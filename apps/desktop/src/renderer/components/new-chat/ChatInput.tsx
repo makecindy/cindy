@@ -313,6 +313,7 @@ import {
   deriveModelsFromProviders,
   filterChatBridgedCodexProviders,
   resolveFastSupported,
+  resolveProviderModelContextWindow,
   resolveProviderModelEfforts,
 } from '@/lib/providerModels';
 import {
@@ -348,7 +349,11 @@ import {
   makerChatStore,
 } from '@/lib/makerChatStore';
 // 切模型前的上下文容量预检(大窗口 → 小窗口护栏), 纯函数与 main 共用。
-import { assessModelSwitchContext } from '../../../shared/modelSwitchAssessment';
+import {
+  assessModelSwitchContext,
+  MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+  shouldBlockLegacyRemotePiModelWindowSwitch,
+} from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
@@ -6085,59 +6090,202 @@ export function ChatInput({
    * 分级语义见 shared/modelSwitchAssessment.ts。overflow 确认后由 host 交接换窗,
    * 不要再建议用户先 /compact —— 小窗口模型压整段历史同样会失败。
    * 返回 false = 用户取消, 调用方直接放弃本次切换(无任何副作用)。
-   * fail-open: 占用未知(0)/ 目标窗口未知 / 阈值读取失败都不拦。
+   * fail-open: 占用未知(0)/ 目标窗口未知时不拦；三个 harness 的强制换窗线统一为 90%。
    */
   const confirmModelSwitchContextGuard = useCallback(
-    async (newModelId: string, sourceRemoteDeviceId?: string): Promise<boolean> => {
+    async (
+      newModelId: string,
+      sourceRemoteDeviceId?: string,
+      targetProviderId?: string | null,
+      verifiedTargetContextWindow?: number,
+      verifiedContextTokens?: number,
+      requireDestructiveConfirmation = false,
+    ): Promise<boolean | number> => {
       if (!sessionId) return true;
-      const contextTokens = makerChatStore.getSnapshot(sessionId).agentStatus.contextTokens;
-      if (!contextTokens || contextTokens <= 0) return true;
-      // device-link 远程会话: 目标模型窗口必须查被控端能力缓存(模型 id 跨设备不唯一)。
-      // 优先复用操作开始时捕获的 device scope，relay origin 暂失时不能退回本机目录。
+      const agentStatus = makerChatStore.getSnapshot(sessionId).agentStatus;
+      const contextTokens = requireDestructiveConfirmation
+        ? verifiedContextTokens
+        : (verifiedContextTokens ?? agentStatus.contextTokens);
+      const currentContextWindow = agentStatus.contextWindow;
+      // 显式来源必须按完整 route 查窗口：同 model id 在不同 provider 可分别为 1M / 200K。
+      // 无来源的旧 flat 入口才沿用设备能力缓存的 model-id 回退。
       const remoteDeviceId = sourceRemoteDeviceId ?? getSessionDeviceId(sessionId) ?? undefined;
-      const targetContextWindow = getModelById(newModelId, remoteDeviceId)?.contextWindow;
-      let autoCompactThresholdPct: number | undefined;
-      try {
-        autoCompactThresholdPct = (await window.electronAPI.maker.compactionGetState()).pct;
-      } catch {
-        // 阈值读不到 → assessment 内部回退默认 90, 不阻断切换。
+      // Pi 目录窗口只是展示估值；只有明确声明最终 runtime 窗口护栏的新 host
+      // 才能跳过控制端估值，并交给被控端 set_model + get_state 裁决。
+      const remotePiWindowGuardSupported =
+        remoteDeviceId === deviceLinkDeviceId &&
+        (piCaps.capabilities as { supportsModelWindowSwitchGuard?: unknown } | null)
+          ?.supportsModelWindowSwitchGuard === true;
+      if (
+        !requireDestructiveConfirmation &&
+        remoteDeviceId &&
+        runtimeAgentKind === 'pi' &&
+        remotePiWindowGuardSupported
+      ) {
+        return true;
       }
+      const targetRouteProviderId =
+        targetProviderId !== undefined && currentModelAgentKind
+          ? effectiveSourceIdForModel(
+              providers,
+              targetProviderId,
+              newModelId,
+              currentModelAgentKind,
+            )
+          : null;
+      const targetContextWindow =
+        verifiedTargetContextWindow ??
+        (targetProviderId !== undefined
+          ? targetRouteProviderId && currentModelAgentKind
+            ? resolveProviderModelContextWindow({
+                providers,
+                providerId: targetRouteProviderId,
+                modelId: newModelId,
+                agentKind: currentModelAgentKind,
+              })
+            : undefined
+          : getModelById(newModelId, remoteDeviceId)?.contextWindow);
+      const hasVerifiedTargetWindow =
+        typeof targetContextWindow === 'number' &&
+        Number.isFinite(targetContextWindow) &&
+        targetContextWindow > 0;
+      const hasVerifiedWindows =
+        Number.isFinite(currentContextWindow) &&
+        currentContextWindow > 0 &&
+        hasVerifiedTargetWindow;
+      const trustedContextTokens =
+        typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens >= 0
+          ? contextTokens
+          : undefined;
+      const hasVerifiedUsage = trustedContextTokens !== undefined;
+      if (requireDestructiveConfirmation && (!hasVerifiedTargetWindow || !hasVerifiedUsage)) {
+        return false;
+      }
+      if (
+        remoteDeviceId &&
+        runtimeAgentKind === 'pi' &&
+        shouldBlockLegacyRemotePiModelWindowSwitch({
+          hostGuardSupported: remotePiWindowGuardSupported,
+          contextTokens,
+          currentContextWindow,
+          targetContextWindow,
+        })
+      ) {
+        return false;
+      }
+      if (remoteHostId && agentStatus.isRunning) return false;
+      // Main 的最终窗口确认属于权威破坏性请求，不得被旧 snapshot 的同窗/扩窗估值跳过。
+      if (
+        !requireDestructiveConfirmation &&
+        hasVerifiedWindows &&
+        targetContextWindow >= currentContextWindow
+      ) {
+        return true;
+      }
+      // SSH 不做远端 handoff。缩窗判据的任一事实未知时继续关闭。
+      if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;
+      if (
+        !requireDestructiveConfirmation &&
+        (!trustedContextTokens || trustedContextTokens <= 0)
+      ) {
+        return true;
+      }
+      const contextTokensForAssessment = trustedContextTokens ?? 0;
       const verdict = assessModelSwitchContext({
-        contextTokens,
+        contextTokens: contextTokensForAssessment,
         targetContextWindow,
-        autoCompactThresholdPct,
+        // 切窗安全线独立于各 harness 的日常 auto-compaction 设置。
+        autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
       });
-      if (verdict.level === 'ok') return true;
+      if (!requireDestructiveConfirmation && verdict.level === 'ok') return true;
       const fmtTokens = (n: number): string =>
         n >= 1_000_000
           ? `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
           : `${Math.round(n / 1000)}K`;
       const vars = {
-        used: fmtTokens(contextTokens),
+        used: fmtTokens(contextTokensForAssessment),
         total: fmtTokens(targetContextWindow ?? 0),
         pct: verdict.projectedPct,
       };
-      if (verdict.level === 'warn' || verdict.level === 'danger') {
+      if (
+        (remoteHostId || remoteDeviceId) &&
+        (verdict.level === 'danger' || verdict.level === 'overflow')
+      ) {
+        toast.error(
+          t('newChat.chatInput.modelSwitchContextGuard.overflowDescriptionRemote', vars),
+          { duration: 5000 },
+        );
+        return false;
+      }
+      if (
+        !requireDestructiveConfirmation &&
+        (verdict.level === 'warn' || verdict.level === 'danger')
+      ) {
         toast.warning(t('newChat.chatInput.modelSwitchContextGuard.warnToast', vars), {
           duration: 4000,
         });
         return true;
       }
-      // overflow (≥100%): 弹确认。默认焦点保持在取消(Radix 默认)——
-      // 期望用户先取消回去压缩(点上下文圆环)或新开会话, "仍然切换"是次选。
-      return confirmDialog({
+      // Local overflow (≥100%): host performs a bounded handoff before switching.
+      const accepted = await confirmDialog({
         title: t('newChat.chatInput.modelSwitchContextGuard.title'),
-        description: t(
-          remoteHostId
-            ? 'newChat.chatInput.modelSwitchContextGuard.overflowDescriptionRemote'
-            : 'newChat.chatInput.modelSwitchContextGuard.overflowDescription',
-          vars,
-        ),
+        description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', vars),
         confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
         cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
       });
+      return accepted && targetContextWindow ? targetContextWindow : accepted;
     },
-    [sessionId, remoteHostId, confirmDialog, t],
+    [
+      sessionId,
+      remoteHostId,
+      confirmDialog,
+      t,
+      providers,
+      currentModelAgentKind,
+      runtimeAgentKind,
+      deviceLinkDeviceId,
+      piCaps.capabilities,
+    ],
+  );
+
+  const setModelWithFinalWindowConfirmation = useCallback(
+    async (
+      modelId: string,
+      providerId: string | null | undefined,
+      invoke: (confirmedContextWindow?: number) =>
+        Promise<{ deferred: boolean; superseded?: boolean } | undefined>,
+    ): Promise<{
+      accepted: boolean;
+      result?: { deferred: boolean; superseded?: boolean };
+    }> => {
+      let result = await invoke();
+      const finalPressure = result as {
+        contextWindowConfirmationRequired?: unknown;
+        contextTokensForConfirmation?: unknown;
+      } | null;
+      const requiredWindow = finalPressure?.contextWindowConfirmationRequired;
+      if (typeof requiredWindow !== 'number' || requiredWindow <= 0) {
+        return { accepted: true, result };
+      }
+      const accepted = await confirmModelSwitchContextGuard(
+        modelId,
+        undefined,
+        providerId,
+        requiredWindow,
+        typeof finalPressure?.contextTokensForConfirmation === 'number'
+          ? finalPressure.contextTokensForConfirmation
+          : undefined,
+        true,
+      );
+      if (accepted !== requiredWindow) return { accepted: false };
+      result = await invoke(accepted);
+      if (
+        typeof (result as { contextWindowConfirmationRequired?: unknown } | null)
+          ?.contextWindowConfirmationRequired === 'number'
+      ) return { accepted: false };
+      return { accepted: true, result };
+    },
+    [confirmModelSwitchContextGuard],
   );
 
   // session-agent-switch 意图制:选中「只属于另一家引擎」的模型 → 只向 main 登记
@@ -6720,9 +6868,15 @@ export function ChatInput({
       const isSourceSessionCurrent = () =>
         isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current);
       // 容量护栏最先跑: 用户取消时直接 return, 不留任何副作用(effort 快照都不动)。
+      let confirmedGuardContextWindow: number | undefined;
       if (sessionId && newModelId !== activeModel) {
-        const proceed = await confirmModelSwitchContextGuard(newModelId, sourceRemoteDeviceId);
+        const proceed = await confirmModelSwitchContextGuard(
+          newModelId,
+          sourceRemoteDeviceId,
+          effectiveSourceId,
+        );
         if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
+        if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;
       }
       // 切换意图期:此时列表展示的是目标引擎(乐观翻转),改选模型 = 更新意图,
       // 绝不能走普通 SET_MODEL 链路(main 会清意图、renderer 乐观态失配)。
@@ -6796,7 +6950,12 @@ export function ChatInput({
                 newModelId,
                 selectedProviderId,
                 expectedAgentSwitchRevision,
-                useAtomicSelection ? { effort: newEffort, fastMode: restoredFast } : undefined,
+                useAtomicSelection
+                  ? ({
+                      effort: newEffort,
+                      fastMode: restoredFast,
+                    } as { effort: string; fastMode: boolean })
+                  : undefined,
               );
               if (remoteSetModelResult?.superseded) {
                 if (isSourceSessionCurrent()) setPendingRemoteSwitch(null);
@@ -6841,13 +7000,30 @@ export function ChatInput({
             const rollbackSeq = (switchSeqBySession.get(sessionId) ?? 0) + 1;
             switchSeqBySession.set(sessionId, rollbackSeq);
             rollbackModelAfterPersistFailure = { model: activeModel, seq: rollbackSeq };
-            const setModelResult = await window.electronAPI.maker.setModel(
-              sessionId,
-              newModelId,
-              undefined,
-              expectedAgentSwitchRevision,
-              { effort: newEffort, fastMode: restoredFast },
-            );
+            const { accepted, result: setModelResult } =
+              await setModelWithFinalWindowConfirmation(
+                newModelId,
+                effectiveSourceId,
+                (confirmedFinalWindow) => {
+                  const confirmedContextWindow =
+                    confirmedFinalWindow ?? confirmedGuardContextWindow;
+                  return window.electronAPI.maker.setModel(
+                    sessionId,
+                    newModelId,
+                    undefined,
+                    expectedAgentSwitchRevision,
+                    {
+                      effort: newEffort,
+                      fastMode: restoredFast,
+                      ...(confirmedContextWindow ? { confirmedContextWindow } : {}),
+                    } as { effort: string; fastMode: boolean },
+                  );
+                },
+              );
+            if (!accepted) {
+              rollbackModelAfterPersistFailure = null;
+              return false;
+            }
             if (setModelResult?.superseded) {
               rollbackModelAfterPersistFailure = null;
               return false;
@@ -6947,6 +7123,7 @@ export function ChatInput({
       syncSessionDraftModelPrefs,
       fastMode,
       confirmModelSwitchContextGuard,
+      setModelWithFinalWindowConfirmation,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
       settingsLocked,
@@ -7234,14 +7411,21 @@ export function ChatInput({
       // 容量护栏(与 handleModelChange 同款): 切来源若连带换到更小窗口的模型
       // (典型: 官方 Claude 1M → 折扣 GPT 272K, 在选择器里是跨分组点击、走本路径而非
       // handleModelChange —— 2026-07-06 实测踩中), 同样要先过上下文容量确认。
-      // 同模型只切来源不拦: 窗口按 model id 取自目录, 来源不变窗口, 无新增风险。
+      // route 的任一维度变化都按目标来源窗口评估；同 model id 跨来源也可能是 1M → 200K。
       // 放在函数最前: 本地分支此前无任何乐观状态写入, 用户取消 = 零副作用直接 return。
-      if (sessionId && reconciledModelId && reconciledModelId !== activeModel) {
+      let confirmedGuardContextWindow: number | undefined;
+      if (
+        sessionId &&
+        reconciledModelId &&
+        (reconciledModelId !== activeModel || newProviderId !== effectiveSourceId)
+      ) {
         const proceed = await confirmModelSwitchContextGuard(
           reconciledModelId,
           sourceRemoteDeviceId,
+          newProviderId,
         );
         if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
+        if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;
       }
       // 切换意图期:列表展示的是目标引擎(乐观翻转),(来源,模型) 改选 = 更新意图,
       // 不走普通 set-model 链路(main 会清意图、renderer 乐观态失配)。
@@ -7313,7 +7497,12 @@ export function ChatInput({
             targetModel,
             newProviderId,
             expectedAgentSwitchRevision,
-            useAtomicSelection ? { effort: targetEffort, fastMode: restoredFast } : undefined,
+            useAtomicSelection
+              ? ({
+                  effort: targetEffort,
+                  fastMode: restoredFast,
+                } as { effort: string; fastMode: boolean })
+              : undefined,
           );
           if (remoteSetModelResult?.superseded) {
             if (isSourceSessionCurrent()) {
@@ -7384,13 +7573,30 @@ export function ChatInput({
           // deferred = 会话自己在跑,main 已登记 pending、turn 结束自动生效(选择不丢);
           // DB 照常落盘(重启也生效),但跳过 runtime setEffort/setFastMode —— 会话
           // turn 结束会被关闭重建,别去动还在跑的旧 turn。
-          const setModelResult = await window.electronAPI.maker.setModel(
-            sessionId,
-            modelId,
-            newProviderId,
-            expectedAgentSwitchRevision,
-            { effort: eff, fastMode: restoredFast },
-          );
+          const { accepted, result: setModelResult } =
+            await setModelWithFinalWindowConfirmation(
+              modelId,
+              newProviderId,
+              (confirmedFinalWindow) => {
+                const confirmedContextWindow =
+                  confirmedFinalWindow ?? confirmedGuardContextWindow;
+                return window.electronAPI.maker.setModel(
+                  sessionId,
+                  modelId,
+                  newProviderId,
+                  expectedAgentSwitchRevision,
+                  {
+                    effort: eff,
+                    fastMode: restoredFast,
+                    ...(confirmedContextWindow ? { confirmedContextWindow } : {}),
+                  } as { effort: string; fastMode: boolean },
+                );
+              },
+            );
+          if (!accepted) {
+            rollbackProviderAfterPersistFailure = null;
+            return false;
+          }
           if (setModelResult?.superseded) {
             rollbackProviderAfterPersistFailure = null;
             return false;
@@ -7508,8 +7714,10 @@ export function ChatInput({
       fastMode,
       modelFastSupported,
       selectedProviderId,
+      effectiveSourceId,
       t,
       confirmModelSwitchContextGuard,
+      setModelWithFinalWindowConfirmation,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
       settingsLocked,

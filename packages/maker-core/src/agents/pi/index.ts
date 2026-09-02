@@ -495,6 +495,32 @@ function effortToPiThinkingLevel(effort: Effort): string {
 }
 
 const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const PI_THINKING_LEVEL_MAP_KEYS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/**
+ * Server / XD 下放的 efforts 是网关 thinking level 的权威。
+ * Pi 本地目录 map 只在同名档仍被下放时保留 remap；api 不一致导致 bundled map 丢失时，仍按 efforts 写同名值，不能把 max/xhigh 静默丢光。
+ */
+function gatewayThinkingLevelMap(
+  efforts: readonly Effort[],
+  bundled?: Record<string, string | null>,
+): Record<string, string | null> | undefined {
+  const supported = new Set<string>();
+  for (const effort of efforts) {
+    if (effort === 'ultra') supported.add('max');
+    else supported.add(effort);
+  }
+  if (supported.size === 0) {
+    return bundled && Object.keys(bundled).length > 0 ? { ...bundled } : undefined;
+  }
+  return Object.fromEntries(
+    PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
+      if (!supported.has(level)) return [level, null];
+      const bundledValue = bundled?.[level];
+      return [level, typeof bundledValue === 'string' ? bundledValue : level];
+    }),
+  );
+}
 
 /**
  * Last-resort maxTokens for models that provide no authoritative output limit.
@@ -1158,6 +1184,61 @@ interface FailedPiStartupCleanup {
   cleanupLocal?: () => void;
 }
 
+/**
+ * pi 官方文档的用户自配置键(Windows shell 逃生门与 npm 包装命令):Cindy 每次
+ * startSession 都覆写隔离 agentHome 的 settings.json,若把这些键一并抹掉,用户在
+ * Cindy Pi 里就失去了原生 pi 文档提供的自救手段 —— #3643:bash spawn 失败时
+ * `shellPath` 是 pi Windows shell 解析的第一顺位来源,原生 pi 用户改 settings.json
+ * 即可恢复,Cindy Pi 用户此前无路可走(pi-harness「上游非退化」红线)。
+ * Cindy 自有键(transport/retry/compaction/packages)始终以新生成内容为准。
+ */
+const PI_USER_SETTINGS_PASSTHROUGH_KEYS = ['shellPath', 'shellCommandPrefix', 'npmCommand'] as const;
+
+function collectPiUserSettingsPassthrough(content: string | null): Record<string, unknown> {
+  if (content === null || content.trim().length === 0) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+  const existing = parsed as Record<string, unknown>;
+  const preserved: Record<string, unknown> = {};
+  for (const key of PI_USER_SETTINGS_PASSTHROUGH_KEYS) {
+    const value = existing[key];
+    if (key === 'npmCommand') {
+      if (
+        Array.isArray(value) &&
+        value.length > 0 &&
+        value.every((item) => typeof item === 'string')
+      ) {
+        preserved[key] = value;
+      }
+      continue;
+    }
+    if (typeof value === 'string' && value.trim().length > 0) preserved[key] = value;
+  }
+  return preserved;
+}
+
+/** 多来源合并,靠后的来源同键覆盖靠前的(稳定根用户文件应排最后)。 */
+export function mergePiUserSettingsPassthrough(
+  builtContent: string,
+  ...existingContents: Array<string | null>
+): string {
+  const preserved: Record<string, unknown> = {};
+  for (const content of existingContents) {
+    Object.assign(preserved, collectPiUserSettingsPassthrough(content));
+  }
+  if (Object.keys(preserved).length === 0) return builtContent;
+  const built = JSON.parse(builtContent) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(preserved)) {
+    if (!(key in built)) built[key] = value;
+  }
+  return JSON.stringify(built, null, 2) + '\n';
+}
+
 export function buildPiSettingsJsonContent(
   contextWindow: number,
   piCompactionPct?: number,
@@ -1552,6 +1633,49 @@ export class PiAgent extends BaseAgent {
     );
   }
 
+  /**
+   * 生成 settings.json 内容,本地会话在覆写前保留用户自配置白名单键(#3643)。
+   * 两个来源,稳定根优先:
+   *  1. 会话 configHome 的既有 settings.json(同会话内 setModel 等覆写不丢配置);
+   *  2. 稳定 agentHome 根(pi-agent-home/settings.json)——本地 configHome 是
+   *     每会话随机目录(run-tmp/<hex>),只读会话文件会让「重启后新会话」拿不到
+   *     用户配置;稳定根文件才是跨启动生效的逃生门(对齐原生 pi 的
+   *     ~/.pi/agent/settings.json 位置语义,Cindy 自身从不写它)。
+   * 远端 fileOps 无 readFile,保持原覆写行为(远端 configHome 全托管,且本机
+   * shell 路径对远端主机无意义)。
+   */
+  private async buildSettingsJsonPreservingUserKeys(
+    settingsJsonPath: string,
+    opts: {
+      fileOps?: PiRemoteFileOps;
+      contextWindow?: number;
+      piCompactionPct?: number;
+      packages?: readonly PiNativePackageEntry[];
+    },
+  ): Promise<string> {
+    const built = this.buildCurrentPiSettingsJson(
+      opts.contextWindow,
+      opts.piCompactionPct,
+      opts.packages,
+    );
+    if (opts.fileOps) return built;
+    const readOrNull = async (file: string): Promise<string | null> => {
+      try {
+        return await fs.readFile(file, 'utf8');
+      } catch {
+        return null;
+      }
+    };
+    const stableUserSettingsPath = joinRemotePosixPath(this.resolveAgentHome(), 'settings.json');
+    const [sessionContent, stableContent] = await Promise.all([
+      readOrNull(settingsJsonPath),
+      stableUserSettingsPath === settingsJsonPath
+        ? Promise.resolve(null)
+        : readOrNull(stableUserSettingsPath),
+    ]);
+    return mergePiUserSettingsPassthrough(built, sessionContent, stableContent);
+  }
+
   private async writePiRuntimeSettings(
     agentHome: string,
     opts: {
@@ -1562,10 +1686,9 @@ export class PiAgent extends BaseAgent {
     } = {},
   ): Promise<void> {
     const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
-    const settingsJsonContent = this.buildCurrentPiSettingsJson(
-      opts.contextWindow,
-      opts.piCompactionPct,
-      opts.packages,
+    const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(
+      settingsJsonPath,
+      opts,
     );
     if (opts.fileOps) {
       await opts.fileOps.writeFile(settingsJsonPath, settingsJsonContent);
@@ -1671,6 +1794,7 @@ export class PiAgent extends BaseAgent {
       gatewayApiByModel.set(m.id, api);
       const supportsImageInput = m.supportsImageInput === true;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
+      const thinkingLevelMap = gatewayThinkingLevelMap(m.efforts, resolvedSpec?.thinkingLevelMap);
       return [{
         id: m.id,
         name: m.displayName,
@@ -1686,9 +1810,7 @@ export class PiAgent extends BaseAgent {
               },
             }
           : {}),
-        ...(resolvedSpec?.thinkingLevelMap
-          ? { thinkingLevelMap: { ...resolvedSpec.thinkingLevelMap } }
-          : {}),
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
         ...(resolvedSpec?.compat ? { compat: structuredClone(resolvedSpec.compat) } : {}),
         ...(resolvedSpec?.samplingParams
           ? { samplingParams: structuredClone(resolvedSpec.samplingParams) }
@@ -1774,10 +1896,9 @@ export class PiAgent extends BaseAgent {
     // isolated embedded runtime. Other PI providers ignore this transport knob.
     // Agent-level retries stay with Pi (provider maxRetries stays 0 — Pi docs:
     // SDK retries can swallow quota errors before the agent sees them).
-    const settingsJsonContent = this.buildCurrentPiSettingsJson(
-      opts.contextWindow,
-      opts.piCompactionPct,
-      opts.packages,
+    const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(
+      settingsJsonPath,
+      opts,
     );
     // 远端 launch identity 必须覆盖进程启动才读的快照。只 hash models.json 时，
     // retry/transport/compaction 改写会落到旧 configHome，daemon 纯 attach。
@@ -5400,18 +5521,10 @@ export class PiAgent extends BaseAgent {
         }
         throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
       }
-      // pi 已确认 → 清掉 pending 标记放行派发。写失败时**不**抛错:模型切换本身确实成功了,
-      // 谎报失败会让上层与 UI 状态和 pi 真实状态背离。代价是这个会话的子代理一直被 pending
-      // 挡住(可见的降级、拒绝时有明确文案),而它是安全方向 —— 绝不会把委派发到错误 endpoint。
-      if (
-        subagentRoutingEnabled
-        && !(await writeSubagentRuntimeFile({ model: wireModel, provider }))
-      ) {
-        deps.logger.error(
-          'pi: model switch confirmed but the subagent routing snapshot stayed pending; ' +
-            'subagent delegation stays disabled for this session (fail-closed)',
-        );
-      }
+      // Keep the subagent snapshot pending until any settings reload has rebuilt and
+      // re-verified the Pi runtime. switch_session recreates AgentSession from the
+      // original CLI options, so clearing pending here would briefly allow children
+      // to use the target route while the parent may have fallen back to the old one.
       mutableModel = model;
       mutableWireModel = wireModel;
       mutablePiProviderId = provider;
@@ -5429,17 +5542,27 @@ export class PiAgent extends BaseAgent {
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
       autoReviewConfirmUndeliveredNotice.reset();
-      const previousWindow = ctx.contextWindow;
       const data = (resp.data ?? {}) as { contextWindow?: number };
-      const nextWindow =
+      const setModelReportedWindow =
         typeof data.contextWindow === 'number' && data.contextWindow > 0
           ? data.contextWindow
-          : (this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)?.contextWindow
-            ?? this.capabilities.availableModels.find((candidate) => candidate.id === model)?.contextWindow
-            ?? ctx.contextWindow);
+          : null;
+      const nextWindow =
+        setModelReportedWindow ??
+        this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)
+          ?.contextWindow ??
+        this.capabilities.availableModels.find((candidate) => candidate.id === model)
+          ?.contextWindow ??
+        ctx.contextWindow;
       if (nextWindow > 0) ctx.contextWindow = nextWindow;
-      if (nextWindow > 0 && nextWindow !== previousWindow) {
+      // Always reload and read get_state after set_model. The catalog and even the
+      // set_model response can disagree with the materialized runtime window; callers
+      // must not decide whether to destroy native context until this verification ends.
+      {
         try {
+          if (!Number.isFinite(nextWindow) || nextWindow <= 0) {
+            throw new Error('pi: model switch returned no verifiable context window');
+          }
           await this.writePiRuntimeSettings(configHome, {
             fileOps,
             contextWindow: nextWindow,
@@ -5458,6 +5581,70 @@ export class PiAgent extends BaseAgent {
               `pi: failed to reload settings after context window change: ${reloaded.error ?? 'unknown'}`,
             );
           }
+          // Pi rebuilds switch_session from the process' original --provider/--model
+          // options. Re-apply the requested route, then read it back before exposing
+          // the parent or its subagents as switched.
+          const reapplied = await proc.request({
+            type: 'set_model',
+            provider,
+            modelId: wireModel,
+          });
+          if (!reapplied.success) {
+            throw new Error(
+              `pi: failed to re-apply model after settings reload: ${reapplied.error ?? 'unknown'}`,
+            );
+          }
+          const verified = await proc.request({ type: 'get_state' });
+          if (!verified.success) {
+            throw new Error(
+              `pi: failed to verify model after settings reload: ${verified.error ?? 'unknown'}`,
+            );
+          }
+          const verifiedModel = (verified.data as {
+            model?: { provider?: unknown; id?: unknown; contextWindow?: unknown } | null;
+          } | undefined)?.model;
+          if (verifiedModel?.provider !== provider || verifiedModel.id !== wireModel) {
+            throw new Error(
+              `pi: settings reload restored an unexpected model (expected ${provider}/${wireModel}, ` +
+                `got ${String(verifiedModel?.provider)}/${String(verifiedModel?.id)})`,
+            );
+          }
+          const verifiedWindow = verifiedModel.contextWindow;
+          if (
+            typeof verifiedWindow !== 'number' ||
+            !Number.isFinite(verifiedWindow) ||
+            verifiedWindow <= 0
+          ) {
+            throw new Error('pi: settings reload returned an invalid context window');
+          }
+          if (verifiedWindow !== nextWindow) {
+            await this.writePiRuntimeSettings(configHome, {
+              fileOps,
+              contextWindow: verifiedWindow,
+              piCompactionPct: sessionPiAutoCompactPct,
+            });
+            const recalibrated = await proc.request({ type: 'switch_session', sessionPath: sdkSessionId });
+            if (!recalibrated.success) {
+              throw new Error(`pi: failed to reload recalibrated settings: ${recalibrated.error ?? 'unknown'}`);
+            }
+            const recalibratedModel = await proc.request({ type: 'set_model', provider, modelId: wireModel });
+            if (!recalibratedModel.success) {
+              throw new Error(`pi: failed to re-apply model after settings recalibration: ${recalibratedModel.error ?? 'unknown'}`);
+            }
+            const reverified = await proc.request({ type: 'get_state' });
+            const reverifiedModel = (reverified.data as {
+              model?: { provider?: unknown; id?: unknown; contextWindow?: unknown } | null;
+            } | undefined)?.model;
+            if (
+              !reverified.success ||
+              reverifiedModel?.provider !== provider ||
+              reverifiedModel.id !== wireModel ||
+              reverifiedModel.contextWindow !== verifiedWindow
+            ) {
+              throw new Error('pi: recalibrated settings did not match the verified runtime window');
+            }
+          }
+          ctx.contextWindow = verifiedWindow;
         } catch (err) {
           this.deps.logger.error('pi: compaction settings reload unconfirmed after model switch', {
             message: err instanceof Error ? err.message : String(err),
@@ -5474,6 +5661,18 @@ export class PiAgent extends BaseAgent {
             'pi: 模型切换后未能重载压缩阈值，已终止本任务以免继续按旧 reserveTokens 压缩。请重新打开任务。',
           );
         }
+      }
+      // The parent route and target-window settings are now confirmed. Clear the
+      // pending marker last; failure keeps subagent delegation disabled but does
+      // not misreport the parent switch itself.
+      if (
+        subagentRoutingEnabled &&
+        !(await writeSubagentRuntimeFile({ model: wireModel, provider }))
+      ) {
+        deps.logger.error(
+          'pi: model switch confirmed but the subagent routing snapshot stayed pending; ' +
+            'subagent delegation stays disabled for this session (fail-closed)',
+        );
       }
     };
 

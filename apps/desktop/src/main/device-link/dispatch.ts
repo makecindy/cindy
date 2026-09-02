@@ -314,6 +314,17 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   // (G2)。与被控端 handler 同语义:args[2]===undefined(老 2 参调用)不动 provider_id;string→写;
   // null/''→清除(回落默认路由)。写进 DB 后 mapper 自动带进 sessions:patched → 回流控制端镜像。
   if (channel === 'maker:set-model') {
+    // 最终 Pi 窗口首次触发压力时，handler 返回结构化确认请求而非接受选择。
+    // 此时 runtime 已回滚；通用回流也不得抢先把请求参数写进 DB。
+    if (
+      result !== null &&
+      typeof result === 'object' &&
+      !Array.isArray(result) &&
+      ('contextWindowConfirmationRequired' in result ||
+        'contextTokensForConfirmation' in result)
+    ) {
+      return;
+    }
     // 同引擎重选的第二段带 host revision CAS。handler 返回 superseded 表示
     // 另一控制端已在两段之间更新过意图：runtime 未应用，DB 也必须同样不落
     // 这次请求参数，否则 sessions:patched 会把过期选择反向盖回控制端。

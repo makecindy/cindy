@@ -2971,7 +2971,14 @@
           "toggleFailed": "切換瀏覽器自動化失敗",
           "openedForLogin": "已開啟自動化瀏覽器，請在其中登入需要的網站",
           "openForLoginFailed": "開啟瀏覽器失敗",
-          "foreignInstance": "本機已有另一個 Cindy 占用了 Agent 專用瀏覽器。請先退出其它 Cindy 視窗再試。"
+          "foreignInstance": "本機已有另一個 Cindy 占用了 Agent 專用瀏覽器。請先退出其它 Cindy 視窗再試。",
+          "profileLocked": "請完全結束 Chrome、Edge 或 Brave（包括系統匣中的程序），然後再試。",
+          "noChromium": "在這台電腦上找不到 Chrome、Edge、Brave 或 Chromium。",
+          "noAuthDb": "找不到可複製的瀏覽器登入資料。請先在日常瀏覽器中登入，或關閉「使用我的瀏覽器登入狀態」後在 Agent 專用瀏覽器中登入。",
+          "copyFailed": "無法複製瀏覽器登入狀態。請完全結束日常瀏覽器後再試，或關閉「使用我的瀏覽器登入狀態」。",
+          "headlessForbidden": "Agent 專用瀏覽器以無介面模式執行時，無法使用你的瀏覽器登入狀態。",
+          "stopFailed": "請完全關閉 Agent 專用瀏覽器，然後再試。",
+          "appBoundEncryptionUnsupported": "Windows 已使用應用程式繫結加密保護這些瀏覽器登入狀態，Cindy 無法複製。請關閉「使用我的瀏覽器登入狀態」，開啟 Agent 專用瀏覽器並在其中登入一次。"
         },
         "openForLogin": "開啟 Agent 專用瀏覽器",
         "openForLoginHint": "這是 Agent 專用的獨立瀏覽器：基於你本機的 Chrome，但用一份獨立配置（右上角顯示為 Cindy），不會動你日常 Chrome 的標籤頁、書籤和登入態。Agent 會在這裡替你開啟網頁、閱讀內容、點選和截圖。需要登入的網站，點上面「開啟 Agent 專用瀏覽器」手動登入一次即可——登入態會長期保留，之後 Agent 就能以你的身份繼續操作。"
@@ -3679,6 +3686,28 @@
       "recording": "按下新快捷鍵…",
       "editAria": "修改 {{name}} 的快捷鍵",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex 相容性",
+          "label": "防止 Codex 佔用裝置",
+          "aria": "防止 Codex 佔用 Codex Micro",
+          "recover": "還原環境",
+          "status": {
+            "unsupported": "僅 macOS",
+            "disabled": "已關閉",
+            "protecting": "請重新啟動 Codex",
+            "intercepted": "保護中",
+            "recovery-required": "需要還原",
+            "error": "無法使用"
+          },
+          "descriptions": {
+            "unsupported": "此保護僅可在 macOS 上使用。",
+            "disabled": "Cindy 執行期間會阻止 Codex 連線至 Codex Micro；不會限制 Cindy 本身。",
+            "protecting": "保護已就緒。請完全結束後重新開啟 Codex；已在執行的 Codex 不受影響。",
+            "intercepted": "已阻止 Codex 的 Work Louder 服務，Cindy 可以繼續使用裝置。",
+            "recovery-required": "保護已停止，但 NODE_OPTIONS 尚未安全還原。請先重試還原，再重新開啟。",
+            "error": "Cindy 無法更新 Codex 保護；原有 NODE_OPTIONS 已保留或等待還原。"
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "上一個任務",
@@ -5947,6 +5976,10 @@
       "detachDevice": "中斷連線裝置",
       "startDevice": "啟動裝置",
       "stopDevice": "停止裝置",
+      "deleteDevice": "刪除裝置",
+      "deleteDeviceConfirmTitle": "刪除「{{device}}」？",
+      "deleteDeviceConfirmDescription": "此操作會永久刪除這台模擬器，以及其中儲存的所有 App、帳號與資料。此操作無法復原。",
+      "deleteRunningDeviceConfirmDescription": "這台模擬器正在執行。確認後，Cindy 會先清理相關資源並停止裝置，然後永久刪除其中的所有 App、帳號與資料。此操作無法復原。",
       "attachedDescription": "此裝置已繫結到當前 Cindy 任務。",
       "agentControlTitle": "Agent 控制",
       "agentControlDescription": "允許後，Agent 才能啟動、停止或操作這臺裝置。",
@@ -6638,6 +6671,13 @@
       "move": "立即移動（推薦）",
       "download": "手動下載新版本"
     },
+    "windowsRuntimeMissing": {
+      "title": "需要安裝 Microsoft Visual C++ 執行階段",
+      "description": "這台電腦缺少更新程式所需的 Microsoft Visual C++ 執行階段。已下載的更新套件會保留；請安裝 Microsoft 官方 x64 執行階段後重新檢查。",
+      "download": "下載執行階段",
+      "retry": "重新檢查",
+      "later": "稍後安裝"
+    },
     "moveToApplications": {
       "title": "移動到應用程式資料夾",
       "message": "將 {{appName}} 移動到「應用程式」資料夾可獲得更好的體驗，包括自動更新。",
@@ -7267,7 +7307,7 @@
         "title": "這個模型裝不下目前的對話",
         "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
         "overflowDescription": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。換過去後，Cindy 會先整理一份摘要再繼續；對話記錄還在，只是不會整段原樣帶給新模型。",
-        "overflowDescriptionRemote": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。遠端任務不會自動換窗，下一次傳送仍可能失敗。可以仍然切換，或留在目前模型。",
+        "overflowDescriptionRemote": "目前遠端任務的上下文已用 {{used}} / {{total}}（約 {{pct}}%），無法安全切換到這個小視窗模型。請保留目前模型，或新增任務後再選擇。",
         "confirmSwitch": "切換並繼續",
         "cancelSwitch": "先不換"
       },

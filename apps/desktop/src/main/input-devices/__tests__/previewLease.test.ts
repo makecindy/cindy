@@ -31,6 +31,23 @@ describe('createLayoutPreviewLease', () => {
     expect(setActive).toHaveBeenCalledWith(false);
   });
 
+  it('ignores a stale renderer turning preview off after another window owns it', () => {
+    const setActive = vi.fn();
+    const lease = createLayoutPreviewLease(setActive);
+    const first = fakeOwner(1);
+    const second = fakeOwner(2);
+
+    lease.setActive(true, first);
+    lease.setActive(true, second);
+    setActive.mockClear();
+
+    lease.setActive(false, first);
+    expect(setActive).not.toHaveBeenCalled();
+
+    lease.setActive(false, second);
+    expect(setActive).toHaveBeenCalledWith(false);
+  });
+
   it('ignores a stale owner after another renderer takes the lease', () => {
     const setActive = vi.fn();
     const lease = createLayoutPreviewLease(setActive);

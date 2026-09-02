@@ -7,6 +7,7 @@ import {
 } from '../../maker-host/session-provider-store.js';
 import {
   applyRuntimeSetModelChange,
+  closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
   type RuntimeSetModelMaker,
 } from '../runtimeSetModel.js';
@@ -56,6 +57,61 @@ describe('isRemoteModelSwitchRouteChangeError', () => {
     expect(isRemoteModelSwitchRouteChangeError(new Error('ordinary set-model failure'))).toBe(
       false,
     );
+  });
+});
+
+describe('closeRejectedRuntimeAndRestoreControlStores', () => {
+  it('restores the old control route and rejects when runtime close leaves the handle alive', async () => {
+    const closeError = new Error('close transport rejected');
+    const retainedRuntimeError = new Error('rejected runtime is still live');
+    const closeRuntime = vi.fn(async () => {
+      throw closeError;
+    });
+    const controlStores = {
+      providerId: 'target-provider',
+      effort: 'max',
+      fastMode: true,
+    };
+    const persistedRoute = {
+      model: 'old-model',
+      providerId: 'old-provider',
+      effort: 'low',
+      fastMode: false,
+    } as const;
+    const restoreControlStores = vi.fn(() => {
+      controlStores.providerId = persistedRoute.providerId;
+      controlStores.effort = persistedRoute.effort;
+      controlStores.fastMode = persistedRoute.fastMode;
+    });
+    const reportCloseError = vi.fn();
+    const assertRuntimeClosed = vi.fn(() => {
+      expect(controlStores).toEqual({
+        providerId: persistedRoute.providerId,
+        effort: persistedRoute.effort,
+        fastMode: persistedRoute.fastMode,
+      });
+      throw retainedRuntimeError;
+    });
+
+    await expect(
+      closeRejectedRuntimeAndRestoreControlStores({
+        closeRuntime,
+        restoreControlStores,
+        reportCloseError,
+        assertRuntimeClosed,
+      }),
+    ).rejects.toBe(retainedRuntimeError);
+
+    expect(closeRuntime).toHaveBeenCalledOnce();
+    expect(reportCloseError).toHaveBeenCalledWith(closeError);
+    expect(restoreControlStores).toHaveBeenCalledOnce();
+    expect(assertRuntimeClosed).toHaveBeenCalledOnce();
+    expect(controlStores).toEqual({
+      providerId: persistedRoute.providerId,
+      effort: persistedRoute.effort,
+      fastMode: persistedRoute.fastMode,
+    });
+    expect(persistedRoute.model).toBe('old-model');
   });
 });
 
@@ -889,6 +945,41 @@ describe('applyRuntimeSetModelChange', () => {
     expect(order).toEqual(['close', 'route', 'wake']);
     expect(closeSession).toHaveBeenCalledOnce();
     expect(wakeSessionInputQueue).toHaveBeenCalledOnce();
+  });
+
+  it('lets the Pi guard reject an incompatible runtime replacement before route side effects', async () => {
+    const sessionId = rememberSession('runtime-set-model-pi-replacement-guard');
+    setSessionProvider(sessionId, 'openai');
+    const closeSession = vi.fn(async () => {});
+    const clearPendingCredentialSwitch = vi.fn();
+    const wakeSessionInputQueue = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'chatgpt/gpt-5.5',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      assertSessionCloseSupported: () => { throw new Error('replacement unsupported'); },
+      clearPendingCredentialSwitch,
+      wakeSessionInputQueue,
+    })).rejects.toThrow('replacement unsupported');
+
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(clearPendingCredentialSwitch).not.toHaveBeenCalled();
+    expect(wakeSessionInputQueue).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('openai');
   });
 
   it.each([

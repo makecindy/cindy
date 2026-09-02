@@ -6,6 +6,7 @@ import {
   compactEnglishEffortLabel,
   normalizeMobileAgentCapabilities,
   reconcileRuntimeDraftWithCapabilities,
+  shouldBlockLegacyRemoteModelWindowSwitch,
 } from '../agentCapabilities';
 
 const desktopCapabilitiesPayload = {
@@ -65,6 +66,10 @@ describe('agent capabilities shared model', () => {
       'claude-sonnet-4-6',
       'claude-haiku-4-6',
     ]);
+    expect(capabilities?.availableModels.map((item) => item.contextWindow)).toEqual([
+      200_000,
+      200_000,
+    ]);
     // 已知档 id 在 normalize 单点换成中文词表名(被控端给的英文 displayName 被覆盖)。
     expect(capabilities?.effortLevels.map((item) => item.label)).toEqual([
       '低',
@@ -78,12 +83,91 @@ describe('agent capabilities shared model', () => {
       'plan',
     ]);
     expect(capabilities?.supportsSessionAgentSwitch).toBe(false);
+    expect(capabilities?.supportsModelWindowSwitchGuard).toBe(false);
     expect(capabilities?.availableModels[0].newSessionDefault).toEqual(['claude-code', 'codex', 'pi']);
     expect('newSessionDefault' in (capabilities?.availableModels[1] ?? {})).toBe(false);
     expect(normalizeMobileAgentCapabilities({
       ...desktopCapabilitiesPayload,
       supportsSessionAgentSwitch: true,
     })?.supportsSessionAgentSwitch).toBe(true);
+    expect(normalizeMobileAgentCapabilities({
+      ...desktopCapabilitiesPayload,
+      supportsModelWindowSwitchGuard: true,
+    })?.supportsModelWindowSwitchGuard).toBe(true);
+  });
+
+  describe('legacy host model-window guard', () => {
+    const pressuredShrink = {
+      hostGuardSupported: false,
+      agentKind: 'codex',
+      contextTokens: 180_000,
+      currentContextWindow: 1_000_000,
+      targetContextWindow: 200_000,
+    };
+
+    it('blocks non-Pi legacy shrinks at 90% while preserving same/expand, low pressure, and SSH semantics', () => {
+      expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredShrink)).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        contextTokens: 179_999,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        targetContextWindow: 1_000_000,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        targetContextWindow: 2_000_000,
+      })).toBe(false);
+      const pressuredSshShrink = { ...pressuredShrink, isSsh: true };
+      expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredSshShrink)).toBe(true);
+    });
+
+    it('fails closed for every estimated legacy Pi route and defers guarded Pi to the host', () => {
+      const legacyPiSwitch = { ...pressuredShrink, agentKind: 'pi' };
+      const estimatedPiRoutes = {
+        lowPressure: { ...legacyPiSwitch, contextTokens: 179_999 },
+        exact90Percent: legacyPiSwitch,
+        sameWindow: { ...legacyPiSwitch, targetContextWindow: 1_000_000 },
+        expansion: { ...legacyPiSwitch, targetContextWindow: 2_000_000 },
+        unknownUsage: { ...legacyPiSwitch, contextTokens: undefined },
+        unknownCurrentWindow: { ...legacyPiSwitch, currentContextWindow: undefined },
+        unknownTargetWindow: { ...legacyPiSwitch, targetContextWindow: undefined },
+      };
+      for (const route of Object.values(estimatedPiRoutes)) {
+        expect(shouldBlockLegacyRemoteModelWindowSwitch(route)).toBe(true);
+      }
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...legacyPiSwitch,
+        hostGuardSupported: true,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...legacyPiSwitch,
+        hostGuardSupported: true,
+        contextTokens: undefined,
+        targetContextWindow: undefined,
+      })).toBe(false);
+    });
+
+    it('fails closed when legacy-host window or usage facts are unknown', () => {
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        contextTokens: undefined,
+      })).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        currentContextWindow: undefined,
+      })).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        targetContextWindow: undefined,
+      })).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        contextTokens: undefined,
+        targetContextWindow: 1_000_000,
+      })).toBe(false);
+    });
   });
 
   it('uses the current model efforts and model-specific labels', () => {

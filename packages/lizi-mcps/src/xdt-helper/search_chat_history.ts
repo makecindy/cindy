@@ -82,7 +82,7 @@ export function registerSearchChatHistoryTool(
     category: 'history',
     description: DESCRIPTION,
     inputShape: {
-      query: z.string().min(1).describe('自然语言查询(必填)。例: "上次怎么修的语音输入授权问题"。'),
+      query: z.string().min(1).max(256).describe('自然语言查询(必填, 最长 256)。例: "上次怎么修的语音输入授权问题"。'),
       session_ids: z
         .array(z.string().min(1))
         .max(50)

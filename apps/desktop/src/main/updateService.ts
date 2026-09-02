@@ -68,6 +68,12 @@ import { disposeAndroidAdb } from './mcp-integrations/android';
 import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
+import {
+  checkWindowsUpdaterPrerequisites,
+  stageBundledWindowsUpdaterRuntime,
+  WINDOWS_UPDATER_RUNTIME_FILES,
+  WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE,
+} from './windowsUpdaterPrerequisites';
 
 const log = createLogger('updateService');
 
@@ -226,9 +232,41 @@ function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): 
   currentStatus = status;
   lastErrorCode = extra?.errorCode;
   broadcastStatus({ status, ...extra });
-  if (status === 'ready' && !startupUpdateCheckInProgress) {
+  if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
     void evaluateAutoRelaunch('status-ready');
   }
+}
+
+function blockWindowsUpdaterForMissingRuntime(missingFiles: readonly string[]): false {
+  log.error(
+    'Windows updater prerequisites missing (%s); keeping patch staged',
+    missingFiles.join(', '),
+  );
+  isRelaunching = false;
+  autoRelaunchInProgress = false;
+  setStatus('ready', {
+    version: readyVersion,
+    errorCode: WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE,
+  });
+  return false;
+}
+
+function ensureWindowsUpdaterPrerequisites(options?: {
+  allowBundledRuntime?: boolean;
+}): boolean {
+  if (process.platform !== 'win32') return true;
+
+  const resourcesPath = options?.allowBundledRuntime === false
+    ? ''
+    : process.resourcesPath;
+  const result = checkWindowsUpdaterPrerequisites(undefined, resourcesPath);
+  if (!result.satisfied) {
+    return blockWindowsUpdaterForMissingRuntime(result.missingFiles);
+  }
+  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) {
+    lastErrorCode = undefined;
+  }
+  return true;
 }
 
 function autoUpdateSettingsWire() {
@@ -271,6 +309,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
   if (!readAutoUpdateSettings().autoRelaunchOnIdle) return 'disabled';
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
+  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
   const hasBusyTasksNow = await hasBusyTasks();
 
@@ -318,6 +357,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
 async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason | null> {
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
+  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
   // pkexec 必须用户在场输入密码，启动时不能自己装。
   if (process.platform === 'linux') return 'interactive-auth';
@@ -335,6 +375,9 @@ async function buildStartupReadyReply(version: string | undefined): Promise<{
   action: 'relaunch' | 'none';
   version: string | undefined;
 }> {
+  if (!ensureWindowsUpdaterPrerequisites()) {
+    return { hasUpdate: true, action: 'none', version };
+  }
   const blockReason = await getStartupRelaunchBlockReason();
   if (blockReason) {
     lastAutoRelaunchBlockReason = blockReason;
@@ -503,6 +546,9 @@ export function isUpdateRelaunchImminent(): boolean {
   if (currentStatus !== 'downloading' && currentStatus !== 'ready') return false;
   // The native updater replaces the *installed* app; it never runs in dev.
   if (isDev()) return false;
+  // A missing VC++ Runtime requires an explicit user install. Treating that
+  // indefinite wait as imminent would keep startup side-effects disabled.
+  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return false;
   // Linux 安装要 pkexec 密码，不会在空闲/启动时自己装。
   if (process.platform === 'linux') return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
@@ -1396,11 +1442,40 @@ function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
   try {
     fs.mkdirSync(workDir, { recursive: true });
     fs.copyFileSync(updaterSrc, updaterRun);
+    const runtimeStageResult = stageBundledWindowsUpdaterRuntime(
+      process.resourcesPath,
+      workDir,
+    );
+    if (runtimeStageResult === 'blocked') {
+      log.error(
+        'Windows updater app-local Runtime could not be staged or safely removed; keeping patch staged',
+      );
+      blockWindowsUpdaterForMissingRuntime(WINDOWS_UPDATER_RUNTIME_FILES);
+      return;
+    }
+    if (
+      runtimeStageResult === 'fallback-safe'
+      && !ensureWindowsUpdaterPrerequisites({ allowBundledRuntime: false })
+    ) {
+      log.error(
+        'Windows updater Runtime became unavailable while preparing the updater; keeping patch staged',
+      );
+      return;
+    }
+    log.info(
+      'Windows updater runtime source: %s',
+      runtimeStageResult === 'staged' ? 'bundled app-local DLLs' : 'System32 fallback',
+    );
   } catch (err) {
     log.error('failed to set up updater workdir at %s:', maskPath(workDir), err);
     handleApplyFailure('workdir_setup_failed');
     return;
   }
+
+  // Count the attempt only after the last Runtime check. If security software
+  // removes the bundled DLLs between the early guard and this copy, keeping the
+  // patch staged must not consume a retry or recreate the relaunch loop.
+  incrementApplyAttempts();
 
   // Theme is resolved by the renderer (collapses 'system' via the live DOM
   // class) and forwarded through the `update-relaunch` IPC, so the updater's
@@ -1823,6 +1898,14 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
     return;
   }
 
+  // The Windows updater is an x64 MSVC binary. Prefer its verified app-local
+  // Runtime and keep a machine-wide installation as the legacy/damaged-package
+  // fallback. This guard is Windows-only; macOS and Linux keep their existing
+  // update executors unchanged. Run it before stopping Subagents, incrementing
+  // the durable attempt counter, or spawning anything so a missing Runtime
+  // keeps both Cindy and the already-downloaded patch intact.
+  if (!ensureWindowsUpdaterPrerequisites()) return;
+
   // Gate *before* the updater is spawned, not inside forceQuit: once the
   // updater script is running it polls our pid and SIGKILLs us after 120s
   // (`updateScriptMacOS.ts`), so a late decision not to exit does not keep this
@@ -1840,11 +1923,6 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
     return;
   }
 
-  // Increment applyAttempts before spawning so that if the updater itself
-  // crashes (spawn succeeds → forceQuit → updater fails → old version boots),
-  // the counter persists across restarts and eventually breaks the loop.
-  incrementApplyAttempts();
-
   log.info(
     'Executing relaunch with file: %s (%s bytes)',
     maskPath(readyFilePath), fs.statSync(readyFilePath).size,
@@ -1855,9 +1933,14 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
       executeUpdateWindows(readyFilePath, theme);
       break;
     case 'darwin':
+      // Increment immediately before starting the platform executor so a
+      // failed updater can be bounded across restarts. Windows does this only
+      // after its final app-local/System32 Runtime check inside the executor.
+      incrementApplyAttempts();
       executeUpdateMacOS(readyFilePath);
       break;
     case 'linux':
+      incrementApplyAttempts();
       executeUpdateLinux(readyFilePath);
       break;
     default:

@@ -45,4 +45,10 @@ describe('conversationSearch source invariants', () => {
       'filters.sessionIds !== null || filters.workingDirs !== null',
     );
   });
+
+  it('keeps FTS hits only when visible text matches, not merely because preview is non-empty', () => {
+    expect(conversationSearchSource).toContain('visibleTextMatchesMessagesFtsQuery');
+    expect(conversationSearchSource).toContain('preview.keywordMatchedVisibleText');
+    expect(conversationSearchSource).not.toContain('preview.preview.length === 0 ? null : hit.ftsRank');
+  });
 });

@@ -205,6 +205,7 @@ async function startRewindableSession(
     idleTimeoutMs?: number;
     remoteHostId?: string;
     model?: string;
+    availableModels?: ModelDescriptor[];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
 ) {
@@ -235,7 +236,7 @@ async function startRewindableSession(
         infoCalls.push(message);
       },
     ),
-    capabilityAdditions: { availableModels: TEST_MODELS },
+    capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
@@ -268,6 +269,45 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('passes the selected custom-provider window and compact threshold to spawned Claude Code', async () => {
+    const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+    const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';
+
+    try {
+      const { handle } = await startRewindableSession({
+        model: 'xai/grok-4.6',
+        autoCompactThresholdPct: 80.4,
+        availableModels: [{
+          id: 'xai/grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 372_000.4,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        }],
+      });
+      await handle.close();
+
+      const env = sdkMock.query.mock.calls[0]?.[0]?.options?.env as
+        | Record<string, string>
+        | undefined;
+      expect(env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('372000');
+      expect(env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+    } finally {
+      if (originalMaxContextTokens === undefined) {
+        delete process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+      } else {
+        process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = originalMaxContextTokens;
+      }
+      if (originalCompactPctOverride === undefined) {
+        delete process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+      } else {
+        process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = originalCompactPctOverride;
+      }
+    }
+  });
+
   it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 

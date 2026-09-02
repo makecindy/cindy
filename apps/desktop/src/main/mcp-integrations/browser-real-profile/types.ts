@@ -14,7 +14,9 @@ export type RealProfileErrorCode =
   | 'NO_AUTH_DB'
   | 'HEADLESS_FORBIDDEN'
   | 'COPY_FAILED'
-  | 'STOP_FAILED';
+  | 'STOP_FAILED'
+  | 'REAL_PROFILE_READ_DENIED'
+  | 'APP_BOUND_ENCRYPTION_UNSUPPORTED';
 
 export class RealProfileError extends Error {
   readonly code: RealProfileErrorCode;

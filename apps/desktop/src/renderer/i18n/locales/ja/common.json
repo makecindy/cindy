@@ -2979,7 +2979,14 @@
           "toggleFailed": "ブラウザ自動操作の切り替えに失敗しました",
           "openedForLogin": "自動操作ブラウザを開きました。必要なサイトにログインしてください",
           "openForLoginFailed": "ブラウザを開けませんでした",
-          "foreignInstance": "別の Cindy が Agent 専用ブラウザを使用中です。先にそのウィンドウを終了してください。"
+          "foreignInstance": "別の Cindy が Agent 専用ブラウザを使用中です。先にそのウィンドウを終了してください。",
+          "profileLocked": "Chrome、Edge、または Brave をトレイのプロセスも含めて完全に終了し、もう一度お試しください。",
+          "noChromium": "このコンピューターに Chrome、Edge、Brave、または Chromium が見つかりません。",
+          "noAuthDb": "コピーできるブラウザのログインデータが見つかりません。通常のブラウザで先にログインするか、「ブラウザのログイン状態を使う」をオフにして Agent 専用ブラウザでログインしてください。",
+          "copyFailed": "ブラウザのログイン状態をコピーできませんでした。通常のブラウザを完全に終了して再試行するか、「ブラウザのログイン状態を使う」をオフにしてください。",
+          "headlessForbidden": "Agent 専用ブラウザがヘッドレスモードで動作している間は、ブラウザのログイン状態を使用できません。",
+          "stopFailed": "Agent 専用ブラウザを完全に終了してから、もう一度お試しください。",
+          "appBoundEncryptionUnsupported": "Windows のアプリバウンド暗号化で保護されているため、Cindy はこのブラウザのログイン状態をコピーできません。「ブラウザのログイン状態を使う」をオフにし、Agent 専用ブラウザを開いて一度ログインしてください。"
         },
         "openForLogin": "Agent 専用ブラウザを開く",
         "openForLoginHint": "これはエージェント専用の独立したブラウザです。お使いの Chrome を利用しますが、プロファイルは完全に独立しており（右上に「Cindy」と表示）、普段の Chrome のタブ・ブックマーク・ログイン状態には一切影響しません。エージェントはこのブラウザであなたの代わりにページを開き、読み、クリックし、スクリーンショットを撮ります。ログインが必要なサイトは、上の「Agent 専用ブラウザを開く」から一度ログインすれば、ログイン状態が保持され、以降はエージェントがあなたとして操作を続けられます。"
@@ -3687,6 +3694,28 @@
       "recording": "新しいショートカットを入力…",
       "editAria": "{{name}} のショートカットを変更",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex との互換性",
+          "label": "Codex によるデバイスの占有を防ぐ",
+          "aria": "Codex による Codex Micro の占有を防ぐ",
+          "recover": "環境を復元",
+          "status": {
+            "unsupported": "macOS のみ",
+            "disabled": "オフ",
+            "protecting": "Codex を再起動",
+            "intercepted": "保護中",
+            "recovery-required": "復元が必要",
+            "error": "利用不可"
+          },
+          "descriptions": {
+            "unsupported": "この保護機能は macOS でのみ利用できます。",
+            "disabled": "Cindy の実行中、Codex が Codex Micro に接続するのを防ぎます。Cindy 自体は制限されません。",
+            "protecting": "保護の準備ができました。Codex を完全に終了してから開き直してください。実行中の Codex には影響しません。",
+            "intercepted": "Codex の Work Louder サービスをブロックしました。Cindy は引き続きデバイスを使用できます。",
+            "recovery-required": "保護は停止しましたが、NODE_OPTIONS は安全に復元されていません。再度有効にする前に復元を再試行してください。",
+            "error": "Codex の保護を更新できませんでした。以前の NODE_OPTIONS は保持されているか、復元待ちです。"
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "前のタスク",
@@ -5955,6 +5984,10 @@
       "detachDevice": "デバイスを切断",
       "startDevice": "デバイスを起動",
       "stopDevice": "デバイスを停止",
+      "deleteDevice": "デバイスを削除",
+      "deleteDeviceConfirmTitle": "「{{device}}」を削除しますか？",
+      "deleteDeviceConfirmDescription": "このシミュレータと、その中に保存されているすべてのアプリ、アカウント、データを完全に削除します。この操作は取り消せません。",
+      "deleteRunningDeviceConfirmDescription": "このシミュレータは実行中です。確認すると、Cindy が関連リソースをクリーンアップしてデバイスを停止した後、保存されているすべてのアプリ、アカウント、データを完全に削除します。この操作は取り消せません。",
       "attachedDescription": "このデバイスは現在の Cindy セッションに割り当てられています。",
       "agentControlTitle": "Agent の操作権限",
       "agentControlDescription": "許可した場合のみ、Agent がこのデバイスを起動、停止、操作できます。",
@@ -6646,6 +6679,13 @@
       "move": "今すぐ移動（推奨）",
       "download": "手動でダウンロード"
     },
+    "windowsRuntimeMissing": {
+      "title": "Microsoft Visual C++ ランタイムが必要です",
+      "description": "この PC にはアップデーターに必要な Microsoft Visual C++ ランタイムがありません。ダウンロード済みの更新は保持されます。Microsoft 公式の x64 ランタイムをインストールしてから、もう一度確認してください。",
+      "download": "ランタイムをダウンロード",
+      "retry": "もう一度確認",
+      "later": "後でインストール"
+    },
     "moveToApplications": {
       "title": "アプリケーションフォルダに移動",
       "message": "{{appName}} を「アプリケーション」フォルダに移動すると、自動更新を含むより良い体験が得られます。",
@@ -7275,7 +7315,7 @@
         "title": "このモデルには今の会話が収まりません",
         "warnToast": "この会話はすでに {{used}} 使っています。切替後は新しいモデルの容量（{{total}}）の約 {{pct}}% になります",
         "overflowDescription": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy が要約してから続けます。チャット履歴は残りますが、全文をそのままは渡しません。",
-        "overflowDescriptionRemote": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。リモートのタスクでは自動的に新しいエージェント文脈へ引き継げないため、次の送信が失敗する可能性があります。このまま切り替えるか、今のモデルのままにしてください。",
+        "overflowDescriptionRemote": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
         "confirmSwitch": "切り替えて続ける",
         "cancelSwitch": "今は切り替えない"
       },

@@ -11,6 +11,10 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const deviceLinkHostSource = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8').replace(
+  /\r\n?/g,
+  '\n',
+);
 const makerSendSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
   'utf8',
@@ -25,6 +29,15 @@ function handlerBody(source: string, channel: string, nextChannel: string): stri
 }
 
 describe('session runtime control wiring', () => {
+  it('advertises host-side model-window protection to remote controllers', () => {
+    const capabilities = handlerBody(
+      registerSource,
+      'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
+      'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
+    );
+    expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+  });
+
   it('authenticates Desktop package-command entry points before minting Main context', () => {
     const legacySend = handlerBody(
       registerSource,
@@ -44,7 +57,9 @@ describe('session runtime control wiring', () => {
     );
     expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
     expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
-    expect(registerSource).toContain('attachTrustedDesktopSendContext(message, sendOpts, expectedText)');
+    expect(registerSource).toContain(
+      'attachTrustedDesktopSendContext(message, sendOpts, expectedText)',
+    );
 
     for (const [channel, nextChannel] of [
       ['MAKER_INVOKE.INPUT_ENQUEUE,', 'MAKER_INVOKE.INPUT_COMPACT,'],
@@ -245,15 +260,39 @@ describe('session runtime control wiring', () => {
     expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeLessThan(
       setModel.indexOf("typeof sessionId !== 'string'"),
     );
-    expect(setModel).toContain(
-      '!isSupportedRuntimeEffort((selection as { effort?: unknown }).effort)',
-    );
+    expect(setModel).toContain('!isSupportedRuntimeEffort(selectionEffort)');
     expect(setModel).toContain("internalOptions.source !== 'user'");
     expect(registerSource).toMatch(
       /handleSetModel\(\s*undefined,\s*sessionId,\s*model,\s*providerId,\s*undefined,\s*selection,\s*options,?\s*\)/,
     );
     expect(setModel).toMatch(/\{\s*source:\s*'user',?\s*\}/);
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
+  });
+
+  it('accepts null effort for fixed-effort local retries and device-link atomic selections', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const confirmation = setModel.indexOf('const confirmedContextWindow =');
+    const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
+    const fixedEffortValidation = setModel.indexOf('atomicSelection.effort === null');
+    const prepare = setModel.indexOf('prepareModelWindowSwitch(');
+    const apply = setModel.indexOf('applyRuntimeSetModelChange({');
+
+    expect(confirmation).toBeGreaterThan(-1);
+    expect(confirmation).toBeLessThan(selectionValidation);
+    expect(setModel).toContain(
+      "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
+    );
+    expect(setModel).toContain('catalogModel.efforts.length > 0');
+    expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
+    expect(fixedEffortValidation).toBeLessThan(prepare);
+    expect(prepare).toBeLessThan(apply);
+    expect(setModel).toContain(
+      '!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow',
+    );
   });
 
   it('validates atomic user axes against the selected catalog model before side effects', () => {
@@ -278,6 +317,191 @@ describe('session runtime control wiring', () => {
     );
     expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
     expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
+  });
+
+  it('reconciles deferred route axes before the pending gate can wake input', () => {
+    const persistRoute = handlerBody(
+      registerSource,
+      'persistRoute: async (sessionId, route) => {',
+      'logger: log,',
+    );
+    const resolveAxes = persistRoute.indexOf('const axes = resolveSessionRuntimeAxes({');
+    const persist = persistRoute.indexOf(
+      'await getDbClient().drizzle.update(sessions).set(patch)',
+      resolveAxes,
+    );
+    const commitEffort = persistRoute.indexOf('setSessionEffort(sessionId, finalEffort);', persist);
+    const commitFast = persistRoute.indexOf('setSessionFastMode(sessionId, finalFastMode);', persist);
+    const broadcast = persistRoute.indexOf('broadcastSessionPatched(sessionId, patch);', persist);
+
+    expect(persistRoute).toContain('const [desiredRow] = await getDbClient()');
+    expect(persistRoute).toContain('const restoringPreviousRoute =');
+    expect(persistRoute).toContain(
+      'let finalEffort = restoringPreviousRoute && route.effort',
+    );
+    expect(persistRoute).toContain(
+      'let finalFastMode = restoringPreviousRoute && route.fastMode !== undefined',
+    );
+    expect(persistRoute).toContain('effortExplicit: false');
+    expect(persistRoute).toContain('fastExplicit: false');
+    expect(resolveAxes).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(resolveAxes);
+    expect(commitEffort).toBeGreaterThan(persist);
+    expect(commitFast).toBeGreaterThan(commitEffort);
+    expect(broadcast).toBeGreaterThan(commitFast);
+  });
+
+  it('commits device-link atomic axes before a rebuilt queue can wake', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const selectionStart = setModel.indexOf('const selectionToCommit = atomicSelection;');
+    const applyAxes = setModel.indexOf('await applyRuntimeSelectionAxesWithRecovery({');
+    const patchEffort = setModel.indexOf('patch.effort = atomicSelection.effort;', applyAxes);
+    const patchFast = setModel.indexOf('patch.fastMode = atomicSelection.fastMode;', patchEffort);
+    const persistSelection = setModel.indexOf(
+      'await persistSessionFields(sessionId, patch);',
+      patchFast,
+    );
+    const normalWakeGuard = setModel.indexOf(
+      'if ((rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection) && !response.deferred)',
+      persistSelection,
+    );
+    const wakeQueue = setModel.indexOf(
+      'wakeSessionInputAfterCredentialSwitch(sessionId);',
+      normalWakeGuard,
+    );
+
+    expect(setModel).toContain('selectionEffort === null &&');
+    expect(setModel).toContain('isDeviceLinkInvoke() ||');
+    expect(setModel).toContain(
+      "(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')",
+    );
+    expect(setModel).toContain('!rebuildLiveOrcaWorker && !atomicSelection');
+    expect(setModel).toContain('{ wake: false }');
+    expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
+    expect(selectionStart).toBeGreaterThan(-1);
+    expect(setModel.slice(selectionStart, applyAxes)).toContain(
+      'setSessionFastMode(sessionId, selectionToCommit.fastMode);',
+    );
+    expect(applyAxes).toBeGreaterThan(selectionStart);
+    expect(patchEffort).toBeGreaterThan(applyAxes);
+    expect(patchFast).toBeGreaterThan(patchEffort);
+    expect(persistSelection).toBeGreaterThan(patchFast);
+    expect(normalWakeGuard).toBeGreaterThan(persistSelection);
+    expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
+  });
+
+  it('requires a verified target window before preparing any destructive model rebuild', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const verifiedWindowOnly = setModel.indexOf(
+      'targetContextWindow = verifiedTargetWindow ?? undefined;',
+    );
+    const unknownWindowGuard = setModel.indexOf(
+      'target model context window is unknown; runtime selection was not changed',
+    );
+    const prepare = setModel.indexOf('prepareModelWindowSwitch(');
+    const apply = setModel.indexOf('applyRuntimeSetModelChange({');
+    expect(verifiedWindowOnly).toBeGreaterThan(-1);
+    expect(setModel).toContain('await maker.getSessionMeta(sessionId)');
+    expect(setModel).toContain(
+      'liveSessionBeforeRouteChange?.model ?? persistedSessionMeta?.model',
+    );
+    expect(setModel).not.toContain(
+      'if (liveSessionBeforeRouteChange && runtimeAgentKind && runtimeRouteChanged)',
+    );
+    expect(setModel).not.toContain('verifiedTargetWindow ?? targetCatalogModel?.contextWindow');
+    expect(verifiedWindowOnly).toBeLessThan(unknownWindowGuard);
+    expect(unknownWindowGuard).toBeLessThan(prepare);
+    expect(prepare).toBeGreaterThan(-1);
+    expect(prepare).toBeLessThan(apply);
+    expect(setModel).not.toContain('getAutoCompactThresholdPct');
+    expect(setModel).toContain("preparation === 'busy'");
+    expect(setModel).toContain("preparation === 'remote-unsupported'");
+    expect(setModel).toContain('beforeClose: () => {');
+    expect(setModel).toContain('clearPendingCredentialSwitchForSession(sessionId, { wake: false })');
+    expect(setModel).toContain('sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)');
+    expect(setModel).toContain('modelWindowRebuilt ||');
+    expect(setModel).toContain('patch.contextWindow = targetContextWindow;');
+    expect(setModel).toContain(
+      '(rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection)',
+    );
+    expect(setModel).toContain('wakeSessionInputAfterCredentialSwitch(sessionId);');
+  });
+
+  it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
+    const commitRebuild = handlerBody(
+      registerSource,
+      'commitRebuild: async (sessionId, handoff, meta) => {',
+      'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
+    );
+    const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
+    const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
+    const broadcast = commitRebuild.indexOf('broadcastSessionPatched(\n        sessionId,');
+
+    expect(query).toBeGreaterThan(-1);
+    expect(commit).toBeGreaterThan(query);
+    expect(broadcast).toBeGreaterThan(commit);
+    expect(commitRebuild).toContain('contextTokens: 0,');
+    expect(commitRebuild).toContain('{ contextWindow: projectionContextWindow }');
+    expect(commitRebuild).toContain('const ownerScope = captureDataOwnerBroadcastScope();');
+    expect(commitRebuild).toContain('getCurrentDbClientSnapshot()?.clientEpoch');
+    expect(commitRebuild).toContain('ownerScope,\n      );');
+    expect(commitRebuild).toContain("log.warn('context rebuild card creation failed after commit'");
+    expect(commitRebuild).toContain('try {\n        await createDbMessage(\n          sessionId,');
+
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain("typeof runtimeStatus.contextTokens === 'number'");
+    expect(setModel).toContain('runtimeStatus.contextTokens >= 0');
+    const persistFinalRoute = setModel.indexOf('await persistSessionFields(sessionId, patch);');
+    const projectFinalWindow = setModel.indexOf(
+      '// commitRebuild first projects zero usage against the still-authoritative',
+    );
+    expect(persistFinalRoute).toBeGreaterThan(-1);
+    expect(projectFinalWindow).toBeGreaterThan(persistFinalRoute);
+    expect(setModel.slice(projectFinalWindow)).toContain('contextTokens: 0,');
+    expect(setModel.slice(projectFinalWindow)).toContain('contextWindow: targetContextWindow,');
+    expect(setModel).toContain(
+      'const routeProjectionOwnerScope = captureDataOwnerBroadcastScope();',
+    );
+  });
+
+  it('omits effort from the DB patch for fixed-effort models (sessions.effort NOT NULL)', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 固定 effort 模型(efforts.length === 0)的运行时语义是 effort: null,但
+    // sessions.effort 列是 NOT NULL——把 null 写进 DB patch 会让整个模型切换被
+    // NOT NULL 约束炸掉(issue #3691)。持久化 patch 必须省略该字段,内存 store
+    // 照常清 null,重启后按目标模型能力重新归一化。
+    const atomicPatch = setModel.indexOf('if (atomicSelection) {', setModel.indexOf('const patch: Record<string, unknown>'));
+    expect(atomicPatch).toBeGreaterThan(-1);
+    const persistCall = setModel.indexOf('persistSessionFields(sessionId', atomicPatch);
+    expect(persistCall).toBeGreaterThan(atomicPatch);
+    const patchBlock = setModel.slice(atomicPatch, persistCall);
+    expect(patchBlock).toContain('if (atomicSelection.effort !== null) {');
+    expect(patchBlock).toContain('patch.effort = atomicSelection.effort;');
+  });
+
+  it('normalizes hydrated effort to the current model capability on restart', () => {
+    // 重启后 DB 行里的 effort 是历史值;bootstrapSession hydrate 必须按当前模型
+    // 能力归一化(固定 effort → null,可调 → 兼容档),否则旧值会作为
+    // reasoningEffort 打给不支持的模型被 provider 拒绝(Greptile P1)。
+    expect(registerSource).toContain(
+      'resolveCompatibleSessionRuntimeEffort(hydrateModel, efRow?.effort ?? null)',
+    );
   });
 
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
@@ -324,6 +548,13 @@ describe('session runtime control wiring', () => {
     expect(catchBlock).toContain('await broadcastSessionRuntimeProjection(sessionId)');
     expect(catchBlock.indexOf('cancelPendingSessionRuntimeMutation')).toBeLessThan(
       catchBlock.indexOf('broadcastSessionRuntimeProjection'),
+    );
+    expect(catchBlock).toContain("const failureReason = 'runtime-selection-cancelled'");
+    expect(catchBlock).toContain('onTurnErrorEvent(sessionId, { message: failureMessage');
+    expect(catchBlock).toContain('broadcastToAllWindows(MAKER_PUSH.EVENT');
+    expect(catchBlock).toContain('The previous model remains active.');
+    expect(catchBlock.indexOf('broadcastSessionRuntimeProjection')).toBeLessThan(
+      catchBlock.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT'),
     );
   });
 
@@ -407,6 +638,34 @@ describe('session runtime control wiring', () => {
       'fastMode: atomicSelection ? atomicSelection.fastMode : runtimeStatus.fastMode',
     );
     expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
+  });
+
+  it('skips stale Codex thread relink after rebuild and still commits the target route', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const rebuilt = setModel.indexOf("modelWindowRebuilt = preparation === 'rebuilt'");
+    const relinkGate = setModel.indexOf(
+      'const shouldRelinkCodexThread = requiresCodexThreadRelink && !modelWindowRebuilt;',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);');
+
+    expect(rebuilt).toBeGreaterThan(-1);
+    expect(relinkGate).toBeGreaterThan(rebuilt);
+    expect(relinkGate).toBeLessThan(apply);
+    expect(setModel.slice(apply, persist)).toContain(
+      'requiresCodexThreadRelink: shouldRelinkCodexThread',
+    );
+    expect(setModel.slice(apply, persist)).toContain(
+      'shouldRelinkCodexThread && relinkCodexThread',
+    );
+    expect(setModel.slice(apply, persist)).toContain(
+      'result.persistedRoute !== true &&\n          (modelWindowRebuilt ||',
+    );
+    expect(persist).toBeGreaterThan(apply);
   });
 
   it('omits null runtime effort from the Codex relink SQLite commit', () => {
@@ -517,6 +776,48 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('result = await applyCandidate();');
   });
 
+  it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
+    const setRuntime = handlerBody(
+      registerSource,
+      'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {',
+      'assertExternalInputAllowed: assertReviewExternalInputAllowed,',
+    );
+    const setRuntimeGuard = setRuntime.indexOf(
+      'if (runtimeSelectionRequiresModelWindowConfirmation(response))',
+    );
+    const setRuntimeSuccess = setRuntime.indexOf(
+      'const control = getSessionRuntimeControlSnapshot(targetSessionId);',
+    );
+    expect(setRuntimeGuard).toBeGreaterThan(-1);
+    expect(setRuntimeGuard).toBeLessThan(setRuntimeSuccess);
+    expect(setRuntime.slice(setRuntimeGuard, setRuntimeSuccess)).toContain('ok: false');
+    expect(setRuntime.slice(setRuntimeGuard, setRuntimeSuccess)).toContain(
+      "errorCode: 'ROUTE_UNAVAILABLE'",
+    );
+    expect(setRuntime.slice(setRuntimeGuard, setRuntimeSuccess)).toContain(
+      'runtime selection was not changed',
+    );
+
+    const fallback = handlerBody(
+      registerSource,
+      'const maybeApplySessionRuntimeFallback = async (',
+      'const sessionControlService = createSessionControlService({',
+    );
+    const fallbackGuard = fallback.indexOf(
+      'if (runtimeSelectionRequiresModelWindowConfirmation(result))',
+    );
+    const fallbackSuccess = fallback.indexOf(
+      "log.info('automatic session runtime fallback evaluated'",
+    );
+    expect(fallbackGuard).toBeGreaterThan(-1);
+    expect(fallbackGuard).toBeLessThan(fallbackSuccess);
+    expect(fallback).toContain('blockAutoResumeForModelWindowConfirmation = true;');
+    expect(fallback).toContain('if (blockAutoResumeForModelWindowConfirmation) {');
+    expect(fallback).toContain(
+      'pendingSessionRuntimeFallbackRebuilds.delete(runtimeSession);\n        throw error;',
+    );
+  });
+
   it('fences atomic model axis settlement after an owner boundary', () => {
     const setModel = handlerBody(
       registerSource,
@@ -570,6 +871,21 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain("effort: effective.effort ?? '',");
   });
 
+  it('persists Pi runtime-verified windows without catalog replacement', () => {
+    const snapshotStart = registerSource.indexOf('if (pendingContextSnapshot) {');
+    const snapshotEnd = registerSource.indexOf(
+      'if (pendingCodexAccountUsageSnapshot)',
+      snapshotStart,
+    );
+    const snapshot = registerSource.slice(snapshotStart, snapshotEnd);
+
+    expect(snapshot).toContain("session.agentKind === 'pi'");
+    expect(snapshot).toContain('piRuntimeWindow ?? verifiedWindow');
+    expect(snapshot.indexOf('pendingContextSnapshot.contextWindow')).toBeLessThan(
+      snapshot.indexOf('lookupVerifiedContextWindow('),
+    );
+  });
+
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
     expect(registerSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
@@ -594,6 +910,231 @@ describe('session runtime control wiring', () => {
     expect(fallback).toContain('profiles.control.generation,');
   });
 
+  it('rehydrates a cold Pi runtime before model-window assessment', () => {
+    const rehydrate = handlerBody(
+      registerSource,
+      'async function rehydrateColdPiRuntimeForWindowVerification(',
+      'const agentSwitchDeps:',
+    );
+    const rolloverWiring = handlerBody(
+      registerSource,
+      'contextOverflowRolloverHolder = createContextOverflowRollover({',
+      'const pendingCredentialSwitchService = new PendingCredentialSwitchService({',
+    );
+
+    expect(rehydrate).toContain("row.agentKind !== 'pi'");
+    expect(rehydrate).toContain('resumeSessionId: row.sdkSessionId');
+    expect(rehydrate).toContain('await bootstrapSession(createOpts)');
+    expect(rehydrate).not.toContain('.send(');
+    expect(rolloverWiring).toContain('rehydrateColdPiRuntimeForWindowVerification,');
+
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const rehydrateCall = setModel.indexOf(
+      'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    expect(rehydrateCall).toBeGreaterThan(-1);
+    expect(rehydrateCall).toBeLessThan(apply);
+    expect(setModel).toContain('Pi current runtime could not be verified');
+  });
+
+  it('closes a cold Pi runtime when route persistence fails after rehydrate', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const rehydrate = setModel.indexOf(
+      'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
+    );
+    const captureRuntime = setModel.indexOf(
+      'rehydratedColdPiRuntime = liveSessionBeforeRouteChange;',
+      rehydrate,
+    );
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);');
+    const persistenceFailure = setModel.indexOf('catch (persistenceError)', persist);
+    const persistenceRethrow = setModel.indexOf('throw persistenceError;', persistenceFailure);
+    const rollback = setModel.slice(
+      persistenceFailure,
+      persistenceRethrow + 'throw persistenceError;'.length,
+    );
+    const restoreControlStores = setModel.slice(
+      setModel.indexOf('const restoreControlStores ='),
+      setModel.indexOf('const closeRejectedPiRuntime ='),
+    );
+    const restoreStores = rollback.indexOf('restoreControlStores();');
+    const closeRuntime = rollback.indexOf(
+      'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
+    );
+
+    expect(rehydrate).toBeGreaterThan(-1);
+    expect(captureRuntime).toBeGreaterThan(rehydrate);
+    expect(captureRuntime).toBeLessThan(persist);
+    expect(rollback).toContain(
+      "(result.status !== 'deferred' && previousRuntime.hadLiveSession) ||",
+    );
+    expect(rollback).toContain('rehydratedColdPiRuntime !== undefined;');
+    expect(restoreStores).toBeGreaterThan(-1);
+    expect(closeRuntime).toBeGreaterThan(restoreStores);
+    expect(restoreControlStores).toContain(
+      'setSessionProvider(sessionId, previousRuntime.providerId);',
+    );
+    expect(restoreControlStores).toContain('setSessionEffort(sessionId, previousRuntime.effort);');
+    expect(restoreControlStores).toContain('setSessionFastMode(sessionId, previousRuntime.fastMode);');
+    expect(rollback).not.toContain('.send(');
+    expect(rollback).toContain('throw persistenceError;');
+  });
+
+  it('rejects only remote rebuild pressure before applying the runtime model', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+
+    expect(setModel).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
+    expect(deviceLinkHostSource).not.toContain(
+      'CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
+    );
+    const remoteAssessment = setModel.indexOf('const remoteTargetAssessment');
+    const remoteGuard = setModel.indexOf('const remoteRouteCannotRebuild', remoteAssessment);
+    const remotePressureRejection = setModel.indexOf(
+      'remote model-window rebuild is unsupported; runtime selection was not changed',
+      remoteGuard,
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    expect(remoteGuard).toBeGreaterThan(remoteAssessment);
+    const remoteGuardBody = setModel.slice(remoteGuard, remotePressureRejection);
+    expect(remoteGuardBody).toContain('!!runtimeStatus.remoteHostId');
+    expect(remoteGuardBody).toContain('remoteRouteCannotRebuild && targetRequiresRebuild');
+    expect(remoteGuardBody).not.toContain("runtimeAgentKind === 'pi'");
+    // Protected Hosts may apply same-window, expansion, and low-pressure Pi routes,
+    // then use final get_state below to reject only an actual unsafe shrink.
+    expect(remotePressureRejection).toBeGreaterThan(remoteGuard);
+    expect(remotePressureRejection).toBeLessThan(apply);
+    expect(setModel).toContain("remoteTargetAssessment.level === 'danger'");
+    expect(setModel).toContain("remoteTargetAssessment.level === 'overflow'");
+    expect(setModel).toContain(
+      'remote model-window confirmation is unsupported; runtime selection was not changed',
+    );
+    expect(setModel).toContain('!isDeviceLinkInvoke() && confirmedContextWindow ===');
+    expect(setModel).toContain(
+      "runtimeAgentKind !== 'pi' &&\n          confirmedContextWindow !== targetContextWindow",
+    );
+    expect(setModel).not.toContain('confirmedContextWindow > targetContextWindow');
+  });
+
+  it('fails closed before switching a busy or unverifiable cold remote Pi runtime', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+
+    expect(setModel.indexOf('busy Pi task cannot change runtime selection')).toBeLessThan(apply);
+    expect(
+      setModel.indexOf('cold remote Pi runtime cannot verify the target window'),
+    ).toBeLessThan(apply);
+    expect(setModel).toContain('model window switch context is unknown; runtime selection was not changed');
+    expect(setModel).toContain('finalPiWindow < verifiedCurrentWindow!');
+    expect(setModel).not.toContain('finalPiWindow < targetContextWindow');
+  });
+
+  it('switches and verifies Pi before deciding whether the actual window needs rebuild', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    const closeRecovery = setModel.indexOf('const closeRejectedPiRuntime =');
+    const finalWindow = setModel.indexOf('const finalPiWindow =');
+    const finalWindowEnd = setModel.indexOf('if (atomicSelection) {', finalWindow);
+    const runtimeCommit = setModel.indexOf('let generation: number;');
+    const finalPreparation = setModel.indexOf('let finalPreparation:');
+    const smallerFinalWindow = setModel.indexOf('finalPiWindow < verifiedCurrentWindow!');
+    const preflightPreparation = setModel.indexOf(
+      'preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(',
+    );
+
+    const piPreflightGuard = setModel.lastIndexOf(
+      "runtimeAgentKind !== 'pi'",
+      preflightPreparation,
+    );
+    expect(piPreflightGuard).toBeGreaterThan(-1);
+    expect(preflightPreparation - piPreflightGuard).toBeLessThan(700);
+    expect(closeRecovery).toBeGreaterThan(-1);
+    expect(closeRecovery).toBeLessThan(finalWindow);
+    expect(finalWindow).toBeGreaterThan(apply);
+    expect(finalWindow).toBeLessThan(runtimeCommit);
+    expect(setModel.match(/await closeRejectedPiRuntime\(/g)).toHaveLength(5);
+    expect(finalWindowEnd).toBeGreaterThan(finalWindow);
+    expect(setModel.slice(finalWindow, finalWindowEnd)).not.toContain(
+      'await withRehydrateCloseSuppressed',
+    );
+    expect(setModel).toContain('restoreControlStores,');
+    expect(setModel).toContain('failed to close Pi after rejected final-window selection');
+    expect(setModel).toContain('assertRuntimeClosed: () => {');
+    expect(setModel).toContain('if (maker.getSession(sessionId)) {');
+    expect(setModel).toContain(
+      'rejected Pi runtime could not be closed; runtime selection was not changed',
+    );
+    expect(setModel).toContain('recheckTargetPressure: true');
+    expect(setModel).toContain("finalPreparation === 'confirmation-required'");
+    expect(setModel).toContain('contextWindowConfirmationRequired: finalPiWindow');
+    expect(setModel).toContain('contextTokensForConfirmation: finalPressureContextTokens');
+    expect(setModel).toContain('finalPressureContextTokens = contextTokens');
+    expect(setModel).toContain('runtimeRouteChanged || confirmedContextWindow !== undefined');
+    expect(setModel).toContain('targetContextWindow = finalPiWindow');
+    expect(setModel).toContain("if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {");
+    expect(setModel).toContain("runtimeAgentKind !== 'pi' || !!runtimeStatus.remoteHostId");
+    expect(setModel).not.toContain(
+      "runtimeAgentKind !== 'pi' || isDeviceLinkInvoke() || !!runtimeStatus.remoteHostId",
+    );
+    const finalRemotePressureRejection = setModel.indexOf(
+      'remote model-window confirmation is unsupported; runtime selection was not changed',
+      finalWindow,
+    );
+    expect(finalRemotePressureRejection).toBeGreaterThan(finalWindow);
+    expect(setModel).toContain('targetContextWindow = confirmedContextWindow ?? targetContextWindow');
+    expect(setModel).toContain('confirmedContextWindow === targetContextWindow');
+    expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
+    expect(finalPreparation).toBeGreaterThan(smallerFinalWindow);
+    expect(setModel).toContain("finalPreparation === 'rebuilt'");
+    expect(setModel).toContain("finalPreparation === 'remote-unsupported'");
+    expect(setModel).toContain(
+      "? 'remote model-window rebuild is unsupported; runtime selection was not changed'",
+    );
+    expect(setModel).toContain('`Pi final-window context preparation failed: ${finalPreparation}`');
+  });
+
+  it('refreshes model-only context snapshots against the retained target provider route', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const refreshStart = setModel.indexOf(
+      "if (!response.deferred) {\n          try {\n            const currentAgentKind =",
+    );
+    const refreshEnd = setModel.indexOf('const projectionMeta =', refreshStart);
+    const refresh = setModel.slice(refreshStart, refreshEnd);
+
+    expect(setModel).toContain(
+      "effectiveProviderId === undefined\n          ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)",
+    );
+    expect(refresh).toContain('model,\n              targetRouteProviderId,');
+    expect(refresh).not.toContain(
+      "typeof effectiveProviderId === 'string' ? effectiveProviderId : null",
+    );
+    expect(refresh).toContain('await recordSessionContextSnapshot(');
+  });
+
   it('commits runtime control before best-effort context bookkeeping', () => {
     const setModel = handlerBody(
       registerSource,
@@ -615,7 +1156,25 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel.slice(runtimeCommit, contextSnapshot)).toContain('if (!response.deferred) {');
     expect(setModel.slice(runtimeCommit, contextSnapshot)).toContain('try {');
+    expect(setModel).toContain("currentAgentKind === 'pi'");
+    expect(setModel).toContain('getUsageSnapshot?.().contextWindow');
+    expect(setModel).toContain(': verifiedWindow;');
     expect(setModel).toContain('runtime model context snapshot refresh failed');
+  });
+
+  it('cancels deferred selection when final-window pressure would need confirmation', () => {
+    const settle = handlerBody(
+      registerSource,
+      'const settlePendingSessionRuntimeControl =',
+      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+    );
+
+    expect(settle).toContain('if (!pending) return;');
+    expect(settle).toContain('deferred model-window selection requires unsupported confirmation');
+    expect(settle).toContain('cancelPendingSessionRuntimeMutation(sessionId, pending.generation)');
+    expect(settle).toContain('await broadcastSessionRuntimeProjection(sessionId)');
+    expect(settle).not.toContain('markPendingSessionRuntimeConfirmationRequired(');
+    expect(settle).not.toContain('confirmedContextWindow: pending.confirmedContextWindow');
   });
 
   it('composes later partial runtime changes on the accepted pending profile', () => {
@@ -641,7 +1200,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
     expect(setModel).toContain('const result = routeExplicit');
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
-    expect(setModel).toContain('applyEffort: routeExplicit || internalOptions.effortExplicit === true');
+    expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
+    expect(setModel).toContain('(routeExplicit || internalOptions.effortExplicit === true)');
     expect(setModel).toContain('applyFastMode: routeExplicit || internalOptions.fastExplicit === true');
   });
 
@@ -652,7 +1212,10 @@ describe('session runtime control wiring', () => {
       'const recoverRemoteRuntimeAxisPersistence',
     );
     expect(setModel).toContain("runtimeStatus.orcaRole === 'worker'");
-    expect(setModel).toContain('forceSessionRebuild: rebuildLiveOrcaWorker');
-    expect(setModel).toContain('if (rebuildLiveOrcaWorker && !response.deferred)');
+    expect(setModel).toContain('forceSessionRebuild:');
+    expect(setModel).toContain('rebuildLiveOrcaWorker ||');
+    expect(setModel).toContain(
+      'if ((rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection) && !response.deferred)',
+    );
   });
 });

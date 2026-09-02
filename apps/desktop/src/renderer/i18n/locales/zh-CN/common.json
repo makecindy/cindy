@@ -2971,7 +2971,14 @@
           "toggleFailed": "切换浏览器自动化失败",
           "openedForLogin": "已打开自动化浏览器，请在其中登录需要的网站",
           "openForLoginFailed": "打开浏览器失败",
-          "foreignInstance": "本机已有另一个 Cindy 占用了 Agent 专用浏览器。请先退出其它 Cindy 窗口再试。"
+          "foreignInstance": "本机已有另一个 Cindy 占用了 Agent 专用浏览器。请先退出其它 Cindy 窗口再试。",
+          "profileLocked": "请彻底退出 Chrome、Edge 或 Brave（包括托盘中的进程），然后重试。",
+          "noChromium": "未在这台电脑上找到 Chrome、Edge、Brave 或 Chromium。",
+          "noAuthDb": "没有找到可复制的浏览器登录数据。请先在日常浏览器中登录，或关闭「使用我的浏览器登录态」后在 Agent 专用浏览器中登录。",
+          "copyFailed": "无法复制浏览器登录态。请彻底退出日常浏览器后重试，或关闭「使用我的浏览器登录态」。",
+          "headlessForbidden": "Agent 专用浏览器处于无界面模式时无法使用你的浏览器登录态。",
+          "stopFailed": "请彻底关闭 Agent 专用浏览器，然后重试。",
+          "appBoundEncryptionUnsupported": "Windows 已使用应用绑定加密保护这些浏览器登录态，Cindy 无法复制。请关闭「使用我的浏览器登录态」，打开 Agent 专用浏览器并在其中登录一次。"
         },
         "openForLogin": "打开 Agent 专用浏览器",
         "openForLoginHint": "这是 Agent 专用的独立浏览器：基于你本机的 Chrome，但用一份独立配置（右上角显示为 Cindy），不会动你日常 Chrome 的标签页、书签和登录态。Agent 会在这里替你打开网页、阅读内容、点击和截图。需要登录的网站，点上面「打开 Agent 专用浏览器」手动登录一次即可——登录态会长期保留，之后 Agent 就能以你的身份继续操作。"
@@ -3673,6 +3680,28 @@
       "recording": "按下新快捷键…",
       "editAria": "修改 {{name}} 的快捷键",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex 兼容性",
+          "label": "防止 Codex 占用设备",
+          "aria": "防止 Codex 占用 Codex Micro",
+          "recover": "恢复环境",
+          "status": {
+            "unsupported": "仅 macOS",
+            "disabled": "已关闭",
+            "protecting": "请重启 Codex",
+            "intercepted": "保护中",
+            "recovery-required": "需要恢复",
+            "error": "不可用"
+          },
+          "descriptions": {
+            "unsupported": "此保护仅在 macOS 上可用。",
+            "disabled": "Cindy 运行期间阻止 Codex 连接 Codex Micro；不会限制 Cindy 本身。",
+            "protecting": "保护已就绪。请完全退出后重新打开 Codex；已经运行的 Codex 不受影响。",
+            "intercepted": "已阻止 Codex 的 Work Louder 服务，Cindy 可以继续使用设备。",
+            "recovery-required": "保护已停止，但 NODE_OPTIONS 尚未安全恢复。请先重试恢复，再重新开启。",
+            "error": "Cindy 无法更新 Codex 保护；原有 NODE_OPTIONS 已保留或等待恢复。"
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "上一个任务",
@@ -5947,6 +5976,10 @@
       "detachDevice": "断开设备",
       "startDevice": "启动设备",
       "stopDevice": "停止设备",
+      "deleteDevice": "删除设备",
+      "deleteDeviceConfirmTitle": "删除“{{device}}”？",
+      "deleteDeviceConfirmDescription": "此操作会永久删除这台模拟器，以及其中存储的所有 App、账号和数据。此操作无法撤销。",
+      "deleteRunningDeviceConfirmDescription": "这台模拟器正在运行。确认后，Cindy 会先清理相关资源并停止设备，然后永久删除其中的所有 App、账号和数据。此操作无法撤销。",
       "attachedDescription": "此设备已绑定到当前 Cindy 任务。",
       "agentControlTitle": "Agent 控制",
       "agentControlDescription": "允许后，Agent 才能启动、停止或操作这台设备。",
@@ -6638,6 +6671,13 @@
       "move": "立即移动（推荐）",
       "download": "手动下载新版本"
     },
+    "windowsRuntimeMissing": {
+      "title": "需要安装 Microsoft Visual C++ 运行库",
+      "description": "这台电脑缺少更新程序所需的 Microsoft Visual C++ 运行库。已下载的更新包会保留；请安装微软官方 x64 运行库后重新检查。",
+      "download": "下载运行库",
+      "retry": "重新检查",
+      "later": "稍后安装"
+    },
     "moveToApplications": {
       "title": "移动到应用程序文件夹",
       "message": "将 {{appName}} 移动到「应用程序」文件夹可获得更好的体验，包括自动更新。",
@@ -7267,7 +7307,7 @@
         "title": "这个模型装不下当前对话",
         "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
         "overflowDescription": "这段对话已经用了 {{used}}，超过新模型能放下的 {{total}}（约 {{pct}}%）。换过去后，Cindy 会先整理一份摘要再继续；对话记录还在，只是不会整段原样带给新模型。",
-        "overflowDescriptionRemote": "这段对话已经用了 {{used}}，超过新模型能放下的 {{total}}（约 {{pct}}%）。远程任务不会自动换窗，下一次发送仍可能失败。可以仍然切换，或留在当前模型。",
+        "overflowDescriptionRemote": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。",
         "confirmSwitch": "切换并继续",
         "cancelSwitch": "先不换"
       },

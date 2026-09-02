@@ -13,6 +13,13 @@ const mocks = vi.hoisted(() => ({
   resetSettings: vi.fn(),
   openInputMonitoringSettings: vi.fn(),
   reload: vi.fn(),
+  setGuardEnabled: vi.fn(),
+  recoverGuard: vi.fn(),
+  guardStatus: 'disabled' as
+    | 'disabled'
+    | 'protecting'
+    | 'intercepted'
+    | 'recovery-required',
   setLayoutPreviewActive: vi.fn(),
   previewListeners: [] as Array<
     (input: {
@@ -30,6 +37,22 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+vi.mock('@/hooks/useCodexMicroGuard', () => ({
+  useCodexMicroGuard: () => ({
+    state: {
+      supported: true,
+      enabled: mocks.guardStatus === 'protecting' || mocks.guardStatus === 'intercepted',
+      status: mocks.guardStatus,
+    },
+    loading: false,
+    saving: false,
+    error: false,
+    setEnabled: mocks.setGuardEnabled,
+    recover: mocks.recoverGuard,
+    reload: vi.fn(),
+  }),
 }));
 
 vi.mock('@/hooks/useWorkLouderCodex', () => ({
@@ -93,6 +116,7 @@ describe('WorkLouderCodexSettings', () => {
     Element.prototype.scrollIntoView = vi.fn();
     mocks.agentSource = 'sidebar';
     mocks.layout = createWorkLouderCodexDefaultSettings().layout;
+    mocks.guardStatus = 'disabled';
     mocks.previewListeners = [];
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -220,6 +244,30 @@ describe('WorkLouderCodexSettings', () => {
       'settings.shortcuts.workLouderCodex.lighting.autoDim.options.10-minutes',
     );
     expect(mocks.setSettings).toHaveBeenCalledWith({ lightingAutoDim: '10-minutes' });
+  });
+
+  it('lets Cindy protect the device from Codex and exposes recovery failures', () => {
+    const { unmount } = render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(
+      screen.getByRole('switch', {
+        name: 'settings.shortcuts.workLouderCodex.codexGuard.aria',
+      }),
+    );
+    expect(mocks.setGuardEnabled).toHaveBeenCalledWith(true);
+    expect(
+      screen.getByText('settings.shortcuts.workLouderCodex.codexGuard.status.disabled'),
+    ).toBeTruthy();
+    unmount();
+
+    mocks.guardStatus = 'recovery-required';
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.codexGuard.recover',
+      }),
+    );
+    expect(mocks.recoverGuard).toHaveBeenCalledOnce();
   });
 
   it('sets all six task keys at once, since they follow one shared rule', async () => {

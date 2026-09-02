@@ -18183,7 +18183,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18262,7 +18262,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18344,7 +18344,7 @@ describe('CodexAgent yield continuation', () => {
           cmd: 'pnpm --filter desktop run typecheck',
           yield_time_ms: 10_000,
         }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.turnCompleted({
@@ -18396,7 +18396,7 @@ describe('CodexAgent yield continuation', () => {
           cmd: 'pnpm --filter desktop run typecheck',
           yield_time_ms: 10_000,
         }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.itemCompleted({
@@ -18456,7 +18456,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'function_call',
         name: 'exec_command',
         arguments: JSON.stringify({ cmd: 'pnpm typecheck', yield_time_ms: 10_000 }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 226' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.itemCompleted({
@@ -18466,7 +18466,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'function_call',
         name: 'exec_command',
         arguments: JSON.stringify({ cmd: 'pnpm lint', yield_time_ms: 10_000 }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.itemCompleted({
@@ -18529,7 +18529,7 @@ describe('CodexAgent yield continuation', () => {
           cmd: 'pnpm --filter desktop run typecheck',
           yield_time_ms: 10_000,
         }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.itemCompleted({
@@ -18698,7 +18698,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18808,7 +18808,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -18863,7 +18863,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18937,7 +18937,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18990,7 +18990,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnStarted?.({
@@ -19053,7 +19053,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19122,7 +19122,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19198,7 +19198,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19304,7 +19304,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'inProgress',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.itemCompleted({
@@ -19356,7 +19356,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'inProgress',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.itemCompleted({
@@ -19413,7 +19413,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19541,7 +19541,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19601,7 +19601,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19623,7 +19623,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19645,7 +19645,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19688,7 +19688,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19741,7 +19741,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19798,7 +19798,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19889,7 +19889,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20000,7 +20000,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20070,7 +20070,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20154,7 +20154,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20231,7 +20231,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20319,7 +20319,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({

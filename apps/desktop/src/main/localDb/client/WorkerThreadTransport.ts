@@ -63,6 +63,68 @@ function applyPragmas(nextDb) {
   nextDb.pragma('busy_timeout = 5000');
 }
 
+function registerCjkSeg(nextDb) {
+  const hanChar = /\\p{Script=Han}/u;
+  const letterOrNumber = /[\\p{L}\\p{N}]/u;
+  const mark = /\\p{M}/u;
+  const whitelist = "('user', 'assistant', 'ask_user', 'plan_review')";
+  nextDb.function('cjk_seg', { deterministic: true }, (value) => {
+    if (value == null) return null;
+    const text = typeof value === 'string' ? value : String(value);
+    if (text.length === 0) return text;
+    const chars = Array.from(text);
+    let out = '';
+    let lastBoundary = '';
+    for (let i = 0; i < chars.length; i += 1) {
+      const ch = chars[i];
+      if (mark.test(ch)) {
+        out += ch;
+        continue;
+      }
+      if (lastBoundary) {
+        const hanNow = hanChar.test(ch);
+        const hanPrev = hanChar.test(lastBoundary);
+        if ((hanNow && hanPrev) || (hanNow && letterOrNumber.test(lastBoundary)) || (hanPrev && letterOrNumber.test(ch))) {
+          out += ' ';
+        }
+      }
+      out += ch;
+      lastBoundary = ch;
+    }
+    return out;
+  });
+  const row = nextDb.prepare("SELECT cjk_seg(?) AS v").get('探针');
+  if (!row || row.v !== '探 针') {
+    throw new Error("cjk_seg probe failed: expected '探 针', got " + JSON.stringify(row && row.v));
+  }
+  const hasMessages = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages');
+  const hasFts = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages_fts');
+  const hasRows = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages_fts_rows');
+  if (!hasMessages || !hasFts || !hasRows) return;
+  nextDb.exec('DROP TRIGGER IF EXISTS temp.messages_fts_insert_cjk;');
+  nextDb.exec('DROP TRIGGER IF EXISTS temp.messages_fts_update_cjk;');
+  nextDb.exec(
+    "CREATE TEMP TRIGGER messages_fts_insert_cjk AFTER INSERT ON messages " +
+    "WHEN new.rewind_at IS NULL AND new.role IN " + whitelist + " BEGIN " +
+    "INSERT OR IGNORE INTO messages_fts_rows(message_id) VALUES (new.id); " +
+    "INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content) " +
+    "SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content) " +
+    "FROM messages_fts_rows WHERE message_id = new.id; END;",
+  );
+  nextDb.exec(
+    "CREATE TEMP TRIGGER messages_fts_update_cjk AFTER UPDATE OF id, session_id, role, content, rewind_at ON messages " +
+    "WHEN old.id IS NOT new.id OR old.session_id IS NOT new.session_id OR old.role IS NOT new.role " +
+    "OR old.content IS NOT new.content OR old.rewind_at IS NOT new.rewind_at BEGIN " +
+    "DELETE FROM messages_fts WHERE rowid = (SELECT fts_rowid FROM messages_fts_rows WHERE message_id = old.id); " +
+    "UPDATE messages_fts_rows SET message_id = new.id WHERE message_id = old.id AND old.id IS NOT new.id; " +
+    "INSERT OR IGNORE INTO messages_fts_rows(message_id) SELECT new.id " +
+    "WHERE new.rewind_at IS NULL AND new.role IN " + whitelist + "; " +
+    "INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content) " +
+    "SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content) FROM messages_fts_rows " +
+    "WHERE message_id = new.id AND new.rewind_at IS NULL AND new.role IN " + whitelist + "; END;",
+  );
+}
+
 function hashMigrationFile(filePath) {
   const raw = fs.readFileSync(filePath, 'utf-8');
   const normalized = raw.replace(/\\r\\n/g, '\\n');
@@ -206,6 +268,7 @@ function createDatabase(opts) {
   const dbOpts = opts && opts.nativeBinding ? { nativeBinding: opts.nativeBinding } : {};
   const nextDb = new Database(dbPath, dbOpts);
   try {
+    registerCjkSeg(nextDb);
     applyPragmas(nextDb);
     if (dbPath !== ':memory:') {
       const vec = loadSqliteVec(nextDb, opts.sqliteVecExtPath);
@@ -433,7 +496,7 @@ function contextRebuild(readyDb, args) {
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   return readyDb.transaction(() => {
     const sessionResult = readyDb.prepare(
-      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+      'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
     ).run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error('Session missing or clear-boundary changed: ' + sessionId), {

@@ -1,4 +1,4 @@
-﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,7 @@ import {
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createVllmResponsesCompatibilityRule,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
   stripEncryptedContentFromBody,
@@ -452,6 +453,59 @@ describe('anthropic-compat-proxy tool_use provider field compatibility', () => {
 });
 
 describe('anthropic-compat-proxy encrypted content retry', () => {
+  it('normalizes and retries the vLLM Qwen Responses incompatibility once', async () => {
+    const upstream = await startFakeUpstream((idx, body, res) => {
+      if (idx === 0) {
+        expect(JSON.parse(body)).toMatchObject({
+          instructions: 'base instructions',
+          reasoning: { effort: 'high' },
+          input: [
+            { type: 'message', role: 'developer', content: 'permissions' },
+            { type: 'message', role: 'user', content: 'hello' },
+          ],
+        });
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: {
+            message: 'Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.',
+            type: 'BadRequestError',
+          },
+        }));
+        return;
+      }
+      expect(JSON.parse(body)).toEqual({
+        model: 'qwen3.8-27b-fp8',
+        reasoning: { effort: 'xhigh' },
+        input: [
+          { type: 'message', role: 'system', content: 'base instructions' },
+          { type: 'message', role: 'system', content: 'permissions' },
+          { type: 'message', role: 'user', content: 'hello' },
+        ],
+      });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createVllmResponsesCompatibilityRule()],
+    });
+
+    const result = await post(proxy.url, {
+      model: 'qwen3.8-27b-fp8',
+      instructions: 'base instructions',
+      reasoning: { effort: 'high' },
+      input: [
+        { type: 'message', role: 'developer', content: 'permissions' },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    });
+
+    expect(result.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+  });
+
   it('preserves readable agent progress when foreign reasoning ciphertext triggers recovery', async () => {
     const upstream = await startFakeUpstream((_idx, rawBody, res) => {
       const body = JSON.parse(rawBody) as {

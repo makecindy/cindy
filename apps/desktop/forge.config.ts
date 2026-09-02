@@ -23,6 +23,10 @@ import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 import { READ_SHEET_RUNTIME_PACKAGES } from '../../packages/lizi-mcps/src/cindy-docs/readSheetRuntimeDeps';
 import { reviewPdfRuntimePackages } from './src/main/reviewer/reviewPdfRuntimeDeps';
+import {
+  validateBundledWindowsUpdaterRuntime,
+  windowsUpdaterRuntimeExtraResourceForTarget,
+} from './src/main/windowsUpdaterPrerequisites';
 
 const _require = createRequire(__filename);
 const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
@@ -770,8 +774,13 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/THIRD-PARTY-RESTRICTED.txt',
   ];
 
-  if (targetPlatform === 'win32') {
-    base.unshift(`resources/${UPDATER_EXE}`);
+  const windowsUpdaterRuntimeResource =
+    windowsUpdaterRuntimeExtraResourceForTarget(targetPlatform);
+  if (windowsUpdaterRuntimeResource) {
+    base.unshift(
+      `resources/${UPDATER_EXE}`,
+      windowsUpdaterRuntimeResource,
+    );
   }
 
   if (targetPlatform === 'darwin' || targetPlatform === 'mas') {
@@ -975,6 +984,18 @@ function buildMacIOSSimulatorHelper(platform: ForgePlatform, arch: ForgeArch): v
   }
 }
 
+function compileCObjectForTarget(
+  src: string,
+  dest: string,
+  target: string,
+  extraArgs: string[],
+  label: string,
+): void {
+  const r = spawnSync('clang', ['-c', src, '-target', target, ...extraArgs, '-o', dest], { stdio: 'inherit' });
+  if (r.error) throw new Error(`[forge] clang spawn failed for ${label}: ${r.error.message}`);
+  if (r.status !== 0) throw new Error(`[forge] clang failed for ${label} (${target}) with exit code ${r.status}`);
+}
+
 function runSwiftcForTarget(src: string, dest: string, target: string, extraArgs: string[], label: string): void {
   const r = spawnSync('swiftc', ['-target', target, src, ...extraArgs, '-o', dest], { stdio: 'inherit' });
   if (r.error) throw new Error(`[forge] swiftc spawn failed for ${label}: ${r.error.message}`);
@@ -1010,20 +1031,43 @@ function buildSwiftHelperForForgeArch(
 function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
   const src = path.join(__dirname, 'native', 'xbox-gamepad', 'macos-xbox-gamepad-helper.swift');
+  const switch2UsbC = path.join(__dirname, 'native', 'xbox-gamepad', 'switch2_usb.c');
+  const switch2UsbH = path.join(__dirname, 'native', 'xbox-gamepad', 'switch2_usb.h');
   const destDir = path.join(__dirname, 'resources', 'tools', 'xbox-gamepad');
   const dest = path.join(destDir, 'cindy-macos-xbox-gamepad-helper');
   if (!fs.existsSync(src)) {
     throw new Error(`[forge] Xbox gamepad helper source missing at ${src}`);
   }
+  if (!fs.existsSync(switch2UsbC) || !fs.existsSync(switch2UsbH)) {
+    throw new Error(`[forge] Switch 2 USB helper source missing at ${switch2UsbC}`);
+  }
   fs.mkdirSync(destDir, { recursive: true });
-  buildSwiftHelperForForgeArch(
-    src,
-    dest,
-    arch,
-    MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET,
-    ['-framework', 'GameController', '-framework', 'IOKit'],
-    'Xbox gamepad helper',
-  );
+  const targets = swiftTargetTriplesForForgeArch(arch, MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET);
+  const compileOne = (output: string, target: string, objectDir: string): void => {
+    const object = path.join(objectDir, `switch2_usb-${target.split('-')[0]}.o`);
+    compileCObjectForTarget(switch2UsbC, object, target, [], 'Xbox gamepad helper C');
+    runSwiftcForTarget(
+      src,
+      output,
+      target,
+      [object, '-import-objc-header', switch2UsbH, '-framework', 'GameController', '-framework', 'IOKit'],
+      'Xbox gamepad helper',
+    );
+  };
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-xbox-gamepad-helper-'));
+  try {
+    if (targets.length === 1) {
+      compileOne(dest, targets[0], tempDir);
+    } else {
+      const outputs = targets.map((target) => path.join(tempDir, `${path.basename(dest)}-${target.split('-')[0]}`));
+      targets.forEach((target, index) => compileOne(outputs[index], target, tempDir));
+      const r = spawnSync('lipo', ['-create', ...outputs, '-output', dest], { stdio: 'inherit' });
+      if (r.error) throw new Error(`[forge] lipo spawn failed for Xbox gamepad helper: ${r.error.message}`);
+      if (r.status !== 0) throw new Error(`[forge] lipo failed for Xbox gamepad helper with exit code ${r.status}`);
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
   fs.chmodSync(dest, 0o755);
 }
 
@@ -1487,6 +1531,17 @@ const config: ForgeConfig = {
       const targetArch = requestedTargetArch();
       ensureMacIOSSimulatorWdaArchive(platform);
       if (targetPlatform === 'win32') {
+        if (targetArch !== 'x64') {
+          throw new Error(
+            `[forge] Windows updater app-local Runtime is x64-only; unsupported target arch: ${targetArch}`,
+          );
+        }
+        const runtimeManifest = validateBundledWindowsUpdaterRuntime(
+          path.join(__dirname, 'resources'),
+        );
+        console.log(
+          `[forge:prePackage] verified Windows updater app-local Runtime ${runtimeManifest.version} x64`,
+        );
         buildCindyUpdater();
       }
       stageRipgrep(targetPlatform, targetArch);

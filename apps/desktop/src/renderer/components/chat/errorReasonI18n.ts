@@ -19,6 +19,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
   tool_use_loop_detected: 'logic.errors.toolUseLoopDetected',
   'permission-tighten-interrupt-failed': 'logic.errors.permissionTightenInterruptFailed',
+  'runtime-selection-cancelled': 'newChat.chatInput.switchFailed',
   'codex-auto-review-unavailable': 'logic.errors.codexAutoReviewUnavailable',
   'host-shell-command-blocked': 'logic.errors.hostShellCommandBlocked',
   upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',

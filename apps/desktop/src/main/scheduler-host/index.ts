@@ -96,8 +96,8 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     getMainWindow: deps.getMainWindow,
     feishuIm: deps.feishuIm,
     logger: deps.logger,
-    shouldNotifyDesktop: () =>
-      getDesktopNotificationsEnabled() && !(getAgentIslandService()?.isEnabled() ?? false),
+    shouldNotifyDesktop: getDesktopNotificationsEnabled,
+    isAgentIslandEnabled: () => getAgentIslandService()?.isEnabled() ?? false,
     wecomGroupPublisher: wecomGroupNotificationService,
   });
   const promptRunner = new MakerScheduleRunner({

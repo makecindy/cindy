@@ -9,6 +9,13 @@ import { createLayoutPreviewLease, layoutPreviewOwnerFromEvent } from '../input-
 import { registerInputDevice } from '../input-devices/registry.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
 import {
+  CODEX_MICRO_GUARD_GET_STATE_CHANNEL,
+  CODEX_MICRO_GUARD_RECOVER_CHANNEL,
+  CODEX_MICRO_GUARD_SET_ENABLED_CHANNEL,
+  CODEX_MICRO_GUARD_STATE_CHANGED_CHANNEL,
+  type CodexMicroGuardState,
+} from '../../shared/codexMicroGuard.js';
+import {
   WORKLOUDER_CODEX_ACTION_CHANNEL,
   WORKLOUDER_CODEX_DEVICE,
   WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL,
@@ -34,6 +41,8 @@ import {
 } from './WorkLouderCodexHostClient.js';
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
 import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
+import { CodexMicroGuardService } from './CodexMicroGuardService.js';
+import { createCodexMicroGuardIpc } from './codexMicroGuardIpc.js';
 import { createWorkLouderCodexActiveWindowRouter } from './actionWindow.js';
 import { createWorkLouderCodexSystemFrontmostInput } from './systemFrontmostInput.js';
 import {
@@ -115,6 +124,7 @@ const hostClient = new WorkLouderCodexHostClient({
   fork: forkWorkLouderHost,
   log,
 });
+const codexMicroGuardService = new CodexMicroGuardService();
 
 /**
  * Tasks as the sidebar currently shows them, published by the renderer.
@@ -198,7 +208,12 @@ export function registerWorkLouderCodexInputDevice(): void {
       rendererTaskCatalogScope = null;
       workLouderCodexLightingController.suspendTaskSlots();
     },
-    dispose: () => workLouderCodexLightingController.dispose(),
+    dispose: async () => {
+      await Promise.all([
+        workLouderCodexLightingController.dispose(),
+        codexMicroGuardService.dispose(),
+      ]);
+    },
   });
 }
 
@@ -220,6 +235,7 @@ export function registerWorkLouderCodexSettingsIpc(): void {
 
   workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());
   workLouderCodexLightingController.start();
+  void codexMicroGuardService.initialize();
   const handlers = createWorkLouderCodexSettingsIpc({
     assertTrustedSender: (event) => assertTrustedAppRendererEvent(event as never),
     getState: () => workLouderCodexLightingController.getState(),
@@ -266,6 +282,19 @@ export function registerWorkLouderCodexSettingsIpc(): void {
   ipcMain.handle(WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL, (event, active: unknown) =>
     handlers.setLayoutPreviewActive(event, active),
   );
+
+  const guardHandlers = createCodexMicroGuardIpc({
+    assertTrustedSender: (event) => assertTrustedAppRendererEvent(event as never),
+    getState: () => codexMicroGuardService.getState(),
+    setEnabled: (enabled) => codexMicroGuardService.setEnabled(enabled),
+    recover: () => codexMicroGuardService.recover(),
+  });
+  ipcMain.handle(CODEX_MICRO_GUARD_GET_STATE_CHANNEL, (event) => guardHandlers.get(event));
+  ipcMain.handle(CODEX_MICRO_GUARD_SET_ENABLED_CHANNEL, (event, enabled: unknown) =>
+    guardHandlers.setEnabled(event, enabled),
+  );
+  ipcMain.handle(CODEX_MICRO_GUARD_RECOVER_CHANNEL, (event) => guardHandlers.recover(event));
+  codexMicroGuardService.subscribe((state) => broadcastGuardState(state));
 
   workLouderCodexLightingController.subscribeState((state) => {
     broadcastState(state);
@@ -318,6 +347,13 @@ function broadcastState(state: WorkLouderCodexState): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!isTrustedAppRendererWindow(window)) continue;
     window.webContents.send(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, state);
+  }
+}
+
+function broadcastGuardState(state: CodexMicroGuardState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppRendererWindow(window)) continue;
+    window.webContents.send(CODEX_MICRO_GUARD_STATE_CHANGED_CHANNEL, state);
   }
 }
 

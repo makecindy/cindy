@@ -9,6 +9,8 @@ import {
   listMessagesWithPayloadRetry,
   MESSAGE_PAGE_SIZE,
   oldestMessageCursor,
+  projectLoadedMessageWindow,
+  projectLoadedMessageWindowIncrementally,
   shouldKeepOlderMessagesAffordance,
   shouldRefreshLatestMessageWindowOnReopen,
 } from '@/session/messagePaging';
@@ -64,6 +66,172 @@ describe('messagePaging', () => {
     expect(oldestMessageCursor([
       { ...message('', '2026-01-01T00:00:01.000Z'), clientId: 'client-only' },
     ])).toBeNull();
+  });
+
+  describe('projectLoadedMessageWindow', () => {
+    const compact = (id: string, createdAt: string): RemoteMessage => ({
+      ...message(`mobile-system-compact:${id}`, createdAt),
+      systemCardType: 'compact',
+    });
+
+    it('hides detached Compact cards older than the loaded host window', () => {
+      const detached = compact('old', '2026-01-01T00:00:01.000Z');
+      const rows = [
+        detached,
+        message('m10', '2026-01-01T00:00:10.000Z'),
+        message('m11', '2026-01-01T00:00:11.000Z'),
+      ];
+
+      expect(projectLoadedMessageWindow(rows).map((row) => row.id)).toEqual(['m10', 'm11']);
+    });
+
+    it('restores a Compact card when older host rows reach its time range', () => {
+      const rows = [
+        message('m0', '2026-01-01T00:00:00.000Z'),
+        compact('in-window', '2026-01-01T00:00:01.000Z'),
+        message('m2', '2026-01-01T00:00:02.000Z'),
+      ];
+
+      expect(projectLoadedMessageWindow(rows)).toBe(rows);
+    });
+
+    it('collapses adjacent replay-time Compact cards to the latest boundary', () => {
+      const rows = [
+        message('m1', '2026-01-01T00:00:01.000Z'),
+        compact('replay-1', '2026-01-01T00:00:10.000Z'),
+        compact('replay-2', '2026-01-01T00:00:11.000Z'),
+        compact('replay-3', '2026-01-01T00:00:12.000Z'),
+      ];
+
+      expect(projectLoadedMessageWindow(rows).map((row) => row.id)).toEqual([
+        'm1',
+        'mobile-system-compact:replay-3',
+      ]);
+    });
+
+    it('keeps only the latest detached tail Compact across temporary streaming rows', () => {
+      const temporaryStream = message('mobile-stream-1', '2026-01-01T00:00:11.000Z');
+      const rows = [
+        message('m1', '2026-01-01T00:00:01.000Z'),
+        compact('replay-1', '2026-01-01T00:00:10.000Z'),
+        temporaryStream,
+        compact('replay-2', '2026-01-01T00:00:12.000Z'),
+      ];
+
+      expect(projectLoadedMessageWindow(rows).map((row) => row.id)).toEqual([
+        'm1',
+        'mobile-stream-1',
+        'mobile-system-compact:replay-2',
+      ]);
+    });
+
+    it('does not let a generated streaming client id widen the persisted host window', () => {
+      const temporaryStream = {
+        ...message('temporary-row', '2026-01-01T00:00:11.000Z'),
+        clientId: 'mobile-stream-2',
+      };
+      const rows = [
+        message('m1', '2026-01-01T00:00:01.000Z'),
+        compact('replay-1', '2026-01-01T00:00:10.000Z'),
+        temporaryStream,
+        compact('replay-2', '2026-01-01T00:00:12.000Z'),
+      ];
+
+      expect(projectLoadedMessageWindow(rows).map((row) => row.id)).toEqual([
+        'm1',
+        'temporary-row',
+        'mobile-system-compact:replay-2',
+      ]);
+    });
+
+    it('keeps Compact boundaries separated by host body rows', () => {
+      const rows = [
+        message('m0', '2026-01-01T00:00:00.000Z'),
+        compact('first', '2026-01-01T00:00:01.000Z'),
+        message('body', '2026-01-01T00:00:02.000Z'),
+        compact('second', '2026-01-01T00:00:03.000Z'),
+      ];
+
+      expect(projectLoadedMessageWindow(rows)).toBe(rows);
+    });
+
+    it('keeps current-tail Compact and unrelated local system cards', () => {
+      const contextCard = {
+        ...message('mobile-system-context:1', '2025-12-31T23:59:59.000Z'),
+        systemCardType: 'context' as const,
+      };
+      const rows = [
+        contextCard,
+        message('m1', '2026-01-01T00:00:01.000Z'),
+        compact('tail', '2026-01-01T00:00:02.000Z'),
+      ];
+
+      expect(projectLoadedMessageWindow(rows)).toBe(rows);
+    });
+
+    it('does not erase Compact-only local state when no host cursor is loaded', () => {
+      const rows = [compact('only', '2026-01-01T00:00:01.000Z')];
+      expect(projectLoadedMessageWindow(rows)).toBe(rows);
+    });
+
+    it('collapses an adjacent Compact-only wall when no host cursor is loaded', () => {
+      const rows = [
+        compact('first', '2026-01-01T00:00:01.000Z'),
+        compact('second', '2026-01-01T00:00:02.000Z'),
+        compact('latest', '2026-01-01T00:00:03.000Z'),
+      ];
+
+      expect(projectLoadedMessageWindow(rows).map((row) => row.id)).toEqual([
+        'mobile-system-compact:latest',
+      ]);
+    });
+
+    it('patches a visible streaming row without rescanning a Compact projection', () => {
+      const rows = [
+        message('m1', '2026-01-01T00:00:01.000Z'),
+        compact('replay-1', '2026-01-01T00:00:02.000Z'),
+        compact('replay-2', '2026-01-01T00:00:03.000Z'),
+        message('streaming', '2026-01-01T00:00:04.000Z'),
+      ];
+      const structureToken = {};
+      const first = projectLoadedMessageWindowIncrementally({
+        changedIndexes: new Set(),
+        messages: rows,
+        structureToken,
+      });
+      expect(first.projected.map((row) => row.id)).toEqual([
+        'm1',
+        'mobile-system-compact:replay-2',
+        'streaming',
+      ]);
+
+      const nextRows = [...rows];
+      nextRows[3] = { ...rows[3], content: 'next token' };
+      let unrelatedSourceReads = 0;
+      const observedRows = new Proxy(nextRows, {
+        get(target, property, receiver) {
+          if (typeof property === 'string' && /^\d+$/.test(property) && Number(property) !== 3) {
+            unrelatedSourceReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const next = projectLoadedMessageWindowIncrementally({
+        changedIndexes: new Set([3]),
+        messages: observedRows,
+        previous: first,
+        structureToken,
+      });
+
+      expect(unrelatedSourceReads).toBe(0);
+      expect(next.sourceToProjectedIndex).toBe(first.sourceToProjectedIndex);
+      expect(next.changedIndexes).toEqual(new Set([2]));
+      expect(next.projected.map((row) => row.content)).toEqual([
+        'hello',
+        'hello',
+        'next token',
+      ]);
+    });
   });
 
   it('keeps the load-earlier affordance only when the remote page is full', () => {

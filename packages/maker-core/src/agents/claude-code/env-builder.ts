@@ -37,6 +37,12 @@ interface ClaudeEnvBuildOptions {
    */
   modelContextWindows?: readonly ModelContextWindowSource[];
   /**
+   * The model selected for this spawn. Claude Code's auto-compact resolver does
+   * not read Maker's catalog-wide window map; it needs the selected model's
+   * window in CLAUDE_CODE_MAX_CONTEXT_TOKENS.
+   */
+  activeModel?: string;
+  /**
    * 'remote': 远端 cc-mgr daemon 跑 SDK 的 env —— 从空字典起,绝不继承 desktop
    * 进程 OS env(Windows HOME=C:\... 透到远端会让 cc CLI 落怪目录)。daemon 自身
    * process.env 的真实远端 HOME/PATH 由 SDK spawn merge 提供。
@@ -51,6 +57,16 @@ interface ClaudeEnvBuildOptions {
    * (options.subagentModel 省略、走 runtimeConfig 回落分支时消费)。
    */
   sessionProviderId?: string | null;
+  /**
+   * CC CLI 内部小模型调用(bash 命令前缀判定/标题/摘要等)的模型覆写
+   * (`ANTHROPIC_SMALL_FAST_MODEL`)。未设置时 CLI 用内置**裸名**默认值 ——
+   * 经网关路由的会话模型 id 带命名空间前缀(如 `anthropic/claude-opus-5`),
+   * 网关模型白名单按字面比对,CLI 的裸名默认值必被拒为 403
+   * user_model_access_denied(#3557)。调用方只在会话 wire 模型带命名空间时
+   * 传入(钉到会话自身的 wire 模型 —— 它是唯一确定已授权的 id);裸名会话
+   * (订阅直连 / 自定义中继)省略,保持 CLI 默认行为零变化。
+   */
+  smallFastModel?: string;
   /**
    * 调用方已解析好的 `CLAUDE_CODE_SUBAGENT_MODEL` 决定(见 subagent-model-default.ts)。
    *   - 字符串 → 设该值;
@@ -355,6 +371,12 @@ export async function buildClaudeEnv(
         )?.trim() || undefined),
   );
 
+  // #3557: 网关路由会话把 CLI 内部小模型调用钉到会话自身的 wire 模型。
+  // if-undefined 守卫:behaviorFlags / 用户显式覆盖优先。
+  if (options.smallFastModel && env.ANTHROPIC_SMALL_FAST_MODEL === undefined) {
+    env.ANTHROPIC_SMALL_FAST_MODEL = options.smallFastModel;
+  }
+
   // 第三道防线: 告诉 CC CLI "provider 路由由 host 接管"。
   // CC 内部 filterSettingsEnv 看到此标记后,会从所有 settings-sourced env 中剥掉
   // ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 等 provider 相关字段,
@@ -380,6 +402,26 @@ export async function buildClaudeEnv(
     env[MAKER_MODEL_CONTEXT_WINDOWS_ENV] = modelContextWindows;
   } else {
     delete env[MAKER_MODEL_CONTEXT_WINDOWS_ENV];
+  }
+
+  const activeContextWindow = options.modelContextWindows?.find(
+    (model) => model.id === options.activeModel,
+  )?.contextWindow;
+  if (
+    activeContextWindow !== undefined
+    && Number.isFinite(activeContextWindow)
+    && activeContextWindow > 0
+  ) {
+    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(Math.floor(activeContextWindow));
+  } else {
+    delete env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+  }
+
+  const configuredCompactPct = Math.round(runtimeConfig.autoCompactThresholdPct ?? Number.NaN);
+  if (configuredCompactPct >= 50 && configuredCompactPct <= 95) {
+    env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(configuredCompactPct);
+  } else {
+    delete env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
   }
 
   // 关掉 CC SDK 内部的遥测 / 错误上报 / OTEL metrics export。

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IOSSimulatorMutationState } from '@cindy/ios-simulator-runtime';
@@ -2263,12 +2263,97 @@ describe('IOSSimulatorTabBody', () => {
       screen.getByRole('button', { name: 'rightSidebar.iosSimulator.detachDevice' }),
     ).toBeTruthy();
     expect(
+      screen.queryByRole('button', { name: 'rightSidebar.iosSimulator.deleteDevice' }),
+    ).toBeNull();
+    expect(
       screen.queryByRole('button', { name: 'rightSidebar.iosSimulator.pressHome' }),
     ).toBeNull();
     expect(
       screen.queryByRole('button', { name: 'rightSidebar.iosSimulator.stopDevice' }),
     ).toBeNull();
     expect(screen.queryByText('rightSidebar.iosSimulator.agentControlTitle')).toBeNull();
+  });
+
+  it('confirms deletion for a stopped Cindy-created simulator', async () => {
+    const instance: IOSSimulatorPublicInstance = {
+      ...readyInstance(),
+      creationProvenance: 'cindy',
+      lifecycleState: 'stopped',
+      stoppedAt: '2026-08-04T09:00:00.000Z',
+    };
+    const api = installStatus(readyStatus(instance));
+    vi.mocked(ctx.patchState).mockClear();
+
+    render(<IOSSimulatorTabBody state={{ instanceId: instance.instanceId }} ctx={ctx} />);
+
+    const deleteButton = await screen.findByRole('button', {
+      name: 'rightSidebar.iosSimulator.deleteDevice',
+    });
+    fireEvent.click(deleteButton);
+    expect(screen.getByText('rightSidebar.iosSimulator.deleteDeviceConfirmTitle')).toBeTruthy();
+    expect(
+      screen.getByText('rightSidebar.iosSimulator.deleteDeviceConfirmDescription'),
+    ).toBeTruthy();
+    expect(api.call).not.toHaveBeenCalled();
+    const confirmButton = within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'rightSidebar.iosSimulator.deleteDevice',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(confirmButton));
+
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(api.call).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        name: 'delete_instance',
+        args: {
+          instanceId: instance.instanceId,
+          generation: instance.generation,
+          leaseId: instance.lease.id,
+        },
+      });
+      expect(ctx.patchState).toHaveBeenCalledWith({ instanceId: null });
+    });
+  });
+
+  it('offers deletion while a Cindy-created simulator is running and explains automatic shutdown', async () => {
+    const instance: IOSSimulatorPublicInstance = {
+      ...readyInstance(),
+      creationProvenance: 'cindy',
+    };
+    const api = installStatus(readyStatus(instance));
+    vi.mocked(ctx.patchState).mockClear();
+
+    render(<IOSSimulatorTabBody state={{ instanceId: instance.instanceId }} ctx={ctx} />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'rightSidebar.iosSimulator.deleteDevice',
+      }),
+    );
+    expect(
+      screen.getByText('rightSidebar.iosSimulator.deleteRunningDeviceConfirmDescription'),
+    ).toBeTruthy();
+    expect(api.call).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'rightSidebar.iosSimulator.deleteDevice',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(api.call).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        name: 'delete_instance',
+        args: {
+          instanceId: instance.instanceId,
+          generation: instance.generation,
+          leaseId: instance.lease.id,
+        },
+      });
+      expect(ctx.patchState).toHaveBeenCalledWith({ instanceId: null });
+    });
   });
 
   it('maps host error codes to stable localized setup steps', () => {

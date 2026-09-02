@@ -21,6 +21,9 @@ apps/desktop/native/sqlite-vec/**/*.so filter=lfs diff=lfs merge=lfs -text
 # cindy-updater.exe 不再进 git/LFS——Windows 打包的 prePackage 每次都从
 # apps/desktop/cindy-updater/ 现场 cargo build 并覆盖 resources/ 下的产物
 # （见 forge.config.ts buildCindyUpdater）；路径已在 .gitignore 中排除。
+# Windows updater 的两个 VC Runtime DLL 很小且必须让 release 构建完全离线可复现，
+# 因此有意直接入 Git（不走 LFS）；来源、版本和 sha256 见同目录 manifest.json。
+apps/desktop/resources/cindy-updater-runtime/*.dll -text
 # Pencil 设计稿（加密二进制，体积大且改动频繁）—— 走 Git LFS
 *.pen filter=lfs diff=lfs merge=lfs -text
 # Vendored browser-control-runtime：由 scripts/browser-runtime/sync.mjs 从上游同步生成，非手写源码。

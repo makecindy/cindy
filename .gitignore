@@ -112,9 +112,13 @@ nul
 # ── AI coding agent 本地状态 ──────────────────────────────────
 # 国际主流
 # Agent 工具私有目录整体忽略；共享说明只通过 AGENTS.md / CLAUDE.md 提交。
+# 本机覆盖不入仓：CLAUDE.local.md（Claude 叠加）。
+# AGENTS.override.md 会整份替换 AGENTS.md，不得当本机备注用；出现也不入仓。
 .agents/
 .learnings/
 .claude/
+.pi/
+AGENTS.override.md
 CLAUDE.local.md
 .codex/
 .cursor/

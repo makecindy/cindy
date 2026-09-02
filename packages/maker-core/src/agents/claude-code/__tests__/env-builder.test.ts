@@ -33,6 +33,8 @@ describe('buildClaudeEnv', () => {
   const originalTerm = process.env.TERM;
   const originalPsOutputRendering = process.env.PSStyle__OutputRendering;
   const originalSubagentModel = process.env.CLAUDE_CODE_SUBAGENT_MODEL;
+  const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+  const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
 
   afterEach(() => {
     if (originalDisableCron === undefined) {
@@ -50,12 +52,38 @@ describe('buildClaudeEnv', () => {
     restore('TERM', originalTerm);
     restore('PSStyle__OutputRendering', originalPsOutputRendering);
     restore('CLAUDE_CODE_SUBAGENT_MODEL', originalSubagentModel);
+    restore('CLAUDE_CODE_MAX_CONTEXT_TOKENS', originalMaxContextTokens);
+    restore('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', originalCompactPctOverride);
   });
 
   it('disables Claude Code native cron for host-managed sessions', async () => {
     const env = await buildClaudeEnv(createAuthAdapter(), {});
 
     expect(env.CLAUDE_CODE_DISABLE_CRON).toBe('1');
+  });
+
+  it('pins ANTHROPIC_SMALL_FAST_MODEL to the session wire model when provided (#3557)', async () => {
+    // 网关路由会话:CLI 内部小模型调用不能用内置裸名默认值(网关白名单按
+    // 字面比对必 403),钉到会话自身已授权的 wire 模型。
+    const env = await buildClaudeEnv(createAuthAdapter(), {}, {
+      smallFastModel: 'anthropic/claude-opus-5',
+    });
+
+    expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe('anthropic/claude-opus-5');
+  });
+
+  it('leaves ANTHROPIC_SMALL_FAST_MODEL untouched when not provided or already set (#3557)', async () => {
+    // 裸名会话(订阅直连/自定义中继)不传 → 保持 CLI 默认行为零变化。
+    const absent = await buildClaudeEnv(createAuthAdapter(), {});
+    expect(absent.ANTHROPIC_SMALL_FAST_MODEL).toBeUndefined();
+
+    // behaviorFlags / 用户显式覆盖优先,不被会话值盖掉。
+    const overridden = await buildClaudeEnv(
+      createAuthAdapter(),
+      { behaviorFlags: { ANTHROPIC_SMALL_FAST_MODEL: 'anthropic/claude-haiku-4-5' } },
+      { smallFastModel: 'anthropic/claude-opus-5' },
+    );
+    expect(overridden.ANTHROPIC_SMALL_FAST_MODEL).toBe('anthropic/claude-haiku-4-5');
   });
 
   it('passes requested credential mode to the auth adapter', async () => {
@@ -280,6 +308,35 @@ describe('buildClaudeEnv', () => {
     });
 
     expect(env[MODEL_CONTEXT_WINDOWS_ENV]).toBeUndefined();
+  });
+
+  it('tells Claude Code the selected provider model context window', async () => {
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';
+
+    const env = await buildClaudeEnv(createAuthAdapter(), { autoCompactThresholdPct: 80.4 }, {
+      activeModel: 'xai/grok-4.6',
+      modelContextWindows: [
+        { id: 'xai/grok-4.6', contextWindow: 372_000.4 },
+        { id: 'other/model', contextWindow: 992_000 },
+      ],
+    });
+
+    expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('372000');
+    expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+  });
+
+  it('does not set a context window when the selected model is provider-unrouted', async () => {
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';
+
+    const env = await buildClaudeEnv(createAuthAdapter(), { autoCompactThresholdPct: 80 }, {
+      activeModel: 'claude-sonnet-5',
+      modelContextWindows: [{ id: 'xai/grok-4.6', contextWindow: 372_000 }],
+    });
+
+    expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+    expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
   });
 
   it('defaults command output to plain text across common CLI color controls', async () => {

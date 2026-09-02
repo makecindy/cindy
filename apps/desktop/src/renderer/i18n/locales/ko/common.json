@@ -2979,7 +2979,14 @@
           "toggleFailed": "브라우저 자동화 전환 실패",
           "openedForLogin": "자동화 브라우저를 열었습니다. 필요한 사이트에 로그인하세요",
           "openForLoginFailed": "브라우저를 열지 못했습니다",
-          "foreignInstance": "다른 Cindy 창이 이미 Agent 전용 브라우저를 사용 중입니다. 그 창을 종료한 뒤 다시 시도하세요."
+          "foreignInstance": "다른 Cindy 창이 이미 Agent 전용 브라우저를 사용 중입니다. 그 창을 종료한 뒤 다시 시도하세요.",
+          "profileLocked": "트레이 프로세스를 포함하여 Chrome, Edge 또는 Brave를 완전히 종료한 뒤 다시 시도하세요.",
+          "noChromium": "이 컴퓨터에서 Chrome, Edge, Brave 또는 Chromium을 찾을 수 없습니다.",
+          "noAuthDb": "복사할 브라우저 로그인 데이터가 없습니다. 일반 브라우저에서 먼저 로그인하거나 ‘내 브라우저 로그인 사용’을 끈 뒤 Agent 전용 브라우저에서 로그인하세요.",
+          "copyFailed": "브라우저 로그인을 복사하지 못했습니다. 일반 브라우저를 완전히 종료한 뒤 다시 시도하거나 ‘내 브라우저 로그인 사용’을 끄세요.",
+          "headlessForbidden": "Agent 전용 브라우저가 헤드리스 모드로 실행 중일 때는 브라우저 로그인을 사용할 수 없습니다.",
+          "stopFailed": "Agent 전용 브라우저를 완전히 종료한 뒤 다시 시도하세요.",
+          "appBoundEncryptionUnsupported": "Windows 앱 바운드 암호화로 보호되어 Cindy가 이 브라우저 로그인을 복사할 수 없습니다. ‘내 브라우저 로그인 사용’을 끄고 Agent 전용 브라우저를 열어 한 번 로그인하세요."
         },
         "openForLogin": "Agent 전용 브라우저 열기",
         "openForLoginHint": "에이전트 전용 독립 브라우저입니다. 설치된 Chrome을 사용하지만 프로필이 완전히 분리되어 있어(오른쪽 위에 “Cindy”로 표시) 평소 Chrome의 탭·북마크·로그인 상태에 전혀 영향을 주지 않습니다. 에이전트가 이 브라우저에서 사용자를 대신해 페이지를 열고 읽고 클릭하고 스크린샷을 찍습니다. 로그인이 필요한 사이트는 위의 “Agent 전용 브라우저 열기”에서 한 번 로그인하면 로그인 상태가 유지되어, 이후 에이전트가 사용자 명의로 계속 작업할 수 있습니다."
@@ -3687,6 +3694,28 @@
       "recording": "새 단축키를 누르세요…",
       "editAria": "{{name}} 단축키 변경",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex 호환성",
+          "label": "Codex의 장치 점유 방지",
+          "aria": "Codex의 Codex Micro 점유 방지",
+          "recover": "환경 복원",
+          "status": {
+            "unsupported": "macOS 전용",
+            "disabled": "꺼짐",
+            "protecting": "Codex 재시작 필요",
+            "intercepted": "보호 중",
+            "recovery-required": "복원 필요",
+            "error": "사용 불가"
+          },
+          "descriptions": {
+            "unsupported": "이 보호 기능은 macOS에서만 사용할 수 있습니다.",
+            "disabled": "Cindy가 실행되는 동안 Codex가 Codex Micro에 연결하지 못하게 합니다. Cindy 자체는 제한하지 않습니다.",
+            "protecting": "보호 준비가 완료되었습니다. Codex를 완전히 종료한 뒤 다시 여세요. 이미 실행 중인 Codex에는 영향을 주지 않습니다.",
+            "intercepted": "Codex의 Work Louder 서비스를 차단했습니다. Cindy는 장치를 계속 사용할 수 있습니다.",
+            "recovery-required": "보호가 중지되었지만 NODE_OPTIONS가 안전하게 복원되지 않았습니다. 다시 켜기 전에 복원을 재시도하세요.",
+            "error": "Codex 보호를 업데이트하지 못했습니다. 기존 NODE_OPTIONS는 유지되었거나 복원 대기 중입니다."
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "이전 작업",
@@ -5955,6 +5984,10 @@
       "detachDevice": "기기 연결 해제",
       "startDevice": "기기 시작",
       "stopDevice": "기기 중지",
+      "deleteDevice": "기기 삭제",
+      "deleteDeviceConfirmTitle": "{{device}} 기기를 삭제할까요?",
+      "deleteDeviceConfirmDescription": "이 시뮬레이터와 그 안에 저장된 모든 앱, 계정 및 데이터를 영구적으로 삭제합니다. 이 작업은 취소할 수 없습니다.",
+      "deleteRunningDeviceConfirmDescription": "이 시뮬레이터는 실행 중입니다. 확인하면 Cindy가 관련 리소스를 정리하고 기기를 중지한 다음 저장된 모든 앱, 계정 및 데이터를 영구적으로 삭제합니다. 이 작업은 취소할 수 없습니다.",
       "attachedDescription": "이 기기는 현재 Cindy 세션에 연결되어 있습니다.",
       "agentControlTitle": "Agent 제어",
       "agentControlDescription": "허용한 경우에만 Agent가 이 기기를 시작, 중지 또는 조작할 수 있습니다.",
@@ -6646,6 +6679,13 @@
       "move": "지금 이동 (권장)",
       "download": "수동으로 다운로드"
     },
+    "windowsRuntimeMissing": {
+      "title": "Microsoft Visual C++ 런타임 필요",
+      "description": "이 PC에는 업데이터에 필요한 Microsoft Visual C++ 런타임이 없습니다. 다운로드한 업데이트는 유지됩니다. Microsoft 공식 x64 런타임을 설치한 후 다시 확인해 주세요.",
+      "download": "런타임 다운로드",
+      "retry": "다시 확인",
+      "later": "나중에 설치"
+    },
     "moveToApplications": {
       "title": "응용 프로그램 폴더로 이동",
       "message": "{{appName}}를 응용 프로그램 폴더로 이동하면 자동 업데이트를 포함한 더 나은 경험을 사용할 수 있습니다.",
@@ -7275,7 +7315,7 @@
         "title": "이 모델에는 지금 대화를 다 넣을 수 없습니다",
         "warnToast": "이 대화는 이미 {{used}}를 사용 중입니다. 바꾸면 새 모델 용량({{total}})의 약 {{pct}}%가 됩니다",
         "overflowDescription": "이 대화는 이미 {{used}}를 사용 중이며, 새 모델이 담을 수 있는 {{total}}(약 {{pct}}%)를 넘습니다. 바꾸면 Cindy가 요약을 만든 뒤 이어서 진행합니다. 채팅 기록은 그대로 있고, 전체를 그대로 넘기지는 않습니다.",
-        "overflowDescriptionRemote": "이 대화는 이미 {{used}}를 사용 중이며, 새 모델이 담을 수 있는 {{total}}(약 {{pct}}%)를 넘습니다. 원격 작업에서는 자동으로 새 에이전트 문맥을 이어갈 수 없어 다음 요청이 실패할 수 있습니다. 그대로 바꾸거나 현재 모델을 유지하세요.",
+        "overflowDescriptionRemote": "이 원격 작업의 컨텍스트는 더 작은 모델의 {{total}} 중 {{used}}(약 {{pct}}%)를 사용 중이므로 안전하게 전환할 수 없습니다. 현재 모델을 유지하거나 새 작업을 만든 뒤 이 모델을 선택하세요.",
         "confirmSwitch": "바꾸고 계속하기",
         "cancelSwitch": "지금은 바꾸지 않기"
       },
