@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { Session } from '@/lib/ccAgent.types';
 import type { UsageHistoryPayload } from '@/hooks/useUsageHistory';
 import {
   buildAgentRows,
@@ -13,7 +14,13 @@ import {
   isUsageHistoryEmpty,
   toUsageDays,
 } from '../usageHistoryStats';
-import { shouldHideUsageTaskTable, usageActivityIso } from '../UsageTaskTable';
+import {
+  removeUsageSessionForScope,
+  shouldHideUsageTaskTable,
+  usageActivityIso,
+  usageSessionsForScope,
+  type UsageSessionsState,
+} from '../UsageTaskTable';
 
 const zeroMoney = {
   amount: 0,
@@ -70,6 +77,28 @@ describe('isUsageHistorySingleDay', () => {
     expect(isUsageHistorySingleDay('today')).toBe(true);
     expect(isUsageHistorySingleDay('day:2026-08-20')).toBe(true);
     expect(isUsageHistorySingleDay('7d')).toBe(false);
+  });
+});
+
+describe('usage task session scope', () => {
+  const readyState = (scopeKey: string): UsageSessionsState => ({
+    scopeKey,
+    status: 'ready',
+    sessions: [{ id: 'session-a' } as Session],
+  });
+
+  it('账号切换的过渡帧不暴露旧账号的全量快照', () => {
+    expect(usageSessionsForScope(readyState('owner-a'), 'owner-b')).toEqual([]);
+  });
+
+  it('只从同一账号的快照消费 deleted 事件', () => {
+    const state = readyState('owner-a');
+    expect(removeUsageSessionForScope(state, 'owner-a', 'session-a')).toMatchObject({
+      scopeKey: 'owner-a',
+      status: 'ready',
+      sessions: [],
+    });
+    expect(removeUsageSessionForScope(state, 'owner-b', 'session-a')).toBe(state);
   });
 });
 

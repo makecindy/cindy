@@ -25,7 +25,7 @@
  * 不计算消息预览，避免把统计页变成整库 messages 扫描。
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -35,6 +35,7 @@ import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 import { useProviders } from '@/hooks/useProviders';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { usageRankColor } from '@/components/new-chat/usagePalette';
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { formatUsagePercent } from './formatUsagePercent';
@@ -110,8 +111,31 @@ export function shouldHideUsageTaskTable(range: UsageHistoryRange): boolean {
   return isUsageHistorySingleDay(range);
 }
 
-type UsageSessionsState =
-  { status: 'loading' } | { status: 'ready'; sessions: Session[] } | { status: 'error' };
+export type UsageSessionsState =
+  | { scopeKey: string | null; status: 'loading' }
+  | { scopeKey: string | null; status: 'ready'; sessions: Session[] }
+  | { scopeKey: string | null; status: 'error' };
+
+/** Only a snapshot belonging to the current data owner may feed the table. */
+export function usageSessionsForScope(
+  state: UsageSessionsState,
+  scopeKey: string | null,
+): Session[] {
+  return state.scopeKey === scopeKey && state.status === 'ready' ? state.sessions : [];
+}
+
+/** Consume an existing deleted-session push without weakening the full-query scope. */
+export function removeUsageSessionForScope(
+  state: UsageSessionsState,
+  scopeKey: string | null,
+  sessionId: string,
+): UsageSessionsState {
+  if (state.scopeKey !== scopeKey || state.status !== 'ready') return state;
+  return {
+    ...state,
+    sessions: state.sessions.filter((session) => session.id !== sessionId),
+  };
+}
 
 /**
  * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
@@ -124,34 +148,56 @@ export function useTopTokenSessions(
 ): Session[] {
   // 归档的任务同样消耗过 token, 统计口径不该因为用户归档而变。
   const { sessions: recentSessions } = useCCSessions({ includeArchived: 'all' });
-  const [usageSessions, setUsageSessions] = useState<UsageSessionsState>({ status: 'loading' });
+  const scopeKey = accountScopeKey ?? null;
+  const deletedSessionIdsRef = useRef<Set<string>>(new Set());
+  const [usageSessions, setUsageSessions] = useState<UsageSessionsState>(() => ({
+    scopeKey,
+    status: 'loading',
+  }));
 
   useEffect(() => {
     let cancelled = false;
-    setUsageSessions({ status: 'loading' });
+    deletedSessionIdsRef.current = new Set();
+    setUsageSessions({ scopeKey, status: 'loading' });
+    const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
+    const unsubscribe = sessionsPush?.onPatched(({ sessionId, patch }, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp) || patch.status !== 'deleted') return;
+      deletedSessionIdsRef.current.add(sessionId);
+      setUsageSessions((state) => removeUsageSessionForScope(state, scopeKey, sessionId));
+    });
     void sessionService
       .list(20, 'all', { usageHistory: true })
       .then((rows) => {
-        if (!cancelled) setUsageSessions({ status: 'ready', sessions: rows });
+        if (cancelled) return;
+        const deletedSessionIds = deletedSessionIdsRef.current;
+        setUsageSessions({
+          scopeKey,
+          status: 'ready',
+          sessions: rows.filter((session) => !deletedSessionIds.has(session.id)),
+        });
       })
       .catch(() => {
-        if (!cancelled) setUsageSessions({ status: 'error' });
+        if (!cancelled) setUsageSessions({ scopeKey, status: 'error' });
       });
     return () => {
       cancelled = true;
+      unsubscribe?.();
     };
-  }, [accountScopeKey]);
+  }, [scopeKey]);
 
   const sessions = useMemo(() => {
     // The sidebar snapshot is capped at 1000 rows and cannot stand in for the
     // full usage-history query. Hide the aggregate until that query succeeds;
     // showing the truncated or failed fallback would mislabel the ranking.
-    if (usageSessions.status !== 'ready') return [];
-    const byId = new Map(usageSessions.sessions.map((session) => [session.id, session]));
+    if (usageSessions.scopeKey !== scopeKey || usageSessions.status !== 'ready') return [];
+    const scopedSessions = usageSessionsForScope(usageSessions, scopeKey);
+    const byId = new Map(scopedSessions.map((session) => [session.id, session]));
     // 当前列表快照包含最近的实时 token/status patch，优先覆盖全量查询的旧行。
-    for (const session of recentSessions) byId.set(session.id, session);
+    for (const session of recentSessions) {
+      if (!deletedSessionIdsRef.current.has(session.id)) byId.set(session.id, session);
+    }
     return [...byId.values()];
-  }, [recentSessions, usageSessions]);
+  }, [recentSessions, scopeKey, usageSessions]);
 
   return useMemo(() => {
     // Sessions retain only their latest activity timestamp, so they cannot
