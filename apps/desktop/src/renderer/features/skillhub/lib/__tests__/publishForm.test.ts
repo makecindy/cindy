@@ -145,6 +145,7 @@ describe('buildSkillhubPublishParams', () => {
       publishAbsolutePath: '/tmp/sivi-boss-fighting',
       submitName: 'sivi-boss-fighting',
       isFirstPublish: true,
+      categories: [{ slug: 'engine', name: 'Game Engine' }],
     })).toMatchObject({
       absolutePath: '/tmp/sivi-boss-fighting',
       name: 'sivi-boss-fighting',
@@ -153,7 +154,7 @@ describe('buildSkillhubPublishParams', () => {
       displayName: 'Boss fighting',
       summary: 'Helps structure boss fight encounters.',
       description: 'Helps structure boss fight encounters.',
-      categories: ['engine'],
+      tags: ['Game Engine'],
       visibility: 'DEPARTMENT_SCOPED',
       deptTeamSlug: 'od-dept-owner',
       visibleSlugs: ['od-dept-1', 'combat-team'],
@@ -174,15 +175,14 @@ describe('buildSkillhubPublishParams', () => {
     expect(params.deptTeamSlug).toBeUndefined();
   });
 
-  it('uses auto category mode without sending manual category slugs', () => {
+  it('uses the no-tag option without sending a misleading auto-classification mode', () => {
     expect(buildSkillhubPublishParams({
       form: { ...baseForm, categoryMode: 'auto' },
       publishAbsolutePath: '/tmp/sivi-boss-fighting',
       submitName: 'sivi-boss-fighting',
       isFirstPublish: true,
     })).toMatchObject({
-      categoryMode: 'auto',
-      categories: [],
+      tags: [],
       deptTeamSlug: 'od-dept-owner',
       visibleSlugs: ['od-dept-1', 'combat-team'],
     });

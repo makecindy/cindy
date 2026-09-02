@@ -10243,6 +10243,7 @@
       "forbidden": "이 Skill 을 조작할 권한이 없습니다",
       "notFound": "이 Skill 은 더 이상 존재하지 않습니다. 목록으로 돌아가 새로고침하세요",
       "managementApiUnavailable": "Hub 관리 API 가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요",
+      "invalidVisibility": "이 조직에서는 해당 공개 범위를 지원하지 않습니다. 공개를 선택하세요",
       "default": "작업에 실패했습니다. 잠시 후 다시 시도하세요"
     },
     "installPicker": {
@@ -10291,7 +10292,7 @@
       "versionLabel": "버전",
       "versionFormatHint": "형식: x.y.z (예: 1.0.1)",
       "categoryLabel": "분류",
-      "categoryAuto": "자동",
+      "categoryAuto": "태그 없음",
       "categoryPlaceholder": "분류 선택",
       "categoryLoading": "분류 불러오는 중…",
       "categoryLoadFailed": "분류를 불러오지 못했습니다. 다시 시도하세요",

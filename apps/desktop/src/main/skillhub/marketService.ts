@@ -1,12 +1,15 @@
 import { ServerApiError, type ApiFetchOptions } from '../serverApiClient';
 import { skillhubApiFetch } from './hubApi';
 import { mapHubSkillInfoToDesktopInfo, type HubSkillInfoForDesktop } from './infoMapping';
-import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse } from './syncMapping';
+import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse, type SkillhubSyncRef } from './syncMapping';
 import { assertSkillhubVisibilityAllowed, assertSkillhubWriteAllowed } from './identityPolicy';
-import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
+import { registryService } from './registry';
+import { createLogger } from '../logger';
+import { skillhubCatalogKey, withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 const SKILLHUB_SYNC_BATCH_SIZE = 100;
 const HUB_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
+const log = createLogger('skillhub:marketService');
 
 export type SkillhubMarketFetcher = <T>(apiPath: string, opts?: Omit<ApiFetchOptions, 'baseUrl'>) => Promise<T>;
 
@@ -42,6 +45,7 @@ export interface SkillhubMarketServiceOptions {
   fetch?: SkillhubMarketFetcher;
   assertWriteAllowed?: () => void | Promise<void>;
   assertVisibilityAllowed?: (visibility: 'private' | 'shared' | 'public') => void | Promise<void>;
+  updateRegistryCatalogScope?: (name: string, scope: SkillhubCatalogScope | undefined) => Promise<void>;
 }
 
 export interface ListMarketParams {
@@ -60,7 +64,7 @@ export interface UpdatePublishedFields {
   displayName?: string;
   summary?: string;
   description?: string;
-  categories?: string[];
+  tags?: string[];
   visibility?: 'private' | 'shared' | 'public';
   /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
   teamSlug?: string | null;
@@ -90,19 +94,32 @@ export class SkillhubMarketService {
   private readonly fetch: SkillhubMarketFetcher;
   private readonly assertWriteAllowed: () => void | Promise<void>;
   private readonly assertVisibilityAllowed: (visibility: 'private' | 'shared' | 'public') => void | Promise<void>;
+  private readonly updateRegistryCatalogScope: (name: string, scope: SkillhubCatalogScope | undefined) => Promise<void>;
 
   constructor(options: SkillhubMarketServiceOptions = {}) {
     this.fetch = options.fetch ?? skillhubApiFetch;
     this.assertWriteAllowed = options.assertWriteAllowed ?? assertSkillhubWriteAllowed;
     this.assertVisibilityAllowed = options.assertVisibilityAllowed ?? assertSkillhubVisibilityAllowed;
+    this.updateRegistryCatalogScope = options.updateRegistryCatalogScope
+      ?? registryService.updateCatalogScopeForSkill;
   }
 
-  async sync(params: { slugs?: string[] } | undefined) {
-    const names = normalizeSkillhubSlugs(params?.slugs);
-    const hubSlugs = names.filter(isValidHubSlug);
-    const detailBatches = hubSlugs.length === 0 ? [[]] : chunkSkillhubSlugs(hubSlugs);
-    const detailResponses = await Promise.all(detailBatches.map((batch) => this.fetchSkillhubBatchDetail(batch)));
-    return buildSkillhubSyncResponse(names, detailResponses);
+  async sync(params: { skills?: unknown; slugs?: string[] } | undefined) {
+    const refs = normalizeSkillhubSyncRefs(params?.skills ?? params?.slugs);
+    const grouped = new Map<SkillhubCatalogScope | undefined, string[]>();
+    for (const ref of refs.filter(({ slug }) => isValidHubSlug(slug))) {
+      const scope = ref.catalogScope;
+      grouped.set(scope, [...(grouped.get(scope) ?? []), ref.slug]);
+    }
+    const batches = [...grouped.entries()].flatMap(([catalogScope, slugs]) =>
+      chunkSkillhubSlugs(slugs).map((batch) => ({ catalogScope, slugs: batch }))
+    );
+    const requests = batches.length > 0 ? batches : [{ catalogScope: 'market' as const, slugs: [] }];
+    const detailResponses = await Promise.all(requests.map(async ({ catalogScope, slugs }) => ({
+      catalogScope,
+      response: await this.fetchSkillhubBatchDetail(slugs, catalogScope),
+    })));
+    return buildSkillhubSyncResponse(refs, detailResponses);
   }
 
   async listMarket(params: ListMarketParams | undefined) {
@@ -234,6 +251,13 @@ export class SkillhubMarketService {
         },
       },
     );
+    // A public-review request has already moved the user's management view to
+    // the native record even while the old catalog visibility remains active.
+    const targetVisibility = result.requestedVisibility ?? result.visibility;
+    const catalogScope = targetVisibility === 'shared' ? 'team' as const : undefined;
+    await this.updateRegistryCatalogScope(name, catalogScope).catch((err) => {
+      log.warn(`[visibility] registry catalog scope update failed name=${name}:`, err);
+    });
     return { success: true as const, result };
   }
 
@@ -267,6 +291,7 @@ export class SkillhubMarketService {
       name: string;
       skillCount?: number;
       mySkillCount?: number;
+      source?: 'author' | 'platform';
       children?: Array<{
         slug: string;
         name: string;
@@ -303,8 +328,8 @@ export class SkillhubMarketService {
     return { success: true as const, ...result };
   }
 
-  private fetchSkillhubBatchDetail(slugs: string[]): Promise<SkillhubBatchDetailResponse> {
-    return this.fetch<SkillhubBatchDetailResponse>('/api/skills-hub/skills/batch-detail', {
+  private fetchSkillhubBatchDetail(slugs: string[], catalogScope?: SkillhubCatalogScope): Promise<SkillhubBatchDetailResponse> {
+    return this.fetch<SkillhubBatchDetailResponse>(withSkillhubCatalogScope('/api/skills-hub/skills/batch-detail', catalogScope), {
       method: 'POST',
       body: { slugs },
     });
@@ -321,6 +346,23 @@ export function normalizeSkillhubSlugs(slugs: unknown): string[] {
   return [...new Set((Array.isArray(slugs) ? slugs : []).filter(
     (slug): slug is string => typeof slug === 'string' && slug.length > 0 && slug.length <= 128,
   ))];
+}
+
+export function normalizeSkillhubSyncRefs(items: unknown): SkillhubSyncRef[] {
+  const refs = Array.isArray(items) ? items : [];
+  const byKey = new Map<string, SkillhubSyncRef>();
+  for (const item of refs) {
+    const raw = typeof item === 'string' ? { slug: item } : item;
+    if (!raw || typeof raw !== 'object') continue;
+    const slug = (raw as { slug?: unknown }).slug;
+    if (typeof slug !== 'string' || slug.length === 0 || slug.length > 128) continue;
+    const candidateScope = (raw as { catalogScope?: unknown }).catalogScope;
+    const catalogScope = candidateScope === 'team' || candidateScope === 'market'
+      ? candidateScope
+      : undefined;
+    byKey.set(skillhubCatalogKey(slug, catalogScope), { slug, catalogScope });
+  }
+  return [...byKey.values()];
 }
 
 function isValidHubSlug(slug: string): boolean {
@@ -354,17 +396,25 @@ type HubCategoryNode = {
   name: string;
   skillCount?: number;
   mySkillCount?: number;
+  source?: 'author' | 'platform';
   children?: HubCategoryNode[];
 };
 
 function flattenHubCategories(nodes: HubCategoryNode[]) {
-  const out: Array<{ slug: string; name: string; count: number; myCount: number }> = [];
+  const out: Array<{
+    slug: string;
+    name: string;
+    count: number;
+    myCount: number;
+    source?: 'author' | 'platform';
+  }> = [];
   const visit = (node: HubCategoryNode) => {
     out.push({
       slug: node.slug,
       name: node.name,
       count: node.skillCount ?? 0,
       myCount: node.mySkillCount ?? 0,
+      source: node.source,
     });
     for (const child of node.children ?? []) visit(child);
   };

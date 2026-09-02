@@ -20,6 +20,7 @@ import { writeSnapshot } from './snapshot';
 import { pack } from './zipPacker';
 import type { PackResult } from './zipPacker';
 import { registryService } from './registry';
+import type { SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 import { getCurrentDataOwnerId, getCurrentUserId } from '../authManager';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { currentSkillhubIdentityPolicy } from './identityPolicy';
@@ -45,8 +46,7 @@ export interface PublishParams {
   deptTeamSlug?: string;
   /** 发布者为普通团队时的团队归属 slug */
   teamSlug?: string;
-  categoryMode?: 'auto' | 'manual';
-  categories?: string[];
+  tags?: string[];
   changelog?: string;
 }
 
@@ -139,6 +139,7 @@ function serverErrorToCode(err: unknown): PublishErrorCode {
     if (code === 'VERSION_RACE') return 'VERSION_RACE';
     if (code === 'CHECKSUM_MISMATCH') return 'CHECKSUM_MISMATCH';
     if (code === 'NOT_AUTHOR') return 'NOT_AUTHOR';
+    if (code === 'INVALID_VISIBILITY') return 'INVALID_VISIBILITY';
     if (code === 'OSS_OBJECT_NOT_FOUND') return 'OSS_OBJECT_NOT_FOUND';
     if (err.message.includes('manifest') || err.message.includes('frontmatter'))
       return 'MANIFEST_INVALID';
@@ -152,8 +153,8 @@ function unhandledPublishErrorToCode(err: unknown): PublishErrorCode {
   return 'INTERNAL';
 }
 
-function normalizePublishCategories(categories?: string[]): string[] {
-  return [...new Set((categories ?? []).map((category) => category.trim()).filter(Boolean))];
+function normalizePublishTags(tags?: string[]): string[] {
+  return [...new Set((tags ?? []).map((tag) => tag.trim()).filter(Boolean))];
 }
 
 const PASSING_SCAN_STATUSES = new Set(['pass', 'passed', 'approved', 'published']);
@@ -177,6 +178,7 @@ async function syncPublishedRegistry(
   absolutePath: string,
   version: string,
   folderHash: string,
+  catalogScope?: SkillhubCatalogScope | null,
 ): Promise<void> {
   const nowSec = Math.floor(Date.now() / 1000);
   const myUserId = getCurrentUserId() ?? '';
@@ -188,6 +190,7 @@ async function syncPublishedRegistry(
       updatedAt: nowSec,
       authorId: myUserId,
       origin: 'published',
+      ...(catalogScope !== undefined ? { catalogScope: catalogScope ?? undefined } : {}),
     });
   } else {
     await registryService.addInstall(slug, absolutePath, {
@@ -197,6 +200,7 @@ async function syncPublishedRegistry(
       installedAt: nowSec,
       updatedAt: nowSec,
       origin: 'published',
+      ...(catalogScope ? { catalogScope } : {}),
     });
   }
 }
@@ -304,20 +308,7 @@ export class SkillPublishService {
       return { success: false, errorCode: 'INTERNAL' };
     }
 
-    const categoryMode = params.isFirstPublish ? (params.categoryMode ?? 'manual') : undefined;
-    const categories = categoryMode === 'auto' ? [] : normalizePublishCategories(params.categories);
-    if (params.isFirstPublish && categoryMode === 'manual' && categories.length === 0) {
-      this.emitProgress(
-        {
-          phase: 'failed',
-          name: params.name,
-          errorCode: 'CATEGORY_REQUIRED',
-          message: '请选择分类后再发布',
-        },
-        onProgress,
-      );
-      return { success: false, errorCode: 'CATEGORY_REQUIRED' };
-    }
+    const tags = params.isFirstPublish ? normalizePublishTags(params.tags) : undefined;
 
     const abortController = new AbortController();
     const state: InternalState = { abortController };
@@ -576,8 +567,7 @@ export class SkillPublishService {
           if (params.summary) commitBody.summary = params.summary;
           if (params.description) commitBody.description = params.description;
           if (params.isFirstPublish) {
-            commitBody.categories = categories;
-            commitBody.categoryMode = categoryMode;
+            commitBody.tags = tags;
             commitBody.visibility =
               params.visibility === 'PUBLIC'
                 ? 'public'
@@ -613,6 +603,11 @@ export class SkillPublishService {
             params.absolutePath,
             publishedVersion,
             folderHash,
+            params.isFirstPublish
+              ? params.visibility === 'DEPARTMENT_SCOPED'
+                  ? 'team'
+                  : null
+              : undefined,
           ).catch((err) => log.warn('[publish] registry sync failed (non-fatal):', err));
 
           this.emitProgress(

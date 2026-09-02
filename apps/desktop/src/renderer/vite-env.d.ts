@@ -3141,6 +3141,7 @@ interface ElectronAPI {
         | string[]
         | {
             slugs?: string[];
+            skills?: Array<{ slug: string; catalogScope?: 'market' | 'team' }>;
           },
     ) => Promise<{
       success: boolean;
@@ -3175,9 +3176,11 @@ interface ElectronAPI {
         description: string;
         authorId: string;
         authorName: string;
+        publisherName?: string;
         /** 飞书登录时拉到的头像 URL,可能为 null。 */
         authorAvatarUrl: string | null;
         isMine: boolean;
+        canManage: boolean;
         latestVersion: string;
         visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
         publishedVisibility?: 'private' | 'shared' | 'public';
@@ -3195,7 +3198,7 @@ interface ElectronAPI {
         };
         visibleDeptIds: string[];
         categories?: string[];
-        tags?: Array<{ slug: string; name: string }>;
+        tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
         githubUrl?: string | null;
         publishedAt: string;
         downloads: number;
@@ -3238,7 +3241,7 @@ interface ElectronAPI {
         displayName?: string;
         summary?: string;
         description?: string;
-        categories?: string[];
+        tags?: string[];
         visibility?: 'private' | 'shared' | 'public';
         /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
         teamSlug?: string | null;
@@ -6565,14 +6568,17 @@ interface SkillUsageDiagnosisContext {
 /* ── SkillHub v0.2.1 publish types ── */
 
 type SkillhubSyncResult =
-  | { name: string; exists: false }
+  | { name: string; catalogScope?: 'market' | 'team'; exists: false }
   | {
       name: string;
+      catalogScope?: 'market' | 'team';
       exists: true;
       isMine: boolean;
+      canManage: boolean;
       /** server 权威 authorId,用于本地 registry 回填及离线归属判定。 */
       authorId?: string;
       authorName?: string;
+      publisherName?: string;
       latestVersion: string;
       folderHash: string;
       visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
@@ -6594,7 +6600,9 @@ interface SkillhubInfoResult {
   description: string;
   authorId: string;
   authorName: string;
+  publisherName?: string;
   isMine: boolean;
+  canManage: boolean;
   latestVersion: string;
   folderHash: string;
   visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
@@ -6614,7 +6622,7 @@ interface SkillhubInfoResult {
   visibleDeptIds: string[];
   visibleDeptNames?: string[];
   categories?: string[];
-  tags?: Array<{ slug: string; name: string }>;
+  tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
   githubUrl?: string | null;
   changelog?: string;
   publishedAt: string;
@@ -6634,8 +6642,7 @@ interface SkillhubPublishParams {
   displayName?: string;
   summary?: string;
   description?: string;
-  categoryMode?: 'auto' | 'manual';
-  categories?: string[];
+  tags?: string[];
   visibility?: 'PUBLIC' | 'DEPARTMENT_SCOPED' | 'PRIVATE';
   visibleSlugs?: string[];
   /** 发布者为部门时的部门归属(od- 开头的飞书部门 ID,Hub 端自动转部门团队) */

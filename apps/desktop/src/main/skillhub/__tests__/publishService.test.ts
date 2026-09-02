@@ -158,34 +158,6 @@ describe('SkillPublishService', () => {
     })).resolves.toEqual({ success: false, errorCode: 'INVALID_VISIBILITY' });
   });
 
-  it('rejects manual-category publish requests without a category before review or upload starts', async () => {
-    const { SkillPublishService } = await import('../publishService');
-    const service = new SkillPublishService();
-    const events: Array<{ phase: string; errorCode?: string; message?: string }> = [];
-
-    const result = await service.publish(
-      {
-        absolutePath: '/tmp/skill',
-        name: 'lark-task',
-        isFirstPublish: true,
-        version: '1.0.0',
-        categoryMode: 'manual',
-        categories: [],
-      },
-      (event) => events.push(event),
-    );
-
-    expect(result).toEqual({ success: false, errorCode: 'CATEGORY_REQUIRED' });
-    expect(events).toEqual([
-      {
-        phase: 'failed',
-        name: 'lark-task',
-        errorCode: 'CATEGORY_REQUIRED',
-        message: '请选择分类后再发布',
-      },
-    ]);
-  });
-
   it('allows version publishes without category metadata and omits category fields from commit', async () => {
     writeApiKeyFile();
     const skillPath = '/tmp/xdt-publish-service-test/skill';
@@ -267,8 +239,7 @@ describe('SkillPublishService', () => {
       version: '1.1.0',
       changelog: 'Update flow.',
     });
-    expect(commitCall?.[1]?.body).not.toHaveProperty('categoryMode');
-    expect(commitCall?.[1]?.body).not.toHaveProperty('categories');
+    expect(commitCall?.[1]?.body).not.toHaveProperty('tags');
     expect(commitCall?.[1]?.body).not.toHaveProperty('visibility');
     expect(scanPollSpy).toHaveBeenCalledWith('lark-task', '1.1.0');
   });
@@ -423,8 +394,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['Productivity'],
       },
       () => {},
     );
@@ -437,8 +407,7 @@ describe('SkillPublishService', () => {
       body: expect.objectContaining({
         displayName: 'Lark Task',
         summary: 'Publish summary',
-        categories: ['productivity'],
-        categoryMode: 'manual',
+        tags: ['Productivity'],
       }),
     });
     const commitCall = vi
@@ -447,7 +416,7 @@ describe('SkillPublishService', () => {
     expect(commitCall?.[1]?.body).not.toHaveProperty('description');
   });
 
-  it('allows auto category mode and asks Hub to classify the skill', async () => {
+  it('allows a first publish without author tags', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -513,8 +482,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'auto',
-        categories: [],
+        tags: [],
       },
       () => {},
     );
@@ -525,8 +493,7 @@ describe('SkillPublishService', () => {
       baseUrl: expect.any(Function),
       logLabel: '/api/skills-hub',
       body: expect.objectContaining({
-        categoryMode: 'auto',
-        categories: [],
+        tags: [],
       }),
     });
   });
@@ -598,8 +565,7 @@ describe('SkillPublishService', () => {
         summary: 'Publish summary',
         visibility: 'PUBLIC',
         visibleSlugs: [],
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['Productivity'],
       },
       () => {},
     );
@@ -684,8 +650,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['Productivity'],
       },
       () => {},
     );
@@ -779,8 +744,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['Productivity'],
       },
       (event) => events.push(event),
     );
@@ -798,7 +762,10 @@ describe('SkillPublishService', () => {
     expect(events).not.toContainEqual(expect.objectContaining({ phase: 'failed' }));
   });
 
-  it('maps preserved Hub business error codes to actionable publish errors', async () => {
+  it.each([
+    ['NAME_TAKEN', 409, '名字已被占用'],
+    ['INVALID_VISIBILITY', 400, '当前组织暂不支持组织或私有可见性，请选择公开发布'],
+  ])('maps preserved Hub business error %s to an actionable publish error', async (errorCode, statusCode, message) => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -837,7 +804,7 @@ describe('SkillPublishService', () => {
         };
       }
       if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        throw new ServerApiError('NAME_TAKEN', 409, '名字已被占用');
+        throw new ServerApiError(errorCode, statusCode, message);
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -853,14 +820,13 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['Productivity'],
       },
       (event) => events.push(event),
     );
 
-    expect(result).toEqual({ success: false, errorCode: 'NAME_TAKEN' });
-    expect(events.at(-1)).toMatchObject({ phase: 'failed', errorCode: 'NAME_TAKEN' });
+    expect(result).toEqual({ success: false, errorCode });
+    expect(events.at(-1)).toMatchObject({ phase: 'failed', errorCode });
   });
 
   it('emits a failed progress event when packing throws unexpectedly', async () => {

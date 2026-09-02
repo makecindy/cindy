@@ -10235,6 +10235,7 @@
       "forbidden": "没有权限操作这个 Skill",
       "notFound": "这个 Skill 已不存在，请返回列表刷新",
       "managementApiUnavailable": "Hub 管理接口暂未就绪，请稍后再试",
+      "invalidVisibility": "当前组织暂不支持该可见范围，请选择公开发布",
       "default": "操作失败，请稍后重试"
     },
     "installPicker": {
@@ -10283,7 +10284,7 @@
       "versionLabel": "版本号",
       "versionFormatHint": "格式：x.y.z (例如 1.0.1)",
       "categoryLabel": "分类",
-      "categoryAuto": "自动",
+      "categoryAuto": "不添加标签",
       "categoryPlaceholder": "请选择分类",
       "categoryLoading": "正在加载分类…",
       "categoryLoadFailed": "分类加载失败，请重试",

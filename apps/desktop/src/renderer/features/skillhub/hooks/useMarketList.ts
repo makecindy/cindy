@@ -60,12 +60,15 @@ export interface MarketSkill {
   displayName: string;
   description: string;
   authorName: string;
+  /** 实际提交当前版本的成员；authorName 仍表示个人或组织归属。 */
+  publisherName?: string;
   authorId: string;
   /** 飞书头像 URL;为 null/失败时回落到 avatarInitial 字母。 */
   authorAvatarUrl: string | null;
   /** Latin/中文首字符,用于头像 fallback。 */
   avatarInitial: string;
   isMine: boolean;
+  canManage: boolean;
   latestVersion: string;
   visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
   publishedVisibility?: HubPublishedVisibility;
@@ -84,7 +87,7 @@ export interface MarketSkill {
   /** 分类 slug 列表。服务端目前还未返回时给空数组兜底。 */
   categories: string[];
   /** 服务端可搜索标签，保留显示名供详情等消费方使用。 */
-  tags: Array<{ slug: string; name: string }>;
+  tags: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
   /** Skill 对应的公开仓库地址；null 表示发布者未配置。 */
   githubUrl: string | null;
   publishedAt: string; // ISO
@@ -115,8 +118,10 @@ interface ServerListItem {
   description: string;
   authorId: string;
   authorName: string;
+  publisherName?: string;
   authorAvatarUrl: string | null;
   isMine: boolean;
+  canManage: boolean;
   latestVersion: string;
   visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
   publishedVisibility?: HubPublishedVisibility;
@@ -133,7 +138,7 @@ interface ServerListItem {
   };
   visibleDeptIds: string[];
   categories?: string[];
-  tags?: Array<{ slug: string; name: string }>;
+  tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
   githubUrl?: string | null;
   publishedAt: string;
   downloads?: number;
@@ -232,10 +237,12 @@ function mapServerToView(
     displayName: item.displayName,
     description: item.description,
     authorName: item.authorName,
+    publisherName: item.publisherName || item.authorName,
     authorId: item.authorId,
     authorAvatarUrl: item.authorAvatarUrl ?? null,
     avatarInitial: deriveAvatarInitial(item.authorName),
     isMine: item.isMine,
+    canManage: item.canManage,
     latestVersion: item.latestVersion,
     visibility: item.visibility,
     publishedVisibility: item.publishedVisibility,

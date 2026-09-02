@@ -19,13 +19,13 @@ describe('mapHubSkillInfoToDesktopInfo', () => {
         { slug: 'engine', name: 'Engine' },
         { slug: 'office', name: 'Office' },
       ],
-      tags: [{ slug: 'automation', name: 'Automation' }],
+      tags: [{ slug: 'automation', name: 'Automation', source: 'author' }],
       githubUrl: 'https://github.com/example/lark-task',
       stats: { downloads: 135 },
     }, { catalogScope: 'market' });
 
     expect(info.categories).toEqual(['engine', 'office']);
-    expect(info.tags).toEqual([{ slug: 'automation', name: 'Automation' }]);
+    expect(info.tags).toEqual([{ slug: 'automation', name: 'Automation', source: 'author' }]);
     expect(info.githubUrl).toBe('https://github.com/example/lark-task');
     expect(info.icon).toBe('https://skillhub.example.test/assets/default-skill-icon-v4.svg');
     expect(info.description).toBe('Market summary');
@@ -48,6 +48,22 @@ describe('mapHubSkillInfoToDesktopInfo', () => {
 
     expect(info.description).toBe('Manifest description');
     expect(info.downloads).toBe(0);
+  });
+
+  it('keeps organization ownership and the member publisher as separate fields', () => {
+    const info = mapHubSkillInfoToDesktopInfo({
+      slug: 'org-skill',
+      displayName: 'Org Skill',
+      description: 'Organization skill',
+      version: '1.0.0',
+      owner: { type: 'org', slug: 'acme', name: 'Acme' },
+      publisher: { name: 'Cindy Publisher' },
+      visibility: 'public',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+    });
+
+    expect(info.authorName).toBe('Acme');
+    expect(info.publisherName).toBe('Cindy Publisher');
   });
 
   it('preserves Hub ownership, visibility, and review status needed by My Published management', () => {

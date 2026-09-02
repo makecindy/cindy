@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
 import {
   Bot,
   ChevronRight,
@@ -42,6 +43,7 @@ import {
   type HomeMarketFilter,
 } from './lib/homeMarketFilter';
 import { deriveSkillSource } from './lib/skillSource';
+import { skillPublisherLabel } from './lib/publisherLabel';
 import { InstallTargetPicker, type InstallTargetSkill } from './components/InstallTargetPicker';
 import { SkillIcon } from './components/SkillIcon';
 import { SkillhubMarketPreviewPanel } from './SkillhubMarketPreviewPanel';
@@ -118,7 +120,7 @@ export function SkillhubHomeView({
       (marketResponseCurrent ? marketItems : [])
         .filter((skill) =>
           includesSkillQuery(
-            [skill.displayName, skill.name, skill.description, skill.authorName],
+            [skill.displayName, skill.name, skill.description, skill.authorName, skill.publisherName],
             normalizedQuery,
           ),
         ),
@@ -384,7 +386,7 @@ export function SkillhubHomeView({
                         </p>
                       )}
                       <div className="flex items-center gap-2 text-11 text-[var(--cmd-palette-item-meta)]">
-                        <span className="min-w-0 truncate">{s.authorName}</span>
+                        <span className="min-w-0 truncate">{skillPublisherLabel(s)}</span>
                         <span className="inline-flex shrink-0 items-center gap-0.5">
                           <Download size={11} />
                           {s.downloads}
@@ -568,7 +570,7 @@ function LocalGroup({
           // 来源:'skillhub' = 从市场安装的副本(填充徽标);'local' = 自己开发/发布、
           // 没走 SkillHub 安装的本地副本(弱化文字,不与 SkillHub 抢视觉)。
           // origin 缺失的历史 registry 靠 server isMine 兜底判定(见 deriveSkillSource)。
-          const sync = syncResults.get(s.name);
+          const sync = syncResults.get(skillhubCatalogKey(s.name, s.registryEntry?.catalogScope));
           const isMine = sync?.exists === true ? sync.isMine : null;
           const source = deriveSkillSource(
             s.registryEntry?.origin,

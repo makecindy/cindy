@@ -556,6 +556,10 @@ export function PublishDialog({
     categories: [],
     error: null,
   });
+  const editableCategories = useMemo(
+    () => categoryState.categories.filter((category) => category.source === 'author'),
+    [categoryState.categories],
+  );
 
   const loadCategories = useCallback(async () => {
     setCategoryState({ loading: true, categories: [], error: null });
@@ -695,7 +699,7 @@ export function PublishDialog({
     ? validateRequiredCategory({
       loading: categoryState.loading,
       error: categoryState.error,
-      categories: categoryState.categories,
+      categories: editableCategories,
       categoryMode: form.categoryMode,
       selectedSlug: form.categorySlug,
     })
@@ -719,8 +723,9 @@ export function PublishDialog({
       submitName,
       isFirstPublish: effectiveFirstPublish,
       ownerType: identityPolicy.ownerType,
+      categories: editableCategories,
     }),
-    [form, effectiveFirstPublish, identityPolicy.ownerType],
+    [form, effectiveFirstPublish, identityPolicy.ownerType, editableCategories],
   );
 
   const runPublish = useCallback((params: SkillhubPublishParams) => {
@@ -1090,7 +1095,7 @@ export function PublishDialog({
                         value: AUTO_CATEGORY_VALUE,
                         label: t('skillhub.publishDialog.categoryAuto'),
                       },
-                      ...categoryState.categories.map((category) => ({
+                      ...editableCategories.map((category) => ({
                         value: category.slug,
                         label: category.name,
                       })),

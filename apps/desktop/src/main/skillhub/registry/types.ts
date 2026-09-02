@@ -38,6 +38,8 @@ export interface StoredInstall {
 
 export interface StoredManifest {
   schemaVersion: 1;
+  /** catalogScope 缺省值迁移标记。旧客户端忽略并在 spread 写回时保留。 */
+  catalogScopeMigrated?: true;
   /** 自校验:必须等于文件名(去 .json)。不一致即抛 RegistryCorruptedError。 */
   skillName: string;
   /** key = path.normalize 后的绝对 installPath。 */

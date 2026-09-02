@@ -1049,6 +1049,10 @@ export function SkillhubDetailView() {
     () => (entry?.name ? getCachedInfo(entry.name, entryCatalogScope) : null),
   );
   const [infoLoading, setInfoLoading] = useState(false);
+  const [publishTargetInfo, setPublishTargetInfo] = useState<SkillhubInfoResult | null>(
+    () => (entry?.name && entryCatalogScope === 'team' ? getCachedInfo(entry.name) : null),
+  );
+  const [publishTargetLoading, setPublishTargetLoading] = useState(false);
   const [infoFetchTrigger, setInfoFetchTrigger] = useState(0);
 
   // 同步重置:entry.name 变化时立刻把 infoResult 切到新 name 的缓存值。
@@ -1064,6 +1068,9 @@ export function SkillhubDetailView() {
     setTrackedEntryInfoKey(entryInfoKey);
     const cached = entry?.name ? getCachedInfo(entry.name, entryCatalogScope) : null;
     setInfoResult(cached);
+    setPublishTargetInfo(
+      entry?.name && entryCatalogScope === 'team' ? getCachedInfo(entry.name) : null,
+    );
     setLiveScanStatus(null);
     // 有缓存就不显示 loading(SWR 后台静默刷),没缓存才进 loading 态
     setInfoLoading(isSkill && entry != null && cached === null);
@@ -1140,6 +1147,28 @@ export function SkillhubDetailView() {
       });
     return () => { cancelled = true; };
   }, [remoteInfoRequest, refreshRemoteInfo]);
+
+  // 组织目录条目可能来自只读代理，而发布始终写入原生 Hub。用无 scope
+  // 详情独立读取写入目标，避免拿组织目录的同名 Skill 判断首发/升级。
+  useEffect(() => {
+    if (!remoteInfoRequest || remoteInfoRequest.catalogScope !== 'team') {
+      setPublishTargetLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPublishTargetLoading(getCachedInfo(remoteInfoRequest.name) === null);
+    refreshInfo(remoteInfoRequest.name)
+      .then((info) => {
+        if (!cancelled) setPublishTargetInfo(info);
+      })
+      .catch((err) => {
+        log.warn(`[DetailView/publish-target] getInfo failed name=${remoteInfoRequest.name}`, err);
+      })
+      .finally(() => {
+        if (!cancelled) setPublishTargetLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [remoteInfoRequest]);
 
   // Local folder hash — only meaningful for skill kind.
   // force=true:每次切换 entry 都强制重算,bypass 30s cache,
@@ -1228,11 +1257,13 @@ export function SkillhubDetailView() {
         latestVersion: liveScanStatus.version,
       }
     : null;
-  const reviewVersion = activePublishedReviewVersion(infoResult) ?? activePublishedReviewVersion(liveScanSource);
-  const isPublishedReviewing = isEffectiveActivePublishedReview(infoResult) || isEffectiveActivePublishedReview(liveScanSource);
-  const publishedStatus = effectivePublishedStatus(infoResult) ?? effectivePublishedStatus(liveScanSource);
+  const effectivePublishInfo = entryCatalogScope === 'team' ? publishTargetInfo : infoResult;
+  const effectivePublishLoading = entryCatalogScope === 'team' ? publishTargetLoading : infoLoading;
+  const reviewVersion = activePublishedReviewVersion(effectivePublishInfo) ?? activePublishedReviewVersion(liveScanSource);
+  const isPublishedReviewing = isEffectiveActivePublishedReview(effectivePublishInfo) || isEffectiveActivePublishedReview(liveScanSource);
+  const publishedStatus = effectivePublishedStatus(effectivePublishInfo) ?? effectivePublishedStatus(liveScanSource);
   const publishDialogPendingVersion =
-    infoResult?.pendingVersion ??
+    effectivePublishInfo?.pendingVersion ??
     (reviewVersion && publishedStatus
       ? { version: reviewVersion, status: publishedStatus }
       : null);
@@ -1240,7 +1271,7 @@ export function SkillhubDetailView() {
   // 按钮区/banner 数据就绪:info 落定 + hash 算完即可,不再依赖批量 sync。
   // 仅 isSkill 场景需要 hash;command/agent 直接视为 ready。
   const hashReady = !isSkill || (!hashLoading && localFolderHash !== null);
-  const detailReady = !isSkill || (!infoLoading && hashReady);
+  const detailReady = !isSkill || (!infoLoading && !effectivePublishLoading && hashReady);
 
   // 三维度 detail state
   const marketDeleted = !infoLoading && checkMarketDeleted(entry?.name ?? '', entryCatalogScope);
@@ -1248,6 +1279,11 @@ export function SkillhubDetailView() {
     const state = deriveDetailState(isSkill ? entry : null, infoResult, marketDeleted);
     return state;
   }, [isSkill, entry, infoResult, marketDeleted]);
+  const publishTargetDeleted = !effectivePublishLoading
+    && checkMarketDeleted(entry?.name ?? '', entryCatalogScope === 'team' ? undefined : entryCatalogScope);
+  const publishDetailState = useMemo<DetailState | null>(() => (
+    deriveDetailState(isSkill ? entry : null, effectivePublishInfo, publishTargetDeleted)
+  ), [isSkill, entry, effectivePublishInfo, publishTargetDeleted]);
 
   // ── 从 detailState 派生互斥的 UI action state ──
   const registryEntry = entry?.registryEntry ?? null;
@@ -1258,8 +1294,9 @@ export function SkillhubDetailView() {
       localFolderHash,
       publishedStatus,
       identityPolicy.canWrite,
+      publishDetailState,
     ),
-    [detailState, registryEntry, localFolderHash, publishedStatus, identityPolicy.canWrite],
+    [detailState, registryEntry, localFolderHash, publishedStatus, identityPolicy.canWrite, publishDetailState],
   );
   const detailAction = detailActionState?.status ?? null;
   const isOutdated = detailActionState?.isOutdated ?? false;
@@ -1875,7 +1912,7 @@ export function SkillhubDetailView() {
                 </span>
               );
             })}
-            {detailState?.isMine && publishedStatus === 'rejected' && (
+            {publishDetailState?.canManage && publishedStatus === 'rejected' && (
               <Tip text={t('skillhub.detail.rejectedTooltip')}>
                 <button
                   type="button"
@@ -2240,7 +2277,7 @@ export function SkillhubDetailView() {
             </div>
           )}
           {/* outdated: 另一台设备发布了新版,本地版本号已落后 */}
-          {isOutdated && detailState.isMine && entry.registryEntry && (
+          {isOutdated && publishDetailState?.canManage && entry.registryEntry && (
             <div className="shrink-0 pl-3 pr-3 pt-4">
               <button
                 type="button"
@@ -2285,7 +2322,7 @@ export function SkillhubDetailView() {
             </div>
           )}
           {/* unregistered: name may be taken by someone else */}
-          {detailState.origin === null && infoResult && !infoResult.isMine && (
+          {detailState.origin === null && effectivePublishInfo && !effectivePublishInfo.canManage && (
             <div className="shrink-0 pl-3 pr-3 pt-4">
               <div className={cn(
                 'flex items-center gap-2.5 rounded-xl px-4 py-3',
@@ -2293,7 +2330,7 @@ export function SkillhubDetailView() {
               )}>
                 <AlertTriangle size={16} className="shrink-0 text-[var(--settings-section-desc)]" />
                 <span className="text-sm font-medium text-[var(--msg-assistant-text)]">
-                  {t('skillhub.detail.bannerNameTaken', { name: entry.name, author: infoResult.authorName })}
+                  {t('skillhub.detail.bannerNameTaken', { name: entry.name, author: effectivePublishInfo.authorName })}
                 </span>
               </div>
             </div>
@@ -2544,23 +2581,23 @@ export function SkillhubDetailView() {
           open={publishOpen}
           onOpenChange={setPublishOpen}
           skill={entry}
-          isFirstPublish={!detailState || detailAction?.kind === 'publish-to-market'}
+          isFirstPublish={!publishDetailState || detailAction?.kind === 'publish-to-market'}
           autoCleanName={
             detailState?.origin === null &&
-            !!infoResult && !infoResult.isMine
+            !!effectivePublishInfo && !effectivePublishInfo.canManage
           }
           latestVersion={
-            detailState?.isMine && detailState.latestVersion !== null
-              ? detailState.latestVersion
+            publishDetailState?.canManage && publishDetailState.latestVersion !== null
+              ? publishDetailState.latestVersion
               : undefined
           }
-          latestVersionStatus={detailState?.isMine ? infoResult?.moderationStatus : undefined}
+          latestVersionStatus={publishDetailState?.canManage ? effectivePublishInfo?.moderationStatus : undefined}
           pendingVersion={
-            detailState?.isMine
+            publishDetailState?.canManage
               ? publishDialogPendingVersion
               : undefined
           }
-          onLocalRenamed={(newAbsolutePath, newName) => {
+          onLocalRenamed={(newAbsolutePath) => {
             // skill 在本地被改名(目录 + frontmatter)。先清掉 history(旧 entry id 已失效)
             // + 旧 name 的 info 缓存(让新 name 重新查),然后刷新 scanner,
             // 最后导航到新 URL。先 await refresh 才 navigate,确保新 URL 落地时

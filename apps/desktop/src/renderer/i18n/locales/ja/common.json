@@ -10243,6 +10243,7 @@
       "forbidden": "この Skill を操作する権限がありません",
       "notFound": "この Skill は存在しません。リストに戻って更新してください",
       "managementApiUnavailable": "Hub 管理 API はまだ利用できません。しばらくしてから再試行してください",
+      "invalidVisibility": "この組織ではその公開範囲を利用できません。公開を選択してください",
       "default": "操作に失敗しました。しばらくしてから再試行してください"
     },
     "installPicker": {
@@ -10291,7 +10292,7 @@
       "versionLabel": "バージョン",
       "versionFormatHint": "形式：x.y.z（例：1.0.1）",
       "categoryLabel": "カテゴリ",
-      "categoryAuto": "自動",
+      "categoryAuto": "タグなし",
       "categoryPlaceholder": "カテゴリを選択",
       "categoryLoading": "カテゴリを読み込み中…",
       "categoryLoadFailed": "カテゴリの読み込みに失敗しました。再試行してください",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -7,13 +7,10 @@ import { toast } from '@/lib/toast';
 import { MarketInfoEditDialog } from '../components/MarketInfoEditDialog';
 import { type MarketCardManageAction } from '../components/MarketCard';
 import { VisibilityEditorDialog, type VisibilityTier } from '../components/VisibilityEditorDialog';
-import { lacksTeamManagePermission } from '../lib/manageGuard';
 import { marketActionErrorMessage } from '../lib/marketErrors';
 import { refresh as refreshSkillhub } from './useSkillhub';
 import type { MarketSkill } from './useMarketList';
 import { useSkillhubIdentityPolicy } from './useSkillhubIdentityPolicy';
-
-type TeamRole = 'admin' | 'publisher' | 'viewer' | undefined;
 
 export interface MarketManagementController {
   editTarget: MarketSkill | null;
@@ -33,31 +30,16 @@ export function useMarketManagement(options: {
   onClone: (skill: MarketSkill) => void;
   onDeleted?: (skill: MarketSkill) => void;
 }): MarketManagementController {
-  const { active, reload, onClone, onDeleted } = options;
+  const { reload, onClone, onDeleted } = options;
   const { t } = useTranslation();
   const { user } = useAuth();
   const identityPolicy = useSkillhubIdentityPolicy(user);
   const { confirm } = useConfirmDialog();
   const [editTarget, setEditTarget] = useState<MarketSkill | null>(null);
   const [visibilityTarget, setVisibilityTarget] = useState<MarketSkill | null>(null);
-  const [myRoleByTeamSlug, setMyRoleByTeamSlug] =
-    useState<Map<string, TeamRole>>(() => new Map());
-
-  useEffect(() => {
-    if (!active) return undefined;
-    let cancelled = false;
-    void window.electronAPI.skillhub.listUserTeams().then((res) => {
-      if (cancelled || !res.success) return;
-      setMyRoleByTeamSlug(new Map(res.teams.map((team) => [team.slug, team.myRole])));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [active]);
-
   const isReadOnly = useCallback(
-    (skill: MarketSkill) => !identityPolicy.canWrite || lacksTeamManagePermission(skill, myRoleByTeamSlug),
-    [identityPolicy.canWrite, myRoleByTeamSlug],
+    (skill: MarketSkill) => !identityPolicy.canWrite || !skill.canManage,
+    [identityPolicy.canWrite],
   );
 
   const handleDelete = useCallback(async (skill: MarketSkill) => {

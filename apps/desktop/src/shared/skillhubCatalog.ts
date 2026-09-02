@@ -6,6 +6,12 @@ export function isSkillhubCatalogScope(value: unknown): value is SkillhubCatalog
     && SKILLHUB_CATALOG_SCOPES.includes(value as SkillhubCatalogScope);
 }
 
+export function skillhubCatalogKey(slug: string, scope?: SkillhubCatalogScope): string {
+  // Missing scope is the authenticated native/management view. Market and
+  // team are explicit catalog reads and must never alias this key.
+  return `${scope ?? 'native'}:${slug}`;
+}
+
 /** Keeps follow-up reads on the generic catalog that produced the list item. */
 export function withSkillhubCatalogScope(
   path: string,

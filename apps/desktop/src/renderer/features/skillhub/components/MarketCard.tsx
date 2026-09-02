@@ -13,6 +13,7 @@ import { i18n } from '@/i18n';
 import type { MarketSkill } from '../hooks/useMarketList';
 import type { MarketCardPrimaryAction } from '../lib/marketDetailViewModel';
 import { marketVisibilityLabelKey } from '../lib/marketVisibility';
+import { skillPublisherLabel } from '../lib/publisherLabel';
 import {
   effectivePublishedStatus,
   isEffectiveActivePublishedReview,
@@ -184,7 +185,7 @@ export function MarketCard({
       {/* Author · Version + Visibility tag */}
       <div className="flex w-full items-center" style={{ gap: '8px' }}>
         <span className="text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '12px' }}>
-          {skill.authorName} · {versionStr}
+          {skillPublisherLabel(skill)} · {versionStr}
         </span>
         {status ? (
           <span

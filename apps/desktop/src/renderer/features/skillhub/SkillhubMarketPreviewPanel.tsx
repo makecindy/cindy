@@ -21,6 +21,7 @@ import {
 } from './lib/marketDetailViewModel';
 import { marketActionErrorMessage } from './lib/marketErrors';
 import { marketVisibilityLabelKey } from './lib/marketVisibility';
+import { skillPublisherLabel } from './lib/publisherLabel';
 import {
   effectivePublishedStatus,
   effectivePublishedStatusVersion,
@@ -237,7 +238,7 @@ export function SkillhubMarketPreviewPanel({
                         // New Maker 草稿,用户在那里用原生入口选 agent/模型/项目,
                         // 发送时走正常建会话路径(蒸馏会话继承该会话的模型)。
                         saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
-                          text: plainTextToTiptapDoc(`/learn hub:${skill.name} `),
+                          text: plainTextToTiptapDoc(`/learn hub:${skill.catalogScope ?? 'market'}:${skill.name} `),
                           attachments: [],
                         });
                         // 草稿目标重置为本地对话:残留的 device-link 远程草稿
@@ -287,7 +288,7 @@ export function SkillhubMarketPreviewPanel({
               </div>
 
               <p className="mt-1 truncate text-xs text-[var(--cmd-palette-item-meta)]">
-                {skill.authorName} · {skill.name} · v{skill.latestVersion}
+                {skillPublisherLabel(skill)} · {skill.name} · v{skill.latestVersion}
               </p>
               {skill.description && (
                 <p className="mt-3 text-sm leading-[1.55] text-[var(--text-secondary-mid)]">

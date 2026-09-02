@@ -10265,6 +10265,7 @@
       "forbidden": "No permission to operate on this Skill",
       "notFound": "This Skill no longer exists. Go back to the list and refresh",
       "managementApiUnavailable": "Hub management API is not ready. Please try again later",
+      "invalidVisibility": "This organization does not support that visibility. Choose Public",
       "default": "Operation failed. Please try again later"
     },
     "installPicker": {
@@ -10313,7 +10314,7 @@
       "versionLabel": "Version",
       "versionFormatHint": "Format: x.y.z (e.g. 1.0.1)",
       "categoryLabel": "Category",
-      "categoryAuto": "Auto",
+      "categoryAuto": "No Tag",
       "categoryPlaceholder": "Select a category",
       "categoryLoading": "Loading categories…",
       "categoryLoadFailed": "Failed to load categories. Please retry.",
