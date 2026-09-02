@@ -626,6 +626,14 @@ describe('auth login-flow reset', () => {
     expect(logoutBody).toContain('accountToLogOut: currentIdentity');
     expect(logoutBody).toContain('if (isUnavailableSavedAccountError(error)) continue;');
     expect(logoutBody).toContain('isRetryableSavedAccountSwitchError(error)');
+    const retryableSwitchStart = source.indexOf('function isRetryableSavedAccountSwitchError(');
+    const retryableSwitchEnd = source.indexOf(
+      '\n}\n\nfunction revokeLoggedOutAccountBestEffort',
+      retryableSwitchStart,
+    );
+    const retryableSwitchBody = source.slice(retryableSwitchStart, retryableSwitchEnd);
+    expect(retryableSwitchBody).toContain('error.statusCode === 429');
+    expect(retryableSwitchBody).toContain("'RATE_LIMITED'");
     expect(logoutBody.indexOf('return;', candidateLoop)).toBeLessThan(terminalSignOut);
     expect(terminalSignOut).toBeGreaterThan(candidateLoop);
     expect(logoutBody).not.toContain('revokeSavedSessionsBestEffort');

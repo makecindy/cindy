@@ -5549,9 +5549,14 @@ function isRetryableSavedAccountSwitchError(error: unknown): boolean {
   }
   return (
     error.statusCode >= 500 ||
-    ['NETWORK_ERROR', 'REQUEST_TIMEOUT', 'INVALID_RESPONSE', 'ORG_REALM_UNAVAILABLE'].includes(
-      error.code,
-    )
+    error.statusCode === 429 ||
+    [
+      'NETWORK_ERROR',
+      'REQUEST_TIMEOUT',
+      'INVALID_RESPONSE',
+      'ORG_REALM_UNAVAILABLE',
+      'RATE_LIMITED',
+    ].includes(error.code)
   );
 }
 
