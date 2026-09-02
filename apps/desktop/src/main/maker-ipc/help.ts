@@ -164,6 +164,7 @@ async function routeHelpTopics(
         ...target.options,
         maxTokens: 30,
         timeoutMs: 12_000,
+        beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey),
       });
     }
     if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return [];
@@ -377,7 +378,10 @@ export function registerMakerHelpIpc(maker: Maker): void {
           !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
         ) {
           if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return { kind: 'no-answer' };
-          raw = await maker.oneShot(target.agentKind, prompt, target.options);
+          raw = await maker.oneShot(target.agentKind, prompt, {
+            ...target.options,
+            beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey),
+          });
         }
         if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return { kind: 'no-answer' };
         if (utility.ok) {

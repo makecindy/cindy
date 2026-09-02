@@ -15,7 +15,7 @@ describe('custom auxiliary chain does not hit the session agent', () => {
     expect(source).toContain('!auxiliaryModelCustomized');
     expect(source.match(/maker\.oneShot/g)?.length).toBeGreaterThan(0);
     expect(source).toContain('const ownerScopeKey = activeOwnerScopeKey();');
-    expect(source.match(/beforeDispatch: async \(\) => isHelpOwnerScopeCurrent\(ownerScopeKey\)/g)?.length).toBe(2);
+    expect(source.match(/beforeDispatch: async \(\) => isHelpOwnerScopeCurrent\(ownerScopeKey\)/g)?.length).toBe(4);
   });
 
   it('pinned-card summaries skip agent oneShot when the auxiliary list is customized', () => {

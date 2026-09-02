@@ -365,7 +365,10 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
           (await isAgentOneShotRouteDisabled(agentKind)) ||
           !isAuxiliaryOwnerScopeCurrent(ownerScopeKey)
         ? ''
-        : await getMaker().oneShot(agentKind, prompt, { maxTokens: 120 });
+        : await getMaker().oneShot(agentKind, prompt, {
+            maxTokens: 120,
+            beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey),
+          });
     const summary = sanitize(text, maxCharsForTier(tier));
     if (!summary) return;
     if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey)) return;

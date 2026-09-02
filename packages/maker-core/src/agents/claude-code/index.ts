@@ -1058,6 +1058,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         maxRetries: 0,
       });
 
+      // Auth and host setup can await asynchronous work. Re-check the caller's
+      // ownership fence immediately before the paid provider request, matching
+      // Codex oneShot's thread/start guard.
+      if (opts?.beforeDispatch && !(await opts.beforeDispatch())) {
+        throw new OneShotError('network', 'Claude oneShot dispatch guard rejected');
+      }
+
       const resp = await client.messages.create(
         {
           model,
