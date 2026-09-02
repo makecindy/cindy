@@ -595,15 +595,11 @@ export async function readUsageHistoryWith(
     : shiftDayKey(todayKey, -(modelWindowDays - 1));
   // 一次查询同时服务两个窗口: 热力图 tooltip 的每日 token (heatmap 窗口) 与
   // 模型拆分聚合 (30 天窗口)。取更早的 cutoff (ISO day key 字符串可直接比较)。
-  const usageRowsSince = heatmapCutoff === null && modelCutoff === null
+  const usageRowsSince = heatmapCutoff === null || modelCutoff === null
     ? '0000-01-01'
-    : heatmapCutoff === null
-      ? modelCutoff!
-      : modelCutoff === null
-        ? heatmapCutoff
-        : heatmapCutoff < modelCutoff
-          ? heatmapCutoff
-          : modelCutoff;
+    : heatmapCutoff < modelCutoff
+      ? heatmapCutoff
+      : modelCutoff;
   const allModelRows = (await deps.getModelUsageSince(usageRowsSince)).map((row) => ({
     ...row,
     money: keepCompatibleMoney(row.money),

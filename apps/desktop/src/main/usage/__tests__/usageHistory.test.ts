@@ -350,6 +350,52 @@ describe('readUsageHistoryWith', () => {
     });
   });
 
+  it('keeps all-time heatmap token rows when the model window is finite', async () => {
+    const oldRow = modelRow('2026-04-01', 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 123,
+    });
+    const recentRow = modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 456,
+    });
+    let requestedSince = '';
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async (sinceDayKey) => {
+          requestedSince = sinceDayKey;
+          return [oldRow, recentRow];
+        },
+      }),
+      { days: 'all', modelDays: 30 },
+    );
+
+    expect(requestedSince).toBe('0000-01-01');
+    expect(result.days.map((row) => row.day)).toEqual(['2026-04-01', TODAY]);
+    expect(result.modelDaily.map((row) => row.day)).toEqual([TODAY]);
+  });
+
+  it('keeps all-time model rows when the heatmap window is finite', async () => {
+    const oldRow = modelRow('2026-04-01', 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 123,
+    });
+    const recentRow = modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 456,
+    });
+    let requestedSince = '';
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async (sinceDayKey) => {
+          requestedSince = sinceDayKey;
+          return [oldRow, recentRow];
+        },
+      }),
+      { days: 30, modelDays: 'all' },
+    );
+
+    expect(requestedSince).toBe('0000-01-01');
+    expect(result.days.map((row) => row.day)).toEqual([TODAY]);
+    expect(result.modelDaily.map((row) => row.day)).toEqual(['2026-04-01', TODAY]);
+  });
+
   it('aggregates actual money and subscription value without double counting', async () => {
     const estimateAmount = regionalUsdAmount(2);
     const result = await readUsageHistoryWith(makeDeps({
