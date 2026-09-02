@@ -153,6 +153,7 @@ export class WorkLouderAccessories {
   private readonly listeners = new Set<(state: WorkLouderAccessoriesState) => void>();
   private syncing = false;
   private identityDiscoveryRequested = false;
+  private identityDiscoveryTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly lighting: WorkLouderLightingHost,
@@ -201,12 +202,28 @@ export class WorkLouderAccessories {
       }
     }
     const needsDiscovery = workLouderNeedsIdentityDiscovery(liveDeviceType(live), this.settings);
-    if (needsDiscovery && !this.identityDiscoveryRequested) {
+    if (needsDiscovery) this.scheduleIdentityDiscovery();
+    else this.stopIdentityDiscovery();
+    this.emit();
+  }
+
+  private scheduleIdentityDiscovery(): void {
+    if (!this.identityDiscoveryRequested) {
       this.identityDiscoveryRequested = true;
       this.onNeedsIdentityDiscovery?.();
     }
-    if (!needsDiscovery) this.identityDiscoveryRequested = false;
-    this.emit();
+    if (this.identityDiscoveryTimer || !this.onNeedsIdentityDiscovery) return;
+    this.identityDiscoveryTimer = setInterval(() => {
+      this.onNeedsIdentityDiscovery?.();
+    }, 5_000);
+    this.identityDiscoveryTimer.unref?.();
+  }
+
+  private stopIdentityDiscovery(): void {
+    this.identityDiscoveryRequested = false;
+    if (!this.identityDiscoveryTimer) return;
+    clearInterval(this.identityDiscoveryTimer);
+    this.identityDiscoveryTimer = null;
   }
 
   private emit(): void {

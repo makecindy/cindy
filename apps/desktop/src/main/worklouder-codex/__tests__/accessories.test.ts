@@ -227,6 +227,31 @@ describe('WorkLouderAccessories occupancy', () => {
     expect(lighting.getState().settings.deviceEnabled).toBe(true);
   });
 
+  it('retries identity discovery while a board stays enabled but unnamed', () => {
+    vi.useFakeTimers();
+    try {
+      const lighting = new FakeLighting(liveState({ deviceType: null, present: null }));
+      const discover = vi.fn();
+      const accessories = new WorkLouderAccessories(lighting, discover);
+      accessories.applySettings('creator-micro-2', defaults('creator-micro-2', true));
+      expect(discover).toHaveBeenCalledOnce();
+
+      vi.advanceTimersByTime(5_000);
+      expect(discover).toHaveBeenCalledTimes(2);
+
+      lighting.setLive(
+        liveState({
+          deviceType: 'creator-micro-2',
+          settings: lighting.getState().settings,
+        }),
+      );
+      vi.advanceTimersByTime(5_000);
+      expect(discover).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not re-apply lighting when occupancy already matches live settings', () => {
     const lighting = new FakeLighting(
       liveState({

@@ -473,8 +473,10 @@ export function WorkLouderCodexSettings({
       return {
         legend: key,
         name: custom
-          ? (actionLabel(settings.customAgentKeys[index] ?? null, t, state) ??
-            t('settings.shortcuts.workLouderCodex.agentKeys.newTask'))
+          ? index >= 0 && index < settings.customAgentKeys.length
+            ? (actionLabel(settings.customAgentKeys[index] ?? null, t, state) ??
+              t('settings.shortcuts.workLouderCodex.agentKeys.newTask'))
+            : (slot?.title || t('settings.shortcuts.workLouderCodex.agentKeys.newTask'))
           : (slot?.title || t('settings.shortcuts.workLouderCodex.agentKeys.newTask')),
         description: custom
           ? t('settings.shortcuts.workLouderCodex.agentKeys.customDescription')
