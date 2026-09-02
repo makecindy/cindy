@@ -6834,7 +6834,6 @@
       "moreLabel": "More, current user: {{name}}",
       "menuSettings": "Settings",
       "menuAddAccount": "Sign in to another account",
-      "menuLogout": "Log out",
       "canaryBadge": "Canary user",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -10806,7 +10805,7 @@
     },
     "confirm": {
       "logoutTitle": "Log out",
-      "logoutDescription": "Log out of all accounts on this device?",
+      "logoutDescription": "Log out of the current account?",
       "logoutConfirm": "Log out",
       "cancel": "Cancel",
       "sessionExpiredTitle": "Login expired",

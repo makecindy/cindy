@@ -6832,7 +6832,6 @@
       "moreLabel": "更多，当前用户：{{name}}",
       "menuSettings": "设置",
       "menuAddAccount": "登录更多账号",
-      "menuLogout": "退出",
       "canaryBadge": "灰度用户",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -10790,7 +10789,7 @@
     },
     "confirm": {
       "logoutTitle": "退出登录",
-      "logoutDescription": "确定要退出这台设备上的所有账号吗？",
+      "logoutDescription": "确定要退出当前账号吗？",
       "logoutConfirm": "退出",
       "cancel": "取消",
       "sessionExpiredTitle": "登录已过期",

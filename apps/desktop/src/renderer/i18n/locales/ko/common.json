@@ -6832,7 +6832,6 @@
       "moreLabel": "더 보기, 현재 사용자: {{name}}",
       "menuSettings": "설정",
       "menuAddAccount": "다른 계정으로 로그인",
-      "menuLogout": "로그아웃",
       "canaryBadge": "Canary 사용자",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -10790,7 +10789,7 @@
     },
     "confirm": {
       "logoutTitle": "로그아웃",
-      "logoutDescription": "이 기기의 모든 계정에서 로그아웃하시겠습니까?",
+      "logoutDescription": "현재 계정에서 로그아웃하시겠습니까?",
       "logoutConfirm": "로그아웃",
       "cancel": "취소",
       "sessionExpiredTitle": "로그인이 만료됨",

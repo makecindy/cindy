@@ -10,6 +10,10 @@ describe('auth login-flow reset', () => {
     /\r\n/g,
     '\n',
   );
+  const logoutPolicySource = readFileSync(
+    resolve(process.cwd(), 'src/main/authAccountLogoutPolicy.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
   const deviceLinkSource = readFileSync(
     resolve(process.cwd(), 'src/main/device-link/index.ts'),
     'utf8',
@@ -136,8 +140,12 @@ describe('auth login-flow reset', () => {
     const logoutStart = source.indexOf('export async function logout()');
     const logoutEnd = source.indexOf('\n}\n\n/**\n * Called on system resume', logoutStart);
     const logoutBody = source.slice(logoutStart, logoutEnd);
-    expect(logoutBody).toContain('token: currentAccessToken');
+    expect(logoutBody).toContain('accessToken: currentAccessToken');
     expect(logoutBody).not.toContain('pendingAccountToken');
+
+    const revokeStart = source.indexOf('function revokeLoggedOutAccountBestEffort(');
+    const revokeEnd = source.indexOf('\n}\n\nexport async function logout()', revokeStart);
+    expect(source.slice(revokeStart, revokeEnd)).toContain('token: input.accessToken');
 
     const getterStart = source.indexOf('export function getAccessToken(): string | null {');
     const getterEnd = source.indexOf('\n}', getterStart);
@@ -214,8 +222,11 @@ describe('auth login-flow reset', () => {
     expect(readBody).toContain("throw new Error('invalid saved resource credential')");
     expect(readBody).toContain("throw new Error('invalid saved Passport credential')");
     expect(readBody).toContain("throw new Error('invalid saved Passport membership')");
+    expect(readBody).toContain("throw new Error('invalid logged-out account key')");
     expect(readBody).toContain('memberships.length !== item.memberships.length');
-    expect(readBody).toContain('active && resources[active] ? active : null');
+    expect(readBody).toContain(
+      'active && resources[active] && !loggedOutKeys.has(active) ? active : null',
+    );
   });
 
   it('recovers invalid Desktop vault content only for a completed explicit login', () => {
@@ -384,8 +395,10 @@ describe('auth login-flow reset', () => {
     expect(switchBody).toContain("'REGION_MISMATCH'");
     expect(switchBody).toContain('const switchLoginFlowEpoch = loginFlowEpoch;');
     expect(switchBody).toContain(
-      "await completeLogin({ status: 'ok', ...pair }, switchLoginFlowEpoch);",
+      "await completeLogin({ status: 'ok', ...pair }, switchLoginFlowEpoch, {",
     );
+    expect(switchBody).toContain('restoreLoggedOutAccount: false');
+    expect(switchBody).toContain('accountToLogOut: options.accountToLogOut');
 
     const resourceRefreshStart = source.indexOf('async function refreshSavedResourceSession(');
     const resourceRefreshEnd = source.indexOf(
@@ -485,7 +498,7 @@ describe('auth login-flow reset', () => {
     expect(refreshAt).toBeGreaterThan(reconcileAt);
   });
 
-  it('keeps logout-all durable across a crash between vault and session cleanup', () => {
+  it('keeps a durable signed-out owner across a crash between vault and session cleanup', () => {
     expect(source).toContain('signedOutAt?: number;');
 
     const clearStart = source.indexOf('async function clearAuthAccountVault(');
@@ -533,6 +546,9 @@ describe('auth login-flow reset', () => {
     const resourceWriteBody = source.slice(resourceWriteStart, resourceWriteEnd);
     expect(resourceWriteBody).toContain('if (options.markActive !== false) {');
     expect(resourceWriteBody).toContain('delete vault.signedOutAt;');
+    expect(resourceWriteBody).toContain(
+      'if (options.restoreLoggedOutAccount) restoreLoggedOutVaultAccount(vault, key);',
+    );
 
     const loginCommitStart = source.indexOf('async function commitDesktopLoginSessions(');
     const loginCommitEnd = source.indexOf(
@@ -542,16 +558,56 @@ describe('auth login-flow reset', () => {
     const loginCommitBody = source.slice(loginCommitStart, loginCommitEnd);
     expect(loginCommitBody).toContain('if (!input.passportId) {');
     expect(loginCommitBody).toContain('delete vault.signedOutAt;');
+    expect(loginCommitBody).toContain('removeLoggedOutVaultAccount(vault, input.accountToLogOut)');
 
     const logoutStart = source.indexOf('export async function logout(): Promise<void> {');
     const logoutEnd = source.indexOf('\n}\n\n/**\n * Called on system resume', logoutStart);
     const logoutBody = source.slice(logoutStart, logoutEnd);
-    const tombstoneCommit = logoutBody.indexOf('await clearAuthAccountVault(() => {');
+    const tombstoneCommit = logoutBody.indexOf('await mutateAuthAccountVault((vault) => {');
     const ownerTeardown = logoutBody.indexOf('await withAccountFreeOwnerCommit({');
     expect(tombstoneCommit).toBeGreaterThan(-1);
+    expect(logoutBody).not.toContain('clearAuthAccountVault(');
+    expect(logoutBody).toContain('removeLoggedOutVaultAccount(vault, currentIdentity)');
+    expect(logoutBody).toContain('vault.signedOutAt = Date.now();');
     expect(logoutBody.indexOf('removeSafe(AUTH_SESSION_KEY);')).toBeGreaterThan(tombstoneCommit);
     expect(ownerTeardown).toBeGreaterThan(tombstoneCommit);
     expect(logoutBody).toContain('preservePersistedRefreshToken: true');
+  });
+
+  it('logs out only the current saved account and advances to the next restorable account', () => {
+    expect(source).toContain('loggedOutAccountKeys?: string[];');
+
+    const removalStart = logoutPolicySource.indexOf('export function removeLoggedOutVaultAccount<');
+    const removalBody = logoutPolicySource.slice(removalStart);
+    expect(removalBody).toContain('delete vault.resources[identity.accountKey];');
+    expect(removalBody).toContain('loggedOutKeys.add(identity.accountKey);');
+    expect(removalBody).toContain('const hasRestorableSibling =');
+    expect(removalBody).toContain('if (hasRestorableSibling) return null;');
+    expect(removalBody).toContain('delete vault.passports[passportKey];');
+
+    const summariesStart = source.indexOf('function savedAccountSummaries(');
+    const summariesEnd = source.indexOf('\n}\n\nexport function listSavedAccounts', summariesStart);
+    const summariesBody = source.slice(summariesStart, summariesEnd);
+    expect(summariesBody).toContain('const loggedOutKeys = loggedOutAccountKeySet(vault);');
+    expect(summariesBody).toContain(
+      'if (!loggedOutKeys.has(key)) byKey.set(key, resource.metadata);',
+    );
+    expect(summariesBody).toContain('return rightUsed - leftUsed');
+
+    const logoutStart = source.indexOf('export async function logout(): Promise<void> {');
+    const logoutEnd = source.indexOf('\n}\n\n/**\n * Called on system resume', logoutStart);
+    const logoutBody = source.slice(logoutStart, logoutEnd);
+    const candidateLoop = logoutBody.indexOf(
+      'for (const candidateAccountKey of candidateAccountKeys)',
+    );
+    const terminalSignOut = logoutBody.indexOf('await mutateAuthAccountVault((vault) => {');
+    expect(candidateLoop).toBeGreaterThan(-1);
+    expect(logoutBody).toContain('await switchSavedAccount(candidateAccountKey, {');
+    expect(logoutBody).toContain('accountToLogOut: currentIdentity');
+    expect(logoutBody).toContain('if (isUnavailableSavedAccountError(error)) continue;');
+    expect(logoutBody.indexOf('return;', candidateLoop)).toBeLessThan(terminalSignOut);
+    expect(terminalSignOut).toBeGreaterThan(candidateLoop);
+    expect(logoutBody).not.toContain('revokeSavedSessionsBestEffort');
   });
 
   it('activates a restored realm only after the refreshed membership passes build policy', () => {

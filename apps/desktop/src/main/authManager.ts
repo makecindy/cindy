@@ -79,6 +79,13 @@ import {
 } from './authLoopbackCallback';
 import { createDesktopPollCredentials, runHostedCallbackPolling } from './authHostedCallback';
 import { reconcileSavedAccountMetadata, type StoredAccountMetadata } from './authAccountMetadata';
+import {
+  isLoggedOutVaultAccount,
+  loggedOutAccountKeySet,
+  removeLoggedOutVaultAccount,
+  restoreLoggedOutVaultAccount,
+  type LoggedOutAccountIdentity,
+} from './authAccountLogoutPolicy';
 // dev-only 登录 scenario harness(implementation-plan Step 0 WHAT4):静态 import
 // (main 禁运行时动态 import),生产构建由 vite alias 把整模块替换为空 stub
 // (vite.main.config.ts),运行时另有 app.isPackaged guard 双保险。
@@ -252,10 +259,12 @@ interface AuthAccountVault {
   activeAccountKey: string | null;
   resources: Record<string, StoredResourceSession>;
   passports: Record<string, StoredPassportSession>;
+  /** Memberships explicitly logged out on this device stay hidden until a fresh login restores them. */
+  loggedOutAccountKeys?: string[];
   /**
-   * Durable logout-all marker. The vault is the crash-consistent owner record,
-   * so this must win over a compatibility session left behind by an interrupted
-   * logout until a new explicit login commits an active Resource.
+   * Durable signed-out owner marker. The vault is the crash-consistent owner
+   * record, so this must win over a compatibility session left behind by an
+   * interrupted logout until another account is explicitly activated.
    */
   signedOutAt?: number;
 }
@@ -769,6 +778,7 @@ function readAuthAccountVault(
       !parsed.passports ||
       typeof parsed.passports !== 'object' ||
       Array.isArray(parsed.passports) ||
+      (parsed.loggedOutAccountKeys !== undefined && !Array.isArray(parsed.loggedOutAccountKeys)) ||
       (parsed.signedOutAt !== undefined && typeof parsed.signedOutAt !== 'number')
     ) {
       throw new Error('unsupported auth account vault');
@@ -822,12 +832,24 @@ function readAuthAccountVault(
         memberships,
       };
     }
+    const loggedOutAccountKeys = (parsed.loggedOutAccountKeys ?? []).filter(
+      (key): key is string => parseDesktopAccountKey(key) !== null,
+    );
+    if (
+      !options.allowUnreadable &&
+      !options.recoverInvalid &&
+      loggedOutAccountKeys.length !== (parsed.loggedOutAccountKeys?.length ?? 0)
+    ) {
+      throw new Error('invalid logged-out account key');
+    }
+    const loggedOutKeys = new Set(loggedOutAccountKeys);
     const active = typeof parsed.activeAccountKey === 'string' ? parsed.activeAccountKey : null;
     return {
       version: 1,
-      activeAccountKey: active && resources[active] ? active : null,
+      activeAccountKey: active && resources[active] && !loggedOutKeys.has(active) ? active : null,
       resources,
       passports,
+      ...(loggedOutAccountKeys.length > 0 ? { loggedOutAccountKeys } : {}),
       ...(typeof parsed.signedOutAt === 'number' ? { signedOutAt: parsed.signedOutAt } : {}),
     };
   } catch (error) {
@@ -1062,9 +1084,14 @@ function writeResourceSessionToVault(
   pair: AuthTokenPair,
   realm: AuthRegion,
   passportId: string,
-  options: { markActive?: boolean; lastUsedAt?: number } = {},
+  options: {
+    markActive?: boolean;
+    lastUsedAt?: number;
+    restoreLoggedOutAccount?: boolean;
+  } = {},
 ): void {
   const key = accountVaultKey(realm, pair.membership.id);
+  if (options.restoreLoggedOutAccount) restoreLoggedOutVaultAccount(vault, key);
   vault.resources[key] = {
     realm,
     refreshToken: pair.refreshToken,
@@ -1125,6 +1152,9 @@ async function commitDesktopLoginSessions(
     passportId?: string;
     accountRefreshToken?: string | null;
     memberships: readonly (AuthMembership | AccountMembership | StoredAccountMetadata)[];
+    restoreLoggedOutAccount?: boolean;
+    accountToLogOut?: LoggedOutAccountIdentity;
+    onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
   },
   transition: {
     commit: () => void | Promise<void>;
@@ -1133,14 +1163,27 @@ async function commitDesktopLoginSessions(
 ): Promise<void> {
   await transactAuthAccountVault(
     (vault) => {
+      const targetAccountKey = accountVaultKey(input.realm, input.pair.membership.id);
+      if (input.accountToLogOut?.accountKey === targetAccountKey) {
+        throw new AuthApiError(
+          'INVALID_AUTH_ACTION',
+          400,
+          'Cannot activate and log out the same saved account',
+        );
+      }
       if (!input.passportId) {
         // Legacy login responses may only be able to persist the compatibility
         // session. They are still an explicit login and must supersede a prior
-        // logout-all tombstone so cold start can migrate the Resource later.
+        // signed-out marker so cold start can migrate the Resource later.
+        if (input.restoreLoggedOutAccount) {
+          restoreLoggedOutVaultAccount(vault, targetAccountKey);
+        }
         delete vault.signedOutAt;
         return;
       }
-      writeResourceSessionToVault(vault, input.pair, input.realm, input.passportId);
+      writeResourceSessionToVault(vault, input.pair, input.realm, input.passportId, {
+        restoreLoggedOutAccount: input.restoreLoggedOutAccount,
+      });
       if (input.accountRefreshToken) {
         writePassportSessionToVault(vault, {
           realm: input.realm,
@@ -1148,6 +1191,10 @@ async function commitDesktopLoginSessions(
           accountRefreshToken: input.accountRefreshToken,
           memberships: input.memberships,
         });
+      }
+      if (input.accountToLogOut) {
+        const removedPassport = removeLoggedOutVaultAccount(vault, input.accountToLogOut);
+        if (removedPassport) input.onLoggedOutPassportRemoved?.(removedPassport);
       }
     },
     async () => {
@@ -1522,7 +1569,7 @@ async function reconcileDesktopActiveAuthSession(): Promise<
       const vault = readAuthAccountVault();
       const session = readPersistedAuthSession();
       if (typeof vault.signedOutAt === 'number') {
-        // Logout-all persists this owner tombstone before removing the
+        // Account logout persists this owner tombstone before removing the
         // compatibility projection. If the process stopped between those
         // writes, finish the projection cleanup without ever refreshing it.
         removeSafe(AUTH_SESSION_KEY);
@@ -3503,28 +3550,38 @@ function accountSummaryFromMetadata(
   };
 }
 
-export function listSavedAccounts(): DesktopAccountSwitcherSnapshot {
-  const vault = readAuthAccountVault({ allowUnreadable: true });
+function savedAccountSummaries(
+  vault: AuthAccountVault,
+  activeAccountKey: string | null,
+): DesktopSavedAccount[] {
+  const loggedOutKeys = loggedOutAccountKeySet(vault);
   const byKey = new Map<string, StoredAccountMetadata>();
   for (const [key, resource] of Object.entries(vault.resources)) {
-    byKey.set(key, resource.metadata);
+    if (!loggedOutKeys.has(key)) byKey.set(key, resource.metadata);
   }
   for (const passport of Object.values(vault.passports)) {
     for (const membership of passport.memberships) {
       const key = accountVaultKey(passport.realm, membership.membershipId);
-      if (!byKey.has(key)) byKey.set(key, membership);
+      if (!loggedOutKeys.has(key) && !byKey.has(key)) byKey.set(key, membership);
     }
   }
-  const activeKey = currentUser ? accountVaultKey(activeAuthRealm, currentUser.id) : null;
-  const accounts = [...byKey.entries()]
-    .map(([key, metadata]) => accountSummaryFromMetadata(key, metadata, activeKey))
+  return [...byKey.entries()]
+    .map(([key, metadata]) => accountSummaryFromMetadata(key, metadata, activeAccountKey))
     .sort((left, right) => {
       if (left.isCurrent !== right.isCurrent) return left.isCurrent ? -1 : 1;
       const leftUsed = vault.resources[left.accountKey]?.lastUsedAt ?? 0;
       const rightUsed = vault.resources[right.accountKey]?.lastUsedAt ?? 0;
       return rightUsed - leftUsed || left.displayName.localeCompare(right.displayName);
     });
-  return { accounts, mutationAllowed: !isPassiveSharedUserDataInstance() };
+}
+
+export function listSavedAccounts(): DesktopAccountSwitcherSnapshot {
+  const vault = readAuthAccountVault({ allowUnreadable: true });
+  const activeKey = currentUser ? accountVaultKey(activeAuthRealm, currentUser.id) : null;
+  return {
+    accounts: savedAccountSummaries(vault, activeKey),
+    mutationAllowed: !isPassiveSharedUserDataInstance(),
+  };
 }
 
 export async function syncSavedAccounts(): Promise<DesktopAccountSwitcherSnapshot> {
@@ -3558,7 +3615,13 @@ export async function syncSavedAccounts(): Promise<DesktopAccountSwitcherSnapsho
   return listSavedAccounts();
 }
 
-export async function switchSavedAccount(rawAccountKey: unknown): Promise<void> {
+export async function switchSavedAccount(
+  rawAccountKey: unknown,
+  options: {
+    accountToLogOut?: LoggedOutAccountIdentity;
+    onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
+  } = {},
+): Promise<void> {
   const switchLoginFlowEpoch = loginFlowEpoch;
   const parsedKey = parseDesktopAccountKey(rawAccountKey);
   if (!parsedKey) throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Invalid account key');
@@ -3572,6 +3635,9 @@ export async function switchSavedAccount(rawAccountKey: unknown): Promise<void> 
   if (currentUser && parsedKey === accountVaultKey(activeAuthRealm, currentUser.id)) return;
 
   let vault = readAuthAccountVault();
+  if (isLoggedOutVaultAccount(vault, parsedKey)) {
+    throw new AuthApiError('ACCOUNT_NOT_FOUND', 404, 'Saved account was logged out');
+  }
   let resource: StoredResourceSession | undefined = vault.resources[parsedKey];
   let metadata = resource?.metadata;
   if (!metadata) {
@@ -3647,7 +3713,11 @@ export async function switchSavedAccount(rawAccountKey: unknown): Promise<void> 
   pendingAccountRefreshToken = null;
   pendingAccountMemberships = [];
   try {
-    await completeLogin({ status: 'ok', ...pair }, switchLoginFlowEpoch);
+    await completeLogin({ status: 'ok', ...pair }, switchLoginFlowEpoch, {
+      restoreLoggedOutAccount: false,
+      accountToLogOut: options.accountToLogOut,
+      onLoggedOutPassportRemoved: options.onLoggedOutPassportRemoved,
+    });
   } catch (error) {
     pendingAuthRealm = null;
     throw error;
@@ -4561,6 +4631,11 @@ export async function getLoginState(): Promise<DesktopLoginActionResult> {
 async function completeLogin(
   outcome: Extract<LoginOutcome, { status: 'ok' }>,
   expectedLoginFlowEpoch = loginFlowEpoch,
+  options: {
+    restoreLoggedOutAccount?: boolean;
+    accountToLogOut?: LoggedOutAccountIdentity;
+    onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
+  } = {},
 ): Promise<AuthFlowState> {
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   const loginEpoch = ++authStateEpoch;
@@ -4593,6 +4668,9 @@ async function completeLogin(
         accountRefreshToken,
         memberships:
           pendingAccountMemberships.length > 0 ? pendingAccountMemberships : [outcome.membership],
+        restoreLoggedOutAccount: options.restoreLoggedOutAccount ?? true,
+        accountToLogOut: options.accountToLogOut,
+        onLoggedOutPassportRemoved: options.onLoggedOutPassportRemoved,
       },
       {
         commit: async () => {
@@ -5397,30 +5475,45 @@ export async function refresh(): Promise<boolean> {
   }
 }
 
-function revokeSavedSessionsBestEffort(
-  vault: AuthAccountVault,
-  currentAccountKey: string | null,
-): void {
+function isUnavailableSavedAccountError(error: unknown): boolean {
+  return (
+    error instanceof AuthApiError &&
+    (isDefinitiveRefreshError(error) ||
+      [
+        'ACCOUNT_NOT_FOUND',
+        'ACCOUNT_REAUTH_REQUIRED',
+        'REGION_MISMATCH',
+        'NETWORK_ERROR',
+        'REQUEST_TIMEOUT',
+        'INVALID_RESPONSE',
+        'AUTH_REQUEST_FAILED',
+        'ORG_REALM_UNAVAILABLE',
+      ].includes(error.code))
+  );
+}
+
+function revokeLoggedOutAccountBestEffort(input: {
+  accessToken: string | null;
+  authBaseUrl: string;
+  passport: StoredPassportSession | null;
+}): void {
   void (async () => {
-    for (const [key, session] of Object.entries(vault.resources)) {
-      if (key === currentAccountKey) continue;
-      try {
-        await loadClientEndpointsForRealm(session.realm);
-        const client = createAuthClient(session.realm);
-        const pair = await client.refresh(session.refreshToken);
-        await client.logout(pair.accessToken);
-      } catch {
-        // Logout is local-first. Offline/expired remote sessions age out normally.
-      }
+    if (input.accessToken) {
+      apiFetch('/api/auth/logout', {
+        method: 'POST',
+        body: { deviceId },
+        token: input.accessToken,
+        baseUrl: input.authBaseUrl,
+      }).catch(() => {});
     }
-    for (const session of Object.values(vault.passports)) {
+    if (input.passport) {
       try {
-        await loadClientEndpointsForRealm(session.realm);
-        const client = createAuthClient(session.realm);
-        const pair = await client.refreshAccount(session.accountRefreshToken);
+        await loadClientEndpointsForRealm(input.passport.realm);
+        const client = createAuthClient(input.passport.realm);
+        const pair = await client.refreshAccount(input.passport.accountRefreshToken);
         await client.logoutAccount(pair.accountToken);
       } catch {
-        // Best effort for the same reason as resource logout above.
+        // Logout is local-first. Offline/expired remote sessions age out normally.
       }
     }
   })();
@@ -5431,26 +5524,62 @@ export async function logout(): Promise<void> {
     throw new AuthApiError(
       'PASSIVE_AUTH_MUTATION_BLOCKED',
       409,
-      'This shared-data instance cannot log out all accounts',
+      'This shared-data instance cannot log out the current account',
     );
   }
   const currentAccessToken = accessToken;
-  const currentAuthBaseUrl = authServerUrl(activeAuthRealm);
-  // Logout remains available even if the vault cannot be decrypted: local
-  // credential files are removed directly and remote revocation is best effort.
-  const savedVault = readAuthAccountVault({ allowUnreadable: true });
-  const currentAccountKey = currentUser
-    ? accountVaultKey(activeAuthRealm, currentUser.id)
-    : savedVault.activeAccountKey;
-  await clearAuthAccountVault(() => {
-    // Publish the durable signed-out owner before clearing compatibility
-    // records. The vault lock remains held across both writes, and startup
-    // reconciliation completes this cleanup if the process dies in between.
-    removeSafe(AUTH_SESSION_KEY);
-    removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
-    removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
-    removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+  const currentAuthRealm = activeAuthRealm;
+  const currentAuthBaseUrl = authServerUrl(currentAuthRealm);
+  const activeUser = currentUser;
+  if (!activeUser) {
+    throw new AuthApiError('UNAUTHENTICATED', 401, 'No current account to log out');
+  }
+
+  const savedVault = readAuthAccountVault();
+  const currentAccountKey = accountVaultKey(currentAuthRealm, activeUser.id);
+  const currentIdentity: LoggedOutAccountIdentity = {
+    accountKey: currentAccountKey,
+    realm: currentAuthRealm,
+    passportId:
+      activeUser.passportId || savedVault.resources[currentAccountKey]?.metadata.passportId || '',
+  };
+  const candidateAccountKeys = savedAccountSummaries(savedVault, currentAccountKey)
+    .filter((account) => account.accountKey !== currentAccountKey)
+    .map((account) => account.accountKey);
+  let removedPassport: StoredPassportSession | null = null;
+
+  for (const candidateAccountKey of candidateAccountKeys) {
+    let candidateRemovedPassport: StoredPassportSession | null = null;
+    try {
+      await switchSavedAccount(candidateAccountKey, {
+        accountToLogOut: currentIdentity,
+        onLoggedOutPassportRemoved: (session) => {
+          candidateRemovedPassport = session;
+        },
+      });
+      removedPassport = candidateRemovedPassport;
+      revokeLoggedOutAccountBestEffort({
+        accessToken: currentAccessToken,
+        authBaseUrl: currentAuthBaseUrl,
+        passport: removedPassport,
+      });
+      return;
+    } catch (error) {
+      if (isUnavailableSavedAccountError(error)) continue;
+      throw error;
+    }
+  }
+
+  await mutateAuthAccountVault((vault) => {
+    removedPassport = removeLoggedOutVaultAccount(vault, currentIdentity);
+    // Commit the signed-out owner before clearing compatibility records. If the
+    // process stops between the writes, cold start must not restore this account.
+    vault.signedOutAt = Date.now();
   });
+  removeSafe(AUTH_SESSION_KEY);
+  removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+  removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+  removeSafe(LEGACY_REFRESH_TOKEN_KEY);
   // The shared projection state machine owns the full teardown and only then
   // publishes the signed-out owner. The bootstrap IPC handler must not wrap a
   // second independent boundary around this transition.
@@ -5461,11 +5590,7 @@ export async function logout(): Promise<void> {
   // 它,primary 随后 confirmAccountDeletion() 直接 ACCOUNT_DELETION_RECEIPT_MISSING。
   // 闸门只加在这条隐式路径上——renderer 主动调的显式清理仍照常生效(见
   // clearAccountDeletionReceipt 的注释)。
-  if (isPassiveSharedUserDataInstance()) {
-    log.info('passive shared-userData instance keeps the account-deletion receipt on logout');
-  } else {
-    clearAccountDeletionReceipt();
-  }
+  clearAccountDeletionReceipt();
   let localTransitionError: unknown = null;
   try {
     await withAccountFreeOwnerCommit({
@@ -5478,18 +5603,11 @@ export async function logout(): Promise<void> {
     localTransitionError = error;
   }
 
-  // passive 共享实例跳过服务端登出:refresh token 按 (user, device) 一对一存,而它与
-  // primary 共用同一 deviceId——调这一发会把 primary 的那份一起作废,即使本地文件留着,
-  // primary 下次续期照样拿到确定性失败被踢。
-  if (currentAccessToken && !isPassiveSharedUserDataInstance()) {
-    apiFetch('/api/auth/logout', {
-      method: 'POST',
-      body: { deviceId },
-      token: currentAccessToken,
-      baseUrl: currentAuthBaseUrl,
-    }).catch(() => {});
-  }
-  revokeSavedSessionsBestEffort(savedVault, currentAccountKey);
+  revokeLoggedOutAccountBestEffort({
+    accessToken: currentAccessToken,
+    authBaseUrl: currentAuthBaseUrl,
+    passport: removedPassport,
+  });
   if (localTransitionError) throw localTransitionError;
 }
 

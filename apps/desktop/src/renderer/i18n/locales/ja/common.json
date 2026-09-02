@@ -6832,7 +6832,6 @@
       "moreLabel": "その他、現在のユーザー：{{name}}",
       "menuSettings": "設定",
       "menuAddAccount": "別のアカウントでログイン",
-      "menuLogout": "ログアウト",
       "canaryBadge": "Canary ユーザー",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -10790,7 +10789,7 @@
     },
     "confirm": {
       "logoutTitle": "ログアウト",
-      "logoutDescription": "このデバイス上のすべてのアカウントからログアウトしますか？",
+      "logoutDescription": "現在のアカウントからログアウトしますか？",
       "logoutConfirm": "ログアウト",
       "cancel": "キャンセル",
       "sessionExpiredTitle": "ログインの有効期限が切れました",
