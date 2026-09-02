@@ -879,7 +879,17 @@ function readAuthAccountVault(
 }
 
 function writeAuthAccountVault(vault: AuthAccountVault): boolean {
-  return writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+  // Keep ordinary v1 vaults readable by older clients. The v2 marker is only
+  // needed while a logout tombstone is present; otherwise a routine token
+  // refresh must not turn a shared userData vault into a downgrade trap.
+  const persistedVersion =
+    vault.loggedOutAccountKeys && vault.loggedOutAccountKeys.length > 0
+      ? AUTH_ACCOUNT_VAULT_VERSION
+      : 1;
+  return writeAtomicSafe(
+    AUTH_ACCOUNT_VAULT_KEY,
+    JSON.stringify({ ...vault, version: persistedVersion }),
+  );
 }
 
 function writeAuthAccountVaultOrThrow(vault: AuthAccountVault): void {

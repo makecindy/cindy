@@ -221,7 +221,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   };
 
   const renderSavedAccountItems = () => {
-    if (mode !== 'cloud' || !accountsReadyForOwner || savedAccounts.length <= 1) return null;
+    const switchableAccounts = savedAccounts.filter((account) => !account.isCurrent);
+    if (mode !== 'cloud' || !accountsReadyForOwner || switchableAccounts.length === 0) return null;
 
     return (
       <>
@@ -275,7 +276,9 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-[190px]">
         {renderSavedAccountItems()}
-        {mode === 'cloud' && accountsReadyForOwner && savedAccounts.length > 1 ? (
+        {mode === 'cloud' &&
+        accountsReadyForOwner &&
+        savedAccounts.some((account) => !account.isCurrent) ? (
           <DropdownMenuSeparator />
         ) : null}
         {mode === 'local' ? (

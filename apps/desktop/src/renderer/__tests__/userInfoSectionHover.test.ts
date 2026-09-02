@@ -108,7 +108,7 @@ describe('UserInfoSection — Canary avatar badge', () => {
     expect(source).toContain('dataOwnerId');
     expect(source).toContain('isCanary, listAccounts, syncAccounts, switchAccount');
     expect(source).toContain(
-      "if (mode !== 'cloud' || !accountsReadyForOwner || savedAccounts.length <= 1) return null;",
+      "if (mode !== 'cloud' || !accountsReadyForOwner || switchableAccounts.length === 0) return null;",
     );
     expect(source).toContain('{isCanary && (');
     expect(source).toContain("aria-label={t('sidebar.user.canaryBadge')}");
@@ -219,7 +219,8 @@ describe('UserInfoSection — inner main button no longer owns hover background'
   it('keeps Settings at the bottom of the More menu and leaves logout in Settings', () => {
     expect(source).toContain("t('sidebar.user.menuSettings')");
     expect(source).toContain('{renderSavedAccountItems()}');
-    expect(source).toContain('accountsReadyForOwner && savedAccounts.length > 1');
+    expect(source).toContain('accountsReadyForOwner &&');
+    expect(source).toContain('savedAccounts.some((account) => !account.isCurrent)');
     expect(source.indexOf('{renderSavedAccountItems()}')).toBeLessThan(
       source.indexOf("t('sidebar.user.menuSettings')"),
     );
@@ -237,7 +238,7 @@ describe('UserInfoSection — inner main button no longer owns hover background'
     expect(source).toContain('dataOwnerId');
     expect(source).toContain('isCanary, listAccounts, syncAccounts, switchAccount');
     expect(source).toContain(
-      "if (mode !== 'cloud' || !accountsReadyForOwner || savedAccounts.length <= 1) return null;",
+      "if (mode !== 'cloud' || !accountsReadyForOwner || switchableAccounts.length === 0) return null;",
     );
     expect(source).toContain('onSelect={() => void switchSavedAccount(account)}');
     expect(source).toContain('await switchAccount(account.accountKey);');
