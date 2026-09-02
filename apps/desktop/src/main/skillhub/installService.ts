@@ -45,7 +45,7 @@ import {
   projectWorkingDirFromSkillPath,
 } from '../maker-host/shared-global-skills.js';
 import { clearIgnoredAutoSyncSkill, ignoreAutoSyncSkill, isKnownAutoSyncCandidateSkill } from './autoSyncPreferences';
-import { withSkillhubHubSource, type SkillhubHubSource } from '../../shared/skillhubSource';
+import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 import { createLogger } from '../logger';
 
@@ -59,8 +59,8 @@ const MAX_SKILL_ZIP_ENTRIES = 10_000;
 export interface InstallParams {
   name: string;
   version?: string;
-  /** Backing catalog returned by the list API; absent on older clients. */
-  hubSource?: SkillhubHubSource;
+  /** Generic catalog context returned by the list flow; absent on older installs. */
+  catalogScope?: SkillhubCatalogScope;
   /** 由产品自动同步服务发起的安装 / 更新。 */
   autoSync?: boolean;
   /**
@@ -530,13 +530,13 @@ export async function install(
       // 如果没传版本号，先查 hub 拿最新版本
       if (!downloadVersion) {
         const detail = await skillhubApiFetch<{ version: string }>(
-          withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(p.name)}`, p.hubSource),
+          withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(p.name)}`, p.catalogScope),
         );
         downloadVersion = detail.version;
       }
       const versionQs = downloadVersion ? `?version=${encodeURIComponent(downloadVersion)}` : '';
       info = await skillhubApiFetch<DownloadInfoResponse>(
-        withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(p.name)}/download${versionQs}`, p.hubSource),
+        withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(p.name)}/download${versionQs}`, p.catalogScope),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -734,7 +734,7 @@ export async function install(
       const resp = await skillhubApiFetch<{
         items: Array<{ slug: string; owner: { slug: string }; isMine: boolean }>;
         availableCount?: number;
-      }>(withSkillhubHubSource('/api/skills-hub/skills/batch-detail', p.hubSource), {
+      }>(withSkillhubCatalogScope('/api/skills-hub/skills/batch-detail', p.catalogScope), {
         method: 'POST',
         body: { slugs: [p.name] },
       });
@@ -788,7 +788,7 @@ export async function install(
         updatedAt: nowSec,
         origin: 'installed',
         autoSynced: nextAutoSynced,
-        ...(p.hubSource ? { hubSource: p.hubSource } : {}),
+        ...(p.catalogScope ? { catalogScope: p.catalogScope } : {}),
       });
       logicalRegistryWritten = true;
       for (const { installPath } of physicalRegistrySnapshots) {

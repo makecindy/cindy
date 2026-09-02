@@ -1,30 +1,52 @@
-import { deriveSkillhubIdentityPolicy } from '../../shared/skillhubIdentityPolicy';
+import {
+  deriveSkillhubIdentityPolicy,
+  skillhubIdentityPolicyFromServer,
+  type SkillhubServerCapabilities,
+} from '../../shared/skillhubIdentityPolicy';
 import { getAuthState } from '../authManager';
 import { ServerApiError } from '../serverApiClient';
 import type { SkillhubPublishVisibility } from '../../shared/skillhubIdentityPolicy';
+import { skillhubApiFetch } from './hubApi';
 
-export function currentSkillhubIdentityPolicy() {
-  return deriveSkillhubIdentityPolicy(getAuthState().user);
+export async function currentSkillhubIdentityPolicy() {
+  const fallback = deriveSkillhubIdentityPolicy(getAuthState().user);
+  try {
+    const capabilities = await skillhubApiFetch<SkillhubServerCapabilities>(
+      '/api/skills-hub/capabilities',
+    );
+    return skillhubIdentityPolicyFromServer(capabilities);
+  } catch {
+    return { ...fallback, canWrite: false, allowedVisibilities: [] };
+  }
 }
 
-export function assertSkillhubWriteAllowed(): void {
-  const policy = currentSkillhubIdentityPolicy();
-  if (policy.canWrite) return;
-  if (policy.readOnlyReason === 'legacy-xd') {
-    throw new ServerApiError(
-      'LEGACY_XD_READ_ONLY',
+function skillhubWritePolicyError(
+  policy: Awaited<ReturnType<typeof currentSkillhubIdentityPolicy>>,
+): ServerApiError {
+  if (policy.readOnlyReason === 'organization-catalog-read-only') {
+    return new ServerApiError(
+      'SKILL_HUB_READ_ONLY',
       403,
-      'XD organization Skill Hub access is read-only',
+      'Organization Skill Hub access is read-only',
     );
   }
-  throw new ServerApiError('UNAUTHORIZED', 401, 'Skill Hub write access requires sign-in');
+  if (policy.readOnlyReason === 'signed-out') {
+    return new ServerApiError('UNAUTHORIZED', 401, 'Skill Hub write access requires sign-in');
+  }
+  return new ServerApiError('SKILL_HUB_UNAVAILABLE', 503, 'Skill Hub write policy is unavailable');
 }
 
-export function assertSkillhubVisibilityAllowed(
+export async function assertSkillhubWriteAllowed(): Promise<void> {
+  const policy = await currentSkillhubIdentityPolicy();
+  if (policy.canWrite) return;
+  throw skillhubWritePolicyError(policy);
+}
+
+export async function assertSkillhubVisibilityAllowed(
   visibility: 'private' | 'shared' | 'public',
-): void {
-  assertSkillhubWriteAllowed();
-  const policy = currentSkillhubIdentityPolicy();
+): Promise<void> {
+  const policy = await currentSkillhubIdentityPolicy();
+  if (!policy.canWrite) throw skillhubWritePolicyError(policy);
   const clientVisibility: SkillhubPublishVisibility = visibility === 'shared'
     ? 'DEPARTMENT_SCOPED'
     : visibility.toUpperCase() as SkillhubPublishVisibility;

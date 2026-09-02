@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { deriveSkillhubIdentityPolicy } from '../../../../shared/skillhubIdentityPolicy';
+import { useSkillhubIdentityPolicy } from '../hooks/useSkillhubIdentityPolicy';
 
 import { VisibilityCard } from '../PublishDialog';
 import { marketActionErrorMessage } from '../lib/marketErrors';
@@ -46,7 +46,7 @@ export function VisibilityEditorDialog({
 }: VisibilityEditorDialogProps) {
   const { t } = useTranslation();
   const { user } = useAuth();
-  const identityPolicy = useMemo(() => deriveSkillhubIdentityPolicy(user), [user]);
+  const identityPolicy = useSkillhubIdentityPolicy(user);
   const currentOwnerIsTeam = currentOwnerType === 'org';
 
   // loading 初始为 true,且关闭时复位 —— Dialog 在数据就绪前不挂载,

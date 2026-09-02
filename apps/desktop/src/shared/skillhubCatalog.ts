@@ -1,0 +1,17 @@
+export const SKILLHUB_CATALOG_SCOPES = ['market', 'team'] as const;
+export type SkillhubCatalogScope = (typeof SKILLHUB_CATALOG_SCOPES)[number];
+
+export function isSkillhubCatalogScope(value: unknown): value is SkillhubCatalogScope {
+  return typeof value === 'string'
+    && SKILLHUB_CATALOG_SCOPES.includes(value as SkillhubCatalogScope);
+}
+
+/** Keeps follow-up reads on the generic catalog that produced the list item. */
+export function withSkillhubCatalogScope(
+  path: string,
+  scope: SkillhubCatalogScope | undefined,
+): string {
+  if (!scope) return path;
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}scope=${encodeURIComponent(scope)}`;
+}

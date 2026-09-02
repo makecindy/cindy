@@ -65,7 +65,7 @@ export type PublishErrorCode =
   | 'CATEGORY_REQUIRED'
   | 'MANIFEST_INVALID'
   | 'CANCELLED'
-  | 'LEGACY_XD_READ_ONLY'
+  | 'SKILL_HUB_READ_ONLY'
   | 'INVALID_VISIBILITY'
   | 'INTERNAL';
 
@@ -247,18 +247,18 @@ export class SkillPublishService {
       );
       return { success: false, errorCode: 'CANCELLED' };
     }
-    const identityPolicy = currentSkillhubIdentityPolicy();
+    const identityPolicy = await currentSkillhubIdentityPolicy();
     if (!identityPolicy.canWrite) {
-      const errorCode = identityPolicy.readOnlyReason === 'legacy-xd'
-        ? 'LEGACY_XD_READ_ONLY'
+      const errorCode = identityPolicy.readOnlyReason === 'organization-catalog-read-only'
+        ? 'SKILL_HUB_READ_ONLY'
         : 'CANCELLED';
       this.emitProgress(
         {
           phase: 'failed',
           name: params.name,
           errorCode,
-          message: identityPolicy.readOnlyReason === 'legacy-xd'
-            ? 'XD organization Skill Hub access is read-only'
+          message: identityPolicy.readOnlyReason === 'organization-catalog-read-only'
+            ? 'Organization Skill Hub access is read-only'
             : 'SkillHub publish requires sign-in',
         },
         onProgress,

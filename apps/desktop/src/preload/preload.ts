@@ -2966,28 +2966,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
         downloads: number;
         /** 跨设备识别：null = pre-feature 历史版本 */
         latestPublishedFromDeviceId: string | null;
-        hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
+        catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
       }>;
       nextCursor?: string | null;
       error?: string;
     }> => ipcRenderer.invoke('skillhub:list-market', params),
 
+    capabilities: (): Promise<{
+      success: boolean;
+      capabilities?: import('../shared/skillhubIdentityPolicy').SkillhubServerCapabilities;
+      error?: string;
+      errorCode?: string;
+    }> => ipcRenderer.invoke('skillhub:capabilities'),
+
     // 查询单个 skill 市场详情（有 in-flight dedupe 在 renderer 侧）
     info: (
       name: string,
-      hubSource?: import('../shared/skillhubSource').SkillhubHubSource,
+      catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope,
     ): Promise<{
       success: boolean;
       info?: unknown;
       deleted?: boolean;
       error?: string;
       errorCode?: string;
-    }> => ipcRenderer.invoke('skillhub:info', { name, hubSource }),
+    }> => ipcRenderer.invoke('skillhub:info', { name, catalogScope }),
 
     getPublishedFiles: (params: {
       name: string;
       version?: string;
-      hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
+      catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
     }): Promise<{
       success: boolean;
       slug?: string;
@@ -3001,7 +3008,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       name: string;
       path: string;
       version?: string;
-      hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
+      catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
     }): Promise<{
       success: boolean;
       file?: { path: string; size: number; language: string; truncated: boolean; content: string };
@@ -3011,13 +3018,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     listPublishedVersions: (
       name: string,
-      hubSource?: import('../shared/skillhubSource').SkillhubHubSource,
+      catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope,
     ): Promise<{
       success: boolean;
       versions?: unknown[];
       error?: string;
       errorCode?: string;
-    }> => ipcRenderer.invoke('skillhub:list-published-versions', { name, hubSource }),
+    }> => ipcRenderer.invoke('skillhub:list-published-versions', { name, catalogScope }),
 
     updatePublished: (params: {
       name: string;
@@ -3075,7 +3082,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getScanStatus: (params: {
       slug: string;
       version?: string;
-      hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
+      catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
     }): Promise<{
       success: boolean;
       status: string;
@@ -3220,7 +3227,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     install: (params: {
       name: string;
       version?: string;
-      hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
+      catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
       force?: boolean;
       /** 完整安装目标路径。不传 → global scope 默认路径。 */
       installPath?: string;

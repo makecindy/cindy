@@ -10373,6 +10373,14 @@
         "title": "취소됨",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "조직 카탈로그는 읽기 전용입니다",
+        "message": "이 조직 카탈로그에서는 게시 및 관리 기능을 사용할 수 없습니다"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "공개 범위를 사용할 수 없습니다",
+        "message": "현재 게시자에게 허용된 공개 범위를 선택하세요"
+      },
       "INTERNAL": {
         "title": "서버 오류",
         "message": "게시 실패, 잠시 후 재시도하세요"

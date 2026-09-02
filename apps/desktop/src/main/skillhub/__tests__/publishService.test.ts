@@ -7,6 +7,12 @@ const authState = vi.hoisted(() => ({
   membershipKind: 'personal' as 'personal' | 'org',
   orgSlug: null as string | null,
 }));
+const serverPolicy = vi.hoisted(() => ({
+  canWrite: true,
+  ownerType: 'personal' as 'personal' | 'organization' | null,
+  allowedVisibilities: ['PUBLIC', 'PRIVATE'] as Array<'PUBLIC' | 'DEPARTMENT_SCOPED' | 'PRIVATE'>,
+  readOnlyReason: null as 'organization-catalog-read-only' | 'organization-routing-unavailable' | 'signed-out' | null,
+}));
 
 vi.mock('electron', () => ({
   app: {
@@ -91,6 +97,10 @@ vi.mock('../../appCapabilities.js', () => ({
   requireAppCapability: vi.fn(),
 }));
 
+vi.mock('../identityPolicy', () => ({
+  currentSkillhubIdentityPolicy: vi.fn(async () => ({ ...serverPolicy })),
+}));
+
 function writeApiKeyFile() {
   const safeStorageDir = `${TEST_ROOT}/safe-storage`;
   fs.mkdirSync(safeStorageDir, { recursive: true });
@@ -105,15 +115,23 @@ describe('SkillPublishService', () => {
     authState.ownerId = 'user-1';
     authState.membershipKind = 'personal';
     authState.orgSlug = null;
+    serverPolicy.canWrite = true;
+    serverPolicy.ownerType = 'personal';
+    serverPolicy.allowedVisibilities = ['PUBLIC', 'PRIVATE'];
+    serverPolicy.readOnlyReason = null;
     vi.resetModules();
     vi.clearAllMocks();
     fs.rmSync(TEST_ROOT, { recursive: true, force: true });
     fs.mkdirSync(TEST_ROOT, { recursive: true });
   });
 
-  it('rejects XD organization publishing before packing or network access', async () => {
+  it('honors the server-owned read-only organization capability before packing', async () => {
     authState.membershipKind = 'org';
-    authState.orgSlug = 'xd';
+    authState.orgSlug = 'example-org';
+    serverPolicy.canWrite = false;
+    serverPolicy.ownerType = 'organization';
+    serverPolicy.allowedVisibilities = [];
+    serverPolicy.readOnlyReason = 'organization-catalog-read-only';
     const { SkillPublishService } = await import('../publishService');
     const service = new SkillPublishService();
 
@@ -122,12 +140,14 @@ describe('SkillPublishService', () => {
       name: 'read-only',
       isFirstPublish: true,
       visibility: 'PUBLIC',
-    })).resolves.toEqual({ success: false, errorCode: 'LEGACY_XD_READ_ONLY' });
+    })).resolves.toEqual({ success: false, errorCode: 'SKILL_HUB_READ_ONLY' });
   });
 
   it('rejects private organization publishing before packing or network access', async () => {
     authState.membershipKind = 'org';
     authState.orgSlug = 'acme';
+    serverPolicy.ownerType = 'organization';
+    serverPolicy.allowedVisibilities = ['PUBLIC', 'DEPARTMENT_SCOPED'];
     const { SkillPublishService } = await import('../publishService');
     const service = new SkillPublishService();
 
@@ -978,7 +998,9 @@ describe('SkillPublishService', () => {
       (event) => events.push(event),
     );
 
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(events).toEqual([{ phase: 'packing' }]);
+    });
     service.cancel();
     const result = await publishPromise;
 

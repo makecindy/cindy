@@ -99,7 +99,7 @@ export function SkillhubMarketPreviewPanel({
     setFilesError(null);
     setSelectedPath(null);
     void window.electronAPI.skillhub
-      .getPublishedFiles({ name: skillName, version: skillVersion, hubSource: skill?.hubSource })
+      .getPublishedFiles({ name: skillName, version: skillVersion, catalogScope: skill?.catalogScope })
       .then((res) => {
         if (cancelled) return;
         setFilesLoading(false);
@@ -119,7 +119,7 @@ export function SkillhubMarketPreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [panelOpen, skill?.hubSource, skillName, skillVersion, t]);
+  }, [panelOpen, skill?.catalogScope, skillName, skillVersion, t]);
 
   useEffect(() => {
     if (!panelOpen || !skillName || !selectedPath) {
@@ -131,7 +131,7 @@ export function SkillhubMarketPreviewPanel({
     // 不预清空 file:切换文件时保留旧内容直到新内容到达,避免空白帧
     setFileLoading(true);
     void window.electronAPI.skillhub
-      .readPublishedFile({ name: skillName, path: selectedPath, version: skillVersion, hubSource: skill?.hubSource })
+      .readPublishedFile({ name: skillName, path: selectedPath, version: skillVersion, catalogScope: skill?.catalogScope })
       .then((res) => {
         if (cancelled) return;
         setFileLoading(false);
@@ -150,7 +150,7 @@ export function SkillhubMarketPreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [panelOpen, selectedPath, skill?.hubSource, skillName, skillVersion, t]);
+  }, [panelOpen, selectedPath, skill?.catalogScope, skillName, skillVersion, t]);
 
   const tree = useMemo(() => buildPreviewTree(files), [files]);
 
@@ -207,7 +207,7 @@ export function SkillhubMarketPreviewPanel({
                           .getScanStatus({
                             slug: skill.name,
                             version: effectivePublishedStatusVersion(skill) ?? skill.latestVersion,
-                            hubSource: skill.hubSource,
+                            catalogScope: skill.catalogScope,
                           })
                           .then((res) => {
                             setScanResult(res.success

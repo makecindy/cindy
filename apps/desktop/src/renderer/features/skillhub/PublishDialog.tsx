@@ -33,7 +33,7 @@ import { refresh as refreshSkillhub } from './hooks/useSkillhub';
 import { getPublishErrorCopy, type PublishActionType } from './lib/publishErrorMap';
 import { shouldHandlePublishProgressEvent } from './lib/publishProgressFilter';
 import { buildPublishFailureEvent, shouldDispatchPublishResultFallback } from './lib/publishFailureFallback';
-import { deriveSkillhubIdentityPolicy } from '../../../shared/skillhubIdentityPolicy';
+import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 import {
   buildSkillhubPublishParams,
   validateRequiredCategory,
@@ -515,7 +515,7 @@ export function PublishDialog({
   const { confirm } = useConfirmDialog();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const identityPolicy = useMemo(() => deriveSkillhubIdentityPolicy(user), [user]);
+  const identityPolicy = useSkillhubIdentityPolicy(user);
 
   // refresh/sync 延迟到 dialog 关闭后才触发，isFirstPublish 在 dialog 生命周期内不会翻转
   const effectiveFirstPublish = isFirstPublish;

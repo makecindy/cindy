@@ -100,6 +100,12 @@ const errorMap: Record<SkillhubPublishErrorCode, PublishErrorSpec> = {
   CANCELLED: {
     primaryAction: CLOSE_ACTION,
   },
+  SKILL_HUB_READ_ONLY: {
+    primaryAction: CLOSE_ACTION,
+  },
+  INVALID_VISIBILITY: {
+    primaryAction: CLOSE_ACTION,
+  },
   INTERNAL: {
     primaryAction: RETRY_ACTION,
     secondaryAction: CLOSE_ACTION,

@@ -25,7 +25,7 @@ import { useTranslation } from 'react-i18next';
 
 import { i18n } from '@/i18n';
 import { CATEGORY_ALL, type MarketCategory } from '../../../../shared/skillhubCategory';
-import type { SkillhubHubSource } from '../../../../shared/skillhubSource';
+import type { SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
 import type { HubPublishedVisibility } from '../lib/marketVisibility';
 import { filterAvailableMarketItems } from '../lib/marketDetailViewModel';
 
@@ -99,8 +99,8 @@ export interface MarketSkill {
   latestPublishedFromDeviceId: string | null;
   /** 派生的 card 状态,UI 直接 switch 这个字段决定按钮。 */
   cardState: MarketCardState;
-  /** 服务端已选择的数据源，后续详情和安装请求必须原样带回。 */
-  hubSource?: SkillhubHubSource;
+  /** 列表所在的通用目录，后续详情和安装请求必须继续携带。 */
+  catalogScope?: SkillhubCatalogScope;
 }
 
 interface ServerListItem {
@@ -129,7 +129,7 @@ interface ServerListItem {
   downloads?: number;
   /** 跨设备识别：null = pre-feature 历史版本 */
   latestPublishedFromDeviceId: string | null;
-  hubSource?: SkillhubHubSource;
+  catalogScope?: SkillhubCatalogScope;
 }
 
 const PAGE_SIZE = 24;
@@ -245,7 +245,7 @@ function mapServerToView(
     hasAnyInstall,
     latestPublishedFromDeviceId: item.latestPublishedFromDeviceId,
     cardState: deriveCardState(item, group, installingNames.has(item.name)),
-    hubSource: item.hubSource,
+    catalogScope: item.catalogScope,
   };
 }
 

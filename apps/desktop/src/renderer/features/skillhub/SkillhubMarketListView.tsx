@@ -30,7 +30,7 @@ import { nextMarketPreviewName } from './lib/marketPreviewSelection';
 import { syncMarketPreviewSelection } from './lib/marketPreviewSync';
 import { useAuth } from '@/contexts/AuthContext';
 import { CATEGORY_ALL } from '../../../shared/skillhubCategory';
-import { deriveSkillhubIdentityPolicy } from '../../../shared/skillhubIdentityPolicy';
+import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 
 const FILTER_CHIP_STYLE = { height: '32px', padding: '0 12px', fontSize: '12px' };
 // Must match the global native scrollbar width in styles/globals.css.
@@ -77,7 +77,7 @@ export function SkillhubMarketListView() {
 function SkillhubMarketListViewInner() {
   const { t } = useTranslation();
   const { user, isInitializing } = useAuth();
-  const identityPolicy = useMemo(() => deriveSkillhubIdentityPolicy(user), [user]);
+  const identityPolicy = useSkillhubIdentityPolicy(user);
   const location = useLocation();
   const navigate = useNavigate();
   const marketState = location.state as { freshEntry?: boolean; initialVisibility?: Visibility } | null;

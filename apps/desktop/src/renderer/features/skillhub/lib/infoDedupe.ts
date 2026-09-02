@@ -11,20 +11,20 @@
  * 网络错误时不覆盖 lastResults/lastDeleted,保留 stale 数据(真正的 SWR 语义)。
  */
 
-import type { SkillhubHubSource } from '../../../../shared/skillhubSource';
+import type { SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
 
 const inFlight = new Map<string, Promise<SkillhubInfoResult | null>>();
 const lastResults = new Map<string, SkillhubInfoResult | null>();
 const lastDeleted = new Map<string, boolean>();
 
-function cacheKey(name: string, hubSource?: SkillhubHubSource): string {
-  return `${hubSource ?? 'default'}:${name}`;
+function cacheKey(name: string, catalogScope?: SkillhubCatalogScope): string {
+  return `${catalogScope ?? 'default'}:${name}`;
 }
 
-function fetchInfo(name: string, hubSource?: SkillhubHubSource): Promise<SkillhubInfoResult | null> {
-  const key = cacheKey(name, hubSource);
+function fetchInfo(name: string, catalogScope?: SkillhubCatalogScope): Promise<SkillhubInfoResult | null> {
+  const key = cacheKey(name, catalogScope);
   const p = window.electronAPI.skillhub
-    .info(name, hubSource)
+    .info(name, catalogScope)
     .then((res) => {
       if (res.success && res.info && 'isMine' in res.info) {
         const info = res.info as SkillhubInfoResult;
@@ -52,31 +52,31 @@ function fetchInfo(name: string, hubSource?: SkillhubHubSource): Promise<Skillhu
   return p;
 }
 
-export function getInfo(name: string, hubSource?: SkillhubHubSource): Promise<SkillhubInfoResult | null> {
-  const existing = inFlight.get(cacheKey(name, hubSource));
+export function getInfo(name: string, catalogScope?: SkillhubCatalogScope): Promise<SkillhubInfoResult | null> {
+  const existing = inFlight.get(cacheKey(name, catalogScope));
   if (existing) return existing;
 
-  return fetchInfo(name, hubSource);
+  return fetchInfo(name, catalogScope);
 }
 
 /** Force one network refresh while keeping stale cache as the failure fallback. */
-export function refreshInfo(name: string, hubSource?: SkillhubHubSource): Promise<SkillhubInfoResult | null> {
-  return fetchInfo(name, hubSource);
+export function refreshInfo(name: string, catalogScope?: SkillhubCatalogScope): Promise<SkillhubInfoResult | null> {
+  return fetchInfo(name, catalogScope);
 }
 
 /** 同步读上次拿到的 info(用于 render 阶段 seed state,实现切 skill 不闪)。 */
-export function getCachedInfo(name: string, hubSource?: SkillhubHubSource): SkillhubInfoResult | null {
-  return lastResults.get(cacheKey(name, hubSource)) ?? null;
+export function getCachedInfo(name: string, catalogScope?: SkillhubCatalogScope): SkillhubInfoResult | null {
+  return lastResults.get(cacheKey(name, catalogScope)) ?? null;
 }
 
 /** Server 是否显式返回 404(skill 已从市场删除)。 */
-export function isMarketDeleted(name: string, hubSource?: SkillhubHubSource): boolean {
-  return lastDeleted.get(cacheKey(name, hubSource)) ?? false;
+export function isMarketDeleted(name: string, catalogScope?: SkillhubCatalogScope): boolean {
+  return lastDeleted.get(cacheKey(name, catalogScope)) ?? false;
 }
 
 /** Force re-fetch on next call (e.g. after publish success). */
-export function invalidate(name: string, hubSource?: SkillhubHubSource): void {
-  const key = cacheKey(name, hubSource);
+export function invalidate(name: string, catalogScope?: SkillhubCatalogScope): void {
+  const key = cacheKey(name, catalogScope);
   inFlight.delete(key);
   lastResults.delete(key);
   lastDeleted.delete(key);

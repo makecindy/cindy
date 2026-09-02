@@ -10365,6 +10365,14 @@
         "title": "已取消",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "目前組織僅支援瀏覽",
+        "message": "目前組織的技能目錄暫不支援發佈或管理"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "可見範圍不可用",
+        "message": "請選擇目前發佈身分支援的可見範圍"
+      },
       "INTERNAL": {
         "title": "伺服器錯誤",
         "message": "釋出失敗，請稍後重試"

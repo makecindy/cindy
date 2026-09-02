@@ -1,4 +1,4 @@
-import { isSkillhubHubSource, type SkillhubHubSource } from '../../shared/skillhubSource';
+import type { SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 export interface HubSkillInfoForDesktop {
   slug: string;
@@ -25,12 +25,11 @@ export interface HubSkillInfoForDesktop {
   stats?: {
     downloads?: number;
   };
-  /** Backing catalog selected by cindy-skill-hub-server. */
-  hubSource?: SkillhubHubSource;
 }
 
 interface MapOptions {
   forceMine?: boolean;
+  catalogScope?: SkillhubCatalogScope;
 }
 
 export function mapHubSkillInfoToDesktopInfo(hub: HubSkillInfoForDesktop, opts?: MapOptions) {
@@ -60,6 +59,6 @@ export function mapHubSkillInfoToDesktopInfo(hub: HubSkillInfoForDesktop, opts?:
     publishedAt: hub.updatedAt,
     downloads: Number.isFinite(hub.stats?.downloads) ? hub.stats?.downloads ?? 0 : 0,
     latestPublishedFromDeviceId: null as string | null,
-    hubSource: isSkillhubHubSource(hub.hubSource) ? hub.hubSource : undefined,
+    catalogScope: opts?.catalogScope,
   };
 }

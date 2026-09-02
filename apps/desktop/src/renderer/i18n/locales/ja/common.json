@@ -10373,6 +10373,14 @@
         "title": "キャンセル済み",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "組織カタログは読み取り専用です",
+        "message": "この組織カタログでは公開や管理を利用できません"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "公開範囲を利用できません",
+        "message": "現在の公開者が利用できる公開範囲を選択してください"
+      },
       "INTERNAL": {
         "title": "サーバーエラー",
         "message": "公開失敗、後ほど再試行してください"

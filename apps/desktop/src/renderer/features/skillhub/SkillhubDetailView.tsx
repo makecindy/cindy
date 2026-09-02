@@ -73,7 +73,7 @@ import { buildRecentTrendRows, formatLocalDayKey } from './lib/skillUsageTrend';
 import { type SkillUsageVersionComparison, selectSkillUsageVersionComparison } from './lib/skillUsageViewModel';
 import { PublishDialog, type ScanResultPayload } from './PublishDialog';
 import { ScanResultDialog } from './ScanResultDialog';
-import { deriveSkillhubIdentityPolicy } from '../../../shared/skillhubIdentityPolicy';
+import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 import { SkillhubDiffPanel } from './SkillhubDiffPanel';
 
 const log = createLogger('SkillhubDetailView');
@@ -969,7 +969,7 @@ function FileTreeRow({ entry, parentDir, depth, currentPath, onSelectFile }: Fil
 export function SkillhubDetailView() {
   const { t } = useTranslation();
   const { user } = useAuth();
-  const identityPolicy = useMemo(() => deriveSkillhubIdentityPolicy(user), [user]);
+  const identityPolicy = useSkillhubIdentityPolicy(user);
   const params = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -1044,9 +1044,9 @@ export function SkillhubDetailView() {
   // 拉新数据;publish 完成后通过 invalidateInfo + bump infoFetchTrigger 强刷。
   // detailState 完全基于 infoResult 派生(不再用批量 syncResults),保证按钮永远
   // 反映「这个 skill 在服务器上的真实状态」。
-  const entryHubSource = entry?.registryEntry?.hubSource;
+  const entryCatalogScope = entry?.registryEntry?.catalogScope;
   const [infoResult, setInfoResult] = useState<SkillhubInfoResult | null>(
-    () => (entry?.name ? getCachedInfo(entry.name, entryHubSource) : null),
+    () => (entry?.name ? getCachedInfo(entry.name, entryCatalogScope) : null),
   );
   const [infoLoading, setInfoLoading] = useState(false);
   const [infoFetchTrigger, setInfoFetchTrigger] = useState(0);
@@ -1058,22 +1058,22 @@ export function SkillhubDetailView() {
   // 关键升级:不再无脑置 null(那会让按钮闪过一次"无版本号 → 有版本号"),
   // 改成同步从 SWR 缓存取上次结果,缓存命中(常见的重访场景)时直接渲染最终态,
   // 完全不闪;缓存 miss(首访)时才退回到 null + loading=true。
-  const entryInfoKey = entry?.name ? `${entryHubSource ?? 'default'}:${entry.name}` : null;
+  const entryInfoKey = entry?.name ? `${entryCatalogScope ?? 'default'}:${entry.name}` : null;
   const [trackedEntryInfoKey, setTrackedEntryInfoKey] = useState<string | null>(entryInfoKey);
   if (entryInfoKey !== trackedEntryInfoKey) {
     setTrackedEntryInfoKey(entryInfoKey);
-    const cached = entry?.name ? getCachedInfo(entry.name, entryHubSource) : null;
+    const cached = entry?.name ? getCachedInfo(entry.name, entryCatalogScope) : null;
     setInfoResult(cached);
     setLiveScanStatus(null);
     // 有缓存就不显示 loading(SWR 后台静默刷),没缓存才进 loading 态
     setInfoLoading(isSkill && entry != null && cached === null);
   }
 
-  const refreshRemoteInfo = useCallback(async (name: string, hubSource?: StoredInstall['hubSource']): Promise<{
+  const refreshRemoteInfo = useCallback(async (name: string, catalogScope?: StoredInstall['catalogScope']): Promise<{
     info: SkillhubInfoResult | null;
     liveScanStatus: { status: string; version: string } | null;
   }> => {
-    const info = await refreshInfo(name, hubSource);
+    const info = await refreshInfo(name, catalogScope);
     if (!info) {
       return { info: null, liveScanStatus: null };
     }
@@ -1085,7 +1085,7 @@ export function SkillhubDetailView() {
       return { info, liveScanStatus: null };
     }
 
-    const versionsRes = await window.electronAPI.skillhub.listPublishedVersions(name, hubSource);
+    const versionsRes = await window.electronAPI.skillhub.listPublishedVersions(name, catalogScope);
     if (versionsRes.success) {
       const active = activePublishedReviewFromVersions(versionsRes.versions);
       if (active) {
@@ -1112,8 +1112,8 @@ export function SkillhubDetailView() {
   const remoteInfoName = isSkill ? (entry?.name ?? null) : null;
   const remoteInfoRequest = useMemo(() => {
     if (!remoteInfoName) return null;
-    return { name: remoteInfoName, hubSource: entryHubSource, refreshKey: infoFetchTrigger };
-  }, [remoteInfoName, entryHubSource, infoFetchTrigger]);
+    return { name: remoteInfoName, catalogScope: entryCatalogScope, refreshKey: infoFetchTrigger };
+  }, [remoteInfoName, entryCatalogScope, infoFetchTrigger]);
 
   useEffect(() => {
     if (!remoteInfoRequest) {
@@ -1124,9 +1124,9 @@ export function SkillhubDetailView() {
     let cancelled = false;
     // SWR:不再清空 infoResult。render 阶段已经 seed 过(缓存命中 → 旧值/缓存值;
     // miss → null),这里只决定要不要显示 loading 态。后台 fetch 拿到新值再 setState。
-    const cached = getCachedInfo(remoteInfoRequest.name, remoteInfoRequest.hubSource);
+    const cached = getCachedInfo(remoteInfoRequest.name, remoteInfoRequest.catalogScope);
     if (cached === null) setInfoLoading(true);
-    refreshRemoteInfo(remoteInfoRequest.name, remoteInfoRequest.hubSource)
+    refreshRemoteInfo(remoteInfoRequest.name, remoteInfoRequest.catalogScope)
       .then((result) => {
         if (cancelled) return;
         setLiveScanStatus(result.liveScanStatus);
@@ -1243,7 +1243,7 @@ export function SkillhubDetailView() {
   const detailReady = !isSkill || (!infoLoading && hashReady);
 
   // 三维度 detail state
-  const marketDeleted = !infoLoading && checkMarketDeleted(entry?.name ?? '', entryHubSource);
+  const marketDeleted = !infoLoading && checkMarketDeleted(entry?.name ?? '', entryCatalogScope);
   const detailState = useMemo<DetailState | null>(() => {
     const state = deriveDetailState(isSkill ? entry : null, infoResult, marketDeleted);
     return state;
@@ -1367,7 +1367,7 @@ export function SkillhubDetailView() {
         name: entry.name,
         installPath: entry.absolutePath,
         version: latestVersion,
-        hubSource: entry.registryEntry?.hubSource,
+        catalogScope: entry.registryEntry?.catalogScope,
         // 主动"更新到 vN":完整替换,但保留 Cindy 备份。即使 dirty 判定漏掉,
         // 旧目录也不会在更新成功后被直接删除;替换失败会尽力恢复旧目录。
         force: true,
@@ -1884,7 +1884,7 @@ export function SkillhubDetailView() {
                     if (!entry?.name) return;
                     const res = await window.electronAPI.skillhub.listPublishedVersions(
                       entry.name,
-                      entry.registryEntry?.hubSource,
+                      entry.registryEntry?.catalogScope,
                     );
                     if (!res.success || !res.versions) {
                       setScanResult({ status: 'rejected', gates: [] });

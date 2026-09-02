@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   deriveSkillhubIdentityPolicy,
-  isLegacyXdSkillhubIdentity,
+  skillhubIdentityPolicyFromServer,
 } from '../skillhubIdentityPolicy';
 
 describe('skillhub identity policy', () => {
@@ -24,10 +24,22 @@ describe('skillhub identity policy', () => {
       });
   });
 
-  it('marks XD organization identities read-only without affecting personal users', () => {
-    expect(isLegacyXdSkillhubIdentity({ membershipKind: 'org', orgSlug: 'xd' })).toBe(true);
-    expect(isLegacyXdSkillhubIdentity({ membershipKind: 'personal', orgSlug: 'xd' })).toBe(false);
-    expect(deriveSkillhubIdentityPolicy({ membershipKind: 'org', orgSlug: 'xd' }))
-      .toMatchObject({ canWrite: false, readOnlyReason: 'legacy-xd' });
+  it('does not infer backing catalog behavior from an organization slug', () => {
+    expect(deriveSkillhubIdentityPolicy({ membershipKind: 'org', orgSlug: 'example-org' }))
+      .toEqual(deriveSkillhubIdentityPolicy({ membershipKind: 'org', orgSlug: 'another-org' }));
+  });
+
+  it('uses the generic server capability response as the write-policy authority', () => {
+    expect(skillhubIdentityPolicyFromServer({
+      canWrite: false,
+      ownerType: 'organization',
+      allowedVisibilities: [],
+      readOnlyReason: 'organization-catalog-read-only',
+    })).toEqual({
+      canWrite: false,
+      ownerType: 'organization',
+      allowedVisibilities: [],
+      readOnlyReason: 'organization-catalog-read-only',
+    });
   });
 });

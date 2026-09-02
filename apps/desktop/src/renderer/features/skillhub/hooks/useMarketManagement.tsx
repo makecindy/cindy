@@ -11,7 +11,7 @@ import { lacksTeamManagePermission } from '../lib/manageGuard';
 import { marketActionErrorMessage } from '../lib/marketErrors';
 import { refresh as refreshSkillhub } from './useSkillhub';
 import type { MarketSkill } from './useMarketList';
-import { deriveSkillhubIdentityPolicy } from '../../../../shared/skillhubIdentityPolicy';
+import { useSkillhubIdentityPolicy } from './useSkillhubIdentityPolicy';
 
 type TeamRole = 'admin' | 'publisher' | 'viewer' | undefined;
 
@@ -36,7 +36,7 @@ export function useMarketManagement(options: {
   const { active, reload, onClone, onDeleted } = options;
   const { t } = useTranslation();
   const { user } = useAuth();
-  const identityPolicy = deriveSkillhubIdentityPolicy(user);
+  const identityPolicy = useSkillhubIdentityPolicy(user);
   const { confirm } = useConfirmDialog();
   const [editTarget, setEditTarget] = useState<MarketSkill | null>(null);
   const [visibilityTarget, setVisibilityTarget] = useState<MarketSkill | null>(null);

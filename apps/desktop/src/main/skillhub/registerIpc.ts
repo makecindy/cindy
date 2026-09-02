@@ -8,7 +8,7 @@ import { ensureReady as ensureLocalDbReady, getRawDb } from '../localDb';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
-import { isSkillhubHubSource } from '../../shared/skillhubSource.js';
+import { isSkillhubCatalogScope } from '../../shared/skillhubCatalog.js';
 import { computeFolderHashDetailed } from './folderHash';
 import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidation';
 import * as importLocalSkill from './importLocalSkill';
@@ -401,11 +401,19 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     },
   );
 
+  ipcMain.handle('skillhub:capabilities', async () => {
+    try {
+      return await marketService.capabilities();
+    } catch (err) {
+      return skillhubIpcError(err);
+    }
+  });
+
   ipcMain.handle(
     'skillhub:info',
-    async (_event, { name, hubSource }: { name: string; hubSource?: unknown }) => {
+    async (_event, { name, catalogScope }: { name: string; catalogScope?: unknown }) => {
       try {
-        return await marketService.info(name, isSkillhubHubSource(hubSource) ? hubSource : undefined);
+        return await marketService.info(name, isSkillhubCatalogScope(catalogScope) ? catalogScope : undefined);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const code = (err as { code?: string }).code;
@@ -419,12 +427,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:get-published-files',
-    async (_event, params: { name: string; version?: string; hubSource?: unknown }) => {
+    async (_event, params: { name: string; version?: string; catalogScope?: unknown }) => {
       try {
         return await marketService.getPublishedFiles({
           name: params.name,
           ...(params.version !== undefined ? { version: params.version } : {}),
-          ...(isSkillhubHubSource(params.hubSource) ? { hubSource: params.hubSource } : {}),
+          ...(isSkillhubCatalogScope(params.catalogScope) ? { catalogScope: params.catalogScope } : {}),
         });
       } catch (err) {
         return skillhubIpcError(err);
@@ -434,13 +442,13 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:read-published-file',
-    async (_event, params: { name: string; path: string; version?: string; hubSource?: unknown }) => {
+    async (_event, params: { name: string; path: string; version?: string; catalogScope?: unknown }) => {
       try {
         return await marketService.readPublishedFile({
           name: params.name,
           path: params.path,
           ...(params.version !== undefined ? { version: params.version } : {}),
-          ...(isSkillhubHubSource(params.hubSource) ? { hubSource: params.hubSource } : {}),
+          ...(isSkillhubCatalogScope(params.catalogScope) ? { catalogScope: params.catalogScope } : {}),
         });
       } catch (err) {
         return skillhubIpcError(err);
@@ -450,9 +458,9 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:list-published-versions',
-    async (_event, { name, hubSource }: { name: string; hubSource?: unknown }) => {
+    async (_event, { name, catalogScope }: { name: string; catalogScope?: unknown }) => {
       try {
-        return await marketService.listPublishedVersions(name, isSkillhubHubSource(hubSource) ? hubSource : undefined);
+        return await marketService.listPublishedVersions(name, isSkillhubCatalogScope(catalogScope) ? catalogScope : undefined);
       } catch (err) {
         return skillhubIpcError(err);
       }
@@ -569,12 +577,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 查询发布后的安全扫描状态（renderer 轮询用）
   ipcMain.handle(
     'skillhub:get-scan-status',
-    async (_event, params: { slug: string; version?: string; hubSource?: unknown }) => {
+    async (_event, params: { slug: string; version?: string; catalogScope?: unknown }) => {
       try {
         return await marketService.getScanStatus({
           slug: params.slug,
           ...(params.version !== undefined ? { version: params.version } : {}),
-          ...(isSkillhubHubSource(params.hubSource) ? { hubSource: params.hubSource } : {}),
+          ...(isSkillhubCatalogScope(params.catalogScope) ? { catalogScope: params.catalogScope } : {}),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -814,7 +822,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       const publicParams: import('./installService').InstallParams = {
         name: params.name,
         ...(params.version !== undefined ? { version: params.version } : {}),
-        ...(isSkillhubHubSource(params.hubSource) ? { hubSource: params.hubSource } : {}),
+        ...(isSkillhubCatalogScope(params.catalogScope) ? { catalogScope: params.catalogScope } : {}),
         ...(params.force !== undefined ? { force: params.force } : {}),
         ...(params.installPath !== undefined ? { installPath: params.installPath } : {}),
         ...(params.skipBackup !== undefined ? { skipBackup: params.skipBackup } : {}),

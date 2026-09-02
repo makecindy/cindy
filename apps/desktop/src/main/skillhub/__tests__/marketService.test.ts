@@ -52,6 +52,20 @@ function makeHubSkill(slug: string, overrides: Partial<HubSkillInfoForDesktop> =
 }
 
 describe('SkillhubMarketService', () => {
+  it('loads generic server capabilities without exposing a catalog source', async () => {
+    const capabilities = {
+      canWrite: false,
+      ownerType: 'organization' as const,
+      allowedVisibilities: [],
+      readOnlyReason: 'organization-catalog-read-only' as const,
+    };
+    const { fetch, calls } = makeFetch([capabilities]);
+    const service = new SkillhubMarketService({ fetch });
+
+    await expect(service.capabilities()).resolves.toEqual({ success: true, capabilities });
+    expect(calls).toEqual([{ path: '/api/skills-hub/capabilities', opts: undefined }]);
+  });
+
   it('normalizes and deduplicates sync slugs before batch-detail lookup', async () => {
     const { fetch, calls } = makeFetch([
       { items: [makeHubSkill('alpha')], availableCount: 4 },
@@ -83,12 +97,12 @@ describe('SkillhubMarketService', () => {
     const service = new SkillhubMarketService({
       fetch,
       assertWriteAllowed: () => {
-        throw new ServerApiError('LEGACY_XD_READ_ONLY', 403, 'read-only');
+        throw new ServerApiError('SKILL_HUB_READ_ONLY', 403, 'read-only');
       },
     });
 
     await expect(service.deletePublished('demo')).rejects.toMatchObject({
-      code: 'LEGACY_XD_READ_ONLY',
+      code: 'SKILL_HUB_READ_ONLY',
     });
     expect(calls).toEqual([]);
   });
@@ -160,8 +174,8 @@ describe('SkillhubMarketService', () => {
 
   it('passes public and organization catalog scopes to the Hub', async () => {
     const { fetch, calls } = makeFetch([
-      { items: [makeHubSkill('public-skill', { hubSource: 'native' })], total: 1 },
-      { items: [makeHubSkill('organization-skill', { visibility: 'shared', hubSource: 'legacy-xd' })], total: 1 },
+      { items: [makeHubSkill('public-skill')], total: 1 },
+      { items: [makeHubSkill('organization-skill', { visibility: 'shared' })], total: 1 },
     ]);
     const service = new SkillhubMarketService({ fetch });
 
@@ -172,8 +186,8 @@ describe('SkillhubMarketService', () => {
       '/api/skills-hub/skills?page=1&pageSize=24&sort=trending&order=desc&scope=market',
       '/api/skills-hub/skills?page=1&pageSize=24&sort=trending&order=desc&scope=team',
     ]);
-    expect(publicResult.items[0]?.hubSource).toBe('native');
-    expect(organizationResult.items[0]?.hubSource).toBe('legacy-xd');
+    expect(publicResult.items[0]?.catalogScope).toBe('market');
+    expect(organizationResult.items[0]?.catalogScope).toBe('team');
   });
 
   it('builds detail, file preview, visibility, and scan routes', async () => {
@@ -187,20 +201,20 @@ describe('SkillhubMarketService', () => {
     ]);
     const service = new SkillhubMarketService({ fetch });
 
-    await service.info('demo/skill', 'native');
-    await service.getPublishedFiles({ name: 'demo/skill', version: '1.0.0', hubSource: 'native' });
-    await service.readPublishedFile({ name: 'demo/skill', path: 'docs/README.md', version: '1.0.0', hubSource: 'native' });
-    await service.listPublishedVersions('demo/skill', 'native');
+    await service.info('demo/skill', 'market');
+    await service.getPublishedFiles({ name: 'demo/skill', version: '1.0.0', catalogScope: 'market' });
+    await service.readPublishedFile({ name: 'demo/skill', path: 'docs/README.md', version: '1.0.0', catalogScope: 'market' });
+    await service.listPublishedVersions('demo/skill', 'market');
     await service.getPublishedVisibility('demo/skill');
-    await service.getScanStatus({ slug: 'demo/skill', version: '1.0.0', hubSource: 'native' });
+    await service.getScanStatus({ slug: 'demo/skill', version: '1.0.0', catalogScope: 'market' });
 
     expect(calls.map((call) => call.path)).toEqual([
-      '/api/skills-hub/skills/demo%2Fskill?hubSource=native',
-      '/api/skills-hub/skills/demo%2Fskill/files?version=1.0.0&hubSource=native',
-      '/api/skills-hub/skills/demo%2Fskill/file?path=docs%2FREADME.md&version=1.0.0&hubSource=native',
-      '/api/skills-hub/skills/demo%2Fskill/versions?hubSource=native',
+      '/api/skills-hub/skills/demo%2Fskill?scope=market',
+      '/api/skills-hub/skills/demo%2Fskill/files?version=1.0.0&scope=market',
+      '/api/skills-hub/skills/demo%2Fskill/file?path=docs%2FREADME.md&version=1.0.0&scope=market',
+      '/api/skills-hub/skills/demo%2Fskill/versions?scope=market',
       '/api/skills-hub/skills/demo%2Fskill/visibility',
-      '/api/skills-hub/skills/demo%2Fskill/scan?version=1.0.0&hubSource=native',
+      '/api/skills-hub/skills/demo%2Fskill/scan?version=1.0.0&scope=market',
     ]);
     expect(calls[5]?.opts).toEqual({
       cache: 'no-store',

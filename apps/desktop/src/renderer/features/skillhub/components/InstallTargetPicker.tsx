@@ -27,7 +27,7 @@ import {
   joinSkillInstallPath,
   normalizeInstallPathKey,
 } from '../lib/installTargetPaths';
-import type { SkillhubHubSource } from '../../../../shared/skillhubSource';
+import type { SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
 
 /** Minimal skill identity for the picker (market Clone or local import). */
 export interface InstallTargetSkill {
@@ -37,7 +37,7 @@ export interface InstallTargetSkill {
   /** Market Clone passes latestVersion; used when versionLabel is absent. */
   latestVersion?: string | number;
   description?: string;
-  hubSource?: SkillhubHubSource;
+  catalogScope?: SkillhubCatalogScope;
 }
 
 export type InstallTargetActionResult =
@@ -57,7 +57,7 @@ interface InstallTargetPickerProps {
     name: string;
     installPath?: string;
     force?: boolean;
-    hubSource?: SkillhubHubSource;
+    catalogScope?: SkillhubCatalogScope;
   }) => Promise<InstallTargetActionResult>;
   /** i18n key override for dialog title (default installPicker.title). */
   titleKey?: string;
@@ -76,13 +76,13 @@ async function runMarketInstall(params: {
   name: string;
   installPath?: string;
   force?: boolean;
-  hubSource?: SkillhubHubSource;
+  catalogScope?: SkillhubCatalogScope;
 }): Promise<InstallTargetActionResult> {
   return window.electronAPI.skillhub.install({
     name: params.name,
     installPath: params.installPath,
     force: params.force,
-    hubSource: params.hubSource,
+    catalogScope: params.catalogScope,
   });
 }
 
@@ -150,7 +150,7 @@ export function InstallTargetPicker({
     setBannerError(null);
     setInstalling(true);
     try {
-      const res = await runAction({ name: skill.name, installPath, hubSource: skill.hubSource });
+      const res = await runAction({ name: skill.name, installPath, catalogScope: skill.catalogScope });
       if (res.success) {
         toast.success(
           t(successToastKey, {
@@ -173,7 +173,7 @@ export function InstallTargetPicker({
           cancelText: t('skillhub.installPicker.conflictDialog.cancel'),
         });
         if (!ok) return;
-        const forced = await runAction({ name: skill.name, installPath, force: true, hubSource: skill.hubSource });
+        const forced = await runAction({ name: skill.name, installPath, force: true, catalogScope: skill.catalogScope });
         if (forced.success) {
           toast.success(
             t(successToastKey, {

@@ -10395,6 +10395,14 @@
         "title": "Cancelled",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "Organization catalog is read-only",
+        "message": "Publishing and management are not available for this organization catalog"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "Visibility unavailable",
+        "message": "Choose a visibility supported by the current publishing identity"
+      },
       "INTERNAL": {
         "title": "Server error",
         "message": "Publish failed, please retry later"

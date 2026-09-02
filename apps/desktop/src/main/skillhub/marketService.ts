@@ -3,7 +3,8 @@ import { skillhubApiFetch } from './hubApi';
 import { mapHubSkillInfoToDesktopInfo, type HubSkillInfoForDesktop } from './infoMapping';
 import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse } from './syncMapping';
 import { assertSkillhubVisibilityAllowed, assertSkillhubWriteAllowed } from './identityPolicy';
-import { withSkillhubHubSource, type SkillhubHubSource } from '../../shared/skillhubSource';
+import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
+import type { SkillhubServerCapabilities } from '../../shared/skillhubIdentityPolicy';
 
 const SKILLHUB_SYNC_BATCH_SIZE = 100;
 const HUB_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
@@ -40,8 +41,8 @@ function mapFirstLevelDepartments(
 
 export interface SkillhubMarketServiceOptions {
   fetch?: SkillhubMarketFetcher;
-  assertWriteAllowed?: () => void;
-  assertVisibilityAllowed?: (visibility: 'private' | 'shared' | 'public') => void;
+  assertWriteAllowed?: () => Promise<void>;
+  assertVisibilityAllowed?: (visibility: 'private' | 'shared' | 'public') => Promise<void>;
 }
 
 export interface ListMarketParams {
@@ -81,13 +82,20 @@ export interface SetPublishedVisibilityParams {
  */
 export class SkillhubMarketService {
   private readonly fetch: SkillhubMarketFetcher;
-  private readonly assertWriteAllowed: () => void;
-  private readonly assertVisibilityAllowed: (visibility: 'private' | 'shared' | 'public') => void;
+  private readonly assertWriteAllowed: () => Promise<void>;
+  private readonly assertVisibilityAllowed: (visibility: 'private' | 'shared' | 'public') => Promise<void>;
 
   constructor(options: SkillhubMarketServiceOptions = {}) {
     this.fetch = options.fetch ?? skillhubApiFetch;
     this.assertWriteAllowed = options.assertWriteAllowed ?? assertSkillhubWriteAllowed;
     this.assertVisibilityAllowed = options.assertVisibilityAllowed ?? assertSkillhubVisibilityAllowed;
+  }
+
+  async capabilities() {
+    const capabilities = await this.fetch<SkillhubServerCapabilities>(
+      '/api/skills-hub/capabilities',
+    );
+    return { success: true as const, capabilities };
   }
 
   async sync(params: { slugs?: string[] } | undefined) {
@@ -134,7 +142,8 @@ export class SkillhubMarketService {
         : undefined,
     );
 
-    const items = (hubResult.items ?? []).map((item) => mapHubSkillInfoToDesktopInfo(item));
+    const catalogScope = params?.scope === 'team' ? 'team' : 'market';
+    const items = (hubResult.items ?? []).map((item) => mapHubSkillInfoToDesktopInfo(item, { catalogScope }));
     const hasMore = page * pageSize < hubResult.total;
     return {
       success: true as const,
@@ -143,28 +152,28 @@ export class SkillhubMarketService {
     };
   }
 
-  async info(name: string, hubSource?: SkillhubHubSource) {
+  async info(name: string, catalogScope?: SkillhubCatalogScope) {
     const hub = await this.fetch<HubSkillInfoForDesktop | { deleted: true }>(
-      withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(name)}`, hubSource),
+      withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}`, catalogScope),
     );
     if ('deleted' in hub) {
       return { success: true as const, deleted: true as const };
     }
-    const info = mapHubSkillInfoToDesktopInfo(hub);
+    const info = mapHubSkillInfoToDesktopInfo(hub, { catalogScope });
     return { success: true as const, info };
   }
 
-  async getPublishedFiles({ name, version, hubSource }: { name: string; version?: string; hubSource?: SkillhubHubSource }) {
+  async getPublishedFiles({ name, version, catalogScope }: { name: string; version?: string; catalogScope?: SkillhubCatalogScope }) {
     const qs = version ? `?version=${encodeURIComponent(version)}` : '';
     const result = await this.fetch<{
       slug: string;
       version: string;
       files: Array<{ path: string; size: number; language: string; truncated: boolean }>;
-    }>(withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(name)}/files${qs}`, hubSource));
+    }>(withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}/files${qs}`, catalogScope));
     return { success: true as const, ...result };
   }
 
-  async readPublishedFile({ name, path: filePath, version, hubSource }: { name: string; path: string; version?: string; hubSource?: SkillhubHubSource }) {
+  async readPublishedFile({ name, path: filePath, version, catalogScope }: { name: string; path: string; version?: string; catalogScope?: SkillhubCatalogScope }) {
     const search = new URLSearchParams({ path: filePath });
     if (version) search.set('version', version);
     const result = await this.fetch<{
@@ -173,20 +182,20 @@ export class SkillhubMarketService {
       language: string;
       truncated: boolean;
       content: string;
-    }>(withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(name)}/file?${search.toString()}`, hubSource));
+    }>(withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}/file?${search.toString()}`, catalogScope));
     return { success: true as const, file: result };
   }
 
-  async listPublishedVersions(name: string, hubSource?: SkillhubHubSource) {
+  async listPublishedVersions(name: string, catalogScope?: SkillhubCatalogScope) {
     const versions = await this.fetch<unknown[]>(
-      withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(name)}/versions`, hubSource),
+      withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}/versions`, catalogScope),
     );
     return { success: true as const, versions };
   }
 
   async updatePublished(name: string, fields: UpdatePublishedFields) {
-    this.assertWriteAllowed();
-    if (fields.visibility) this.assertVisibilityAllowed(fields.visibility);
+    await this.assertWriteAllowed();
+    if (fields.visibility) await this.assertVisibilityAllowed(fields.visibility);
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}`,
       { method: 'PATCH', body: fields },
@@ -195,7 +204,7 @@ export class SkillhubMarketService {
   }
 
   async deletePublished(name: string) {
-    this.assertWriteAllowed();
+    await this.assertWriteAllowed();
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}`,
       { method: 'DELETE' },
@@ -204,7 +213,7 @@ export class SkillhubMarketService {
   }
 
   async unpublishPublished(name: string) {
-    this.assertWriteAllowed();
+    await this.assertWriteAllowed();
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}/unpublish`,
       { method: 'POST' },
@@ -213,8 +222,8 @@ export class SkillhubMarketService {
   }
 
   async setPublishedVisibility({ name, visibility, teamSlug, visibleSlugs }: SetPublishedVisibilityParams) {
-    this.assertWriteAllowed();
-    this.assertVisibilityAllowed(visibility);
+    await this.assertWriteAllowed();
+    await this.assertVisibilityAllowed(visibility);
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}/set-visibility`,
       {
@@ -265,7 +274,7 @@ export class SkillhubMarketService {
         skillCount?: number;
         mySkillCount?: number;
       }>;
-    }>>('/api/skills-hub/categories?hubSource=native');
+    }>>('/api/skills-hub/categories?scope=market');
     const categories = flattenHubCategories(items ?? []);
     const totalCount = categories.reduce((s, c) => s + c.count, 0);
     const myTotalCount = categories.reduce((s, c) => s + c.myCount, 0);
@@ -286,10 +295,10 @@ export class SkillhubMarketService {
     return { success: true as const, teams };
   }
 
-  async getScanStatus({ slug, version, hubSource }: { slug: string; version?: string; hubSource?: SkillhubHubSource }) {
+  async getScanStatus({ slug, version, catalogScope }: { slug: string; version?: string; catalogScope?: SkillhubCatalogScope }) {
     const path = `/api/skills-hub/skills/${encodeURIComponent(slug)}/scan${version ? `?version=${encodeURIComponent(version)}` : ''}`;
     const result = await this.fetch<{ status: string; gates?: unknown[]; scorecard?: unknown }>(
-      withSkillhubHubSource(path, hubSource),
+      withSkillhubCatalogScope(path, catalogScope),
       { cache: 'no-store', headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
     );
     return { success: true as const, ...result };
