@@ -90,12 +90,16 @@ export interface HistoryMessage {
 // ── Reader 调用参数 (host 端把 tool 解析后的参数透传给 reader) ───────────────
 
 export interface ListWorkdirsArgs {
+  /** Host-owned ownership scope. null = account history; [] = deny all. */
+  sessionIds: string[] | null;
   limit: number;
   cursor: HistoryCursor | null;
   order: HistoryOrder;
 }
 
 export interface ListSessionsArgs {
+  /** Host-owned ownership scope. null = account history; [] = deny all. */
+  sessionIds: string[] | null;
   workdir: string | null;
   fromMs: number | null;
   toMs: number | null;
@@ -205,6 +209,11 @@ export interface SearchChatHistoryResult {
 // ── Deps interface ─────────────────────────────────────────────────────────
 
 export interface XdtHelperHistoryDeps {
+  /** Resolve the maximum history scope for the current runtime Session. */
+  resolveSessionScope?: (args: {
+    callerSessionId?: string;
+    callerMemoryScopeKey?: string;
+  }) => Promise<ControlResult<{ sessionIds: string[] | null }>>;
   listWorkdirs: (args: ListWorkdirsArgs) => Promise<ControlResult<{ page: HistoryPage<HistoryWorkdir> }>>;
   listSessions: (args: ListSessionsArgs) => Promise<ControlResult<{ page: HistoryPage<HistorySession> }>>;
   getMessages: (
