@@ -882,17 +882,35 @@ function projectXdGatewayMediaModels(
       ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
+  // Embedding is a provider-level capability, so it must be projected separately from
+  // agent-bound `models`. A gateway snapshot that explicitly includes embedding models is
+  // authoritative for the current account; payment-only entries must not unlock chat indexing.
+  const embeddingModels = gatewayModels
+    .filter((model) => model.mode === 'embedding' && model.availability !== 'requires_payment')
+    .map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+    }));
+  const hasEmbeddingEntries = gatewayModels.some((model) => model.mode === 'embedding');
   const identity = { ...provider };
   delete identity.imageModels;
   delete identity.imageDefaults;
   delete identity.videoModels;
   delete identity.videoDefaults;
+  if (hasEmbeddingEntries) {
+    delete identity.embeddingModels;
+    delete identity.embeddingDefaults;
+  }
   return {
     ...identity,
     imageModels,
     videoModels,
+    ...(embeddingModels.length > 0 ? { embeddingModels } : {}),
     ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
     ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),
+    ...(embeddingModels[0]
+      ? { embeddingDefaults: { standard: embeddingModels[0].id } }
+      : {}),
   };
 }
 
