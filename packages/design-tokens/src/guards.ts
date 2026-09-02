@@ -13,7 +13,9 @@ import {
   isDtcgLeaf,
   parseAliasPath,
   resolveAlias,
+  toDtcgColorObject,
   TOKEN_NAME_RE,
+  type DtcgColorObject,
   type DtcgFile,
 } from './dtcg.ts';
 import {
@@ -125,17 +127,53 @@ export function assertSemanticMatchesSnapshot(
       `semantic 角色数 ${resolved.size} ≠ SEMANTIC_ROLES ${SEMANTIC_ROLE_IDS.size}`,
     );
   }
+  // 逐值一致在标准 DTCG 颜色对象层比较（语义等价），不在原始字符串层比较：
+  // 影子层 $value 是对象（如 {colorSpace:"hsl",components:[60,12.5,97]}），
+  // 快照是字符串（"60 12.5% 97%"）；两侧都过 toDtcgColorObject 后必须深度相等。
+  // hex 大小写（#417CDD vs #417cdd）不构成色值差异。
   for (const [id, value] of resolved) {
     const frozen = byId.get(id);
     if (!frozen) {
       throw new Error(snapshotMismatch(`semantic 角色 ${id} 不在冻结快照中`));
     }
-    if (value.light !== frozen.light || value.dark !== frozen.dark) {
-      throw new Error(
-        snapshotMismatch(
-          `semantic.${id} light/dark（影子层 ${value.light}/${value.dark} vs 快照 ${frozen.light}/${frozen.dark}）`,
-        ),
-      );
+    for (const mode of ['light', 'dark'] as const) {
+      const shadowValue = value[mode];
+      const frozenValue = frozen[mode];
+      if (shadowValue == null || frozenValue == null) {
+        throw new Error(
+          snapshotMismatch(`semantic.${id} ${mode} 缺值（影子层/快照）`),
+        );
+      }
+      let shadowObj: DtcgColorObject;
+      let frozenObj: DtcgColorObject;
+      try {
+        shadowObj =
+          typeof shadowValue === 'string'
+            ? toDtcgColorObject(shadowValue)
+            : shadowValue;
+      } catch {
+        throw new Error(
+          snapshotMismatch(`semantic.${id} ${mode} 影子层值无法解析: ${String(shadowValue)}`),
+        );
+      }
+      try {
+        frozenObj = toDtcgColorObject(frozenValue);
+      } catch {
+        throw new Error(
+          snapshotMismatch(`semantic.${id} ${mode} 快照值无法解析: ${frozenValue}`),
+        );
+      }
+      if (
+        shadowObj.colorSpace !== frozenObj.colorSpace ||
+        JSON.stringify(shadowObj.components) !== JSON.stringify(frozenObj.components) ||
+        shadowObj.alpha !== frozenObj.alpha
+      ) {
+        throw new Error(
+          snapshotMismatch(
+            `semantic.${id} ${mode}（影子层 ${JSON.stringify(shadowObj)} vs 快照 ${frozenValue}）`,
+          ),
+        );
+      }
     }
   }
 }
@@ -148,6 +186,29 @@ export interface StructureIssue {
     | 'alias-unresolved'
     | 'alias-direction';
   message: string;
+}
+
+const COLOR_SPACES = ['srgb', 'hsl'] as const;
+
+function isValidDtcgColorObject(value: unknown): value is DtcgColorObject {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (!COLOR_SPACES.includes(record.colorSpace as (typeof COLOR_SPACES)[number])) {
+    return false;
+  }
+  if (!Array.isArray(record.components) || record.components.length !== 3) {
+    return false;
+  }
+  if (!record.components.every((c) => typeof c === 'number' && Number.isFinite(c))) {
+    return false;
+  }
+  if (
+    record.alpha != null &&
+    (typeof record.alpha !== 'number' || record.alpha < 0 || record.alpha > 1)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function fileLeaves(file: DtcgFile) {
@@ -171,16 +232,32 @@ export function validateDtcgSyntax(file: DtcgFile, fileName: string): StructureI
           message: `${fileName} 路径 ${path.join('.')} 含非法 token 名`,
         });
       }
-      if (leaf.$type !== 'color' && leaf.$type !== 'other') {
+      // $type 只允许标准 DTCG 颜色类型。此前这里放行自定义的 "other"，
+      // 导致 12 个 HSL triplet 节点以非法类型落盘（Terrazzo 会静默丢弃，
+      // 见 build-layers.ts / dtcg.ts 的标准颜色对象迁移）。
+      if (leaf.$type !== 'color') {
         issues.push({
           code: 'invalid-syntax',
           message: `${fileName} ${path.join('.')} 的 $type 非法: ${leaf.$type}`,
         });
       }
-      if (typeof leaf.$value !== 'string' || leaf.$value.length === 0) {
+      if (typeof leaf.$value === 'string') {
+        if (leaf.$value.length === 0) {
+          issues.push({
+            code: 'invalid-syntax',
+            message: `${fileName} ${path.join('.')} 缺少 $value`,
+          });
+        }
+        if (!parseAliasPath(leaf.$value)) {
+          issues.push({
+            code: 'invalid-syntax',
+            message: `${fileName} ${path.join('.')} 的 $value 必须是 alias 或标准颜色对象，不能是裸字符串色值`,
+          });
+        }
+      } else if (!isValidDtcgColorObject(leaf.$value)) {
         issues.push({
           code: 'invalid-syntax',
-          message: `${fileName} ${path.join('.')} 缺少 $value`,
+          message: `${fileName} ${path.join('.')} 的 $value 不是合法标准 DTCG 颜色对象`,
         });
       }
     }
@@ -230,7 +307,8 @@ export function validateAliasDirection(layers: BuiltLayers): StructureIssue[] {
   };
 
   for (const { path, leaf } of fileLeaves(layers.reference)) {
-    if (parseAliasPath(leaf.$value)) {
+    // reference 只能持有标准颜色对象字面量；alias 形态（`{…}` 字符串）违规。
+    if (typeof leaf.$value === 'string' && parseAliasPath(leaf.$value)) {
       issues.push({
         code: 'alias-direction',
         message: `reference.${path.join('.')} 不得使用 alias（reference 只能持有字面量）`,
@@ -239,6 +317,13 @@ export function validateAliasDirection(layers: BuiltLayers): StructureIssue[] {
   }
 
   for (const { path, leaf } of fileLeaves(layers.semantic)) {
+    if (typeof leaf.$value !== 'string') {
+      issues.push({
+        code: 'alias-direction',
+        message: `semantic.${path.join('.')} 必须 alias 到 reference，不能写字面量`,
+      });
+      continue;
+    }
     const alias = parseAliasPath(leaf.$value);
     if (!alias) {
       issues.push({
@@ -261,7 +346,10 @@ export function validateAliasDirection(layers: BuiltLayers): StructureIssue[] {
         message: `semantic.${path.join('.')} 解析回 semantic，违反单向依赖`,
       });
     }
-    if (parseAliasPath(resolved.leaf.$value)) {
+    if (
+      typeof resolved.leaf.$value === 'string' &&
+      parseAliasPath(resolved.leaf.$value)
+    ) {
       issues.push({
         code: 'alias-cycle',
         message: `semantic.${path.join('.')} 指向的 reference 仍是 alias`,

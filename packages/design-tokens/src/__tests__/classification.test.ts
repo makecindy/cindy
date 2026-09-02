@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
@@ -51,6 +52,28 @@ describe('DS-3 · 分类登记', () => {
     ]);
     for (const file of built.files) {
       expect(readFileSync(file.path, 'utf8')).toBe(file.body);
+    }
+  });
+
+  it('生成物 JSON 检出行尾固定 LF（.gitattributes 已钉 eol=lf，Windows autocrlf 不会转 CRLF）', () => {
+    // CI 实锤（2026-09-02 Windows unit tests 红）：core.autocrlf=true 的检出把
+    // 生成物 JSON 转成 CRLF 后，上一条「磁盘 = 内存生成」字节一致守卫假红。
+    // 修复 = .gitattributes 给 packages/design-tokens/src/**/*.json 钉 eol=lf
+    // （drizzle migration .sql 同款先例）。本测试钉住该契约：一旦有人删掉
+    // .gitattributes 规则，这里用 git check-attr 直接红灯，不再等 Windows CI。
+    for (const relPath of [
+      'packages/design-tokens/src/classification.json',
+      'packages/design-tokens/src/reference/color.json',
+      'packages/design-tokens/src/semantic/color.json',
+    ]) {
+      const attrs = execFileSync(
+        'git',
+        ['check-attr', 'eol', '--', relPath],
+        { cwd: repoRoot, encoding: 'utf8' },
+      ).trim();
+      expect(attrs, `${relPath} 应被 .gitattributes 钉 eol=lf，实际: ${attrs}`).toBe(
+        `${relPath}: eol: lf`,
+      );
     }
   });
 

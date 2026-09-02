@@ -29,6 +29,12 @@ Cindy 设计 token 的 **DTCG 影子层**（reference → semantic）。
 
 依赖单向：semantic → reference。不建 component 层（DS-4）。不装 Terrazzo（DS-8）。
 
+色值一律用标准 DTCG 颜色对象（`$type: "color"` + `{colorSpace, components[, alpha]}`）：
+HSL triplet（`60 12.5% 97%`）→ `{"colorSpace":"hsl","components":[60,12.5,97]}`；
+hex / rgba / transparent → srgb 分量（0–1）+ 可选 alpha。不用自定义 `$type`
+（`"other"` 不是标准 DTCG 类型——Terrazzo 2.7.1 实测会静默丢弃这类 token，
+DS-8 接线时无法生成 CSS 变量；裸 triplet 字符串也会被解析成黑色）。
+
 U2 二级信息色（`text-secondary` / `text-secondary-cross`）、`annotation-accent`、CINDY 皮肤族品牌红（`login-brand-accent` / `login-brand-accent-pressed`）按治理合同 §1.1 标记 **protected**，只登记、不进 semantic 映射。皮肤族其余值在 cindy-light/dark 主题 override 里，不在本快照默认值中。
 
 ## 多入口投放合同（只写合同，DS-8 才接线）

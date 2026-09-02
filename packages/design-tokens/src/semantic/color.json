@@ -13,11 +13,11 @@
     },
     "surface-hsl": {
       "light": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-60-12-5pct-97pct}"
       },
       "dark": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-60-2pct-12pct}"
       }
     },
@@ -93,11 +93,11 @@
     },
     "surface-hover-hsl": {
       "light": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-0-0pct-90pct}"
       },
       "dark": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-60-2pct-17pct}"
       }
     },
@@ -125,21 +125,21 @@
     },
     "border-default-hsl": {
       "light": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-60-3pct-84pct}"
       },
       "dark": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-60-2pct-23pct}"
       }
     },
     "border-shadcn-hsl": {
       "light": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-0-0pct-90pct}"
       },
       "dark": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-30-4pct-28pct}"
       }
     },
@@ -167,11 +167,11 @@
     },
     "text-primary-hsl": {
       "light": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-0-0pct-9pct}"
       },
       "dark": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-0-0pct-83pct}"
       }
     },
@@ -257,11 +257,11 @@
     },
     "text-tertiary-hsl": {
       "light": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-0-0pct-45pct}"
       },
       "dark": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-0-0pct-45pct}"
       }
     },
@@ -381,11 +381,11 @@
   "status": {
     "destructive": {
       "light": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-0-84pct-60pct}"
       },
       "dark": {
-        "$type": "other",
+        "$type": "color",
         "$value": "{hsl-0-72pct-63pct}"
       }
     },

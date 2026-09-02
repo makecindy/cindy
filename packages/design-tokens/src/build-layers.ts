@@ -1,16 +1,17 @@
-import { aliasValue, assertTokenName, type DtcgFile, type DtcgType } from './dtcg.ts';
+import {
+  aliasValue,
+  assertTokenName,
+  dtcgColorObjectToString,
+  toDtcgColorObject,
+  type DtcgColorObject,
+  type DtcgFile,
+} from './dtcg.ts';
 import { SEMANTIC_ROLES } from './semantic-roles.ts';
 import type { SnapshotColor } from './snapshot.ts';
 
 export interface BuiltLayers {
   reference: DtcgFile;
   semantic: DtcgFile;
-}
-
-function dtcgTypeFor(value: string): DtcgType {
-  return value.includes('%') && !value.startsWith('#') && !value.startsWith('rgb')
-    ? 'other'
-    : 'color';
 }
 
 function refTokenName(value: string, used: Map<string, string>): string {
@@ -54,18 +55,20 @@ export function buildLayers(byId: Map<string, SnapshotColor>): BuiltLayers {
     if (color.light == null || color.dark == null) {
       throw new Error(`semantic 角色 ${role.id} 缺少 light/dark 双模式值`);
     }
+    const lightValue = toDtcgColorObject(color.light);
+    const darkValue = toDtcgColorObject(color.dark);
     const lightName = refTokenName(color.light, used);
     const darkName = refTokenName(color.dark, used);
     if (!referenceTokens[lightName]) {
       referenceTokens[lightName] = {
-        $type: dtcgTypeFor(color.light),
-        $value: color.light,
+        $type: 'color',
+        $value: lightValue,
       };
     }
     if (!referenceTokens[darkName]) {
       referenceTokens[darkName] = {
-        $type: dtcgTypeFor(color.dark),
-        $value: color.dark,
+        $type: 'color',
+        $value: darkValue,
       };
     }
     if (!semantic[role.group]) {
@@ -74,11 +77,11 @@ export function buildLayers(byId: Map<string, SnapshotColor>): BuiltLayers {
     const group = semantic[role.group] as DtcgFile;
     group[role.id] = {
       light: {
-        $type: dtcgTypeFor(color.light),
+        $type: 'color',
         $value: aliasValue([lightName]),
       },
       dark: {
-        $type: dtcgTypeFor(color.dark),
+        $type: 'color',
         $value: aliasValue([darkName]),
       },
     };
@@ -100,9 +103,12 @@ export function resolvedSemanticValues(
       const darkAlias = (modes as DtcgFile).dark as { $value: string };
       const lightPath = lightAlias.$value.slice(1, -1);
       const darkPath = darkAlias.$value.slice(1, -1);
-      const lightLeaf = reference[lightPath] as { $value: string };
-      const darkLeaf = reference[darkPath] as { $value: string };
-      resolved.set(roleId, { light: lightLeaf.$value, dark: darkLeaf.$value });
+      const lightLeaf = reference[lightPath] as { $value: DtcgColorObject };
+      const darkLeaf = reference[darkPath] as { $value: DtcgColorObject };
+      resolved.set(roleId, {
+        light: dtcgColorObjectToString(lightLeaf.$value),
+        dark: dtcgColorObjectToString(darkLeaf.$value),
+      });
     }
   }
   return resolved;
