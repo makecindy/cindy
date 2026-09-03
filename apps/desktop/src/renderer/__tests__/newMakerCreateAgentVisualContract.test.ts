@@ -25,8 +25,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('data-testid="create-agent-main"');
     expect(source).toContain('data-testid="create-agent-mode-pill"');
     expect(source).toContain('testId="create-agent-brand-lockup"');
-    expect(source).toContain('data-testid="create-agent-quick-starts"');
-    expect(source).toContain('createAgentQuickStarts.map');
+    expect(source).toContain('<HomeSuggestionList');
     expect(source).toContain('<ChatInput');
     // 引擎切换控件在新建对话工具条上**统一面板真正启用时才撤除**
     // (model-selector-unified §1.1):分段器 → 下拉(AgentSelect)→ 统一模型选择器把引擎
@@ -77,6 +76,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     // 比例调参:25.5%→28%(用户实机拍板 2026-07-21)。
     expect(source).toContain('pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]');
     expect(source).not.toContain('pt-[clamp(96px,25.5vh,268px)]');
+    expect(source).not.toContain('10vh');
+    expect(source).not.toContain('InheritedSubscriptionNotice');
+    expect(source).not.toContain('PromotionalGrantNotice');
     // 内容列宽度从死锁 800px 改为跟随 useProportionalWidth 的 inputWidth(与进行中
     // 对话页同源,封顶 914+20=934px):大屏留出左右呼吸空间、发送后同一 ChatInput 无宽度跳变。
     expect(source).toContain('relative flex w-full flex-col items-start');
@@ -86,13 +88,11 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('absolute right-0 top-[22px]');
     // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
     // 旧 800px 封顶在宽窗口下右缘短一截,2026-07-24 用户反馈后摘除。
-    const quickStartsBlock = source.slice(
-      source.indexOf('data-testid="create-agent-quick-starts"'),
-      source.indexOf('data-testid="create-agent-quick-starts"') + 200,
-    );
-    expect(quickStartsBlock).toContain('w-full');
-    expect(quickStartsBlock).toContain('mt-[42px]');
-    expect(quickStartsBlock).not.toMatch(/maxWidth:\s*800/);
+    expect(source).toContain('<HomeSuggestionList narrow={isDraftNarrow} onSelect={handleHomeSuggestion} />');
+    expect(source).toContain('<HomeZeroModelAction');
+    expect(source).not.toContain('ConnectProviderCard');
+    expect(source).not.toMatch(/data-testid="create-agent-quick-starts"/);
+    expect(source).not.toContain('mt-[42px]');
   });
 
   it('preserves New Maker behavior-critical props on ChatInput', () => {
@@ -101,7 +101,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     const chatInputBlock = source.slice(chatInputIndex, source.indexOf('<NewGoalDialog', chatInputIndex));
 
     for (const invariant of [
-      'onSend={handleSend}',
+      'onSend={handleComposerSend}',
       'onBeforeVoiceInputStart={handleBeforeVoiceInputStart}',
       'externalDragOver={pageDragOver}',
       'sessionId={undefined}',
@@ -145,34 +145,16 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     }
   });
 
-  it('uses the R2 quick-start icon mapping and avoids page-level shadows', () => {
-    expect(source).toContain('SearchCode');
-    expect(source).toContain('Code2');
-    expect(source).toContain('MessageSquareCode');
-    expect(source).toContain('Hammer');
+  it('uses home suggestion rows instead of the old four quick-start cards', () => {
+    expect(source).toContain('<HomeSuggestionList');
+    expect(source).not.toContain('SearchCode');
+    expect(source).not.toContain('MessageSquareCode');
+    expect(source).not.toContain('createAgentQuickStarts');
     expect(source).not.toContain('shadow-[');
     expect(source).not.toContain('boxShadow');
   });
 
-  it('lays out quick-start cards icon-top/label-bottom with a 4px minimum gap (2026-07-25 redesign)', () => {
-    // 用户改稿 2026-07-25:两档(narrow/常态)统一竖排——icon 固定左上,文字挪到卡片
-    // 中下方与 icon 左对齐(flex-col + justify-between,gap-1 兜底最小间距),取代原
-    // 窄态横排 / 常态竖排自适应(#562)。卡片高度不变(narrow 84 / 常态 112)。
-    expect(source).toContain(
-      "'group flex flex-col items-start justify-between gap-1 rounded-xl border",
-    );
-    expect(source).toContain("isDraftNarrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4'");
-    // 行高从 `leading-[16px]` 改成无单位 `leading-[1.231]`(= 16 ÷ 13):`text-13` 会随
-    // 「外观 → UI 字号」缩放,固定 px 行框不跟随,放大字号时标签会裁切。默认字号下
-    // 渲染不变(13 × 1.231 ≈ 16.003px)。见 DESIGN.md §3 non-goals 的行高例外条款。
-    expect(source).toContain('className="w-full min-w-0 text-13 font-semibold leading-[1.231]"');
-    // 旧的窄态横排(items-center)/常态竖排(gap-3)特判已被统一竖排取代。
-    expect(source).not.toContain("'flex min-h-[84px] items-center gap-3 p-3'");
-    expect(source).not.toContain("'flex min-h-[112px] flex-col items-start gap-3 p-4'");
-  });
-
-  it('uses exact CREATE AGENT quick-start and avatar tokens from the Figma slices', () => {
-    // head_image 切图方案(用户裁决 2026-07-17):边框烧入图,仅投影走 CSS
+  it('keeps brand lockup tokens from the Figma slices', () => {
     expect(brandLockupSource).toContain('head-image-dark.png');
     expect(brandLockupSource).toContain('head-image-light.png');
     expect(brandLockupSource).toContain("drop-shadow(0 2px 3.65px rgba(0, 0, 0, 0.15))");
@@ -181,15 +163,6 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(brandLockupSource).toContain('BRAND_LOGO_HEIGHT = 37.5');
     expect(brandLockupSource).not.toMatch(/logoScale\s*[=:]/);
     expect(source).not.toContain('create-agent-avatar-glass-bg');
-    expect(source).toContain('bg-[var(--create-agent-quick-card-bg)]');
-    expect(source).toContain('border-[var(--create-agent-quick-card-border)]');
-    expect(source).toContain('text-[var(--create-agent-quick-card-text)]');
-    expect(source).toContain('bg-[var(--create-agent-quick-card-icon-bg)]');
-    expect(source).toContain('text-[var(--create-agent-quick-card-icon)]');
-
-    expect(colorsSource).toContain("'create-agent-quick-card-icon-bg'");
-    expect(colorsSource).toContain("light: '#EDEDED'");
-    expect(colorsSource).toContain("dark: '#2A2828'");
   });
 
   it('keeps the decorative head image unselectable', () => {
