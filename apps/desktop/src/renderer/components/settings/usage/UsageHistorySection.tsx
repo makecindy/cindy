@@ -182,7 +182,7 @@ export function UsageHistorySection(): React.JSX.Element {
                     </Select.ItemIndicator>
                   </Select.Item>
                 ))}
-                {selectedDay ? (
+                {range.startsWith('day:') && selectedDay ? (
                   <Select.Item
                     value={range}
                     className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-12 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)]"
