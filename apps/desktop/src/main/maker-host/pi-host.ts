@@ -503,6 +503,26 @@ function catalogCostForPiNative(cost: {
 }
 
 /**
+ * 自定义 openai-completions 端点（火山引擎、vLLM 等）普遍只接受
+ * system/assistant/user/tool 四种 role；Pi 运行时对未识别端点默认
+ * supportsDeveloperRole=true，会把 system 消息改写成 role:"developer" 并被上游
+ * 整单拒绝。bundled/官方目录显式声明的兼容位保持权威，其余自定义 Chat 模型
+ * 保守回落 supportsDeveloperRole:false（system 在所有兼容端点都可接受）。
+ */
+function piNativeModelCompat(
+  modelApi: PiNativeApi,
+  bundledCompat: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (bundledCompat && 'supportsDeveloperRole' in bundledCompat) {
+    return structuredClone(bundledCompat);
+  }
+  if (modelApi !== 'openai-completions') {
+    return bundledCompat ? structuredClone(bundledCompat) : undefined;
+  }
+  return { ...(bundledCompat ? structuredClone(bundledCompat) : {}), supportsDeveloperRole: false };
+}
+
+/**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
  * provider catalog. Registry metadata is authoritative for OpenAI subscription
  * models; the version-matched PI binary remains authoritative for native API and
@@ -1312,6 +1332,7 @@ export function buildPiNativeProvidersFromConfigs(
             : bundledModel?.api === modelApi
               ? bundledModel.baseUrl
               : undefined;
+        const modelCompat = piNativeModelCompat(modelApi, bundledModel?.compat);
         const spec = {
           id: m.id,
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
@@ -1344,7 +1365,7 @@ export function buildPiNativeProvidersFromConfigs(
               : {}),
           ...(bundledModel?.cost ? { cost: { ...bundledModel.cost } } : {}),
           ...(bundledModel?.headers ? { headers: { ...bundledModel.headers } } : {}),
-          ...(bundledModel?.compat ? { compat: structuredClone(bundledModel.compat) } : {}),
+          ...(modelCompat ? { compat: modelCompat } : {}),
           ...(bundledModel?.samplingParams
             ? { samplingParams: structuredClone(bundledModel.samplingParams) }
             : {}),

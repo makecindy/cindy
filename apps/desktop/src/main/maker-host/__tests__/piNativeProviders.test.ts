@@ -217,6 +217,120 @@ describe('resolvePiCindyGatewayModelApi', () => {
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it('pins developer role off for undeclared custom chat-completions models', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'volc',
+          name: 'Volcano Engine',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+              models: [{ id: 'doubao-seed', name: 'Doubao Seed' }],
+            }),
+          },
+        },
+      ],
+      () => 'custom-key',
+    );
+
+    expect(providers[0]?.api).toBe('openai-completions');
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'doubao-seed',
+      compat: { supportsDeveloperRole: false },
+    });
+  });
+
+  it('leaves non-chat custom models without a developer-role compat pin', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'local-responses',
+          name: 'Local Responses',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              wireProtocol: 'openai-responses',
+              models: [{ id: 'local-model', name: 'Local Model' }],
+            }),
+          },
+        },
+        {
+          id: 'local-messages',
+          name: 'Local Messages',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              wireProtocol: 'anthropic-messages',
+              models: [{ id: 'claude-local', name: 'Claude Local' }],
+            }),
+          },
+        },
+      ],
+      () => null,
+    );
+
+    expect(providers[0]?.api).toBe('openai-responses');
+    expect(providers[0]?.models[0]).toMatchObject({ id: 'local-model' });
+    expect(providers[0]?.models[0]).not.toHaveProperty('compat');
+    expect(providers[1]?.api).toBe('anthropic-messages');
+    expect(providers[1]?.models[0]).toMatchObject({ id: 'claude-local' });
+    expect(providers[1]?.models[0]).not.toHaveProperty('compat');
+  });
+
+  it('keeps bundled compat authoritative and still pins undeclared chat models', () => {
+    const bundled = new Map([
+      [
+        'volc',
+        new Map([
+          [
+            'declared',
+            piBundledModel('declared', 'openai-completions', {
+              baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+              compat: { supportsDeveloperRole: true },
+            }),
+          ],
+          [
+            'undeclared',
+            piBundledModel('undeclared', 'openai-completions', {
+              baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+              compat: { supportsStrictTools: true },
+            }),
+          ],
+        ]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'volc',
+          name: 'Volcano Engine',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+              wireProtocol: undefined,
+              models: [
+                { id: 'declared', name: 'Declared' },
+                { id: 'undeclared', name: 'Undeclared' },
+              ],
+            }),
+          },
+        },
+      ],
+      () => 'custom-key',
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]?.models[0]?.compat).toEqual({ supportsDeveloperRole: true });
+    expect(providers[0]?.models[1]?.compat).toEqual({
+      supportsStrictTools: true,
+      supportsDeveloperRole: false,
+    });
+  });
+
   it('keeps a legacy custom xai endpoint separate from the official SuperGrok provider', () => {
     const { providers, env } = buildPiNativeProvidersFromConfigs(
       [
@@ -281,6 +395,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       id: 'models-url-only',
       name: 'Models URL Only',
       contextWindow: 64_000,
+      compat: { supportsDeveloperRole: false },
     });
   });
 
@@ -369,6 +484,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       name: 'My DeepSeek Flash',
       contextWindow: 64_000,
       input: ['text', 'image'],
+      compat: { supportsDeveloperRole: false },
       reasoning: true,
       thinkingLevelMap: {
         minimal: null,
@@ -1860,8 +1976,19 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       () => null,
     );
     expect(providers[0].models).toEqual([
-      { id: 'vision', name: 'Vision', contextWindow: undefined, input: ['text', 'image'] },
-      { id: 'legacy', name: 'Legacy', contextWindow: undefined },
+      {
+        id: 'vision',
+        name: 'Vision',
+        contextWindow: undefined,
+        input: ['text', 'image'],
+        compat: { supportsDeveloperRole: false },
+      },
+      {
+        id: 'legacy',
+        name: 'Legacy',
+        contextWindow: undefined,
+        compat: { supportsDeveloperRole: false },
+      },
     ]);
   });
 
@@ -2050,6 +2177,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       name,
       contextWindow: undefined,
       ...(visual ? { input: ['text', 'image'] } : {}),
+      compat: { supportsDeveloperRole: false },
       reasoning: true,
       thinkingLevelMap: {
         minimal: null,
