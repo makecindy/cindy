@@ -227,17 +227,20 @@ describe('createOtaRequestCoordinator', () => {
     expect(h.events.at(-1)).toBe('write:shared');
   });
 
-  it('U2 启动后共享请求头成为稳定基线', async () => {
+  it('U1 下载 U2 后跨协调器重建，U2 以共享请求头成为稳定基线', async () => {
+    const first = createHarness({
+      checkResult: { isAvailable: true, manifest: { id: 'u2' } },
+      fetchResult: { isNew: true, manifest: { id: 'u2' } },
+    });
+    await first.run(async (client) => {
+      await client.checkForUpdateAsync();
+      await client.fetchUpdateAsync();
+    });
+
+    // 新 coordinator 模拟 JS reload / 冷启动：只共享真实持久层，不复用内存 baseline。
     const h = createHarness({
       currentUpdateId: 'u2',
-      stored: JSON.stringify({
-        version: 1,
-        mode: 'shared',
-        updateId: 'u2',
-        runtimeVersion: 'runtime-1',
-        updateUrl: UPDATE_URL,
-        channel: 'canary',
-      }),
+      stored: first.getStored(),
     });
 
     await h.run((client) => client.checkForUpdateAsync());
@@ -383,6 +386,44 @@ describe('createOtaRequestCoordinator', () => {
       updateUrl: UPDATE_URL,
     });
     expect(h.configs.at(-1)?.requestHeaders[EAS_CLIENT_ID_HEADER]).toBe(SHARED_OTA_CLIENT_ID);
+  });
+
+  it('check 超时先恢复 U1，并等待原生结果晚到后才放行下一笔事务', async () => {
+    const h = createHarness();
+    let finishNativeCheck!: (result: { isAvailable: boolean }) => void;
+    vi.mocked(h.client.checkForUpdateAsync).mockImplementationOnce(() => new Promise((resolve) => {
+      finishNativeCheck = resolve;
+    }));
+
+    const first = h.run(
+      (client) => client.checkForUpdateAsync(),
+      'canary',
+      { checkTimeoutMs: 10 },
+    );
+    await expect(first).rejects.toThrow('ota-request-timeout(10ms)');
+    expect(h.configs.at(-1)?.requestHeaders).toEqual({ 'x-cindy-update-channel': 'canary' });
+
+    const secondOperation = vi.fn((client: OtaRequestClient) => client.checkForUpdateAsync());
+    const second = h.run(secondOperation);
+    await Promise.resolve();
+    expect(secondOperation).not.toHaveBeenCalled();
+
+    finishNativeCheck({ isAvailable: false });
+    await expect(second).resolves.toMatchObject({ isAvailable: false });
+    expect(secondOperation).toHaveBeenCalledOnce();
+    expect(h.configs.at(-1)?.requestHeaders).toEqual({ 'x-cindy-update-channel': 'canary' });
+  });
+
+  it('首次 legacy baseline 写入失败时不改原生配置，也不发 OTA 请求', async () => {
+    const h = createHarness();
+    h.writeBaseline.mockRejectedValueOnce(new Error('storage unavailable'));
+
+    await expect(h.run((client) => client.checkForUpdateAsync()))
+      .rejects.toThrow('storage unavailable');
+
+    expect(h.setConfigOverride).not.toHaveBeenCalled();
+    expect(h.client.checkForUpdateAsync).not.toHaveBeenCalled();
+    expect(h.getStored()).toBeNull();
   });
 
   it('首次设置 shared override 抛错时尽力恢复 U1 配置', async () => {

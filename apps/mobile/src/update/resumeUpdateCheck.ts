@@ -107,6 +107,10 @@ export function createResumeUpdateChecker(
     if (!deps.otaEnabled) return 'skipped';
     try {
       const operation = async (client: ResumeOtaClient): Promise<ResumeOtaOutcome> => {
+        // withOtaClient 可能正在等启动/手动检查释放串行队列。轮到本次事务时账号或
+        // channel 可能已经变化，必须在真正发 manifest 请求前再次判旧，不能只检查
+        // 入队时快照或迟到结果。
+        if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
         const check = await withTimeout(client.checkForUpdateAsync(), checkTimeoutMs);
         if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
         if (!check.isAvailable) return 'up-to-date';

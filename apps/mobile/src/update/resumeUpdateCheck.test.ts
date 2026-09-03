@@ -132,6 +132,33 @@ describe('createResumeUpdateChecker OTA 静默路径', () => {
     expect(deps.fetchUpdateAsync).not.toHaveBeenCalled();
   });
 
+  it('排队等待包装器期间账号切换 → 请求前跳过,不访问旧 channel', async () => {
+    let current = true;
+    let releaseQueue!: () => void;
+    const wrappedCheck = vi.fn(async () => ({ isAvailable: false }));
+    const withOtaClient: NonNullable<ResumeUpdateCheckDeps['withOtaClient']> =
+      vi.fn(async (operation) => {
+        await new Promise<void>((resolve) => { releaseQueue = resolve; });
+        return operation({
+          checkForUpdateAsync: wrappedCheck,
+          fetchUpdateAsync: vi.fn(async () => ({ isNew: false })),
+        });
+      });
+    const deps = makeDeps({
+      withOtaClient,
+      isCurrent: () => current,
+    });
+
+    const pending = runOnce(deps);
+    await vi.waitFor(() => expect(withOtaClient).toHaveBeenCalledOnce());
+    current = false;
+    releaseQueue();
+
+    await expect(pending).resolves.toMatchObject({ ota: 'skipped' });
+    expect(wrappedCheck).not.toHaveBeenCalled();
+    expect(deps.checkForUpdateAsync).not.toHaveBeenCalled();
+  });
+
   it('用同一个包装器覆盖完整 check → fetch 事务', async () => {
     const wrappedCheck = vi.fn(async () => ({ isAvailable: true }));
     const wrappedFetch = vi.fn(async () => ({ isNew: true }));
