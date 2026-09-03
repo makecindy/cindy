@@ -70,6 +70,7 @@ import {
   collectRefinerPrewarmTransports,
   orderVoiceInputRefinerChainForRuntime,
 } from './VoiceInputRefinerRouting.js';
+import { isActiveCatalogVoiceRefinerProfile } from './mapAuxiliaryRefsToVoiceRefiners.js';
 import {
   getMicrophoneSettingsUrl,
   isExplicitMicrophonePermissionDenied,
@@ -946,6 +947,9 @@ function guardRefinerClientAgainstUnavailableRoute(
     requestJson: (input) => {
       if (isUtilityRouteDisabled(profile)) {
         return Promise.reject(new Error('voice refiner route disabled in settings'));
+      }
+      if (!isActiveCatalogVoiceRefinerProfile(profile)) {
+        return Promise.reject(new Error('voice refiner catalog route unavailable'));
       }
       // Refinement may start minutes after chain resolution. Re-read the live
       // owner-scoped catalog immediately before every direct XD request so a

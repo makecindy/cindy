@@ -8,11 +8,16 @@
 import { isModelSelectableForNewRoute } from '@cindy/model-providers';
 
 import { parseAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
-import type { CatalogModelPinRoute } from '../../shared/catalogModelPin.js';
+import {
+  CATALOG_MODEL_PIN_PREFIX,
+  decodeCatalogModelPin,
+  type CatalogModelPinRoute,
+} from '../../shared/catalogModelPin.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   getVoiceInputRefinerProfile,
   voiceInputRefinerProviderKindForCatalogRoute,
+  type VoiceInputRefinerProfile,
   type VoiceInputRefinerProviderKind,
 } from '../../shared/voiceInputRefinerProfiles.js';
 
@@ -35,6 +40,19 @@ function isActiveCatalogVoiceRoute(route: CatalogModelPinRoute): boolean {
     model
     && isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
   );
+}
+
+/**
+ * Re-check a retained catalog refiner profile against the live catalog. Voice
+ * refinement can be dispatched long after the profile was first resolved.
+ * Static utility profiles remain valid without a catalog lookup.
+ */
+export function isActiveCatalogVoiceRefinerProfile(
+  profile: Pick<VoiceInputRefinerProfile, 'id'>,
+): boolean {
+  if (!profile.id.startsWith(CATALOG_MODEL_PIN_PREFIX)) return true;
+  const route = decodeCatalogModelPin(profile.id);
+  return Boolean(route && isActiveCatalogVoiceRoute(route));
 }
 
 export function mapAuxiliaryRefToVoiceRefiner(ref: string): VoiceInputRefinerProviderKind | null {

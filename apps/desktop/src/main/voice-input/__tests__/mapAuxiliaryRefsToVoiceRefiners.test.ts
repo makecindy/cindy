@@ -36,6 +36,7 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
 }));
 
 import {
+  isActiveCatalogVoiceRefinerProfile,
   mapAuxiliaryRefToVoiceRefiner,
   mapAuxiliaryRefsToVoiceRefiners,
 } from '../mapAuxiliaryRefsToVoiceRefiners.js';
@@ -79,6 +80,23 @@ describe('mapAuxiliaryRefsToVoiceRefiners', () => {
       expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:deepseek/deepseek-v4-flash')).toBeNull();
     } finally {
       xdProvider.routing.codex.disabled = false;
+    }
+  });
+
+  it('rechecks retained catalog refiner profiles against the live catalog', () => {
+    const profile = { id: 'cat:xd:codex:deepseek/deepseek-v4-flash' };
+    expect(isActiveCatalogVoiceRefinerProfile(profile)).toBe(true);
+
+    const xdProvider = activeCatalog.providers.find((provider) => provider.id === 'xd');
+    if (!xdProvider) throw new Error('test fixture is missing the xd provider');
+    const originalModels = xdProvider.models.codex;
+    xdProvider.models.codex = originalModels.filter(
+      (model) => model.id !== 'deepseek/deepseek-v4-flash',
+    );
+    try {
+      expect(isActiveCatalogVoiceRefinerProfile(profile)).toBe(false);
+    } finally {
+      xdProvider.models.codex = originalModels;
     }
   });
 
