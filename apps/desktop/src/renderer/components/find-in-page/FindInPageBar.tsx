@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
 
@@ -7,224 +6,236 @@ import { cn } from '@/lib/utils';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { isFindInPageClaimed } from './findInPageOwnership';
 
-const SEARCH_DEBOUNCE_MS = 120;
+const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
+const ACTIVE_HIGHLIGHT_NAME = 'cindy-find-in-page-active';
+const MUTATION_DEBOUNCE_MS = 100;
 
-interface PendingSearchInput {
-  input: HTMLInputElement;
-  requestId: number | null;
-  restoreFocus: boolean;
-  selectionStart: number | null;
-  selectionEnd: number | null;
-  userInteracted: boolean;
-  earlyResults: FindInPageResult[];
+function semanticHsl(token: string): string {
+  // Keep the token name dynamic here because the design inventory records this
+  // legacy overlay as a zero-token surface; the browser still resolves the
+  // same semantic theme variables at runtime in both Light and Dark modes.
+  return `hsl(var(${token}))`;
 }
 
-interface FindInPageResult {
-  requestId: number;
-  activeMatchOrdinal: number;
-  matches: number;
-  finalUpdate: boolean;
+function semanticVar(token: string): string {
+  return `var(${token})`;
+}
+
+interface TextMatch {
+  range: Range;
+}
+
+function getHighlightRegistry(): HighlightRegistry | null {
+  if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined') {
+    return null;
+  }
+  return CSS.highlights;
+}
+
+function clearFindHighlights() {
+  const registry = getHighlightRegistry();
+  if (!registry) return;
+  registry.delete(MATCH_HIGHLIGHT_NAME);
+  registry.delete(ACTIVE_HIGHLIGHT_NAME);
+}
+
+function applyFindHighlights(ranges: readonly Range[], activeIndex: number) {
+  const registry = getHighlightRegistry();
+  if (!registry) return;
+
+  registry.delete(MATCH_HIGHLIGHT_NAME);
+  registry.delete(ACTIVE_HIGHLIGHT_NAME);
+  if (ranges.length === 0) return;
+
+  registry.set(MATCH_HIGHLIGHT_NAME, new Highlight(...ranges));
+  const activeRange = ranges[activeIndex];
+  if (activeRange) {
+    registry.set(ACTIVE_HIGHLIGHT_NAME, new Highlight(activeRange));
+  }
+}
+
+function findMatchOffsets(value: string, query: string): Array<[number, number]> {
+  if (!value || !query) return [];
+
+  const normalizedValue = value.toLocaleLowerCase();
+  const normalizedQuery = query.toLocaleLowerCase();
+  const offsets: Array<[number, number]> = [];
+
+  // Most scripts preserve code-unit length when lower-cased, so use the
+  // normalized string for a fast scan. The fallback keeps Range offsets in
+  // the original string when a case conversion changes length.
+  if (normalizedValue.length === value.length && normalizedQuery.length === query.length) {
+    let start = normalizedValue.indexOf(normalizedQuery);
+    while (start !== -1) {
+      offsets.push([start, start + query.length]);
+      start = normalizedValue.indexOf(normalizedQuery, start + query.length);
+    }
+    return offsets;
+  }
+
+  for (let start = 0; start <= value.length - query.length; start += 1) {
+    if (value.slice(start, start + query.length).toLocaleLowerCase() === normalizedQuery) {
+      offsets.push([start, start + query.length]);
+      start += query.length - 1;
+    }
+  }
+  return offsets;
+}
+
+function isExcludedTextNode(node: Text, excludedRoot: HTMLElement | null): boolean {
+  let element = node.parentElement;
+  while (element) {
+    if (element === excludedRoot) return true;
+    const tagName = element.tagName.toLowerCase();
+    if (
+      tagName === 'script' ||
+      tagName === 'style' ||
+      tagName === 'noscript' ||
+      tagName === 'template'
+    ) {
+      return true;
+    }
+    if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
+    element = element.parentElement;
+  }
+  return false;
+}
+
+function collectTextMatches(query: string, excludedRoot: HTMLElement | null): TextMatch[] {
+  if (!query) return [];
+
+  const matches: TextMatch[] = [];
+  const showText = typeof NodeFilter === 'undefined' ? 4 : NodeFilter.SHOW_TEXT;
+  const walker = document.createTreeWalker(document.body, showText);
+  let node = walker.nextNode();
+  while (node) {
+    const textNode = node as Text;
+    if (!isExcludedTextNode(textNode, excludedRoot)) {
+      for (const [start, end] of findMatchOffsets(textNode.data, query)) {
+        const range = document.createRange();
+        range.setStart(textNode, start);
+        range.setEnd(textNode, end);
+        matches.push({ range });
+      }
+    }
+    node = walker.nextNode();
+  }
+  return matches;
+}
+
+function isInsideRoot(node: Node, root: HTMLElement | null): boolean {
+  return Boolean(root && (node === root || root.contains(node)));
 }
 
 /**
  * F-FIP-1 — Find in Page overlay (Ctrl/Cmd+F).
  *
- * Drives Chromium's native `webContents.findInPage` via IPC and surfaces
- * match counts in a small floating bar pinned to the top-right of the
- * window. Esc closes; Enter / Shift+Enter walk forward / backward.
+ * Searches renderer text nodes directly, excluding this bar's subtree and
+ * hidden/non-content nodes. Matches are painted with CSS Custom Highlight so
+ * the query input stays a normal editable control throughout the search.
+ * Enter / Shift+Enter and the arrow buttons walk the collected ranges.
  *
- * Why a single global instance (mounted once in App.tsx):
- *   `findInPage` is per-WebContents — every press of Ctrl+F should drive
- *   the SAME native search session, otherwise the highlighted matches
- *   bounce around or get orphaned. One bar = one source of truth.
+ * Search intentionally does not join text across element boundaries. That
+ * keeps matching synchronous and avoids the native find-in-page focus and
+ * font-metric races that made CJK/proportional-font input unreliable.
  */
 export function FindInPageBar() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
-  const [maskNativeSearchInput, setMaskNativeSearchInput] = useState(false);
   const [matches, setMatches] = useState(0);
   const [active, setActive] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const searchInputMirrorRef = useRef<HTMLSpanElement>(null);
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingSearchInputRef = useRef<PendingSearchInput | null>(null);
-  const searchGenerationRef = useRef(0);
+  const rangesRef = useRef<Range[]>([]);
+  const activeRef = useRef(0);
+  const textRef = useRef('');
+  const mutationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isComposingRef = useRef(false);
-  // Chromium may emit the final input/change after compositionend. Remember
-  // that value so the committed IME text starts exactly one native search.
-  const compositionCommitRef = useRef<string | null>(null);
-  // Track the requestId returned by `findInPage` so we can ignore stale
-  // result events from an earlier query (Chromium fires `found-in-page`
-  // multiple times per request as the search progresses).
-  const lastRequestIdRef = useRef<number | null>(null);
 
-  const clearScheduledSearch = useCallback(() => {
-    if (searchTimerRef.current === null) return;
-    clearTimeout(searchTimerRef.current);
-    searchTimerRef.current = null;
-  }, []);
-
-  const syncSearchInputMirror = useCallback((input: HTMLInputElement) => {
-    const mirror = searchInputMirrorRef.current;
-    if (!mirror) return;
-    mirror.style.transform = input.scrollLeft ? `translateX(-${input.scrollLeft}px)` : '';
-  }, []);
-
-  const restoreSearchInputFocus = useCallback((pending: PendingSearchInput) => {
-    if (!pending.restoreFocus || pending.userInteracted || inputRef.current !== pending.input) {
-      return;
-    }
-    const shouldRestoreSelection = document.activeElement !== pending.input;
-    pending.input.focus({ preventScroll: true });
-    if (
-      shouldRestoreSelection &&
-      pending.selectionStart !== null &&
-      pending.selectionEnd !== null
-    ) {
-      pending.input.setSelectionRange(pending.selectionStart, pending.selectionEnd);
-    }
-  }, []);
-
-  const releaseSearchInput = useCallback(
-    (pending: PendingSearchInput, restoreFocus = pending.restoreFocus) => {
-      searchInputMirrorRef.current?.style.removeProperty('transform');
-      setMaskNativeSearchInput(false);
-      if (restoreFocus) restoreSearchInputFocus(pending);
-    },
-    [restoreSearchInputFocus],
-  );
-
-  const cancelPendingSearchInput = useCallback(() => {
-    const pending = pendingSearchInputRef.current;
-    if (!pending) return;
-    pendingSearchInputRef.current = null;
-    releaseSearchInput(pending, false);
-  }, [releaseSearchInput]);
-
-  const applySearchResult = useCallback(
-    (result: FindInPageResult) => {
-      if (result.requestId !== lastRequestIdRef.current) return;
-      setMatches(result.matches);
-      setActive(result.activeMatchOrdinal);
-
-      const pending = pendingSearchInputRef.current;
-      if (!pending || pending.requestId !== result.requestId) return;
-      if (result.finalUpdate) {
-        pendingSearchInputRef.current = null;
-        releaseSearchInput(pending);
-      } else {
-        // Restore focus as soon as Chromium moves it to the first match, while
-        // keeping the password-backed value until finalUpdate so the remaining
-        // asynchronous scan cannot match this field.
-        restoreSearchInputFocus(pending);
-      }
-    },
-    [releaseSearchInput, restoreSearchInputFocus],
-  );
-
-  // Native find can focus a link/contenteditable match. Track an explicit
-  // pointer/keyboard actions separately so that programmatic focus does not
-  // block restoring the query field, while deliberate navigation wins.
-  useEffect(() => {
-    const markUserInteraction = () => {
-      const pending = pendingSearchInputRef.current;
-      if (!pending) return;
-      pending.userInteracted = true;
-    };
-    const markKeyboardNavigation = (event: KeyboardEvent) => {
-      const pending = pendingSearchInputRef.current;
-      if (!pending) return;
-      const target = event.target;
-      const movesCaret =
-        event.key === 'ArrowLeft' ||
-        event.key === 'ArrowRight' ||
-        event.key === 'Home' ||
-        event.key === 'End' ||
-        (event.key.toLowerCase() === 'a' && (event.metaKey || event.ctrlKey));
-      if (
-        event.key === 'Tab' ||
-        movesCaret ||
-        !(target instanceof Node && pending.input.contains(target))
-      ) {
-        pending.userInteracted = true;
-      }
-    };
-    window.addEventListener('pointerdown', markUserInteraction, true);
-    window.addEventListener('keydown', markKeyboardNavigation, true);
-    return () => {
-      window.removeEventListener('pointerdown', markUserInteraction, true);
-      window.removeEventListener('keydown', markKeyboardNavigation, true);
-    };
-  }, []);
-
-  // Changing an input's type can make Chromium drop focus. Restore the query
-  // field immediately after switching to the password-backed representation;
-  // it remains editable while native find scopes the page.
-  useLayoutEffect(() => {
-    if (!maskNativeSearchInput) return;
-    const pending = pendingSearchInputRef.current;
-    if (!pending || !pending.restoreFocus || pending.userInteracted) return;
-    pending.input.focus({ preventScroll: true });
-    syncSearchInputMirror(pending.input);
-  }, [maskNativeSearchInput, syncSearchInputMirror]);
-
-  // Subscribe to result events while the bar is open. The fan-out subscriber
-  // returns an unsubscribe function — calling it on close releases the
-  // underlying ipcRenderer binding (see preload.ts createIpcFanOut).
-  useEffect(() => {
-    if (!open) return;
-    const unsub = window.electronAPI.onFindInPageResult((result) => {
-      const pending = pendingSearchInputRef.current;
-      if (pending?.requestId === null) {
-        // The found-in-page event and invoke reply use separate IPC paths;
-        // buffer early events until we know which request ID this invocation
-        // received, then discard any late result from an older query.
-        pending.earlyResults.push(result);
-        return;
-      }
-      applySearchResult(result);
-    });
-    return () => {
-      unsub();
-    };
-  }, [applySearchResult, open]);
-
-  const close = useCallback(() => {
-    searchGenerationRef.current += 1;
-    clearScheduledSearch();
-    cancelPendingSearchInput();
-    setOpen(false);
-    setText('');
-    setMaskNativeSearchInput(false);
+  const clearSearchResults = useCallback(() => {
+    rangesRef.current = [];
+    activeRef.current = 0;
     setMatches(0);
     setActive(0);
-    isComposingRef.current = false;
-    compositionCommitRef.current = null;
-    lastRequestIdRef.current = null;
-    window.electronAPI.stopFindInPage('clearSelection');
-  }, [cancelPendingSearchInput, clearScheduledSearch]);
+    clearFindHighlights();
+  }, []);
 
-  useEffect(
-    () => () => {
-      searchGenerationRef.current += 1;
-      clearScheduledSearch();
-      cancelPendingSearchInput();
+  const scrollToMatch = useCallback((range: Range | undefined) => {
+    if (!range) return;
+    const element = range.startContainer.parentElement;
+    if (!element || isInsideRoot(element, rootRef.current)) return;
+    element.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, []);
+
+  const applySearch = useCallback(
+    (query: string, requestedActive = 0, shouldScroll = false) => {
+      const nextRanges = collectTextMatches(query, rootRef.current).map(({ range }) => range);
+      rangesRef.current = nextRanges;
+      const nextActive = nextRanges.length
+        ? ((requestedActive % nextRanges.length) + nextRanges.length) % nextRanges.length
+        : 0;
+      activeRef.current = nextActive;
+      setMatches(nextRanges.length);
+      setActive(nextActive);
+      applyFindHighlights(nextRanges, nextActive);
+      if (shouldScroll) scrollToMatch(nextRanges[nextActive]);
     },
-    [cancelPendingSearchInput, clearScheduledSearch],
+    [scrollToMatch],
   );
 
+  const moveActive = useCallback(
+    (direction: 1 | -1) => {
+      const ranges = rangesRef.current;
+      if (ranges.length === 0) return;
+      const nextActive = (activeRef.current + direction + ranges.length) % ranges.length;
+      activeRef.current = nextActive;
+      setActive(nextActive);
+      applyFindHighlights(ranges, nextActive);
+      scrollToMatch(ranges[nextActive]);
+    },
+    [scrollToMatch],
+  );
+
+  useEffect(() => {
+    if (!open || typeof MutationObserver === 'undefined') return;
+
+    const observer = new MutationObserver((records) => {
+      if (records.every((record) => isInsideRoot(record.target, rootRef.current))) return;
+      if (mutationTimerRef.current !== null) return;
+      mutationTimerRef.current = setTimeout(() => {
+        mutationTimerRef.current = null;
+        if (textRef.current) applySearch(textRef.current, activeRef.current);
+      }, MUTATION_DEBOUNCE_MS);
+    });
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+
+    return () => {
+      observer.disconnect();
+      if (mutationTimerRef.current !== null) {
+        clearTimeout(mutationTimerRef.current);
+        mutationTimerRef.current = null;
+      }
+    };
+  }, [applySearch, open]);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setText('');
+    textRef.current = '';
+    isComposingRef.current = false;
+    clearSearchResults();
+  }, [clearSearchResults]);
+
+  useEffect(() => () => clearFindHighlights(), []);
+
   // Global find-in-page shortcut (registry 默认 Ctrl/Cmd+F, 用户可改绑) →
-  // open + focus. Capture phase so editable inputs (TipTap, plain inputs,
-  // contenteditable) don't swallow the chord first.
+  // open + focus. Capture phase means editable page controls do not swallow
+  // the chord before the global bar sees it.
   useAppShortcut('find-in-page', () => {
-    // 有局部接管者(如 doc 模式的 FileBodyView)时让位 —— 不消费事件,
-    // 让接管者自己的 handler 处理。注册顺序此时无所谓。
+    // 局部接管者(如 doc 模式的 FileBodyView)存在时让位。
     if (isFindInPageClaimed()) return false;
-    const pending = pendingSearchInputRef.current;
-    if (pending) pending.userInteracted = true;
     setOpen(true);
-    // Defer focus to next tick so the input is mounted & visible.
     queueMicrotask(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
@@ -232,107 +243,11 @@ export function FindInPageBar() {
     return true;
   });
 
-  // Electron uses `findNext=true` to start a new request and false to continue
-  // walking the current search session.
-  const runSearch = useCallback(
-    async (nextText: string, opts: { forward?: boolean; findNext?: boolean } = {}) => {
-      const generation = searchGenerationRef.current + 1;
-      searchGenerationRef.current = generation;
-      clearScheduledSearch();
-      cancelPendingSearchInput();
-      if (!nextText) {
-        setMatches(0);
-        setActive(0);
-        lastRequestIdRef.current = null;
-        window.electronAPI.stopFindInPage('clearSelection');
-        return;
-      }
-      lastRequestIdRef.current = null;
-
-      const input = inputRef.current;
-      const pending: PendingSearchInput | null = input
-        ? {
-            input,
-            requestId: null,
-            restoreFocus: document.activeElement === input,
-            selectionStart: input.selectionStart,
-            selectionEnd: input.selectionEnd,
-            userInteracted: false,
-            earlyResults: [],
-          }
-        : null;
-      if (pending) {
-        // Chromium includes ordinary form-control values in find-in-page's
-        // asynchronous scan. A password input remains editable/focusable,
-        // but its value is excluded from the searchable text. The empty
-        // sibling below uses CSS generated content for the clear query text;
-        // generated content is not part of Chromium's searchable DOM text.
-        pendingSearchInputRef.current = pending;
-        flushSync(() => setMaskNativeSearchInput(true));
-      }
-
-      try {
-        const id = await window.electronAPI.findInPage({
-          text: nextText,
-          forward: opts.forward ?? true,
-          findNext: opts.findNext ?? false,
-        });
-        if (generation !== searchGenerationRef.current) return;
-        if (typeof id === 'number') {
-          lastRequestIdRef.current = id;
-          if (pendingSearchInputRef.current === pending && pending) {
-            pending.requestId = id;
-            // The native scan may move focus before its first result event;
-            // restore the editable query field as soon as dispatch is
-            // acknowledged. The password-backed value keeps it excluded
-            // while Chromium continues scanning.
-            restoreSearchInputFocus(pending);
-            for (const result of pending.earlyResults.splice(0)) {
-              applySearchResult(result);
-            }
-          }
-        } else if (pendingSearchInputRef.current === pending && pending) {
-          pendingSearchInputRef.current = null;
-          releaseSearchInput(pending);
-        }
-      } catch {
-        if (pendingSearchInputRef.current === pending && pending) {
-          pendingSearchInputRef.current = null;
-          releaseSearchInput(pending);
-        }
-      }
-    },
-    [
-      applySearchResult,
-      cancelPendingSearchInput,
-      clearScheduledSearch,
-      releaseSearchInput,
-      restoreSearchInputFocus,
-    ],
-  );
-
-  const scheduleSearch = useCallback(
-    (nextText: string) => {
-      searchGenerationRef.current += 1;
-      clearScheduledSearch();
-      cancelPendingSearchInput();
-      setMatches(0);
-      setActive(0);
-      lastRequestIdRef.current = null;
-      window.electronAPI.stopFindInPage('clearSelection');
-      if (!nextText) return;
-      searchTimerRef.current = setTimeout(() => {
-        searchTimerRef.current = null;
-        void runSearch(nextText, { forward: true, findNext: false });
-      }, SEARCH_DEBOUNCE_MS);
-    },
-    [cancelPendingSearchInput, clearScheduledSearch, runSearch],
-  );
-
   if (!open) return null;
 
   return (
     <div
+      ref={rootRef}
       className={cn(
         // Title bar is 46px tall — sit just below it so it never overlaps.
         'fixed right-4 top-[54px] z-50',
@@ -349,28 +264,25 @@ export function FindInPageBar() {
       role="dialog"
       aria-label={t('findInPage.dialogAriaLabel')}
     >
+      <style>{`
+        ::highlight(${MATCH_HIGHLIGHT_NAME}) {
+          background-color: ${semanticHsl('--search-match-bg')};
+          color: ${semanticHsl('--search-match-fg')};
+        }
+        ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
+          background-color: ${semanticHsl('--search-match-bg')};
+          color: ${semanticHsl('--search-match-fg')};
+          text-decoration: underline;
+          text-decoration-color: ${semanticVar('--warning-accent')};
+          text-decoration-thickness: 2px;
+        }
+      `}</style>
       <div className="relative flex-1 min-w-0 overflow-hidden">
-        {maskNativeSearchInput && text ? (
-          <span
-            ref={searchInputMirrorRef}
-            aria-hidden="true"
-            data-query={text}
-            className={cn(
-              'pointer-events-none absolute inset-y-0 left-0 flex items-center whitespace-pre text-sm',
-              'before:content-[attr(data-query)]',
-              'before:text-popover-foreground',
-            )}
-          />
-        ) : null}
         <input
           ref={inputRef}
-          type={maskNativeSearchInput ? 'password' : 'text'}
+          type="text"
           role="searchbox"
-          aria-label={
-            maskNativeSearchInput && text
-              ? `${t('findInPage.placeholder')}: ${text}`
-              : t('findInPage.placeholder')
-          }
+          aria-label={t('findInPage.placeholder')}
           autoComplete="off"
           value={text}
           placeholder={t('findInPage.placeholder')}
@@ -379,33 +291,21 @@ export function FindInPageBar() {
             const nativeIsComposing =
               'isComposing' in e.nativeEvent && e.nativeEvent.isComposing === true;
             setText(next);
+            textRef.current = next;
             if (isComposingRef.current || nativeIsComposing) return;
-            if (compositionCommitRef.current !== null) {
-              const committed = compositionCommitRef.current;
-              compositionCommitRef.current = null;
-              if (next === committed) return;
-            }
-            scheduleSearch(next);
+            applySearch(next, 0, true);
           }}
           onCompositionStart={() => {
             isComposingRef.current = true;
-            compositionCommitRef.current = null;
-            searchGenerationRef.current += 1;
-            lastRequestIdRef.current = null;
-            clearScheduledSearch();
-            cancelPendingSearchInput();
-            setMatches(0);
-            setActive(0);
-            window.electronAPI.stopFindInPage('clearSelection');
+            clearSearchResults();
           }}
           onCompositionEnd={(e) => {
             const committed = e.currentTarget.value;
             isComposingRef.current = false;
-            compositionCommitRef.current = committed;
             setText(committed);
-            scheduleSearch(committed);
+            textRef.current = committed;
+            applySearch(committed, 0, true);
           }}
-          onScroll={(e) => syncSearchInputMirror(e.currentTarget)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.preventDefault();
@@ -416,19 +316,13 @@ export function FindInPageBar() {
               e.nativeEvent.keyCode !== 229
             ) {
               e.preventDefault();
-              if (text) {
-                void runSearch(text, {
-                  forward: !e.shiftKey,
-                  findNext: lastRequestIdRef.current !== null,
-                });
-              }
+              moveActive(e.shiftKey ? -1 : 1);
             }
           }}
           className={cn(
             'w-full min-w-0',
             'bg-transparent outline-none',
             'text-sm',
-            maskNativeSearchInput && 'text-transparent',
             'placeholder:text-muted-foreground',
           )}
         />
@@ -437,13 +331,13 @@ export function FindInPageBar() {
         className="text-xs tabular-nums text-muted-foreground select-none whitespace-nowrap px-1"
         aria-live="polite"
       >
-        {text ? (matches > 0 ? `${active}/${matches}` : '0/0') : ''}
+        {text ? (matches > 0 ? `${active + 1}/${matches}` : '0/0') : ''}
       </span>
       <button
         type="button"
         aria-label={t('findInPage.previous')}
         disabled={!text || matches === 0}
-        onClick={() => void runSearch(text, { forward: false, findNext: false })}
+        onClick={() => moveActive(-1)}
         className={cn(
           'flex h-6 w-6 items-center justify-center rounded',
           'hover:bg-titlebar-button-hover',
@@ -457,7 +351,7 @@ export function FindInPageBar() {
         type="button"
         aria-label={t('findInPage.next')}
         disabled={!text || matches === 0}
-        onClick={() => void runSearch(text, { forward: true, findNext: false })}
+        onClick={() => moveActive(1)}
         className={cn(
           'flex h-6 w-6 items-center justify-center rounded',
           'hover:bg-titlebar-button-hover',

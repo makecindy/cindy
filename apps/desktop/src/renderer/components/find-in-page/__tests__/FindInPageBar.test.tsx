@@ -3,18 +3,11 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
+const ACTIVE_HIGHLIGHT_NAME = 'cindy-find-in-page-active';
+
 const mocks = vi.hoisted(() => ({
   shortcutHandler: null as ((event: KeyboardEvent) => boolean) | null,
-  resultHandler: null as
-    | ((result: {
-        requestId: number;
-        activeMatchOrdinal: number;
-        matches: number;
-        finalUpdate: boolean;
-      }) => void)
-    | null,
-  findInPage: vi.fn(),
-  stopFindInPage: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -33,13 +26,28 @@ vi.mock('@/components/find-in-page/findInPageOwnership', () => ({
 
 import { FindInPageBar } from '../FindInPageBar';
 
-async function openFindBar(): Promise<HTMLInputElement> {
+class MockHighlight {
+  readonly ranges: readonly AbstractRange[];
+
+  constructor(...ranges: AbstractRange[]) {
+    this.ranges = ranges;
+  }
+}
+
+let highlights: Map<string, MockHighlight>;
+
+async function openFindBar(page?: HTMLElement): Promise<HTMLInputElement> {
+  if (page) document.body.append(page);
   render(<FindInPageBar />);
   await act(async () => {
     expect(mocks.shortcutHandler?.(new KeyboardEvent('keydown'))).toBe(true);
     await Promise.resolve();
   });
-  return screen.getByPlaceholderText('findInPage.placeholder') as HTMLInputElement;
+  return screen.getByRole('searchbox') as HTMLInputElement;
+}
+
+function getHighlight(name: string): MockHighlight | undefined {
+  return highlights.get(name);
 }
 
 describe('FindInPageBar', () => {
@@ -47,572 +55,140 @@ describe('FindInPageBar', () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     mocks.shortcutHandler = null;
-    mocks.resultHandler = null;
-    mocks.findInPage.mockResolvedValue(41);
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        findInPage: mocks.findInPage,
-        stopFindInPage: mocks.stopFindInPage,
-        onFindInPageResult: (handler: NonNullable<typeof mocks.resultHandler>) => {
-          mocks.resultHandler = handler;
-          return () => {
-            if (mocks.resultHandler === handler) mocks.resultHandler = null;
-          };
-        },
+    highlights = new Map();
+    vi.stubGlobal('Highlight', MockHighlight);
+    vi.stubGlobal('CSS', {
+      highlights: {
+        set: vi.fn((name: string, highlight: MockHighlight) => highlights.set(name, highlight)),
+        delete: vi.fn((name: string) => highlights.delete(name)),
       },
     });
   });
 
   afterEach(() => {
     cleanup();
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
-    Reflect.deleteProperty(window, 'electronAPI');
   });
 
-  it('excludes the query input from native search and restores its caret after finalUpdate', async () => {
-    const input = await openFindBar();
-    input.focus();
+  it('searches page text without matching the query input or hidden content', async () => {
+    const page = document.createElement('main');
+    page.append('foo');
+    const hidden = document.createElement('span');
+    hidden.setAttribute('aria-hidden', 'true');
+    hidden.textContent = 'foo';
+    page.append(hidden);
+    const script = document.createElement('script');
+    script.textContent = '// foo';
+    page.append(script);
+
+    const input = await openFindBar(page);
     fireEvent.change(input, { target: { value: 'foo' } });
-    input.setSelectionRange(2, 2);
-
-    expect(mocks.findInPage).not.toHaveBeenCalled();
-    mocks.findInPage.mockImplementationOnce(async () => {
-      expect(input.type).toBe('password');
-      return 41;
-    });
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    expect(mocks.findInPage).toHaveBeenCalledWith({
-      text: 'foo',
-      forward: true,
-      findNext: false,
-    });
-    expect(input.type).toBe('password');
-
-    // Chromium moves focus to the active page match while searching.
-    input.blur();
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 2,
-        finalUpdate: true,
-      });
-    });
-
-    expect(input.type).toBe('text');
-    expect(document.activeElement).toBe(input);
-    expect(input.selectionStart).toBe(2);
-    expect(input.selectionEnd).toBe(2);
-    expect(screen.getByText('1/2')).toBeTruthy();
-  });
-
-  it('cancels the delayed search when the query is cleared', async () => {
-    const input = await openFindBar();
-    fireEvent.change(input, { target: { value: 'foo' } });
-    fireEvent.change(input, { target: { value: '' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    expect(mocks.findInPage).not.toHaveBeenCalled();
-    expect(mocks.stopFindInPage).toHaveBeenCalledWith('clearSelection');
-  });
-
-  it('ignores late results from the previous query during the debounce window', async () => {
-    const input = await openFindBar();
-    fireEvent.change(input, { target: { value: 'foo' } });
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 2,
-        finalUpdate: true,
-      });
-    });
-    expect(screen.getByText('1/2')).toBeTruthy();
-
-    fireEvent.change(input, { target: { value: 'bar' } });
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 2,
-        matches: 99,
-        finalUpdate: true,
-      });
-    });
-
-    expect(screen.queryByText('2/99')).toBeNull();
-    expect(screen.queryByText('1/2')).toBeNull();
-  });
-
-  it('restores the query focus when Chromium focuses a matched link', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foo' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    const link = document.createElement('a');
-    link.href = '#match';
-    document.body.append(link);
-    link.focus();
-
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: false,
-      });
-    });
-
-    expect(input.type).toBe('password');
-    expect(document.activeElement).toBe(input);
-    link.remove();
-  });
-
-  it('keeps a deliberate pointer focus change after the search completes', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foo' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    const button = document.createElement('button');
-    document.body.append(button);
-    fireEvent.pointerDown(button);
-    button.focus();
-
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: true,
-      });
-    });
-
-    expect(document.activeElement).toBe(button);
-    expect(input.type).toBe('text');
-    button.remove();
-  });
-
-  it('applies a result that arrives before the invoke reply', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foo' } });
-
-    let resolveRequest!: (requestId: number) => void;
-    mocks.findInPage.mockImplementationOnce(
-      () =>
-        new Promise<number>((resolve) => {
-          resolveRequest = resolve;
-        }),
-    );
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    expect(input.type).toBe('password');
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 77,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: true,
-      });
-    });
-
-    await act(async () => {
-      resolveRequest(77);
-      await Promise.resolve();
-    });
 
     expect(screen.getByText('1/1')).toBeTruthy();
-    expect(input.type).toBe('text');
-    expect(document.activeElement).toBe(input);
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('foo');
+    expect(getHighlight(ACTIVE_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
   });
 
-  it('does not revive a cancelled search when its invoke reply arrives late', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foo' } });
+  it('matches case-insensitively and keeps element-boundary matches explicit', async () => {
+    const page = document.createElement('main');
+    page.append('Foo foo 中文中文');
+    const first = document.createElement('span');
+    first.textContent = '中';
+    const second = document.createElement('span');
+    second.textContent = '文';
+    page.append(first, second);
 
-    let resolveRequest!: (requestId: number) => void;
-    mocks.findInPage.mockImplementationOnce(
-      () =>
-        new Promise<number>((resolve) => {
-          resolveRequest = resolve;
-        }),
-    );
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: '中文' } });
 
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    fireEvent.change(input, { target: { value: 'bar' } });
-    await act(async () => {
-      resolveRequest(41);
-      await Promise.resolve();
-    });
-
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 2,
-        matches: 99,
-        finalUpdate: true,
-      });
-    });
-
-    expect(screen.queryByText('2/99')).toBeNull();
-    expect(input.type).toBe('text');
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(2);
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.map((range) => range.toString())).toEqual([
+      '中文',
+      '中文',
+    ]);
   });
 
-  it('keeps the query editable while waiting for a slow finalUpdate', async () => {
-    const input = await openFindBar();
-    input.focus();
+  it('walks matches with Enter, Shift+Enter, and the navigation buttons', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'foo foo foo';
+    const input = await openFindBar(page);
     fireEvent.change(input, { target: { value: 'foo' } });
 
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    expect(input.type).toBe('password');
-    fireEvent.change(input, { target: { value: 'foobar' } });
-    expect(input.value).toBe('foobar');
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    expect(mocks.findInPage).toHaveBeenLastCalledWith({
-      text: 'foobar',
-      forward: true,
-      findNext: false,
-    });
-  });
-
-  it('re-masks the query when Enter restarts a pending search', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foo' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    expect(input.type).toBe('password');
-    mocks.findInPage.mockImplementationOnce(async () => {
-      expect(input.type).toBe('password');
-      return 42;
-    });
-
+    expect(screen.getByText('1/3')).toBeTruthy();
     fireEvent.keyDown(input, { key: 'Enter' });
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(mocks.findInPage).toHaveBeenLastCalledWith({
-      text: 'foo',
-      forward: true,
-      findNext: true,
-    });
-    expect(input.type).toBe('password');
+    expect(screen.getByText('2/3')).toBeTruthy();
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(screen.getByText('1/3')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'findInPage.previous' }));
+    expect(screen.getByText('3/3')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'findInPage.next' }));
+    expect(screen.getByText('1/3')).toBeTruthy();
   });
 
-  it('keeps the query excluded from the async scan until finalUpdate', async () => {
-    const input = await openFindBar();
-    input.focus();
+  it('clears highlights when the query is cleared or the bar closes', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    const input = await openFindBar(page);
     fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
 
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.queryByText('1/1')).toBeNull();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)).toBeUndefined();
+    expect(getHighlight(ACTIVE_HIGHLIGHT_NAME)).toBeUndefined();
 
-    // The password-backed representation is searchable-safe while Chromium
-    // continues scoping matches, but the control remains editable.
-    expect(input.type).toBe('password');
-    expect(input.disabled).toBe(false);
-    expect(input.parentElement?.textContent).toBe('');
-    const mirror = input.parentElement?.querySelector('[data-query]') as HTMLElement;
-    expect(mirror.getAttribute('data-query')).toBe('foo');
-    expect(input.getAttribute('role')).toBe('searchbox');
-    expect(input.getAttribute('aria-label')).toBe('findInPage.placeholder: foo');
-
-    input.scrollLeft = 37;
-    fireEvent.scroll(input);
-    expect(mirror.style.transform).toBe('translateX(-37px)');
-
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: false,
-      });
-    });
-    expect(input.type).toBe('password');
-
-    // The value returns to a normal text input once native scoping completes.
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: true,
-      });
-    });
-    expect(input.type).toBe('text');
+    fireEvent.change(input, { target: { value: 'foo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'findInPage.close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)).toBeUndefined();
   });
 
-  it('preserves a caret moved in the query while finalUpdate is pending', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foobar' } });
+  it('waits for compositionend before searching committed IME text', async () => {
+    const page = document.createElement('main');
+    page.textContent = '中文';
+    const input = await openFindBar(page);
 
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: '中' } });
+    expect(screen.queryByText('1/1')).toBeNull();
 
-    input.setSelectionRange(1, 1);
-    fireEvent.pointerDown(input);
-    input.setSelectionRange(4, 4);
-    input.blur();
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: true,
-      });
-    });
-
-    expect(document.activeElement).not.toBe(input);
-    expect(input.selectionStart).toBe(4);
-    expect(input.selectionEnd).toBe(4);
+    fireEvent.compositionEnd(input, { target: { value: '中文' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
   });
 
-  it('preserves keyboard caret movement while a result is pending', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foobar' } });
-    input.setSelectionRange(1, 1);
+  it('refreshes matches after page text changes', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
 
+    page.append(' foo');
     await act(async () => {
-      vi.advanceTimersByTime(120);
+      await Promise.resolve();
+      vi.advanceTimersByTime(100);
       await Promise.resolve();
     });
 
-    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    expect(screen.getByText('1/2')).toBeTruthy();
+  });
+
+  it('reopens the bar and selects the whole query', async () => {
+    const input = await openFindBar();
+    fireEvent.change(input, { target: { value: 'foobar' } });
     input.setSelectionRange(2, 2);
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: false,
-      });
-    });
-
-    expect(document.activeElement).toBe(input);
-    expect(input.selectionStart).toBe(2);
-    expect(input.selectionEnd).toBe(2);
-  });
-
-  it('keeps keyboard caret navigation after native search moves focus away', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foobar' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    input.setSelectionRange(1, 1);
-    fireEvent.keyDown(input, { key: 'ArrowRight' });
-    input.setSelectionRange(2, 2);
-    input.blur();
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: true,
-      });
-    });
-
-    expect(document.activeElement).not.toBe(input);
-    expect(input.selectionStart).toBe(2);
-    expect(input.selectionEnd).toBe(2);
-  });
-
-  it('keeps a keyboard select-all after native search moves focus away', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foobar' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    input.setSelectionRange(1, 1);
-    fireEvent.keyDown(input, { key: 'a', metaKey: true });
-    input.setSelectionRange(0, input.value.length);
-    input.blur();
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: true,
-      });
-    });
-
-    expect(document.activeElement).not.toBe(input);
-    expect(input.selectionStart).toBe(0);
-    expect(input.selectionEnd).toBe(6);
-  });
-
-  it('keeps a re-opened find bar select-all after native search moves focus away', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foobar' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
 
     await act(async () => {
       expect(mocks.shortcutHandler?.(new KeyboardEvent('keydown'))).toBe(true);
       await Promise.resolve();
     });
-    input.blur();
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: true,
-      });
-    });
 
-    expect(document.activeElement).not.toBe(input);
-  });
-
-  it('waits for compositionend before starting a search', async () => {
-    const input = await openFindBar();
-    fireEvent.compositionStart(input);
-    fireEvent.change(input, { target: { value: '中' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-    expect(mocks.findInPage).not.toHaveBeenCalled();
-
-    fireEvent.compositionEnd(input, { target: { value: '中文' } });
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-    expect(mocks.findInPage).toHaveBeenCalledWith({
-      text: '中文',
-      forward: true,
-      findNext: false,
-    });
-  });
-
-  it('invalidates an in-flight search when IME composition starts', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foo' } });
-
-    let resolveRequest!: (requestId: number) => void;
-    mocks.findInPage.mockImplementationOnce(
-      () =>
-        new Promise<number>((resolve) => {
-          resolveRequest = resolve;
-        }),
-    );
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    fireEvent.compositionStart(input);
-    expect(mocks.stopFindInPage).toHaveBeenLastCalledWith('clearSelection');
-
-    await act(async () => {
-      resolveRequest(41);
-      await Promise.resolve();
-    });
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 9,
-        finalUpdate: true,
-      });
-    });
-
-    expect(screen.queryByText('1/9')).toBeNull();
-  });
-
-  it('keeps a deliberate Tab navigation after the search completes', async () => {
-    const input = await openFindBar();
-    input.focus();
-    fireEvent.change(input, { target: { value: 'foo' } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(120);
-      await Promise.resolve();
-    });
-
-    const button = document.createElement('button');
-    document.body.append(button);
-    fireEvent.keyDown(input, { key: 'Tab' });
-    button.focus();
-
-    act(() => {
-      mocks.resultHandler?.({
-        requestId: 41,
-        activeMatchOrdinal: 1,
-        matches: 1,
-        finalUpdate: true,
-      });
-    });
-
-    expect(document.activeElement).toBe(button);
-    expect(input.type).toBe('text');
-    button.remove();
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
   });
 });
