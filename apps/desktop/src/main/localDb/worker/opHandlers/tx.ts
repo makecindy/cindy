@@ -114,6 +114,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return botsFinishDelegation(db, txArgs);
     case 'bots.createDelegation':
       return botsCreateDelegation(db, txArgs);
+    case 'bots.reopenDelegation':
+      return botsReopenDelegation(db, txArgs);
     case 'bots.pauseLifecycle':
       return botsPauseLifecycle(db, txArgs);
     case 'bots.resumeLifecycle':
@@ -731,6 +733,80 @@ function botsCreateDelegation(db: Database.Database, args: unknown): void {
         targetProfileVersion,
         expectNumber(d.depth, 'delegation.depth'),
         createdAt, createdAt);
+  })();
+}
+
+function botsReopenDelegation(
+  db: Database.Database,
+  args: unknown,
+): { reopened: boolean; previousParentSessionId: string | null } {
+  const p = asRecord(args, 'bots.reopenDelegation args');
+  const delegationId = expectString(p.delegationId, 'delegationId');
+  const requestingBotId = expectString(p.requestingBotId, 'requestingBotId');
+  const expectedStatus = expectString(p.expectedStatus, 'expectedStatus');
+  if (!['completed', 'failed', 'cancelled', 'timed-out'].includes(expectedStatus)) {
+    throw new Error('bots.reopenDelegation expectedStatus must be terminal');
+  }
+  const targetBotId = nullableString(p.targetBotId);
+  const targetProfileVersion = p.targetProfileVersion === null || p.targetProfileVersion === undefined
+    ? null
+    : expectNumber(p.targetProfileVersion, 'targetProfileVersion');
+  const reopenedAt = expectNumber(p.reopenedAt, 'reopenedAt');
+  const maxActiveChildren = expectNumber(p.maxActiveChildren, 'maxActiveChildren');
+
+  return db.transaction(() => {
+    const current = db.prepare(`SELECT requesting_bot_id AS requestingBotId,
+      target_bot_id AS targetBotId, target_profile_version AS targetProfileVersion,
+      parent_session_id AS parentSessionId, status
+      FROM bot_delegations WHERE id = ?`).get(delegationId) as
+      | {
+          requestingBotId: string;
+          targetBotId: string | null;
+          targetProfileVersion: number | null;
+          parentSessionId: string | null;
+          status: string;
+        }
+      | undefined;
+    if (
+      !current
+      || current.requestingBotId !== requestingBotId
+      || current.targetBotId !== targetBotId
+      || current.targetProfileVersion !== targetProfileVersion
+      || current.status !== expectedStatus
+    ) {
+      return { reopened: false, previousParentSessionId: current?.parentSessionId ?? null };
+    }
+    const count = db.prepare(`SELECT COUNT(*) AS count FROM bot_delegations
+      WHERE requesting_bot_id = ? AND id <> ? AND status IN ('queued','running','waiting')`)
+      .get(requestingBotId, delegationId) as { count: number };
+    if (count.count >= maxActiveChildren) throw new Error('BOT_DELEGATION_CONCURRENCY_LIMIT');
+
+    const session = asRecord(p.session, 'session');
+    insertBotSession(db, session);
+    const childSessionId = expectString(p.childSessionId, 'childSessionId');
+    if (targetBotId) {
+      db.prepare(`INSERT INTO bot_session_links
+        (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+        VALUES (?, ?, ?, ?, 'delegation', ?, ?, NULL)`)
+        .run(`${targetBotId}:${childSessionId}`, targetBotId, childSessionId,
+          targetProfileVersion, `delegation:${delegationId}`, reopenedAt);
+    }
+    const updated = db.prepare(`UPDATE bot_delegations SET
+      parent_session_id = ?, child_session_id = ?, objective = ?,
+      permission_snapshot_json = ?, status = 'queued', result_summary = NULL,
+      output_artifacts_json = '[]', last_error = NULL, tokens_used = 0,
+      accepted_at = NULL, completed_at = NULL, updated_at = ?
+      WHERE id = ? AND status = ?`).run(
+      expectString(p.parentSessionId, 'parentSessionId'),
+      childSessionId,
+      expectString(p.objective, 'objective'),
+      expectString(p.permissionSnapshotJson, 'permissionSnapshotJson'),
+      reopenedAt,
+      delegationId,
+      expectedStatus,
+    );
+    if (updated.changes !== 1) throw new Error('BOT_DELEGATION_REOPEN_RACE');
+    return { reopened: true, previousParentSessionId: current.parentSessionId };
   })();
 }
 

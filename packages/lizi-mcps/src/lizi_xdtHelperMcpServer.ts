@@ -58,21 +58,13 @@ import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import {
-  registerBotDelegationTools,
-  type BotDelegationCallbacks,
-} from './xdt-helper/bot_delegation.js';
-import {
-  registerBotMessagingTools,
-  type BotMessagingCallbacks,
-} from './xdt-helper/bot_messaging.js';
-import {
   registerBotSkillTools,
   type BotSkillCallbacks,
 } from './xdt-helper/bot_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
-import type { LiziMcpLogger } from './types.js';
+import type { ControlResult, LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
 import { errorPayload, okPayload } from './xdt-helper/_payload.js';
@@ -98,6 +90,68 @@ const D_CALL_TOOL =
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
 const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'bots'] as const;
+
+type BotDelegationStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed-out';
+
+interface BotDelegationCallbacks {
+  listBots(params: { callerSessionId: string }): Promise<ControlResult<{ bots: unknown[] }, string>>;
+  call(params: {
+    callerSessionId: string;
+    targetBotId: string | null;
+    objective: string;
+    contextRefs?: string[];
+    title?: string;
+    workingDir?: string;
+    maxDepth?: number;
+    timeoutMs?: number;
+  }): Promise<ControlResult<Record<string, unknown>, string>>;
+  reply(params: {
+    callerSessionId: string;
+    delegationId: string;
+    reply:
+      | { kind: 'approve' }
+      | { kind: 'deny'; reason?: string }
+      | { kind: 'answer'; answers: Record<string, string> }
+      | { kind: 'message'; text: string; idempotencyKey?: string };
+  }): Promise<ControlResult<Record<string, unknown>, string>>;
+  listDelegations(params: {
+    callerSessionId: string;
+    status?: BotDelegationStatus;
+  }): Promise<ControlResult<{ delegations: unknown[] }, string>>;
+  cancelDelegation(params: {
+    callerSessionId: string;
+    delegationId: string;
+  }): Promise<ControlResult<Record<string, unknown>, string>>;
+}
+
+interface BotMessagingCallbacks {
+  messageAgent(params: {
+    callerSessionId: string;
+    targetBotId: string;
+    message: string;
+  }): Promise<
+    | {
+        ok: true;
+        targetBotId: string;
+        targetBotName: string;
+        targetSessionId: string;
+        wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
+      }
+    | {
+        ok: false;
+        errorCode: string;
+        message: string;
+        availableBots?: Array<{ id: string; name: string }>;
+      }
+  >;
+}
 
 // ── Entry tool registration ──────────────────────────────────────────────────
 
@@ -202,11 +256,7 @@ function registerCallToolEntry(
   );
 }
 
-/**
- * High-frequency Bot collaboration is a first-class, typed entry instead of a
- * second discovery layer hidden behind cindy_helper/call_tool. Low-frequency
- * inspection/cancel/interject operations stay in the progressive registry.
- */
+/** Bot collaboration is one direct primitive; target selection is only an argument. */
 function registerBotCollaborationEntry(
   server: McpServer,
   deps: XdtHelperMcpDeps,
@@ -216,83 +266,74 @@ function registerBotCollaborationEntry(
   server.tool(
     'collaborate_with_bot',
     [
-      'Use one typed Cindy Bot collaboration action.',
+      'Use one typed Cindy Bot collaboration primitive.',
       'status reads a Bot\'s current availability/activity and does not send anything.',
-      'delegate starts tracked work on another Bot whose result returns to this task; use it for work, deliverables, or any requested reply.',
+      'call starts tracked work. Pass target_bot_id for another Bot; omit it for a full Cindy task. Both targets use the same state, card, result, and cancellation flow.',
+      'reply answers a waiting permission/question/plan or adds a message to an active call.',
+      'cancel stops one tracked call and its descendants.',
       'notify sends a fire-and-forget notice to a Bot and only confirms delivery; never use it when a result is expected.',
-      'start_task launches a full Cindy task (no target Bot) for heavy work like coding or long-running jobs; its result returns to this task the same way.',
       'When a structured @Bot reference is present, use its Bot ID directly. Do not list the roster first.',
     ].join('\n'),
     {
-      action: z.enum(['status', 'delegate', 'notify', 'start_task']),
-      /** Required for status/delegate/notify; not accepted for start_task. */
+      action: z.enum(['status', 'notify', 'call', 'reply', 'cancel']),
+      /** Required for status/notify; optional for call (omitted = full Cindy task). */
       target_bot_id: z.string().min(1).max(128).optional(),
-      // Match BotDelegationService.MAX_OBJECTIVE_CHARS. A schema-valid direct
-      // collaboration call must not fail one layer later on a smaller limit.
+      /** Required for reply/cancel; returned by call. */
+      call_id: z.string().min(1).max(128).optional(),
       instruction: z.string().min(1).max(12_000).optional(),
       context_refs: z.array(z.string().max(512)).max(32).optional(),
       max_depth: z.number().int().min(1).max(5).optional(),
       timeout_ms: z.number().int().min(1_000).max(86_400_000).optional(),
-      /** start_task only: task title (defaults to the first line of the instruction). */
+      /** call without target_bot_id only. */
       title: z.string().min(1).max(120).optional(),
-      /** start_task only: absolute path of an existing directory to work in. */
+      /** call without target_bot_id only. */
       working_dir: z.string().min(1).max(1_024).optional(),
+      reply_kind: z.enum(['approve', 'deny', 'answer', 'message']).optional(),
+      answers: z.record(z.string(), z.string()).optional(),
+      reason: z.string().max(4_000).optional(),
+      idempotency_key: z.string().min(1).max(128).optional(),
     },
     async ({
       action,
       target_bot_id,
+      call_id,
       instruction,
       context_refs,
       max_depth,
       timeout_ms,
       title,
       working_dir,
+      reply_kind,
+      answers,
+      reason,
+      idempotency_key,
     }) => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
       if (!callerSessionId) {
         return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
       }
-      if (action === 'start_task') {
-        if (!deps.botDelegation) {
-          return errorPayload('HOST_NOT_READY', '伙伴委派服务尚未就绪。');
-        }
-        if (target_bot_id !== undefined) {
-          return errorPayload(
-            'INVALID_ARGS',
-            'start_task 开的是一条普通 Cindy 任务，不接受 target_bot_id；要找某个伙伴请用 action=delegate。',
-          );
-        }
-        if (!instruction?.trim()) {
-          return errorPayload('INVALID_ARGS', 'instruction is required when action=start_task.');
-        }
-        const result = await deps.botDelegation.delegateToCindy({
-          callerSessionId,
-          objective: instruction.trim(),
-          title,
-          workingDir: working_dir,
-          timeoutMs: timeout_ms,
-        });
-        return result.ok
-          ? okPayload({
-              ...result,
-              action: 'start_task',
-              expects_result: true,
-              guidance: 'This Cindy task is tracked. Its completion or failure returns to this task automatically.',
-            })
-          : errorPayload(result.errorCode, result.message);
-      }
-      if (title !== undefined || working_dir !== undefined) {
-        return errorPayload(
-          'INVALID_ARGS',
-          `title/working_dir 只用于 action=start_task。`,
-        );
-      }
-      if (!target_bot_id) {
-        return errorPayload('INVALID_ARGS', `target_bot_id is required when action=${action}.`);
-      }
       if (action === 'status') {
         if (!deps.botDelegation) {
           return errorPayload('HOST_NOT_READY', '伙伴状态服务尚未就绪。');
+        }
+        if (call_id) {
+          if (target_bot_id) {
+            return errorPayload('INVALID_ARGS', 'status 只能查询一个 call_id 或一个 target_bot_id。');
+          }
+          const result = await deps.botDelegation.listDelegations({ callerSessionId });
+          if (!result.ok) return errorPayload(result.errorCode, result.message);
+          const call = result.delegations.find((item) =>
+            item !== null
+            && typeof item === 'object'
+            && !Array.isArray(item)
+            && (item as Record<string, unknown>).id === call_id
+          );
+          return call
+            ? okPayload({ action: 'status', call_id, call })
+            : errorPayload('NOT_FOUND', 'call 不存在。');
+        }
+        if (!target_bot_id) {
+          return errorPayload('INVALID_ARGS', 'target_bot_id or call_id is required when action=status.');
         }
         const result = await deps.botDelegation.listBots({ callerSessionId });
         if (!result.ok) return errorPayload(result.errorCode, result.message);
@@ -329,13 +370,13 @@ function registerBotCollaborationEntry(
           guidance: 'This was a read-only status check. Do not send a follow-up unless the user asked you to.',
         });
       }
-      if (!instruction?.trim()) {
-        return errorPayload(
-          'INVALID_ARGS',
-          `instruction is required when action=${action}.`,
-        );
-      }
       if (action === 'notify') {
+        if (!target_bot_id) {
+          return errorPayload('INVALID_ARGS', 'target_bot_id is required when action=notify.');
+        }
+        if (!instruction?.trim()) {
+          return errorPayload('INVALID_ARGS', 'instruction is required when action=notify.');
+        }
         if (!deps.botMessaging) {
           return errorPayload('HOST_NOT_READY', '伙伴通知服务尚未就绪。');
         }
@@ -346,7 +387,7 @@ function registerBotCollaborationEntry(
         ) {
           return errorPayload(
             'NOTIFY_CANNOT_TRACK_WORK',
-            '通知不接受成果或执行边界；需要回复或交付物时请改用 action=delegate。',
+            '通知不接受成果或执行边界；需要回复或交付物时请改用 action=call。',
           );
         }
         const result = await deps.botMessaging.messageAgent({
@@ -372,21 +413,77 @@ function registerBotCollaborationEntry(
       if (!deps.botDelegation) {
         return errorPayload('HOST_NOT_READY', '伙伴委派服务尚未就绪。');
       }
-      const result = await deps.botDelegation.delegateToBot({
+      if (action === 'call') {
+        if (!instruction?.trim()) {
+          return errorPayload('INVALID_ARGS', 'instruction is required when action=call.');
+        }
+        if (target_bot_id && (title !== undefined || working_dir !== undefined)) {
+          return errorPayload(
+            'INVALID_ARGS',
+            'title/working_dir only apply to a Cindy task call without target_bot_id.',
+          );
+        }
+        const result = await deps.botDelegation.call({
+          callerSessionId,
+          targetBotId: target_bot_id ?? null,
+          objective: instruction.trim(),
+          contextRefs: context_refs,
+          title,
+          workingDir: working_dir,
+          maxDepth: max_depth,
+          timeoutMs: timeout_ms,
+        });
+        return result.ok
+          ? okPayload({
+              ...result,
+              action: 'call',
+              call_id: result.delegationId,
+              expects_result: true,
+              guidance: 'The call is tracked. Its state, completion, failure, and artifacts return automatically; do not poll.',
+            })
+          : errorPayload(result.errorCode, result.message);
+      }
+      if (!call_id) {
+        return errorPayload('INVALID_ARGS', `call_id is required when action=${action}.`);
+      }
+      if (action === 'cancel') {
+        const result = await deps.botDelegation.cancelDelegation({
+          callerSessionId,
+          delegationId: call_id,
+        });
+        return result.ok
+          ? okPayload({ ...result, action: 'cancel', call_id })
+          : errorPayload(result.errorCode, result.message);
+      }
+      if (!reply_kind) {
+        return errorPayload('INVALID_ARGS', 'reply_kind is required when action=reply.');
+      }
+      const reply = reply_kind === 'approve'
+        ? { kind: 'approve' as const }
+        : reply_kind === 'deny'
+          ? { kind: 'deny' as const, reason }
+          : reply_kind === 'answer'
+            ? answers
+              ? { kind: 'answer' as const, answers }
+              : null
+            : instruction?.trim()
+              ? { kind: 'message' as const, text: instruction.trim(), idempotencyKey: idempotency_key }
+              : null;
+      if (!reply) {
+        return errorPayload(
+          'INVALID_ARGS',
+          reply_kind === 'answer'
+            ? 'answers is required when reply_kind=answer.'
+            : 'instruction is required when reply_kind=message.',
+        );
+      }
+      const result = await deps.botDelegation.reply({
         callerSessionId,
-        targetBotId: target_bot_id,
-        objective: instruction.trim(),
-        contextRefs: context_refs,
-        maxDepth: max_depth,
-        timeoutMs: timeout_ms,
+        delegationId: call_id,
+        reply,
       });
       return result.ok
-        ? okPayload({
-            ...result,
-            action: 'delegate',
-            expects_result: true,
-            guidance: 'This work is tracked. Its completion, failure, and artifacts return to this task automatically.',
-          })
+        ? okPayload({ ...result, action: 'reply', call_id })
         : errorPayload(result.errorCode, result.message);
     },
   );
@@ -582,18 +679,8 @@ export function createXdtHelperMcpServer(
       sendToSession: deps.sendToSession,
     });
   }
-  if (deps.botDelegation) {
-    registerBotDelegationTools(registry, {
-      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
-      callbacks: deps.botDelegation,
-    });
-  }
-  if (deps.botMessaging) {
-    registerBotMessagingTools(registry, {
-      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
-      callbacks: deps.botMessaging,
-    });
-  }
+  // 伙伴协作只保留上面的 `collaborate_with_bot` 直接入口。旧的
+  // delegate/start_task/message_agent 渐进工具会制造多套近义命令,不再投进发现面。
   if (deps.botSkills) {
     registerBotSkillTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),

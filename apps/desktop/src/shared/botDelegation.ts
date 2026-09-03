@@ -1,3 +1,15 @@
+/**
+ * 一次 call 的状态机(伙伴目标与 Cindy 任务目标共用同一套):
+ *
+ *   queued → running ⇄ waiting → completed | failed | cancelled
+ *
+ * - queued:    已发起,对方还没接手(含首句没送进去、正在退避重试)。
+ * - running:   对方正在做。
+ * - waiting:   对方停在一个要人拍板的地方(权限确认 / 提问 / 计划审核),
+ *              `pendingInteraction` 里是具体在等什么;发起方伙伴替用户答,
+ *              或用户直接在子任务里答,任一侧答了就回到 running。
+ * - completed / failed / cancelled: 终态。超时归入 failed(lastError 以 TIMEOUT 开头)。
+ */
 export const BOT_DELEGATION_STATUSES = [
   'queued',
   'running',
@@ -5,10 +17,29 @@ export const BOT_DELEGATION_STATUSES = [
   'completed',
   'failed',
   'cancelled',
+  /** Legacy terminal rows remain readable; new timeouts are stored as failed + TIMEOUT. */
   'timed-out',
 ] as const;
 
 export type BotDelegationStatus = (typeof BOT_DELEGATION_STATUSES)[number];
+
+export type BotDelegationInteractionKind = 'permission' | 'ask_user_question' | 'plan_review';
+
+/** waiting 状态下对方正在等的那件事,给卡片与发起方伙伴看的同一份摘要。 */
+export interface BotDelegationPendingInteraction {
+  requestId: string;
+  kind: BotDelegationInteractionKind;
+  /** 人话摘要:要批的是什么 / 问的是什么 / 计划标题。 */
+  summary: string;
+  raisedAt: number;
+}
+
+/** 子任务交出的文件(相对子任务工作目录的路径 + 绝对路径)。 */
+export interface BotDelegationArtifact {
+  path: string;
+  absolutePath: string;
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+}
 
 export interface BotDelegationCapabilitySnapshot {
   profileVersion: number;
@@ -104,7 +135,8 @@ export interface BotDelegationPlanSnapshot {
     deadlineAt: number;
   };
   permission: {
-    mode: 'ask' | 'bypassPermissions';
+    /** 子任务实际运行的权限档;Cindy 任务目标从 ask 开始并把交互回调给发起伙伴。 */
+    mode: string;
     requesterMode: string | null;
     targetConfigured: 'ask' | 'trusted';
   };
@@ -176,7 +208,8 @@ export function parseBotDelegationPlanSnapshot(
     typeof limits.maxDepth !== 'number'
     || typeof limits.timeoutMs !== 'number'
     || typeof limits.deadlineAt !== 'number'
-    || (permission.mode !== 'ask' && permission.mode !== 'bypassPermissions')
+    || typeof permission.mode !== 'string'
+    || permission.mode.length === 0
     || (permission.requesterMode !== null && typeof permission.requesterMode !== 'string')
     || (permission.targetConfigured !== 'ask' && permission.targetConfigured !== 'trusted')
   ) return null;
@@ -198,7 +231,10 @@ export interface BotDelegationView {
   targetProfileVersion: number | null;
   depth: number;
   status: BotDelegationStatus;
+  /** 只在 waiting 时非空。 */
+  pendingInteraction: BotDelegationPendingInteraction | null;
   resultSummary: string | null;
+  artifacts: BotDelegationArtifact[];
   lastError: string | null;
   createdAt: number;
   acceptedAt: number | null;
@@ -211,6 +247,7 @@ export interface BotDelegationChangedPayload {
   parentSessionId: string | null;
   childSessionId: string | null;
   status: BotDelegationStatus;
+  pendingInteraction?: BotDelegationPendingInteraction | null;
 }
 
 export type BotDelegationListResult =

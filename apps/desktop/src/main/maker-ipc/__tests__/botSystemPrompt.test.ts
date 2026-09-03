@@ -73,7 +73,11 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('save_bot_skill');
     expect(all).toContain('把活交出去');
     expect(all).toContain('action=notify');
-    expect(all).toContain('action=start_task');
+    expect(all).toContain('action=call');
+    expect(all).toContain('action=reply');
+    expect(all).toContain('action=cancel');
+    expect(all).not.toContain('action=start_task');
+    expect(all).not.toContain('action=delegate');
     expect(all).toContain('collaborate_with_bot');
     expect(all).not.toContain('list_tools');
 

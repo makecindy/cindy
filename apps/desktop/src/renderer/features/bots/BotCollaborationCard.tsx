@@ -209,6 +209,7 @@ function CollaborationCardBody({
 
   // 终态：收拢成一行战报，点开才看细节。
   if (row && !active) {
+    const artifacts = row.artifacts ?? [];
     const elapsed = formatBotCollaborationDuration(
       t,
       row.createdAt,
@@ -262,6 +263,15 @@ function CollaborationCardBody({
               <p className="mt-2 whitespace-pre-wrap break-words text-[var(--error-fg)]">
                 {row.lastError}
               </p>
+            ) : null}
+            {artifacts.length > 0 ? (
+              <ul className="mt-2 space-y-1 text-11 text-[var(--text-tertiary)]">
+                {artifacts.map((artifact) => (
+                  <li key={`${artifact.status}:${artifact.absolutePath}`} className="truncate">
+                    {artifact.path}
+                  </li>
+                ))}
+              </ul>
             ) : null}
             {row.childSessionId ? (
               <button
@@ -322,12 +332,11 @@ function CollaborationCardBody({
           </span>
         ) : null}
       </div>
-      {/*
-        waiting = 第一句话没能送进对方的任务，正在退避重试。以前这里什么都不说，
-        卡片和「正在做」长得一模一样——用户以为对方在干活，其实一次都没开始。
-        重试有次数上限，用完会翻成失败终态；在那之前至少要如实说「还没开始」。
-      */}
-      {row?.status === 'waiting' ? (
+      {row?.status === 'waiting' && row.pendingInteraction ? (
+        <p className="mt-1.5 whitespace-pre-wrap text-11 leading-4 text-[var(--text-tertiary)]">
+          {row.pendingInteraction.summary}
+        </p>
+      ) : row?.status === 'waiting' ? (
         <p className="mt-1.5 text-11 text-[var(--text-tertiary)]">{t('bots.collab.retrying')}</p>
       ) : null}
       {row ? (

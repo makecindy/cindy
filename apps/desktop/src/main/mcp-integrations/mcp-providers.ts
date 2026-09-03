@@ -485,7 +485,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
           return svc.listBots(callerSessionId);
         },
-        delegateToBot: async (params) => {
+        call: async (params) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
@@ -495,7 +495,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           try {
-            return await svc.delegateToBot(params);
+            return await svc.call(params);
           } catch (err) {
             return {
               ok: false,
@@ -504,7 +504,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
         },
-        delegateToCindy: async (params) => {
+        reply: async ({ callerSessionId, delegationId, reply }) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
@@ -514,7 +514,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           try {
-            return await svc.delegateToCindy(params);
+            return await svc.reply(callerSessionId, delegationId, reply);
           } catch (err) {
             return {
               ok: false,
@@ -544,17 +544,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           return svc.cancelDelegation(callerSessionId, delegationId);
-        },
-        interjectDelegation: async ({ callerSessionId, delegationId, text, idempotencyKey }) => {
-          const svc = tryGetBotDelegationService();
-          if (!svc) {
-            return {
-              ok: false,
-              errorCode: 'HOST_NOT_READY',
-              message: 'Bot delegation service not initialized',
-            };
-          }
-          return svc.interjectDelegation(callerSessionId, delegationId, text, idempotencyKey);
         },
       },
       botMessaging: {

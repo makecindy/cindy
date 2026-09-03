@@ -190,7 +190,7 @@ function scriptedAnthropicTurn(requestBody: string): string {
   if (requestBody.includes('direct Bot collaboration')) {
     return toolResultCount === 0
       ? anthropicToolTurn(1, 'collaborate_with_bot', {
-          action: 'delegate',
+          action: 'call',
           target_bot_id: 'bot-b',
           instruction: 'Return the tracked result.',
         })
@@ -577,8 +577,9 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           {
             description: 'Typed Cindy Bot collaboration',
             inputSchema: {
-              action: z.enum(['status', 'delegate', 'notify']),
-              target_bot_id: z.string(),
+              action: z.enum(['status', 'notify', 'call', 'reply', 'cancel']),
+              target_bot_id: z.string().optional(),
+              call_id: z.string().optional(),
               instruction: z.string().optional(),
             },
           },
@@ -943,14 +944,14 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       );
 
       expect(botCollaborationCalls).toEqual([{
-        action: 'delegate',
+        action: 'call',
         target_bot_id: 'bot-b',
         instruction: 'Return the tracked result.',
       }]);
       expect(permissions).toEqual([{
         toolName: 'mcp__cindy_helper__collaborate_with_bot',
         input: {
-          action: 'delegate',
+          action: 'call',
           target_bot_id: 'bot-b',
           instruction: 'Return the tracked result.',
         },

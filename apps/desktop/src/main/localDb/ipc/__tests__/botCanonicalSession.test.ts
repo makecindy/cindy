@@ -2058,7 +2058,7 @@ it('recovers a soft-deleted canonical without resurrecting the deleted Session',
           .prepare('SELECT status FROM bot_delegations WHERE id = ?')
           .pluck()
           .get('delegation-expired-restart'),
-      ).toBe('timed-out');
+      ).toBe('failed');
       expect(
         h.sqlite!.prepare(`SELECT role, content FROM messages
           WHERE session_id = 'session-2' AND client_id = ?`).get(
@@ -2575,6 +2575,7 @@ describe('Bot teammate collaboration', () => {
         };
       },
     );
+    const resolveInteraction = vi.fn(() => true);
     let clock = 10_000;
     let ids = 0;
     const service = createBotDelegationService({
@@ -2582,6 +2583,7 @@ describe('Bot teammate collaboration', () => {
       abortSession: vi.fn(async () => undefined),
       closeSession: vi.fn(async () => undefined),
       broadcastSessionCreated: vi.fn(),
+      resolveInteraction,
       now: () => clock,
       createId: () => {
         ids += 1;
@@ -2626,6 +2628,46 @@ describe('Bot teammate collaboration', () => {
       expect(
         readBotCollaborationMeta(JSON.parse(guestRequest!.agentMeta).botCollaboration),
       ).toMatchObject({ role: 'guest-request', parentSessionId: 'session-1' });
+
+      // 子任务里的授权先回到发起伙伴：同一 call 进入 waiting，伙伴代答后继续。
+      const permissionRequest = {
+        kind: 'permission' as const,
+        requestId: 'permission-1',
+        toolName: 'write_file',
+        input: { path: '/private/hidden' },
+        title: '写入方案文件',
+      };
+      await service.handleInteractionStart(firstChild, permissionRequest);
+      const waiting = await service.listDelegations('session-1');
+      expect(waiting).toMatchObject({
+        ok: true,
+        delegations: [{
+          id: firstId,
+          status: 'waiting',
+          pendingInteraction: {
+            requestId: 'permission-1',
+            kind: 'permission',
+            summary: '写入方案文件',
+          },
+        }],
+      });
+      expect(waiting.ok && waiting.delegations[0]?.pendingInteraction).not.toHaveProperty('request');
+      expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+        targetSessionId: 'session-1',
+        clientId: `bot-delegation-interaction:${firstId}:permission-1`,
+        message: expect.stringContaining('action=reply'),
+      }));
+      await expect(
+        service.reply('session-1', firstId, { kind: 'approve' }),
+      ).resolves.toMatchObject({ ok: true, delegationId: firstId });
+      expect(resolveInteraction).toHaveBeenCalledWith('permission-1', {
+        kind: 'permission',
+        behavior: 'allow',
+      });
+      await service.handleInteractionEnd(firstChild, permissionRequest);
+      expect(
+        h.sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?').pluck().get(firstId),
+      ).toBe('running');
 
       // ── 忙时插话 ──────────────────────────────────────────────────────
       clock = 12_000;
@@ -2687,7 +2729,7 @@ describe('Bot teammate collaboration', () => {
         h.sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?').pluck().get(firstId),
       ).toBe('completed');
       // 完成信号是一条用户不可见的内部指令:synthetic-trigger 前缀让渲染 / 预览 /
-      // 搜索统一隐藏,可见终态由协作卡承载;正文里不得裸露内部 id。
+      // 搜索统一隐藏,可见终态由协作卡承载;内部 call id 只在这条隐藏指令里用于续接。
       const completion = dispatch.mock.calls
         .map(([params]) => params as unknown as {
           message: string;
@@ -2698,7 +2740,7 @@ describe('Bot teammate collaboration', () => {
       expect(completion!.message.startsWith(UI_ACTION_TRIGGER_PREFIX)).toBe(true);
       expect(completion!.message).toContain('方案定三条：先对齐、再做卡、最后接插话。');
       expect(completion!.message).toContain('Planner Bot');
-      expect(completion!.message).not.toContain(firstId);
+      expect(completion!.message).toContain(firstId);
       expect(completion!.message).not.toContain(firstChild);
       expect(completion!.persistedContent).toBe(completion!.message);
 
@@ -2706,6 +2748,40 @@ describe('Bot teammate collaboration', () => {
       await expect(
         service.interjectDelegation('session-1', firstId, '再改一版'),
       ).resolves.toMatchObject({ ok: false, errorCode: 'ALREADY_TERMINAL' });
+
+      // Bot 拿到终态回执后可以沿同一个 call 继续：旧子任务留在历史里，同一张卡
+      // 指向新子任务并重新进入运行态，不再制造第二个互不相干的 call。
+      clock = 25_000;
+      const continued = await service.reply('session-1', firstId, {
+        kind: 'message',
+        text: '把第三条改成先验收再交付。',
+      });
+      expect(continued).toMatchObject({
+        ok: true,
+        delegationId: firstId,
+        resumed: true,
+        queued: false,
+      });
+      const continuedChild = continued.ok ? continued.childSessionId ?? '' : '';
+      expect(continuedChild).not.toBe('');
+      expect(continuedChild).not.toBe(firstChild);
+      expect(
+        h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').pluck().get(firstChild),
+      ).toBe('archived');
+      expect(
+        h.sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?').pluck().get(firstId),
+      ).toBe('running');
+      expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+        targetSessionId: continuedChild,
+        clientId: `bot-delegation-start:${firstId}`,
+        persistedContent: expect.stringContaining('把第三条改成先验收再交付。'),
+      }));
+      clock = 27_000;
+      await service.settleSession({
+        childSessionId: continuedChild,
+        outcome: 'done',
+        resultText: '方案已改：先对齐、再做卡、最后先验收再交付。',
+      });
 
       // ── 第二棒：拿第一棒的结论去叫设计 ───────────────────────────────
       const firstResult = h.sqlite!
@@ -2738,7 +2814,7 @@ describe('Bot teammate collaboration', () => {
       // 目标主任务里只留协作卡锚点,不再复读一遍。
       expect(
         h.sqlite!.prepare('SELECT objective FROM bot_delegations WHERE id = ?').pluck().get(secondId),
-      ).toContain('先对齐、再做卡、最后接插话');
+      ).toContain('先对齐、再做卡、最后先验收再交付');
       expect(
         h.sqlite!.prepare('SELECT role, content FROM messages WHERE client_id = ?')
           .get(`bot-delegation-target-request:${secondId}`),
@@ -3278,11 +3354,11 @@ describe('Bot delegation end-to-end runtime', () => {
         targetBotId: 'bot-b',
         objective: '起不来的活也要有终点。',
       });
-      expect(delegated).toMatchObject({ ok: true, status: 'waiting' });
+      expect(delegated).toMatchObject({ ok: true, status: 'queued' });
       const delegationId = delegated.ok ? delegated.delegationId : '';
       expect(
         h.sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?').pluck().get(delegationId),
-      ).toBe('waiting');
+      ).toBe('queued');
       expect(
         h.sqlite!.prepare('SELECT provider_id FROM sessions WHERE id = ?').pluck().get('session-3'),
       ).toBeNull();

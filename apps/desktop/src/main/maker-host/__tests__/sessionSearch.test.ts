@@ -31,8 +31,8 @@ describe('session_search Bot ownership boundary', () => {
       'bot-session-a',
     ]);
     expect(mocks.query).toHaveBeenCalledWith(
-      expect.stringContaining('FROM bot_session_links scoped'),
-      ['"release"', 'bot-a', 10],
+      expect.stringMatching(/FROM\s+bot_session_links scoped/),
+      [16_384, '"release"', 'bot-a', 10],
     );
   });
 
@@ -46,7 +46,7 @@ describe('session_search Bot ownership boundary', () => {
 
     expect(mocks.query).toHaveBeenCalledWith(
       expect.stringMatching(/m\.session_id = \?[\s\S]*scoped\.bot_id = \?/),
-      ['"release"', 'foreign-session', 'bot-a', 10],
+      [16_384, '"release"', 'foreign-session', 'bot-a', 10],
     );
   });
 
@@ -74,6 +74,6 @@ describe('session_search Bot ownership boundary', () => {
 
     const [sql, params] = mocks.query.mock.calls[0] as [string, unknown[]];
     expect(sql).not.toContain('FROM bot_session_links scoped');
-    expect(params).toEqual(['"release"', 10]);
+    expect(params).toEqual([16_384, '"release"', 10]);
   });
 });

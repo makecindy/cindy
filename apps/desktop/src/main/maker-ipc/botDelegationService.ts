@@ -27,7 +27,7 @@ import {
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { deriveAvailableModels } from '../maker-host/catalog-to-descriptors.js';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import { createLogger } from '../logger.js';
 import { resolveBusinessSessionId } from '../sessionIds.js';
@@ -36,8 +36,10 @@ import { classifyBotDelegationDispatchFailure } from './botDelegationDispatchOut
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
 import type {
   BotCapabilityCatalogEntry,
+  BotDelegationArtifact,
   BotDelegationChangedPayload,
   BotDelegationCapabilitySnapshot,
+  BotDelegationPendingInteraction,
   BotDelegationPlanSnapshot,
   BotDelegationStatus,
   BotDelegationView,
@@ -64,6 +66,9 @@ const MAX_TIMEOUT_MS = 24 * 60 * 60_000;
 const MAX_OBJECTIVE_CHARS = 12_000;
 const MAX_RESULT_CHARS = 12_000;
 const MAX_RETRY_DELAY_MS = 60_000;
+/** 对方停在要人拍板的地方时,超时不计时;每隔这么久再看一眼有没有答完。 */
+const WAITING_TIMEOUT_GRACE_MS = 5 * 60_000;
+const MAX_ARTIFACTS = 64;
 const messageRowid = sql<number>`"messages"."rowid"`;
 const log = createLogger('bot-delegation');
 
@@ -102,6 +107,13 @@ export interface BotDelegationServiceDeps {
     agentMeta?: Record<string, unknown>;
   }) => Promise<void>;
   onChanged?: (payload: BotDelegationChangedPayload) => void;
+  /**
+   * 替用户回答子任务里挂起的交互(权限 / 提问 / 计划)。返回 false 表示这条交互
+   * 已经不在了(用户先答了、超时了、子任务关了)。
+   */
+  resolveInteraction?: (requestId: string, decision: InteractionDecision) => boolean;
+  /** 子任务这一路改过的文件;缺省不采集交付物。 */
+  collectArtifacts?: (sessionId: string) => Promise<BotDelegationArtifact[]>;
   now?: () => number;
   createId?: () => string;
   maxActiveChildren?: number;
@@ -158,27 +170,36 @@ export function unavailableRequiredBotCapabilities(
   ];
 }
 
-export interface DelegateToBotInput {
+/**
+ * 一次 call:把一件有边界的活交给一个伙伴(`targetBotId`)或一条普通 Cindy 任务
+ * (`targetBotId: null`)。两种目标走完全相同的状态机、协作卡、回执与交付物回流;
+ * 唯一的分叉是子任务用谁的执行配置跑(伙伴的 Profile,还是发起方自己的档位)。
+ */
+export interface BotCallInput {
   callerSessionId: string;
-  targetBotId: string;
+  targetBotId: string | null;
   objective: string;
   contextRefs?: string[];
+  /** 只对 Cindy 任务目标有效:任务标题,缺省取 objective 首行。 */
+  title?: string;
+  /**
+   * 只对 Cindy 任务目标有效:工作目录,必须是已存在的绝对路径;缺省用发起伙伴的
+   * Home workspace。伙伴目标一律在目标伙伴自己的 workspace 里干活。
+   */
+  workingDir?: string;
   maxDepth?: number;
   timeoutMs?: number;
 }
 
-export interface DelegateToCindyInput {
-  callerSessionId: string;
-  objective: string;
-  /** 子任务标题;缺省取 objective 首行。 */
-  title?: string;
-  /**
-   * 子任务工作目录。必须是已存在的绝对路径;缺省用发起 Bot 的 Home workspace。
-   * 子任务是一条普通 Cindy 任务,自己的权限门照常生效,这里不做授权扩张。
-   */
-  workingDir?: string;
-  timeoutMs?: number;
-}
+/**
+ * 发起方对一次 call 的回话。对方正停在 waiting 时,approve / deny / answer 直接替
+ * 用户拍板;message 在对方进行中时是插话,在终态时把这次 call 重新拉起来接着聊。
+ */
+export type BotCallReply =
+  | { kind: 'approve' }
+  | { kind: 'deny'; reason?: string }
+  | { kind: 'answer'; answers: Record<string, string> }
+  | { kind: 'message'; text: string; idempotencyKey?: string };
 
 export type BotDelegationResult<T extends object = object> =
   | ({ ok: true } & T)
@@ -201,6 +222,25 @@ function parseStringArray(value: string | null | undefined): string[] {
     return Array.isArray(parsed)
       ? parsed.filter((item): item is string => typeof item === 'string')
       : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseArtifacts(value: string | null | undefined): BotDelegationArtifact[] {
+  try {
+    const parsed = JSON.parse(value ?? '[]') as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+      const artifact = item as Partial<BotDelegationArtifact>;
+      if (
+        typeof artifact.path !== 'string'
+        || typeof artifact.absolutePath !== 'string'
+        || !['added', 'modified', 'deleted', 'renamed'].includes(artifact.status ?? '')
+      ) return [];
+      return [artifact as BotDelegationArtifact];
+    });
   } catch {
     return [];
   }
@@ -377,6 +417,13 @@ function normalizeDelegationReferences(
 export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * 子任务里当前挂起、等人拍板的交互,按 delegationId 记。只在内存里:重启后
+   * 子任务的挂起交互本来就随进程消失,waiting 行由 restore 按 running 续跑。
+   */
+  const pendingInteractions = new Map<string, BotDelegationPendingInteraction & {
+    request: InteractionRequest;
+  }>();
   const now = deps.now ?? Date.now;
   const createId = deps.createId ?? randomUUID;
   const maxActiveChildren = Math.max(1, deps.maxActiveChildren ?? DEFAULT_MAX_ACTIVE_CHILDREN);
@@ -655,40 +702,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     parentSessionId: string | null;
     childSessionId: string | null;
     objective: string;
-    status: Extract<DelegationStatus, 'completed' | 'failed' | 'cancelled' | 'timed-out'>;
+    status: Extract<DelegationStatus, 'completed' | 'failed' | 'cancelled'>;
     resultSummary?: string | null;
+    artifacts?: BotDelegationArtifact[];
     lastError?: string | null;
   }): Promise<void> => {
-    const db = getDbClient().drizzle;
-    const liveRequesterTask = async (sessionId: string): Promise<boolean> => {
-      const [parent] = await db
-        .select({
-          status: sessions.status,
-          role: botSessionLinks.role,
-          botId: botSessionLinks.botId,
-        })
-        .from(sessions)
-        .innerJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      return (
-        parent?.status === 'active'
-        && parent.botId === params.requestingBotId
-        && (parent.role === 'canonical' || parent.role === 'delegation')
-      );
-    };
-    let targetSessionId: string | null = null;
-    if (params.parentSessionId && (await liveRequesterTask(params.parentSessionId))) {
-      targetSessionId = params.parentSessionId;
-    } else {
-      // 每日换卷会归档父卷;完成信号跟着 Bot 走,投它当前的 canonical 卷。
-      const current = await resolveBotCanonicalSessionForUse(params.requestingBotId)
-        .catch(() => null);
-      if (current?.canonicalSessionId && (await liveRequesterTask(current.canonicalSessionId))) {
-        if (current.renewed) deps.broadcastSessionCreated?.(current.canonicalSessionId);
-        targetSessionId = current.canonicalSessionId;
-      }
-    }
+    const targetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
     if (!targetSessionId) {
       log.warn('skip Bot delegation completion: requester has no live task', {
         delegationId: params.id,
@@ -703,17 +722,21 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const statusLine =
       params.status === 'completed'
         ? '已完成'
-        : params.status === 'timed-out'
-          ? '已超时'
-          : params.status === 'cancelled'
-            ? '已取消'
+        : params.status === 'cancelled'
+          ? '已取消'
+          : params.lastError?.startsWith('TIMEOUT')
+            ? '已超时'
             : '失败了';
+    const artifacts = params.artifacts ?? [];
     const completionMessage = [
-      `${UI_ACTION_TRIGGER_PREFIX}[协作回执] 你委派给「${targetName}」的工作${statusLine}。`,
+      `${UI_ACTION_TRIGGER_PREFIX}[协作回执] 你交给「${targetName}」的工作${statusLine}。call_id: ${params.id}`,
       `目标事项: ${params.objective.slice(0, 400)}`,
       params.resultSummary ? `结果:\n${params.resultSummary}` : '',
+      artifacts.length
+        ? `交出的文件(${artifacts.length}):\n${artifacts.slice(0, 20).map((item) => `- ${item.absolutePath}`).join('\n')}`
+        : '',
       params.lastError ? `失败原因: ${params.lastError}` : '',
-      '对话里的协作卡已更新到终态。直接依据结果接手继续当前工作;回复用户时不要复述本条回执,也不要提及任何内部编号。',
+      '对话里的协作卡已更新到终态,交付文件清单也在卡片里。直接依据结果接手继续当前工作;结果不够或还想让对方接着做,用 `collaborate_with_bot` action=reply(带 call_id)继续说,不必重新发起。回复用户时不要复述本条回执,也不要提及任何内部编号。',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -725,9 +748,44 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     });
   };
 
+  /**
+   * 发起伙伴此刻活着的那条任务:优先冻结的父任务;父卷已被每日换卷归档时改投
+   * 它当前的 canonical 卷 —— 回执与交互事件属于伙伴本人,不属于某一卷。
+   */
+  const requesterLiveSessionId = async (
+    requestingBotId: string,
+    parentSessionId: string | null,
+  ): Promise<string | null> => {
+    const db = getDbClient().drizzle;
+    const liveRequesterTask = async (sessionId: string): Promise<boolean> => {
+      const [parent] = await db
+        .select({
+          status: sessions.status,
+          role: botSessionLinks.role,
+          botId: botSessionLinks.botId,
+        })
+        .from(sessions)
+        .innerJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      return (
+        parent?.status === 'active'
+        && parent.botId === requestingBotId
+        && (parent.role === 'canonical' || parent.role === 'delegation')
+      );
+    };
+    if (parentSessionId && (await liveRequesterTask(parentSessionId))) return parentSessionId;
+    const current = await resolveBotCanonicalSessionForUse(requestingBotId).catch(() => null);
+    if (current?.canonicalSessionId && (await liveRequesterTask(current.canonicalSessionId))) {
+      if (current.renewed) deps.broadcastSessionCreated?.(current.canonicalSessionId);
+      return current.canonicalSessionId;
+    }
+    return null;
+  };
+
   const updateTerminal = async (params: {
     delegationId: string;
-    status: Extract<DelegationStatus, 'completed' | 'failed' | 'cancelled' | 'timed-out'>;
+    status: Extract<DelegationStatus, 'completed' | 'failed' | 'cancelled'>;
     resultSummary?: string | null;
     outputArtifactsJson?: string;
     lastError?: string | null;
@@ -756,11 +814,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     if (updated) {
       clearTimer(params.delegationId);
       clearRetryTimer(params.delegationId);
+      pendingInteractions.delete(params.delegationId);
       emitChanged({
         delegationId: updated.id,
         parentSessionId: updated.parentSessionId,
         childSessionId: updated.childSessionId,
         status: updated.status as DelegationStatus,
+        pendingInteraction: null,
       });
       if (updated.childSessionId) {
         if (params.abortChild) {
@@ -824,17 +884,22 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .where(eq(botDelegations.id, delegationId))
       .limit(1);
     if (!row) return;
-    const lastError = 'Bot delegation exceeded its configured timeout.';
+    // 对方停在等人拍板的地方不算超时:等人不是干活慢。答完再按原截止时间续算。
+    if (pendingInteractions.has(delegationId)) {
+      scheduleTimeout(delegationId, now() + WAITING_TIMEOUT_GRACE_MS);
+      return;
+    }
+    const lastError = 'TIMEOUT: 到了约定时间对方还没有交回结果';
     const changed = await updateTerminal({
       delegationId,
-      status: 'timed-out',
+      status: 'failed',
       lastError,
       abortChild: true,
     });
     if (changed) {
       await deliverCompletion({
         ...row,
-        status: 'timed-out',
+        status: 'failed',
         resultSummary: row.resultSummary,
         lastError,
       });
@@ -877,6 +942,140 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     return link;
   };
 
+  const interactionSummary = (request: InteractionRequest): string => {
+    if (request.kind === 'permission') {
+      return request.title?.trim()
+        || request.displayName?.trim()
+        || request.description?.trim()
+        || `需要授权使用 ${request.toolName}`;
+    }
+    if (request.kind === 'ask_user_question') {
+      return request.questions
+        .slice(0, 5)
+        .map((question, index) => {
+          const options = question.options?.map((option) => option.label).filter(Boolean) ?? [];
+          return `${index + 1}. ${question.question}${options.length ? `（${options.join(' / ')}）` : ''}`;
+        })
+        .join('\n')
+        .slice(0, 4_000) || '子任务需要补充信息';
+    }
+    return request.plan.trim().slice(0, 4_000) || '子任务需要确认执行计划';
+  };
+
+  const pendingInteractionView = (
+    pending: BotDelegationPendingInteraction & { request: InteractionRequest },
+  ): BotDelegationPendingInteraction => ({
+    requestId: pending.requestId,
+    kind: pending.kind,
+    summary: pending.summary,
+    raisedAt: pending.raisedAt,
+  });
+
+  const handleInteractionStart = async (
+    childSessionId: string,
+    request: InteractionRequest,
+  ): Promise<void> => {
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select()
+      .from(botDelegations)
+      .where(
+        and(
+          eq(botDelegations.childSessionId, childSessionId),
+          inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES]),
+        ),
+      )
+      .orderBy(desc(botDelegations.createdAt))
+      .limit(1);
+    if (!row) return;
+    const pending: BotDelegationPendingInteraction & { request: InteractionRequest } = {
+      requestId: request.requestId,
+      kind: request.kind,
+      summary: interactionSummary(request),
+      raisedAt: now(),
+      request,
+    };
+    pendingInteractions.set(row.id, pending);
+    const [waiting] = await db
+      .update(botDelegations)
+      .set({ status: 'waiting', updatedAt: pending.raisedAt })
+      .where(
+        and(
+          eq(botDelegations.id, row.id),
+          inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES]),
+        ),
+      )
+      .returning({
+        id: botDelegations.id,
+        parentSessionId: botDelegations.parentSessionId,
+        childSessionId: botDelegations.childSessionId,
+      });
+    if (!waiting) {
+      pendingInteractions.delete(row.id);
+      return;
+    }
+    emitChanged({
+      delegationId: row.id,
+      parentSessionId: row.parentSessionId,
+      childSessionId,
+      status: 'waiting',
+      pendingInteraction: pendingInteractionView(pending),
+    });
+    const requesterSessionId = await requesterLiveSessionId(
+      row.requestingBotId,
+      row.parentSessionId,
+    );
+    if (!requesterSessionId) return;
+    const message = [
+      `${UI_ACTION_TRIGGER_PREFIX}[协作需要你处理] call_id: ${row.id}`,
+      `类型: ${request.kind}`,
+      pending.summary,
+      '你是用户的代理。能按用户已表达的意图安全决定，就用 `collaborate_with_bot` action=reply 直接回答；拿不准才用一句人话问用户。不要让用户去子任务窗口处理，也不要复述内部编号。',
+    ].join('\n\n');
+    await deps.dispatch({
+      targetSessionId: requesterSessionId,
+      message,
+      persistedContent: message,
+      clientId: `bot-delegation-interaction:${row.id}:${request.requestId}`,
+    }).catch((error) => {
+      log.warn('failed to notify requesting Bot about child interaction', {
+        delegationId: row.id,
+        requestId: request.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
+
+  const handleInteractionEnd = async (
+    childSessionId: string,
+    request: InteractionRequest,
+  ): Promise<void> => {
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select()
+      .from(botDelegations)
+      .where(eq(botDelegations.childSessionId, childSessionId))
+      .orderBy(desc(botDelegations.createdAt))
+      .limit(1);
+    if (!row) return;
+    const pending = pendingInteractions.get(row.id);
+    if (!pending || pending.requestId !== request.requestId) return;
+    pendingInteractions.delete(row.id);
+    const [running] = await db
+      .update(botDelegations)
+      .set({ status: 'running', updatedAt: now() })
+      .where(and(eq(botDelegations.id, row.id), eq(botDelegations.status, 'waiting')))
+      .returning({ id: botDelegations.id });
+    if (!running) return;
+    emitChanged({
+      delegationId: row.id,
+      parentSessionId: row.parentSessionId,
+      childSessionId,
+      status: 'running',
+      pendingInteraction: null,
+    });
+  };
+
   const buildDelegationPrompt = (row: {
     id: string;
     requestingBotId: string;
@@ -893,7 +1092,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     row.targetBotId
       ? 'Work independently using your own Bot profile and workspace.'
       : 'Work independently in this task\'s own workspace.',
-    'Return a concise conclusion. Do not write files into the requester\'s directory and do not ask the user to copy a local path.',
+    'The requester is a Cindy Bot acting for the user: permission prompts, questions and plan reviews you raise are answered by it (or by the user directly). Ask through the normal tools when you genuinely need a decision; otherwise keep going.',
+    'Return a concise conclusion when done. Files you create or change in this workspace are handed back automatically; do not write into the requester\'s directory and do not ask anyone to copy a local path.',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -1074,7 +1274,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     attempt = 0,
   ): Promise<{
     ok: boolean;
-    status: 'queued' | 'waiting' | 'running' | 'failed';
+    status: 'queued' | 'running' | 'failed';
     error?: DispatchResult;
   }> {
     const db = getDbClient().drizzle;
@@ -1083,11 +1283,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .from(botDelegations)
       .where(eq(botDelegations.id, delegationId))
       .limit(1);
-    if (
-      !row
-      || !row.childSessionId
-      || (row.status !== 'queued' && row.status !== 'waiting')
-    ) {
+    if (!row || !row.childSessionId || row.status !== 'queued') {
       return { ok: true, status: row?.status === 'running' ? 'running' : 'queued' };
     }
     const deadlineAt = readDeadline(row.permissionSnapshotJson);
@@ -1127,12 +1323,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         const [accepted] = await db
           .update(botDelegations)
           .set({ status: 'running', acceptedAt, lastError: null, updatedAt: acceptedAt })
-          .where(
-            and(
-              eq(botDelegations.id, row.id),
-              inArray(botDelegations.status, ['queued', 'waiting']),
-            ),
-          )
+          .where(and(eq(botDelegations.id, row.id), eq(botDelegations.status, 'queued')))
           .returning({
             id: botDelegations.id,
             parentSessionId: botDelegations.parentSessionId,
@@ -1156,16 +1347,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         .from(botDelegations)
         .where(eq(botDelegations.id, row.id))
         .limit(1);
-      return {
-        ok: true,
-        status: current?.status === 'running'
-          ? 'running'
-          : current?.status === 'waiting'
-            ? 'waiting'
-            : 'queued',
-      };
+      return { ok: true, status: current?.status === 'running' ? 'running' : 'queued' };
     }
-    // 去程没送出去。**不能**一律标 waiting 然后永远重试下去：没登录、子任务已归档
+    // 去程没送出去。**不能**一律留在 queued 然后永远重试下去：没登录、子任务已归档
     // 这类原因不会自愈，无限退避只会让协作卡永远转圈、发起方永远等不到任何交代。
     const verdict = classifyBotDelegationDispatchFailure({
       errorCode: dispatched.errorCode,
@@ -1184,35 +1368,28 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return { ok: false, status: 'failed', error: dispatched };
     }
     const failedAt = now();
-    const [waiting] = await db
+    const [retrying] = await db
       .update(botDelegations)
       .set({
-        status: 'waiting',
         lastError: `${dispatched.errorCode}: ${dispatched.message}`.slice(0, 4_000),
         updatedAt: failedAt,
       })
-      .where(
-        and(
-          eq(botDelegations.id, row.id),
-          inArray(botDelegations.status, ['queued', 'waiting']),
-        ),
-      )
+      .where(and(eq(botDelegations.id, row.id), eq(botDelegations.status, 'queued')))
       .returning({
         id: botDelegations.id,
         parentSessionId: botDelegations.parentSessionId,
         childSessionId: botDelegations.childSessionId,
-        status: botDelegations.status,
       });
-    if (waiting) {
+    if (retrying) {
       emitChanged({
-        delegationId: waiting.id,
-        parentSessionId: waiting.parentSessionId,
-        childSessionId: waiting.childSessionId,
-        status: 'waiting',
+        delegationId: retrying.id,
+        parentSessionId: retrying.parentSessionId,
+        childSessionId: retrying.childSessionId,
+        status: 'queued',
       });
-      scheduleDispatchRetry(waiting.id, attempt);
+      scheduleDispatchRetry(retrying.id, attempt);
     }
-    return { ok: false, status: 'waiting', error: dispatched };
+    return { ok: false, status: 'queued', error: dispatched };
   }
 
   async function resumeRunningDelegation(delegationId: string, attempt = 0): Promise<void> {
@@ -1222,7 +1399,21 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .from(botDelegations)
       .where(eq(botDelegations.id, delegationId))
       .limit(1);
-    if (!row || row.status !== 'running') return;
+    // 重启前停在 waiting 的:那次挂起交互已随进程消失,按 running 续跑,子任务会重新问。
+    if (!row || (row.status !== 'running' && row.status !== 'waiting')) return;
+    if (row.status === 'waiting') {
+      await db
+        .update(botDelegations)
+        .set({ status: 'running', updatedAt: now() })
+        .where(and(eq(botDelegations.id, row.id), eq(botDelegations.status, 'waiting')));
+      emitChanged({
+        delegationId: row.id,
+        parentSessionId: row.parentSessionId,
+        childSessionId: row.childSessionId,
+        status: 'running',
+        pendingInteraction: null,
+      });
+    }
     const deadlineAt = readDeadline(row.permissionSnapshotJson);
     if (deadlineAt !== null && deadlineAt <= now()) {
       await timeoutDelegation(row.id);
@@ -1662,11 +1853,16 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       agentKind: 'cc' | 'codex' | 'pi';
       permissionMode: string;
       title: string;
+      /**
+       * 伙伴目标的子任务是 `bot` 来源(只在伙伴视图里、终态自动归档);Cindy 任务目标
+       * 是 `desktop` 来源 —— 出现在用户的主任务列表、完整能力面、用户可以接着聊。
+       */
+      source: 'bot' | 'desktop';
     };
   }): Promise<BotDelegationResult<{
     delegationId: string;
     childSessionId: string;
-    status: 'queued' | 'waiting' | 'running' | 'failed';
+    status: 'queued' | 'running' | 'failed';
     deadlineAt: number;
   }>> => {
     const { plan } = input;
@@ -1692,12 +1888,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             : {}),
           agentKind: input.session.agentKind,
           permissionMode: input.session.permissionMode,
-          source: 'bot',
+          ...(input.session.source === 'bot' ? { source: 'bot' as const } : {}),
           parentSessionId: input.callerSessionId,
         },
         createdAt,
       ),
       title: input.session.title,
+      source: input.session.source,
     };
     try {
       await ensureProjectGitInitialized({
@@ -1824,19 +2021,25 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     };
   };
 
-  const delegateToBot = async (
-    input: DelegateToBotInput,
+  /**
+   * 一个原语,两种目标。伙伴目标:冻结目标 Profile、在目标伙伴自己的 workspace
+   * 里以它的执行配置跑,目标主任务里留一张入站卡。Cindy 任务目标:普通 desktop
+   * 会话、发起方自己的执行配置与权限档、用户主任务列表里可见。之后的状态机、
+   * 协作卡、交互代答、回执与交付物回流两边完全相同。
+   */
+  const call = async (
+    input: BotCallInput,
   ): Promise<BotDelegationResult<{
     delegationId: string;
     childSessionId: string;
     /**
-     * `failed` 也是一个合法的即时结果：去程遇到不会自愈的原因（最典型是没登录）时，
-     * 委派在返回前就已经收口。发起方的模型据此当场知道「这活没派出去」，而不是拿到
-     * 一个「排队中」的假承诺再永远等下去。
+     * `failed` 也是一个合法的即时结果:去程遇到不会自愈的原因(最典型是没登录)时,
+     * call 在返回前就已经收口。发起方据此当场知道「这活没派出去」,而不是拿到一个
+     * 「排队中」的假承诺再永远等下去。
      */
-    status: 'queued' | 'waiting' | 'running' | 'failed';
-    targetBotId: string;
-    targetBotName: string;
+    status: 'queued' | 'running' | 'failed';
+    targetBotId: string | null;
+    targetName: string;
     depth: number;
     deadlineAt: number;
   }>> => {
@@ -1852,6 +2055,110 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const preflight = await resolveDelegationPreflight(input);
     if (!preflight.ok) return preflight;
     const { caller, parentDepth, maxDepth, lineage, timeoutMs, hardDeadlineAt } = preflight;
+    const contextRefs = normalizeDelegationReferences(input.contextRefs);
+    if (!contextRefs.ok) return contextRefs;
+    const createdAt = now();
+    const deadlineAt = Math.min(createdAt + timeoutMs, hardDeadlineAt);
+
+    if (input.targetBotId === null) {
+      // 子任务沿用发起方会话当前的模型与 harness,但权限从 ask 开始。需要授权时
+      // 统一回到发起伙伴代答,不能因为伙伴本身是 trusted 就让完整任务静默越权。
+      const [callerSession] = await db
+        .select({
+          model: sessions.model,
+          agentKind: sessions.agentKind,
+          providerId: sessions.providerId,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
+        })
+        .from(sessions)
+        .where(eq(sessions.id, input.callerSessionId))
+        .limit(1);
+      if (!callerSession) {
+        return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
+      }
+      let workingDir = input.workingDir?.trim() || '';
+      if (workingDir) {
+        const isDirectory = (() => {
+          try {
+            return statSync(workingDir).isDirectory();
+          } catch {
+            return false;
+          }
+        })();
+        if (!path.isAbsolute(workingDir) || !existsSync(workingDir) || !isDirectory) {
+          return {
+            ok: false,
+            errorCode: 'INVALID_WORKING_DIR',
+            message: 'working_dir 必须是已存在的绝对路径',
+          };
+        }
+      } else {
+        workingDir = await ensureBotWorkspaceDir(
+          ownerScopedUserDataPath(),
+          caller.botId,
+          app.getPath('userData'),
+        );
+      }
+      const permissionMode = 'ask';
+      const plan: BotDelegationPlanSnapshot = {
+        version: 1,
+        createdAt,
+        targetBotId: null,
+        access: { contextRefs: contextRefs.refs },
+        completionTarget: { parentSessionId: input.callerSessionId },
+        limits: { maxDepth, timeoutMs, deadlineAt },
+        permission: {
+          mode: permissionMode,
+          requesterMode: caller.permissionMode ?? null,
+          targetConfigured: 'ask',
+        },
+      };
+      const started = await startDelegation({
+        caller,
+        callerSessionId: input.callerSessionId,
+        targetBotId: null,
+        targetProfileVersion: null,
+        targetDisplayName: 'Cindy',
+        objective,
+        contextRefs: contextRefs.refs,
+        lineage,
+        parentDepth,
+        plan,
+        session: {
+          workingDir,
+          model: callerSession.model,
+          ...(callerSession.effort ? { effort: callerSession.effort } : {}),
+          ...(callerSession.fastMode !== null && callerSession.fastMode !== undefined
+            ? { fastMode: callerSession.fastMode }
+            : {}),
+          ...(callerSession.providerId ? { providerId: callerSession.providerId } : {}),
+          agentKind: callerSession.agentKind as 'cc' | 'codex' | 'pi',
+          permissionMode,
+          title: input.title?.trim() || objective.split('\n')[0]!.slice(0, 60),
+          source: 'desktop',
+        },
+      });
+      if (!started.ok) return started;
+      return {
+        ok: true,
+        delegationId: started.delegationId,
+        childSessionId: started.childSessionId,
+        status: started.status,
+        targetBotId: null,
+        targetName: 'Cindy',
+        depth: parentDepth + 1,
+        deadlineAt: started.deadlineAt,
+      };
+    }
+
+    if (input.title !== undefined || input.workingDir !== undefined) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: 'title / working_dir 只用于交给 Cindy 任务;伙伴在自己的 workspace 里干活',
+      };
+    }
     if (lineage.includes(input.targetBotId)) {
       return {
         ok: false,
@@ -1880,8 +2187,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     if (!version) {
       return { ok: false, errorCode: 'PROFILE_NOT_FOUND', message: '目标 Bot Profile 版本不存在' };
     }
-    const contextRefs = normalizeDelegationReferences(input.contextRefs);
-    if (!contextRefs.ok) return contextRefs;
     let targetCanonical: BotDelegationResult<{ sessionId: string }>;
     try {
       targetCanonical = await ensureTargetCanonicalSession(target);
@@ -1895,8 +2200,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       };
     }
     if (!targetCanonical.ok) return targetCanonical;
-    const createdAt = now();
-    const deadlineAt = Math.min(createdAt + timeoutMs, hardDeadlineAt);
     const workingDir = await ensureBotWorkspaceDir(
       ownerScopedUserDataPath(),
       target.id,
@@ -1942,6 +2245,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         agentKind: plan.target!.agentKind,
         permissionMode,
         title: `${target.displayName} · ${objective.split('\n')[0]!.slice(0, 60)}`,
+        source: 'bot',
       },
     });
     if (!started.ok) return started;
@@ -1951,128 +2255,30 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       childSessionId: started.childSessionId,
       status: started.status,
       targetBotId: target.id,
-      targetBotName: target.displayName,
+      targetName: target.displayName,
       depth: parentDepth + 1,
       deadlineAt: started.deadlineAt,
     };
   };
 
-  /**
-   * 把一件大活开成一条**普通 Cindy 任务**。子任务出现在用户的主任务列表里,
-   * 有完整的 Cindy 能力面与自己的权限门;发起方拿到同一张协作卡与同一条完成
-   * 信号 —— 伙伴自己保持轻量,重活交给真正的 Cindy 会话。
-   */
-  const delegateToCindy = async (
-    input: DelegateToCindyInput,
-  ): Promise<BotDelegationResult<{
-    delegationId: string;
-    childSessionId: string;
-    status: 'queued' | 'waiting' | 'running' | 'failed';
-    depth: number;
-    deadlineAt: number;
-  }>> => {
-    const objective = input.objective.trim();
-    if (!objective || objective.length > MAX_OBJECTIVE_CHARS) {
-      return {
-        ok: false,
-        errorCode: 'INVALID_ARGS',
-        message: `objective 必须为 1-${MAX_OBJECTIVE_CHARS} 个字符`,
-      };
-    }
-    const db = getDbClient().drizzle;
-    const preflight = await resolveDelegationPreflight(input);
-    if (!preflight.ok) return preflight;
-    const { caller, parentDepth, maxDepth, lineage, timeoutMs, hardDeadlineAt } = preflight;
-    // 子任务是普通 Cindy 任务,执行路由沿用发起方会话当前的运行配置 ——
-    // 这是用户为这个伙伴选过的模型面,不引入任何隐藏的额外模型依赖。
-    const [callerSession] = await db
-      .select({
-        model: sessions.model,
-        agentKind: sessions.agentKind,
-        providerId: sessions.providerId,
-        effort: sessions.effort,
-        fastMode: sessions.fastMode,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, input.callerSessionId))
-      .limit(1);
-    if (!callerSession) {
-      return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
-    }
-    let workingDir = input.workingDir?.trim() || '';
-    if (workingDir) {
-      const isDirectory = (() => {
-        try {
-          return statSync(workingDir).isDirectory();
-        } catch {
-          return false;
-        }
-      })();
-      if (!path.isAbsolute(workingDir) || !existsSync(workingDir) || !isDirectory) {
-        return {
-          ok: false,
-          errorCode: 'INVALID_WORKING_DIR',
-          message: 'working_dir 必须是已存在的绝对路径',
-        };
-      }
-    } else {
-      workingDir = await ensureBotWorkspaceDir(
-        ownerScopedUserDataPath(),
-        caller.botId,
-        app.getPath('userData'),
-      );
-    }
-    const createdAt = now();
-    const deadlineAt = Math.min(createdAt + timeoutMs, hardDeadlineAt);
-    const plan: BotDelegationPlanSnapshot = {
-      version: 1,
-      createdAt,
-      targetBotId: null,
-      access: { contextRefs: [] },
-      completionTarget: { parentSessionId: input.callerSessionId },
-      limits: { maxDepth, timeoutMs, deadlineAt },
-      permission: {
-        mode: 'ask',
-        requesterMode: caller.permissionMode ?? null,
-        targetConfigured: 'ask',
-      },
-    };
-    const title = input.title?.trim() || objective.split('\n')[0]!.slice(0, 60);
-    const started = await startDelegation({
-      caller,
-      callerSessionId: input.callerSessionId,
-      targetBotId: null,
-      targetProfileVersion: null,
-      targetDisplayName: 'Cindy',
-      objective,
-      contextRefs: [],
-      lineage,
-      parentDepth,
-      plan,
-      session: {
-        workingDir,
-        model: callerSession.model,
-        ...(callerSession.effort ? { effort: callerSession.effort } : {}),
-        ...(callerSession.fastMode !== null && callerSession.fastMode !== undefined
-          ? { fastMode: callerSession.fastMode }
-          : {}),
-        ...(callerSession.providerId ? { providerId: callerSession.providerId } : {}),
-        agentKind: callerSession.agentKind as 'cc' | 'codex' | 'pi',
-        // 普通任务的默认权限门:每一步该问的照问,不继承伙伴的信任档。
-        permissionMode: 'ask',
-        title,
-      },
-    });
-    if (!started.ok) return started;
-    return {
-      ok: true,
-      delegationId: started.delegationId,
-      childSessionId: started.childSessionId,
-      status: started.status,
-      depth: parentDepth + 1,
-      deadlineAt: started.deadlineAt,
-    };
-  };
+  /** Compatibility wrappers for the older progressive tool names during the Draft migration. */
+  const delegateToBot = (input: {
+    callerSessionId: string;
+    targetBotId: string;
+    objective: string;
+    contextRefs?: string[];
+    maxDepth?: number;
+    timeoutMs?: number;
+  }) => call({ ...input, targetBotId: input.targetBotId });
+
+  const delegateToCindy = (input: {
+    callerSessionId: string;
+    objective: string;
+    title?: string;
+    workingDir?: string;
+    maxDepth?: number;
+    timeoutMs?: number;
+  }) => call({ ...input, targetBotId: null });
 
   const listDelegations = async (
     callerSessionId: string,
@@ -2107,6 +2313,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         contextRefs: parseStringArray(row.contextRefsJson),
         lineage: parseStringArray(row.lineageJson),
         permissionSnapshot: parseRecord(row.permissionSnapshotJson),
+        pendingInteraction: pendingInteractions.has(row.id)
+          ? pendingInteractionView(pendingInteractions.get(row.id)!)
+          : null,
+        artifacts: parseArtifacts(row.outputArtifactsJson),
       })) as BotDelegationView[],
     };
   };
@@ -2339,6 +2549,308 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     };
   };
 
+  /**
+   * 终态 call 的继续消息会另起一条执行任务,但复用原 call id。旧任务已经归档为
+   * 历史,新任务重新进入 queued；卡片、取消、状态查询与后续回执仍指向同一个 call。
+   */
+  const reopenTerminalDelegation = async (
+    callerSessionId: string,
+    callerBotId: string,
+    row: DelegationRow,
+    text: string,
+  ): Promise<BotDelegationResult<{
+    delegationId: string;
+    childSessionId: string;
+    resumed: true;
+    queued: boolean;
+  }>> => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return { ok: false, errorCode: 'INVALID_ARGS', message: '继续说明不能为空' };
+    }
+    if (trimmed.length > MAX_INTERJECTION_CHARS) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: `继续说明超过 ${MAX_INTERJECTION_CHARS} 字，请发起新的 call`,
+      };
+    }
+    const oldPlan = parseBotDelegationPlanSnapshot(row.permissionSnapshotJson);
+    if (!oldPlan || !row.childSessionId) {
+      return {
+        ok: false,
+        errorCode: 'CALL_HISTORY_INCOMPLETE',
+        message: '这次 call 的冻结执行信息不完整，无法继续',
+      };
+    }
+    const db = getDbClient().drizzle;
+    const [oldChild] = await db
+      .select({
+        title: sessions.title,
+        workingDir: sessions.workingDir,
+        workspaceKind: sessions.workspaceKind,
+        model: sessions.model,
+        effort: sessions.effort,
+        permissionMode: sessions.permissionMode,
+        fastMode: sessions.fastMode,
+        agentKind: sessions.agentKind,
+        remoteHostId: sessions.remoteHostId,
+        providerId: sessions.providerId,
+        extraDirs: sessions.extraDirs,
+        source: sessions.source,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, row.childSessionId))
+      .limit(1);
+    if (
+      !oldChild
+      || !oldChild.workingDir
+      || (oldChild.source !== 'bot' && oldChild.source !== 'desktop')
+    ) {
+      return {
+        ok: false,
+        errorCode: 'CALL_HISTORY_INCOMPLETE',
+        message: '上一次执行任务已经不可用，无法沿这次 call 继续',
+      };
+    }
+
+    let targetCanonicalSessionId = oldPlan.targetCanonicalSessionId;
+    if (row.targetBotId) {
+      const [target] = await db
+        .select({
+          id: botProfiles.id,
+          currentVersion: botProfiles.currentVersion,
+          status: botProfiles.status,
+        })
+        .from(botProfiles)
+        .where(eq(botProfiles.id, row.targetBotId))
+        .limit(1);
+      if (!target || target.status !== 'active') {
+        return {
+          ok: false,
+          errorCode: 'TARGET_BOT_UNAVAILABLE',
+          message: '目标伙伴已暂停或归档，无法继续这次 call',
+        };
+      }
+      const canonical = await ensureTargetCanonicalSession(target);
+      if (!canonical.ok) return canonical;
+      targetCanonicalSessionId = canonical.sessionId;
+    }
+
+    const reopenedAt = now();
+    const deadlineAt = reopenedAt + Math.min(MAX_TIMEOUT_MS, oldPlan.limits.timeoutMs);
+    const nextPlan: BotDelegationPlanSnapshot = {
+      ...oldPlan,
+      createdAt: reopenedAt,
+      targetCanonicalSessionId,
+      completionTarget: { parentSessionId: callerSessionId },
+      limits: { ...oldPlan.limits, deadlineAt },
+    };
+    const continuationObjective = [
+      'Continue the same call with the requester’s follow-up.',
+      `Previous objective:\n${row.objective.slice(0, 5_000)}`,
+      row.resultSummary ? `Previous result:\n${row.resultSummary.slice(0, 4_000)}` : '',
+      `Requester follow-up:\n${trimmed}`,
+    ].filter(Boolean).join('\n\n').slice(0, MAX_OBJECTIVE_CHARS);
+    const childSessionId = resolveBusinessSessionId(undefined);
+    try {
+      await ensureProjectGitInitialized({
+        workingDir: oldChild.workingDir,
+        workspaceKind: 'dialogue',
+        remoteHostId: null,
+        sessionId: childSessionId,
+        autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+        source: 'bot-delegation',
+      });
+      const reopened = await getDbClient().tx('bots.reopenDelegation', {
+        maxActiveChildren,
+        delegationId: row.id,
+        requestingBotId: callerBotId,
+        expectedStatus: row.status as 'completed' | 'failed' | 'cancelled' | 'timed-out',
+        parentSessionId: callerSessionId,
+        childSessionId,
+        objective: continuationObjective,
+        permissionSnapshotJson: JSON.stringify(nextPlan),
+        targetBotId: row.targetBotId,
+        targetProfileVersion: row.targetProfileVersion,
+        session: {
+          id: childSessionId,
+          title: oldChild.title,
+          workingDir: oldChild.workingDir,
+          workspaceKind: oldChild.workspaceKind,
+          model: oldChild.model,
+          effort: oldChild.effort,
+          permissionMode: oldChild.permissionMode,
+          agentKind: oldChild.agentKind,
+          remoteHostId: oldChild.remoteHostId,
+          providerId: oldChild.providerId,
+          parentSessionId: callerSessionId,
+          extraDirs: oldChild.extraDirs,
+          fastMode: oldChild.fastMode,
+          source: oldChild.source,
+          createdAt: reopenedAt,
+          updatedAt: reopenedAt,
+        },
+        reopenedAt,
+      });
+      if (!reopened.reopened) {
+        return {
+          ok: false,
+          errorCode: 'CALL_STATE_CHANGED',
+          message: 'call 状态刚刚发生变化，请重新查看后再继续',
+        };
+      }
+      deps.broadcastSessionCreated?.(childSessionId);
+      emitChanged({
+        delegationId: row.id,
+        parentSessionId: callerSessionId,
+        childSessionId,
+        status: 'queued',
+        pendingInteraction: null,
+      });
+      const reopenedRow = {
+        ...row,
+        parentSessionId: callerSessionId,
+        childSessionId,
+        objective: continuationObjective,
+        permissionSnapshotJson: JSON.stringify(nextPlan),
+        createdAt: reopenedAt,
+      };
+      if (reopened.previousParentSessionId !== callerSessionId) {
+        await projectParentRequest(reopenedRow).catch((error) => {
+          log.warn('failed to anchor reopened Bot call in the current task', {
+            delegationId: row.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      if (
+        row.targetBotId
+        && targetCanonicalSessionId
+        && targetCanonicalSessionId !== oldPlan.targetCanonicalSessionId
+      ) {
+        await projectTargetRequest(reopenedRow).catch((error) => {
+          log.warn('failed to anchor reopened Bot call in target canonical task', {
+            delegationId: row.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      scheduleTimeout(row.id, deadlineAt);
+      const dispatched = await attemptDispatch(row.id);
+      return {
+        ok: true,
+        delegationId: row.id,
+        childSessionId,
+        resumed: true,
+        queued: dispatched.status === 'queued',
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'BOT_DELEGATION_CONCURRENCY_LIMIT') {
+        return {
+          ok: false,
+          errorCode: 'CONCURRENCY_LIMIT',
+          message: `当前伙伴已有 ${maxActiveChildren} 个进行中的 call`,
+        };
+      }
+      throw error;
+    }
+  };
+
+  const reply = async (
+    callerSessionId: string,
+    delegationId: string,
+    input: BotCallReply,
+  ): Promise<BotDelegationResult<{
+    delegationId: string;
+    childSessionId: string | null;
+    resumed: boolean;
+    queued?: boolean;
+  }>> => {
+    const caller = await resolveCaller(callerSessionId);
+    if (!caller) {
+      return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
+    }
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select()
+      .from(botDelegations)
+      .where(
+        and(
+          eq(botDelegations.id, delegationId),
+          eq(botDelegations.requestingBotId, caller.botId),
+        ),
+      )
+      .limit(1);
+    if (!row) return { ok: false, errorCode: 'NOT_FOUND', message: 'call 不存在' };
+
+    const pending = pendingInteractions.get(delegationId);
+    if (pending) {
+      let decision: InteractionDecision | null = null;
+      if (pending.request.kind === 'permission') {
+        if (input.kind === 'approve') {
+          decision = { kind: 'permission', behavior: 'allow' };
+        } else if (input.kind === 'deny') {
+          decision = { kind: 'permission', behavior: 'deny', reason: input.reason };
+        }
+      } else if (pending.request.kind === 'ask_user_question' && input.kind === 'answer') {
+        decision = { kind: 'ask_user_question', answers: input.answers };
+      } else if (pending.request.kind === 'plan_review') {
+        if (input.kind === 'approve') {
+          decision = { kind: 'plan_review', behavior: 'allow' };
+        } else if (input.kind === 'deny') {
+          decision = { kind: 'plan_review', behavior: 'deny', reason: input.reason };
+        }
+      }
+      if (!decision) {
+        return {
+          ok: false,
+          errorCode: 'WRONG_REPLY_KIND',
+          message: `当前 call 在等待 ${pending.request.kind}，回复类型 ${input.kind} 不匹配`,
+        };
+      }
+      if (!deps.resolveInteraction?.(pending.requestId, decision)) {
+        await handleInteractionEnd(row.childSessionId ?? '', pending.request);
+        return {
+          ok: false,
+          errorCode: 'INTERACTION_STALE',
+          message: '这条确认已由用户或子任务处理，请重新查看 call 状态',
+        };
+      }
+      return {
+        ok: true,
+        delegationId,
+        childSessionId: row.childSessionId,
+        resumed: false,
+      };
+    }
+
+    if (input.kind !== 'message') {
+      return {
+        ok: false,
+        errorCode: 'NO_PENDING_INTERACTION',
+        message: '当前 call 没有等待确认；补充说明请使用 message',
+      };
+    }
+    if (!isActiveDelegation(row.status as DelegationStatus)) {
+      return reopenTerminalDelegation(callerSessionId, caller.botId, row, input.text);
+    }
+    const result = await interjectDelegation(
+      callerSessionId,
+      delegationId,
+      input.text,
+      input.idempotencyKey,
+    );
+    if (!result.ok) return result;
+    return {
+      ok: true,
+      delegationId,
+      childSessionId: result.childSessionId,
+      resumed: false,
+      queued: result.queued,
+    };
+  };
+
   const settleSession = async (params: {
     childSessionId: string;
     outcome: 'done' | 'error';
@@ -2369,10 +2881,21 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ? (await readLatestAssistantText(params.childSessionId))?.trim() ?? ''
         : '');
     const resultSummary = recoveredText.slice(0, MAX_RESULT_CHARS) || null;
+    const artifacts = params.outcome === 'done' && deps.collectArtifacts
+      ? (await deps.collectArtifacts(params.childSessionId).catch((error) => {
+          log.warn('failed to collect Bot call artifacts', {
+            delegationId: row.id,
+            childSessionId: params.childSessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return [];
+        })).slice(0, MAX_ARTIFACTS)
+      : [];
     const changed = await updateTerminal({
       delegationId: row.id,
       status,
       resultSummary,
+      outputArtifactsJson: JSON.stringify(artifacts),
       lastError,
       tokensUsed,
     });
@@ -2381,6 +2904,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       ...row,
       status,
       resultSummary,
+      artifacts,
       lastError,
     });
   };
@@ -2420,11 +2944,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       }
       const deadlineAt = readDeadline(row.permissionSnapshotJson);
       if (deadlineAt !== null) scheduleTimeout(row.id, deadlineAt);
-      if (row.status === 'queued' || row.status === 'waiting') {
+      if (row.status === 'queued') {
         if (row.childSessionId) await attemptDispatch(row.id);
         continue;
       }
-      if (row.status === 'running') await resumeRunningDelegation(row.id);
+      if (row.status === 'running' || row.status === 'waiting') {
+        await resumeRunningDelegation(row.id);
+      }
     }
     const terminalRows = await db
       .select({ delegation: botDelegations })
@@ -2474,6 +3000,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
 
   return {
     listBots,
+    call,
+    reply,
     delegateToBot,
     ensureCanonicalSession: async (botId: string) => {
       const [profile] = await getDbClient().drizzle
@@ -2493,6 +3021,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     cancelDelegationsForParentSession,
     cancelDelegationsForBot,
     settleSession,
+    handleInteractionStart,
+    handleInteractionEnd,
     restore,
     dispose,
   };

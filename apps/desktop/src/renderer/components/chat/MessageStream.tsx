@@ -68,7 +68,7 @@ import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { joystickScrollDelta } from '../../../shared/workLouderCodexScroll';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
-import { cn } from '@/lib/utils';
+import { basename, cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
@@ -1577,6 +1577,8 @@ export function buildRenderItems(
     turnChangeSets?: readonly TurnChangeSetSummary[];
     /** Session working directory for opaque generated-file fallback chips. */
     workingDir?: string;
+    /** Bot-owned Session: show newly created files as deliverables, not an engineering diff card. */
+    botSessionId?: string;
   },
 ): {
   items: RenderItem[];
@@ -1847,15 +1849,17 @@ export function buildRenderItems(
         if (file.oldPath) exactPaths.add(pathKey(resolveToolFilePath(file.oldPath, changeSet.cwd)));
       }
     }
-    for (const changeSet of changeSets) {
-      // Zero-file entries have nothing the user can inspect or act on. Keep their
-      // diagnostic sidecars in Main, but do not add a warning-only chat card.
-      if (!hasReviewableTurnChanges(changeSet)) continue;
-      items.push({
-        type: 'turn_changes',
-        key: `turnchanges-${changeSet.id}`,
-        changeSet,
-      });
+    if (!opts?.botSessionId) {
+      for (const changeSet of changeSets) {
+        // Zero-file entries have nothing the user can inspect or act on. Keep their
+        // diagnostic sidecars in Main, but do not add a warning-only chat card.
+        if (!hasReviewableTurnChanges(changeSet)) continue;
+        items.push({
+          type: 'turn_changes',
+          key: `turnchanges-${changeSet.id}`,
+          changeSet,
+        });
+      }
     }
     // 子代理工具结果里的媒体产物(出图 / 视频 / 音频 / 模型)。这些工具行本身被隐藏,
     // 不进 tool_segment,所以段级的 pendingSegmentMedia 收不到它们;而 AgentTaskUpdate
@@ -1890,15 +1894,31 @@ export function buildRenderItems(
       }
     }
 
-    const workingDir = opts?.workingDir ?? '';
-    // changeSet 的路径按它自己的 cwd 解析,不依赖 workingDir;没有 workingDir 时
-    // 就收不到本轮的 tool / command 候选。
-    if (!workingDir || hi <= lo) return;
     const slice = originalTurnSlice(lo, hi);
-    const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
-      const normalized = pathKey(file.path);
-      return !exactPaths.has(normalized) || changeSets.length === 0;
-    });
+    const generatedByPath = new Map<string, GeneratedFileRef>();
+    if (opts?.botSessionId) {
+      for (const changeSet of changeSets) {
+        for (const file of changeSet.files) {
+          if (file.status !== 'added') continue;
+          const resolved = resolveToolFilePath(file.path, changeSet.cwd);
+          generatedByPath.set(pathKey(resolved), {
+            path: resolved,
+            name: basename(file.path),
+            source: 'tool',
+            ready: true,
+          });
+        }
+      }
+    }
+    const workingDir = opts?.workingDir ?? '';
+    if (workingDir) {
+      for (const file of collectGeneratedFiles(slice, workingDir)) {
+        const normalized = pathKey(file.path);
+        if (exactPaths.has(normalized) && changeSets.length > 0) continue;
+        generatedByPath.set(normalized, file);
+      }
+    }
+    const generatedFiles = [...generatedByPath.values()];
     if (generatedFiles.length === 0) return;
     let turnStartMs: number | null = null;
     for (const message of slice) {

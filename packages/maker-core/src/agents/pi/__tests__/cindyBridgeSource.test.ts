@@ -1328,6 +1328,12 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "const CINDY_BOT_COLLABORATION_TOOL = 'collaborate_with_bot'",
     );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain(
+      "enum: ['status', 'delegate', 'notify', 'start_task']",
+    );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       'mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true })',

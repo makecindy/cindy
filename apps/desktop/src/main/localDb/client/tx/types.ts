@@ -38,6 +38,7 @@ export type DbTxName =
   | 'bots.finishRuntime'
   | 'bots.finishDelegation'
   | 'bots.createDelegation'
+  | 'bots.reopenDelegation'
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
@@ -603,6 +604,7 @@ export interface BotsReplaceCanonicalSessionArgs {
     providerId: string | null;
     parentSessionId?: string | null;
     extraDirs: string;
+    fastMode?: boolean;
     source: string;
     createdAt: number;
     updatedAt: number;
@@ -673,6 +675,26 @@ export interface BotsCreateDelegationArgs {
     depth: number; createdAt: number;
   };
   session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+export interface BotsReopenDelegationArgs {
+  maxActiveChildren: number;
+  delegationId: string;
+  requestingBotId: string;
+  expectedStatus: 'completed' | 'failed' | 'cancelled' | 'timed-out';
+  parentSessionId: string;
+  childSessionId: string;
+  objective: string;
+  permissionSnapshotJson: string;
+  targetBotId: string | null;
+  targetProfileVersion: number | null;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+  reopenedAt: number;
+}
+
+export interface BotsReopenDelegationResult {
+  reopened: boolean;
+  previousParentSessionId: string | null;
 }
 
 export interface BotsLifecycleTransitionArgs {
@@ -1017,6 +1039,7 @@ export type DbTxArgsByName = {
   'bots.finishRuntime': BotsFinishRuntimeArgs;
   'bots.finishDelegation': BotsFinishDelegationArgs;
   'bots.createDelegation': BotsCreateDelegationArgs;
+  'bots.reopenDelegation': BotsReopenDelegationArgs;
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
@@ -1082,6 +1105,7 @@ export type DbTxResultByName = {
   'bots.finishRuntime': boolean;
   'bots.finishDelegation': BotsFinishDelegationResult | null;
   'bots.createDelegation': undefined;
+  'bots.reopenDelegation': BotsReopenDelegationResult;
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };

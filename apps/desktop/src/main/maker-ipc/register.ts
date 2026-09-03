@@ -6432,7 +6432,28 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
 
   // 注入 interaction listener (permission/ask/plan 三合一,renderer 按 kind 弹不同 UI)
   installDesktopInteractionListener(session);
-  installInteractionLifecycleObserver(session, ghostSessionTap.interactionObserver);
+  installInteractionLifecycleObserver(session, {
+    onStart: (request, route) => {
+      ghostSessionTap.interactionObserver.onStart(request, route);
+      void botDelegationServiceHolder?.handleInteractionStart(session.id, request).catch((error) => {
+        log.warn('failed to project child interaction to requesting Bot', {
+          sessionId: session.id,
+          requestId: request.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+    onEnd: (request, route) => {
+      ghostSessionTap.interactionObserver.onEnd(request, route);
+      void botDelegationServiceHolder?.handleInteractionEnd(session.id, request).catch((error) => {
+        log.warn('failed to clear child interaction for requesting Bot', {
+          sessionId: session.id,
+          requestId: request.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+  });
 }
 
 /**
@@ -10860,6 +10881,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     broadcastSessionCreated,
     onChanged: (payload) => {
       broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload);
+    },
+    resolveInteraction: resolvePendingInteraction,
+    collectArtifacts: async (sessionId) => {
+      await waitForTurnChangeSetSeal(sessionId);
+      const changeSets = await listTurnChangeSets(sessionId);
+      const byPath = new Map<string, {
+        path: string;
+        absolutePath: string;
+        status: 'added' | 'modified' | 'deleted' | 'renamed';
+      }>();
+      for (const changeSet of changeSets) {
+        for (const file of changeSet.files) {
+          const status = file.status === 'added' || file.status === 'untracked' || file.status === 'copied'
+            ? 'added'
+            : file.status === 'deleted'
+              ? 'deleted'
+              : file.status === 'renamed'
+                ? 'renamed'
+                : 'modified';
+          byPath.set(file.path, {
+            path: file.path,
+            absolutePath: path.resolve(changeSet.cwd, file.path),
+            status,
+          });
+        }
+      }
+      return [...byPath.values()];
     },
     requireRuntimeSnapshot: true,
     isSessionTurnRunning: (sessionId) => maker.getSession(sessionId)?.isTurnRunning() ?? false,

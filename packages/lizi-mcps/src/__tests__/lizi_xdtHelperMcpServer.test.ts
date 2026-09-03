@@ -100,37 +100,42 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("exposes Bot delegation through live discovery for a Bot-bound session", async () => {
+  it("exposes one direct Bot call primitive for a Bot-bound session", async () => {
     const listBots = vi.fn(async () => ({
       ok: true as const,
       bots: [{ id: "bot-b", name: "Dash Bot" }],
     }));
-    const delegateToBot = vi.fn(async () => ({
+    const call = vi.fn(async () => ({
       ok: true as const,
       delegationId: "delegation-1",
       childSessionId: "bot-child-session",
       status: "running",
+      targetBotId: "bot-b",
+      targetName: "Dash Bot",
     }));
-    const listDelegations = vi.fn(async () => ({ ok: true as const, delegations: [] }));
+    const reply = vi.fn(async () => ({
+      ok: true as const,
+      delegationId: "delegation-1",
+      childSessionId: "bot-child-session",
+      resumed: false,
+    }));
+    const listDelegations = vi.fn(async () => ({
+      ok: true as const,
+      delegations: [{ id: "delegation-1", status: "running" }],
+    }));
     const cancelDelegation = vi.fn(async () => ({
       ok: true as const,
       delegationId: "delegation-1",
       childSessionId: "bot-child-session",
     }));
-    const interjectDelegation = vi.fn(async () => ({
-      ok: true as const,
-      delegationId: "delegation-1",
-      childSessionId: "bot-child-session",
-      queued: true,
-    }));
     const server = createXdtHelperMcpServer(
       {
         botDelegation: {
           listBots,
-          delegateToBot,
+          call,
+          reply,
           listDelegations,
           cancelDelegation,
-          interjectDelegation,
         },
       },
       {
@@ -151,13 +156,13 @@ describe("cindy_helper MCP server", () => {
       const oversized = await client.callTool({
         name: "collaborate_with_bot",
         arguments: {
-          action: "delegate",
+          action: "call",
           target_bot_id: "bot-b",
           instruction: "x".repeat(12_001),
         },
       });
       expect(oversized.isError).toBe(true);
-      expect(delegateToBot).not.toHaveBeenCalled();
+      expect(call).not.toHaveBeenCalled();
       const status = parsePayload(await client.callTool({
         name: "collaborate_with_bot",
         arguments: { action: "status", target_bot_id: "bot-b" },
@@ -171,66 +176,62 @@ describe("cindy_helper MCP server", () => {
       const delegated = parsePayload(await client.callTool({
         name: "collaborate_with_bot",
         arguments: {
-          action: "delegate",
+          action: "call",
           target_bot_id: "bot-b",
           instruction: "Return a tracked compatibility report.",
         },
       }));
       expect(delegated).toMatchObject({
         ok: true,
-        action: "delegate",
+        action: "call",
+        call_id: "delegation-1",
         expects_result: true,
         delegationId: "delegation-1",
       });
-      expect(delegateToBot).toHaveBeenCalledWith(expect.objectContaining({
+      expect(call).toHaveBeenCalledWith(expect.objectContaining({
         callerSessionId: "bot-parent-session",
         targetBotId: "bot-b",
         objective: "Return a tracked compatibility report.",
       }));
 
+      const replied = parsePayload(await client.callTool({
+        name: "collaborate_with_bot",
+        arguments: {
+          action: "reply",
+          call_id: "delegation-1",
+          reply_kind: "approve",
+        },
+      }));
+      expect(replied).toMatchObject({ ok: true, action: "reply", call_id: "delegation-1" });
+      expect(reply).toHaveBeenCalledWith({
+        callerSessionId: "bot-parent-session",
+        delegationId: "delegation-1",
+        reply: { kind: "approve" },
+      });
+
+      const callStatus = parsePayload(await client.callTool({
+        name: "collaborate_with_bot",
+        arguments: { action: "status", call_id: "delegation-1" },
+      }));
+      expect(callStatus).toMatchObject({
+        ok: true,
+        action: "status",
+        call_id: "delegation-1",
+        call: { id: "delegation-1", status: "running" },
+      });
+      expect(listDelegations).toHaveBeenCalledWith({ callerSessionId: "bot-parent-session" });
+
       const discovered = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "bots" } }),
       );
-      expect(discovered).toMatchObject({ ok: true, category: "bots" });
-      expect((discovered.tools as Array<{ name: string }>).map((tool) => tool.name).sort()).toEqual([
-        "cancel_bot_delegation",
-        "delegate_to_bot",
-        "interject_bot_delegation",
-        "list_bot_delegations",
-        "list_bots",
-        "start_cindy_task",
-      ]);
-
-      const interjected = await client.callTool({
-        name: "call_tool",
-        arguments: {
-          name: "interject_bot_delegation",
-          args: { delegation_id: "delegation-1", text: "先别写代码，等我确认口径" },
-        },
-      });
-      expect(parsePayload(interjected)).toMatchObject({ ok: true, queued: true });
-      expect(interjectDelegation).toHaveBeenCalledWith({
-        callerSessionId: "bot-parent-session",
-        delegationId: "delegation-1",
-        text: "先别写代码，等我确认口径",
-      });
-
-      const listed = await client.callTool({
-        name: "call_tool",
-        arguments: { name: "list_bots", args: {} },
-      });
-      expect(parsePayload(listed)).toMatchObject({
-        ok: true,
-        bots: [{ id: "bot-b", name: "Dash Bot" }],
-      });
-      expect(listBots).toHaveBeenCalledWith({ callerSessionId: "bot-parent-session" });
+      expect(discovered).toMatchObject({ ok: true, category: "bots", tools: [] });
     } finally {
       await client.close();
       await server.close();
     }
   });
 
-  it("discovers and calls message_agent with the host-bound caller task", async () => {
+  it("sends a fire-and-forget notice only through the unified collaboration tool", async () => {
     const messageAgent = vi.fn(async () => ({
       ok: true as const,
       targetBotId: "bot-b",
@@ -274,28 +275,7 @@ describe("cindy_helper MCP server", () => {
       const discovered = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "bots" } }),
       );
-      expect((discovered.tools as Array<{ name: string }>).map((tool) => tool.name)).toContain(
-        "message_agent",
-      );
-
-      const sent = await client.callTool({
-        name: "call_tool",
-        arguments: {
-          name: "message_agent",
-          args: { target_bot_id: "bot-b", message: "请同步发布风险。" },
-        },
-      });
-      expect(parsePayload(sent)).toMatchObject({
-        ok: true,
-        target_bot_id: "bot-b",
-        target_session_id: "bot-b-main",
-        wake_kind: "queued",
-      });
-      expect(messageAgent).toHaveBeenCalledWith({
-        callerSessionId: "bot-a-main",
-        targetBotId: "bot-b",
-        message: "请同步发布风险。",
-      });
+      expect(discovered).toMatchObject({ ok: true, category: "bots", tools: [] });
     } finally {
       await client.close();
       await server.close();
@@ -482,7 +462,7 @@ describe("cindy_helper MCP server", () => {
       const overview = parsePayload(
         await client.callTool({ name: "list_tools", arguments: {} }),
       );
-      expect(overview.categories).toEqual([{ name: "bots", tool_count: 1 }]);
+      expect(overview.categories).toEqual([]);
 
       const forbiddenCategory = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "handoff" } }),
@@ -510,9 +490,7 @@ describe("cindy_helper MCP server", () => {
       const botTools = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "bots" } }),
       );
-      expect((botTools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
-        "message_agent",
-      ]);
+      expect((botTools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([]);
     } finally {
       await client.close();
       await server.close();

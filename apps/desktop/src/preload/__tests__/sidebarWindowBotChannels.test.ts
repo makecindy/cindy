@@ -9,8 +9,8 @@ import { describe, expect, it } from 'vitest';
  * 背景（空头支票复核 2026-08-19）：`bot-delegations` tab 在分离侧栏窗口里同样可达
  * —— `executeSidebarCommand` 的 `open-bot-delegations-tab` 会路由到当前持有侧栏的
  * 那个窗口。但 `sidebarWindowPreload.ts` 当初漏了委派面板要的五条。于是
- * `BotDelegationsBody` 的 effect 里裸调
- * `window.electronAPI.maker.onBotDelegationChanged(...)` 直接抛
+ * `BotDelegationsBody` 的 effect 里调用
+ * `window.electronAPI.maker.onBotDelegationChanged(...)` 时若漏投影会直接抛
  * TypeError，被 `TabBodyErrorBoundary` 接住 —— 用户看到的是一个**空白死 tab**。
  *
  * 这是"漏配"型缺陷：两个 preload 各自维护一份手写投影，没有任何东西保证它们对同一
@@ -30,8 +30,6 @@ const DELEGATION_PANEL_CHANNELS = [
   'maker:bot-delegations:list',
   'maker:bot-delegation:cancel',
   'maker:bot-delegation:changed',
-  'maker:bot-delivery:retry',
-  'maker:bot-delivery:changed',
   'maker:open-session-in-new-window',
 ] as const;
 
@@ -49,7 +47,7 @@ describe('分离侧栏窗口的 Bot 通道投影', () => {
   it('推送类通道在两侧都带 ownerStamp 第二参，否则数据主人守卫会失效', () => {
     // 渲染层统一用 isDataOwnerPushCurrent(ownerStamp) 丢弃旧账号的残留推送；
     // 分离窗口若用单参 onPayload 接推送，ownerStamp 恒 undefined，守卫形同虚设。
-    for (const channel of ['maker:bot-delegation:changed', 'maker:bot-delivery:changed']) {
+    for (const channel of ['maker:bot-delegation:changed']) {
       const line = sidebarPreload
         .split('\n')
         .find((row) => row.includes(`'${channel}'`));
