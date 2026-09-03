@@ -20,7 +20,6 @@ import type {
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { createLogger } from '@/lib/logger';
-import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   isCodexSessionExpiredError,
@@ -987,9 +986,9 @@ export function VoiceInputOverlay() {
     if (codexRecoveryScope === 'system-shared') {
       try {
         const opened = await window.electronAPI.openChatGPTApp();
-        if (!opened.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
+        if (!opened.success) setError(t('chatgptAuthRecovery.openAppFailed'));
       } catch {
-        toast.error(t('chatgptAuthRecovery.openAppFailed'));
+        setError(t('chatgptAuthRecovery.openAppFailed'));
       }
       return;
     }
@@ -1407,6 +1406,11 @@ export function VoiceInputOverlay() {
       if (command.type === 'submit') {
         if (stateRef.current === 'error') {
           if (stopInFlightRef.current) return;
+          if (codexRecovery) {
+            void handleCodexRecovery();
+            return;
+          }
+          codexSessionPromptActiveRef.current = false;
           void startRecording();
           return;
         }
@@ -1419,7 +1423,7 @@ export function VoiceInputOverlay() {
     });
     window.electronAPI.voiceInput.notifyGlobalOverlayReady();
     return unsubscribe;
-  }, [cancelAndClose, startRecording, stopAndPaste]);
+  }, [cancelAndClose, codexRecovery, handleCodexRecovery, startRecording, stopAndPaste]);
 
   // Mount-time prewarm. The overlay is now pre-created at app idle (see
   // prewarmGlobalVoiceInputOverlay in main/voice-input/global.ts) so this

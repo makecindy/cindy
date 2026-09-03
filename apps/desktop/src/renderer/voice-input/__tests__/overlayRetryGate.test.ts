@@ -26,4 +26,10 @@ describe('voice input overlay retry gate', () => {
     expect(overlaySource).toContain('resolveVoiceInputReadinessRecovery(readiness, readiness.serviceMode)');
     expect(overlaySource).not.toContain('window.electronAPI.voiceInput.getModelSelection()');
   });
+
+  it('keeps inline auth recovery visible and routes the global submit back through recovery', () => {
+    expect(overlaySource).toContain("if (!opened.success) setError(t('chatgptAuthRecovery.openAppFailed'));");
+    expect(overlaySource).toContain("if (codexRecovery) {\n            void handleCodexRecovery();");
+    expect(overlaySource).toContain('codexSessionPromptActiveRef.current = false;\n          void startRecording();');
+  });
 });
