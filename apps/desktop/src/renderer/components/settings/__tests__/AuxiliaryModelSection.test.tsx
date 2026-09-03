@@ -350,6 +350,26 @@ describe('AuxiliaryModelSection', () => {
     expect(h.set).not.toHaveBeenCalled();
   });
 
+  it('disables a later slot until its preceding slot has a model', async () => {
+    h.get.mockResolvedValue(
+      state({
+        models: [PREFERRED_PIN],
+        isCustomized: true,
+        customizedKeys: ['models'],
+        options: OPTIONS,
+      }),
+    );
+    render(<AuxiliaryModelSection />);
+
+    const fallback2Select = await screen.findByRole('button', {
+      name: 'settings.auxiliaryModels.fallback2.ariaLabel:select',
+    });
+    expect((fallback2Select as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(fallback2Select);
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
   it('does not offer or persist a model already selected in another slot', async () => {
     h.get.mockResolvedValue(
       state({

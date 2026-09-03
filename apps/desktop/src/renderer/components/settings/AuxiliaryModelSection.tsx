@@ -285,7 +285,7 @@ export function AuxiliaryModelSection() {
                         budgetLabel={t('settings.auxiliaryModels.budget')}
                         subscriptionLabel={t('settings.auxiliaryModels.subscription')}
                         groupByProvider
-                        disabled={pending}
+                        disabled={pending || (index > 0 && !activeModels[index - 1])}
                       />
                     </div>
                   </div>
