@@ -489,8 +489,8 @@ describe('auth login-flow reset', () => {
       completeLoginStart,
     );
     const completeLoginBody = source.slice(completeLoginStart, completeLoginEnd);
-    expect(completeLoginBody).toContain('validateBeforeCommit?: () => void;');
-    expect(completeLoginBody).toContain('options.validateBeforeCommit?.();');
+    expect(completeLoginBody).toContain('validateBeforeCommit?: (loginEpoch: number) => void;');
+    expect(completeLoginBody).toContain('options.validateBeforeCommit?.(loginEpoch);');
 
     const resourceRefreshStart = source.indexOf('async function refreshSavedResourceSession(');
     const resourceRefreshEnd = source.indexOf(
@@ -697,7 +697,10 @@ describe('auth login-flow reset', () => {
     expect(candidateLoop).toBeGreaterThan(-1);
     expect(logoutBody).toContain('await switchSavedAccount(candidateAccountKey, {');
     expect(logoutBody).toContain('accountToLogOut: currentIdentity');
-    expect(logoutBody).toContain('validateBeforeCommit: assertLogoutStillCurrent');
+    expect(logoutBody).toContain('validateBeforeCommit: (loginEpoch) => {');
+    expect(logoutBody).toContain('assertLogoutStillCurrent(loginEpoch);');
+    expect(logoutBody).toContain('candidateTransitionEpoch = loginEpoch;');
+    expect(logoutBody).toContain('assertLogoutTransitionStillCurrent(candidateTransitionEpoch);');
     expect(logoutBody).toContain('assertLogoutStillCurrent();');
     expect(logoutBody).toContain('if (isUnavailableSavedAccountError(error)) continue;');
     expect(logoutBody).toContain('isRetryableSavedAccountSwitchError(error)');

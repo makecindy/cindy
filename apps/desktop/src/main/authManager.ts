@@ -3827,7 +3827,7 @@ export async function switchSavedAccount(
   options: {
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
-    validateBeforeCommit?: () => void;
+    validateBeforeCommit?: (loginEpoch: number) => void;
   } = {},
 ): Promise<void> {
   const switchLoginFlowEpoch = loginFlowEpoch;
@@ -4878,7 +4878,7 @@ async function completeLogin(
     restoreLoggedOutAccount?: boolean;
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
-    validateBeforeCommit?: () => void;
+    validateBeforeCommit?: (loginEpoch: number) => void;
   } = {},
 ): Promise<AuthFlowState> {
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
@@ -4923,7 +4923,7 @@ async function completeLogin(
           // Any cancellation before commit restores both durable records while
           // the cross-process vault lock is still held.
           assertTransitionCurrent();
-          options.validateBeforeCommit?.();
+          options.validateBeforeCommit?.(loginEpoch);
           // Capture the compatibility session only after entering the same
           // cross-process ownership window as the vault write. A concurrent
           // passive refresh may have rotated it while this login waited on the
@@ -5789,12 +5789,20 @@ export async function logout(): Promise<void> {
     throw new AuthApiError('UNAUTHENTICATED', 401, 'No current account to log out');
   }
   const logoutAuthEpoch = authStateEpoch;
-  const isLogoutStillCurrent = (): boolean =>
-    authStateEpoch === logoutAuthEpoch &&
+  const isLogoutStillCurrent = (expectedAuthEpoch = logoutAuthEpoch): boolean =>
+    authStateEpoch === expectedAuthEpoch &&
     currentUser?.id === activeUser.id &&
     activeAuthRealm === currentAuthRealm;
-  const assertLogoutStillCurrent = (): void => {
-    if (isLogoutStillCurrent()) return;
+  const assertLogoutStillCurrent = (expectedAuthEpoch = logoutAuthEpoch): void => {
+    if (isLogoutStillCurrent(expectedAuthEpoch)) return;
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Logout was superseded by a newer auth action',
+    );
+  };
+  const assertLogoutTransitionStillCurrent = (expectedAuthEpoch: number): void => {
+    if (authStateEpoch === expectedAuthEpoch) return;
     throw new AuthApiError(
       'AUTH_FLOW_SUPERSEDED',
       409,
@@ -5831,15 +5839,26 @@ export async function logout(): Promise<void> {
   for (const candidateAccountKey of candidateAccountKeys) {
     assertLogoutStillCurrent();
     let candidateRemovedPassport: StoredPassportSession | null = null;
+    let candidateTransitionEpoch: number | null = null;
     try {
       await switchSavedAccount(candidateAccountKey, {
         accountToLogOut: currentIdentity,
         onLoggedOutPassportRemoved: (session) => {
           candidateRemovedPassport = session;
         },
-        validateBeforeCommit: assertLogoutStillCurrent,
+        validateBeforeCommit: (loginEpoch) => {
+          assertLogoutStillCurrent(loginEpoch);
+          candidateTransitionEpoch = loginEpoch;
+        },
       });
-      assertLogoutStillCurrent();
+      if (candidateTransitionEpoch === null) {
+        throw new AuthApiError(
+          'AUTH_FLOW_SUPERSEDED',
+          409,
+          'Logout was superseded by a newer auth action',
+        );
+      }
+      assertLogoutTransitionStillCurrent(candidateTransitionEpoch);
       removedPassport = candidateRemovedPassport;
       revokeLoggedOutAccountBestEffort({
         accessToken: currentAccessToken,
