@@ -79,6 +79,10 @@ describe('FindInPageBar', () => {
     hidden.setAttribute('aria-hidden', 'true');
     hidden.textContent = 'foo';
     page.append(hidden);
+    const cssHidden = document.createElement('span');
+    cssHidden.style.display = 'none';
+    cssHidden.textContent = 'foo';
+    page.append(cssHidden);
     const script = document.createElement('script');
     script.textContent = '// foo';
     page.append(script);

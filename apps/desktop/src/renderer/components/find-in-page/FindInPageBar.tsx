@@ -17,10 +17,6 @@ function semanticHsl(token: string): string {
   return `hsl(var(${token}))`;
 }
 
-function semanticVar(token: string): string {
-  return `var(${token})`;
-}
-
 interface TextMatch {
   range: Range;
 }
@@ -96,6 +92,14 @@ function isExcludedTextNode(node: Text, excludedRoot: HTMLElement | null): boole
       return true;
     }
     if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
+    const style = window.getComputedStyle(element);
+    if (
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      style.visibility === 'collapse'
+    ) {
+      return true;
+    }
     element = element.parentElement;
   }
   return false;
@@ -273,7 +277,7 @@ export function FindInPageBar() {
           background-color: ${semanticHsl('--search-match-bg')};
           color: ${semanticHsl('--search-match-fg')};
           text-decoration: underline;
-          text-decoration-color: ${semanticVar('--warning-accent')};
+          text-decoration-color: ${semanticHsl('--search-match-fg')};
           text-decoration-thickness: 2px;
         }
       `}</style>
