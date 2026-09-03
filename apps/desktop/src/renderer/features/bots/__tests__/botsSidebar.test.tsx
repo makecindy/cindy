@@ -205,15 +205,13 @@ describe('BotsSidebar rows', () => {
 
     expect(screen.getByLabelText('bots.list.needsAttention')).toBeTruthy();
   });
-  it('shows visible recent Bots in Active now and opens their canonical chat', async () => {
+  it('does not duplicate recent Bots in a separate Active now area', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'Active steward', lastMessageAt: Date.now() })];
 
     await renderSidebar();
 
-    const chip = screen.getByLabelText('bots.list.openActive:{"name":"Active steward"}');
-    expect(chip).toBeTruthy();
-    fireEvent.click(chip);
-    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1');
+    expect(screen.queryByLabelText('bots.list.activeNow')).toBeNull();
+    expect(screen.getAllByText('Active steward')).toHaveLength(1);
   });
 
   it('keeps hidden Bots recoverable and reveals a match automatically while searching', async () => {

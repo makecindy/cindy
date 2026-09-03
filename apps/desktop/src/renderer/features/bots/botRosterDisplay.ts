@@ -1,8 +1,5 @@
 import type { BotProfile } from './botStore';
 
-/** Hermes keeps the row pulse intentionally short; durable state lives elsewhere. */
-export const BOT_ACTIVE_WINDOW_MS = 90_000;
-
 function finiteTimestamp(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -14,25 +11,6 @@ export function botRosterActivityAt(bot: BotProfile): number {
     finiteTimestamp(bot.lastMessageAt),
     ...bot.sessions.map((session) => finiteTimestamp(session.updatedAt)),
   );
-}
-
-/**
- * Active-now is deliberately ephemeral: a live turn, a recent canonical message,
- * or a recent Bot worker. Profile creation alone must never pretend the Bot ran.
- */
-export function isBotActiveNow(
-  bot: BotProfile,
-  input: { working: boolean; now?: number },
-): boolean {
-  if (input.working) return true;
-  const now = input.now ?? Date.now();
-  const recentActivityAt = Math.max(
-    finiteTimestamp(bot.lastMessageAt),
-    ...bot.sessions
-      .filter((session) => session.kind === 'worker')
-      .map((session) => finiteTimestamp(session.updatedAt)),
-  );
-  return recentActivityAt > 0 && now - recentActivityAt < BOT_ACTIVE_WINDOW_MS;
 }
 
 export function sortBotRoster(bots: readonly BotProfile[]): BotProfile[] {

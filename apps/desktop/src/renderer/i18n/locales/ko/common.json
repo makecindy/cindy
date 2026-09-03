@@ -6895,8 +6895,6 @@
       "startChat": "대화 시작하기",
       "typing": "입력 중…",
       "unread": "읽지 않은 메시지 {{count}}개",
-      "activeNow": "현재 활동 중",
-      "openActive": "{{name}} 대화 열기",
       "search": "동료 검색",
       "searchPlaceholder": "동료 검색…",
       "showHidden": "숨긴 동료 표시",

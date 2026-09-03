@@ -2482,6 +2482,7 @@ interface McpServerRef {
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
 const CINDY_BOT_COLLABORATION_TOOL = 'collaborate_with_bot';
+const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 
 interface ConnectedMcpTool {
@@ -2818,6 +2819,16 @@ class CindyMcpGateway {
     };
   }
 
+  resolveCreateTeammate(input: unknown): ResolvedMcpGatewayCall | null {
+    const tool = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_CREATE_TEAMMATE_TOOL));
+    if (!tool) return null;
+    return {
+      qualifiedName: 'mcp__cindy_helper__' + CINDY_CREATE_TEAMMATE_TOOL,
+      args: recordInput(input),
+      tool,
+    };
+  }
+
   resolveBotMemory(input: unknown): ResolvedMcpGatewayCall | null {
     if (!this.botMemoryFacadeEnabled) return null;
     const tool = this.tools.get(mcpGatewayKey('cindy_memory', 'call_tool'));
@@ -3065,6 +3076,15 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved);
   }
 
+  private async executeCreateTeammate(params: unknown): Promise<{
+    content: Array<Record<string, unknown>>;
+    details: unknown;
+  }> {
+    const resolved = this.resolveCreateTeammate(params);
+    if (!resolved) throw new Error('Cindy teammate creation is unavailable in this task.');
+    return this.executeResolvedCall(resolved);
+  }
+
   private async executeBotMemory(params: unknown): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
@@ -3143,6 +3163,26 @@ class CindyMcpGateway {
         },
         execute: async (_toolCallId: string, params: unknown) =>
           this.executeBotCollaboration(params),
+      });
+    }
+
+    if (this.resolveCreateTeammate({})) {
+      pi.registerTool({
+        name: CINDY_CREATE_TEAMMATE_TOOL,
+        label: 'Create a Cindy teammate',
+        description:
+          'Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Use the official default model and empty capability grants.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 200 },
+            description: { type: 'string', minLength: 1, maxLength: 4000 },
+            identity_source: { type: 'string', minLength: 1, maxLength: 12000 },
+          },
+          required: ['name', 'description', 'identity_source'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) => this.executeCreateTeammate(params),
       });
     }
 
@@ -3804,6 +3844,8 @@ export default async function cindyBridge(pi: any) {
       ? mcpGateway.resolveCall(event.input)
       : event.toolName === CINDY_BOT_COLLABORATION_TOOL
         ? mcpGateway.resolveBotCollaboration(event.input)
+        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
+          ? mcpGateway.resolveCreateTeammate(event.input)
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? mcpGateway.resolveBotMemory(event.input)
         : null;
@@ -3811,6 +3853,8 @@ export default async function cindyBridge(pi: any) {
       ? resolvedGatewayCall
       : event.toolName === CINDY_BOT_COLLABORATION_TOOL
         ? resolvedGatewayCall
+        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
+          ? resolvedGatewayCall
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? resolvedGatewayCall
         : null;
@@ -3820,6 +3864,7 @@ export default async function cindyBridge(pi: any) {
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
         || event.toolName === CINDY_BOT_COLLABORATION_TOOL
+        || event.toolName === CINDY_CREATE_TEAMMATE_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;
@@ -3875,6 +3920,8 @@ export default async function cindyBridge(pi: any) {
       ? mcpGateway.resolveCall(event.input)
       : event.toolName === CINDY_BOT_COLLABORATION_TOOL
         ? mcpGateway.resolveBotCollaboration(event.input)
+        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
+          ? mcpGateway.resolveCreateTeammate(event.input)
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? mcpGateway.resolveBotMemory(event.input)
         : null;
@@ -3882,6 +3929,8 @@ export default async function cindyBridge(pi: any) {
       ? resolvedGatewayCall
       : event.toolName === CINDY_BOT_COLLABORATION_TOOL
         ? resolvedGatewayCall
+        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
+          ? resolvedGatewayCall
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? resolvedGatewayCall
         : null;

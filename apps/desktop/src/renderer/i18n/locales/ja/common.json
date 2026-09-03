@@ -6895,8 +6895,6 @@
       "startChat": "会話を始める",
       "typing": "入力中…",
       "unread": "{{count}} 件の未読メッセージ",
-      "activeNow": "現在アクティブ",
-      "openActive": "{{name}} との会話を開く",
       "search": "仲間を検索",
       "searchPlaceholder": "仲間を検索…",
       "showHidden": "非表示の仲間を表示",

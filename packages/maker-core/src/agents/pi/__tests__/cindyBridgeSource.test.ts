@@ -1329,6 +1329,12 @@ describe('cindy-bridge extension source', () => {
       "const CINDY_BOT_COLLABORATION_TOOL = 'collaborate_with_bot'",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "name: CINDY_CREATE_TEAMMATE_TOOL",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain(

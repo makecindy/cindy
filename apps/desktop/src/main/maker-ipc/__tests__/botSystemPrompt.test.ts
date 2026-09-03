@@ -40,6 +40,7 @@ describe('稳定层:能力必须写进提示词', () => {
           toolsets: ['docs'],
           memoryEnabled: false,
           delegationEnabled: false,
+          botCreationEnabled: true,
           ownSkillsEnabled: false,
         },
       }),
@@ -56,6 +57,23 @@ describe('稳定层:能力必须写进提示词', () => {
     const stable = buildBotStableTier(input());
     expect(stable).not.toContain('make_pptx');
     expect(stable).not.toContain('render_pdf');
+  });
+
+  it('创建伙伴入口不依赖是否开启协作委派', () => {
+    const stable = buildBotStableTier(
+      input({
+        capabilities: {
+          toolsets: [],
+          memoryEnabled: false,
+          delegationEnabled: false,
+          botCreationEnabled: true,
+          ownSkillsEnabled: false,
+          botModeEnabled: true,
+        },
+      }),
+    );
+    expect(stable).toContain('create_teammate');
+    expect(stable).not.toContain('collaborate_with_bot');
   });
 
   it('记忆 / 技能 / 协作各自按信号出现', () => {
@@ -79,10 +97,12 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).not.toContain('action=start_task');
     expect(all).not.toContain('action=delegate');
     expect(all).toContain('collaborate_with_bot');
+    expect(all).toContain('create_teammate');
     expect(all).not.toContain('list_tools');
 
     const none = buildBotStableTier(input());
     expect(none).not.toContain('save_bot_skill');
+    expect(none).not.toContain('create_teammate');
     expect(none).not.toContain('make_pptx');
   });
 

@@ -6895,8 +6895,6 @@
       "startChat": "開始對話",
       "typing": "正在輸入…",
       "unread": "{{count}} 則未讀訊息",
-      "activeNow": "正在活躍",
-      "openActive": "開啟 {{name}} 的對話",
       "search": "搜尋夥伴",
       "searchPlaceholder": "搜尋夥伴…",
       "showHidden": "顯示隱藏的夥伴",

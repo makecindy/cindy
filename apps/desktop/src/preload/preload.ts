@@ -700,6 +700,7 @@ const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
 );
 const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
+const fanOutBotProfileChanged = createIpcFanOut('maker:bot-profile:changed');
 const fanOutBotLifecycleChanged = createIpcFanOut('maker:bot-lifecycle:changed');
 const fanOutMakerPiPackagesChanged = createIpcFanOut('maker:pi-packages:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
@@ -5386,6 +5387,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         idempotencyKey,
       ),
     onBotDelegationChanged: fanOutBotDelegationChanged,
+    onBotProfileChanged: fanOutBotProfileChanged,
     runBotLifecycleAction: (
       request: import('../shared/botLifecycle').BotLifecycleActionRequest,
     ): Promise<import('../shared/botLifecycle').BotLifecycleActionResult> =>

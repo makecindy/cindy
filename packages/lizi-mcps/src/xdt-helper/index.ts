@@ -139,6 +139,10 @@ export {
   type BotSkillToolDeps,
 } from './bot_skills.js';
 export {
+  registerCreateTeammateTool,
+  type CreateTeammateCallbacks,
+} from './create_teammate.js';
+export {
   registerSubmitGithubIssueTool,
   type SubmitGithubIssueDeps,
   type SubmitGithubIssueHostResult,

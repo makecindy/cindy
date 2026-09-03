@@ -9,8 +9,10 @@ export function BotsFeatureLayout() {
   useOwnTopNavScrollableRows(false);
   useEffect(() => {
     refreshBotProfiles();
+    const unsubscribeProfile = window.electronAPI.maker.onBotProfileChanged(() => refreshBotProfiles());
     const unsubscribeLifecycle = window.electronAPI.maker.onBotLifecycleChanged(() => refreshBotProfiles());
     return () => {
+      unsubscribeProfile();
       unsubscribeLifecycle();
     };
   }, []);

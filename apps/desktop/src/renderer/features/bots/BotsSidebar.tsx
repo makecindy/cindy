@@ -22,7 +22,7 @@ import {
   formatBotUnreadBadge,
 } from './botListDisplay';
 import { subscribeBotReadState } from './botReadState';
-import { isBotActiveNow, partitionBotRoster } from './botRosterDisplay';
+import { partitionBotRoster } from './botRosterDisplay';
 import {
   canonicalBotSessionId,
   duplicateBotProfile,
@@ -107,16 +107,13 @@ function BotsSidebarContent() {
     return bot.sessions.some((session) => islandActivity.get(session.id)?.phase === 'running');
   };
   const roster = partitionBotRoster(rosterBots, { query, showHidden });
-  const activeNowBots = roster.visible.filter((bot) =>
-    isBotActiveNow(bot, { working: isBotWorking(bot), now }),
-  );
   const showSearch = rosterBots.length >= 8 || query.trim().length > 0;
 
   useEffect(() => {
-    if (activeNowBots.length === 0) return;
+    if (roster.visible.length === 0) return;
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
-  }, [activeNowBots.length]);
+  }, [roster.visible.length]);
 
   // 曾经这里还按 bot 逐个拉 `getBotHealth` 只为在行尾画一个状态图标。图标下线之后
   // 这一轮 N 次 IPC 也一起下线——列表不再为一个不显示的东西查询。
@@ -206,31 +203,6 @@ function BotsSidebarContent() {
           <BotCreateMenu />
         </span>
       </div>
-
-      {activeNowBots.length > 0 ? (
-        <div
-          role="status"
-          aria-live="polite"
-          aria-label={t('bots.list.activeNow')}
-          className="flex flex-wrap items-center gap-1.5 px-2.5 pb-2"
-        >
-          <span className="text-10 font-medium uppercase tracking-wide text-[var(--sidebar-list-muted)]">
-            {t('bots.list.activeNow')}
-          </span>
-          {activeNowBots.map((bot) => (
-            <button
-              key={bot.id}
-              type="button"
-              onClick={() => navigate(`/bots/${bot.id}`)}
-              className="flex min-w-0 items-center gap-1.5 rounded-lg bg-sidebar-item-hover px-1.5 py-1 text-left"
-              aria-label={t('bots.list.openActive', { name: bot.name })}
-            >
-              <BotAvatar bot={bot} size="xs" />
-              <span className="max-w-24 truncate text-11 font-medium">{bot.name}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
 
       {showSearch ? (
         <label className="relative mb-2 block px-2.5">

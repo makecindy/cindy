@@ -65,6 +65,7 @@ import {
   isSupportedBotAvatarValue,
   portableBotAvatarOrFallback,
 } from '../../../shared/botAvatarValue.js';
+import { MAKER_PUSH } from '../../maker-ipc/channels.js';
 
 const log = createLogger('bots');
 
@@ -695,6 +696,100 @@ async function fileExists(candidate: string): Promise<boolean> {
   }
 }
 
+function defaultNewBotCapabilities(): Record<string, unknown> {
+  let modelChain = readEffectiveBotModelChain({
+    modelChainOverride: null,
+    modelOverride: null,
+  });
+  const primary = modelChain[0] ?? {
+    harness: 'pi' as const,
+    model: NEW_BOT_DEFAULT_PI_MODEL,
+    providerId: NEW_BOT_DEFAULT_PI_PROVIDER,
+    effort: NEW_BOT_DEFAULT_PI_EFFORT,
+    fastMode: false,
+  };
+  if (modelChain.length === 0) modelChain = [primary];
+  return {
+    ...primary,
+    modelOverride: null,
+    modelChain,
+    modelChainOverride: null,
+    skillMode: 'allowlist',
+    skillsExcluded: [],
+    toolsetMode: 'allowlist',
+    toolsets: [],
+    mcpMode: 'allowlist',
+    mcpServers: [],
+    memory: true,
+    permissions: 'trusted',
+  };
+}
+
+function broadcastBotProfileChanged(payload: {
+  botId: string;
+  change: 'created' | 'updated';
+}): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    try {
+      win.webContents.send(MAKER_PUSH.BOT_PROFILE_CHANGED, payload);
+    } catch (error) {
+      log.warn('Bot profile broadcast failed', { error: String(error) });
+    }
+  }
+}
+
+/** Main-owned creation path shared by the renderer and Bot runtime tools. */
+export async function createBotProfile(raw: unknown) {
+  const body =
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const name = readText(body.name ?? body.displayName, 'name', 200, true);
+  const description = readText(body.description, 'description');
+  const id =
+    readText(body.id, 'id', 128) || `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const requestedAvatar = readBotAvatar(body.avatar) || '🤖';
+  // Creation has no prior main-owned upload receipt. Never let a renderer or
+  // model mint a managed-media address by string alone.
+  const avatar = portableBotAvatarOrFallback(requestedAvatar);
+  const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
+  const identitySource =
+    readText(body.identitySource, 'identitySource', 12000) || buildDefaultBotIdentity(name);
+  const skills = Array.isArray(body.skills)
+    ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
+    : [];
+  const hasRequestedCapabilities =
+    body.capabilities && typeof body.capabilities === 'object' && !Array.isArray(body.capabilities);
+  const requestedCapabilities = hasRequestedCapabilities
+    ? (body.capabilities as Record<string, unknown>)
+    : {};
+  const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+  const gender = readBotGender(body.gender);
+  const persistedCapabilities = normalizeBotModelCapabilitiesOrThrow({
+    ...(hasRequestedCapabilities ? {} : defaultNewBotCapabilities()),
+    ...requestedCapabilities,
+    skills,
+    userContextSource,
+    ...(gender ? { gender } : {}),
+  });
+  const now = Date.now();
+  const client = getDbClient();
+  const db = client.drizzle;
+  await client.tx('bots.createProfile', {
+    id,
+    displayName: name,
+    description,
+    avatar,
+    avatarColor,
+    identitySource,
+    capabilitiesJson: safeJson(persistedCapabilities),
+    now,
+  });
+  await syncBotProfileFolder(id, identitySource, persistedCapabilities);
+  const profile = await readProfile(db, id);
+  broadcastBotProfileChanged({ botId: id, change: 'created' });
+  return profile;
+}
+
 export function registerBotIpc(): void {
   ipcMain.handle('local-db:bots:model-chain-settings-get', async (event) => {
     assertTrustedAppRendererEvent(event);
@@ -907,55 +1002,7 @@ export function registerBotIpc(): void {
 
   ipcMain.handle('local-db:bots:create', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const body =
-      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-    const name = readText(body.name ?? body.displayName, 'name', 200, true);
-    const description = readText(body.description, 'description');
-    const id =
-      readText(body.id, 'id', 128) || `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const requestedAvatar = readBotAvatar(body.avatar) || '🤖';
-    // Creation has no prior main-owned upload receipt. Never let a renderer
-    // mint a managed-media address by string alone.
-    const avatar = portableBotAvatarOrFallback(requestedAvatar);
-    const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
-    const identitySource =
-      readText(body.identitySource, 'identitySource', 12000) || buildDefaultBotIdentity(name);
-    const skills = Array.isArray(body.skills)
-      ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
-      : [];
-    const capabilities =
-      body.capabilities &&
-      typeof body.capabilities === 'object' &&
-      !Array.isArray(body.capabilities)
-        ? (body.capabilities as Record<string, unknown>)
-        : {};
-    const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
-    // 角色性别。与 userContextSource 同款:不是「能力」,但和档案同生命周期,
-    // 所以一起冻进 capabilities_json,再由 readProfile 投影成顶层字段。
-    // 之前渲染层传了它、这里没接,阵容里的角色一律落回「用名字称呼」,
-    // 设置页显示「林律是谁」而不是「她是谁」(2026-08-21 实机发现)。
-    const gender = readBotGender(body.gender);
-    const persistedCapabilities = normalizeBotModelCapabilitiesOrThrow({
-      ...capabilities,
-      skills,
-      userContextSource,
-      ...(gender ? { gender } : {}),
-    });
-    const now = Date.now();
-    const client = getDbClient();
-    const db = client.drizzle;
-    await client.tx('bots.createProfile', {
-      id,
-      displayName: name,
-      description,
-      avatar,
-      avatarColor,
-      identitySource,
-      capabilitiesJson: safeJson(persistedCapabilities),
-      now,
-    });
-    await syncBotProfileFolder(id, identitySource, persistedCapabilities);
-    return readProfile(db, id);
+    return createBotProfile(raw);
   });
 
   ipcMain.handle('local-db:bots:update', async (event, raw: unknown) => {

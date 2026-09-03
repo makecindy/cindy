@@ -2,10 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { BotProfile } from '../botStore';
 import {
-  BOT_ACTIVE_WINDOW_MS,
   botRosterActivityAt,
   filterBotRoster,
-  isBotActiveNow,
   partitionBotRoster,
   sortBotRoster,
 } from '../botRosterDisplay';
@@ -97,42 +95,8 @@ describe('Hermes-style Bot roster display', () => {
     expect(all).toHaveLength(2);
   });
 
-  it('treats a busy canonical turn, recent canonical message, or recent worker as Active now', () => {
-    const now = 1_000_000;
-    expect(isBotActiveNow(bot('busy'), { working: true, now })).toBe(true);
-    expect(
-      isBotActiveNow(bot('message', { lastMessageAt: now - BOT_ACTIVE_WINDOW_MS + 1 }), {
-        working: false,
-        now,
-      }),
-    ).toBe(true);
-    expect(
-      isBotActiveNow(
-        bot('worker', {
-          sessions: [
-            {
-              id: 'worker-session',
-              title: 'Worker',
-              kind: 'worker',
-              channel: 'local',
-              updatedAt: now - BOT_ACTIVE_WINDOW_MS + 1,
-            },
-          ],
-        }),
-        { working: false, now },
-      ),
-    ).toBe(true);
-    expect(
-      isBotActiveNow(bot('stale', { lastMessageAt: now - BOT_ACTIVE_WINDOW_MS }), {
-        working: false,
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it('uses creation only for roster ordering, not Active now', () => {
+  it('uses creation time only as a stable roster-ordering fallback', () => {
     const row = bot('fresh-profile', { createdAt: 900 });
     expect(botRosterActivityAt(row)).toBe(900);
-    expect(isBotActiveNow(row, { working: false, now: 1_000 })).toBe(false);
   });
 });

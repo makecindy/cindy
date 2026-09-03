@@ -372,6 +372,33 @@ beforeEach(async () => {
 
 describe('Bot canonical Session lifecycle', () => {
 
+  it('uses the official Bot defaults when created without renderer capabilities', async () => {
+    await invoke('local-db:bots:create', {
+      id: 'bot-defaults',
+      name: 'Default Bot',
+    });
+
+    const row = h.sqlite!
+      .prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-defaults') as { capabilities_json: string };
+    const capabilities = JSON.parse(row.capabilities_json) as {
+      modelChain?: Array<Record<string, unknown>>;
+      skills?: unknown[];
+      toolsets?: unknown[];
+      mcpServers?: unknown[];
+    };
+
+    expect(capabilities.modelChain?.[0]).toMatchObject({
+      harness: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'high',
+    });
+    expect(capabilities.skills).toEqual([]);
+    expect(capabilities.toolsets).toEqual([]);
+    expect(capabilities.mcpServers).toEqual([]);
+  });
+
 
 
 

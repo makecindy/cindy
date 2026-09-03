@@ -68,6 +68,10 @@ import type { ControlResult, LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
 import { errorPayload, okPayload } from './xdt-helper/_payload.js';
+import {
+  registerCreateTeammateTool,
+  type CreateTeammateCallbacks,
+} from './xdt-helper/create_teammate.js';
 
 // ── Re-exports (backward compat for consumers that imported from here) ────
 
@@ -546,6 +550,8 @@ export interface XdtHelperMcpDeps {
   botDelegation?: BotDelegationCallbacks;
   /** Hermes-style direct Bot DM over the target's canonical Cindy Session. */
   botMessaging?: BotMessagingCallbacks;
+  /** Direct lightweight Bot creation for a Bot-bound session. */
+  botProfiles?: CreateTeammateCallbacks;
   /**
    * Cindy Bot-only skill shelf: the Bot turns a finished way of working into a
    * real Skill file that the next task mounts. Host resolves Bot ownership from
@@ -689,6 +695,12 @@ export function createXdtHelperMcpServer(
   }
 
   registerBotCollaborationEntry(server, deps, sessionCtx);
+  if (deps.botProfiles) {
+    registerCreateTeammateTool(server, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.botProfiles,
+    });
+  }
   registerListToolsEntry(server, registry, allowedCategories);
   registerCallToolEntry(server, registry, {
     logger: deps.logger,

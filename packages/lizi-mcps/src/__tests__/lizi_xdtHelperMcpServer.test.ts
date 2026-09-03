@@ -18,6 +18,47 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  it("exposes direct teammate creation without the discovery loop", async () => {
+    const create = vi.fn(async () => ({
+      ok: true as const,
+      bot: { id: "bot-new", name: "程序员", description: "负责开发" },
+    }));
+    const server = createXdtHelperMcpServer(
+      { botProfiles: { create } },
+      { agentKind: "pi", workingDir: "/repo", sessionId: "bot-parent-session" },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "cindy-helper-create-test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toContain("create_teammate");
+      const result = await client.callTool({
+        name: "create_teammate",
+        arguments: {
+          name: "程序员",
+          description: "负责开发",
+          identity_source: "你是一个可靠的程序员伙伴。",
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(parsePayload(result)).toMatchObject({
+        ok: true,
+        action: "created",
+        bot: { id: "bot-new", name: "程序员" },
+      });
+      expect(create).toHaveBeenCalledWith({
+        callerSessionId: "bot-parent-session",
+        name: "程序员",
+        description: "负责开发",
+        identitySource: "你是一个可靠的程序员伙伴。",
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("dispatches a discovered send_to_session call without dropping nested arguments", async () => {
     const sendToSession = vi.fn(async () => ({
       ok: true as const,

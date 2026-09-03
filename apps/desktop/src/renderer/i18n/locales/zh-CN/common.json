@@ -6895,8 +6895,6 @@
       "startChat": "开始对话",
       "typing": "正在输入…",
       "unread": "{{count}} 条未读消息",
-      "activeNow": "正在活跃",
-      "openActive": "打开 {{name}} 的对话",
       "search": "搜索伙伴",
       "searchPlaceholder": "搜索伙伴…",
       "showHidden": "显示隐藏的伙伴",

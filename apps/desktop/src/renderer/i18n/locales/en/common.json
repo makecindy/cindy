@@ -6897,8 +6897,6 @@
       "startChat": "Start the conversation",
       "typing": "Typing…",
       "unread": "{{count}} unread messages",
-      "activeNow": "Active now",
-      "openActive": "Open {{name}}'s conversation",
       "search": "Search teammates",
       "searchPlaceholder": "Search teammates…",
       "showHidden": "Show hidden teammates",

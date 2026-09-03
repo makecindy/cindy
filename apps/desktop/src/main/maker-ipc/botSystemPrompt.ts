@@ -28,6 +28,8 @@ export interface BotPromptCapabilitySignals {
   memoryEnabled: boolean;
   /** 是否允许把活委派给别的伙伴。 */
   delegationEnabled: boolean;
+  /** 是否能直接创建新的伙伴；与委派能力独立。 */
+  botCreationEnabled?: boolean;
   /** 伙伴自有技能是否可写入(save_bot_skill 是否在工具面里)。 */
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
@@ -133,6 +135,11 @@ const DELEGATION_GUIDANCE = [
   '这是把一段有边界的活交出去并拿回结果,不是命令对方、也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
 ].join('\n');
 
+const BOT_CREATION_GUIDANCE = [
+  '## 你可以创建伙伴',
+  '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。根据用户描述推断名称、职责和简洁身份，不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
+].join('\n');
+
 /**
  * 队友名册 —— 这个伙伴的同事都是谁、各自干什么。
  *
@@ -222,6 +229,8 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
   if (input.capabilities.ownSkillsEnabled) capabilityParts.push(OWN_SKILLS_GUIDANCE);
+  const botCreationEnabled = input.capabilities.botCreationEnabled ?? input.capabilities.delegationEnabled;
+  if (botModeEnabled && botCreationEnabled) capabilityParts.push(BOT_CREATION_GUIDANCE);
   if (botModeEnabled && input.capabilities.delegationEnabled) {
     capabilityParts.push(DELEGATION_GUIDANCE);
   }
