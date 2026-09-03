@@ -13,6 +13,7 @@ import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../shared/auxiliaryModelChain.
 import {
   formatAuxiliaryModelRefLabel,
   getEffectiveAuxiliaryModelChain,
+  getEffectiveAuxiliaryModelChainSnapshot,
 } from '../resolveAuxiliaryModelChain.js';
 
 const ENV_KEYS = [
@@ -104,5 +105,21 @@ describe('getEffectiveAuxiliaryModelChain', () => {
   it('uses the product-facing Cindy AI label for XD catalog refs', () => {
     expect(formatAuxiliaryModelRefLabel('cat:xd:codex:deepseek/deepseek-v4-flash'))
       .toBe('deepseek/deepseek-v4-flash · Cindy AI');
+  });
+
+  it('changes when the effective source or ordered refs change', () => {
+    const automatic = getEffectiveAuxiliaryModelChainSnapshot();
+    h.models = ['litellm-kimi-k2.6'];
+    const custom = getEffectiveAuxiliaryModelChainSnapshot();
+
+    expect(automatic).not.toBe(custom);
+    expect(JSON.parse(automatic)).toEqual({
+      source: 'auto',
+      refs: [...AUTO_AUXILIARY_MODEL_CHAIN],
+    });
+    expect(JSON.parse(custom)).toEqual({
+      source: 'custom',
+      refs: ['litellm-kimi-k2.6'],
+    });
   });
 });

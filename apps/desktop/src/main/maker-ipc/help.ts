@@ -11,6 +11,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { isAuxiliaryModelCustomized } from '../utility-model/auxiliary-model-settings-store.js';
 import { agentSupportsOneShot, requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { MAKER_INVOKE } from './channels.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import type {
@@ -81,9 +82,11 @@ type HelpOneShotTarget = {
  * prompt after the account/session boundary moved while credentials or the
  * auxiliary chain were being resolved.
  */
-function isHelpOwnerScopeCurrent(scopeKey: string): boolean {
+function isHelpOwnerScopeCurrent(scopeKey: string, chainSnapshot?: string): boolean {
   try {
-    return !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scopeKey;
+    return !isAppSessionBoundaryPending()
+      && activeOwnerScopeKey() === scopeKey
+      && (chainSnapshot === undefined || getEffectiveAuxiliaryModelChainSnapshot() === chainSnapshot);
   } catch {
     return false;
   }
@@ -144,30 +147,31 @@ async function routeHelpTopics(
     // changed while the utility model is in flight; completion must not read a
     // newer mode and accidentally cross the custom/automatic boundary.
     const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
+    const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
     const utility = await requestUtilityText(maker, prompt, {
       maxTokens: 30,
       timeoutMs: 12_000,
-      beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey),
+      beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
     });
-    if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return [];
+    if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return [];
     let raw = utility.ok ? utility.text : '';
     // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
     if (
       !raw &&
       !auxiliaryModelCustomized &&
       target.agentKind &&
-      isHelpOwnerScopeCurrent(ownerScopeKey) &&
+      isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot) &&
       !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
     ) {
-      if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return [];
+      if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return [];
       raw = await maker.oneShot(target.agentKind, prompt, {
         ...target.options,
         maxTokens: 30,
         timeoutMs: 12_000,
-        beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey),
+        beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
       });
     }
-    if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return [];
+    if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return [];
     return parseRouterOutput(raw, KNOWN_DOC_IDS);
   } catch (err) {
     // Routing is best-effort; on failure fall back to summary-only grounding.
@@ -363,27 +367,28 @@ export function registerMakerHelpIpc(maker: Maker): void {
         // As with topic routing, pin the fallback policy for this answer
         // request before awaiting the utility model.
         const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
+        const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
         const utility = await requestUtilityText(maker, prompt, {
           ...target.options,
-          beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey),
+          beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
         });
-        if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return { kind: 'no-answer' };
+        if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return { kind: 'no-answer' };
         let raw = utility.ok ? utility.text : '';
         // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
         if (
           !raw &&
           !auxiliaryModelCustomized &&
           target.agentKind &&
-          isHelpOwnerScopeCurrent(ownerScopeKey) &&
+          isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot) &&
           !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
         ) {
-          if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return { kind: 'no-answer' };
+          if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return { kind: 'no-answer' };
           raw = await maker.oneShot(target.agentKind, prompt, {
             ...target.options,
-            beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey),
+            beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
           });
         }
-        if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return { kind: 'no-answer' };
+        if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return { kind: 'no-answer' };
         if (utility.ok) {
           log.debug('help ask used utility model', {
             provider: utility.providerId,

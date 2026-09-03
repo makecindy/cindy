@@ -24,6 +24,7 @@ import {
   isUtilityRouteDisabled,
   isUtilityRoutePaymentRequired,
 } from '../utility-model/oneShotCandidates.js';
+import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -950,8 +951,12 @@ function assertRefinerRouteAvailable(profile: VoiceInputRefinerProfile): void {
   }
 }
 
-function assertVoiceInputOwnerScopeCurrent(ownerScopeKey: string): void {
-  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
+function assertVoiceInputOwnerScopeCurrent(ownerScopeKey: string, chainSnapshot?: string): void {
+  if (
+    isAppSessionBoundaryPending()
+    || activeOwnerScopeKey() !== ownerScopeKey
+    || (chainSnapshot !== undefined && getEffectiveAuxiliaryModelChainSnapshot() !== chainSnapshot)
+  ) {
     throw new Error('voice input owner scope changed');
   }
 }
@@ -2094,6 +2099,7 @@ export function registerVoiceInputIpc(): void {
     // readiness, or credential await. A later account switch must fail closed
     // at the final refiner dispatch instead of using the new owner's route.
     const ownerScopeKey = activeOwnerScopeKey();
+    const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
     const isInlineSender = !isGlobalVoiceInputOverlaySender(event.sender);
     const existing = activeByWebContentsId.get(event.sender.id);
     if (existing) {
@@ -2245,7 +2251,7 @@ export function registerVoiceInputIpc(): void {
             ?? `${VOICE_INPUT_REFINEMENT_CACHE_SCOPE}:${CINDY_MANAGED_REFINER_PROVIDER}`;
           refiner = new DictationRefiner({
             client: createVoiceInputTextModelClient(effectiveRefinerProfile, {
-              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),
+              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
               timeoutMs: VOICE_INPUT_MANAGED_REFINER_IDLE_TIMEOUT_MS,
               voiceContext,
               onUsage: ({ servedModel, ...usage }) => {
@@ -2282,7 +2288,7 @@ export function registerVoiceInputIpc(): void {
               profile,
               createVoiceInputTextModelClient(profile, {
                 beforeDispatch: () => {
-                  assertVoiceInputOwnerScopeCurrent(ownerScopeKey);
+                  assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
                   assertRefinerRouteAvailable(profile);
                 },
                 timeoutMs: VOICE_INPUT_REFINER_IDLE_TIMEOUT_MS,

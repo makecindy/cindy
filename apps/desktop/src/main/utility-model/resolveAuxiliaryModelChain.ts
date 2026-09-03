@@ -113,6 +113,16 @@ export function getEffectiveAuxiliaryModelChain(): EffectiveAuxiliaryModelChain 
   return { source: 'auto', refs: [...AUTO_AUXILIARY_MODEL_CHAIN] };
 }
 
+/**
+ * Stable request-time identity for the effective auxiliary chain.
+ * Async callers capture this before resolving credentials or readiness, then
+ * fail closed if the user changes the routing decision while work is in flight.
+ */
+export function getEffectiveAuxiliaryModelChainSnapshot(): string {
+  const chain = getEffectiveAuxiliaryModelChain();
+  return JSON.stringify({ source: chain.source, refs: chain.refs });
+}
+
 export function getEffectiveAuxiliaryModelRefs(): string[] {
   return getEffectiveAuxiliaryModelChain().refs;
 }

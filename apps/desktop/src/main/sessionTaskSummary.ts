@@ -30,6 +30,7 @@ import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from './appSessionState.js';
 import { isAuxiliaryModelCustomized } from './utility-model/auxiliary-model-settings-store.js';
 import { agentSupportsOneShot, requestUtilityText } from './utility-model/oneShotCandidates.js';
+import { getEffectiveAuxiliaryModelChainSnapshot } from './utility-model/resolveAuxiliaryModelChain.js';
 import { getDbClient } from './localDb/client/current.js';
 import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';
 import { messages, sessions } from './localDb/schema.js';
@@ -93,9 +94,11 @@ function isOwnerScopeCurrent(scope: DataOwnerBroadcastScope | null): boolean {
  * local DB themselves. Keep the request tied to the session that started it;
  * an account switch or teardown must fail closed before the paid dispatch.
  */
-function isAuxiliaryOwnerScopeCurrent(scopeKey: string): boolean {
+function isAuxiliaryOwnerScopeCurrent(scopeKey: string, chainSnapshot?: string): boolean {
   try {
-    return !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scopeKey;
+    return !isAppSessionBoundaryPending()
+      && activeOwnerScopeKey() === scopeKey
+      && (chainSnapshot === undefined || getEffectiveAuxiliaryModelChainSnapshot() === chainSnapshot);
   } catch {
     return false;
   }
@@ -281,6 +284,8 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // Capture before any async DB/model work. The fallback chain must not be
     // allowed to dispatch under a different account after an owner switch.
     const ownerScopeKey = activeOwnerScopeKey();
+    const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
+    const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
     const db = getDbClient().drizzle;
     const [session] = await db
       .select({
@@ -339,20 +344,15 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
         ? session.agentKind
         : 'claude-code';
     const prompt = SUMMARY_PROMPT(session.title, userMsg, assistantMsg, tier);
-    // Freeze the fallback policy for this request. The auxiliary setting may
-    // change while the utility request is in flight; the result must not then
-    // be routed through a different policy merely because the user switched
-    // modes before the request completed.
-    const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
     // 模型走系统统一配置:优先用"轻量任务模型链"(utility-model,与起标题同源,
     // 由 getUtilityModelChainProfiles 决定),配置缺失/不可用时再回退到 agent 自带的
     // oneShot 兜底——不再写死 haiku/mini。maxTokens 120:长档 30+ CJK 字可能超 80 token,留余量防截断。
     const utility = await requestUtilityText(getMaker(), prompt, {
       maxTokens: 120,
       timeoutMs: 30_000,
-      beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey),
+      beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
     });
-    if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey)) return;
+    if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
     // 停用轴:agent one-shot 兜底是新的付费调用,该 agent 的默认路由被停用时不派发
     // (摘要 best-effort,直接放弃本轮,PR #744 review)。
     // oneShot 能力轴:Pi 未实现 oneShot(继承 BaseAgent 的 not-implemented),对 Pi 会话
@@ -363,15 +363,15 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
       : auxiliaryModelCustomized ||
           !agentSupportsOneShot(agentKind) ||
           (await isAgentOneShotRouteDisabled(agentKind)) ||
-          !isAuxiliaryOwnerScopeCurrent(ownerScopeKey)
+          !isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)
         ? ''
         : await getMaker().oneShot(agentKind, prompt, {
             maxTokens: 120,
-            beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey),
+            beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
           });
     const summary = sanitize(text, maxCharsForTier(tier));
     if (!summary) return;
-    if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey)) return;
+    if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
 
     // 写回前重查会话状态:oneShot 是异步的(数秒),in-flight 期间会话可能已变化,无条件写回
     // 会写入一份已过时的摘要(codex review)。任一不符即跳过:
@@ -401,7 +401,7 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     ) {
       return;
     }
-    if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey)) return;
+    if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
 
     // 直写 summary,不 bump updatedAt——摘要刷新不应引起 sidebar 重排
     await db.update(sessions).set({ summary }).where(eq(sessions.id, sessionId));

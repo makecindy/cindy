@@ -15,7 +15,7 @@ describe('custom auxiliary chain does not hit the session agent', () => {
     expect(source).toContain('!auxiliaryModelCustomized');
     expect(source.match(/maker\.oneShot/g)?.length).toBeGreaterThan(0);
     expect(source).toContain('const ownerScopeKey = activeOwnerScopeKey();');
-    expect(source.match(/beforeDispatch: async \(\) => isHelpOwnerScopeCurrent\(ownerScopeKey\)/g)?.length).toBe(4);
+    expect(source.match(/beforeDispatch: async \(\) => isHelpOwnerScopeCurrent\(ownerScopeKey, auxiliaryChainSnapshot\)/g)?.length).toBe(4);
   });
 
   it('pinned-card summaries skip agent oneShot when the auxiliary list is customized', () => {
@@ -24,6 +24,12 @@ describe('custom auxiliary chain does not hit the session agent', () => {
     expect(source).toContain('auxiliaryModelCustomized ||');
     expect(source).toContain('await getMaker().oneShot');
     expect(source).toContain('const ownerScopeKey = activeOwnerScopeKey();');
-    expect(source).toContain('beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey)');
+    expect(source).toContain('beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)');
+  });
+
+  it('voice refinement pins the effective auxiliary chain for the whole run', () => {
+    const source = readFileSync(path.join(root, 'voice-input/index.ts'), 'utf8');
+    expect(source).toContain('const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();');
+    expect(source.match(/assertVoiceInputOwnerScopeCurrent\(ownerScopeKey, auxiliaryChainSnapshot\)/g)?.length).toBe(2);
   });
 });
