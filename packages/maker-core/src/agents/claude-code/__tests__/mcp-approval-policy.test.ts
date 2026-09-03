@@ -207,6 +207,7 @@ async function startSession(
     turnChangeCapture?: AgentDeps['turnChangeCapture'];
     getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
     resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
+    resolveVerifiedContextWindow?: AgentDeps['resolveVerifiedContextWindow'];
     availableModels?: NonNullable<AgentDeps['capabilityAdditions']>['availableModels'];
     model?: string;
   },
@@ -227,6 +228,7 @@ async function startSession(
   deps.turnChangeCapture = options?.turnChangeCapture;
   deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
   deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
+  deps.resolveVerifiedContextWindow = options?.resolveVerifiedContextWindow;
   deps.capabilityAdditions = options?.availableModels
     ? { availableModels: options.availableModels }
     : undefined;
@@ -466,6 +468,85 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
         },
       },
     });
+    await handle.close();
+  });
+
+  it('falls back to the catalog when verified route context is unavailable', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'allowed' }),
+      resolveVerifiedContextWindow: () => null,
+      availableModels: [{
+        id: 'z-ai/glm-5.3',
+        displayName: 'GLM-5.3',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'z-ai/glm-5.3' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { updatedInput: { model: 'z-ai/glm-5.3[1m]' } },
+    });
+    await handle.close();
+  });
+
+  it('falls back to the catalog when verified route context throws', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'allowed' }),
+      resolveVerifiedContextWindow: (_providerId, modelId) => {
+        if (modelId === 'z-ai/glm-5.3') throw new Error('route unavailable');
+        return null;
+      },
+      availableModels: [{
+        id: 'z-ai/glm-5.3',
+        displayName: 'GLM-5.3',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'z-ai/glm-5.3' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { updatedInput: { model: 'z-ai/glm-5.3[1m]' } },
+    });
+    await handle.close();
+  });
+
+  it('does not invent a context window when route and catalog metadata are invalid', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'allowed' }),
+      resolveVerifiedContextWindow: () => Number.NaN,
+      availableModels: [{
+        id: 'z-ai/glm-5.3',
+        displayName: 'GLM-5.3',
+        contextWindow: 0,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'z-ai/glm-5.3' },
+    })).resolves.toEqual({ continue: true });
     await handle.close();
   });
 

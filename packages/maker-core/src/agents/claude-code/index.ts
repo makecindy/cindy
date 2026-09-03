@@ -1293,9 +1293,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (resolveVerified) {
         try {
           const verified = resolveVerified(opts.providerId ?? null, normalized);
-          return typeof verified === 'number' && verified > 0 ? verified : undefined;
+          if (typeof verified === 'number' && Number.isFinite(verified) && verified > 0) {
+            return verified;
+          }
         } catch {
-          return undefined;
+          // Fall back to catalog metadata when route verification is unavailable.
         }
       }
       const descriptor = this.capabilities.availableModels.find(
