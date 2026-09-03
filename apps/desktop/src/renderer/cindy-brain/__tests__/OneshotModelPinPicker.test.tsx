@@ -165,4 +165,40 @@ describe('OneshotModelPinPicker provider-first mode', () => {
 
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it('keeps an available same-model route when the current agent route is unavailable', () => {
+    const onChange = vi.fn();
+    const available = {
+      ...xdOption,
+      id: 'cat:xd:codex:shared-model',
+      modelId: 'shared-model',
+      modelName: 'Shared model',
+      label: 'Shared model · Cindy AI',
+      available: true,
+    };
+    const unavailable = {
+      ...available,
+      id: 'cat:xd:claude-code:shared-model',
+      agentKind: 'claude-code',
+      available: false,
+    };
+    render(
+      <OneshotModelPinPicker
+        value={unavailable.id}
+        defaultLabel=""
+        declaredLabel={null}
+        options={[available, unavailable]}
+        onChange={onChange}
+        ariaLabel="Auxiliary model"
+        groupByProvider
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary model' }));
+    const option = screen.getByRole('option', { name: /Shared model/ });
+    expect(option.getAttribute('disabled')).toBeNull();
+    fireEvent.click(option);
+
+    expect(onChange).toHaveBeenCalledWith(available.id);
+  });
 });

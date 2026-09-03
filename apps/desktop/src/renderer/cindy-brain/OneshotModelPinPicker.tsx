@@ -150,7 +150,7 @@ export function OneshotModelPinPicker({
         existing.agentKind !== preferredAgentForModel(existing.modelId);
       const replacesUnavailableRoute = existing.available === false && option.available !== false;
       if (
-        option.id === value ||
+        (option.id === value && option.available !== false) ||
         replacesUnavailableRoute ||
         (existing.id !== value && preferredRoute)
       ) {
