@@ -1092,10 +1092,14 @@ export function MessageRenderer({
     finishHistoryPrependTransaction(generation);
   }, [finishHistoryPrependTransaction]);
 
-  const handoffHistoryPrependToUser = useCallback(() => {
+  // `viewportTakenOver` separates «a finger is on the ScrollView» from «the reader actually moved
+  // the viewport». Both must stop imperative corrections, but only the latter may cancel the
+  // regroup-only continuation: a bare tap moves nothing, and treating it as a takeover strands the
+  // reader at the top when a page merely expanded the collapsed first work group.
+  const handoffHistoryPrependToUser = useCallback((viewportTakenOver = true) => {
     const transaction = historyPrependTransactionRef.current;
     if (!transaction) return;
-    transaction.userControlledDuringRequest = true;
+    if (viewportTakenOver) transaction.userControlledDuringRequest = true;
     if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     transaction.userHandoffPending = true;
     const currentAnchor = captureCurrentHistoryAnchor(true);
@@ -2155,7 +2159,9 @@ export function MessageRenderer({
     isMomentumScrollingRef.current = false;
     historyTouchStartYRef.current = event.nativeEvent.pageY;
     historyTouchTriggeredRef.current = false;
-    handoffHistoryPrependToUser();
+    // Touch-start only means the finger holds the ScrollView; it is not a viewport takeover yet.
+    // maybeTriggerHistoryTouch / onScrollBeginDrag report the real move once it clears the dead zone.
+    handoffHistoryPrependToUser(false);
   }, [handoffHistoryPrependToUser]);
 
   const maybeTriggerHistoryTouch = useCallback((pageY: number) => {

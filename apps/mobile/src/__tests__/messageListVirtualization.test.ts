@@ -137,8 +137,17 @@ describe('mobile message list container', () => {
     expect(source).toContain('const restoreHistoryAnchorOnce = useCallback');
     expect(source).toContain('restoreHistoryAnchorOnce(transaction.generation)');
     expect(source).toContain('transaction.userControlledAfterCommit = true');
-    expect(source).toContain('transaction.userControlledDuringRequest = true');
+    expect(source).toContain('if (viewportTakenOver) transaction.userControlledDuringRequest = true;');
     expect(source).toContain('if (transaction.userControlledDuringRequest) {');
+    // 轻点不是接管视口:touch-start 只代表手指按住 ScrollView。若把它当接管,会取消
+    // regroup-only 续拉标记,新页仅展开顶部折叠 Worked for 时用户就被留在顶部干等。
+    const touchStartStart = source.indexOf('const handleHistoryTouchStart = useCallback');
+    const touchStartEnd = source.indexOf('const maybeTriggerHistoryTouch', touchStartStart);
+    const touchStartSource = source.slice(touchStartStart, touchStartEnd);
+    expect(touchStartSource).toContain('handoffHistoryPrependToUser(false)');
+    const triggerTouchStart = source.indexOf('const maybeTriggerHistoryTouch = useCallback');
+    const triggerTouchEnd = source.indexOf('const handleHistoryTouchMove', triggerTouchStart);
+    expect(source.slice(triggerTouchStart, triggerTouchEnd)).toContain('handoffHistoryPrependToUser();');
     // 手势接管只在手指/惯性真正持有视口时扣住事务:否则「提交前手势已结束 + 该页无坐标进展」
     // 会永久扣住事务,native MVCP 整段关掉。提交分支必须显式重新武装 handoff,
     // 手势早已结束时才有路径回到锚点校验并收口。
