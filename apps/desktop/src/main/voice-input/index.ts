@@ -31,7 +31,11 @@ import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
 } from '../maker-host/auth-adapters.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+} from '../appSessionState.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -943,6 +947,12 @@ function assertRefinerRouteAvailable(profile: VoiceInputRefinerProfile): void {
   }
   if (isUtilityRoutePaymentRequired(profile)) {
     throw new Error('voice refiner route requires paid entitlement');
+  }
+}
+
+function assertVoiceInputOwnerScopeCurrent(ownerScopeKey: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
+    throw new Error('voice input owner scope changed');
   }
 }
 
@@ -2080,6 +2090,10 @@ export function registerVoiceInputIpc(): void {
   });
 
   ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
+    // Bind this run to the owner that initiated it before any cancellation,
+    // readiness, or credential await. A later account switch must fail closed
+    // at the final refiner dispatch instead of using the new owner's route.
+    const ownerScopeKey = activeOwnerScopeKey();
     const isInlineSender = !isGlobalVoiceInputOverlaySender(event.sender);
     const existing = activeByWebContentsId.get(event.sender.id);
     if (existing) {
@@ -2231,6 +2245,7 @@ export function registerVoiceInputIpc(): void {
             ?? `${VOICE_INPUT_REFINEMENT_CACHE_SCOPE}:${CINDY_MANAGED_REFINER_PROVIDER}`;
           refiner = new DictationRefiner({
             client: createVoiceInputTextModelClient(effectiveRefinerProfile, {
+              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),
               timeoutMs: VOICE_INPUT_MANAGED_REFINER_IDLE_TIMEOUT_MS,
               voiceContext,
               onUsage: ({ servedModel, ...usage }) => {
@@ -2266,7 +2281,10 @@ export function registerVoiceInputIpc(): void {
             client: guardRefinerClientAgainstUnavailableRoute(
               profile,
               createVoiceInputTextModelClient(profile, {
-                beforeDispatch: () => assertRefinerRouteAvailable(profile),
+                beforeDispatch: () => {
+                  assertVoiceInputOwnerScopeCurrent(ownerScopeKey);
+                  assertRefinerRouteAvailable(profile);
+                },
                 timeoutMs: VOICE_INPUT_REFINER_IDLE_TIMEOUT_MS,
                 onUsage: (usage) => {
                   if (!runId) return;

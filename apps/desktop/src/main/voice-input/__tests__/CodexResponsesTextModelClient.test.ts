@@ -208,19 +208,23 @@ describe('CodexResponsesTextModelClient', () => {
     expect(undiciFetchMock).not.toHaveBeenCalled();
   });
 
-  it('runs the final dispatch guard before fetch and can fail closed', async () => {
+  it('runs the final dispatch guard after request awaits and can fail closed on owner drift', async () => {
+    let ownerScope = 'owner-a';
     const beforeDispatch = vi.fn(() => {
-      throw new Error('voice refiner catalog route unavailable');
+      if (ownerScope !== 'owner-a') throw new Error('voice input owner scope changed');
     });
     const client = new CodexResponsesTextModelClient({
-      accessTokenProvider: async () => 'tok',
+      accessTokenProvider: async () => {
+        ownerScope = 'owner-b';
+        return 'tok';
+      },
       accountIdProvider: async () => null,
       beforeDispatch,
     });
 
     await expect(client.requestJson({
       model: 'm', schemaName: 's', system: 'sys', user: {},
-    })).rejects.toThrow('voice refiner catalog route unavailable');
+    })).rejects.toThrow('voice input owner scope changed');
     expect(beforeDispatch).toHaveBeenCalledOnce();
     expect(undiciFetchMock).not.toHaveBeenCalled();
   });
