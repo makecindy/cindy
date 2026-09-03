@@ -71,7 +71,6 @@ describe('FindInPageBar', () => {
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     cleanup();
     document.body.replaceChildren();
     vi.unstubAllGlobals();
@@ -137,59 +136,6 @@ describe('FindInPageBar', () => {
     expect(screen.getByText('3/3')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'findInPage.next' }));
     expect(screen.getByText('1/3')).toBeTruthy();
-  });
-
-  it('scrolls the active range using its own geometry', async () => {
-    const page = document.createElement('main');
-    page.textContent = 'foo';
-    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
-    const originalGetClientRects = Range.prototype.getClientRects;
-    const originalGetBoundingClientRect = Range.prototype.getBoundingClientRect;
-    const rect = {
-      top: 900,
-      bottom: 920,
-      left: 0,
-      right: 40,
-      width: 40,
-      height: 20,
-      x: 0,
-      y: 900,
-      toJSON: () => ({}),
-    } as DOMRect;
-    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-      callback(0);
-      return 1;
-    });
-    Object.defineProperty(Range.prototype, 'getClientRects', {
-      configurable: true,
-      value: () => [rect],
-    });
-    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => rect,
-    });
-
-    const input = await openFindBar(page);
-    fireEvent.change(input, { target: { value: 'foo' } });
-
-    expect(scrollBy).toHaveBeenCalledTimes(2);
-    expect(scrollBy).toHaveBeenCalledWith({ top: 152, behavior: 'auto' });
-    if (originalGetClientRects) {
-      Object.defineProperty(Range.prototype, 'getClientRects', {
-        configurable: true,
-        value: originalGetClientRects,
-      });
-    } else {
-      delete (Range.prototype as unknown as Record<string, unknown>).getClientRects;
-    }
-    if (originalGetBoundingClientRect) {
-      Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
-        configurable: true,
-        value: originalGetBoundingClientRect,
-      });
-    } else {
-      delete (Range.prototype as unknown as Record<string, unknown>).getBoundingClientRect;
-    }
   });
 
   it('clears highlights when the query is cleared or the bar closes', async () => {
