@@ -84,12 +84,14 @@ export function resolveHeatmapWeeks({
   availableWidth,
   minimumWeeks = MIN_HEATMAP_WEEKS,
   windowDays,
+  metric,
 }: {
-  days: Array<{ day: string }>;
+  days: Array<{ day: string; money?: RegionalMoney; tokens?: number }>;
   todayKey: string;
   availableWidth: number;
   minimumWeeks?: number;
   windowDays?: number;
+  metric?: 'money' | 'tokens';
 }): number {
   const minWeeks = Math.max(
     MIN_HEATMAP_WEEKS,
@@ -99,9 +101,16 @@ export function resolveHeatmapWeeks({
   const today = parseDayKey(todayKey);
   if (!todayKey || Number.isNaN(today.getTime())) return minWeeks;
 
+  const intensityOf = (day: { money?: RegionalMoney; tokens?: number }): number =>
+    metric === 'tokens' ? (day.tokens ?? 0) : (day.money?.amount ?? 0);
   const earliestDay = days
+    .filter(
+      (day) =>
+        day.day &&
+        day.day <= todayKey &&
+        (metric === undefined || intensityOf(day) > 0),
+    )
     .map((day) => day.day)
-    .filter((day) => day && day <= todayKey)
     .sort()[0];
   const dataWeeks = earliestDay
     ? Math.floor(
@@ -169,6 +178,7 @@ export function UsageHeatmap({
     availableWidth,
     minimumWeeks,
     windowDays,
+    metric,
   });
 
   useLayoutEffect(() => {
@@ -291,8 +301,11 @@ export function UsageHeatmap({
                           cell.level === 0
                             ? 'var(--surface-chip)'
                             : `color-mix(in srgb, var(--accent-emphasis) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
-                        boxShadow:
-                          selectedDay === cell.day ? '0 0 0 2px var(--focus-ring-soft)' : undefined,
+                        outline:
+                          selectedDay === cell.day
+                            ? '2px solid var(--focus-ring-soft)'
+                            : undefined,
+                        outlineOffset: selectedDay === cell.day ? '1px' : undefined,
                       }}
                     />
                   </button>

@@ -73,6 +73,30 @@ describe('UsageHeatmap metric', () => {
     ).toBe(60);
   });
 
+  it('按当前 metric 过滤历史起点，不让零值日期扩展热力图', () => {
+    const history = [
+      { day: '2025-01-01', money: money(100), tokens: 0 },
+      { day: '2026-08-20', money: money(0), tokens: 1_000 },
+    ];
+
+    expect(
+      resolveHeatmapWeeks({
+        days: history,
+        todayKey: '2026-08-22',
+        availableWidth: 900,
+        metric: 'money',
+      }),
+    ).toBe(60);
+    expect(
+      resolveHeatmapWeeks({
+        days: history,
+        todayKey: '2026-08-22',
+        availableWidth: 900,
+        metric: 'tokens',
+      }),
+    ).toBe(20);
+  });
+
   it('周日锚点也覆盖完整的 windowDays 历史，不把未来占位挤掉最早日期', () => {
     expect(heatmapWeeksForWindow('2026-08-22', 140)).toBe(20);
     expect(heatmapWeeksForWindow('2026-08-23', 140)).toBe(21);
@@ -178,5 +202,23 @@ describe('UsageHeatmap metric', () => {
     expect(getByRole('button', { name: '2026-08-21' }).firstElementChild?.className).toContain(
       'rounded-full',
     );
+  });
+
+  it('选中日期使用 outline 而不是页面内阴影', () => {
+    const { getByRole } = render(
+      <UsageHeatmap
+        days={days}
+        todayKey="2026-08-22"
+        windowDays={7}
+        metric="tokens"
+        selectedDay="2026-08-21"
+        onDayClick={vi.fn()}
+      />,
+    );
+
+    const selectedCell = getByRole('button', { name: '2026-08-21' })
+      .firstElementChild as HTMLElement;
+    expect(selectedCell.style.outline).toBe('2px solid var(--focus-ring-soft)');
+    expect(selectedCell.style.boxShadow).toBe('');
   });
 });

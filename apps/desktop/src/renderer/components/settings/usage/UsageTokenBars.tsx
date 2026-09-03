@@ -168,7 +168,9 @@ export function UsageTokenBars({
                 style={{
                   height,
                   backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
-                  boxShadow: selectedDay === b.day ? '0 0 0 2px var(--focus-ring-soft)' : undefined,
+                  outline:
+                    selectedDay === b.day ? '2px solid var(--focus-ring-soft)' : undefined,
+                  outlineOffset: selectedDay === b.day ? '1px' : undefined,
                 }}
               >
                 {[...b.segments].reverse().map((s) => (

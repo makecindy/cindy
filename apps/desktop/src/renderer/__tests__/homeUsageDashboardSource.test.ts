@@ -15,6 +15,10 @@ const heatmapSource = readFileSync(
   resolve(__dirname, '../components/new-chat/UsageHeatmap.tsx'),
   'utf8',
 );
+const tokenBarsSource = readFileSync(
+  resolve(__dirname, '../components/settings/usage/UsageTokenBars.tsx'),
+  'utf8',
+);
 
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
@@ -65,6 +69,13 @@ describe('HomeUsageDashboard source contract', () => {
     expect(dailyBarsSource).toContain('DEFAULT_USAGE_CURRENCY');
     expect(heatmapSource).not.toContain("money.currency ?? 'USD'");
     expect(dailyBarsSource).not.toContain("money.currency ?? 'USD'");
+  });
+
+  it('keeps selected usage chart days flat without ad-hoc shadows', () => {
+    expect(heatmapSource).not.toContain('boxShadow');
+    expect(tokenBarsSource).not.toContain('boxShadow');
+    expect(heatmapSource).toContain("'2px solid var(--focus-ring-soft)'");
+    expect(tokenBarsSource).toContain("'2px solid var(--focus-ring-soft)'");
   });
 
   it('shows cached usage immediately while marking background refresh', () => {
