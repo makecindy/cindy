@@ -372,6 +372,60 @@ describe('sanitizePresets', () => {
     }])).toEqual([]);
   });
 
+  it('图片生成能力只接受显式布尔值', () => {
+    const imagegen = {
+      id: 'imagegen',
+      name: 'Imagegen',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://images.example/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'image-chat', name: 'Image Chat' }],
+        },
+      },
+    };
+    expect(sanitizePresets([imagegen])).toEqual([imagegen]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            codex: {
+              ...imagegen.runtimes.codex,
+              supportsImageGeneration: 'yes',
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            codex: {
+              ...imagegen.runtimes.codex,
+              wireProtocol: 'openai-chat',
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            pi: {
+              ...imagegen.runtimes.codex,
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+  });
+
   it('requestPath 合法时保留；跨主机、fragment 与 CRLF 形态剥字段但保留预设', () => {
     const runtime = (requestPath: unknown) => ({
       codex: {

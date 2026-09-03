@@ -2806,12 +2806,16 @@ describe('PI durable subagent run store', () => {
     expect(new Set(controls.map((control) => control.requestId)).size).toBe(2);
   });
 
-  it.skipIf(process.platform === 'win32')('refuses a control mailbox redirected through a symlink', async () => {
+  it('refuses a control mailbox redirected through a symlink', async () => {
     const root = await makeRoot();
     const runId = '123e4567-e89b-42d3-a456-426614174014';
     const outside = await makeRoot();
     await writeStatus(root, status(runId));
-    await symlink(outside, path.join(root, runId, 'controls'), 'dir');
+    await symlink(
+      outside,
+      path.join(root, runId, 'controls'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
 
     await expect(controlPiSubagentRuns(root, runId, 'stop')).rejects.toThrow(/control directory is unavailable/);
     await expect(readdir(outside)).resolves.toEqual([]);

@@ -20,6 +20,7 @@ import type { ChannelIM } from '../channelIM.js';
 import type {
   IMHost,
   IMCardActionEvent,
+  IMFinalReplyMirror,
   IMMessageEvent,
   IMStatus,
   InteractiveCardSpec,
@@ -35,6 +36,7 @@ import { feishuEvents } from './events.js';
 import { cancelAppRegistration, reconnectSavedCredentials, registerFeishuIpc } from './ipc.js';
 import * as outbound from './outbound.js';
 import * as streamingText from './streamingText.js';
+import { releaseMirrorConfirmation, retainMirrorConfirmation } from './dualDelivery.js';
 import { downloadAttachments, type DownloadResult } from './attachmentDownloader.js';
 import type { AttachmentRef } from './incomingContent.js';
 
@@ -363,6 +365,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     await wsClient.stop({
       offlineTimeoutMs: wsClient.QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS,
       reason: 'transport-dispose',
+      discardPendingTopicLeases: true,
     });
   }
 
@@ -431,8 +434,41 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     );
   }
 
-  startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
+  startStreamingText(
+    userId: string,
+    initial?: string,
+  ): Promise<StreamingTextHandle> {
     return streamingText.start(userId, initial);
+  }
+
+  retainFinalReplyMirror(mirror: IMFinalReplyMirror): () => void {
+    retainMirrorConfirmation(mirror.idempotencyKey);
+    return () => releaseMirrorConfirmation(mirror.idempotencyKey);
+  }
+
+  async mirrorFinalReply(
+    mirror: IMFinalReplyMirror,
+    text: string,
+    opts?: { mediaAbsPaths?: string[] },
+  ): Promise<void> {
+    if (mirror.kind !== 'parent-chat') return;
+    try {
+      await streamingText.mirrorFinal(
+        mirror.chatId,
+        mirror.idempotencyKey,
+        text,
+        opts?.mediaAbsPaths,
+        mirror.allowedFileRoots,
+        mirror.accountEpoch,
+        mirror.confirmed,
+      );
+    } catch (err) {
+      this.log.warn(
+        `parent-chat terminal mirror failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**

@@ -65,6 +65,7 @@ describe('db worker runtime', () => {
       expect(findLogPayload(logs, 'dbWorker.schemaDrift')).toMatchObject({
         status: 'unknown',
       });
+      expect(db.prepare('SELECT cjk_seg(?) AS v').get('探针')).toEqual({ v: '探 针' });
     } finally {
       db.close();
     }

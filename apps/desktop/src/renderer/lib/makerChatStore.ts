@@ -4093,6 +4093,7 @@ function applyInputProjection(
     }
   }
   let settlingClientIds: string[] = [];
+  let locallyDispatchedQueueItems: QueuedMessage[] = [];
   const deferredPersistFromProjection: {
     payload: {
       data: Record<string, unknown> | null;
@@ -4144,6 +4145,19 @@ function applyInputProjection(
       );
     });
     settlingClientIds = settlingQueueItems.map((item) => item.clientId);
+    // A local send can race with the main coordinator becoming idle between
+    // the renderer's busy check and `input.enqueue()`. In that case the
+    // coordinator starts the turn immediately and the returned projection has
+    // an empty pendingQueue. Keep the optimistic row visible as a pending
+    // transcript message until the durable messages:created echo arrives (or
+    // a later authoritative projection puts it back in the queue after a
+    // pre-accept failure).
+    locallyDispatchedQueueItems = s.pendingQueue.filter(
+      (item) =>
+        item.isPendingEnqueue === true &&
+        !currentQueueIds.has(item.clientId) &&
+        !persistedMessageIds.has(item.clientId),
+    );
     // Only trigger if the retried message is still stuck in the pending queue:
     // projection.error is queue-level (string | null, no clientId), so we correlate
     // via pendingQueue. If the retry message was already dispatched and the agent
@@ -4174,7 +4188,10 @@ function applyInputProjection(
       queuedIds.size > 0 && s.messages.some((m) => m.isPendingPersist && queuedIds.has(m.clientId))
         ? s.messages.filter((m) => !(m.isPendingPersist && queuedIds.has(m.clientId)))
         : s.messages;
-    const withSettlingMessages = settlingQueueItems.reduce<ChatMessage[]>((messages, item) => {
+    const withSettlingMessages = [
+      ...settlingQueueItems,
+      ...locallyDispatchedQueueItems,
+    ].reduce<ChatMessage[]>((messages, item) => {
       if (messages.some((message) => message.clientId === item.clientId)) return messages;
       return [...messages, { ...item.chatMessage, isPendingPersist: true }];
     }, dedupedMessages);
@@ -12755,8 +12772,13 @@ async function sendMessageCore(
     : undefined;
   if (deviceLinkRemote && !remoteRecord) return false;
 
-  // device-link 乐观第一拍：空闲沿用消息流气泡，忙时也立即显示 sending 队列行。
-  if (deviceLinkRemote && isSendBusyForQueue(current)) {
+  // Busy sends must be visible before the main projection round-trip.  This is
+  // especially important for local sessions: the coordinator can be waiting
+  // for a delayed/stale turn boundary, so waiting for `input.enqueue()` to
+  // resolve would make the user's message appear to disappear.  The
+  // authoritative projection will replace the temporary marker (or remove it
+  // on a pre-accept failure) once the IPC call settles.
+  if (isSendBusyForQueue(current)) {
     setState(sessionId, (s) =>
       s.pendingQueue.some((item) => item.clientId === queued.clientId)
         ? s
@@ -12886,6 +12908,12 @@ async function sendMessageCore(
       setState(sessionId, (s) => ({
         ...s,
         error: message,
+        pendingQueue: s.pendingQueue.filter(
+          (item) => !(item.clientId === queued.clientId && item.isPendingEnqueue === true),
+        ),
+        messages: s.messages.filter(
+          (item) => !(item.clientId === queued.clientId && item.isPendingPersist === true),
+        ),
         usageLimitRecovery: null,
         errorReason: null,
         recoverableError: null,

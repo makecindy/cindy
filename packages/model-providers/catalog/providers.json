@@ -529,6 +529,19 @@
               "reasoningDefaultEffort": "high"
             },
             {
+              "id": "deepseek-v4-flash-vision-exp",
+              "name": "DeepSeek V4 Flash Vision Exp",
+              "contextWindow": 1000000,
+              "supportsImageInput": true,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
               "id": "deepseek-v4-pro",
               "name": "DeepSeek V4 Pro",
               "contextWindow": 1000000,
@@ -1030,7 +1043,7 @@
             {
               "id": "MiniMax-M3",
               "name": "MiniMax-M3",
-              "contextWindow": 1000000,
+              "contextWindow": 1048576,
               "supportsImageInput": true
             }
           ]
@@ -1089,7 +1102,7 @@
             {
               "id": "MiniMax-M3",
               "name": "MiniMax-M3",
-              "contextWindow": 1000000,
+              "contextWindow": 1048576,
               "supportsImageInput": true
             }
           ]
@@ -1292,6 +1305,17 @@
               "reasoningDefaultEffort": "high"
             },
             {
+              "id": "deepseek-v4-pro-0813",
+              "name": "DeepSeek V4 Pro 0813",
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
               "id": "glm-5",
               "name": "GLM-5",
               "contextWindow": 202752,
@@ -1364,6 +1388,18 @@
               "name": "Qwen3.7 Plus",
               "contextWindow": 1000000,
               "supportsImageInput": true
+            },
+            {
+              "id": "qwen3.8-flash",
+              "name": "Qwen3.8 Flash",
+              "contextWindow": 1000000,
+              "supportsImageInput": true,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
             },
             {
               "id": "qwen3.8-max",
@@ -1603,6 +1639,17 @@
               "reasoningDefaultEffort": "high"
             },
             {
+              "id": "deepseek-v4-pro-0813",
+              "name": "DeepSeek V4 Pro 0813",
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
               "id": "glm-5",
               "name": "GLM-5",
               "contextWindow": 202752,
@@ -1675,6 +1722,18 @@
               "name": "Qwen3.7 Plus",
               "contextWindow": 1000000,
               "supportsImageInput": true
+            },
+            {
+              "id": "qwen3.8-flash",
+              "name": "Qwen3.8 Flash",
+              "contextWindow": 1000000,
+              "supportsImageInput": true,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
             },
             {
               "id": "qwen3.8-max",
@@ -1924,6 +1983,12 @@
           "piCatalogProviderId": "zai-coding-cn",
           "models": [
             {
+              "id": "glm-4.6v",
+              "name": "GLM-4.6V",
+              "contextWindow": 128000,
+              "supportsImageInput": true
+            },
+            {
               "id": "glm-4.7",
               "name": "GLM-4.7",
               "contextWindow": 204800
@@ -1934,22 +1999,74 @@
               "contextWindow": 200000
             },
             {
+              "id": "glm-5.1",
+              "name": "GLM-5.1",
+              "contextWindow": 200000
+            },
+            {
               "id": "glm-5.2",
               "name": "GLM-5.2",
               "contextWindow": 1000000,
               "reasoning": true,
               "reasoningEfforts": [
-                "low",
-                "medium",
                 "high",
                 "max"
               ],
-              "reasoningDefaultEffort": "medium"
+              "reasoningDefaultEffort": "high"
             },
             {
               "id": "glm-5.2-highspeed",
               "name": "GLM-5.2 Highspeed",
-              "contextWindow": 1000000
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
+              "id": "glm-5.3",
+              "name": "GLM-5.3",
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
+              "id": "glm-5.3-flash",
+              "name": "GLM-5.3-Flash",
+              "contextWindow": 1000000,
+              "supportsImageInput": true,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
+              "id": "glm-5.3-highspeed",
+              "name": "GLM-5.3 Highspeed",
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
+              "id": "glm-5v-turbo",
+              "name": "GLM-5V-Turbo",
+              "contextWindow": 200000,
+              "supportsImageInput": true
             }
           ]
         }
@@ -2014,17 +2131,58 @@
               "contextWindow": 1000000,
               "reasoning": true,
               "reasoningEfforts": [
-                "low",
-                "medium",
                 "high",
                 "max"
               ],
-              "reasoningDefaultEffort": "medium"
+              "reasoningDefaultEffort": "high"
             },
             {
               "id": "glm-5.2-highspeed",
               "name": "GLM-5.2 Highspeed",
-              "contextWindow": 1000000
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
+              "id": "glm-5.3",
+              "name": "GLM-5.3",
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
+              "id": "glm-5.3-flash",
+              "name": "GLM-5.3-Flash",
+              "contextWindow": 1000000,
+              "supportsImageInput": true,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
+            },
+            {
+              "id": "glm-5.3-highspeed",
+              "name": "GLM-5.3 Highspeed",
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "reasoningDefaultEffort": "high"
             }
           ]
         }
@@ -2073,22 +2231,6 @@
           "wireProtocol": "openai-chat",
           "piCatalogProviderId": "xiaomi",
           "models": [
-            {
-              "id": "mimo-v2-flash",
-              "name": "MiMo-V2-Flash",
-              "contextWindow": 262144
-            },
-            {
-              "id": "mimo-v2-omni",
-              "name": "MiMo-V2-Omni",
-              "contextWindow": 262144,
-              "supportsImageInput": true
-            },
-            {
-              "id": "mimo-v2-pro",
-              "name": "MiMo-V2-Pro",
-              "contextWindow": 1048576
-            },
             {
               "id": "mimo-v2.5",
               "name": "MiMo-V2.5",
@@ -2152,11 +2294,6 @@
           "wireProtocol": "openai-chat",
           "piCatalogProviderId": "xiaomi-token-plan-cn",
           "models": [
-            {
-              "id": "mimo-v2-pro",
-              "name": "MiMo-V2-Pro",
-              "contextWindow": 1048576
-            },
             {
               "id": "mimo-v2.5",
               "name": "MiMo-V2.5",

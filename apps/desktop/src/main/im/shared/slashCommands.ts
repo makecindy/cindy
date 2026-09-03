@@ -62,6 +62,12 @@ export interface SlashCtx {
     withMarkdown(userId: string, markdown: string): Promise<boolean>;
     withCard(userId: string, spec: InteractiveCardSpec): Promise<boolean>;
   };
+  /**
+   * 已确认双投时由 messageHandler 注入: 首个 markdown 终态同步到群主流。
+   * 只应消费一次(与 consumePendingOpener 同口径)。卡片回复镜像卡片正文
+   * （没有正文时退回标题）；按钮仍只在话题内可点。
+   */
+  mirrorTerminalReply?: (text: string) => Promise<void>;
 }
 
 export interface ImSlashHandlers {
@@ -94,11 +100,34 @@ export function createSlashHandlers(
    * 群主流 @ 开话题的首条 slash: 首个回复经 ctx.consumePendingOpener 就地
    * patch 开场白卡(消费过一次后回落正常发送)。
    */
+  async function mirrorFirstSlashReply(ctx: SlashCtx, text: string): Promise<void> {
+    const mirror = ctx.mirrorTerminalReply;
+    if (!mirror) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    ctx.mirrorTerminalReply = undefined;
+    try {
+      await mirror(trimmed);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`slash parent-chat mirror failed (non-fatal): ${msg}`);
+    }
+  }
+
+  function slashCardMirrorText(spec: InteractiveCardSpec | null | undefined): string {
+    if (!spec || typeof spec !== 'object') return '';
+    const body = typeof spec.body === 'string' ? spec.body.trim() : '';
+    const title = typeof spec.title === 'string' ? spec.title.trim() : '';
+    return body || title;
+  }
+
   async function safeSendText(ctx: SlashCtx, text: string): Promise<void> {
     try {
       if (ctx.consumePendingOpener) {
         try {
-          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) return;
+          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) {
+            return;
+          }
         } catch (err) {
           // patch 失败不吞回复: 认领已完成(卡不会再被误 patch), 回落正常
           // 发送 — 用户至少收到结果。
@@ -115,6 +144,10 @@ export function createSlashHandlers(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendText failed (non-fatal): ${msg}`);
+    } finally {
+      // Thread send failure must still consume the parent-chat retain; otherwise
+      // enqueue retention pins confirmed forever.
+      await mirrorFirstSlashReply(ctx, text);
     }
   }
 
@@ -127,7 +160,9 @@ export function createSlashHandlers(
     try {
       if (ctx.consumePendingOpener) {
         try {
-          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) return true;
+          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) {
+            return true;
+          }
         } catch (err) {
           // 替换失败回落正常发卡: 认领已完成, 用户至少拿到一张可用卡片。
           const msg = err instanceof Error ? err.message : String(err);
@@ -149,6 +184,8 @@ export function createSlashHandlers(
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendCard failed (non-fatal): ${msg}`);
       return false;
+    } finally {
+      await mirrorFirstSlashReply(ctx, slashCardMirrorText(spec));
     }
   }
 

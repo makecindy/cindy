@@ -188,7 +188,15 @@ export interface AppServerClientOptions {
    * 关联中的 JSON-RPC response 明确返回 cloudRequirements Auth/relogin 时调用一次。
    * 任意 stderr 与工具输出均不得触发；上层 (CodexAgent) 用它注销旧凭证并通知 UI 重登。
    */
-  onAuthInvalidated?: (reason: string) => void;
+  onAuthInvalidated?: (
+    reason: string,
+    context?: { credentialGeneration?: string | null },
+  ) => void;
+  /**
+   * Return the generation frozen for this concrete transport. It must not resnapshot mutable
+   * credential storage; the client binds the returned host fact to each correlated request id.
+   */
+  captureCredentialGeneration?: () => string | null;
 }
 
 export type NotificationHandler = (params: unknown) => void | Promise<void>;
@@ -201,6 +209,7 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   method: string;
+  credentialGeneration?: string | null;
   timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
@@ -211,7 +220,8 @@ export class AppServerClient {
   private readonly logger: Logger;
   private readonly maxLineBytes: number;
   private readonly onTransportError?: (err: Error) => void;
-  private readonly onAuthInvalidated?: (reason: string) => void;
+  private readonly onAuthInvalidated?: AppServerClientOptions['onAuthInvalidated'];
+  private readonly captureCredentialGeneration?: () => string | null;
   /** 单次 latch — 结构化鉴权失败只通知一次, 防 cloud_requirements 周期性 retry 刷屏。 */
   private authInvalidatedFired = false;
 
@@ -226,7 +236,10 @@ export class AppServerClient {
    * the request. Preserve only the request id/method so a late structured auth
    * error remains correlated without keeping the already-rejected Promise.
    */
-  private readonly writeFailureTombstones = new Map<JsonRpcId, string>();
+  private readonly writeFailureTombstones = new Map<
+    JsonRpcId,
+    { method: string; credentialGeneration?: string | null }
+  >();
   private readonly notificationHandlers = new Map<string, NotificationHandler>();
   private readonly requestHandlers = new Map<string, ServerRequestHandler>();
 
@@ -243,6 +256,7 @@ export class AppServerClient {
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
     this.onTransportError = opts.onTransportError;
     this.onAuthInvalidated = opts.onAuthInvalidated;
+    this.captureCredentialGeneration = opts.captureCredentialGeneration;
   }
 
   /**
@@ -303,7 +317,7 @@ export class AppServerClient {
    * - reject 所有挂起 promise
    * - 关闭 transport (杀子进程 / 关 ssh channel)
    */
-  async close(opts?: { reason?: string }): Promise<void> {
+  async close(opts?: { reason?: string; throwOnTransportError?: boolean }): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     const reason = opts?.reason ?? 'AppServerClient.close()';
@@ -322,6 +336,7 @@ export class AppServerClient {
         await this.transport.close(reason);
       } catch (e) {
         this.logger.warn('transport.close threw', { message: (e as Error).message });
+        if (opts?.throwOnTransportError) throw e;
       }
     }
   }
@@ -346,6 +361,15 @@ export class AppServerClient {
     const transport = this.transport;
     const id = this.nextId++;
     const payload = JSON.stringify({ id, method, params });
+    let credentialGeneration: string | null | undefined;
+    try {
+      credentialGeneration = this.captureCredentialGeneration?.();
+    } catch (error) {
+      credentialGeneration = null;
+      this.logger.warn('credential generation capture failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     const timeoutMs = opts?.timeoutMs;
     if (
       timeoutMs !== undefined &&
@@ -360,6 +384,7 @@ export class AppServerClient {
         resolve: resolve as (v: unknown) => void,
         reject,
         method,
+        credentialGeneration,
         timeoutId: null,
       };
       this.pending.set(id, pending);
@@ -378,7 +403,7 @@ export class AppServerClient {
         if (this.pending.get(id) !== pending) return;
         this.pending.delete(id);
         if (pending.timeoutId) clearTimeout(pending.timeoutId);
-        this.rememberWriteFailure(id, method);
+        this.rememberWriteFailure(id, method, credentialGeneration);
         reject(err);
       });
     });
@@ -470,15 +495,21 @@ export class AppServerClient {
   private dispatchResponse(id: JsonRpcId, result: unknown, error: JsonRpcErrorObject | null): void {
     const pending = this.pending.get(id);
     if (!pending) {
-      const failedWriteMethod = this.writeFailureTombstones.get(id);
-      if (failedWriteMethod !== undefined) {
+      const failedWrite = this.writeFailureTombstones.get(id);
+      if (failedWrite !== undefined) {
         this.writeFailureTombstones.delete(id);
         this.logger.warn('late response for request with failed write', {
           id,
-          method: failedWriteMethod,
+          method: failedWrite.method,
           hasError: error !== null,
         });
-        if (error) this.notifyAuthInvalidated(error, failedWriteMethod);
+        if (error) {
+          this.notifyAuthInvalidated(
+            error,
+            failedWrite.method,
+            failedWrite.credentialGeneration,
+          );
+        }
         return;
       }
       this.logger.warn('response for unknown id', { id });
@@ -487,7 +518,7 @@ export class AppServerClient {
     this.pending.delete(id);
     if (pending.timeoutId) clearTimeout(pending.timeoutId);
     if (error) {
-      this.notifyAuthInvalidated(error, pending.method);
+      this.notifyAuthInvalidated(error, pending.method, pending.credentialGeneration);
       const err = new Error(`codex app-server ${pending.method} error ${error.code}: ${error.message}`);
       // 把 code/data 挂上, 上层想区分 OVERLOADED 等可以判 (err as any).code。
       Object.assign(err, { code: error.code, data: error.data });
@@ -498,8 +529,12 @@ export class AppServerClient {
   }
 
   /** Keep write-failure correlation bounded; oldest ids are least useful. */
-  private rememberWriteFailure(id: JsonRpcId, method: string): void {
-    this.writeFailureTombstones.set(id, method);
+  private rememberWriteFailure(
+    id: JsonRpcId,
+    method: string,
+    credentialGeneration?: string | null,
+  ): void {
+    this.writeFailureTombstones.set(id, { method, credentialGeneration });
     while (this.writeFailureTombstones.size > MAX_WRITE_FAILURE_TOMBSTONES) {
       const oldestId = this.writeFailureTombstones.keys().next().value as JsonRpcId | undefined;
       if (oldestId === undefined) break;
@@ -508,12 +543,20 @@ export class AppServerClient {
   }
 
   /** Notify the host once, but only after the caller has correlated the response. */
-  private notifyAuthInvalidated(error: JsonRpcErrorObject, method?: string): void {
+  private notifyAuthInvalidated(
+    error: JsonRpcErrorObject,
+    method?: string,
+    credentialGeneration?: string | null,
+  ): void {
     const authInvalidationReason = detectAuthInvalidationReason(error, method);
     if (this.authInvalidatedFired || !this.onAuthInvalidated || !authInvalidationReason) return;
     this.authInvalidatedFired = true;
     try {
-      this.onAuthInvalidated(authInvalidationReason);
+      if (credentialGeneration === undefined) {
+        this.onAuthInvalidated(authInvalidationReason);
+      } else {
+        this.onAuthInvalidated(authInvalidationReason, { credentialGeneration });
+      }
     } catch (e) {
       this.logger.warn('onAuthInvalidated handler threw', { message: (e as Error).message });
     }

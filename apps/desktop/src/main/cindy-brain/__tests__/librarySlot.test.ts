@@ -3,13 +3,14 @@
  * read/rename/delete)、db 子集(经进程内 core)、binding 漂移 → unavailable、
  * owner scope 切换后旧会话作废且写入落新根。注入 deps + tmpdir,零 Electron。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 
-import { GhostLibrarySlot, type GhostLibrarySlotDeps } from '../librarySlot.js';
+import { GhostLibrarySlot, libraryAvailableRef, type GhostLibrarySlotDeps } from '../librarySlot.js';
+import { createHash } from 'node:crypto';
 import { LibraryBindingStore } from '../libraryBinding.js';
 import { LibraryVault } from '../libraryVault.js';
 import { createLibraryDbCore, type SqliteDatabaseConstructor } from '../libraryDbCore.js';
@@ -45,21 +46,28 @@ describe('GhostLibrarySlot', () => {
   let scopeKey: string | null = 'local:owner-a:1';
   let ghost: InstalledGhost;
   let slot: GhostLibrarySlot;
+  let bindingStore: LibraryBindingStore;
+  let showItemInFolder: ReturnType<typeof vi.fn>;
+  let showSaveDialog: ReturnType<typeof vi.fn>;
+  let syncAgentReadonlyExtraDir: ReturnType<typeof vi.fn>;
+  let clock: number;
 
   beforeEach(async () => {
     tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-library-slot-'));
     defaultRootBase = path.join(tmp, 'owners', 'a', 'libraries');
     bindingFile = path.join(tmp, 'owners', 'a', 'libraries-binding.json');
     candidate = path.join(tmp, 'picked');
+    clock = 0;
     await fs.promises.mkdir(candidate, { recursive: true });
     ghost = makeGhost(true);
+    bindingStore = new LibraryBindingStore({
+      getFile: () => bindingFile,
+      getManagedRoots: () => [path.join(tmp, 'managed')],
+      getDefaultRoot: (id) => path.join(defaultRootBase, id),
+    });
     const deps: GhostLibrarySlotDeps = {
       getGhost: (id) => (id === GHOST_ID ? ghost : null),
-      bindingStore: new LibraryBindingStore({
-        getFile: () => bindingFile,
-        getManagedRoots: () => [path.join(tmp, 'managed')],
-        getDefaultRoot: (id) => path.join(defaultRootBase, id),
-      }),
+      bindingStore,
       getDefaultRoot: (id) => path.join(defaultRootBase, id),
       captureOwnerScope: () => scopeKey,
       createVault: (d) => new LibraryVault(d),
@@ -72,7 +80,14 @@ describe('GhostLibrarySlot', () => {
       getDiskFreeBytes: async () => 1024 ** 4,
       workerScriptPath: () => path.join(tmp, 'unused-worker.js'),
       betterSqliteModulePath: () => 'better-sqlite3',
+      showItemInFolder: (...args: unknown[]) => showItemInFolder(...args),
+      showSaveDialog: (...args: unknown[]) => showSaveDialog(...args),
+      syncAgentReadonlyExtraDir: (...args: unknown[]) => syncAgentReadonlyExtraDir(...args),
+      now: () => clock,
     };
+    showItemInFolder = vi.fn();
+    showSaveDialog = vi.fn(async () => ({ canceled: true }));
+    syncAgentReadonlyExtraDir = vi.fn(async () => {});
     slot = new GhostLibrarySlot(deps);
   });
 
@@ -208,5 +223,335 @@ describe('GhostLibrarySlot', () => {
     const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'read', path: 'a.txt' });
     if (!r.ok || r.op !== 'read') throw new Error(JSON.stringify(r));
     expect(r.content).toBe('owner-b');
+  });
+
+  it('reveal: 在文件夹中显示库内已有文件',
+    async () => {
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });
+      const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/a.psd' });
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.op !== 'reveal') throw new Error(JSON.stringify(r));
+      expect(showItemInFolder).toHaveBeenCalledTimes(1);
+      const abs = String(showItemInFolder.mock.calls[0]?.[0] ?? '');
+      expect(abs.endsWith(`${path.sep}exports${path.sep}a.psd`)).toBe(true);
+    },
+  );
+
+  it('reveal: 库内没有该文件 → NOT_FOUND,不调用 Finder',
+    async () => {
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+      const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/missing.psd' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errorCode).toBe('NOT_FOUND');
+      expect(showItemInFolder).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reveal: 同插件两次请求间隔不足 = RATE_LIMITED(按尝试记账)', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });
+    const first = await slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/a.psd' });
+    expect(first.ok).toBe(true);
+    clock += 1_000;
+    const second = await slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/a.psd' });
+    expect(second).toMatchObject({ ok: false, errorCode: 'RATE_LIMITED' });
+    expect(showItemInFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('reveal: 解析期间账号切换则不打开文件夹', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });
+    const orig = LibraryVault.prototype.resolveExistingFile;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const spy = vi.spyOn(LibraryVault.prototype, 'resolveExistingFile').mockImplementation(async function (
+      this: LibraryVault,
+      relPath: string,
+    ) {
+      started();
+      await gate;
+      return orig.call(this, relPath);
+    });
+    try {
+      const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/a.psd' });
+      await opened;
+      scopeKey = 'local:owner-b:1';
+      await slot.disposeAll();
+      release();
+      const r = await pending;
+      expect(r).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+      expect(showItemInFolder).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('saveAs: 用户取消不复制;确认则拷到所选路径,成功只回库内相对键',
+    async () => {
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd-bytes' });
+      showSaveDialog.mockResolvedValueOnce({ canceled: true });
+      const cancelled = await slot.handleLibraryRequest(GHOST_ID, {
+        op: 'saveAs', path: 'exports/a.psd', name: 'layers.psd',
+      });
+      expect(cancelled).toEqual({ ok: true, op: 'saveAs', cancelled: true });
+      expect(showSaveDialog).toHaveBeenCalledWith({
+        defaultPath: 'layers.psd',
+        ghostName: '测试意识',
+      });
+
+      clock += 4_000;
+      const dest = path.join(tmp, 'Desktop', 'out.psd');
+      await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+      showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dest });
+      const saved = await slot.handleLibraryRequest(GHOST_ID, {
+        op: 'saveAs', path: 'exports/a.psd', name: 'layers.psd',
+      });
+      expect(saved.ok).toBe(true);
+      if (!saved.ok || saved.op !== 'saveAs' || saved.cancelled) throw new Error(JSON.stringify(saved));
+      expect(saved.path).toBe('exports/a.psd');
+      expect(saved.bytes).toBeGreaterThan(0);
+      expect(JSON.stringify(saved)).not.toContain(dest);
+      expect(fs.readFileSync(dest, 'utf8')).toBe('psd-bytes');
+    },
+  );
+
+  it('saveAs: 覆盖已有目标时先写临时文件;拷贝失败则原文件原样', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'new-psd' });
+    const dest = path.join(tmp, 'Desktop', 'existing.psd');
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    await fs.promises.writeFile(dest, 'keep-me');
+
+    clock += 4_000;
+    showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dest });
+    const copy = vi.spyOn(fs.promises, 'copyFile').mockRejectedValueOnce(new Error('ENOSPC'));
+    try {
+      const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+      expect(r).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+      expect(fs.readFileSync(dest, 'utf8')).toBe('keep-me');
+    } finally {
+      copy.mockRestore();
+    }
+
+    clock += 4_000;
+    showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dest });
+    const saved = await slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+    expect(saved.ok).toBe(true);
+    expect(fs.readFileSync(dest, 'utf8')).toBe('new-psd');
+  });
+
+  it('saveAs: 同插件两次请求间隔不足 = RATE_LIMITED(按尝试记账)', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });
+    showSaveDialog.mockResolvedValue({ canceled: true });
+    expect((await slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' })).ok).toBe(true);
+    clock += 1_000;
+    const second = await slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+    expect(second).toMatchObject({ ok: false, errorCode: 'RATE_LIMITED' });
+    expect(showSaveDialog).toHaveBeenCalledTimes(1);
+  });
+
+  it('saveAs: 已有另存为窗口在场 = BUSY,不排队', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });
+    let release: (value: { canceled: boolean; filePath?: string }) => void = () => {};
+    const gate = new Promise<{ canceled: boolean; filePath?: string }>((resolve) => {
+      release = resolve;
+    });
+    let dialogOpened!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      dialogOpened = resolve;
+    });
+    showSaveDialog.mockImplementationOnce(() => {
+      dialogOpened();
+      return gate;
+    });
+    const first = slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+    await opened;
+    clock += 4_000;
+    const second = await slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+    expect(second).toMatchObject({ ok: false, errorCode: 'BUSY' });
+    release({ canceled: true });
+    expect(await first).toEqual({ ok: true, op: 'saveAs', cancelled: true });
+  });
+
+  it('saveAs: 拷贝期间账号切换则不替换已有目标', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'new-psd' });
+    const dest = path.join(tmp, 'Desktop', 'existing.psd');
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    await fs.promises.writeFile(dest, 'keep-me');
+    clock += 4_000;
+    showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dest });
+
+    const origCopy = fs.promises.copyFile.bind(fs.promises);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const spy = vi.spyOn(fs.promises, 'copyFile').mockImplementation(async (src, dst, mode) => {
+      started();
+      await gate;
+      return origCopy(src, dst, mode);
+    });
+    try {
+      const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+      await opened;
+      scopeKey = 'local:owner-b:1';
+      await slot.disposeAll();
+      release();
+      const r = await pending;
+      expect(r).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+      expect(fs.readFileSync(dest, 'utf8')).toBe('keep-me');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('saveAs: 对话框期间账号切换则拒绝拷贝,不把源文件拷出', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'secret-psd' });
+    const dest = path.join(tmp, 'Desktop', 'leaked.psd');
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    let release: (value: { canceled: boolean; filePath?: string }) => void = () => {};
+    const gate = new Promise<{ canceled: boolean; filePath?: string }>((resolve) => {
+      release = resolve;
+    });
+    let dialogOpened!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      dialogOpened = resolve;
+    });
+    showSaveDialog.mockImplementationOnce(() => {
+      dialogOpened();
+      return gate;
+    });
+    const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+    await opened;
+    scopeKey = 'local:owner-b:1';
+    await slot.disposeAll();
+    release({ canceled: false, filePath: dest });
+    const r = await pending;
+    expect(r).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('open/status 握手含 authorizedReadonly 与 generation/identity,JSON 不含绝对库根', async () => {
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    const openHs = open as unknown as {
+      authorizedReadonly: boolean;
+      libraryGeneration: number;
+      libraryIdentity: string;
+    };
+    expect(openHs.authorizedReadonly).toBe(true);
+    expect(openHs.libraryGeneration).toBe(0);
+    expect(openHs.libraryIdentity).toBe('default');
+    const dumped = JSON.stringify(open);
+    expect(dumped).not.toContain(defaultRootBase);
+    expect(dumped).not.toMatch(/\/Users\//);
+    expect(dumped).not.toContain(tmp);
+
+    const st = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((st as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    const probeDump = JSON.stringify({ open, status: st });
+    expect(probeDump).not.toContain(defaultRootBase);
+    expect(probeDump).not.toMatch(/\/Users\/.*\/libraries\//);
+  });
+
+  it('open 把库根交给 extraDirs 同步;dispose 时撤槽', async () => {
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(
+      GHOST_ID,
+      path.join(defaultRootBase, GHOST_ID),
+    );
+    await slot.disposeGhost(GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, null);
+  });
+
+  it('bind generation 变了:握手换身份,extraDirs 同步新根不留旧根', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    const defaultRoot = path.join(defaultRootBase, GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, defaultRoot);
+
+    const bound = await bindingStore.setBinding(GHOST_ID, candidate);
+    expect(bound.ok).toBe(true);
+    await slot.disposeGhost(GHOST_ID);
+    syncAgentReadonlyExtraDir.mockClear();
+
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    const hs = open as unknown as {
+      authorizedReadonly: boolean;
+      libraryGeneration: number;
+      libraryIdentity: string;
+    };
+    expect(hs.authorizedReadonly).toBe(true);
+    expect(hs.libraryGeneration).toBe(1);
+    expect(hs.libraryIdentity).toBe('g1');
+    const dumped = JSON.stringify(open);
+    expect(dumped).not.toContain(candidate);
+    expect(dumped).not.toContain(defaultRoot);
+    expect(dumped).not.toMatch(/\/Users\/.*\/libraries\//);
+
+    const newRoot = path.join(await fs.promises.realpath(candidate), GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, newRoot);
+    expect(syncAgentReadonlyExtraDir.mock.calls.map((call) => call[1])).not.toContain(defaultRoot);
+  });
+
+  it('extraDirs 同步失败则握手 authorizedReadonly=false,不假装授权', async () => {
+    syncAgentReadonlyExtraDir.mockRejectedValueOnce(new Error('require app-server 0.144.6 or newer'));
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    expect((open as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(JSON.stringify(open)).not.toContain(defaultRootBase);
+  });
+
+  it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {
+    const body = 'pixel-bytes';
+    const sha = createHash('sha256').update(body).digest('hex');
+    const rel = 'assets/ab/abc123def456abc123def456abc123de/blob.png';
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    const begin = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'writeBegin', path: rel, totalBytes: Buffer.byteLength(body), sha256: sha,
+    });
+    if (!begin.ok || begin.op !== 'writeBegin') throw new Error(JSON.stringify(begin));
+    const chunk = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'writeChunk', streamId: begin.streamId, seq: 1, content: body,
+    });
+    expect(chunk.ok).toBe(true);
+    const commit = await slot.handleLibraryRequest(GHOST_ID, { op: 'writeCommit', streamId: begin.streamId });
+    expect(commit).toEqual({
+      ok: true,
+      op: 'writeCommit',
+      path: rel,
+      bytes: Buffer.byteLength(body),
+      sha256: sha,
+    });
+    expect(commit.ok && 'sha256' in commit && /^[0-9a-f]{64}$/.test(commit.sha256)).toBe(true);
+    expect(fs.existsSync(path.join(tmp, 'libraryConfirmed.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(process.cwd(), 'apps/desktop/src/main/cindy-brain/libraryConfirmed.ts'))).toBe(false);
+  });
+
+  it('available 引用:授权相对键,未授权 cindy-media,SVG 未授权不可读', () => {
+    const hash = 'c'.repeat(64);
+    expect(libraryAvailableRef({ authorized: true, hash, ext: 'png', confirmed: true }))
+      .toBe(`library:assets/${hash.slice(0, 2)}/${hash}/blob.png`);
+    expect(libraryAvailableRef({ authorized: false, hash, ext: 'png', confirmed: true }))
+      .toBe(`cindy-media://blobs/${hash}.png`);
+    expect(libraryAvailableRef({ authorized: false, hash, ext: 'svg', confirmed: true })).toBeNull();
+    expect(libraryAvailableRef({ authorized: true, hash, ext: 'png', confirmed: false })).toBeNull();
   });
 });

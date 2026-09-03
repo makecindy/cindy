@@ -26,13 +26,22 @@ export interface LegacyUsdModelPrice {
   outputUsdPerMtok: number;
   cacheReadUsdPerMtok?: number;
   cacheCreateUsdPerMtok?: number;
+  /** Gateway 折扣比例 0..1;旧控制端忽略。计费金额 = 原价 × (1 - costDiscount)。 */
+  costDiscount?: number;
 }
 
 export type LegacyUsdModelPricingMap = Record<string, LegacyUsdModelPrice>;
 
+function normalizedCostDiscount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1
+    ? value
+    : undefined;
+}
+
 /**
  * device-link v1 兼容投影。旧控制端只能表达扁平 USD 价格，因此只投影真实 USD quote；
  * CNY 不能反算或写进 *Usd，旧端按既有“无价隐藏”语义降级。
+ * costDiscount 是 append-only：新控制端用来算折后价，旧端忽略未知字段。
  */
 export function toLegacyUsdModelPricing(
   pricing: ModelPricingMap | null,
@@ -40,6 +49,7 @@ export function toLegacyUsdModelPricing(
   const out: LegacyUsdModelPricingMap = {};
   for (const [modelId, quote] of Object.entries(pricing?.xd ?? {})) {
     if (quote.currency !== 'USD') continue;
+    const costDiscount = normalizedCostDiscount(quote.costDiscount);
     out[modelId] = {
       inputUsdPerMtok: quote.inputPerMtok,
       outputUsdPerMtok: quote.outputPerMtok,
@@ -49,6 +59,7 @@ export function toLegacyUsdModelPricing(
       ...(quote.cacheCreatePerMtok !== undefined
         ? { cacheCreateUsdPerMtok: quote.cacheCreatePerMtok }
         : {}),
+      ...(costDiscount !== undefined ? { costDiscount } : {}),
     };
   }
   return Object.keys(out).length > 0 ? out : null;

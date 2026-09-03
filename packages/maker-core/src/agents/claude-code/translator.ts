@@ -39,6 +39,7 @@ import type { UsageTracker } from '../shared/usage-tracker.js';
 import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import {
   beginClaudeGeneration,
+  beginClaudeGenerationAtRequestStart,
   finalizeClaudeGeneration,
   markClaudeGenerationUnreliable,
   newClaudeGenerationState,
@@ -142,6 +143,14 @@ export interface RuntimeState {
   /** tool_use.id → tool_use.name。用于在 tool_result echo 时区分命令输出和内容结果。 */
   toolUseIdToName: Map<string, string>;
   /**
+   * 主(parent)流当前请求 streamed 出来的 tool_use id;message_start 清空,
+   * message_delta 停表后清空。生成时钟只允许停在这批 id 上 —— toolUseIdToName
+   * 是跨请求、跨 turn 的命名表,里面可能留着 echo 永远不会来的旧 id(ToolSearch
+   * 等 SDK 内部工具、错误中断的 turn),按它扫全量停表会让 pendingToolIds 永不
+   * 排空、时钟冻死,而 output 还在涨,live tok/s 无限膨胀。
+   */
+  mainRequestToolUseIds: Set<string>;
+  /**
    * SDK child assistant 消息按 parent_tool_use_id 隔离的真实模型。
    * 并发 subagent 的完整消息与 stream_event 都会交错，不能用会话级元数据推断。
    */
@@ -198,6 +207,7 @@ export function newRuntimeState(): RuntimeState {
   return {
     currentThinking: null,
     toolUseIdToName: new Map(),
+    mainRequestToolUseIds: new Set(),
     streamModelByParentToolUseId: new Map(),
     resolvedSubagentModelByParentToolUseId: new Map(),
     publishedSubagentModelByParentToolUseId: new Map(),
@@ -1558,10 +1568,12 @@ function pauseClaudeGenerationForToolUse(
   pauseClaudeGeneration(ctx.rt.generation, toolUseId);
 }
 
-function pauseClaudeGenerationForKnownTools(ctx: TranslateContext): void {
-  for (const toolUseId of ctx.rt.toolUseIdToName.keys()) {
+/** 只停本次主流请求 streamed 出来的 tool_use;见 mainRequestToolUseIds 字段注释。 */
+function pauseClaudeGenerationForCurrentRequestTools(ctx: TranslateContext): void {
+  for (const toolUseId of ctx.rt.mainRequestToolUseIds) {
     pauseClaudeGenerationForToolUse(ctx, toolUseId);
   }
+  ctx.rt.mainRequestToolUseIds.clear();
 }
 
 /**
@@ -1626,6 +1638,7 @@ function handleStreamEvent(
         // message_delta 或完整 assistant tool_use: content_block_start
         // 早于参数 input_json_delta,这里停表会把参数生成时间从分母抠掉,
         // 而后续 message_delta 仍把这些 token 加进 outputTokens。
+        if (!parentToolUseId) ctx.rt.mainRequestToolUseIds.add(toolUseId);
         ctx.onToolUseStart?.(toolUseId, cb.name, cb.input, parentToolUseId);
       }
     }
@@ -1718,8 +1731,9 @@ function handleStreamEvent(
   if (event.type === 'message_delta') {
     // message_delta 是整条 assistant 消息(含工具参数 token)生成完毕后的
     // 第一个事件。在此停表,才能排除工具执行/审批等待,又不把参数生成
-    // 区间从 tok/s 分母里抠掉。
-    pauseClaudeGenerationForKnownTools(ctx);
+    // 区间从 tok/s 分母里抠掉。只有主流自己的 message_delta 才停主时钟:
+    // 子代理 delta 到达时父级可能正在并行生成(后台 Agent),不许提前切断。
+    if (!parentToolUseId) pauseClaudeGenerationForCurrentRequestTools(ctx);
     const usage = event.usage;
     if (usage) {
       const dIn = usage.input_tokens ?? 0;
@@ -1818,7 +1832,13 @@ function handleStreamEvent(
     // 子代理 stream 不占用父级生成时钟。若对应 Agent 工具尚未停表，在此用
     // parent_tool_use_id 补上既有 pause 边界，避免分母吞进子代理时间。
     if (parentToolUseId) observeClaudeSubagentStream(ctx, parentToolUseId);
-    else beginClaudeGeneration(ctx.rt.generation);
+    else {
+      // 新主流请求边界: 上一请求残留的 tool id 已过期(失败重试的请求不会再有
+      // message_delta);还挂着的 pending 视作已在 SDK 内部收口(echo 不会来了),
+      // 由 beginClaudeGenerationAtRequestStart 结清并重启时钟。
+      ctx.rt.mainRequestToolUseIds.clear();
+      beginClaudeGenerationAtRequestStart(ctx.rt.generation);
+    }
     queue.push({
       type: 'status',
       data: ccLiveStatus(ctx, 'Generating...', true),
@@ -2259,6 +2279,7 @@ function handleResult(
     // 否则下一真实 turn 会从 0 起算、把整段历史 token 全算到那一轮(Codex P2)。
     ctx.rt.lastResultUsageAggregate = aggregateBeforeThisResult;
     resetTurnState(ctx.turn);
+    ctx.rt.mainRequestToolUseIds.clear();
     resetClaudeGenerationTiming(ctx.rt.generation);
     ctx.onTurnEnd?.();
     return;
@@ -2379,6 +2400,7 @@ function handleResult(
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)
   resetTurnState(ctx.turn);
   ctx.rt.activeUsageSegmentByParent.clear();
+  ctx.rt.mainRequestToolUseIds.clear();
   resetClaudeGenerationTiming(ctx.rt.generation);
   // turn 结束钩子 — agent 用来清 turnInFlight 标记 (rewind preview/commit 前置守卫读它)
   ctx.onTurnEnd?.();

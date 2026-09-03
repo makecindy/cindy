@@ -101,9 +101,15 @@ export function useRelativeTime(
   });
 
   useEffect(() => {
-    if (!createdAt) return;
+    if (!createdAt) {
+      setText('');
+      return;
+    }
     const ms = new Date(createdAt).getTime();
-    if (Number.isNaN(ms)) return;
+    if (Number.isNaN(ms)) {
+      setText('');
+      return;
+    }
 
     // Recompute once whenever hover toggles on so a long-unhovered message
     // shows the current value the moment it becomes visible.

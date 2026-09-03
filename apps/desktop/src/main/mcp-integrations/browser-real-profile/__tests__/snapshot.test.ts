@@ -23,6 +23,16 @@ import { REAL_MANAGED_PROFILE } from '../../browser-managed-config.js';
 import { REAL_PROFILE_READ_DENIED } from '../../../../shared/browserBackend.js';
 import { RealProfileError, type InstalledChromium } from '../types.js';
 
+describe('node:sqlite main-process packaging', () => {
+  it('keeps node:sqlite external so Vite does not stub it as a browser module', () => {
+    const viteConfig = fs.readFileSync(
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'vite.main.config.ts'),
+      'utf8',
+    );
+    expect(viteConfig).toContain("'node:sqlite'");
+  });
+});
+
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -57,6 +67,15 @@ function readSqlite(filePath: string, table: string): string {
   const row = db.prepare(`SELECT name FROM ${table}`).get() as { name: string };
   db.close();
   return row.name;
+}
+
+function setCookieEncryptionPrefix(filePath: string, prefix: 'v10' | 'v20'): void {
+  const db = new DatabaseSync(filePath);
+  const encryptedHex = Buffer.from(`${prefix}-encrypted-cookie`).toString('hex');
+  db.exec(
+    `ALTER TABLE cookies ADD COLUMN encrypted_value BLOB; UPDATE cookies SET encrypted_value = x'${encryptedHex}';`,
+  );
+  db.close();
 }
 
 function seedSource(root: string, lastUsed = 'Profile 6'): InstalledChromium {
@@ -260,7 +279,7 @@ describe('snapshotRealProfile', () => {
       await expect(
         snapshotRealProfile({ source, destDir, platform: 'darwin' }),
       ).rejects.toMatchObject({
-        code: 'COPY_FAILED',
+        code: 'REAL_PROFILE_READ_DENIED',
         message: REAL_PROFILE_READ_DENIED,
       });
     } finally {
@@ -349,6 +368,54 @@ describe('snapshotRealProfile', () => {
         platform: 'darwin',
       }),
     ).rejects.toMatchObject({ code: 'NO_AUTH_DB' });
+  });
+
+  it('rejects Windows v20 cookies before publishing a new snapshot', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    setCookieEncryptionPrefix(path.join(source.userDataDir, 'Profile 6', 'Cookies'), 'v20');
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    fs.mkdirSync(path.join(destDir, 'Default'), { recursive: true });
+    writeSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies', 'existing-snapshot');
+
+    await expect(
+      snapshotRealProfile({ source, destDir, platform: 'win32' }),
+    ).rejects.toMatchObject({
+      code: 'APP_BOUND_ENCRYPTION_UNSUPPORTED',
+    });
+
+    expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe(
+      'existing-snapshot',
+    );
+    expect(leftoverStagingNames(destDir)).toEqual([]);
+  });
+
+  it('keeps the Windows snapshot path for legacy v10 cookies', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    setCookieEncryptionPrefix(path.join(source.userDataDir, 'Profile 6', 'Cookies'), 'v10');
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+
+    await expect(
+      snapshotRealProfile({ source, destDir, platform: 'win32' }),
+    ).resolves.toMatchObject({
+      sourceKind: 'chrome',
+      sourceProfile: 'Profile 6',
+    });
+    expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe('session-cookie');
+  });
+
+  it('does not apply the App-Bound Encryption gate outside Windows', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    setCookieEncryptionPrefix(path.join(source.userDataDir, 'Profile 6', 'Cookies'), 'v20');
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+
+    await expect(
+      snapshotRealProfile({ source, destDir, platform: 'darwin' }),
+    ).resolves.toMatchObject({
+      sourceKind: 'chrome',
+    });
   });
 
   it('treats a Windows exclusive lock as PROFILE_LOCKED', () => {
@@ -509,5 +576,23 @@ describe('cleanupRealProfileSnapshots', () => {
     expect(fs.existsSync(realDir)).toBe(false);
     expect(fs.existsSync(profileDir)).toBe(false);
     expect(fs.readFileSync(path.join(cindyDir, 'keep.txt'), 'utf8')).toBe('isolated');
+  });
+
+  it('uses bounded retries for transient Windows directory locks', () => {
+    const runtimeDir = makeTempDir();
+    const profileDir = realProfileProfileDir(runtimeDir);
+    fs.mkdirSync(profileDir, { recursive: true });
+    const rm = vi.spyOn(fs, 'rmSync');
+    try {
+      cleanupRealProfileSnapshots(runtimeDir);
+      expect(rm).toHaveBeenCalledWith(profileDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    } finally {
+      rm.mockRestore();
+    }
   });
 });

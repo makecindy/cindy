@@ -19,6 +19,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
+import {
+  setCodexAppliedCustomProviderRoutes,
+  type CodexCustomProviderRoute,
+} from '../../maker-host/codex-custom-provider-route.js';
 
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
@@ -180,6 +184,37 @@ interface RunnerHarness {
   closeSession: ReturnType<typeof vi.fn>;
 }
 
+const schedulerImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
+  {
+    providerId: 'provider-a',
+    routeId: 'a'.repeat(20),
+    modelProviderId: `cindy_custom_${'a'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model', 'a-alt-model'],
+    routing: {
+      upstream: 'https://a.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+  {
+    providerId: 'provider-b',
+    routeId: 'b'.repeat(20),
+    modelProviderId: `cindy_custom_${'b'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model'],
+    routing: {
+      upstream: 'https://b.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+];
+
 function createRunnerHarness(
   h: FakeSessionHarness,
   meta: {
@@ -248,6 +283,7 @@ async function fireToCompletion(
 
 describe('MakerScheduleRunner model selection', () => {
   beforeEach(() => {
+    setCodexAppliedCustomProviderRoutes([]);
     vi.clearAllMocks();
     mocks.createMessage.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
@@ -333,7 +369,7 @@ describe('MakerScheduleRunner model selection', () => {
   });
 
   describe('Pi 派发前路由重裁决', () => {
-    it('晚到 reroute 在 send 前同步 Pi 原生 provider-model，再更新 host store', async () => {
+    it('晚到 reroute 跨 Pi proxy 身份时本轮失败，留给下次 fire 关进程重建', async () => {
       const checkModelRoute = vi
         .fn()
         .mockResolvedValueOnce({ kind: 'pass' as const })
@@ -341,31 +377,6 @@ describe('MakerScheduleRunner model selection', () => {
       const h = createSessionHarness();
       (h.session as { agentKind: string }).agentKind = 'pi';
       (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
-      const harness = createRunnerHarness(h, null, { checkModelRoute });
-
-      await fireToCompletion(
-        harness,
-        h,
-        baseSchedule({ agentKind: 'pi', model: 'chatgpt/gpt-5.6-sol' }),
-      );
-
-      expect(checkModelRoute).toHaveBeenCalledTimes(2);
-      expect(h.setModel).toHaveBeenCalledWith('chatgpt/gpt-5.6-sol', { providerId: 'byom-b' });
-      expect(h.setModel.mock.invocationCallOrder[0]).toBeLessThan(
-        h.send.mock.invocationCallOrder[0],
-      );
-      expect(mocks.setSessionProvider).toHaveBeenCalledWith('scheduler-session', 'byom-b');
-    });
-
-    it('晚到 reroute 的 Pi 原生同步失败时不写 store，也不发送 prompt', async () => {
-      const checkModelRoute = vi
-        .fn()
-        .mockResolvedValueOnce({ kind: 'pass' as const })
-        .mockResolvedValueOnce({ kind: 'reroute' as const, providerId: 'byom-b' });
-      const h = createSessionHarness();
-      (h.session as { agentKind: string }).agentKind = 'pi';
-      (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
-      h.setModel.mockRejectedValue(new Error('provider snapshot unavailable'));
       const harness = createRunnerHarness(h, null, { checkModelRoute });
 
       await expect(
@@ -373,8 +384,9 @@ describe('MakerScheduleRunner model selection', () => {
           baseSchedule({ agentKind: 'pi', model: 'chatgpt/gpt-5.6-sol' }),
           createFireContext(),
         ),
-      ).rejects.toThrow('Session send failed before dispatch');
-      expect(h.setModel).toHaveBeenCalledWith('chatgpt/gpt-5.6-sol', { providerId: 'byom-b' });
+      ).rejects.toThrow(/Session send failed before dispatch/);
+      expect(checkModelRoute).toHaveBeenCalledTimes(2);
+      expect(h.setModel).not.toHaveBeenCalled();
       expect(mocks.setSessionProvider).not.toHaveBeenCalled();
       expect(h.send).not.toHaveBeenCalled();
     });
@@ -1137,11 +1149,7 @@ describe('MakerScheduleRunner model selection', () => {
       }));
       const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
 
-      await fireToCompletion(
-        harness,
-        h,
-        baseSchedule({ model: 'claude-from-future' }),
-      );
+      await fireToCompletion(harness, h, baseSchedule({ model: 'claude-from-future' }));
 
       expect(harness.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ model: 'claude-from-future', providerId: null }),
@@ -1223,7 +1231,7 @@ describe('MakerScheduleRunner model selection', () => {
       );
     });
 
-    it('heartbeat 复用 Pi 时即使模型不变也把 provider-model 原子同步到原生进程', async () => {
+    it('heartbeat 复用 Pi 跨 proxy 身份时先关闭再按新来源重建', async () => {
       mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
       mocks.getSessionProvider.mockReturnValue('byom-a');
       const h = createSessionHarness();
@@ -1250,14 +1258,51 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-b' });
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.createSession.mock.invocationCallOrder[0],
+      );
+      expect(h.setModel).not.toHaveBeenCalled();
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: 'byom-b', model: 'gpt-5.6-sol' }),
+      );
+    });
+
+    it('heartbeat 复用 Pi 同身份时即使模型不变也把 provider-model 原子同步到原生进程', async () => {
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
+      mocks.getSessionProvider.mockReturnValue('byom-a');
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      (h.session as { model: string }).model = 'gpt-5.6-sol';
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'gpt-5.6-sol',
+          workDir: '/work',
+          sdkSessionId: 'sdk-pi-1',
+        },
+        { sessionAlive: true },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'pi',
+          model: 'gpt-5.6-sol',
+          providerId: 'byom-a',
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(harness.closeSession).not.toHaveBeenCalled();
+      expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-a' });
       expect(h.setModel.mock.invocationCallOrder[0]).toBeLessThan(
         h.send.mock.invocationCallOrder[0],
       );
-      expect(mocks.setSessionProvider).toHaveBeenCalledWith('scheduler-session', 'byom-b');
     });
 
-    it('heartbeat 复用 Pi 的原生路由同步失败时在 send 前 fail-closed', async () => {
+    it('heartbeat 复用 Pi 同身份的原生路由同步失败时在 send 前 fail-closed', async () => {
       mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
       mocks.getSessionProvider.mockReturnValue('byom-a');
       const h = createSessionHarness();
@@ -1279,7 +1324,7 @@ describe('MakerScheduleRunner model selection', () => {
           baseSchedule({
             agentKind: 'pi',
             model: 'gpt-5.6-sol',
-            providerId: 'byom-b',
+            providerId: 'byom-a',
             targetSessionId: 'scheduler-session',
           }),
           createFireContext(),
@@ -1328,6 +1373,125 @@ describe('MakerScheduleRunner model selection', () => {
         'scheduler-session',
         expect.objectContaining({ model: 'gpt-5.4', providerId: 'openai' }),
         expect.anything(),
+      );
+    });
+
+    it('heartbeat 在同一 dynamic Provider 的两个 Responses 模型间热切且不重建', async () => {
+      const routeA = schedulerImageGenerationRoutes[0]!;
+      setCodexAppliedCustomProviderRoutes(schedulerImageGenerationRoutes);
+      mocks.getSessionRowSnapshot.mockResolvedValue({
+        status: 'active',
+        providerId: routeA.providerId,
+      });
+      mocks.getSessionProvider.mockReturnValue(routeA.providerId);
+      const h = createSessionHarness();
+      Object.defineProperties(h.session, {
+        agentKind: { value: 'codex' },
+        model: { value: 'shared-model', writable: true },
+        codexProxyActive: { value: true },
+        codexThreadModelProviderId: { value: routeA.modelProviderId },
+      });
+      const harness = createRunnerHarness(
+        h,
+        { model: 'shared-model', workDir: '/work', sdkSessionId: 'sdk-image-a' },
+        { sessionAlive: true },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'codex',
+          model: 'a-alt-model',
+          providerId: routeA.providerId,
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(harness.closeSession).not.toHaveBeenCalled();
+      expect(h.setModel).toHaveBeenCalledWith('a-alt-model');
+    });
+
+    it('heartbeat 从 dynamic Provider A 切到 B 时只关闭目标 thread 并按 B 重建', async () => {
+      const [routeA, routeB] = schedulerImageGenerationRoutes;
+      setCodexAppliedCustomProviderRoutes(schedulerImageGenerationRoutes);
+      mocks.getSessionRowSnapshot.mockResolvedValue({
+        status: 'active',
+        providerId: routeA!.providerId,
+      });
+      mocks.getSessionProvider.mockReturnValue(routeA!.providerId);
+      const h = createSessionHarness();
+      Object.defineProperties(h.session, {
+        agentKind: { value: 'codex' },
+        model: { value: 'shared-model', writable: true },
+        codexProxyActive: { value: true },
+        codexThreadModelProviderId: { value: routeA!.modelProviderId },
+      });
+      const unrelatedBusyCodex = {
+        id: 'unrelated-busy-codex',
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => true,
+      } as unknown as Session;
+      const harness = createRunnerHarness(
+        h,
+        { model: 'shared-model', workDir: '/work', sdkSessionId: 'sdk-image-a' },
+        { sessionAlive: true, activeSessions: [h.session, unrelatedBusyCodex] },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'codex',
+          model: 'shared-model',
+          providerId: routeB!.providerId,
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(harness.closeSession).toHaveBeenCalledTimes(1);
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: routeB!.providerId, model: 'shared-model' }),
+      );
+    });
+
+    it('heartbeat 从 dynamic identity 切到同 Provider 非 Responses 模型时重建', async () => {
+      const routeA = schedulerImageGenerationRoutes[0]!;
+      setCodexAppliedCustomProviderRoutes(schedulerImageGenerationRoutes);
+      mocks.getSessionRowSnapshot.mockResolvedValue({
+        status: 'active',
+        providerId: routeA.providerId,
+      });
+      mocks.getSessionProvider.mockReturnValue(routeA.providerId);
+      const h = createSessionHarness();
+      Object.defineProperties(h.session, {
+        agentKind: { value: 'codex' },
+        model: { value: 'shared-model', writable: true },
+        codexProxyActive: { value: true },
+        codexThreadModelProviderId: { value: routeA.modelProviderId },
+      });
+      const harness = createRunnerHarness(
+        h,
+        { model: 'shared-model', workDir: '/work', sdkSessionId: 'sdk-image-a' },
+        { sessionAlive: true },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'codex',
+          model: 'chat-model',
+          providerId: routeA.providerId,
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: routeA.providerId, model: 'chat-model' }),
       );
     });
 
@@ -1501,11 +1665,7 @@ describe('MakerScheduleRunner model selection', () => {
       (h.session as { agentKind: string }).agentKind = 'pi';
       const harness = createRunnerHarness(h);
 
-      await fireToCompletion(
-        harness,
-        h,
-        baseSchedule({ agentKind: 'pi', model: 'gpt-5.6-sol' }),
-      );
+      await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: 'gpt-5.6-sol' }));
 
       expect(harness.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ providerId: null }),

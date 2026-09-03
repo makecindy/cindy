@@ -1016,6 +1016,23 @@ describe('pi translator', () => {
     expect(full).toMatchObject({ data: { fullText: stale } });
   });
 
+  it('ignores Pi 0.84.3 session_compact_failed RPC leaks without hanging compaction UI', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'session_compact_failed',
+        reason: 'overflow',
+        aborted: false,
+        errorMessage: 'quota',
+      }),
+      queue,
+      ctx,
+    );
+    expect(events.some((event) => event.type === 'compact_boundary')).toBe(false);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+  });
+
   it('maps compaction_end (threshold) → compact_boundary with token deltas + updates contextTokens', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

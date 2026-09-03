@@ -3,34 +3,25 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  WorkLouderAccessoriesState,
   WorkLouderCodexSettings,
   WorkLouderCodexState,
+  WorkLouderModel,
 } from '../../../shared/workLouderCodex.js';
 import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+  WORKLOUDER_MODELS,
+  cloneWorkLouderCodexLayout,
   createWorkLouderCodexDefaultSettings,
 } from '../../../shared/workLouderCodex.js';
-import { createWorkLouderCodexSettingsIpc } from '../settingsIpc.js';
+import { createWorkLouderCodexSettingsIpc, __testing as settingsIpcTesting } from '../settingsIpc.js';
 
 const DEFAULT_SETTINGS: WorkLouderCodexSettings = createWorkLouderCodexDefaultSettings();
 
 const EVENT = { senderFrame: 'fake' };
 
-function makeIpc(options?: {
-  assertTrustedSender?: (event: unknown) => void;
-  writeThrows?: boolean;
-}) {
-  let settings = createWorkLouderCodexDefaultSettings();
-  const assertTrustedSender = vi.fn(options?.assertTrustedSender ?? (() => undefined));
-  const writeSettings = vi.fn((patch: Partial<WorkLouderCodexSettings>) => {
-    if (options?.writeThrows) throw new Error('EACCES: /internal/private/path readonly');
-    settings = { ...settings, ...patch };
-    return { ...settings };
-  });
-  const applySettings = vi.fn((next: WorkLouderCodexSettings) => {
-    settings = { ...next };
-  });
-  const getState = vi.fn((): WorkLouderCodexState => ({
+function modelState(settings: WorkLouderCodexSettings): WorkLouderCodexState {
+  return {
     connectionStatus: 'connected',
     connectionReason: null,
     devicePresent: true,
@@ -44,10 +35,34 @@ function makeIpc(options?: {
     })),
     taskOptions: [],
     agentSlotCount: 6,
-  }));
-  const resetSettings = vi.fn(() => {
-    settings = createWorkLouderCodexDefaultSettings();
-    return { ...settings };
+  };
+}
+
+function makeIpc(options?: {
+  assertTrustedSender?: (event: unknown) => void;
+  writeThrows?: boolean;
+}) {
+  const settings = Object.fromEntries(
+    WORKLOUDER_MODELS.map((model) => [model, createWorkLouderCodexDefaultSettings(model)]),
+  ) as Record<WorkLouderModel, WorkLouderCodexSettings>;
+  const assertTrustedSender = vi.fn(options?.assertTrustedSender ?? (() => undefined));
+  const writeSettings = vi.fn((model: WorkLouderModel, patch: Partial<WorkLouderCodexSettings>) => {
+    if (options?.writeThrows) throw new Error('EACCES: /internal/private/path readonly');
+    settings[model] = { ...settings[model], ...patch };
+    return { ...settings[model] };
+  });
+  const applySettings = vi.fn((model: WorkLouderModel, next: WorkLouderCodexSettings) => {
+    settings[model] = { ...next };
+  });
+  const getState = vi.fn(
+    (): WorkLouderAccessoriesState =>
+      Object.fromEntries(
+        WORKLOUDER_MODELS.map((model) => [model, modelState(settings[model])]),
+      ) as WorkLouderAccessoriesState,
+  );
+  const resetSettings = vi.fn((model: WorkLouderModel) => {
+    settings[model] = createWorkLouderCodexDefaultSettings(model);
+    return { ...settings[model] };
   });
   const openInputMonitoringSettings = vi.fn(async () => undefined);
   const probeDevice = vi.fn();
@@ -88,7 +103,11 @@ describe('Work Louder Codex settings IPC business body', () => {
     });
 
     expect(() => ipc.get(EVENT)).toThrow('untrusted sender');
-    expect(() => ipc.set(EVENT, { lightingBrightness: 50 })).toThrow('untrusted sender');
+    expect(() =>
+      (ipc.set as (event: unknown, ...rest: unknown[]) => unknown)(EVENT, {
+        lightingBrightness: 50,
+      }),
+    ).toThrow('untrusted sender');
     expect(getState).not.toHaveBeenCalled();
     expect(writeSettings).not.toHaveBeenCalled();
     expect(applySettings).not.toHaveBeenCalled();
@@ -109,10 +128,18 @@ describe('Work Louder Codex settings IPC business body', () => {
   ])('rejects invalid payload %j with INVALID_PARAMS', (value, messagePart) => {
     const { ipc, writeSettings, applySettings } = makeIpc();
 
-    expect(() => ipc.set(EVENT, value)).toThrow('[INVALID_PARAMS]');
-    expect(() => ipc.set(EVENT, value)).toThrow(messagePart);
+    expect(() => ipc.set(EVENT, 'codex-micro', value)).toThrow('[INVALID_PARAMS]');
+    expect(() => ipc.set(EVENT, 'codex-micro', value)).toThrow(messagePart);
     expect(writeSettings).not.toHaveBeenCalled();
     expect(applySettings).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown Work Louder model before writing', () => {
+    const { ipc, writeSettings } = makeIpc();
+    expect(() => ipc.set(EVENT, 'not-a-board', { lightingBrightness: 40 })).toThrow(
+      'Work Louder model is invalid',
+    );
+    expect(writeSettings).not.toHaveBeenCalled();
   });
 
   it('persists, applies, and returns a valid settings patch', () => {
@@ -123,10 +150,10 @@ describe('Work Louder Codex settings IPC business body', () => {
       singleTapAgentKeys: false,
     };
 
-    const state = ipc.set(EVENT, patch);
+    const state = ipc.set(EVENT, 'codex-micro', patch);
 
-    expect(writeSettings).toHaveBeenCalledWith(patch);
-    expect(applySettings).toHaveBeenCalledWith({
+    expect(writeSettings).toHaveBeenCalledWith('codex-micro', patch);
+    expect(applySettings).toHaveBeenCalledWith('codex-micro', {
       deviceEnabled: false,
       lightingBrightness: 40,
       lightingAutoDim: 'off',
@@ -135,11 +162,28 @@ describe('Work Louder Codex settings IPC business body', () => {
       singleTapAgentKeys: false,
       layout: DEFAULT_SETTINGS.layout,
     });
-    expect(state.settings).toMatchObject({
+    expect(state['codex-micro'].settings).toMatchObject({
       lightingBrightness: 40,
       lightingAutoDim: 'off',
       singleTapAgentKeys: false,
     });
+  });
+
+  it('accepts extra Codex task keys on the layout patch', () => {
+    const { ipc, writeSettings } = makeIpc();
+    const layout = cloneWorkLouderCodexLayout(DEFAULT_SETTINGS.layout);
+    layout.taskKeys = [...(layout.taskKeys ?? []), 'ACT06'];
+
+    expect(() => settingsIpcTesting.parseLayout(layout)).not.toThrow();
+    ipc.set(EVENT, 'codex-micro', { layout });
+    expect(writeSettings).toHaveBeenCalledWith(
+      'codex-micro',
+      expect.objectContaining({
+        layout: expect.objectContaining({
+          taskKeys: expect.arrayContaining(['ACT06']),
+        }),
+      }),
+    );
   });
 
   it('re-checks the device on probe and refuses untrusted callers', () => {
@@ -148,7 +192,7 @@ describe('Work Louder Codex settings IPC business body', () => {
     const state = ipc.probe(EVENT);
 
     expect(probeDevice).toHaveBeenCalledOnce();
-    expect(state.settings).toBeTruthy();
+    expect(state['codex-micro'].settings).toBeTruthy();
 
     assertTrustedSender.mockImplementationOnce(() => {
       throw new Error('untrusted');
@@ -201,12 +245,13 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(source).toContain('if (isAppSessionBoundaryPending()) return null;');
     expect(source).toContain('if (rendererTaskCatalogScope !== currentTaskCatalogScope())');
     expect(source).toContain('if (!scope) return;');
-    expect(source).toContain('workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());');
+    expect(source).toContain('workLouderAccessories.applySettings(model, persisted[model]);');
     expect(source).toContain('workLouderCodexLightingController.start();');
+    expect(source).toContain('hostClient.probe()');
     expect(source).toContain('const win = actionWindowRouter.resolve(action);');
     expect(source).toContain('if (systemFrontmostInput.handle(action)) return;');
     expect(source).toContain('return win === main || isSecondaryAppWindow(win);');
-    expect(source.indexOf('applySettings(readWorkLouderCodexSettings())')).toBeLessThan(
+    expect(source.indexOf('workLouderAccessories.applySettings(model, persisted[model]);')).toBeLessThan(
       source.indexOf('workLouderCodexLightingController.start();'),
     );
   });
@@ -217,22 +262,22 @@ describe('Work Louder Codex settings IPC business body', () => {
     // Older builds stored a microphone mode. The key now follows Cindy's own
     // microphone, but a settings object round-tripped from such a build must
     // not be rejected outright.
-    const state = ipc.set(EVENT, {
+    const state = ipc.set(EVENT, 'codex-micro', {
       layout: { ...DEFAULT_SETTINGS.layout, voiceButtonMode: 'push-to-talk' },
     });
 
-    expect(state.settings.layout).not.toHaveProperty('voiceButtonMode');
-    expect(state.settings.layout.separateMicrophoneKeys).toBe(false);
+    expect(state['codex-micro'].settings.layout).not.toHaveProperty('voiceButtonMode');
+    expect(state['codex-micro'].settings.layout.separateMicrophoneKeys).toBe(false);
   });
 
   it('resets all settings through the dedicated reset operation', () => {
     const { ipc, resetSettings, applySettings } = makeIpc();
 
-    const state = ipc.reset(EVENT);
+    const state = ipc.reset(EVENT, 'codex-micro');
 
-    expect(resetSettings).toHaveBeenCalledOnce();
-    expect(applySettings).toHaveBeenCalledWith(DEFAULT_SETTINGS);
-    expect(state.settings).toEqual(DEFAULT_SETTINGS);
+    expect(resetSettings).toHaveBeenCalledWith('codex-micro');
+    expect(applySettings).toHaveBeenCalledWith('codex-micro', DEFAULT_SETTINGS);
+    expect(state['codex-micro'].settings).toEqual(DEFAULT_SETTINGS);
   });
 
   it('toggles layout preview without writing settings', () => {
@@ -240,9 +285,11 @@ describe('Work Louder Codex settings IPC business body', () => {
 
     ipc.setLayoutPreviewActive(EVENT, true);
     ipc.setLayoutPreviewActive(EVENT, false);
+    ipc.setLayoutPreviewActive(EVENT, { active: true, model: 'creator-micro-2' });
 
-    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(1, true, EVENT);
-    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(2, false, EVENT);
+    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(1, true, 'codex-micro', EVENT);
+    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(2, false, null, EVENT);
+    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(3, true, 'creator-micro-2', EVENT);
     expect(writeSettings).not.toHaveBeenCalled();
   });
 
@@ -258,7 +305,7 @@ describe('Work Louder Codex settings IPC business body', () => {
     const { ipc, applySettings } = makeIpc({ writeThrows: true });
     let caught: Error | null = null;
     try {
-      ipc.set(EVENT, { lightingBrightness: 20 });
+      ipc.set(EVENT, 'codex-micro', { lightingBrightness: 20 });
     } catch (error) {
       caught = error as Error;
     }

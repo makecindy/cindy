@@ -12,7 +12,17 @@
  * resume 路径、启动 RPC 也不会即时拒),控制流本身才是被测对象。
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1988,8 +1998,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(repeatedArgValues(args, '--extension')).toEqual([
       // 轮 40-w4-t15:argv 里的 extension 路径是 posix join(远端派生路径统一
       // POSIX),对比也用 posix —— 平台 path.join 在 Windows 拼反斜杠不匹配。
-      path.posix.join(configHome, 'extensions', 'cindy-bridge.ts'),
-      path.posix.join(configHome, 'extensions', 'cindy-subagent.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-subagent.ts'),
     ]);
     await vi.waitFor(() => {
       expect(handle.getRuntimeCapabilities?.()?.projectResources).toEqual({
@@ -2229,6 +2239,49 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await waitFor(() => !existsSync(home2));
   });
 
+  it.each([
+    ['failure', 'pi list failed at /private/package-home'],
+    ['timeout', 'pi list timed out after 30000ms'],
+  ])('fails local startup explicitly when native package projection has a %s', async (_kind, detail) => {
+    let configHomeDuringProjection = '';
+    let runtimeFilesDuringProjection: string[] = [];
+    const resolvePiNativePackagePaths = vi.fn(async () => {
+      const runTmp = path.join(agentHome, 'run-tmp');
+      const configHomes = readdirSync(runTmp);
+      expect(configHomes).toHaveLength(1);
+      configHomeDuringProjection = path.join(runTmp, configHomes[0]!);
+      expect(existsSync(path.join(configHomeDuringProjection, 'models.json'))).toBe(true);
+      const runtimeDir = path.join(agentHome, 'runtime');
+      runtimeFilesDuringProjection = readdirSync(runtimeDir)
+        .filter((name) => name.startsWith('perm-') || name.startsWith('subagent-'))
+        .map((name) => path.join(runtimeDir, name));
+      expect(runtimeFilesDuringProjection).toHaveLength(2);
+      throw new Error(detail);
+    });
+    const agent = new PiAgent(buildDeps({ resolvePiNativePackagePaths }));
+
+    await expect(agent.startSession({
+      sessionId: 'native-package-projection-failed',
+      workingDir: cwd,
+      model: 'm',
+    })).rejects.toThrow(
+      'Package state is unavailable. Restart Cindy and try again.',
+    );
+    expect(resolvePiNativePackagePaths).toHaveBeenCalledOnce();
+    expect(knobs.spawnedArgs).toEqual([]);
+    expect(disposed).toBe(1);
+    await waitFor(() => !existsSync(configHomeDuringProjection));
+    await waitFor(() => runtimeFilesDuringProjection.every((file) => !existsSync(file)));
+    const reviewHandle = await agent.startSession({
+      sessionId: 'native-package-review',
+      workingDir: cwd,
+      model: 'm',
+      reviewMode: true,
+    });
+    expect(resolvePiNativePackagePaths).toHaveBeenCalledOnce();
+    await reviewHandle.close();
+  });
+
   it('keeps an approved session isolated from a concurrent Review session', async () => {
     const skillPath = path.join(cwd, '.pi', 'skills', 'approved-only');
     mkdirSync(skillPath, { recursive: true });
@@ -2242,15 +2295,18 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const packageExtension = path.join(agentHome, 'managed-packages', 'extension.ts');
     const packageSkill = path.join(agentHome, 'managed-packages', 'skill-one');
     const packagePrompt = path.join(agentHome, 'managed-packages', 'prompt-one.md');
+    const packageRoot = path.dirname(packageExtension);
     const resolvePiManagedPackageResources = vi.fn(async () => ({
       extensions: [packageExtension],
       skills: [{ path: packageSkill, name: 'package-skill' }],
       promptTemplates: [packagePrompt],
-      packageRoots: [path.dirname(packageExtension)],
+      packageRoots: [packageRoot],
     }));
+    const resolvePiNativePackagePaths = vi.fn(async () => [packageRoot]);
     const agent = new PiAgent(buildDeps({
       resolvePiProjectTrustInput,
       resolvePiManagedPackageResources,
+      resolvePiNativePackagePaths,
     }));
     const [approvedHandle, reviewHandle] = await Promise.all([
       agent.startSession({ sessionId: 'approved', workingDir: cwd, model: 'm' }),
@@ -2275,29 +2331,26 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     );
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--skill')).toEqual([
       stagedSkillPath(approvedHome, 0, skillPath),
-      packageSkill,
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--skill')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--extension')).toEqual([
-      path.posix.join(approvedHome, 'extensions', 'cindy-bridge.ts'),
-      path.posix.join(approvedHome, 'extensions', 'cindy-subagent.ts'),
-      packageExtension,
+      path.posix.join(approvedHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(approvedHome, 'internal-extensions', 'cindy-subagent.ts'),
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--extension')).toEqual([
-      path.posix.join(reviewHome, 'extensions', 'cindy-bridge.ts'),
+      path.posix.join(reviewHome, 'internal-extensions', 'cindy-bridge.ts'),
     ]);
-    expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--prompt-template')).toEqual([
-      packagePrompt,
-    ]);
+    expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--prompt-template')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--prompt-template')).toEqual([]);
     expect(resolvePiProjectTrustInput).toHaveBeenCalledOnce();
     expect(resolvePiProjectTrustInput).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'approved',
     }));
     expect(resolvePiManagedPackageResources).toHaveBeenCalledOnce();
-    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith({
-      snapshotRoot: path.join(approvedHome, 'managed-packages'),
-    });
+    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith();
+    expect(resolvePiNativePackagePaths).toHaveBeenCalledOnce();
+    expect(JSON.parse(readFileSync(path.join(approvedHome, 'settings.json'), 'utf8')))
+      .toMatchObject({ packages: [packageRoot] });
     await vi.waitFor(() => {
       expect(approvedHandle.getRuntimeCapabilities?.()?.projectResources).toMatchObject({
         status: 'approved', approvalRevision: 'rev-approved-only', requestedSkillCount: 1,

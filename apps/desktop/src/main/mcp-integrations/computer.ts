@@ -278,6 +278,7 @@ interface DaemonStatus {
 }
 
 interface CuaMcpSessionEntry {
+  logicalSessionId: string;
   client: Client;
   transport: StdioClientTransport;
   ready: Promise<void>;
@@ -288,6 +289,12 @@ interface CuaMcpSessionEntry {
   };
 }
 type CursorSetupState = 'pending' | 'applied' | 'unavailable';
+type CursorCapabilityState = 'unknown' | 'unavailable';
+
+interface CuaMcpSessionCursorCapabilities {
+  motion: CursorCapabilityState;
+  style: CursorCapabilityState;
+}
 
 interface ProcessSnapshotEntry {
   pid: number;
@@ -523,6 +530,9 @@ function probeDriverPermissionsOnce(options: { forceNew?: boolean } = {}): Promi
 }
 const cuaMcpSessions = new Map<string, CuaMcpSessionEntry>();
 const cuaMcpSessionCleanups = new Map<string, Promise<void>>();
+// 永久的能力/策略拒绝属于逻辑 MCP session，而不是某一代 driver transport。
+// applied/pending 仍保留在 entry 内，因为新 generation 必须重新应用成功的设置。
+const cuaMcpSessionCursorCapabilities = new Map<string, CuaMcpSessionCursorCapabilities>();
 const cuaDriverSessionGenerations = new Map<string, number>();
 const cuaMcpSessionCloseVersions = new Map<string, number>();
 
@@ -2114,13 +2124,15 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
     name: 'xdt-maker-cua-driver',
     version: '0.1.0',
   });
+  const capabilities = cuaMcpSessionCursorCapabilities.get(sessionId);
   const entry: CuaMcpSessionEntry = {
+    logicalSessionId: sessionId,
     client,
     transport,
     driverSessionId: getDriverSessionId(sessionId),
     cursorSetup: {
-      motion: 'pending',
-      style: 'pending',
+      motion: capabilities?.motion === 'unavailable' ? 'unavailable' : 'pending',
+      style: capabilities?.style === 'unavailable' ? 'unavailable' : 'pending',
     },
     ready: withTimeout(
       client.connect(transport),
@@ -2267,6 +2279,7 @@ async function initializeDefaultCursorStyle(
   _args: Record<string, unknown>,
   entry: CuaMcpSessionEntry,
   session: string,
+  sessionCloseVersion: number,
 ): Promise<void> {
   if (!CURSOR_STYLED_TOOL_NAMES.has(name)) return;
 
@@ -2308,6 +2321,16 @@ async function initializeDefaultCursorStyle(
       const message = err instanceof Error ? err.message : String(err);
       if (isCursorSetupUnavailableError(message)) {
         entry.cursorSetup[call.stateKey] = 'unavailable';
+        if (getCuaMcpSessionCloseVersion(entry.logicalSessionId) === sessionCloseVersion) {
+          const capabilities = cuaMcpSessionCursorCapabilities.get(entry.logicalSessionId) ?? {
+            motion: 'unknown',
+            style: 'unknown',
+          };
+          cuaMcpSessionCursorCapabilities.set(entry.logicalSessionId, {
+            ...capabilities,
+            [call.stateKey]: 'unavailable',
+          });
+        }
         logger.info('cua-driver cursor setup unavailable; continuing without it', {
           tool: name,
           cursorTool: call.tool,
@@ -2327,9 +2350,10 @@ async function initializeDefaultCursorStyle(
 }
 
 /**
- * Driver capability/policy failures cannot recover while the same MCP process
- * remains alive. Remember them on the session entry so an optional cursor
- * decoration never adds a rejected tool call to every real computer action.
+ * Driver capability/policy failures cannot recover while the same logical MCP
+ * session remains alive. Remember them outside the generation-specific entry
+ * so an optional cursor decoration never adds a rejected tool call after a
+ * stale driver transport is replaced.
  */
 function isCursorSetupUnavailableError(message: string): boolean {
   return /has no reviewed risk classification|method not found|unknown tool|tool .+ not found/i.test(message);
@@ -3325,7 +3349,7 @@ export async function callComputerDriverTool(
   const entry = await getCuaMcpSession(sessionId);
   assertComputerDriverToolDispatchAvailable();
   const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId);
-  await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId);
+  await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId, sessionCloseVersion);
   const timeoutMs = getCuaMcpToolTimeoutMs(name);
   try {
     const result = await callCuaMcpToolWithTypeTextChunks(entry, name, driverArgs, timeoutMs);
@@ -3372,7 +3396,13 @@ export async function callComputerDriverTool(
             }
           : normalizedArgs;
         const freshArgs = applyDriverSessionArgs(name, retryArgs, freshEntry.driverSessionId);
-        await initializeDefaultCursorStyle(name, freshArgs, freshEntry, freshEntry.driverSessionId);
+        await initializeDefaultCursorStyle(
+          name,
+          freshArgs,
+          freshEntry,
+          freshEntry.driverSessionId,
+          sessionCloseVersion,
+        );
         if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
           await cleanupComputerDriverSessionInternal(sessionId, {
             resetGeneration: false,
@@ -3448,6 +3478,7 @@ async function cleanupComputerDriverSessionEntry(sessionId: string, entry: CuaMc
 }
 
 export function cleanupComputerDriverSession(sessionId: string): Promise<void> {
+  cuaMcpSessionCursorCapabilities.delete(sessionId);
   markCuaMcpSessionClosed(sessionId);
   const entry = cuaMcpSessions.get(sessionId);
   if (entry) {
@@ -3489,6 +3520,7 @@ export async function cleanupAllComputerDriverSessions(): Promise<void> {
   stopPermissionGrantFlow('cleanup');
   clearProcessSnapshotCache();
   await cleanupActiveComputerDriverSessions();
+  cuaMcpSessionCursorCapabilities.clear();
   cuaDriverSessionGenerations.clear();
   cuaMcpSessionCloseVersions.clear();
 }

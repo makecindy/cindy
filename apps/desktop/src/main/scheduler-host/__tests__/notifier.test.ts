@@ -37,6 +37,7 @@ function run(status: ScheduleRun['status']): ScheduleRun {
 function createNotifier(opts?: {
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
+  isAgentIslandEnabled?: () => boolean;
   publishMarkdown?: ReturnType<typeof vi.fn>;
 }): {
   notifier: DesktopNotifier;
@@ -55,6 +56,7 @@ function createNotifier(opts?: {
     } as unknown as FeishuIM,
     logger: { warn },
     shouldNotifyDesktop: opts?.shouldNotifyDesktop ?? (() => true),
+    isAgentIslandEnabled: opts?.isAgentIslandEnabled ?? (() => false),
     wecomGroupPublisher: { publishMarkdown },
   });
   return { notifier, sendMarkdownText, warn, publishMarkdown };
@@ -115,6 +117,37 @@ describe('DesktopNotifier desktop status mapping', () => {
 
     expect(sendMobileSessionNotify).not.toHaveBeenCalled();
   });
+
+  it('lets Agent Island replace a desktop notification for a session-bound run', async () => {
+    const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+
+    await notifier.notify(schedule, run('failed'));
+
+    expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it('keeps a desktop error notification when Agent Island cannot represent the failed run', async () => {
+    const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+
+    await notifier.notify(schedule, { ...run('failed'), sessionId: undefined });
+
+    expect(showDesktopSessionEvent).toHaveBeenCalledWith(expect.any(Function), {
+      sessionId: '',
+      title: '每日检查',
+      kind: 'error',
+    });
+  });
+
+  it.each(['success', 'aborted', 'interrupted'] as const)(
+    'does not bypass Agent Island for a sessionless %s run',
+    async (status) => {
+      const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+
+      await notifier.notify(schedule, { ...run(status), sessionId: undefined });
+
+      expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+    },
+  );
 
   it('mobile 正文带运行结果摘要:成功用 resultText,失败用 errorMsg', async () => {
     const { notifier } = createNotifier();

@@ -301,7 +301,6 @@ describe('executeCodexFileRestorePlan', () => {
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
   it('never deletes through a symlinked parent that escapes the repository', async () => {
-    if (process.platform === 'win32') return; // 符号链接在 Windows CI 上需要特权
     await writeFile('a.txt', 'base\n');
     await commitAll('seed');
     const turnStart = await shadowSavepoint('turn-start');
@@ -313,7 +312,11 @@ describe('executeCodexFileRestorePlan', () => {
     try {
       await fs.writeFile(path.join(outside, 'target.txt'), 'precious external data\n', 'utf8');
       await fs.rm(path.join(repoPath, 'evil'), { recursive: true });
-      await fs.symlink(outside, path.join(repoPath, 'evil'));
+      await fs.symlink(
+        outside,
+        path.join(repoPath, 'evil'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
 
       const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
       const result = await executeCodexFileRestorePlan(plan, {
@@ -335,7 +338,6 @@ describe('executeCodexFileRestorePlan', () => {
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
   it('never restores through a symlinked parent that escapes the repository', async () => {
-    if (process.platform === 'win32') return; // 符号链接在 Windows CI 上需要特权
     await writeFile('evil/target.txt', 'baseline\n');
     await commitAll('seed evil');
     const turnStart = await shadowSavepoint('turn-start');
@@ -346,7 +348,11 @@ describe('executeCodexFileRestorePlan', () => {
     const outside = await fs.mkdtemp(path.join(path.dirname(repoPath), 'outside-'));
     try {
       await fs.writeFile(path.join(outside, 'target.txt'), 'external data\n', 'utf8');
-      await fs.symlink(outside, path.join(repoPath, 'evil'));
+      await fs.symlink(
+        outside,
+        path.join(repoPath, 'evil'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
 
       const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
       // 恢复目标的最近存在祖先(evil)真实路径在仓库外 → 改动前中止:

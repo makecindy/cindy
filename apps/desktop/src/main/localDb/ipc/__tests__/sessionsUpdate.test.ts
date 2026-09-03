@@ -32,6 +32,10 @@ const h = vi.hoisted(() => ({
   })),
   closeSession: vi.fn(async (_sessionId: string) => undefined),
   tapWindowBroadcast: vi.fn(),
+  windows: [] as Array<{
+    isDestroyed: ReturnType<typeof vi.fn>;
+    webContents: { send: ReturnType<typeof vi.fn> };
+  }>,
   summarizeSession: vi.fn(async () => undefined),
   stopAndRemovePiSubagentRuns: vi.fn(async (_root: string) => true),
   writePiSubagentDeletedTombstone: vi.fn(async (_agentHome: string, _sessionId: string) => undefined),
@@ -60,7 +64,7 @@ vi.mock('electron', () => ({
       h.handlers.set(channel, handler);
     }),
   },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: { getAllWindows: () => h.windows },
   // status 写路径(removeHookAttachmentDir / removeTurnChangeSetsForSession)会调
   // app.getPath('userData') 并对真实文件系统做 fire-and-forget fs.rm。这里返回每次
   // 测试用 mkdtemp 生成的独立目录，避免并发 worktree 共享同一字面量路径互相删 fixture，
@@ -123,7 +127,9 @@ vi.mock('../../../cindy-brain/index.js', () => ({
 }));
 
 import {
+  broadcastSessionPatched,
   patchSessionMetaInDb,
+  persistSessionFields,
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
   setSessionRuntimeCleanup,
@@ -237,6 +243,7 @@ beforeEach(() => {
   h.closeSession.mockClear();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.handlers.clear();
+  h.windows = [];
   h.stopAndRemovePiSubagentRuns.mockClear();
   h.stopAndRemovePiSubagentRuns.mockImplementation(async () => true);
   h.writePiSubagentDeletedTombstone.mockClear();
@@ -270,6 +277,32 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('isolates device-link and renderer failures while broadcasting a session patch', () => {
+    const failedWindowSend = vi.fn(() => {
+      throw new Error('window closed');
+    });
+    const healthyWindowSend = vi.fn();
+    h.tapWindowBroadcast.mockImplementationOnce(() => {
+      throw new Error('tap unavailable');
+    });
+    h.windows = [
+      { isDestroyed: vi.fn(() => false), webContents: { send: failedWindowSend } },
+      { isDestroyed: vi.fn(() => false), webContents: { send: healthyWindowSend } },
+    ];
+
+    expect(() =>
+      broadcastSessionPatched('s-projection', {
+        contextTokens: 0,
+        contextWindow: 272_000,
+      }),
+    ).not.toThrow();
+    expect(failedWindowSend).toHaveBeenCalledOnce();
+    expect(healthyWindowSend).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 's-projection',
+      patch: { contextTokens: 0, contextWindow: 272_000 },
+    });
+  });
+
   it('rejects new SSH writable roots because the picker is not on the remote filesystem', async () => {
     await expect(invokeCreate({
       id: 'ssh-forged',
@@ -491,6 +524,23 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted.status).toBe('deleted');
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
     expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
+  });
+
+  it('keeps the last legal sessions.effort when a fixed-effort model switch patches null', async () => {
+    await persistSessionFields('pi-local', {
+      model: 'x-ai-grok/grok-4.6',
+      effort: null,
+      fastMode: false,
+    });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT model, effort, fast_mode FROM sessions WHERE id = ?')
+      .get('pi-local') as { model: string; effort: string; fast_mode: number };
+    expect(persisted).toEqual({
+      model: 'x-ai-grok/grok-4.6',
+      effort: 'high',
+      fast_mode: 0,
+    });
   });
 
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {

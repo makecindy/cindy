@@ -197,6 +197,85 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).not.toHaveBeenCalled();
   });
 
+  it('slash 回复发送失败时仍镜像到群主流以释放保留', async () => {
+    const { handlers } = makeHarness();
+    mocks.sendMarkdownText.mockRejectedValueOnce(new Error('send failed'));
+    const mirrorTerminalReply = vi.fn(async () => undefined);
+
+    const handled = await handlers.handleSlashCommand('/help', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      mirrorTerminalReply,
+    });
+
+    expect(handled).toBe(true);
+    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
+    expect(mirrorTerminalReply).toHaveBeenCalledWith(ui.slash.help);
+  });
+
+  it('已确认双投时把首个 markdown 终态镜像到群主流', async () => {
+    const { handlers } = makeHarness();
+    const mirrorTerminalReply = vi.fn(async () => undefined);
+
+    const handled = await handlers.handleSlashCommand('/help', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      mirrorTerminalReply,
+    });
+
+    expect(handled).toBe(true);
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.help);
+    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
+    expect(mirrorTerminalReply).toHaveBeenCalledWith(ui.slash.help);
+  });
+
+  it('已确认双投时把卡片型 slash 的正文镜像到群主流', async () => {
+    const spec = {
+      title: '选择模型',
+      body: '当前 **claude-opus-4-8**',
+      buttons: [{ id: 'pick', label: '切换' }],
+    };
+    const { handlers, cards } = makeHarness();
+    vi.mocked(cards.buildModelPickerCard).mockReturnValue(spec);
+    const mirrorTerminalReply = vi.fn(async () => undefined);
+
+    const handled = await handlers.handleSlashCommand('/model', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      mirrorTerminalReply,
+    });
+
+    expect(handled).toBe(true);
+    expect(mocks.sendInteractiveCard).toHaveBeenCalled();
+    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
+    expect(mirrorTerminalReply).toHaveBeenCalledWith(spec.body);
+  });
+
+  it('卡片型 slash 消费开场白卡后仍镜像正文到群主流', async () => {
+    const spec = {
+      title: '接管',
+      body: '选择一个工作区',
+      buttons: [{ id: 'pick', label: '选择' }],
+    };
+    const { handlers, cards } = makeHarness();
+    vi.mocked(cards.buildControlPickerCard).mockReturnValue(spec);
+    const withCard = vi.fn(async () => true);
+    const mirrorTerminalReply = vi.fn(async () => undefined);
+
+    const handled = await handlers.handleSlashCommand('/ctr', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      consumePendingOpener: { withMarkdown: vi.fn(async () => false), withCard },
+      mirrorTerminalReply,
+    });
+
+    expect(handled).toBe(true);
+    expect(withCard).toHaveBeenCalledWith('ou_user', spec);
+    expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
+    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
+    expect(mirrorTerminalReply).toHaveBeenCalledWith(spec.body);
+  });
+
   it('首条 slash 消费失败时回落正常发送', async () => {
     const { handlers } = makeHarness();
     const withMarkdown = vi.fn(async () => false);

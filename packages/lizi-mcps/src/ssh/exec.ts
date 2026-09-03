@@ -68,7 +68,7 @@ export function registerSshExecTool(
         return errorPayload('INTERNAL', `SSH 连接池不可用：${err instanceof Error ? err.message : String(err)}`);
       }
 
-      const resolved = resolveHost(pool, host);
+      const resolved = resolveHost(pool, host, deps);
       if (!resolved.ok) return resolved.result;
       const hostId = resolved.snapshot.config.id;
 
@@ -104,7 +104,7 @@ export function registerSshExecTool(
         });
       } catch (err) {
         // 不回显 command 原文，只落 host + 分类结果。
-        const classified = classifySshError(err);
+        const classified = classifySshError(err, deps, resolved.snapshot);
         deps.logger?.warn?.(
           `[cindy_ssh] ssh_exec on "${hostId}" failed: ${classified.errorCode}`,
         );

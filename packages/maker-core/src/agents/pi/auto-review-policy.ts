@@ -5,7 +5,7 @@
  *
  * pi 侧的到达面与 CC 不同:bridge 在 pi 进程内直通「只读内置四件套且入参不碰凭证
  * 路径」(见 cindy-bridge-source.ts READONLY_BUILTINS + touchesCredentialPath),
- * `bypassPermissions` 全放行 —— 能到这里的是 bash / edit / write / 桥接 MCP 工具 /
+ * `bypassPermissions` 全放行 —— 能到这里的是 bash / powershell / edit / write / 桥接 MCP 工具 /
  * 凭证路径的只读调用 / 未来新增内置工具。只读分支扫全部字符串入参判凭证,与 bridge
  * 同判定:bridge 升级上来的凭证读在 auto 档必须落弹窗,不能被 path 字段缺失反向放行。
  *
@@ -66,6 +66,9 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 'find', 'l
 
 /** 会改文件、带结构化 `path` 入参的 pi 内置工具。 */
 const FILE_WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit']);
+
+/** Pi v0.84.3 起 Windows 可选 powershell 与 bash 同为 shell 执行面，入参都是 `command`。 */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'powershell']);
 
 function stringField(input: Record<string, unknown>, key: string): string | undefined {
   const v = input[key];
@@ -143,7 +146,7 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
   if (FILE_WRITE_TOOLS.has(toolName)) {
     return { kind: 'file-write', path: stringField(input, 'path') };
   }
-  if (toolName === 'bash') {
+  if (SHELL_TOOLS.has(toolName)) {
     const evidenceAction = canonicalCredentialEvidenceAction(ctx.resolvedCredentialPaths);
     if (evidenceAction) return evidenceAction;
     return { kind: 'exec', command: stringField(input, 'command') ?? '' };

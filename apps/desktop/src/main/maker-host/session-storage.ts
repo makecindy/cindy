@@ -10,7 +10,7 @@
  * 原子写 source='review'，自动化 runner 仍会在创建后 backfill 为 'scheduler'。
  */
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 
@@ -249,4 +249,18 @@ export async function readSessionWritableDirsFromDb(id: string): Promise<string[
     /* fall through */
   }
   return [];
+}
+
+/** 当前 owner 可见、未删除的桌面会话(含 plugin 入口)。review 不注入 library 槽。 */
+export async function listVisibleActiveSessionIds(): Promise<string[]> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(and(
+      inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+      eq(sessions.status, 'active'),
+      ne(sessions.source, 'review'),
+    ));
+  return rows.map((row) => row.id);
 }

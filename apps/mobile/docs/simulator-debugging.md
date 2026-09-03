@@ -1,8 +1,24 @@
 # Mobile Simulator Debugging
 
-This guide is the fixed local loop for testing `apps/mobile` in an iOS
-Simulator. It exists because Expo Go, the iOS development client, and an installed
-distribution build look similar during manual testing but prove different things.
+This guide is the fixed local loop for testing `apps/mobile` in an iOS Simulator
+or Windows Android Emulator. It exists because Expo Go, a development client,
+and an installed distribution build look similar during manual testing but prove
+different things.
+
+On Windows, the explicit Mainland China one-command entry starts or reuses the
+`cindy-api36` AVD, waits for Android to finish booting, configures `adb reverse`,
+and then keeps the current worktree's Metro in the foreground:
+
+```bash
+pnpm mobile:sim:start:cn
+```
+
+`mobile:sim:start` keeps the repository-wide Global default. Use
+`-- --avd <name>` for another AVD or `-- --no-emulator` for Metro only. Android
+SDK tools are resolved from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or the standard
+Windows Android Studio SDK location; they do not need to be on `PATH`. The
+command does not rebuild the native app, so install the matching development
+package first when switching build identity.
 
 ## Current Source Verification Contract
 
@@ -33,6 +49,7 @@ apply". Treat the following as a contract, not optional steps:
 ```bash
 pnpm mobile:sim:start      # start THIS worktree's Global dev-client Metro; injects git
                            # branch/commit into the __DEV__ build label (EXPO_PUBLIC_*)
+pnpm mobile:sim:start:cn   # Mainland China; on Windows also starts cindy-api36
 pnpm mobile:sim:start -- --region=cn # 中国大陆版 JS region；先 rebuild 对应 native app
 pnpm mobile:sim:whoami     # doctor: booted install + which port = which worktree
 pnpm mobile:sim:whoami -- --region=cn # inspect the cn native app + Metro ownership

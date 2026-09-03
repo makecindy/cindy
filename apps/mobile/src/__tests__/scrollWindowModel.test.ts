@@ -7,11 +7,12 @@ import {
   MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS,
   MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS,
   MOBILE_ANCHOR_VERIFY_TOLERANCE,
+  shouldPreserveMobileHistoryBrowseIntent,
 } from '@/session/messageScroll';
 
 // evaluateMessageWindowUpdate 是容器无关的纯函数,驱动「新消息红点 / 近底自动跟随」判定。
 // 迁移到 LegendList 后仍由它决定 hasNewMessages(贴底跟随交给 maintainScrollAtEnd,防跳交给
-// maintainVisibleContentPosition);容器 prop 契约见 messageListVirtualization.test.ts。
+// 应用层 key/offset 锚定);容器 prop 契约见 messageListVirtualization.test.ts。
 describe('scrollWindowModel', () => {
   it('auto-follows the initial visible window without showing a new-message chip', () => {
     expect(evaluateMessageWindowUpdate({
@@ -108,6 +109,23 @@ describe('scrollWindowModel', () => {
     expect(source).toMatch(
       /setLatestMessageWindow\(sessionId, historyPage, \{\s*authority: messageAuthority,\s*moreBeyondWindow,\s*\}\)/,
     );
+  });
+});
+
+describe('history browse intent', () => {
+  it('rejects passive anchor offsets but allows a real user-controlled return to latest', () => {
+    expect(shouldPreserveMobileHistoryBrowseIntent({
+      historyBrowseIntent: true,
+      userControllingScroll: false,
+    })).toBe(true);
+    expect(shouldPreserveMobileHistoryBrowseIntent({
+      historyBrowseIntent: true,
+      userControllingScroll: true,
+    })).toBe(false);
+    expect(shouldPreserveMobileHistoryBrowseIntent({
+      historyBrowseIntent: false,
+      userControllingScroll: false,
+    })).toBe(false);
   });
 });
 

@@ -18,7 +18,7 @@
  *     行为逻辑全部共享。新增 agent (e.g. gemini) 时, 一行加 CONFIG 即可。
  *   - 基础 BinaryProvisioner 实例懒加载 + 缓存 (createBinaryProvisioner 是工厂, 复用同一份 cached manifest)。
  *   - prepare(kind) 内部:
- *       dev: findDevBinary 短路, 缺失硬错 (开发者必须 git lfs pull / pnpm update:codex)
+ *       dev: findDevBinary 短路, 缺失硬错 (开发者必须 pnpm update:codex-package)
  *       Linux packaged: CDN manifest 段优先 (与 mac/win 同链, 国内可达); 资产缺失 /
  *         拉取 / 下载失败时静默回落 runtime fallback (PC 已装 CLI / 旧缓存 / userData
  *         私有安装 / 带上游 SHA-256 的官方 pin 资产, 不依赖系统 npm/curl/tar)
@@ -156,12 +156,11 @@ import type {
 // createBinaryProvisioner 用的内部 enum, 历史叫 'claude' / 'codex' (factory 内部
 // 硬约定, 不改)。
 //
-// pi 与 cc/codex 的差异:
-//   - artifactKind 'tar-gz-dir': pi 是整目录分发(主二进制 + theme/ 等运行时资产,
-//     只装主二进制会在 RPC 启动期崩溃), CDN 资产是整包 tar.gz, 归档根即完整目录
-//     (与 apps/pi-bin/<platform>/ 同布局)。
-//   - optionalAsset: pi 是可选实验 agent。manifest 缺 pi 字段 / 下载失败都不阻塞
-//     启动 —— check-environment 的 pi 段静默降级，本次不注册 pi。
+// 目录分发运行时:
+//   - codex-package:完整目录包含 bin/codex、code-mode host、rg 与 resources；生产入口
+//     与 dev 一致指向 bin/codex，CDN 资产读取 manifest.codexPackage。
+//   - pi:完整目录包含主二进制与 theme/ 等运行时资产；同时它是可选实验 agent，
+//     manifest 缺 pi 字段 / 下载失败都不阻塞启动。
 
 export type AgentBinaryKind = 'claude-code' | 'codex' | 'pi';
 
@@ -170,7 +169,8 @@ interface AgentBinaryConfig {
   manifestField: string;           // CDN manifest 顶层字段
   installSubdir: string;           // userData/<installSubdir>/<version>/<binary>
   binaryName: string;              // 平台相关二进制名
-  devBinDir: string;               // apps/<devBinDir>/<platform>/ (LFS bundle)
+  devBinDir: string;               // apps/<devBinDir>/<platform>/
+  devBinaryName?: string;          // dev 可覆盖入口相对路径；prod 仍使用 binaryName
   vendorTag: VendorKey;            // 'binary-download-progress' IPC payload 的 vendor 字段
   artifactKind: 'gz' | 'tar-gz-dir'; // CDN 资产形态(单文件 gz / 整目录 tar.gz)
   optionalAsset?: boolean;         // true = manifest 缺字段不算"需要下载"(可选 vendor)
@@ -186,15 +186,18 @@ const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
     devBinDir: 'claude-code-bin',
     vendorTag: 'claude',
     artifactKind: 'gz',
+    preserveLocalVersion: true,
   },
   codex: {
     vendorKey: 'codex',
-    manifestField: 'codex',
-    installSubdir: 'codex',
-    binaryName: process.platform === 'win32' ? 'codex.exe' : 'codex',
-    devBinDir: 'codex-bin',
+    manifestField: 'codexPackage',
+    installSubdir: 'codex-package',
+    binaryName: path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex'),
+    devBinDir: 'codex-package-bin',
+    devBinaryName: path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex'),
     vendorTag: 'codex',
-    artifactKind: 'gz',
+    artifactKind: 'tar-gz-dir',
+    preserveLocalVersion: true,
   },
   pi: {
     vendorKey: 'pi',
@@ -279,9 +282,12 @@ export function getCachedBinaryStatus(kind: AgentBinaryKind): CachedBinaryStatus
     }
   }
 
-  // dev: 优先查 LFS bundle (apps/<devBinDir>/<platform>/<binary>)
+  // dev:优先查仓库本地 runtime(apps/<devBinDir>/<platform>/<devBinaryName>)。
   if (!app.isPackaged) {
-    const devPath = findDevBinary({ vendorBinDir: cfg.devBinDir, binaryName: cfg.binaryName });
+    const devPath = findDevBinary({
+      vendorBinDir: cfg.devBinDir,
+      binaryName: cfg.devBinaryName ?? cfg.binaryName,
+    });
     if (devPath) return { binaryReady: true, binaryPath: devPath };
   }
 
@@ -326,7 +332,10 @@ export async function prepare(
 
   // ── dev mode 短路 (与老 vendor/{claude,codex}/binaryProvisioner.ts 等价) ──
   if (!app.isPackaged) {
-    const devPath = findDevBinary({ vendorBinDir: cfg.devBinDir, binaryName: cfg.binaryName });
+    const devPath = findDevBinary({
+      vendorBinDir: cfg.devBinDir,
+      binaryName: cfg.devBinaryName ?? cfg.binaryName,
+    });
     if (devPath) {
       console.log(`[agent-binaries/${kind}] dev fallback hit: ${devPath}`);
       console.warn(`[agent-binaries/${kind}] dev fallback: SHA256 check SKIPPED — for development only`);

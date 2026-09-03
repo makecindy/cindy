@@ -21,7 +21,6 @@ import {
   hasPiPackageCompatibilityWarning,
   isRelativeLocalPiPackageSource,
   mergePiPackageCommands,
-  shouldShowPiPackagePostMutationNotice,
   shouldListPiPackageCommands,
 } from '../../../shared/piPackages.js';
 
@@ -144,19 +143,6 @@ describe('Pi package runtime compatibility', () => {
         compatible: false,
       }],
     })).toBe(true);
-  });
-
-  it('shows a post-install notice for approval gates and failed or bounded inspection', () => {
-    const base = { source: 'npm:sample', name: 'sample', enabled: false, resources: [] };
-    expect(shouldShowPiPackagePostMutationNotice({
-      ...base,
-      requiresExtensionApproval: true,
-    })).toBe(true);
-    expect(shouldShowPiPackagePostMutationNotice({
-      ...base,
-      warning: 'inspection-limit',
-    })).toBe(true);
-    expect(shouldShowPiPackagePostMutationNotice(base)).toBe(false);
   });
 });
 

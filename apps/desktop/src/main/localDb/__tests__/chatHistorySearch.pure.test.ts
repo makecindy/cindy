@@ -5,7 +5,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { fuseRRF, buildFtsMatch, RRF_K } from '../chatHistorySearch.pure';
+import {
+  fuseRRF,
+  buildFtsMatch,
+  buildMessagesFtsMatch,
+  visibleTextMatchesMessagesFtsQuery,
+  RRF_K,
+} from '../chatHistorySearch.pure';
 
 describe('fuseRRF', () => {
   it('空输入返回空数组', () => {
@@ -80,6 +86,17 @@ describe('buildFtsMatch', () => {
     expect(buildFtsMatch('登录报错')).toBe('"登录报错"');
   });
 
+  it('messages_fts 把 CJK run 收成相邻 phrase；默认多词 OR，session_search 显式 AND', () => {
+    expect(buildMessagesFtsMatch('登录报错')).toBe('"登 录 报 错"');
+    expect(buildMessagesFtsMatch('边界')).toBe('"边 界"');
+    expect(buildMessagesFtsMatch('login crash')).toBe('"login" OR "crash"');
+    expect(buildMessagesFtsMatch('修复 login 问题')).toBe('"修 复" OR "login" OR "问 题"');
+    expect(buildMessagesFtsMatch('login crash', 'AND')).toBe('"login" AND "crash"');
+    expect(buildMessagesFtsMatch('修复 login 问题', 'AND')).toBe(
+      '"修 复" AND "login" AND "问 题"',
+    );
+  });
+
   it('中英混合: 各自成 token', () => {
     expect(buildFtsMatch('修复 login 问题')).toBe('"修复" OR "login" OR "问题"');
   });
@@ -88,5 +105,48 @@ describe('buildFtsMatch', () => {
     const many = Array.from({ length: 50 }, (_, i) => `t${i}`).join(' ');
     const out = buildFtsMatch(many)!;
     expect(out.split(' OR ')).toHaveLength(32);
+  });
+
+  it('combining mark / 变体选择符跟着所属 token，不拆成两半', () => {
+    expect(buildMessagesFtsMatch('甲́乙')).toBe('"甲́ 乙"');
+    expect(buildMessagesFtsMatch('禰\u{E0100}豆子')).toBe('"禰\u{E0100} 豆 子"');
+  });
+
+  it('超长连续汉字截成有限 MATCH，不把整段扩进去', () => {
+    const out = buildMessagesFtsMatch('边'.repeat(400))!;
+    expect(out.length).toBeLessThanOrEqual(2048);
+    expect(out.startsWith('"边 ')).toBe(true);
+  });
+
+  it('65~256 字连续汉字整段保留，不截成 64 字前缀', () => {
+    const query = '边'.repeat(200) + '界';
+    // messages_fts：cjk_seg 后 201 个单字相邻 phrase，整段精确召回。
+    expect(buildMessagesFtsMatch(query)).toBe(`"${'边 '.repeat(200)}界"`);
+    // 群历史整段 token：完整段 quoted 精确匹配，前缀假阳性不再出现。
+    expect(buildFtsMatch(query)).toBe(`"${query}"`);
+  });
+
+  it('超过 256 字的汉字 run 截到上限，只防御绕过 schema 的输入', () => {
+    expect(buildMessagesFtsMatch('边'.repeat(300))).toBe(`"${'边 '.repeat(255)}边"`);
+  });
+
+  it('超长 Latin / 数字 token 不截断，quoted MATCH 仍是精确命中', () => {
+    const hex = 'a'.repeat(128);
+    expect(buildMessagesFtsMatch(hex)).toBe(`"${hex}"`);
+    expect(buildFtsMatch(hex)).toBe(`"${hex}"`);
+  });
+});
+
+describe('visibleTextMatchesMessagesFtsQuery', () => {
+  it('跨标点的按字 phrase 仍算可见命中', () => {
+    expect(visibleTextMatchesMessagesFtsQuery('边，界', '边界')).toBe(true);
+    expect(visibleTextMatchesMessagesFtsQuery('登录报错了', '登录')).toBe(true);
+  });
+
+  it('可见正文不含 query 时不算命中，即使隐藏字段会 MATCH', () => {
+    expect(visibleTextMatchesMessagesFtsQuery('please inspect the billing flow', 'secret')).toBe(
+      false,
+    );
+    expect(visibleTextMatchesMessagesFtsQuery('结论。', 'turn17search1')).toBe(false);
   });
 });

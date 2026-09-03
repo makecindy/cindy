@@ -1,8 +1,8 @@
 /**
  * RemoteSection — Settings → Remote tab.
  *
- * Phase A: list SSH hosts (sourced from ~/.ssh/config + ones added here),
- * connect/disconnect, add a new host, remove a manually-added host.
+ * Phase A: list SSH hosts discovered from OpenSSH config, connect/disconnect,
+ * add a Cindy-managed host, and remove a Cindy-managed host.
  * No agent-on-remote yet — that's Phase B.
  *
  * Design: matches ConnectionsSection card layout. Inline add-form
@@ -11,7 +11,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Server, RefreshCw, Trash2, ChevronRight, ChevronDown, KeyRound, Pencil } from 'lucide-react';
+import {
+  AlertTriangle,
+  Plus,
+  Server,
+  RefreshCw,
+  Trash2,
+  ChevronRight,
+  ChevronDown,
+  KeyRound,
+  Pencil,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -23,6 +33,12 @@ import { RemoteHostDetail } from './RemoteHostDetail';
 import { SshKeySetupDialog } from './SshKeySetupDialog';
 
 type Status = RemoteHostSnapshot['status'];
+type SshConfigDiagnosticKind = 'io' | 'syntax' | 'limit';
+type RemoteSshListResult = {
+  hosts: RemoteHostSnapshot[];
+  warningCount?: number;
+  diagnostic?: { kind: SshConfigDiagnosticKind } | null;
+};
 
 interface RowProps {
   snap: RemoteHostSnapshot;
@@ -73,6 +89,7 @@ function HostRow({
   const disconnectable = snap.status === 'ready' || snap.status === 'connecting'
     || snap.status === 'authenticating' || snap.status === 'reconnecting';
   const canExpand = snap.status === 'ready';
+  const displayName = snap.config.displayName?.trim() || snap.config.id;
 
   // For non-failed states append " · via <auth-label>" so the user can see
   // which credential is actually carrying the connection. Catches the case
@@ -119,8 +136,13 @@ function HostRow({
             className="text-14 font-medium leading-tight"
             style={{ color: 'var(--settings-section-title)' }}
           >
-            {snap.config.id}
+            {displayName}
           </span>
+          {displayName !== snap.config.id && (
+            <code className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
+              {snap.config.id}
+            </code>
+          )}
           <span
             className="h-1.5 w-1.5 rounded-full"
             style={{ backgroundColor: dot }}
@@ -147,6 +169,11 @@ function HostRow({
         >
           {subtitle}
         </span>
+        {!snap.config.managedByCindy && (
+          <span className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
+            {t('settings.remote.readOnlyFromSshConfig')}
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -227,9 +254,8 @@ function HostRow({
             <span className="relative top-px">{t('settings.remote.button.disconnect')}</span>
           </button>
         )}
-        {/* Edit always available — surgical update preserves any hand-written
-            directives (ProxyJump, ServerAliveInterval, ...) the user may
-            have added in ~/.ssh/config. */}
+        {/* External hosts still expose local preferences. Main independently
+            enforces that their connection fields remain read-only. */}
         <button
           type="button"
           onClick={onEdit}
@@ -244,7 +270,7 @@ function HostRow({
         >
           <Pencil size={14} />
         </button>
-        {snap.config.source === 'manual' && (
+        {snap.config.managedByCindy && (
           <button
             type="button"
             onClick={onRemove}
@@ -266,11 +292,17 @@ function HostRow({
 
 interface AddFormState {
   id: string;
+  displayName: string;
   hostname: string;
   user: string;
   port: string;
   authMethod: 'agent' | 'key';
+  /** Newly entered/picked path. Existing paths remain main-only. */
   identityFile: string;
+  /** Edit mode: preserve the existing main-only path until the user changes it. */
+  identityFileUnchanged: boolean;
+  /** Display-only basename for an existing configured identity. */
+  identityFileName: string;
   /** 「Agent 流量走 Proxy」开关。 */
   agentProxyEnabled: boolean;
   /** tunnel = Cindy 代建隧道; env = 自备代理 (仅注入环境变量)。 */
@@ -287,11 +319,14 @@ const DEFAULT_AGENT_PROXY_REMOTE_PORT = String(LEGACY_AGENT_PROXY_REMOTE_PORT);
 
 const EMPTY_FORM: AddFormState = {
   id: '',
+  displayName: '',
   hostname: '',
   user: '',
   port: '22',
   authMethod: 'agent',
   identityFile: '',
+  identityFileUnchanged: false,
+  identityFileName: '',
   agentProxyEnabled: false,
   agentProxyMode: 'tunnel',
   agentProxyAddr: '127.0.0.1:7890',
@@ -375,17 +410,25 @@ interface HostFormProps {
   /**
    * 'add' → blank form, alias editable, submit creates a new host.
    * 'edit' → form pre-filled with `initial`, alias locked (renaming is
-   *          rename + re-add — keeps ~/.ssh/config consistency simple),
+   *          rename + re-add — keeps the OpenSSH alias join key stable),
    *          submit updates the existing host.
    */
   mode: 'add' | 'edit';
   initial?: AddFormState;
   busy: boolean;
+  connectionFieldsReadOnly?: boolean;
   onSubmit: (form: AddFormState) => void;
   onCancel: () => void;
 }
 
-function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
+function HostForm({
+  mode,
+  initial,
+  busy,
+  connectionFieldsReadOnly = false,
+  onSubmit,
+  onCancel,
+}: HostFormProps) {
   const { t } = useTranslation();
   const [form, setForm] = useState<AddFormState>(initial ?? EMPTY_FORM);
   // Local dialog state. Three open modes — they share the same dialog but
@@ -399,12 +442,16 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
   //               Pick fills identityFile, KEEPS authMethod=agent.
   const [keysOpenMode, setKeysOpenMode] = useState<'manage' | 'pick' | 'pinPick' | null>(null);
   const isEdit = mode === 'edit';
+  const hasIdentityFile = form.identityFileUnchanged || form.identityFile.trim().length > 0;
+  const identityFileName = form.identityFileUnchanged
+    ? form.identityFileName
+    : form.identityFile.split(/[/\\]/).pop() ?? '';
 
   const valid = useMemo(() => {
-    if (!form.id.trim() || /\s|[*?!]/.test(form.id)) return false;
+    if (!form.id.trim() || /\s|[*?!\[]/.test(form.id)) return false;
     if (!form.hostname.trim()) return false;
     if (!form.user.trim()) return false;
-    if (form.authMethod === 'key' && !form.identityFile.trim()) return false;
+    if (form.authMethod === 'key' && !hasIdentityFile) return false;
     if (form.agentProxyEnabled) {
       if (form.agentProxyMode === 'tunnel') {
         if (!parseProxyAddrInput(form.agentProxyAddr)) return false;
@@ -414,7 +461,7 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
       }
     }
     return true;
-  }, [form]);
+  }, [form, hasIdentityFile]);
 
   return (
     <div
@@ -432,36 +479,51 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
 
       <div className="grid grid-cols-2 gap-3">
         <LabeledInput
+          label={t('settings.remote.add.displayName')}
+          placeholder={t('settings.remote.add.displayNamePlaceholder')}
+          value={form.displayName}
+          onChange={(v) => setForm({ ...form, displayName: v })}
+        />
+        <LabeledInput
           label={t('settings.remote.add.alias')}
           placeholder="my-server"
           value={form.id}
           onChange={(v) => setForm({ ...form, id: v })}
-          // Alias / Host directive is the join key between ~/.ssh/config and
+          // Alias / Host directive is the join key between OpenSSH config and
           // our pool, AND the name a user may have typed in terminal scripts.
           // Renaming via UI = remove + re-add (out of scope to make safe).
-          disabled={isEdit}
+          disabled={isEdit || connectionFieldsReadOnly}
         />
         <LabeledInput
           label={t('settings.remote.add.hostname')}
           placeholder="example.com or 1.2.3.4"
           value={form.hostname}
           onChange={(v) => setForm({ ...form, hostname: v })}
+          disabled={connectionFieldsReadOnly}
         />
         <LabeledInput
           label={t('settings.remote.add.user')}
           placeholder="ubuntu"
           value={form.user}
           onChange={(v) => setForm({ ...form, user: v })}
+          disabled={connectionFieldsReadOnly}
         />
         <LabeledInput
           label={t('settings.remote.add.port')}
           placeholder="22"
           value={form.port}
           onChange={(v) => setForm({ ...form, port: v.replace(/[^0-9]/g, '') })}
+          disabled={connectionFieldsReadOnly}
         />
       </div>
 
-      <div className="flex flex-col gap-2">
+      {connectionFieldsReadOnly && (
+        <p className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
+          {t('settings.remote.edit.connectionFieldsReadOnly')}
+        </p>
+      )}
+
+      <div className={cn('flex flex-col gap-2', connectionFieldsReadOnly && 'hidden')}>
         <label
           className="text-12 font-medium"
           style={{ color: 'var(--settings-section-sublabel)' }}
@@ -477,22 +539,85 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
             // optional pin (FilteredAgent), in key mode it's the file we
             // read directly. User can unpin / clear from the agent block.
             onClick={() => setForm({ ...form, authMethod: 'agent' })}
+            disabled={connectionFieldsReadOnly}
           />
           <RadioOption
             checked={form.authMethod === 'key'}
             label={t('settings.remote.add.auth.key')}
             hint={t('settings.remote.add.auth.keyHint')}
             onClick={() => setForm({ ...form, authMethod: 'key' })}
+            disabled={connectionFieldsReadOnly}
           />
         </div>
         {form.authMethod === 'key' && (
           <div className="flex flex-col gap-1">
-            <LabeledInput
-              label={t('settings.remote.add.identityFile')}
-              placeholder="~/.ssh/id_ed25519"
-              value={form.identityFile}
-              onChange={(v) => setForm({ ...form, identityFile: v })}
-            />
+            {form.identityFileUnchanged ? (
+              <div className="flex flex-col gap-1">
+                <span
+                  className="text-12 font-medium"
+                  style={{ color: 'var(--settings-section-sublabel)' }}
+                >
+                  {t('settings.remote.add.identityFile')}
+                </span>
+                <div className="flex items-center gap-2">
+                  <code
+                    className="flex-1 text-12 truncate rounded-md px-2 py-1.5"
+                    style={{
+                      backgroundColor: 'var(--surface-chip, #f5f5f5)',
+                      color: 'var(--settings-section-title)',
+                      fontFamily: 'var(--app-font-code, var(--app-font-code-default))',
+                    }}
+                    title={identityFileName}
+                  >
+                    {identityFileName}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => setKeysOpenMode('pick')}
+                    disabled={connectionFieldsReadOnly}
+                    className="h-7 rounded-full px-3 text-12 border"
+                    style={{
+                      backgroundColor: 'transparent',
+                      borderColor: 'var(--settings-btn-secondary-border)',
+                      color: 'var(--settings-btn-secondary-text)',
+                    }}
+                  >
+                    {t('settings.remote.add.auth.pinnedKeyChange')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForm({
+                      ...form,
+                      identityFile: '',
+                      identityFileUnchanged: false,
+                      identityFileName: '',
+                    })}
+                    disabled={connectionFieldsReadOnly}
+                    className="h-7 rounded-full px-3 text-12 border"
+                    style={{
+                      backgroundColor: 'transparent',
+                      borderColor: 'var(--settings-btn-secondary-border)',
+                      color: 'var(--settings-btn-secondary-text)',
+                    }}
+                  >
+                    {t('settings.remote.add.auth.pinnedKeyClear')}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <LabeledInput
+                label={t('settings.remote.add.identityFile')}
+                placeholder="~/.ssh/id_ed25519"
+                value={form.identityFile}
+                onChange={(v) => setForm({
+                  ...form,
+                  identityFile: v,
+                  identityFileUnchanged: false,
+                  identityFileName: '',
+                })}
+                disabled={connectionFieldsReadOnly}
+              />
+            )}
             {/* Picker shortcut — opens dialog with `pick` semantics so a
                 click on a key fills identityFile (instead of just browsing). */}
             <div className="flex items-center gap-2 text-12">
@@ -502,6 +627,7 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
               <button
                 type="button"
                 onClick={() => setKeysOpenMode('pick')}
+                disabled={connectionFieldsReadOnly}
                 className="inline-flex items-center gap-1 underline underline-offset-2"
                 style={{ color: 'var(--settings-section-title)' }}
               >
@@ -523,7 +649,7 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
               >
                 {t('settings.remote.add.auth.pinnedKeyLabel')}
               </span>
-              {form.identityFile ? (
+              {hasIdentityFile ? (
                 <div className="flex items-center gap-2">
                   <code
                     className="flex-1 text-12 truncate rounded-md px-2 py-1.5"
@@ -532,13 +658,14 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
                       color: 'var(--settings-section-title)',
                       fontFamily: 'var(--app-font-code, var(--app-font-code-default))',
                     }}
-                    title={form.identityFile}
+                    title={identityFileName}
                   >
-                    {form.identityFile.split(/[/\\]/).pop()}
+                    {identityFileName}
                   </code>
                   <button
                     type="button"
                     onClick={() => setKeysOpenMode('pinPick')}
+                    disabled={connectionFieldsReadOnly}
                     className="h-7 rounded-full px-3 text-12 border"
                     style={{
                       backgroundColor: 'transparent',
@@ -550,7 +677,13 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setForm({ ...form, identityFile: '' })}
+                    onClick={() => setForm({
+                      ...form,
+                      identityFile: '',
+                      identityFileUnchanged: false,
+                      identityFileName: '',
+                    })}
+                    disabled={connectionFieldsReadOnly}
                     className="h-7 rounded-full px-3 text-12 border"
                     style={{
                       backgroundColor: 'transparent',
@@ -565,6 +698,7 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
                 <button
                   type="button"
                   onClick={() => setKeysOpenMode('pinPick')}
+                  disabled={connectionFieldsReadOnly}
                   className="self-start inline-flex items-center gap-1 h-7 rounded-full px-3 text-12 leading-none border"
                   style={{
                     backgroundColor: 'transparent',
@@ -580,7 +714,7 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
                 className="text-11"
                 style={{ color: 'var(--settings-integration-subtitle)' }}
               >
-                {form.identityFile
+                {hasIdentityFile
                   ? t('settings.remote.add.auth.pinnedKeyHintSet')
                   : t('settings.remote.add.auth.pinnedKeyHintUnset')}
               </span>
@@ -604,6 +738,12 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
           </div>
         )}
       </div>
+
+      {connectionFieldsReadOnly && (
+        <p className="text-12" style={{ color: 'var(--settings-integration-subtitle)' }}>
+          {t('settings.remote.edit.authenticationFromSshConfig')}
+        </p>
+      )}
 
       {/* ── Agent Proxy ──
           开关 + 双模式。pref 落 desktop 本地 ssh-host-prefs.json (不写
@@ -765,8 +905,9 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
             pick    → key-file mode picking identityFile (authMethod stays 'key')
             pinPick → agent mode pinning the agent to one key (authMethod stays 'agent')
             manage  → pure inspection, no mutation
-          identityFile in both pick/pinPick is the private key path; resolveAuth
-          derives the matching .pub for the FilteredAgent fingerprint lookup. */}
+          identityFile in both pick/pinPick is the newly selected private-key
+          path. Existing paths stay in Main and are represented here only by a
+          basename plus identityFileUnchanged. */}
       <SshKeySetupDialog
         hostId={null}
         hostInline={{
@@ -778,7 +919,12 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
         onOpenChange={(open) => { if (!open) setKeysOpenMode(null); }}
         onKeyPicked={(keysOpenMode === 'pick' || keysOpenMode === 'pinPick')
           ? (_pubkeyPath, privateKeyPath) => {
-              setForm((prev) => ({ ...prev, identityFile: privateKeyPath }));
+              setForm((prev) => ({
+                ...prev,
+                identityFile: privateKeyPath,
+                identityFileUnchanged: false,
+                identityFileName: privateKeyPath.split(/[/\\]/).pop() ?? '',
+              }));
               setKeysOpenMode(null);
             }
           : undefined}
@@ -832,17 +978,23 @@ function RadioOption({
   label,
   hint,
   onClick,
+  disabled = false,
 }: {
   checked: boolean;
   label: string;
   hint: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-1 flex-col gap-1 items-start text-left rounded-lg border p-3 transition-colors"
+      disabled={disabled}
+      className={cn(
+        'flex flex-1 flex-col gap-1 items-start text-left rounded-lg border p-3 transition-colors',
+        disabled && 'cursor-not-allowed opacity-60',
+      )}
       style={{
         backgroundColor: checked
           ? 'var(--settings-menu-bg-selected)'
@@ -867,6 +1019,8 @@ function RadioOption({
 export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}) {
   const { t } = useTranslation();
   const [hosts, setHosts] = useState<RemoteHostSnapshot[]>([]);
+  const [configWarningCount, setConfigWarningCount] = useState(0);
+  const [configDiagnostic, setConfigDiagnostic] = useState<SshConfigDiagnosticKind | null>(null);
   const [adding, setAdding] = useState(false);
   /** Per-host busy flag so per-row buttons disable independently of each other. */
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -897,15 +1051,21 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
     });
   }, []);
 
+  const applyListResult = useCallback((res: RemoteSshListResult) => {
+    setHosts(res.hosts);
+    setConfigWarningCount(res.warningCount ?? 0);
+    setConfigDiagnostic(res.diagnostic?.kind ?? null);
+    remoteSshHostsStore.replace(res.hosts);
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const res = await window.electronAPI.remoteSsh.list();
-      setHosts(res.hosts);
-      remoteSshHostsStore.replace(res.hosts);
+      applyListResult(res);
     } catch (err) {
       toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.loadFailed' })));
     }
-  }, [t]);
+  }, [applyListResult, t]);
 
   useEffect(() => {
     void refresh();
@@ -926,13 +1086,23 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
   const handleReload = useCallback(async () => {
     try {
       const res = await window.electronAPI.remoteSsh.reloadConfig();
-      setHosts(res.hosts as RemoteHostSnapshot[]);
-      remoteSshHostsStore.replace(res.hosts);
-      toast.success(t('settings.remote.toast.reloaded'));
+      applyListResult(res);
+      if (res.diagnostic) toast.error(t(`settings.remote.configDiagnostic.${res.diagnostic.kind}`));
+      else toast.success(t('settings.remote.toast.reloaded'));
     } catch (err) {
       toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.loadFailed' })));
     }
-  }, [t]);
+  }, [applyListResult, t]);
+
+  const reloadCommittedMutationOnce = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await window.electronAPI.remoteSsh.reloadConfig();
+      applyListResult(res);
+      return !res.diagnostic;
+    } catch {
+      return false;
+    }
+  }, [applyListResult]);
 
   const handleConnect = useCallback(async (id: string) => {
     setBusy(id, true);
@@ -1000,14 +1170,20 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       setHosts((prev) => prev.filter((h) => h.config.id !== id));
       remoteSshHostsStore.remove(id);
     } catch (err) {
-      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.removeFailed' })));
+      const recovered = extractIpcError(err)?.code === 'SSH_CONFIG_RELOAD_REQUIRED'
+        && await reloadCommittedMutationOnce();
+      if (!recovered) {
+        toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.removeFailed' })));
+      }
     } finally {
       setBusy(id, false);
     }
-  }, [setBusy, t]);
+  }, [reloadCommittedMutationOnce, setBusy, t]);
 
   const handleEdit = useCallback(async (form: AddFormState) => {
     setEditBusy(true);
+    const currentHost = hosts.find((host) => host.config.id === form.id);
+    let connectionFieldsChanged = false;
     try {
       const port = parseInt(form.port, 10);
       // identityFile is meaningful in BOTH auth modes:
@@ -1015,6 +1191,16 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       //   agent → optional pin (FilteredAgent only offers this one key)
       // Empty string from the input = unset, send undefined.
       const trimmedIdentityFile = form.identityFile.trim();
+      const normalizedPort = Number.isFinite(port) && port > 0 ? port : 22;
+      const identityFileChanged = !form.identityFileUnchanged
+        && (currentHost?.config.identityFileConfigured === true || trimmedIdentityFile.length > 0);
+      connectionFieldsChanged = currentHost !== undefined && (
+        currentHost.config.hostname !== form.hostname.trim()
+        || currentHost.config.user !== form.user.trim()
+        || currentHost.config.port !== normalizedPort
+        || currentHost.config.authMethod !== form.authMethod
+        || identityFileChanged
+      );
       const proxyPayload = buildAgentProxyPayload(form);
       if (!proxyPayload.ok) {
         toast.error(t(proxyPayload.errorKey));
@@ -1022,11 +1208,13 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       }
       await window.electronAPI.remoteSsh.update({
         id: form.id.trim(),
+        displayName: form.displayName.trim() || form.id.trim(),
         hostname: form.hostname.trim(),
         user: form.user.trim(),
-        port: Number.isFinite(port) && port > 0 ? port : 22,
+        port: normalizedPort,
         authMethod: form.authMethod,
         identityFile: trimmedIdentityFile || undefined,
+        identityFileUnchanged: form.identityFileUnchanged,
         agentProxy: proxyPayload.agentProxy,
       });
       // refresh() pulls the latest snapshot; updateConfig already fired a
@@ -1036,11 +1224,22 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       setEditingId(null);
       toast.success(t('settings.remote.toast.edited'));
     } catch (err) {
-      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.editFailed' })));
+      const code = extractIpcError(err)?.code;
+      const prefsWriteFailed = code === 'SSH_HOST_PREFS_WRITE_FAILED';
+      const recovered = (code === 'SSH_CONFIG_RELOAD_REQUIRED'
+        || (prefsWriteFailed && connectionFieldsChanged))
+        && await reloadCommittedMutationOnce();
+      if (recovered) {
+        setEditingId(null);
+        if (prefsWriteFailed) toast.error(t('ipcError.SSH_HOST_PREFS_WRITE_FAILED'));
+        else toast.success(t('settings.remote.toast.edited'));
+      } else {
+        toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.editFailed' })));
+      }
     } finally {
       setEditBusy(false);
     }
-  }, [refresh, t]);
+  }, [hosts, refresh, reloadCommittedMutationOnce, t]);
 
   const handleAdd = useCallback(async (form: AddFormState) => {
     setAddBusy(true);
@@ -1055,6 +1254,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       }
       await window.electronAPI.remoteSsh.add({
         id: form.id.trim(),
+        displayName: form.displayName.trim() || form.id.trim(),
         hostname: form.hostname.trim(),
         user: form.user.trim(),
         port: Number.isFinite(port) && port > 0 ? port : 22,
@@ -1066,11 +1266,30 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       setAdding(false);
       toast.success(t('settings.remote.toast.added'));
     } catch (err) {
-      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.addFailed' })));
+      const code = extractIpcError(err)?.code;
+      if (code === 'PRECONDITION_FAILED') {
+        // The main process rejected a concurrent SSH-config ownership change.
+        // Re-read the graph so the conflicting alias is visible before the
+        // user retries; this is not a committed mutation and must not close
+        // the add form or show a success toast.
+        await reloadCommittedMutationOnce();
+        toast.error(t('settings.remote.toast.addConflict'));
+        return;
+      }
+      const prefsWriteFailed = code === 'SSH_HOST_PREFS_WRITE_FAILED';
+      const recovered = (code === 'SSH_CONFIG_RELOAD_REQUIRED' || prefsWriteFailed)
+        && await reloadCommittedMutationOnce();
+      if (recovered) {
+        setAdding(false);
+        if (prefsWriteFailed) toast.error(t('ipcError.SSH_HOST_PREFS_WRITE_FAILED'));
+        else toast.success(t('settings.remote.toast.added'));
+      } else {
+        toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.addFailed' })));
+      }
     } finally {
       setAddBusy(false);
     }
-  }, [refresh, t]);
+  }, [refresh, reloadCommittedMutationOnce, t]);
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -1128,6 +1347,21 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
         </div>
       </div>
 
+      {(configDiagnostic !== null || configWarningCount > 0) && (
+        <div className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2.5">
+          <AlertTriangle
+            size={15}
+            aria-hidden="true"
+            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+          />
+          <p className="text-12 leading-[1.5] text-[var(--settings-section-title)]">
+            {configDiagnostic
+              ? t(`settings.remote.configDiagnostic.${configDiagnostic}`)
+              : t('settings.remote.configWarning')}
+          </p>
+        </div>
+      )}
+
       <div
         className={cn('flex flex-col rounded-xl', 'bg-[var(--settings-theme-card-bg)]')}
         style={{ border: '1px solid var(--settings-theme-card-border)' }}
@@ -1180,11 +1414,14 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
                   busy={editBusy}
                   initial={{
                     id: snap.config.id,
+                    displayName: snap.config.displayName ?? snap.config.id,
                     hostname: snap.config.hostname,
                     user: snap.config.user,
                     port: String(snap.config.port ?? 22),
                     authMethod: snap.config.authMethod === 'key' ? 'key' : 'agent',
-                    identityFile: snap.config.identityFile ?? '',
+                    identityFile: '',
+                    identityFileUnchanged: snap.config.identityFileConfigured,
+                    identityFileName: snap.config.identityFileName ?? '',
                     agentProxyEnabled: snap.agentProxy?.enabled === true,
                     agentProxyMode: snap.agentProxy?.mode === 'env' ? 'env' : 'tunnel',
                     agentProxyAddr: snap.agentProxy?.mode === 'tunnel'
@@ -1197,6 +1434,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
                       ? snap.agentProxy.proxyUrl
                       : 'http://127.0.0.1:7890',
                   }}
+                  connectionFieldsReadOnly={!snap.config.managedByCindy}
                   onSubmit={handleEdit}
                   onCancel={() => setEditingId(null)}
                 />

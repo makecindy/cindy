@@ -255,7 +255,12 @@ export interface AppServerHostOptions {
    * 关联中的 JSON-RPC response 明确返回 cloudRequirements Auth/relogin 时调用一次
    * (单次 latch 在 client 内)。stderr 始终只作为诊断日志。
    */
-  onAuthInvalidated?: (reason: string) => void;
+  onAuthInvalidated?: (
+    reason: string,
+    context?: { credentialGeneration?: string | null },
+  ) => void;
+  /** Returns the credential generation frozen for the current concrete transport. */
+  captureCredentialGeneration?: () => string | null;
   /**
    * Host 创建时冻结的事实:该 app-server 的 model_provider.base_url 是否走
    * 本机 codex proxy。session 级 prompt gate 只读这个值,不再 live 读取全局状态。
@@ -273,6 +278,13 @@ export interface AppServerHostOptions {
   remoteCompactionProviderId?: string;
   /** Cindy Provider codex/* 的内部 OpenAI transport identity。 */
   cindyRemoteCompactionProviderId?: string;
+  /** Generic custom Provider identities and capabilities frozen into this process. */
+  codexCustomProviderRoutes?: Array<{
+    providerId: string;
+    modelProviderId: string;
+    capabilities: Readonly<Record<string, boolean | undefined>>;
+    responseModels: readonly string[];
+  }>;
   /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   /** Cindy-side fallback used only when a subagent's actual model is not reported. */
@@ -436,6 +448,45 @@ export class AppServerHost {
     return this.opts.cindyRemoteCompactionProviderId ?? null;
   }
 
+  getCustomProviderModelProviderId(
+    providerId: string | null | undefined,
+    model: string | null | undefined,
+  ): string | null {
+    if (!providerId || !model) return null;
+    const route = this.opts.codexCustomProviderRoutes?.find(
+      (candidate) => candidate.providerId === providerId,
+    );
+    return route?.responseModels.includes(model) ? route.modelProviderId : null;
+  }
+
+  getCustomProviderThreadPolicy(
+    providerId: string | null | undefined,
+    model: string | null | undefined,
+  ): {
+    dynamicIdentity: boolean;
+    disableSubagents: boolean;
+    disableModelOverrides: boolean;
+  } {
+    const route = providerId && model
+      ? this.opts.codexCustomProviderRoutes?.find(
+          (candidate) =>
+            candidate.providerId === providerId && candidate.responseModels.includes(model),
+        )
+      : undefined;
+    if (!route) {
+      return { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false };
+    }
+    const child = this.opts.subagentRoute;
+    const childCompatible = !child || (
+      child.providerId === route.providerId && route.responseModels.includes(child.catalogModel)
+    );
+    return {
+      dynamicIdentity: true,
+      disableSubagents: !childCompatible,
+      disableModelOverrides: true,
+    };
+  }
+
   /**
    * Return the host-owned MCP URL overrides for one concrete Session instance.
    * Anonymous/legacy callers keep the spawn-level unbound URLs, which preserves
@@ -542,6 +593,7 @@ export class AppServerHost {
       logger: this.opts.logger,
       onTransportError: (err) => this.handleTransportError(err),
       onAuthInvalidated: this.opts.onAuthInvalidated,
+      captureCredentialGeneration: this.opts.captureCredentialGeneration,
     });
     this.client = client;
 
@@ -798,7 +850,10 @@ export class AppServerHost {
    * **必须** 在 app.before-quit 显式调一次 — Windows 子进程不会随父进程死,
    * 不显式收割就成孤儿。
    */
-  async shutdown(reason = 'AppServerHost.shutdown()'): Promise<void> {
+  async shutdown(
+    reason = 'AppServerHost.shutdown()',
+    opts?: { throwOnTransportError?: boolean },
+  ): Promise<void> {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     // MCP readiness is scoped to the concrete app-server process. A normal
@@ -816,7 +871,7 @@ export class AppServerHost {
     this.client = null;
     this.startPromise = null;
     try {
-      if (c) await c.close({ reason });
+      if (c) await c.close({ reason, throwOnTransportError: opts?.throwOnTransportError });
     } finally {
       // 重置, 允许之后的 ensureStarted 重新 spawn (transport error 恢复路径)
       this.shuttingDown = false;
@@ -827,9 +882,12 @@ export class AppServerHost {
    * 终态关停。凭据/账号切换后旧 host 不能再被旧 session 闭包重新拉起；
    * transport error 自愈仍走普通 shutdown(),保留同对象重启能力。
    */
-  async retire(reason = 'AppServerHost.retire()'): Promise<void> {
+  async retire(
+    reason = 'AppServerHost.retire()',
+    opts?: { throwOnTransportError?: boolean },
+  ): Promise<void> {
     this.retired = true;
-    await this.shutdown(reason);
+    await this.shutdown(reason, opts);
   }
 
   /**
@@ -1470,34 +1528,17 @@ export class AppServerHost {
   }
 
   /**
-   * 子进程 crash / IO 错误: 广播给所有 subscriber 的 error handler, 让上层每个
-   * session 都能 emit 'error' AgentEvent + 结束自己的 event queue, 然后强制 shutdown
-   * (此后任何 subscribeThread/request 都会拒绝, 上层下次需要时拿不到 host)。
-   *
-   * 注意: shutdown 之后 startPromise = null, 下一次 ensureStarted 可以重新 spawn。
-   * 但当前内存里的 subscribers 都已被清掉 — 上层 session 拿到 error 后该自己 close。
+   * 子进程 crash / IO 错误: 将所有 subscriber 作为 host 强制退役处理，让每个
+   * session 按自己的真实状态收口（空闲静默结束 event queue，在飞任务发终态
+   * error + Done），然后强制 shutdown。此后下一次 ensureStarted 可以重新 spawn。
    */
   private handleTransportError(err: Error): void {
-    this.logger.error('transport error, notifying subscribers + shutting down', { message: err.message });
-    this.broadcastTransportErrorToSubscribers(`app-server transport error: ${err.message}`);
+    this.logger.error('transport error, retiring subscribers + shutting down', { message: err.message });
+    // Treat a transport crash as a forced host replacement. Idle sessions must
+    // end their event queues, while sessions with in-flight work need the
+    // structured terminal error + Done sequence from their own handlers.
+    this.notifySubscribersOfForcedRetire(`transport error: ${err.message}`);
     void this.shutdown(`transport error: ${err.message}`);
-  }
-
-  /** ErrorNotification 的 shape 不能完全合成 (没真实 turnId), 用最小可信字段。 */
-  private broadcastTransportErrorToSubscribers(message: string): void {
-    for (const [threadId, handlers] of this.subscribers) {
-      try {
-        handlers.error?.({
-          threadId,
-          turnId: '',
-          willRetry: false,
-          scope: 'transport',
-          error: { message },
-        });
-      } catch (e) {
-        this.logger.warn('error broadcast handler threw', { threadId, message: (e as Error).message });
-      }
-    }
   }
 
   // ── 诊断辅助 (测试 / 日志) ────────────────────────────────────────────────

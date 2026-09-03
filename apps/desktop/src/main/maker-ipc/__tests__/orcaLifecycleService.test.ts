@@ -44,6 +44,7 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
       calls.push(`createActiveTeam:${leadSessionId}`);
       return { id: 'team-1', leadSessionId };
     }),
+    isOrphanedTeamInit: vi.fn(async () => false),
     getWorkerPermissionMode: vi.fn(() => 'auto' as const),
     setWorkerPermissionMode: vi.fn((workerPermissionMode) => {
       calls.push(`setWorkerPermissionMode:${workerPermissionMode}`);
@@ -878,5 +879,99 @@ describe('OrcaLifecycleService', () => {
       'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
     ]);
+  });
+});
+
+describe('enableTeam — 孤儿空团队自动回收 (#3555)', () => {
+  const enableParams = {
+    leadSessionId: 'lead-1',
+    workerAgent: 'codex',
+    role: 'reviewer',
+    label: 'reviewer',
+  } as const;
+
+  it('active 空团队(零 worker 且无存活 reservation)→ 按 failed 收口后继续启用', async () => {
+    const { calls, deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      isOrphanedTeamInit: vi.fn(async () => true),
+    });
+    await expect(service.enableTeam(enableParams)).resolves.toMatchObject({
+      teamId: 'team-1',
+      workerId: 'worker-1',
+    });
+    expect(deps.isOrphanedTeamInit).toHaveBeenCalledWith('team-existing');
+    expect(deps.markTeamEnded).toHaveBeenCalledWith('team-existing', 'failed');
+    expect(calls).toContain('createActiveTeam:lead-1');
+  });
+
+  it('非孤儿 → 维持 ALREADY_EXISTS,不动既有 team', async () => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      isOrphanedTeamInit: vi.fn(async () => false),
+    });
+    await expect(service.enableTeam(enableParams)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'ALREADY_EXISTS',
+    });
+    expect(deps.markTeamEnded).not.toHaveBeenCalled();
+  });
+
+  it('孤儿判定抛错 → 保守维持 ALREADY_EXISTS,绝不误收可能有内容的 team', async () => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      isOrphanedTeamInit: vi.fn(async () => {
+        throw new Error('db down');
+      }),
+    });
+    await expect(service.enableTeam(enableParams)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'ALREADY_EXISTS',
+    });
+    expect(deps.markTeamEnded).not.toHaveBeenCalled();
+  });
+
+  it('并发 enableTeam:in-flight 初始化中的 team 不会被误判孤儿收口(review P1)', async () => {
+    // 竞态:A 已 createActiveTeam、worker/reservation 尚未落地时,B 进来看到
+    // 零 worker 团队。若无 in-flight 守卫,B 会把 A 的 team 判孤儿标 failed,
+    // A 随后把 worker 写进 failed team 并返回成功——结果与持久化状态不一致。
+    let releaseCreate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const { deps, service } = createDeps({
+      // 若守卫失效,B 会调用它并走收口——断言它根本不被咨询。
+      isOrphanedTeamInit: vi.fn(async () => true),
+    });
+    let activeTeam: OrcaTeamSnapshot | null = null;
+    vi.mocked(deps.getActiveTeamByLead).mockImplementation(async () => activeTeam);
+    vi.mocked(deps.createActiveTeam).mockImplementation(async (leadSessionId) => {
+      activeTeam = { id: 'team-a', leadSessionId };
+      return activeTeam;
+    });
+    vi.mocked(deps.createWorkerInTeam).mockImplementation(async (params) => {
+      await gate;
+      return createdWorker({ teamId: params.teamId });
+    });
+
+    const first = service.enableTeam({
+      leadSessionId: 'lead-1',
+      workerAgent: 'codex',
+      role: 'reviewer',
+      label: 'reviewer',
+    });
+    await vi.waitFor(() => expect(deps.createWorkerInTeam).toHaveBeenCalled());
+
+    const second = await service.enableTeam({
+      leadSessionId: 'lead-1',
+      workerAgent: 'codex',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    });
+    expect(second).toMatchObject({ ok: false, errorCode: 'ALREADY_EXISTS' });
+    expect(deps.isOrphanedTeamInit).not.toHaveBeenCalled();
+    expect(deps.markTeamEnded).not.toHaveBeenCalled();
+
+    releaseCreate();
+    await expect(first).resolves.toMatchObject({ teamId: 'team-a' });
   });
 });

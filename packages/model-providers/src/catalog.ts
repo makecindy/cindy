@@ -545,6 +545,24 @@ function isValidPreset(v: unknown): v is ProviderPreset {
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
+    if (
+      r.supportsImageGeneration !== undefined &&
+      typeof r.supportsImageGeneration !== 'boolean'
+    ) {
+      return false;
+    }
+    if (r.supportsImageGeneration === true && agent !== 'codex') return false;
+    const defaultWireProtocol = r.wireProtocol ?? (agent === 'codex' ? 'openai-responses' : undefined);
+    const hasResponsesRoute =
+      defaultWireProtocol === 'openai-responses' ||
+      r.models.some((model) => {
+        if (!model || typeof model !== 'object') return false;
+        const route = (model as Record<string, unknown>).route;
+        return route && typeof route === 'object' && !Array.isArray(route)
+          ? (route as Record<string, unknown>).wireProtocol === 'openai-responses'
+          : false;
+      });
+    if (r.supportsImageGeneration === true && !hasResponsesRoute) return false;
     if (r.headers !== undefined) {
       if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) return false;
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;

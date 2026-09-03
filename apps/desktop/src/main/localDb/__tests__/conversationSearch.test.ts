@@ -1,7 +1,23 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { DbClient } from '../client/DbClient.js';
+import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
+import * as schema from '../schema.js';
+
+const mocks = vi.hoisted(() => ({
+  searchChatHistoryHybrid: vi.fn(),
+}));
+
+vi.mock('../chatHistorySearch.js', () => ({
+  searchChatHistoryHybrid: mocks.searchChatHistoryHybrid,
+}));
+
+import { searchConversations } from '../conversationSearch.js';
 
 const conversationSearchSource = readFileSync(
   resolve(__dirname, '..', 'conversationSearch.ts'),
@@ -44,5 +60,151 @@ describe('conversationSearch source invariants', () => {
     expect(conversationSearchSource).not.toContain(
       'filters.sessionIds !== null || filters.workingDirs !== null',
     );
+  });
+
+  it('keeps FTS hits only when visible text matches, not merely because preview is non-empty', () => {
+    expect(conversationSearchSource).toContain('visibleTextMatchesMessagesFtsQuery');
+    expect(conversationSearchSource).toContain('preview.keywordMatchedVisibleText');
+    expect(conversationSearchSource).not.toContain('preview.preview.length === 0 ? null : hit.ftsRank');
+  });
+});
+
+function createSearchDb(): Database.Database {
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'New Maker',
+      working_dir TEXT,
+      workspace_kind TEXT NOT NULL DEFAULT 'project',
+      model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      effort TEXT NOT NULL DEFAULT 'high',
+      permission_mode TEXT NOT NULL DEFAULT 'ask',
+      status TEXT NOT NULL DEFAULT 'active',
+      sdk_session_id TEXT,
+      total_token_usage INTEGER NOT NULL DEFAULT 0,
+      total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_amount REAL NOT NULL DEFAULT 0,
+      total_cost_currency TEXT,
+      total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
+      context_tokens INTEGER NOT NULL DEFAULT 0,
+      context_window INTEGER NOT NULL DEFAULT 0,
+      fast_mode INTEGER NOT NULL DEFAULT 0,
+      plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
+      cleared_at INTEGER,
+      pinned_at INTEGER,
+      summary TEXT,
+      provider_id TEXT,
+      user_send_at INTEGER,
+      agent_kind TEXT NOT NULL DEFAULT 'cc',
+      orca_role TEXT,
+      parent_session_id TEXT,
+      forked_at_message_id TEXT,
+      worktree_path TEXT,
+      source TEXT NOT NULL DEFAULT 'desktop',
+      feishu_open_id TEXT,
+      feishu_bot_app_id TEXT,
+      im_bot_context_id TEXT,
+      im_user_id TEXT,
+      used_project_context INTEGER NOT NULL DEFAULT 0,
+      codex_history_has_product_prompt INTEGER,
+      codex_plan_json TEXT,
+      extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
+      remote_host_id TEXT,
+      active_turn_started_at INTEGER,
+      active_turn_pid INTEGER,
+      last_turn_ended_at INTEGER,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      tool_use_id TEXT,
+      agent_meta TEXT,
+      agent_kind TEXT,
+      created_at INTEGER NOT NULL,
+      rewind_at INTEGER
+    );
+  `);
+  return db;
+}
+
+function makeSearchDbClient(db: Database.Database): DbClient {
+  return {
+    drizzle: drizzle(db, { schema }),
+  } as unknown as DbClient;
+}
+
+function insertSearchSession(
+  db: Database.Database,
+  id: string,
+  updatedAt: number,
+  userSendAt: number | null,
+): void {
+  db.prepare(
+    `INSERT INTO sessions (id, title, status, source, agent_kind, user_send_at, created_at, updated_at)
+     VALUES (?, ?, 'active', 'desktop', 'cc', ?, ?, ?)`,
+  ).run(id, `needle ${id}`, userSendAt, updatedAt, updatedAt);
+}
+
+afterEach(() => {
+  clearCurrentDbClient();
+  vi.useRealTimers();
+  mocks.searchChatHistoryHybrid.mockReset();
+});
+
+describe('conversationSearch recent activity SQL filtering', () => {
+  it('filters the SQLite session candidates before title and content matching', async () => {
+    const db = createSearchDb();
+    const client = makeSearchDbClient(db);
+    setCurrentDbClient(client, 'test-user');
+    vi.useFakeTimers();
+    const now = Date.parse('2026-09-02T00:00:00.000Z');
+    vi.setSystemTime(now);
+    mocks.searchChatHistoryHybrid.mockResolvedValue({
+      hits: [],
+      sessions: {},
+      vectorUsed: false,
+      vectorSkipReason: null,
+      nextOffset: null,
+      hasMore: false,
+      poolSize: 0,
+      poolCapped: false,
+    });
+
+    try {
+      const day = 24 * 60 * 60 * 1000;
+      insertSearchSession(db, 'updated-recently', now - day, null);
+      insertSearchSession(db, 'sent-recently', now - 10 * day, now - day);
+      insertSearchSession(db, 'stale', now - 10 * day, now - 10 * day);
+
+      const response = await searchConversations({
+        query: 'needle',
+        semanticMode: 'keyword',
+        filters: { lastActivity: '3d' },
+      });
+
+      expect(response.results.map((result) => result.session.id).sort()).toEqual([
+        'updated-recently',
+        'sent-recently',
+      ].sort());
+      expect(mocks.searchChatHistoryHybrid).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionIds: ['updated-recently', 'sent-recently'],
+          sessionActivityFromMs: now - 3 * day,
+        }),
+      );
+    } finally {
+      clearCurrentDbClient(client);
+      db.close();
+    }
   });
 });

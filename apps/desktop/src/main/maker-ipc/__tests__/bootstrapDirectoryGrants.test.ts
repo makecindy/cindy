@@ -64,7 +64,7 @@ describe('prepareDirectoryGrantsForBootstrap', () => {
   it('drops caller-supplied writable roots when no persisted session grant exists', async () => {
     const { root, workspace, shared, specs, output } = makeGrantTree();
     const sharedAlias = path.join(root, 'shared-alias');
-    symlinkSync(shared, sharedAlias, 'dir');
+    symlinkSync(shared, sharedAlias, process.platform === 'win32' ? 'junction' : 'dir');
     const opts = createOpts(workspace, [specs], [sharedAlias, output]);
     const persistExistingSession = vi.fn(async () => {
       // Direct maker:create-session has no SQLite row until maker-core creates it.

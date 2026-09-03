@@ -6,8 +6,11 @@ import { sessions } from '../localDb/schema.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   type WorkLouderCodexTaskOption,
 } from '../../shared/workLouderCodex.js';
+
+const KEYBOARD_TASK_SLOT_LIMIT = WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.length;
 
 export const WORKLOUDER_CODEX_TASK_OPTION_LIMIT = 100;
 const TASK_OPTION_LIMIT = WORKLOUDER_CODEX_TASK_OPTION_LIMIT;
@@ -27,11 +30,11 @@ export interface WorkLouderCodexTaskCatalog {
   options: WorkLouderCodexTaskOption[];
 }
 
-/** Keeps database recency order unchanged and caps the keyboard projection at six tasks. */
+/** Keeps database recency order unchanged and caps the keyboard projection at the board size. */
 export function selectWorkLouderCodexRecentTaskSlots(
   rows: readonly WorkLouderCodexTaskSlotRow[],
 ): string[] {
-  return rows.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map((row) => row.id);
+  return rows.slice(0, KEYBOARD_TASK_SLOT_LIMIT).map((row) => row.id);
 }
 
 /** Reads the active task catalog used by recent, pinned, priority, and custom modes. */
@@ -109,9 +112,9 @@ export function buildWorkLouderCodexTaskCatalog(
   });
   const sidebarSource =
     options.publishedVisibleOrder || visibleOrder.length > 0 ? publishedVisibleRows : catalogRows;
-  const sidebar = sidebarSource.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(toTaskOption);
+  const sidebar = sidebarSource.slice(0, KEYBOARD_TASK_SLOT_LIMIT).map(toTaskOption);
   const lastSent = sortLastSentRows(catalogRows)
-    .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)
+    .slice(0, KEYBOARD_TASK_SLOT_LIMIT)
     .map(toTaskOption);
   return {
     sidebar,

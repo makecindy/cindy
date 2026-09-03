@@ -317,6 +317,12 @@ export interface SshHostSnapshotLike {
     port: number;
     user: string;
     authMethod: 'agent' | 'key';
+    /** Main-only path metadata used solely to redact model-visible errors. */
+    identityFile?: string;
+    sshAuthentication?: {
+      identityAgent?: string;
+      configuredIdentityFiles?: string[];
+    };
     source: 'ssh-config' | 'manual';
   };
   status:
@@ -374,6 +380,8 @@ export interface SshPoolLike {
 export interface SshMcpDeps {
   getPool(): Promise<SshPoolLike>;
   ensureReady(id: string): Promise<void>;
+  /** Host-owned synchronous boundary redactor. It must not retain its inputs. */
+  redactSensitiveText(snapshot: SshHostSnapshotLike, text: string): string;
   logger?: LiziMcpLogger;
 }
 

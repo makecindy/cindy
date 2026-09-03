@@ -26,6 +26,154 @@ export function oldestMessageCursor(messages: readonly RemoteMessage[]): string 
   return oldest?.id ?? null;
 }
 
+/**
+ * A reclaimed message window can retain locally generated Compact cards after the host rows that
+ * originally surrounded them have been evicted. Transcript replay also lacks the original boundary
+ * timestamp, so several historical boundaries can be stamped "now" and become adjacent. Rendering
+ * either shape produces a misleading wall of Compact cards. Keep every card in the store (they are
+ * local-only and cannot be fetched again), while the visible projection hides a detached prefix,
+ * keeps only the newest detached trailing boundary, and collapses adjacent in-window Compact cards.
+ * A persisted host row between boundaries always preserves both. Temporary `mobile-stream-*` rows
+ * are rendered, but do not widen the authoritative persisted-host window.
+ */
+export function projectLoadedMessageWindow(
+  messages: readonly RemoteMessage[],
+): readonly RemoteMessage[] {
+  let firstHostIndex = -1;
+  let lastHostIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (!isHostMessageRow(messages[index])) continue;
+    if (firstHostIndex < 0) firstHostIndex = index;
+    lastHostIndex = index;
+  }
+  if (firstHostIndex < 0) {
+    let changed = false;
+    const projected: RemoteMessage[] = [];
+    for (const message of messages) {
+      const previous = projected.at(-1);
+      if (isLocalCompactCard(message) && previous && isLocalCompactCard(previous)) {
+        projected[projected.length - 1] = message;
+        changed = true;
+        continue;
+      }
+      projected.push(message);
+    }
+    return changed ? projected : messages;
+  }
+
+  let latestDetachedTailCompactIndex = -1;
+  for (let index = lastHostIndex + 1; index < messages.length; index += 1) {
+    if (isLocalCompactCard(messages[index])) latestDetachedTailCompactIndex = index;
+  }
+
+  let changed = false;
+  const projected: RemoteMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const localCompact = isLocalCompactCard(message);
+    const detachedPrefix = localCompact && index < firstHostIndex;
+    const staleDetachedTail = localCompact
+      && index > lastHostIndex
+      && index !== latestDetachedTailCompactIndex;
+    if (detachedPrefix || staleDetachedTail) {
+      changed = true;
+      continue;
+    }
+    const previous = projected.at(-1);
+    if (isLocalCompactCard(message) && previous && isLocalCompactCard(previous)) {
+      projected[projected.length - 1] = message;
+      changed = true;
+      continue;
+    }
+    projected.push(message);
+  }
+  return changed ? projected : messages;
+}
+
+export interface LoadedMessageWindowProjection {
+  changedIndexes: ReadonlySet<number>;
+  projected: readonly RemoteMessage[];
+  source: readonly RemoteMessage[];
+  sourceToProjectedIndex: Int32Array | null;
+  structureToken: object;
+}
+
+/**
+ * Reuses Compact-card projection while a stable structure token proves that only row content
+ * changed. The source-to-projected map lets a streaming delta patch its one visible row without
+ * scanning the complete loaded window again.
+ */
+export function projectLoadedMessageWindowIncrementally(input: {
+  changedIndexes: ReadonlySet<number>;
+  messages: readonly RemoteMessage[];
+  previous?: LoadedMessageWindowProjection | null;
+  structureToken: object;
+}): LoadedMessageWindowProjection {
+  const { changedIndexes, messages, previous, structureToken } = input;
+  const sameStructure = previous?.structureToken === structureToken
+    && previous.source.length === messages.length;
+  let projected: readonly RemoteMessage[];
+  let sourceToProjectedIndex: Int32Array | null;
+  if (sameStructure && messages === previous.source) {
+    projected = previous.projected;
+    sourceToProjectedIndex = previous.sourceToProjectedIndex;
+  } else if (sameStructure && previous.projected === previous.source) {
+    projected = messages;
+    sourceToProjectedIndex = null;
+  } else if (
+    sameStructure
+    && previous.sourceToProjectedIndex?.length === messages.length
+  ) {
+    let patched: RemoteMessage[] | null = null;
+    for (const sourceIndex of changedIndexes) {
+      const projectedIndex = previous.sourceToProjectedIndex[sourceIndex] ?? -1;
+      if (projectedIndex < 0) continue;
+      const nextMessage = messages[sourceIndex];
+      if (!nextMessage || previous.projected[projectedIndex] === nextMessage) continue;
+      patched ??= [...previous.projected];
+      patched[projectedIndex] = nextMessage;
+    }
+    projected = patched ?? previous.projected;
+    sourceToProjectedIndex = previous.sourceToProjectedIndex;
+  } else {
+    projected = projectLoadedMessageWindow(messages);
+    if (projected === messages) {
+      sourceToProjectedIndex = null;
+    } else {
+      sourceToProjectedIndex = new Int32Array(messages.length);
+      sourceToProjectedIndex.fill(-1);
+      let projectedIndex = 0;
+      for (let sourceIndex = 0; sourceIndex < messages.length; sourceIndex += 1) {
+        if (messages[sourceIndex] !== projected[projectedIndex]) continue;
+        sourceToProjectedIndex[sourceIndex] = projectedIndex;
+        projectedIndex += 1;
+      }
+    }
+  }
+  const projectedChangedIndexes = sourceToProjectedIndex
+    ? mapChangedIndexesToProjection(changedIndexes, sourceToProjectedIndex)
+    : changedIndexes;
+  return {
+    changedIndexes: projectedChangedIndexes,
+    projected,
+    source: messages,
+    sourceToProjectedIndex,
+    structureToken,
+  };
+}
+
+function mapChangedIndexesToProjection(
+  changedIndexes: ReadonlySet<number>,
+  sourceToProjectedIndex: Int32Array,
+): ReadonlySet<number> {
+  const projectedIndexes = new Set<number>();
+  for (const sourceIndex of changedIndexes) {
+    const projectedIndex = sourceToProjectedIndex[sourceIndex] ?? -1;
+    if (projectedIndex >= 0) projectedIndexes.add(projectedIndex);
+  }
+  return projectedIndexes;
+}
+
 export function hasMoreOlderMessages(page: readonly RemoteMessage[], pageSize = MESSAGE_PAGE_SIZE): boolean {
   if (page.length >= pageSize) return true;
   // 被控端结果帧超限时会静默裁行,并在保留行打 agentMeta.remoteRowsTrimmed 标记
@@ -124,6 +272,17 @@ function countRealMessages(messages: readonly RemoteMessage[]): number {
     count += 1;
   }
   return count;
+}
+
+function isHostMessageRow(message: RemoteMessage): boolean {
+  if (!message.id || message.id.startsWith('mobile-system-')) return false;
+  return !message.id.startsWith('mobile-stream-')
+    && !message.clientId.startsWith('mobile-stream-');
+}
+
+function isLocalCompactCard(message: RemoteMessage): boolean {
+  return message.systemCardType === 'compact'
+    && message.id.startsWith('mobile-system-compact:');
 }
 
 export function isPayloadTooLargeError(error: unknown): boolean {

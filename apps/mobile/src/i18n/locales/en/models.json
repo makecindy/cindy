@@ -18,6 +18,9 @@
     "configureAccessibility": "Configure {{model}}",
     "budgetDisabledHint": "This model needs an API key configured on the controlled device first",
     "priceLine": "Input {{input}} · Output {{output}} / million tokens",
+    "priceTitle": "Per 1M tokens",
+    "priceAmounts": "Input {{input}} · Output {{output}}",
+    "discountedVsStandard": "Discounted · {{percent}}% off standard",
     "contextSuffix": "{{size}} context",
     "fastTag": "Fast"
   },
@@ -32,9 +35,17 @@
       "medium": "Medium",
       "high": "High",
       "xhigh": "Extra High",
-      "max": "Max",
+      "max": "Maximum",
       "ultra": "Ultra"
     }
+  },
+  "contextWindowSwitch": {
+    "title": "This model can't fit the current conversation",
+    "remoteTitle": "This remote model switch isn't supported",
+    "description": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won't all be passed through verbatim.",
+    "remoteDescription": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model.",
+    "cancel": "Keep this model",
+    "confirm": "Switch and continue"
   },
   "agentSwitch": {
     "browseAccessibility": "Browse {{agent}} models",

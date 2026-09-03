@@ -111,6 +111,34 @@ describe('wrapRuntimeWithRealProfile', () => {
     expect(applyConfig).not.toHaveBeenCalled();
   });
 
+  it('does not resnapshot while the managed process exists but CDP is unavailable', async () => {
+    const inner = {
+      async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
+        if (request.action === 'status') {
+          return result('status', {
+            running: false,
+            pid: 1234,
+            userDataDir: '/runtime/browser/Cindy-real/user-data',
+          });
+        }
+        return result(request.action, {});
+      },
+    };
+    const snapshot = vi.fn();
+    const wrapped = wrapRuntimeWithRealProfile(inner, {
+      isEnabled: () => true,
+      getRuntimeDir: () => '/runtime',
+      applyConfig: vi.fn(),
+      resolveSource: () => chrome,
+      snapshot,
+      cleanup: vi.fn(),
+    });
+
+    await wrapped.call({ action: 'start' });
+
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
   it('keeps the isolated Cindy profile on the fixed CDP port', async () => {
     let started = 0;
     const inner = {
@@ -157,6 +185,35 @@ describe('wrapRuntimeWithRealProfile', () => {
     const started = await wrapped.call({ action: 'start' });
     expect(started.ok).toBe(false);
     expect(started.message).toMatch(/missing cookies/);
+    expect(started.data).toEqual({ reason: 'NO_AUTH_DB' });
+    expect(innerState.starts).toBe(0);
+  });
+
+  it('preserves the App-Bound Encryption reason without starting Chrome', async () => {
+    const innerState = { running: false, starts: 0 };
+    const inner = fakeInner(innerState);
+    const wrapped = wrapRuntimeWithRealProfile(inner, {
+      isEnabled: () => true,
+      getRuntimeDir: () => '/runtime',
+      applyConfig: vi.fn(),
+      resolveSource: () => chrome,
+      snapshot: async () => {
+        throw new RealProfileError(
+          'APP_BOUND_ENCRYPTION_UNSUPPORTED',
+          'unsupported app-bound cookies',
+        );
+      },
+      cleanup: vi.fn(),
+      pickCdpPort: pick18800,
+    });
+
+    const started = await wrapped.call({ action: 'start' });
+
+    expect(started).toMatchObject({
+      ok: false,
+      errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+      data: { reason: 'APP_BOUND_ENCRYPTION_UNSUPPORTED' },
+    });
     expect(innerState.starts).toBe(0);
   });
 
@@ -282,9 +339,11 @@ describe('wrapRuntimeWithRealProfile', () => {
 
   it('starts Cindy-real by name after config swap so a stale default Cindy does not miss it', async () => {
     let startedProfile: string | undefined;
+    let statusProfile: string | undefined;
     const inner = {
       async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
         if (request.action === 'status') {
+          statusProfile = request.profile;
           return result('status', { running: false });
         }
         if (request.action === 'start') {
@@ -319,6 +378,7 @@ describe('wrapRuntimeWithRealProfile', () => {
     });
     const started = await wrapped.call({ action: 'start' });
     expect(started.ok).toBe(true);
+    expect(statusProfile).toBe('Cindy-real');
     expect(startedProfile).toBe('Cindy-real');
   });
 
@@ -398,8 +458,10 @@ describe('wrapRuntimeWithRealProfile', () => {
 
   it('stops a remembered Cindy-real leftover before snapshotting after a crash', async () => {
     const innerState = { running: true, starts: 0, stops: 0 };
+    const requests: BrowserControlRequest[] = [];
     const inner = {
       async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
+        requests.push(request);
         if (request.action === 'status') {
           return result('status', { running: innerState.running });
         }
@@ -435,6 +497,10 @@ describe('wrapRuntimeWithRealProfile', () => {
     });
     const started = await wrapped.call({ action: 'start' });
     expect(started.ok).toBe(true);
+    expect(requests.slice(0, 2)).toEqual([
+      { action: 'status', profile: 'Cindy-real' },
+      { action: 'stop', profile: 'Cindy-real' },
+    ]);
     expect(innerState.stops).toBe(1);
     expect(innerState.starts).toBe(1);
     expect(snapshot).toHaveBeenCalledOnce();

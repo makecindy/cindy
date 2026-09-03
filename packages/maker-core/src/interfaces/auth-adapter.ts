@@ -90,6 +90,12 @@ export interface AuthAdapter {
   cancelLogin?(): void;
 
   /**
+   * Capture an opaque credential generation at agent-host spawn time. The runtime must only carry
+   * this value back to invalidate(); it must not inspect or persist its contents.
+   */
+  captureCredentialGeneration?(): string | null;
+
+  /**
    * agent runtime 检测到当前凭证已被服务端作废 (e.g. OAuth refresh token 已被旋转,
    * 401 reauth_required 等) 时调用一次。实现侧应等价于 logout() + 通知 UI 重登,
    * 让用户立刻能感知到状态变化, 而不是任由 agent 持续撞失败。
@@ -97,5 +103,12 @@ export interface AuthAdapter {
    * 可选 — 没实现时 runtime 至少会自己 dispose 当前 agent host 防御性收尾,
    * 但 UI 端不会自动跳出 "请重新登录" 的提示。
    */
-  invalidate?(reason: string): Promise<void>;
+  invalidate?(
+    reason: string,
+    context?: {
+      credentialGeneration?: string | null;
+      /** The child reported auth failure, but the protocol did not identify its credential. */
+      credentialAttribution?: 'unproven';
+    },
+  ): Promise<void>;
 }

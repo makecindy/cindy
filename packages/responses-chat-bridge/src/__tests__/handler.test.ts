@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createResponsesChatHandler } from '../handler.js';
+import type { ChatBridgeCapabilities, ChatCompletionsRequest, ResponsesRequest } from '../types.js';
 
 class FakeResponse extends EventEmitter {
   status = 0;
@@ -35,7 +36,318 @@ function streamResponse(lines: unknown[]): Response {
   return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 }
 
+function systemOrderError(status = 400, message = 'System message must be at the beginning.'): Response {
+  return new Response(JSON.stringify({ error: { message, type: 'BadRequestError' } }), { status });
+}
+
+// Reduced shape of the real Codex capture: instructions + developer, user, user.
+// Exact captured text is replayed separately against the official Qwen template.
+function leadingSystemRequest(): ResponsesRequest {
+  return {
+    model: 'qwen3.8-27b-fp8',
+    instructions: 'base instructions',
+    input: [
+      { role: 'developer', content: 'permission instructions' },
+      { role: 'user', content: 'environment context' },
+      { role: 'user', content: 'hello' },
+    ],
+  };
+}
+
 describe('createResponsesChatHandler', () => {
+  it.each([undefined, 'coalesce-leading'] as const)(
+    'retries a rejected consecutive system prefix (#3583), policy=%s',
+    async (systemMessagePolicy) => {
+      const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        const body: ChatCompletionsRequest = JSON.parse(String(init?.body));
+        expect(body).not.toHaveProperty('reasoning_effort');
+        if (body.messages.slice(1).some((message) => message.role === 'system')) {
+          return systemOrderError();
+        }
+        expect(body.messages).toEqual([
+          { role: 'system', content: 'base instructions\n\npermission instructions' },
+          { role: 'user', content: 'environment context' },
+          { role: 'user', content: 'hello' },
+        ]);
+        return streamResponse([
+          { id: 'chat_1', choices: [{ delta: { content: 'hi' } }] },
+          { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+        ]);
+      });
+      const onUpstreamError = vi.fn();
+      const handler = createResponsesChatHandler({
+        upstreamBase: 'https://vllm.example/v1',
+        buildHeaders: async () => ({}),
+        capabilities: { systemMessagePolicy },
+        onUpstreamError,
+      }, { fetchImpl });
+      const res = new FakeResponse();
+      await handler.handle({
+        parsedBody: { ...leadingSystemRequest(), reasoning: { effort: 'high' } },
+        res: res as never,
+      });
+      expect(res.status).toBe(200);
+      expect(res.chunks.join('')).toContain('event: response.completed');
+      expect(fetchImpl).toHaveBeenCalledTimes(systemMessagePolicy ? 1 : 2);
+      expect(onUpstreamError).not.toHaveBeenCalled();
+    },
+  );
+
+  it('leaves a consecutive system prefix intact when the upstream accepts it', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body)).messages).toEqual([
+        { role: 'system', content: 'base instructions' },
+        { role: 'system', content: 'permission instructions' },
+        { role: 'user', content: 'environment context' },
+        { role: 'user', content: 'hello' },
+      ]);
+      return streamResponse([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1', buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: leadingSystemRequest(), res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+  });
+
+  it('preserves whitespace and repeated instructions without depending on a model alias', async () => {
+    const bodies: ChatCompletionsRequest[] = [];
+    const instruction = '  permission boundary\r\nkeep this text\n';
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      if (bodies.length === 1) return systemOrderError();
+      return streamResponse([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+      capabilities: { reasoningField: 'reasoning_effort', reasoningEffortMap: { high: 'xhigh' } },
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-alias', instructions: instruction, reasoning: { effort: 'high' },
+        input: [
+          { role: 'developer', content: instruction },
+          { role: 'system', content: 'last instruction' },
+          { role: 'user', content: 'hello' },
+        ],
+      },
+      res: res as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(bodies[1]).toEqual({
+      ...bodies[0],
+      messages: [
+        { role: 'system', content: `${instruction}\n\n${instruction}\n\nlast instruction` },
+        { role: 'user', content: 'hello' },
+      ],
+    });
+    expect(bodies[1].reasoning_effort).toBe('xhigh');
+    expect(res.status).toBe(200);
+  });
+
+  it.each<{
+    name: string;
+    status?: number;
+    message?: string;
+    errorBody?: string;
+    capabilities?: ChatBridgeCapabilities;
+    input?: ResponsesRequest;
+  }>([
+    { name: 'explicit preserve policy', capabilities: { systemMessagePolicy: 'preserve' } },
+    { name: 'native developer role', capabilities: { developerRole: 'developer' } },
+    { name: 'already coalesced policy', capabilities: { systemMessagePolicy: 'coalesce-leading' } },
+    { name: 'already leading system', input: { model: 'm', instructions: 'base', input: 'hello' } },
+    { name: 'system after user', input: { model: 'm', instructions: 'base', input: [
+      { role: 'user', content: 'hello' }, { role: 'developer', content: 'later instructions' },
+    ] } },
+    { name: 'leading prefix followed by a late system', input: { ...leadingSystemRequest(), input: [
+      { role: 'developer', content: 'initial permissions' },
+      { role: 'user', content: 'hello' },
+      { role: 'system', content: 'updated permissions' },
+    ] } },
+    { name: 'no leading prefix', input: { model: 'm', input: [
+      { role: 'user', content: 'hello' }, { role: 'system', content: 'later instructions' },
+    ] } },
+    { name: 'empty system only', input: { model: 'm', input: [
+      { role: 'user', content: 'hi' }, { role: 'system', content: '' },
+    ] } },
+    { name: 'authentication error', status: 401 },
+    { name: 'permission error', status: 403 },
+    { name: 'validation error', status: 422 },
+    { name: 'rate limit', status: 429 },
+    { name: 'server error', status: 500 },
+    { name: 'different role error', message: 'Unexpected message role.' },
+    { name: 'quoted error in unrelated rejection', message: 'Invalid content: System message must be at the beginning.' },
+    { name: 'unstructured error', errorBody: 'System message must be at the beginning.' },
+    { name: 'non-string error message', errorBody: '{"error":{"message":null}}' },
+  ])('does not retry system normalization for $name', async ({ status = 400, message, errorBody, capabilities, input }) => {
+    const fetchImpl = vi.fn(async () => errorBody === undefined
+      ? systemOrderError(status, message)
+      : new Response(errorBody, { status }));
+    const onUpstreamError = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1',
+      buildHeaders: async () => ({}),
+      capabilities,
+      onUpstreamError,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: input ?? leadingSystemRequest(), res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(status);
+    expect(onUpstreamError).toHaveBeenCalledOnce();
+    expect(res.listenerCount('close')).toBe(0);
+  });
+
+  it.each([400, 401, 503])('reports only the final error when the compatibility retry fails with %s', async (status) => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(systemOrderError())
+      .mockResolvedValueOnce(systemOrderError(status));
+    const onUpstreamError = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1',
+      buildHeaders: async () => ({}),
+      onUpstreamError,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: leadingSystemRequest(), res: res as never });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(status);
+    expect(onUpstreamError).toHaveBeenCalledOnce();
+    expect(onUpstreamError).toHaveBeenCalledWith(expect.objectContaining({ status }));
+    expect(res.listenerCount('close')).toBe(0);
+  });
+
+  it('preserves tools, media, tuning and the original input across a request-local retry', async () => {
+    const bodies: ChatCompletionsRequest[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (bodies.length === 1) return systemOrderError();
+      return new Response(JSON.stringify({
+        id: 'chat_json',
+        choices: [{ message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+      }), { headers: { 'content-type': 'application/json' } });
+    });
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1',
+      buildHeaders: async () => ({ authorization: 'Bearer test-token' }),
+      capabilities: { imageInput: 'image_url', passthroughFields: ['temperature'] },
+    }, { fetchImpl });
+    const source: ResponsesRequest = {
+      ...leadingSystemRequest(),
+      stream: false,
+      temperature: 0.2,
+      tools: [{ type: 'function', name: 'inspect', parameters: { type: 'object' } }],
+      input: [
+        { role: 'developer', content: 'permission instructions' },
+        { role: 'user', content: 'first' },
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'c1', output: 'tool result' },
+        { role: 'user', content: [{ type: 'input_image', image_url: 'https://image.example/test.png' }] },
+      ],
+    };
+    const original = structuredClone(source);
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: source, res: res as never });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.chunks.join('')).status).toBe('completed');
+    const { messages: firstMessages, ...firstFields } = bodies[0];
+    const { messages: retryMessages, ...retryFields } = bodies[1];
+    expect(retryFields).toEqual(firstFields);
+    expect(retryMessages).toEqual([
+      { role: 'system', content: 'base instructions\n\npermission instructions' },
+      ...firstMessages.filter((message) => message.role !== 'system'),
+    ]);
+    expect(source).toEqual(original);
+    expect(fetchImpl.mock.calls[1][0]).toBe(fetchImpl.mock.calls[0][0]);
+    expect(fetchImpl.mock.calls[1][1]?.headers).toEqual(fetchImpl.mock.calls[0][1]?.headers);
+    expect(fetchImpl.mock.calls[1][1]?.signal).toBe(fetchImpl.mock.calls[0][1]?.signal);
+
+    // A later request must not inherit a policy learned from this request's upstream error.
+    const next = new FakeResponse();
+    await handler.handle({ parsedBody: source, res: next as never });
+    expect(bodies[2]).toEqual(bodies[0]);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry after the client disconnects while reading the template error', async () => {
+    const res = new FakeResponse();
+    const response = systemOrderError();
+    const read = response.text.bind(response);
+    vi.spyOn(response, 'text').mockImplementation(async () => {
+      res.emit('close');
+      return read();
+    });
+    const fetchImpl = vi.fn(async () => response);
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1', buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    await handler.handle({ parsedBody: leadingSystemRequest(), res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.headersSent).toBe(false);
+    expect(res.listenerCount('close')).toBe(0);
+  });
+
+  it('cleans up when the compatibility retry cannot reach the upstream', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(systemOrderError())
+      .mockRejectedValueOnce(new Error('network unavailable'));
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1', buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: leadingSystemRequest(), res: res as never });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(502);
+    expect(res.chunks.join('')).toContain('upstream_unreachable');
+    expect(res.listenerCount('close')).toBe(0);
+  });
+
+  it('does not report or write a retry error after the client disconnects during its body read', async () => {
+    const res = new FakeResponse();
+    const response = systemOrderError();
+    const read = response.text.bind(response);
+    vi.spyOn(response, 'text').mockImplementation(async () => {
+      res.emit('close');
+      return read();
+    });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(systemOrderError())
+      .mockResolvedValueOnce(response);
+    const onUpstreamError = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1', buildHeaders: async () => ({}), onUpstreamError,
+    }, { fetchImpl });
+    await handler.handle({ parsedBody: leadingSystemRequest(), res: res as never });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(res.headersSent).toBe(false);
+    expect(onUpstreamError).not.toHaveBeenCalled();
+    expect(res.listenerCount('close')).toBe(0);
+  });
+
+  it('aborts the compatibility retry when the client disconnects', async () => {
+    const res = new FakeResponse();
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(systemOrderError())
+      .mockImplementationOnce(async (_url: string | URL | Request, init?: RequestInit) => {
+        res.emit('close');
+        expect(init?.signal?.aborted).toBe(true);
+        throw new Error('aborted');
+      });
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1', buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    await handler.handle({ parsedBody: leadingSystemRequest(), res: res as never });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(res.headersSent).toBe(false);
+    expect(res.listenerCount('close')).toBe(0);
+  });
+
   it('posts translated Chat request and streams Responses events', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));

@@ -51,4 +51,11 @@ describe('sim-rebuild script invariants', () => {
     expect(source).toContain('entries.slice(APP_CACHE_KEEP)');
     expect(source).toContain('APP_CACHE_PRUNE_MIN_AGE_MS) continue;');
   });
+
+  it('uses an exact simulator destination when the Host supplies a UDID', () => {
+    expect(source).toContain("passthrough.indexOf('--udid')");
+    expect(source).toContain('Simulator UUID');
+    expect(source).toContain('`platform=iOS Simulator,id=${simulatorUdid}`');
+    expect(source).toContain("'-destination', simulatorDestination");
+  });
 });

@@ -54,6 +54,19 @@ import {
 
 type SessionRow = typeof sessions.$inferSelect;
 type SessionInsert = typeof sessions.$inferInsert;
+
+/**
+ * 运行时固定 effort 模型用 `null`；`sessions.effort` 是 NOT NULL 枚举。
+ * 空白 / null 表示不落库，UPDATE 保留该行已有的合法档位。
+ */
+export function persistableSessionEffort(
+  effort: unknown,
+): SessionInsert['effort'] | undefined {
+  if (typeof effort !== 'string') return undefined;
+  const trimmed = effort.trim();
+  return trimmed ? (trimmed as SessionInsert['effort']) : undefined;
+}
+
 type MessageRow = typeof messages.$inferSelect;
 type MessageInsert = typeof messages.$inferInsert;
 type ScheduleRow = typeof schedules.$inferSelect;
@@ -384,7 +397,7 @@ export function sessionPatchToRow(
     workingDir?: string;
     workspaceKind?: WorkspaceKind;
     model?: string;
-    effort?: string;
+    effort?: string | null;
     permissionMode?: string;
     providerId?: string | null;
     fastMode?: boolean;
@@ -409,7 +422,8 @@ export function sessionPatchToRow(
     out.workingDir = normalizeWorkingDirForStorage(patch.workingDir);
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
   if (patch.model !== undefined) out.model = patch.model;
-  if (patch.effort !== undefined) out.effort = patch.effort as SessionInsert['effort'];
+  const persistableEffort = persistableSessionEffort(patch.effort);
+  if (persistableEffort !== undefined) out.effort = persistableEffort;
   if (patch.permissionMode !== undefined)
     out.permissionMode = patch.permissionMode as SessionInsert['permissionMode'];
   if (patch.providerId !== undefined) out.providerId = patch.providerId;

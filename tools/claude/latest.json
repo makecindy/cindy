@@ -6,25 +6,25 @@
     "url": "https://github.com/anthropics/claude-code/issues"
   },
   "dist": {
-    "shasum": "c64ecfdfff0e8a7f7c79467b178344ec52e08fbe",
-    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.247.tgz",
+    "shasum": "98ffba9e70047120136ae937218b2407164c323a",
+    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.259.tgz",
     "fileCount": 7,
-    "integrity": "sha512-2Z2UQKom3x6GBQDYlFFi00KbRciqsuGL9CpK+IN3fXmmJb7IXVitrRZ6HZyUw0ixnckr814GIp0FUaXwDEbBrw==",
+    "integrity": "sha512-kzhz+R36GgL5aouAkeMO9nI1BEIVaRx1NGu0wTTn/H315l61uiLRo13yvva7H10Pfv0PGgzqJ4m+EKv9BzIRXQ==",
     "signatures": [
       {
-        "sig": "MEUCIQCTCj0fY9zWMr7bKZo/+kmpnYX9++NqBDjQAIBQk0MC4wIgD7Q67OtopvToafYzgG64y7jG0miGj6oRnKt3Qu7OySY=",
+        "sig": "MEUCIQDN7r3dGf7abmOHFq1zmcWnZq3V469SKdvnlpEaN2PoowIgNMz4rZnwvxGokMZEeveHsNJXNKvFx72ZiGKtKhVYqQc=",
         "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
       },
       {
-        "sig": "MEUCIQCMIO2FOJk1Gxyrz0jEfSboFYCbkTCFpjcdDjHMFm3UbgIgQGoeBph5TrfVsTdD/puq+LgVCNto6Tkwig7KJvvTmyQ=",
+        "sig": "MEYCIQCCy/WJiG51+Bf5xqrKcJJqz6uyLqgWAOoCnSewyzENSQIhAMYHpS3gnXLHi4vdCpx+sm1/lTDDChGwH/Yoj/woYd/D",
         "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
       }
     ],
-    "unpackedSize": 178324
+    "unpackedSize": 182773
   },
   "name": "@anthropic-ai/claude-code",
   "type": "module",
-  "_from": "file:staged-npm/anthropic-ai-claude-code-2.1.247.tgz",
+  "_from": "file:staged-npm/anthropic-ai-claude-code-2.1.259.tgz",
   "author": {
     "name": "Anthropic",
     "email": "support@anthropic.com"
@@ -42,8 +42,8 @@
     "email": "wolffiex@anthropic.com"
   },
   "homepage": "https://github.com/anthropics/claude-code",
-  "_resolved": "/home/runner/work/claude-cli-internal/claude-cli-internal/staged-npm/anthropic-ai-claude-code-2.1.247.tgz",
-  "_integrity": "sha512-2Z2UQKom3x6GBQDYlFFi00KbRciqsuGL9CpK+IN3fXmmJb7IXVitrRZ6HZyUw0ixnckr814GIp0FUaXwDEbBrw==",
+  "_resolved": "/home/runner/work/claude-cli-internal/claude-cli-internal/staged-npm/anthropic-ai-claude-code-2.1.259.tgz",
+  "_integrity": "sha512-kzhz+R36GgL5aouAkeMO9nI1BEIVaRx1NGu0wTTn/H315l61uiLRo13yvva7H10Pfv0PGgzqJ4m+EKv9BzIRXQ==",
   "_npmVersion": "11.17.0",
   "description": "Use Claude, Anthropic's AI assistant, right from your terminal. Claude can understand your codebase, edit files, run terminal commands, and handle entire workflows for you.",
   "directories": {},
@@ -106,46 +106,46 @@
   "_hasShrinkwrap": false,
   "readmeFilename": "README.md",
   "optionalDependencies": {
-    "@anthropic-ai/claude-code-linux-x64": "2.1.247",
-    "@anthropic-ai/claude-code-win32-x64": "2.1.247",
-    "@anthropic-ai/claude-code-darwin-x64": "2.1.247",
-    "@anthropic-ai/claude-code-linux-arm64": "2.1.247",
-    "@anthropic-ai/claude-code-win32-arm64": "2.1.247",
-    "@anthropic-ai/claude-code-darwin-arm64": "2.1.247",
-    "@anthropic-ai/claude-code-linux-x64-musl": "2.1.247",
-    "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.247"
+    "@anthropic-ai/claude-code-linux-x64": "2.1.259",
+    "@anthropic-ai/claude-code-win32-x64": "2.1.259",
+    "@anthropic-ai/claude-code-darwin-x64": "2.1.259",
+    "@anthropic-ai/claude-code-linux-arm64": "2.1.259",
+    "@anthropic-ai/claude-code-win32-arm64": "2.1.259",
+    "@anthropic-ai/claude-code-darwin-arm64": "2.1.259",
+    "@anthropic-ai/claude-code-linux-x64-musl": "2.1.259",
+    "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.259"
   },
   "_npmOperationalInternal": {
-    "tmp": "tmp/claude-code_2.1.247_1787767320957_0.43571757369009734",
+    "tmp": "tmp/claude-code_2.1.259_1788384102028_0.03746517436129704",
     "host": "s3://npm-registry-packages-npm-production"
   },
-  "_id": "@anthropic-ai/claude-code@2.1.247",
-  "version": "2.1.247",
+  "_id": "@anthropic-ai/claude-code@2.1.259",
+  "version": "2.1.259",
   "runtimeAssets": {
     "darwin-arm64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.247/darwin-arm64/claude",
-      "sha256": "5086b9b64d8bb842e1f599cdd3767ab08c6b2266e462fcc5686ae4b019cca8f7",
-      "size": 233073008
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.259/darwin-arm64/claude",
+      "sha256": "884baa38fe1a624be25c4a91568bf5a08b5cf4e7d7acf29b7760e3525d964898",
+      "size": 200225968
     },
     "darwin-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.247/darwin-x64/claude",
-      "sha256": "162e65d7bf8735dbcdc75b0122dbb126d5704a00e682bbdfc413749188a20cfd",
-      "size": 241972656
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.259/darwin-x64/claude",
+      "sha256": "af8741cff0d3fb5c4b893c7cb3613bd21b28fa61cca45469d60b8e5e161eb9d8",
+      "size": 209000528
     },
     "linux-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.247/linux-x64/claude",
-      "sha256": "5fb321bf417ffc5cd4e3f36e7c9c7e029bf47aaa36d5621db979fcc5e6eabe15",
-      "size": 250162696
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.259/linux-x64/claude",
+      "sha256": "f7dd62ae415378018cd21dd950eb3bac174ab085830304d3b8b098146bfd47b6",
+      "size": 216677784
     },
     "linux-arm64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.247/linux-arm64/claude",
-      "sha256": "a68bb633f85e4a0e73465952ea624cf18992c3fa4db615feeb942ffad57d082a",
-      "size": 249617856
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.259/linux-arm64/claude",
+      "sha256": "c6ff03c389ccdeae0f19e9dc32488eeba61fbef4796f531dbfba6c00f45040d0",
+      "size": 216194384
     },
     "win32-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.247/win32-x64/claude.exe",
-      "sha256": "00e5be0a8b69893cad9259a1e8b80d59be8f3eb367d4a16c19f91bcd279423b7",
-      "size": 253204128
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.259/win32-x64/claude.exe",
+      "sha256": "85429000ec9b80082613e9ecd2e0d3b2276c9d5b22a681936575d2c4c2f342ed",
+      "size": 219715232
     }
   }
 }

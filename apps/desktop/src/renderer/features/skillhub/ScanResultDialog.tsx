@@ -12,7 +12,8 @@ import { ShieldAlert, ShieldCheck, AlertTriangle, Check, Copy } from 'lucide-rea
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import type { ScanResultPayload } from './PublishDialog';
-import { isPassingScanStatus } from './lib/scanStatus';
+import { isPassingScanStatus, isPendingManualReviewStatus } from './lib/scanStatus';
+import { isPublicationProcessingFailure } from './lib/scanResultPresentation';
 
 interface ScanIssue {
   severity?: string;
@@ -45,13 +46,16 @@ function resolveI18nField(value: unknown): string {
 
 function visibleScanIssues(gate: ScanGate): ScanIssue[] {
   const issues = Array.isArray(gate.issues) ? gate.issues : [];
-  return (issues as ScanIssue[]).filter((issue) => (
-    issue.severity === 'warning' || issue.severity === 'error'
-  ));
+  return (issues as ScanIssue[]).filter(
+    (issue) => issue.severity === 'warning' || issue.severity === 'error',
+  );
 }
 
 function normalizeScanCode(value: unknown): string {
-  return String(value ?? '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
 }
 
 function scanStatusLabel(value: unknown, t: TFunction): string {
@@ -59,13 +63,28 @@ function scanStatusLabel(value: unknown, t: TFunction): string {
   if (code === 'pass' || code === 'passed' || code === 'success' || code === 'ok') {
     return t('skillhub.scanResult.statusLabel.passed');
   }
-  if (code === 'fail' || code === 'failed' || code === 'rejected' || code === 'blocked' || code === 'quarantine' || code === 'error') {
+  if (
+    code === 'fail' ||
+    code === 'failed' ||
+    code === 'rejected' ||
+    code === 'blocked' ||
+    code === 'quarantine' ||
+    code === 'error'
+  ) {
     return t('skillhub.scanResult.statusLabel.failed');
   }
   if (code === 'warn' || code === 'warning') {
     return t('skillhub.scanResult.statusLabel.warning');
   }
-  if (code === 'pending' || code === 'scanning' || code === 'reviewing' || code === 'running' || code === 'in-progress') {
+  if (code === 'pending') {
+    return t('skillhub.scanResult.statusLabel.waitingReview');
+  }
+  if (
+    code === 'scanning' ||
+    code === 'reviewing' ||
+    code === 'running' ||
+    code === 'in-progress'
+  ) {
     return t('skillhub.scanResult.statusLabel.reviewing');
   }
   if (code === 'unavailable' || code === 'scan-status-unavailable') {
@@ -82,6 +101,9 @@ function scanGateLabel(gate: ScanGate, t: TFunction): string {
   }
   if (code === 'security-scan' || code === 'scan-status') {
     return t('skillhub.scanResult.gateLabel.securityScan');
+  }
+  if (code === 'internal-error') {
+    return t('skillhub.scanResult.gateLabel.publicationProcessing');
   }
   return gate.name;
 }
@@ -123,14 +145,25 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
   if (!result) return null;
 
   const passed = isPassingScanStatus(result.status);
-  const failedGates = (result.gates ?? []).filter((g) => g.status !== 'pass');
+  const pendingManualReview = isPendingManualReviewStatus(result.status);
+  const failedGates = (result.gates ?? []).filter((g) => !isPassingScanStatus(g.status));
+  const processingFailure =
+    !passed && !pendingManualReview && isPublicationProcessingFailure(result.gates);
   const title = passed
     ? t('skillhub.scanResult.passedTitle')
-    : t('skillhub.scanResult.failedTitle', { status: result.status });
+    : pendingManualReview
+      ? t('skillhub.scanResult.pendingTitle')
+      : processingFailure
+        ? t('skillhub.scanResult.processingFailedTitle')
+        : t('skillhub.scanResult.failedTitle', { status: result.status });
   const statusLabel = scanStatusLabel(result.status, t);
   const description = passed
     ? t('skillhub.scanResult.passedDesc')
-    : t('skillhub.scanResult.failedDesc', { status: statusLabel });
+    : pendingManualReview
+      ? t('skillhub.scanResult.pendingDesc')
+      : processingFailure
+        ? t('skillhub.scanResult.processingFailedDesc')
+        : t('skillhub.scanResult.failedDesc', { status: statusLabel });
   const footerButtonBaseClass = cn(
     'inline-flex h-9 min-w-[104px] items-center justify-center gap-1.5 rounded-full px-5',
     'text-sm font-medium leading-none',
@@ -138,7 +171,7 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
   );
 
   async function handleCopyReviewResult(): Promise<void> {
-    const gatesToCopy = passed ? (result?.gates ?? []) : failedGates;
+    const gatesToCopy = passed || pendingManualReview ? (result?.gates ?? []) : failedGates;
     const lines = [
       title,
       `${t('skillhub.scanResult.copyText.status')}: ${withRawCode(statusLabel, result?.status)}`,
@@ -149,7 +182,9 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
       lines.push('', `${t('skillhub.scanResult.copyText.gates')}:`);
       for (const gate of gatesToCopy) {
         const label = scanGateLabel(gate, t);
-        lines.push(`- ${withRawCode(label, gate.name)}: ${withRawCode(scanStatusLabel(gate.status, t), gate.status)}`);
+        lines.push(
+          `- ${withRawCode(label, gate.name)}: ${withRawCode(scanStatusLabel(gate.status, t), gate.status)}`,
+        );
         for (const issue of visibleScanIssues(gate)) {
           const line = scanIssueCopyLine(issue);
           if (line) lines.push(`  - ${line}`);
@@ -171,7 +206,12 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onClose();
+      }}
+    >
       <Dialog.Portal>
         <Dialog.Overlay
           className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
@@ -193,6 +233,14 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
             {passed ? (
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--diff-add-bg)]">
                 <ShieldCheck size={22} className="text-[var(--diff-add-fg)]" />
+              </div>
+            ) : pendingManualReview ? (
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--diff-add-bg)]">
+                <ShieldCheck size={22} className="text-[var(--diff-add-fg)]" />
+              </div>
+            ) : processingFailure ? (
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--warning-bg-soft)]">
+                <AlertTriangle size={22} className="text-[var(--warning-fg)]" />
               </div>
             ) : (
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--error-bg)]">
@@ -219,7 +267,10 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
                       className="rounded-lg border border-[var(--error-border)] bg-[var(--error-bg)] p-3"
                     >
                       <div className="flex items-center gap-2">
-                        <AlertTriangle size={14} className="shrink-0 text-[var(--error-fg-strong)]" />
+                        <AlertTriangle
+                          size={14}
+                          className="shrink-0 text-[var(--error-fg-strong)]"
+                        />
                         <span className="text-sm font-medium text-[var(--msg-assistant-text)]">
                           {scanGateLabel(gate, t)}
                         </span>
@@ -235,10 +286,14 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
                       {visibleScanIssues(gate).length > 0 && (
                         <div className="mt-2 flex flex-col gap-1.5 pl-5">
                           {visibleScanIssues(gate).map((issue, i) => (
-                            <div key={i} className="text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]">
+                            <div
+                              key={i}
+                              className="text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]"
+                            >
                               {issue.path && (
                                 <span className="font-mono text-[var(--settings-section-desc)]">
-                                  {issue.path}{issue.line != null ? `:${issue.line}` : ''}
+                                  {issue.path}
+                                  {issue.line != null ? `:${issue.line}` : ''}
                                 </span>
                               )}
                               {issue.path && issue.message && <span className="mx-1">—</span>}
@@ -254,13 +309,12 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
                   ))}
                 </div>
               )}
-
             </div>
           )}
 
           {/* Footer */}
           <div className="flex flex-wrap items-center justify-center gap-2 p-5">
-            {!passed && (
+            {!passed && !pendingManualReview && (
               <button
                 type="button"
                 onClick={() => void handleCopyReviewResult()}
@@ -274,8 +328,14 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
                   'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
                 )}
               >
-                {copied ? <Check size={15} className="shrink-0" /> : <Copy size={15} className="shrink-0" />}
-                {copied ? t('skillhub.scanResult.copiedReviewResult') : t('skillhub.scanResult.copyReviewResult')}
+                {copied ? (
+                  <Check size={15} className="shrink-0" />
+                ) : (
+                  <Copy size={15} className="shrink-0" />
+                )}
+                {copied
+                  ? t('skillhub.scanResult.copiedReviewResult')
+                  : t('skillhub.scanResult.copyReviewResult')}
               </button>
             )}
             <button

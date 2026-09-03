@@ -76,6 +76,18 @@ describe('classifyPiToolForAutoReview', () => {
     expect(verdict('bash', {})).not.toBe('auto-approve');
   });
 
+  it('routes Pi 0.84.3 powershell through the same shell classifier, not unknown-tool gray', () => {
+    expect(verdict('powershell', { command: 'git status' })).toBe('auto-approve');
+    expect(verdict('powershell', { command: 'sudo whoami' })).toBe('prompt-each-time');
+    expect(verdict('powershell', { command: 'rm -rf /' })).toBe('prompt-each-time');
+    expect(verdict('powershell', {})).not.toBe('auto-approve');
+    expect(verdict(
+      'powershell',
+      { command: 'Get-Content innocent.txt' },
+      ['/Users/t/.ssh/id_rsa'],
+    )).toBe('prompt-each-time');
+  });
+
   it('approves plain reads but always prompts for credential paths (bridge-drift defense)', () => {
     expect(verdict('read', { path: `${WS}/src/a.ts` })).toBe('auto-approve');
     expect(verdict('read', { path: '/Users/t/.ssh/id_rsa' })).toBe('prompt-each-time');

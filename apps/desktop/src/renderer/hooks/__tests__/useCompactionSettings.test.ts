@@ -19,13 +19,13 @@ describe('useCompactionSettings', () => {
     const piCompactionSetPct = vi.fn().mockResolvedValue({
       pct: 80,
       isCustomized: true,
-      defaultPct: 75,
+      defaultPct: 90,
     });
     const maker = {
       piCompactionGetState: vi.fn().mockResolvedValue({
-        pct: 75,
+        pct: 90,
         isCustomized: false,
-        defaultPct: 75,
+        defaultPct: 90,
       }),
       piCompactionSetPct,
       piCompactionResetPct: vi.fn(),

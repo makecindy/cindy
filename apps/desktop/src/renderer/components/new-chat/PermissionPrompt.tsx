@@ -50,7 +50,7 @@ export function formatToolInput(toolName: string, input: Record<string, unknown>
     const text = JSON.stringify(input, null, 2);
     return text.length > 500 ? text.slice(0, 500) + '...' : text;
   };
-  if (name === 'bash') {
+  if (name === 'bash' || name === 'powershell') {
     return firstString(input, ['command']) ?? fallback();
   }
   if (name === 'read' || name === 'edit' || name === 'write') {

@@ -50,11 +50,28 @@ import { getSessionProvider } from './session-provider-store.js';
  */
 type CustomProviderKeyReader = (providerId: string, agent: AgentKind) => string | null;
 let customProviderKeyReader: CustomProviderKeyReader = () => null;
+type CustomProviderHeaderReader = (
+  providerId: string,
+  agent: AgentKind,
+) => Record<string, string> | null;
+let customProviderHeaderReader: CustomProviderHeaderReader = () => null;
 const providerRouteMutationCounts = new Map<string, number>();
+const providerRouteCredentialRevisions = new Map<string, number>();
+let nextProviderRouteCredentialRevision = 1;
+
+export type ProviderRouteMutationRelease = (() => void) & {
+  /** Publish the new non-sensitive route/capability/credential dispatch generation. */
+  commit(): void;
+};
 
 /** host 启动期接通真实 safeStorage 读取（按 `provider_key_<id>_<agent>`，per-runtime 独立密钥）。 */
 export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): void {
   customProviderKeyReader = reader;
+}
+
+/** Host-side secure header reader. Header values never enter Provider route snapshots. */
+export function setCustomProviderHeaderReader(reader: CustomProviderHeaderReader): void {
+  customProviderHeaderReader = reader;
 }
 
 /**
@@ -64,20 +81,37 @@ export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): voi
  * endpoint 与新 key（或新 endpoint 与旧 key）拼成一次上游请求。计数使排队的多窗口
  * mutation 之间不会短暂恢复路由。
  */
-export function beginProviderRouteMutation(providerId: string): () => void {
+export function beginProviderRouteMutation(providerId: string): ProviderRouteMutationRelease {
   providerId = runtimeCustomProviderId(providerId);
+  const revision = nextProviderRouteCredentialRevision++;
   providerRouteMutationCounts.set(
     providerId,
     (providerRouteMutationCounts.get(providerId) ?? 0) + 1,
   );
   let finished = false;
-  return () => {
+  let committed = false;
+  const finish = (() => {
     if (finished) return;
     finished = true;
     const remaining = (providerRouteMutationCounts.get(providerId) ?? 1) - 1;
     if (remaining <= 0) providerRouteMutationCounts.delete(providerId);
     else providerRouteMutationCounts.set(providerId, remaining);
+  }) as ProviderRouteMutationRelease;
+  finish.commit = () => {
+    if (finished || committed) return;
+    committed = true;
+    providerRouteCredentialRevisions.set(providerId, revision);
   };
+  return finish;
+}
+
+/**
+ * Non-sensitive request-dispatch generation for Provider routing, capabilities and credentials.
+ * Kept for the process lifetime (including after delete) so deleting and recreating the same id
+ * cannot make an old Host snapshot valid again.
+ */
+export function getProviderRouteCredentialRevision(providerId: string): number {
+  return providerRouteCredentialRevisions.get(runtimeCustomProviderId(providerId)) ?? 0;
 }
 
 export function isProviderRouteMutationInProgress(providerId: string): boolean {
@@ -499,7 +533,8 @@ export function providerRoutingForModel(
 
   // 鉴权、固定 headers 与模型 namespace 门继续继承 provider/runtime；请求路径不能在
   // 协议切换后误继承旧 runtime 的路径，只有模型覆盖显式声明时才带回。
-  const { requestPath: _runtimeRequestPath, ...inherited } = routing;
+  const inherited = { ...routing };
+  delete inherited.requestPath;
   return {
     ...inherited,
     upstream: agent === 'pi' ? piRoute!.baseUrl : modelRoute!.baseUrl,
@@ -727,6 +762,54 @@ export async function resolveProviderRouteDecision(
     decision: decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
       : decision,
+  };
+}
+
+/**
+ * Resolve a route descriptor frozen with a Codex Host spawn snapshot.
+ * Provider existence and credentials remain live safety boundaries: deleting the
+ * Provider or removing its credential fails closed instead of falling through.
+ */
+export async function resolveFrozenProviderRouteDecision(
+  providerId: string,
+  routing: RoutingDescriptor,
+  credentialRevision: number,
+  agent: AgentKind,
+  gatewayKey: string | null,
+  wireModel?: string,
+): Promise<ResolvedProviderRouteDecision | null> {
+  const id = providerId.trim();
+  if (!id || isProviderRouteMutationInProgress(id)) return null;
+  if (getProviderRouteCredentialRevision(id) !== credentialRevision) return null;
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === id);
+  if (!provider || provider.source !== 'user' || !provider.agents.includes(agent)) return null;
+  if (!routingServesWireModel(routing, wireModel)) return null;
+  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  const customHeaders = customProviderHeaderReader(storedCustomProviderId(provider.id), agent);
+  // A provider-OAuth reader may await refresh. Recheck both guards after the credential read so a
+  // concurrent endpoint/key/token mutation can only yield the old coherent decision or fail closed.
+  if (
+    isProviderRouteMutationInProgress(id) ||
+    getProviderRouteCredentialRevision(id) !== credentialRevision
+  ) {
+    return null;
+  }
+  const hasCustomHeaders = Boolean(customHeaders && Object.keys(customHeaders).length > 0);
+  if (routing.headerOverrideState && !hasCustomHeaders) return null;
+  const requestRouting = hasCustomHeaders ? { ...routing, headerOverride: customHeaders! } : routing;
+  const decision = buildRouteDecision(requestRouting, gatewayKey, agent, apiKey, oauthToken);
+  const dispatchGenerationValid = (): boolean => {
+    if (isProviderRouteMutationInProgress(id)) return false;
+    if (getProviderRouteCredentialRevision(id) !== credentialRevision) return false;
+    return getActiveCatalog().providers.some(
+      (candidate) =>
+        candidate.id === id && candidate.source === 'user' && candidate.agents.includes(agent),
+    );
+  };
+  return {
+    providerId: id,
+    routing,
+    decision: decision ? { ...decision, dispatchGenerationValid } : decision,
   };
 }
 

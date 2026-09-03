@@ -20,6 +20,7 @@ const {
   providersState,
   codexAuthState,
   codexAuthActions,
+  promptCodexSessionExpired,
   toastError,
   setModelVisibilitiesSpy,
 } = vi.hoisted(
@@ -37,6 +38,7 @@ const {
       cancelLogin: vi.fn(async () => undefined),
       logout: vi.fn(async () => undefined),
     },
+    promptCodexSessionExpired: vi.fn(() => true),
     toastError: vi.fn(),
     setModelVisibilitiesSpy: vi.fn(() => true),
   }),
@@ -66,6 +68,10 @@ vi.mock('@/hooks/useCodexAuth', () => ({
     ...codexAuthState,
     ...codexAuthActions,
   }),
+}));
+
+vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
+  useCodexSessionExpiredPrompt: () => promptCodexSessionExpired,
 }));
 
 vi.mock('@/hooks/useApiKey', () => ({
@@ -186,7 +192,7 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
-  it('ChatGPT 系统共享登录失效时显示来源说明并在 Cindy 中重新登录', async () => {
+  it('ChatGPT 系统共享登录失效时显示来源说明并进入受保护恢复流程', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
       reason: 'token_revoked',
@@ -209,9 +215,10 @@ describe('ProvidersSection — 深链定位', () => {
       'var(--remote-status-failed)',
     );
     expect(await screen.findByText('chatgptAuthRecovery.systemSharedInvalidated')).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.recheck' }));
 
-    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledOnce());
+    await waitFor(() => expect(promptCodexSessionExpired).toHaveBeenCalledWith('token_revoked'));
+    expect(codexAuthActions.triggerLogin).not.toHaveBeenCalled();
     expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
   });
 
@@ -230,14 +237,13 @@ describe('ProvidersSection — 深链定位', () => {
         models: { codex: [], 'claude-code': [] },
       }),
     ];
-    codexAuthActions.triggerLogin.mockResolvedValueOnce('cancelled');
     renderAt('?tab=providers&connect=openai');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.recheck' }));
 
-    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledOnce());
+    await waitFor(() => expect(promptCodexSessionExpired).toHaveBeenCalledWith('token_revoked'));
     expect(toastError).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.recheck' })).not.toBeNull();
     expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
   });
 

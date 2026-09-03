@@ -1098,6 +1098,9 @@ export function translatePiEvent(
     case 'summarization_retry_attempt_start':
     case 'summarization_retry_finished':
     case 'bash_execution_update':
+    // Pi v0.84.3 extension telemetry. If it ever leaks onto the RPC stream,
+    // ignore it: compaction_end already carries aborted/errorMessage.
+    case 'session_compact_failed':
       return;
 
     case 'extension_error': {

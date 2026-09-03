@@ -31,6 +31,7 @@ import {
 
 const PORT = 56121;
 const XAI_ORIGIN = 'https://accounts.x.ai';
+let callbackPort = PORT;
 
 interface HttpResult {
   status: number;
@@ -48,7 +49,7 @@ function send(
     const req = httpRequest(
       // agent:false —— 每请求独立连接。全局 agent 的 keep-alive 会把上一个用例
       // 已关闭 server 的死 socket 复用给下一个用例,产生假 ECONNRESET。
-      { host: '127.0.0.1', port: PORT, method, path, headers, agent: false },
+      { host: '127.0.0.1', port: callbackPort, method, path, headers, agent: false },
       (res) => {
         let body = '';
         res.on('data', (chunk: Buffer) => (body += chunk.toString('utf-8')));
@@ -92,37 +93,15 @@ describe('xaiCallbackCorsHeaders', () => {
   });
 });
 
-/**
- * 绑 56121 时它可能短暂被别人占着,有两个来源:
- *   1. 文件内部:close() 同步返回但端口是异步释放的,上一个用例「调过 close」
- *      不等于端口已交还,下一个用例立刻重绑就撞上;
- *   2. 文件外部:56121 落在临时端口段内(macOS 49152–65535 / Linux 32768–60999),
- *      任何用 listen(0) 拿端口的并发用例都可能被内核分到它。desktop unit tier
- *      一轮 1330 个文件、threads 池下还共享同一个进程,这不是理论风险 —— CI 上
- *      两轮分别撞在不同用例的 beforeEach 上。而 xAI 只接受
- *      http://127.0.0.1:56121/callback,端口换不了。
- *
- * 两者是同一句话,所以只留一个判据:仅在引擎明确报出「端口被占用」时短暂重试,
- * 其它启动失败原样抛出,不掩盖真正的问题。每次重试用全新实例,免得复用一个
- * listen 失败过的 server。同族的客户端那一半由 send() 的 agent:false 处理。
- *
- * 判据必须与生产同源:start() 把底层错误包成新 Error、丢掉了 err.code,只剩文本可看,
- * 而按端口号做子串匹配会连 EACCES / EADDRNOTAVAIL 一起收进来(它们的原文里同样带端口
- * 号),把真正的启动故障当成「端口被占」白重试 100 次。所以整条比对生产导出的那句
- * EADDRINUSE 专属提示。
- */
+/** 默认单测用系统分配端口，避免与并行 worktree 或宿主端口保留范围互相干扰。 */
 async function startFreshListener(): Promise<CallbackListener> {
-  for (let attempt = 1; ; attempt += 1) {
-    const candidate = new CallbackListener();
-    try {
-      await candidate.start();
-      return candidate;
-    } catch (err) {
-      candidate.close();
-      const occupied = err instanceof Error && err.message === XAI_CALLBACK_PORT_OCCUPIED_MESSAGE;
-      if (!occupied || attempt >= 100) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+  const candidate = new CallbackListener(0);
+  try {
+    callbackPort = await candidate.start();
+    return candidate;
+  } catch (err) {
+    candidate.close();
+    throw err;
   }
 }
 
@@ -134,7 +113,7 @@ describe('CallbackListener(xAI loopback 回调)', () => {
   });
 
   afterEach(() => {
-    listener.close();
+    listener?.close();
   });
 
   it('OPTIONS preflight 回 204 + CORS/PNA 头,且不终止登录流', async () => {
@@ -324,7 +303,7 @@ describe('CallbackListener(xAI loopback 回调)', () => {
       const req = httpRequest(
         {
           host: '127.0.0.1',
-          port: PORT,
+          port: callbackPort,
           method: 'GET',
           path: '/callback?code=abort-me&state=state-7',
           headers: { origin: XAI_ORIGIN },
@@ -359,9 +338,9 @@ describe('CallbackListener(xAI loopback 回调)', () => {
   });
 
   it('回调端口被占用时 start() 报可读错误', async () => {
-    const blocker = new CallbackListener();
-    // beforeEach 已占 56121,新实例 start 应失败。整条比对,不按端口号做子串匹配
-    // ——后者对任何带端口号的 listen 失败都成立(见 startFreshListener 说明)。
+    const blocker = new CallbackListener(callbackPort);
+    // 复用当前测试端口的新实例应失败。整条比对，不按端口号做子串匹配——后者
+    // 对任何带端口号的 listen 失败都成立，会误把 EACCES 等错误当成端口占用。
     await expect(blocker.start()).rejects.toThrow(XAI_CALLBACK_PORT_OCCUPIED_MESSAGE);
     blocker.close();
     // 上面那条是同源比对,改文案不会让它失败;这句守住「用户看得见端口号」这个可读性

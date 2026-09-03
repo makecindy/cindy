@@ -752,7 +752,7 @@ export function VoiceInputOverlay() {
     // async path so newly granted permission / freshly completed Codex login
     // can be picked up immediately. Main verifies readiness again in start().
     const guards = await resolveVoiceInputStartGuards({ requireAccessibility: true });
-    log.debug('global voice input start guards checked', {
+    log.info('global voice input start guards checked', {
       ok: guards.ok,
       failed: guards.ok ? undefined : guards.failed,
       permissionSource: guards.permissionSource,
@@ -860,6 +860,16 @@ export function VoiceInputOverlay() {
       cancelStartedRun(startResultPromise);
       suppressedStartErrorAttemptsRef.current.delete(attemptId);
       await restoreSystemAudioForRecording();
+      // Permission revoked after the start guard trusted a positive cache:
+      // show the same recovery prompt as a guard-time denial so the user gets
+      // the fix on this attempt instead of a raw capture error.
+      if (captureStart.permissionDenied) {
+        setError(t('voiceInputOverlay.permissionPrompts.microphone.message'));
+        setPermissionPrompt('microphone');
+        setVoiceState('done');
+        closingRef.current = false;
+        return;
+      }
       setError(captureStart.error);
       setVoiceState('error');
       scheduleErrorClose();

@@ -1453,8 +1453,8 @@ describe('ModelSelector trigger variants', () => {
         'xhigh',
         '特高',
       ),
-    ).toBe('XHi');
-    expect(modelCompactEffortLabel('en-US', t, null, 'medium', '中')).toBe('Mid');
+    ).toBe('Extra');
+    expect(modelCompactEffortLabel('en-US', t, null, 'medium', '中')).toBe('Medium');
     expect(modelCompactEffortLabel('zh-CN', t, null, 'xhigh', 'Extra High')).toBe('超高');
     expect(
       modelCompactEffortLabel(

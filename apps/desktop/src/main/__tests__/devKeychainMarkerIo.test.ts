@@ -11,7 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createKeychainMarkerIo } from '../devKeychainMarkerIo';
-import { KEYCHAIN_IDENTITY_MARKER_FILE } from '../devKeychainName';
+import {
+  ISOLATED_AUTH_LAUNCH_PROOF_FILE,
+  KEYCHAIN_IDENTITY_MARKER_FILE,
+  resolveDevKeychainDecision,
+} from '../devKeychainName';
 
 
 // Windows 上创建 symlink 需要管理员或开发者模式;拿不到权限时(EPERM)按仓内
@@ -177,5 +181,25 @@ describe('createKeychainMarkerIo', () => {
     expect(io.profileHasData()).toBe(false);
     fs.writeFileSync(join(profileDir, 'config.json'), '{}');
     expect(io.profileHasData()).toBe(true);
+  });
+
+  it('proof-only isolated-auth profile 仍认领 CindyDev 身份', () => {
+    fs.writeFileSync(join(profileDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE), '{}\n');
+    fs.writeFileSync(
+      join(profileDir, `${ISOLATED_AUTH_LAUNCH_PROOF_FILE}.123-${'b'.repeat(64)}.tmp`),
+      '{}\n',
+    );
+    const io = makeIo();
+
+    expect(io.profileHasData()).toBe(false);
+    expect(
+      resolveDevKeychainDecision({
+        isPackaged: false,
+        isolated: true,
+        hasDirOverride: true,
+        io,
+      }),
+    ).toEqual({ kind: 'rename', appName: 'CindyDev' });
+    expect(io.readMarker()).toEqual({ kind: 'present', value: 'CindyDev\n' });
   });
 });

@@ -58,9 +58,9 @@ describe('device-link auto-title wiring', () => {
     // steer 会因同会话已有在飞 steer / Stop 边界 / 输入锁返回 false。被拒的文本
     // 改掉默认名 / 合成占位 / fork 占位就是凭空改名(review P1)。
     const body = handlerBody('INPUT_STEER', 'INPUT_STOP');
-    expect(body).toMatch(/const accepted = await inputCoordinator\.steer\(/);
+    expect(body).toMatch(/const runSteer = \(\) => inputCoordinator\.steer\(/);
     expect(body).toMatch(/if \(accepted\)\s*\{[\s\S]*?commitAutoTitle\(\);/);
-    const acceptAt = body.indexOf('await inputCoordinator.steer(');
+    const acceptAt = body.indexOf('inputCoordinator.steer(');
     expect(body.indexOf('commitAutoTitle()')).toBeGreaterThan(acceptAt);
   });
 
@@ -75,7 +75,7 @@ describe('device-link auto-title wiring', () => {
       [
         'INPUT_STEER',
         'INPUT_STOP',
-        'await inputCoordinator.steer(',
+        'inputCoordinator.steer(',
         'assertCurrentInputGeneration();',
       ],
     ] as const) {
@@ -131,7 +131,7 @@ describe('device-link auto-title wiring', () => {
         expect(body).toContain(
           'allowMissingTrustedContexts: deviceLinkInvoke && steerOpts?.removeFromQueue === true',
         );
-        const steerAt = body.indexOf('await inputCoordinator.steer(', finalGuardAt);
+        const steerAt = body.indexOf('inputCoordinator.steer(', finalGuardAt);
         const postSteerGuard = body.indexOf('assertCurrentInputGeneration();', steerAt);
         const commitAt = body.indexOf('commitAutoTitle();', postSteerGuard);
         expect(steerAt).toBeGreaterThan(finalGuardAt);
