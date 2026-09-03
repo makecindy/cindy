@@ -325,6 +325,25 @@ export interface Session {
   summary?: string | null;
 }
 
+/**
+ * 用量历史任务榜单的最小 wire DTO。
+ *
+ * 该查询会覆盖整个本地 sessions 表，因此不能把完整 Session 行送进
+ * Renderer；榜单只需要这些统计与展示字段。
+ */
+export type UsageHistorySession = Pick<
+  Session,
+  | 'id'
+  | 'title'
+  | 'model'
+  | 'providerId'
+  | 'totalTokenUsage'
+  | 'contextTokens'
+  | 'contextWindow'
+  | 'userSendAt'
+  | 'updatedAt'
+>;
+
 export interface SessionRuntimeProfileProjection {
   agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;

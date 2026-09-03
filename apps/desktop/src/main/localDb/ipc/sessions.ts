@@ -22,7 +22,7 @@ import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-sh
 import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
-import { sessions, messages } from '../schema';
+import { sessions } from '../schema';
 import {
   LIST_PREVIEW_EXTRACT_SQL,
   LATEST_VISIBLE_PREVIEW_FILTER_SQL,
@@ -36,6 +36,7 @@ import { resolveBusinessSessionId } from '../../sessionIds';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
   sessionToCamel,
+  sessionUsageToCamel,
   sessionCreateToRow,
   sessionPatchToRow,
   persistableSessionEffort,
@@ -1132,14 +1133,7 @@ export function registerSessionIpc(
         const statusWhere = () =>
           statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
         const rows = await selectSessionUsageRows(db, and(sourceFilter, statusWhere()));
-        return rows.map((session) =>
-          sessionToCamel({
-            ...session,
-            messageCount: 0,
-            latestMessageExtract: null,
-            latestMessageRole: null,
-          }),
-        );
+        return rows.map(sessionUsageToCamel);
       };
       // key 用同一快照上的 userId + clientEpoch + 归一化参数。
       // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
@@ -2346,13 +2340,38 @@ interface SessionListRow {
 function selectSessionUsageRows(
   db: DbClient['drizzle'],
   where: SQL | undefined,
-): Promise<Array<typeof sessions.$inferSelect>> {
+): Promise<
+  Array<
+    Pick<
+      typeof sessions.$inferSelect,
+      | 'id'
+      | 'title'
+      | 'model'
+      | 'providerId'
+      | 'totalTokenUsage'
+      | 'contextTokens'
+      | 'contextWindow'
+      | 'userSendAt'
+      | 'updatedAt'
+    >
+  >
+> {
   return db
-    .select({ session: sessions })
+    .select({
+      id: sessions.id,
+      title: sessions.title,
+      model: sessions.model,
+      providerId: sessions.providerId,
+      totalTokenUsage: sessions.totalTokenUsage,
+      contextTokens: sessions.contextTokens,
+      contextWindow: sessions.contextWindow,
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
+    })
     .from(sessions)
     .where(where)
     .orderBy(desc(sessions.updatedAt))
-    .then((rows) => rows.map((row) => row.session));
+    .then((rows) => rows);
 }
 
 /**

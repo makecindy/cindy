@@ -202,13 +202,38 @@ describe('local-db:sessions:list includePinned', () => {
   it('returns the full sessions set for the usage-history query without message projections', async () => {
     const handler = sessionsListHandler();
     h.queryResults.push([
-      { session: sessionRow('recent', { totalTokenUsage: 20 }) },
-      { session: sessionRow('old', { totalTokenUsage: 200 }) },
+      sessionRow('recent', { totalTokenUsage: 20 }),
+      sessionRow('old', { totalTokenUsage: 200 }),
     ]);
 
     const result = await handler({}, 20, 'all', { usageHistory: true });
 
     expect(result.map((s) => s.id)).toEqual(['recent', 'old']);
+    expect(result[0]).toEqual({
+      id: 'recent',
+      title: 'recent',
+      model: 'sonnet',
+      providerId: null,
+      totalTokenUsage: 20,
+      contextTokens: 0,
+      contextWindow: 0,
+      userSendAt: null,
+      updatedAt: new Date(1_700_000_000_000).toISOString(),
+    });
+    expect(result[0]).not.toHaveProperty('workingDir');
+    const selectCalls = h.fakeDb.select.mock.calls as unknown as Array<unknown[]>;
+    const projection = selectCalls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(Object.keys(projection ?? {})).toEqual([
+      'id',
+      'title',
+      'model',
+      'providerId',
+      'totalTokenUsage',
+      'contextTokens',
+      'contextWindow',
+      'userSendAt',
+      'updatedAt',
+    ]);
     expect(h.fakeDb.select).toHaveBeenCalledTimes(1);
     expect(h.listQuery).not.toHaveBeenCalled();
     expect(h.queryResults).toHaveLength(0);

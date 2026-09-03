@@ -32,7 +32,7 @@ import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import * as sessionService from '@/lib/sessionService';
-import type { Session } from '@/lib/ccAgent.types';
+import type { Session, UsageHistorySession } from '@/lib/ccAgent.types';
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 import { useProviders } from '@/hooks/useProviders';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
@@ -113,14 +113,14 @@ export function shouldHideUsageTaskTable(range: UsageHistoryRange): boolean {
 
 export type UsageSessionsState =
   | { scopeKey: string | null; status: 'loading' }
-  | { scopeKey: string | null; status: 'ready'; sessions: Session[] }
+  | { scopeKey: string | null; status: 'ready'; sessions: UsageHistorySession[] }
   | { scopeKey: string | null; status: 'error' };
 
 /** Only a snapshot belonging to the current data owner may feed the table. */
 export function usageSessionsForScope(
   state: UsageSessionsState,
   scopeKey: string | null,
-): Session[] {
+): UsageHistorySession[] {
   return state.scopeKey === scopeKey && state.status === 'ready' ? state.sessions : [];
 }
 
@@ -141,9 +141,21 @@ export function removeUsageSessionForScope(
  * Merge live sidebar metadata into the full usage-history row without letting
  * the sidebar's potentially stale token snapshot replace the database total.
  */
-export function mergeUsageSessionSnapshots(fullSession: Session, liveSession: Session): Session {
-  const merged = { ...fullSession, ...liveSession };
-  return { ...merged, totalTokenUsage: fullSession.totalTokenUsage };
+export function mergeUsageSessionSnapshots(
+  fullSession: UsageHistorySession,
+  liveSession: Session,
+): UsageHistorySession {
+  return {
+    ...fullSession,
+    title: liveSession.title,
+    model: liveSession.model,
+    providerId: liveSession.providerId,
+    contextTokens: liveSession.contextTokens,
+    contextWindow: liveSession.contextWindow,
+    userSendAt: liveSession.userSendAt,
+    updatedAt: liveSession.updatedAt,
+    totalTokenUsage: fullSession.totalTokenUsage,
+  };
 }
 
 /**
@@ -154,7 +166,7 @@ export function useTopTokenSessions(
   range: UsageHistoryRange = '30d',
   todayKeyOverride?: string,
   accountScopeKey?: string,
-): Session[] {
+): UsageHistorySession[] {
   // 归档的任务同样消耗过 token, 统计口径不该因为用户归档而变。
   const { sessions: recentSessions } = useCCSessions({ includeArchived: 'all' });
   const scopeKey = accountScopeKey ?? null;
@@ -242,8 +254,8 @@ export function useTopTokenSessions(
 export function UsageTaskTable({
   rows,
   rangeLabel,
-}: {
-  rows: Session[];
+  }: {
+  rows: UsageHistorySession[];
   rangeLabel: string;
 }): React.JSX.Element {
   const { t } = useTranslation();
