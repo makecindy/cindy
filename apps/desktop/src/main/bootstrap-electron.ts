@@ -820,23 +820,33 @@ import { healWindowsShortcuts } from './windowsShortcutSelfHeal.js';
 import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
+  writeLinuxCloseBehavior,
   writeSwallowActivationClick,
   writeWindowsCloseBehavior,
 } from './window-behavior-settings-store.js';
 import {
   hideWindowToWindowsTray,
   popUpWindowsTrayMenu,
-  requestWindowsCloseBehavior,
   requestWindowsTrayQuit,
 } from './windowsTrayLifecycle.js';
-import { createWindowsClosePromptFallbackController } from './windowsClosePromptFallback.js';
 import {
+  applyLinuxMainWindowCloseBehavior,
+  createCloseBehaviorPromptFallbackController,
+  requestMainWindowCloseBehavior,
+} from './mainWindowCloseBehavior.js';
+import {
+  isLinuxCloseBehavior,
   isWindowsCloseBehavior,
+  WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
+  WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
+  WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
+  WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
   WINDOW_BEHAVIOR_SET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
+  type LinuxCloseBehavior,
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior.js';
 import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './commands/index.js';
@@ -3007,7 +3017,7 @@ let windowsTrayMenu: Menu | null = null;
 // 已弹出的菜单在 native callback 前必须保留,即使语言切换清掉了当前缓存。
 const activeWindowsTrayMenus = new Set<Menu>();
 const windowsTrayLog = createLogger('windows-tray');
-const WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS = 2_000;
+const CLOSE_BEHAVIOR_PROMPT_FALLBACK_DELAY_MS = 2_000;
 
 function buildWindowsTrayMenu(): Menu {
   return Menu.buildFromTemplate([
@@ -3170,13 +3180,35 @@ function showNativeWindowsCloseBehaviorPrompt(): WindowsCloseBehavior {
   return choice === 1 ? 'quit' : 'tray';
 }
 
-const windowsClosePromptFallback = createWindowsClosePromptFallbackController(
+function showNativeLinuxCloseBehaviorPrompt(): LinuxCloseBehavior {
+  const options = {
+    type: 'question' as const,
+    title: t('settings.windowBehavior.closePrompt.title'),
+    message: t('settings.windowBehavior.closePrompt.message'),
+    detail: t('settings.windowBehavior.closePrompt.linuxDetail'),
+    buttons: [
+      t('settings.windowBehavior.closeBehavior.minimize'),
+      t('settings.windowBehavior.closeBehavior.quit'),
+    ],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  const mainWindow = mainWindowRef;
+  const choice =
+    mainWindow && !mainWindow.isDestroyed()
+      ? dialog.showMessageBoxSync(mainWindow, options)
+      : dialog.showMessageBoxSync(options);
+  return choice === 1 ? 'quit' : 'minimize';
+}
+
+const windowsClosePromptFallback = createCloseBehaviorPromptFallbackController(
   {
     readBehavior: () => readWindowBehaviorSettings().windowsCloseBehavior,
     showRendererPrompt: () => {
       const mainWindow = mainWindowRef;
       if (!mainWindow) return;
-      requestWindowsCloseBehavior(
+      requestMainWindowCloseBehavior(
         mainWindow,
         WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
       );
@@ -3194,7 +3226,34 @@ const windowsClosePromptFallback = createWindowsClosePromptFallbackController(
     schedule: (callback, delayMs) => setTimeout(callback, delayMs),
     cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   },
-  WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS,
+  CLOSE_BEHAVIOR_PROMPT_FALLBACK_DELAY_MS,
+);
+
+const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
+  {
+    readBehavior: () => readWindowBehaviorSettings().linuxCloseBehavior,
+    showRendererPrompt: () => {
+      const mainWindow = mainWindowRef;
+      if (!mainWindow) return;
+      requestMainWindowCloseBehavior(
+        mainWindow,
+        WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
+      );
+    },
+    showNativePrompt: showNativeLinuxCloseBehaviorPrompt,
+    persistBehavior: writeLinuxCloseBehavior,
+    applyBehavior: (behavior) => {
+      const mainWindow = mainWindowRef;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+      } else {
+        app.quit();
+      }
+    },
+    schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  },
+  CLOSE_BEHAVIOR_PROMPT_FALLBACK_DELAY_MS,
 );
 
 app.on('before-quit', () => {
@@ -3203,6 +3262,7 @@ app.on('before-quit', () => {
   retryPiRuntimeAfterNetworkRecovery = null;
   disposePiRuntimeRecovery = null;
   windowsClosePromptFallback.dispose();
+  linuxClosePromptFallback.dispose();
   destroyWindowsTray();
   disposeUpdatePresentationRecovery();
 });
@@ -3664,8 +3724,8 @@ const createWindow = () => {
       }
       return;
     }
-    // Windows: first close asks once, then either quits or keeps the main window
-    // alive in the system tray. Linux keeps the historical quit behavior.
+    // Windows and Linux ask once on first close, then reuse the persisted choice.
+    // The keep-running action follows each platform: tray on Windows, minimize on Linux.
     event.preventDefault();
     if (process.platform === 'win32') {
       const behavior = readWindowBehaviorSettings().windowsCloseBehavior;
@@ -3674,6 +3734,15 @@ const createWindow = () => {
         return;
       }
       applyWindowsCloseBehavior(mainWindow, behavior);
+      return;
+    }
+    if (process.platform === 'linux') {
+      const behavior = readWindowBehaviorSettings().linuxCloseBehavior;
+      if (!behavior) {
+        linuxClosePromptFallback.request();
+        return;
+      }
+      applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
       return;
     }
     app.quit();
@@ -4416,7 +4485,7 @@ const registerIpcHandlers = () => {
   });
 
   // Window behavior —— swallowActivationClick 保持 renderer 运行时事实标准;
-  // Windows close behavior 由 main 读写并执行。
+  // Windows / Linux close behavior 由 main 读写并执行。
   ipcMain.handle(
     WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
     async (_e, enabled: unknown) => {
@@ -4445,6 +4514,28 @@ const registerIpcHandlers = () => {
   ipcMain.on(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL, (event) => {
     if (BrowserWindow.fromWebContents(event.sender) === mainWindowRef) {
       windowsClosePromptFallback.acknowledge();
+    }
+  });
+  ipcMain.handle(WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readWindowBehaviorSettings().linuxCloseBehavior;
+  });
+  ipcMain.handle(
+    WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
+    async (event, behavior: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (!isLinuxCloseBehavior(behavior)) {
+        throwIpcError('INVALID_PARAMS', 'Linux close behavior required (quit|minimize)');
+      }
+      linuxClosePromptFallback.acknowledge();
+      writeLinuxCloseBehavior(behavior);
+      return behavior;
+    },
+  );
+  ipcMain.on(WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL, (event) => {
+    assertTrustedAppRendererEvent(event);
+    if (BrowserWindow.fromWebContents(event.sender) === mainWindowRef) {
+      linuxClosePromptFallback.acknowledge();
     }
   });
   // LSP Beta 开关 IPC —— 同 compat-mode 模式:

@@ -565,12 +565,14 @@
         "hint": "You will be asked the first time. You can change the choice here later.",
         "aria": "Choose what happens when the main window closes",
         "tray": "Minimize to tray",
+        "minimize": "Minimize window",
         "quit": "Quit Cindy"
       },
       "closePrompt": {
         "title": "Close Cindy",
         "message": "What should happen when you close the main window?",
-        "detail": "Tasks keep running when Cindy is minimized to the system tray; right-click the tray icon to quit. You can change this later in Settings."
+        "detail": "Tasks keep running when Cindy is minimized to the system tray; right-click the tray icon to quit. You can change this later in Settings.",
+        "linuxDetail": "Tasks keep running while the window is minimized. Restore Cindy from the taskbar or window overview, or change this choice later in Settings."
       },
       "trayMenu": {
         "show": "Open Cindy",
