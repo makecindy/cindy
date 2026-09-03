@@ -105,10 +105,7 @@ export function resolveHeatmapWeeks({
     metric === 'tokens' ? (day.tokens ?? 0) : (day.money?.amount ?? 0);
   const earliestDay = days
     .filter(
-      (day) =>
-        day.day &&
-        day.day <= todayKey &&
-        (metric === undefined || intensityOf(day) > 0),
+      (day) => day.day && day.day <= todayKey && (metric === undefined || intensityOf(day) > 0),
     )
     .map((day) => day.day)
     .sort()[0];
@@ -152,6 +149,11 @@ export function UsageHeatmap({
   const { t, i18n } = useTranslation();
   const plotRef = useRef<HTMLDivElement>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
+  const dateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language, { year: 'numeric', month: 'short', day: 'numeric' }),
+    [i18n.language],
+  );
 
   useLayoutEffect(() => {
     const element = plotRef.current;
@@ -272,20 +274,20 @@ export function UsageHeatmap({
                   return <div key={ri} style={{ width: CELL_PX, height: CELL_PX }} />;
                 }
 
-                const title =
+                const usageSummary =
                   metric === 'tokens'
-                    ? `${cell.day} · ${
-                        cell.tokens > 0
-                          ? t('usageDashboard.tokensOnly', {
-                              tokens: formatCompactTokens(cell.tokens),
-                            })
-                          : t('usageHistory.heatmap.emptyCell')
-                      }`
-                    : `${cell.day} · ${formatMoney(cell.money)}${
+                    ? cell.tokens > 0
+                      ? t('usageDashboard.tokensOnly', {
+                          tokens: formatCompactTokens(cell.tokens),
+                        })
+                      : t('usageHistory.heatmap.emptyCell')
+                    : `${formatMoney(cell.money)}${
                         cell.tokens > 0
                           ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
                           : ''
                       }`;
+                const title = `${cell.day} · ${usageSummary}`;
+                const accessibleLabel = `${dateFormatter.format(parseDayKey(cell.day))} · ${usageSummary}`;
                 const className = onDayClick ? 'rounded-full' : 'rounded-[3px]';
                 const style = {
                   width: CELL_PX,
@@ -304,7 +306,7 @@ export function UsageHeatmap({
                   <button
                     key={ri}
                     type="button"
-                    aria-label={cell.day}
+                    aria-label={accessibleLabel}
                     aria-pressed={selectedDay === cell.day}
                     onClick={() => onDayClick(cell.day)}
                     className="cursor-pointer rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"

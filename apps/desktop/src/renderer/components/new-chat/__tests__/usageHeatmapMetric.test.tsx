@@ -187,7 +187,7 @@ describe('UsageHeatmap metric', () => {
       />,
     );
 
-    fireEvent.click(getByRole('button', { name: '2026-08-21' }));
+    fireEvent.click(getByRole('button', { name: /Aug 21, 2026/ }));
     expect(onDayClick).toHaveBeenCalledWith('2026-08-21');
   });
 
@@ -203,7 +203,7 @@ describe('UsageHeatmap metric', () => {
       />,
     );
 
-    fireEvent.click(getByRole('button', { name: '2026-08-22' }));
+    fireEvent.click(getByRole('button', { name: /Aug 22, 2026/ }));
     expect(onDayClick).toHaveBeenCalledWith('2026-08-22');
   });
 
@@ -212,7 +212,7 @@ describe('UsageHeatmap metric', () => {
       <UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} metric="tokens" />,
     );
 
-    expect(queryByRole('button', { name: '2026-08-21' })).toBeNull();
+    expect(queryByRole('button', { name: /Aug 21, 2026/ })).toBeNull();
     expect(container.querySelector('div[title^="2026-08-21"]')).toBeTruthy();
   });
 
@@ -228,9 +228,23 @@ describe('UsageHeatmap metric', () => {
       />,
     );
 
-    expect(getByRole('button', { name: '2026-08-21' }).firstElementChild?.className).toContain(
+    expect(getByRole('button', { name: /Aug 21, 2026/ }).firstElementChild?.className).toContain(
       'rounded-full',
     );
+  });
+
+  it('可访问名称包含本地化日期和用量摘要', () => {
+    const { getByRole } = render(
+      <UsageHeatmap
+        days={days}
+        todayKey="2026-08-22"
+        windowDays={7}
+        metric="tokens"
+        onDayClick={vi.fn()}
+      />,
+    );
+
+    expect(getByRole('button', { name: /Aug 21, 2026.*tokens/ })).toBeTruthy();
   });
 
   it('选中日期使用 outline 而不是页面内阴影', () => {
@@ -245,7 +259,7 @@ describe('UsageHeatmap metric', () => {
       />,
     );
 
-    const selectedCell = getByRole('button', { name: '2026-08-21' })
+    const selectedCell = getByRole('button', { name: /Aug 21, 2026/ })
       .firstElementChild as HTMLElement;
     expect(selectedCell.style.outline).toBe('2px solid var(--focus-ring-soft)');
     expect(selectedCell.style.boxShadow).toBe('');

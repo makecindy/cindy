@@ -45,6 +45,11 @@ function shiftDayKeyLocal(dayKey: string, deltaDays: number): string {
   return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
+function parseDayKeyLocal(dayKey: string): Date {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  return new Date(year, (month ?? 1) - 1, day ?? 1);
+}
+
 /** 与 UsageDailyBars 同一套刻度算法, 保证两张图的刻度密度一致。 */
 function niceTicks(max: number): number[] {
   if (!(max > 0)) return [];
@@ -70,7 +75,16 @@ export function UsageTokenBars({
   selectedDay?: string | null;
   onDayClick?: (day: string) => void;
 }): React.JSX.Element {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const dateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      }),
+    [i18n.language],
+  );
 
   const bars = useMemo(() => {
     const segsByDay = new Map<string, Map<number, DaySegment>>();
@@ -141,12 +155,12 @@ export function UsageTokenBars({
           {bars.list.map((b) => {
             const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
             const height = b.tokens > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
+            const usageSummary =
+              b.tokens > 0
+                ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
+                : t('usageHistory.heatmap.emptyCell');
             const titleLines = [
-              `${b.day} · ${
-                b.tokens > 0
-                  ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
-                  : t('usageHistory.heatmap.emptyCell')
-              }`,
+              `${b.day} · ${usageSummary}`,
               ...b.segments.map(
                 (s) =>
                   `${s.label}: ${t('usageDashboard.tokensOnly', {
@@ -159,7 +173,7 @@ export function UsageTokenBars({
                 key={b.day}
                 type="button"
                 title={titleLines.join('\n')}
-                aria-label={b.day}
+                aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
                 aria-pressed={selectedDay === b.day}
                 onClick={() => onDayClick?.(b.day)}
                 disabled={!onDayClick}
@@ -168,8 +182,7 @@ export function UsageTokenBars({
                 style={{
                   height,
                   backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
-                  outline:
-                    selectedDay === b.day ? '2px solid var(--focus-ring-soft)' : undefined,
+                  outline: selectedDay === b.day ? '2px solid var(--focus-ring-soft)' : undefined,
                   outlineOffset: selectedDay === b.day ? '1px' : undefined,
                 }}
               >

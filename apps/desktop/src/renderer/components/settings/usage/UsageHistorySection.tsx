@@ -176,7 +176,7 @@ export function UsageHistorySection(): React.JSX.Element {
                   <Select.Item
                     key={option}
                     value={option}
-                    className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-12 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)]"
+                    className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-12 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]"
                   >
                     <Select.ItemText>{t(`usageHistory.range.${option}`)}</Select.ItemText>
                     <Select.ItemIndicator>
@@ -187,7 +187,7 @@ export function UsageHistorySection(): React.JSX.Element {
                 {range.startsWith('day:') && selectedDay ? (
                   <Select.Item
                     value={range}
-                    className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-12 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)]"
+                    className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-12 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]"
                   >
                     <Select.ItemText>{rangeLabel}</Select.ItemText>
                     <Select.ItemIndicator>
@@ -272,11 +272,7 @@ export function UsageHistorySection(): React.JSX.Element {
           {modelRows.length > 0 && (
             <Card title={t('usageHistory.byModel.title')} subtitle={rangeLabel}>
               <div className="overflow-x-auto">
-                <UsageModelTable
-                  rows={modelRows}
-                  rangeLabel={rangeLabel}
-                  colorOrder={colorOrder}
-                />
+                <UsageModelTable rows={modelRows} rangeLabel={rangeLabel} colorOrder={colorOrder} />
               </div>
             </Card>
           )}

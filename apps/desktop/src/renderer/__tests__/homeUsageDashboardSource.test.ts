@@ -213,9 +213,7 @@ describe('HomeUsageDashboard source contract', () => {
 
   it('keeps the settings usage loading state separate from a loaded empty payload', () => {
     const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
-    expect(usageHistorySectionSource).toContain(
-      'const loading = history === null && refreshing;',
-    );
+    expect(usageHistorySectionSource).toContain('const loading = history === null && refreshing;');
     expect(usageHistorySectionSource).toContain(
       'const loadFailed = history === null && !refreshing;',
     );
@@ -223,14 +221,27 @@ describe('HomeUsageDashboard source contract', () => {
       'const empty = history !== null && isUsageHistoryEmpty(history);',
     );
     expect(usageHistorySectionSource).toContain("t('usageHistory.loadFailed')");
-    expect(hookSource).toContain(
-      'useState(scope.cache === null || scope.refreshing)',
-    );
+    expect(hookSource).toContain('useState(scope.cache === null || scope.refreshing)');
     expect(hookSource.indexOf('void load(scopedKey);')).toBeLessThan(
       hookSource.indexOf('setIsRefreshing(activeScope.refreshing);'),
     );
     expect(hookSource).toContain(
       'historyState.scopeKey === scopedKey ? isRefreshing : scope.cache === null || scope.refreshing;',
+    );
+  });
+
+  it('keeps interactive usage controls discoverable and semantically selected', () => {
+    expect(usageHistorySectionSource).toContain(
+      'data-[state=checked]:bg-[var(--settings-menu-bg-selected)]',
+    );
+    expect(usageHistorySectionSource).toContain(
+      'data-[state=checked]:text-[var(--settings-menu-text-selected)]',
+    );
+    expect(heatmapSource).toContain('const accessibleLabel =');
+    expect(heatmapSource).toContain('aria-label={accessibleLabel}');
+    expect(tokenBarsSource).toContain('function parseDayKeyLocal(dayKey: string): Date');
+    expect(tokenBarsSource).toContain(
+      'aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))}',
     );
   });
 });
