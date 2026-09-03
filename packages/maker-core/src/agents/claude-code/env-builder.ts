@@ -332,15 +332,14 @@ const CLAUDE_FAMILY_MARKERS = ['claude', 'fable'] as const;
  *
  * 非 firstParty 路由本来就走不到 cap,那里设了也只是 no-op,不额外分支。
  *
- * ## 两处已知边界
+ * ## 已知边界
  *
- * - **只在 spawn 期判一次**,与相邻的 `applySubagentModelEnv` 同语义(env 必须在 spawn 前
- *   定好)。会话中途 `setModel` 不重算:Claude 起的会话切到 GPT 后,Explore 仍会被改判成
- *   Opus;反向则 Explore 跟随新模型而不被限高。要闭掉得重建子进程,代价远大于收益。
  * - **依赖一个未公开的 env**。上游哪天移除,这里静默退回现状(不会崩)。单测钉住的只是本
  *   函数的判定表,**钉不住二进制行为** —— 上面那段反编译是 2.1.259
  *   (`tools/claude/latest.json` 的 pin)的实测结论,升级 CC 后请回到二进制里重新核对
  *   `FX` / `r7r` 与 `ven`／`Cen`,再决定这张表是否还成立。
+ * - 本机热切若跨过这张表,由 `applyExploreInheritCapEnv(..., 'replace')` 改字典,下一
+ *   次 send 重建 Query 让子进程吃到新 env。远端 daemon 烤死 spawn env,跨表则拒绝切模。
  */
 export function shouldDisableExploreInheritCap(activeModel: string | undefined): boolean {
   const model = activeModel?.trim().toLowerCase();
@@ -349,6 +348,40 @@ export function shouldDisableExploreInheritCap(activeModel: string | undefined):
   if (EXPLORE_CAP_TIER_WORDS.some((word) => model.includes(word))) return false;
   if (CLAUDE_FAMILY_MARKERS.some((word) => model.includes(word))) return false;
   return true;
+}
+
+/**
+ * 把 Explore inherit-cap 开关写进(或移出) env 字典。
+ *
+ * - `if-undefined`:spawn 用。behaviorFlags / 用户显式设的值优先,只在键缺失时注入 `'1'`。
+ * - `replace`:本机热切跨策略时用。只动 Cindy 注入的 `'1'` / 缺省,不碰显式覆盖(如 `'0'`)。
+ */
+export function applyExploreInheritCapEnv(
+  env: Record<string, string>,
+  activeModel: string | undefined,
+  mode: 'if-undefined' | 'replace',
+): void {
+  const disable = shouldDisableExploreInheritCap(activeModel);
+  if (mode === 'if-undefined') {
+    if (env[EXPLORE_INHERIT_CAP_DISABLE_ENV] === undefined && disable) {
+      env[EXPLORE_INHERIT_CAP_DISABLE_ENV] = '1';
+    }
+    return;
+  }
+  const current = env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
+  if (current !== undefined && current !== '1') return;
+  if (disable) env[EXPLORE_INHERIT_CAP_DISABLE_ENV] = '1';
+  else delete env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
+}
+
+/** Cindy 可改写的 cap 开关是否与目标模型失配。显式覆盖(非 `'1'`)视为用户钉死,不算失配。 */
+export function exploreInheritCapEnvNeedsSync(
+  env: Record<string, string>,
+  activeModel: string | undefined,
+): boolean {
+  const current = env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
+  if (current !== undefined && current !== '1') return false;
+  return shouldDisableExploreInheritCap(activeModel) !== (current === '1');
 }
 
 /**
@@ -459,14 +492,7 @@ export async function buildClaudeEnv(
 
   // 非 Claude 主模型的会话关掉内置 Explore 的 inherit cap ——
   // 否则 CC 会把它静默改判成 Opus(判据与代价见 shouldDisableExploreInheritCap)。
-  // if-undefined 守卫:behaviorFlags 与用户显式设的值优先(这不是鉴权/路由键,
-  // 不需要像 CLAUDE_CODE_SUBAGENT_MODEL 那样强制 delete 掉继承来的残留)。
-  if (
-    env[EXPLORE_INHERIT_CAP_DISABLE_ENV] === undefined
-    && shouldDisableExploreInheritCap(options.activeModel)
-  ) {
-    env[EXPLORE_INHERIT_CAP_DISABLE_ENV] = '1';
-  }
+  applyExploreInheritCapEnv(env, options.activeModel, 'if-undefined');
 
   // 第三道防线: 告诉 CC CLI "provider 路由由 host 接管"。
   // CC 内部 filterSettingsEnv 看到此标记后,会从所有 settings-sourced env 中剥掉

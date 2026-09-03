@@ -5,8 +5,10 @@ import type { AgentRuntimeConfig } from '../../../interfaces/runtime-config.js';
 import {
   EXPLORE_INHERIT_CAP_DISABLE_ENV,
   SENSITIVE_ANTHROPIC_ENV_KEYS,
+  applyExploreInheritCapEnv,
   applySubagentModelEnv,
   buildClaudeEnv,
+  exploreInheritCapEnvNeedsSync,
   shouldDisableExploreInheritCap,
 } from '../env-builder.js';
 
@@ -410,6 +412,40 @@ describe('buildClaudeEnv', () => {
       });
 
       expect(env[EXPLORE_INHERIT_CAP_DISABLE_ENV]).toBe('1');
+    });
+
+    it('replaces a Cindy-managed cap flag when the live model crosses the policy boundary', () => {
+      const env: Record<string, string> = {
+        [EXPLORE_INHERIT_CAP_DISABLE_ENV]: '1',
+      };
+
+      applyExploreInheritCapEnv(env, 'claude-fable-5', 'replace');
+      expect(env[EXPLORE_INHERIT_CAP_DISABLE_ENV]).toBeUndefined();
+
+      applyExploreInheritCapEnv(env, 'gpt-5.6-sol[1m]', 'replace');
+      expect(env[EXPLORE_INHERIT_CAP_DISABLE_ENV]).toBe('1');
+    });
+
+    it('keeps an explicit override in if-undefined mode even when replace would flip it', () => {
+      const env: Record<string, string> = {
+        [EXPLORE_INHERIT_CAP_DISABLE_ENV]: '0',
+      };
+
+      applyExploreInheritCapEnv(env, 'gpt-5.6-sol[1m]', 'if-undefined');
+      expect(env[EXPLORE_INHERIT_CAP_DISABLE_ENV]).toBe('0');
+    });
+
+    it('treats an explicit override as already in sync so live switches do not rebuild', () => {
+      const env: Record<string, string> = {
+        [EXPLORE_INHERIT_CAP_DISABLE_ENV]: '0',
+      };
+      expect(exploreInheritCapEnvNeedsSync(env, 'gpt-5.6-sol[1m]')).toBe(false);
+      expect(exploreInheritCapEnvNeedsSync(env, 'claude-fable-5')).toBe(false);
+      expect(exploreInheritCapEnvNeedsSync({}, 'gpt-5.6-sol[1m]')).toBe(true);
+      expect(exploreInheritCapEnvNeedsSync(
+        { [EXPLORE_INHERIT_CAP_DISABLE_ENV]: '1' },
+        'claude-fable-5',
+      )).toBe(true);
     });
   });
 
