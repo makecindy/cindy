@@ -16,8 +16,12 @@ describe('readPersistedWindowMaximized', () => {
   });
 
   it('is false for a windowed, malformed or missing file', () => {
-    expect(readPersistedWindowMaximized('x', () => JSON.stringify({ isMaximized: false }))).toBe(false);
-    expect(readPersistedWindowMaximized('x', () => JSON.stringify({ isMaximized: 'yes' }))).toBe(false);
+    expect(readPersistedWindowMaximized('x', () => JSON.stringify({ isMaximized: false }))).toBe(
+      false,
+    );
+    expect(readPersistedWindowMaximized('x', () => JSON.stringify({ isMaximized: 'yes' }))).toBe(
+      false,
+    );
     expect(readPersistedWindowMaximized('x', () => '[]')).toBe(false);
     expect(readPersistedWindowMaximized('x', () => 'not json')).toBe(false);
     expect(
@@ -35,7 +39,13 @@ function createHarness(options: { armed?: boolean } = {}) {
   const timers: Timer[] = [];
   const windowListeners = new Map<string, () => void>();
   const screenListeners = new Map<string, () => void>();
-  const state = { visible: true, maximized: false, minimized: false, fullscreen: false, destroyed: false };
+  const state = {
+    visible: true,
+    maximized: false,
+    minimized: false,
+    fullscreen: false,
+    destroyed: false,
+  };
 
   const win = {
     isDestroyed: () => state.destroyed,
@@ -346,8 +356,10 @@ describe('installMainWindowNativeRestoreIntent', () => {
     type Listener = (...args: unknown[]) => void;
     const windowListeners = new Map<string, Listener>();
     const webContentsListeners = new Map<string, Listener>();
+    const windowMessageListeners = new Map<number, (wParam: Buffer, lParam: Buffer) => void>();
     const removeListener = vi.fn((event: string) => windowListeners.delete(event));
     const removeWebContentsListener = vi.fn((event: string) => webContentsListeners.delete(event));
+    const unhookWindowMessage = vi.fn((message: number) => windowMessageListeners.delete(message));
     const win = {
       isDestroyed: () => false,
       isVisible: () => true,
@@ -357,6 +369,11 @@ describe('installMainWindowNativeRestoreIntent', () => {
       maximize: vi.fn(),
       on: vi.fn((event: string, listener: Listener) => windowListeners.set(event, listener)),
       removeListener,
+      hookWindowMessage: vi.fn(
+        (message: number, listener: (wParam: Buffer, lParam: Buffer) => void) =>
+          windowMessageListeners.set(message, listener),
+      ),
+      unhookWindowMessage,
       webContents: {
         on: vi.fn((event: string, listener: Listener) => webContentsListeners.set(event, listener)),
         removeListener: removeWebContentsListener,
@@ -366,8 +383,10 @@ describe('installMainWindowNativeRestoreIntent', () => {
       win,
       windowListeners,
       webContentsListeners,
+      windowMessageListeners,
       removeListener,
       removeWebContentsListener,
+      unhookWindowMessage,
     };
   }
 
@@ -397,8 +416,11 @@ describe('installMainWindowNativeRestoreIntent', () => {
         modifiers: ['meta'],
       },
     );
+    const restoreCommand = Buffer.alloc(8);
+    restoreCommand.writeUInt32LE(0xf120, 0);
+    h.windowMessageListeners.get(0x0112)?.(restoreCommand, Buffer.alloc(8));
 
-    expect(notify).toHaveBeenCalledTimes(4);
+    expect(notify).toHaveBeenCalledTimes(5);
 
     dispose();
     expect(h.removeListener).toHaveBeenCalledWith('will-move', expect.any(Function));
@@ -411,8 +433,10 @@ describe('installMainWindowNativeRestoreIntent', () => {
       'before-input-event',
       expect.any(Function),
     );
+    expect(h.unhookWindowMessage).toHaveBeenCalledWith(0x0112);
     expect(h.windowListeners.size).toBe(0);
     expect(h.webContentsListeners.size).toBe(0);
+    expect(h.windowMessageListeners.size).toBe(0);
   });
 
   it('ignores unrelated input and non-Windows platforms', () => {
@@ -467,6 +491,9 @@ describe('installMainWindowNativeRestoreIntent', () => {
         modifiers: ['meta'],
       },
     );
+    const minimizeCommand = Buffer.alloc(8);
+    minimizeCommand.writeUInt32LE(0xf020, 0);
+    windows.windowMessageListeners.get(0x0112)?.(minimizeCommand, Buffer.alloc(8));
 
     expect(windowsNotify).not.toHaveBeenCalled();
   });

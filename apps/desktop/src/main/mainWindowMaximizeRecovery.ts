@@ -71,7 +71,13 @@ interface MaximizeRecoveryMouseInput {
 
 type MaximizeRecoveryUserIntentSource = 'before-unmaximize' | 'after-unmaximize';
 
+const WM_SYSCOMMAND = 0x0112;
+const SC_RESTORE = 0xf120;
+const SYSTEM_COMMAND_MASK = 0xfff0;
+
 export interface MaximizeRecoveryNativeWindow extends MaximizeRecoveryWindow {
+  hookWindowMessage(message: number, callback: (wParam: Buffer, lParam: Buffer) => void): void;
+  unhookWindowMessage(message: number): void;
   webContents: {
     on(
       event: 'before-input-event',
@@ -110,6 +116,11 @@ export function installMainWindowNativeRestoreIntent(
     notifyUserUnmaximizeIntent(win.isMaximized() ? 'before-unmaximize' : 'after-unmaximize');
   const onWillResize = (): void =>
     notifyUserUnmaximizeIntent(win.isMaximized() ? 'before-unmaximize' : 'after-unmaximize');
+  const onSystemCommand = (wParam: Buffer): void => {
+    if (wParam.byteLength >= 4 && (wParam.readUInt32LE(0) & SYSTEM_COMMAND_MASK) === SC_RESTORE) {
+      notifyUserUnmaximizeIntent('before-unmaximize');
+    }
+  };
   const onBeforeMouseEvent = (_event: unknown, mouse: MaximizeRecoveryMouseInput): void => {
     if (
       mouse.type === 'mouseDown' &&
@@ -136,12 +147,14 @@ export function installMainWindowNativeRestoreIntent(
 
   win.on('will-move', onWillMove);
   win.on('will-resize', onWillResize);
+  win.hookWindowMessage(WM_SYSCOMMAND, onSystemCommand);
   win.webContents.on('before-mouse-event', onBeforeMouseEvent);
   win.webContents.on('before-input-event', onBeforeInputEvent);
 
   return (): void => {
     win.removeListener('will-move', onWillMove);
     win.removeListener('will-resize', onWillResize);
+    win.unhookWindowMessage(WM_SYSCOMMAND);
     win.webContents.removeListener('before-mouse-event', onBeforeMouseEvent);
     win.webContents.removeListener('before-input-event', onBeforeInputEvent);
   };
