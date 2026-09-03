@@ -45,8 +45,8 @@
  * 会话不进本进程 maker-core,天然不经过。
  *
  * 写入频率:每个 turn 起止各一次 UPDATE,不在事件热路径,对 maker-core 四指标
- * 无影响(规则 10)。所有写入吞错落日志:这是尽力而为的辅助信号,绝不阻塞
- * turn 主流程。
+ * 无影响(规则 10)。普通 turn 写吞错落日志,绝不阻塞主流程；Windows confirmed
+ * session-end 的 awaited started 写会把失败回报给 lifecycle,让它保留终态事件兜底。
  */
 
 import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
@@ -148,19 +148,25 @@ function notifyTurnEndedPersisted(sessionId: string, endedAt: number, context: u
 /** started / ended 的 per-session 写链:只做 UPDATE 排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
 
-/** 返回链上本次写完成(含失败吞错)的 promise,供需要落库确认的调用方 await。 */
+/** 返回本次写的原始结果,同时用吞错尾链保证后续写不会被一次失败毒死。 */
 function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
   const prev = _writeChains.get(sessionId) ?? Promise.resolve();
-  const next = prev.then(op).catch(() => undefined);
-  _writeChains.set(sessionId, next);
-  return next;
+  const attempt = prev.then(op);
+  _writeChains.set(
+    sessionId,
+    attempt.catch(() => undefined),
+  );
+  return attempt;
 }
 
-/** turn 启动:写 active_turn_started_at = now。fire-and-forget,失败只落日志。 */
-export function markSessionTurnStarted(sessionId: string): void {
-  if (_quitFrozen) return;
+function enqueueSessionTurnStarted(sessionId: string, propagateFailure = false): Promise<void> {
+  if (_quitFrozen) {
+    return propagateFailure
+      ? Promise.reject(new Error('session active-turn markers are frozen'))
+      : Promise.resolve();
+  }
   const startedAt = Date.now();
-  chainWrite(sessionId, async () => {
+  return chainWrite(sessionId, async () => {
     try {
       await getDbClient()
         .drizzle.update(sessions)
@@ -171,8 +177,19 @@ export function markSessionTurnStarted(sessionId: string): void {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (propagateFailure) throw err;
     }
   });
+}
+
+/** turn 启动:写 active_turn_started_at = now。fire-and-forget,失败只落日志。 */
+export function markSessionTurnStarted(sessionId: string): void {
+  void enqueueSessionTurnStarted(sessionId);
+}
+
+/** Windows confirmed session-end barrier:写落库后 resolve,失败则 reject 供终态兜底。 */
+export function markSessionTurnStartedDurable(sessionId: string): Promise<void> {
+  return enqueueSessionTurnStarted(sessionId, true);
 }
 
 /**
@@ -214,6 +231,24 @@ export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Pro
   void barrier.then(
     () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
     () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
+  );
+}
+
+/**
+ * Windows confirmed-session-end fallback: terminal history is durable, so pair
+ * any pre-existing started marker even though the global quit freeze is active.
+ * This narrow awaited path is the only shutdown writer allowed to bypass that
+ * freeze; no newer started marker can enter after freeze.
+ */
+export async function markSessionTurnsEndedAfterShutdownFallback(
+  sessionIds: Iterable<string>,
+): Promise<void> {
+  const endedAt = Date.now();
+  const notifyContext = captureTurnEndedPersistedContext();
+  await Promise.all(
+    [...new Set(sessionIds)].map((sessionId) =>
+      enqueueEndedWrite(sessionId, endedAt, notifyContext, true),
+    ),
   );
 }
 
@@ -289,7 +324,12 @@ export async function ackSessionTurnEndedIfUnchanged(
 }
 
 /** ended 写入的唯一落库实现:MAX 守卫 + per-session 链,见 markSessionTurnEnded 注释。 */
-function enqueueEndedWrite(sessionId: string, endedAt: number, notifyContext: unknown): Promise<void> {
+function enqueueEndedWrite(
+  sessionId: string,
+  endedAt: number,
+  notifyContext: unknown,
+  propagateFailure = false,
+): Promise<void> {
   return chainWrite(sessionId, async () => {
     try {
       const db = getDbClient().drizzle;
@@ -314,6 +354,7 @@ function enqueueEndedWrite(sessionId: string, endedAt: number, notifyContext: un
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (propagateFailure) throw err;
     }
   });
 }

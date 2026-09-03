@@ -89,10 +89,15 @@ import {
   sealAssistantBlockForLateFinal,
   flushOrphanToolResults,
   isSuccessfulCodexDoneEventData,
+  persistReservedStaleAssistantBlock,
+  persistReservedStaleOrphanToolResults,
+  onReservedStaleTurnErrorEvent,
   onTurnErrorEvent,
   reserveTurnErrorPersistId,
   releaseReservedTurnErrorPersistId,
+  whenSessionPersistedDurably,
   whenTurnErrorPersisted,
+  whenTurnErrorPersistedDurably,
   resetTurnPersistState,
   clearCodexPlanRowsForSession,
   clearSessionPersistState,
@@ -107,6 +112,10 @@ import {
   noteTurnStarted,
   saveTurnStartedAtForDeferred,
   preserveTurnPersistStateForBackground,
+  releaseReservedSessionReplacementPersistState,
+  reserveAssistantBlockForSessionReplacement,
+  reservePendingToolResultsForSessionReplacement,
+  retainReservedSessionReplacementPersistState,
 } from '../messagePersistBroadcaster.js';
 
 const SESSION = 'sess-tr';
@@ -1631,6 +1640,100 @@ describe('synthetic tool events:本地合成事件也返回 renderer 展示所�
 });
 
 describe('done orphan:残留 buffer 在 turn 末 flush', () => {
+  it('persists exact stale orphan results without consuming replacement buffers', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    const replacementIdentity = {
+      sessionInstanceId: 'replacement-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'codex' as const,
+    };
+    const olderMeta = {
+      requestId: 'older-request',
+    } as import('@/lib/ccAgent.types').AgentMeta;
+    const replacementMeta = {
+      requestId: 'replacement-request',
+    } as import('@/lib/ccAgent.types').AgentMeta;
+    expect(
+      onToolResultFullEvent(
+        SESSION,
+        { toolUseId: 'older-orphan', fullText: 'older tool output' },
+        olderMeta,
+        'turn',
+        olderIdentity,
+      ),
+    ).toBeNull();
+
+    reservePendingToolResultsForSessionReplacement(
+      SESSION,
+      replacementIdentity.sessionInstanceId,
+    );
+    noteSessionAgentKind(SESSION, 'codex');
+    expect(
+      onToolResultFullEvent(
+        SESSION,
+        { toolUseId: 'replacement-orphan', fullText: 'replacement tool output' },
+        replacementMeta,
+        'turn',
+        replacementIdentity,
+      ),
+    ).toBeNull();
+
+    expect(persistReservedStaleOrphanToolResults(SESSION, null, olderIdentity)).toBe(1);
+    flushOrphanToolResults(SESSION, replacementMeta, replacementIdentity);
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenNthCalledWith(
+      1,
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: 'older tool output',
+        toolUseId: 'older-orphan',
+        agentKind: 'cc',
+        agentMeta: expect.objectContaining({ requestId: 'older-request' }),
+      }),
+      expect.anything(),
+    );
+    expect(createMessage).toHaveBeenNthCalledWith(
+      2,
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: 'replacement tool output',
+        toolUseId: 'replacement-orphan',
+        agentKind: 'codex',
+        agentMeta: expect.objectContaining({ requestId: 'replacement-request' }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('includes a reserved stale orphan failure in the session durable barrier', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'older-orphan', fullText: 'must survive shutdown' },
+      null,
+      'turn',
+      olderIdentity,
+    );
+    reservePendingToolResultsForSessionReplacement(SESSION, 'replacement-instance');
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('stale orphan insert rejected'));
+
+    expect(persistReservedStaleOrphanToolResults(SESSION, null, olderIdentity)).toBe(1);
+    await expect(whenSessionPersistedDurably(SESSION)).rejects.toThrow(
+      'stale orphan insert rejected',
+    );
+  });
+
   it('buffer 的全文在 flushOrphanToolResults 落成 orphan tool_result', async () => {
     const r = onToolResultFullEvent(SESSION, { toolUseId: 'tu_orphan', fullText: FULL }, null);
     expect(r).toBeNull(); // buffered
@@ -2466,9 +2569,601 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
     await expect(markAssistantTurnFailed(SESSION, undefined)).resolves.toBe(false);
     expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
   });
+
+  it('session durable barrier propagates a queued assistant insert failure', async () => {
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('final assistant insert rejected'));
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'final response that must survive shutdown', isFinal: true },
+      null,
+    );
+
+    await expect(whenSessionPersistedDurably(SESSION)).rejects.toThrow(
+      'final assistant insert rejected',
+    );
+  });
+
+  it('session durable barrier propagates a queued tool insert failure', async () => {
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('final tool insert rejected'));
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'tool-before-shutdown', toolName: 'Read', input: { file_path: '/tmp/a' } },
+      null,
+    );
+
+    await expect(whenSessionPersistedDurably(SESSION)).rejects.toThrow(
+      'final tool insert rejected',
+    );
+  });
+
+  it('session durable barrier waits for every current-batch write before reporting failure', async () => {
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('current batch insert rejected'));
+    let releaseLaterWrite!: (value: Awaited<ReturnType<typeof createMessage>>) => void;
+    const laterWrite = new Promise<Awaited<ReturnType<typeof createMessage>>>((resolve) => {
+      releaseLaterWrite = resolve;
+    });
+    vi.mocked(createMessage).mockReturnValueOnce(laterWrite);
+
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'failed-current-tool', toolName: 'Read', input: { file_path: '/tmp/a' } },
+      null,
+    );
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'pending-current-tool', toolName: 'Read', input: { file_path: '/tmp/b' } },
+      null,
+    );
+
+    const currentBarrier = whenSessionPersistedDurably(SESSION);
+    let currentBarrierSettled = false;
+    void currentBarrier.then(
+      () => {
+        currentBarrierSettled = true;
+      },
+      () => {
+        currentBarrierSettled = true;
+      },
+    );
+    await flushWrites();
+    expect(currentBarrierSettled).toBe(false);
+
+    releaseLaterWrite({} as Awaited<ReturnType<typeof createMessage>>);
+    await expect(currentBarrier).rejects.toThrow('current batch insert rejected');
+  });
+
+  it('session durable barrier starts a fresh batch after an earlier write failure', async () => {
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('older transient insert rejected'));
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'older-failed-tool', toolName: 'Read', input: { file_path: '/tmp/old' } },
+      null,
+    );
+    await expect(whenSessionPersistedDurably(SESSION)).rejects.toThrow(
+      'older transient insert rejected',
+    );
+
+    let releaseCurrentWrite!: (value: Awaited<ReturnType<typeof createMessage>>) => void;
+    const currentWrite = new Promise<Awaited<ReturnType<typeof createMessage>>>((resolve) => {
+      releaseCurrentWrite = resolve;
+    });
+    vi.mocked(createMessage).mockReturnValueOnce(currentWrite);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'current-fallback-tool', toolName: 'Read', input: { file_path: '/tmp/new' } },
+      null,
+    );
+
+    const currentBarrier = whenSessionPersistedDurably(SESSION);
+    let currentBarrierSettled = false;
+    void currentBarrier.then(
+      () => {
+        currentBarrierSettled = true;
+      },
+      () => {
+        currentBarrierSettled = true;
+      },
+    );
+    await flushWrites();
+    expect(currentBarrierSettled).toBe(false);
+
+    releaseCurrentWrite({} as Awaited<ReturnType<typeof createMessage>>);
+    await expect(currentBarrier).resolves.toBeUndefined();
+  });
+
+  it('session durable barrier ignores a settled historical failure when no new write exists', async () => {
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('settled historical rejection'));
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'historical-failed-tool', toolName: 'Read', input: { file_path: '/tmp/old' } },
+      null,
+    );
+    await expect(whenSessionPersistedDurably(SESSION)).rejects.toThrow(
+      'settled historical rejection',
+    );
+
+    await expect(whenSessionPersistedDurably(SESSION)).resolves.toBeUndefined();
+  });
 });
 
 describe('onTurnErrorEvent — terminal error 持久化', () => {
+  it('keeps exact deferred assistant and orphan buffers across replacement cleanup', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    const replacementIdentity = {
+      sessionInstanceId: 'replacement-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'codex' as const,
+    };
+    const olderMeta = {
+      requestId: 'older-request',
+    } as import('@/lib/ccAgent.types').AgentMeta;
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'held older response', isFinal: false },
+      olderMeta,
+      olderIdentity,
+    );
+    expect(
+      onToolResultFullEvent(
+        SESSION,
+        { toolUseId: 'held-older-orphan', fullText: 'held older tool output' },
+        olderMeta,
+        'turn',
+        olderIdentity,
+      ),
+    ).toBeNull();
+    reserveAssistantBlockForSessionReplacement(SESSION, 'replacement-instance');
+    reservePendingToolResultsForSessionReplacement(SESSION, 'replacement-instance');
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement response to clear', isFinal: false },
+      null,
+      replacementIdentity,
+    );
+    onToolResultFullEvent(
+      SESSION,
+      {
+        toolUseId: 'replacement-orphan-to-clear',
+        fullText: 'replacement tool output to clear',
+      },
+      null,
+      'turn',
+      replacementIdentity,
+    );
+
+    try {
+      // The replacement Session owns this business-id cleanup. The older
+      // exact-instance replay pipeline still owns its reserved buffers.
+      clearSessionPersistState(SESSION);
+      expect(flushAssistantBlock(SESSION, null, replacementIdentity)).toBeUndefined();
+      flushOrphanToolResults(SESSION, null, replacementIdentity);
+      expect(
+        persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
+      ).toBe(olderPersistId);
+      expect(persistReservedStaleOrphanToolResults(SESSION, null, olderIdentity)).toBe(1);
+      await flushWrites();
+
+      expect(createMessage).toHaveBeenCalledTimes(2);
+      expect(createMessage).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({
+          clientId: olderPersistId,
+          role: 'assistant',
+          content: 'held older response',
+          agentKind: 'cc',
+        }),
+        expect.anything(),
+      );
+      expect(createMessage).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({
+          role: 'tool_result',
+          content: 'held older tool output',
+          toolUseId: 'held-older-orphan',
+          agentKind: 'cc',
+        }),
+        expect.anything(),
+      );
+    } finally {
+      releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    }
+  });
+
+  it('keeps an exact already-persisted assistant across replacement cleanup', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-persisted-instance',
+      turnGeneration: 2,
+      dbAgentKind: 'cc' as const,
+    };
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'already persisted older response', isFinal: true },
+      { requestId: 'older-persisted-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+    await flushWrites();
+    reserveAssistantBlockForSessionReplacement(
+      SESSION,
+      'replacement-instance',
+      olderIdentity,
+    );
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    await expect(whenSessionPersistedDurably(SESSION)).resolves.toBeUndefined();
+
+    try {
+      clearSessionPersistState(SESSION);
+      expect(
+        persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, true),
+      ).toBe(olderPersistId);
+      await flushWrites();
+      expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+        SESSION,
+        olderPersistId,
+        { turnCompleted: true },
+      );
+    } finally {
+      releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    }
+  });
+
+  it('drops exact deferred buffers when replay teardown discards them', () => {
+    const olderIdentity = {
+      sessionInstanceId: 'discarded-instance',
+      turnGeneration: 3,
+      dbAgentKind: 'cc' as const,
+    };
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'discarded response', isFinal: false },
+      null,
+      olderIdentity,
+    );
+    onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'discarded-orphan', fullText: 'discarded tool output' },
+      null,
+      'turn',
+      olderIdentity,
+    );
+    reserveAssistantBlockForSessionReplacement(SESSION, 'replacement-instance');
+    reservePendingToolResultsForSessionReplacement(SESSION, 'replacement-instance');
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    clearSessionPersistState(SESSION);
+
+    releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+
+    expect(
+      persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
+    ).toBeUndefined();
+    expect(persistReservedStaleOrphanToolResults(SESSION, null, olderIdentity)).toBe(0);
+  });
+
+  it('preserves and seals an already queued stale assistant across replacement', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    const replacementIdentity = {
+      sessionInstanceId: 'replacement-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'codex' as const,
+    };
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'already queued response', isFinal: true },
+      { requestId: 'older-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+    reserveAssistantBlockForSessionReplacement(
+      SESSION,
+      replacementIdentity.sessionInstanceId,
+      olderIdentity,
+    );
+    const replacementPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement response', isFinal: false },
+      { requestId: 'replacement-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      replacementIdentity,
+    );
+
+    expect(
+      persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, true),
+    ).toBe(olderPersistId);
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement response complete', isFinal: true, isFullText: true },
+      { requestId: 'replacement-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      replacementIdentity,
+    );
+    flushAssistantBlock(SESSION, null, replacementIdentity);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenNthCalledWith(
+      1,
+      SESSION,
+      expect.objectContaining({
+        clientId: olderPersistId,
+        content: 'already queued response',
+        agentKind: 'cc',
+      }),
+      expect.anything(),
+    );
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      olderPersistId,
+      { turnCompleted: true },
+    );
+    expect(createMessage).toHaveBeenNthCalledWith(
+      2,
+      SESSION,
+      expect.objectContaining({
+        clientId: replacementPersistId,
+        content: 'replacement response complete',
+        agentKind: 'codex',
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('keeps an already queued stale assistant insert in the durable barrier after replacement cleanup', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    vi.mocked(createMessage).mockRejectedValueOnce(
+      new Error('already queued stale assistant insert rejected'),
+    );
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'must remain required', isFinal: true },
+      { requestId: 'older-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+    reserveAssistantBlockForSessionReplacement(
+      SESSION,
+      'replacement-instance',
+      olderIdentity,
+    );
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+
+    try {
+      // Let the transferred insert fail before the held terminal replays. Its
+      // settled rejection must remain owned by the exact superseded turn even
+      // after the replacement Session clears the reusable business id.
+      clearSessionPersistState(SESSION);
+      await flushWrites();
+      expect(
+        persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
+      ).toBe(olderPersistId);
+      await expect(
+        whenSessionPersistedDurably(SESSION, olderIdentity),
+      ).rejects.toThrow('already queued stale assistant insert rejected');
+    } finally {
+      releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    }
+  });
+
+  it('keeps an already queued stale non-assistant write in the exact durable barrier', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-tool-instance',
+      turnGeneration: 4,
+      dbAgentKind: 'cc' as const,
+    };
+    vi.mocked(createMessage).mockRejectedValueOnce(
+      new Error('already queued stale tool-use insert rejected'),
+    );
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'older-tool-use', toolName: 'Bash', input: { command: 'pwd' } },
+      null,
+    );
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    await expect(whenSessionPersistedDurably(SESSION)).resolves.toBeUndefined();
+
+    try {
+      clearSessionPersistState(SESSION);
+      await flushWrites();
+      await expect(
+        whenSessionPersistedDurably(SESSION, olderIdentity),
+      ).rejects.toThrow('already queued stale tool-use insert rejected');
+    } finally {
+      releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    }
+  });
+
+  it('persists an exact stale assistant block without consuming its replacement block', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    const replacementIdentity = {
+      sessionInstanceId: 'replacement-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'codex' as const,
+    };
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'older final response', isFinal: false },
+      { requestId: 'older-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'older final response', isFinal: true, isFullText: true },
+      { requestId: 'older-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+
+    reserveAssistantBlockForSessionReplacement(SESSION, replacementIdentity.sessionInstanceId);
+    const replacementPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement response', isFinal: false },
+      { requestId: 'replacement-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      replacementIdentity,
+    );
+    const replayedPersistId = persistReservedStaleAssistantBlock(
+      SESSION,
+      null,
+      olderIdentity,
+      true,
+    );
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement response complete', isFinal: true, isFullText: true },
+      { requestId: 'replacement-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      replacementIdentity,
+    );
+    flushAssistantBlock(SESSION, null, replacementIdentity);
+
+    expect(replayedPersistId).toBe(olderPersistId);
+    expect(replacementPersistId).not.toBe(olderPersistId);
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenNthCalledWith(
+      1,
+      SESSION,
+      expect.objectContaining({
+        clientId: olderPersistId,
+        role: 'assistant',
+        content: 'older final response',
+        agentKind: 'cc',
+        agentMeta: expect.objectContaining({
+          requestId: 'older-request',
+          turnCompleted: true,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(createMessage).toHaveBeenNthCalledWith(
+      2,
+      SESSION,
+      expect.objectContaining({
+        clientId: replacementPersistId,
+        role: 'assistant',
+        content: 'replacement response complete',
+        agentKind: 'codex',
+        agentMeta: expect.objectContaining({ requestId: 'replacement-request' }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('seals an exact stale assistant terminal error as failed', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'older partial response', isFinal: false },
+      { requestId: 'older-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+    reserveAssistantBlockForSessionReplacement(SESSION, 'replacement-instance');
+
+    expect(
+      persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
+    ).toBe(olderPersistId);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: olderPersistId,
+        agentMeta: expect.objectContaining({
+          requestId: 'older-request',
+          turnCompleted: false,
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('includes a reserved stale assistant failure in the session durable barrier', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'must survive shutdown', isFinal: false },
+      null,
+      olderIdentity,
+    );
+    reserveAssistantBlockForSessionReplacement(SESSION, 'replacement-instance');
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('stale assistant insert rejected'));
+
+    expect(
+      persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, true),
+    ).toBeTruthy();
+    await expect(whenSessionPersistedDurably(SESSION)).rejects.toThrow(
+      'stale assistant insert rejected',
+    );
+  });
+
+  it('reserved stale error persists without flushing replacement turn state', async () => {
+    onAssistantTextEvent(SESSION, { text: 'replacement still streaming', isFinal: false }, null);
+    const persistId = onReservedStaleTurnErrorEvent(
+      SESSION,
+      { message: 'older query-time turn failed', reason: 'turn-failed' },
+      { requestId: 'older-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      {
+        capturedAt: Date.now() - 100,
+        sessionInstanceId: 'older-instance',
+        turnGeneration: 1,
+        dbAgentKind: 'cc',
+      },
+    );
+
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(createMessage).toHaveBeenNthCalledWith(
+      1,
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        role: 'error',
+        agentKind: 'cc',
+        agentMeta: expect.objectContaining({ requestId: 'older-request' }),
+      }),
+      expect.anything(),
+    );
+    expect(mockSend).toHaveBeenCalledWith(
+      'local-db:session:error-persisted',
+      { sessionId: SESSION, persistId },
+      undefined,
+    );
+
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement still streaming replacement complete', isFinal: true },
+      null,
+    );
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenNthCalledWith(
+      2,
+      SESSION,
+      expect.objectContaining({
+        role: 'assistant',
+        content: 'replacement still streaming replacement complete',
+      }),
+      expect.anything(),
+    );
+  });
+
   it('落一条 role=error 行,content 保留 message/reason/sdkError,且绝不广播', async () => {
     const persistId = onTurnErrorEvent(SESSION, {
       message: '任务执行失败（模型未返回错误详情）。',
@@ -2874,6 +3569,22 @@ describe('reserveTurnErrorPersistId — 广播前预留与 waiter', () => {
     expect(done).toBe(true);
   });
 
+  it('durable error waiter propagates the exact database write failure', async () => {
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('fallback error insert rejected'));
+    const persistId = onTurnErrorEvent(SESSION, { message: 'shutdown fallback failed' });
+    expect(persistId).toBeTruthy();
+    const durableOutcome = whenTurnErrorPersistedDurably(SESSION, persistId!);
+    const settlementOnly = whenTurnErrorPersisted(SESSION, persistId!);
+
+    await expect(durableOutcome).rejects.toThrow('fallback error insert rejected');
+    await expect(settlementOnly).resolves.toBeUndefined();
+    expect(mockSend).not.toHaveBeenCalledWith(
+      'local-db:session:error-persisted',
+      expect.objectContaining({ persistId }),
+      expect.anything(),
+    );
+  });
+
   it('未知 persistId 的 whenTurnErrorPersisted 立即返回', async () => {
     await expect(whenTurnErrorPersisted(SESSION, 'never-reserved')).resolves.toBeUndefined();
   });
@@ -2924,7 +3635,9 @@ describe('reserveTurnErrorPersistId — 广播前预留与 waiter', () => {
     expect(reserved).toBeTruthy();
     ownerScopeState.current = false;
     onTurnErrorEvent(SESSION, { message: 'skip-owner' }, null, reserved);
+    const durableOutcome = whenTurnErrorPersistedDurably(SESSION, reserved!);
     await whenTurnErrorPersisted(SESSION, reserved!);
+    await expect(durableOutcome).rejects.toMatchObject({ code: 'OWNER_SCOPE_SUPERSEDED' });
     expect(createMessage).not.toHaveBeenCalled();
   });
 

@@ -2411,6 +2411,36 @@ describe('Session turn send guard', () => {
     expect(handle.send).not.toHaveBeenCalled();
   });
 
+  it('releases host lifecycle state when preparation itself rejects', async () => {
+    const order: string[] = [];
+    const prepareError = new Error('turn lease write failed');
+    const handle = createHandle({ id: 'thread-host-turn-lifecycle-prepare-failure' });
+    handle.send = vi.fn(async () => undefined);
+    const session = new Session({
+      id: 'host-turn-lifecycle-prepare-failure',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    session.setTurnLifecycleObserver({
+      beforeProviderStart: async (turnGeneration) => {
+        order.push(`host:${turnGeneration}`);
+        throw prepareError;
+      },
+      onUndispatched: async (turnGeneration) => {
+        order.push(`undispatched:${turnGeneration}`);
+      },
+      onTerminal: vi.fn(),
+    });
+
+    await expect(session.send('first')).rejects.toBe(prepareError);
+
+    expect(order).toEqual(['host:1', 'undispatched:1']);
+    expect(handle.send).not.toHaveBeenCalled();
+  });
+
   it('reports the exact observed generation before terminal event listeners', async () => {
     const events = createAsyncQueue<AgentEvent>();
     const handle = createHandle({ id: 'thread-host-turn-terminal' });

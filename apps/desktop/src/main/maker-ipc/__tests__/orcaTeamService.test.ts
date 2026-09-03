@@ -1581,6 +1581,37 @@ describe('OrcaTeamService', () => {
     ]);
   });
 
+  it('preserves an active worker and suppresses auto-bridge on Windows session end', async () => {
+    const leadMessages: string[] = [];
+    const { calls, deps, getWorker, service } = createDeps({
+      sendAutoBridgeToLead: vi.fn(async (_leadSessionId, message) => {
+        leadMessages.push(message);
+        return { accepted: true };
+      }),
+    });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '分析 issue',
+    });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'error',
+      finalText: '',
+      suppressWindowsSessionEndError: true,
+    });
+
+    expect(getWorker().status).toBe('running');
+    expect(calls).toEqual([
+      'dispatchWorkerMessage:worker-1',
+      'updateWorkerStatus:running',
+      'broadcastOrcaWorkerChanged',
+    ]);
+    expect(deps.clearManualInterrupt).toHaveBeenCalledWith('worker-session-1');
+    expect(leadMessages).toEqual([]);
+  });
+
   it.each(['done', 'error'] as const)(
     'updates worker %s status, broadcasts, and auto-bridges pending output',
     async (status) => {

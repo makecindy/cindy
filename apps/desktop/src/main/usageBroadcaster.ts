@@ -118,6 +118,7 @@ export interface RateLimitSnapshot {
 export async function recordTurnSpend(
   money: RegionalMoney,
   ts: number = Date.now(),
+  options?: { throwOnError?: boolean },
 ): Promise<void> {
   try {
     const result = await incrementDailySpend(money, ts);
@@ -134,6 +135,7 @@ export async function recordTurnSpend(
       'recordTurnSpend failed:',
       err instanceof Error ? err.message : String(err),
     );
+    if (options?.throwOnError) throw err;
   }
 }
 
@@ -176,6 +178,7 @@ export async function rebroadcastTodaySpend(): Promise<void> {
 export async function recordModelTurnUsage(
   delta: DailyModelUsageDelta,
   ts: number = Date.now(),
+  options?: { throwOnError?: boolean },
 ): Promise<void> {
   try {
     await incrementDailyModelUsage(delta, ts);
@@ -184,6 +187,7 @@ export async function recordModelTurnUsage(
       'recordModelTurnUsage failed:',
       err instanceof Error ? err.message : String(err),
     );
+    if (options?.throwOnError) throw err;
   }
 }
 

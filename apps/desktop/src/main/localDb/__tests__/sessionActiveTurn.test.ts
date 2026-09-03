@@ -135,6 +135,81 @@ describe('sessionActiveTurn', () => {
     });
   });
 
+  it('markSessionTurnStartedDurable resolves only after the start marker lands', async () => {
+    const { markSessionTurnStartedDurable } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-start-durable');
+
+    await markSessionTurnStartedDurable('s-start-durable');
+
+    expect((await readMarks(client, 's-start-durable'))?.active_turn_started_at).toBeTypeOf(
+      'number',
+    );
+  });
+
+  it('markSessionTurnStartedDurable rejects a failed write without poisoning the chain', async () => {
+    const { markSessionTurnStartedDurable } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-start-durable-failure');
+    const markerError = new Error('database worker rejected marker');
+    const update = vi.spyOn(client.drizzle, 'update').mockImplementationOnce(() => {
+      throw markerError;
+    });
+
+    await expect(markSessionTurnStartedDurable('s-start-durable-failure')).rejects.toBe(
+      markerError,
+    );
+    update.mockRestore();
+
+    await expect(markSessionTurnStartedDurable('s-start-durable-failure')).resolves.toBeUndefined();
+    expect((await readMarks(client, 's-start-durable-failure'))?.active_turn_started_at).toBeTypeOf(
+      'number',
+    );
+  });
+
+  it('markSessionTurnStartedDurable rejects instead of claiming success after freeze', async () => {
+    const { freezeSessionActiveTurnMarkers, markSessionTurnStartedDurable } =
+      await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-start-durable-frozen');
+
+    freezeSessionActiveTurnMarkers();
+
+    await expect(markSessionTurnStartedDurable('s-start-durable-frozen')).rejects.toThrow(
+      'session active-turn markers are frozen',
+    );
+    expect((await readMarks(client, 's-start-durable-frozen'))?.active_turn_started_at).toBeNull();
+  });
+
+  it('pairs a pre-existing started marker after shutdown fallback despite freeze', async () => {
+    const { freezeSessionActiveTurnMarkers, markSessionTurnsEndedAfterShutdownFallback } =
+      await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const startedAt = Date.now() - 1000;
+    await seedSession(client, 's-shutdown-fallback', { startedAt });
+
+    freezeSessionActiveTurnMarkers();
+    await markSessionTurnsEndedAfterShutdownFallback(['s-shutdown-fallback']);
+
+    expect(
+      (await readMarks(client, 's-shutdown-fallback'))?.last_turn_ended_at,
+    ).toBeGreaterThanOrEqual(startedAt);
+  });
+
+  it('reports a shutdown fallback marker write failure to its prerequisite', async () => {
+    const { markSessionTurnsEndedAfterShutdownFallback } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-shutdown-fallback-failure', { startedAt: Date.now() - 1000 });
+    const markerError = new Error('ended marker rejected');
+    vi.spyOn(client.drizzle, 'update').mockImplementationOnce(() => {
+      throw markerError;
+    });
+
+    await expect(
+      markSessionTurnsEndedAfterShutdownFallback(['s-shutdown-fallback-failure']),
+    ).rejects.toBe(markerError);
+  });
+
   it('per-session write chain keeps started/ended landing order for very short turns', async () => {
     const { markSessionTurnStarted, markSessionTurnEnded } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();

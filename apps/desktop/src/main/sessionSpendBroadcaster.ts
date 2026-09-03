@@ -87,6 +87,7 @@ function isOwnerScopeCurrent(scope: OwnerScope | null): boolean {
 export async function recordSessionTurnSpend(
   sessionId: string,
   money: RegionalMoney,
+  options?: { throwOnError?: boolean },
 ): Promise<void> {
   if (!sessionId) return;
   const ownerScope = captureOwnerScope();
@@ -151,6 +152,7 @@ export async function recordSessionTurnSpend(
     );
   } catch (err) {
     log.warn('recordSessionTurnSpend failed:', err instanceof Error ? err.message : String(err));
+    if (options?.throwOnError) throw err;
   }
 }
 

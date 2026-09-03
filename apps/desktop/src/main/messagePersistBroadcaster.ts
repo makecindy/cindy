@@ -79,9 +79,160 @@ interface AssistantBlock {
   agentMessageId?: string;
   agentMeta: AgentMeta | null;
   createdAt: number;
+  /** Immutable owner captured from the host event, never inferred from a replacement Session. */
+  turnIdentity?: AssistantTurnPersistenceIdentity;
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+export interface AssistantTurnPersistenceIdentity {
+  sessionInstanceId: string;
+  turnGeneration: number;
+  dbAgentKind: 'cc' | 'codex' | 'pi';
+}
+
+/**
+ * A replacement Session reuses the same business session id. Keep a streaming
+ * block from the superseded incarnation under its exact host identity so its
+ * deferred terminal can persist it without reading or clearing the new turn's
+ * live state.
+ */
+const reservedAssistantBlocksBySession = new Map<string, Map<string, AssistantBlock>>();
+interface ReservedPersistedAssistant {
+  usagePersistId?: string;
+  boundaryPersistId?: string;
+}
+const reservedPersistedAssistantsBySession = new Map<
+  string,
+  Map<string, ReservedPersistedAssistant>
+>();
+const retainedSessionReplacementPersistStateBySession = new Map<string, Set<string>>();
+/** Pending durable outcomes transferred from a superseded exact turn. */
+const retainedSessionReplacementPersistenceOutcomesBySession = new Map<
+  string,
+  Map<string, Promise<void>>
+>();
+
+function assistantTurnIdentityKey(identity: AssistantTurnPersistenceIdentity): string {
+  return `${identity.sessionInstanceId}:${identity.turnGeneration}`;
+}
+
+function deleteReservedIdentity<V>(
+  states: Map<string, Map<string, V>>,
+  sessionId: string,
+  identityKey: string,
+): void {
+  const byIdentity = states.get(sessionId);
+  if (!byIdentity) return;
+  byIdentity.delete(identityKey);
+  if (byIdentity.size === 0) states.delete(sessionId);
+}
+
+function clearUnretainedReservedIdentities<V>(
+  states: Map<string, Map<string, V>>,
+  sessionId: string,
+  retainedIdentityKeys: ReadonlySet<string> | undefined,
+): void {
+  const byIdentity = states.get(sessionId);
+  if (!byIdentity) return;
+  if (!retainedIdentityKeys || retainedIdentityKeys.size === 0) {
+    states.delete(sessionId);
+    return;
+  }
+  for (const identityKey of byIdentity.keys()) {
+    if (!retainedIdentityKeys.has(identityKey)) byIdentity.delete(identityKey);
+  }
+  if (byIdentity.size === 0) states.delete(sessionId);
+}
+
+/** Keep one superseded turn's reserved buffers until its deferred replay pipeline settles. */
+export function retainReservedSessionReplacementPersistState(
+  sessionId: string,
+  identity: AssistantTurnPersistenceIdentity,
+): void {
+  const identityKey = assistantTurnIdentityKey(identity);
+  const retained = retainedSessionReplacementPersistStateBySession.get(sessionId) ?? new Set();
+  retained.add(identityKey);
+  retainedSessionReplacementPersistStateBySession.set(sessionId, retained);
+
+  // The business session id is about to be reused by the replacement runtime.
+  // Transfer the old exact turn's still-pending durable batch before new writes
+  // can join it, so replacement cleanup cannot erase the old replay barrier.
+  const batch = sessionPersistenceOutcomeBatches.get(sessionId);
+  if (!batch || batch.settled) return;
+  const outcomes =
+    retainedSessionReplacementPersistenceOutcomesBySession.get(sessionId) ?? new Map();
+  outcomes.set(identityKey, batch.outcome);
+  retainedSessionReplacementPersistenceOutcomesBySession.set(sessionId, outcomes);
+  if (sessionPersistenceOutcomeBatches.get(sessionId) === batch) {
+    sessionPersistenceOutcomeBatches.delete(sessionId);
+  }
+}
+
+function isSameAssistantTurnIdentity(
+  left: AssistantTurnPersistenceIdentity | undefined,
+  right: AssistantTurnPersistenceIdentity,
+): boolean {
+  return (
+    left?.sessionInstanceId === right.sessionInstanceId &&
+    left.turnGeneration === right.turnGeneration
+  );
+}
+
+function reserveAssistantBlock(sessionId: string, block: AssistantBlock): boolean {
+  if (!block.turnIdentity) return false;
+  let reserved = reservedAssistantBlocksBySession.get(sessionId);
+  if (!reserved) {
+    reserved = new Map<string, AssistantBlock>();
+    reservedAssistantBlocksBySession.set(sessionId, reserved);
+  }
+  reserved.set(assistantTurnIdentityKey(block.turnIdentity), block);
+  return true;
+}
+
+function reserveActiveAssistantBlockForDifferentTurn(
+  sessionId: string,
+  identity: AssistantTurnPersistenceIdentity | undefined,
+): void {
+  if (!identity) return;
+  const active = assistantBlocks.get(sessionId);
+  if (!active) return;
+  if (!active.turnIdentity) {
+    active.turnIdentity = { ...identity };
+    return;
+  }
+  if (isSameAssistantTurnIdentity(active.turnIdentity, identity)) return;
+  if (reserveAssistantBlock(sessionId, active)) assistantBlocks.delete(sessionId);
+}
+
+/** Reserve an old instance's pending text before wiring a replacement runtime. */
+export function reserveAssistantBlockForSessionReplacement(
+  sessionId: string,
+  replacementSessionInstanceId: string,
+  supersededTurnIdentity?: AssistantTurnPersistenceIdentity,
+): void {
+  if (supersededTurnIdentity) {
+    const usagePersistId = lastAssistantPersistIdBySession.get(sessionId);
+    const boundaryPersistId = lastTopLevelAssistantPersistIdBySession.get(sessionId);
+    if (usagePersistId || boundaryPersistId) {
+      const reserved = reservedPersistedAssistantsBySession.get(sessionId) ?? new Map();
+      reserved.set(assistantTurnIdentityKey(supersededTurnIdentity), {
+        ...(usagePersistId ? { usagePersistId } : {}),
+        ...(boundaryPersistId ? { boundaryPersistId } : {}),
+      });
+      reservedPersistedAssistantsBySession.set(sessionId, reserved);
+      lastAssistantPersistIdBySession.delete(sessionId);
+      lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+    }
+  }
+  const active = assistantBlocks.get(sessionId);
+  if (
+    !active?.turnIdentity ||
+    active.turnIdentity.sessionInstanceId === replacementSessionInstanceId
+  ) {
+    return;
+  }
+  if (reserveAssistantBlock(sessionId, active)) assistantBlocks.delete(sessionId);
+}
 interface SealedAssistantLateFinalCandidate {
   persistId: string;
   text: string;
@@ -345,13 +496,18 @@ function markAssistantTurnBoundary(
   completed: boolean,
 ): Promise<boolean> {
   if (!sessionId || !clientId) return Promise.resolve(false);
-  return enqueueDurableWrite(`turn-boundary:${sessionId}:${clientId}:${completed}`, async (ownerScope) => {
-    const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
-      turnCompleted: completed,
-    });
-    if (!patched) return false;
-    return broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
-  });
+  const outcome = enqueueDurableWrite(
+    `turn-boundary:${sessionId}:${clientId}:${completed}`,
+    async (ownerScope) => {
+      const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
+        turnCompleted: completed,
+      });
+      if (!patched) return false;
+      return broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
+    },
+  );
+  rememberSessionPersistenceOutcome(sessionId, outcome);
+  return outcome;
 }
 
 /**
@@ -421,7 +577,44 @@ export function markAutoResumeOutcome(
  * 序列化(sqlite 本就单写者)。每个 link 单独 catch,失败只 warn、不打断后续写。
  */
 let writeChain: Promise<unknown> = Promise.resolve();
+interface SessionPersistenceOutcomeBatch {
+  outcome: Promise<void>;
+  settled: boolean;
+}
+/** 每个业务 session 当前一批 failure-propagating durable writes。 */
+const sessionPersistenceOutcomeBatches = new Map<string, SessionPersistenceOutcomeBatch>();
 const OWNER_SCOPE_SUPERSEDED = 'OWNER_SCOPE_SUPERSEDED';
+
+function rememberSessionPersistenceOutcome(
+  sessionId: string,
+  outcome: Promise<unknown>,
+): void {
+  const previous = sessionPersistenceOutcomeBatches.get(sessionId);
+  // Writes queued while the current batch is pending share one failure result.
+  // Once that batch settles, the next write starts a fresh batch: an old transient
+  // failure must not poison a later Windows fallback, whose own writes still need
+  // to be awaited and reported independently.
+  const previousOutcome = previous && !previous.settled ? previous.outcome : Promise.resolve();
+  const cumulative = Promise.allSettled([previousOutcome, outcome]).then((results) => {
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failed) throw failed.reason;
+  });
+  const batch: SessionPersistenceOutcomeBatch = { outcome: cumulative, settled: false };
+  sessionPersistenceOutcomeBatches.set(sessionId, batch);
+  void cumulative.then(
+    () => {
+      batch.settled = true;
+    },
+    () => {
+      batch.settled = true;
+    },
+  );
+  // Required Windows fallback consumers await the original cumulative promise;
+  // this handler only prevents normal message writes from becoming unhandled.
+  void cumulative.catch(() => undefined);
+}
 
 function captureOwnerScope(): ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null {
   return broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
@@ -447,22 +640,27 @@ function isOwnerScopeSupersededError(error: unknown): boolean {
   );
 }
 
-function enqueueWrite(label: string, fn: (ownerScope: OwnerScope) => Promise<unknown>): void {
+function enqueueWrite(
+  label: string,
+  fn: (ownerScope: OwnerScope) => Promise<unknown>,
+  sessionId: string,
+): void {
   const ownerScope = captureOwnerScope();
-  writeChain = writeChain
-    .then(() => {
-      if (!isOwnerScopeCurrent(ownerScope)) {
-        log.debug('message persist skipped after app-session boundary', { label });
-        return;
-      }
-      return fn(ownerScope);
-    })
-    .catch((err) => {
-      log.warn('message persist failed', {
-        label,
-        error: err instanceof Error ? err.message : String(err),
-      });
+  const writeResult = writeChain.then(() => {
+    if (!isOwnerScopeCurrent(ownerScope)) {
+      log.debug('message persist skipped after app-session boundary', { label });
+      throw ownerScopeSupersededError();
+    }
+    return fn(ownerScope);
+  });
+  rememberSessionPersistenceOutcome(sessionId, writeResult);
+  writeChain = writeResult.catch((err) => {
+    if (isOwnerScopeSupersededError(err)) return;
+    log.warn('message persist failed', {
+      label,
+      error: err instanceof Error ? err.message : String(err),
     });
+  });
 }
 
 /**
@@ -476,24 +674,22 @@ function enqueueTurnErrorWrite(
 ): void {
   const ownerScope = captureOwnerScope();
   const label = `turn_error:${sessionId}:${persistId}`;
-  writeChain = writeChain
-    .then(async () => {
-      try {
-        if (!isOwnerScopeCurrent(ownerScope)) {
-          log.debug('message persist skipped after app-session boundary', { label });
-          return;
-        }
-        await fn(ownerScope);
-      } finally {
-        resolveTurnErrorWaiter(sessionId, persistId);
-      }
-    })
-    .catch((err) => {
-      log.warn('message persist failed', {
-        label,
-        error: err instanceof Error ? err.message : String(err),
-      });
+  const writeResult = writeChain.then(async () => {
+    if (!isOwnerScopeCurrent(ownerScope)) {
+      log.debug('message persist skipped after app-session boundary', { label });
+      throw ownerScopeSupersededError();
+    }
+    await fn(ownerScope);
+  });
+  rememberSessionPersistenceOutcome(sessionId, writeResult);
+  rememberTurnErrorPersistenceOutcome(sessionId, persistId, writeResult);
+  writeChain = writeResult.catch((err) => {
+    if (isOwnerScopeSupersededError(err)) return;
+    log.warn('message persist failed', {
+      label,
+      error: err instanceof Error ? err.message : String(err),
     });
+  });
 }
 
 /** 在事件入队时冻结 agent_kind，避免 writeChain 延迟执行时读到切换后的可变 Map。 */
@@ -503,7 +699,11 @@ function enqueueVisibleDbMessage(
   body: CreateDbMessageBody,
 ): void {
   const stamped = withAgentKindStamp(sessionId, body);
-  enqueueWrite(label, (ownerScope) => createVisibleDbMessage(sessionId, stamped, ownerScope));
+  enqueueWrite(
+    label,
+    (ownerScope) => createVisibleDbMessage(sessionId, stamped, ownerScope),
+    sessionId,
+  );
 }
 
 /**
@@ -569,6 +769,31 @@ export async function drainPersistQueue(): Promise<void> {
   }
 }
 
+/** Await every message/tool/assistant write queued for one session and propagate failure. */
+export function whenSessionPersistedDurably(
+  sessionId: string,
+  retainedIdentity?: AssistantTurnPersistenceIdentity,
+): Promise<void> {
+  const batch = sessionPersistenceOutcomeBatches.get(sessionId);
+  // This is a snapshot of writes that are pending at the call boundary. A
+  // settled batch is historical: a later terminal replay that queues no new
+  // writes must not inherit an older transient failure.
+  const liveOutcome = batch && !batch.settled ? batch.outcome : undefined;
+  const retainedOutcome = retainedIdentity
+    ? retainedSessionReplacementPersistenceOutcomesBySession
+        .get(sessionId)
+        ?.get(assistantTurnIdentityKey(retainedIdentity))
+    : undefined;
+  if (!retainedOutcome) return liveOutcome ?? Promise.resolve();
+  if (!liveOutcome) return retainedOutcome;
+  return Promise.allSettled([retainedOutcome, liveOutcome]).then((results) => {
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failed) throw failed.reason;
+  });
+}
+
 function enqueuePersistAssistant(
   sessionId: string,
   clientId: string,
@@ -576,6 +801,7 @@ function enqueuePersistAssistant(
   agentMeta: AgentMeta | null,
   createdAt: number,
   agentMessageId?: string,
+  dbAgentKind?: 'cc' | 'codex' | 'pi',
 ): void {
   noteAssistantTranscriptUuid(sessionId, agentMeta);
   enqueueVisibleDbMessage(`assistant:${sessionId}:${clientId}`, sessionId, {
@@ -584,6 +810,7 @@ function enqueuePersistAssistant(
     content,
     agentMeta: agentMeta ?? null,
     createdAt,
+    ...(dbAgentKind ? { agentKind: dbAgentKind } : {}),
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
@@ -807,14 +1034,14 @@ export function onAgentTaskUpdateEvent(sessionId: string, data: unknown): boolea
 
       clearRecoveredPendingAgentTaskStatus(sessionId, aliases, status);
       await patchAgentTaskTerminalStatus(sessionId, link, status, ownerScope);
-    });
+    }, sessionId);
     return true;
   }
 
   const linkedTask = link;
   enqueueWrite(`agent_task_terminal:${sessionId}:${linkedTask.persistId}`, async (ownerScope) => {
     await patchAgentTaskTerminalStatus(sessionId, linkedTask, status, ownerScope);
-  });
+  }, sessionId);
   return true;
 }
 
@@ -824,7 +1051,7 @@ interface BackgroundTurnPersistState {
   pendingToolUseIds: Set<string>;
   toolUseCreatedAt: Map<string, number>;
   toolResultIdByToolUseId: Map<string, string>;
-  pendingFullTextByToolUseId: Map<string, { text: string; createdAt: number }>;
+  pendingFullTextByToolUseId: Map<string, PendingToolResultFullText>;
   toolResultContentByClientId: Map<string, string>;
 }
 
@@ -1023,15 +1250,19 @@ export function onToolUseEvent(
         : _turnStartedAtBySession.get(sessionId);
     if (planUpdate && !backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)) {
       const clearBoundaryAtEnqueue = clearBoundaryBySession.get(sessionId);
-      enqueueWrite(`codex_plan_state_update:${sessionId}:${planUpdate.turnId}`, () => {
-        if (
-          clearBoundaryBySession.get(sessionId) !== clearBoundaryAtEnqueue ||
-          backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)
-        ) {
-          return Promise.resolve();
-        }
-        return writeCodexPlanUpdate(sessionId, planUpdate);
-      });
+      enqueueWrite(
+        `codex_plan_state_update:${sessionId}:${planUpdate.turnId}`,
+        () => {
+          if (
+            clearBoundaryBySession.get(sessionId) !== clearBoundaryAtEnqueue ||
+            backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)
+          ) {
+            return Promise.resolve();
+          }
+          return writeCodexPlanUpdate(sessionId, planUpdate);
+        },
+        sessionId,
+      );
     }
   }
 
@@ -1084,6 +1315,7 @@ export function onToolUseEvent(
     const content = { toolUseId, toolName, input: data.input };
     enqueueWrite(`tool_use_update:${sessionId}:${existingPersistId}`, () =>
       updateDbMessageContent(sessionId, existingPersistId, content),
+      sessionId,
     );
     // 同一 turn 的第二次 update_plan 走这条复用分支,按-turn 缓存必须跟着刷新:
     // 终态写入优先读它,停在首版快照会把已更新的计划整行盖回第一版(review P1)。
@@ -1138,6 +1370,7 @@ export function persistCodexPlanOnDone(
   if (planTerminal) {
     enqueueWrite(`codex_plan_state_terminal:${sessionId}:${planTerminal.turnId}`, () =>
       writeCodexPlanTerminal(sessionId, planTerminal),
+      sessionId,
     );
   }
   const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
@@ -1175,20 +1408,24 @@ export function persistCodexPlanOnDone(
   // 终态已定,这份计划行不再需要跨段引用;同时保留最新 input 供同 turn 的
   // 重复 done(罕见)幂等复用。
   planRowMap?.set(toolUseId, { persistId, input: nextInput });
-  enqueueWrite(`codex_plan_done:${sessionId}:${persistId}`, async (ownerScope) => {
-    const updated = await updateDbMessageContent(sessionId, persistId, {
-      toolUseId,
-      toolName: 'update_plan',
-      input: nextInput,
-      ...(isSuccessfulTerminal
-        ? { terminalPlanSnapshot: true, terminalPlanAtMs }
-        : { turnCompleted: false }),
-    });
-    // Reuse the existing upsert-style row broadcast so a renderer that mounts
-    // between `done` and this queued write, plus remote mirrors, receives the
-    // durable terminal snapshot instead of keeping its stale local copy.
-    if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
-  });
+  enqueueWrite(
+    `codex_plan_done:${sessionId}:${persistId}`,
+    async (ownerScope) => {
+      const updated = await updateDbMessageContent(sessionId, persistId, {
+        toolUseId,
+        toolName: 'update_plan',
+        input: nextInput,
+        ...(isSuccessfulTerminal
+          ? { terminalPlanSnapshot: true, terminalPlanAtMs }
+          : { turnCompleted: false }),
+      });
+      // Reuse the existing upsert-style row broadcast so a renderer that mounts
+      // between `done` and this queued write, plus remote mirrors, receives the
+      // durable terminal snapshot instead of keeping its stale local copy.
+      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+    },
+    sessionId,
+  );
   return true;
 }
 
@@ -1223,17 +1460,22 @@ export function persistCodexPlanOnTerminalError(sessionId: string, turnId?: stri
     if (ownedTurnId) {
       enqueueWrite(`codex_plan_state_error:${sessionId}:${ownedTurnId}`, () =>
         markCodexPlanInterrupted(sessionId, ownedTurnId),
+        sessionId,
       );
     }
-    enqueueWrite(`codex_plan_terminal_error:${sessionId}:${persistId}`, async (ownerScope) => {
-      const updated = await updateDbMessageContent(sessionId, persistId, {
-        toolUseId,
-        toolName: 'update_plan',
-        input,
-        turnCompleted: false,
-      });
-      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
-    });
+    enqueueWrite(
+      `codex_plan_terminal_error:${sessionId}:${persistId}`,
+      async (ownerScope) => {
+        const updated = await updateDbMessageContent(sessionId, persistId, {
+          toolUseId,
+          toolName: 'update_plan',
+          input,
+          turnCompleted: false,
+        });
+        if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+      },
+      sessionId,
+    );
     stamped = true;
   }
   return stamped;
@@ -1329,8 +1571,88 @@ export function onThinkingEvent(
 //   pendingFullTextByToolUseId: toolUseId → 早到的全文 buffer(对应 tool_result/tool_use 还没到)
 //   toolResultContentByClientId: persistId → 当前已解析内容(判断是否需要 update / 是否变化)
 const toolResultIdByToolUseId = new Map<string, Map<string, string>>();
-const pendingFullTextByToolUseId = new Map<string, Map<string, { text: string; createdAt: number }>>();
+interface PendingToolResultFullText {
+  text: string;
+  createdAt: number;
+  agentMeta?: AgentMeta | null;
+  turnIdentity?: AssistantTurnPersistenceIdentity;
+}
+const pendingFullTextByToolUseId = new Map<
+  string,
+  Map<string, PendingToolResultFullText>
+>();
+const reservedPendingFullTextBySession = new Map<
+  string,
+  Map<string, Map<string, PendingToolResultFullText>>
+>();
 const toolResultContentByClientId = new Map<string, Map<string, string>>();
+
+/** Release one exact replay owner's assistant/tool buffers after replay or discard. */
+export function releaseReservedSessionReplacementPersistState(
+  sessionId: string,
+  identity: AssistantTurnPersistenceIdentity,
+): void {
+  const identityKey = assistantTurnIdentityKey(identity);
+  deleteReservedIdentity(reservedAssistantBlocksBySession, sessionId, identityKey);
+  deleteReservedIdentity(reservedPersistedAssistantsBySession, sessionId, identityKey);
+  deleteReservedIdentity(reservedPendingFullTextBySession, sessionId, identityKey);
+  deleteReservedIdentity(
+    retainedSessionReplacementPersistenceOutcomesBySession,
+    sessionId,
+    identityKey,
+  );
+  const retained = retainedSessionReplacementPersistStateBySession.get(sessionId);
+  if (!retained) return;
+  retained.delete(identityKey);
+  if (retained.size === 0) retainedSessionReplacementPersistStateBySession.delete(sessionId);
+}
+
+function reservePendingFullTextWhere(
+  sessionId: string,
+  shouldReserve: (identity: AssistantTurnPersistenceIdentity) => boolean,
+): void {
+  const pending = pendingFullTextByToolUseId.get(sessionId);
+  if (!pending) return;
+  for (const [toolUseId, value] of pending) {
+    if (!value.turnIdentity || !shouldReserve(value.turnIdentity)) continue;
+    let reservedByIdentity = reservedPendingFullTextBySession.get(sessionId);
+    if (!reservedByIdentity) {
+      reservedByIdentity = new Map<string, Map<string, PendingToolResultFullText>>();
+      reservedPendingFullTextBySession.set(sessionId, reservedByIdentity);
+    }
+    const key = assistantTurnIdentityKey(value.turnIdentity);
+    let reserved = reservedByIdentity.get(key);
+    if (!reserved) {
+      reserved = new Map<string, PendingToolResultFullText>();
+      reservedByIdentity.set(key, reserved);
+    }
+    reserved.set(toolUseId, value);
+    pending.delete(toolUseId);
+  }
+  if (pending.size === 0) pendingFullTextByToolUseId.delete(sessionId);
+}
+
+function reservePendingFullTextForDifferentTurn(
+  sessionId: string,
+  identity: AssistantTurnPersistenceIdentity | undefined,
+): void {
+  if (!identity) return;
+  reservePendingFullTextWhere(
+    sessionId,
+    (pendingIdentity) => !isSameAssistantTurnIdentity(pendingIdentity, identity),
+  );
+}
+
+/** Reserve orphan candidates before a replacement can consume the shared turn maps. */
+export function reservePendingToolResultsForSessionReplacement(
+  sessionId: string,
+  replacementSessionInstanceId: string,
+): void {
+  reservePendingFullTextWhere(
+    sessionId,
+    (identity) => identity.sessionInstanceId !== replacementSessionInstanceId,
+  );
+}
 
 function getOrCreateSessionMap<V>(
   outer: Map<string, Map<string, V>>,
@@ -1386,12 +1708,14 @@ export function onToolResultEvent(
   data: { summary?: unknown; toolUseIds?: unknown },
   agentMeta: AgentMeta | null,
   scope: 'turn' | 'background' = 'turn',
+  turnIdentity?: AssistantTurnPersistenceIdentity,
 ): { persistId: string; content: string } | null {
   const summary = typeof data.summary === 'string' ? data.summary : '';
   const ids = Array.isArray(data.toolUseIds)
     ? data.toolUseIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
     : [];
   if (scope === 'background' && ids.length === 0) return null;
+  if (scope === 'turn') reservePendingFullTextForDifferentTurn(sessionId, turnIdentity);
 
   const backgroundState = scope === 'background'
     ? backgroundStateForToolUse(sessionId, ids)
@@ -1454,6 +1778,7 @@ export function onToolResultEvent(
     if (capped !== cappedPrev) {
       enqueueWrite(`tool_result_update:${sessionId}:${existing}`, () =>
         updateDbMessageContent(sessionId, existing!, capped),
+        sessionId,
       );
     }
     if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', existing);
@@ -1495,12 +1820,14 @@ export function onToolResultFullEvent(
   data: { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
   agentMeta: AgentMeta | null,
   scope: 'turn' | 'background' = 'turn',
+  turnIdentity?: AssistantTurnPersistenceIdentity,
 ): { persistId: string; content: string } | null {
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const rawText = typeof data.fullText === 'string' ? data.fullText : null;
   const fullText =
     rawText === null ? null : markFailedToolResultText(rawText, data.isError === true);
   if (!toolUseId || fullText === null) return null; // guard,对齐老 renderer
+  if (scope === 'turn') reservePendingFullTextForDifferentTurn(sessionId, turnIdentity);
 
   const backgroundState = scope === 'background'
     ? backgroundStateForToolUse(sessionId, [toolUseId])
@@ -1544,7 +1871,12 @@ export function onToolResultFullEvent(
       return { persistId, content: fullText };
     }
     // tool_use 也没到 → buffer,等 tool_result 摘要 / done 兜底消费;renderer 不显示。
-    pending.set(toolUseId, { text: fullText, createdAt });
+    pending.set(toolUseId, {
+      text: fullText,
+      createdAt,
+      ...(agentMeta ? { agentMeta } : {}),
+      ...(turnIdentity ? { turnIdentity: { ...turnIdentity } } : {}),
+    });
     return null;
   }
 
@@ -1558,6 +1890,7 @@ export function onToolResultFullEvent(
   if (capped !== cappedPrev) {
     enqueueWrite(`tool_result_full:${sessionId}:${target}`, () =>
       updateDbMessageContent(sessionId, target, capped),
+      sessionId,
     );
   }
   if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', target);
@@ -1663,6 +1996,7 @@ export function onInteractionResolved(
         status: cancelled ? 'cancelled' : 'answered',
         answers,
       }),
+      sessionId,
     );
     return;
   }
@@ -1690,6 +2024,7 @@ export function onInteractionResolved(
       status,
       feedback,
     }),
+    sessionId,
   );
 }
 
@@ -1698,7 +2033,12 @@ export function onInteractionResolved(
  * image content block、SDK 不发摘要的 MCP 工具)。orphan 落库后经 onCreated append 到
  * renderer(turn 末、边缘场景,不需即时)。
  */
-export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta | null): void {
+export function flushOrphanToolResults(
+  sessionId: string,
+  agentMeta: AgentMeta | null,
+  turnIdentity?: AssistantTurnPersistenceIdentity,
+): void {
+  reservePendingFullTextForDifferentTurn(sessionId, turnIdentity);
   const idMap = getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
   const contentMap = getOrCreateSessionMap(toolResultContentByClientId, sessionId);
   const meta = toolResultMeta(sessionId, agentMeta);
@@ -1753,6 +2093,49 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
   }
 }
 
+/** Persist only orphan tool payloads captured by an exact deferred Session terminal. */
+export function persistReservedStaleOrphanToolResults(
+  sessionId: string,
+  agentMetaFallback: AgentMeta | null,
+  turnIdentity: AssistantTurnPersistenceIdentity,
+): number {
+  const identityKey = assistantTurnIdentityKey(turnIdentity);
+  const reservedByIdentity = reservedPendingFullTextBySession.get(sessionId);
+  const candidates =
+    reservedByIdentity?.get(identityKey) ?? new Map<string, PendingToolResultFullText>();
+  if (reservedByIdentity?.delete(identityKey) && reservedByIdentity.size === 0) {
+    reservedPendingFullTextBySession.delete(sessionId);
+  }
+
+  const active = pendingFullTextByToolUseId.get(sessionId);
+  if (active) {
+    for (const [toolUseId, value] of active) {
+      if (!isSameAssistantTurnIdentity(value.turnIdentity, turnIdentity)) continue;
+      candidates.set(toolUseId, value);
+      active.delete(toolUseId);
+    }
+    if (active.size === 0) pendingFullTextByToolUseId.delete(sessionId);
+  }
+
+  for (const [toolUseId, value] of candidates) {
+    const persistId = createId();
+    enqueueVisibleDbMessage(
+      `reserved_stale_tool_result_orphan:${sessionId}:${persistId}`,
+      sessionId,
+      {
+        clientId: persistId,
+        role: 'tool_result',
+        content: persistableToolResultContent(sessionId, value.text),
+        toolUseId,
+        agentMeta: value.agentMeta ?? agentMetaFallback,
+        agentKind: value.turnIdentity?.dbAgentKind ?? turnIdentity.dbAgentKind,
+        createdAt: value.createdAt,
+      },
+    );
+  }
+  return candidates.size;
+}
+
 /**
  * turn 结束(done)时重置 per-turn 状态(对齐老 renderer 在 done case 把两个 Map 置空 +
  * lastAgentMeta 清空)。assistant block 已在 done 边界 flush;此处清 tool_result 相关 Map
@@ -1799,6 +2182,7 @@ export function onAssistantTextEvent(
   sessionId: string,
   data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown },
   agentMeta: AgentMeta | null,
+  turnIdentity?: AssistantTurnPersistenceIdentity,
 ): string | undefined {
   const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
@@ -1808,13 +2192,14 @@ export function onAssistantTextEvent(
       ? data.agentMessageId
       : undefined;
 
+  reserveActiveAssistantBlockForDifferentTurn(sessionId, turnIdentity);
   const activeBlock = assistantBlocks.get(sessionId);
   if (
     activeBlock?.agentMessageId &&
     agentMessageId &&
     activeBlock.agentMessageId !== agentMessageId
   ) {
-    flushAssistantBlock(sessionId);
+    flushAssistantBlock(sessionId, null, turnIdentity);
   }
 
   if (isFinal) {
@@ -1846,6 +2231,7 @@ export function onAssistantTextEvent(
               broadcastMessageRow(sessionId, updated, ownerScope);
             }
           },
+          sessionId,
         );
       }
       // Do not restore the consumed per-turn Assistant ids here. A paired late
@@ -1892,6 +2278,7 @@ export function onAssistantTextEvent(
         agentMeta,
         Date.now(),
         agentMessageId,
+        turnIdentity?.dbAgentKind,
       );
       return persistId;
     }
@@ -1907,6 +2294,7 @@ export function onAssistantTextEvent(
       agentMessageId,
       agentMeta,
       createdAt: Date.now(),
+      ...(turnIdentity ? { turnIdentity: { ...turnIdentity } } : {}),
     };
     assistantBlocks.set(sessionId, block);
   } else {
@@ -1927,19 +2315,22 @@ export function onAssistantTextEvent(
 export function flushAssistantBlock(
   sessionId: string,
   agentMetaFallback: AgentMeta | null = null,
+  turnIdentity?: AssistantTurnPersistenceIdentity,
 ): void {
-  flushAssistantBlockInternal(sessionId, agentMetaFallback);
+  flushAssistantBlockInternal(sessionId, agentMetaFallback, turnIdentity);
 }
 
 function flushAssistantBlockInternal(
   sessionId: string,
   agentMetaFallback: AgentMeta | null,
+  turnIdentity?: AssistantTurnPersistenceIdentity,
 ): {
   persistId: string;
   text: string;
   agentMessageId?: string;
   agentMeta: AgentMeta | null;
 } | undefined {
+  reserveActiveAssistantBlockForDifferentTurn(sessionId, turnIdentity);
   const block = assistantBlocks.get(sessionId);
   if (!block) return undefined;
   assistantBlocks.delete(sessionId);
@@ -1955,6 +2346,7 @@ function flushAssistantBlockInternal(
     meta,
     block.createdAt,
     block.agentMessageId,
+    block.turnIdentity?.dbAgentKind,
   );
   return {
     persistId: block.persistId,
@@ -1962,6 +2354,72 @@ function flushAssistantBlockInternal(
     ...(block.agentMessageId ? { agentMessageId: block.agentMessageId } : {}),
     agentMeta: meta,
   };
+}
+
+/**
+ * Persist the assistant text owned by an exact deferred Session terminal.
+ * This deliberately bypasses all live-turn transcript/dedup pointers: those
+ * maps may already belong to a replacement runtime under the same session id.
+ */
+export function persistReservedStaleAssistantBlock(
+  sessionId: string,
+  agentMetaFallback: AgentMeta | null,
+  turnIdentity: AssistantTurnPersistenceIdentity,
+  turnCompleted: boolean,
+): string | undefined {
+  const identityKey = assistantTurnIdentityKey(turnIdentity);
+  const reservedPersisted = reservedPersistedAssistantsBySession.get(sessionId);
+  const persistedAssistant = reservedPersisted?.get(identityKey);
+  if (persistedAssistant) {
+    reservedPersisted!.delete(identityKey);
+    if (reservedPersisted!.size === 0) reservedPersistedAssistantsBySession.delete(sessionId);
+  }
+  const reserved = reservedAssistantBlocksBySession.get(sessionId);
+  let block = reserved?.get(identityKey);
+  if (block) {
+    reserved!.delete(identityKey);
+    if (reserved!.size === 0) reservedAssistantBlocksBySession.delete(sessionId);
+  } else {
+    const active = assistantBlocks.get(sessionId);
+    if (!active || !isSameAssistantTurnIdentity(active.turnIdentity, turnIdentity)) {
+      if (!persistedAssistant) return undefined;
+      const boundaryOutcome = turnCompleted
+        ? markAssistantTurnCompleted(sessionId, persistedAssistant.boundaryPersistId)
+        : markAssistantTurnFailed(sessionId, persistedAssistant.boundaryPersistId);
+      void boundaryOutcome.catch(() => undefined);
+      return persistedAssistant.usagePersistId ?? persistedAssistant.boundaryPersistId;
+    }
+    assistantBlocks.delete(sessionId);
+    block = active;
+  }
+
+  const visible = stripInternalWebCitations(block.text);
+  if (!visible) return undefined;
+  const meta = block.agentMeta ?? agentMetaFallback;
+  // The stale branch returns before the live-turn boundary patching path. Seal
+  // this exact historical row at creation time so no replacement-session
+  // pointers need to be read or mutated.
+  const sealedMeta = { ...(meta ?? {}), turnCompleted };
+  const dbAgentKind = block.turnIdentity?.dbAgentKind ?? turnIdentity.dbAgentKind;
+  const writeResult = enqueueDurableWrite(
+    `reserved_stale_assistant:${sessionId}:${block.persistId}`,
+    (ownerScope) =>
+      createVisibleDbMessage(
+        sessionId,
+        {
+          clientId: block.persistId,
+          role: 'assistant',
+          content: visible,
+          agentMeta: sealedMeta,
+          agentKind: dbAgentKind,
+          createdAt: block.createdAt,
+        },
+        ownerScope,
+      ),
+  );
+  rememberSessionPersistenceOutcome(sessionId, writeResult);
+  void writeResult.catch(() => undefined);
+  return block.persistId;
 }
 
 /**
@@ -2036,6 +2494,8 @@ interface TurnErrorPersistWaiter {
 
 /** 预留后、写库前即可 await；key = `${sessionId}:${persistId}`。 */
 const _turnErrorPersistWaiters = new Map<string, TurnErrorPersistWaiter>();
+/** 精确 error-row 写入结果；Windows recovery 用它区分 FIFO 排空与真实 durable 成功。 */
+const _turnErrorPersistenceOutcomes = new Map<string, Promise<void>>();
 /** 预留后尚未 enqueue 写库的 id，供 onTurnErrorEvent 复用。 */
 const _reservedTurnErrorPersistIds = new Set<string>();
 /** 已消费（写库或 release）的预留 id，防止同一 persistId 双写。 */
@@ -2061,6 +2521,20 @@ function resolveTurnErrorWaiter(sessionId: string, persistId: string): void {
   if (!waiter) return;
   waiter.resolve();
   _turnErrorPersistWaiters.delete(key);
+}
+
+function rememberTurnErrorPersistenceOutcome(
+  sessionId: string,
+  persistId: string,
+  outcome: Promise<void>,
+): void {
+  _turnErrorPersistenceOutcomes.set(turnErrorPersistKey(sessionId, persistId), outcome);
+  // dismiss-error 只要求写入已经结算，因此成功/失败都兑现旧 waiter。调用方若
+  // 必须证明 durable 成功（Windows fallback）会直接 await 上面的精确 outcome。
+  void outcome.then(
+    () => resolveTurnErrorWaiter(sessionId, persistId),
+    () => resolveTurnErrorWaiter(sessionId, persistId),
+  );
 }
 
 function dropSessionTurnErrorReservations(sessionId: string): void {
@@ -2116,12 +2590,13 @@ function turnErrorDedupKey(
   sessionId: string,
   message: string,
   agentMeta: AgentMeta | null,
+  dedupIdentity?: string,
 ): { dedupKey: string; hasTurnIdentity: boolean } {
   const turnDedupId =
     _turnDedupIdBySession.get(sessionId) ??
     _savedTurnDedupIdForDeferred.get(sessionId) ??
     null;
-  const turnId = agentMeta?.requestId ?? agentMeta?.uuid ?? null;
+  const turnId = dedupIdentity ?? agentMeta?.requestId ?? agentMeta?.uuid ?? null;
   const messageKey = message.slice(0, 100);
   return {
     dedupKey: `${sessionId}:${turnId ?? (turnDedupId ? `turn:${turnDedupId}:${messageKey}` : `message:${messageKey}`)}`,
@@ -2134,8 +2609,14 @@ function claimTurnErrorDedup(
   message: string,
   agentMeta: AgentMeta | null,
   capturedAt: number,
+  dedupIdentity?: string,
 ): boolean {
-  const { dedupKey, hasTurnIdentity } = turnErrorDedupKey(sessionId, message, agentMeta);
+  const { dedupKey, hasTurnIdentity } = turnErrorDedupKey(
+    sessionId,
+    message,
+    agentMeta,
+    dedupIdentity,
+  );
   const last = _recentErrorPersistKeys.get(dedupKey);
   if (
     last !== undefined &&
@@ -2152,8 +2633,9 @@ function rememberTurnErrorPersistId(
   message: string,
   agentMeta: AgentMeta | null,
   persistId: string,
+  dedupIdentity?: string,
 ): void {
-  const { dedupKey } = turnErrorDedupKey(sessionId, message, agentMeta);
+  const { dedupKey } = turnErrorDedupKey(sessionId, message, agentMeta, dedupIdentity);
   const last = _recentErrorPersistKeys.get(dedupKey);
   if (last) {
     last.persistId = persistId;
@@ -2166,8 +2648,9 @@ function lookupTurnErrorPersistId(
   sessionId: string,
   message: string,
   agentMeta: AgentMeta | null,
+  dedupIdentity?: string,
 ): string | undefined {
-  const { dedupKey } = turnErrorDedupKey(sessionId, message, agentMeta);
+  const { dedupKey } = turnErrorDedupKey(sessionId, message, agentMeta, dedupIdentity);
   return _recentErrorPersistKeys.get(dedupKey)?.persistId;
 }
 
@@ -2214,6 +2697,22 @@ export function whenTurnErrorPersisted(sessionId: string, persistId: string): Pr
   return waiter.promise;
 }
 
+/**
+ * Await the exact error-row database write and propagate failure. Call after
+ * onTurnErrorEvent has consumed/enqueued the persist id. Unlike the dismiss
+ * waiter above, owner-scope supersession is also a failure because no durable
+ * recovery outcome exists.
+ */
+export function whenTurnErrorPersistedDurably(
+  sessionId: string,
+  persistId: string,
+): Promise<void> {
+  return (
+    _turnErrorPersistenceOutcomes.get(turnErrorPersistKey(sessionId, persistId)) ??
+    Promise.resolve()
+  );
+}
+
 export function onTurnErrorEvent(
   sessionId: string,
   data:
@@ -2222,13 +2721,20 @@ export function onTurnErrorEvent(
     | undefined,
   agentMeta: AgentMeta | null = null,
   reservedPersistId?: string,
+  persistenceContext?: {
+    preserveLiveTurnState: true;
+    capturedAt: number;
+    dedupIdentity: string;
+    dbAgentKind: 'cc' | 'codex' | 'pi';
+  },
 ): string | undefined {
   const message = typeof data?.message === 'string' ? redactSensitiveText(data.message) : '';
   if (!message) return undefined;
-  const capturedAt = Date.now();
-  const recordedTurnStartedAt =
-    _turnStartedAtBySession.get(sessionId) ??
-    _savedTurnStartedAtForDeferred.get(sessionId);
+  const capturedAt = persistenceContext?.capturedAt ?? Date.now();
+  const recordedTurnStartedAt = persistenceContext
+    ? capturedAt
+    : _turnStartedAtBySession.get(sessionId) ??
+      _savedTurnStartedAtForDeferred.get(sessionId);
   const turnStartedAtSnapshot = recordedTurnStartedAt ?? capturedAt;
 
   let persistId: string;
@@ -2246,11 +2752,30 @@ export function onTurnErrorEvent(
     // 无 agentMeta 时优先使用 register 记录的 turnDedupId,最后才回退 message 短窗口。
     // Electron main 单线程:claim + createId + remember 在同一次调用里完成,输家
     // 再进来时 lookup 一定能拿到赢家的 persistId,不必另造 pending-dismiss。
-    if (!claimTurnErrorDedup(sessionId, message, agentMeta, capturedAt)) {
-      return lookupTurnErrorPersistId(sessionId, message, agentMeta);
+    if (
+      !claimTurnErrorDedup(
+        sessionId,
+        message,
+        agentMeta,
+        capturedAt,
+        persistenceContext?.dedupIdentity,
+      )
+    ) {
+      return lookupTurnErrorPersistId(
+        sessionId,
+        message,
+        agentMeta,
+        persistenceContext?.dedupIdentity,
+      );
     }
     persistId = createId();
-    rememberTurnErrorPersistId(sessionId, message, agentMeta, persistId);
+    rememberTurnErrorPersistId(
+      sessionId,
+      message,
+      agentMeta,
+      persistId,
+      persistenceContext?.dedupIdentity,
+    );
     _consumedTurnErrorPersistIds.add(turnErrorPersistKey(sessionId, persistId));
     createTurnErrorWaiter(sessionId, persistId);
   }
@@ -2270,8 +2795,10 @@ export function onTurnErrorEvent(
   //   /clear 语义不受影响：blockCreatedAt 在 /clear 之前产生，+1 仍满足 error.createdAt <= clearedAt。
   // 无 block 时：enqueueWrite 内异步查最新消息时间戳（=本轮最后入库时间），
   //   避免 Date.now() 落在 /clear 之后导致 error 行在清空后的历史中浮现。
-  const blockCreatedAt = assistantBlocks.get(sessionId)?.createdAt;
-  flushAssistantBlock(sessionId, agentMeta);
+  const blockCreatedAt = persistenceContext
+    ? undefined
+    : assistantBlocks.get(sessionId)?.createdAt;
+  if (!persistenceContext) flushAssistantBlock(sessionId, agentMeta);
   const content: Record<string, unknown> = { message };
   if (typeof data?.reason === 'string' && data.reason) content.reason = data.reason;
   if (typeof data?.sdkError === 'string' && data.sdkError) {
@@ -2285,10 +2812,13 @@ export function onTurnErrorEvent(
   // 不足(或反向丢失充值入口)。在入队前取值,写队列延迟消费不影响快照语义。
   // null(未显式选择,走默认路由)时不写字段:来源不明确的错误行,读侧一律不启用
   // 余额分类(fail-closed),与 live 路径「显式 providerId 才分类」同一判据。
-  const providerIdAtError = getSessionProvider(sessionId);
+  const providerIdAtError = persistenceContext ? null : getSessionProvider(sessionId);
   if (providerIdAtError) content.providerId = providerIdAtError;
-  const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  const dbAgentKindSnapshot = getSessionDbAgentKind(sessionId) ?? undefined;
+  const meta = persistenceContext
+    ? agentMeta
+    : agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
+  const dbAgentKindSnapshot =
+    persistenceContext?.dbAgentKind ?? getSessionDbAgentKind(sessionId) ?? undefined;
   enqueueTurnErrorWrite(sessionId, persistId, async (ownerScope) => {
     // 两个分支统一 +1：保证 error.createdAt 严格晚于本轮所有已入库行。
     // 注意：register.ts 在 flushAssistantBlock 之后调本函数，blockCreatedAt
@@ -2353,8 +2883,36 @@ export function onTurnErrorEvent(
       broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', payload, ownerStamp);
     }
   });
-  notePersistedMessage(sessionId, 'error', persistId);
+  if (!persistenceContext) notePersistedMessage(sessionId, 'error', persistId);
   return persistId;
+}
+
+/**
+ * Persist a terminal captured before a replacement turn without consuming or
+ * flushing any session-id-scoped state that now belongs to that replacement.
+ * The normal error-persisted dirty signal remains the only live broadcast, so
+ * renderer streaming state stays attached to the newer turn.
+ */
+export function onReservedStaleTurnErrorEvent(
+  sessionId: string,
+  data:
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | null
+    | undefined,
+  agentMeta: AgentMeta | null,
+  context: {
+    capturedAt: number;
+    sessionInstanceId: string;
+    turnGeneration: number;
+    dbAgentKind: 'cc' | 'codex' | 'pi';
+  },
+): string | undefined {
+  return onTurnErrorEvent(sessionId, data, agentMeta, undefined, {
+    preserveLiveTurnState: true,
+    capturedAt: context.capturedAt,
+    dedupIdentity: `reserved:${context.sessionInstanceId}:${context.turnGeneration}`,
+    dbAgentKind: context.dbAgentKind,
+  });
 }
 
 /** session 关闭时清掉该会话所有 per-session 持久化状态,避免 Map 泄漏 / 跨会话串状态。 */
@@ -2368,7 +2926,24 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 
 export function clearSessionPersistState(sessionId: string): void {
   clearCodexPlanRowsForSession(sessionId);
+  sessionPersistenceOutcomeBatches.delete(sessionId);
   assistantBlocks.delete(sessionId);
+  // A replacement Session can close while an older exact instance still owns
+  // a Windows query-time replay. Clear the current business-id state without
+  // deleting those retained buffers; their deferred replay teardown releases
+  // each exact identity after replay or discard.
+  const retainedReplacementIdentities =
+    retainedSessionReplacementPersistStateBySession.get(sessionId);
+  clearUnretainedReservedIdentities(
+    reservedAssistantBlocksBySession,
+    sessionId,
+    retainedReplacementIdentities,
+  );
+  clearUnretainedReservedIdentities(
+    reservedPersistedAssistantsBySession,
+    sessionId,
+    retainedReplacementIdentities,
+  );
   sealedAssistantLateFinalBySession.delete(sessionId);
   backgroundTurnPersistStatesBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);
@@ -2379,6 +2954,11 @@ export function clearSessionPersistState(sessionId: string): void {
   clearAgentTaskPersistState(sessionId);
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
+  clearUnretainedReservedIdentities(
+    reservedPendingFullTextBySession,
+    sessionId,
+    retainedReplacementIdentities,
+  );
   toolResultContentByClientId.delete(sessionId);
   lastPersistedMsgBySession.delete(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
@@ -2394,6 +2974,9 @@ export function clearSessionPersistState(sessionId: string): void {
   // dedup 守卫:清本 session 相关的所有 key(前缀 `${sessionId}:`)
   for (const key of _recentErrorPersistKeys.keys()) {
     if (key.startsWith(`${sessionId}:`)) _recentErrorPersistKeys.delete(key);
+  }
+  for (const key of _turnErrorPersistenceOutcomes.keys()) {
+    if (key.startsWith(`${sessionId}:`)) _turnErrorPersistenceOutcomes.delete(key);
   }
   dropSessionTurnErrorReservations(sessionId);
 }

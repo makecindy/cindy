@@ -18,10 +18,103 @@ const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts')
 const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const bootstrapSourcePath = resolve(__dirname, '..', 'bootstrap-electron.ts');
 const bootstrapSource = readFileSync(bootstrapSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const windowsSessionEndSourcePath = resolve(__dirname, '..', 'windowsSessionEnd.ts');
+const windowsSessionEndSource = readFileSync(windowsSessionEndSourcePath, 'utf8').replace(
+  /\r\n?/g,
+  '\n',
+);
 const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts');
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it('keeps both DB-closing quit hooks behind the recovery storage barrier', () => {
+    expect(bootstrapSource).toContain(
+      'const disposeLifecycleDbClientOnQuit = createShutdownStorageDisposer(',
+    );
+    expect(bootstrapSource).toContain(
+      "onQuit('db-client', disposeLifecycleDbClientOnQuit, 'async');",
+    );
+    const localDbCloseStart = bootstrapSource.indexOf("onQuit(\n  'local-db-close'");
+    expect(localDbCloseStart).toBeGreaterThanOrEqual(0);
+    const localDbCloseSource = bootstrapSource.slice(
+      localDbCloseStart,
+      bootstrapSource.indexOf('\n);', localDbCloseStart) + 3,
+    );
+    expect(localDbCloseSource).toContain(
+      'await disposeLifecycleDbClientOnQuit().catch(() => undefined);',
+    );
+    expectOrder(
+      localDbCloseSource,
+      'await disposeLifecycleDbClientOnQuit()',
+      'await localDbCloseDb()',
+    );
+  });
+
+  it('emits Windows fallback terminals before fallible quit prework', () => {
+    expect(bootstrapSource).toContain(
+      'prepareFallbackBeforeShutdownPrerequisites:\n' +
+        '      prepareWindowsSessionEndFallbackBeforeSessionTeardown,',
+    );
+    const shutdownMakerStart = bootstrapSource.indexOf('async function shutdownMaker()');
+    const shutdownMakerEnd = bootstrapSource.indexOf('\n}\n\nfunction ', shutdownMakerStart);
+    expect(shutdownMakerStart).toBeGreaterThanOrEqual(0);
+    expect(shutdownMakerEnd).toBeGreaterThan(shutdownMakerStart);
+    const shutdownMakerSource = bootstrapSource.slice(shutdownMakerStart, shutdownMakerEnd);
+    const prepareFallback = 'await prepareWindowsSessionEndFallbackBeforeSessionTeardown();';
+    const prepareFallbackStart = shutdownMakerSource.indexOf(prepareFallback);
+    const awaitedCalls = [...shutdownMakerSource.matchAll(/^[ \t]*await\s+/gm)];
+
+    expect(prepareFallbackStart).toBeGreaterThanOrEqual(0);
+    expect(
+      awaitedCalls[0] === undefined
+        ? undefined
+        : awaitedCalls[0].index + awaitedCalls[0][0].indexOf('await'),
+    ).toBe(prepareFallbackStart);
+    for (const laterPrework of [
+      'await waitForTurnChangeSetActions();',
+      'rehydrateCloseSuppression.suppressAllForShutdown();',
+      'await shutdownLspServerPool();',
+      'const m = getMakerCore();',
+      "const report = await m.shutdown({ reason: 'app-quit' });",
+    ]) {
+      expectOrder(shutdownMakerSource, prepareFallback, laterPrework);
+    }
+    expectOrder(
+      shutdownMakerSource,
+      prepareFallback,
+      'beginWindowsSessionEndFallbackProviderTeardown();',
+    );
+    expectOrder(
+      shutdownMakerSource,
+      'beginWindowsSessionEndFallbackProviderTeardown();',
+      'await waitForTurnChangeSetActions();',
+    );
+  });
+
+  it('does not snapshot an idle replacement for a tracked Windows turn', () => {
+    const snapshotStart = bootstrapSource.indexOf('listActiveClaudeTurns: () => {');
+    const snapshotEnd = bootstrapSource.indexOf('\n    },', snapshotStart);
+    expect(snapshotStart).toBeGreaterThanOrEqual(0);
+    expect(snapshotEnd).toBeGreaterThan(snapshotStart);
+    const snapshotSource = bootstrapSource.slice(snapshotStart, snapshotEnd);
+
+    expectOrder(
+      snapshotSource,
+      'const session = maker.getSession(sessionId);',
+      "session?.agentKind !== 'claude-code' || !session.isTurnRunning()",
+    );
+    expectOrder(
+      snapshotSource,
+      "session?.agentKind !== 'claude-code' || !session.isTurnRunning()",
+      'const turnGeneration = session.getTurnGeneration();',
+    );
+    expectOrder(
+      snapshotSource,
+      'const turnGeneration = session.getTurnGeneration();',
+      'sessionInstanceId: session.instanceId',
+    );
+  });
+
   it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
     const redactor = source.slice(
       source.indexOf('function redactEventForRenderer'),
@@ -44,11 +137,79 @@ describe('maker:event hot path ordering', () => {
       'const wiredSessionsById = new Map<string, WiredSessionRegistration>();',
     );
     expect(wireSessionSource).toContain('if (existing?.session === session)');
-    expect(wireSessionSource).toContain('for (const dispose of existing.disposers) dispose();');
-    expect(wireSessionSource).toContain('existing.session.setInteractionListener(null);');
-    expect(wireSessionSource).toMatch(
-      /registration\.disposers\.push\(\s*session\.onEvent\(\(event: AgentEvent\) => \{/,
+    expect(wireSessionSource).toContain('deferWindowsSessionEndWiringTeardown(');
+    expectOrder(
+      wireSessionSource,
+      'deferWindowsSessionEndWiringTeardown(',
+      'for (const dispose of existing.disposers) dispose();',
     );
+    expect(wireSessionSource).toContain('existing.session.setInteractionListener(null);');
+    const replayTeardownStart = wireSessionSource.indexOf(
+      'const teardownExistingReplayConsumers = (): void => {',
+    );
+    const replayTeardownEnd = wireSessionSource.indexOf('\n    };', replayTeardownStart);
+    const replayTeardownSource = wireSessionSource.slice(replayTeardownStart, replayTeardownEnd);
+    expect(replayTeardownStart).toBeGreaterThanOrEqual(0);
+    expect(replayTeardownEnd).toBeGreaterThan(replayTeardownStart);
+    expect(replayTeardownSource).toContain('existing.replayConsumerDisposers');
+    expect(replayTeardownSource).toContain(
+      'releaseReservedSessionReplacementPersistState(',
+    );
+    expect(replayTeardownSource).not.toContain('existing.disposers');
+    expect(replayTeardownSource).not.toContain('setInteractionListener');
+    expect(replayTeardownSource).not.toContain('sessionTurnLeaseTracker');
+    expect(wireSessionSource).toContain(
+      'session.onEvent((event: AgentEvent) => handleGhostSessionEvent(event))',
+    );
+    expect(wireSessionSource).toContain(
+      'session.onEvent((event: AgentEvent) => handleForwardSessionEvent(event))',
+    );
+    expect(wireSessionSource).toContain(
+      'session.setEventDispatchGate(null);',
+    );
+    expect(wireSessionSource).toContain(
+      'clearReservedStaleClaudeUsage(session.id, session.instanceId);',
+    );
+    expectOrder(
+      wireSessionSource,
+      'reservePendingToolResultsForSessionReplacement(session.id, session.instanceId);',
+      'retainReservedSessionReplacementPersistState(session.id, supersededTurnIdentity);',
+    );
+    expect(
+      wireSessionSource.match(/registration\.replayConsumerDisposers\.push\(/g),
+    ).toHaveLength(5);
+    const lifecycleObserverStart = wireSessionSource.indexOf(
+      'session.setTurnLifecycleObserver({',
+    );
+    const lifecycleObserverEnd = wireSessionSource.indexOf(
+      '\n  });',
+      lifecycleObserverStart,
+    );
+    const lifecycleObserverSource = wireSessionSource.slice(
+      lifecycleObserverStart,
+      lifecycleObserverEnd,
+    );
+    const lifecycleDisposerStart = wireSessionSource.indexOf(
+      'registration.disposers.push(() => {\n    session.setTurnLifecycleObserver(null);',
+      lifecycleObserverEnd,
+    );
+    const lifecycleDisposerEnd = wireSessionSource.indexOf(
+      '\n  });',
+      lifecycleDisposerStart,
+    );
+    const lifecycleDisposerSource = wireSessionSource.slice(
+      lifecycleDisposerStart,
+      lifecycleDisposerEnd,
+    );
+    expect(lifecycleObserverSource).toMatch(
+      /onUndispatched:[\s\S]*rollbackWindowsSessionEndTurnStarted\(\s*session\.id,\s*turnGeneration,\s*session\.instanceId/,
+    );
+    expect(lifecycleObserverSource).toMatch(
+      /noteWindowsSessionEndTurnStarted\([\s\S]*session\.instanceId/,
+    );
+    expect(lifecycleDisposerStart).toBeGreaterThan(lifecycleObserverEnd);
+    expect(lifecycleDisposerEnd).toBeGreaterThan(lifecycleDisposerStart);
+    expect(lifecycleDisposerSource).not.toContain('rollbackWindowsSessionEndTurnStarted');
     expect(wireSessionSource).toMatch(
       /registration\.disposers\.push\(\s*session\.onStatusChange\(\(status\) => \{/,
     );
@@ -63,6 +224,213 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
+  it('retires an exact Session query snapshot at the completed close boundary', () => {
+    const wireSessionSource = extractWireSessionSource();
+    expect(wireSessionSource).toMatch(
+      /const windowsSessionEndCloseDisposer = session\.onStatusChange\(\(status\) => \{[\s\S]*status === 'closed'[\s\S]*finishWindowsSessionEndSessionClosed\(session\.id, session\.instanceId\)/,
+    );
+    expect(wireSessionSource).toContain(
+      'registration.replayConsumerDisposers.push(windowsSessionEndCloseDisposer);',
+    );
+    const closeFinally = wireSessionSource.indexOf(
+      '// Wiring teardown is independent of the best-effort product cleanup',
+    );
+    expect(closeFinally).toBeGreaterThanOrEqual(0);
+    const closeBoundary = wireSessionSource.slice(closeFinally);
+
+    expect(closeBoundary).toContain(
+      'finishWindowsSessionEndSessionClosed(session.id, session.instanceId);',
+    );
+    expectOrder(
+      closeBoundary,
+      'finishWindowsSessionEndSessionClosed(session.id, session.instanceId);',
+      'sessionTurnActivityTracker.deleteSession(session.id);',
+    );
+  });
+
+  it('emits confirmed fallback before Session close can disable dispatch', () => {
+    const wireSessionSource = extractWireSessionSource();
+    expect(wireSessionSource).toMatch(
+      /const windowsSessionEndBeforeCloseDisposer = session\.onBeforeClose\(\(\) => \{[\s\S]*prepareWindowsSessionEndFallbackBeforeSessionClose\(session\.id, session\.instanceId\)/,
+    );
+    expect(wireSessionSource).toContain(
+      'registration.replayConsumerDisposers.push(windowsSessionEndBeforeCloseDisposer);',
+    );
+    expect(wireSessionSource).toMatch(
+      /const emitWindowsSessionEndFallbackTerminal = \(turnGeneration: number\): boolean => \{[\s\S]*session\.emitHostTerminalErrorForGeneration\([\s\S]*if \(emittedBySession\) return true;[\s\S]*return deferRetainedWindowsSessionEndFallback\([\s\S]*replayRetainedWindowsSessionEndFallback/,
+    );
+    expect(wireSessionSource).toMatch(
+      /replayRetainedWindowsSessionEndFallback = \(event: AgentEvent\): void => \{[\s\S]*handleGhostSessionEvent\(event, true\);[\s\S]*handleForwardSessionEvent\(event, true\)/,
+    );
+    expect(wireSessionSource).toContain('if (isFencedStaleSessionTerminal(session.id, event))');
+    expect(wireSessionSource).not.toContain(
+      '!isWindowsSessionEndFallbackSession(session.id) &&\n      isFencedStaleSessionTerminal',
+    );
+    const fallbackClassification = wireSessionSource.indexOf(
+      'const isWindowsSessionEndFallbackReplay = isWindowsSessionEndFallbackSession(session.id)',
+    );
+    const forwardStaleFence = wireSessionSource.indexOf(
+      'if (isFencedStaleTerminal)',
+      fallbackClassification,
+    );
+    expect(fallbackClassification).toBeGreaterThanOrEqual(0);
+    expect(forwardStaleFence).toBeGreaterThan(fallbackClassification);
+    expect(wireSessionSource).toContain('const replay = event.sessionEventReplay;');
+    const replayStart = wireSessionSource.indexOf(
+      'const replay = event.sessionEventReplay;',
+      forwardStaleFence,
+    );
+    expect(replayStart).toBeGreaterThanOrEqual(forwardStaleFence);
+    expectOrder(
+      wireSessionSource.slice(replayStart),
+      'const replay = event.sessionEventReplay;',
+      'persistReservedStaleAssistantBlock(',
+    );
+    expectOrder(
+      wireSessionSource.slice(replayStart),
+      'persistReservedStaleAssistantBlock(',
+      'persistReservedStaleOrphanToolResults(',
+    );
+    expectOrder(
+      wireSessionSource.slice(replayStart),
+      'persistReservedStaleOrphanToolResults(',
+      'onReservedStaleTurnErrorEvent(',
+    );
+    expectOrder(
+      wireSessionSource.slice(replayStart),
+      'onReservedStaleTurnErrorEvent(',
+      'trackRequiredWindowsFallbackErrorPersistence(',
+    );
+    expectOrder(
+      wireSessionSource.slice(replayStart),
+      'trackRequiredWindowsFallbackErrorPersistence(',
+      'const durableStaleDone = whenSessionPersistedDurably(session.id, staleTurnIdentity);',
+    );
+    expectOrder(
+      wireSessionSource.slice(replayStart),
+      'const durableStaleDone = whenSessionPersistedDurably(session.id, staleTurnIdentity);',
+      'trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleDone, {',
+    );
+    expectOrder(
+      wireSessionSource.slice(replayStart),
+      'trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleDone, {',
+      "log.debug('ignored stale terminal after leftover turn reclaim'",
+    );
+    const staleFenceEnd = wireSessionSource.indexOf(
+      "log.debug('ignored stale terminal after leftover turn reclaim'",
+      forwardStaleFence,
+    );
+    const staleFenceSource = wireSessionSource.slice(forwardStaleFence, staleFenceEnd);
+    expect(staleFenceSource).toContain("event.type === 'done'");
+    expect(staleFenceSource).toContain('!isTurnContinuationBoundaryEvent(event)');
+    expect(staleFenceSource).toContain('requireSuccess: true');
+    expect(staleFenceSource).toMatch(
+      /isWindowsSessionEndFallbackReplay &&\s*isTerminalTurnErrorEvent\(event\) &&\s*!isTurnContinuationBoundaryEvent\(event\)\s*\) \{\s*const durableStaleTerminal = whenSessionPersistedDurably\(\s*session\.id,\s*staleTurnIdentity,?\s*\)/,
+    );
+    expect(staleFenceSource).not.toContain(
+      'replayedAssistantPersistId !== undefined || replayedOrphanToolResultCount > 0',
+    );
+  });
+
+  it('records stale Claude paired-done usage against the exact historical turn', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const replacementStart = wireSessionSource.indexOf('if (existing) {');
+    const replacementEnd = wireSessionSource.indexOf(
+      'advanceSessionTurnBoundaryGeneration(session.id);',
+      replacementStart,
+    );
+    const replacementSource = wireSessionSource.slice(replacementStart, replacementEnd);
+    const helperStart = source.indexOf('function recordReservedStaleClaudeDoneUsage(');
+    const helperEnd = source.indexOf(
+      '\n/**\n * 跟踪每个 session 的逻辑 turn',
+      helperStart,
+    );
+    const helperSource = source.slice(helperStart, helperEnd);
+    const staleStart = wireSessionSource.indexOf('if (isFencedStaleTerminal)');
+    const staleEnd = wireSessionSource.indexOf(
+      "log.debug('ignored stale terminal after leftover turn reclaim'",
+      staleStart,
+    );
+    const staleSource = wireSessionSource.slice(staleStart, staleEnd);
+
+    expectOrder(
+      replacementSource,
+      'const keepsReplayConsumers = deferWindowsSessionEndWiringTeardown(',
+      'if (keepsReplayConsumers) {',
+    );
+    expectOrder(
+      replacementSource,
+      'if (keepsReplayConsumers) {',
+      'reserveAssistantBlockForSessionReplacement(',
+    );
+    expect(replacementSource).toContain(
+      'flushAssistantBlock(session.id, null, supersededTurnIdentity);',
+    );
+    expect(replacementSource).toContain(
+      'persistReservedStaleOrphanToolResults(session.id, null, supersededTurnIdentity);',
+    );
+    expect(replacementSource).toContain('resetTurnPersistState(session.id);');
+    expect(replacementSource).toContain(
+      'sessionInstanceId: existing.session.instanceId,\n      turnGeneration: existing.session.getTurnGeneration(),',
+    );
+    expect(replacementSource).toContain(
+      'clearReservedStaleClaudeUsage(existing.session.id, existing.session.instanceId);',
+    );
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    expect(helperSource).toContain('.get(turnIdentity.sessionInstanceId)');
+    expect(helperSource).toContain('state.taskByGeneration.get(turnIdentity.turnGeneration)');
+    expect(helperSource).toContain('await historicalOutputPersisted;');
+    expect(helperSource).toContain('state.lastReportedModelUsage');
+    expect(helperSource).toContain('state.lastReportedCostUsd');
+    expect(helperSource).toContain('recordModelTurnUsage(');
+    expect(helperSource).toContain(
+      'recordSessionTurnSpend(sessionId, turnMoney, { throwOnError: true }),',
+    );
+    expect(helperSource.match(/await awaitBothSpendWrites\(/g)).toHaveLength(2);
+    expect(helperSource).not.toContain('await Promise.all([');
+    expect(helperSource).toContain('clientId: assistantPersistId');
+    expect(helperSource).toContain('recordTurnUsageOnMessage({');
+    expectOrder(
+      staleSource,
+      'rememberReservedStaleClaudeUsageTarget(',
+      'recordReservedStaleClaudeDoneUsage(',
+    );
+    expectOrder(
+      staleSource,
+      'recordReservedStaleClaudeDoneUsage(',
+      'trackWindowsSessionEndFallbackStorageTask(session.id, staleClaudeUsageTask, {',
+    );
+    expect(staleSource).toContain('requireSuccess: true');
+
+    const lateUsageStart = wireSessionSource.indexOf(
+      'const handleLateWindowsFallbackProviderDoneUsage =',
+    );
+    const lateUsageEnd = wireSessionSource.indexOf(
+      'const windowsSessionEndEventGate =',
+      lateUsageStart,
+    );
+    const lateUsageSource = wireSessionSource.slice(lateUsageStart, lateUsageEnd);
+    expect(lateUsageStart).toBeGreaterThanOrEqual(0);
+    expect(lateUsageEnd).toBeGreaterThan(lateUsageStart);
+    expectOrder(
+      lateUsageSource,
+      'trackWindowsSessionEndFallbackStorageTask(session.id, usageTask, {',
+      'return usageTask;',
+    );
+    const gateDisposerStart = wireSessionSource.indexOf(
+      'registration.replayConsumerDisposers.push(() => {\n    session.setEventDispatchGate(null);',
+    );
+    const gateDisposerEnd = wireSessionSource.indexOf('\n  });', gateDisposerStart);
+    const gateDisposerSource = wireSessionSource.slice(gateDisposerStart, gateDisposerEnd);
+    expect(gateDisposerStart).toBeGreaterThanOrEqual(0);
+    expectOrder(
+      gateDisposerSource,
+      'session.setEventDispatchGate(null);',
+      'finishWindowsSessionEndFallbackProviderEvents(session.id, session.instanceId);',
+    );
+  });
+
   it('runs the paid-model fence in the shared Session lifecycle boundary', () => {
     const wireSessionSource = extractWireSessionSource();
     const observerStart = wireSessionSource.indexOf('session.setTurnLifecycleObserver({');
@@ -71,6 +439,19 @@ describe('maker:event hot path ordering', () => {
 
     expect(observerStart).toBeGreaterThanOrEqual(0);
     expect(observerEnd).toBeGreaterThan(observerStart);
+    expect(observerSource).toContain(
+      'shouldRejectWindowsSessionEndTurnStart(session.agentKind)',
+    );
+    expectOrder(
+      observerSource,
+      'shouldRejectWindowsSessionEndTurnStart(session.agentKind)',
+      'noteWindowsSessionEndTurnStarted(',
+    );
+    expectOrder(
+      observerSource,
+      'shouldRejectWindowsSessionEndTurnStart(session.agentKind)',
+      'await verdictForModelRoute(',
+    );
     expect(observerSource).toContain('await verdictForModelRoute(');
     expect(observerSource).toContain(
       "if (verdict.kind === 'reroute' && verdict.reason === 'payment-required')",
@@ -91,6 +472,7 @@ describe('maker:event hot path ordering', () => {
   it('rejects a fenced leftover terminal before register-side turn effects', () => {
     expect(source).toContain('delete rendererEvent.sessionTurnGeneration');
     expect(source).toContain('delete rendererEvent.sessionInstanceId');
+    expect(source).toContain('delete rendererEvent.sessionEventReplay');
     const wireSessionSource = extractWireSessionSource();
     expectOrder(
       wireSessionSource,
@@ -319,7 +701,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain("if (session.agentKind === 'codex') return false;");
     expect(source).toContain('service.deferRemoteAuthRetryError(meta, event);');
     expect(wireSessionSource).toContain(
-      'isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);',
+      '!isWindowsSessionEndFallbackReplay && isRemoteAuthRetryErrorEvent(session, event);',
     );
     expect(deferredHandler).toBeTruthy();
     expect(deferredHandler).toContain(
@@ -402,7 +784,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('autoResumeBookkeeping.consumeFailedTurnCompletionTail(');
     expect(source).toContain('event.sessionTurnGeneration');
     expect(source).toContain(
-      'hasSuppressedError: autoResumeBookkeeping.hasSuppressedError(session.id)',
+      'hasSuppressedError:\n              !isWindowsSessionEndFallbackReplay &&\n              autoResumeBookkeeping.hasSuppressedError(session.id)',
     );
   });
 
@@ -423,9 +805,9 @@ describe('maker:event hot path ordering', () => {
     expect(terminalIdleAssignments).toHaveLength(2);
 
     // 回看窗口要盖住赋值点与所属 if 条件之间的声明/注释(done 分支里 silent-stop
-    // 的 isSilentStopDone 判定 + 设计注释就有 ~500 字符),太窄会把仍在正确分支内的
-    // 赋值误判成"脱离 done 路径"。
-    const CONTEXT_LOOKBACK = 1_400;
+    // 的 exact-generation lease 判定 + isSilentStopDone 设计注释就超过 1400 字符),
+    // 太窄会把仍在正确分支内的赋值误判成"脱离 done 路径"。
+    const CONTEXT_LOOKBACK = 1_800;
     const statusContexts = statusIdleAssignments.map((index) =>
       wireSessionSource.slice(
         Math.max(0, index - CONTEXT_LOOKBACK),
@@ -532,7 +914,7 @@ describe('maker:event hot path ordering', () => {
     expect(boundaryEnd).toBeGreaterThan(boundaryStart);
     expectOrder(
       boundaryBlock,
-      'flushAssistantBlock(session.id, eventAgentMeta);',
+      'flushAssistantBlock(session.id, eventAgentMeta, assistantTurnIdentity);',
       'consumeLastAssistantPersistId(session.id);',
     );
     expectOrder(
@@ -543,7 +925,7 @@ describe('maker:event hot path ordering', () => {
     expectOrder(
       boundaryBlock,
       'consumeLastTopLevelAssistantPersistId(session.id);',
-      'flushOrphanToolResults(session.id, eventAgentMeta);',
+      'flushOrphanToolResults(session.id, eventAgentMeta, assistantTurnIdentity);',
     );
     expect(boundaryBlock).toContain("event.type === 'done'");
     expect(boundaryBlock).toContain("event.source !== 'codex'");
@@ -570,6 +952,167 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('keeps Windows session-end Claude failures out of durable error history', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const classifyIndex = wireSessionSource.indexOf(
+      'suppressWindowsSessionEndError = shouldSuppressWindowsSessionEndClaudeError({',
+    );
+    const persistenceBoundary = wireSessionSource.indexOf(
+      '// 压住的错误详情必须在这里存一份',
+      classifyIndex,
+    );
+
+    expect(classifyIndex).toBeGreaterThanOrEqual(0);
+    expect(persistenceBoundary).toBeGreaterThan(classifyIndex);
+    const fallbackClassificationIndex = wireSessionSource.indexOf(
+      'const isWindowsSessionEndFallbackReplay = isWindowsSessionEndFallbackSession(session.id)',
+    );
+    expect(fallbackClassificationIndex).toBeGreaterThanOrEqual(0);
+    expect(fallbackClassificationIndex).toBeLessThan(classifyIndex);
+    const classifiedErrorPath = wireSessionSource.slice(classifyIndex, persistenceBoundary);
+    expect(classifiedErrorPath.match(/!suppressWindowsSessionEndError/g)).toHaveLength(4);
+    expect(classifiedErrorPath).toContain(
+      'sessionInstanceId: event.sessionInstanceId ?? session.instanceId',
+    );
+    expect(classifiedErrorPath).toContain(
+      '!suppressWindowsSessionEndError && !isWindowsSessionEndFallbackReplay',
+    );
+    expect(classifiedErrorPath).toContain(
+      '!isWindowsSessionEndFallbackReplay && isRemoteAuthRetryErrorEvent(session, event)',
+    );
+    expect(classifiedErrorPath).toContain(
+      '!isWindowsSessionEndFallbackReplay &&\n          isGatewayProxyTokenRecoveryErrorEvent',
+    );
+    const workerTerminalStart = wireSessionSource.indexOf(
+      '// Worker turn 结束后交给 OrcaTeamService',
+      persistenceBoundary,
+    );
+    const terminalPersistenceSource = wireSessionSource.slice(
+      wireSessionSource.indexOf('const autoResumeWouldSuppressPersist', classifyIndex),
+      workerTerminalStart,
+    );
+    expect(terminalPersistenceSource).toMatch(
+      /const autoResumeWouldSuppressPersist =[\s\S]*!isWindowsSessionEndFallbackReplay/,
+    );
+    expect(terminalPersistenceSource).toMatch(
+      /const autoResumeSuppressesPersist =[\s\S]*!isWindowsSessionEndFallbackReplay/,
+    );
+    expect(terminalPersistenceSource).toMatch(
+      /const overflowClaim =[\s\S]*!isWindowsSessionEndFallbackReplay/,
+    );
+    const workerTerminalEnd = wireSessionSource.indexOf(
+      '\n      if (pendingContextSnapshot)',
+      workerTerminalStart,
+    );
+    const workerTerminalSource = wireSessionSource.slice(
+      workerTerminalStart,
+      workerTerminalEnd,
+    );
+    expect(workerTerminalStart).toBeGreaterThan(persistenceBoundary);
+    expect(workerTerminalEnd).toBeGreaterThan(workerTerminalStart);
+    expect(workerTerminalSource).toContain('const workerTerminalTask = (async () => {');
+    expect(workerTerminalSource).toContain(
+      'trackWindowsSessionEndFallbackStorageTask(session.id, workerTerminalTask, {',
+    );
+    expect(workerTerminalSource).toContain('requireSuccess: true');
+    expect(workerTerminalSource).toContain('void workerTerminalTask.catch((error) => {');
+    expect(workerTerminalSource).not.toContain('const workerTerminalTask = (async () => {\n            try {');
+  });
+
+  it('gates Windows query-phase terminal events before every Session listener', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const gateIndex = wireSessionSource.indexOf(
+      'const windowsSessionEndEventGate = createWindowsSessionEndEventGate(',
+    );
+    const gateInstallIndex = wireSessionSource.indexOf(
+      'session.setEventDispatchGate(windowsSessionEndEventGate)',
+    );
+    const ghostHandlerStart = wireSessionSource.indexOf('const handleGhostSessionEvent');
+    const forwardHandlerStart = wireSessionSource.indexOf('const handleForwardSessionEvent');
+    const forwardHandlerEnd = wireSessionSource.indexOf(
+      'registration.disposers.push(',
+      forwardHandlerStart,
+    );
+
+    expect(gateIndex).toBeGreaterThanOrEqual(0);
+    expect(gateInstallIndex).toBeGreaterThan(gateIndex);
+    expect(ghostHandlerStart).toBeGreaterThan(gateIndex);
+    expect(forwardHandlerStart).toBeGreaterThan(ghostHandlerStart);
+    expect(forwardHandlerEnd).toBeGreaterThan(forwardHandlerStart);
+
+    const ghostHandler = wireSessionSource.slice(ghostHandlerStart, forwardHandlerStart);
+    const forwardHandler = wireSessionSource.slice(forwardHandlerStart, forwardHandlerEnd);
+    const gateSource = wireSessionSource.slice(gateIndex, ghostHandlerStart);
+    const lateDoneAccountingStart = wireSessionSource.indexOf(
+      'const handleLateWindowsFallbackProviderDoneUsage =',
+    );
+    const lateDoneAccountingEnd = wireSessionSource.indexOf(
+      'const windowsSessionEndEventGate =',
+      lateDoneAccountingStart,
+    );
+    const lateDoneAccountingSource = wireSessionSource.slice(
+      lateDoneAccountingStart,
+      lateDoneAccountingEnd,
+    );
+    expect(lateDoneAccountingStart).toBeGreaterThanOrEqual(0);
+    expect(lateDoneAccountingEnd).toBeGreaterThan(lateDoneAccountingStart);
+    expectOrder(
+      lateDoneAccountingSource,
+      'reserveStaleClaudeUsageForSessionReplacement(session);',
+      'recordReservedStaleClaudeDoneUsage(',
+    );
+    expectOrder(
+      lateDoneAccountingSource,
+      'recordReservedStaleClaudeDoneUsage(',
+      'trackWindowsSessionEndFallbackStorageTask(',
+    );
+    expect(lateDoneAccountingSource).not.toContain('broadcastToAllWindows(MAKER_PUSH.EVENT');
+    expect(lateDoneAccountingSource).not.toContain('handleAgentIslandEventAfterBroadcast');
+    expect(ghostHandler).toContain('event.sessionEventReplay === undefined');
+    expect(forwardHandler).toContain('event.sessionEventReplay === undefined');
+    expect(ghostHandler).toContain('isWindowsSessionEndSensitiveEvent(event)');
+    expect(forwardHandler).toContain('isWindowsSessionEndSensitiveEvent(event)');
+    expect(wireSessionSource).toContain("event.type === 'done' || isTerminalTurnErrorEvent(event)");
+    expect(gateSource).toContain('createWindowsSessionEndEventGate(');
+    expect(gateSource).toContain('session.instanceId');
+    expect(gateSource).toContain('handleLateWindowsFallbackProviderDoneUsage');
+    expect(gateSource).toContain('session.setEventDispatchGate(windowsSessionEndEventGate)');
+    expect(gateSource).not.toContain('replay.discard');
+    expect(windowsSessionEndSource).toMatch(
+      /gate\.shouldRun = \(event\) =>\s*shouldGateWindowsSessionEndEvent\(/,
+    );
+    const gatePreflightStart = windowsSessionEndSource.indexOf(
+      'export function shouldGateWindowsSessionEndEvent(',
+    );
+    const gatePreflightEnd = windowsSessionEndSource.indexOf(
+      'export function gateWindowsSessionEndEvent(',
+      gatePreflightStart,
+    );
+    const gatePreflight = windowsSessionEndSource.slice(gatePreflightStart, gatePreflightEnd);
+    expectOrder(
+      gatePreflight,
+      'confirmedRecoveryMarkerStates.get(sessionId)',
+      "event.type !== 'done' && event.type !== 'error' && event.type !== 'status'",
+    );
+    expectOrder(
+      gatePreflight,
+      "event.type !== 'done' && event.type !== 'error' && event.type !== 'status'",
+      'const recoveryMarkerState = confirmedRecoveryMarkerStates.get(sessionId);',
+    );
+    expectOrder(ghostHandler, 'deferWindowsSessionEndEvent(', 'noteTurnDiffEvent(');
+    expectOrder(forwardHandler, 'deferWindowsSessionEndEvent(', "if (event.type === 'turn_diff')");
+    expectOrder(
+      ghostHandler,
+      'event.sessionEventReplay === undefined',
+      'deferWindowsSessionEndEvent(',
+    );
+    expectOrder(
+      forwardHandler,
+      'event.sessionEventReplay === undefined',
+      'deferWindowsSessionEndEvent(',
+    );
+  });
+
   it('reserves terminal error persistId before EVENT broadcast and writes after', () => {
     const wireSessionSource = extractWireSessionSource();
     expectOrder(
@@ -586,6 +1129,59 @@ describe('maker:event hot path ordering', () => {
     expect(
       wireSessionSource.indexOf('const autoResumeSuppressesPersist', persistBoundaryStart),
     ).toBeGreaterThan(persistBoundaryStart);
+  });
+
+  it('requires the exact Windows fallback error write before marker settlement', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const persistStart = wireSessionSource.indexOf(
+      'const terminalErrorPersistId = onTurnErrorEvent(',
+    );
+    const persistEnd = wireSessionSource.indexOf(
+      '} else if (persistId) {',
+      persistStart,
+    );
+    const fallbackPersistSource = wireSessionSource.slice(persistStart, persistEnd);
+
+    expect(persistStart).toBeGreaterThanOrEqual(0);
+    expect(persistEnd).toBeGreaterThan(persistStart);
+    expectOrder(
+      fallbackPersistSource,
+      'const terminalErrorPersistId = onTurnErrorEvent(',
+      'trackRequiredWindowsFallbackErrorPersistence(',
+    );
+    expect(fallbackPersistSource).toContain('if (isWindowsSessionEndFallbackReplay)');
+    expect(source).toContain(
+      '? whenTurnErrorPersistedDurably(sessionId, persistId)',
+    );
+    expect(source).toContain('trackWindowsSessionEndFallbackStorageTask(sessionId, durableTerminalError, {');
+    expect(source).toContain('requireSuccess: true');
+    expect(windowsSessionEndSource).toContain('if (options?.requireSuccess) throw error;');
+  });
+
+  it('requires the session durable chain before settling a fallback terminal', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const resetIndex = wireSessionSource.indexOf('resetTurnPersistState(session.id);');
+    const terminalBarrierIndex = wireSessionSource.indexOf(
+      'whenSessionPersistedDurably(session.id)',
+      resetIndex,
+    );
+    const summaryIndex = wireSessionSource.indexOf(
+      '// sidebar-card-mode:',
+      resetIndex,
+    );
+
+    expect(resetIndex).toBeGreaterThanOrEqual(0);
+    expect(terminalBarrierIndex).toBeGreaterThan(resetIndex);
+    expect(summaryIndex).toBeGreaterThan(terminalBarrierIndex);
+    expect(wireSessionSource.slice(resetIndex, summaryIndex)).toContain(
+      'isWindowsSessionEndFallbackReplay &&',
+    );
+    expect(wireSessionSource.slice(resetIndex, summaryIndex)).toContain(
+      "event.type === 'done' || isTerminalTurnErrorEvent(event)",
+    );
+    expect(wireSessionSource.slice(resetIndex, summaryIndex)).toContain(
+      '{ requireSuccess: true }',
+    );
   });
 
   it('rejects stale Agent Island interactions before renderer delivery', () => {
@@ -958,8 +1554,11 @@ describe('maker:event hot path ordering', () => {
     const helperEnd = source.indexOf('\n\n  const inputCoordinator:', helperStart);
     const helperSource = source.slice(helperStart, helperEnd);
     const wireSessionSource = extractWireSessionSource();
+    const productStatusListener = wireSessionSource.indexOf(
+      'registration.disposers.push(\n    session.onStatusChange',
+    );
     const closedBlock = wireSessionSource.slice(
-      wireSessionSource.indexOf("if (status === 'closed') {"),
+      wireSessionSource.indexOf("if (status === 'closed') {", productStatusListener),
     );
 
     expect(source).toContain(
@@ -982,6 +1581,7 @@ describe('maker:event hot path ordering', () => {
     );
     expect(helperSource).toContain('direct-abort-retry');
     expect(helperSource).toContain('cancelDirectAbortReconciliation(sessionId, boundary);');
+    expect(productStatusListener).toBeGreaterThanOrEqual(0);
     expect(wireSessionSource).toContain(
       'if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);',
     );
@@ -1172,8 +1772,12 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain(
       'const claudeUsageSegments = normalizeTurnUsageSegments(doneData?.usageSegments);',
     );
-    expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');
-    expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
+    expect(claudeDoneSource).toContain(
+      'recordTurnSpend(turnMoney, undefined, { throwOnError: true }),',
+    );
+    expect(claudeDoneSource).toContain(
+      'recordSessionTurnSpend(session.id, turnMoney, { throwOnError: true }),',
+    );
     expect(claudeDoneSource).toContain('subscriptionEstimate ?? unpricedSubscriptionValueMarker()');
     expect(claudeDoneSource).toContain('money: modelRowMoney,');
     // 订阅轮 (Claude Anthropic 订阅或 bridge 订阅直连) 打 #billing=subscription 标记,
@@ -1198,9 +1802,7 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain("observedClaudeRoute === 'subscription'");
     expect(claudeDoneSource).toContain(': !readClaudeApiKey()');
     // 纯订阅轮无 recordTurnSpend push, 模型行落库后重广播今日 spend 触发仪表盘刷新
-    expect(claudeDoneSource).toContain(
-      'void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());',
-    );
+    expect(claudeDoneSource).toContain('void rebroadcastTodaySpend();');
     // 保留 #216 的 tooltip token/cache 明细。
     expect(claudeDoneSource).toContain('buildClaudeTurnUsageDetails(');
     // 窄兜底: total_cost_usd 是进程累计；首次只建基线，且累计 usage 不得冒充本轮 token。
@@ -1214,6 +1816,45 @@ describe('maker:event hot path ordering', () => {
       /buildClaudeTurnUsageDetails\(\s*undefined,\s*undefined,\s*resolvedModel,/,
     );
     expect(claudeCostFallback).toContain("if (route !== 'provider-api')");
+    // Windows session-end fallback must wait for Claude usage sinks as well as message writes.
+    expect(claudeDoneSource).toContain(
+      'let claudeUsagePersistenceTask: Promise<void> | undefined;',
+    );
+    expect(claudeDoneSource).toContain(
+      'claudeUsagePersistenceTask = (async () => {',
+    );
+    expect(claudeDoneSource).toContain(
+      'trackWindowsSessionEndFallbackStorageTask(session.id, claudeUsagePersistenceTask, {',
+    );
+    expect(claudeDoneSource).toContain('const usageResults = await Promise.allSettled(usageWrites);');
+    expect(claudeDoneSource).toMatch(
+      /const usageResults = await Promise\.allSettled\(usageWrites\);[\s\S]*?if \(isWindowsSessionEndFallbackReplay\) \{\s*propagateFirstRejectedUsageWrite\(usageResults\);/,
+    );
+    expect(claudeDoneSource).toContain('propagateFirstRejectedUsageWrite(usageResults);');
+    expect(claudeDoneSource).not.toContain('await awaitBothSpendWrites(');
+    expect(claudeDoneSource).not.toContain('await Promise.all([');
+    expect(claudeDoneSource).toContain(
+      "cacheCreateTokensDelta: m.deltas.cacheCreateTokens,\n                }, undefined, { throwOnError: true }),",
+    );
+    expect(claudeDoneSource).toContain('void claudeUsagePersistenceTask.catch((error) => {');
+    expect(claudeDoneSource).toContain("log.warn('Claude usage persistence task failed'");
+  });
+
+  it('awaits both Claude spend sinks before propagating either rejection', () => {
+    const helperStart = source.indexOf('async function awaitBothSpendWrites(');
+    const helperEnd = source.indexOf(
+      '\nfunction recordReservedStaleClaudeDoneUsage(',
+      helperStart,
+    );
+    const helperSource = source.slice(helperStart, helperEnd);
+
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    expectOrder(
+      helperSource,
+      'await Promise.allSettled([turnSpendWrite, sessionSpendWrite])',
+      'propagateFirstRejectedUsageWrite(results);',
+    );
   });
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {

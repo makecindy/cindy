@@ -8,7 +8,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
-import { Session } from './session.js';
+import {
+  Session,
+  type SessionEventDispatchGate,
+  type SessionEventReplay,
+} from './session.js';
 import {
   MAIN_OWNED_SEND_CONTEXT,
   type AgentSessionHandle,
@@ -39,13 +43,13 @@ function createControllableHandle(opts?: {
   holdDispatch?: boolean;
   holdOnSend?: number;
 }) {
-  let waiter: ((e: AgentEvent | null) => void) | null = null;
+  let waiter: ((e: AgentEvent | Error | null) => void) | null = null;
   let turnRunning = false;
   let closeCalls = 0;
   let releaseDispatch: (() => void) | null = null;
   let sendCount = 0;
-  const pending: Array<AgentEvent | null> = [];
-  const deliver = (event: AgentEvent | null) => {
+  const pending: Array<AgentEvent | Error | null> = [];
+  const deliver = (event: AgentEvent | Error | null) => {
     if (waiter) {
       const resolve = waiter;
       waiter = null;
@@ -86,14 +90,15 @@ function createControllableHandle(opts?: {
     },
     async *events() {
       for (;;) {
-        let next: AgentEvent | null;
+        let next: AgentEvent | Error | null;
         if (pending.length > 0) {
           next = pending.shift() ?? null;
         } else {
-          next = await new Promise<AgentEvent | null>((resolve) => {
+          next = await new Promise<AgentEvent | Error | null>((resolve) => {
             waiter = resolve;
           });
         }
+        if (next instanceof Error) throw next;
         if (next === null) return;
         yield next;
       }
@@ -139,6 +144,14 @@ function createControllableHandle(opts?: {
     },
     queue(event: AgentEvent) {
       deliver(event);
+    },
+    async endEvents() {
+      deliver(null);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    async crashEvents(error: Error) {
+      deliver(error);
+      await new Promise((resolve) => setTimeout(resolve, 0));
     },
     closeCalls: () => closeCalls,
     lastSendOptions: () => lastSendOptions,
@@ -201,6 +214,372 @@ describe('Session interaction fallback', () => {
       reason: 'no_listener_attached',
       dismissed: true,
     });
+  });
+});
+
+describe('Session event dispatch gate', () => {
+  it('holds a terminal before lifecycle observers and every listener, then replays once', async () => {
+    const { handle, emit } = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(handle, 'claude-code');
+    const first: AgentEvent[] = [];
+    const second: AgentEvent[] = [];
+    const terminalTypes: string[] = [];
+    let replay: (() => void) | null = null;
+    let gateCalls = 0;
+    let replayReservations = 0;
+
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal: ({ event }) => {
+        terminalTypes.push(event.type);
+      },
+    });
+    const dispatchGate: SessionEventDispatchGate = (event, getReplay) => {
+      gateCalls += 1;
+      if (event.type !== 'error') return false;
+      replayReservations += 1;
+      replay = getReplay();
+      return true;
+    };
+    dispatchGate.shouldRun = (event) => event.type === 'error';
+    session.setEventDispatchGate(dispatchGate);
+    session.onEvent((event) => first.push(event));
+    session.onEvent((event) => second.push(event));
+
+    await session.send('go');
+    await emit({ type: 'text', data: { text: 'before terminal' }, source: 'claude-code' });
+    expect(gateCalls).toBe(0);
+    expect(replayReservations).toBe(0);
+    await emit({
+      type: 'error',
+      data: { message: 'shutdown', isTerminal: true },
+      source: 'claude-code',
+    });
+    expect(gateCalls).toBe(1);
+    expect(replayReservations).toBe(1);
+
+    expect(first.map((event) => event.type)).toEqual(['text']);
+    expect(second.map((event) => event.type)).toEqual(['text']);
+    expect(terminalTypes).toEqual([]);
+
+    replay?.();
+    replay?.();
+
+    expect(first.map((event) => event.type)).toEqual(['text', 'error']);
+    expect(second.map((event) => event.type)).toEqual(['text', 'error']);
+    expect(terminalTypes).toEqual(['error']);
+  });
+
+  it('delivers a held older-generation terminal without settling the newer turn', async () => {
+    const { handle, emit } = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(handle, 'claude-code');
+    const events: AgentEvent[] = [];
+    const terminalGenerations: number[] = [];
+    let replay: SessionEventReplay | null = null;
+    session.setEventDispatchGate((event, getReplay) => {
+      if (event.type !== 'error') return false;
+      replay = getReplay();
+      return true;
+    });
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal: ({ turnGeneration }) => {
+        terminalGenerations.push(turnGeneration);
+      },
+    });
+    session.onEvent((event) => events.push(event));
+
+    await session.send('first');
+    await emit({
+      type: 'error',
+      data: { message: 'held generation one', isTerminal: true },
+      source: 'claude-code',
+    });
+    await session.send('second');
+
+    replay?.();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        sessionTurnGeneration: 1,
+        sessionEventReplay: { capturedAt: expect.any(Number) },
+      }),
+    ]);
+    expect(terminalGenerations).toEqual([1]);
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.isTurnRunning()).toBe(true);
+  });
+
+  it('notifies before-close observers while terminal dispatch is still available', async () => {
+    const { handle } = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(handle, 'claude-code');
+    const events: AgentEvent[] = [];
+    session.onEvent((event) => events.push(event));
+    await session.send('go');
+
+    session.onBeforeClose(() => {
+      expect(
+        session.emitHostTerminalErrorForGeneration(
+          session.getTurnGeneration(),
+          'close fallback',
+        ),
+      ).toBe(true);
+    });
+
+    await session.close();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        sessionTurnGeneration: 1,
+        data: expect.objectContaining({ message: 'close fallback' }),
+      }),
+    ]);
+  });
+
+  it('notifies before-close observers when the provider event stream ends naturally', async () => {
+    const { handle, endEvents, setTurnRunning } = createControllableHandle({
+      agentKind: 'claude-code',
+    });
+    const session = makeSession(handle, 'claude-code');
+    const events: AgentEvent[] = [];
+    session.onEvent((event) => events.push(event));
+    await session.send('go');
+    setTurnRunning(false);
+
+    session.onBeforeClose(() => {
+      expect(
+        session.emitHostTerminalErrorForGeneration(
+          session.getTurnGeneration(),
+          'natural close fallback',
+        ),
+      ).toBe(true);
+    });
+    await endEvents();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        sessionTurnGeneration: 1,
+        data: expect.objectContaining({ message: 'natural close fallback' }),
+      }),
+    ]);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('keeps consumers alive when the event iterator ends behind a held terminal', async () => {
+    const { handle, emit, endEvents } = createControllableHandle({
+      agentKind: 'claude-code',
+    });
+    const session = makeSession(handle, 'claude-code');
+    const calls: string[] = [];
+    let replay: SessionEventReplay | null = null;
+    session.setEventDispatchGate((event, getReplay) => {
+      if (event.type !== 'error') return false;
+      replay = getReplay();
+      return true;
+    });
+    session.onEvent((event) => calls.push(`event:${event.type}`));
+    session.onStatusChange((status) => calls.push(`status:${status}`));
+
+    await session.send('go');
+    await emit({
+      type: 'error',
+      data: { message: 'shutdown query', isTerminal: true },
+      source: 'claude-code',
+    });
+    await endEvents();
+
+    expect(session.getStatus()).toBe('active');
+    expect(calls).toEqual([]);
+
+    replay?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(calls).toEqual(['event:error', 'status:closed']);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('does not synthesize a second error when the iterator crashes behind a held terminal', async () => {
+    const { handle, emit, crashEvents } = createControllableHandle({
+      agentKind: 'claude-code',
+    });
+    const session = makeSession(handle, 'claude-code');
+    const events: AgentEvent[] = [];
+    const replays: SessionEventReplay[] = [];
+    session.setEventDispatchGate((event, getReplay) => {
+      if (event.type !== 'error') return false;
+      replays.push(getReplay());
+      return true;
+    });
+    session.onEvent((event) => events.push(event));
+
+    await session.send('go');
+    await emit({
+      type: 'error',
+      data: { message: 'provider terminal before iterator crash', isTerminal: true },
+      source: 'claude-code',
+    });
+    await crashEvents(new Error('iterator exploded after terminal'));
+
+    expect(replays).toHaveLength(1);
+    expect(events).toEqual([]);
+    expect(session.getStatus()).toBe('active');
+
+    replays[0]?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          message: 'provider terminal before iterator crash',
+        }),
+      }),
+    ]);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('lets a discarded terminal release natural close without delivery', async () => {
+    const { handle, emit, endEvents } = createControllableHandle({
+      agentKind: 'claude-code',
+    });
+    const session = makeSession(handle, 'claude-code');
+    const events: AgentEvent[] = [];
+    let replay: SessionEventReplay | null = null;
+    session.setEventDispatchGate((event, getReplay) => {
+      if (event.type !== 'error') return false;
+      replay = getReplay();
+      return true;
+    });
+    session.onEvent((event) => events.push(event));
+
+    await session.send('go');
+    await emit({
+      type: 'error',
+      data: { message: 'confirmed shutdown', isTerminal: true },
+      source: 'claude-code',
+    });
+    await endEvents();
+
+    replay?.discard();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(events).toEqual([]);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('keeps consumers alive when ordinary close overlaps a held terminal', async () => {
+    const { handle, emit, closeCalls } = createControllableHandle({
+      agentKind: 'claude-code',
+    });
+    const session = makeSession(handle, 'claude-code');
+    const calls: string[] = [];
+    let replay: SessionEventReplay | null = null;
+    session.setEventDispatchGate((event, getReplay) => {
+      if (event.type !== 'error') return false;
+      replay = getReplay();
+      return true;
+    });
+    session.onEvent((event) => calls.push(`event:${event.type}`));
+    session.onStatusChange((status) => calls.push(`status:${status}`));
+
+    await session.send('go');
+    await emit({
+      type: 'error',
+      data: { message: 'shutdown query', isTerminal: true },
+      source: 'claude-code',
+    });
+    const closing = session.close();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(closeCalls()).toBe(1);
+    expect(session.getStatus()).toBe('active');
+    expect(calls).toEqual([]);
+
+    replay?.();
+    await closing;
+
+    expect(calls).toEqual(['event:error', 'status:closed']);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('keeps consumers alive until detach can discard a held terminal', async () => {
+    const { handle, emit, closeCalls } = createControllableHandle({
+      agentKind: 'claude-code',
+    });
+    const session = makeSession(handle, 'claude-code');
+    const events: AgentEvent[] = [];
+    let replay: SessionEventReplay | null = null;
+    session.setEventDispatchGate((event, getReplay) => {
+      if (event.type !== 'error') return false;
+      replay = getReplay();
+      return true;
+    });
+    session.onEvent((event) => events.push(event));
+
+    await session.send('go');
+    await emit({
+      type: 'error',
+      data: { message: 'confirmed shutdown', isTerminal: true },
+      source: 'claude-code',
+    });
+    const detaching = session.detach({ reason: 'account-boundary' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(closeCalls()).toBe(1);
+    expect(session.getStatus()).toBe('active');
+
+    replay?.discard();
+    await detaching;
+
+    expect(events).toEqual([]);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('offers a generation-exact host terminal to the gate before detach', async () => {
+    const { handle, closeCalls } = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(handle, 'claude-code');
+    const events: AgentEvent[] = [];
+    let replay: SessionEventReplay | null = null;
+    session.setEventDispatchGate((event, getReplay) => {
+      if (event.type !== 'error') return false;
+      replay = getReplay();
+      return true;
+    });
+    session.onEvent((event) => events.push(event));
+
+    await session.send('go');
+    expect(
+      session.emitHostTerminalErrorForGeneration(
+        session.getTurnGeneration(),
+        'Windows session end fallback',
+      ),
+    ).toBe(true);
+    expect(events).toEqual([]);
+
+    const detaching = session.detach({ reason: 'app-quit' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closeCalls()).toBe(1);
+    expect(session.getStatus()).toBe('active');
+
+    replay?.();
+    await detaching;
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        sessionTurnGeneration: 1,
+        data: expect.objectContaining({
+          message: 'Windows session end fallback',
+          isTerminal: true,
+          reason: 'session_event_loop_crashed',
+        }),
+      }),
+    ]);
+    expect(session.getStatus()).toBe('closed');
   });
 });
 

@@ -232,6 +232,22 @@ import {
 import { invalidateWorkersByLeadSingleFlight } from '../localDb/ipc/orcaWorkerListSingleFlight.js';
 import { messageToCamel, setSessionRuntimeProjector } from '../localDb/mapper.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
+import {
+  createWindowsSessionEndEventGate,
+  deferRetainedWindowsSessionEndFallback,
+  deferWindowsSessionEndEvent,
+  deferWindowsSessionEndWiringTeardown,
+  finishWindowsSessionEndFallbackProviderEvents,
+  finishWindowsSessionEndProductTurn,
+  finishWindowsSessionEndSessionClosed,
+  isWindowsSessionEndFallbackSession,
+  noteWindowsSessionEndTurnStarted,
+  prepareWindowsSessionEndFallbackBeforeSessionClose,
+  rollbackWindowsSessionEndTurnStarted,
+  shouldRejectWindowsSessionEndTurnStart,
+  shouldSuppressWindowsSessionEndClaudeError,
+  trackWindowsSessionEndFallbackStorageTask,
+} from '../windowsSessionEnd.js';
 import { buildReviewPrompt } from '../reviewer/reviewPrompt.js';
 import {
   listReviewHistoricalAttachments,
@@ -469,15 +485,25 @@ import {
   onToolResultEvent,
   onToolResultFullEvent,
   onToolUseEvent,
+  persistReservedStaleAssistantBlock,
+  persistReservedStaleOrphanToolResults,
   preserveTurnPersistStateForBackground,
+  releaseReservedSessionReplacementPersistState,
+  reserveAssistantBlockForSessionReplacement,
+  reservePendingToolResultsForSessionReplacement,
+  retainReservedSessionReplacementPersistState,
+  type AssistantTurnPersistenceIdentity,
   sealAssistantBlockForLateFinal,
   markAutoResumeOutcome,
+  onReservedStaleTurnErrorEvent,
   onTurnErrorEvent,
   releaseReservedTurnErrorPersistId,
   reserveTurnErrorPersistId,
   prepareSyntheticToolEventForBroadcast,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
+  whenSessionPersistedDurably,
+  whenTurnErrorPersistedDurably,
 } from '../messagePersistBroadcaster.js';
 import { ensureCcManagerInstalledOrInstall } from '../remote-ssh/cc-manager-install.js';
 import {
@@ -990,6 +1016,7 @@ import {
   hasAnySessionInTurn,
   isSessionTurnDispatchBoundaryBusy,
   isTerminalTurnErrorEvent,
+  listSessionIdsInTurn as listTrackedAndLiveSessionIdsInTurn,
   SessionTurnActivityTracker,
 } from './sessionTurnActivityTracker.js';
 import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
@@ -1653,6 +1680,18 @@ export function broadcastSessionCreated(sessionId: string): void {
  */
 function markTurnEndedAfterPersistDrain(sessionId: string): void {
   markSessionTurnEndedAfterBarrier(sessionId, drainPersistQueue());
+}
+
+function trackRequiredWindowsFallbackErrorPersistence(
+  sessionId: string,
+  persistId: string | undefined,
+): void {
+  const durableTerminalError = persistId
+    ? whenTurnErrorPersistedDurably(sessionId, persistId)
+    : Promise.reject(new Error('Windows session-end fallback terminal has no durable error row'));
+  trackWindowsSessionEndFallbackStorageTask(sessionId, durableTerminalError, {
+    requireSuccess: true,
+  });
 }
 
 // ─── Orca collab service holder ───────────────────────────────────────────
@@ -2681,6 +2720,7 @@ type WiredSession = NonNullable<ReturnType<Maker['getSession']>>;
 interface WiredSessionRegistration {
   session: WiredSession;
   disposers: Array<() => void>;
+  replayConsumerDisposers: Array<() => void>;
 }
 
 /**
@@ -2808,6 +2848,407 @@ function unpricedSubscriptionValueMarker(): RegionalMoney {
  * (日/会话总额不受影响,PR #485 review)。turn start 清残留,防错配到下一轮。
  */
 const pendingFailedTurnAssistantPersistId = new Map<string, string>();
+
+interface ReservedStaleClaudeUsageState {
+  sessionInstanceId: string;
+  modelPromise: Promise<string>;
+  providerId: string | null;
+  billingRoute: BillingRoute;
+  isClaudeSubscriptionSession: boolean;
+  lastReportedCostUsd?: number;
+  lastReportedModelUsage?: Map<string, ModelUsageCumulative>;
+  fallbackAssistantPersistId?: string;
+  assistantPersistIdByGeneration: Map<number, string>;
+  taskByGeneration: Map<number, Promise<void>>;
+}
+
+/**
+ * A replacement runtime starts its own provider-cumulative usage stream at
+ * zero. Preserve the superseded Claude instance's baselines and message target
+ * separately so a query-held paired done can settle usage without reading or
+ * mutating the replacement's session-id-scoped state.
+ */
+const reservedStaleClaudeUsageBySession = new Map<
+  string,
+  Map<string, ReservedStaleClaudeUsageState>
+>();
+
+function reserveStaleClaudeUsageForSessionReplacement(session: WiredSession): void {
+  if (session.agentKind !== 'claude-code') return;
+  if (reservedStaleClaudeUsageBySession.get(session.id)?.has(session.instanceId)) return;
+  const providerId = getSessionProvider(session.id);
+  const observedRoute = providerId == null ? readClaudeSessionRoute(session.id) : null;
+  const explicitProviderRoute = billingRouteForExplicitProvider(
+    providerId,
+    providerId
+      ? getActiveCatalog().providers.find((provider) => provider.id === providerId)?.access?.kind
+      : null,
+  );
+  const isClaudeSubscriptionSession =
+    !session.remoteHostId &&
+    (providerId === 'anthropic' ||
+      (providerId == null &&
+        (observedRoute != null ? observedRoute === 'subscription' : !readClaudeApiKey())));
+  const billingRoute: BillingRoute = session.remoteHostId
+    ? 'unknown'
+    : isClaudeSubscriptionSession
+      ? 'subscription'
+      : (explicitProviderRoute ??
+        (observedRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
+  const continuationTarget = productTurnUsageTargetTracker.finish(session.id, undefined);
+  const failedTarget = pendingFailedTurnAssistantPersistId.get(session.id);
+  let byInstance = reservedStaleClaudeUsageBySession.get(session.id);
+  if (!byInstance) {
+    byInstance = new Map();
+    reservedStaleClaudeUsageBySession.set(session.id, byInstance);
+  }
+  byInstance.set(session.instanceId, {
+    sessionInstanceId: session.instanceId,
+    modelPromise:
+      turnModelPromiseBySession.get(session.id) ?? Promise.resolve(session.model || 'unknown'),
+    providerId,
+    billingRoute,
+    isClaudeSubscriptionSession,
+    lastReportedCostUsd: lastReportedCostUsdBySession.get(session.id),
+    lastReportedModelUsage: lastReportedModelUsageBySession.get(session.id),
+    fallbackAssistantPersistId: failedTarget ?? continuationTarget,
+    assistantPersistIdByGeneration: new Map(),
+    taskByGeneration: new Map(),
+  });
+
+  // The replacement must begin with independent provider-cumulative baselines
+  // and product-turn pointers even while the old replay consumers remain alive.
+  lastReportedCostUsdBySession.delete(session.id);
+  lastReportedModelUsageBySession.delete(session.id);
+  turnModelPromiseBySession.delete(session.id);
+  pendingFailedTurnAssistantPersistId.delete(session.id);
+  productTurnWallClockTracker.clear(session.id);
+  productTurnUsageTargetTracker.clear(session.id);
+  claudeOutputLagTimingGuard.clear(session.id);
+}
+
+function clearReservedStaleClaudeUsage(sessionId: string, sessionInstanceId: string): void {
+  const byInstance = reservedStaleClaudeUsageBySession.get(sessionId);
+  if (!byInstance) return;
+  byInstance.delete(sessionInstanceId);
+  if (byInstance.size === 0) reservedStaleClaudeUsageBySession.delete(sessionId);
+  claudeOutputLagTimingGuard.clear(sessionInstanceId);
+}
+
+function rememberReservedStaleClaudeUsageTarget(
+  sessionId: string,
+  turnIdentity: AssistantTurnPersistenceIdentity,
+  persistId: string | undefined,
+): void {
+  if (!persistId) return;
+  reservedStaleClaudeUsageBySession
+    .get(sessionId)
+    ?.get(turnIdentity.sessionInstanceId)
+    ?.assistantPersistIdByGeneration.set(turnIdentity.turnGeneration, persistId);
+}
+
+function propagateFirstRejectedUsageWrite(results: PromiseSettledResult<unknown>[]): void {
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
+  );
+  if (failed) throw failed.reason;
+}
+
+async function awaitBothSpendWrites(
+  turnSpendWrite: Promise<unknown>,
+  sessionSpendWrite: Promise<unknown>,
+): Promise<void> {
+  const results = await Promise.allSettled([turnSpendWrite, sessionSpendWrite]);
+  propagateFirstRejectedUsageWrite(results);
+}
+
+function recordReservedStaleClaudeDoneUsage(
+  sessionId: string,
+  event: AgentEvent,
+  turnIdentity: AssistantTurnPersistenceIdentity,
+  directAssistantPersistId: string | undefined,
+  historicalOutputPersisted: Promise<void>,
+): Promise<void> | undefined {
+  if (event.type !== 'done' || event.source !== 'claude-code') return undefined;
+  const state = reservedStaleClaudeUsageBySession
+    .get(sessionId)
+    ?.get(turnIdentity.sessionInstanceId);
+  if (!state) return undefined;
+  const existingTask = state.taskByGeneration.get(turnIdentity.turnGeneration);
+  if (existingTask) return existingTask;
+
+  const assistantPersistId =
+    directAssistantPersistId ??
+    state.assistantPersistIdByGeneration.get(turnIdentity.turnGeneration) ??
+    state.fallbackAssistantPersistId;
+  if (directAssistantPersistId) {
+    state.assistantPersistIdByGeneration.set(
+      turnIdentity.turnGeneration,
+      directAssistantPersistId,
+    );
+  }
+  const doneData = event.data as
+    | {
+        total_cost_usd?: unknown;
+        duration_ms?: unknown;
+        duration_api_ms?: unknown;
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
+        modelUsage?: Record<string, unknown>;
+        usageSegments?: unknown;
+        usageSegmentsComplete?: unknown;
+        modelUsageCumulativeStartsAtZero?: unknown;
+        assistant_message_id?: unknown;
+        is_error?: unknown;
+      }
+    | undefined;
+  const claudeUsageSegments = normalizeTurnUsageSegments(doneData?.usageSegments);
+  const claudeUsageSegmentsComplete =
+    doneData?.usageSegmentsComplete === true && (claudeUsageSegments?.length ?? 0) > 0;
+  let modelUsageDeltas: ModelUsageDeltaEntry[] | undefined;
+  if (doneData?.modelUsage && typeof doneData.modelUsage === 'object') {
+    const observedByModel = claudeUsageSegmentsComplete
+      ? (() => {
+          const grouped = new Map<string, ReturnType<typeof sumTurnUsageSegments>>();
+          for (const segment of claudeUsageSegments ?? []) {
+            const model = normalizeModelIdForPricing(segment.model);
+            const previous = grouped.get(model) ?? {
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheCreateTokens: 0,
+            };
+            grouped.set(model, {
+              inputTokens: previous.inputTokens + segment.inputTokens,
+              outputTokens: previous.outputTokens + segment.outputTokens,
+              cacheReadTokens: previous.cacheReadTokens + segment.cacheReadTokens,
+              cacheCreateTokens: previous.cacheCreateTokens + segment.cacheCreateTokens,
+            });
+          }
+          return grouped;
+        })()
+      : undefined;
+    const { next, deltas } = computeModelUsageDeltas(
+      state.lastReportedModelUsage,
+      doneData.modelUsage,
+      observedByModel,
+      { cumulativeStartsAtZero: doneData.modelUsageCumulativeStartsAtZero === true },
+    );
+    state.lastReportedModelUsage = next;
+    modelUsageDeltas = deltas;
+  }
+  const outputLagTiming = claudeOutputLagTimingGuard.evaluate(
+    state.sessionInstanceId,
+    modelUsageDeltas ?? [],
+    !isTurnContinuationBoundaryEvent(event),
+    typeof doneData?.assistant_message_id === 'string'
+      ? doneData.assistant_message_id
+      : undefined,
+    doneData?.is_error !== true,
+  );
+  const generationDurationMs = outputLagTiming.suppressTiming
+    ? undefined
+    : typeof doneData?.duration_api_ms === 'number'
+      ? doneData.duration_api_ms
+      : undefined;
+  const turnDurationMs =
+    typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined;
+  const cumulative = doneData?.total_cost_usd;
+  const previousCumulative = state.lastReportedCostUsd;
+  if (typeof cumulative === 'number' && cumulative >= 0) {
+    state.lastReportedCostUsd = cumulative;
+  }
+
+  const task = (async () => {
+    // Capture the exact instance state synchronously above, but do not patch
+    // its historical message until the assistant/error rows ahead of this
+    // replay have durably committed.
+    await historicalOutputPersisted;
+    const writes: Promise<unknown>[] = [];
+    if (
+      (modelUsageDeltas && modelUsageDeltas.length > 0) ||
+      (claudeUsageSegments?.length ?? 0) > 0
+    ) {
+      const pricing =
+        state.billingRoute === 'xd-gateway'
+          ? await getGatewayModelPricingForModel()
+          : getReferenceModelPricing();
+      const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
+        modelUsageDeltas ?? [],
+        pricing,
+        {
+          providerId: state.providerId,
+          billingRoute: state.billingRoute,
+          region: CURRENT_CINDY_REGION,
+        },
+        claudeUsageSegments,
+        claudeUsageSegmentsComplete,
+      );
+      const resolvedUsageDeltas: ModelUsageDeltaEntry[] = perModel.map((item) => ({
+        model: item.model,
+        costUsdDelta: item.money?.kind === 'actual-cost' ? item.money.amount : 0,
+        inputTokensDelta: item.deltas.inputTokens,
+        outputTokensDelta: item.deltas.outputTokens,
+        cacheReadTokensDelta: item.deltas.cacheReadTokens,
+        cacheCreateTokensDelta: item.deltas.cacheCreateTokens,
+      }));
+      const subscriptionTurnEstimates: RegionalMoney[] = [];
+      let hasSubscriptionValueRow = false;
+      for (const item of perModel) {
+        const isClaudeSubscriptionValueRow =
+          state.isClaudeSubscriptionSession && !item.money && isAnthropicModel(item.model);
+        const isBridgeSubscriptionRow =
+          item.source === 'subscription' && isSubscriptionDirectRoute(item.model);
+        const subscriptionEstimate =
+          isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
+            ? computePriceQuoteTurnMoney(
+                item.deltas,
+                getSubscriptionValuePriceFor('claude-code', item.model, pricing),
+                currentLedgerCurrency(),
+                item.segments,
+              )
+            : null;
+        if (subscriptionEstimate?.amount) subscriptionTurnEstimates.push(subscriptionEstimate);
+        if (isClaudeSubscriptionValueRow || isBridgeSubscriptionRow) {
+          hasSubscriptionValueRow = true;
+        }
+        const modelRowMoney =
+          item.money?.kind === 'actual-cost'
+            ? item.money
+            : isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
+              ? (subscriptionEstimate ?? unpricedSubscriptionValueMarker())
+              : null;
+        writes.push(
+          recordModelTurnUsage(
+            {
+              agentKind: 'claude-code',
+              model:
+                isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
+                  ? claudeSubscriptionUsageModelKey(item.model)
+                  : item.model,
+              money: modelRowMoney,
+              inputTokensDelta: item.deltas.inputTokens,
+              outputTokensDelta: item.deltas.outputTokens,
+              cacheReadTokensDelta: item.deltas.cacheReadTokens,
+              cacheCreateTokensDelta: item.deltas.cacheCreateTokens,
+            },
+            undefined,
+            { throwOnError: true },
+          ),
+        );
+      }
+      if (turnMoney && turnMoney.amount > 0) {
+        const turnUsageDetails = buildClaudeTurnUsageDetails(
+          doneData?.usage,
+          resolvedUsageDeltas,
+          'unknown',
+          perModel,
+          generationDurationMs,
+          turnDurationMs,
+        );
+        writes.push(
+          (async () => {
+            await awaitBothSpendWrites(
+              recordTurnSpend(turnMoney, undefined, { throwOnError: true }),
+              recordSessionTurnSpend(sessionId, turnMoney, { throwOnError: true }),
+            );
+            const changedScheduleId = await recordSchedulerTurnCost({
+              sessionId,
+              clientId: assistantPersistId,
+              money: turnMoney,
+              turnUsageDetails,
+              turnOrigin: event.turnOrigin,
+            });
+            if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+          })(),
+        );
+      } else if (assistantPersistId) {
+        const estimatedValues: RegionalMoney[] = estimatedTurnMoney
+          ? [estimatedTurnMoney]
+          : [];
+        estimatedValues.push(...subscriptionTurnEstimates);
+        const turnEstimatedValue =
+          estimatedValues.length > 0 ? addRegionalMoney(estimatedValues) : null;
+        const turnUsageDetails = buildClaudeTurnUsageDetails(
+          doneData?.usage,
+          resolvedUsageDeltas,
+          'unknown',
+          perModel,
+          generationDurationMs,
+          turnDurationMs,
+        );
+        writes.push(
+          (async () => {
+            if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
+              const changedScheduleId = await recordSchedulerTurnCost({
+                sessionId,
+                clientId: assistantPersistId,
+                money: turnEstimatedValue,
+                turnUsageDetails,
+                turnOrigin: event.turnOrigin,
+              });
+              if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+            } else {
+              await recordTurnUsageOnMessage({
+                sessionId,
+                clientId: assistantPersistId,
+                turnUsageDetails,
+              });
+            }
+          })(),
+        );
+      }
+      const results = await Promise.allSettled(writes);
+      if ((hasSubscriptionValueRow || estimatedTurnMoney) && !turnMoney) {
+        void rebroadcastTodaySpend();
+      }
+      propagateFirstRejectedUsageWrite(results);
+      return;
+    }
+
+    if (typeof cumulative === 'number' && cumulative >= 0) {
+      const rawDelta =
+        previousCumulative === undefined ? 0 : Math.max(0, cumulative - previousCumulative);
+      const resolvedModel = await state.modelPromise.catch(() => 'unknown');
+      const turnUsageDetails = buildClaudeTurnUsageDetails(
+        undefined,
+        undefined,
+        resolvedModel,
+        undefined,
+        generationDurationMs,
+        turnDurationMs,
+      );
+      if (rawDelta > 0 && state.billingRoute === 'provider-api') {
+        const ledgerCurrency = (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
+        const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
+        await awaitBothSpendWrites(
+          recordTurnSpend(money, undefined, { throwOnError: true }),
+          recordSessionTurnSpend(sessionId, money, { throwOnError: true }),
+        );
+        const changedScheduleId = await recordSchedulerTurnCost({
+          sessionId,
+          clientId: assistantPersistId,
+          money,
+          turnUsageDetails,
+          turnOrigin: event.turnOrigin,
+        });
+        if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+      } else if (assistantPersistId) {
+        await recordTurnUsageOnMessage({
+          sessionId,
+          clientId: assistantPersistId,
+          turnUsageDetails,
+        });
+      }
+    }
+  })();
+  state.taskByGeneration.set(turnIdentity.turnGeneration, task);
+  return task;
+}
 
 /**
  * 跟踪每个 session 的逻辑 turn 与后台节流 keepalive。外部 running guard
@@ -3307,6 +3748,15 @@ export function createAutomationUserTurnGitBaselineHooks(): AutomationUserTurnGi
 
 export function isSessionInTurn(sessionId: string): boolean {
   return sessionTurnActivityTracker.isSessionInTurn(sessionId);
+}
+
+export function listSessionIdsInTurn(
+  maker?: Pick<Maker, 'listActiveSessions'> | null,
+): string[] {
+  return listTrackedAndLiveSessionIdsInTurn(
+    sessionTurnActivityTracker,
+    maker?.listActiveSessions() ?? [],
+  );
 }
 
 /**
@@ -3988,8 +4438,11 @@ async function settleSilentStopDone(
   sessionId: string,
   reason: 'exhausted' | 'skip' | 'send-failed',
   turnLeaseId: string,
+  sessionInstanceId: string,
+  turnGeneration: number,
 ): Promise<void> {
   silentStopTurnLeaseGate.settle(sessionId, turnLeaseId);
+  finishWindowsSessionEndProductTurn(sessionId, turnGeneration, sessionInstanceId);
   try {
     if (!(await sessionTurnLeaseTracker.markTurnEndedAndCheckIdle(sessionId, turnLeaseId))) {
       log.debug('ignored stale silent-stop settle after a newer turn started', {
@@ -4058,6 +4511,7 @@ async function handleSilentStopTurnEnd(
   session: NonNullable<ReturnType<Maker['getSession']>>,
   doneAt: number,
   turnLeaseId: string,
+  turnGeneration: number,
   turnOrigin?: SendOrigin,
 ): Promise<void> {
   if (!silentStopTurnLeaseGate.claim(session.id, turnLeaseId)) {
@@ -4071,7 +4525,13 @@ async function handleSilentStopTurnEnd(
     log.debug('silent-stop auto-resume skipped — coordinator has queued work', {
       sessionId: session.id,
     });
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId);
+    await settleSilentStopDone(
+      session.id,
+      'skip',
+      turnLeaseId,
+      session.instanceId,
+      turnGeneration,
+    );
     return;
   }
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
@@ -4125,7 +4585,13 @@ async function handleSilentStopTurnEnd(
           reason: outcome.reason,
         });
         await surfaceSilentStopExhaustedBanner(session.id);
-        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+        await settleSilentStopDone(
+          session.id,
+          'exhausted',
+          turnLeaseId,
+          session.instanceId,
+          turnGeneration,
+        );
       } else {
         log.info('silent-stop auto-resume dispatched', { sessionId: session.id });
       }
@@ -4136,16 +4602,34 @@ async function handleSilentStopTurnEnd(
         error: err instanceof Error ? err.message : String(err),
       });
       await surfaceSilentStopExhaustedBanner(session.id);
-      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+      await settleSilentStopDone(
+        session.id,
+        'exhausted',
+        turnLeaseId,
+        session.instanceId,
+        turnGeneration,
+      );
     }
     return;
   }
   if (decision.action === 'exhausted') {
     await surfaceSilentStopExhaustedBanner(session.id);
-    await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+    await settleSilentStopDone(
+      session.id,
+      'exhausted',
+      turnLeaseId,
+      session.instanceId,
+      turnGeneration,
+    );
   }
   if (decision.action === 'skip') {
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId);
+    await settleSilentStopDone(
+      session.id,
+      'skip',
+      turnLeaseId,
+      session.instanceId,
+      turnGeneration,
+    );
   }
 }
 
@@ -4178,19 +4662,103 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     return;
   }
   if (existing) {
+    reserveStaleClaudeUsageForSessionReplacement(existing.session);
+    const supersededTurnIdentity: AssistantTurnPersistenceIdentity = {
+      sessionInstanceId: existing.session.instanceId,
+      turnGeneration: existing.session.getTurnGeneration(),
+      dbAgentKind: makerToDbAgentKind(existing.session.agentKind),
+    };
     // A runtime replacement invalidates any delayed direct-abort callback that
     // still belongs to the old Session instance.
     cancelDirectAbortReconciliation(session.id);
     goalDeferredResumeCancelObserver?.(session.id);
+    const teardownExistingReplayConsumers = (): void => {
+      for (const dispose of existing.replayConsumerDisposers) dispose();
+      releaseReservedSessionReplacementPersistState(
+        existing.session.id,
+        supersededTurnIdentity,
+      );
+      clearReservedStaleClaudeUsage(existing.session.id, existing.session.instanceId);
+    };
+    const keepsReplayConsumers = deferWindowsSessionEndWiringTeardown(
+      existing.session.id,
+      existing.session.agentKind,
+      teardownExistingReplayConsumers,
+    );
+    if (keepsReplayConsumers) {
+      reserveAssistantBlockForSessionReplacement(
+        session.id,
+        session.instanceId,
+        supersededTurnIdentity,
+      );
+      reservePendingToolResultsForSessionReplacement(session.id, session.instanceId);
+      retainReservedSessionReplacementPersistState(session.id, supersededTurnIdentity);
+    } else {
+      // Ordinary provider/runtime replacement has no replay owner. Flush the
+      // superseded turn's visible buffers before its consumers are disposed so
+      // partial assistant/tool output is not stranded in reserved maps.
+      flushAssistantBlock(session.id, null, supersededTurnIdentity);
+      persistReservedStaleOrphanToolResults(session.id, null, supersededTurnIdentity);
+      consumeLastAssistantPersistId(session.id);
+      consumeLastTopLevelAssistantPersistId(session.id);
+      resetTurnPersistState(session.id);
+    }
+    // Session-wide ownership cleanup must happen before the replacement can
+    // acquire its own lease under the same business id. Only the old event
+    // gate, onEvent consumers, and exact-instance close observer are needed by
+    // a held Session replay and may outlive this point.
     for (const dispose of existing.disposers) dispose();
     existing.session.setInteractionListener(null);
+    if (!keepsReplayConsumers) {
+      teardownExistingReplayConsumers();
+    }
   }
   advanceSessionTurnBoundaryGeneration(session.id);
-  const registration: WiredSessionRegistration = { session, disposers: [] };
+  const registration: WiredSessionRegistration = {
+    session,
+    disposers: [],
+    replayConsumerDisposers: [],
+  };
   wiredSessionsById.set(session.id, registration);
 
+  const windowsSessionEndTurnRegistrations = new Set<number>();
+  let replayRetainedWindowsSessionEndFallback: (event: AgentEvent) => void = () => undefined;
+  const emitWindowsSessionEndFallbackTerminal = (turnGeneration: number): boolean => {
+    const emittedBySession = session.emitHostTerminalErrorForGeneration(
+      turnGeneration,
+      'Windows ended the session before this turn produced a terminal event.',
+    );
+    if (emittedBySession) return true;
+    // A close can begin during the reversible query and reject before Windows
+    // confirms shutdown. Session has cleared its fan-out by then, but the
+    // exact-instance replay consumers remain retained by the query snapshot.
+    return deferRetainedWindowsSessionEndFallback(
+      session.id,
+      session.agentKind,
+      session.instanceId,
+      turnGeneration,
+      replayRetainedWindowsSessionEndFallback,
+    );
+  };
   session.setTurnLifecycleObserver({
     beforeProviderStart: async (turnGeneration) => {
+      if (shouldRejectWindowsSessionEndTurnStart(session.agentKind)) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Cannot start a Claude turn while Windows is ending the session',
+        );
+      }
+      if (
+        noteWindowsSessionEndTurnStarted(
+          session.id,
+          session.agentKind,
+          turnGeneration,
+          () => emitWindowsSessionEndFallbackTerminal(turnGeneration),
+          session.instanceId,
+        )
+      ) {
+        windowsSessionEndTurnRegistrations.add(turnGeneration);
+      }
       if (session.remoteHostId) return;
       // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
       // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
@@ -4224,6 +4792,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       );
     },
     onUndispatched: async (turnGeneration) => {
+      if (windowsSessionEndTurnRegistrations.delete(turnGeneration)) {
+        rollbackWindowsSessionEndTurnStarted(session.id, turnGeneration, session.instanceId);
+      }
       if (session.remoteHostId) return;
       await sessionTurnLeaseTracker.markTurnEnded(
         session.id,
@@ -4231,6 +4802,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       );
     },
     onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {
+      windowsSessionEndTurnRegistrations.delete(turnGeneration);
       if (session.remoteHostId) return;
       const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);
       const isSilentStop =
@@ -4255,6 +4827,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   });
   registration.disposers.push(() => {
     session.setTurnLifecycleObserver(null);
+    // Session.send captures the observer for an in-flight preparation and
+    // pairs it with onUndispatched unless provider dispatch succeeds. Do not
+    // guess that outcome during instance replacement: an accepted turn may
+    // already have its terminal held by the Windows event gate, before
+    // onTerminal can retire this registration. Its query snapshot and replay
+    // consumers must survive until the held event is replayed or discarded.
     silentStopTurnLeaseGate.supersedeOwnedBy(session.id, `${session.instanceId}:`);
     void sessionTurnLeaseTracker.markTurnEnded(session.id);
   });
@@ -4274,20 +4852,122 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     installInteractionLifecycleObserver(session, null);
     clearPendingTurnChangeSets(session.id);
   });
-  registration.disposers.push(
-    session.onEvent((event: AgentEvent) => {
-      if (isFencedStaleSessionTerminal(session.id, event)) return;
-      noteTurnDiffEvent(session.id, event, session.remoteHostId !== null);
-      ghostSessionTap.handleEvent(
-        event as { type: string; data?: unknown; source?: string; turnOrigin?: { kind?: string } },
-      );
-    }),
+  const handleLateWindowsFallbackProviderDoneUsage = (
+    event: AgentEvent,
+  ): void | Promise<void> => {
+    if (
+      event.type !== 'done' ||
+      event.source !== 'claude-code' ||
+      typeof event.sessionTurnGeneration !== 'number'
+    ) {
+      return;
+    }
+    reserveStaleClaudeUsageForSessionReplacement(session);
+    const turnIdentity: AssistantTurnPersistenceIdentity = {
+      sessionInstanceId: event.sessionInstanceId ?? session.instanceId,
+      turnGeneration: event.sessionTurnGeneration,
+      dbAgentKind: 'cc',
+    };
+    const usageTask = recordReservedStaleClaudeDoneUsage(
+      session.id,
+      event,
+      turnIdentity,
+      undefined,
+      whenSessionPersistedDurably(session.id, turnIdentity),
+    );
+    if (!usageTask) return;
+    trackWindowsSessionEndFallbackStorageTask(session.id, usageTask, {
+      requireSuccess: true,
+    });
+    void usageTask.catch((error) => {
+      log.warn('late Windows provider done accounting failed', {
+        sessionId: session.id,
+        sessionInstanceId: turnIdentity.sessionInstanceId,
+        sessionTurnGeneration: turnIdentity.turnGeneration,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return usageTask;
+  };
+  const windowsSessionEndEventGate = createWindowsSessionEndEventGate(
+    session.id,
+    session.agentKind,
+    session.instanceId,
+    handleLateWindowsFallbackProviderDoneUsage,
+  );
+  session.setEventDispatchGate(windowsSessionEndEventGate);
+  registration.replayConsumerDisposers.push(() => {
+    session.setEventDispatchGate(null);
+    finishWindowsSessionEndFallbackProviderEvents(session.id, session.instanceId);
+    clearReservedStaleClaudeUsage(session.id, session.instanceId);
+  });
+  // A confirmed Session can close before shutdown-maker reaches its global
+  // fallback preparation. Fire while Session dispatch is still available and
+  // retain this exact-instance observer across replacement with the gate.
+  const windowsSessionEndBeforeCloseDisposer = session.onBeforeClose(() => {
+    prepareWindowsSessionEndFallbackBeforeSessionClose(session.id, session.instanceId);
+  });
+  registration.replayConsumerDisposers.push(windowsSessionEndBeforeCloseDisposer);
+  // Replacement tears down ordinary status/product listeners immediately,
+  // but a query-protected old instance can complete close afterward. Keep this
+  // exact-instance retirement observer beside the held-event consumers until
+  // the advisory query settles; otherwise confirmation can revive a closed turn.
+  const windowsSessionEndCloseDisposer = session.onStatusChange((status) => {
+    if (status === 'closed') {
+      finishWindowsSessionEndSessionClosed(session.id, session.instanceId);
+    }
+  });
+  registration.replayConsumerDisposers.push(windowsSessionEndCloseDisposer);
+  const isWindowsSessionEndSensitiveEvent = (event: AgentEvent): boolean =>
+    session.agentKind === 'claude-code' &&
+    (event.type === 'done' || isTerminalTurnErrorEvent(event));
+  const handleGhostSessionEvent = (event: AgentEvent, replayed = false): void => {
+    if (
+      !replayed &&
+      event.sessionEventReplay === undefined &&
+      isWindowsSessionEndSensitiveEvent(event) &&
+      deferWindowsSessionEndEvent(
+        session.id,
+        session.agentKind,
+        event,
+        () => handleGhostSessionEvent(event, true),
+        undefined,
+        session.instanceId,
+      )
+    ) {
+      return;
+    }
+    if (isFencedStaleSessionTerminal(session.id, event)) {
+      return;
+    }
+    noteTurnDiffEvent(session.id, event, session.remoteHostId !== null);
+    ghostSessionTap.handleEvent(
+      event as { type: string; data?: unknown; source?: string; turnOrigin?: { kind?: string } },
+    );
+  };
+  registration.replayConsumerDisposers.push(
+    session.onEvent((event: AgentEvent) => handleGhostSessionEvent(event)),
   );
 
   // 转发事件到所有 window。interaction_dismissed 单独走专用 channel,
   // 让 renderer chat store 不必扫所有 vendor-raw 找它。
-  registration.disposers.push(
-    session.onEvent((event: AgentEvent) => {
+  const handleForwardSessionEvent = (event: AgentEvent, replayed = false): void => {
+    if (
+      !replayed &&
+      event.sessionEventReplay === undefined &&
+      isWindowsSessionEndSensitiveEvent(event) &&
+      deferWindowsSessionEndEvent(
+        session.id,
+        session.agentKind,
+        event,
+        () => handleForwardSessionEvent(event, true),
+        undefined,
+        session.instanceId,
+      )
+    ) {
+      return;
+    }
+      const isWindowsSessionEndFallbackReplay = isWindowsSessionEndFallbackSession(session.id);
       // Exact patches are main-owned durable data. They have a dedicated summary push and
       // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
       // potentially multi-megabyte payload to every renderer and device-link controller.
@@ -4299,12 +4979,126 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       ) {
         return;
       }
-      if (isFencedStaleSessionTerminal(session.id, event)) {
+      const isFencedStaleTerminal = isFencedStaleSessionTerminal(session.id, event);
+      if (isFencedStaleTerminal) {
+        const replay = event.sessionEventReplay;
+        const staleTurnIdentity =
+          typeof event.sessionTurnGeneration === 'number' &&
+          typeof event.sessionInstanceId === 'string'
+            ? {
+                sessionInstanceId: event.sessionInstanceId,
+                turnGeneration: event.sessionTurnGeneration,
+                dbAgentKind: makerToDbAgentKind(session.agentKind),
+              }
+            : undefined;
+        const replayedAssistantPersistId =
+          staleTurnIdentity &&
+          (event.type === 'done' || isTerminalTurnErrorEvent(event))
+            ? persistReservedStaleAssistantBlock(
+                session.id,
+                (event.agentMeta as AgentMeta | null | undefined) ?? null,
+                staleTurnIdentity,
+                event.type === 'done' &&
+                  (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data)),
+              )
+            : undefined;
+        const replayedOrphanToolResultCount =
+          staleTurnIdentity &&
+          (event.type === 'done' || isTerminalTurnErrorEvent(event))
+            ? persistReservedStaleOrphanToolResults(
+                session.id,
+                (event.agentMeta as AgentMeta | null | undefined) ?? null,
+                staleTurnIdentity,
+              )
+            : 0;
+        if (staleTurnIdentity) {
+          rememberReservedStaleClaudeUsageTarget(
+            session.id,
+            staleTurnIdentity,
+            replayedAssistantPersistId,
+          );
+        }
+        const replayedTerminalPersistId =
+          replay &&
+          isTerminalTurnErrorEvent(event) &&
+          staleTurnIdentity
+            ? onReservedStaleTurnErrorEvent(
+                session.id,
+                event.data as {
+                  message?: unknown;
+                  reason?: unknown;
+                  sdkError?: unknown;
+                  toolLoop?: unknown;
+                } | null,
+                (event.agentMeta as AgentMeta | null | undefined) ?? null,
+                {
+                  capturedAt: replay.capturedAt,
+                  ...staleTurnIdentity,
+                },
+              )
+            : undefined;
+        if (isWindowsSessionEndFallbackReplay && isTerminalTurnErrorEvent(event)) {
+          trackRequiredWindowsFallbackErrorPersistence(
+            session.id,
+            replayedTerminalPersistId,
+          );
+        }
+        if (
+          isWindowsSessionEndFallbackReplay &&
+          event.type === 'done' &&
+          !isTurnContinuationBoundaryEvent(event)
+        ) {
+          const durableStaleDone = whenSessionPersistedDurably(session.id, staleTurnIdentity);
+          trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleDone, {
+            requireSuccess: true,
+          });
+        }
+        const staleClaudeUsageTask =
+          staleTurnIdentity && event.type === 'done' && event.source === 'claude-code'
+            ? recordReservedStaleClaudeDoneUsage(
+                session.id,
+                event,
+                staleTurnIdentity,
+                replayedAssistantPersistId,
+                whenSessionPersistedDurably(session.id, staleTurnIdentity),
+              )
+            : undefined;
+        if (staleClaudeUsageTask) {
+          if (isWindowsSessionEndFallbackReplay) {
+            trackWindowsSessionEndFallbackStorageTask(session.id, staleClaudeUsageTask, {
+              requireSuccess: true,
+            });
+          }
+          void staleClaudeUsageTask.catch((error) => {
+            log.warn('reserved stale Claude usage persistence failed', {
+              sessionId: session.id,
+              sessionInstanceId: staleTurnIdentity?.sessionInstanceId ?? null,
+              sessionTurnGeneration: staleTurnIdentity?.turnGeneration ?? null,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+        if (
+          isWindowsSessionEndFallbackReplay &&
+          isTerminalTurnErrorEvent(event) &&
+          !isTurnContinuationBoundaryEvent(event)
+        ) {
+          const durableStaleTerminal = whenSessionPersistedDurably(
+            session.id,
+            staleTurnIdentity,
+          );
+          trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleTerminal, {
+            requireSuccess: true,
+          });
+        }
         log.debug('ignored stale terminal after leftover turn reclaim', {
           sessionId: session.id,
           eventType: event.type,
           sessionTurnGeneration: event.sessionTurnGeneration ?? null,
           sessionInstanceId: event.sessionInstanceId ?? null,
+          reservedAssistantPersisted: replayedAssistantPersistId !== undefined,
+          reservedOrphanToolResultsPersisted: replayedOrphanToolResultCount,
+          reservedReplayPersisted: replayedTerminalPersistId !== undefined,
         });
         return;
       }
@@ -4389,6 +5183,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let pendingCodexAccountUsageSnapshot: unknown | null = null;
       let shouldMarkTurnStatusIdleAfterBroadcast = false;
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
+      let suppressWindowsSessionEndError = false;
       let completedTurnWallClockMs: number | undefined;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
       // 探针:continuation 边界命中会跳过 status idle / ended 写 / tracker idle,
@@ -4492,10 +5287,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const rawTurn = (event.data as { raw?: { id?: unknown; status?: unknown } } | null)?.raw;
         const carriesSilentStop =
           (event.data as { silentStop?: boolean } | null | undefined)?.silentStop === true;
+        const silentStopTurnGeneration = carriesSilentStop
+          ? event.sessionTurnGeneration
+          : undefined;
         const silentStopTurnLeaseId = carriesSilentStop
           ? silentStopTurnLeaseGate.turnLeaseIdForEvent(event)
           : undefined;
-        if (carriesSilentStop && !silentStopTurnLeaseId) {
+        if (
+          carriesSilentStop &&
+          (!silentStopTurnLeaseId || typeof silentStopTurnGeneration !== 'number')
+        ) {
           log.debug('ignored stale silent-stop terminal from an older turn', {
             sessionId: session.id,
           });
@@ -4551,6 +5352,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               session,
               silentStopDoneAt,
               silentStopTurnLeaseId!,
+              silentStopTurnGeneration!,
               silentStopTurnOrigin,
             );
           }, 1_500);
@@ -4561,6 +5363,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let isRemoteAuthRetry = false;
       let isGatewayProxyTokenRecovery = false;
       if (isTerminalTurnErrorEvent(event)) {
+        suppressWindowsSessionEndError = shouldSuppressWindowsSessionEndClaudeError({
+          sessionId: session.id,
+          source: event.source,
+          isTerminalError: true,
+          sessionInstanceId: event.sessionInstanceId ?? session.instanceId,
+          sessionTurnGeneration: event.sessionTurnGeneration,
+        });
         finalizeTurnChangeSet(session.id, null, 'partial');
         // **任何**终态失败都先把上一条重连记录钉成失败 —— 不管这次错误本身是否值得自愈。
         // 只在"命中白名单、准备再接管"时才 settle 的话,非白名单的终态(认证 / 计费 /
@@ -4602,21 +5411,25 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // banner-clicker):同 host 其它会话的中断照真实失败浮现;窗口外的 daemon
         // 死亡同样不受影响(保留 + 通知)。
         isPlannedUpgradeClose =
+          !isWindowsSessionEndFallbackReplay &&
           errData?.reason === 'remote_daemon_closed' && isCcMgrUpgradeInFlight(session.id);
         // Legacy CC/XD 远程 auth 错误跳过持久化：renderer 会静默 auto-retry（makerChatStore 在 reducer
         // 前拦截、关闭旧会话、重发消息，不显示 ErrorBanner）；若 main 已落库，retry 成功后
         // 重开会话会看到虚假错误卡。判定与 renderer 的 isAuthError 保持一致，覆盖
         // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /
         // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
-        isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
-        isGatewayProxyTokenRecovery = isGatewayProxyTokenRecoveryErrorEvent(session.id, event);
+        isRemoteAuthRetry =
+          !isWindowsSessionEndFallbackReplay && isRemoteAuthRetryErrorEvent(session, event);
+        isGatewayProxyTokenRecovery =
+          !isWindowsSessionEndFallbackReplay &&
+          isGatewayProxyTokenRecoveryErrorEvent(session.id, event);
         if (isPlannedUpgradeClose) {
           agentInputCoordinatorHolder?.noteSuppressedTerminalError(session.id, {
             generation: event.sessionTurnGeneration,
             reason: 'remote_daemon_closed',
             instanceId: event.sessionInstanceId ?? session.instanceId,
           });
-        } else {
+        } else if (!suppressWindowsSessionEndError && !isWindowsSessionEndFallbackReplay) {
           agentInputCoordinatorHolder?.onTurnEvent(
             session.id,
             'error',
@@ -4647,6 +5460,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 异步队列、不在此同步执行(规则19 热路径)。终止型 error 同样在广播前预留 persistId
       // (O(1) createId,不 flush、不写库),让 live 横幅与事后 error 行绑定同一 id。
       const eventAgentMeta = (event as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
+      const assistantTurnIdentity =
+        typeof event.sessionTurnGeneration === 'number' &&
+        typeof event.sessionInstanceId === 'string'
+          ? {
+              sessionInstanceId: event.sessionInstanceId,
+              turnGeneration: event.sessionTurnGeneration,
+              dbAgentKind: makerToDbAgentKind(session.agentKind),
+            }
+          : undefined;
       // 跟踪会话最近一次非空 agentMeta(镜像 renderer state.lastAgentMeta),给 interaction
       // 边界 flush 当兜底锚点,保 agent_meta 不丢(rewind/fork)。
       if (eventAgentMeta && event.turnScope !== 'background')
@@ -4688,11 +5510,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             agentMessageId?: unknown;
           },
           eventAgentMeta,
+          assistantTurnIdentity,
         );
       } else if (event.type === 'tool_use') {
         // tool_use 边界:先 flush 在飞 assistant(保证 assistant 行先于其 tool_use 入队
         // 落库),再落 tool_use 本身,拿回 persistId 盖进 payload。两者都只入队、不阻塞。
-        if (event.turnScope !== 'background') flushAssistantBlock(session.id, eventAgentMeta);
+        if (event.turnScope !== 'background') {
+          flushAssistantBlock(session.id, eventAgentMeta, assistantTurnIdentity);
+        }
         persistId = onToolUseEvent(
           session.id,
           event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown },
@@ -4707,6 +5532,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.data as { summary?: unknown; toolUseIds?: unknown },
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
+          assistantTurnIdentity,
         );
         persistId = r?.persistId;
         resolvedContent = r?.content;
@@ -4716,6 +5542,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.data as { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
+          assistantTurnIdentity,
         );
         persistId = r?.persistId;
         resolvedContent = r?.content;
@@ -4788,9 +5615,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // const 提前。预留 persistId 只看这份,真正写库仍走广播后的那份。
       const autoResumeWouldSuppressPersist =
         event.type === 'error' &&
+        !isWindowsSessionEndFallbackReplay &&
         (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
           agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
       const suppressOverflowBroadcast =
+        !isWindowsSessionEndFallbackReplay &&
         !session.remoteHostId &&
         event.type === 'error' &&
         isTerminalTurnErrorEvent(event) &&
@@ -4876,7 +5705,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let turnBoundaryAssistantPersistId: string | undefined;
       let isPairedFailedTurnDone = false;
       if (event.type === 'done' || isTerminalTurnErrorEvent(event)) {
-        flushAssistantBlock(session.id, eventAgentMeta);
+        flushAssistantBlock(session.id, eventAgentMeta, assistantTurnIdentity);
         turnAssistantPersistId = consumeLastAssistantPersistId(session.id);
         turnBoundaryAssistantPersistId = consumeLastTopLevelAssistantPersistId(session.id);
         if (isTerminalTurnErrorEvent(event) && event.type !== 'done') {
@@ -4914,7 +5743,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             );
           }
         }
-        flushOrphanToolResults(session.id, eventAgentMeta);
+        flushOrphanToolResults(session.id, eventAgentMeta, assistantTurnIdentity);
         if (turnBoundaryAssistantPersistId) {
           // 在同一 durable FIFO 内先盖 turn seal、再复用 local-db:messages:created 广播
           // 更新后的完整行。失败轮的 paired done 只复用 id 做 usage 记账，不能把
@@ -4964,6 +5793,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           : undefined;
         const autoResumeSuppressesPersist =
           event.type === 'error' &&
+          !suppressWindowsSessionEndError &&
+          !isWindowsSessionEndFallbackReplay &&
           (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
             agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
         // Only skip handleWorkerTerminalTurn after the Orca payload is actually
@@ -4972,6 +5803,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         let deferredOrcaWorkerTerminal = false;
         const overflowClaim =
           event.type === 'error' &&
+          !suppressWindowsSessionEndError &&
+          !isWindowsSessionEndFallbackReplay &&
           !session.remoteHostId &&
           isTerminalTurnErrorEvent(event) &&
           !isPlannedUpgradeClose &&
@@ -5027,12 +5860,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
         } else if (
           event.type === 'error' &&
+          !suppressWindowsSessionEndError &&
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
           !isGatewayProxyTokenRecovery &&
           !autoResumeSuppressesPersist
         ) {
-          onTurnErrorEvent(
+          const terminalErrorPersistId = onTurnErrorEvent(
             session.id,
             attributedEvent.data as {
               message?: unknown;
@@ -5042,6 +5876,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             eventAgentMeta,
             persistId,
           );
+          if (isWindowsSessionEndFallbackReplay) {
+            trackRequiredWindowsFallbackErrorPersistence(
+              session.id,
+              terminalErrorPersistId,
+            );
+          }
         } else if (persistId) {
           releaseReservedTurnErrorPersistId(session.id, persistId);
         }
@@ -5127,6 +5967,17 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         }
         preserveTurnPersistStateForBackground(session.id);
         resetTurnPersistState(session.id);
+        if (
+          isWindowsSessionEndFallbackReplay &&
+          (event.type === 'done' || isTerminalTurnErrorEvent(event)) &&
+          !isContinuationBoundary
+        ) {
+          trackWindowsSessionEndFallbackStorageTask(
+            session.id,
+            whenSessionPersistedDurably(session.id),
+            { requireSuccess: true },
+          );
+        }
         // sidebar-card-mode: 摘要触发挪到本轮 assistant 块 flush 入队之后(原先在
         // done 早段、flush 之前触发,流式轮次会读到上一轮文本)。只在正常 done 触发。
         // codex review:flushAssistantBlock 仅把 assistant insert 入队 writeChain、未落库,
@@ -5188,27 +6039,37 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             eventType: event.type,
             isPairedFailedTurnDone,
             isFailedTurnCompletionTail,
-            hasSuppressedError: autoResumeBookkeeping.hasSuppressedError(session.id),
+            hasSuppressedError:
+              !isWindowsSessionEndFallbackReplay &&
+              autoResumeBookkeeping.hasSuppressedError(session.id),
             isAutoResumePending:
+              !isWindowsSessionEndFallbackReplay &&
               agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true,
             isAutoResumeDeferred:
+              !isWindowsSessionEndFallbackReplay &&
               agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true,
           })
         ) {
-          void (async () => {
-            try {
-              await workerTurnStartSequencer.waitForStart(session.id);
-              await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
-                sessionId: session.id,
-                status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-                finalText: workerTerminalFinalText,
-                diagnostic: workerTerminalDiagnostic,
-                capture: workerTerminalCapture,
-              });
-            } catch {
-              /* non-fatal */
-            }
+          const workerTerminalTask = (async () => {
+            await workerTurnStartSequencer.waitForStart(session.id);
+            await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
+              sessionId: session.id,
+              status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+              finalText: workerTerminalFinalText,
+              diagnostic: workerTerminalDiagnostic,
+              capture: workerTerminalCapture,
+              suppressWindowsSessionEndError: suppressWindowsSessionEndError || undefined,
+            });
           })();
+          trackWindowsSessionEndFallbackStorageTask(session.id, workerTerminalTask, {
+            requireSuccess: true,
+          });
+          void workerTerminalTask.catch((error) => {
+            log.warn('Orca worker terminal handling failed', {
+              sessionId: session.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
         }
       }
       if (pendingContextSnapshot) {
@@ -5375,6 +6236,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               /* 模型解析失败:跳过降级检测,非致命 */
             });
         }
+        let claudeUsagePersistenceTask: Promise<void> | undefined;
         if (
           (modelUsageDeltas && modelUsageDeltas.length > 0) ||
           (claudeUsageSegments?.length ?? 0) > 0
@@ -5382,7 +6244,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 主路径: 逐模型 HYBRID 定价 (Anthropic→SDK, 非 Anthropic→gateway), 四个 sink
           // 由同一份解析结果驱动。价格表走 main 端内存 + 磁盘缓存, stale 快返并后台刷新。
           const deltas = modelUsageDeltas ?? [];
-          void (async () => {
+          claudeUsagePersistenceTask = (async () => {
             const sessionProviderForBilling = getSessionProvider(session.id);
             const observedClaudeRoute =
               sessionProviderForBilling == null ? readClaudeSessionRoute(session.id) : null;
@@ -5431,7 +6293,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // 订阅轮打 #billing=subscription 标记(Claude 订阅:Anthropic 模型 + cost=0),
             // 或 bridge 订阅轮(chatgpt// xai/ 前缀,source==='subscription');两类均需触发
             // rebroadcastTodaySpend 刷新首页仪表盘。
-            const modelUsageWrites: Promise<unknown>[] = [];
+            const usageWrites: Promise<unknown>[] = [];
             const subscriptionTurnEstimates: RegionalMoney[] = [];
             let hasSubscriptionValueRow = false;
             for (const m of perModel) {
@@ -5459,7 +6321,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   : isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
                     ? (subscriptionEstimate ?? unpricedSubscriptionValueMarker())
                     : null;
-              modelUsageWrites.push(
+              usageWrites.push(
                 recordModelTurnUsage({
                   agentKind: 'claude-code',
                   model:
@@ -5473,14 +6335,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   outputTokensDelta: m.deltas.outputTokens,
                   cacheReadTokensDelta: m.deltas.cacheReadTokens,
                   cacheCreateTokensDelta: m.deltas.cacheCreateTokens,
-                }),
+                }, undefined, { throwOnError: true }),
               );
-            }
-            // 无真实费用、但产生订阅价值或 provider 参考估值的轮次不走
-            // recordTurnSpend。等模型行落库后重广播今日 spend 快照,通知已打开的首页
-            // 仪表盘刷新(对齐 codex 订阅轮的 rebroadcastCodexTodayUsage)。
-            if ((hasSubscriptionValueRow || estimatedTurnMoney) && !turnMoney) {
-              void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());
             }
             if (turnMoney && turnMoney.amount > 0) {
               // 保留 #216 的 token/cache 明细随费用落库 (MessageActionBar tooltip)。
@@ -5494,17 +6350,21 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 claudeGenerationDurationMs,
                 claudeTurnDurationMs,
               );
-              recordTurnSpend(turnMoney);
-              recordSessionTurnSpend(session.id, turnMoney);
-              // per-message 维度优先挂 assistant；纯 tool turn 则按 scheduler runId 直接归因。
-              const changedScheduleId = await recordSchedulerTurnCost({
-                sessionId: session.id,
-                clientId: turnAssistantPersistId,
-                money: turnMoney,
-                turnUsageDetails,
-                turnOrigin: event.turnOrigin,
-              });
-              if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+              usageWrites.push(
+                recordTurnSpend(turnMoney, undefined, { throwOnError: true }),
+                recordSessionTurnSpend(session.id, turnMoney, { throwOnError: true }),
+                (async () => {
+                  // per-message 维度优先挂 assistant；纯 tool turn 则按 scheduler runId 直接归因。
+                  const changedScheduleId = await recordSchedulerTurnCost({
+                    sessionId: session.id,
+                    clientId: turnAssistantPersistId,
+                    money: turnMoney,
+                    turnUsageDetails,
+                    turnOrigin: event.turnOrigin,
+                  });
+                  if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+                })(),
+              );
             } else if (turnAssistantPersistId) {
               // 无真实计费轮的「本轮价值」估算,挂到消息(isEstimate:true,chip 的
               // "本会话价值"由 useSessionEstimatedValue 汇总),不进 daily_spend /
@@ -5530,24 +6390,38 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 claudeGenerationDurationMs,
                 claudeTurnDurationMs,
               );
-              if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
-                const changedScheduleId = await recordSchedulerTurnCost({
-                  sessionId: session.id,
-                  clientId: turnAssistantPersistId,
-                  money: turnEstimatedValue,
-                  turnUsageDetails,
-                  turnOrigin: event.turnOrigin,
-                });
-                if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
-              } else {
-                // 真实计费与订阅估值都拿不到(典型:网关目录整体不下发价格、模型不在价表)
-                // —— 钱没有,但 token 明细是算好的,落下来让 UI 退回显示本轮 token。
-                await recordTurnUsageOnMessage({
-                  sessionId: session.id,
-                  clientId: turnAssistantPersistId,
-                  turnUsageDetails,
-                });
-              }
+              usageWrites.push(
+                (async () => {
+                  if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
+                    const changedScheduleId = await recordSchedulerTurnCost({
+                      sessionId: session.id,
+                      clientId: turnAssistantPersistId,
+                      money: turnEstimatedValue,
+                      turnUsageDetails,
+                      turnOrigin: event.turnOrigin,
+                    });
+                    if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+                  } else {
+                    // 真实计费与订阅估值都拿不到(典型:网关目录整体不下发价格、模型不在价表)
+                    // —— 钱没有,但 token 明细是算好的,落下来让 UI 退回显示本轮 token。
+                    await recordTurnUsageOnMessage({
+                      sessionId: session.id,
+                      clientId: turnAssistantPersistId,
+                      turnUsageDetails,
+                    });
+                  }
+                })(),
+              );
+            }
+            // Start every independent accounting sink before observing failure.
+            // Ordinary turns remain best-effort; only Windows fallback recovery
+            // propagates a rejection into its required-success durability barrier.
+            const usageResults = await Promise.allSettled(usageWrites);
+            if ((hasSubscriptionValueRow || estimatedTurnMoney) && !turnMoney) {
+              void rebroadcastTodaySpend();
+            }
+            if (isWindowsSessionEndFallbackReplay) {
+              propagateFirstRejectedUsageWrite(usageResults);
             }
           })();
         } else if (typeof cumulative === 'number' && cumulative >= 0) {
@@ -5558,7 +6432,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // request segments, only establish the baseline.
           const rawDelta =
             prevReportedCost === undefined ? 0 : Math.max(0, cumulative - prevReportedCost);
-          void (async () => {
+          claudeUsagePersistenceTask = (async () => {
             let resolvedModel = 'unknown';
             try {
               const model = await modelPromise;
@@ -5623,17 +6497,38 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             }
             const ledgerCurrency = (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
             const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
-            recordTurnSpend(money);
-            recordSessionTurnSpend(session.id, money);
-            const changedScheduleId = await recordSchedulerTurnCost({
-              sessionId: session.id,
-              clientId: turnAssistantPersistId,
-              money,
-              turnUsageDetails,
-              turnOrigin: event.turnOrigin,
-            });
-            if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+            const usageResults = await Promise.allSettled([
+              recordTurnSpend(money, undefined, { throwOnError: true }),
+              recordSessionTurnSpend(session.id, money, { throwOnError: true }),
+              (async () => {
+                const changedScheduleId = await recordSchedulerTurnCost({
+                  sessionId: session.id,
+                  clientId: turnAssistantPersistId,
+                  money,
+                  turnUsageDetails,
+                  turnOrigin: event.turnOrigin,
+                });
+                if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+              })(),
+            ]);
+            if (isWindowsSessionEndFallbackReplay) {
+              propagateFirstRejectedUsageWrite(usageResults);
+            }
           })();
+        }
+        if (claudeUsagePersistenceTask) {
+          if (isWindowsSessionEndFallbackReplay) {
+            trackWindowsSessionEndFallbackStorageTask(session.id, claudeUsagePersistenceTask, {
+              requireSuccess: true,
+            });
+          } else {
+            void claudeUsagePersistenceTask.catch((error) => {
+              log.warn('Claude usage persistence task failed', {
+                sessionId: session.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
         }
         // 与 spend 记账并列的另一个 turn-done side-effect: 刷新 Claude 账号月度配额
         // (LiteLLM /v2/user/info)。fire-and-forget, 模块内 2s 超时 + 10s 节流。
@@ -6155,7 +7050,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           })();
         }
       }
-    }),
+  };
+  replayRetainedWindowsSessionEndFallback = (event: AgentEvent): void => {
+    handleGhostSessionEvent(event, true);
+    handleForwardSessionEvent(event, true);
+  };
+  registration.replayConsumerDisposers.push(
+    session.onEvent((event: AgentEvent) => handleForwardSessionEvent(event)),
   );
   registration.disposers.push(
     session.onStatusChange((status) => {
@@ -6249,10 +7150,17 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // Wiring teardown is independent of the best-effort product cleanup
           // above. A single disposer or listener error must not leave a closed
           // session reachable from the in-memory routing map.
+          // A completed close is also exact-instance proof that no protected
+          // advisory-query generation from this Session can produce a later
+          // terminal. Retire it before confirmation can persist a false marker.
+          finishWindowsSessionEndSessionClosed(session.id, session.instanceId);
           cancelDirectAbortReconciliation(session.id);
           pendingFailedTurnAssistantPersistId.delete(session.id);
           wiredSessionsById.delete(session.id);
-          for (const dispose of registration.disposers) {
+          for (const dispose of [
+            ...registration.disposers,
+            ...registration.replayConsumerDisposers,
+          ]) {
             try {
               dispose();
             } catch (err) {
@@ -18310,6 +19218,7 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   delete rendererEvent.backgroundTurnStartedAt;
   delete rendererEvent.sessionTurnGeneration;
   delete rendererEvent.sessionInstanceId;
+  delete rendererEvent.sessionEventReplay;
   if (!event.data || typeof event.data !== 'object') return rendererEvent;
 
   const data = event.data as Record<string, unknown>;

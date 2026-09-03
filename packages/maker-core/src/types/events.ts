@@ -188,6 +188,13 @@ export interface AgentEvent {
   /** Session.instanceId of the incarnation that dequeued this event. Host-only. */
   sessionInstanceId?: string;
   /**
+   * Identity for an event synchronously replayed by Session after a dispatch
+   * gate reserved it. Host listeners may use the original capture time to
+   * persist an older turn without mutating a replacement turn. Never expose
+   * this field through renderer, device-link, or provider boundaries.
+   */
+  sessionEventReplay?: { capturedAt: number };
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later

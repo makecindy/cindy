@@ -336,10 +336,14 @@ describe('interrupted continuation enqueue contract', () => {
       /consumeFailedTurnCompletionTail\(\s*session\.id,\s*event\.sessionTurnGeneration/,
     );
     expect(terminalBlock).toMatch(
-      /hasSuppressedError:\s*autoResumeBookkeeping\.hasSuppressedError/,
+      /hasSuppressedError:\s*!isWindowsSessionEndFallbackReplay &&\s*autoResumeBookkeeping\.hasSuppressedError/,
     );
-    expect(terminalBlock).toMatch(/isAutoResumePending:/);
-    expect(terminalBlock).toMatch(/isAutoResumeDeferred:/);
+    expect(terminalBlock).toMatch(
+      /isAutoResumePending:\s*!isWindowsSessionEndFallbackReplay &&\s*agentInputCoordinatorHolder\?\.isAutoResumePending/,
+    );
+    expect(terminalBlock).toMatch(
+      /isAutoResumeDeferred:\s*!isWindowsSessionEndFallbackReplay &&\s*agentInputCoordinatorHolder\?\.isAutoResumeDeferred/,
+    );
     expect(terminalBlock).toMatch(/handleWorkerTerminalTurn\(/);
 
     expect(registerSource).toMatch(

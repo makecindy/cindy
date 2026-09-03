@@ -52,6 +52,13 @@ import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
 import { isGhostPanelWebContentsId } from './ghost-panel-window/registry.js';
+import {
+  beginWindowsSessionEndQuery,
+  cancelWindowsSessionEndQuery,
+  markWindowsSessionEnding,
+  settleWindowsSessionEndRecoveryMarkers,
+  type WindowsSessionEndActiveTurn,
+} from './windowsSessionEnd';
 import { isReviewArtifactConfirmWebContentsId } from './reviewer/reviewArtifactConfirmWindowRegistry.js';
 
 /**
@@ -435,6 +442,74 @@ export function armShutdownHardKillWatchdog(
 let _installed = false;
 let _isDisposing = false;
 let _disposeStarted: Promise<void> | null = null;
+const pendingShutdownPrerequisites = new Set<Promise<void>>();
+const pendingShutdownStoragePrerequisites = new Set<Promise<void>>();
+let windowsShutdownPreparation: (() => Promise<void>) | null = null;
+
+function registerShutdownPrerequisite(prerequisite: Promise<void>, reason: string): void {
+  const observed = prerequisite.catch((error) => {
+    log.warn(`shutdown prerequisite failed before ${reason} disposers`, error);
+  });
+  pendingShutdownPrerequisites.add(observed);
+  void observed.finally(() => pendingShutdownPrerequisites.delete(observed));
+}
+
+function registerShutdownStoragePrerequisite(prerequisite: Promise<void>, reason: string): void {
+  const observed = prerequisite.catch((error) => {
+    log.warn(`shutdown storage prerequisite failed before ${reason} disposal`, error);
+  });
+  pendingShutdownStoragePrerequisites.add(observed);
+  void observed.finally(() => pendingShutdownStoragePrerequisites.delete(observed));
+}
+
+async function waitForShutdownPrerequisites(timeoutMs: number, reason: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (pendingShutdownPrerequisites.size > 0) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      log.warn(`shutdown prerequisite timed out after ${timeoutMs}ms for ${reason}`);
+      return;
+    }
+    const snapshot = [...pendingShutdownPrerequisites];
+    let timer: NodeJS.Timeout | undefined;
+    const completed = await Promise.race([
+      Promise.all(snapshot).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), remainingMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!completed) {
+      log.warn(`shutdown prerequisite timed out after ${timeoutMs}ms for ${reason}`);
+      return;
+    }
+  }
+}
+
+async function waitForShutdownStoragePrerequisites(): Promise<void> {
+  while (pendingShutdownStoragePrerequisites.size > 0) {
+    await Promise.all([...pendingShutdownStoragePrerequisites]);
+  }
+}
+
+/**
+ * Build one idempotent DB-closing disposer that starts only after every
+ * recovery-marker outcome has actually settled. The ordinary disposer budget
+ * and the external hard-kill watchdog still bound process exit; the important
+ * distinction is that database teardown may not be what rejects an in-flight
+ * marker write and then leave its fallback with no persistence backend.
+ */
+export function createShutdownStorageDisposer(
+  dispose: () => void | Promise<void>,
+): () => Promise<void> {
+  let disposal: Promise<void> | null = null;
+  return () => {
+    disposal ??= waitForShutdownStoragePrerequisites()
+      .then(() => dispose())
+      .then(() => undefined);
+    return disposal;
+  };
+}
 
 /**
  * 「致命 shutdown」观察者 —— 目前唯一消费者是日志上报的崩溃即时路径。
@@ -478,30 +553,51 @@ function notifyFatalShutdown(reason: string): void {
 }
 
 /**
- * 幂等启动 disposer chain: 第一次调用真的跑, 后续调用复用同一个 Promise。
+ * 幂等启动 disposer chain: 第一次调用真的跑, 后续调用复用同一个 Promise，
+ * 但仍可把新 prerequisite 纳入尚未启动 disposer 的共享等待集合。
  * 返回的 Promise 在 sync + async + post-async 三阶段都跑完 (或 async 超时) 后 resolve。
  *
  * reason 是触发入口标识(before-quit / signal:SIGTERM / uncaughtException /
  * render-process-gone:<reason>),同时写进 run marker(startup-diagnostics),
  * 让下次启动的退出尸检能还原「这次 shutdown 是谁发起的」。
  */
-function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
+function beginShutdown(
+  timeoutMs: number,
+  reason: string,
+  beforeDisposers?: Promise<void>,
+): Promise<void> {
+  // watchdog 必须是 shutdown 的第一个动作 (review P1): Windows preparation
+  // 会同步 snapshot Maker state,且失败日志同样会碰文件 IO；日志盘位于坏盘或
+  // 网络盘时,二者都可能在 disposer chain 之前无限阻塞。spawn 本身不做盘写
+  // (win32 脚本已在启动期预生成;缓存被外部删除时才尝试重建),且布防幂等。
+  armShutdownHardKillWatchdog();
+  // The Windows coordinator is installed before any production shutdown
+  // entrypoint can fire. Prepare interrupted-turn recovery proactively on the
+  // first shutdown trigger, even if an independent before-quit/fatal event
+  // beats query-session-end to the JS event loop. This closes the admission
+  // gap where DB-closing disposers could otherwise start before a late query
+  // registered its hold.
+  if (!_disposeStarted && windowsShutdownPreparation) {
+    try {
+      registerShutdownPrerequisite(windowsShutdownPreparation(), reason);
+    } catch (error) {
+      log.warn(`Windows shutdown preparation failed before ${reason} disposers`, error);
+    }
+  }
+  if (beforeDisposers) registerShutdownPrerequisite(beforeDisposers, reason);
   if (_disposeStarted) return _disposeStarted;
   _isDisposing = true;
-  // watchdog 必须是 shutdown 的第一个动作 (review P1): log 与 noteShutdownBegin
-  // 都是同步盘 IO (日志文件 / run-marker 的 mkdirSync+writeFileSync), 落在坏盘
-  // 或网络盘上可能无限阻塞 —— 那正是 watchdog 要兜的挂死形态, 不能让布防
-  // 排在它们后面。spawn 本身不做盘写 (win32 的 watchdog 脚本已在启动期由
-  // installQuitHandler 预生成; 布防期只做存在性校验——脚本被外部删除时
-  // prepareShutdownWatchdogScript 会清缓存并重建, 启动期写盘失败则直接走缺席标记)。
-  armShutdownHardKillWatchdog();
   log.info(`beginShutdown timeoutMs=${timeoutMs} reason=${reason}`);
   noteShutdownBegin(reason);
   // 致命崩溃的观察者派发排在 disposer chain **之前**: 崩溃现场的待补传标记必须在清理链
   // 开始前落盘(清理链可能超时被腰斩,甚至进程可能马上就没了)。回调不进 registry,
   // 不占 timeoutMs 预算(见 onFatalShutdown 的注释)。
   notifyFatalShutdown(reason);
-  _disposeStarted = runQuitDisposers(timeoutMs)
+  const runAfterPrerequisite = async () => {
+    await waitForShutdownPrerequisites(timeoutMs, reason);
+    await runQuitDisposers(timeoutMs);
+  };
+  _disposeStarted = runAfterPrerequisite()
     .then(() => {
       log.info('runQuitDisposers completed');
       noteQuitDisposersCompleted();
@@ -510,6 +606,168 @@ function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
       log.error('runQuitDisposers threw', err);
     });
   return _disposeStarted;
+}
+
+/**
+ * Connect Windows shutdown, restart, and logoff to Cindy's existing bounded
+ * shutdown path. The handler deliberately does not prevent the OS session end.
+ */
+export function installWindowsSessionEndHandler(
+  window: BrowserWindow,
+  options: {
+    platform?: NodeJS.Platform;
+    timeoutMs?: number;
+    markActiveTurnStarted: (sessionId: string) => Promise<void>;
+    freezeActiveTurnMarkers: () => void;
+    drainPersistQueue: () => Promise<void>;
+    settleActiveTurnMarkers: (sessionIds: Iterable<string>) => Promise<void>;
+    listActiveClaudeTurns: () => Iterable<WindowsSessionEndActiveTurn>;
+    prepareFallbackBeforeShutdownPrerequisites?: () => void | Promise<unknown>;
+  },
+): void {
+  if ((options.platform ?? process.platform) !== 'win32') return;
+  const timeoutMs = options.timeoutMs ?? 2000;
+  let confirmedSessionEndBarrier: Promise<void> | null = null;
+  let releasePendingQueryShutdownHold: (() => void) | null = null;
+  const beginPendingQueryShutdownHold = (): void => {
+    // Another shutdown entrypoint may already have prepared the same recovery
+    // handoff. A later native query then has nothing new to admit and must not
+    // add a hold that no future confirmation path can release.
+    if (confirmedSessionEndBarrier || releasePendingQueryShutdownHold) return;
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    releasePendingQueryShutdownHold = release;
+    // Windows guarantees query-session-end precedes the confirmed/cancelled
+    // outcome. Register here so an overlapping before-quit chain cannot launch
+    // DB-closing disposers while that outcome is still undecided.
+    registerShutdownPrerequisite(hold, 'windows-session-end-query');
+  };
+  const releasePendingQueryShutdownAfter = (barrier: Promise<void>): void => {
+    const release = releasePendingQueryShutdownHold;
+    releasePendingQueryShutdownHold = null;
+    if (!release) return;
+    void barrier.then(release, release);
+  };
+  const snapshotActiveClaudeTurns = (): WindowsSessionEndActiveTurn[] => {
+    try {
+      return [...options.listActiveClaudeTurns()];
+    } catch (error) {
+      // query-session-end can arrive while the startup splash is still
+      // provisioning Maker. An unavailable snapshot means there are no agent
+      // turns to protect yet; it must not escape into the fatal-error path.
+      log.warn('failed to snapshot active Claude turns for Windows session end', error);
+      return [];
+    }
+  };
+  const prepareConfirmedSessionEnd = (): Promise<void> => {
+    if (confirmedSessionEndBarrier) return confirmedSessionEndBarrier;
+    const activeSessionIds = markWindowsSessionEnding(snapshotActiveClaudeTurns());
+    // The live-session half of this snapshot may be ahead of the desktop status
+    // event that normally writes active_turn_started_at. Queue those start marks
+    // before freezing so every suppressed shutdown error has a recovery marker.
+    // markWindowsSessionEnding unions this confirmation snapshot with the query
+    // snapshot, preserving turns that became idle while terminal events waited.
+    const durableSessionIds = new Set<string>();
+    const markerWrites = activeSessionIds.map((sessionId) => {
+      let markerWrite: Promise<void>;
+      try {
+        markerWrite = Promise.resolve(options.markActiveTurnStarted(sessionId));
+      } catch (error) {
+        markerWrite = Promise.reject(error);
+      }
+      return markerWrite.then(
+        () => {
+          durableSessionIds.add(sessionId);
+        },
+        (error) => {
+          log.warn(`failed to persist Windows session-end recovery marker for ${sessionId}`, error);
+        },
+      );
+    });
+    // markActiveTurnStarted synchronously queues every durable write before it
+    // returns its barrier. Freeze subsequent status writes now; beginShutdown
+    // has already armed the watchdog before calling this preparation.
+    options.freezeActiveTurnMarkers();
+    // Emit generation-exact fallback terminals while Session gates/listeners
+    // are alive and before beginShutdown waits on markerBarrier. The terminal
+    // remains held while the marker write is pending: a durable marker discards
+    // it, while a rejected marker replays it immediately. Deferring this until
+    // the shutdown-maker disposer creates a cycle because marker settlement is
+    // itself waiting for that terminal.
+    let fallbackPreparation = Promise.resolve();
+    try {
+      fallbackPreparation = Promise.resolve(
+        options.prepareFallbackBeforeShutdownPrerequisites?.(),
+      ).then(() => undefined);
+    } catch (error) {
+      fallbackPreparation = Promise.reject(error);
+    }
+    fallbackPreparation = fallbackPreparation.catch((error) => {
+      log.warn('failed to prepare Windows fallback before shutdown prerequisites', error);
+    });
+    // Do not convert the prerequisite timeout into a marker outcome. The
+    // generic shutdown prerequisite remains bounded, but a still-running UPDATE
+    // must stay pending: otherwise it could land after terminal fallback replay
+    // and leave an unmatched started marker. Only actual write settlement may
+    // choose replay versus discard.
+    const markerBarrier = Promise.all([Promise.all(markerWrites), fallbackPreparation]).then(
+      async () => {
+        let fallbackSettlementQueue = Promise.resolve();
+        await settleWindowsSessionEndRecoveryMarkers(
+          durableSessionIds,
+          (fallbackSessionId) => {
+            // Fallback replay synchronously reaches the event listeners, but
+            // terminal message persistence is queued behind
+            // messagePersistBroadcaster's async write chain. Settle each late
+            // fallback independently so another session without a terminal event
+            // cannot strand this session's recovery marker.
+            const settlement = fallbackSettlementQueue.then(async () => {
+              await options.drainPersistQueue();
+              await options.settleActiveTurnMarkers([fallbackSessionId]);
+            });
+            fallbackSettlementQueue = settlement.catch(() => undefined);
+            return settlement;
+          },
+          (prerequisite, identity) => {
+            registerShutdownStoragePrerequisite(
+              prerequisite,
+              `late Windows provider usage for ${identity.sessionInstanceId}:` +
+                identity.turnGeneration,
+            );
+          },
+        );
+      },
+    );
+    registerShutdownStoragePrerequisite(markerBarrier, 'Windows session-end recovery');
+    confirmedSessionEndBarrier = markerBarrier;
+    releasePendingQueryShutdownAfter(markerBarrier);
+    return markerBarrier;
+  };
+  windowsShutdownPreparation = prepareConfirmedSessionEnd;
+  const handleConfirmedSessionEnd = () => {
+    const shutdownAlreadyStarted = _isDisposing;
+    const shutdown = beginShutdown(timeoutMs, 'windows-session-end');
+    if (!shutdownAlreadyStarted) void shutdown.finally(() => app.exit(0));
+  };
+  // Electron intentionally emits `session-end` only for WM_ENDSESSION(TRUE).
+  // Hook the native message as well so WM_ENDSESSION(FALSE) can release query
+  // deferrals. A wall-clock timeout cannot distinguish cancellation from the
+  // Windows shutdown UI waiting arbitrarily long for another application.
+  const WM_ENDSESSION = 0x0016;
+  window.hookWindowMessage(WM_ENDSESSION, (wParam) => {
+    if (wParam.every((byte) => byte === 0) && cancelWindowsSessionEndQuery()) {
+      releasePendingQueryShutdownAfter(Promise.resolve().then(() => options.drainPersistQueue()));
+    }
+  });
+  // `query-session-end` is advisory: do not freeze turn state or start
+  // irreversible cleanup until the subsequent confirmed `session-end`.
+  window.on('query-session-end', () => {
+    beginPendingQueryShutdownHold();
+    beginWindowsSessionEndQuery(snapshotActiveClaudeTurns());
+  });
+  window.on('session-end', handleConfirmedSessionEnd);
 }
 
 export function installQuitHandler(timeoutMs = 2000): void {

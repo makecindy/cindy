@@ -204,6 +204,8 @@ export interface WorkerTerminalTurnParams {
   finalText: string;
   /** Provider/session diagnostic used when an error turn has no assistant output. */
   diagnostic?: string;
+  /** Windows session-end terminal error: preserve the active worker for recovery after restart. */
+  suppressWindowsSessionEndError?: boolean;
   capture?: WorkerTerminalTurnCapture;
 }
 
@@ -1604,6 +1606,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           if (!worker) {
             deferredDoneAcknowledgements.delete(link.workerId);
             clearRuntimeState(params.sessionId);
+            return;
+          }
+
+          if (params.suppressWindowsSessionEndError === true) {
+            clearRuntimeState(params.sessionId);
+            deps.log.info('worker Windows session-end terminal suppressed', {
+              workerId: link.workerId,
+              leadSessionId: link.leadSessionId,
+              sessionId: params.sessionId,
+              status: params.status,
+            });
             return;
           }
 

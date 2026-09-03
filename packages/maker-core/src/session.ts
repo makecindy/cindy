@@ -68,8 +68,25 @@ export interface PermissionModeState {
 }
 
 export type SessionEventListener = (event: AgentEvent) => void;
+export type SessionBeforeCloseListener = () => void;
+export interface SessionEventReplay {
+  (): void;
+  /** Settle a held event without delivering it to Session consumers. */
+  discard(): void;
+}
+/** Lazily reserve replay ownership before the gate returns only when it holds an event. */
+export type SessionEventReplayFactory = () => SessionEventReplay;
+export interface SessionEventDispatchGate {
+  (event: AgentEvent, getReplay: SessionEventReplayFactory): boolean;
+  /** Allocation-free preflight for hosts whose gate is active only in rare states. */
+  shouldRun?(event: AgentEvent): boolean;
+}
 export type SessionStatusListener = (status: SessionStatus) => void;
 export type InteractionRequestListener = (req: InteractionRequest) => Promise<InteractionDecision>;
+
+function discardSessionEventReplay(replay: SessionEventReplay | null): void {
+  replay?.discard();
+}
 
 /**
  * turn 零事件看门狗阈值(ms)。turn 在跑、却连续这么久**一个事件都没有**,视为整条
@@ -308,7 +325,7 @@ export interface SessionSendOptions extends SendOptions {
 export interface SessionTurnLifecycleObserver {
   /** Awaited after option validation and before any provider-owned start hook or send. */
   beforeProviderStart(turnGeneration: number): void | Promise<void>;
-  /** Called when a prepared generation never crosses the provider dispatch boundary. */
+  /** Called when an invoked preparation never crosses dispatch, including preparation failure. */
   onUndispatched(turnGeneration: number): void | Promise<void>;
   /** Called before event listeners for a foreground unclaimed done or terminal error. */
   onTerminal(input: {
@@ -408,6 +425,14 @@ export class Session {
   /** Host-owned logical turn leases that outlive a vendor's transient idle edge. */
   private readonly hostTurnLeases = new Set<Promise<void>>();
   private readonly eventListeners = new Set<SessionEventListener>();
+  private readonly beforeCloseListeners = new Set<SessionBeforeCloseListener>();
+  private eventDispatchGate: SessionEventDispatchGate | null = null;
+  /** Gate-held events keep consumers alive until the host replays or discards them. */
+  private readonly deferredEventDispatches = new Set<{
+    settled: boolean;
+    productTerminalGeneration: number | null;
+  }>();
+  private readonly deferredEventDispatchWaiters = new Set<() => void>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
   private turnLifecycleObserver: SessionTurnLifecycleObserver | null = null;
@@ -807,8 +832,11 @@ export class Session {
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
       if (turnLifecycleObserver) {
-        await turnLifecycleObserver.beforeProviderStart(reservedTurnGeneration);
+        // Preparation may register host state before a later awaited write
+        // rejects. Pair every invoked preparation with onUndispatched unless
+        // provider dispatch succeeds, including failure inside the hook itself.
         turnLifecyclePrepared = true;
+        await turnLifecycleObserver.beforeProviderStart(reservedTurnGeneration);
       }
       if (beforeProviderStart) await beforeProviderStart();
       const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
@@ -1291,6 +1319,7 @@ export class Session {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
+    this.notifyBeforeClose();
     this.terminationStarted = true;
     this.closePromise = this.performClose(opts ?? { reason: 'navigation' });
     return this.closePromise;
@@ -1305,12 +1334,16 @@ export class Session {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning()) {
       return Promise.resolve(false);
     }
+    this.notifyBeforeClose();
     this.terminationStarted = true;
     this.closePromise = this.performClose({ reason: 'navigation' });
     return this.closePromise.then(() => true);
   }
 
-  private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
+  private async performClose(
+    teardown: AgentSessionTeardownOptions,
+    beforeEventConsumerTeardown?: Promise<void>,
+  ): Promise<void> {
     let closeSucceeded = false;
     try {
       this.clearTurnStallWatchdog();
@@ -1319,16 +1352,20 @@ export class Session {
       await this.handle.close(teardown);
       closeSucceeded = true;
     } finally {
+      if (beforeEventConsumerTeardown) await beforeEventConsumerTeardown;
+      await this.waitForDeferredEventDispatches();
       this.sendReservation = null;
       this.unacceptedSendGeneration = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
       this.turnControlState = null;
       this.eventListeners.clear();
+      this.eventDispatchGate = null;
       this.interactionListener = null;
       if (closeSucceeded) {
         this.setStatus('closed');
         this.statusListeners.clear();
+        this.beforeCloseListeners.clear();
       } else {
         // 底层仍可能存活时不能发布 closed；保留 status listener，让 Maker 后续重试
         // close 时仍能从 activeSessions 移除，避免错误句柄永久占槽。
@@ -1347,6 +1384,7 @@ export class Session {
   async detach(opts?: AgentSessionTeardownOptions): Promise<void> {
     const teardown: AgentSessionTeardownOptions = opts ?? { reason: 'account-boundary' };
     if (this.status === 'closed') return;
+    this.notifyBeforeClose();
     this.terminationStarted = true;
     // 与 performClose() 对齐：进入拆离立即 abort 未完成的 pre-dispatch reservation
     // （vision bridge 等前置 hook 的 fetch），而不是等 handle.detach()/视觉通道超时——
@@ -1361,6 +1399,7 @@ export class Session {
       }
       detachSucceeded = true;
     } finally {
+      await this.waitForDeferredEventDispatches();
       this.sendReservation = null;
       this.unacceptedSendGeneration = null;
       this.currentTurnOrigin = null;
@@ -1368,10 +1407,12 @@ export class Session {
       this.turnControlState = null;
       this.clearTerminalErrorDrain();
       this.eventListeners.clear();
+      this.eventDispatchGate = null;
       this.interactionListener = null;
       if (detachSucceeded) {
         this.setStatus('closed');
         this.statusListeners.clear();
+        this.beforeCloseListeners.clear();
       } else {
         // Shutdown must retain Maker's status listener and active-session owner
         // until a later detach/close attempt confirms the process is gone.
@@ -1849,6 +1890,27 @@ export class Session {
     return () => this.eventListeners.delete(listener);
   }
 
+  /** Run synchronously while Session dispatch is still available, before teardown is reserved. */
+  onBeforeClose(listener: SessionBeforeCloseListener): () => void {
+    this.beforeCloseListeners.add(listener);
+    return () => this.beforeCloseListeners.delete(listener);
+  }
+
+  private notifyBeforeClose(): void {
+    for (const listener of this.beforeCloseListeners) {
+      try {
+        listener();
+      } catch (error) {
+        this.logger.warn('before-close listener failed', { error: String(error) });
+      }
+    }
+  }
+
+  /** Hold an event at the single fan-out boundary before any host consumer sees it. */
+  setEventDispatchGate(gate: SessionEventDispatchGate | null): void {
+    this.eventDispatchGate = gate;
+  }
+
   onStatusChange(listener: SessionStatusListener): () => void {
     this.statusListeners.add(listener);
     return () => this.statusListeners.delete(listener);
@@ -1860,6 +1922,39 @@ export class Session {
 
   setTurnLifecycleObserver(observer: SessionTurnLifecycleObserver | null): void {
     this.turnLifecycleObserver = observer;
+  }
+
+  /**
+   * Offer one host-owned terminal to the normal dispatch gate before teardown
+   * reserves `terminationStarted`. This is intentionally generation-explicit:
+   * a host recovery protocol may need to settle an older protected provider
+   * turn without attributing it to a newer turn on the same Session.
+   */
+  emitHostTerminalErrorForGeneration(turnGeneration: number, message: string): boolean {
+    if (
+      this.status !== 'active' ||
+      this.terminationStarted ||
+      this.closePromise ||
+      !Number.isSafeInteger(turnGeneration) ||
+      turnGeneration <= 0
+    ) {
+      return false;
+    }
+    this.fanOutEvent(
+      {
+        type: 'error',
+        data: {
+          message,
+          isTerminal: true,
+          reason: 'session_event_loop_crashed',
+        },
+        source: this.agentKind,
+        sessionTurnGeneration: turnGeneration,
+      },
+      turnGeneration,
+      turnGeneration,
+    );
+    return true;
   }
 
   // ── 内部 ──────────────────────────────────────────────────────────────────
@@ -1888,6 +1983,72 @@ export class Session {
     if (this.eventLoopStarted) return;
     this.eventLoopStarted = true;
     void this.runEventLoop();
+  }
+
+  private createEventReplay(
+    event: AgentEvent,
+    observedGeneration: number,
+    queuedGeneration: number,
+  ): SessionEventReplay {
+    const capturedAt = Date.now();
+    const isForegroundProductTerminal =
+      event.turnScope !== 'background' &&
+      (
+        isTerminalAgentErrorEvent(event) ||
+        (
+          event.type === 'done' &&
+          event.turnContinuationId === undefined &&
+          !this.isSilentStopDoneEvent(event)
+        )
+      );
+    const hold = {
+      settled: false,
+      productTerminalGeneration: isForegroundProductTerminal
+        ? (event.sessionTurnGeneration ?? observedGeneration)
+        : null,
+    };
+    this.deferredEventDispatches.add(hold);
+    const settle = (): boolean => {
+      if (hold.settled) return false;
+      hold.settled = true;
+      this.deferredEventDispatches.delete(hold);
+      if (this.deferredEventDispatches.size === 0) {
+        const waiters = [...this.deferredEventDispatchWaiters];
+        this.deferredEventDispatchWaiters.clear();
+        for (const resolve of waiters) resolve();
+      }
+      return true;
+    };
+    const replay = (() => {
+      if (!settle()) return;
+      this.fanOutEvent(
+        { ...event, sessionEventReplay: { capturedAt } },
+        observedGeneration,
+        queuedGeneration,
+        true,
+      );
+    }) as SessionEventReplay;
+    replay.discard = () => {
+      settle();
+    };
+    return replay;
+  }
+
+  private waitForDeferredEventDispatches(): Promise<void> {
+    if (this.deferredEventDispatches.size === 0) return Promise.resolve();
+    return new Promise((resolve) => this.deferredEventDispatchWaiters.add(resolve));
+  }
+
+  private hasDeferredProductTerminal(turnGeneration: number): boolean {
+    for (const dispatch of this.deferredEventDispatches) {
+      if (
+        !dispatch.settled &&
+        dispatch.productTerminalGeneration === turnGeneration
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private beginTurnControl(generation: number): void {
@@ -2229,6 +2390,7 @@ export class Session {
     event: AgentEvent,
     observedGeneration = this.turnGeneration,
     queuedGeneration = observedGeneration,
+    bypassDispatchGate = false,
   ): void {
     const isBackgroundEvent = event.turnScope === 'background';
     if (!isBackgroundEvent) this.lastEventAt = Date.now();
@@ -2261,7 +2423,6 @@ export class Session {
         resolvedGeneration === this.turnGeneration &&
         (this.agentKind === 'codex' || this.agentKind === 'pi')
       );
-    this.observeTurnControl(event, resolvedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
     if (!isBackgroundEvent && isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
@@ -2275,6 +2436,30 @@ export class Session {
     ) {
       event.turnAttemptToken = this.currentTurnAttemptToken;
     }
+    const eventDispatchGate = this.eventDispatchGate;
+    if (
+      !bypassDispatchGate &&
+      eventDispatchGate &&
+      (eventDispatchGate.shouldRun?.(event) ?? true)
+    ) {
+      let replay: SessionEventReplay | null = null;
+      const getReplay = (): SessionEventReplay => {
+        replay ??= this.createEventReplay(event, observedGeneration, queuedGeneration);
+        return replay;
+      };
+      try {
+        // Most AgentEvents pass through. The host asks for replay ownership
+        // only for the rare event it actually defers, keeping per-token fan-out
+        // free of hold/replay allocations and Set churn.
+        if (eventDispatchGate(event, getReplay)) return;
+      } catch (error) {
+        this.logger.warn('event dispatch gate failed; delivering event', {
+          error: String(error),
+        });
+      }
+      discardSessionEventReplay(replay);
+    }
+    this.observeTurnControl(event, resolvedGeneration);
     // A provider continuation claim turns this `done` into an SDK-turn
     // boundary, not a product-turn terminal. Keep the same origin/token and
     // stall watchdog across the automatic continuation; only its later done
@@ -2394,7 +2579,12 @@ export class Session {
         reservationWindowLeftover
       ) &&
       (isTerminal || this.isIdleStatusEvent(event));
-    if (isTerminal && !isBackgroundEvent && !isLeftoverProductTerminal) {
+    const deliverReservedLeftover = bypassDispatchGate && isLeftoverProductTerminal;
+    if (
+      isTerminal &&
+      !isBackgroundEvent &&
+      (!isLeftoverProductTerminal || deliverReservedLeftover)
+    ) {
       try {
         const pending = this.turnLifecycleObserver?.onTerminal({
           turnGeneration: resolvedGeneration,
@@ -2416,7 +2606,7 @@ export class Session {
         });
       }
     }
-    if (!isLeftoverProductTerminal) {
+    if (!isLeftoverProductTerminal || deliverReservedLeftover) {
       for (const listener of this.eventListeners) {
         try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
       }
@@ -2740,8 +2930,24 @@ export class Session {
       this.logger.error('event loop crashed', { error: String(e) });
       if (this.closePromise || this.status === 'closed') return;
       // 先占住 closing gate，避免 terminal error listener 在死掉的 iterator 上重新 send。
-      this.closePromise = this.performClose({ reason: 'navigation' });
-      if (this.terminalEventObservedGeneration !== this.turnGeneration) {
+      let beginClose!: () => void;
+      const closeReady = new Promise<void>((resolve) => {
+        beginClose = resolve;
+      });
+      // Close the dead transport immediately, but keep consumers installed until
+      // the dispatch gate settles the synthetic terminal below.
+      const eventConsumerTeardownReady = (async () => {
+        await closeReady;
+        await this.waitForDeferredEventDispatches();
+      })();
+      this.closePromise = this.performClose(
+        { reason: 'navigation' },
+        eventConsumerTeardownReady,
+      );
+      if (
+        this.terminalEventObservedGeneration !== this.turnGeneration &&
+        !this.hasDeferredProductTerminal(this.turnGeneration)
+      ) {
         this.fanOutEvent({
           type: 'error',
           data: {
@@ -2752,6 +2958,7 @@ export class Session {
           source: this.agentKind,
         });
       }
+      beginClose();
       try {
         await this.closePromise;
       } catch (closeError) {
@@ -2777,10 +2984,9 @@ export class Session {
     const unfinishedTurn =
       this.status === 'active' &&
       this.isTurnRunning() &&
-      this.terminalEventObservedGeneration !== this.turnGeneration;
+      this.terminalEventObservedGeneration !== this.turnGeneration &&
+      !this.hasDeferredProductTerminal(this.turnGeneration);
     this.logger.debug('event loop ended (handle dead), auto-closing session', { unfinishedTurn });
-    this.terminationStarted = true;
-    this.closePromise = Promise.resolve();
     if (unfinishedTurn) {
       this.fanOutEvent({
         type: 'error',
@@ -2792,17 +2998,36 @@ export class Session {
         source: this.agentKind,
       });
     }
-    this.clearTurnStallWatchdog();
-    this.cancelSendReservation(this.sendReservation);
-    this.sendReservation = null;
-    this.unacceptedSendGeneration = null;
-    this.currentTurnOrigin = null;
-    this.currentTurnAttemptToken = null;
-    this.turnControlState = null;
-    this.setStatus('closed');
-    this.eventListeners.clear();
-    this.statusListeners.clear();
-    this.interactionListener = null;
+    // The synthetic terminal above must enter the dispatch gate first. A host
+    // before-close observer can then see that the generation already has a
+    // reserved outcome instead of injecting a duplicate fallback.
+    this.notifyBeforeClose();
+    this.terminationStarted = true;
+    this.closePromise = Promise.resolve();
+    const finalizeNaturalClose = (): void => {
+      this.clearTurnStallWatchdog();
+      this.cancelSendReservation(this.sendReservation);
+      this.sendReservation = null;
+      this.unacceptedSendGeneration = null;
+      this.currentTurnOrigin = null;
+      this.currentTurnAttemptToken = null;
+      this.turnControlState = null;
+      this.setStatus('closed');
+      this.eventListeners.clear();
+      this.eventDispatchGate = null;
+      this.statusListeners.clear();
+      this.beforeCloseListeners.clear();
+      this.interactionListener = null;
+    };
+    if (this.deferredEventDispatches.size === 0) {
+      finalizeNaturalClose();
+      return;
+    }
+    // The provider is already dead, but a host protocol can still own its final
+    // event. Do not publish closed and clear consumers ahead of that decision.
+    this.closePromise =
+      this.waitForDeferredEventDispatches().then(finalizeNaturalClose);
+    await this.closePromise;
   }
 
   private isHandleTurnRunning(): boolean {

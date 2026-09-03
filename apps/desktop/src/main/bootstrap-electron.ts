@@ -60,6 +60,7 @@ import {
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
+import { drainPersistQueue } from './messagePersistBroadcaster.js';
 
 let retryPiRuntimeAfterNetworkRecovery: (() => void) | null = null;
 let disposePiRuntimeRecovery: (() => void) | null = null;
@@ -123,6 +124,15 @@ app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 // Windows 上 codex app-server 子进程不会随父死 → 残留孤儿, 持有 binary 文件锁,
 // 用户下次启动时撞 EBUSY / 端口占用 (anthropic-compat-proxy 等)。
 async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
+  // Every later quit step may reject or remain pending. Give a failed Windows
+  // recovery marker its generation-exact fallback terminal first, while the
+  // original Session gate and event consumers are still guaranteed alive.
+  await prepareWindowsSessionEndFallbackBeforeSessionTeardown();
+  // Marker settlement normally preceded this disposer. If the generic wait
+  // timed out, this monotonic signal detaches retained replacement gates only
+  // after their fallback has eventually replayed. Active Session gates close
+  // later inside maker.shutdown().
+  beginWindowsSessionEndFallbackProviderTeardown();
   // Do not terminate Main while one workspace patch command is settling.
   await waitForTurnChangeSetActions();
   // 退出前先把 onClose 重副作用(worktree stash/删除、临时附件清理)一刀切抑制掉:
@@ -371,6 +381,8 @@ import {
 import {
   beginSessionTurnEndedSuppression,
   freezeSessionActiveTurnMarkers,
+  markSessionTurnsEndedAfterShutdownFallback,
+  markSessionTurnStartedDurable,
 } from './localDb/sessionActiveTurn';
 import { getDrizzleDir } from './localDb/migrate';
 import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
@@ -395,7 +407,16 @@ import {
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
 
-import { onQuit, installQuitHandler } from './lifecycle';
+import {
+  createShutdownStorageDisposer,
+  installQuitHandler,
+  installWindowsSessionEndHandler,
+  onQuit,
+} from './lifecycle';
+import {
+  beginWindowsSessionEndFallbackProviderTeardown,
+  prepareWindowsSessionEndFallbackBeforeSessionTeardown,
+} from './windowsSessionEnd';
 import {
   cancelIOSSimulatorSessionOperations,
   cleanupIOSSimulatorRemovedSession,
@@ -617,6 +638,7 @@ import {
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
+  listSessionIdsInTurn,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
   isSessionTurnPendingCompletion,
@@ -3621,6 +3643,40 @@ const createWindow = () => {
     },
   });
   markAppContentWindow(mainWindow);
+  installWindowsSessionEndHandler(mainWindow, {
+    timeoutMs: 6000,
+    markActiveTurnStarted: markSessionTurnStartedDurable,
+    freezeActiveTurnMarkers: freezeSessionActiveTurnMarkers,
+    drainPersistQueue,
+    settleActiveTurnMarkers: markSessionTurnsEndedAfterShutdownFallback,
+    prepareFallbackBeforeShutdownPrerequisites:
+      prepareWindowsSessionEndFallbackBeforeSessionTeardown,
+    listActiveClaudeTurns: () => {
+      const maker = getMakerCore();
+      return listSessionIdsInTurn(maker).flatMap((sessionId) => {
+        const session = maker.getSession(sessionId);
+        // The desktop tracker is keyed by the reusable business session id. A
+        // replacement can therefore inherit an old instance's busy bit while
+        // the old terminal is held by the advisory query. Only snapshot the
+        // resolved instance when that exact Session still owns a live turn;
+        // the query snapshot already preserves held turns from old instances.
+        if (session?.agentKind !== 'claude-code' || !session.isTurnRunning()) return [];
+        const turnGeneration = session.getTurnGeneration();
+        return [
+          {
+            sessionId,
+            sessionInstanceId: session.instanceId,
+            turnGeneration,
+            emitFallbackTerminal: () =>
+              session.emitHostTerminalErrorForGeneration(
+                turnGeneration,
+                'Windows ended the session before this turn produced a terminal event.',
+              ),
+          },
+        ];
+      });
+    },
+  });
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
@@ -9118,12 +9174,26 @@ onQuit('ios-simulator-exit-abort', abortIOSSimulatorOperationsForExit, 'sync');
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
-onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
+const disposeLifecycleDbClientOnQuit = createShutdownStorageDisposer(() =>
+  lifecycleDbClientManager.dispose('quit'),
+);
+onQuit('db-client', disposeLifecycleDbClientOnQuit, 'async');
 onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');
 onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
-onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
+onQuit(
+  'local-db-close',
+  async () => {
+    // The async phase can time out while db-client is still waiting for a
+    // Windows recovery-marker outcome. Preserve both orderings here: never
+    // close the worker to force that marker to reject, and never close the
+    // local fallback handle before the worker transport has disposed.
+    await disposeLifecycleDbClientOnQuit().catch(() => undefined);
+    await localDbCloseDb();
+  },
+  'post-async',
+);
 
 installQuitHandler(6000);
 
