@@ -8,7 +8,7 @@
 
 import type { AgentKind } from '@cindy/maker-core';
 
-import { activeOwnerScopeKey } from '../appSessionState.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { isAgentOneShotRouteDisabled } from './model-route-guard-live.js';
 import { readAuxiliaryModelSettings } from '../utility-model/auxiliary-model-settings-store.js';
@@ -65,10 +65,12 @@ async function generateAuxiliaryTitle(
   const auxiliaryChain = getEffectiveAuxiliaryModelChain();
   const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
   const beforeDispatch = async () => {
+    if (isAppSessionBoundaryPending()) return false;
     if ((await deps.readOwnerScope()) !== ownerScope) return false;
     if (getEffectiveAuxiliaryModelChainSnapshot() !== auxiliaryChainSnapshot) return false;
     const currentModels = JSON.stringify(await deps.readModels());
-    return (await deps.readOwnerScope()) === ownerScope
+    return !isAppSessionBoundaryPending()
+      && (await deps.readOwnerScope()) === ownerScope
       && getEffectiveAuxiliaryModelChainSnapshot() === auxiliaryChainSnapshot
       && currentModels === snapshot;
   };

@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   requestText: vi.fn(),
   oneShot: vi.fn(),
   chainSource: 'auto' as 'auto' | 'custom' | 'env',
+  sessionBoundaryPending: false,
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -18,6 +19,11 @@ vi.mock('../index.js', () => ({
 
 vi.mock('../model-route-guard-live.js', () => ({
   isAgentOneShotRouteDisabled: vi.fn(async () => false),
+}));
+
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => h.ownerScope,
+  isAppSessionBoundaryPending: () => h.sessionBoundaryPending,
 }));
 
 vi.mock('../../utility-model/resolveAuxiliaryModelChain.js', () => ({
@@ -54,6 +60,7 @@ beforeEach(() => {
   h.models = [];
   h.ownerScope = 'local:owner-a:1';
   h.chainSource = 'auto';
+  h.sessionBoundaryPending = false;
   h.oneShot.mockResolvedValue('会话 Agent 命名');
   h.requestText.mockImplementation(async (_prompt: string, options: Record<string, unknown>) => {
     const allowed = await (options.beforeDispatch as () => Promise<boolean>)();
@@ -180,5 +187,25 @@ describe('auxiliary task-title routing', () => {
       ...runtimeDeps(),
       readModels,
     })).resolves.toBeNull();
+  });
+
+  it('fails closed while the app session boundary is pending', async () => {
+    h.models = ['codex-gpt-5.4-mini'];
+    h.requestText.mockImplementation(async (_prompt: string, options: Record<string, unknown>) => {
+      h.sessionBoundaryPending = true;
+      const allowed = await (options.beforeDispatch as () => Promise<boolean>)();
+      return allowed
+        ? {
+            ok: true,
+            text: '不应采用',
+            providerId: 'xd',
+            model: 'gpt-5.4-mini',
+            transport: 'litellm-chat-completions',
+          }
+        : { ok: false, reason: 'all_candidates_failed', attempts: [] };
+    });
+
+    await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBeNull();
+    expect(h.oneShot).not.toHaveBeenCalled();
   });
 });
