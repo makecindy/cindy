@@ -99,6 +99,12 @@ function isExcludedTextNode(
     ) {
       return true;
     }
+    if (tagName === 'details' && !element.hasAttribute('open')) {
+      const summary = Array.from(element.children).find(
+        (child) => child.tagName.toLowerCase() === 'summary',
+      );
+      if (!summary || !summary.contains(node)) return true;
+    }
     if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
     const cachedHidden = visibilityCache.get(element);
     if (cachedHidden !== undefined) {
@@ -154,7 +160,7 @@ function getRangeRect(range: Range): DOMRect | null {
   return rect;
 }
 
-function scrollRangeIntoView(range: Range) {
+function scrollRangeIntoViewNow(range: Range) {
   const element = range.startContainer.parentElement;
   if (!element) return;
 
@@ -162,9 +168,11 @@ function scrollRangeIntoView(range: Range) {
   while (ancestor) {
     const style = window.getComputedStyle(ancestor);
     const canScrollY =
-      /(auto|scroll|overlay|hidden)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight;
+      /(auto|scroll|overlay|hidden)/.test(style.overflowY) &&
+      ancestor.scrollHeight > ancestor.clientHeight;
     const canScrollX =
-      /(auto|scroll|overlay|hidden)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth;
+      /(auto|scroll|overlay|hidden)/.test(style.overflowX) &&
+      ancestor.scrollWidth > ancestor.clientWidth;
     if (!canScrollY && !canScrollX) {
       ancestor = ancestor.parentElement;
       continue;
@@ -194,6 +202,14 @@ function scrollRangeIntoView(range: Range) {
   if (rect.left < 0 || rect.right > viewportWidth) {
     window.scrollBy({ left: rect.left < 0 ? rect.left : rect.right - viewportWidth, behavior: 'auto' });
   }
+}
+
+function scrollRangeIntoView(range: Range) {
+  scrollRangeIntoViewNow(range);
+  if (typeof requestAnimationFrame !== 'function') return;
+  requestAnimationFrame(() => {
+    if (range.startContainer.isConnected) scrollRangeIntoViewNow(range);
+  });
 }
 
 /**
@@ -284,7 +300,7 @@ export function FindInPageBar() {
       childList: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['aria-hidden', 'class', 'hidden', 'style'],
+      attributeFilter: ['aria-hidden', 'class', 'hidden', 'open', 'style'],
       subtree: true,
     });
 

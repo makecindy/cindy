@@ -156,6 +156,10 @@ describe('FindInPageBar', () => {
       y: 900,
       toJSON: () => ({}),
     } as DOMRect;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
     Object.defineProperty(Range.prototype, 'getClientRects', {
       configurable: true,
       value: () => [rect],
@@ -168,6 +172,7 @@ describe('FindInPageBar', () => {
     const input = await openFindBar(page);
     fireEvent.change(input, { target: { value: 'foo' } });
 
+    expect(scrollBy).toHaveBeenCalledTimes(2);
     expect(scrollBy).toHaveBeenCalledWith({ top: 152, behavior: 'auto' });
     if (originalGetClientRects) {
       Object.defineProperty(Range.prototype, 'getClientRects', {
@@ -260,6 +265,37 @@ describe('FindInPageBar', () => {
     expect(screen.getByText('0/0')).toBeTruthy();
 
     page.hidden = false;
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('excludes closed details content and refreshes when it opens', async () => {
+    const page = document.createElement('main');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'foo';
+    const body = document.createElement('p');
+    body.textContent = 'foo';
+    details.append(summary, body);
+    page.append(details);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    details.open = true;
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+    expect(screen.getByText('1/2')).toBeTruthy();
+
+    details.open = false;
     await act(async () => {
       await Promise.resolve();
       vi.advanceTimersByTime(100);
