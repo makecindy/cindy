@@ -210,7 +210,10 @@ export function UsageHeatmap({
     const cursor = new Date(start);
     for (let index = 0; index < visibleWeeks * 7; index += 1) {
       const key = toDayKey(cursor);
-      const placeholder = cursor > today;
+      // `cursor` stays at noon so DST transitions cannot skip a calendar day;
+      // compare the rendered day keys instead of Date instants so today's cell
+      // is not mistaken for a future placeholder.
+      const placeholder = key > todayKey;
       const money = spendByDay.get(key) ?? {
         amount: 0,
         currency: days[0]?.money.currency ?? EMPTY_MONEY_CURRENCY,

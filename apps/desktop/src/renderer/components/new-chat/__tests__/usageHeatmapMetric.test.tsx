@@ -191,6 +191,22 @@ describe('UsageHeatmap metric', () => {
     expect(onDayClick).toHaveBeenCalledWith('2026-08-21');
   });
 
+  it('今天的日期格不是未来占位，并且可以点击', () => {
+    const onDayClick = vi.fn();
+    const { getByRole } = render(
+      <UsageHeatmap
+        days={days}
+        todayKey="2026-08-22"
+        windowDays={7}
+        metric="tokens"
+        onDayClick={onDayClick}
+      />,
+    );
+
+    fireEvent.click(getByRole('button', { name: '2026-08-22' }));
+    expect(onDayClick).toHaveBeenCalledWith('2026-08-22');
+  });
+
   it('首页非交互日期格不渲染为禁用按钮', () => {
     const { container, queryByRole } = render(
       <UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} metric="tokens" />,
