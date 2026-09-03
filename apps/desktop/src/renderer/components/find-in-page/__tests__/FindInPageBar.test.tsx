@@ -78,7 +78,7 @@ describe('FindInPageBar', () => {
 
     expect(mocks.findInPage).not.toHaveBeenCalled();
     mocks.findInPage.mockImplementationOnce(async () => {
-      expect(input.inert).toBe(true);
+      expect(input.type).toBe('password');
       return 41;
     });
     await act(async () => {
@@ -91,7 +91,7 @@ describe('FindInPageBar', () => {
       forward: true,
       findNext: false,
     });
-    expect(input.inert).toBe(false);
+    expect(input.type).toBe('password');
 
     // Chromium moves focus to the active page match while searching.
     input.blur();
@@ -104,7 +104,7 @@ describe('FindInPageBar', () => {
       });
     });
 
-    expect(input.inert).toBe(false);
+    expect(input.type).toBe('text');
     expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(2);
     expect(input.selectionEnd).toBe(2);
@@ -180,7 +180,7 @@ describe('FindInPageBar', () => {
       });
     });
 
-    expect(input.inert).toBe(false);
+    expect(input.type).toBe('password');
     expect(document.activeElement).toBe(input);
     link.remove();
   });
@@ -210,7 +210,7 @@ describe('FindInPageBar', () => {
     });
 
     expect(document.activeElement).toBe(button);
-    expect(input.inert).toBe(false);
+    expect(input.type).toBe('text');
     button.remove();
   });
 
@@ -232,7 +232,7 @@ describe('FindInPageBar', () => {
       await Promise.resolve();
     });
 
-    expect(input.inert).toBe(true);
+    expect(input.type).toBe('password');
     act(() => {
       mocks.resultHandler?.({
         requestId: 77,
@@ -248,7 +248,7 @@ describe('FindInPageBar', () => {
     });
 
     expect(screen.getByText('1/1')).toBeTruthy();
-    expect(input.inert).toBe(false);
+    expect(input.type).toBe('text');
     expect(document.activeElement).toBe(input);
   });
 
@@ -286,7 +286,7 @@ describe('FindInPageBar', () => {
     });
 
     expect(screen.queryByText('2/99')).toBeNull();
-    expect(input.inert).toBe(false);
+    expect(input.type).toBe('text');
   });
 
   it('keeps the query editable while waiting for a slow finalUpdate', async () => {
@@ -299,7 +299,7 @@ describe('FindInPageBar', () => {
       await Promise.resolve();
     });
 
-    expect(input.inert).toBe(false);
+    expect(input.type).toBe('password');
     fireEvent.change(input, { target: { value: 'foobar' } });
     expect(input.value).toBe('foobar');
 
@@ -313,6 +313,45 @@ describe('FindInPageBar', () => {
       forward: true,
       findNext: false,
     });
+  });
+
+  it('keeps the query excluded from the async scan until finalUpdate', async () => {
+    const input = await openFindBar();
+    input.focus();
+    fireEvent.change(input, { target: { value: 'foo' } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(120);
+      await Promise.resolve();
+    });
+
+    // The password-backed representation is searchable-safe while Chromium
+    // continues scoping matches, but the control remains editable.
+    expect(input.type).toBe('password');
+    expect(input.disabled).toBe(false);
+    expect(input.parentElement?.textContent).toBe('');
+    expect(input.parentElement?.getAttribute('data-query')).toBe('foo');
+
+    act(() => {
+      mocks.resultHandler?.({
+        requestId: 41,
+        activeMatchOrdinal: 1,
+        matches: 1,
+        finalUpdate: false,
+      });
+    });
+    expect(input.type).toBe('password');
+
+    // The value returns to a normal text input once native scoping completes.
+    act(() => {
+      mocks.resultHandler?.({
+        requestId: 41,
+        activeMatchOrdinal: 1,
+        matches: 1,
+        finalUpdate: true,
+      });
+    });
+    expect(input.type).toBe('text');
   });
 
   it('preserves a caret moved in the query while finalUpdate is pending', async () => {
@@ -537,7 +576,7 @@ describe('FindInPageBar', () => {
     });
 
     expect(document.activeElement).toBe(button);
-    expect(input.inert).toBe(false);
+    expect(input.type).toBe('text');
     button.remove();
   });
 });
