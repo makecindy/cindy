@@ -151,63 +151,69 @@ export function UsageTokenBars({
             style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
           />
         ))}
-        <div className="absolute inset-0 flex items-end gap-[3px]">
-          {bars.list.map((b) => {
-            const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
-            const visualHeight =
-              b.tokens > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
-            const hitHeight = Math.max(24, visualHeight);
-            const usageSummary =
-              b.tokens > 0
-                ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
-                : t('usageHistory.heatmap.emptyCell');
-            const titleLines = [
-              `${b.day} · ${usageSummary}`,
-              ...b.segments.map(
-                (s) =>
-                  `${s.label}: ${t('usageDashboard.tokensOnly', {
-                    tokens: formatCompactTokens(s.tokens),
-                  })}`,
-              ),
-            ];
-            return (
-              <button
-                key={b.day}
-                type="button"
-                title={titleLines.join('\n')}
-                aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
-                aria-pressed={selectedDay === b.day}
-                onClick={() => onDayClick?.(b.day)}
-                disabled={!onDayClick}
-                // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
-                className="flex min-w-0 flex-1 cursor-pointer items-end justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-                style={{
-                  height: hitHeight,
-                  outline: selectedDay === b.day ? '2px solid var(--focus-ring-soft)' : undefined,
-                  outlineOffset: selectedDay === b.day ? '1px' : undefined,
-                }}
-              >
-                <span
-                  aria-hidden="true"
-                  className="flex w-full flex-col overflow-hidden rounded-full"
+        <div className="absolute inset-0 overflow-x-auto">
+          <div
+            className="flex h-full items-end gap-[3px]"
+            style={{ minWidth: bars.list.length * 24 + Math.max(0, bars.list.length - 1) * 3 }}
+          >
+            {bars.list.map((b) => {
+              const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
+              const visualHeight =
+                b.tokens > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
+              const hitHeight = Math.max(24, visualHeight);
+              const usageSummary =
+                b.tokens > 0
+                  ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
+                  : t('usageHistory.heatmap.emptyCell');
+              const titleLines = [
+                `${b.day} · ${usageSummary}`,
+                ...b.segments.map(
+                  (s) =>
+                    `${s.label}: ${t('usageDashboard.tokensOnly', {
+                      tokens: formatCompactTokens(s.tokens),
+                    })}`,
+                ),
+              ];
+              return (
+                <button
+                  key={b.day}
+                  type="button"
+                  title={titleLines.join('\n')}
+                  aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
+                  aria-pressed={selectedDay === b.day}
+                  onClick={() => onDayClick?.(b.day)}
+                  disabled={!onDayClick}
+                  // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
+                  className="flex min-w-0 flex-1 cursor-pointer items-end justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
                   style={{
-                    height: visualHeight,
-                    backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
+                    height: hitHeight,
+                    minWidth: 24,
+                    outline: selectedDay === b.day ? '2px solid var(--focus-ring-soft)' : undefined,
+                    outlineOffset: selectedDay === b.day ? '1px' : undefined,
                   }}
                 >
-                  {[...b.segments].reverse().map((s) => (
-                    <span
-                      key={s.rank}
-                      style={{
-                        height: `${(s.tokens / b.tokens) * 100}%`,
-                        backgroundColor: usageRankColor(s.rank),
-                      }}
-                    />
-                  ))}
-                </span>
-              </button>
-            );
-          })}
+                  <span
+                    aria-hidden="true"
+                    className="flex w-full flex-col overflow-hidden rounded-full"
+                    style={{
+                      height: visualHeight,
+                      backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
+                    }}
+                  >
+                    {[...b.segments].reverse().map((s) => (
+                      <span
+                        key={s.rank}
+                        style={{
+                          height: `${(s.tokens / b.tokens) * 100}%`,
+                          backgroundColor: usageRankColor(s.rank),
+                        }}
+                      />
+                    ))}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

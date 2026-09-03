@@ -92,6 +92,9 @@ describe('HomeUsageDashboard source contract', () => {
     expect(heatmapSource).toContain('style={{ width: cellSize, height: cellSize }}');
     expect(tokenBarsSource).toContain('const hitHeight = Math.max(24, visualHeight);');
     expect(tokenBarsSource).toContain('height: visualHeight');
+    expect(tokenBarsSource).toContain('minWidth: bars.list.length * 24');
+    expect(tokenBarsSource).toContain('minWidth: 24');
+    expect(tokenBarsSource).toContain('overflow-x-auto');
   });
 
   it('keeps the home heatmap non-interactive when no day callback is supplied', () => {
