@@ -37,6 +37,7 @@ describe('voice input overlay retry gate', () => {
     expect(overlaySource).toContain('codexSessionPromptActiveRef.current = false;\n          void startRecording();');
     expect(overlaySource).toContain('if (codexRecoveryPromptPending) return;');
     expect(overlaySource).toContain('disabled={stopInFlight || codexRecoveryBusy || codexRecoveryPromptPending}');
+    expect(overlaySource).toContain('onPromptStarted: (reason) => {');
   });
 
   it('drops a delayed handoff after an immediate retry and leaves the paste gate open', async () => {
@@ -67,6 +68,7 @@ describe('voice input overlay retry gate', () => {
 
     expect(recoveryEstablished).toBe(false);
     expect(gate).toBe(false);
+    expect(!gate).toBe(true);
     expect(overlaySource).toContain('codexRecoveryPromptAttemptRef.current = null;');
     expect(overlaySource).toContain('invalidateCodexRecoveryPrompt();');
   });

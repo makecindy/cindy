@@ -30,6 +30,7 @@ function reconnectCopyForScope(scope: CodexCredentialScope): {
 
 export function useCodexSessionExpiredPrompt(options?: {
   onAuthenticated?: (recoveredError: string) => void;
+  onPromptStarted?: (error: string) => void;
   onPromptClosed?: () => void;
   /** 交给独立入口内联呈现恢复动作，避免在辅助窗口里丢失恢复状态。 */
   onInlineRecoveryRequired?: (error: string, scope: CodexCredentialScope) => void;
@@ -43,9 +44,11 @@ export function useCodexSessionExpiredPrompt(options?: {
   const promptActiveRef = useRef(false);
   const mountedRef = useRef(true);
   const onAuthenticatedRef = useRef(options?.onAuthenticated);
+  const onPromptStartedRef = useRef(options?.onPromptStarted);
   const onPromptClosedRef = useRef(options?.onPromptClosed);
   const onInlineRecoveryRequiredRef = useRef(options?.onInlineRecoveryRequired);
   onAuthenticatedRef.current = options?.onAuthenticated;
+  onPromptStartedRef.current = options?.onPromptStarted;
   onPromptClosedRef.current = options?.onPromptClosed;
   onInlineRecoveryRequiredRef.current = options?.onInlineRecoveryRequired;
 
@@ -64,6 +67,7 @@ export function useCodexSessionExpiredPrompt(options?: {
       if (promptedForErrorRef.current === error) return promptActiveRef.current;
       promptedForErrorRef.current = error;
       promptActiveRef.current = true;
+      onPromptStartedRef.current?.(error);
 
       const closePrompt = () => {
         promptedForErrorRef.current = null;

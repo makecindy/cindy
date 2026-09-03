@@ -185,6 +185,13 @@ export function VoiceInputOverlay() {
     setCodexRecoveryPromptPending(false);
   }, []);
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
+    onPromptStarted: (reason) => {
+      codexRecoveryPromptAttemptRef.current = {
+        attemptId: startAttemptIdRef.current,
+        reason,
+      };
+      setCodexRecoveryPromptPending(true);
+    },
     onPromptClosed: () => {
       codexSessionPromptActiveRef.current = false;
       if (codexPromptCloseTimerRef.current !== null) {
@@ -277,23 +284,7 @@ export function VoiceInputOverlay() {
   });
 
   const requestCodexSessionExpiredPrompt = useCallback((reason: string) => {
-    const pending = {
-      attemptId: startAttemptIdRef.current,
-      reason,
-    };
-    codexRecoveryPromptAttemptRef.current = pending;
-    const prompted = promptCodexSessionExpired(reason);
-    if (prompted) {
-      setCodexRecoveryPromptPending(true);
-    } else if (isCurrentCodexRecoveryPromptAttempt(
-      codexRecoveryPromptAttemptRef.current,
-      pending.attemptId,
-      reason,
-    )) {
-      codexRecoveryPromptAttemptRef.current = null;
-      setCodexRecoveryPromptPending(false);
-    }
-    return prompted;
+    return promptCodexSessionExpired(reason);
   }, [promptCodexSessionExpired]);
 
   const setVoiceState = useCallback((next: VoiceInputState) => {
