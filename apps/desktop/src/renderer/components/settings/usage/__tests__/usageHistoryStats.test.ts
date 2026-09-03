@@ -16,6 +16,7 @@ import {
 } from '../usageHistoryStats';
 import {
   removeUsageSessionForScope,
+  mergeUsageSessionSnapshots,
   shouldHideUsageTaskTable,
   usageActivityIso,
   usageSessionsForScope,
@@ -99,6 +100,25 @@ describe('usage task session scope', () => {
       sessions: [],
     });
     expect(removeUsageSessionForScope(state, 'owner-b', 'session-a')).toBe(state);
+  });
+
+  it('合并实时元数据时保留全量查询的累计 token', () => {
+    const fullSession = {
+      id: 'session-a',
+      title: '历史标题',
+      totalTokenUsage: 1000,
+    } as Session;
+    const liveSession = {
+      id: 'session-a',
+      title: '最新标题',
+      totalTokenUsage: 100,
+    } as Session;
+
+    expect(mergeUsageSessionSnapshots(fullSession, liveSession)).toMatchObject({
+      id: 'session-a',
+      title: '最新标题',
+      totalTokenUsage: 1000,
+    });
   });
 });
 

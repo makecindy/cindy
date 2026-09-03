@@ -138,6 +138,15 @@ export function removeUsageSessionForScope(
 }
 
 /**
+ * Merge live sidebar metadata into the full usage-history row without letting
+ * the sidebar's potentially stale token snapshot replace the database total.
+ */
+export function mergeUsageSessionSnapshots(fullSession: Session, liveSession: Session): Session {
+  const merged = { ...fullSession, ...liveSession };
+  return { ...merged, totalTokenUsage: fullSession.totalTokenUsage };
+}
+
+/**
  * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
  * 组件内部返回 null 会留下一张只有标题、正文全空的卡片 (会话被删光 / 列表首次加载中)。
  */
@@ -192,9 +201,14 @@ export function useTopTokenSessions(
     if (usageSessions.scopeKey !== scopeKey || usageSessions.status !== 'ready') return [];
     const scopedSessions = usageSessionsForScope(usageSessions, scopeKey);
     const byId = new Map(scopedSessions.map((session) => [session.id, session]));
-    // 当前列表快照包含最近的实时 token/status patch，优先覆盖全量查询的旧行。
+    // 侧栏快照只补充实时元数据；其 totalTokenUsage 可能滞后，保留全量查询的累计值。
     for (const session of recentSessions) {
-      if (!deletedSessionIdsRef.current.has(session.id)) byId.set(session.id, session);
+      if (deletedSessionIdsRef.current.has(session.id)) continue;
+      const usageSession = byId.get(session.id);
+      byId.set(
+        session.id,
+        usageSession ? mergeUsageSessionSnapshots(usageSession, session) : session,
+      );
     }
     return [...byId.values()];
   }, [recentSessions, scopeKey, usageSessions]);
