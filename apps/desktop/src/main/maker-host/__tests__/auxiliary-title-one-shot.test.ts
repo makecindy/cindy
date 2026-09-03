@@ -4,10 +4,25 @@ const h = vi.hoisted(() => ({
   models: [] as string[],
   ownerScope: 'local:owner-a:1',
   requestText: vi.fn(),
+  oneShot: vi.fn(),
+  chainSource: 'auto' as 'auto' | 'custom' | 'env',
 }));
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn() }),
+}));
+
+vi.mock('../index.js', () => ({
+  getMaker: () => ({ oneShot: h.oneShot }),
+}));
+
+vi.mock('../model-route-guard-live.js', () => ({
+  isAgentOneShotRouteDisabled: vi.fn(async () => false),
+}));
+
+vi.mock('../../utility-model/resolveAuxiliaryModelChain.js', () => ({
+  getEffectiveAuxiliaryModelChain: () => ({ source: h.chainSource, refs: [] }),
+  getEffectiveAuxiliaryModelChainSnapshot: () => JSON.stringify({ source: h.chainSource, refs: [] }),
 }));
 
 import {
@@ -19,6 +34,11 @@ const REQUEST = {
   sessionId: 'task-1',
   agentKind: 'pi' as const,
   prompt: '给这项工作起名',
+};
+
+const CODEX_REQUEST = {
+  ...REQUEST,
+  agentKind: 'codex' as const,
 };
 
 function runtimeDeps() {
@@ -33,6 +53,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.models = [];
   h.ownerScope = 'local:owner-a:1';
+  h.chainSource = 'auto';
+  h.oneShot.mockResolvedValue('会话 Agent 命名');
   h.requestText.mockImplementation(async (_prompt: string, options: Record<string, unknown>) => {
     const allowed = await (options.beforeDispatch as () => Promise<boolean>)();
     return allowed
@@ -63,17 +85,36 @@ describe('auxiliary task-title routing', () => {
     );
   });
 
-  it('fails closed instead of falling back when the chain is exhausted', async () => {
+  it('falls back to the same session agent when the automatic chain is exhausted', async () => {
     h.requestText.mockResolvedValue({
       ok: false,
       reason: 'all_candidates_failed',
       attempts: [],
     });
 
-    await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBeNull();
-    await expect(generateTitleWithAuxiliaryModelResult(REQUEST, {}, runtimeDeps())).resolves.toEqual({
-      status: 'failed',
+    await expect(generateTitleWithAuxiliaryModel(CODEX_REQUEST, {}, runtimeDeps())).resolves.toBe(
+      '会话 Agent 命名',
+    );
+    expect(h.oneShot).toHaveBeenCalledWith(
+      'codex',
+      CODEX_REQUEST.prompt,
+      expect.objectContaining({
+        maxTokens: 32,
+        responseInstructions: expect.stringContaining('Output only the short conversation title'),
+      }),
+    );
+  });
+
+  it('keeps an explicit custom chain fail-closed when it is exhausted', async () => {
+    h.chainSource = 'custom';
+    h.requestText.mockResolvedValue({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [],
     });
+
+    await expect(generateTitleWithAuxiliaryModel(CODEX_REQUEST, {}, runtimeDeps())).resolves.toBeNull();
+    expect(h.oneShot).not.toHaveBeenCalled();
   });
 
   it('cancels dispatch when the selected setting changes during credential work', async () => {

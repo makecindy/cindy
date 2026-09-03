@@ -789,6 +789,51 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('maps disabled thinking to Ollama reasoning_effort none', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'cindy-local-ollama',
+        name: 'Ollama',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'none',
+          },
+        },
+        models: {
+          codex: [{ id: 'qwen3.8:27b', name: 'Qwen 3.8 27B', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'local title', reasoning: 'hidden chain' } }],
+      }),
+    } as never);
+
+    const result = await requestExplicitUtilityText('generate', {
+      providerId: 'cindy-local-ollama',
+      agentKind: 'codex',
+      model: 'qwen3.8:27b',
+      maxTokens: 32,
+      disableReasoning: true,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'local title' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).toMatchObject({
+      model: 'qwen3.8:27b',
+      max_tokens: 32,
+      reasoning_effort: 'none',
+    });
+    expect(body).not.toHaveProperty('thinking');
+  });
+
   it('keeps system instructions separate on an exact auxiliary chat route', async () => {
     activeCatalog.mockReturnValue({
       providers: [{

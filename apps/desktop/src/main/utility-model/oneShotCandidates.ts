@@ -27,6 +27,7 @@ import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
 import { parseAuxiliaryModelRef, type ParsedAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
@@ -931,6 +932,7 @@ async function requestExplicitProviderText(
     settingsTab: 'providers',
     missingCredentialMessage: 'API key is required for the selected provider.',
   };
+  const isOllama = isOllamaProviderRoute(provider.id, routing.upstream);
   const candidate: UtilityTextCandidate = {
     providerId: provider.id,
     model,
@@ -941,6 +943,7 @@ async function requestExplicitProviderText(
       baseUrl: routing.upstream,
       requestPath: routing.requestPath,
       wireProtocol: routing.wireProtocol,
+      isOllama,
       headers: routing.headerOverride,
       credential: credential ?? '',
       authStrategy,
@@ -979,6 +982,14 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   if (provider.agents.includes('codex')) return 'codex';
   if (provider.agents.includes('claude-code')) return 'claude-code';
   return undefined;
+}
+
+function isOllamaProviderRoute(providerId: string, upstream: string): boolean {
+  const normalizedId = providerId.trim().toLowerCase();
+  return providerId === MANAGED_OLLAMA_PROVIDER_ID
+    || normalizedId === 'ollama'
+    || normalizedId.includes('ollama')
+    || /(?:127\.0\.0\.1|localhost):11434(?:\/|$)/i.test(upstream);
 }
 
 /** Matches the xAI bridge capability gate: coding/build variants reject `reasoning`. */
@@ -1541,6 +1552,8 @@ async function requestProviderHttpText(input: {
   timeoutMs?: number;
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   disableReasoning?: boolean;
+  /** Ollama's OpenAI-compatible chat wire uses `reasoning_effort: "none"` to disable thinking. */
+  isOllama?: boolean;
   /** Some coding-specialized models reject their wire's reasoning field. */
   supportsReasoning?: boolean;
   /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
@@ -1585,6 +1598,9 @@ async function requestProviderHttpText(input: {
       || input.maxTokens !== undefined
       || input.disableReasoning === true
       || supportsRequestedReasoning;
+    const ollamaReasoningOff = input.wire === 'chat-completions'
+      && input.isOllama === true
+      && input.disableReasoning === true;
     const buildBody = (minimal: boolean) => input.wire === 'responses'
       ? {
         model: input.model,
@@ -1615,8 +1631,12 @@ async function requestProviderHttpText(input: {
         : {
           model: input.model,
           ...(!minimal && input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-          ...(!minimal && input.disableReasoning ? { thinking: { type: 'disabled' } } : {}),
-          ...(!minimal && supportsRequestedReasoning
+          ...(!minimal && input.disableReasoning
+            ? ollamaReasoningOff
+              ? { reasoning_effort: 'none' }
+              : { thinking: { type: 'disabled' } }
+            : {}),
+          ...(!minimal && supportsRequestedReasoning && !ollamaReasoningOff
             ? { reasoning_effort: reasoningEffort }
             : {}),
           messages: [
@@ -1752,6 +1772,7 @@ function chatCompletionEmptyFingerprint(parsed: unknown): Record<string, unknown
           .map((part) => (typeof part === 'object' && part !== null ? (part as { type?: unknown }).type : typeof part))
       : undefined,
     hasReasoningContent: typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0,
+    hasReasoning: typeof message.reasoning === 'string' && message.reasoning.length > 0,
     finishReason: first?.finish_reason,
     messageKeys: Object.keys(message).slice(0, 8),
   };
@@ -1763,6 +1784,7 @@ async function requestCustomProviderText(input: {
   baseUrl: string;
   requestPath?: string;
   wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat';
+  isOllama?: boolean;
   headers?: Record<string, string>;
   credential: string;
   authStrategy: 'api-key-header' | 'oauth-token' | 'none';
@@ -1824,6 +1846,7 @@ async function requestCustomProviderText(input: {
     timeoutMs: input.timeoutMs,
     reasoningEffort: input.reasoningEffort,
     disableReasoning: input.disableReasoning,
+    isOllama: input.isOllama,
     retryWithMinimalBodyOnInvalidRequest: true,
     signal: input.signal,
     systemPrompt: input.systemPrompt,

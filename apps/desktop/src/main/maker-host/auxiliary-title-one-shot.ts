@@ -1,16 +1,25 @@
 /**
  * Session-title routing through the shared auxiliary-model chain.
  *
- * Automatic and custom chains both go through `requestUtilityText`. Callers
- * retain their existing heuristic/manual-error fallback semantics.
+ * Automatic and custom chains both go through `requestUtilityText`. Automatic
+ * routing may fall back to the owning session agent when the auxiliary chain
+ * is unavailable; an explicit custom/env chain remains fail-closed.
  */
 
 import type { AgentKind } from '@cindy/maker-core';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
+import { isAgentOneShotRouteDisabled } from './model-route-guard-live.js';
 import { readAuxiliaryModelSettings } from '../utility-model/auxiliary-model-settings-store.js';
-import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import {
+  agentSupportsOneShot,
+  requestUtilityText,
+} from '../utility-model/oneShotCandidates.js';
+import {
+  getEffectiveAuxiliaryModelChain,
+  getEffectiveAuxiliaryModelChainSnapshot,
+} from '../utility-model/resolveAuxiliaryModelChain.js';
 import { getMaker } from './index.js';
 import type { TitleOneShotDeps, TitleOneShotResult } from './title-one-shot.js';
 import { validateTitleOutput } from './title-output-validation.js';
@@ -53,6 +62,16 @@ async function generateAuxiliaryTitle(
   const ownerScope = await deps.readOwnerScope();
   const models = [...await deps.readModels()];
   const snapshot = JSON.stringify(models);
+  const auxiliaryChain = getEffectiveAuxiliaryModelChain();
+  const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
+  const beforeDispatch = async () => {
+    if ((await deps.readOwnerScope()) !== ownerScope) return false;
+    if (getEffectiveAuxiliaryModelChainSnapshot() !== auxiliaryChainSnapshot) return false;
+    const currentModels = JSON.stringify(await deps.readModels());
+    return (await deps.readOwnerScope()) === ownerScope
+      && getEffectiveAuxiliaryModelChainSnapshot() === auxiliaryChainSnapshot
+      && currentModels === snapshot;
+  };
   const result = await deps.requestText(args.prompt, {
     maxTokens: AUXILIARY_TITLE_MAX_TOKENS,
     timeoutMs: AUXILIARY_TITLE_TIMEOUT_MS,
@@ -64,26 +83,50 @@ async function generateAuxiliaryTitle(
     responseInstructions: AUXILIARY_TITLE_RESPONSE_INSTRUCTIONS,
     signal: args.signal,
     // Settings may change while OAuth refresh/credential discovery awaits.
-    beforeDispatch: async () => {
-      if ((await deps.readOwnerScope()) !== ownerScope) return false;
-      const currentModels = JSON.stringify(await deps.readModels());
-      return (await deps.readOwnerScope()) === ownerScope && currentModels === snapshot;
-    },
+    beforeDispatch,
   });
   if (!result.ok) {
+    // A signed-out user still has the current session agent available. Only
+    // the automatic chain may use that same-agent fallback; custom and env
+    // chains are explicit routing decisions and must remain fail-closed.
+    const canFallbackToSessionAgent = auxiliaryChain.source === 'auto'
+      && agentSupportsOneShot(args.agentKind)
+      && !(await isAgentOneShotRouteDisabled(args.agentKind))
+      && await beforeDispatch();
+    if (canFallbackToSessionAgent) {
+      try {
+        const fallbackText = await getMaker().oneShot(args.agentKind, args.prompt, {
+          maxTokens: AUXILIARY_TITLE_MAX_TOKENS,
+          timeoutMs: AUXILIARY_TITLE_TIMEOUT_MS,
+          signal: args.signal,
+          responseInstructions: AUXILIARY_TITLE_RESPONSE_INSTRUCTIONS,
+          beforeDispatch,
+        });
+        const fallbackTitle = normalizeAuxiliaryTitle(fallbackText);
+        if (fallbackTitle) return { status: 'ok', title: fallbackTitle };
+      } catch (error) {
+        log.warn('auxiliary title session agent fallback failed', {
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+      }
+    }
     log.warn('auxiliary title model failed', {
       reason: result.reason,
     });
     return { status: 'failed' };
   }
 
+  const title = normalizeAuxiliaryTitle(result.text);
+  return title ? { status: 'ok', title } : { status: 'failed' };
+}
+
+function normalizeAuxiliaryTitle(text: string): string | null {
   // Validate the complete response before the historical 40-character visual
   // truncation, matching title-one-shot's persisted-content boundary.
-  const normalized = validateTitleOutput(result.text, AUXILIARY_TITLE_OUTPUT_MAX_CHARS);
-  const title = normalized
+  const normalized = validateTitleOutput(text, AUXILIARY_TITLE_OUTPUT_MAX_CHARS);
+  return normalized
     ? Array.from(normalized).slice(0, AUXILIARY_TITLE_VISUAL_MAX_CHARS).join('')
     : null;
-  return title ? { status: 'ok', title } : { status: 'failed' };
 }
 
 export async function generateTitleWithAuxiliaryModel(
