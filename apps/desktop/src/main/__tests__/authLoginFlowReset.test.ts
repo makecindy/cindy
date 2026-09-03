@@ -595,7 +595,7 @@ describe('auth login-flow reset', () => {
     expect(source).toContain('signedOutAt?: number;');
 
     const clearStart = source.indexOf('async function clearAuthAccountVault(');
-    const clearEnd = source.indexOf('\n}\n\nfunction metadataFromMembership', clearStart);
+    const clearEnd = source.indexOf('\n}\n\nfunction persistLogoutTombstoneOnly', clearStart);
     const clearBody = source.slice(clearStart, clearEnd);
     expect(clearBody).toContain('withCrossProcessLock(');
     expect(clearBody).toContain("label: 'auth-account-vault-clear'");
@@ -607,6 +607,14 @@ describe('auth login-flow reset', () => {
     expect(clearBody.indexOf('writeAuthAccountVaultOrThrow(vault);')).toBeLessThan(
       clearBody.indexOf('await afterPersist();'),
     );
+
+    const tombstoneStart = source.indexOf('async function persistLogoutTombstoneOnly(');
+    const tombstoneEnd = source.indexOf('\n}\n\nfunction metadataFromMembership', tombstoneStart);
+    const tombstoneBody = source.slice(tombstoneStart, tombstoneEnd);
+    expect(tombstoneBody).toContain("label: 'auth-account-logout-tombstone'");
+    expect(tombstoneBody).toContain('readAuthAccountLogoutTombstones({ recoverInvalid: true })');
+    expect(tombstoneBody).toContain('writeAuthAccountLogoutTombstones(vault)');
+    expect(tombstoneBody).not.toContain('writeAuthAccountVaultOrThrow');
 
     const reconcileStart = source.indexOf('async function reconcileDesktopActiveAuthSession()');
     const reconcileEnd = source.indexOf(
@@ -660,7 +668,8 @@ describe('auth login-flow reset', () => {
     const ownerTeardown = logoutBody.indexOf('await withAccountFreeOwnerCommit({');
     expect(tombstoneCommit).toBeGreaterThan(-1);
     expect(logoutBody).toContain('savedVaultWasUnreadable');
-    expect(logoutBody).toContain('clearAuthAccountVault((vault) => {');
+    expect(logoutBody).toContain('await persistLogoutTombstoneOnly(currentIdentity.accountKey);');
+    expect(logoutBody).not.toContain('clearAuthAccountVault((vault) => {');
     expect(logoutBody).toContain('savedVaultHasUnreadableLogoutTombstones');
     expect(logoutBody).toContain(
       'const candidateAccountKeys = savedVaultHasUnreadableLogoutTombstones',

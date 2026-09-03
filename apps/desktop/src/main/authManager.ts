@@ -1213,6 +1213,32 @@ async function clearAuthAccountVault(
   );
 }
 
+/**
+ * Persist an explicit logout tombstone without replacing an aggregate vault
+ * whose ciphertext cannot currently be decrypted. The opaque vault remains
+ * available for a later retry or recovery, while the new client still fails
+ * closed for the account being logged out.
+ */
+async function persistLogoutTombstoneOnly(accountKey: string): Promise<void> {
+  await withCrossProcessLock(
+    authAccountVaultLockPath(),
+    { label: 'auth-account-logout-tombstone', waitMs: 5_000 },
+    async (status) => {
+      if (!status.held) throw accountVaultLockError(status.reason);
+      const existingKeys = readAuthAccountLogoutTombstones({ recoverInvalid: true });
+      const vault = emptyAuthAccountVault();
+      vault.loggedOutAccountKeys = [...new Set([...existingKeys, accountKey])];
+      if (!writeAuthAccountLogoutTombstones(vault)) {
+        throw new AuthApiError(
+          'CREDENTIAL_STORE_UNAVAILABLE',
+          503,
+          'Could not persist saved account logout state',
+        );
+      }
+    },
+  );
+}
+
 function metadataFromMembership(
   membership: AuthMembership | AccountMembership,
   passportId: string,
@@ -5909,14 +5935,10 @@ export async function logout(): Promise<void> {
   assertLogoutStillCurrent();
 
   if (savedVaultWasUnreadable) {
-    await clearAuthAccountVault((vault) => {
-      assertLogoutStillCurrent();
-      removeLoggedOutVaultAccount(vault, currentIdentity);
-      // Commit the signed-out owner before clearing compatibility records. If
-      // the process stops between the writes, cold start must not restore this
-      // account.
-      vault.signedOutAt = Date.now();
-    });
+    // The aggregate vault may contain other accounts whose ciphertext is still
+    // recoverable later. Never replace that opaque payload with an empty vault;
+    // persist only the independent tombstone and then clear local sessions.
+    await persistLogoutTombstoneOnly(currentIdentity.accountKey);
   } else {
     await mutateAuthAccountVault(
       (vault) => {
