@@ -2,12 +2,10 @@
  * The "调整性格" (Adjust personality) wizard's compile target.
  *
  * The wizard never owns a field of its own — a persisted teammate only has
- * `identitySource` (free-text prompt material, see `botTemplates.ts`). So the
- * three-step selection is compiled into a small, clearly-delimited block that
- * lives *inside* `identitySource`, written in the same voice as the shipped
- * templates (a Chinese first-person line + an English durable-instruction
- * line — see `BOT_TEMPLATES` in `botTemplates.ts`). That block is real prompt
- * material the model reads, not a settings echo.
+ * `identitySource` (free-text prompt material). So the three-step selection is
+ * compiled into a small, clearly-delimited block that lives *inside*
+ * `identitySource` (a Chinese first-person line + an English durable-instruction
+ * line). That block is real prompt material the model reads, not a settings echo.
  *
  * The block is fenced by a stable HTML-comment marker
  * (`<!--persona:v1:{...json...}-->`) so re-opening the wizard can find its own
