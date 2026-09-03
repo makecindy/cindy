@@ -140,6 +140,55 @@ function isInsideRoot(node: Node, root: HTMLElement | null): boolean {
   return Boolean(root && (node === root || root.contains(node)));
 }
 
+function getRangeRect(range: Range): DOMRect | null {
+  const rects = typeof range.getClientRects === 'function' ? range.getClientRects() : [];
+  const rect =
+    rects[0] ??
+    (typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null);
+  if (!rect) return null;
+  if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.bottom === 0) return null;
+  return rect;
+}
+
+function scrollRangeIntoView(range: Range) {
+  const element = range.startContainer.parentElement;
+  if (!element) return;
+
+  let ancestor: HTMLElement | null = element;
+  while (ancestor?.parentElement) {
+    ancestor = ancestor.parentElement;
+    const style = window.getComputedStyle(ancestor);
+    const canScrollY =
+      /(auto|scroll|overlay)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight;
+    const canScrollX =
+      /(auto|scroll|overlay)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth;
+    if (!canScrollY && !canScrollX) continue;
+
+    const rect = getRangeRect(range);
+    const containerRect = ancestor.getBoundingClientRect();
+    if (!rect) return;
+    if (canScrollY) {
+      if (rect.top < containerRect.top) ancestor.scrollTop -= containerRect.top - rect.top;
+      else if (rect.bottom > containerRect.bottom) ancestor.scrollTop += rect.bottom - containerRect.bottom;
+    }
+    if (canScrollX) {
+      if (rect.left < containerRect.left) ancestor.scrollLeft -= containerRect.left - rect.left;
+      else if (rect.right > containerRect.right) ancestor.scrollLeft += rect.right - containerRect.right;
+    }
+  }
+
+  const rect = getRangeRect(range);
+  if (!rect || typeof window.scrollBy !== 'function') return;
+  const viewportHeight = window.innerHeight;
+  const viewportWidth = window.innerWidth;
+  if (rect.top < 0 || rect.bottom > viewportHeight) {
+    window.scrollBy({ top: rect.top < 0 ? rect.top : rect.bottom - viewportHeight, behavior: 'auto' });
+  }
+  if (rect.left < 0 || rect.right > viewportWidth) {
+    window.scrollBy({ left: rect.left < 0 ? rect.left : rect.right - viewportWidth, behavior: 'auto' });
+  }
+}
+
 /**
  * F-FIP-1 — Find in Page overlay (Ctrl/Cmd+F).
  *
@@ -178,7 +227,7 @@ export function FindInPageBar() {
     if (!range) return;
     const element = range.startContainer.parentElement;
     if (!element || isInsideRoot(element, rootRef.current)) return;
-    element.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    scrollRangeIntoView(range);
   }, []);
 
   const applySearch = useCallback(
@@ -215,10 +264,13 @@ export function FindInPageBar() {
 
     const observer = new MutationObserver((records) => {
       if (records.every((record) => isInsideRoot(record.target, rootRef.current))) return;
+      if (isComposingRef.current) return;
       if (mutationTimerRef.current !== null) return;
       mutationTimerRef.current = setTimeout(() => {
         mutationTimerRef.current = null;
-        if (textRef.current) applySearch(textRef.current, activeRef.current);
+        if (!isComposingRef.current && textRef.current) {
+          applySearch(textRef.current, activeRef.current);
+        }
       }, MUTATION_DEBOUNCE_MS);
     });
     observer.observe(document.body, {

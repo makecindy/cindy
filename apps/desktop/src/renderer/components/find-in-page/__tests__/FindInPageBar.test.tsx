@@ -66,6 +66,7 @@ describe('FindInPageBar', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     cleanup();
     document.body.replaceChildren();
     vi.unstubAllGlobals();
@@ -133,6 +134,54 @@ describe('FindInPageBar', () => {
     expect(screen.getByText('1/3')).toBeTruthy();
   });
 
+  it('scrolls the active range using its own geometry', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+    const originalGetClientRects = Range.prototype.getClientRects;
+    const originalGetBoundingClientRect = Range.prototype.getBoundingClientRect;
+    const rect = {
+      top: 900,
+      bottom: 920,
+      left: 0,
+      right: 40,
+      width: 40,
+      height: 20,
+      x: 0,
+      y: 900,
+      toJSON: () => ({}),
+    } as DOMRect;
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [rect],
+    });
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => rect,
+    });
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+
+    expect(scrollBy).toHaveBeenCalledWith({ top: 152, behavior: 'auto' });
+    if (originalGetClientRects) {
+      Object.defineProperty(Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: originalGetClientRects,
+      });
+    } else {
+      delete (Range.prototype as unknown as Record<string, unknown>).getClientRects;
+    }
+    if (originalGetBoundingClientRect) {
+      Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: originalGetBoundingClientRect,
+      });
+    } else {
+      delete (Range.prototype as unknown as Record<string, unknown>).getBoundingClientRect;
+    }
+  });
+
   it('clears highlights when the query is cleared or the bar closes', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo';
@@ -158,6 +207,14 @@ describe('FindInPageBar', () => {
 
     fireEvent.compositionStart(input);
     fireEvent.change(input, { target: { value: '中' } });
+    expect(screen.queryByText('1/1')).toBeNull();
+
+    page.append(' 文');
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
     expect(screen.queryByText('1/1')).toBeNull();
 
     fireEvent.compositionEnd(input, { target: { value: '中文' } });
