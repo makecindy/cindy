@@ -1256,4 +1256,13 @@ describe('parseAutoSyncConfig', () => {
       { slug: 'wrong-scope', catalogScope: 'native' },
     ] })).toEqual([]);
   });
+
+  it('uses the first catalog scope when config repeats a slug for the single global install slot', () => {
+    expect(parseAutoSyncConfig({ skills: [
+      { slug: 'shared-name', catalogScope: 'team' },
+      { slug: 'shared-name', catalogScope: 'market' },
+    ] })).toEqual([
+      { name: 'shared-name', catalogScope: 'team' },
+    ]);
+  });
 });

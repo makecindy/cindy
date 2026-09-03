@@ -651,9 +651,12 @@ export function parseAutoSyncConfig(value: unknown): AutoSyncSkill[] | null {
   for (const raw of rawSkills) {
     const skill = parseAutoSyncSkill(raw);
     if (!skill) continue;
-    const key = skillhubCatalogKey(skill.name, skill.catalogScope ?? 'market');
-    if (seen.has(key)) continue;
-    seen.add(key);
+    // Global discovery has exactly one ~/.agents/skills/<slug> slot. Preserve
+    // the historical first-entry-wins behavior when a remote config repeats a
+    // slug with different catalog scopes instead of scheduling two installs
+    // that would target the same directory.
+    if (seen.has(skill.name)) continue;
+    seen.add(skill.name);
     skills.push(skill);
   }
   return skills;
