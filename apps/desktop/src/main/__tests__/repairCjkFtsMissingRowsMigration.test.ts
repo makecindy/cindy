@@ -80,7 +80,7 @@ describe('0101 repair cjk fts missing rows', () => {
       db.prepare('SELECT content FROM messages_fts WHERE message_id = ?').get('gap2'),
     ).toEqual({ content: 'foo 登 录 bar' });
     expect(
-      db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"')?.n,
+      (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"') as { n: number } | undefined)?.n,
     ).toBe(2); // gap1 与 gap2 都含「登录」
     const rowsBefore = db.prepare(
       'SELECT fts_rowid, message_id FROM messages_fts_rows ORDER BY fts_rowid',
@@ -120,10 +120,10 @@ describe('0101 repair cjk fts missing rows', () => {
       db.prepare('SELECT count(*) AS n FROM messages_fts_rows').get(),
     ).toEqual({ n: 2 });
     expect(
-      db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"')?.n,
+      (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"') as { n: number } | undefined)?.n,
     ).toBe(1);
     expect(
-      db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"正 常"')?.n,
+      (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"正 常"') as { n: number } | undefined)?.n,
     ).toBe(1);
     db.close();
   });
@@ -138,7 +138,7 @@ describe('0101 repair cjk fts missing rows', () => {
        FROM messages_fts_rows WHERE message_id = 'stale1'`,
     ).run();
     expect(
-      db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"')?.n,
+      (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"') as { n: number } | undefined)?.n,
     ).toBe(0);
 
     migration.run(db);
@@ -147,7 +147,7 @@ describe('0101 repair cjk fts missing rows', () => {
       db.prepare('SELECT content FROM messages_fts WHERE message_id = ?').get('stale1'),
     ).toEqual({ content: '登 录 报 错 了' });
     expect(
-      db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"')?.n,
+      (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"') as { n: number } | undefined)?.n,
     ).toBe(1);
     db.close();
   });

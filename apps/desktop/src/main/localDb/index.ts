@@ -452,6 +452,12 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   // 见 orcaStrandedLeadReconcile.ts。同样必须在 migration / drift-repair 之后跑(依赖 orca_teams)。
   reconcileStrandedOrcaLeads(db);
 
+  // #3841：openWithPragmas 时三表可能还不存在（全新库），ensure 会早退。
+  // migration / drift-repair 建完表后必须再收口一次，否则 in-proc 回退走这条
+  // 主连接写 messages 时，持久触发器因 cjk_seg 已注册而跳过、TEMP 又不在，
+  // 增量消息继续漏 FTS。已挂则是 no-op。
+  ensureCjkFtsTempTriggersInstalled(db);
+
   // 启动 optimize: 0x10002 mask 会强制对从未 ANALYZE 过的表跑一次,
   // 之后挂 24h 周期任务按需更新统计。详见 runOptimize 注释。
   runOptimize(0x10002);

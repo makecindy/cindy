@@ -96,7 +96,7 @@ describe('cjk TEMP trigger survival (#3841)', () => {
     insertMessage(db, 'm1', '登录报错了');
     expect(ftsRow(db, 'm1')?.content).toBe('登 录 报 错 了');
     expect(
-      db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"')?.n,
+      (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"') as { n: number } | undefined)?.n,
     ).toBe(1);
     db.close();
   });
@@ -144,7 +144,7 @@ describe('cjk TEMP trigger survival (#3841)', () => {
     expect(() => insertMessage(db, 'm3', '边界')).not.toThrow();
     // 守卫通过（函数缺失）→ 持久触发器写【原文】进 FTS：旧客户端自己的搜索仍可用，
     // 主表消息落库。内容保持未分词的 '边界'（不是新客户端的 '边 界'）。
-    expect(db.prepare("SELECT count(*) AS n FROM messages WHERE id='m3'").get()?.n).toBe(1);
+    expect((db.prepare("SELECT count(*) AS n FROM messages WHERE id='m3'").get() as { n: number } | undefined)?.n).toBe(1);
     expect(ftsRow(db, 'm3')?.content).toBe('边界');
     db.close();
   });
