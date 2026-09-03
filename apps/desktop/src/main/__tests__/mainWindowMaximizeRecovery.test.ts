@@ -297,6 +297,21 @@ describe('installMainWindowMaximizeRecovery', () => {
     expect(h.win.maximize).toHaveBeenCalledOnce();
   });
 
+  it('keeps a native intent created during a display burst across later events', () => {
+    const h = createHarness();
+    h.state.maximized = true;
+
+    h.fireDisplay();
+    h.advance(100);
+    h.recovery.notifyUserUnmaximizeIntent();
+    h.advance(100);
+    h.fireDisplay();
+    h.osUnmaximize();
+    h.runTimers();
+
+    expect(h.win.maximize).not.toHaveBeenCalled();
+  });
+
   it('disarms after the user unmaximizes away from any display change', () => {
     const h = createHarness();
     h.state.maximized = true;

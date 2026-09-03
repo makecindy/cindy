@@ -306,12 +306,20 @@ export function installMainWindowMaximizeRecovery(
 
   const onDisplayChange = (): void => {
     if (disposed) return;
-    lastDisplayChangeAtMs = now();
+    const at = now();
     // An unmaximize immediately before this change belongs to the OS re-layout.
     clearDisarm();
-    // A native restore signal from the previous display generation must not
-    // confirm the OS unmaximize caused by this new display re-layout.
-    pendingUserUnmaximizeAtMs = null;
+    // A native restore signal from before the current display generation must
+    // not confirm the OS unmaximize caused by this new display re-layout. Keep
+    // signals created after the last display event so a burst of display/DPI
+    // notifications cannot discard the same user gesture before unmaximize.
+    if (
+      pendingUserUnmaximizeAtMs !== null &&
+      (lastDisplayChangeAtMs === null || pendingUserUnmaximizeAtMs < lastDisplayChangeAtMs)
+    ) {
+      pendingUserUnmaximizeAtMs = null;
+    }
+    lastDisplayChangeAtMs = at;
     if (!armed) return;
     pendingRecovery = true;
     scheduleReapply();
