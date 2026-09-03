@@ -86,6 +86,14 @@ describe('HomeUsageDashboard source contract', () => {
     expect(tokenBarsSource).toContain("'2px solid var(--focus-ring-soft)'");
   });
 
+  it('keeps chart visuals small while giving interactive controls a stable hit target', () => {
+    expect(heatmapSource).toContain('const INTERACTIVE_CELL_PX = 24;');
+    expect(heatmapSource).toContain('const cellSize = onDayClick ? INTERACTIVE_CELL_PX : CELL_PX;');
+    expect(heatmapSource).toContain('style={{ width: cellSize, height: cellSize }}');
+    expect(tokenBarsSource).toContain('const hitHeight = Math.max(24, visualHeight);');
+    expect(tokenBarsSource).toContain('height: visualHeight');
+  });
+
   it('keeps the home heatmap non-interactive when no day callback is supplied', () => {
     expect(heatmapSource).not.toContain('disabled={!onDayClick}');
     expect(heatmapSource).toContain('return onDayClick ? (');

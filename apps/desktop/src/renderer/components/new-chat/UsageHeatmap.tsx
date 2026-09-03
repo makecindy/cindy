@@ -19,6 +19,7 @@ import { formatCompactTokens, formatMoney } from '@/lib/usageFormat';
 import { DEFAULT_USAGE_CURRENCY, type RegionalMoney } from '../../../shared/regionalMoney';
 
 const CELL_PX = 12;
+const INTERACTIVE_CELL_PX = 24;
 const GAP_PX = 3;
 const MIN_HEATMAP_WEEKS = 20;
 const EMPTY_MONEY_CURRENCY = DEFAULT_USAGE_CURRENCY;
@@ -60,9 +61,9 @@ function calendarDayDistance(from: Date, to: Date): number {
   return Math.round((toUtc - fromUtc) / 86_400_000);
 }
 
-function fitWeeksForWidth(width: number): number {
+function fitWeeksForWidth(width: number, cellSize = CELL_PX): number {
   if (!(width > 0)) return 0;
-  return Math.max(1, Math.floor((width + GAP_PX) / (CELL_PX + GAP_PX)));
+  return Math.max(1, Math.floor((width + GAP_PX) / (cellSize + GAP_PX)));
 }
 
 /**
@@ -85,6 +86,7 @@ export function resolveHeatmapWeeks({
   minimumWeeks = MIN_HEATMAP_WEEKS,
   windowDays,
   metric,
+  cellSize = CELL_PX,
 }: {
   days: Array<{ day: string; money?: RegionalMoney; tokens?: number }>;
   todayKey: string;
@@ -92,6 +94,7 @@ export function resolveHeatmapWeeks({
   minimumWeeks?: number;
   windowDays?: number;
   metric?: 'money' | 'tokens';
+  cellSize?: number;
 }): number {
   const minWeeks = Math.max(
     MIN_HEATMAP_WEEKS,
@@ -114,7 +117,7 @@ export function resolveHeatmapWeeks({
         calendarDayDistance(startOfWeek(parseDayKey(earliestDay)), startOfWeek(today)) / 7,
       ) + 1
     : 0;
-  const fitWeeks = fitWeeksForWidth(availableWidth);
+  const fitWeeks = fitWeeksForWidth(availableWidth, cellSize);
   const widthLimit = fitWeeks > 0 ? fitWeeks : minWeeks;
   return Math.max(minWeeks, Math.min(Math.max(minWeeks, dataWeeks), widthLimit));
 }
@@ -174,6 +177,7 @@ export function UsageHeatmap({
   }, []);
 
   const minimumWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(windowDays / 7));
+  const cellSize = onDayClick ? INTERACTIVE_CELL_PX : CELL_PX;
   const visibleWeeks = resolveHeatmapWeeks({
     days,
     todayKey,
@@ -181,6 +185,7 @@ export function UsageHeatmap({
     minimumWeeks,
     windowDays,
     metric,
+    cellSize,
   });
 
   useLayoutEffect(() => {
@@ -248,7 +253,7 @@ export function UsageHeatmap({
     return { columns: cols, monthLabels: labels };
   }, [days, todayKey, visibleWeeks, i18n.language, metric]);
 
-  const colPitch = CELL_PX + GAP_PX;
+  const colPitch = cellSize + GAP_PX;
 
   return (
     <div ref={plotRef} className="w-full min-w-0 overflow-x-auto">
@@ -271,7 +276,7 @@ export function UsageHeatmap({
             <div key={ci} className="flex flex-col" style={{ gap: GAP_PX }}>
               {col.map((cell, ri) => {
                 if (cell.placeholder) {
-                  return <div key={ri} style={{ width: CELL_PX, height: CELL_PX }} />;
+                  return <div key={ri} style={{ width: cellSize, height: cellSize }} />;
                 }
 
                 const usageSummary =
@@ -288,8 +293,8 @@ export function UsageHeatmap({
                       }`;
                 const title = `${cell.day} · ${usageSummary}`;
                 const accessibleLabel = `${dateFormatter.format(parseDayKey(cell.day))} · ${usageSummary}`;
-                const className = onDayClick ? 'rounded-full' : 'rounded-[3px]';
-                const style = {
+                const visualClassName = onDayClick ? 'rounded-full' : 'rounded-[3px]';
+                const visualStyle = {
                   width: CELL_PX,
                   height: CELL_PX,
                   backgroundColor:
@@ -300,7 +305,9 @@ export function UsageHeatmap({
                     selectedDay === cell.day ? '2px solid var(--focus-ring-soft)' : undefined,
                   outlineOffset: selectedDay === cell.day ? '1px' : undefined,
                 };
-                const visual = <div title={title} className={className} style={style} />;
+                const visual = (
+                  <div title={title} className={visualClassName} style={visualStyle} />
+                );
 
                 return onDayClick ? (
                   <button
@@ -309,7 +316,8 @@ export function UsageHeatmap({
                     aria-label={accessibleLabel}
                     aria-pressed={selectedDay === cell.day}
                     onClick={() => onDayClick(cell.day)}
-                    className="cursor-pointer rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                    className="flex cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                    style={{ width: cellSize, height: cellSize }}
                   >
                     {visual}
                   </button>

@@ -191,6 +191,25 @@ describe('UsageHeatmap metric', () => {
     expect(onDayClick).toHaveBeenCalledWith('2026-08-21');
   });
 
+  it('可点击日期格保留小视觉标记但提供 24px 命中区域', () => {
+    const { getByRole } = render(
+      <UsageHeatmap
+        days={days}
+        todayKey="2026-08-22"
+        windowDays={7}
+        metric="tokens"
+        onDayClick={vi.fn()}
+      />,
+    );
+
+    const button = getByRole('button', { name: /Aug 21, 2026/ });
+    const visual = button.firstElementChild as HTMLElement;
+    expect(button.style.width).toBe('24px');
+    expect(button.style.height).toBe('24px');
+    expect(visual.style.width).toBe('12px');
+    expect(visual.style.height).toBe('12px');
+  });
+
   it('今天的日期格不是未来占位，并且可以点击', () => {
     const onDayClick = vi.fn();
     const { getByRole } = render(
