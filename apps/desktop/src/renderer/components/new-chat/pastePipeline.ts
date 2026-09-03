@@ -267,13 +267,19 @@ function segmentPathCandidates(
   let matchedAny = false;
   let m: RegExpExecArray | null;
   while ((m = PATH_CANDIDATE_RE.exec(text)) !== null) {
-    const trimmed = trimPathCandidate(m[0]);
+    const raw = m[0];
+    const trimmed = trimPathCandidate(raw);
     // workdir 本体不算(粘 workdir 自身应保持原文;@chip 相对路径会成空串)。
     if (!trimmed || !isWithinWorkingDir(trimmed, workingDir)) continue;
     if (m.index > cursor) segments.push({ kind: 'text', text: text.slice(cursor, m.index) });
     segments.push({ kind: 'path', path: trimmed });
     matchedAny = true;
-    cursor = m.index + trimmed.length;
+    // 尾分隔符是路径候选的一部分,不能留在后面的 text 段里;否则单独粘贴
+    // `/workdir/subdir/` 会因「非空白文本」被降级为普通粘贴。其它被
+    // trim 掉的诊断后缀(如 `:12`) 仍保留在 text 段中,避免把带行号的
+    // 日志位置误升级成文件引用。
+    const consumesTrailingSeparator = /[\\/]$/.test(raw);
+    cursor = m.index + (consumesTrailingSeparator ? raw.length : trimmed.length);
     PATH_CANDIDATE_RE.lastIndex = cursor;
   }
   if (!matchedAny) return null;

@@ -195,6 +195,16 @@ describe('segmentPastedContent — path candidates', () => {
     expect(segmentPastedContent(`cd ${WORKDIR}/`, { workingDir: WORKDIR })).toBeNull();
   });
 
+  it('recognizes a standalone directory path with a trailing separator', () => {
+    const dir = `${WORKDIR}/apps/desktop/`;
+    expect(segmentPastedContent(dir, { workingDir: WORKDIR })).toEqual([
+      { kind: 'path', path: `${WORKDIR}/apps/desktop` },
+    ]);
+    expect(segmentPastedContent('C:\\Code\\XDMaker\\apps\\', { workingDir: WIN_WORKDIR })).toEqual([
+      { kind: 'path', path: 'C:\\Code\\XDMaker\\apps' },
+    ]);
+  });
+
   it('does not upgrade a path used as part of a shell command', () => {
     const dir = `${WORKDIR}/apps/desktop`;
     expect(segmentPastedContent(`cd ${dir}/`, { workingDir: WORKDIR })).toBeNull();
