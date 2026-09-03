@@ -315,7 +315,9 @@ export function installMainWindowMaximizeRecovery(
     // notifications cannot discard the same user gesture before unmaximize.
     if (
       pendingUserUnmaximizeAtMs !== null &&
-      (lastDisplayChangeAtMs === null || pendingUserUnmaximizeAtMs < lastDisplayChangeAtMs)
+      (lastDisplayChangeAtMs === null ||
+        pendingUserUnmaximizeAtMs < lastDisplayChangeAtMs ||
+        at - lastDisplayChangeAtMs > graceMs)
     ) {
       pendingUserUnmaximizeAtMs = null;
     }
