@@ -169,6 +169,9 @@ export function VoiceInputOverlay() {
       codexSessionPromptActiveRef.current = false;
     },
     onInlineRecoveryRequired: (reason, scope) => {
+      // The prompt hook closes its own de-duplication lease before handing off.
+      // Keep the voice flow gated separately until useCodexAuth verifies recovery.
+      codexSessionPromptActiveRef.current = true;
       setCodexRecovery({ reason, scope });
     },
   });

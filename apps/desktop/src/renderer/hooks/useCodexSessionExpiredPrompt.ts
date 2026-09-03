@@ -103,6 +103,7 @@ export function useCodexSessionExpiredPrompt(options?: {
         }
         const copy = reconnectCopyForScope(credentialScope);
         if (credentialScope === 'system-shared' && onInlineRecoveryRequiredRef.current) {
+          closePrompt();
           onInlineRecoveryRequiredRef.current(error, credentialScope);
           return;
         }
@@ -169,6 +170,7 @@ export function useCodexSessionExpiredPrompt(options?: {
           closePrompt();
           return;
         } else if (onInlineRecoveryRequiredRef.current) {
+          closePrompt();
           onInlineRecoveryRequiredRef.current(error, credentialScope);
           return;
         } else if (options?.confirmBeforeLogin !== false) {

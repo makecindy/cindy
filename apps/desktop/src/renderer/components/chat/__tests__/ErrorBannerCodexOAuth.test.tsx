@@ -793,14 +793,18 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(mocks.triggerLogin).not.toHaveBeenCalled();
   });
 
-  it('hands voice recovery to its inline owner without opening a transient dialog', async () => {
+  it('cleans the inline lease so the same voice error can recover again', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'token_revoked',
       credentialScope: 'system-shared',
     });
     const onInlineRecoveryRequired = vi.fn();
-    const prompt = renderHook(() => useCodexSessionExpiredPrompt({ onInlineRecoveryRequired }));
+    const onPromptClosed = vi.fn();
+    const prompt = renderHook(() => useCodexSessionExpiredPrompt({
+      onInlineRecoveryRequired,
+      onPromptClosed,
+    }));
 
     act(() => {
       expect(prompt.result.current('token_revoked')).toBe(true);
@@ -809,6 +813,13 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     await waitFor(() =>
       expect(onInlineRecoveryRequired).toHaveBeenCalledWith('token_revoked', 'system-shared'),
     );
+    expect(onPromptClosed).toHaveBeenCalledOnce();
+
+    act(() => {
+      expect(prompt.result.current('token_revoked')).toBe(true);
+    });
+    await waitFor(() => expect(onInlineRecoveryRequired).toHaveBeenCalledTimes(2));
+    expect(onPromptClosed).toHaveBeenCalledTimes(2);
     expect(mocks.confirm).not.toHaveBeenCalled();
     expect(mocks.confirmThree).not.toHaveBeenCalled();
     expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
