@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -92,6 +93,34 @@ type StatusErrorKey =
   | 'rightSidebar.iosSimulator.pluginSessionUnavailable'
   | 'rightSidebar.iosSimulator.pluginStateChanging'
   | 'rightSidebar.iosSimulator.statusInternalError';
+
+const MIN_FITTED_SCREEN_HEIGHT_PX = 192;
+
+interface SimulatorScreenSize {
+  width: number;
+  height: number;
+}
+
+export function fitSimulatorScreenSize(
+  viewport: Pick<IOSSimulatorPublicViewport, 'width' | 'height'> | null,
+  availableWidth: number,
+  availableHeight: number,
+): SimulatorScreenSize | null {
+  if (
+    !viewport ||
+    viewport.width <= 0 ||
+    viewport.height <= 0 ||
+    availableWidth <= 0 ||
+    availableHeight <= 0
+  ) {
+    return null;
+  }
+  const scale = Math.min(availableWidth / viewport.width, availableHeight / viewport.height);
+  return {
+    width: viewport.width * scale,
+    height: viewport.height * scale,
+  };
+}
 
 function statusErrorI18nKey(error: unknown): StatusErrorKey {
   switch (extractIpcError(error)?.code) {
@@ -400,6 +429,7 @@ export function IOSSimulatorTabBody({
   const [viewerReadyToken, setViewerReadyToken] = useState<string | null>(null);
   const [nativeRecoveryPending, setNativeRecoveryPending] = useState(false);
   const [nativeRecoveryFailed, setNativeRecoveryFailed] = useState(false);
+  const [fittedScreenSize, setFittedScreenSize] = useState<SimulatorScreenSize | null>(null);
   const requestVersionRef = useRef(0);
   const nativeRecoveryRequestRef = useRef(0);
   const frameSequenceRef = useRef(0);
@@ -430,6 +460,9 @@ export function IOSSimulatorTabBody({
   const presentationEpochRef = useRef(0);
   const frameFreshnessTimerRef = useRef<number | null>(null);
   const currentRouteStatusRef = useRef<IOSSimulatorPublicRouteStatus | null>(null);
+  const panelViewportRef = useRef<HTMLDivElement | null>(null);
+  const viewerSectionRef = useRef<HTMLElement | null>(null);
+  const viewerSlotRef = useRef<HTMLDivElement | null>(null);
   const nativeRecoveryGateRef = useRef<NativeRecoveryGate>({
     routeKey: null,
     attemptCount: 0,
@@ -1822,6 +1855,84 @@ export function IOSSimulatorTabBody({
     [cancelActivePointerGesture],
   );
 
+  useLayoutEffect(() => {
+    if (!active || !shellVisible || attachedInstance?.lifecycleState !== 'ready' || !viewport) {
+      setFittedScreenSize(null);
+      return;
+    }
+
+    const panelViewport = panelViewportRef.current;
+    const viewerSection = viewerSectionRef.current;
+    const viewerSlot = viewerSlotRef.current;
+    if (!panelViewport || !viewerSection || !viewerSlot) return;
+
+    const update = () => {
+      const panelHeight = panelViewport.clientHeight;
+      const slotWidth = viewerSlot.clientWidth;
+      if (panelHeight <= 0 || slotWidth <= 0) {
+        setFittedScreenSize(null);
+        return;
+      }
+
+      const sectionRect = viewerSection.getBoundingClientRect();
+      const slotRect = viewerSlot.getBoundingClientRect();
+      const deviceHeaderHeight = Math.max(0, slotRect.top - sectionRect.top);
+      const availableHeight = Math.max(
+        MIN_FITTED_SCREEN_HEIGHT_PX,
+        panelHeight - deviceHeaderHeight,
+      );
+      const next = fitSimulatorScreenSize(viewport, slotWidth, availableHeight);
+      setFittedScreenSize((current) =>
+        current &&
+        next &&
+        Math.abs(current.width - next.width) < 0.5 &&
+        Math.abs(current.height - next.height) < 0.5
+          ? current
+          : next,
+      );
+    };
+
+    let animationFrame: number | null = null;
+    const scheduleUpdate = () => {
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        update();
+      });
+    };
+
+    update();
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleUpdate);
+    observer?.observe(panelViewport);
+    observer?.observe(viewerSection);
+    observer?.observe(viewerSlot);
+    window.addEventListener('resize', scheduleUpdate);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', scheduleUpdate);
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+    };
+  }, [
+    actionError,
+    active,
+    agentBusy,
+    attachedInstance?.instanceId,
+    attachedInstance?.lifecycleState,
+    compactXcodeVersion,
+    grant?.agentControl,
+    instances.length,
+    mutation?.agentPaused,
+    mutation?.takeoverPending,
+    nativeRecoveryEligible,
+    nativeRecoveryFailed,
+    nativeRecoveryPending,
+    operation,
+    shellVisible,
+    statusErrorKey,
+    viewport,
+  ]);
+
   const sendTextInput = useCallback(async () => {
     if (!textInput) return;
     if (await runInteraction('type_text', { text: textInput })) setTextInput('');
@@ -1829,6 +1940,8 @@ export function IOSSimulatorTabBody({
 
   return (
     <div
+      ref={panelViewportRef}
+      data-testid="ios-simulator-panel-viewport"
       className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--text-primary)]"
       aria-busy={busy || refreshing || requestingAccess}
     >
@@ -2029,7 +2142,11 @@ export function IOSSimulatorTabBody({
             )}
 
             {attachedInstance && (
-              <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3">
+              <section
+                ref={viewerSectionRef}
+                data-testid="ios-simulator-viewer-section"
+                className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <h3 className="truncate text-12 font-medium">
@@ -2331,68 +2448,94 @@ export function IOSSimulatorTabBody({
                       </div>
                     )}
                     <div
-                      data-testid="ios-simulator-screen"
-                      className="mt-3 overflow-hidden bg-[var(--surface)] [corner-shape:squircle]"
-                      style={screenCornerStyle}
+                      ref={viewerSlotRef}
+                      data-testid="ios-simulator-screen-slot"
+                      className="mt-3 flex min-h-48 w-full items-center justify-center"
                     >
-                      <div className="relative flex min-h-48 items-center justify-center">
-                        {frameUrl && presentationMatchesRoute && (
-                          <img
-                            src={frameUrl}
-                            alt={t('rightSidebar.iosSimulator.streamAlt', {
+                      <div
+                        data-testid="ios-simulator-screen"
+                        className={cn(
+                          'overflow-hidden bg-[var(--surface)] [corner-shape:squircle]',
+                          fittedScreenSize ? null : 'w-full',
+                        )}
+                        style={{
+                          ...screenCornerStyle,
+                          ...(fittedScreenSize
+                            ? {
+                                width: fittedScreenSize.width,
+                                height: fittedScreenSize.height,
+                              }
+                            : null),
+                        }}
+                      >
+                        <div
+                          className={cn(
+                            'relative flex h-full w-full items-center justify-center',
+                            fittedScreenSize ? null : 'min-h-48',
+                          )}
+                        >
+                          {frameUrl && presentationMatchesRoute && (
+                            <img
+                              src={frameUrl}
+                              alt={t('rightSidebar.iosSimulator.streamAlt', {
+                                device: attachedInstance.simulatorName,
+                              })}
+                              title={t('rightSidebar.iosSimulator.gestureHint')}
+                              className={cn(
+                                'block w-full touch-none select-none object-contain',
+                                fittedScreenSize ? 'h-full' : 'h-auto',
+                                framePresentation === 'jpeg' ? null : 'hidden',
+                                busy
+                                  ? 'cursor-wait opacity-80'
+                                  : !viewerInteractive
+                                    ? 'pointer-events-none cursor-default opacity-80'
+                                    : null,
+                              )}
+                              draggable={false}
+                              onPointerDown={onViewerPointerDown}
+                              onPointerMove={onViewerPointerMove}
+                              onPointerUp={onViewerPointerUp}
+                              onPointerCancel={onViewerPointerCancel}
+                              onLostPointerCapture={onViewerLostPointerCapture}
+                            />
+                          )}
+                          <canvas
+                            ref={h264CanvasRef}
+                            role="img"
+                            aria-label={t('rightSidebar.iosSimulator.streamAlt', {
                               device: attachedInstance.simulatorName,
                             })}
+                            aria-hidden={
+                              !(presentationMatchesRoute && framePresentation === 'h264')
+                            }
                             title={t('rightSidebar.iosSimulator.gestureHint')}
                             className={cn(
-                              'block h-auto w-full touch-none select-none object-contain',
-                              framePresentation === 'jpeg' ? null : 'hidden',
+                              'block w-full touch-none select-none object-contain',
+                              fittedScreenSize ? 'h-full' : 'h-auto',
+                              presentationMatchesRoute && framePresentation === 'h264'
+                                ? null
+                                : 'hidden',
                               busy
                                 ? 'cursor-wait opacity-80'
                                 : !viewerInteractive
                                   ? 'pointer-events-none cursor-default opacity-80'
                                   : null,
                             )}
-                            draggable={false}
                             onPointerDown={onViewerPointerDown}
                             onPointerMove={onViewerPointerMove}
                             onPointerUp={onViewerPointerUp}
                             onPointerCancel={onViewerPointerCancel}
                             onLostPointerCapture={onViewerLostPointerCapture}
                           />
-                        )}
-                        <canvas
-                          ref={h264CanvasRef}
-                          role="img"
-                          aria-label={t('rightSidebar.iosSimulator.streamAlt', {
-                            device: attachedInstance.simulatorName,
-                          })}
-                          aria-hidden={!(presentationMatchesRoute && framePresentation === 'h264')}
-                          title={t('rightSidebar.iosSimulator.gestureHint')}
-                          className={cn(
-                            'block h-auto w-full touch-none select-none object-contain',
-                            presentationMatchesRoute && framePresentation === 'h264'
-                              ? null
-                              : 'hidden',
-                            busy
-                              ? 'cursor-wait opacity-80'
-                              : !viewerInteractive
-                                ? 'pointer-events-none cursor-default opacity-80'
-                                : null,
+                          {!presentationMatchesRoute && (
+                            <div className="flex flex-col items-center gap-2 p-8 text-center text-11 text-[var(--text-secondary)]">
+                              <Smartphone size={22} aria-hidden="true" />
+                              <span className="text-pretty">
+                                {t('rightSidebar.iosSimulator.waitingForFrame')}
+                              </span>
+                            </div>
                           )}
-                          onPointerDown={onViewerPointerDown}
-                          onPointerMove={onViewerPointerMove}
-                          onPointerUp={onViewerPointerUp}
-                          onPointerCancel={onViewerPointerCancel}
-                          onLostPointerCapture={onViewerLostPointerCapture}
-                        />
-                        {!presentationMatchesRoute && (
-                          <div className="flex flex-col items-center gap-2 p-8 text-center text-11 text-[var(--text-secondary)]">
-                            <Smartphone size={22} aria-hidden="true" />
-                            <span className="text-pretty">
-                              {t('rightSidebar.iosSimulator.waitingForFrame')}
-                            </span>
-                          </div>
-                        )}
+                        </div>
                       </div>
                     </div>
 

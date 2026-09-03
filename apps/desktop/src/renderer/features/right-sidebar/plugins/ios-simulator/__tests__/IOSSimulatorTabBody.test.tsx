@@ -26,7 +26,7 @@ vi.mock('react-i18next', () => ({
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 
-import { IOSSimulatorTabBody, setupStepKeys } from '../IOSSimulatorTabBody';
+import { fitSimulatorScreenSize, IOSSimulatorTabBody, setupStepKeys } from '../IOSSimulatorTabBody';
 
 const ctx: TabKindHostContext = {
   tabId: 'tab-a',
@@ -403,6 +403,85 @@ afterEach(() => {
 });
 
 describe('IOSSimulatorTabBody', () => {
+  it('fits the simulator viewport within both available width and panel height', () => {
+    expect(fitSimulatorScreenSize({ width: 400, height: 800 }, 700, 900)).toEqual({
+      width: 450,
+      height: 900,
+    });
+    expect(fitSimulatorScreenSize({ width: 400, height: 800 }, 300, 900)).toEqual({
+      width: 300,
+      height: 600,
+    });
+    expect(fitSimulatorScreenSize({ width: 800, height: 400 }, 700, 900)).toEqual({
+      width: 700,
+      height: 350,
+    });
+    expect(fitSimulatorScreenSize({ width: 0, height: 800 }, 700, 900)).toBeNull();
+  });
+
+  it('fits only the device header and screen within the panel height', async () => {
+    const instance = readyInstance();
+    const api = installStatus(readyStatus(instance));
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        queueMicrotask(() => callback(0));
+        return 1;
+      }),
+    );
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    await screen.findByRole('img', {
+      name: 'rightSidebar.iosSimulator.streamAlt',
+    });
+    const panel = screen.getByTestId('ios-simulator-panel-viewport');
+    const section = screen.getByTestId('ios-simulator-viewer-section');
+    const slot = screen.getByTestId('ios-simulator-screen-slot');
+    const simulatorScreen = screen.getByTestId('ios-simulator-screen');
+    let slotWidth = 700;
+    Object.defineProperty(panel, 'clientHeight', { configurable: true, value: 1_000 });
+    Object.defineProperty(slot, 'clientWidth', {
+      configurable: true,
+      get: () => slotWidth,
+    });
+    vi.spyOn(section, 'getBoundingClientRect').mockReturnValue({
+      top: 80,
+      bottom: 980,
+    } as DOMRect);
+    vi.spyOn(slot, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          top: 150,
+          bottom: 850,
+          width: slotWidth,
+        }) as DOMRect,
+    );
+
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(Number.parseFloat(simulatorScreen.style.height)).toBeCloseTo(930);
+      expect(Number.parseFloat(simulatorScreen.style.width)).toBeCloseTo(429.01, 1);
+    });
+
+    slotWidth = 250;
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(Number.parseFloat(simulatorScreen.style.width)).toBeCloseTo(250);
+      expect(Number.parseFloat(simulatorScreen.style.height)).toBeCloseTo(541.98, 1);
+    });
+  });
+
   it('copies a screenshot for the exact attached simulator route', async () => {
     const instance = readyInstance();
     const api = installStatus(readyStatus(instance));
@@ -1833,7 +1912,7 @@ describe('IOSSimulatorTabBody', () => {
     });
     await waitFor(() => expect(rendered.container.querySelector('img')).toBeTruthy());
     const image = rendered.container.querySelector('img');
-    expect(image?.className).toContain('w-full');
+    expect(screen.getByTestId('ios-simulator-screen-slot').className).toContain('justify-center');
     expect(image?.className).not.toContain('max-h-[520px]');
     const textInput = screen.getByLabelText(
       'rightSidebar.iosSimulator.textInputLabel',
