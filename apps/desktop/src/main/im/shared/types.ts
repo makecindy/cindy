@@ -225,7 +225,7 @@ export interface ImChannelAdapter {
    * 群护栏; 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道
    * 不实现即保持 fail-closed。
    */
-  turnPolicyOptionalForMode?(permissionMode: PermissionMode): boolean;
+  turnPolicyOptionalForMode?(permissionMode: PermissionMode, isGuestTurn: boolean): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
 }

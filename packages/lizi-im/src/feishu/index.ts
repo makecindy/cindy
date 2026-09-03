@@ -330,6 +330,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     this.log.info('init starting');
     const announceEnabled = storage.readLifecycleAnnouncement();
     wsClient.setLifecycleAnnouncement(announceEnabled);
+    wsClient.setAllowStrangerChats(storage.readAllowStrangerChats());
     ownerGuard.loadFromDisk();
     const owner = ownerGuard.firstAllowed();
     this.log.info(

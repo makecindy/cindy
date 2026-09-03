@@ -2162,11 +2162,30 @@
         "cellLabel": "訊息通知",
         "hint": "上下線時向 Bot 傳送通知訊息"
       },
+      "strangerChats": {
+        "label": "其他人對話",
+        "cellLabel": "允許其他人對話",
+        "hint": "開啟後，其他人可私聊或 @ Bot 發起普通對話；控制命令仍僅主人可用。"
+      },
       "sessionNotification": {
         "label": "任務完成通知",
         "cellLabel": "任務完成或需要回復時傳送飛書 / Lark 訊息",
         "hint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先配置 Bot 並向它傳送一條訊息以完成繫結。"
+      },
+      "qr": {
+        "title": "掃碼建立 Agent",
+        "description": "使用飛書 / Lark App 掃碼，授權 Cindy 自動建立並繫結機器人。",
+        "qrAlt": "飛書 / Lark 授權 QR Code",
+        "userCode": "授權碼",
+        "expiresInSeconds": "{{seconds}} 秒內有效",
+        "expiresInMinutes": "{{minutes}} 分 {{seconds}} 秒內有效",
+        "qrPlaceholder": "QR Code 尚未產生",
+        "generate": "產生授權 QR Code",
+        "regenerate": "重新產生 QR Code",
+        "generating": "正在產生…",
+        "connecting": "正在連線…",
+        "cancel": "取消授權"
       },
       "bind": "繫結"
     },
@@ -2512,6 +2531,15 @@
         "dmQuoteHint": {
           "off": "私聊回答不引用你的訊息（預設，更清爽）。",
           "first": "第一條回答引用你發的那條訊息。"
+        },
+        "accessLabel": "其他人對話",
+        "accessOption": {
+          "off": "僅主人",
+          "on": "允許"
+        },
+        "accessHint": {
+          "off": "私聊僅允許主人對話。",
+          "on": "其他人可私聊發起普通對話；控制命令仍僅主人可用。"
         },
         "error": {
           "load": "未能讀取 Telegram 行為設定，請檢查連線後重試。",
@@ -10743,7 +10771,8 @@
       "dingtalkBotNetworkFailed": "無法訪問釘釘開放平臺，請檢查網路或 Proxy 後重試",
       "dingtalkBotStreamFailed": "憑證有效，但 Stream 連線未建立；請確認已啟用機器人、選擇 Stream 模式併發布應用版本",
       "dingtalkBotDisconnected": "已解綁釘釘機器人",
-      "dingtalkBotDisconnectFailed": "釘釘機器人解綁失敗"
+      "dingtalkBotDisconnectFailed": "釘釘機器人解綁失敗",
+      "feishuQrCardActionHint": "掃碼創建的機器人需在飛書開放平台手動添加 card.action.trigger 事件訂閱才能使用卡片按鈕"
     },
     "errors": {
       "openFileFailed": "無法在系統中開啟檔案",

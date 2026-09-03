@@ -2162,11 +2162,30 @@
         "cellLabel": "消息通知",
         "hint": "上下线时向 Bot 发送通知消息"
       },
+      "strangerChats": {
+        "label": "其他人对话",
+        "cellLabel": "允许其他人对话",
+        "hint": "开启后，其他人可私聊或 @ Bot 发起普通对话；控制命令仍仅主人可用。"
+      },
       "sessionNotification": {
         "label": "任务完成通知",
         "cellLabel": "任务完成或需要回复时发送飞书 / Lark 消息",
         "hint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
         "disabledHint": "需要先配置 Bot 并向它发送一条消息以完成绑定。"
+      },
+      "qr": {
+        "title": "扫码创建 Agent",
+        "description": "使用飞书 / Lark App 扫码，授权 Cindy 自动创建并绑定机器人。",
+        "qrAlt": "飞书 / Lark 授权二维码",
+        "userCode": "授权码",
+        "expiresInSeconds": "{{seconds}} 秒内有效",
+        "expiresInMinutes": "{{minutes}} 分 {{seconds}} 秒内有效",
+        "qrPlaceholder": "二维码未生成",
+        "generate": "生成授权二维码",
+        "regenerate": "重新生成二维码",
+        "generating": "正在生成…",
+        "connecting": "正在连接…",
+        "cancel": "取消授权"
       },
       "bind": "绑定"
     },
@@ -2512,6 +2531,15 @@
         "dmQuoteHint": {
           "off": "私聊回答不引用你的消息（默认，更清爽）。",
           "first": "第一条回答引用你发的那条消息。"
+        },
+        "accessLabel": "其他人对话",
+        "accessOption": {
+          "off": "仅主人",
+          "on": "允许"
+        },
+        "accessHint": {
+          "off": "私聊仅允许主人对话。",
+          "on": "其他人可私聊发起普通对话；控制命令仍仅主人可用。"
         },
         "error": {
           "load": "未能读取 Telegram 行为设置，请检查连接后重试。",
@@ -10743,7 +10771,8 @@
       "dingtalkBotNetworkFailed": "无法访问钉钉开放平台，请检查网络或 Proxy 后重试",
       "dingtalkBotStreamFailed": "凭证有效，但 Stream 连接未建立；请确认已启用机器人、选择 Stream 模式并发布应用版本",
       "dingtalkBotDisconnected": "已解绑钉钉机器人",
-      "dingtalkBotDisconnectFailed": "钉钉机器人解绑失败"
+      "dingtalkBotDisconnectFailed": "钉钉机器人解绑失败",
+      "feishuQrCardActionHint": "扫码创建的机器人需在飞书开放平台手动添加 card.action.trigger 事件订阅才能使用卡片按钮"
     },
     "errors": {
       "openFileFailed": "无法在系统中打开文件",

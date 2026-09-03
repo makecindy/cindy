@@ -193,7 +193,7 @@ describe('feishu outbound lane routing', () => {
     expect(larkMocks.reply).not.toHaveBeenCalled();
   });
 
-  it('ignores deliverToOwnerDm for non-lane userIds', async () => {
+  it('redirects deliverToOwnerDm for guest DM userIds to the owner', async () => {
     await outbound.sendInteractive(
       'ou_dm_user',
       { body: 'hi', buttons: [] },
@@ -201,7 +201,20 @@ describe('feishu outbound lane routing', () => {
     );
     expect(larkMocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ receive_id: 'ou_dm_user' }),
+        data: expect.objectContaining({ receive_id: 'ou_owner' }),
+      }),
+    );
+  });
+
+  it("keeps deliverToOwnerDm for the owner own DM userId", async () => {
+    await outbound.sendInteractive(
+      'ou_owner',
+      { body: 'hi', buttons: [] },
+      { deliverToOwnerDm: true },
+    );
+    expect(larkMocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ receive_id: 'ou_owner' }),
       }),
     );
   });

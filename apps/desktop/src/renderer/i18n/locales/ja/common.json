@@ -2162,11 +2162,30 @@
         "cellLabel": "メッセージ通知",
         "hint": "接続・切断時に Bot へ通知メッセージを送信"
       },
+      "strangerChats": {
+        "label": "他の人との会話",
+        "cellLabel": "他の人の利用を許可",
+        "hint": "オンにすると、他の人も DM や @ で通常の会話を始められます。制御コマンドはオーナー限定です。"
+      },
       "sessionNotification": {
         "label": "セッション完了通知",
         "cellLabel": "セッション完了または応答が必要なときに Feishu / Lark メッセージを送信",
         "hint": "連携済みの Feishu または Lark ボットを通じて DM を送信します。ウィンドウが非アクティブなときのみ送信されます。",
         "disabledHint": "先に Bot を設定し、バインドを完了するために DM を送信してください。"
+      },
+      "qr": {
+        "title": "QRコードで Agent を作成",
+        "description": "Feishu / Lark アプリでスキャンし、Cindy がボットを作成して連携する許可を与えてください。",
+        "qrAlt": "Feishu / Lark 認証 QR コード",
+        "userCode": "認証コード",
+        "expiresInSeconds": "{{seconds}} 秒以内に有効",
+        "expiresInMinutes": "{{minutes}} 分 {{seconds}} 秒以内に有効",
+        "qrPlaceholder": "QR コードは未生成です",
+        "generate": "認証 QR コードを生成",
+        "regenerate": "QR コードを再生成",
+        "generating": "生成中…",
+        "connecting": "接続中…",
+        "cancel": "認証をキャンセル"
       },
       "bind": "連携"
     },
@@ -2512,6 +2531,15 @@
         "dmQuoteHint": {
           "off": "DM の回答は引用なしで送ります（デフォルト）。",
           "first": "最初の返信があなたのメッセージを引用します。"
+        },
+        "accessLabel": "他の人との会話",
+        "accessOption": {
+          "off": "オーナーのみ",
+          "on": "許可"
+        },
+        "accessHint": {
+          "off": "DM で会話できるのはオーナーのみです。",
+          "on": "他の人も DM で通常の会話できます。制御コマンドはオーナー限定です。"
         },
         "error": {
           "load": "Telegram の動作設定を読み込めませんでした。接続を確認して再試行してください。",
@@ -10743,7 +10771,8 @@
       "dingtalkBotNetworkFailed": "DingTalk オープンプラットフォームに接続できません。ネットワークまたはプロキシを確認して再試行してください",
       "dingtalkBotStreamFailed": "認証情報は有効ですが、Stream 接続を確立できません。ボットを有効化し、Stream モードを選択してアプリのバージョンを公開してください",
       "dingtalkBotDisconnected": "DingTalk ボットの連携を解除しました",
-      "dingtalkBotDisconnectFailed": "DingTalk ボットの連携解除に失敗しました"
+      "dingtalkBotDisconnectFailed": "DingTalk ボットの連携解除に失敗しました",
+      "feishuQrCardActionHint": "QRコードで作成したボットは、Feishuオープンプラットフォームで card.action.trigger イベント購読を手動で追加する必要があります"
     },
     "errors": {
       "openFileFailed": "システムでファイルを開けません",

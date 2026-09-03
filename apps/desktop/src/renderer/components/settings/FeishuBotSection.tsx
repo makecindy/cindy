@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Trash2, Check, RefreshCw } from 'lucide-react';
+import { Trash2, Check, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hooks/useFeishuBot';
@@ -11,11 +11,8 @@ import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feish
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
+import { useFeishuBotRegistration } from '@/hooks/useFeishuBotRegistration';
 
-const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
-  feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
-  lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
-};
 const FEISHU_SERVICES = ['feishu', 'lark'] as const;
 const FEISHU_ONLY = ['feishu'] as const;
 
@@ -66,23 +63,16 @@ export function FeishuBotSection({
     service,
     setService,
     appId,
-    setAppId,
-    appSecret,
-    setAppSecret,
     status,
     errorMessage,
     hasSavedCreds,
     ownerOpenId,
-    validationError,
-    isSaving,
     isClearing,
     isReconnecting,
-    save,
     reconnect,
     clear,
   } = useFeishuBot();
 
-  const [showSecret, setShowSecret] = useState(false);
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('feishu');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
@@ -90,11 +80,7 @@ export function FeishuBotSection({
   const showSavedCredentialsCard = shouldShowSavedCredentialsCard(hasSavedCreds);
   // 已保存的 Lark 凭证仍允许查看和清除，身份限制只影响新的配置入口。
   const configurableService = showLark || hasSavedCreds ? service : 'feishu';
-  const canSave =
-    service === configurableService &&
-    appId.trim().length > 0 &&
-    appSecret.trim().length > 0 &&
-    !isSaving;
+  const registration = useFeishuBotRegistration(configurableService);
 
   useEffect(() => {
     if (!showLark && !hasSavedCreds && service === 'lark') {
@@ -112,10 +98,6 @@ export function FeishuBotSection({
     if (!confirmed) return;
     await clear();
   }, [confirm, clear, t]);
-
-  const openLauncher = useCallback(() => {
-    window.electronAPI.openExternal?.(APP_LAUNCHER_URL[configurableService]);
-  }, [configurableService]);
 
   return (
     <ImChannelSettingsCard
@@ -166,22 +148,12 @@ export function FeishuBotSection({
           onClear={handleClearClick}
         />
       ) : (
-        <ManualConfig
+        <FeishuBotQrConfig
           service={configurableService}
           setService={setService}
           showLark={showLark}
-          appId={appId}
-          setAppId={setAppId}
-          appSecret={appSecret}
-          setAppSecret={setAppSecret}
-          showSecret={showSecret}
-          setShowSecret={setShowSecret}
-          validationError={validationError}
           errorMessage={errorMessage}
-          isSaving={isSaving}
-          canSave={canSave}
-          onSave={save}
-          onOpenLauncher={openLauncher}
+          registration={registration}
         />
       )}
       {hasSavedCreds && (
@@ -313,168 +285,180 @@ function SavedCredentialsCard(props: {
   );
 }
 
-function ManualConfig(props: {
+function ServiceSelector(props: {
   service: FeishuBotService;
   setService: (service: FeishuBotService) => void;
   showLark: boolean;
-  appId: string;
-  setAppId: (v: string) => void;
-  appSecret: string;
-  setAppSecret: (v: string) => void;
-  showSecret: boolean;
-  setShowSecret: (v: boolean) => void;
-  validationError: string | null;
-  errorMessage: string | null;
-  isSaving: boolean;
-  canSave: boolean;
-  onSave: () => Promise<boolean>;
-  onOpenLauncher: () => void;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-col gap-3">
-      <fieldset className="flex flex-col gap-2">
-        <legend
-          className="text-12 font-medium text-[var(--settings-section-desc)]"
-          style={{ letterSpacing: '0.12px' }}
-        >
-          {t('settings.feishuBot.serviceLabel')}
-        </legend>
-        <div
-          className={cn(
-            'grid gap-1 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-1',
-            props.showLark ? 'grid-cols-2' : 'grid-cols-1',
-          )}
-          role="radiogroup"
-          aria-label={t('settings.feishuBot.serviceAria')}
-        >
-          {(props.showLark ? FEISHU_SERVICES : FEISHU_ONLY).map((service) => {
-            const selected = props.service === service;
-            return (
-              <button
-                key={service}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => props.setService(service)}
-                className={cn(
-                  'h-[34px] rounded-full text-12 font-medium transition-colors',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  selected
-                    ? 'bg-[var(--surface-chip)] text-[var(--settings-section-title)]'
-                    : 'text-[var(--settings-section-desc)] hover:text-[var(--settings-section-title)]',
-                )}
-              >
-                {t(`settings.feishuBot.services.${service}`)}
-              </button>
-            );
-          })}
-        </div>
-      </fieldset>
-
-      <label
+    <fieldset className="flex flex-col gap-2">
+      <legend
         className="text-12 font-medium text-[var(--settings-section-desc)]"
         style={{ letterSpacing: '0.12px' }}
       >
-        {t('settings.feishuBot.appIdLabel')}
-      </label>
-      <input
-        type="text"
-        value={props.appId}
-        onChange={(e) => props.setAppId(e.target.value)}
-        placeholder={t('settings.feishuBot.appIdPlaceholder')}
-        spellCheck={false}
-        autoComplete="off"
+        {t('settings.feishuBot.serviceLabel')}
+      </legend>
+      <div
         className={cn(
-          'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
-          'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
-          'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-          'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
+          'grid gap-1 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-1',
+          props.showLark ? 'grid-cols-2' : 'grid-cols-1',
         )}
-        style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+        role="radiogroup"
+        aria-label={t('settings.feishuBot.serviceAria')}
+      >
+        {(props.showLark ? FEISHU_SERVICES : FEISHU_ONLY).map((service) => {
+          const selected = props.service === service;
+          return (
+            <button
+              key={service}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => props.setService(service)}
+              className={cn(
+                'h-[34px] rounded-full text-12 font-medium transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                selected
+                  ? 'bg-[var(--surface-chip)] text-[var(--settings-section-title)]'
+                  : 'text-[var(--settings-section-desc)] hover:text-[var(--settings-section-title)]',
+              )}
+            >
+              {t(`settings.feishuBot.services.${service}`)}
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
+
+function FeishuBotQrConfig(props: {
+  service: FeishuBotService;
+  setService: (service: FeishuBotService) => void;
+  showLark: boolean;
+  errorMessage: string | null;
+  registration: ReturnType<typeof useFeishuBotRegistration>;
+}) {
+  const { t } = useTranslation();
+  const { phase, qrDataUrl, userCode, secondsLeft, errorMessage } = props.registration;
+  const isGenerating = phase === 'starting';
+  const visibleError = errorMessage ?? props.errorMessage;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <ServiceSelector
+        service={props.service}
+        setService={props.setService}
+        showLark={props.showLark}
       />
 
-      <label
-        className="text-12 font-medium text-[var(--settings-section-desc)]"
-        style={{ letterSpacing: '0.12px' }}
+      <div
+        className="flex flex-col items-center gap-3 rounded-xl border p-4"
+        style={{
+          borderColor: 'var(--settings-theme-card-border)',
+          backgroundColor: 'var(--settings-theme-card-bg)',
+        }}
       >
-        {t('settings.feishuBot.appSecretLabel')}
-      </label>
-      <div className="relative">
-        <input
-          type={props.showSecret ? 'text' : 'password'}
-          value={props.appSecret}
-          onChange={(e) => props.setAppSecret(e.target.value)}
-          placeholder={t('settings.feishuBot.appSecretPlaceholder')}
-          spellCheck={false}
-          autoComplete="off"
-          className={cn(
-            'h-[42px] w-full rounded-full pl-[14px] pr-10',
-            'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
-            'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-            'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
-          )}
-          style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-        />
+        <div className="text-13 font-medium text-[var(--settings-section-title)]">
+          {t('settings.feishuBot.qr.title')}
+        </div>
+        <p className="max-w-[280px] text-center text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+          {t('settings.feishuBot.qr.description')}
+        </p>
+
+        {phase === 'qr' && qrDataUrl ? (
+          <>
+            <img
+              src={qrDataUrl}
+              alt={t('settings.feishuBot.qr.qrAlt')}
+              className="h-[180px] w-[180px] rounded-lg"
+            />
+            {userCode ? (
+              <span
+                className="select-all text-12 font-medium text-[var(--settings-section-title)]"
+                style={{ letterSpacing: '0.16em' }}
+              >
+                {t('settings.feishuBot.qr.userCode')}: {userCode}
+              </span>
+            ) : null}
+            {secondsLeft !== null ? (
+              <span className="text-11 text-[var(--settings-section-desc)]">
+                {secondsLeft < 60
+                  ? t('settings.feishuBot.qr.expiresInSeconds', { seconds: secondsLeft })
+                  : t('settings.feishuBot.qr.expiresInMinutes', {
+                      minutes: Math.floor(secondsLeft / 60),
+                      seconds: secondsLeft % 60,
+                    })}
+              </span>
+            ) : null}
+          </>
+        ) : phase === 'starting' || phase === 'success' ? (
+          <div className="flex h-[180px] items-center justify-center gap-2 text-12 text-[var(--settings-section-desc)]">
+            <Spinner size={14} />
+            {phase === 'starting'
+              ? t('settings.feishuBot.qr.generating')
+              : t('settings.feishuBot.qr.connecting')}
+          </div>
+        ) : (
+          <div className="flex h-[180px] items-center justify-center text-12 text-[var(--settings-section-desc)]">
+            {t('settings.feishuBot.qr.qrPlaceholder')}
+          </div>
+        )}
+
+        {visibleError ? (
+          <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+            {visibleError}
+          </p>
+        ) : null}
+      </div>
+
+      {phase === 'qr' ? (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => void props.registration.beginRegistration()}
+            className={cn(
+              'flex h-[42px] flex-1 items-center justify-center rounded-full border text-12 font-medium transition-colors',
+              'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
+              'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
+            )}
+          >
+            {t('settings.feishuBot.qr.regenerate')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void props.registration.cancelRegistration()}
+            className={cn(
+              'flex h-[42px] flex-1 items-center justify-center rounded-full border text-12 font-medium transition-colors',
+              'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
+              'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
+            )}
+          >
+            {t('settings.feishuBot.qr.cancel')}
+          </button>
+        </div>
+      ) : (
         <button
           type="button"
-          onClick={() => props.setShowSecret(!props.showSecret)}
-          className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
-          aria-label={
-            props.showSecret
-              ? t('settings.feishuBot.hideSecret')
-              : t('settings.feishuBot.showSecret')
-          }
-        >
-          {props.showSecret ? <Eye size={18} /> : <EyeOff size={18} />}
-        </button>
-      </div>
-
-      <div className="flex min-h-[18px] items-center justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          {props.validationError ? (
-            <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-              {props.validationError}
-            </p>
-          ) : props.errorMessage ? (
-            <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-              {props.errorMessage}
-            </p>
-          ) : (
-            <p
-              className="text-12 text-[var(--settings-source-meta)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              <button
-                type="button"
-                onClick={props.onOpenLauncher}
-                className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
-              >
-                {t('settings.feishuBot.createLink', {
-                  service: t(`settings.feishuBot.services.${props.service}`),
-                })}
-              </button>
-              <span>{t('settings.feishuBot.createLinkSuffix')}</span>
-            </p>
+          onClick={() => void props.registration.beginRegistration()}
+          disabled={isGenerating}
+          className={cn(
+            'flex h-[42px] w-full items-center justify-center gap-1.5 rounded-full',
+            'bg-[var(--settings-btn-primary-bg)] border border-[var(--settings-btn-primary-border)]',
+            'text-13 font-medium text-[var(--settings-btn-primary-text)]',
+            'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)]',
+            isGenerating && 'cursor-not-allowed opacity-40',
           )}
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onClick={props.onSave}
-        disabled={!props.canSave}
-        className={cn(
-          'flex h-[42px] w-full items-center justify-center gap-1.5 rounded-full',
-          'bg-[var(--settings-btn-primary-bg)] border border-[var(--settings-btn-primary-border)]',
-          'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-          'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)]',
-          !props.canSave && 'cursor-not-allowed opacity-40',
-        )}
-      >
-        {props.isSaving ? <Spinner size={14} /> : null}
-        {t('settings.feishuBot.bind')}
-      </button>
+        >
+          {isGenerating ? <Spinner size={14} /> : null}
+          {t(
+            phase === 'expired' || phase === 'cancelled' || phase === 'error'
+              ? 'settings.feishuBot.qr.regenerate'
+              : 'settings.feishuBot.qr.generate',
+          )}
+        </button>
+      )}
     </div>
   );
 }

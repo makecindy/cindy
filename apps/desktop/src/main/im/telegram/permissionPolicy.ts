@@ -22,3 +22,18 @@ export function createTelegramGuestTurnPermissionPolicy(taskId: string): TurnPer
     forceConfirmToolCall: channelForceConfirmToolCall,
   };
 }
+
+/**
+ * Guest (non-owner) turn policy: force-confirms every tool call,
+ * including read-only leaves. Guests share the bot-level working
+ * directory with the owner; even read/glob/grep can expose
+ * owner-created files from earlier turns.
+ */
+export function createTelegramGuestOnlyPolicy(taskId: string): TurnPermissionPolicy {
+	return {
+		origin: { kind: 'im', channel: 'telegram', taskId },
+		confirmationSurface: 'channel',
+		confirmationTimeoutMs: 30 * 60 * 1_000,
+		forceConfirmToolCall: () => true,
+	};
+}

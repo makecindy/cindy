@@ -378,8 +378,9 @@ export function createMessageHandler(
         // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,
         // 这里挡住第二条路径)。
         ...(event.protectedContent === true ? { protectedContent: true } : {}),
-        ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
-        ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
+      ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
+      ...(event.speaker?.isOwner === false ? { guestTurn: true } : {}),
+      ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(handedOverAck !== undefined ? { ackReactionIdPromise: handedOverAck } : {}),
         // 早期拒绝终态(missing_auth / credential busy): 本条消息自己开了话题
         // 时, 用终态文案收口开场白卡 — 否则「思考中」卡残留且下一条误认领。

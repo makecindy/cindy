@@ -87,6 +87,7 @@ let lifecycleGeneration = 0;
 let conflictTransitionGeneration: number | null = null;
 
 let lifecycleAnnouncementEnabled = true;
+let allowStrangerChats = false;
 let pendingOfflineNotice = false;
 
 /**
@@ -263,6 +264,7 @@ interface UnconfirmedOpenRetry {
   messageId: string;
   chatId: string;
   senderOpenId: string;
+  isOwner: boolean;
   text: string;
   attachments: Awaited<ReturnType<typeof downloadAttachments>>['attachments'];
   unsupported: ReturnType<typeof parseIncoming>['unsupported'];
@@ -501,7 +503,7 @@ async function retryUnconfirmedOpen(
     contextId: entry.botAppId,
     messageId: entry.messageId,
     text: entry.text,
-    speaker: { id: entry.senderOpenId, name: '', isOwner: true },
+    speaker: { id: entry.senderOpenId, name: '', isOwner: entry.isOwner },
     ...(groupContextLane ? { groupContextLane } : {}),
     ...(recoveredMirror ? { finalReplyMirror: recoveredMirror } : {}),
     ...(entry.replyContext ? { replyContext: entry.replyContext } : {}),
@@ -937,6 +939,10 @@ export function getCurrentBotAppId(): string | null {
 export function setLifecycleAnnouncement(enabled: boolean): void {
   lifecycleAnnouncementEnabled = enabled;
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
+}
+
+export function setAllowStrangerChats(enabled: boolean): void {
+  allowStrangerChats = enabled;
 }
 
 /**
@@ -1561,8 +1567,8 @@ async function processClaimedMessage(
       log.info('[feishu/wsClient] drop group mention: no owner bound yet');
       return;
     }
-    // 非 owner @bot → 礼貌回应(per-user 冷却), 不起 turn。
-    if (!ownerGuard.check(senderOpenId)) {
+    // 非 owner @bot → 默认礼貌回应; 开关开启时放行普通 turn。
+    if (!ownerGuard.check(senderOpenId) && !allowStrangerChats) {
       const last = strangerNoticeAt.get(senderOpenId) ?? 0;
       if (Date.now() - last >= STRANGER_NOTICE_COOLDOWN_MS) {
         strangerNoticeAt.set(senderOpenId, Date.now());
@@ -1614,13 +1620,13 @@ async function processClaimedMessage(
       }
     }
 
-    // whitelist gate
-    if (!ownerGuard.check(senderOpenId)) {
+    // whitelist gate; 开关只放行普通消息。
+    if (!ownerGuard.check(senderOpenId) && !allowStrangerChats) {
       log.warn(`[feishu/wsClient] drop non-whitelisted sender ...${senderOpenId.slice(-8)}`);
       return;
     }
 
-    if (pendingOfflineNotice) {
+    if (pendingOfflineNotice && ownerGuard.check(senderOpenId)) {
       pendingOfflineNotice = false;
       try {
         await outbound.sendText(senderOpenId, transportMessages.lifecycle.offlineNotice);
@@ -1656,6 +1662,15 @@ async function processClaimedMessage(
     isGroup && data.message?.mentions && botOpenId
       ? resolveMentionPlaceholders(parsed.text, data.message.mentions, botOpenId)
       : parsed.text;
+
+  // 私聊普通消息可按开关放行, 但控制命令永远不交给非 owner。
+  if (!isGroup && !ownerGuard.check(senderOpenId)) {
+    const plain = text.trim();
+    if (plain.startsWith('/') || plain === '!stop' || plain === '！stop') {
+      log.info(`[feishu/wsClient] drop non-owner command ...${senderOpenId.slice(-8)}`);
+      return;
+    }
+  }
 
   // Drop entirely only when there's literally nothing to relay.
   if (!text && attachments.length === 0 && unsupported.length === 0) {
@@ -1741,6 +1756,7 @@ async function processClaimedMessage(
                 messageId,
                 chatId,
                 senderOpenId,
+                isOwner: ownerGuard.check(senderOpenId),
                 text,
                 attachments,
                 unsupported,
@@ -1776,6 +1792,7 @@ async function processClaimedMessage(
             messageId,
             chatId,
             senderOpenId,
+            isOwner: ownerGuard.check(senderOpenId),
             text,
             attachments,
             unsupported,
@@ -1794,6 +1811,7 @@ async function processClaimedMessage(
           messageId,
           chatId,
           senderOpenId,
+          isOwner: ownerGuard.check(senderOpenId),
           text,
           attachments,
           unsupported,
@@ -1828,6 +1846,7 @@ async function processClaimedMessage(
                 messageId,
                 chatId,
                 senderOpenId,
+                isOwner: ownerGuard.check(senderOpenId),
                 text,
                 attachments,
                 unsupported,
@@ -1869,6 +1888,10 @@ async function processClaimedMessage(
     outbound.getAccountEpoch(),
     finalReplyMirrorConfirmed,
   );
+  const speaker =
+    laneUserId || !ownerGuard.check(senderOpenId)
+      ? { id: senderOpenId, name: '', isOwner: ownerGuard.check(senderOpenId) }
+      : undefined;
   feishuEvents.emit('message', {
     channelName: 'feishu',
     senderId: laneUserId ?? senderOpenId,
@@ -1876,13 +1899,7 @@ async function processClaimedMessage(
     contextId: botAppId,
     messageId,
     text,
-    ...(laneUserId
-      ? {
-          // 群轮次必带 speaker — 共享层以它识别群轮(强确认策略/命令主人门)。
-          // 触发人恒为 owner(上面的门已保证), name 留空(飞书事件不带显示名)。
-          speaker: { id: senderOpenId, name: '', isOwner: true },
-        }
-      : {}),
+    ...(speaker ? { speaker } : {}),
     ...(groupContextLane ? { groupContextLane } : {}),
     ...(inboundMirror ? { finalReplyMirror: inboundMirror } : {}),
     ...(resolvedReply ? { replyContext: resolvedReply.replyContext } : {}),

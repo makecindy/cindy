@@ -2162,11 +2162,30 @@
         "cellLabel": "메시지 알림",
         "hint": "연결/해제 시 Bot에 알림 메시지를 전송합니다"
       },
+      "strangerChats": {
+        "label": "다른 사람과의 대화",
+        "cellLabel": "다른 사람의 대화 허용",
+        "hint": "켜면 다른 사람도 DM 또는 @으로 일반 대화를 시작할 수 있습니다. 제어 명령은 소유자만 사용할 수 있습니다."
+      },
       "sessionNotification": {
         "label": "세션 완료 알림",
         "cellLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
         "hint": "연동된 Feishu 또는 Lark 봇을 통해 DM을 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
         "disabledHint": "먼저 Bot을 설정하고 바인딩을 완료하려면 DM을 보내주세요."
+      },
+      "qr": {
+        "title": "QR코드로 Agent 만들기",
+        "description": "Feishu / Lark 앱으로 스캔해 Cindy가 봇을 자동으로 만들고 연결하도록 허용하세요.",
+        "qrAlt": "Feishu / Lark 인증 QR 코드",
+        "userCode": "인증 코드",
+        "expiresInSeconds": "{{seconds}}초 동안 유효",
+        "expiresInMinutes": "{{minutes}}분 {{seconds}}초 동안 유효",
+        "qrPlaceholder": "QR 코드가 생성되지 않았습니다",
+        "generate": "인증 QR 코드 생성",
+        "regenerate": "QR 코드 다시 생성",
+        "generating": "생성 중…",
+        "connecting": "연결 중…",
+        "cancel": "인증 취소"
       },
       "bind": "연동"
     },
@@ -2512,6 +2531,15 @@
         "dmQuoteHint": {
           "off": "DM 답변은 인용 없이 보냅니다(기본).",
           "first": "첫 답장이 보낸 메시지를 인용합니다."
+        },
+        "accessLabel": "다른 사람과의 대화",
+        "accessOption": {
+          "off": "소유자만",
+          "on": "허용"
+        },
+        "accessHint": {
+          "off": "DM에서는 소유자만 대화할 수 있습니다.",
+          "on": "다른 사람도 DM에서 일반 대화를 할 수 있습니다. 제어 명령은 소유자만 사용할 수 있습니다."
         },
         "error": {
           "load": "Telegram 동작 설정을 불러오지 못했습니다. 연결을 확인하고 다시 시도하세요.",
@@ -10743,7 +10771,8 @@
       "dingtalkBotNetworkFailed": "DingTalk 오픈 플랫폼에 연결할 수 없습니다. 네트워크 또는 프록시를 확인한 후 다시 시도하세요",
       "dingtalkBotStreamFailed": "자격 증명은 유효하지만 Stream 연결이 설정되지 않았습니다. 봇을 활성화하고 Stream 모드를 선택한 뒤 앱 버전을 게시하세요",
       "dingtalkBotDisconnected": "DingTalk 봇 연동이 해제됨",
-      "dingtalkBotDisconnectFailed": "DingTalk 봇 연동 해제 실패"
+      "dingtalkBotDisconnectFailed": "DingTalk 봇 연동 해제 실패",
+      "feishuQrCardActionHint": "QR 코드로 생성한 봇은 Feishu 개방 플랫폼에서 card.action.trigger 이벤트 구독을 수동으로 추가해야 합니다"
     },
     "errors": {
       "openFileFailed": "시스템에서 파일을 열 수 없습니다",

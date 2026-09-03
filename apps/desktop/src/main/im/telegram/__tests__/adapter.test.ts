@@ -53,4 +53,23 @@ describe('Telegram group history access scope', () => {
       lane: null,
     });
   });
+
+  it('keeps guest DMs from crossing Telegram lanes', () => {
+    expect(
+      adapter.groupHistoryAccessFor?.({
+        contextId: 'bot-1',
+        senderId: '22222',
+        messageId: 'm-3',
+        chatId: '22222',
+        text: '查历史',
+        attachments: [],
+        unsupported: [],
+        speaker: { id: '22222', name: 'Guest', isOwner: false },
+      } as never),
+    ).toEqual({
+      access: 'lane',
+      provider: 'telegram-personal:bot-1',
+      lane: null,
+    });
+  });
 });

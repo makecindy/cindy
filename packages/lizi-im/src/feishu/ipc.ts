@@ -107,6 +107,14 @@ export function registerFeishuIpc(): void {
     return { ok: true };
   });
 
+  host.ipc.handle('feishuBot:set-allow-stranger-chats', async (payload) => {
+    const p = payload as { enabled?: unknown } | undefined;
+    const enabled = typeof p?.enabled === 'boolean' ? p.enabled : false;
+    storage.writeAllowStrangerChats(enabled);
+    wsClient.setAllowStrangerChats(enabled);
+    return { ok: true };
+  });
+
   host.ipc.handle('feishuBot:registration-begin', async (payload) => {
     const p = payload as { service?: unknown } | undefined;
     if (p?.service !== 'feishu' && p?.service !== 'lark') {
@@ -175,6 +183,7 @@ export function getPublicState(): FeishuPublicState {
     hasSecret: creds != null,
     ownerOpenId: storage.readOwnerOpenId(),
     lifecycleAnnouncement: storage.readLifecycleAnnouncement(),
+    allowStrangerChats: storage.readAllowStrangerChats(),
     service: creds?.service ?? 'feishu',
   };
 }

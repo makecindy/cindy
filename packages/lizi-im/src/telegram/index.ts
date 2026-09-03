@@ -248,6 +248,8 @@ export interface TelegramBehaviorConfig {
   replyQuoteGroup: 'off' | 'first' | 'all';
   /** DM 回复引用: off(默认) / first=首条回复挂回触发消息。 */
   replyQuoteDm: 'off' | 'first';
+  /** 陌生人对话开关: 默认仅 owner; 开启后非 owner 可私聊普通对话。 */
+  allowNonOwnerMessages?: boolean;
   /**
    * per-chat 群参与模式(chatId → 模式)。缺省 mention。
    * always = 全响应·自主判断: 每条群消息都进 turn(ambient 标记), 模型用
@@ -260,6 +262,7 @@ export const TELEGRAM_DEFAULT_BEHAVIOR: TelegramBehaviorConfig = {
   emojiReactions: 'minimal',
   replyQuoteGroup: 'first',
   replyQuoteDm: 'off',
+  allowNonOwnerMessages: false,
 };
 
 export interface TelegramIMOptions {
@@ -744,6 +747,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // lane 投递, 不吞掉这次交互。
     const groupLane =
       opts?.deliverToOwnerDm === true && this.ownerUserId ? decodeLaneUserId(userId) : null;
+    // Guest DM 轮次的授权卡同样改投 owner: 访客私聊触发工具确认时, 卡片如果
+    // 原样发回访客, 回调只认 owner 点击 → 主人收不到入口, 轮次只会等超时。
+    // 访客 DM 没有群深链, 只带说明文案。
+    const guestDmRedirect =
+      !groupLane &&
+      opts?.deliverToOwnerDm === true &&
+      this.ownerUserId != null &&
+      userId !== this.ownerUserId;
     if (groupLane) {
       // 来源深链只认调用方给的那条触发消息 id —— 只有它知道这张卡属于哪一轮业务 turn。
       // 传输层能看到的两个信号都不等于业务轮次: 回挂目标在 'first' 档发出首条回复即被
@@ -771,6 +782,25 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       });
       // 刻意不动群 lane 的回挂目标: 那条触发消息在私聊里不存在, 消耗掉还会让本轮真正的
       // 回答失去引用。回声按**实际落地**的私聊维度记, 否则群窗口会以为 bot 在群里说过这段。
+      this.recordOwnEcho(
+        this.ownerUserId,
+        spec.title ? `[${spec.title}]` : spec.body.slice(0, 100),
+        sent,
+      );
+      return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+    }
+    if (guestDmRedirect) {
+      const notice = opts?.ownerDmNote ?? '';
+      const { html, replyMarkup } = buildCardPayload({
+        ...spec,
+        body: notice ? `${notice}\n\n${spec.body}` : spec.body,
+      });
+      const sent = await this.callSend<TgMessage>('sendMessage', {
+        chat_id: this.ownerUserId,
+        text: html,
+        parse_mode: 'HTML',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
       this.recordOwnEcho(
         this.ownerUserId,
         spec.title ? `[${spec.title}]` : spec.body.slice(0, 100),
@@ -1345,11 +1375,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.logStaleSkip(staleFor, 'private', m.message_id);
         return;
       }
-      if (String(m.from.id) !== this.ownerUserId) {
-        // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
-        // per-user 冷却防刷屏; 不进任何业务链路。
-        this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
-        return;
+      const isOwner = String(m.from.id) === this.ownerUserId;
+      if (!isOwner) {
+        const plain = (m.text ?? '').trim();
+        const isCommand = plain.startsWith('/') || plain === '!stop' || plain === '！stop';
+        if (!this.behaviorOf().allowNonOwnerMessages || isCommand) {
+          // 开关只放开普通对话; slash / !stop 的能力和状态面继续 owner 专属。
+          this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
+          return;
+        }
       }
       // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
       // (与 Discord 的 acceptedContext 模式同口径)。
@@ -1362,13 +1396,23 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         ...(this.host.media ? { media: this.host.media } : {}),
       });
       if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
+      const speaker = isOwner
+        ? undefined
+        : {
+            id: String(m.from.id),
+            name:
+              [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') ||
+              String(m.from.id),
+            ...(m.from.username ? { username: m.from.username } : {}),
+            isOwner: false,
+          };
       if (this.behaviorOf().replyQuoteDm === 'first') {
         this.queueReplyTarget(String(m.from.id), String(m.message_id));
       }
       // DM 也要 typing: 首条真实消息落地前, 聊天列表/标题栏的「正在输入…」
       // 是唯一反馈, 靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
       this.startTypingLoop(String(m.chat.id));
-      this.emitMessage(event);
+      this.emitMessage({ ...event, ...(speaker ? { speaker } : {}) });
       return;
     }
 

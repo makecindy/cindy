@@ -2163,11 +2163,30 @@
         "cellLabel": "Message notification",
         "hint": "Send a notification message to the Bot on connect/disconnect"
       },
+      "strangerChats": {
+        "label": "Other people",
+        "cellLabel": "Allow others to chat",
+        "hint": "Other people can DM or @ the bot to start normal chats. Control commands stay owner-only."
+      },
       "sessionNotification": {
         "label": "Session notifications",
         "cellLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
         "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
         "disabledHint": "First set up the bot and DM it once to complete binding."
+      },
+      "qr": {
+        "title": "Scan to create an agent",
+        "description": "Scan with the Feishu / Lark app to authorize Cindy to create and bind your bot.",
+        "qrAlt": "Feishu / Lark authorization QR code",
+        "userCode": "Auth code",
+        "expiresInSeconds": "Expires in {{seconds}}s",
+        "expiresInMinutes": "Expires in {{minutes}}m {{seconds}}s",
+        "qrPlaceholder": "QR code not generated",
+        "generate": "Generate authorization QR code",
+        "regenerate": "Regenerate QR code",
+        "generating": "Generating…",
+        "connecting": "Connecting…",
+        "cancel": "Cancel authorization"
       },
       "bind": "Bind"
     },
@@ -2513,6 +2532,15 @@
         "dmQuoteHint": {
           "off": "DM answers are sent without quoting (default, cleaner).",
           "first": "The first reply quotes the message you sent."
+        },
+        "accessLabel": "Other people",
+        "accessOption": {
+          "off": "Owner only",
+          "on": "Allowed"
+        },
+        "accessHint": {
+          "off": "Only you can chat with the bot in DMs.",
+          "on": "Others can have normal DM chats; control commands stay owner-only."
         },
         "error": {
           "load": "Telegram behavior could not be loaded. Check the connection and retry.",
@@ -10759,7 +10787,8 @@
       "dingtalkBotNetworkFailed": "Cannot reach DingTalk Open Platform. Check your network or proxy and try again",
       "dingtalkBotStreamFailed": "Credentials are valid, but the Stream connection was not established. Enable the bot, select Stream mode, and publish the app version",
       "dingtalkBotDisconnected": "DingTalk bot unbound",
-      "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot"
+      "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot",
+      "feishuQrCardActionHint": "QR-created bots need card.action.trigger event subscription added manually in the Feishu open platform console for card buttons to work"
     },
     "errors": {
       "openFileFailed": "Cannot open file in system",

@@ -156,6 +156,19 @@ function groupMessage(overrides: {
   };
 }
 
+function p2pMessage(sender: string, text: string, messageId: string): unknown {
+  return {
+    sender: { sender_id: { open_id: sender } },
+    message: {
+      message_id: messageId,
+      chat_id: 'oc_dm',
+      chat_type: 'p2p',
+      message_type: 'text',
+      content: JSON.stringify({ text }),
+    },
+  };
+}
+
 async function connect(): Promise<void> {
   const connecting = wsClient.start(credentials, { announceLifecycle: false });
   mocks.options.at(-1)?.onReady?.();
@@ -181,6 +194,7 @@ beforeEach(async () => {
   feishuEvents.removeAllListeners('message');
   mocks.firstAllowed.mockReturnValue(OWNER);
   mocks.checkOwner.mockImplementation((id: string) => id === OWNER);
+  wsClient.setAllowStrangerChats(false);
   // 恢复 openThread / replyText 默认实现 — 个别用例会覆盖它们
   // (含持续的 mockRejectedValue), 不能泄漏到后续用例。
   mocks.openThread.mockImplementation(async () => ({
@@ -243,6 +257,36 @@ describe('feishu group inbound gate', () => {
     await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({ sender: STRANGER }));
     expect(mocks.replyText).toHaveBeenCalledTimes(1);
     expect(events).toHaveLength(0);
+  });
+
+  it('allows a non-owner mention to start a turn when stranger chats are enabled', async () => {
+    wsClient.setAllowStrangerChats(true);
+    await connect();
+    const events = collectEvents();
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({ sender: STRANGER }));
+
+    expect(mocks.replyText).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.speaker).toEqual({ id: STRANGER, name: '', isOwner: false });
+  });
+
+  it('allows a non-owner private message when stranger chats are enabled, but drops commands', async () => {
+    wsClient.setAllowStrangerChats(true);
+    await connect();
+    const events = collectEvents();
+    await mocks.eventHandlers['im.message.receive_v1']!(
+      p2pMessage(STRANGER, 'hello', 'om_dm_stranger'),
+    );
+    await mocks.eventHandlers['im.message.receive_v1']!(
+      p2pMessage(STRANGER, '/new', 'om_dm_command'),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      senderId: STRANGER,
+      text: 'hello',
+      speaker: { id: STRANGER, isOwner: false },
+    });
   });
 
   it('owner mention in main stream opens a thread and emits into the new topic lane', async () => {

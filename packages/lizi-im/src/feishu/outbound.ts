@@ -1115,7 +1115,11 @@ export async function sendInteractive(
   // 授权卡改投宿主私聊(群 lane 专用语义): 群里的授权卡只有 owner 能答且
   // 消不掉。owner 未知时保持原 lane 投递, 不吞掉这次交互(telegram 同口径)。
   const owner = ownerGuard.firstAllowed();
-  if (opts?.deliverToOwnerDm && decodeLaneUserId(userId) && owner) {
+  // Guest DM 轮次同样改投: 访客私聊来的 permission 卡如果原样发回访客,
+  // cardActionParser 只认 owner 点击 → 主人收不到入口, 轮次只会等 30 分钟超时。
+  const isGroupLane = decodeLaneUserId(userId) !== null;
+  const isGuestDm = !isGroupLane && owner !== null && userId !== owner;
+  if (opts?.deliverToOwnerDm && owner && (isGroupLane || isGuestDm)) {
     const dmSpec: InteractiveCardSpec = opts.ownerDmNote
       ? { ...spec, body: `${opts.ownerDmNote}\n\n${spec.body}` }
       : spec;

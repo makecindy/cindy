@@ -81,10 +81,12 @@ describe('windowsPackagedInstanceBarrier', () => {
     async () => {
       const programName = `CindyBarrierTest${process.pid}`;
       const userDataDir = path.join(os.tmpdir(), programName);
+      // Cold CI Windows runners regularly need >2s for PowerShell startup
+      // plus the Add-Type P/Invoke compile inside the helper script.
       const first = await acquireWindowsPackagedInstanceBarrier({
         userDataDir,
         programName,
-        timeoutMs: 1_000,
+        timeoutMs: 10_000,
       });
       try {
         expect(first.isHeld()).toBe(true);

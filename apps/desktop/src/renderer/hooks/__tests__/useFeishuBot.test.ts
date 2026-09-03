@@ -45,6 +45,7 @@ type FeishuState = {
   hasSecret: boolean;
   ownerOpenId: string | null;
   lifecycleAnnouncement: boolean;
+  allowStrangerChats?: boolean;
   service?: 'feishu' | 'lark';
 };
 
@@ -59,11 +60,13 @@ function installFeishuApi() {
       hasSecret: true,
       ownerOpenId: null,
       lifecycleAnnouncement: true,
+      allowStrangerChats: false,
     })),
     save: vi.fn(),
     reconnect: vi.fn(),
     clear: vi.fn(),
     setLifecycleAnnouncement: vi.fn(),
+    setAllowStrangerChats: vi.fn(async () => ({ ok: true as const })),
     registrationBegin: vi.fn(),
     registrationCancel: vi.fn(),
     onStatusChange: vi.fn((listener: StatusListener) => {
@@ -272,5 +275,16 @@ describe('useFeishuBot', () => {
 
     expect(hook.result.current.appId).toBe('cli_registered');
     expect(hook.result.current.ownerOpenId).toBe('ou_registered_owner');
+  });
+
+  it('persists the stranger-chat switch through the Feishu bot API', async () => {
+    const { api } = installFeishuApi();
+    const hook = renderHook(() => useFeishuBot());
+    await waitFor(() => expect(hook.result.current.allowStrangerChats).toBe(false));
+
+    act(() => hook.result.current.setAllowStrangerChats(true));
+
+    expect(hook.result.current.allowStrangerChats).toBe(true);
+    expect(api.setAllowStrangerChats).toHaveBeenCalledWith(true);
   });
 });

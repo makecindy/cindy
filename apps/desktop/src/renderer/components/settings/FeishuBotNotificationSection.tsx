@@ -11,6 +11,8 @@ export function FeishuBotNotificationSection() {
     ownerOpenId,
     lifecycleAnnouncement,
     setLifecycleAnnouncement,
+    allowStrangerChats,
+    setAllowStrangerChats,
   } = useFeishuBot();
   const { enabled: sessionNotifyEnabled, setEnabled: setSessionNotifyEnabled } =
     useFeishuNotificationSettings();
@@ -36,6 +38,14 @@ export function FeishuBotNotificationSection() {
         hint={t('settings.feishuBot.lifecycleAnnouncement.hint')}
         checked={lifecycleAnnouncement}
         onCheckedChange={setLifecycleAnnouncement}
+      />
+      <div className="h-px w-full bg-[var(--border-default)]" />
+      <ImLifecycleAnnouncementSection
+        label={t('settings.feishuBot.strangerChats.label')}
+        cellLabel={t('settings.feishuBot.strangerChats.cellLabel')}
+        hint={t('settings.feishuBot.strangerChats.hint')}
+        checked={allowStrangerChats}
+        onCheckedChange={setAllowStrangerChats}
       />
       <div className="h-px w-full bg-[var(--border-default)]" />
       <ImLifecycleAnnouncementSection

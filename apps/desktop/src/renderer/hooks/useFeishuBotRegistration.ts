@@ -69,6 +69,17 @@ export function useFeishuBotRegistration(
     }
   }, [phase, secondsLeft]);
 
+  // 切换飞书/Lark 服务时丢弃当前 QR: 老二维码对应的设备码授权只对原服务
+  // 有效, 继续展示会让用户用新服务扫旧码, 造成「绑定了但渠道不对」的困惑。
+  useEffect(() => {
+    setPhase((prev) => (prev === 'qr' || prev === 'starting' ? 'idle' : prev));
+    setQrDataUrl(null);
+    setVerificationUrl(null);
+    setUserCode(null);
+    setExpiresAt(null);
+    setErrorMessage(null);
+  }, [service]);
+
   useEffect(() => {
     const off = window.electronAPI.feishuBot.onRegistrationStatus((payload) => {
       if (payload.status === 'pending') return;

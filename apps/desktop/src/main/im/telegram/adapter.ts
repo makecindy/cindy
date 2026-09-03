@@ -23,7 +23,7 @@ import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from './groupWindow';
 import { readTelegramPersona } from './behaviorStore';
 import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
-import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
+import { createTelegramGuestTurnPermissionPolicy, createTelegramGuestOnlyPolicy } from './permissionPolicy';
 import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
 import type { GroupHistoryAccessScope } from '../shared/groupHistoryAccess';
 
@@ -98,18 +98,22 @@ export function buildTelegramAdapter(
     // owner 触发的轮次, 提示注入可借 owner 轮次的宽松档执行危险操作; 统一
     // 强确认后确认卡只认 owner 点击, owner 多一次点按换掉这条注入通路。
     // DM(无 speaker)不挂, owner 私聊保持全速。
-    turnPermissionPolicyFor: (event) =>
-      event.speaker ? createTelegramGuestTurnPermissionPolicy(event.messageId) : undefined,
+    turnPermissionPolicyFor: (event) => {
+      if (!event.speaker) return undefined;
+      return event.speaker.isOwner === false
+        ? createTelegramGuestOnlyPolicy(event.messageId)
+        : createTelegramGuestTurnPermissionPolicy(event.messageId);
+    },
     groupHistoryAccessFor: (event): GroupHistoryAccessScope => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const provider = `telegram-personal:${event.contextId}`;
       return {
-        // 跨 lane 检索只给 DM(!lane, 上游已保证 DM 非 owner 不进业务链路)。
+        // 跨 lane 检索只给 owner DM; 开关放行的非 owner DM 显式保持无当前 lane。
         // 群轮次一律 lane-only —— 与上面 turnPermissionPolicyFor 的 2026-07-30
         // 裁决同一信任模型: 群窗口/引用块把成员可控文本注入 owner 触发的轮次,
         // 注入可借 owner 轮次把其它 lane 的历史检索出来回帖泄漏。owner 要跨
         // lane 查, 走私聊(检索类调用无强确认卡, 不能靠确认兜底)。
-        access: lane ? 'lane' : 'owner',
+        access: lane || event.speaker?.isOwner === false ? 'lane' : 'owner',
         provider,
         lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
       };

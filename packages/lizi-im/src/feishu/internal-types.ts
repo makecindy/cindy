@@ -36,6 +36,7 @@ export interface FeishuPublicState {
   ownerOpenId: string | null;
   error?: string;
   lifecycleAnnouncement: boolean;
+  allowStrangerChats: boolean;
   service: FeishuService;
 }
 

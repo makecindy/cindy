@@ -329,6 +329,8 @@ interface QueuedSend {
   /** Durable route side effects run only after provider acceptance, never on enqueue. */
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** True when the triggering sender is a non-owner (guest) turn. */
+  guestTurn?: boolean;
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -448,6 +450,8 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** True when the triggering sender is a non-owner (guest) turn. */
+  guestTurn?: boolean;
   /**
    * 这一轮的触发消息来自「禁止保存内容」的群。
    *
@@ -963,6 +967,7 @@ export function createTurnRunner(
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      ...(args.guestTurn === true ? { guestTurn: true } : {}),
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1038,7 +1043,7 @@ export function createTurnRunner(
     }
     try {
       const row = await repo.peekSessionById(item.rowId);
-      if (row && adapter.turnPolicyOptionalForMode(row.permissionMode)) {
+      if (row && adapter.turnPolicyOptionalForMode(row.permissionMode, item.guestTurn === true)) {
         log.info(
           `turn policy skipped by channel (mode=${row.permissionMode}) session=${item.rowId.slice(-8)}`,
         );

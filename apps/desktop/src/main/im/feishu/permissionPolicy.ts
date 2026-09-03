@@ -24,3 +24,18 @@ export function createFeishuGroupTurnPermissionPolicy(taskId: string): TurnPermi
     forceConfirmToolCall: channelForceConfirmMutatingToolCall,
   };
 }
+
+/**
+ * Guest (non-owner) group turn policy: force-confirms every tool call,
+ * including read-only leaves. Guests share the bot-level working directory
+ * with the owner; even read/glob/grep can expose owner-created files from
+ * earlier turns. Confirmation cards go to the owner's DM.
+ */
+export function createFeishuGuestTurnPermissionPolicy(taskId: string): TurnPermissionPolicy {
+	return {
+		origin: { kind: 'im', channel: 'feishu', taskId },
+		confirmationSurface: 'channel',
+		confirmationTimeoutMs: 30 * 60 * 1_000,
+		forceConfirmToolCall: () => true,
+	};
+}

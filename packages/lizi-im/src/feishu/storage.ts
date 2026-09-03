@@ -23,6 +23,7 @@ const KEY_APP_SECRET = 'feishu_bot_app_secret';
 const KEY_SERVICE = 'feishu_bot_service';
 const KEY_OWNER_OPEN_ID = 'feishu_bot_owner_open_id';
 const KEY_LIFECYCLE_ANNOUNCEMENT = 'feishu_bot_lifecycle_announcement';
+const KEY_ALLOW_STRANGER_CHATS = 'feishu_bot_allow_stranger_chats';
 
 function maskTail(s: string | null | undefined, tail = 4): string {
   if (!s) return '<null>';
@@ -115,6 +116,17 @@ export function writeLifecycleAnnouncement(enabled: boolean): void {
   const secrets = getHost().secrets;
   if (!secrets.isAvailable()) return;
   secrets.write(KEY_LIFECYCLE_ANNOUNCEMENT, String(enabled));
+}
+
+export function readAllowStrangerChats(): boolean {
+  const raw = getHost().secrets.read(KEY_ALLOW_STRANGER_CHATS);
+  return raw === 'true';
+}
+
+export function writeAllowStrangerChats(enabled: boolean): void {
+  const secrets = getHost().secrets;
+  if (!secrets.isAvailable()) return;
+  secrets.write(KEY_ALLOW_STRANGER_CHATS, String(enabled));
 }
 
 function normalizeService(value: string | null): FeishuService {

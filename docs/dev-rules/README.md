@@ -54,3 +54,5 @@
   device-link allowlist、手机版入口与功能类 PR 的远程／手机三选一门禁。
 - [`development-workflow.md`](development-workflow.md)：worktree dogfooding 会话契约、提 PR
   与直推 `main` 门禁，以及 Review P0／P1／P2 严重度口径。
+ [`reusable-collaboration/README.md`](reusable-collaboration/README.md)：项目无关的可复用
+ 协作 playbook 与验收清单，覆盖 Agent 指引、分支／PR、review 分层、UI 规范和自动化门禁。
