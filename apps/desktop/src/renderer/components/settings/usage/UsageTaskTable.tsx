@@ -146,6 +146,23 @@ export function mergeUsageSessionSnapshots(fullSession: Session, liveSession: Se
   return { ...merged, totalTokenUsage: fullSession.totalTokenUsage };
 }
 
+/** Apply the authoritative per-session token push to the matching full-query row. */
+export function updateUsageSessionTokenForScope(
+  state: UsageSessionsState,
+  scopeKey: string | null,
+  sessionId: string,
+  totalTokenUsage: number,
+): UsageSessionsState {
+  if (state.scopeKey !== scopeKey || state.status !== 'ready') return state;
+  let changed = false;
+  const sessions = state.sessions.map((session) => {
+    if (session.id !== sessionId || session.totalTokenUsage === totalTokenUsage) return session;
+    changed = true;
+    return { ...session, totalTokenUsage };
+  });
+  return changed ? { ...state, sessions } : state;
+}
+
 /**
  * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
  * 组件内部返回 null 会留下一张只有标题、正文全空的卡片 (会话被删光 / 列表首次加载中)。
@@ -174,6 +191,20 @@ export function useTopTokenSessions(
       deletedSessionIdsRef.current.add(sessionId);
       setUsageSessions((state) => removeUsageSessionForScope(state, scopeKey, sessionId));
     });
+    const unsubscribeTokens = window.electronAPI?.onUsageSessionTokensChanged?.(
+      ({ sessionId, totalTokens }, ownerStamp) => {
+        if (
+          !isDataOwnerPushCurrent(ownerStamp) ||
+          !Number.isFinite(totalTokens) ||
+          totalTokens < 0
+        ) {
+          return;
+        }
+        setUsageSessions((state) =>
+          updateUsageSessionTokenForScope(state, scopeKey, sessionId, totalTokens),
+        );
+      },
+    );
     void sessionService
       .list(20, 'all', { usageHistory: true })
       .then((rows) => {
@@ -191,6 +222,7 @@ export function useTopTokenSessions(
     return () => {
       cancelled = true;
       unsubscribe?.();
+      unsubscribeTokens?.();
     };
   }, [scopeKey]);
 
