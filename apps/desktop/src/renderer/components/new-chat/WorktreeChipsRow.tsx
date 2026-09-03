@@ -40,6 +40,7 @@ import {
   type FolderPickerSelectSource,
 } from './FolderPickerPopover';
 import { resolveBranchPick } from './branchPick';
+import { filterBranches } from './branchFilter';
 import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
 
@@ -407,7 +408,9 @@ function FolderChipBig({
 
 // ── [分支 │ ☑ worktree] 联合控件(对齐 Claude Code,2026-07-29 用户裁决) ──────
 
-function BranchWorktreeChip({
+// 导出仅为让分支搜索的交互(打开即聚焦 / 过滤 / 键盘导航 / 关闭清空)能被单测直接
+// render;它不是对外 API,WorktreeChipsRow 之外不要拿它当组件用。
+export function BranchWorktreeChip({
   branchLabel,
   branches,
   branchesLoading,
@@ -452,18 +455,25 @@ function BranchWorktreeChip({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return branches;
-    return branches.filter((b) => b.toLowerCase().includes(q));
-  }, [branches, query]);
+  const filtered = useMemo(() => filterBranches(branches, query), [branches, query]);
+
+  /**
+   * 关面板。关闭与清空搜索词是同一件事,收在这一个出口 —— 选中一项、Esc、点面板外
+   * 三条路径都走它。受控 Popover 的 onOpenChange 只在 Radix 自己发起关闭时触发,
+   * 程序化 setOpen(false) 不会走那条回调;两处各自记得清空的话,选中项这条路径必然
+   * 漏掉,于是上次的搜索词被带到下次打开(单测 branchPickerSearch 抓到过)。
+   */
+  const closePanel = useCallback(() => {
+    setOpen(false);
+    setQuery('');
+  }, []);
 
   const pick = useCallback(
     (branch: string) => {
       onPick(branch);
-      setOpen(false);
+      closePanel();
     },
-    [onPick],
+    [onPick, closePanel],
   );
 
   const listItems = useCallback(
@@ -553,10 +563,12 @@ function BranchWorktreeChip({
     <Popover
       open={open}
       onOpenChange={(next) => {
-        setOpen(next);
-        if (next) onOpenRequested();
-        // 关闭即清空:下次打开是全量列表,不留上一次的搜索词。
-        else setQuery('');
+        if (!next) {
+          closePanel();
+          return;
+        }
+        setOpen(true);
+        onOpenRequested();
       }}
     >
       <PopoverTrigger asChild>{branchTipped}</PopoverTrigger>
