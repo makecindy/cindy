@@ -358,6 +358,18 @@ describe('auxiliary-model-settings-store', () => {
     ).toEqual(['litellm-qwen3.6-plus']);
   });
 
+  it('keeps legacy refiner file fields ahead of utility environment overrides', () => {
+    vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER', 'litellm-deepseek-v4-flash');
+    vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER_CHAIN', 'codex-gpt-5.4-mini');
+
+    expect(
+      __testing.legacyVoiceOverrideRefs({
+        refinerProvider: 'litellm-kimi-k2.6',
+        refinerProviderChain: ['litellm-qwen3.6-plus'],
+      }),
+    ).toEqual(['litellm-kimi-k2.6', 'litellm-qwen3.6-plus']);
+  });
+
   it('keeps the implicit default head when migrating a legacy fallback-only chain', () => {
     expect(
       __testing.legacyVoiceOverrideRefs({

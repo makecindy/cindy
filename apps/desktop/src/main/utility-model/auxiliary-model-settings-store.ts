@@ -166,21 +166,21 @@ function legacyVoiceHeadRef(
   raw: Record<string, unknown>,
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  // Match UtilityModelSelection's precedence: utility file, utility env,
-  // legacy refiner file, legacy refiner env. In particular, an old file may
+  // Match the legacy VoiceInputModelSelection precedence: utility file,
+  // refiner file, utility env, refiner env. In particular, an old file may
   // only pin the provider while XDT_UTILITY_MODEL_PROVIDER_CHAIN supplies the
   // fallback tail.
   const providerValue = firstNonBlankString(
     raw.utilityModelProvider,
-    env.XDT_UTILITY_MODEL_PROVIDER,
     raw.refinerProvider,
+    env.XDT_UTILITY_MODEL_PROVIDER,
     env.XDT_VOICE_INPUT_REFINER_PROVIDER,
   );
   const providerRef = refFromUnknown(providerValue);
   const model = firstNonBlankString(
     raw.utilityModel,
-    env.XDT_UTILITY_MODEL,
     raw.refinerModel,
+    env.XDT_UTILITY_MODEL,
     env.XDT_VOICE_INPUT_REFINER_MODEL,
   );
   if (!providerRef && !model) return null;
@@ -233,8 +233,8 @@ function legacyVoiceOverrideRefs(
   const head = legacyVoiceHeadRef(source, env);
   const rawChain =
     readLegacyStringList(source, 'utilityModelProviderChain') ??
-    splitCommaList(env.XDT_UTILITY_MODEL_PROVIDER_CHAIN) ??
     readLegacyStringList(source, 'refinerProviderChain') ??
+    splitCommaList(env.XDT_UTILITY_MODEL_PROVIDER_CHAIN) ??
     splitCommaList(env.XDT_VOICE_INPUT_REFINER_PROVIDER_CHAIN);
   const chain = refsFromUnknownList(rawChain);
   const refs = collectUniqueRefs([head, ...chain]);
