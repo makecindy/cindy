@@ -50,6 +50,7 @@ const DRIZZLE_PROXY_SCHEMA = [
       used_project_context INTEGER NOT NULL DEFAULT 0,
       codex_history_has_product_prompt INTEGER,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       remote_host_id TEXT,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
@@ -189,6 +190,56 @@ describe('drizzle proxy', () => {
       // DELETE 同样透传
       const del = await client.drizzle.delete(sessions).where(eq(sessions.id, 's1')).run();
       expect(del.changes).toBe(1);
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it('UPDATE ... RETURNING 回传命中行,不再固定返回 [](#3496 CAS 自愈误拦)', async () => {
+    // 回归测试 — 防退化:compareAndClearSdkSessionId 用
+    // .returning({ id }) 的行数判断条件 UPDATE 是否命中。此前 executeAll 对
+    // 非 select builder 固定返回 [],磁盘上成功的 CAS 清除被判失败,
+    // invalid-resume 的一次性 fresh fallback 被「refusing to overwrite
+    // concurrent ...」拦成 UI 终态错误(No conversation found)。
+    const client = await createDbClient({ useInlineWorker: true });
+    try {
+      await applyDrizzleProxySchema(client);
+      await client.drizzle
+        .insert(sessions as never)
+        .values({ id: 's1', sdkSessionId: 'sdk-old', title: 'a', createdAt: 1, updatedAt: 1 } as never);
+
+      // 命中:返回被更新行(CAS 判胜)
+      const hit = await client.drizzle
+        .update(sessions)
+        .set({ sdkSessionId: null })
+        .where(eq(sessions.sdkSessionId, 'sdk-old'))
+        .returning({ id: sessions.id });
+      expect(hit).toEqual([{ id: 's1' }]);
+
+      // 未命中:返回 [](CAS 判负),且与「查询失败」可区分地正常 resolve
+      const miss = await client.drizzle
+        .update(sessions)
+        .set({ sdkSessionId: null })
+        .where(eq(sessions.sdkSessionId, 'sdk-old'))
+        .returning({ id: sessions.id });
+      expect(miss).toEqual([]);
+
+      // 字段别名映射:key 用调用方命名,不透传裸列名
+      const aliased = await client.drizzle
+        .update(sessions)
+        .set({ title: 'renamed' })
+        .where(eq(sessions.id, 's1'))
+        .returning({ sessionId: sessions.id, newTitle: sessions.title });
+      expect(aliased).toEqual([{ sessionId: 's1', newTitle: 'renamed' }]);
+
+      // .returning().get() 走 executeGet 分支,同样按别名映射
+      const got = await client.drizzle
+        .update(sessions)
+        .set({ title: 'got' })
+        .where(eq(sessions.id, 's1'))
+        .returning({ sessionId: sessions.id })
+        .get();
+      expect(got).toEqual({ sessionId: 's1' });
     } finally {
       await client.dispose();
     }

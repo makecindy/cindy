@@ -182,6 +182,8 @@ export interface EmbeddingRecordFailuresArgs {
   jobs: Array<{ rowid: number; attempts: number }>;
   errMsg: string;
   now: number;
+  /** #3416:确定性失败(INVALID_MODEL 等)整批直接进 'failed' 终态,不走退避。 */
+  terminal?: boolean;
 }
 
 export interface EmbeddingEnqueueArgs {

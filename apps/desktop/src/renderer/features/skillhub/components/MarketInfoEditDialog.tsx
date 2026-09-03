@@ -82,8 +82,32 @@ export function MarketInfoEditDialog({
       }
       setDisplayName(infoRes.info.displayName);
       setDescription(infoRes.info.description);
-      setCategorySlug(infoRes.info.categories?.[0] ?? currentCategories[0] ?? '');
-      if (catRes.success) setCategories(catRes.categories ?? []);
+      const editableBySlug = new Map(
+        (catRes.success ? catRes.categories ?? [] : [])
+          .filter((category) => category.source === 'author')
+          .map((category) => [category.slug, category]),
+      );
+      // Private/shared author tags may have no public-market count and thus be
+      // absent from /categories. Preserve them from the detail response so an
+      // unrelated metadata edit does not silently clear the current tag.
+      for (const tag of infoRes.info.tags ?? []) {
+        if (tag.source !== 'author' || editableBySlug.has(tag.slug)) continue;
+        editableBySlug.set(tag.slug, {
+          slug: tag.slug,
+          name: tag.name,
+          count: 0,
+          myCount: 1,
+          source: 'author',
+        });
+      }
+      const editableCategories = [...editableBySlug.values()];
+      const currentCategory = [
+        ...(infoRes.info.tags ?? []).filter((tag) => tag.source === 'author').map((tag) => tag.slug),
+        ...(infoRes.info.categories ?? []),
+        ...currentCategories,
+      ].find((slug) => editableBySlug.has(slug));
+      setCategorySlug(currentCategory ?? '');
+      setCategories(editableCategories);
     });
     return () => { cancelled = true; };
   }, [open, skillName, currentCategories]);
@@ -91,8 +115,7 @@ export function MarketInfoEditDialog({
   const displayNameMissing = displayName.trim().length === 0;
   const displayNameOverLimit = displayName.length > DISPLAY_NAME_LIMIT;
   const descriptionOverLimit = description.length > DESCRIPTION_LIMIT;
-  const categoryMissing = categories.length > 0 && !categorySlug;
-  const invalid = displayNameMissing || displayNameOverLimit || descriptionOverLimit || categoryMissing;
+  const invalid = displayNameMissing || displayNameOverLimit || descriptionOverLimit;
 
   const handleSave = async () => {
     if (invalid || saving) return;
@@ -103,7 +126,9 @@ export function MarketInfoEditDialog({
         fields: {
           displayName: displayName.trim(),
           summary: description,
-          categories: categorySlug ? [categorySlug] : [],
+          tags: categorySlug
+            ? [categories.find((category) => category.slug === categorySlug)?.name ?? categorySlug]
+            : [],
         },
       });
       if (!res.success) {
@@ -243,11 +268,6 @@ export function MarketInfoEditDialog({
                       })),
                     ]}
                   />
-                  {categoryMissing ? (
-                    <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
-                      {t('skillhub.publishDialog.categoryRequired')}
-                    </p>
-                  ) : null}
                 </div>
               </>
             )}

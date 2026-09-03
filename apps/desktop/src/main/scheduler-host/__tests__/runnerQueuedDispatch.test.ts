@@ -819,7 +819,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.listenerCount()).toBe(0);
   });
 
-  it('排队 Pi 即使模型不变也同步原生 provider-model，并在派发前写 Fast', async () => {
+  it('排队 Pi 跨 proxy 身份时本轮沿用当前路由，不热切 setModel', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
       userSendAt: null,
@@ -846,14 +846,47 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
     await queue.accept();
 
-    expect(harness.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-b' });
-    expect(mocks.setSessionProvider).toHaveBeenCalledWith(SESSION_ID, 'byom-b');
+    expect(harness.setModel).not.toHaveBeenCalled();
+    expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+    harness.emit({ type: 'done', data: {}, source: 'pi' });
+    await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  it('排队 Pi 同身份时即使模型不变也同步原生 provider-model，并在派发前写 Fast', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: null,
+      providerId: 'byom-a',
+    });
+    mocks.getSessionProvider.mockReturnValue('byom-a');
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    (harness.session as { agentKind: string }).agentKind = 'pi';
+    (harness.session as { model: string }).model = 'gpt-5.6-sol';
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps, {
+      metaModel: 'gpt-5.6-sol',
+      metaFastMode: true,
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({
+        agentKind: 'pi',
+        model: 'gpt-5.6-sol',
+        providerId: 'byom-a',
+      }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    expect(harness.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-a' });
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith(SESSION_ID, 'byom-a');
     expect(mocks.setSessionFastMode).toHaveBeenCalledWith(SESSION_ID, true);
     harness.emit({ type: 'done', data: {}, source: 'pi' });
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
 
-  it('排队 Pi 的原生路由同步失败时在 vendor dispatch 前 fail-closed', async () => {
+  it('排队 Pi 同身份的原生路由同步失败时在 vendor dispatch 前 fail-closed', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
       userSendAt: null,
@@ -873,7 +906,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       heartbeatSchedule({
         agentKind: 'pi',
         model: 'gpt-5.6-sol',
-        providerId: 'byom-b',
+        providerId: 'byom-a',
       }),
       createFireContext(),
     );

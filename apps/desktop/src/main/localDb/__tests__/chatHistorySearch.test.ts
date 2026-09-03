@@ -178,6 +178,8 @@ describe('searchChatHistoryHybrid', () => {
     });
 
     expect(dbMocks.query).toHaveBeenCalledTimes(1);
+    expect(dbMocks.query.mock.calls[0][0]).toContain('substr(m.content, 1, ?)');
+    expect(dbMocks.query.mock.calls[0][1][0]).toBe(16_384);
     expect(dbMocks.query.mock.calls[0][1].at(-1)).toBe(51);
     expect(result.hits.map((hit) => hit.sessionId)).toEqual(['s2']);
     expect(result.nextOffset).toBeNull();

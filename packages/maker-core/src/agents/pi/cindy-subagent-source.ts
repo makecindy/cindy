@@ -14,7 +14,7 @@
  *
  * 安全形态(重要,别当冗余删掉):
  *  - 子进程**继承 `PI_CODING_AGENT_DIR`**,但显式 `--no-extensions` 关闭隐式发现，再只用
- *    `--extension <configHome>/extensions/cindy-bridge.ts` 回装权限门。这样 project extension
+ *    `--extension <configHome>/internal-extensions/cindy-bridge.ts` 回装权限门。这样 project extension
  *    永远不会执行，bridge 的 tool_call 拦截 + 凭证路径硬拦仍对子代理生效。
  *  - 只读角色固定 read/grep/find/ls；worker/custom-write 才拿 edit/write/bash。Ask/Auto
  *    下 bridge 产生的 `extension_ui_request` 由 durable runner 记录，父 PI adapter 转交
@@ -896,7 +896,7 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
     mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });
     copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'));
-    copyFileSync(join(configHome, 'extensions', 'cindy-bridge.ts'), bridgeExtension);
+    copyFileSync(join(configHome, 'internal-extensions', 'cindy-bridge.ts'), bridgeExtension);
     try { chmodSync(join(childConfigHome, 'models.json'), 0o600); } catch (err) { /* best effort on Windows */ }
     try { chmodSync(bridgeExtension, 0o600); } catch (err) { /* best effort on Windows */ }
     mkdirSync(childSessionRoot, { recursive: true, mode: 0o700 });

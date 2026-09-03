@@ -146,6 +146,27 @@ export function resolveMobileNearBottomOnScroll(input: MobileNearBottomResolveIn
   return input.scrollDelta > MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
 }
 
+export interface MobileHistoryBrowseIntentInput {
+  /** The reader explicitly requested or dragged into older history. */
+  historyBrowseIntent: boolean;
+  /** A finger drag or its native momentum currently owns the viewport. */
+  userControllingScroll: boolean;
+}
+
+/**
+ * Keep history browsing authoritative across app/native anchor corrections.
+ *
+ * A completed prepend can emit one more positive-offset scroll event when MVCP is re-enabled.
+ * Without this guard that programmatic event looks like a downward user gesture and silently
+ * re-pins a live session to the tail. Only an active drag/momentum may recover follow from an
+ * explicit history-browse intent; the jump-to-latest path clears the intent separately.
+ */
+export function shouldPreserveMobileHistoryBrowseIntent(
+  input: MobileHistoryBrowseIntentInput,
+): boolean {
+  return input.historyBrowseIntent && !input.userControllingScroll;
+}
+
 // ── 贴底跟随的 contentSize 补滚护栏(振荡断路器)──
 // 背景(bug:冷开会话消息区空白 + 无 loading + 返回键无响应,杀 App 才恢复):
 // handleContentSize 的「贴底且内容长高 → 命令式 scrollToEnd」补偿,与 LegendList
@@ -287,16 +308,16 @@ export const MOBILE_ANCHOR_VERIFY_TOLERANCE = 2;
 export const MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS = 6;
 
 /**
- * 校验等待上限(独立于补滚预算):mVCP 还在结算 / metrics 未就绪时环只等不滚,等待
- * 不消耗补滚额度——否则连续的 data / size 调整会先把 6 次补滚预算烧光,布局安静后
+ * 校验等待上限(独立于补滚预算):列表布局还在结算 / metrics 未就绪时环只等不滚,等待
+ * 不消耗补滚额度——否则连续的行身份 / size 调整会先把 6 次补滚预算烧光,布局安静后
  * 反而没额度补滚,遮挡残留(review P1)。双帧一轮约 33ms,75 轮约 2.5s；超过该
  * 上限说明布局持续变化或状态异常,结束环交给后续 contentSize 事件继续跟随。
  */
 export const MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS = 75;
 
 /**
- * LegendList 的 mVCP 没有公开“本轮 native 调整已完成”信号。data / size 变化后保留
- * 一个短安静窗：期间 verifier 只等待；连续流式测量会延长窗口，但仍受上面的 2.5s
+ * LegendList 没有公开“本轮行坐标 / native size 调整已完成”信号。行身份 / size 变化后
+ * 保留一个短安静窗：期间 verifier 只等待；连续流式测量会延长窗口，但仍受上面的 2.5s
  * 总等待预算约束。120ms 约 7 帧，覆盖 JS commit、native layout 与滚动回传的常见链路。
  */
 export const MOBILE_MVCP_SETTLE_QUIET_MS = 120;
@@ -358,8 +379,7 @@ export type MobileAnchorVerifyAction =
  * 贴底锚定校验判定(纯函数,供 MessageRenderer 的 verify 环使用)。
  *
  * 背景:贴底跟随的落底 scrollToOffset 存在两类静默落空——
- * (a) maintainVisibleContentPosition 尚未真正关闭的帧里执行,被 mVCP 当成上方内容
- *     增长吸收/抵消(组件内 open-settle 注释实测过的偶发路径);
+ * (a) 行坐标或 size 锚定尚在结算的帧里执行,被后续布局调整吸收/抵消;
  * (b) 落底一刻 scrollMetricsRef 里的 contentHeight / viewportHeight 是陈旧值,目标
  *     offset 偏短,且之后再无 contentSize / layout 事件来纠正。
  * 两类的共同结果都是「最新消息停在底部浮层(composer)后面」。verify 环在每次落底后
@@ -367,8 +387,8 @@ export type MobileAnchorVerifyAction =
  */
 export function evaluateMobileAnchorVerify(input: MobileAnchorVerifyInput): MobileAnchorVerifyAction {
   if (!input.stickToLatest || !input.listVisible) return 'settled';
-  // mVCP 还开着(state 已请求关闭但 prop 未下发,或 settle 窗口仍在):此刻补滚会再次
-  // 被吸收,等窗口真正关闭后的下一轮再判。等待走独立预算,不消耗补滚额度。
+  // 行坐标 / size 锚定仍在 settle 窗口:此刻补滚可能被后续布局吸收,下一轮再判。
+  // 等待走独立预算,不消耗补滚额度。
   const { contentHeight, offsetY, viewportHeight } = input.metrics;
   if (input.preserveVisibleContentPosition || contentHeight <= 0 || viewportHeight <= 0) {
     return input.waitRounds >= MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS ? 'give-up' : 'wait';
@@ -426,9 +446,9 @@ export function mobileTopPaddingCompensationOffset(input: MobileTopPaddingCompen
 /**
  * 「加载更早」预取触发距离:离顶还有约两屏时就开始拉上一页,而不是撞到顶(旧默认 96px)才拉。
  * 目标是无感翻页——用户滑到旧内容顶端之前,更早的消息已经 prepend 完毕,浏览像连续对话一样;
- * 同时触发时刻锚点(首个可见消息 cell)远离接缝,mVCP 的视口补偿也最稳定。
+ * 同时触发时刻锚点(首个可见消息 cell)远离接缝,应用层视口补偿也最稳定。
  * 视口高度未知(布局前)时退回旧默认,不凭空放大。
- * 不会级联连拉:每页 80 条消息的高度远超两屏,prepend 落地后 offsetY 被 mVCP 顶高、立即脱离阈值。
+ * 不会级联连拉:每页 80 条消息的高度远超两屏,prepend 落地后手动锚定会顶高 offsetY、立即脱离阈值。
  * 边界假设(review P2):上一行成立的前提是页均高度 > 两屏,即平均每条 > viewportHeight/40
  * (典型视口 844px 约 21px/条,低于单行气泡的最小实高)。理论上整页全是极短消息才可能连拉一页,
  * 且有 loadingEarlier 门禁串行化,最坏是多拉一页,不会失控循环。
@@ -443,11 +463,13 @@ export interface MobileAutoLoadEarlierDecisionInput {
   actionDisabled: boolean;
   /** 「加载更早」入口可见(hasOlderMessages 且列表非空)。 */
   actionVisible: boolean;
-  /** 列表当前贴在内容末端(LegendList getState().isAtEnd,含 prepend 补偿后的记账)。 */
+  /** 列表当前贴在内容末端(LegendList getState().isAtEnd,含应用层 prepend 补偿后的记账)。 */
   atEnd: boolean;
+  /** 列表当前也贴在内容开头；与 atEnd 同时成立才说明内容未撑满视口。 */
+  atStart: boolean;
   /** 当前首个渲染项 key(prepend 落地后必变,作为「上次尝试有进展」的信号)。 */
   firstItemKey: string | null;
-  /** 冷开补齐预算尚有余额；只用于未经手势的初始短窗口。 */
+  /** 冷开补齐预算尚有余额；仍需 atStart + atEnd 确认视口未填满。 */
   initialAutoFillAllowed: boolean;
   /** 上一次自动触发时的首项 key;相同说明上次尝试无进展(失败/重复页),不再自动重试。 */
   lastAttemptedFirstItemKey: string | null;
@@ -468,7 +490,7 @@ export interface MobileAutoLoadEarlierDecisionInput {
  *   用户之后永远滚不出 1.3 × 阈值的复位区 → 永久哑火(实机高频复现的截图场景);
  * - 上一页在途时到达顶部(disabled guard 吞边沿),加载完成后停在顶部无任何重评估 → 哑火。
  * 修复:把判定改成电平语义——nearStart / atEnd 直接读 LegendList getState() 的实时账
- * (它的 scroll 记账含 prepend 锚点补偿,app 侧 onScroll 的原生 offsetY 在 prepend 后不可信),
+ * (它的 scroll 记账会接收应用层 prepend 锚点补偿,app 侧 onScroll 的原生 offsetY 在提交瞬间不可信),
  * 并在 scroll 事件、onStartReached、eligibility 变化(加载结束/入口点亮/首项变化)时都重新评估。
  *
  * 防失控:
@@ -479,10 +501,16 @@ export interface MobileAutoLoadEarlierDecisionInput {
  *   保证手势永远能重新驱动一次尝试。
  */
 export function shouldAutoLoadEarlier(input: MobileAutoLoadEarlierDecisionInput): boolean {
-  if (!input.userScrolledForOlder && !input.initialAutoFillAllowed) return false;
+  if (
+    !input.userScrolledForOlder
+    && (!input.initialAutoFillAllowed || !input.atStart || !input.atEnd)
+  ) return false;
   if (!input.actionVisible || input.actionDisabled) return false;
   if (!input.nearStart) return false;
-  if (input.atEnd && !input.initialAutoFillAllowed) return false;
+  // A short window can be both atStart and atEnd. After an explicit upward drag, allow it to
+  // request the previous page; only suppress user-driven prefetch when a longer list is still
+  // pinned at the latest edge without also being at the history edge.
+  if (input.atEnd && input.userScrolledForOlder && !input.atStart) return false;
   if (!input.firstItemKey) return false;
   return input.lastAttemptedFirstItemKey !== input.firstItemKey;
 }

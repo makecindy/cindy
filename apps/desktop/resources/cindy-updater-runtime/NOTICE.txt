@@ -1,0 +1,19 @@
+Microsoft Visual C++ Runtime — Windows x64 updater dependencies
+
+The DLL files in this directory are Microsoft Distributable Code. They are
+bundled only with the Windows x64 Cindy updater and are not licensed under the
+Cindy repository's Apache-2.0 license.
+
+Official source:
+https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+Redistribution documentation:
+https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+
+Visual Studio license terms:
+https://visualstudio.microsoft.com/license-terms/vs2022-ga-community/
+
+The exact source version, installer hash, file hashes, sizes, architecture and
+signer identities are recorded in manifest.json. The DLLs were taken from the
+official Visual Studio 2022 VC/Redist x64 Microsoft.VC143.CRT directory; they
+were not copied from Windows System32.

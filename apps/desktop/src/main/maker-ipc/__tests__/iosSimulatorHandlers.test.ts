@@ -639,6 +639,18 @@ describe('iOS Simulator IPC handlers', () => {
       }),
     ).resolves.toMatchObject({ ok: true });
     expect(callTool).toHaveBeenCalledWith('attach_device', {}, 'session-a');
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_CALL, {
+        sessionId: 'session-a',
+        name: 'delete_instance',
+        args: { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(callTool).toHaveBeenCalledWith(
+      'delete_instance',
+      { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' },
+      'session-a',
+    );
     for (const name of ['build_app', 'open_url', 'push_notification', 'delete_everything']) {
       await expect(
         harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_CALL, {
@@ -648,7 +660,7 @@ describe('iOS Simulator IPC handlers', () => {
         }),
       ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     }
-    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(2);
   });
 
   it('folds tool-call internals behind the same safe Main-to-Renderer boundary', async () => {

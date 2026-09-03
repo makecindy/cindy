@@ -274,6 +274,7 @@ describe("review read scope", () => {
     expect(await resolveReviewReadPath(source, workspace, grants)).toBeNull();
   });
 
+  // symlink-platform-skip: This case validates POSIX inode and hard-link confinement semantics.
   it("uses a confined package manifest to resolve scoped pnpm mirrors", async () => {
     if (process.platform === "win32") return;
     const root = await makeTempDir();

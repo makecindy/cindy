@@ -82,7 +82,10 @@ process.stdout.write(canvas.createCanvas(1, 1).toBuffer('image/png').subarray(1,
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });
     }
-  });
+    // @napi-rs/canvas + 平台 binding 二进制整棵 cp 进 tmpdir + 子进程 require 探针,
+    // 纯磁盘 IO;满载 Windows runner 上默认 20s 盖不住(与 readSheetProcessPackaging
+    // 的同款形态),放宽避免把环境慢误判为契约失败。
+  }, 120_000);
 
   it('maps every packaged Desktop target to its canvas binding', () => {
     expect(reviewPdfRuntimePackages('darwin', 'arm64')).toEqual([

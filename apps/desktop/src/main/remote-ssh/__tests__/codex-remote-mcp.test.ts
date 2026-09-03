@@ -17,6 +17,7 @@ import {
   ensureRemoteCodexMcpBridge,
   stripRemoteCodexMcpConfig,
   hasPendingRemoteMcpDrift,
+  invalidateRemoteCodexMcpEndpointState,
 } from '../codex-remote-mcp.js';
 
 // safeStorage 在测试 stub 里 isEncryptionAvailable=false → token 真源恒 null;
@@ -654,6 +655,28 @@ describe('ensureRemoteCodexMcpBridge server whitelist', () => {
 });
 
 describe('ensureRemoteCodexMcpBridge drift self-heal (appliedFingerprint)', () => {
+
+  it('preserves the alias port but clears endpoint-specific MCP state', async () => {
+    const { host } = fakeHost('host-endpoint-change', '');
+    const result = await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({
+        port: 38080,
+        serverNames: SERVERS,
+        bridgeInstanceId: 'bridge-endpoint-change',
+      }),
+      hasLiveTurnOnHost: () => false,
+    });
+    expect(result.ok).toBe(true);
+    expect(prefsOf('host-endpoint-change')).toMatchObject({
+      remotePort: 47921,
+      appliedFingerprint: expect.any(String),
+      bridgeLocalPort: 38080,
+    });
+
+    invalidateRemoteCodexMcpEndpointState('host-endpoint-change');
+
+    expect(prefsOf('host-endpoint-change')).toEqual({ remotePort: 47921 });
+  });
 
   it('bootstraps on the next ensure once the live turn settles (deferred drift stays persistent)', async () => {
     // defer 语义回归:live turn 期间 config 照写但 bootstrap 推迟;漂移未生效

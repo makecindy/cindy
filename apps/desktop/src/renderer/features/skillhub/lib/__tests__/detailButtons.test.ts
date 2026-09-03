@@ -28,13 +28,15 @@ function makeRegistryEntry(overrides: Partial<StoredInstall> = {}): StoredInstal
 }
 
 function makeInfo(overrides: Partial<SkillhubInfoResult> = {}): SkillhubInfoResult {
+  const isMine = overrides.isMine ?? false;
   return {
     name: 'test-skill',
     displayName: 'Test Skill',
     description: '',
     authorId: 'user_other',
     authorName: 'Alice',
-    isMine: false,
+    isMine,
+    canManage: overrides.canManage ?? isMine,
     latestVersion: '5',
     folderHash: 'def456',
     visibility: 'PUBLIC',
@@ -46,9 +48,11 @@ function makeInfo(overrides: Partial<SkillhubInfoResult> = {}): SkillhubInfoResu
 }
 
 function makeDetailState(overrides: Partial<DetailState> = {}): DetailState {
+  const isMine = overrides.isMine ?? null;
   return {
     origin: null,
-    isMine: null,
+    isMine,
+    canManage: overrides.canManage ?? isMine,
     localVersion: null,
     latestVersion: null,
     marketDeleted: false,
@@ -76,6 +80,7 @@ describe('deriveDetailState — no registryEntry', () => {
     expect(deriveDetailState(makeSkill({ registryEntry: null }), null, false)).toEqual({
       origin: null,
       isMine: null,
+      canManage: null,
       localVersion: null,
       latestVersion: null,
       marketDeleted: false,
@@ -91,6 +96,7 @@ describe('deriveDetailState — no registryEntry', () => {
     )).toEqual({
       origin: null,
       isMine: true,
+      canManage: true,
       localVersion: null,
       latestVersion: '2',
       marketDeleted: false,
@@ -108,6 +114,7 @@ describe('deriveDetailState — registryEntry + server info', () => {
     )).toEqual({
       origin: 'installed',
       isMine: true,
+      canManage: true,
       localVersion: '3',
       latestVersion: '5',
       marketDeleted: false,
@@ -123,6 +130,7 @@ describe('deriveDetailState — registryEntry + server info', () => {
     )).toEqual({
       origin: 'installed',
       isMine: false,
+      canManage: false,
       localVersion: '1',
       latestVersion: '1',
       marketDeleted: false,
@@ -138,6 +146,7 @@ describe('deriveDetailState — registryEntry + server info', () => {
     )).toEqual({
       origin: null,
       isMine: true,
+      canManage: true,
       localVersion: '2',
       latestVersion: '3',
       marketDeleted: false,
@@ -155,6 +164,7 @@ describe('deriveDetailState — server unavailable and market deleted', () => {
     )).toEqual({
       origin: 'installed',
       isMine: null,
+      canManage: null,
       localVersion: '3',
       latestVersion: null,
       marketDeleted: false,
@@ -488,5 +498,81 @@ describe('deriveDetailActionState', () => {
       null,
       null,
     )?.status).toEqual({ kind: 'publish-to-market' });
+  });
+
+  it('hides first-publish actions for read-only Skill Hub identities', () => {
+    expect(deriveDetailActionState(
+      makeDetailState({ isMine: false, latestVersion: null, marketDeleted: true }),
+      null,
+      null,
+      null,
+      false,
+    )?.status).toEqual({ kind: 'none' });
+  });
+
+  it('keeps the published version visible but hides republish for read-only identities', () => {
+    expect(deriveDetailActionState(
+      makeDetailState({ isMine: true, latestVersion: '1.2.3' }),
+      makeRegistryEntry({ origin: 'published', version: '1.2.3', folderHash: 'before' }),
+      'after',
+      null,
+      false,
+    )?.status).toEqual({ kind: 'published-tag', version: '1.2.3' });
+  });
+
+  it('does not offer management actions when organization ownership lacks per-skill permission', () => {
+    expect(deriveDetailActionState(
+      makeDetailState({
+        origin: 'published',
+        isMine: true,
+        canManage: false,
+        localVersion: '1.2.3',
+        latestVersion: '1.2.3',
+      }),
+      makeRegistryEntry({ origin: 'published', version: '1.2.3', folderHash: 'before' }),
+      'after',
+    )?.status).toEqual({ kind: 'none' });
+  });
+
+  it('uses the native write target to classify a team catalog skill as a first publish', () => {
+    const teamState = makeDetailState({
+      origin: 'installed',
+      isMine: true,
+      canManage: false,
+      localVersion: '1.0.0',
+      latestVersion: '1.0.0',
+    });
+    const nativeState = makeDetailState({
+      origin: 'installed',
+      isMine: false,
+      canManage: false,
+      localVersion: '1.0.0',
+      latestVersion: null,
+      marketDeleted: true,
+    });
+
+    expect(deriveDetailActionState(
+      teamState,
+      makeRegistryEntry({ origin: 'installed', version: '1.0.0' }),
+      'abc123',
+      null,
+      true,
+      nativeState,
+    )?.status).toEqual({ kind: 'publish-to-market' });
+  });
+
+  it('hides update actions when the user is signed out', () => {
+    expect(deriveDetailActionState(
+      makeDetailState({
+        origin: 'installed',
+        isMine: false,
+        localVersion: '1.0.0',
+        latestVersion: '2.0.0',
+      }),
+      makeRegistryEntry({ origin: 'installed', version: '1.0.0' }),
+      'abc123',
+      null,
+      false,
+    )?.status).toEqual({ kind: 'none' });
   });
 });

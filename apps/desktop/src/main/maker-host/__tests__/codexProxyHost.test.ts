@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -10,6 +10,12 @@ type Registry = {
   delete(threadId: string): void;
   readonly size: number;
 };
+
+// 每个用例都经 freshCodexProxyHost() 的 vi.resetModules() + 动态 import 重新加载
+// 整条 SUT 模块链(maker-core / compat-proxy / bridges)。首个用例还要承担全部
+// 依赖的首次编译加载，满载 CI 上会超出 vitest 默认 5s。只放宽本文件的预算，
+// 断言与流程不变。
+vi.setConfig({ testTimeout: 20_000 });
 
 const mockState = vi.hoisted(() => {
   let capturedRegistry: Registry | null = null;
@@ -142,6 +148,14 @@ async function freshCodexProxyHost() {
   return import('../codex-proxy-host.js');
 }
 
+// CI 忙时本文件首次 import SUT 要付 Vitest transform 整个模块图的冷启动钱:Linux 分片
+// 实测超默认 5s,Windows 分片超 15s,继续抬单测超时只是把死亡线后推。这笔成本属于环境
+// 冷启动,不属于任何断言 —— 文件级 beforeAll 先把模块图焐热(hook 超时独立计),之后各
+// 用例里 resetModules + import 只剩模块求值开销,回到默认超时内。
+beforeAll(async () => {
+  await import('../codex-proxy-host.js');
+}, 60_000);
+
 describe('withCodexUpstreamRecording', () => {
   const DEFAULT_UPSTREAM = 'https://gateway.example/v1';
   const ctxFor = (threadId?: string) => ({
@@ -151,7 +165,6 @@ describe('withCodexUpstreamRecording', () => {
     headers: threadId ? { 'thread-id': threadId } : {},
   }) as never;
 
-  // Linux CI shard 下本文件首次 resetModules + import SUT 经常超过默认 5s；断言未变。
   it('records the override upstream origin for the request thread', async () => {
     const host = await freshCodexProxyHost();
     host.resetCodexThreadUpstreamForTest();
@@ -166,7 +179,7 @@ describe('withCodexUpstreamRecording', () => {
     expect(host.getCodexThreadUpstreamOrigin('t-xai')).toBe('https://api.x.ai');
     // 没记录过的 thread 不借用别人的结论。
     expect(host.getCodexThreadUpstreamOrigin('t-other')).toBe(null);
-  }, 15_000);
+  });
 
   it('falls back to the default upstream when the decision does not override it', async () => {
     const host = await freshCodexProxyHost();
@@ -415,13 +428,13 @@ describe('createCrossProviderCompactionCompatTransform', () => {
     encrypted_content: 'REASONING_ENC',
   };
 
-  it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 ChatGPT 上游)', async () => {
+  it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 GPT 模型)', async () => {
     const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
       {
-        model: 'gpt-5.5',
+        model: 'not-gpt-5',
         input: [compactionItem, contextCompactionItem, agentMessage, reasoningItem, userMessage],
       },
       { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
@@ -452,7 +465,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
 
     const out = transform(
       {
-        model: 'gpt-5.5',
+        model: 'codex/claude-sonnet-4-6',
         input: [
           {
             type: 'agent_message',
@@ -474,30 +487,73 @@ describe('createCrossProviderCompactionCompatTransform', () => {
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
-      { model: 'gpt-5.5', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
+      { model: 'claude-sonnet-4-6', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
       { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
     )).toBeNull();
   });
 
-  it('Cindy Provider codex/* 原样透传 compaction，同时清理 agent 消息密文', async () => {
+  it('版本化 gpt-* 与任意 */gpt-* 在所有 Responses Provider 原样透传父子 Agent 协作密文(大小写不敏感)', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    host.registerComposed('session-custom-gpt-parent', 'thread-custom-gpt-parent', 'PRODUCT_PROMPT');
+    setSessionProvider('session-custom-gpt-parent', 'custom-gpt-pool');
+    const parentToChildMessage = {
+      type: 'agent_message',
+      author: 'parent',
+      recipient: 'researcher',
+      content: [{ type: 'encrypted_content', encrypted_content: 'gAAAAA_PARENT_TO_CHILD_TASK' }],
+    };
+
+    try {
+      const transform = host.createCrossProviderCompactionCompatTransform();
+      for (const model of [
+        'gpt-5.6-sol',
+        'GPT-5.6-TERRA',
+        'codex/gpt-5.6-sol',
+        'OPENAI/GPT-5.6-TERRA',
+        'custom/pool/gpt-5.6-sol',
+      ]) {
+        expect(transform(
+          {
+            model,
+            input: [compactionItem, parentToChildMessage, agentMessage, userMessage],
+          },
+          {
+            ...CTX_BASE,
+            upstreamBase: 'https://custom-pool.example.com/v1',
+            headers: {
+              'thread-id': 'thread-custom-gpt-child',
+              'x-openai-subagent': 'collab_spawn',
+              'x-codex-parent-thread-id': 'thread-custom-gpt-parent',
+            },
+          },
+        )).toBeNull();
+      }
+    } finally {
+      host.unregister('session-custom-gpt-parent');
+      clearSessionProvider('session-custom-gpt-parent');
+    }
+  });
+
+  it('gpt-oss 与非版本化 gpt 标签仍删除父子 Agent 协作密文', async () => {
     const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
     const transform = createCrossProviderCompactionCompatTransform();
-
-    const out = transform(
-      { model: 'codex/gpt-5.6-sol', input: [compactionItem, agentMessage, userMessage] },
-      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
-    ) as { input: Array<Record<string, unknown>> };
-
-    expect(out.input).toEqual([
-      compactionItem,
-      {
-        type: 'agent_message',
-        author: 'researcher',
-        recipient: 'parent',
-        content: [{ type: 'input_text', text: 'readable agent result' }],
-      },
-      userMessage,
-    ]);
+    for (const model of ['gpt-oss:20b', 'codex/gpt-oss:20b', 'gpt-image-1']) {
+      const out = transform(
+        { model, input: [agentMessage, userMessage] },
+        { ...CTX_BASE, upstreamBase: 'https://custom-pool.example.com/v1' },
+      ) as { input: Array<Record<string, unknown>> };
+      expect(out.input).toEqual([
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          recipient: 'parent',
+          content: [{ type: 'input_text', text: 'readable agent result' }],
+        },
+        userMessage,
+      ]);
+      expect(JSON.stringify(out.input)).not.toContain('AGENT_ENC');
+    }
   });
 
   it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {
@@ -648,6 +704,20 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     expect(chatBridgeCapabilitiesForRoute(upstream, 'kimi-k3').imageInput).toBe('image_url');
   });
+
+  it.each([
+    ['https://api.deepseek.com/v1', 'deepseek-v4-flash', 'reasoning_content'],
+    ['https://api.deepseek.com', 'deepseek-chat', 'reasoning_content'],
+    ['https://relay.example/v1', 'deepseek-v4-flash', undefined],
+    ['http://api.deepseek.com/v1', 'deepseek-v4-flash', undefined],
+    ['https://api.deepseek.com/v1', 'kimi-k3', undefined],
+  ] as const)(
+    'reasoning_content 历史回传只对官方 DeepSeek 路由开启 (#3441): %s %s → %s',
+    async (upstream, model, expected) => {
+      const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+      expect(chatBridgeCapabilitiesForRoute(upstream, model).reasoningHistoryField).toBe(expected);
+    },
+  );
 
   it.each([
     ['https://api.kimi.com/coding/v1', 'k3'],
@@ -911,6 +981,75 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       });
     } finally {
       clearSessionProvider('session-history-chat');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('strips parent-to-child ciphertext when a versioned GPT model uses the Chat bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'OPENAI/GPT-5.6-SOL';
+    setCustomProviders([
+      buildUserProvider({
+        id: 'gpt-history-chat-provider',
+        name: 'GPT History Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://gpt-chat-provider.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: model, name: 'Custom GPT' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'gpt-history-provider-key');
+    host.registerComposed('session-gpt-history-chat', 'thread-gpt-history-chat', 'PRODUCT_PROMPT');
+    setSessionProvider('session-gpt-history-chat', 'gpt-history-chat-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const parentToChildMessage = {
+      type: 'agent_message',
+      author: 'parent',
+      recipient: 'researcher',
+      content: [{ type: 'encrypted_content', encrypted_content: 'gAAAAA_PARENT_TO_CHILD_TASK' }],
+    };
+    const parsedBody = { model, input: [parentToChildMessage] };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-gpt-history-chat' },
+    };
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(parsedBody, ctx));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      if (!decision?.localHandler) throw new Error('expected GPT Chat bridge local handler');
+
+      const res = {} as never;
+      await decision.localHandler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx,
+        res,
+      });
+      const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+        | { handle: ReturnType<typeof vi.fn> }
+        | undefined;
+      expect(bridge?.handle).toHaveBeenCalledWith({
+        parsedBody: {
+          ...parsedBody,
+          instructions: 'PRODUCT_PROMPT',
+          input: [],
+        },
+        res,
+      });
+    } finally {
+      clearSessionProvider('session-gpt-history-chat');
       setCustomProviderKeyReader(() => null);
       setCustomProviders([]);
     }
@@ -4287,8 +4426,10 @@ describe('codex proxy host', () => {
         ],
         tool_choice: { type: 'function', name: 'exec' },
         input: [
+          // `ctc_1` becomes `fc_1`: a Responses upstream validates an item's id prefix against
+          // its type, so flipping the dialect without flipping the prefix is rejected with 400.
           expect.objectContaining({
-            type: 'function_call', id: 'ctc_1', status: 'completed', name: 'exec',
+            type: 'function_call', id: 'fc_1', status: 'completed', name: 'exec',
             arguments: '{"input":"text(\\"old\\")"}',
           }),
           { type: 'function_call_output', call_id: 'old_call', output: 'old result' },

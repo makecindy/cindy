@@ -156,6 +156,8 @@ final class XboxGamepadReporter {
   /// nil until the first refresh, so an empty device list still gets logged once.
   private var lastSeenSummary: String?
   private var lastPresenceSignature: [String: String] = [:]
+  private var switch2UsbWanted = false
+  private var switch2PollTimer: Timer?
 
   func start() {
     if #available(macOS 11.3, *) {
@@ -176,6 +178,28 @@ final class XboxGamepadReporter {
       self?.refresh()
     }
     refresh()
+  }
+
+  func setSwitch2UsbWanted(_ wanted: Bool) {
+    if switch2UsbWanted == wanted { return }
+    switch2UsbWanted = wanted
+    if wanted {
+      _ = switch2_usb_ensure()
+      if switch2PollTimer == nil {
+        switch2PollTimer = Timer.scheduledTimer(withTimeInterval: 0.008, repeats: true) { [weak self] _ in
+          self?.refreshSwitch2IfNeeded()
+        }
+      }
+      refreshSwitch2IfNeeded()
+      return
+    }
+    switch2PollTimer?.invalidate()
+    switch2PollTimer = nil
+    switch2_usb_shutdown()
+    if observed["nintendo"] == nil, lastPresenceSignature["nintendo"] != "absent" {
+      lastPresenceSignature["nintendo"] = "absent"
+      emit(["kind": "presence", "present": false, "family": "nintendo"])
+    }
   }
 
   func refresh() {
@@ -205,6 +229,12 @@ final class XboxGamepadReporter {
 
     for family in GAMEPAD_FAMILIES {
       guard let controller = next[family] else {
+        if family == "nintendo" {
+          observed[family] = nil
+          if switch2UsbWanted {
+            continue
+          }
+        }
         if observed[family] != nil || lastPresenceSignature[family] != "absent" {
           observed[family] = nil
           lastPresenceSignature[family] = "absent"
@@ -219,6 +249,77 @@ final class XboxGamepadReporter {
       emitPresence(from: controller, family: family)
       emitFrame(from: controller, family: family)
     }
+    if next["nintendo"] == nil {
+      refreshSwitch2IfNeeded()
+    }
+  }
+
+  private func refreshSwitch2IfNeeded() {
+    if !switch2UsbWanted { return }
+    if observed["nintendo"] != nil { return }
+    var state = Switch2UsbState()
+    switch2_usb_copy_state(&state)
+    if !state.present {
+      if lastPresenceSignature["nintendo"] != "absent" {
+        lastPresenceSignature["nintendo"] = "absent"
+        emit(["kind": "presence", "present": false, "family": "nintendo"])
+      }
+      return
+    }
+    emitSwitch2(state)
+  }
+
+  private func emitSwitch2(_ state: Switch2UsbState) {
+    let payload: [String: Any] = [
+      "kind": "presence",
+      "present": true,
+      "name": "Pro Controller",
+      "category": "Nintendo Switch 2",
+      "family": "nintendo",
+      "transport": "usb",
+      "batteryState": "unknown",
+    ]
+    let signature = "switch2-usb:Pro Controller"
+    if signature != lastPresenceSignature["nintendo"] {
+      lastPresenceSignature["nintendo"] = signature
+      emit(payload)
+      emit([
+        "kind": "log",
+        "level": "info",
+        "message": "controllers: Nintendo/Pro Controller/family=nintendo (switch2-usb)",
+      ])
+    }
+    emit([
+      "kind": "frame",
+      "family": "nintendo",
+      "buttons": [
+        "a": state.a,
+        "b": state.b,
+        "x": state.x,
+        "y": state.y,
+        "lb": state.lb,
+        "rb": state.rb,
+        "lt": state.lt,
+        "rt": state.rt,
+        "view": state.view,
+        "menu": state.menu,
+        "xbox": state.xbox,
+        "ls": state.ls,
+        "rs": state.rs,
+        "dpadUp": state.dpad_up,
+        "dpadDown": state.dpad_down,
+        "dpadLeft": state.dpad_left,
+        "dpadRight": state.dpad_right,
+      ],
+      "axes": [
+        "lx": state.lx,
+        "ly": state.ly,
+        "rx": state.rx,
+        "ry": state.ry,
+      ],
+      "ltAnalog": state.lt ? 1.0 : 0.0,
+      "rtAnalog": state.rt ? 1.0 : 0.0,
+    ])
   }
 
   private func attach(_ controller: GCController) {
@@ -288,6 +389,16 @@ DispatchQueue.global(qos: .utility).async {
     if trimmed == "probe" {
       DispatchQueue.main.async {
         reporter.refresh()
+      }
+    }
+    if trimmed == "switch2-usb on" {
+      DispatchQueue.main.async {
+        reporter.setSwitch2UsbWanted(true)
+      }
+    }
+    if trimmed == "switch2-usb off" {
+      DispatchQueue.main.async {
+        reporter.setSwitch2UsbWanted(false)
       }
     }
   }

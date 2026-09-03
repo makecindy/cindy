@@ -32,6 +32,7 @@ export function printHelp(log = console.log) {
   log('    # 升级到上游最新版：下载全平台二进制，并修改对应 latest.json pin');
   log('    pnpm update:claude');
   log('    pnpm update:codex');
+  log('    pnpm update:codex-package');
   log('    pnpm update:ripgrep');
   log('    pnpm update:pi');
   log('    # 依次把四种二进制全部升级到上游最新版');
@@ -39,6 +40,7 @@ export function printHelp(log = console.log) {
   log('    # 固定到指定版本：下面是完整示例，会修改 latest.json pin');
   log('    pnpm update:claude 2.1.199');
   log('    pnpm update:codex 0.144.1');
+  log('    pnpm update:codex-package 0.145.0');
   log('    pnpm update:ripgrep 15.1.0');
   log('    pnpm update:pi 0.83.0');
   log('    # 发布到 CDN 不在本仓：见同级 cindy-binary-release 工程（pnpm release:<kind>）');
@@ -53,6 +55,9 @@ export function printHelp(log = console.log) {
   log('    pnpm mobile:sim:start');
   log('    # 中国大陆版模拟器：先 rebuild 安装，再 start 启动 Metro');
   log('    pnpm mobile:sim:rebuild -- --region=cn');
+  log('    # Windows 一键复用/启动 cindy-api36、配置 adb reverse，并启动中国大陆版 Metro');
+  log('    pnpm mobile:sim:start:cn');
+  log('    # 等价的显式区域写法；--no-emulator 可只启动 Metro');
   log('    pnpm mobile:sim:start -- --region=cn');
   log('    # 查看当前 Metro 对应的 checkout / branch');
   log('    pnpm mobile:sim:whoami');

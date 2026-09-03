@@ -147,6 +147,49 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
+  it('uses cause-neutral Codex app-server retirement copy and does not suggest switching models', () => {
+    render(
+      <ErrorBanner
+        error="app-server force-retired: Codex desktop auth login"
+        errorReason="app-server-force-retired"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        modelId="codex/gpt-5.6-sol"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexAppServerRetired')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.codexAppServerRestarted')).toBeNull();
+    expect(screen.queryByText('app-server force-retired: Codex desktop auth login')).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
+
+  it.each([
+    { label: 'SSH', remoteHostId: 'ssh-1' },
+    { label: 'device-link', deviceLinkDeviceId: 'device-1' },
+  ])(
+    'uses neutral force-retired copy for $label Codex sessions',
+    ({ remoteHostId, deviceLinkDeviceId }) => {
+      render(
+        <ErrorBanner
+          error="app-server force-retired: CodexAgent auth invalidated: remote credentials changed"
+          errorReason="app-server-force-retired"
+          retryText="retry this turn"
+          onRetry={vi.fn()}
+          agentKind="codex"
+          modelId="gpt-5.6-sol"
+          remoteHostId={remoteHostId}
+          deviceLinkDeviceId={deviceLinkDeviceId}
+        />,
+      );
+
+      expect(screen.getByText('chat.errorBanner.codexAppServerRetired')).toBeTruthy();
+      expect(screen.queryByText('chat.errorBanner.codexAppServerRestarted')).toBeNull();
+      expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    },
+  );
+
   it('opens ChatGPT App without starting Cindy OAuth for an invalidated system-shared login', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
@@ -753,6 +796,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
         confirmText: 'chatgptAuthRecovery.openApp',
         tertiaryText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
+        maxWidth: 520,
         autoFocusConfirm: true,
       }),
     );
@@ -806,6 +850,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
         confirmText: 'chatgptAuthRecovery.openApp',
         tertiaryText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
+        maxWidth: 520,
         autoFocusConfirm: true,
       }),
     );

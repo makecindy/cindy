@@ -1,0 +1,19 @@
+{
+  "name": "@cindy/design-tokens",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cindy design-token shadow layer (DTCG reference + semantic). Zero runtime consumers until DS-8.",
+  "type": "module",
+  "scripts": {
+    "generate": "node --experimental-strip-types src/generate.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -40,7 +40,8 @@ import type {
 import { getDbClient } from './client/current';
 import { messages as messagesTable, sessions as sessionsTable } from './schema';
 import { messageToCamel } from './mapper';
-import { fuseRRF, buildFtsMatch } from './chatHistorySearch.pure';
+import { fuseRRF, buildMessagesFtsMatch, extractMessagesFtsTokens } from './chatHistorySearch.pure';
+import { buildSnippetFromContent, SNIPPET_SOURCE_MAX_CHARS } from './cjkSeg';
 import { resolveStoredWorkingDirCandidates } from './workingDirHistoryFilter';
 import { createLogger } from '../logger';
 import { getEmbeddingService } from '../embedding-host';
@@ -63,8 +64,6 @@ const VEC_OVERFETCH = 5;
 /** 融合候选池硬上限 —— offset 游标只在池内翻页; 超出则 poolCapped=true 提示用户缩范围。 */
 const FUSE_POOL_CAP = 100;
 const MAX_INTERNAL_POOL = 500;
-/** snippet 高亮上下文 token 半径(与 session-search.ts 对齐)。 */
-const SNIPPET_RADIUS = 8;
 
 interface ArmRow {
   messageId: string;
@@ -226,15 +225,20 @@ async function runFtsArm(
   args: SearchChatHistoryEngineArgs,
   workdirCandidates: string[] | null,
 ): Promise<ArmRow[]> {
-  const match = buildFtsMatch(args.query);
+  const queryTokens = extractMessagesFtsTokens(args.query);
+  const match = buildMessagesFtsMatch(args.query, 'OR');
   if (!match) return [];
   const { clause, params } = buildFilterClause(args, workdirCandidates);
+  // snippet 从原文 m.content 重建，不用索引侧文本：
+  // messages_fts.content 是 cjk_seg 插过空格的形态，直接展示会篡改原文空格
+  // （「foo登录bar」多出假空格、「登录 报错」的真空格被吃）。FTS5 无 offsets()，
+  // 命中位置由 buildSnippetFromContent 用同一份查询 token 在原文对齐的索引串里重算。
   const sql = `
     SELECT m.id          AS messageId,
            m.session_id  AS sessionId,
            m.role        AS role,
            m.created_at  AS createdAt,
-           snippet(messages_fts, -1, '<mark>', '</mark>', '…', ${SNIPPET_RADIUS}) AS snippet
+           substr(m.content, 1, ?) AS content
       FROM messages_fts
       JOIN messages m ON m.id = messages_fts.message_id
       JOIN sessions s ON s.id = m.session_id
@@ -249,14 +253,14 @@ async function runFtsArm(
       sessionId: string;
       role: string;
       createdAt: number;
-      snippet: string;
-    }>(sql, [match, ...params, limit]);
+      content: string;
+    }>(sql, [SNIPPET_SOURCE_MAX_CHARS, match, ...params, limit]);
     return rows.map((r) => ({
       messageId: r.messageId,
       sessionId: r.sessionId,
       role: r.role,
       createdAt: r.createdAt,
-      snippet: r.snippet,
+      snippet: buildSnippetFromContent(r.content, queryTokens),
       distance: null,
     }));
   } catch (e) {

@@ -331,6 +331,46 @@ describe('orcaTeamStore', () => {
     ]);
   });
 
+  it('isOrphanedTeamInit:零 worker 且无存活 reservation 判孤儿;活租约或任意 worker 行则不判 (#3555)', async () => {
+    const { isOrphanedTeamInit } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    const now = Date.now();
+    // 年龄地板(review 反馈):刚创建的 team 可能仍在别处初始化,不判孤儿。
+    const staleCreatedAt = now - 120_000;
+    await client.exec(
+      'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['team-young', 'lead-1', 'active', now, now],
+    );
+    await expect(isOrphanedTeamInit('team-young')).resolves.toBe(false);
+    await client.exec(
+      'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['team-orphan', 'lead-1', 'active', staleCreatedAt, staleCreatedAt],
+    );
+    await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(true);
+
+    await client.exec(
+      'INSERT INTO orca_worker_creation_reservations (id, team_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+      ['resv-1', 'team-orphan', 'dev', now, now + 60_000],
+    );
+    await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(false);
+    await client.exec(
+      'UPDATE orca_worker_creation_reservations SET expires_at = ? WHERE id = ?',
+      [now - 1, 'resv-1'],
+    );
+    await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(true);
+
+    await client.exec(
+      'INSERT INTO sessions (id, status, created_at, updated_at) VALUES (?, ?, ?, ?)',
+      ['ws-1', 'archived', now, now],
+    );
+    await client.exec(
+      'INSERT INTO orca_workers (id, team_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['worker-1', 'team-orphan', 'ws-1', now, now],
+    );
+    await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(false);
+  });
+
   function createTestDbClient(): DbClient {
     const dbHandle = new Database(':memory:');
     rawDb = dbHandle;
@@ -384,6 +424,13 @@ describe('orcaTeamStore', () => {
         updated_at INTEGER NOT NULL
       );
 
+      CREATE TABLE orca_worker_creation_reservations (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
       CREATE TABLE orca_teams (
         id TEXT PRIMARY KEY,
         lead_session_id TEXT NOT NULL,

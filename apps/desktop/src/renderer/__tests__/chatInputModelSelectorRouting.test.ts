@@ -3,12 +3,240 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const chatInputSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
-  'utf8',
+const normalizeSourceText = (source: string): string => source.replace(/\r\n?/g, '\n');
+const chatInputSource = normalizeSourceText(
+  readFileSync(
+    resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
+    'utf8',
+  ),
 );
 
 describe('ChatInput model source switching wiring', () => {
+  it('normalizes Windows checkout line endings before matching guard order', () => {
+    const windowsCheckoutSource = chatInputSource.replace(/\n/g, '\r\n');
+    expect(normalizeSourceText(windowsCheckoutSource)).toBe(chatInputSource);
+  });
+
+  it('uses the unified 90% switch-rebuild line instead of a harness compaction setting', () => {
+    const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const end = chatInputSource.indexOf('// session-agent-switch', start);
+    const guard = chatInputSource.slice(start, end);
+    expect(guard).toContain(
+      'autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT',
+    );
+    expect(guard).not.toContain('compactionGetState');
+  });
+
+  it('guards same-model provider route changes with the target provider window', () => {
+    const guardStart = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const guardEnd = chatInputSource.indexOf('// session-agent-switch', guardStart);
+    const guard = chatInputSource.slice(guardStart, guardEnd);
+    expect(guard).toContain('resolveProviderModelContextWindow({');
+    expect(guard).toContain('providerId: targetRouteProviderId');
+
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const providerEnd = chatInputSource.indexOf('const handleProviderChange = useCallback(', providerStart);
+    const providerChange = chatInputSource.slice(providerStart, providerEnd);
+    expect(providerChange).toContain(
+      '(reconciledModelId !== activeModel || newProviderId !== effectiveSourceId)',
+    );
+    expect(providerChange).toMatch(
+      /confirmModelSwitchContextGuard\(\s*reconciledModelId,\s*sourceRemoteDeviceId,\s*newProviderId/,
+    );
+  });
+
+  it('guards model-only duplicate ids with the provider preserved by the final route', () => {
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+
+    expect(modelChange).toMatch(
+      /confirmModelSwitchContextGuard\(\s*newModelId,\s*sourceRemoteDeviceId,\s*effectiveSourceId,/,
+    );
+    expect(modelChange).toContain(
+      'const { efforts, defaultEffort } = resolveModelEfforts(newModelId, effectiveSourceId);',
+    );
+    expect(modelChange).toMatch(
+      /setModelWithFinalWindowConfirmation\(\s*newModelId,\s*effectiveSourceId,/,
+    );
+    expect(modelChange).toMatch(
+      /maker\.setModel\(\s*sessionId,\s*newModelId,\s*undefined,/,
+    );
+  });
+
+  it('keeps exact-window confirmation local and removes it from device-link calls', () => {
+    const guardStart = chatInputSource.indexOf(
+      'const confirmModelSwitchContextGuard = useCallback(',
+    );
+    const guardEnd = chatInputSource.indexOf(
+      'const setModelWithFinalWindowConfirmation',
+      guardStart,
+    );
+    const guard = chatInputSource.slice(guardStart, guardEnd);
+    expect(guard).toContain(
+      'return accepted && targetContextWindow ? targetContextWindow : accepted',
+    );
+
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+    const providerChange = chatInputSource.slice(providerStart);
+    for (const route of [modelChange, providerChange]) {
+      const remoteSet = route.indexOf('const remoteSetModelResult = await remoteMaker.setModel(');
+      const localSet = route.indexOf('await setModelWithFinalWindowConfirmation(', remoteSet);
+      expect(remoteSet).toBeGreaterThan(-1);
+      expect(localSet).toBeGreaterThan(remoteSet);
+      const remoteRoute = route.slice(remoteSet, localSet);
+      expect(remoteRoute).not.toContain('setModelWithFinalWindowConfirmation');
+      expect(remoteRoute).not.toContain('confirmedContextWindow');
+      expect(route.slice(localSet)).toContain('confirmedFinalWindow ?? confirmedGuardContextWindow');
+    }
+    expect(chatInputSource).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
+  });
+
+  it('passes the guard-confirmed window into both initial trusted local set-model calls', () => {
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const providerEnd = chatInputSource.indexOf(
+      'const handleProviderChange = useCallback(',
+      providerStart,
+    );
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+    const providerChange = chatInputSource.slice(providerStart, providerEnd);
+
+    for (const route of [modelChange, providerChange]) {
+      expect(route).toContain("if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;");
+      expect(route).toMatch(
+        /const confirmedContextWindow =\s*confirmedFinalWindow \?\? confirmedGuardContextWindow;\s*return window\.electronAPI\.maker\.setModel/,
+      );
+      expect(route.indexOf("if (!proceed ||")).toBeLessThan(
+        route.indexOf('window.electronAPI.maker.setModel('),
+      );
+    }
+  });
+
+  it('confirms pressure first revealed by Pi final-window verification before retrying', () => {
+    const helperStart = chatInputSource.indexOf(
+      'const setModelWithFinalWindowConfirmation = useCallback(',
+    );
+    const helperEnd = chatInputSource.indexOf('// session-agent-switch', helperStart);
+    const helper = chatInputSource.slice(helperStart, helperEnd);
+
+    expect(helper).toContain('contextWindowConfirmationRequired');
+    expect(helper).toContain('contextTokensForConfirmation');
+    expect(helper).toMatch(
+      /confirmModelSwitchContextGuard\(\s*modelId,\s*undefined,\s*providerId,\s*requiredWindow,/,
+    );
+    expect(helper).toContain('if (accepted !== requiredWindow) return { accepted: false };');
+    expect(helper).toContain('result = await invoke(accepted)');
+    expect(helper).not.toContain('result = await invoke(requiredWindow)');
+    expect(chatInputSource.split('await setModelWithFinalWindowConfirmation(')).toHaveLength(3);
+    expect(chatInputSource).toContain('? { confirmedContextWindow }');
+  });
+
+  it('keeps authoritative final-window confirmation ahead of stale snapshot shortcuts', () => {
+    const guardStart = chatInputSource.indexOf(
+      'const confirmModelSwitchContextGuard = useCallback(',
+    );
+    const helperStart = chatInputSource.indexOf(
+      'const setModelWithFinalWindowConfirmation = useCallback(',
+      guardStart,
+    );
+    const helperEnd = chatInputSource.indexOf('// session-agent-switch', helperStart);
+    const guard = chatInputSource.slice(guardStart, helperStart);
+    const helper = chatInputSource.slice(helperStart, helperEnd);
+    const piBypass = guard.indexOf("runtimeAgentKind === 'pi' &&");
+    const sameOrExpand = guard.indexOf('targetContextWindow >= currentContextWindow');
+    const localVerdictShortcut = guard.indexOf("verdict.level === 'ok'");
+    const confirmation = guard.indexOf('const accepted = await confirmDialog({');
+
+    expect(guard).toContain(
+      'const contextTokens = requireDestructiveConfirmation\n        ? verifiedContextTokens',
+    );
+    expect(guard.slice(0, piBypass)).toContain('!requireDestructiveConfirmation &&');
+    expect(guard.slice(piBypass, sameOrExpand)).toContain(
+      '!requireDestructiveConfirmation &&\n        hasVerifiedWindows',
+    );
+    expect(guard.slice(0, sameOrExpand)).toContain(
+      'requireDestructiveConfirmation && (!hasVerifiedTargetWindow || !hasVerifiedUsage)',
+    );
+    expect(guard.slice(sameOrExpand, localVerdictShortcut)).toContain(
+      '!requireDestructiveConfirmation &&\n        (!trustedContextTokens || trustedContextTokens <= 0)',
+    );
+    expect(guard.slice(localVerdictShortcut - 40, confirmation)).toContain(
+      '!requireDestructiveConfirmation && verdict.level',
+    );
+    expect(confirmation).toBeGreaterThan(localVerdictShortcut);
+    expect(helper).toContain('if (accepted !== requiredWindow) return { accepted: false };');
+    expect(helper).toContain('result = await invoke(accepted);');
+  });
+
+  it('gates the device-link Pi estimate bypass on the controlled host window guard', () => {
+    const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const end = chatInputSource.indexOf('// session-agent-switch', start);
+    const guard = chatInputSource.slice(start, end);
+    const piCapability = guard.indexOf('const remotePiWindowGuardSupported =');
+    const piRuntimeBypass = guard.indexOf("runtimeAgentKind === 'pi' &&");
+    const catalogTargetResolution = guard.indexOf('const targetRouteProviderId =');
+    const remoteGuard = guard.indexOf('const hasVerifiedWindows =');
+    const legacyPiGuard = guard.indexOf('shouldBlockLegacyRemotePiModelWindowSwitch({');
+    const remoteUnknownBlock = guard.indexOf(
+      'if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;',
+    );
+    const zeroUsagePass = guard.indexOf(
+      '!requireDestructiveConfirmation &&\n        (!trustedContextTokens || trustedContextTokens <= 0)',
+    );
+    const remoteBlock = guard.indexOf("verdict.level === 'danger' || verdict.level === 'overflow'");
+    const warningPath = guard.indexOf("verdict.level === 'warn'");
+    const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
+
+    expect(piCapability).toBeGreaterThan(-1);
+    expect(piCapability).toBeLessThan(piRuntimeBypass);
+    expect(piRuntimeBypass).toBeLessThan(catalogTargetResolution);
+    expect(guard).toContain('remoteDeviceId === deviceLinkDeviceId');
+    expect(guard).toContain('supportsModelWindowSwitchGuard === true');
+    expect(guard).not.toContain("if (remoteDeviceId && runtimeAgentKind === 'pi') return true;");
+    expect(guard.slice(piCapability, piRuntimeBypass)).toContain(
+      '!requireDestructiveConfirmation &&',
+    );
+    expect(remoteGuard).toBeGreaterThan(catalogTargetResolution);
+    expect(legacyPiGuard).toBeGreaterThan(remoteGuard);
+    expect(legacyPiGuard).toBeLessThan(zeroUsagePass);
+    expect(guard.slice(legacyPiGuard, remoteUnknownBlock)).toContain('return false;');
+    expect(remoteGuard).toBeLessThan(remoteBlock);
+    const shrinkGate = guard.slice(remoteGuard, remoteBlock);
+    expect(shrinkGate).toContain('agentStatus.isRunning');
+    expect(shrinkGate).toContain('targetContextWindow >= currentContextWindow');
+    expect(shrinkGate).toContain(
+      '!requireDestructiveConfirmation &&\n        hasVerifiedWindows',
+    );
+    expect(shrinkGate).toContain(
+      'requireDestructiveConfirmation && (!hasVerifiedTargetWindow || !hasVerifiedUsage)',
+    );
+    expect(shrinkGate).toContain("typeof contextTokens === 'number'");
+    expect(shrinkGate).toContain('const hasVerifiedUsage = trustedContextTokens !== undefined;');
+    expect(shrinkGate).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
+    expect(remoteUnknownBlock).toBeGreaterThan(legacyPiGuard);
+    expect(zeroUsagePass).toBeGreaterThan(remoteUnknownBlock);
+    expect(shrinkGate).toContain('return true;');
+    expect(guard).toContain(
+      "if (!requireDestructiveConfirmation && verdict.level === 'ok') return true;",
+    );
+    expect(remoteBlock).toBeLessThan(warningPath);
+    expect(remoteBlock).toBeLessThan(confirmPath);
+    const blocked = guard.slice(remoteBlock, warningPath);
+    expect(guard).toContain('(remoteHostId || remoteDeviceId)');
+    expect(guard.indexOf('(remoteHostId || remoteDeviceId)')).toBeLessThan(remoteBlock);
+    expect(blocked).toContain("verdict.level === 'danger' || verdict.level === 'overflow'");
+    expect(blocked).toContain('overflowDescriptionRemote');
+    expect(blocked).toContain('toast.error(');
+    expect(blocked).toContain('return false;');
+    const localConfirm = guard.slice(confirmPath);
+    expect(localConfirm).not.toContain('overflowDescriptionRemote');
+    expect(localConfirm).toContain('overflowDescription');
+    expect(localConfirm).toContain('confirmSwitch');
+  });
+
   it('lets a disconnected source reselect the highlighted fallback provider row', () => {
     const selectorStart = chatInputSource.lastIndexOf('<ModelSelector');
     expect(selectorStart).toBeGreaterThanOrEqual(0);

@@ -17,14 +17,46 @@ describe('extractYieldedExecCellIds', () => {
 
   it('keeps later cells in order and dedupes repeats', () => {
     expect(extractYieldedExecCellIds([
-      'Script running with cell ID 226',
+      'Script running with cell ID 226\nWall time 1.0 seconds',
       'Script running with cell ID 229 Wall time 11.0 seconds Output:',
-      'Script running with cell ID 226',
+      'Script running with cell ID 226\nWall time 2.0 seconds',
     ].join('\n'))).toEqual(['226', '229']);
   });
 
   it('ignores finished command output without a yield marker', () => {
     expect(extractYieldedExecCellIds('Exit 0\n\n> tsc --noEmit\n')).toEqual([]);
+  });
+
+  // Windows 路径:执行器状态头以 CRLF 分行时同样是真实 yield,不得漏判(假完成)。
+  it('recognizes a CRLF-delimited executor status header', () => {
+    expect(extractYieldedExecCellIds(
+      'Script running with cell ID 226\r\nWall time 11.0 seconds\r\nOutput:\r\n',
+    )).toEqual(['226']);
+    expect(extractYieldedExecCellIds(
+      'chunk done\r\nScript running with cell ID 42\r\nWall time 1.0 seconds\r\n',
+    )).toEqual(['42']);
+  });
+
+  // #3763:被引用/示例出现的 marker 文案不是执行器状态头,不得铸造 cell。
+  it('ignores quoted or prefixed markers that are not executor status headers', () => {
+    // grep 输出:路径:行号: 前缀,不在物理行首。
+    expect(extractYieldedExecCellIds(
+      "src/x.test.ts:14:      'Script running with cell ID 226\\nWall time 11.0 seconds',",
+    )).toEqual([]);
+    // 源码 cat:缩进 + 引号包裹,\n 是字面转义不是真实换行。
+    expect(extractYieldedExecCellIds(
+      "      'Script running with cell ID 229\\nWall time 11.0 seconds\\nOutput:\\n',",
+    )).toEqual([]);
+    // 行首但缺 Wall time 帧(裸引用一行文案)。
+    expect(extractYieldedExecCellIds('Script running with cell ID 777')).toEqual([]);
+    // issue 复现形态:一次读取源码把多个示例 ID 全炸出来 —— 现在必须为空。
+    expect(extractYieldedExecCellIds([
+      "  it('locks the #3179 rollout yield shape', () => {",
+      "    expect(extractYieldedExecCellIds(",
+      "      'Script running with cell ID 226\\nWall time 11.0 seconds\\nOutput:\\n',",
+      "    )).toEqual(['226']);",
+      "  'Script running with cell ID 229 Wall time', 'cell ID 11', 'cell ID 12',",
+    ].join('\n'))).toEqual([]);
   });
 });
 
@@ -51,11 +83,27 @@ describe('extractYieldedExecCellsFromCodexItem', () => {
         workdir: '/repo',
         yield_time_ms: 10_000,
       }),
-      content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+      content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 10.0 seconds\nOutput:\n' }],
     })).toEqual([{
       cellId: '229',
       command: 'pnpm --filter desktop run typecheck',
     }]);
+  });
+
+  // #3763:已完成命令的 stdout 引用 marker 示例,不得铸造 continuation claim。
+  it('does not mint cells from a completed exec whose stdout merely quotes markers', () => {
+    expect(extractYieldedExecCellsFromCodexItem({
+      type: 'commandExecution',
+      id: 'item-quoted',
+      command: 'grep -rn "cell ID" src/',
+      status: 'completed',
+      exitCode: 0,
+      aggregatedOutput: [
+        "src/a.test.ts:14:      'Script running with cell ID 226\\nWall time 11.0 seconds',",
+        "src/a.test.ts:21:      'Script running with cell ID 229 Wall time 11.0 seconds Output:',",
+        "src/a.test.ts:75:      text: 'I will wait. Script running with cell ID 777',",
+      ].join('\n'),
+    })).toEqual([]);
   });
 
   it('does not treat a finished exec item as a yielded cell', () => {
@@ -82,7 +130,7 @@ describe('extractYieldedExecCellsFromCodexItem', () => {
       type: 'commandExecution',
       id: 'item-late-marker',
       command: 'pnpm --filter desktop run typecheck',
-      aggregatedOutput: `${padding}\nScript running with cell ID 226`,
+      aggregatedOutput: `${padding}\nScript running with cell ID 226\nWall time 30.0 seconds\nOutput:\n`,
     })).toEqual([{
       cellId: '226',
       command: 'pnpm --filter desktop run typecheck',

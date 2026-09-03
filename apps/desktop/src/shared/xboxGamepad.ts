@@ -102,10 +102,12 @@ export type XboxGamepadTransport = 'usb' | 'bluetooth' | 'unknown';
 export type XboxGamepadBatteryState = 'unknown' | 'discharging' | 'charging' | 'full';
 export const GAMEPAD_FAMILIES = ['xbox', 'playstation', 'nintendo', 'generic'] as const;
 export type GamepadFamily = (typeof GAMEPAD_FAMILIES)[number];
-/** Settings currently lists Xbox and PlayStation only. Nintendo / generic stay implemented. */
+/** Settings lists every implemented family. */
 export const VISIBLE_GAMEPAD_FAMILIES = [
   'xbox',
   'playstation',
+  'nintendo',
+  'generic',
 ] as const satisfies readonly GamepadFamily[];
 
 export interface XboxGamepadDeviceInfo {
@@ -180,6 +182,19 @@ export function resolveGamepadFamily(input: {
     return 'xbox';
   }
   return 'generic';
+}
+
+export function isNintendoJoyConDevice(
+  input:
+    | {
+        name?: string | null;
+        category?: string | null;
+      }
+    | null
+    | undefined,
+): boolean {
+  const hay = `${input?.name ?? ''} ${input?.category ?? ''}`.toLowerCase();
+  return hay.includes('joy-con') || hay.includes('joycon');
 }
 
 export interface XboxGamepadState {

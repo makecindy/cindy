@@ -32,7 +32,16 @@ export interface StdioTransportOptions {
   extraArgs?: string[];
   /** 本地进程生命周期观察器；仅用于宿主诊断，不得影响 transport 启动。 */
   onProcessSpawned?: (pid: number) => void | (() => void);
+  /** SIGTERM 后强杀宽限毫秒数;仅测试注入,生产走默认值。 */
+  forceKillGraceMs?: number;
 }
+
+/**
+ * close() 发出 SIGTERM 后等待进程自行退出的宽限期。健康的 app-server 在毫秒级
+ * 退出;卡死的(见 close() 内注释)永远不退,5s 已足够区分两者且不拖慢关闭方
+ * (close() 本身不等待,timer 在后台收尸)。
+ */
+const FORCE_KILL_GRACE_MS = 5_000;
 
 export function createStdioTransport(opts: StdioTransportOptions): Transport {
   if (!opts.binaryPath) {
@@ -174,6 +183,21 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
       try { child.stdin.end(); } catch { /* swallow */ }
       if (child.exitCode === null && child.signalCode === null) {
         try { child.kill('SIGTERM'); } catch { /* swallow */ }
+        // #3699: SIGTERM 只对健康的 app-server 有效。当它的主循环卡死(实测
+        // 场景:内部模型刷新子进程 wedged,manager 反复报 "timeout waiting for
+        // child process to exit")时,进程可能既不响应 stdin EOF 也不处理
+        // SIGTERM —— 而调用方(retireHostKey / 切换凭证 / 关闭会话)在 close()
+        // 后即视其为已弃用,不再持有引用。此前没有任何强杀兜底,弃用的
+        // app-server 会以活体泄漏:继续周期性模型刷新、打错误日志、占用
+        // 网络与文件句柄。宽限期后仍未退出则 SIGKILL 收尸;timer unref,
+        // 不阻塞父进程退出(父进程退出时同进程组的子进程本就会被收割)。
+        const killTimer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            try { child.kill('SIGKILL'); } catch { /* swallow */ }
+          }
+        }, opts.forceKillGraceMs ?? FORCE_KILL_GRACE_MS);
+        killTimer.unref?.();
+        child.once('exit', () => clearTimeout(killTimer));
       }
       fireClose(reason);
     },

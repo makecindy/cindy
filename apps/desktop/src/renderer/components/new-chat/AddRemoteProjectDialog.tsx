@@ -93,12 +93,18 @@ export function AddRemoteProjectDialog({
   const targets = useMemo<RemoteTarget[]>(() => {
     const ssh: RemoteTarget[] = excludeSsh
       ? []
-      : sshHosts.map((h) => ({
-          key: `ssh:${h.config.id}`,
-          kind: 'ssh',
-          hostId: h.config.id,
-          label: `${h.config.id} (${h.config.user}@${h.config.hostname})`,
-        }));
+      : sshHosts.map((h) => {
+          const displayName = h.config.displayName?.trim() || h.config.id;
+          const identity = displayName === h.config.id
+            ? h.config.id
+            : `${displayName} (${h.config.id})`;
+          return {
+            key: `ssh:${h.config.id}`,
+            kind: 'ssh' as const,
+            hostId: h.config.id,
+            label: `${identity} (${h.config.user}@${h.config.hostname})`,
+          };
+        });
     const dev: RemoteTarget[] = devices.map((d) => ({
       key: `device:${d.deviceId}`,
       kind: 'device',

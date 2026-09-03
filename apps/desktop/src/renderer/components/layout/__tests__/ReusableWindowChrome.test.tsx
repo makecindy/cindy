@@ -129,6 +129,7 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('@/components/ui/toast', () => ({ ToastContainer: () => null }));
 vi.mock('@/utils/ipcError', () => ({ extractIpcError: () => null }));
 vi.mock('lucide-react', () => ({
   PanelRight: () => null,

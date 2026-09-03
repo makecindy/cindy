@@ -25,6 +25,20 @@ import type { Maker } from '@cindy/maker-core';
 
 const tempRoots: string[] = [];
 
+const canLinkFile = (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+})();
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
@@ -441,7 +455,7 @@ describe('scanAllSkills', () => {
 });
 
 describe('skill file access', () => {
-  it.skipIf(process.platform === 'win32')('rejects writing through a final file symlink', async () => {
+  it.skipIf(!canLinkFile)('rejects writing through a final file symlink', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-write-file-link-'));
     tempRoots.push(root);
     const skillDir = path.join(root, '.agents', 'skills', 'linked-file');
@@ -508,7 +522,7 @@ describe('skill file access', () => {
     );
   });
 
-  it.skipIf(process.platform === 'win32')('rejects renaming a skill whose SKILL.md is a symlink', async () => {
+  it.skipIf(!canLinkFile)('rejects renaming a skill whose SKILL.md is a symlink', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-rename-md-link-'));
     tempRoots.push(root);
     const skillRoot = path.join(root, 'project', '.pi', 'skills');
