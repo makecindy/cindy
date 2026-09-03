@@ -6,6 +6,10 @@ const overlaySource = readFileSync(
   resolve(__dirname, '..', 'VoiceInputOverlay.tsx'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const bootstrapSource = readFileSync(
+  resolve(__dirname, '../../../main/bootstrap-electron.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 describe('voice input overlay retry gate', () => {
   it('keeps retry disabled until the stop IPC promise settles', () => {
@@ -31,5 +35,12 @@ describe('voice input overlay retry gate', () => {
     expect(overlaySource).toContain("if (!opened.success) setError(t('chatgptAuthRecovery.openAppFailed'));");
     expect(overlaySource).toContain("if (codexRecovery) {\n            void handleCodexRecovery();");
     expect(overlaySource).toContain('codexSessionPromptActiveRef.current = false;\n          void startRecording();');
+  });
+
+  it('keeps the overlay ChatGPT App capability narrowly trusted', () => {
+    expect(bootstrapSource).toContain('isGlobalVoiceInputOverlaySender(candidate.sender)');
+    expect(bootstrapSource).toContain('candidate.senderFrame === candidate.sender.mainFrame');
+    expect(bootstrapSource).toContain('isTrustedCindyRendererWindow(overlayWindow)');
+    expect(bootstrapSource).toContain('assertTrustedAppRendererEvent(candidate);');
   });
 });
