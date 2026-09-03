@@ -148,7 +148,7 @@ describe('HomeUsageDashboard source contract', () => {
     );
     expect(hookSource).toContain('setHistoryState({ scopeKey: scopedKey, value });');
     expect(hookSource).toContain(
-      'history: historyState.scopeKey === scopedKey ? historyState.value : scope.cache,',
+      'const history = historyState.scopeKey === scopedKey ? historyState.value : scope.cache;',
     );
   });
 
@@ -212,12 +212,25 @@ describe('HomeUsageDashboard source contract', () => {
   });
 
   it('keeps the settings usage loading state separate from a loaded empty payload', () => {
-    expect(usageHistorySectionSource).toContain('const loading = history === null;');
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
     expect(usageHistorySectionSource).toContain(
-      'const empty = !loading && isUsageHistoryEmpty(history);',
+      'const loading = history === null && refreshing;',
     );
-    expect(usageHistorySectionSource).toMatch(
-      /\{loading \? \(\s*<div[\s\S]*role="status"[\s\S]*aria-label=\{t\('usageDashboard\.updating'\)\}/,
+    expect(usageHistorySectionSource).toContain(
+      'const loadFailed = history === null && !refreshing;',
+    );
+    expect(usageHistorySectionSource).toContain(
+      'const empty = history !== null && isUsageHistoryEmpty(history);',
+    );
+    expect(usageHistorySectionSource).toContain("t('usageHistory.loadFailed')");
+    expect(hookSource).toContain(
+      'useState(scope.cache === null || scope.refreshing)',
+    );
+    expect(hookSource.indexOf('void load(scopedKey);')).toBeLessThan(
+      hookSource.indexOf('setIsRefreshing(activeScope.refreshing);'),
+    );
+    expect(hookSource).toContain(
+      'historyState.scopeKey === scopedKey ? isRefreshing : scope.cache === null || scope.refreshing;',
     );
   });
 });

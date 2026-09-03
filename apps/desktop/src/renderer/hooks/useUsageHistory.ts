@@ -518,7 +518,10 @@ export function useUsageHistory(opts?: {
     scopeKey: scopedKey,
     value: scope.cache,
   }));
-  const [isRefreshing, setIsRefreshing] = useState(scope.refreshing);
+  // A null payload is pending until the first request settles. Keeping that
+  // invariant in the hook lets consumers distinguish initial loading from a
+  // settled load failure without adding a second lifecycle state owner.
+  const [isRefreshing, setIsRefreshing] = useState(scope.cache === null || scope.refreshing);
 
   useEffect(() => {
     const activeScope = getScope(scopedKey, request);
@@ -531,10 +534,10 @@ export function useUsageHistory(opts?: {
     // load() 在 render 与本 effect 之间更新了 cache, 且后续 load 都命中 dirty-check
     // (不再广播), 本实例会停在旧值。引用相同时 React 自动 bail out, 无重渲染成本。
     setScopedHistory(activeScope.cache);
-    setIsRefreshing(activeScope.refreshing);
     // mount 与 paused→false (展开瞬间) 都拉一次 — 折叠摘要 / 图表数据都保持新鲜。
     // 收起时跳过后续 push 订阅, 避免每个 turn 触发后台重拉。
     void load(scopedKey);
+    setIsRefreshing(activeScope.refreshing);
 
     // paused (卡片收起): 不订阅消费推送, 收起用户的 per-turn 重拉成本归零
     if (paused) {
@@ -569,8 +572,8 @@ export function useUsageHistory(opts?: {
     };
   }, [paused, scopedKey]);
 
-  return {
-    history: historyState.scopeKey === scopedKey ? historyState.value : scope.cache,
-    refreshing: isRefreshing,
-  };
+  const history = historyState.scopeKey === scopedKey ? historyState.value : scope.cache;
+  const refreshing =
+    historyState.scopeKey === scopedKey ? isRefreshing : scope.cache === null || scope.refreshing;
+  return { history, refreshing };
 }

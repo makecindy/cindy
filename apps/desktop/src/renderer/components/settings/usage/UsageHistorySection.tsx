@@ -128,8 +128,9 @@ export function UsageHistorySection(): React.JSX.Element {
   // 任务行与用量聚合是两条数据源: 聚合里有 token, 本地任务却可能一条都没有
   // (用户删光了会话, 或列表还没加载完)。空时整张卡片不渲染, 不留空壳。
   const taskRows = useTopTokenSessions(range, history?.todayKey, user?.id);
-  const loading = history === null;
-  const empty = !loading && isUsageHistoryEmpty(history);
+  const loading = history === null && refreshing;
+  const loadFailed = history === null && !refreshing;
+  const empty = history !== null && isUsageHistoryEmpty(history);
 
   const handleRangeChange = (value: string): void => {
     setRange(value as UsageHistoryRange);
@@ -207,6 +208,13 @@ export function UsageHistorySection(): React.JSX.Element {
           aria-label={t('usageDashboard.updating')}
         >
           <Spinner size={20} />
+        </div>
+      ) : loadFailed ? (
+        <div
+          className="flex min-h-[176px] items-center justify-center rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 text-center text-12 text-[var(--error-fg)]"
+          role="alert"
+        >
+          {t('usageHistory.loadFailed')}
         </div>
       ) : empty ? (
         <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-8 text-center text-12 text-[var(--text-tertiary)]">
