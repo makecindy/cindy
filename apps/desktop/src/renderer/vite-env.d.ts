@@ -3222,7 +3222,7 @@ interface ElectronAPI {
         };
         visibleDeptIds: string[];
         categories?: string[];
-        tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
+        tags?: Array<{ slug: string; name: string; source?: 'platform' }>;
         githubUrl?: string | null;
         publishedAt: string;
         downloads: number;
@@ -3266,7 +3266,6 @@ interface ElectronAPI {
         summary?: string;
         description?: string;
         tags?: string[];
-        authorTagSlugs?: string[];
         contentLocale?: import('../shared/locale').SupportedLocale;
         visibility?: 'private' | 'shared' | 'public';
         /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
@@ -6665,7 +6664,7 @@ interface SkillhubInfoResult {
   visibleDeptIds: string[];
   visibleDeptNames?: string[];
   categories?: string[];
-  tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
+  tags?: Array<{ slug: string; name: string; source?: 'platform' }>;
   githubUrl?: string | null;
   changelog?: string;
   publishedAt: string;

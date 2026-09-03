@@ -9,7 +9,7 @@ export interface MarketCategory {
   name: string;
   count: number;
   myCount: number;
-  source?: 'author' | 'platform';
+  source?: 'platform';
   children?: MarketCategory[];
 }
 

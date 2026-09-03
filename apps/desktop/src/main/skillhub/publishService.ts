@@ -29,6 +29,7 @@ import { createLogger } from '../logger';
 
 const log = createLogger('skillhub:publishService');
 export const PACK_TIMEOUT_MS = 45_000;
+const PLATFORM_TAG_SLUG_RE = /^[\p{L}\p{N}][\p{L}\p{N}-]{0,63}$/u;
 
 // ── 类型 ─────────────────────────────────────────────────────────────────────
 
@@ -155,6 +156,11 @@ function unhandledPublishErrorToCode(err: unknown): PublishErrorCode {
 
 function normalizePublishTags(tags?: string[]): string[] {
   return [...new Set((tags ?? []).map((tag) => tag.trim()).filter(Boolean))];
+}
+
+function isCanonicalPlatformTagSlug(slug: string): boolean {
+  return PLATFORM_TAG_SLUG_RE.test(slug)
+    && slug === slug.normalize('NFKC').toLowerCase().replace(/[\s_]+/g, '-');
 }
 
 const PASSING_SCAN_STATUSES = new Set(['pass', 'passed', 'approved', 'published']);
@@ -295,6 +301,22 @@ export class SkillPublishService {
       );
       return { success: false, errorCode: 'CANCELLED' };
     }
+    const tags = params.isFirstPublish ? normalizePublishTags(params.tags) : undefined;
+    if (
+      params.isFirstPublish
+      && (!tags || tags.length === 0 || tags.length > 50 || tags.some((tag) => !isCanonicalPlatformTagSlug(tag)))
+    ) {
+      this.emitProgress(
+        {
+          phase: 'failed',
+          name: params.name,
+          errorCode: 'CATEGORY_REQUIRED',
+          message: 'Select one or more existing Platform tags before publishing',
+        },
+        onProgress,
+      );
+      return { success: false, errorCode: 'CATEGORY_REQUIRED' };
+    }
     if (this.current) {
       this.emitProgress(
         {
@@ -307,8 +329,6 @@ export class SkillPublishService {
       );
       return { success: false, errorCode: 'INTERNAL' };
     }
-
-    const tags = params.isFirstPublish ? normalizePublishTags(params.tags) : undefined;
 
     const abortController = new AbortController();
     const state: InternalState = { abortController };

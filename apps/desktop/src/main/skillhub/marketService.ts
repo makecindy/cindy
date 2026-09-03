@@ -69,7 +69,6 @@ export interface UpdatePublishedFields {
   summary?: string;
   description?: string;
   tags?: string[];
-  authorTagSlugs?: string[];
   contentLocale?: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
   visibility?: 'private' | 'shared' | 'public';
   /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
@@ -303,7 +302,7 @@ export class SkillhubMarketService {
       name: string;
       skillCount?: number;
       mySkillCount?: number;
-      source?: 'author' | 'platform';
+      source?: 'platform';
       children?: Array<{
         slug: string;
         name: string;
@@ -408,7 +407,7 @@ type HubCategoryNode = {
   name: string;
   skillCount?: number;
   mySkillCount?: number;
-  source?: 'author' | 'platform';
+  source?: 'platform';
   children?: HubCategoryNode[];
 };
 
@@ -418,7 +417,7 @@ function flattenHubCategories(nodes: HubCategoryNode[]) {
     name: string;
     count: number;
     myCount: number;
-    source?: 'author' | 'platform';
+    source?: 'platform';
   }> = [];
   const visit = (node: HubCategoryNode) => {
     out.push({

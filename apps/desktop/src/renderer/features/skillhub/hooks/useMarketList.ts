@@ -92,7 +92,7 @@ export interface MarketSkill {
   /** 分类 slug 列表。服务端目前还未返回时给空数组兜底。 */
   categories: string[];
   /** 服务端可搜索标签，保留显示名供详情等消费方使用。 */
-  tags: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
+  tags: Array<{ slug: string; name: string; source?: 'platform' }>;
   /** Skill 对应的公开仓库地址；null 表示发布者未配置。 */
   githubUrl: string | null;
   publishedAt: string; // ISO
@@ -143,7 +143,7 @@ interface ServerListItem {
   };
   visibleDeptIds: string[];
   categories?: string[];
-  tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
+  tags?: Array<{ slug: string; name: string; source?: 'platform' }>;
   githubUrl?: string | null;
   publishedAt: string;
   downloads?: number;

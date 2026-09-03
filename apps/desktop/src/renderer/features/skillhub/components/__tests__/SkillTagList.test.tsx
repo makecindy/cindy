@@ -22,10 +22,10 @@ describe('SkillTagList', () => {
       <SkillTagList
         maxVisible={2}
         tags={[
-          { slug: 'automation', name: 'Automation', source: 'author' },
+          { slug: 'automation', name: 'Automation', source: 'platform' },
           { slug: 'office', name: 'Office', source: 'platform' },
           { slug: 'automation-copy', name: ' automation ', source: 'platform' },
-          { slug: 'productivity', name: 'Productivity', source: 'author' },
+          { slug: 'productivity', name: 'Productivity', source: 'platform' },
         ]}
       />,
     );

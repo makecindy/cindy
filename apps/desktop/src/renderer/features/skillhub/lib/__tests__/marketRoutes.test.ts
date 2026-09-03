@@ -157,7 +157,7 @@ describe('market management copy and errors', () => {
     expect(listSource).toContain('previewSkill ? WINDOW_NO_DRAG_STYLE : WINDOW_DRAG_STYLE');
   });
 
-  it('updates the Hub copy, locale, and author category from the market info editor', () => {
+  it('updates the Hub copy, locale, and Platform tag slugs from the market info editor', () => {
     const editorSource = readFileSync(resolve(skillhubDir, 'components/MarketInfoEditDialog.tsx'), 'utf8');
     const fieldsStart = editorSource.indexOf('fields: {');
     const fieldsEnd = editorSource.indexOf('},', fieldsStart);
@@ -166,8 +166,8 @@ describe('market management copy and errors', () => {
     expect(fieldsSource).toContain('summary: description');
     expect(fieldsSource).toMatch(/\n\s+description,/);
     expect(fieldsSource).toContain('contentLocale:');
-    expect(fieldsSource).toContain('authorTagSlugs:');
-    expect(fieldsSource).not.toContain('tags:');
+    expect(fieldsSource).toContain('tags: categorySlugs');
+    expect(fieldsSource).not.toContain('authorTagSlugs:');
   });
 
   it('keeps the confirm provider in the main App tree so AuthProvider has a stable context during HMR', () => {

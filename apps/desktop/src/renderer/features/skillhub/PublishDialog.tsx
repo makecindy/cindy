@@ -42,6 +42,7 @@ import {
   type PublishVisibility,
 } from './lib/publishForm';
 import type { MarketCategory } from '../../../shared/skillhubCategory';
+import { PlatformTagSelector } from './components/PlatformTagSelector';
 
 // ── State machine types ───────────────────────────────────────────────────────
 
@@ -148,7 +149,6 @@ const INITIAL_STATE: PublishState = {
   scanGates: [],
 };
 
-const AUTO_CATEGORY_VALUE = '__auto_category__';
 const PUBLISH_TEXT_LIMIT = 280;
 
 /** working = 5 种 active phase 的合并语义,UI 上统一处理 */
@@ -556,10 +556,7 @@ export function PublishDialog({
     categories: [],
     error: null,
   });
-  const editableCategories = useMemo(
-    () => categoryState.categories.filter((category) => category.source === 'author'),
-    [categoryState.categories],
-  );
+  const platformCategories = useMemo(() => categoryState.categories, [categoryState.categories]);
 
   const loadCategories = useCallback(async () => {
     setCategoryState({ loading: true, categories: [], error: null });
@@ -614,8 +611,7 @@ export function PublishDialog({
     visibleDeptIds: [],
     sharedTeamSlugs: [],
     changelog: '',
-    categoryMode: 'auto',
-    categorySlug: '',
+    categorySlugs: [],
   }));
 
   // Reset form when dialog opens or latestVersion loads (info API async)
@@ -633,8 +629,7 @@ export function PublishDialog({
         visibleDeptIds: [],
         sharedTeamSlugs: [],
         changelog: '',
-        categoryMode: 'auto',
-        categorySlug: '',
+        categorySlugs: [],
       });
     }
   }, [open, latestVersion, latestVersionStatus, pendingVersion, identityPolicy.ownerType]);
@@ -699,9 +694,8 @@ export function PublishDialog({
     ? validateRequiredCategory({
       loading: categoryState.loading,
       error: categoryState.error,
-      categories: editableCategories,
-      categoryMode: form.categoryMode,
-      selectedSlug: form.categorySlug,
+      categories: platformCategories,
+      selectedSlugs: form.categorySlugs,
     })
     : { ok: true as const };
 
@@ -723,9 +717,9 @@ export function PublishDialog({
       submitName,
       isFirstPublish: effectiveFirstPublish,
       ownerType: identityPolicy.ownerType,
-      categories: editableCategories,
+      categories: platformCategories,
     }),
-    [form, effectiveFirstPublish, identityPolicy.ownerType, editableCategories],
+    [form, effectiveFirstPublish, identityPolicy.ownerType, platformCategories],
   );
 
   const runPublish = useCallback((params: SkillhubPublishParams) => {
@@ -1078,28 +1072,16 @@ export function PublishDialog({
                 </div>
               )}
 
-              {/* Category — first publish only, sourced from XD Skill Hub */}
+              {/* Platform tags — first publish only, sourced from Skill Hub */}
               {effectiveFirstPublish && (
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('skillhub.publishDialog.categoryLabel')}</FieldLabel>
-                  <SelectInput
-                    value={form.categoryMode === 'auto' ? AUTO_CATEGORY_VALUE : form.categorySlug}
-                    disabled={isLocked}
-                    onChange={(v) => setForm((f) => (
-                      v === AUTO_CATEGORY_VALUE
-                        ? { ...f, categoryMode: 'auto', categorySlug: '' }
-                        : { ...f, categoryMode: 'manual', categorySlug: v }
-                    ))}
-                    options={[
-                      {
-                        value: AUTO_CATEGORY_VALUE,
-                        label: t('skillhub.publishDialog.categoryAuto'),
-                      },
-                      ...editableCategories.map((category) => ({
-                        value: category.slug,
-                        label: category.name,
-                      })),
-                    ]}
+                  <PlatformTagSelector
+                    categories={platformCategories}
+                    value={form.categorySlugs}
+                    onChange={(categorySlugs) => setForm((f) => ({ ...f, categorySlugs }))}
+                    disabled={isLocked || categoryState.loading || platformCategories.length === 0}
+                    ariaLabel={t('skillhub.publishDialog.categoryLabel')}
                   />
                   {!categoryValidation.ok && categoryValidation.reason !== 'required' && (
                     <div className="flex items-center justify-between gap-3 px-0.5">

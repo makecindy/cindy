@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 export interface SkillTag {
   slug: string;
   name: string;
-  source?: 'author' | 'platform';
+  source?: 'platform';
 }
 
 interface SkillTagListProps {

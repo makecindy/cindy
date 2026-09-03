@@ -394,7 +394,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -407,7 +407,7 @@ describe('SkillPublishService', () => {
       body: expect.objectContaining({
         displayName: 'Lark Task',
         summary: 'Publish summary',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       }),
     });
     const commitCall = vi
@@ -416,7 +416,7 @@ describe('SkillPublishService', () => {
     expect(commitCall?.[1]?.body).not.toHaveProperty('description');
   });
 
-  it('allows a first publish without author tags', async () => {
+  it('rejects a first publish without Platform tags before packing or network access', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -487,15 +487,9 @@ describe('SkillPublishService', () => {
       () => {},
     );
 
-    expect(result.success).toBe(true);
-    expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/commit', {
-      method: 'POST',
-      baseUrl: expect.any(Function),
-      logLabel: '/api/skills-hub',
-      body: expect.objectContaining({
-        tags: [],
-      }),
-    });
+    expect(result).toEqual({ success: false, errorCode: 'CATEGORY_REQUIRED' });
+    expect(pack).not.toHaveBeenCalled();
+    expect(serverApiFetch).not.toHaveBeenCalled();
   });
 
   it('keeps an explicit empty visibleSlugs list in first-publish commit', async () => {
@@ -565,7 +559,7 @@ describe('SkillPublishService', () => {
         summary: 'Publish summary',
         visibility: 'PUBLIC',
         visibleSlugs: [],
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -650,7 +644,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -744,7 +738,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       (event) => events.push(event),
     );
@@ -820,7 +814,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       (event) => events.push(event),
     );
