@@ -15,6 +15,7 @@ import { toast } from '@/lib/toast';
 import { marketActionErrorMessage } from '../lib/marketErrors';
 import { SelectInput } from '../PublishDialog';
 import type { MarketCategory } from '../../../../shared/skillhubCategory';
+import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../../shared/locale';
 
 const DESCRIPTION_LIMIT = 280;
 const DISPLAY_NAME_LIMIT = 100;
@@ -48,7 +49,7 @@ export function MarketInfoEditDialog({
   onSaved,
   readOnly = false,
 }: MarketInfoEditDialogProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // loading 初始为 true,且关闭时复位 —— Dialog 在数据就绪前不挂载,
   // 避免"先弹出矮窗再撑开"的跳变(设计规范:拿到数据后一次成型)。
   const [loading, setLoading] = useState(true);
@@ -126,9 +127,11 @@ export function MarketInfoEditDialog({
         fields: {
           displayName: displayName.trim(),
           summary: description,
-          tags: categorySlug
-            ? [categories.find((category) => category.slug === categorySlug)?.name ?? categorySlug]
-            : [],
+          description,
+          contentLocale: (SUPPORTED_LOCALES as readonly string[]).includes(i18n.resolvedLanguage ?? '')
+            ? i18n.resolvedLanguage as SupportedLocale
+            : 'en',
+          authorTagSlugs: categorySlug ? [categorySlug] : [],
         },
       });
       if (!res.success) {

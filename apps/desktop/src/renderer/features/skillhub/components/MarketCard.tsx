@@ -21,6 +21,7 @@ import {
   publishedStatusLabelKey,
 } from '../lib/publishedStatus';
 import { SkillIcon } from './SkillIcon';
+import { SkillTagList } from './SkillTagList';
 
 function visibilityLabel(skill: MarketSkill, allowPrivateLabel: boolean): string {
   return i18n.t(marketVisibilityLabelKey({
@@ -175,11 +176,12 @@ export function MarketCard({
       <div className="flex w-full min-w-0 items-center" style={{ gap: '10px' }}>
         <SkillIcon url={skill.icon} />
         <h3
-          className="min-w-0 truncate font-medium text-[var(--msg-assistant-text)]"
+          className="min-w-0 flex-1 truncate font-medium text-[var(--msg-assistant-text)]"
           style={{ fontSize: '16px' }}
         >
           {skill.displayName || skill.name}
         </h3>
+        <SkillTagList tags={skill.tags} maxVisible={1} className="shrink-0" />
       </div>
 
       {/* Author · Version + Visibility tag */}

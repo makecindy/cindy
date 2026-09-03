@@ -69,6 +69,8 @@ export interface UpdatePublishedFields {
   summary?: string;
   description?: string;
   tags?: string[];
+  authorTagSlugs?: string[];
+  contentLocale?: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
   visibility?: 'private' | 'shared' | 'public';
   /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
   teamSlug?: string | null;
@@ -295,7 +297,7 @@ export class SkillhubMarketService {
     };
   }
 
-  async listCategories() {
+  async listCategories(scope: SkillhubCatalogScope = 'market') {
     const items = await this.fetch<Array<{
       slug: string;
       name: string;
@@ -308,7 +310,7 @@ export class SkillhubMarketService {
         skillCount?: number;
         mySkillCount?: number;
       }>;
-    }>>('/api/skills-hub/categories?scope=market');
+    }>>(`/api/skills-hub/categories?scope=${scope}`);
     const categories = flattenHubCategories(items ?? []);
     const totalCount = categories.reduce((s, c) => s + c.count, 0);
     const myTotalCount = categories.reduce((s, c) => s + c.myCount, 0);

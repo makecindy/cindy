@@ -10116,6 +10116,9 @@
       "clearSearch": "清除技能搜尋",
       "noSearchResults": "沒有找到匹配的技能",
       "catalogFiltersAria": "SkillHub 分類",
+      "categoryFiltersAria": "按分類篩選技能",
+      "scrollCategoriesLeft": "向左查看更多分類",
+      "scrollCategoriesRight": "向右查看更多分類",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",

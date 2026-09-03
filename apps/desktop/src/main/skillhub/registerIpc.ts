@@ -545,9 +545,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // Market 分类列表 — 若 broker / 网络不可用，降级空数组
   ipcMain.handle(
     'skillhub:list-categories',
-    async () => {
+    async (_event, params?: { scope?: 'market' | 'team' }) => {
       try {
-        return await marketService.listCategories();
+        // Renderer payload is untrusted: only the two catalog scopes are valid,
+        // and an absent/invalid value keeps the historical market behavior.
+        const scope = params?.scope === 'team' ? 'team' : 'market';
+        return await marketService.listCategories(scope);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn('list-categories failed', message);

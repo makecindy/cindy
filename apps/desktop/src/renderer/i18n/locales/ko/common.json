@@ -10116,6 +10116,9 @@
       "clearSearch": "스킬 검색 지우기",
       "noSearchResults": "일치하는 스킬을 찾을 수 없습니다",
       "catalogFiltersAria": "SkillHub 카테고리",
+      "categoryFiltersAria": "카테고리로 스킬 필터링",
+      "scrollCategoriesLeft": "왼쪽 카테고리 더 보기",
+      "scrollCategoriesRight": "오른쪽 카테고리 더 보기",
       "catalogFilter": {
         "public": "공개",
         "organization": "조직",

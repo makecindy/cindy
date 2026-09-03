@@ -666,25 +666,35 @@ interface CategoryListState {
 
 const EMPTY_CATEGORY_STATE: CategoryListState = { categories: [], totalCount: 0, myTotalCount: 0 };
 
-// 模块级缓存：避免同一次 mount 内重复请求；每次 mount 都会刷新。
-let inflightCategories: Promise<CategoryListState> | null = null;
+interface ScopedCategoryListState {
+  scope: SkillhubCatalogScope;
+  value: CategoryListState;
+}
 
-export function useCategoryList(): CategoryListState {
-  const [state, setState] = useState<CategoryListState>(EMPTY_CATEGORY_STATE);
+// 按目录作用域分别合并并发请求；完成后删除，后续 mount 仍会刷新。
+const inflightCategories = new Map<SkillhubCatalogScope, Promise<CategoryListState>>();
+
+export function useCategoryList(scope: SkillhubCatalogScope = 'market'): CategoryListState {
+  const [state, setState] = useState<ScopedCategoryListState>({
+    scope,
+    value: EMPTY_CATEGORY_STATE,
+  });
 
   useEffect(() => {
     let cancelled = false;
-    const inflight = inflightCategories ?? (inflightCategories = window.electronAPI.skillhub.listCategories()
+    const existing = inflightCategories.get(scope);
+    const inflight = existing ?? window.electronAPI.skillhub.listCategories({ scope })
       .then((res) => (res.success
         ? { categories: res.categories ?? [], totalCount: res.totalCount ?? 0, myTotalCount: res.myTotalCount ?? 0 }
         : EMPTY_CATEGORY_STATE))
-      .catch(() => EMPTY_CATEGORY_STATE));
+      .catch(() => EMPTY_CATEGORY_STATE);
+    if (!existing) inflightCategories.set(scope, inflight);
     void inflight.then((next) => {
-      inflightCategories = null;
-      if (!cancelled) setState(next);
+      if (inflightCategories.get(scope) === inflight) inflightCategories.delete(scope);
+      if (!cancelled) setState({ scope, value: next });
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [scope]);
 
-  return state;
+  return state.scope === scope ? state.value : EMPTY_CATEGORY_STATE;
 }

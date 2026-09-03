@@ -10132,6 +10132,9 @@
       "clearSearch": "Clear skill search",
       "noSearchResults": "No matching skills found",
       "catalogFiltersAria": "SkillHub categories",
+      "categoryFiltersAria": "Filter skills by category",
+      "scrollCategoriesLeft": "View more categories to the left",
+      "scrollCategoriesRight": "View more categories to the right",
       "catalogFilter": {
         "public": "Public",
         "organization": "Organization",

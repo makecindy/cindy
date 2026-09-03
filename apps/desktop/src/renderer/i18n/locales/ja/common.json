@@ -10116,6 +10116,9 @@
       "clearSearch": "スキル検索をクリア",
       "noSearchResults": "一致するスキルが見つかりません",
       "catalogFiltersAria": "SkillHub カテゴリ",
+      "categoryFiltersAria": "カテゴリでスキルを絞り込む",
+      "scrollCategoriesLeft": "左のカテゴリをさらに表示",
+      "scrollCategoriesRight": "右のカテゴリをさらに表示",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",

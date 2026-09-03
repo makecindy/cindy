@@ -3266,6 +3266,8 @@ interface ElectronAPI {
         summary?: string;
         description?: string;
         tags?: string[];
+        authorTagSlugs?: string[];
+        contentLocale?: import('../shared/locale').SupportedLocale;
         visibility?: 'private' | 'shared' | 'public';
         /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
         teamSlug?: string | null;
@@ -3342,7 +3344,9 @@ interface ElectronAPI {
       names: string[];
       error?: string;
     }>;
-    listCategories: () => Promise<{
+    listCategories: (params?: {
+      scope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
+    }) => Promise<{
       success: boolean;
       categories?: import('../shared/skillhubCategory').MarketCategory[];
       totalCount?: number;
