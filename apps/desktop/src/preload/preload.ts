@@ -125,6 +125,7 @@ import type {
   LocalThemeWriteResult,
 } from '../shared/local-themes';
 import type { LocalThemeImportResult } from '../shared/theme-import/types';
+import type { GhostToolPermissionConfig } from '../shared/ghost';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import type { RawReleaseNotes } from '../shared/releaseNotesContent';
 import {
@@ -1206,6 +1207,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       config: Record<string, unknown> | null,
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
+    /** 插件工具粒度授权配置(sendSync 确保首帧同帧渲染)。 */
+    toolPermissionsSync: (
+      id: string,
+    ): {
+      config: GhostToolPermissionConfig;
+      readStatus: 'missing' | 'readable' | 'unreadable';
+    } => ipcRenderer.sendSync('ghosts:tool-permissions', id),
+    setToolPermissions: (
+      id: string,
+      config: GhostToolPermissionConfig | null,
+    ): Promise<{ config: GhostToolPermissionConfig }> =>
+      ipcRenderer.invoke('ghosts:tool-permissions:set', id, config),
     pickFile: (): Promise<{ canceled: true } | { filePath: string }> =>
       ipcRenderer.invoke('ghosts:pick-file'),
     inspect: (

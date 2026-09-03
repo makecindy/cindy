@@ -36,6 +36,7 @@ import {
   GHOST_SAVE_DEPOSIT_MAX_USES,
   GHOST_SAVE_DEPOSIT_TTL_MS,
 } from '../../shared/ghost.js';
+import { samePathAndHandleFileIdentity } from '../utils/fileIdentity.js';
 
 /** 收集到的单个可上传文件。 */
 export interface CollectedDirFile {
@@ -174,19 +175,18 @@ async function readDepositedFile(
   const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
   const handle = await fs.promises.open(file.absPath, flags);
   try {
-    const openedStat = await handle.stat();
+    const openedStat = await handle.stat({ bigint: true });
     if (!openedStat.isFile()) throw new Error('目录过户目标不再是文件');
 
     // open 之后再复核一次：若祖先目录在 realpath 与 open 之间被换链，
     // 当前路径真身或 inode/dev identity 会与已打开句柄不一致，拒绝读字节。
     const rootAfter = fs.realpathSync.native(rootRealPath);
     const fileAfter = fs.realpathSync.native(file.absPath);
-    const pathStat = fs.statSync(file.absPath);
+    const pathStat = fs.statSync(file.absPath, { bigint: true });
     if (
       !sameRealPath(rootAfter, rootRealPath) ||
       !isPathInsideDir(rootRealPath, fileAfter) ||
-      pathStat.dev !== openedStat.dev ||
-      pathStat.ino !== openedStat.ino
+      !samePathAndHandleFileIdentity(pathStat, openedStat)
     ) {
       throw new Error('目录过户路径在出票后发生变化');
     }
@@ -425,20 +425,19 @@ async function writeNewSaveFile(
       return null;
     }
 
-    let openedStat: fs.Stats | null = null;
+    let openedStat: fs.BigIntStats | null = null;
     let result: string | null = null;
     let closeFailed = false;
     try {
-      openedStat = await handle.stat();
+      openedStat = await handle.stat({ bigint: true });
       const rootAfter = fs.realpathSync.native(dirRealPath);
       const targetAfter = fs.realpathSync.native(target);
-      const pathStat = fs.statSync(target);
+      const pathStat = fs.statSync(target, { bigint: true });
       if (
         !openedStat.isFile() ||
         !sameRealPath(rootAfter, dirRealPath) ||
         !sameRealPath(path.dirname(targetAfter), dirRealPath) ||
-        pathStat.dev !== openedStat.dev ||
-        pathStat.ino !== openedStat.ino
+        !samePathAndHandleFileIdentity(pathStat, openedStat)
       ) {
         return null;
       }
@@ -447,18 +446,17 @@ async function writeNewSaveFile(
       // 写入本身也可能触发另一个进程的 rename / replace；提交成功前再
       // 复核 canonical 根、目标父目录与句柄 identity，避免把已移出批准
       // 目录的 inode 当成成功交接。
-      const writtenStat = await handle.stat();
+      const writtenStat = await handle.stat({ bigint: true });
       const rootAfterWrite = fs.realpathSync.native(dirRealPath);
       const targetAfterWrite = fs.realpathSync.native(target);
-      const pathStatAfterWrite = fs.statSync(target);
+      const pathStatAfterWrite = fs.statSync(target, { bigint: true });
       if (
         !writtenStat.isFile() ||
         !sameRealPath(rootAfterWrite, dirRealPath) ||
         !sameRealPath(path.dirname(targetAfterWrite), dirRealPath) ||
         writtenStat.dev !== openedStat.dev ||
         writtenStat.ino !== openedStat.ino ||
-        pathStatAfterWrite.dev !== writtenStat.dev ||
-        pathStatAfterWrite.ino !== writtenStat.ino
+        !samePathAndHandleFileIdentity(pathStatAfterWrite, writtenStat)
       ) {
         return null;
       }
@@ -499,11 +497,8 @@ async function writeNewSaveFile(
         // 校验窗口内被替换成 symlink/其它文件后误删替代目标。
         if (openedStat?.isFile()) {
           try {
-            const currentStat = await fs.promises.lstat(target);
-            if (
-              currentStat.dev === openedStat.dev &&
-              currentStat.ino === openedStat.ino
-            ) {
+            const currentStat = await fs.promises.lstat(target, { bigint: true });
+            if (samePathAndHandleFileIdentity(currentStat, openedStat)) {
               await fs.promises.unlink(target);
             }
           } catch {

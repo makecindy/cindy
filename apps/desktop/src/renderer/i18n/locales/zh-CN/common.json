@@ -4969,7 +4969,15 @@
         "collapseTools": "收起 Tool",
         "viewAllPermissions": "查看更多",
         "permissionsDialogDescription": "该插件申请的全部 {{count}} 项权限",
-        "closeDialog": "关闭弹窗"
+        "closeDialog": "关闭弹窗",
+        "alwaysAllow": "总是允许",
+        "needsApproval": "每次询问",
+        "blocked": "已阻止",
+        "custom": "自定义",
+        "chooseToolPermission": "选择何时允许 Agent 使用这些工具",
+        "toolPermissionGroup": "Tool {{name}} 的授权档位",
+        "toolPermissionSaveFailed": "工具授权没能保存，请重试。",
+        "toolPermissionUnavailable": "工具授权配置暂时不可用，请稍后重试。"
       },
       "contents": {
         "mainView": "主视图",

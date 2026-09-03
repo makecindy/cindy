@@ -81,11 +81,37 @@ const desktopGitIntegrationInclude = [
 
 export function desktopUnitWorkerCount(
   availableParallelism = os.availableParallelism(),
+  platform = process.platform,
 ) {
   const available = Number.isFinite(availableParallelism)
     ? Math.floor(availableParallelism)
     : 1;
-  return Math.max(1, Math.min(8, available));
+  // Windows keeps desktop on fork workers because threads can crash there.
+  // Four forks avoid CPU starvation and temp-file rename contention observed
+  // with eight concurrent Windows workers, without reducing test coverage.
+  const maxWorkers = platform === 'win32' ? 4 : 8;
+  return Math.max(1, Math.min(maxWorkers, available));
+}
+
+/** Node 22.12–22.17 需要 worker execArgv 才能 raw require 可擦除语法的 .ts。 */
+export function nodeNeedsExperimentalStripTypes(version = process.versions.node) {
+  const [major = 0, minor = 0] = String(version)
+    .split('.')
+    .slice(0, 2)
+    .map((part) => Number.parseInt(part, 10));
+  return major === 22 && minor < 18;
+}
+
+export function desktopUnitPool({
+  nodeVersion = process.versions.node,
+  platform = process.platform,
+  globalObject = globalThis,
+} = {}) {
+  return nodeWebstorageEnabled(globalObject) ||
+    platform === 'win32' ||
+    nodeNeedsExperimentalStripTypes(nodeVersion)
+    ? 'forks'
+    : 'threads';
 }
 
 const noCollectableWorkspace = (name, cwd, reason = noCollectableTestsReason) => ({
@@ -121,22 +147,23 @@ export default {
           execution: 'exclusive',
           // Desktop unit tests spawn many Git/filesystem subprocesses. Benchmarking
           // found eight workers to be the best complexity/resource tradeoff.
-          // Lower-CPU hosts stay capped by their available parallelism.
+          // Windows stays at four fork workers to avoid CPU and temporary-file
+          // contention; lower-CPU hosts stay capped by available parallelism.
           // It runs exclusively so these workers never overlap outer workspaces.
           // The pool follows the webstorage flag, because the flag cannot
           // coexist with worker threads — see scripts/shared/node-webstorage.mjs
           // for the crash it causes and the measurements. On Node 22, which is
-          // what local dev and CI run, the flag is a no-op, so this suite's 1330
-          // files take threads and stop spawning a process each. On a
+          // what current local dev and CI run, the flag is a no-op, so this suite's
+          // files take threads and stop spawning a process each. Node 22.12–22.17
+          // stays on forks because raw migration companion .ts files need the
+          // --experimental-strip-types worker execArgv. On a
           // webstorage-enabled Node the flag wins and the suite stays on forks.
           // win32 stays on forks unconditionally — threads segfaults there and
           // the churn threads exists to avoid is macOS-only (see the pool note
           // at the top of this file).
           command: unitVitestCommand(
             desktopUnitWorkerCount(),
-            nodeWebstorageEnabled() || process.platform === 'win32'
-              ? 'forks'
-              : 'threads',
+            desktopUnitPool(),
           ),
           exclude: [
             '**/*.git-integration.test.ts',

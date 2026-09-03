@@ -42,6 +42,8 @@ import {
   type PiNativeSubscriptionHandlerDeps,
 } from '../anthropic-responses-bridge-host.js';
 
+const hasZstd = typeof zstdCompressSync === 'function' && typeof zstdDecompressSync === 'function';
+
 function responseRecorder() {
   const response = new EventEmitter() as EventEmitter & {
     destroyed: boolean;
@@ -164,7 +166,7 @@ describe('PI native subscription forwarding', () => {
     expect(fetchMock.mock.calls[0]![1]?.headers).not.toHaveProperty('content-encoding');
   });
 
-  it('rewrites the profile suffix after the real proxy zstd parse boundary', async () => {
+  it.skipIf(!hasZstd)('rewrites the profile suffix after the real proxy zstd parse boundary', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },

@@ -151,6 +151,31 @@ describe('AppShortcutStore', () => {
     expect(store.getOverrides()).toEqual({});
   });
 
+  it('recovers from transient Windows EPERM while replacing an existing file', () => {
+    const store = makeStore('win32');
+    store.setOverride('toggle-sidebar', combo('KeyJ', { ctrl: true }));
+    const realRename = fs.renameSync;
+    let failFirstReplacement = true;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (failFirstReplacement && String(from).endsWith('.tmp') && String(to) === filePath()) {
+        failFirstReplacement = false;
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    try {
+      store.setOverride('toggle-sidebar', combo('KeyK', { ctrl: true }));
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(store.getOverrides()['toggle-sidebar']).toEqual(combo('KeyK', { ctrl: true }));
+    expect(makeStore('win32').getOverrides()['toggle-sidebar']).toEqual(
+      combo('KeyK', { ctrl: true }),
+    );
+  });
+
   it('keeps memory, disk, and notifications unchanged when writing fails', () => {
     const onChanged = vi.fn();
     const subscriber = vi.fn();
@@ -225,6 +250,90 @@ describe('AppShortcutStore', () => {
     const store = makeStore('darwin');
     expect(store.getOverrides()).toEqual({});
     expect(store.getEffectiveCombos('toggle-sidebar')[0]!.code).toBe('KeyB');
+  });
+
+  it('does not cache an empty override set when the .bak backup cannot be restored yet, and retries on the next read', () => {
+    // 回归 Codex P2:main 文件缺失、.bak 还在、但恢复(rename .bak → main)这次
+    // 失败(典型场景:Windows 文件锁/杀毒瞬时占用)时，属于 AtomicBackupUnrecoverableError——
+    // 这不是"没有覆盖项"，.bak 里还有救得回来的真实数据。旧实现会把这次读取
+    // 结果当成普通读取失败缓存成 {}，随后任何一次编辑触发的 save() 都会用这份
+    // 错误的空状态覆盖磁盘，把瞬时故障变成永久丢失用户的自定义快捷键。
+    fs.writeFileSync(
+      `${filePath()}.bak`,
+      JSON.stringify({
+        version: 1,
+        overrides: { 'toggle-sidebar': combo('KeyJ', { meta: true }) },
+      }),
+    );
+    const realRename = fs.renameSync;
+    // 非瞬时错误码(不在 TRANSIENT_RENAME_CODES 里)让 renameSyncWithRetry 第一次
+    // 就直接上抛，restoreBackupIfMainMissing 据此包成 AtomicBackupUnrecoverableError。
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (String(from) === `${filePath()}.bak` && String(to) === filePath()) {
+        throw Object.assign(new Error('backup restore blocked'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    const store = makeStore('darwin');
+    try {
+      // 第一次读取:恢复失败，不能缓存成"没有覆盖项"。
+      expect(store.getOverrides()).toEqual({});
+    } finally {
+      spy.mockRestore();
+    }
+
+    // 没有缓存空状态：下一次读取(瞬时故障已经"清除"，因为上面的 mock 只拦一次)
+    // 必须重新尝试读盘，正确恢复出 .bak 里原本保存的覆盖项。
+    expect(store.getOverrides()).toEqual({ 'toggle-sidebar': combo('KeyJ', { meta: true }) });
+  });
+
+  it('refuses to write while the .bak backup is still unrecovered, instead of overwriting it with defaults-derived state', () => {
+    // 回归 Codex P1:只是不缓存空状态还不够——setOverride 这类调用是"先 load
+    // 当前值再基于它 replaceOverrides"，如果拿到的是上一条用例里那份临时空
+    // 快照，合并出的"新配置"其实只包含这一次编辑，会在写盘前锁恰好释放时,
+    // 让 atomicWriteFileSync 先把 .bak 恢复回主文件、再用这份派生自空数据的
+    // 内容覆盖它——把瞬时故障变成永久丢失用户已有的自定义快捷键。
+    //
+    // mock 只拦截"恢复"这一次调用(mockImplementationOnce)，模拟"load() 时
+    // 锁还在、紧接着的 save() 时锁已经清除"——atomicWriteFileSync 自己内部
+    // 的恢复重试这次会成功，所以能不能拦住这次写完全取决于 backupUnrecoverable
+    // 这个标记，不是靠 atomicWriteFileSync 自己重复失败侥幸兜底。
+    fs.writeFileSync(
+      `${filePath()}.bak`,
+      JSON.stringify({
+        version: 1,
+        overrides: { 'toggle-sidebar': combo('KeyJ', { meta: true }) },
+      }),
+    );
+    const realRename = fs.renameSync;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementationOnce(((from: string, to: string) => {
+      if (String(from) === `${filePath()}.bak` && String(to) === filePath()) {
+        throw Object.assign(new Error('backup restore blocked'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    const store = makeStore('darwin');
+    try {
+      // setOverride 内部自己会先 load()——这次调用本身就撞上 mock 的那一次
+      // 恢复失败，置位 backupUnrecoverable，紧接着(同一次调用里，中间没有再
+      // 插入一次成功的 load())就该在 replaceOverrides→save() 被拒绝，而不是
+      // 用这份派生自空数据的"新配置"覆盖磁盘——此时锁已经"清除"(mock 只拦了
+      // 一次)，如果不是 backupUnrecoverable 拦下，atomicWriteFileSync 自己
+      // 会顺利完成恢复 + 覆盖写入。
+      expect(() => store.setOverride('save-file', combo('KeyP', { meta: true }))).toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+
+    // .bak 里原本保存的覆盖项必须原封不动——没有被上面那次被拒绝的写入破坏。
+    expect(
+      JSON.parse(fs.readFileSync(`${filePath()}.bak`, 'utf-8')).overrides['toggle-sidebar'],
+    ).toEqual(combo('KeyJ', { meta: true }));
+    // 备份已经恢复(mock 已移除，重新读盘会成功)：这次真实读到的覆盖项必须是
+    // .bak 里原本的内容，不能是刚才被拒绝的那次写入留下的任何痕迹。
+    expect(store.getOverrides()).toEqual({ 'toggle-sidebar': combo('KeyJ', { meta: true }) });
   });
 
   it('notifies subscribers and onChanged on every mutation', () => {

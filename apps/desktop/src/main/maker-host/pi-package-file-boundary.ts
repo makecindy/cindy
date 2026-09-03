@@ -7,7 +7,15 @@ export function isWithinConfinement(root: string, candidate: string): boolean {
 }
 
 export function sameStableFileIdentity(before: Stats, after: Stats): boolean {
-  return before.dev === after.dev
+  // On Windows, FileHandle.stat() and fs.stat() can report different device
+  // values for the same file (the former may expose a volume-derived value
+  // while the latter reports 0). The inode value remains stable and is the
+  // useful identity component for this proof; reject a genuine mismatch when
+  // both sides provide a device value.
+  const sameDevice = process.platform === 'win32'
+    ? before.dev === 0 || after.dev === 0 || before.dev === after.dev
+    : before.dev === after.dev;
+  return sameDevice
     && before.ino === after.ino
     && before.mode === after.mode
     && before.size === after.size

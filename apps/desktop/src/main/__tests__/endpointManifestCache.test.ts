@@ -136,6 +136,25 @@ describe('endpointManifestCache', () => {
     expect(readEndpointManifestCache(dir)).toEqual(big);
   });
 
+  it.runIf(process.platform === 'win32')(
+    'Windows lstat 设备号不可用时不把同一文件误判为 TOCTOU 替换',
+    () => {
+      expect(writeEndpointManifestCache(dir, ENTRY)).toBe(true);
+      const actual = fs.lstatSync(cacheFile(), { bigint: true });
+      const spy = vi.spyOn(fs, 'lstatSync').mockReturnValue({
+        dev: 0n,
+        ino: actual.ino,
+        size: actual.size,
+        isFile: () => true,
+      } as unknown as fs.BigIntStats);
+      try {
+        expect(readEndpointManifestCache(dir)).toEqual(ENTRY);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
   it('formatCacheSavedAt 解析不了就原样回显', () => {
     expect(formatCacheSavedAt('not-a-date', 'zh-CN')).toBe('not-a-date');
     expect(formatCacheSavedAt(ENTRY.savedAt, 'zh-CN')).not.toBe('');

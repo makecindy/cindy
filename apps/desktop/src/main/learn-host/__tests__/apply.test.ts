@@ -1,15 +1,16 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const TEST_ROOT = '/tmp/xdt-learn-apply-test';
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-learn-apply-test-'));
 
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => '/tmp/xdt-learn-apply-test/userData') },
+  app: { getPath: vi.fn(() => path.join(TEST_ROOT, 'userData')) },
 }));
 vi.mock('../../appSessionState', () => ({
   ownerScopedUserDataPath: (...parts: string[]) =>
-    `/tmp/xdt-learn-apply-test/userData/owners/test-owner/${parts.join('/')}`,
+    path.join(TEST_ROOT, 'userData', 'owners', 'test-owner', ...parts),
 }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -41,12 +42,12 @@ vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>();
   return {
     ...actual,
-    default: { ...actual, homedir: () => path.join('/tmp', 'xdt-learn-apply-test', 'home') },
-    homedir: () => path.join('/tmp', 'xdt-learn-apply-test', 'home'),
+    default: { ...actual, homedir: () => path.join(TEST_ROOT, 'home') },
+    homedir: () => path.join(TEST_ROOT, 'home'),
   };
 });
 
-const HOME = path.join('/tmp', 'xdt-learn-apply-test', 'home');
+const HOME = path.join(TEST_ROOT, 'home');
 const SKILLS_DIR = path.join(HOME, '.agents', 'skills');
 
 const provenance = {
@@ -59,7 +60,7 @@ const provenance = {
 };
 
 async function makeProposal(name: string): Promise<string> {
-  const dir = path.join('/tmp', 'xdt-learn-apply-test', 'staging', 'run-1', name);
+  const dir = path.join(TEST_ROOT, 'staging', 'run-1', name);
   await fs.promises.mkdir(dir, { recursive: true });
   await fs.promises.writeFile(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: t.\n---\nBody`, 'utf8');
   return dir;
@@ -120,7 +121,7 @@ describe('applyProposal', () => {
 
     // 真实目录已被挪走(备份在 owner-scoped learn/backups/),symlink helper 被调用
     expect(fs.existsSync(claudeDir)).toBe(false);
-    const backupsRoot = path.join('/tmp', 'xdt-learn-apply-test', 'userData', 'owners', 'test-owner', 'learn', 'backups');
+    const backupsRoot = path.join(TEST_ROOT, 'userData', 'owners', 'test-owner', 'learn', 'backups');
     const backups = fs.readdirSync(backupsRoot).filter((n) => n.startsWith('linked-skill-claude-'));
     expect(backups).toHaveLength(1);
     expect(fs.readFileSync(path.join(backupsRoot, backups[0], 'SKILL.md'), 'utf8')).toBe('old claude content');
@@ -160,7 +161,7 @@ describe('applyProposal', () => {
 
     // 真实目录已被挪走(备份在 owner-scoped learn/backups/),symlink helper 被调用
     expect(fs.existsSync(codexDir)).toBe(false);
-    const backupsRoot = path.join('/tmp', 'xdt-learn-apply-test', 'userData', 'owners', 'test-owner', 'learn', 'backups');
+    const backupsRoot = path.join(TEST_ROOT, 'userData', 'owners', 'test-owner', 'learn', 'backups');
     const backups = fs.readdirSync(backupsRoot).filter((n) => n.startsWith('codex-skill-codex-'));
     expect(backups).toHaveLength(1);
     expect(fs.readFileSync(path.join(backupsRoot, backups[0], 'SKILL.md'), 'utf8')).toBe('old codex content');
@@ -387,7 +388,7 @@ describe('EXDEV 回退路径(规则 14 回归)', () => {
     ).rejects.toThrow();
     // 原 Claude 目录原封不动;半拷贝备份已被清理
     expect(fs.readFileSync(path.join(claudeDir, 'SKILL.md'), 'utf8')).toBe('old claude content');
-    const backupsRoot = path.join('/tmp', 'xdt-learn-apply-test', 'userData', 'owners', 'test-owner', 'learn', 'backups');
+    const backupsRoot = path.join(TEST_ROOT, 'userData', 'owners', 'test-owner', 'learn', 'backups');
     const leftovers = fs.existsSync(backupsRoot)
       ? fs.readdirSync(backupsRoot).filter((n) => n.startsWith('locked-skill-claude-'))
       : [];

@@ -1355,6 +1355,17 @@ interface ElectronAPI {
       id: string,
       config: Record<string, unknown> | null,
     ) => Promise<{ config: Record<string, unknown> }>;
+    /** 插件工具粒度授权配置:首帧同步读。 */
+    toolPermissionsSync: (
+      id: string,
+    ) => {
+      config: import('../shared/ghost').GhostToolPermissionConfig;
+      readStatus: 'missing' | 'readable' | 'unreadable';
+    };
+    setToolPermissions: (
+      id: string,
+      config: import('../shared/ghost').GhostToolPermissionConfig | null,
+    ) => Promise<{ config: import('../shared/ghost').GhostToolPermissionConfig }>;
     /** 系统文件选择框(.cindy 过滤),只选不装;取消返回 { canceled: true }。 */
     pickFile: () => Promise<{ canceled: true } | { filePath: string }>;
     /** 只验不装:读出清单、签名信任等级与 icon data URL,供安装编排使用。 */

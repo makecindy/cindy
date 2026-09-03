@@ -4969,7 +4969,15 @@
         "collapseTools": "Tool を折りたたむ",
         "viewAllPermissions": "さらに表示",
         "permissionsDialogDescription": "この Plugin が要求する全 {{count}} 項目の権限",
-        "closeDialog": "ダイアログを閉じる"
+        "closeDialog": "ダイアログを閉じる",
+        "alwaysAllow": "常に許可",
+        "needsApproval": "毎回確認",
+        "blocked": "ブロック済み",
+        "custom": "カスタム",
+        "chooseToolPermission": "Agent がこれらのツールを使用できるタイミングを選択",
+        "toolPermissionGroup": "ツール {{name}} の権限",
+        "toolPermissionSaveFailed": "ツール権限を保存できませんでした。もう一度お試しください。",
+        "toolPermissionUnavailable": "ツール権限設定は一時的に利用できません。後でもう一度お試しください。"
       },
       "contents": {
         "mainView": "メインビュー",

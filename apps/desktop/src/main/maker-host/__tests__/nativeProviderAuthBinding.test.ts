@@ -1,11 +1,12 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createBetterSqliteDatabase } from '../../localDb/betterSqliteFactory.js';
 
-const userDataDir = '/tmp/native-provider-auth-binding-test';
+const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'native-provider-auth-binding-test-'));
 const session = { dataOwnerId: 'owner-a' as string | null, boundaryPending: false };
 
 vi.mock('electron', () => ({

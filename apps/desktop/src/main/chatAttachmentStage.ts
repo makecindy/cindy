@@ -9,6 +9,7 @@
 import path from 'node:path';
 
 import { isDangerousAttachmentName } from '../shared/attachmentSafety.js';
+import { samePathAndHandleFileIdentity } from './utils/fileIdentity.js';
 
 export type ChatAttachmentStageErrorCode =
   | 'invalid_source'
@@ -51,7 +52,7 @@ function isSameFileObject(
   expected: ChatAttachmentStageSourceStat,
   actual: ChatAttachmentStageSourceStat,
 ): boolean {
-  return expected.ino !== 0n && expected.dev === actual.dev && expected.ino === actual.ino;
+  return samePathAndHandleFileIdentity(expected, actual);
 }
 
 export function createChatAttachmentStageHandler(deps: ChatAttachmentStageDeps) {

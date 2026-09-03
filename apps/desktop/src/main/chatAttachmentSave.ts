@@ -10,6 +10,8 @@
 
 import path from 'node:path';
 
+import { samePathAndHandleFileIdentity } from './utils/fileIdentity.js';
+
 /** Windows 保留设备名；带扩展名时同样非法，例如 `NUL.exe`。 */
 const WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
 
@@ -60,7 +62,7 @@ function isSameFileObject(
   expected: ChatAttachmentSourceStat,
   actual: ChatAttachmentSourceStat,
 ): boolean {
-  return expected.ino !== 0n && expected.dev === actual.dev && expected.ino === actual.ino;
+  return samePathAndHandleFileIdentity(expected, actual);
 }
 
 /**

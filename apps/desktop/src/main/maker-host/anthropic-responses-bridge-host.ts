@@ -22,7 +22,7 @@ import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { zstdCompress, zstdDecompress } from 'node:zlib';
+import * as zlib from 'node:zlib';
 
 import {
   sanitizeXaiModelInputBody,
@@ -51,8 +51,15 @@ import {
 } from './owner-boundary-error.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 
-const zstdCompressAsync = promisify(zstdCompress);
-const zstdDecompressAsync = promisify(zstdDecompress);
+// zstd was added to Node's zlib API after the minimum Node 22 version this
+// client supports. Keep the bridge importable on older supported runtimes;
+// zstd-encoded context-profile requests will pass through unchanged there.
+// Named imports would fail at ESM link time on Node 22.12–22.14, so feature
+// detection must go through the namespace object.
+const zstdCompressAsync =
+  typeof zlib.zstdCompress === 'function' ? promisify(zlib.zstdCompress) : null;
+const zstdDecompressAsync =
+  typeof zlib.zstdDecompress === 'function' ? promisify(zlib.zstdDecompress) : null;
 
 const log = createMakerLogger('cc-bridge');
 
@@ -481,6 +488,7 @@ async function rewriteOpenaiContextProfileRequest(
     return { body: Buffer.from(JSON.stringify(parsedProfile)), contentEncoding: undefined };
   }
   if (parsedBody !== undefined || contentEncoding?.toLowerCase() !== 'zstd') return null;
+  if (zstdCompressAsync === null || zstdDecompressAsync === null) return null;
   try {
     // Near-1M-token payloads are large enough to stall Electron main. Node's async
     // zstd APIs move compression work to the libuv worker pool.

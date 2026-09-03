@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { sameFileIdentity, samePathAndHandleFileIdentity } from '../utils/fileIdentity.js';
+
 /**
  * ghostContentTree —— 「插件内容目录怎么读」的**唯一判据**。
  *
@@ -176,14 +178,6 @@ interface GhostContentAncestorIdentity {
   ctimeNs: bigint;
 }
 
-function sameFileIdentity(
-  a: Pick<fs.BigIntStats, 'dev' | 'ino'>,
-  b: Pick<fs.BigIntStats, 'dev' | 'ino'>,
-): boolean {
-  if (a.dev === 0n || a.ino === 0n || b.dev === 0n || b.ino === 0n) return false;
-  return a.dev === b.dev && a.ino === b.ino;
-}
-
 /**
  * 「读取期间这个文件没被换掉也没被改过」的统一判据。`ctimeNs` 让它同时覆盖
  * `chmod` —— 权限变化也算内容快照失效,导出侧据此拒绝把不同时刻的 mode 与字节
@@ -195,6 +189,18 @@ export function sameStableFileState(before: fs.BigIntStats, after: fs.BigIntStat
     before.size === after.size &&
     before.mtimeNs === after.mtimeNs &&
     before.ctimeNs === after.ctimeNs;
+}
+
+function sameStablePathAndHandleFileState(
+  pathEntry: fs.BigIntStats,
+  handleEntry: fs.BigIntStats,
+): boolean {
+  return pathEntry.isFile() &&
+    handleEntry.isFile() &&
+    samePathAndHandleFileIdentity(pathEntry, handleEntry) &&
+    pathEntry.size === handleEntry.size &&
+    pathEntry.mtimeNs === handleEntry.mtimeNs &&
+    pathEntry.ctimeNs === handleEntry.ctimeNs;
 }
 
 function sameStableDirectoryState(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
@@ -414,7 +420,7 @@ export async function hashGhostContentFiles(
       );
       if (noFollow === null) {
         const linkStat = await fs.promises.lstat(filePath, { bigint: true });
-        if (linkStat.isSymbolicLink() || !sameFileIdentity(linkStat, handleStat)) {
+        if (linkStat.isSymbolicLink() || !samePathAndHandleFileIdentity(linkStat, handleStat)) {
           throw new Error(`ghost content entry changed into a link: ${relativePath}`);
         }
       }
@@ -428,7 +434,7 @@ export async function hashGhostContentFiles(
         relativeRealPath === '..' ||
         relativeRealPath.startsWith(`..${path.sep}`) ||
         path.isAbsolute(relativeRealPath);
-      if (!sameFileIdentity(pathStat, handleStat) || outsideRoot) {
+      if (!samePathAndHandleFileIdentity(pathStat, handleStat) || outsideRoot) {
         throw new Error(`ghost content entry escaped its root: ${relativePath}`);
       }
 
@@ -471,12 +477,12 @@ export async function hashGhostContentFiles(
         initialRealFilePath === undefined ||
         afterReadPathStat.isSymbolicLink() ||
         !afterReadPathStat.isFile() ||
-        !sameFileIdentity(afterReadPathStat, afterVerificationReadStat) ||
+        !samePathAndHandleFileIdentity(afterReadPathStat, afterVerificationReadStat) ||
         afterReadRealFilePath !== initialRealFilePath
       ) {
         throw new Error(`ghost content entry path changed while reading: ${relativePath}`);
       }
-      if (!sameStableFileState(afterVerificationReadStat, afterReadPathStat)) {
+      if (!sameStablePathAndHandleFileState(afterReadPathStat, afterVerificationReadStat)) {
         throw new Error(`ghost content entry changed while reading: ${relativePath}`);
       }
       assertGhostContentAncestorIdentities(

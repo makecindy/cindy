@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const TEST_ROOT = '/tmp/xdt-publish-service-test';
+import os from 'node:os';
+import path from 'node:path';
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-publish-service-test-'));
 const authState = vi.hoisted(() => ({
   ownerId: 'user-1' as string | null,
   membershipKind: 'personal' as 'personal' | 'org',
@@ -102,7 +104,7 @@ vi.mock('../identityPolicy', () => ({
 }));
 
 function writeApiKeyFile() {
-  const safeStorageDir = `${TEST_ROOT}/safe-storage`;
+  const safeStorageDir = path.join(TEST_ROOT, 'safe-storage');
   fs.mkdirSync(safeStorageDir, { recursive: true });
   fs.writeFileSync(
     `${safeStorageDir}/api_key.enc`,
@@ -163,7 +165,7 @@ describe('SkillPublishService', () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
-      `${skillPath}/SKILL.md`,
+      path.join(skillPath, 'SKILL.md'),
       [
         '---',
         'name: lark-task',
@@ -248,7 +250,7 @@ describe('SkillPublishService', () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
-      `${skillPath}/SKILL.md`,
+      path.join(skillPath, 'SKILL.md'),
       [
         '---',
         'name: lark-task',
@@ -587,7 +589,7 @@ describe('SkillPublishService', () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
-      `${skillPath}/SKILL.md`,
+      path.join(skillPath, 'SKILL.md'),
       [
         '---',
         'name: lark-task',
@@ -675,7 +677,7 @@ describe('SkillPublishService', () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
-      `${skillPath}/SKILL.md`,
+      path.join(skillPath, 'SKILL.md'),
       [
         '---',
         'name: lark-task',

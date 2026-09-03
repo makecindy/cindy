@@ -1,11 +1,14 @@
 import fs from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const settingsDir = fs.mkdtempSync(path.join(tmpdir(), 'cindy-subagent-model-test-'));
+
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn(() => '/tmp/cindy-subagent-model-test'),
+    getPath: vi.fn(() => settingsDir),
   },
 }));
 
@@ -20,7 +23,7 @@ vi.mock('../logger-adapter.js', () => ({
 
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'test-owner', generation: 1 }),
-  ownerScopedUserDataPath: (...parts: string[]) => path.join('/tmp/cindy-subagent-model-test', ...parts),
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(settingsDir, ...parts),
 }));
 
 import {
@@ -37,7 +40,6 @@ import {
   type SubagentModelSettings,
 } from '../../../shared/subagentModelSettings';
 
-const settingsDir = '/tmp/cindy-subagent-model-test';
 const settingsFile = path.join(settingsDir, 'subagent-model-settings.json');
 
 function withDefaults(partial: Partial<SubagentModelSettings> = {}): SubagentModelSettings {

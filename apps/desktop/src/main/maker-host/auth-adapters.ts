@@ -490,7 +490,13 @@ export async function clearCodexAuthBoundaryStateBeforeLogin(
  * 会成环);这里 re-export 保持既有导入路径不变。
  */
 async function tightenAclWindows(file: string): Promise<void> {
-  const principal = resolveWindowsAclPrincipal();
+  // Do not trust the inherited USERNAME environment variable: desktop test
+  // runners and brokered launches can retain the parent user's value while
+  // the current process runs under a different Windows identity.
+  const principal = resolveWindowsAclPrincipal(
+    { USERDOMAIN: process.env.USERDOMAIN },
+    os.userInfo().username,
+  );
   try {
     // 先落当前用户的显式 ACE，再移除继承。若 principal 解析失败，第一步会失败，
     // 文件仍保留原继承权限，不能出现“收紧失败反而把当前用户锁在门外”的半提交状态。
@@ -2051,6 +2057,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
     const cancelledAfterReconcile = cancelFinalization();
     if (cancelledAfterReconcile) return cancelledAfterReconcile;
+
     const state = requireCodexOAuthLoginState(
       await this.readState({ skipReconcile: true, credentialMode: 'oauth-bearer' }),
     );

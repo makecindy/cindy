@@ -4969,7 +4969,15 @@
         "collapseTools": "Tool 접기",
         "viewAllPermissions": "더 보기",
         "permissionsDialogDescription": "이 Plugin이 요청하는 전체 {{count}}개 권한",
-        "closeDialog": "대화 상자 닫기"
+        "closeDialog": "대화 상자 닫기",
+        "alwaysAllow": "항상 허용",
+        "needsApproval": "매번 확인",
+        "blocked": "차단됨",
+        "custom": "사용자 지정",
+        "chooseToolPermission": "Agent가 이 도구를 사용할 수 있는 시기 선택",
+        "toolPermissionGroup": "도구 {{name}} 권한",
+        "toolPermissionSaveFailed": "도구 권한을 저장하지 못했습니다. 다시 시도해 주세요.",
+        "toolPermissionUnavailable": "도구 권한 설정을 일시적으로 사용할 수 없습니다. 나중에 다시 시도해 주세요."
       },
       "contents": {
         "mainView": "메인 보기",

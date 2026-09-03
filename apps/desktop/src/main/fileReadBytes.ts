@@ -28,6 +28,7 @@
 
 import * as nodePath from 'node:path';
 
+import { samePathAndHandleFileIdentity } from './utils/fileIdentity.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 
 /** Hard ceiling regardless of the caller-requested maxSize. */
@@ -76,7 +77,7 @@ export interface ReadFileBytesDeps {
  * chatAttachmentSave.ts.
  */
 function isSameFileObject(expected: FileIdentityStat, actual: FileIdentityStat): boolean {
-  return expected.ino !== 0n && expected.dev === actual.dev && expected.ino === actual.ino;
+  return samePathAndHandleFileIdentity(expected, actual);
 }
 
 export async function readFileBytesForPreview(

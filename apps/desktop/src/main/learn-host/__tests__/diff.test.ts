@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { computeExcludedOldSideRemovals } from '../diff';
 
-const TEST_ROOT = '/tmp/xdt-learn-diff-test';
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-learn-diff-test-'));
 
 // Windows 未开发者模式/无特权时创建文件 symlink 会 EPERM(junction 只适用于目录);
 // 探测一次,不可用则跳过依赖文件 symlink 的用例。

@@ -24,13 +24,13 @@ const loggerMocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 const originalAutoSyncConfigUrl = process.env.XDT_SKILLHUB_AUTO_SYNC_CONFIG_URL;
-const TEST_ROOT = path.join('/tmp', 'xdt-auto-sync-test');
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-auto-sync-test-'));
 const TEST_HOME = path.join(TEST_ROOT, 'home');
 const TEST_USER_DATA = path.join(TEST_ROOT, 'userData');
 
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn(() => path.join('/tmp', 'xdt-auto-sync-test', 'userData')),
+    getPath: vi.fn(() => TEST_USER_DATA),
   },
   net: {
     fetch: vi.fn(),

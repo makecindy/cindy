@@ -339,7 +339,6 @@ describe('readBoundedFileNoFollow', () => {
   it('开启内容稳定性校验时,同 stat 的同长度改写会在复读时返回可重试错误', async () => {
     const file = path.join(workDir, 'same-stat-changed.json');
     await fs.promises.writeFile(file, 'AAAA');
-    const stableStat = await fs.promises.stat(file, { bigint: true });
     const realOpen = fs.promises.open;
     let rewritten = false;
     const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
@@ -347,9 +346,16 @@ describe('readBoundedFileNoFollow', () => {
     ) => {
       const handle = await realOpen(...args);
       const realRead = handle.read.bind(handle);
+      const realStat = handle.stat.bind(handle);
+      let stableStat: fs.BigIntStats | null = null;
       return new Proxy(handle, {
         get(target, key) {
-          if (key === 'stat') return async () => stableStat;
+          if (key === 'stat') {
+            return async (options?: fs.StatOptions) => {
+              stableStat ??= (await realStat(options as never)) as unknown as fs.BigIntStats;
+              return stableStat;
+            };
+          }
           if (key === 'read') {
             return async (buffer: Buffer, offset: number, length: number, position: number) => {
               const result = await realRead(buffer, offset, length, position);
