@@ -69,6 +69,8 @@ interface MaximizeRecoveryMouseInput {
   y: number;
 }
 
+type MaximizeRecoveryUserIntentSource = 'before-unmaximize' | 'after-unmaximize';
+
 export interface MaximizeRecoveryNativeWindow extends MaximizeRecoveryWindow {
   webContents: {
     on(
@@ -99,13 +101,15 @@ export interface MaximizeRecoveryNativeWindow extends MaximizeRecoveryWindow {
  */
 export function installMainWindowNativeRestoreIntent(
   win: MaximizeRecoveryNativeWindow,
-  notifyUserUnmaximizeIntent: () => void,
+  notifyUserUnmaximizeIntent: (source?: MaximizeRecoveryUserIntentSource) => void,
   platform: NodeJS.Platform = process.platform,
 ): () => void {
   if (platform !== 'win32') return () => {};
 
-  const onWillMove = (): void => notifyUserUnmaximizeIntent();
-  const onWillResize = (): void => notifyUserUnmaximizeIntent();
+  const onWillMove = (): void =>
+    notifyUserUnmaximizeIntent(win.isMaximized() ? 'before-unmaximize' : 'after-unmaximize');
+  const onWillResize = (): void =>
+    notifyUserUnmaximizeIntent(win.isMaximized() ? 'before-unmaximize' : 'after-unmaximize');
   const onBeforeMouseEvent = (_event: unknown, mouse: MaximizeRecoveryMouseInput): void => {
     if (
       mouse.type === 'mouseDown' &&
@@ -114,7 +118,7 @@ export function installMainWindowNativeRestoreIntent(
       mouse.y >= 0 &&
       mouse.y <= 46
     ) {
-      notifyUserUnmaximizeIntent();
+      notifyUserUnmaximizeIntent('before-unmaximize');
     }
   };
   const onBeforeInputEvent = (_event: unknown, input: MaximizeRecoveryInput): void => {
@@ -126,7 +130,7 @@ export function installMainWindowNativeRestoreIntent(
       input.key === 'ArrowDown' &&
       hasWindowsModifier
     ) {
-      notifyUserUnmaximizeIntent();
+      notifyUserUnmaximizeIntent('before-unmaximize');
     }
   };
 
@@ -165,7 +169,7 @@ export interface MainWindowMaximizeRecoveryController {
   /** Stop listening for display and window state changes. */
   dispose(): void;
   /** Record a possible user restore; it only disarms once unmaximize is observed. */
-  notifyUserUnmaximizeIntent(): void;
+  notifyUserUnmaximizeIntent(source?: MaximizeRecoveryUserIntentSource): void;
 }
 
 /**
@@ -213,18 +217,33 @@ export function installMainWindowMaximizeRecovery(
     clearDisarm();
   };
 
-  const notifyUserUnmaximizeIntent = (): void => {
+  const notifyUserUnmaximizeIntent = (
+    source: MaximizeRecoveryUserIntentSource = 'before-unmaximize',
+  ): void => {
     if (disposed) return;
     const at = now();
-    // Manual move/resize can be reported immediately after `unmaximize`. Pair
-    // either event order, but never disarm for an input signal by itself.
+    if (source === 'after-unmaximize') {
+      // Manual move/resize can be reported immediately after `unmaximize`.
+      // Only these concrete native transitions may confirm a late signal;
+      // title-bar clicks and key events must never pair with an older OS event.
+      if (
+        lastUnmaximizeAtMs !== null &&
+        at - lastUnmaximizeAtMs >= 0 &&
+        at - lastUnmaximizeAtMs <= userIntentMs &&
+        !win.isMaximized()
+      ) {
+        disarmForConfirmedUserUnmaximize();
+      }
+      return;
+    }
+    if (!win.isMaximized()) return;
     if (
       lastUnmaximizeAtMs !== null &&
       at - lastUnmaximizeAtMs >= 0 &&
-      at - lastUnmaximizeAtMs <= userIntentMs &&
-      !win.isMaximized()
+      at - lastUnmaximizeAtMs <= userIntentMs
     ) {
-      disarmForConfirmedUserUnmaximize();
+      // A click or key event that arrives after an OS transition is not proof
+      // that it caused that transition, so do not retain it as pending intent.
       return;
     }
     pendingUserUnmaximizeAtMs = at;

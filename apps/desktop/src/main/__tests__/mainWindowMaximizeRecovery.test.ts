@@ -244,7 +244,7 @@ describe('installMainWindowMaximizeRecovery', () => {
     h.runTimers();
     h.advance(1_000);
     h.osUnmaximize();
-    h.recovery.notifyUserUnmaximizeIntent();
+    h.recovery.notifyUserUnmaximizeIntent('after-unmaximize');
     h.runTimers();
 
     expect(h.win.maximize).not.toHaveBeenCalled();
@@ -252,6 +252,20 @@ describe('installMainWindowMaximizeRecovery', () => {
     h.fireDisplay();
     h.runTimers();
     expect(h.win.maximize).not.toHaveBeenCalled();
+  });
+
+  it('does not pair a late title-bar intent with an earlier OS unmaximize', () => {
+    const h = createHarness();
+    h.state.maximized = true;
+
+    h.fireDisplay();
+    h.runTimers();
+    h.advance(1_000);
+    h.osUnmaximize();
+    h.recovery.notifyUserUnmaximizeIntent('before-unmaximize');
+    h.runTimers();
+
+    expect(h.win.maximize).toHaveBeenCalledOnce();
   });
 
   it('disarms after the user unmaximizes away from any display change', () => {
