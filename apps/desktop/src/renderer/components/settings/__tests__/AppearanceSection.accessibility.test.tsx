@@ -72,6 +72,17 @@ vi.mock('@/components/ui/slider', () => ({
   }) => <input type="range" value={value?.[0]} readOnly {...props} />,
 }));
 
+vi.mock('@/hooks/useAppearanceBackground', () => ({
+  useAppearanceBackground: () => ({
+    backgroundImage: '',
+    backgroundOverlay: 0.58,
+    backgroundBlur: 0,
+    setPatch: vi.fn(),
+    importBackground: vi.fn(),
+    removeBackground: vi.fn(),
+  }),
+}));
+
 vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));
 vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 
@@ -85,5 +96,18 @@ describe('AppearanceSection accessibility', () => {
     expect(
       screen.getByRole('spinbutton', { name: 'settings.appearance.font.codeSize.label' }),
     ).toBeTruthy();
+  });
+
+  it('hides image-only controls when no custom background is selected', () => {
+    render(<AppearanceSection />);
+
+    expect(
+      screen.queryByRole('img', { name: 'settings.appearance.background.preview' }),
+    ).toBeNull();
+    expect(screen.queryByText('settings.appearance.background.overlay')).toBeNull();
+    expect(screen.queryByText('settings.appearance.background.blur')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'settings.appearance.background.remove' }),
+    ).toBeNull();
   });
 });

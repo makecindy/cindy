@@ -51,8 +51,8 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
 
   it('keeps the default sidebar divider visible after a custom background is removed', () => {
     expect(sidebarShellSource).toContain('borderRightColor: backgroundImage');
-    expect(sidebarShellSource).toContain('var(--border-default) 55%');
-    expect(sidebarShellSource).toContain('var(--text-secondary) 45%');
+    expect(sidebarShellSource).toContain('var(--border-default) 35%');
+    expect(sidebarShellSource).toContain('var(--text-secondary) 65%');
   });
 
   it('keeps the approved CREATE AGENT shell while preserving the functional composer', () => {

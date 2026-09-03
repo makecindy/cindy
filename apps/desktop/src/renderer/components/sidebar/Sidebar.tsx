@@ -178,7 +178,7 @@ export function Sidebar({
         width: visualWidth,
         borderRightColor: backgroundImage
           ? undefined
-          : 'color-mix(in srgb, var(--border-default) 55%, var(--text-secondary) 45%)',
+          : 'color-mix(in srgb, var(--border-default) 35%, var(--text-secondary) 65%)',
       }}
     >
       {/* 定宽内容层(见 contentWidth 注释):收起/展开动画期间内容不随 aside 宽度
