@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   dir: '',
+  mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
+  ownerId: 'test-owner' as string | null,
+  exclusive: true,
+  legacyClaim: true,
 }));
 
 vi.mock('electron', () => ({
@@ -20,6 +24,16 @@ vi.mock('electron', () => ({
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(h.dir, 'owner', ...parts),
   activeOwnerScopeKey: () => 'test-owner',
+  getActiveAppSession: () => ({
+    mode: h.mode,
+    dataOwnerId: h.ownerId,
+    generation: 0,
+  }),
+}));
+
+vi.mock('../../ownerNamespaceMigration.js', () => ({
+  hasExclusiveSharedLegacyUserDataAccess: () => h.exclusive,
+  hasLegacyOwnerNamespaceClaim: () => h.legacyClaim,
 }));
 
 vi.mock('../../maker-host/logger-adapter.js', () => ({
@@ -68,6 +82,10 @@ function readJson(file: string): unknown {
 describe('auxiliary-model-settings-store', () => {
   beforeEach(() => {
     h.dir = mkdtempSync(path.join(os.tmpdir(), 'cindy-auxiliary-model-'));
+    h.mode = 'cloud';
+    h.ownerId = 'test-owner';
+    h.exclusive = true;
+    h.legacyClaim = true;
     mkdirSync(path.join(h.dir, 'owner'), { recursive: true });
   });
 
@@ -126,6 +144,26 @@ describe('auxiliary-model-settings-store', () => {
       promptRecommendationModel: PROMPT_PIN,
     });
 
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    await __testing.flushLegacyMigration();
+    expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+  });
+
+  it('defers legacy migration while shared userData is not exclusive', async () => {
+    writeJson(settingsPath(), {
+      sessionTitleModel: TITLE_PIN,
+      promptRecommendationModel: PROMPT_PIN,
+    });
+    h.exclusive = false;
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    await __testing.flushLegacyMigration();
+    expect(readJson(settingsPath())).toEqual({
+      sessionTitleModel: TITLE_PIN,
+      promptRecommendationModel: PROMPT_PIN,
+    });
+
+    h.exclusive = true;
     expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
     await __testing.flushLegacyMigration();
     expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
@@ -203,6 +241,31 @@ describe('auxiliary-model-settings-store', () => {
 
     expect(() => readFileSync(settingsPath())).toThrow();
     expect(() => readFileSync(migrationStatePath())).toThrow();
+  });
+
+  it('does not import the unscoped legacy voice file without a claimed cloud owner', async () => {
+    writeJson(unscopedVoicePath(), {
+      refinerProvider: 'litellm-kimi-k2.6',
+      refinerProviderChain: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+    });
+    h.mode = 'local';
+    h.ownerId = 'local-owner';
+    h.legacyClaim = false;
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
+    await __testing.flushLegacyMigration();
+    expect(() => readFileSync(settingsPath())).toThrow();
+
+    h.mode = 'cloud';
+    h.ownerId = 'test-owner';
+    h.legacyClaim = true;
+    expect(readAuxiliaryModelSettings()).toEqual({
+      models: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+    });
+    await __testing.flushLegacyMigration();
+    expect(readJson(settingsPath())).toEqual({
+      models: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+    });
   });
 
   it('does not re-import the legacy voice chain after restoring automatic defaults', async () => {

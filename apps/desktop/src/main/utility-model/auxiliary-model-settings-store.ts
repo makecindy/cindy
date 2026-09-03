@@ -24,7 +24,15 @@ import {
   isUtilityModelProviderKind,
   resolveUtilityModelProviderKindAlias,
 } from '../../shared/utilityModelProfiles.js';
-import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getActiveAppSession,
+  ownerScopedUserDataPath,
+} from '../appSessionState.js';
+import {
+  hasExclusiveSharedLegacyUserDataAccess,
+  hasLegacyOwnerNamespaceClaim,
+} from '../ownerNamespaceMigration.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
   createOverrideSettingsFile,
@@ -49,6 +57,13 @@ function unscopedVoiceModelsPath(): string {
 
 function migrationStatePath(): string {
   return ownerScopedUserDataPath(AUXILIARY_MODEL_MIGRATION_FILE);
+}
+
+function readClaimedUnscopedVoiceModels(): Record<string, unknown> | null {
+  const session = getActiveAppSession();
+  if (session.mode !== 'cloud' || !session.dataOwnerId) return null;
+  if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) return null;
+  return readJsonObject(unscopedVoiceModelsPath());
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -273,7 +288,7 @@ function readLegacyMigrationPlan(): LegacyMigrationPlan | null {
   const unscopedVoice =
     ownerVoice.length > 0 || legacyVoiceMigrationCompleted
       ? []
-      : legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath()));
+      : legacyVoiceOverrideRefs(readClaimedUnscopedVoiceModels());
   const fromVoice = (ownerVoice.length > 0 ? ownerVoice : unscopedVoice).slice(0, 3);
 
   if (fromOldPins.length > 0) {
@@ -301,6 +316,14 @@ function scheduleLegacyMigration(): void {
   if (pendingLegacyMigration) return;
   const ownerScopeKey = activeOwnerScopeKey();
   pendingLegacyMigration = (async () => {
+    // The legacy settings file is also read by older primary builds. A
+    // passive or concurrently running instance must not rewrite its schema
+    // underneath them; the next exclusive read will retry this idempotent
+    // migration.
+    if (!hasExclusiveSharedLegacyUserDataAccess()) {
+      log.info('legacy auxiliary model migration deferred: shared userData is not exclusive');
+      return;
+    }
     let markVoiceMigrationComplete = false;
     await store.updateAtomic(() => {
       // Re-read under the same lock immediately before writing. A concurrent
@@ -420,7 +443,7 @@ export async function writeAuxiliaryModelSettingsPatch(
       const legacyVoice =
         hasLegacyVoiceMigrationMarker() ||
         legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath())).length > 0 ||
-        legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath())).length > 0;
+        legacyVoiceOverrideRefs(readClaimedUnscopedVoiceModels()).length > 0;
       if (legacyVoice) markLegacyVoiceMigrationComplete();
       return patch;
     });
@@ -441,7 +464,7 @@ export async function resetAuxiliaryModelSettings(): Promise<AuxiliaryModelSetti
     const legacyVoice =
       hasLegacyVoiceMigrationMarker() ||
       legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath())).length > 0 ||
-      legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath())).length > 0;
+      legacyVoiceOverrideRefs(readClaimedUnscopedVoiceModels()).length > 0;
     if (legacyVoice) markLegacyVoiceMigrationComplete();
     return { models: [] };
   });
