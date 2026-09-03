@@ -46,6 +46,7 @@ export function FindInPageBar() {
   const [matches, setMatches] = useState(0);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchInputMirrorRef = useRef<HTMLSpanElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSearchInputRef = useRef<PendingSearchInput | null>(null);
   const searchGenerationRef = useRef(0);
@@ -62,6 +63,12 @@ export function FindInPageBar() {
     if (searchTimerRef.current === null) return;
     clearTimeout(searchTimerRef.current);
     searchTimerRef.current = null;
+  }, []);
+
+  const syncSearchInputMirror = useCallback((input: HTMLInputElement) => {
+    const mirror = searchInputMirrorRef.current;
+    if (!mirror) return;
+    mirror.style.transform = input.scrollLeft ? `translateX(-${input.scrollLeft}px)` : '';
   }, []);
 
   const restoreSearchInputFocus = useCallback((pending: PendingSearchInput) => {
@@ -82,6 +89,7 @@ export function FindInPageBar() {
   const releaseSearchInput = useCallback(
     (pending: PendingSearchInput, restoreFocus = pending.restoreFocus) => {
       pending.input.type = 'text';
+      searchInputMirrorRef.current?.style.removeProperty('transform');
       setMaskNativeSearchInput(false);
       if (restoreFocus) restoreSearchInputFocus(pending);
     },
@@ -159,7 +167,8 @@ export function FindInPageBar() {
     const pending = pendingSearchInputRef.current;
     if (!pending || !pending.restoreFocus || pending.userInteracted) return;
     pending.input.focus({ preventScroll: true });
-  }, [maskNativeSearchInput]);
+    syncSearchInputMirror(pending.input);
+  }, [maskNativeSearchInput, syncSearchInputMirror]);
 
   // Subscribe to result events while the bar is open. The fan-out subscriber
   // returns an unsubscribe function — calling it on close releases the
@@ -341,21 +350,29 @@ export function FindInPageBar() {
       role="dialog"
       aria-label={t('findInPage.dialogAriaLabel')}
     >
-      <div
-        className={cn(
-          'relative flex-1 min-w-0 overflow-hidden',
-          maskNativeSearchInput &&
-            text && [
-              'before:pointer-events-none before:absolute before:inset-y-0 before:left-0',
-              'before:flex before:items-center before:whitespace-pre before:text-sm',
-              'before:text-popover-foreground before:content-[attr(data-query)]',
-            ],
-        )}
-        data-query={maskNativeSearchInput && text ? text : undefined}
-      >
+      <div className="relative flex-1 min-w-0 overflow-hidden">
+        {maskNativeSearchInput && text ? (
+          <span
+            ref={searchInputMirrorRef}
+            aria-hidden="true"
+            data-query={text}
+            className={cn(
+              'pointer-events-none absolute inset-y-0 left-0 flex items-center whitespace-pre text-sm',
+              'before:content-[attr(data-query)]',
+              'before:text-popover-foreground',
+            )}
+          />
+        ) : null}
         <input
           ref={inputRef}
           type={maskNativeSearchInput ? 'password' : 'text'}
+          role="searchbox"
+          aria-label={
+            maskNativeSearchInput && text
+              ? `${t('findInPage.placeholder')}: ${text}`
+              : t('findInPage.placeholder')
+          }
+          autoComplete="off"
           value={text}
           placeholder={t('findInPage.placeholder')}
           onChange={(e) => {
@@ -389,6 +406,7 @@ export function FindInPageBar() {
             setText(committed);
             scheduleSearch(committed);
           }}
+          onScroll={(e) => syncSearchInputMirror(e.currentTarget)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.preventDefault();

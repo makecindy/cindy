@@ -330,7 +330,14 @@ describe('FindInPageBar', () => {
     expect(input.type).toBe('password');
     expect(input.disabled).toBe(false);
     expect(input.parentElement?.textContent).toBe('');
-    expect(input.parentElement?.getAttribute('data-query')).toBe('foo');
+    const mirror = input.parentElement?.querySelector('[data-query]') as HTMLElement;
+    expect(mirror.getAttribute('data-query')).toBe('foo');
+    expect(input.getAttribute('role')).toBe('searchbox');
+    expect(input.getAttribute('aria-label')).toBe('findInPage.placeholder: foo');
+
+    input.scrollLeft = 37;
+    fireEvent.scroll(input);
+    expect(mirror.style.transform).toBe('translateX(-37px)');
 
     act(() => {
       mocks.resultHandler?.({
