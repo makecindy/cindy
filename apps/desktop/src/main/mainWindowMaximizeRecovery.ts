@@ -69,6 +69,13 @@ export interface MaximizeRecoveryOptions {
   graceMs?: number;
 }
 
+export interface MainWindowMaximizeRecoveryController {
+  /** Stop listening for display and window state changes. */
+  dispose(): void;
+  /** Mark the next unmaximize as an explicit user request, not OS re-layout. */
+  notifyUserUnmaximize(): void;
+}
+
 /**
  * Keeps the main window maximized across display topology / DPI changes while
  * the user's last choice was "maximized"; the user's own maximize / unmaximize
@@ -78,7 +85,7 @@ export function installMainWindowMaximizeRecovery(
   win: MaximizeRecoveryWindow,
   screen: MaximizeRecoveryScreen,
   options: MaximizeRecoveryOptions,
-): () => void {
+): MainWindowMaximizeRecoveryController {
   const now = options.now ?? Date.now;
   const setTimer = options.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
   const clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
@@ -98,6 +105,17 @@ export function installMainWindowMaximizeRecovery(
   const clearDisarm = (): void => {
     if (disarmTimer !== null) clearTimer(disarmTimer);
     disarmTimer = null;
+  };
+
+  const notifyUserUnmaximize = (): void => {
+    if (disposed) return;
+    // The renderer's custom title-bar control is an explicit user choice. Clear
+    // any recovery work before Electron emits `unmaximize`, so a click during
+    // the display-change grace window cannot be mistaken for OS re-layout.
+    armed = false;
+    lastDisplayChangeAtMs = null;
+    clearReapply();
+    clearDisarm();
   };
 
   const dispose = (): void => {
@@ -156,5 +174,5 @@ export function installMainWindowMaximizeRecovery(
   win.on('maximize', onMaximize);
   win.on('unmaximize', onUnmaximize);
   win.on('closed', dispose);
-  return dispose;
+  return { dispose, notifyUserUnmaximize };
 }

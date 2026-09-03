@@ -54,7 +54,7 @@ function createHarness(options: { armed?: boolean } = {}) {
   };
   const log = { info: vi.fn() };
 
-  const dispose = installMainWindowMaximizeRecovery(win, screen, {
+  const recovery = installMainWindowMaximizeRecovery(win, screen, {
     armed: options.armed ?? true,
     log,
     now: () => nowMs,
@@ -85,8 +85,28 @@ function createHarness(options: { armed?: boolean } = {}) {
     state.maximized = false;
     windowListeners.get('unmaximize')?.();
   };
+  const userUnmaximize = (): void => {
+    recovery.notifyUserUnmaximize();
+    state.maximized = false;
+    windowListeners.get('unmaximize')?.();
+  };
 
-  return { state, win, screen, log, timers, dispose, runTimers, advance, fireDisplay, osUnmaximize, windowListeners, screenListeners };
+  return {
+    state,
+    win,
+    screen,
+    log,
+    timers,
+    recovery,
+    dispose: recovery.dispose,
+    runTimers,
+    advance,
+    fireDisplay,
+    osUnmaximize,
+    userUnmaximize,
+    windowListeners,
+    screenListeners,
+  };
 }
 
 describe('installMainWindowMaximizeRecovery', () => {
@@ -156,6 +176,21 @@ describe('installMainWindowMaximizeRecovery', () => {
     h.osUnmaximize();
     h.runTimers();
     expect(h.win.maximize).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors an explicit user restore during the display-change grace window', () => {
+    const h = createHarness();
+    h.state.maximized = true;
+
+    h.fireDisplay();
+    h.userUnmaximize();
+    h.runTimers();
+
+    expect(h.win.maximize).not.toHaveBeenCalled();
+
+    h.fireDisplay();
+    h.runTimers();
+    expect(h.win.maximize).not.toHaveBeenCalled();
   });
 
   it('disarms after the user unmaximizes away from any display change', () => {

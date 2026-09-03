@@ -57,6 +57,7 @@ import {
 import {
   installMainWindowMaximizeRecovery,
   readPersistedWindowMaximized,
+  type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
@@ -2940,6 +2941,7 @@ function isPathAllowed(filePath: string): boolean {
 // BrowserWindow，[0] 拿到它再 .focus() 等于啥也没干，用户视觉上以为
 // "双击启动不了"。
 let mainWindowRef: BrowserWindow | null = null;
+let mainWindowMaximizeRecoveryController: MainWindowMaximizeRecoveryController | null = null;
 // 端点清单阻断门:ready 流程走到正常 createWindow() 前置 true。在此之前
 // second-instance / activate 一律不许建窗——阻断循环(错误框重试)期间用户
 // 双击图标 / 点 Dock 若能建窗,preload 的模块级 sendSync 会因 handler 未注册
@@ -3714,9 +3716,15 @@ const createWindow = () => {
   // state to disk on `close`. Must run before any user resize event fires.
   mainWindowState.manage(mainWindow);
   if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
-  installMainWindowMaximizeRecovery(mainWindow, screen, {
+  const maximizeRecovery = installMainWindowMaximizeRecovery(mainWindow, screen, {
     armed: shouldRestoreMaximized,
     log: createSchedulerLogger('main-window-maximize-recovery'),
+  });
+  mainWindowMaximizeRecoveryController = maximizeRecovery;
+  mainWindow.once('closed', () => {
+    if (mainWindowMaximizeRecoveryController === maximizeRecovery) {
+      mainWindowMaximizeRecoveryController = null;
+    }
   });
 
   // dev-only:F12 切换 DevTools 的兜底通道。走 before-input-event 在 main 侧
@@ -4725,6 +4733,9 @@ const registerIpcHandlers = () => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
     if (!win) return;
     if (win.isMaximized()) {
+      if (win === mainWindowRef) {
+        mainWindowMaximizeRecoveryController?.notifyUserUnmaximize();
+      }
       win.unmaximize();
     } else {
       win.maximize();
