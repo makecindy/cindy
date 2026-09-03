@@ -15,6 +15,7 @@ function depsWith(
   files: string[],
   claudeLogin = false,
   shared: (cli: string) => boolean = () => true,
+  codexOAuthLogin = true,
 ): LocalCliScanDeps {
   const dirSet = new Set(dirs.map((d) => join(HOME, d)));
   const fileSet = new Set(files.map((f) => join(HOME, f)));
@@ -23,6 +24,7 @@ function depsWith(
     isDirectory: async (p) => dirSet.has(p),
     isFile: async (p) => fileSet.has(p),
     hasClaudeLogin: () => claudeLogin,
+    hasCodexOAuthLogin: async () => codexOAuthLogin,
     isCredentialSharedWithCindy: (cli) => shared(cli),
   };
 }
@@ -62,10 +64,21 @@ describe('scanLocalCliAuth', () => {
     expect(codex).toMatchObject({ installed: false, loggedIn: false });
   });
 
-  it('codex 已安装已登录', async () => {
+  it('codex 已安装且通过 ChatGPT OAuth 登录', async () => {
     const r = await scanLocalCliAuth(depsWith(['.codex'], [join('.codex', 'auth.json')], false));
     const codex = r.find((d) => d.cli === 'codex-cli');
-    expect(codex).toMatchObject({ installed: true, loggedIn: true });
+    expect(codex).toMatchObject({ installed: true, loggedIn: true, oauthLoggedIn: true });
+  });
+
+  it('codex 只有 API key auth 时不显示 OAuth 复用入口', async () => {
+    const r = await scanLocalCliAuth(
+      depsWith(['.codex'], [join('.codex', 'auth.json')], false, () => true, false),
+    );
+    expect(r.find((d) => d.cli === 'codex-cli')).toMatchObject({
+      installed: true,
+      loggedIn: true,
+      oauthLoggedIn: false,
+    });
   });
 
   it('文件探测抛错向上传播(生产 deps 在 stat 层吞错,handler 再降级空数组)', async () => {
@@ -76,6 +89,7 @@ describe('scanLocalCliAuth', () => {
         throw new Error('EACCES');
       },
       hasClaudeLogin: () => false,
+      hasCodexOAuthLogin: async () => false,
       isCredentialSharedWithCindy: () => true,
     };
     await expect(scanLocalCliAuth(deps)).rejects.toThrow('EACCES');

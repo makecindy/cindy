@@ -2,9 +2,9 @@
  * localCliDetect(main)—— 本机 agent CLI 安装 / 登录态扫描的实现。
  *
  * 纯函数 + 注入 fs 依赖(规则 14:handler body 可脱 Electron 单测)。
- * 只做存在性 stat(目录用 isDirectory、文件用 isFile,防同名文件顶替误报——
- * 见 memory: 存在性探测用 stat 而非 access),**绝不读取凭证内容**(规则 23)。
- * 任一条目探测失败按「未安装」处理(fail-quiet:检测建议是增强,不是功能依赖)。
+ * 基础状态只做存在性 stat(目录用 isDirectory、文件用 isFile,防同名文件顶替误报)。
+ * Codex 额外通过 Main-only auth helper 判断文件是否为 OAuth；renderer 只收到布尔元数据，
+ * token 和路径不跨 IPC。任一条目探测失败均 fail-quiet（检测建议只是增强）。
  */
 
 import { homedir } from 'node:os';
@@ -12,7 +12,10 @@ import { join } from 'node:path';
 import { stat } from 'node:fs/promises';
 
 import { hasClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
-import { isCodexAuthInheritedFromSystemCli } from '../maker-host/auth-adapters.js';
+import {
+  hasSystemCodexOAuthLogin,
+  isCodexAuthInheritedFromSystemCli,
+} from '../maker-host/auth-adapters.js';
 import { isNativeProviderAuthSelfAuthorized } from '../maker-host/nativeProviderAuthBinding.js';
 import {
   LOCAL_CLI_DETECT_MAP,
@@ -31,6 +34,8 @@ export interface LocalCliScanDeps {
    * 生产 = hasClaudeAiOAuth();只返 boolean,不暴露凭证内容(规则 23)。
    */
   hasClaudeLogin(): boolean;
+  /** Codex CLI auth.json 是否包含可识别的 ChatGPT OAuth 账号。只返回布尔元数据。 */
+  hasCodexOAuthLogin(): Promise<boolean>;
   /**
    * Cindy 用的凭证是否确实就是这份本机凭证(填 `LocalCliDetection.sharedWithCindy`)。
    * 只在该 CLI 已登录时被调用;判据按 CLI 分派,见 createLocalCliScanDeps。
@@ -59,6 +64,13 @@ export function createLocalCliScanDeps(): LocalCliScanDeps {
     hasClaudeLogin: () => {
       try {
         return hasClaudeAiOAuth();
+      } catch {
+        return false;
+      }
+    },
+    hasCodexOAuthLogin: async () => {
+      try {
+        return await hasSystemCodexOAuthLogin();
       } catch {
         return false;
       }
@@ -106,6 +118,8 @@ export async function scanLocalCliAuth(deps: LocalCliScanDeps): Promise<LocalCli
     } else if (dirExists && entry.credentialFileSegments) {
       loggedIn = await deps.isFile(join(deps.homeDir, ...entry.credentialFileSegments));
     }
+    const oauthLoggedIn =
+      entry.cli === 'claude-cli' ? loggedIn : loggedIn ? await deps.hasCodexOAuthLogin() : false;
     // 未登录时不必探测共用性(也无从谈起);已登录才问「Cindy 用的是不是这一份」。
     const sharedWithCindy = loggedIn ? deps.isCredentialSharedWithCindy(entry.cli) : false;
     results.push({
@@ -113,6 +127,7 @@ export async function scanLocalCliAuth(deps: LocalCliScanDeps): Promise<LocalCli
       providerId: entry.providerId,
       installed,
       loggedIn,
+      oauthLoggedIn,
       sharedWithCindy,
     });
   }

@@ -142,18 +142,22 @@ function providerIcon(p: ProviderView, size: number): ReactNode {
 // 通用小件(与重构前一致)
 // ---------------------------------------------------------------------------
 
-function ConnectedPill() {
+function ConnectedPill({ identity }: { identity?: string } = {}) {
   const { t } = useTranslation();
   return (
     <span
-      className="flex h-[22px] shrink-0 items-center gap-1 rounded-full px-2.5 text-11 font-medium"
+      className="flex h-[22px] max-w-64 shrink-0 items-center gap-1 rounded-full px-2.5 text-11 font-medium"
       style={{
         backgroundColor: 'var(--settings-btn-secondary-bg)',
         color: 'var(--settings-section-desc)',
       }}
     >
-      <Check size={12} strokeWidth={2.5} />
-      {t('settings.providers.pill.connected')}
+      <Check size={12} className="shrink-0" strokeWidth={2.5} />
+      <span className="truncate">
+        {identity
+          ? `${t('settings.providers.pill.connected')} · ${identity}`
+          : t('settings.providers.pill.connected')}
+      </span>
     </span>
   );
 }
@@ -562,7 +566,15 @@ function AnthropicHeader({
 // OpenAI —— OAuth(ChatGPT 订阅 / Codex),复用 useCodexAuth()。
 // ---------------------------------------------------------------------------
 
-function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged: () => void }) {
+function OpenAiHeader({
+  provider,
+  onChanged,
+  codexCliLoggedIn,
+}: {
+  provider?: ProviderView;
+  onChanged: () => void;
+  codexCliLoggedIn: boolean;
+}) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const {
@@ -623,6 +635,15 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     }
   }, [triggerLogin, onChanged, t]);
 
+  const handleUseCodexCli = useCallback(async () => {
+    const outcome = await triggerLogin('local-cli');
+    if (outcome === 'authenticated') {
+      onChanged();
+    } else if (outcome === 'failed' || outcome === 'unverified') {
+      toast.error(t('settings.connections.codex.toast.cliConnectFailed'));
+    }
+  }, [onChanged, t, triggerLogin]);
+
   const handleRecovery = useCallback(async () => {
     if (recoveryCheck === 'checking' || loggingIn) return;
     if (recoveryCheck === 'failed') {
@@ -646,7 +667,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
 
   const trailing = connected ? (
     <div className="flex shrink-0 items-center gap-2.5">
-      <ConnectedPill />
+      <ConnectedPill identity={state.kind === 'authenticated' ? state.identity : undefined} />
       <PillButton
         label={t('settings.providers.button.disconnect')}
         onClick={() => void handleLogout()}
@@ -674,20 +695,29 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       />
     </div>
   ) : (
-    <PillButton
-      label={
-        oauthWritesBlocked
-          ? t('chatgptAuthRecovery.devReadOnly')
-          : loggingIn
-            ? t('settings.providers.openai.cancelConnect')
-            : t('settings.providers.openai.connect')
-      }
-      disabled={oauthWritesBlocked}
-      onClick={() => {
-        if (loggingIn) void cancelLogin();
-        else void handleLogin();
-      }}
-    />
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2.5">
+      <PillButton
+        label={
+          oauthWritesBlocked
+            ? t('chatgptAuthRecovery.devReadOnly')
+            : loggingIn
+              ? t('settings.providers.openai.cancelConnect')
+              : t('settings.providers.openai.connect')
+        }
+        disabled={oauthWritesBlocked}
+        onClick={() => {
+          if (loggingIn) void cancelLogin();
+          else void handleLogin();
+        }}
+      />
+      {codexCliLoggedIn &&
+        (state.kind === 'unauthenticated' || state.kind === 'error') && (
+          <PillButton
+            label={t('settings.providers.openai.useCodexCli')}
+            onClick={() => void handleUseCodexCli()}
+          />
+        )}
+    </div>
   );
 
   return (
@@ -2353,7 +2383,17 @@ export function ProvidersSection() {
   const renderDetailHeader = (p: ProviderView): ReactNode => {
     if (p.id === 'xd') return <XdGatewayHeader provider={p} onChanged={refetch} />;
     if (p.id === 'anthropic') return <AnthropicHeader provider={p} onChanged={refetch} />;
-    if (p.id === 'openai') return <OpenAiHeader provider={p} onChanged={refetch} />;
+    if (p.id === 'openai') {
+      return (
+        <OpenAiHeader
+          provider={p}
+          onChanged={refetch}
+          codexCliLoggedIn={detections.some(
+            (d) => d.providerId === 'openai' && d.installed && d.oauthLoggedIn,
+          )}
+        />
+      );
+    }
     if (p.id === 'xai') return <XaiHeader provider={p} onChanged={refetch} />;
     if (
       p.source === 'builtin' &&

@@ -6051,7 +6051,7 @@ interface ElectronAPI {
       getState: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<CodexAuthState>;
       triggerLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi',
-        options?: { mode?: 'browser' | 'device-code'; ownerId?: string },
+        options?: { mode?: 'browser' | 'device-code' | 'local-cli'; ownerId?: string },
       ) => Promise<CodexAuthState>;
       cancelLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi',
@@ -6065,7 +6065,7 @@ interface ElectronAPI {
         cb: (p: {
           agentKind: 'claude-code' | 'codex' | 'pi';
           phase: string;
-          mode?: 'browser' | 'device-code';
+          mode?: 'browser' | 'device-code' | 'local-cli';
           detail?: string;
           verificationUrl?: string;
           userCode?: string;

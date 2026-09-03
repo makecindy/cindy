@@ -1315,6 +1315,7 @@
         "toast": {
           "loggedOut": "ChatGPT 계정 연결이 해제되었습니다",
           "loginFailed": "ChatGPT에 연결하지 못했습니다. 다시 시도해 주세요",
+          "cliConnectFailed": "Codex CLI 계정을 사용할 수 없습니다. CLI가 ChatGPT에 로그인되어 있는지 확인한 후 다시 시도해 주세요",
           "logoutFailed": "ChatGPT 연결을 해제하지 못했습니다. 다시 시도해 주세요",
           "binaryMissing": "Codex 구성 요소를 사용할 수 없습니다. 앱을 다시 시작하세요"
         },
@@ -1427,7 +1428,8 @@
         "subtitle": "하나의 ChatGPT 계정을 Codex와 Claude에서 함께 사용",
         "modelLabel": "GPT 모델",
         "reconnectRequired": "다시 연결 필요",
-        "connect": "ChatGPT 연결",
+        "connect": "ChatGPT 로그인",
+        "useCodexCli": "현재 Codex CLI 계정 사용",
         "reconnect": "ChatGPT 다시 연결",
         "cancelConnect": "연결 취소"
       },

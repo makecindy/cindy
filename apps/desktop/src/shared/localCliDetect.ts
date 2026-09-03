@@ -39,8 +39,13 @@ export interface LocalCliDetection {
   providerId: string;
   /** 配置目录存在(~/.claude / ~/.codex)。 */
   installed: boolean;
-  /** 登录态凭证文件存在(只 stat 不读)。 */
+  /** 登录态凭证存在；仅表示 CLI 有某种认证配置。 */
   loggedIn: boolean;
+  /**
+   * 是否检测到可供 ChatGPT 登录复用的 OAuth 凭证。Main 只暴露此布尔元数据，
+   * 不向 renderer 传递 token 或凭证路径。
+   */
+  oauthLoggedIn: boolean;
   /**
    * Cindy 当前用的凭证**确实就是这一份本机凭证**(而不是各自登录了不同账号)。
    *
