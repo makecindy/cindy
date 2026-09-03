@@ -5811,7 +5811,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
             if (context?.origin !== 'user') {
               requireAgentInteractionSnapshot(instance, args);
             }
-            await running.driver.home(signal);
+            await running.driver.home(running.driverSessionId, signal);
             screenMaps.invalidate(instance.instanceId);
             return {
               backend: 'wda' as const,

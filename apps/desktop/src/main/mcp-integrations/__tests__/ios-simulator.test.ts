@@ -8529,7 +8529,7 @@ describe('iOS Simulator host', () => {
     await expect(
       host.callTool('press_home', route, { sessionId: 'session-a', origin: 'user' }),
     ).resolves.toMatchObject({ ok: true });
-    expect(driver.home).toHaveBeenCalledOnce();
+    expect(driver.home).toHaveBeenCalledWith('wda-session', expect.any(AbortSignal));
     await expect(
       host.callTool(
         'set_orientation',
