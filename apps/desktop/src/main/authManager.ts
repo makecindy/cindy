@@ -853,7 +853,11 @@ function isStoredAccountMetadata(value: unknown): value is StoredAccountMetadata
 }
 
 function readAuthAccountVault(
-  options: { allowUnreadable?: boolean; recoverInvalid?: boolean } = {},
+  options: {
+    allowUnreadable?: boolean;
+    recoverInvalid?: boolean;
+    allowUnreadableLogoutTombstones?: boolean;
+  } = {},
 ): AuthAccountVault {
   let persistedLogoutKeys: string[];
   try {
@@ -861,8 +865,15 @@ function readAuthAccountVault(
       recoverInvalid: options.recoverInvalid,
     });
   } catch (error) {
-    if (options.allowUnreadable) return emptyAuthAccountVault();
-    throw error;
+    if (options.allowUnreadableLogoutTombstones) {
+      // An explicit logout may replace the damaged tombstone record, but must
+      // retain every still-readable account in the aggregate vault.
+      persistedLogoutKeys = [];
+    } else if (options.allowUnreadable) {
+      return emptyAuthAccountVault();
+    } else {
+      throw error;
+    }
   }
   const raw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
   if (raw === null) {
@@ -1071,6 +1082,8 @@ async function transactAuthAccountVault<T>(
   afterPersist: (result: T) => void | Promise<void> = () => undefined,
   options: {
     recoverInvalidForExplicitLogin?: boolean;
+    allowUnreadableLogoutTombstones?: boolean;
+    replaceUnreadableLogoutTombstones?: boolean;
     waitWhileBusyAfterRotation?: boolean;
   } = {},
 ): Promise<T> {
@@ -1100,10 +1113,12 @@ async function transactAuthAccountVault<T>(
           : null;
         const vault = readAuthAccountVault({
           recoverInvalid: options.recoverInvalidForExplicitLogin,
+          allowUnreadableLogoutTombstones: options.allowUnreadableLogoutTombstones,
         });
         const result = await operation(vault);
         writeAuthAccountVaultOrThrow(vault, {
-          replaceUnreadableLogoutTombstones: options.recoverInvalidForExplicitLogin,
+          replaceUnreadableLogoutTombstones:
+            options.replaceUnreadableLogoutTombstones || options.recoverInvalidForExplicitLogin,
         });
         try {
           // Keep the shared-userData lock through the active-session write,
@@ -1165,7 +1180,11 @@ async function transactAuthAccountVault<T>(
 
 async function mutateAuthAccountVault<T>(
   operation: (vault: AuthAccountVault) => T | Promise<T>,
-  options: { waitWhileBusyAfterRotation?: boolean } = {},
+  options: {
+    allowUnreadableLogoutTombstones?: boolean;
+    replaceUnreadableLogoutTombstones?: boolean;
+    waitWhileBusyAfterRotation?: boolean;
+  } = {},
 ): Promise<T> {
   return transactAuthAccountVault(operation, () => undefined, options);
 }
@@ -5812,17 +5831,26 @@ export async function logout(): Promise<void> {
 
   let savedVault: AuthAccountVault;
   let savedVaultWasUnreadable = false;
+  let savedVaultHasUnreadableLogoutTombstones = false;
   try {
     savedVault = readAuthAccountVault();
   } catch (error) {
     if (!(error instanceof AuthApiError && error.code === 'CREDENTIAL_STORE_UNAVAILABLE')) {
       throw error;
     }
-    // The active in-memory session is still authoritative for this explicit
-    // user action. Replace an unreadable vault with a fresh fail-closed record
-    // below instead of making logout depend on decrypting stale saved accounts.
-    savedVault = emptyAuthAccountVault();
-    savedVaultWasUnreadable = true;
+    try {
+      // A damaged tombstone must not make logout discard an otherwise readable
+      // aggregate vault. The explicit action below replaces that tombstone
+      // while retaining every other saved account.
+      savedVault = readAuthAccountVault({ allowUnreadableLogoutTombstones: true });
+      savedVaultHasUnreadableLogoutTombstones = true;
+    } catch {
+      // The active in-memory session is still authoritative for this explicit
+      // user action. Replace an unreadable vault with a fresh fail-closed record
+      // below instead of making logout depend on decrypting stale saved accounts.
+      savedVault = emptyAuthAccountVault();
+      savedVaultWasUnreadable = true;
+    }
   }
   const currentAccountKey = accountVaultKey(currentAuthRealm, activeUser.id);
   const currentIdentity: LoggedOutAccountIdentity = {
@@ -5888,13 +5916,19 @@ export async function logout(): Promise<void> {
       vault.signedOutAt = Date.now();
     });
   } else {
-    await mutateAuthAccountVault((vault) => {
-      assertLogoutStillCurrent();
-      removedPassport = removeLoggedOutVaultAccount(vault, currentIdentity);
-      // Commit the signed-out owner before clearing compatibility records. If the
-      // process stops between the writes, cold start must not restore this account.
-      vault.signedOutAt = Date.now();
-    });
+    await mutateAuthAccountVault(
+      (vault) => {
+        assertLogoutStillCurrent();
+        removedPassport = removeLoggedOutVaultAccount(vault, currentIdentity);
+        // Commit the signed-out owner before clearing compatibility records. If the
+        // process stops between the writes, cold start must not restore this account.
+        vault.signedOutAt = Date.now();
+      },
+      {
+        allowUnreadableLogoutTombstones: savedVaultHasUnreadableLogoutTombstones,
+        replaceUnreadableLogoutTombstones: savedVaultHasUnreadableLogoutTombstones,
+      },
+    );
   }
   assertLogoutStillCurrent();
   removeSafe(AUTH_SESSION_KEY);

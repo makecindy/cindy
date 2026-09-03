@@ -252,9 +252,8 @@ describe('auth login-flow reset', () => {
       'writeAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutRaw)',
     );
     expect(mutationBody).toContain('readAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)');
-    expect(mutationBody).toContain(
-      'replaceUnreadableLogoutTombstones: options.recoverInvalidForExplicitLogin',
-    );
+    expect(mutationBody).toContain('replaceUnreadableLogoutTombstones:');
+    expect(mutationBody).toContain('options.replaceUnreadableLogoutTombstones');
     expect(mutationBody).toContain(
       'writeAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutCiphertext)',
     );
@@ -287,6 +286,8 @@ describe('auth login-flow reset', () => {
     expect(readBody).toContain("throw new Error('invalid saved Passport membership')");
     expect(readBody).toContain("throw new Error('invalid logged-out account key')");
     expect(readBody).toContain('memberships.length !== item.memberships.length');
+    expect(readBody).toContain('allowUnreadableLogoutTombstones?: boolean');
+    expect(readBody).toContain('if (options.allowUnreadableLogoutTombstones) {');
     expect(readBody).toContain(
       'active && resources[active] && !loggedOutKeys.has(active) ? active : null',
     );
@@ -655,11 +656,15 @@ describe('auth login-flow reset', () => {
     const logoutStart = source.indexOf('export async function logout(): Promise<void> {');
     const logoutEnd = source.indexOf('\n}\n\n/**\n * Called on system resume', logoutStart);
     const logoutBody = source.slice(logoutStart, logoutEnd);
-    const tombstoneCommit = logoutBody.indexOf('await mutateAuthAccountVault((vault) => {');
+    const tombstoneCommit = logoutBody.indexOf('await mutateAuthAccountVault(');
     const ownerTeardown = logoutBody.indexOf('await withAccountFreeOwnerCommit({');
     expect(tombstoneCommit).toBeGreaterThan(-1);
     expect(logoutBody).toContain('savedVaultWasUnreadable');
     expect(logoutBody).toContain('clearAuthAccountVault((vault) => {');
+    expect(logoutBody).toContain('savedVaultHasUnreadableLogoutTombstones');
+    expect(logoutBody).toContain(
+      'replaceUnreadableLogoutTombstones: savedVaultHasUnreadableLogoutTombstones',
+    );
     expect(logoutBody).toContain('removeLoggedOutVaultAccount(vault, currentIdentity)');
     expect(logoutBody).toContain('vault.signedOutAt = Date.now();');
     expect(logoutBody.indexOf('removeSafe(AUTH_SESSION_KEY);')).toBeGreaterThan(tombstoneCommit);
@@ -693,7 +698,7 @@ describe('auth login-flow reset', () => {
     const candidateLoop = logoutBody.indexOf(
       'for (const candidateAccountKey of candidateAccountKeys)',
     );
-    const terminalSignOut = logoutBody.indexOf('await mutateAuthAccountVault((vault) => {');
+    const terminalSignOut = logoutBody.indexOf('await mutateAuthAccountVault(');
     expect(candidateLoop).toBeGreaterThan(-1);
     expect(logoutBody).toContain('await switchSavedAccount(candidateAccountKey, {');
     expect(logoutBody).toContain('accountToLogOut: currentIdentity');
