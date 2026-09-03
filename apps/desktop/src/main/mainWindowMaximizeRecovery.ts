@@ -66,7 +66,7 @@ interface MaximizeRecoveryInput {
   key: string;
   meta: boolean;
   isAutoRepeat: boolean;
-  modifiers: string[];
+  modifiers?: string[];
 }
 
 interface MaximizeRecoveryMouseInput {
@@ -141,7 +141,9 @@ export function installMainWindowNativeRestoreIntent(
   };
   const onBeforeInputEvent = (_event: unknown, input: MaximizeRecoveryInput): void => {
     const hasWindowsModifier =
-      input.meta || input.modifiers.includes('meta') || input.modifiers.includes('command');
+      input.meta ||
+      input.modifiers?.includes('meta') === true ||
+      input.modifiers?.includes('command') === true;
     if (
       input.type === 'keyDown' &&
       !input.isAutoRepeat &&

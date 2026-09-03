@@ -548,6 +548,17 @@ describe('installMainWindowNativeRestoreIntent', () => {
         modifiers: [],
       },
     );
+    expect(() =>
+      windows.webContentsListeners.get('before-input-event')?.(
+        {},
+        {
+          type: 'keyDown',
+          key: 'a',
+          meta: false,
+          isAutoRepeat: false,
+        },
+      ),
+    ).not.toThrow();
     windows.webContentsListeners.get('before-input-event')?.(
       {},
       {
