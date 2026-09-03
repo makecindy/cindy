@@ -217,6 +217,8 @@ describe('mobile native app config', () => {
       checkAutomatically: 'NEVER',
       disableAntiBrickingMeasures: true,
     });
+    // 共享 EAS-Client-ID 只能由 JS 事务式覆盖；写入原生 requestHeaders 会改变 fingerprint。
+    expect(selfHosted.updates).not.toHaveProperty('requestHeaders');
     expect(JSON.stringify(selfHosted)).not.toContain('must-not-be-baked.example.com');
     // 自建 app 身份按 region 从 self-host-regions.json(.example 回落)取,而非写死。
     expect(selfHosted.ios.bundleIdentifier).toBe('com.xd.cindycn');
