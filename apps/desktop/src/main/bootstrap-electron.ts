@@ -54,6 +54,10 @@ import {
   readWindowFullscreenState,
   showMainWindowAndRestoreFullscreen,
 } from './mainWindowFullscreenStartup';
+import {
+  installMainWindowMaximizeRecovery,
+  readPersistedWindowMaximized,
+} from './mainWindowMaximizeRecovery';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import {
@@ -3567,7 +3571,15 @@ const createWindow = () => {
   // 改用顶层 import 而不是运行时 require —— Vite 才能 bundle 进 main 产物，
   // 否则 packaged app 因 pnpm hoisted 布局 + electron-packager 只扫
   // apps/desktop/node_modules 而拿不到这个包，运行时报 Cannot find module。
+  const mainWindowStateFile = 'window-state.json';
+  // Read the flag before the keeper validates bounds: it discards `isMaximized`
+  // along with off-screen bounds, which is exactly the lid-closed / monitor-asleep
+  // relaunch case where we still want to come back maximized.
+  const persistedMaximized = readPersistedWindowMaximized(
+    path.join(app.getPath('userData'), mainWindowStateFile),
+  );
   const mainWindowState = windowStateKeeper({
+    file: mainWindowStateFile,
     defaultWidth: 1280,
     defaultHeight: 800,
     // Applying fullscreen while a hidden macOS window is still starting can
@@ -3575,6 +3587,8 @@ const createWindow = () => {
     fullScreen: process.platform !== 'darwin',
   });
   const shouldRestoreMacFullscreen = process.platform === 'darwin' && mainWindowState.isFullScreen;
+  const shouldRestoreMaximized =
+    !shouldRestoreMacFullscreen && (persistedMaximized || Boolean(mainWindowState.isMaximized));
 
   const mainWindow = new BrowserWindow({
     x: mainWindowState.x,
@@ -3699,6 +3713,11 @@ const createWindow = () => {
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
   mainWindowState.manage(mainWindow);
+  if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
+  installMainWindowMaximizeRecovery(mainWindow, screen, {
+    armed: shouldRestoreMaximized,
+    log: createSchedulerLogger('main-window-maximize-recovery'),
+  });
 
   // dev-only:F12 切换 DevTools 的兜底通道。走 before-input-event 在 main 侧
   // 拦截,按键根本不进 renderer —— 不受页面内快捷键系统 / 输入焦点 / 菜单
