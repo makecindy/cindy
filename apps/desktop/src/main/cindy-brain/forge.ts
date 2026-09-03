@@ -3469,6 +3469,13 @@ for (const chunk of chunks) {
 const done = await cindy.library({ op: 'writeCommit', streamId: b.streamId });
 // done = { ok:true, path, bytes, sha256 }; 中断/放弃用 writeAbort
 
+// 在文件夹中显示 / 系统另存为(不回用户所选绝对路径)
+await cindy.library({ op: 'reveal', path: 'exports/a.psd' });
+const saved = await cindy.library({ op: 'saveAs', path: 'exports/a.psd', name: 'layers.psd' });
+// saved = { ok:true, cancelled:true }
+//      或 { ok:true, cancelled:false, path:'exports/a.psd', bytes }
+// path 永远是库内相对键,不是用户另存到的绝对路径
+
 // SQLite:参数化语句 + 首词白名单(SELECT/WITH/INSERT/REPLACE/UPDATE/DELETE/
 // CREATE/DROP/ALTER/REINDEX/ANALYZE);ATTACH/PRAGMA/VACUUM/事务语句一律拒,
 // 事务由宿主管理(db.batch 整批原子),迁移按 user_version 幂等续跑
@@ -3491,7 +3498,15 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   \`LIBRARY_UNAVAILABLE\`(含 reason:binding-moved/disk-missing/corrupt)、
   \`LIBRARY_READONLY\`、\`DISK_FULL\`、\`PATH_INVALID\`、\`NOT_FOUND\`、
   \`ALREADY_EXISTS\`、\`TOO_LARGE\`、\`STREAM_INVALID\`、\`DB_STATEMENT_REJECTED\`、
-  \`DB_ROW_LIMIT\`(结果集超 2000 行,自己加 LIMIT)、\`DB_MIGRATION_CONFLICT\`;
+  \`DB_ROW_LIMIT\`(结果集超 2000 行,自己加 LIMIT)、\`DB_MIGRATION_CONFLICT\`、
+  \`BUSY\`、\`RATE_LIMITED\`;
+- **reveal / saveAs**:只收库内相对路径。成功不回用户另存目标的绝对路径;
+  取消是 \`{ cancelled:true }\`。reveal 打开系统文件夹、saveAs 弹系统对话框
+  (跨平台标题带已核验插件名;macOS 另有正文),同插件 3 秒内连发 \`RATE_LIMITED\`;
+  saveAs 已有对话框在场 \`BUSY\`(不排队)。
+  对话框期间账号切换则拒绝拷贝(\`LIBRARY_UNAVAILABLE\`);
+  拷贝完成替换前、reveal 打开文件夹前再核一次会话;
+  确认后先拷到目标旁临时文件再替换,失败不破坏已有文件;
 - **不可用 ≠ 空**:\`state:'unavailable'\` 时**不要**当空库重建、不要触发
   清理、不要把素材判成已删——如实向用户展示状态,等位置恢复;
 - **无跨库事务**:多个 .sqlite 之间没有 ATTACH;跨库一致性用幂等 + 墓碑

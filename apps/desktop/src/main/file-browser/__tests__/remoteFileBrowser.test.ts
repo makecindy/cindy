@@ -218,4 +218,20 @@ describe('RemoteFileBrowserManager', () => {
     expect(calls.spawn).toBe(2);
     await mgr.disposeAll();
   });
+
+  it('endpoint invalidation fences an in-flight build before it can spawn the old host', async () => {
+    let releaseEnsure!: () => void;
+    const { deps, calls } = makeDeps({ probeResults: [READY_PROBE] });
+    deps.ensureHostReady = () => new Promise<void>((resolve) => {
+      releaseEnsure = resolve;
+    });
+    const mgr = new RemoteFileBrowserManager(deps);
+    const request = mgr.request('h1', 'listDir', { workdir });
+
+    await mgr.disposeHost('h1');
+    releaseEnsure();
+
+    await expect(request).rejects.toMatchObject({ code: 'ENDPOINT_STALE' });
+    expect(calls.spawn).toBe(0);
+  });
 });

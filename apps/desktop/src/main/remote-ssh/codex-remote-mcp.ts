@@ -184,6 +184,21 @@ export function removeRemoteMcpForwardPref(hostId: string): void {
   writePortPrefs(next);
 }
 
+/**
+ * Endpoint fields changed while the stable SSH alias stayed the same.
+ * Keep the alias's preferred remote port, but discard facts that only apply to
+ * the old machine/connection. The next ensure must rebuild the forward and
+ * bootstrap the new endpoint instead of trusting the old applied fingerprint.
+ */
+export function invalidateRemoteCodexMcpEndpointState(hostId: string): void {
+  const current = readPortPrefs()[hostId];
+  if (!current || (!current.appliedFingerprint && !current.bridgeLocalPort)) return;
+  writePortPrefs({
+    ...readPortPrefs(),
+    [hostId]: { remotePort: current.remotePort },
+  });
+}
+
 // ── 远端 config.toml 管理段 (纯函数, 便于单测) ──────────────────────────────
 
 /** 生成我们管理的 mcp_servers 配置块 (带 begin/end 标记)。 */

@@ -19,11 +19,13 @@ import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { visibleTextMatchesMessagesFtsQuery } from './chatHistorySearch.pure.js';
 import {
   collectContentHitsUntilUniqueSessions,
   fuzzyTitleMatch,
   mergeConversationSearchResults,
   normalizeConversationContentPreview,
+  visibleMessageTextForConversationSearch,
 } from './conversationSearch.pure.js';
 
 const DEFAULT_LIMIT = 20;
@@ -128,7 +130,18 @@ export async function searchConversations(
     if (!messageClientId) continue;
     const hitContext = hit.context.find((item) => item.isHit) ?? hit.context[0] ?? null;
     const preview = normalizeConversationContentPreview(hit.role, hitContext?.content ?? '', query);
-    const ftsRank = preview.keywordMatchedVisibleText ? hit.ftsRank : null;
+    // 可见文本对 query 字面不匹配时，仍可能是 FTS 命中（「边，界」按字相邻）。
+    // 不要只靠 keywordRanges 清掉 ftsRank，否则这类命中会被整条丢弃。
+    // 但附件文件名、内部 citation 等隐藏字段命中不能当可见结果：
+    // preview 非空只说明消息有正文，不能证明 MATCH 落在可见字上。
+    const visibleText = visibleMessageTextForConversationSearch(
+      hit.role,
+      hitContext?.content ?? '',
+    );
+    const ftsRank =
+      preview.keywordMatchedVisibleText || visibleTextMatchesMessagesFtsQuery(visibleText, query)
+        ? hit.ftsRank
+        : null;
     if (ftsRank === null && hit.vectorRank === null) continue;
     contentHits.push({
       session,

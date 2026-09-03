@@ -227,8 +227,9 @@ function activityMs(session: ConversationSearchSessionSummary): number {
 
 export function textPreview(value: unknown, max = 180): string {
   const text = extractText(value).replace(/\s+/g, ' ').trim();
-  if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}...`;
+  const chars = [...text];
+  if (chars.length <= max) return text;
+  return `${chars.slice(0, Math.max(0, max - 1)).join('').replace(/\s+$/u, '')}...`;
 }
 
 export interface NormalizedConversationContentPreview {
@@ -366,14 +367,23 @@ function keywordRanges(text: string, query: string): Array<{ start: number; end:
     .sort((a, b) => b.length - a.length);
   if (tokens.length === 0 || !text) return [];
 
-  const lowerText = text.toLocaleLowerCase();
+  // 不能先 toLocaleLowerCase() 再用折叠串的下标切原文：大小写折叠会改变长度
+  // （如 U+0130「İ」折叠为 i + U+0307），emoji 等多单元字符也会让两套下标失配。
+  // 为折叠串的每个 UTF-16 单元记录「折叠偏移 → 原文 UTF-16 偏移」的映射，
+  // 命中偏移经映射换算回原文坐标后再切，切片恒落在码点边界。
+  const { lowerText, foldOffsetToOrig16 } = foldWithOrigMap(text);
   const ranges: Array<{ start: number; end: number }> = [];
   for (const token of tokens) {
-    const lowerToken = token.toLocaleLowerCase();
+    const lowerToken = token.toLowerCase();
     let index = lowerText.indexOf(lowerToken);
     while (index >= 0) {
-      const next = { start: index, end: index + token.length };
-      if (!ranges.some((range) => rangesOverlap(range, next))) {
+      const endUnit = index + lowerToken.length - 1;
+      if (index >= foldOffsetToOrig16.length || endUnit >= foldOffsetToOrig16.length) break;
+      const next = {
+        start: foldOffsetToOrig16[index]!,
+        end: foldOffsetToOrig16[endUnit]! + codePointLenAt(text, foldOffsetToOrig16[endUnit]!),
+      };
+      if (next.end > next.start && !ranges.some((range) => rangesOverlap(range, next))) {
         ranges.push(next);
       }
       index = lowerText.indexOf(lowerToken, index + lowerToken.length);
@@ -382,16 +392,56 @@ function keywordRanges(text: string, query: string): Array<{ start: number; end:
   return ranges.sort((a, b) => a.start - b.start);
 }
 
+/** 求原文在 UTF-16 偏移 pos 处的码点长度（1 或 2），用于把起始偏移换算成结束偏移。 */
+function codePointLenAt(text: string, pos: number): number {
+  return (text.codePointAt(pos) ?? 0) > 0xffff ? 2 : 1;
+}
+
+/**
+ * 一次折叠同时产出小写串和「折叠 UTF-16 偏移 → 原文 UTF-16 偏移」映射。
+ * 不用 toLocaleLowerCase()：lt/tr 等 locale 有上下文相关规则，逐码点折叠
+ * 与整串折叠可能不等长，后面的 ASCII 会漏匹配。
+ */
+function foldWithOrigMap(text: string): { lowerText: string; foldOffsetToOrig16: number[] } {
+  const foldOffsetToOrig16: number[] = [];
+  let lowerText = '';
+  let orig16 = 0;
+  for (const ch of text) {
+    const folded = ch.toLowerCase();
+    lowerText += folded;
+    for (let k = 0; k < folded.length; k += 1) {
+      foldOffsetToOrig16.push(orig16);
+    }
+    orig16 += ch.length;
+  }
+  return { lowerText, foldOffsetToOrig16 };
+}
+
 function visibleSnippet(text: string, range: { start: number; end: number }, max: number): string {
-  if (text.length <= max) return text;
-  const hitLength = Math.max(1, range.end - range.start);
+  const chars = [...text];
+  if (chars.length <= max) return text;
+  const hitStartCp = utf16ToCodePointIndex(text, range.start);
+  const hitEndCp = utf16ToCodePointIndex(text, range.end);
+  const hitLength = Math.max(1, hitEndCp - hitStartCp);
   const side = Math.max(0, Math.floor((max - hitLength) / 2));
-  let start = Math.max(0, range.start - side);
-  const end = Math.min(text.length, start + max);
+  let start = Math.max(0, hitStartCp - side);
+  let end = Math.min(chars.length, start + max);
   start = Math.max(0, end - max);
   const prefix = start > 0 ? '...' : '';
-  const suffix = end < text.length ? '...' : '';
-  return `${prefix}${text.slice(start, end).trim()}${suffix}`;
+  const suffix = end < chars.length ? '...' : '';
+  return `${prefix}${chars.slice(start, end).join('').trim()}${suffix}`;
+}
+
+/** UTF-16 偏移 → 码点下标；落在低代理上时算到该码点。 */
+function utf16ToCodePointIndex(text: string, utf16: number): number {
+  let i = 0;
+  let cp = 0;
+  while (i < text.length && i < utf16) {
+    const code = text.charCodeAt(i);
+    i += code >= 0xd800 && code <= 0xdbff ? 2 : 1;
+    cp += 1;
+  }
+  return cp;
 }
 
 function rangesOverlap(a: { start: number; end: number }, b: { start: number; end: number }): boolean {

@@ -1,3 +1,5 @@
+import type { BrowserOpenForLoginErrorCode } from './browserBackend';
+
 /** main / preload / renderer 共用的 IPC 错误类型。 */
 
 export type IpcErrorCode =
@@ -84,6 +86,12 @@ export type IpcErrorCode =
   | 'SSH_CONNECT_FAILED'
   | 'SSH_AUTH_FAILED'
   | 'SSH_CONFIG_IO_FAILED'
+  | 'SSH_CONFIG_CONCURRENT_MODIFICATION'
+  | 'SSH_CONFIG_OWNERSHIP_REQUIRED'
+  | 'SSH_CONFIG_RELOAD_REQUIRED'
+  | 'SSH_CONFIG_AUTH_UNSUPPORTED'
+  | 'SSH_AGENT_UNAVAILABLE'
+  | 'SSH_HOST_PREFS_WRITE_FAILED'
   | 'SSH_HOST_NOT_FOUND'
   // remote-ssh：配置的私钥文件在磁盘上不存在/不可读。与 SSH_CONNECT_FAILED 分开——
   // 这是本机路径问题（缺失 / ~ 未展开 / 路径被改写），不是网络或服务器错误，renderer
@@ -167,6 +175,7 @@ export type IpcErrorCode =
   | 'AMBIGUOUS_XCODE_PROJECT'
   | 'APP_BUILD_FAILED'
   | 'APP_ARTIFACT_INVALID'
+  | 'APP_ARCH_MISMATCH'
   | 'APP_INSTALL_FAILED'
   | 'APP_LAUNCH_FAILED'
   | 'METRO_NOT_READY'
@@ -211,6 +220,8 @@ export type IpcErrorCode =
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
+  // 打开 Agent 专用浏览器：只跨 IPC 暴露受控原因，不暴露路径或底层异常。
+  | BrowserOpenForLoginErrorCode
   // 本机 HTML 页面打开到系统浏览器
   | 'BROWSER_FILE_INVALID_TARGET'
   | 'BROWSER_FILE_PATH_NOT_ALLOWED'
@@ -310,6 +321,12 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SSH_CONNECT_FAILED',
   'SSH_AUTH_FAILED',
   'SSH_CONFIG_IO_FAILED',
+  'SSH_CONFIG_CONCURRENT_MODIFICATION',
+  'SSH_CONFIG_OWNERSHIP_REQUIRED',
+  'SSH_CONFIG_RELOAD_REQUIRED',
+  'SSH_CONFIG_AUTH_UNSUPPORTED',
+  'SSH_AGENT_UNAVAILABLE',
+  'SSH_HOST_PREFS_WRITE_FAILED',
   'SSH_HOST_NOT_FOUND',
   'SSH_KEY_FILE_NOT_FOUND',
   'SSH_NOT_CONNECTED',
@@ -376,6 +393,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'AMBIGUOUS_XCODE_PROJECT',
   'APP_BUILD_FAILED',
   'APP_ARTIFACT_INVALID',
+  'APP_ARCH_MISMATCH',
   'APP_INSTALL_FAILED',
   'APP_LAUNCH_FAILED',
   'METRO_NOT_READY',
@@ -414,6 +432,15 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DINGTALK_STREAM_CONNECTION_FAILED',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
+  'PROFILE_LOCKED',
+  'REAL_PROFILE_READ_DENIED',
+  'NO_CHROMIUM',
+  'NO_AUTH_DB',
+  'COPY_FAILED',
+  'HEADLESS_FORBIDDEN',
+  'STOP_FAILED',
+  'FOREIGN_AGENT_BROWSER',
+  'APP_BOUND_ENCRYPTION_UNSUPPORTED',
   'BROWSER_FILE_INVALID_TARGET',
   'BROWSER_FILE_PATH_NOT_ALLOWED',
   'BROWSER_FILE_UNSUPPORTED_TYPE',

@@ -9,6 +9,7 @@ import {
   readSchemaVersion,
 } from '../migrationRunner.js';
 import { detectSchemaDriftInDir } from '../schemaDriftCore.js';
+import { assertCjkSegRegistered, registerCjkSeg } from '../registerCjkSeg.js';
 
 export interface DbWorkerRuntimeOptions {
   userId?: string;
@@ -39,6 +40,8 @@ export function createWorkerDatabase(
   const dbOpts = opts.nativeBinding ? { nativeBinding: opts.nativeBinding } : {};
   const db = new DatabaseCtor(dbPath, dbOpts);
   try {
+    registerCjkSeg(db);
+    assertCjkSegRegistered(db);
     applyPragmas(db);
 
     if (dbPath !== ':memory:') {

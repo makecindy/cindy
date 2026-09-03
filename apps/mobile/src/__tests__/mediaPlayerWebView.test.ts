@@ -4,8 +4,26 @@ import {
   buildMediaPlayerWebViewHtml,
   parseMediaPlayerWebViewMessage,
 } from '@/session/mediaPlayerWebViewHtml';
+import { createMediaPlayerWebViewLifecycle } from '@/session/mediaPlayerWebViewLifecycle';
 
 describe('mediaPlayerWebView', () => {
+  it('reloads only when backgrounding interrupted an unfinished load', () => {
+    const lifecycle = createMediaPlayerWebViewLifecycle();
+
+    lifecycle.onBackground();
+    lifecycle.onLoadEnd();
+    expect(lifecycle.consumeReloadOnActive()).toBe(true);
+    expect(lifecycle.consumeReloadOnActive()).toBe(false);
+
+    lifecycle.onLoadEnd();
+    lifecycle.onBackground();
+    expect(lifecycle.consumeReloadOnActive()).toBe(false);
+
+    lifecycle.onLoadStart();
+    lifecycle.onBackground();
+    expect(lifecycle.consumeReloadOnActive()).toBe(true);
+  });
+
   it('builds a video player document with controls and source metadata', () => {
     const html = buildMediaPlayerWebViewHtml({
       kind: 'video',

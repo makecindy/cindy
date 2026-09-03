@@ -1123,7 +1123,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     startLearnHost({
       maker,
       broadcast: broadcastLearnEvent,
-      fetchHubSkill: (slug) => fetchHubSkillReference(learnMarketService, slug),
+      fetchHubSkill: (slug, catalogScope) => fetchHubSkillReference(learnMarketService, slug, catalogScope),
       ...automationGitBaselineHooks,
     });
   } catch (err) {

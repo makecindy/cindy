@@ -1191,7 +1191,7 @@ const CODEX_EFFORTS: EffortDescriptor[] = [
   { id: 'xhigh', displayName: 'Extra High', description: 'Extended reasoning budget' },
   // max/ultra 仅部分模型支持(如 GPT-5.6 Sol);实际是否可选由该模型目录 efforts 决定,
   // 这里只提供 agent 级档名/描述兜底(桌面 i18n effortLevels.* 优先)。
-  { id: 'max', displayName: 'Max', description: 'Very high reasoning budget (model-dependent)' },
+  { id: 'max', displayName: 'Maximum', description: 'Very high reasoning budget (model-dependent)' },
   { id: 'ultra', displayName: 'Ultra', description: 'Maximum reasoning budget (model-dependent)' },
 ];
 
@@ -2067,6 +2067,7 @@ export class CodexAgent extends BaseAgent {
     reason = 'CodexAgent local credential state changed',
   ): Promise<{
     assertIdle(): void;
+    retireActiveHost(): Promise<void>;
     finalize(): Promise<void>;
     release(): void;
   }> {
@@ -2079,6 +2080,7 @@ export class CodexAgent extends BaseAgent {
     });
     this.hostCredentialModeSwitches.set(key, switchPromise);
     let released = false;
+    let hostRetired = false;
 
     const cleanup = (): void => {
       if (released) return;
@@ -2105,10 +2107,21 @@ export class CodexAgent extends BaseAgent {
           );
         }
       },
+      retireActiveHost: async () => {
+        if (released || hostRetired) return;
+        await this.retireHostKey(key, reason, {
+          failIfActive: false,
+          logPrefix: 'codex local credential hard cut',
+          throwOnShutdownFailure: true,
+        });
+        hostRetired = true;
+      },
       finalize: async () => {
         if (released) return;
         try {
-          await this.disposeLocalHostForCredentialChangeUnlocked(key, reason);
+          if (!hostRetired) {
+            await this.disposeLocalHostForCredentialChangeUnlocked(key, reason);
+          }
         } finally {
           cleanup();
         }
@@ -2576,6 +2589,7 @@ export class CodexAgent extends BaseAgent {
     let codexBrowserUseStartupTimeoutMs: number | undefined;
     let remoteCompactionProviderId: string | undefined;
     let cindyRemoteCompactionProviderId: string | undefined;
+    let codexCustomProviderRoutes: CodexExtraSpawnConfig['codexCustomProviderRoutes'];
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     let subagentModelFallback: string | undefined;
     let subagentRoute: CodexExtraSpawnConfig['subagentRoute'];
@@ -2605,6 +2619,7 @@ export class CodexAgent extends BaseAgent {
       codexBrowserUseStartupTimeoutMs = undefined;
       remoteCompactionProviderId = undefined;
       cindyRemoteCompactionProviderId = undefined;
+      codexCustomProviderRoutes = undefined;
       buildSessionMcpConfig = undefined;
       subagentModelFallback = undefined;
       subagentRoute = undefined;
@@ -2658,6 +2673,9 @@ export class CodexAgent extends BaseAgent {
           }
           if (codexProxyActive && cfg.codexCindyRemoteCompactionProviderId) {
             cindyRemoteCompactionProviderId = cfg.codexCindyRemoteCompactionProviderId;
+          }
+          if (codexProxyActive && cfg.codexCustomProviderRoutes?.length) {
+            codexCustomProviderRoutes = cfg.codexCustomProviderRoutes;
           }
           this.deps.logger.info('codex MCP bridge ready', {
             providers: this.deps.mcpProviders?.length ?? 0,
@@ -2723,14 +2741,15 @@ export class CodexAgent extends BaseAgent {
         binaryPath,
         env,
         extraArgs,
-        onProcessSpawned: (pid) =>
+        onProcessSpawned: (pid) => {
           this.deps.registerLocalCodexAppServerProcess?.({
             pid,
             role:
               hostPurpose === 'control-plane'
                 ? 'control-plane-service'
                 : 'task-host',
-          }),
+          });
+        },
       });
     }
 
@@ -2746,6 +2765,7 @@ export class CodexAgent extends BaseAgent {
       codexBrowserUseStartupTimeoutMs,
       remoteCompactionProviderId,
       cindyRemoteCompactionProviderId,
+      codexCustomProviderRoutes,
       buildSessionMcpConfig,
       subagentModelFallback,
       subagentRoute,
@@ -2760,13 +2780,18 @@ export class CodexAgent extends BaseAgent {
         this.deps.logger.warn('codex auth invalidated', {
           reason,
           key,
-          localAuthWillInvalidate: usesLocalAuth,
+          localAuthWillEnterUnprovenRecovery: usesLocalAuth,
         });
         Promise.resolve()
           .then(async () => {
             if (usesLocalAuth) {
               try {
-                await this.deps.auth.invalidate?.(reason);
+                // The app-server protocol does not expose which auth.json generation the child
+                // loaded. Parent-side snapshots before spawn, after initialize, or per request can
+                // all race that read, so they cannot authorize credential deletion or logout.
+                await this.deps.auth.invalidate?.(reason, {
+                  credentialAttribution: 'unproven',
+                });
               } catch (e) {
                 this.deps.logger.error('auth.invalidate threw', { message: (e as Error).message });
               }
@@ -5169,6 +5194,8 @@ export class CodexAgent extends BaseAgent {
       return JSON.stringify(mutableWritableDirs);
     }
 
+    let customProviderThreadConfig: Record<string, unknown> = {};
+
     function currentThreadWorkspaceConfig(): Pick<
       ThreadStartParams,
       | 'approvalPolicy'
@@ -5181,6 +5208,7 @@ export class CodexAgent extends BaseAgent {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
       const config = {
         ...capabilityRoutingConfig,
+        ...customProviderThreadConfig,
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
         ...(reviewMode
@@ -5362,13 +5390,40 @@ export class CodexAgent extends BaseAgent {
       cindyProviderRemoteCompactionRequested && cindyProviderRemoteCompactionCompatible;
     const threadCredentialFamily =
       credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
+    const customProviderModelProvider = opts.remoteHostId
+      ? null
+      : host.getCustomProviderModelProviderId?.(mutableProviderId, mutableCatalogModel);
+    const customProviderThreadPolicy = opts.remoteHostId
+      ? { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false }
+      : host.getCustomProviderThreadPolicy?.(mutableProviderId, mutableCatalogModel) ?? {
+          dynamicIdentity: false,
+          disableSubagents: false,
+          disableModelOverrides: false,
+        };
+    if (customProviderThreadPolicy.dynamicIdentity) {
+      customProviderThreadConfig = {
+        web_search: 'disabled',
+        'features.standalone_web_search': false,
+        ...(customProviderThreadPolicy.disableSubagents
+          ? {
+              'features.multi_agent': false,
+              'features.multi_agent_v2': false,
+              'agents.enabled': false,
+            }
+          : customProviderThreadPolicy.disableModelOverrides
+            ? { 'features.multi_agent_v2.expose_spawn_agent_model_overrides': false }
+            : {}),
+      };
+    }
     const threadModelProvider = opts.remoteHostId
       ? undefined
-      : cindyProviderRemoteCompaction
-        ? host.getCindyRemoteCompactionProviderId?.() ?? undefined
-        : threadCredentialFamily === 'oauth-bearer'
-          ? host.getRemoteCompactionProviderId?.() ?? undefined
-          : undefined;
+      : customProviderModelProvider
+        ? customProviderModelProvider
+        : cindyProviderRemoteCompaction
+          ? host.getCindyRemoteCompactionProviderId?.() ?? undefined
+          : threadCredentialFamily === 'oauth-bearer'
+            ? host.getRemoteCompactionProviderId?.() ?? undefined
+            : undefined;
 
     /**
      * 本 thread 的 Responses 请求是否走 WebSocket。
@@ -5380,7 +5435,8 @@ export class CodexAgent extends BaseAgent {
      * 单独起名是为了把「选没选 provider」和「实际走不走 WS」分开，避免 prompt 注入
      * 通道错误地只看 provider 身份。
      */
-    const threadUsesWebSocket = !cindyProviderRemoteCompaction
+    const threadUsesWebSocket = !customProviderThreadPolicy.dynamicIdentity
+      && !cindyProviderRemoteCompaction
       && !!threadModelProvider
       && (host.getOpenAiWebSocketsEnabled?.() ?? true);
 
@@ -12973,6 +13029,8 @@ export class CodexAgent extends BaseAgent {
       /** Optional identity fence for delayed cleanup from an older handle. */
       expectedHost?: AppServerHost;
       expectedGeneration?: number;
+      /** Propagate shutdown failure to callers that must not mutate persisted state afterward. */
+      throwOnShutdownFailure?: boolean;
     },
   ): Promise<void> {
     let expectedGeneration = opts.expectedGeneration;
@@ -13053,12 +13111,15 @@ export class CodexAgent extends BaseAgent {
     this.bumpHostGeneration(key);
     if (!host) return;
     try {
-      await host.retire(reason);
+      await host.retire(reason, {
+        throwOnTransportError: opts.throwOnShutdownFailure,
+      });
     } catch (error) {
       this.deps.logger.warn(`${opts.logPrefix}: host shutdown failed`, {
         key,
         error: error instanceof Error ? error.message : String(error),
       });
+      if (opts.throwOnShutdownFailure) throw error;
     }
   }
 

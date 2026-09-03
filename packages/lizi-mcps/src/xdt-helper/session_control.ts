@@ -331,8 +331,9 @@ export function registerSetSessionRuntimeTool(
         .number()
         .int()
         .nonnegative()
-        .optional()
-        .describe('来自 get_session_runtime 的 generation。'),
+        .describe(
+          '必填:先调用 get_session_runtime 读取当前 generation 并原样传回,用于防止覆盖并发修改。',
+        ),
     },
     handler: async ({ session_id, provider_id, model, effort, fast, expected_generation }) => {
       const targetSessionId = session_id ?? requireCallerSession(deps);
@@ -348,7 +349,8 @@ export function registerSetSessionRuntimeTool(
         return errorPayload('INVALID_ARGS', '至少提供 provider_id、model、effort 或 fast 之一。');
       }
       if (expected_generation === undefined) {
-        return errorPayload('INVALID_ARGS', '请先调用 get_session_runtime，并传回 expected_generation。');
+        // schema 已必填,此分支为纵深防御:任何绕过 zod 的调用路径仍拿到同一引导。
+        return errorPayload('INVALID_ARGS', '请先调用 get_session_runtime 获取 generation,并作为 expected_generation 传回。');
       }
       const result = await deps.setSessionRuntime({
         targetSessionId,

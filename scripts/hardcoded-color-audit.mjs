@@ -12,15 +12,13 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+import { matchBareColors } from "./shared/hardcoded-color-match.mjs";
+
 const args = process.argv.slice(2);
 let baseRef = "main";
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--base-ref" && args[i + 1]) baseRef = args[i + 1];
 }
-
-const HEX_RE = /#[0-9a-fA-F]{3,8}\b/g;
-const RGB_RE = /rgba?\([^)]+\)/g;
-const HSL_RE = /hsla?\([^)]+\)/g;
 
 let exemptions = [];
 try {
@@ -50,11 +48,7 @@ function diffAddedHits(ref) {
     else if (line.startsWith("+") && !line.startsWith("+++")) {
       if (file.endsWith("hardcoded-color-exemptions.json")) continue;
       const text = line.slice(1);
-      const all = [
-        ...text.matchAll(HEX_RE),
-        ...text.matchAll(RGB_RE),
-        ...text.matchAll(HSL_RE),
-      ].map((m) => m[0]);
+      const all = matchBareColors(text);
       for (const v of all) hits.push({ file, value: v, text: text.trim().slice(0, 80) });
     }
   }

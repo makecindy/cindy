@@ -9,6 +9,7 @@ import { RegistryError, type StoredInstall, type StoredManifest } from './types.
 import * as manifestIO from './manifestIO.js';
 import { sanitizeSkillName } from './derivations.js';
 import { withLock } from './lock.js';
+import { migrateStoredManifest } from './migrations.js';
 
 import { createLogger } from '../../logger';
 
@@ -51,14 +52,7 @@ async function readBackupManifest(skillName: string): Promise<StoredManifest | n
       log.warn(`backup manifest skillName mismatch for ${skillName}`);
       return null;
     }
-    if (parsed.installs && typeof parsed.installs === 'object') {
-      for (const key of Object.keys(parsed.installs)) {
-        const e = parsed.installs[key] as StoredInstall & { isMine?: unknown };
-        if (typeof e.authorId !== 'string') e.authorId = '';
-        if ('isMine' in e) delete (e as { isMine?: unknown }).isMine;
-      }
-    }
-    return parsed;
+    return migrateStoredManifest(parsed).manifest;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== 'ENOENT') log.warn(`read registry backup failed for ${skillName}:`, err);
@@ -110,7 +104,7 @@ async function readManifestWithBackup(skillName: string): Promise<StoredManifest
   const backup = await readBackupManifest(skillName);
   if (!backup) return null;
   if (!(await hasLiveInstallPath(backup))) return null;
-  await manifestIO.writeFileAtomic(skillName, backup);
+  await writeManifestWithBackup(skillName, backup);
   return backup;
 }
 
@@ -133,6 +127,7 @@ export async function addInstall(
     if (!existing) {
       manifest = {
         schemaVersion: 1,
+        catalogScopeMigrated: true,
         skillName,
         installs: { [normalizedPath]: entry },
       };
@@ -156,7 +151,7 @@ export async function addInstall(
 export async function updateInstall(
   skillName: string,
   installPath: string,
-  partial: Partial<Pick<StoredInstall, 'version' | 'folderHash' | 'updatedAt' | 'authorId' | 'origin' | 'autoSynced'>>,
+  partial: Partial<Pick<StoredInstall, 'version' | 'folderHash' | 'updatedAt' | 'authorId' | 'origin' | 'autoSynced' | 'catalogScope'>>,
 ): Promise<void> {
   const normalizedPath = path.normalize(installPath);
 
@@ -260,4 +255,16 @@ export async function listAllInstalls(): Promise<
     }
   }
   return result;
+}
+
+/** Re-point every local install of a slug after the server moves it between catalogs. */
+export async function updateCatalogScopeForSkill(
+  skillName: string,
+  catalogScope: StoredInstall['catalogScope'],
+): Promise<void> {
+  const installs = (await listAllInstalls()).filter((item) => item.skillName === skillName);
+  await Promise.all(installs.map(({ installPath }) => updateInstall(skillName, installPath, {
+    catalogScope,
+    updatedAt: Math.floor(Date.now() / 1000),
+  })));
 }

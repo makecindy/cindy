@@ -22,6 +22,11 @@ import {
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn.js';
 import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
+import {
+  stampTrustedDesktopQueuedOrigin,
+  TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
+  TRUSTED_DESKTOP_QUEUE_ORIGIN,
+} from '../makerSendTransaction.js';
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -8786,6 +8791,27 @@ describe('AgentInputCoordinator queue mutations', () => {
     });
   });
 
+  it('finalizes only a real pending text edit', async () => {
+    const h = createHarness();
+    const sid = 'edit-text-finalizer';
+    const item = makeItem('q-2', 'old text');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateText(sid, item.clientId, 'old text', undefined, undefined, false, finalize);
+    expect(finalize).not.toHaveBeenCalled();
+
+    h.coordinator.updateText(sid, item.clientId, 'pi install npm:context-mode', undefined, undefined, false, finalize);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize.mock.calls[0]?.[0]).toMatchObject({
+      text: 'pi install npm:context-mode',
+      persistedContent: 'pi install npm:context-mode',
+    });
+  });
+
   it('does not re-parse remote edits that omit trusted session refs', async () => {
     const h = createHarness();
     const sid = 'edit-remote-without-snapshot';
@@ -8805,6 +8831,55 @@ describe('AgentInputCoordinator queue mutations', () => {
     const updated = latestProjection(h.projections).pendingQueue[0];
     expect(updated?.sessionRefs).toBeUndefined();
     expect(updated?.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
+  });
+
+  it('finalizes attachment-only edits so stale authorization cannot survive', async () => {
+    const h = createHarness();
+    const sid = 'edit-attachment-finalizer';
+    const item = makeItem('q-2', 'pi install npm:context-mode');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const next = makeItem(item.clientId, item.text, {
+      files: [{
+        id: 'file-new',
+        name: 'new.png',
+        path: '/tmp/new.png',
+        ext: '.png',
+        size: 10,
+        category: 'image',
+        mimeType: 'image/png',
+      }],
+    });
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateContentWithResult(sid, item.clientId, next, finalize);
+
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize.mock.calls[0]?.[0].files).toEqual(next.files);
+  });
+
+  it('finalizes full-content edits after merging the replacement', async () => {
+    const h = createHarness();
+    const sid = 'edit-content-finalizer';
+    const item = makeItem('q-2', 'old text');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const next = makeItem(item.clientId, 'pi remove npm:context-mode');
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateContentWithResult(sid, item.clientId, next, finalize);
+
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: item.clientId,
+      text: 'pi remove npm:context-mode',
+      persistedContent: 'pi remove npm:context-mode',
+    }));
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.text)
+      .toBe('pi remove npm:context-mode');
   });
 
   it('replaces pending row content (text + files) in place while pinning identity fields', async () => {
@@ -8904,6 +8979,42 @@ describe('AgentInputCoordinator queue mutations', () => {
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
+  it('restores the Main-owned authorization for an exact queued Desktop Pi command', async () => {
+    const writer = createHarness();
+    const sid = 'snapshot-desktop-pi-command';
+    const command = 'pi install npm:context-mode';
+    await writer.coordinator.ensureQueueRestored(sid);
+    writer.setRunning(true);
+    writer.coordinator.enqueue(
+      sid,
+      stampTrustedDesktopQueuedOrigin(makeItem('pi-command', command), false),
+    );
+    await flush();
+    const persisted = writer.persistQueueSnapshot.mock.calls.at(-1)?.[1][0]!;
+    const serialized = JSON.parse(JSON.stringify(persisted)) as AgentInputQueuedMessage;
+    expect((serialized as unknown as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT])
+      .toEqual(expect.objectContaining({ version: 1, clientId: 'pi-command', text: command }));
+    expect((serialized.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN])
+      .toBeUndefined();
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async () => [serialized]);
+
+    await h.coordinator.ensureQueueRestored(sid);
+    await flush();
+
+    expect((h.coordinator.getProjection(sid).pendingQueue[0] as unknown as Record<string, unknown>)
+      [TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT]).toBeUndefined();
+    const restored = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    expect((restored.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN])
+      .toEqual(expect.objectContaining({ clientId: restored.clientId, text: command }));
+
+    h.coordinator.resume(sid);
+    await flush();
+    const dispatchPersist = h.sendToAgent.mock.calls[0]?.[3]?.persistUserMessage;
+    expect((dispatchPersist?.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN])
+      .toEqual(expect.objectContaining({ clientId: restored.clientId, text: command }));
+  });
+
   it('persists the queue after restore and shrinks the snapshot once the head crosses the DB boundary', async () => {
     const h = createHarness();
     const sid = 'snapshot-persist';

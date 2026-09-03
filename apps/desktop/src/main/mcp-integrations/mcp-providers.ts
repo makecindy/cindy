@@ -7,6 +7,7 @@ import {
   type LiziMcpProvider,
   type LiziMcpSessionContext,
   type LspServerPool,
+  type SshHostSnapshotLike,
 } from '@cindy/mcps';
 import type { OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
@@ -94,6 +95,13 @@ export interface DesktopMcpProvidersDeps {
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
   const { pluginRegistry } = deps;
+  let redactSshText: ((snapshot: SshHostSnapshotLike, text: string) => string) | undefined;
+  const loadRemoteSsh = async () => {
+    const remoteSsh = await import('../remote-ssh/index.js');
+    redactSshText = (snapshot, text) =>
+      remoteSsh.redactSshSensitiveText(snapshot.config, text);
+    return remoteSsh;
+  };
 
   // 辅助桥接 OrcaCollabService → OrcaMcpDeps / sendToSession，
   // 并在边界捕获 HOST_NOT_READY / INTERNAL。
@@ -276,9 +284,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // hydrated accessor:冷启动时 pool 是空的(hydrate 只在用户访问设置或
       // connect 路径触发),ssh_list_hosts / resolveHost 读 pool.list() 前必须
       // 先从 ~/.ssh/config hydrate,否则已配置主机全部 HOST_NOT_FOUND。
-      getPool: async () => (await import('../remote-ssh/index.js')).getRemoteSshPoolHydrated(),
+      getPool: async () => (await loadRemoteSsh()).getRemoteSshPoolHydrated(),
       ensureReady: async (id: string) =>
-        (await import('../remote-ssh/index.js')).ensureRemoteHostReady(id),
+        (await loadRemoteSsh()).ensureRemoteHostReady(id),
+      redactSensitiveText: (snapshot, text) => {
+        if (!redactSshText) throw new Error('SSH redactor is not initialized');
+        return redactSshText(snapshot, text);
+      },
       // 普通工具策略在 Claude runtime / Codex thread 创建时冻结。不要在 tool-call
       // 时重新读取 registry，否则运行中的工具清单与执行权限会随 Settings 分叉。
       logger: createLogger('mcp/cindy_ssh'),

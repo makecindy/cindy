@@ -10,6 +10,10 @@
  */
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
+import type {
+  CustomProviderUpdateOptions,
+  CustomProviderUpdateResult,
+} from '@/../shared/customProviderUpdate';
 
 import {
   DEFAULT_CUSTOM_CONTEXT_WINDOW,
@@ -228,6 +232,9 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
       baseUrl: routing?.upstream ?? '',
       ...(routing?.requestPath ? { requestPath: routing.requestPath } : {}),
       ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
+      ...(agent === 'codex' && routing?.supportsImageGeneration === true
+        ? { supportsImageGeneration: true }
+        : {}),
       models: models.map((model) => customProviderModelConfigFromCatalogModel(model, agent)),
       ...(routing?.headerOverride && Object.keys(routing.headerOverride).length > 0
         ? { headers: { ...routing.headerOverride } }
@@ -298,19 +305,23 @@ export async function readCustomProviderKey(
 export async function createCustomProvider(
   config: CustomProviderConfig,
   keys: RuntimeKeys,
-): Promise<void> {
-  await window.electronAPI.maker.createCustomProvider(config, keys);
+  options?: CustomProviderUpdateOptions,
+): Promise<CustomProviderUpdateResult> {
+  return options === undefined
+    ? window.electronAPI.maker.createCustomProvider(config, keys)
+    : window.electronAPI.maker.createCustomProvider(config, keys, options);
 }
 
 /** 编辑：main 在同一 provider mutation queue 内提交配置与 runtime 密钥。 */
 export async function updateCustomProvider(
   config: CustomProviderConfig,
   keys: RuntimeKeys,
-): Promise<void> {
-  await window.electronAPI.maker.updateCustomProvider(
-    { ...config, id: storedCustomProviderId(config.id) },
-    keys,
-  );
+  options?: CustomProviderUpdateOptions,
+): Promise<CustomProviderUpdateResult> {
+  const storedConfig = { ...config, id: storedCustomProviderId(config.id) };
+  return options === undefined
+    ? window.electronAPI.maker.updateCustomProvider(storedConfig, keys)
+    : window.electronAPI.maker.updateCustomProvider(storedConfig, keys, options);
 }
 
 /** 删除：main 在同一 provider mutation queue 内清配置与所有凭证。 */

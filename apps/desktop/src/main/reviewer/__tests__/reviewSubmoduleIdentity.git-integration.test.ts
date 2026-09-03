@@ -1,4 +1,6 @@
 import { promises as fs } from 'node:fs';
+import fsSync from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +18,20 @@ import {
 
 let workRoot: string;
 let parentPath: string;
+
+const canLinkFile = (() => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'review-submodule-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 // CI runner 没有全局 git 身份;每个会执行 commit 的仓库(含 submodule 克隆)都要配本地身份。
 async function configureRepo(dir: string): Promise<void> {
@@ -585,7 +601,7 @@ describe('readReviewSubmoduleIdentity intent-to-add 状态绑定 (#2463 review)'
 });
 
 describe('子仓 symlink 按链接文本绑定 (#2463 review)', () => {
-  it.skipIf(process.platform === 'win32')(
+  it.skipIf(!canLinkFile)(
     'binds a dirty submodule symlink pointing outside the sub without aborting',
     async () => {
       // 子仓里指向子仓外(../ 解析进父仓)或悬空的 symlink 是常见合法改动:
@@ -606,7 +622,7 @@ describe('子仓 symlink 按链接文本绑定 (#2463 review)', () => {
     },
   );
 
-  it.skipIf(process.platform === 'win32')(
+  it.skipIf(!canLinkFile)(
     'binds a gitlink replaced by an outside-pointing symlink (typechange) without aborting',
     async () => {
       // gitlink 整个被 symlink 替换(typechange):sub 字段仍标 S 路由到子仓
@@ -627,7 +643,7 @@ describe('子仓 symlink 按链接文本绑定 (#2463 review)', () => {
     },
   );
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'fails closed when a symlinked ancestor resolves the sub outside the parent repo',
     async () => {
       // 祖先目录 vendor 被换成指向父仓外的 symlink:lstat/realpath 跟随中间
@@ -643,7 +659,11 @@ describe('子仓 symlink 按链接文本绑定 (#2463 review)', () => {
       await runGit(['commit', '--no-gpg-sign', '-m', 'outside seed'], { cwd: escapeCheckout });
 
       await fs.rm(path.join(parent, 'vendor'), { recursive: true, force: true });
-      await fs.symlink(escapeRoot, path.join(parent, 'vendor'));
+      await fs.symlink(
+        escapeRoot,
+        path.join(parent, 'vendor'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
 
       await expect(
         readReviewSubmoduleIdentity(parentPath, ['vendor/lib']),

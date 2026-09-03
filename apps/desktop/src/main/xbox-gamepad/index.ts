@@ -23,17 +23,24 @@ import {
   type GamepadFamily,
   type XboxGamepadPreviewInput,
 } from '../../shared/xboxGamepad.js';
-import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from '../security/trustedAppRenderer.js';
 import { createWorkLouderCodexActiveWindowRouter } from '../worklouder-codex/actionWindow.js';
 import { XboxGamepadController } from './controller.js';
 import { createXboxGamepadHost } from './host.js';
-import { createLayoutPreviewLease, layoutPreviewOwnerFromEvent } from '../input-devices/previewLease.js';
+import {
+  createLayoutPreviewLease,
+  layoutPreviewOwnerFromEvent,
+} from '../input-devices/previewLease.js';
 import { createXboxGamepadSettingsIpc } from './settingsIpc.js';
 import {
   readXboxGamepadSettings,
   resetXboxGamepadSettings,
   writeXboxGamepadSettingsPatch,
 } from './settingsStore.js';
+import { computeSwitch2UsbWanted } from './switch2UsbWanted.js';
 
 const log = createLogger('xbox-gamepad');
 
@@ -97,9 +104,22 @@ const host = createXboxGamepadHost((message) => {
   controller.handleHostMessage(message);
 });
 let previewFamily: GamepadFamily | null = null;
+let taskSlotsSuspended = false;
 const layoutPreviewLease = createLayoutPreviewLease((active) => {
+  if (!active) previewFamily = null;
   controller.setLayoutPreviewActive(active, active ? previewFamily : null);
+  syncSwitch2Usb();
 });
+
+function syncSwitch2Usb(): void {
+  host.setSwitch2UsbWanted(
+    computeSwitch2UsbWanted({
+      taskSlotsSuspended,
+      nintendoDeviceEnabled: controller.getAccessories().nintendo.settings.deviceEnabled,
+      previewFamily,
+    }),
+  );
+}
 
 let inputDeviceRegistered = false;
 let settingsIpcRegistered = false;
@@ -116,13 +136,17 @@ export function registerXboxGamepadInputDevice(): void {
       },
       updateSessionActivity: () => undefined,
       resumeTaskSlots: async () => {
+        taskSlotsSuspended = false;
         controller.applySettings(family, readXboxGamepadSettings(family));
+        syncSwitch2Usb();
       },
       suspendTaskSlots: () => {
+        taskSlotsSuspended = true;
         controller.applySettings(family, {
           ...readXboxGamepadSettings(family),
           deviceEnabled: false,
         });
+        syncSwitch2Usb();
       },
       dispose: async () => {
         host.stop();
@@ -137,8 +161,12 @@ export function registerXboxGamepadSettingsIpc(): void {
   for (const family of GAMEPAD_FAMILIES) {
     controller.applySettings(family, readXboxGamepadSettings(family));
   }
-  if (process.platform === 'darwin') host.start();
-  else controller.markUnavailable();
+  if (process.platform === 'darwin') {
+    host.start();
+    syncSwitch2Usb();
+  } else {
+    controller.markUnavailable();
+  }
   installFocusHooks();
 
   const handlers = createXboxGamepadSettingsIpc({
@@ -146,12 +174,22 @@ export function registerXboxGamepadSettingsIpc(): void {
     getState: () => controller.getAccessories(),
     writeSettings: writeXboxGamepadSettingsPatch,
     resetSettings: resetXboxGamepadSettings,
-    applySettings: (family, settings) => controller.applySettings(family, settings),
+    applySettings: (family, settings) => {
+      controller.applySettings(family, settings);
+      syncSwitch2Usb();
+    },
     probeDevice: () => host.probe(),
     setLayoutPreviewActive: (active, family, event) => {
-      previewFamily = family;
-      layoutPreviewLease.setActive(active, layoutPreviewOwnerFromEvent(event));
-      if (active) controller.setLayoutPreviewActive(true, family);
+      const owner = layoutPreviewOwnerFromEvent(event);
+      if (active) {
+        if (!owner) return;
+        previewFamily = family;
+        layoutPreviewLease.setActive(true, owner);
+        controller.setLayoutPreviewActive(true, family);
+        syncSwitch2Usb();
+        return;
+      }
+      layoutPreviewLease.setActive(false, owner);
     },
   });
 

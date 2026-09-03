@@ -1322,19 +1322,27 @@ describe('LearnController 状态机', () => {
 
   it('hub 源命中同名本地 skill:本地 SKILL.md 注入 prompt 前过 redaction', async () => {
     const secret = 'sk-abcdef1234567890abcdef1234567890';
+    const fetchHubSkill = vi.fn(async () => ({
+      name: 'my-skill',
+      description: 'upstream',
+      content: '# upstream skill',
+    }));
     const h = makeHarness({
-      fetchHubSkill: async () => ({
-        name: 'my-skill',
-        description: 'upstream',
-        content: '# upstream skill',
-      }),
+      fetchHubSkill,
       dirExists: async (dir) =>
         dir.startsWith(path.join('/', 'fake-staging')) || dir === path.join('/', 'installed', 'my-skill'),
       readFileText: async () => `# local skill\napi key: ${secret}\n`,
     });
     h.setScan(goodScan());
-    const { runId } = await h.controller.startLearn({ input: '', sourceKind: 'hub', hubSlug: 'my-skill' });
+    const { runId } = await h.controller.startLearn({
+      input: '',
+      sourceKind: 'hub',
+      hubSlug: 'my-skill',
+      hubCatalogScope: 'team',
+    });
     await h.waitForStatus(runId, 'distilling');
+    expect(fetchHubSkill).toHaveBeenCalledWith('my-skill', 'team');
+    expect(h.store.get(runId)?.hubCatalogScope).toBe('team');
     expect(h.session.sent[0]).toContain('# local skill');
     expect(h.session.sent[0]).not.toContain(secret);
   });

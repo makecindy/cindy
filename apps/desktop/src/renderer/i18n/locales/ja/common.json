@@ -15,7 +15,16 @@
     "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。",
-    "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。"
+    "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。",
+    "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定がディスク上で変更されました。再読み込みしてからもう一度お試しください。",
+    "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定は保存されましたが、Cindy で再読み込みできませんでした。SSH 設定を再読み込みしてください。",
+    "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy はこの SSH 設定を安全に管理できません。再読み込みして、Cindy の所有マーカーとホストエイリアスの一意性を確認してください。",
+    "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy はこのホストの一部の SSH 設定規則を安全に再現できません。ターミナルの SSH は動作する場合があります。Match、条件付き Include、IdentityAgent、IdentitiesOnly、公開鍵設定を確認してください。",
+    "SSH_AGENT_UNAVAILABLE": "SSH Agent を使用できません。SSH Agent を起動し、ssh-add で対応する秘密鍵を読み込んでから再試行してください。",
+    "SSH_HOST_PREFS_WRITE_FAILED": "ホストは保存されていますが、表示名または Agent Proxy の設定を保存できませんでした。ローカルストレージの権限を確認して再試行してください。",
+    "RIGHT_SIDEBAR_TOO_MANY_TABS": "このタスクのタブ数の上限に達しました。いくつかのタブを閉じてください",
+    "RIGHT_SIDEBAR_STATE_TOO_LARGE": "タブの内容が大きすぎるため、追加できません",
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "このタブの種類は現在使用できません"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -165,6 +174,13 @@
       "title": "リモートマシン",
       "footnote": "Phase A は SSH 接続管理のみ。リモートでのエージェント実行は今後のアップデートで対応します。",
       "viaAuth": "{{label}} で認証",
+      "readOnlyFromSshConfig": "接続情報は SSH 設定から読み込まれています",
+      "configWarning": "一部の SSH 設定ルールを Cindy では評価できません。ホスト一覧や接続情報がターミナルの SSH と異なる場合があります。",
+      "configDiagnostic": {
+        "io": "Cindy は SSH 設定を読み込めませんでした。最後に正常に読み込んだホストを引き続き表示しています。ファイルのアクセス権を確認して、再読み込みしてください。",
+        "syntax": "Cindy は SSH 設定を解析できませんでした。最後に正常に読み込んだホストを引き続き表示しています。設定を修正して、再読み込みしてください。",
+        "limit": "SSH 設定のネストが深すぎるか、サイズが大きすぎるため、Cindy で安全に読み込めません。最後に正常に読み込んだホストを引き続き表示しています。"
+      },
       "empty": {
         "title": "リモートマシンはまだありません。",
         "hint": "「追加」で登録するか、更新アイコンで ~/.ssh/config から取り込めます。"
@@ -196,7 +212,9 @@
       },
       "edit": {
         "title": "{{id}} を編集",
-        "submit": "変更を保存"
+        "submit": "変更を保存",
+        "connectionFieldsReadOnly": "SSH 設定から読み込まれた接続情報はここでは読み取り専用です。表示名、自動接続、Agent Proxy は変更できます。",
+        "authenticationFromSshConfig": "認証情報は SSH 設定から読み込まれます。"
       },
       "keys": {
         "title": "SSH 鍵を設定",
@@ -273,6 +291,8 @@
       "add": {
         "title": "リモートマシンを追加",
         "alias": "エイリアス",
+        "displayName": "表示名",
+        "displayNamePlaceholder": "任意。Cindy 内でのみ表示",
         "hostname": "ホスト名",
         "user": "ユーザー",
         "port": "ポート",
@@ -373,6 +393,7 @@
         "reloaded": "~/.ssh/config を再読み込みしました",
         "loadFailed": "リモートマシンの読み込みに失敗",
         "addFailed": "マシンの追加に失敗",
+        "addConflict": "マシンの追加中に SSH 設定が変更されました。設定を再読み込みし、ホスト項目を確認してから再試行してください。",
         "connectFailed": "接続に失敗",
         "disconnectFailed": "切断に失敗",
         "removeFailed": "削除に失敗",
@@ -1474,6 +1495,13 @@
           "editTitle": "カスタムプロバイダーを編集",
           "desc": "OpenAI / Anthropic 互換のプロバイダーを設定します。"
         },
+        "imageGenerationReload": {
+          "title": "Codex を再読み込み",
+          "description": "この画像生成設定を保存するには Codex の再読み込みが必要で、現在実行中の Codex タスクは中断されます。",
+          "interrupt": "保存して停止",
+          "cancel": "キャンセル",
+          "close": "閉じる"
+        },
         "fields": {
           "name": "表示名",
           "namePlaceholder": "マイ AI プロバイダー",
@@ -1495,6 +1523,15 @@
           "modelContextWindowTitle": "コンテキストウィンドウ(トークン数)。空欄の場合は保守的な既定値 200K。ウィンドウ表示と圧縮しきい値に影響します。",
           "modelSupportsImageInput": "画像入力に対応",
           "modelSupportsImageInputHelp": "モデルが実際に画像入力へ対応している場合のみ有効にしてください。保存後、新しい Pi タスクで反映されます。",
+          "runtimeAdvanced": "詳細設定",
+          "runtimeSupportsImageGeneration": "画像の生成と編集に対応",
+          "runtimeSupportsImageGenerationHelpLabel": "画像の生成と編集への対応について",
+          "runtimeSupportsImageGenerationConditionTitle": "適用条件",
+          "runtimeSupportsImageGenerationCondition": "ゲートウェイは OpenAI Responses API と互換性があり、画像の生成と編集に対応している必要があります。",
+          "runtimeSupportsImageGenerationEndpointsTitle": "エンドポイント要件",
+          "runtimeSupportsImageGenerationEndpoints": "ゲートウェイは次のリクエストを処理する必要があります。",
+          "runtimeSupportsImageGenerationPermissionsTitle": "権限とエラー処理",
+          "runtimeSupportsImageGenerationPermissions": "現在の API キー、アカウント、またはユーザーグループに画像モデルへのアクセス権が必要です。この設定はゲートウェイの機能を宣言するだけで、上流へのアクセス権を自動的に付与しません。呼び出しに失敗した場合は実際の上流エラーを表示し、別の画像サービスへ切り替えません。",
           "modelSupportsReasoning": "推論に対応",
           "modelSupportsReasoningHelp": "モデルが推論強度を受け付ける場合のみ有効にし、実際に対応するすべてのレベルを選択してください。保存後、次の Pi Agent セッションから反映されます。",
           "modelReasoningEfforts": "対応する推論強度",
@@ -1883,14 +1920,24 @@
           "qwen38-27b": {
             "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。"
           },
-          "gpt-oss-20b": { "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。" },
-          "gemma4-e2b": { "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。" },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。" },
-          "gemma4-12b": { "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。" },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。"
+          },
+          "gemma4-e2b": {
+            "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。"
+          },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。"
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。"
+          },
           "gemma4-31b": {
             "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。"
           },
-          "gemma4-26b": { "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。" },
+          "gemma4-26b": {
+            "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。"
+          },
           "ornith15-35b": {
             "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。"
           },
@@ -2866,7 +2913,7 @@
       "installSectionDescription": "pi.dev ページのインストール元を貼り付けるか、npm パッケージ名、Git URL、ローカルの絶対パスを入力します。",
       "installedSectionTitle": "インストール済み",
       "sourcePlaceholder": "npm パッケージ、Git URL、ローカルの絶対パス",
-      "inspectionHint": "インストール時にリスクを一度だけ確認します。承認後、Cindy が拡張機能をインストールしてリソースを検査し、検査に成功した実行可能リソースを自動的に有効にします。",
+      "inspectionHint": "パッケージのインストールと読み込みは Pi のネイティブパッケージシステムが行います。Cindy の互換性詳細は参考情報であり、未知・未対応・解析失敗でもインストールや有効化を妨げません。",
       "install": "インストール",
       "update": "更新",
       "remove": "アンインストール",
@@ -2887,12 +2934,7 @@
       "loadFailed": "Pi 拡張機能を読み込めませんでした。接続を確認して再試行してください。",
       "retry": "再試行",
       "operationInProgress": "{{name}} を処理しています…",
-      "confirmTitle": "この Pi 拡張機能をインストールしますか？",
-      "confirmDescription": "{{source}} は第三者コードです。Cindy の Pi と同じプロセスで実行され、Pi がアクセスできるファイルや認証情報を読み取る可能性があります。インストール時に npm ライフサイクルスクリプトは実行しません。承認するとインストールされます。検査に成功した実行可能リソースは、互換性の制限が報告された場合でも自動的に有効になります。",
-      "confirmInstall": "リスクを理解してインストール",
       "updateConfirmTitle": "この Pi 拡張機能を更新しますか？",
-      "updateConfirmDescription": "{{source}} は新しいサードパーティ版をダウンロードし、インストール済みコードを置き換えます。更新時に npm ライフサイクルスクリプトは実行しません。コードは Pi と同じプロセスで実行され、ファイルや認証情報を読み取る可能性があります。承認すると更新されます。自分で無効にした拡張機能は無効のままになり、それ以外は検査に成功すると有効になります。",
-      "confirmUpdate": "リスクを理解して更新",
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
       "confirmUninstall": "アンインストール",
@@ -2937,30 +2979,29 @@
       "runtimeMismatch": "{{packageName}} には Pi {{range}} が必要ですが、Cindy は現在 {{currentVersion}} を使用しています。",
       "runtimeLegacyPackage": "{{packageName}} は Pi の旧ランタイム名前空間です。これを基にした拡張機能は、現在の Cindy Pi で読み込めない可能性があります。",
       "runtimeUnknown": "{{packageName}} には Pi {{range}} が必要ですが、現在の Cindy の Pi バージョンが要件を満たすか確認できませんでした。",
-      "compatibilityNoticeTitle": "互換性の確認結果",
-      "compatibilityNoticeDescription": "{{name}} のインストールまたは更新が完了しました。Cindy の検査結果を以下に表示します。有効状態は拡張機能一覧で確認でき、変更は新規または再起動した Pi タスクにだけ反映されます。",
-      "extensionApprovalTitle": "実行可能な拡張機能を有効にしますか？",
-      "extensionApprovalDescription": "有効にすると第三者の拡張機能は Pi と同じプロセスで動作し、モデルや API の認証情報を含む Pi が参照できるファイルと環境変数を読み取れます。Cindy は現在このアクセスを分離できません。完全に信頼するソースだけを有効にしてください。",
-      "parserDisclaimer": "これは静的な互換性チェックであり、セキュリティ監査ではありません。任意の第三者コードの完全な互換性を保証できません。",
-      "disableAfterInstall": "この拡張機能を無効にする",
-      "keepEnabled": "有効のまま使う",
-      "keepDisabled": "無効のままにする",
-      "approveAndEnable": "リスクを理解して有効にする",
-      "done": "完了",
       "warning": {
         "no-resources": "この拡張機能には Pi リソースが見つかりません。",
-        "inspection-failed": "拡張機能は登録されていますが、内容を確認できません。",
-        "inspection-limit": "拡張機能が安全な検査上限を超えたため、無効のままです。",
-        "unsupported-filter": "この拡張機能は Cindy がまだ安全に再現できない Pi リソースフィルターを使用しているため、無効のままです。",
-        "unsafe-source": "保存済みの配布元に認証情報または非公開の URL パラメーターが含まれています。Cindy は機密部分を隠して無効のままにし、アプリ内での更新と削除を禁止しました。",
-        "lifecycle-scripts-disabled": "この拡張機能にはインストールスクリプトがありますが、安全のため Cindy は実行していません。生成ファイルに依存する機能は動作しない可能性があります。"
+        "inspection-failed": "Cindy はインストール済み内容を検査できませんでしたが、それを理由に無効化しません。Pi がネイティブに処理します。",
+        "inspection-limit": "Cindy は詳細分析の上限で表示を停止しました。パッケージは Pi のネイティブローダーで引き続き利用できます。",
+        "unsupported-filter": "Cindy はこの Pi リソースフィルターをまだ表示できません。パッケージとフィルターは Pi がネイティブに処理します。",
+        "unsafe-source": "保存済みソースには認証情報または非公開 URL パラメーターが含まれています。Cindy はこの画面で機密項目だけを隠し、Pi のパッケージ動作はブロックしません。"
+      },
+      "failure": {
+        "sourceUnavailable": "ソースにアクセスできません。ネットワークまたは URL を確認するか、別のソースをお試しください。",
+        "packageNotFound": "パッケージが見つかりません。パッケージ名またはリポジトリ URL を確認してください。",
+        "versionNotFound": "そのバージョンが見つかりません。利用可能なバージョンを選んで再試行してください。",
+        "stateUnavailable": "Cindy は Pi 拡張機能の状態を読み取れませんでした。Cindy を再起動して再試行してください。",
+        "runtimeConvergencePartial": "Pi 拡張機能の変更は保存されましたが、一部のローカル Pi タスクが古い拡張機能を実行中の可能性があります。Pi を再び使用する前に Cindy を再起動してください。",
+        "nativeCommandFailed": "Pi のネイティブパッケージコマンドが失敗しました。ソースまたはバージョンを確認してください。"
       },
       "success": {
-        "install": "Pi 拡張機能をインストールしました。下の有効状態を確認してください。現在のタスクは変わりません。",
-        "installEnabled": "Pi 拡張機能をインストールして有効にしました。現在のタスクは変わりません。Pi タスクを新規作成または再起動すると使えます。",
-        "remove": "Pi 拡張機能を削除しました。現在のタスクは閉じるまで古い拡張機能を保持します。",
-        "update": "Pi 拡張機能を更新しました。現在のタスクは古いバージョンを保持します。新規作成または再起動後に反映されます。",
-        "set-enabled": "Pi 拡張機能の状態を保存しました。現在のタスクは変わりません。新規作成または再起動後に反映されます。"
+        "install": "Pi 拡張機能をインストールしました。実行中のローカル Pi タスクを停止しました。新しい Pi タスクで利用できます。",
+        "installEnabled": "Pi 拡張機能をインストールして有効にしました。実行中のローカル Pi タスクを停止しました。新しい Pi タスクで利用できます。",
+        "remove": "Pi 拡張機能を削除しました。ツールが実行され続けないよう、実行中のローカル Pi タスクを停止しました。",
+        "settingsRemove": "Pi 拡張機能を削除しました。ツールが実行され続けないよう、実行中のローカル Pi タスクを停止しました。",
+        "settingsDisable": "Pi 拡張機能を無効にしました。ツールが実行され続けないよう、実行中のローカル Pi タスクを停止しました。",
+        "update": "Pi 拡張機能を更新しました。実行中のローカル Pi タスクを停止しました。新しい Pi タスクで更新版を利用できます。",
+        "set-enabled": "Pi 拡張機能の状態を保存しました。実行中のローカル Pi タスクを停止しました。新しい Pi タスクで新しい状態が反映されます。"
       }
     },
     "computerUse": {
@@ -2982,7 +3023,14 @@
           "toggleFailed": "ブラウザ自動操作の切り替えに失敗しました",
           "openedForLogin": "自動操作ブラウザを開きました。必要なサイトにログインしてください",
           "openForLoginFailed": "ブラウザを開けませんでした",
-          "foreignInstance": "別の Cindy が Agent 専用ブラウザを使用中です。先にそのウィンドウを終了してください。"
+          "foreignInstance": "別の Cindy が Agent 専用ブラウザを使用中です。先にそのウィンドウを終了してください。",
+          "profileLocked": "Chrome、Edge、または Brave をトレイのプロセスも含めて完全に終了し、もう一度お試しください。",
+          "noChromium": "このコンピューターに Chrome、Edge、Brave、または Chromium が見つかりません。",
+          "noAuthDb": "コピーできるブラウザのログインデータが見つかりません。通常のブラウザで先にログインするか、「ブラウザのログイン状態を使う」をオフにして Agent 専用ブラウザでログインしてください。",
+          "copyFailed": "ブラウザのログイン状態をコピーできませんでした。通常のブラウザを完全に終了して再試行するか、「ブラウザのログイン状態を使う」をオフにしてください。",
+          "headlessForbidden": "Agent 専用ブラウザがヘッドレスモードで動作している間は、ブラウザのログイン状態を使用できません。",
+          "stopFailed": "Agent 専用ブラウザを完全に終了してから、もう一度お試しください。",
+          "appBoundEncryptionUnsupported": "Windows のアプリバウンド暗号化で保護されているため、Cindy はこのブラウザのログイン状態をコピーできません。「ブラウザのログイン状態を使う」をオフにし、Agent 専用ブラウザを開いて一度ログインしてください。"
         },
         "openForLogin": "Agent 専用ブラウザを開く",
         "openForLoginHint": "これはエージェント専用の独立したブラウザです。お使いの Chrome を利用しますが、プロファイルは完全に独立しており（右上に「Cindy」と表示）、普段の Chrome のタブ・ブックマーク・ログイン状態には一切影響しません。エージェントはこのブラウザであなたの代わりにページを開き、読み、クリックし、スクリーンショットを撮ります。ログインが必要なサイトは、上の「Agent 専用ブラウザを開く」から一度ログインすれば、ログイン状態が保持され、以降はエージェントがあなたとして操作を続けられます。"
@@ -3690,6 +3738,28 @@
       "recording": "新しいショートカットを入力…",
       "editAria": "{{name}} のショートカットを変更",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex との互換性",
+          "label": "Codex によるデバイスの占有を防ぐ",
+          "aria": "Codex による Codex Micro の占有を防ぐ",
+          "recover": "環境を復元",
+          "status": {
+            "unsupported": "macOS のみ",
+            "disabled": "オフ",
+            "protecting": "Codex を再起動",
+            "intercepted": "保護中",
+            "recovery-required": "復元が必要",
+            "error": "利用不可"
+          },
+          "descriptions": {
+            "unsupported": "この保護機能は macOS でのみ利用できます。",
+            "disabled": "Cindy の実行中、Codex が Codex Micro に接続するのを防ぎます。Cindy 自体は制限されません。",
+            "protecting": "保護の準備ができました。Codex を完全に終了してから開き直してください。実行中の Codex には影響しません。",
+            "intercepted": "Codex の Work Louder サービスをブロックしました。Cindy は引き続きデバイスを使用できます。",
+            "recovery-required": "保護は停止しましたが、NODE_OPTIONS は安全に復元されていません。再度有効にする前に復元を再試行してください。",
+            "error": "Codex の保護を更新できませんでした。以前の NODE_OPTIONS は保持されているか、復元待ちです。"
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "前のタスク",
@@ -3904,12 +3974,12 @@
           "title": "Agent キー",
           "source": {
             "label": "タスクの順序",
-            "description": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
+            "description": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
             "descriptions": {
-              "sidebar": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
-              "last-sent": "AG00～AG05 は、最後にメッセージを送ったタスクの新しい順です。",
-              "priority": "AG00～AG05 は優先タスクの上から 6 件です。",
-              "custom": "AG00～AG05 はそれぞれ指定したタスクを開きます。"
+              "sidebar": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
+              "last-sent": "タスクキーは基板上の順で、最後にメッセージを送ったタスクに対応します。",
+              "priority": "タスクキーは基板上の順で、優先タスクに対応します。",
+              "custom": "各タスクキーは指定したタスクを開きます。"
             },
             "value": "サイドバー順",
             "options": {
@@ -3926,7 +3996,16 @@
           },
           "newTask": "新しいタスク",
           "slot": "最近の {{position}} 件目",
-          "slotAria": "AG{{slot}} で最近の {{position}} 件目のタスクを開く"
+          "slotAria": "AG{{slot}} で最近の {{position}} 件目のタスクを開く",
+          "role": {
+            "label": "キーの役割",
+            "description": "タスクキーはタスクを切り替え、ライトで状態を示します。アクションキーはショートカットを実行し、キーキャップも選べます。",
+            "task": "タスクキー",
+            "action": "アクションキー"
+          },
+          "lightingLimit": "ファームウェアが個別に点灯できるのは、基板上の先頭 6 個のタスクキーまでです。それ以降のタスクキーでもタスクの切り替えはできます。",
+          "unlitKey": "先頭 6 個より後のキーなので、独立したステータスライトはありません。",
+          "taskHint": "透明なキーキャップがおすすめです。タスクの状態は色の違うライトで表示されます。"
         },
         "commandKeys": {
           "builtInDescription": "キーキャップ既定の動作のままにするか、別の動作に割り当てます。",
@@ -3937,7 +4016,7 @@
           "title": "マイク",
           "separate": {
             "label": "マイクキーを分ける",
-            "description": "ACT10 と ACT11 を 1 つの MIC キーにまとめず、別々に使います。"
+            "description": "短く押すと録音を開始して維持します。もう一度押すか、長押しして離すと停止します。"
           }
         },
         "analog": {
@@ -3977,7 +4056,8 @@
           "tasks": "タスク",
           "commands": "コマンド",
           "keycaps": "キーキャップ",
-          "skills": "スキル"
+          "skills": "スキル",
+          "voice": "音声入力"
         },
         "layout": {
           "editor": {
@@ -3989,7 +4069,10 @@
             "cancel": "キャンセル",
             "save": "保存",
             "assignedShortcut": "割り当てられたアクション",
-            "selectKeycap": "キーキャップ {{keycap}} を選択"
+            "selectKeycap": "キーキャップ {{keycap}} を選択",
+            "keyTitle": "キーを編集",
+            "keyDescription": "タスクキーはタスクを開きステータスライトを表示します。アクションキーはショートカットを実行し、キーキャップを選べます。",
+            "blank": "ブランク"
           },
           "keyboard": {
             "indicator": "ステータスライト",
@@ -4002,6 +4085,54 @@
             "title": "キー配置をリセット",
             "description": "タスク順序やライト設定を変えずに、キーキャップ、ジョイスティック、エンコーダー、マイクの割り当てを初期状態に戻します。",
             "button": "配置をリセット"
+          },
+          "merge": {
+            "right": "右のキーと横長キーにまとめる",
+            "down": "下のキーと縦長キーにまとめる",
+            "split": "2 つのキーに戻す",
+            "rightDescription": "横長のキーキャップが右のキーを覆います。覆われたタスクキーはアクションキーになります。",
+            "downDescription": "縦長のキーキャップが下のキーを覆います。覆われたタスクキーはアクションキーになります。",
+            "splitDescription": "戻すと、覆われていたキーは空白キーになります。"
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "キーでタスクを開き、ライトで状態を同期します。",
+            "openAria": "Work Louder Creator Micro 2 の設定を開く",
+            "connection": {
+              "toggle": {
+                "aria": "この Cindy で Creator Micro 2 を使う"
+              },
+              "descriptions": {
+                "connecting": "Cindy が Work Louder デバイスサービスを起動しています。",
+                "connected": "USB 接続済みです。Cindy がキー入力を待ち受け、タスクのライトを同期しています。",
+                "disabled": "オンにすると、Cindy は現在のレイヤーを書き換え、キー入力を受け取り、ライトでタスク状態を表示します。",
+                "present": "オンにすると、Cindy は現在のレイヤーを書き換え、キー入力を受け取り、ライトでタスク状態を表示します。",
+                "not-detected": "データ通信対応の USB ケーブルで接続してください。ChatGPT がデバイスを使用している場合は終了してください。",
+                "error": "Cindy はキーボードと通信できませんでした。自動的に再試行しています。",
+                "unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",
+                "connection-timeout": "Work Louder サービスが時間内に応答しませんでした。Cindy は自動的に再試行します。",
+                "connection-failed": "Work Louder サービスを起動できませんでした。Cindy は自動的に再試行します。",
+                "permission-required": "macOS がキーボードへのアクセスを拒否しました。入力モニタリングで Cindy を許可してから再試行してください。",
+                "sdk-unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",
+                "device-in-use": "別のアプリがこのキーボードを使用中です。ChatGPT または Input を閉じてから再試行してください。"
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
+                  "last-sent": "タスクキーは基板上の順で、最後にメッセージを送ったタスクに対応します。",
+                  "priority": "タスクキーは基板上の順で、優先タスクに対応します。",
+                  "custom": "各タスクキーは指定したタスクを開きます。"
+                }
+              }
+            },
+            "errors": {
+              "load": "Creator Micro 2 の設定を読み込めませんでした",
+              "save": "Creator Micro 2 の設定を保存できませんでした"
+            }
           }
         }
       },
@@ -4326,7 +4457,9 @@
         "openAria": "PlayStation コントローラー設定を開く",
         "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
         "connection": {
-          "toggle": { "aria": "Cindy が前面にあるとき PlayStation コントローラーを使う" },
+          "toggle": {
+            "aria": "Cindy が前面にあるとき PlayStation コントローラーを使う"
+          },
           "descriptions": {
             "connecting": "Cindy は PlayStation コントローラーを探しています。",
             "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
@@ -4343,7 +4476,9 @@
         "openAria": "Switch コントローラー設定を開く",
         "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
         "connection": {
-          "toggle": { "aria": "Cindy が前面にあるとき Switch コントローラーを使う" },
+          "toggle": {
+            "aria": "Cindy が前面にあるとき Switch コントローラーを使う"
+          },
           "descriptions": {
             "connecting": "Cindy は Switch コントローラーを探しています。",
             "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
@@ -4360,7 +4495,9 @@
         "openAria": "汎用コントローラー設定を開く",
         "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
         "connection": {
-          "toggle": { "aria": "Cindy が前面にあるとき汎用コントローラーを使う" },
+          "toggle": {
+            "aria": "Cindy が前面にあるとき汎用コントローラーを使う"
+          },
           "descriptions": {
             "connecting": "Cindy はコントローラーを探しています。",
             "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
@@ -4692,7 +4829,7 @@
         "fsWrite": "ファイルを書き込めます(作成/変更)",
         "fsWriteDetail": "専用データフォルダにはいつでも書き込めます。現在のセッションの作業ディレクトリへの書き込みはセッションの権限モードに従います(自動承認モードでは直接書き込み、逐次確認モードでは事前に承認を求めます)。それ以外のフォルダへの書き込みは毎回確認が必要です。ファイルは常にホストが代理で書き込み、プラグイン自体があなたのファイルシステムに直接アクセスすることはありません。",
         "libraryPersist": "永続ライブラリを使用可能(大量のファイルとデータベース)",
-        "libraryPersistDetail": "Cindy が管理する独立した保存領域を取得し、作品データ(キャンバス、画像、データベースなど)を保存します。通常のプラグインデータ割り当ての制限を受けません。ファイルとデータベースの操作はすべてホストが代行実行し、プラグインはライブラリ内の相対パスのみを使用して、他のファイルに触れることはできません。プラグインをアンインストールしてもこのデータは削除されず、削除には Cindy 設定での個別確認が必要です。",
+        "libraryPersistDetail": "Cindy が管理する独立した保存領域を取得し、作品データ(キャンバス、画像、データベースなど)を保存します。通常のプラグインデータ割り当ての制限を受けません。ファイルとデータベースの操作はすべてホストが代行実行し、プラグインはライブラリ内の相対パスのみを使用して、他のファイルに触れることはできません。ライブラリ内のファイルをシステムのフォルダで表示したり、システムの名前を付けて保存ダイアログを開いてコピー先を選ばせることもできます。キャンセルすれば何もコピーされません。プラグインをアンインストールしてもこのデータは削除されず、削除には Cindy 設定での個別確認が必要です。",
         "networkHost": "ネットワークドメイン {{host}} にアクセス",
         "networkSecret": "認証情報「{{name}}」の入力が必要",
         "networkSecretGhostInputDetail": "この資格情報はプラグイン自身の設定画面で入力を受け付けるため、入力時にはプラグインのページを経由します。その後ホストへ一度だけ渡されて暗号化保存され、保存後はプラグインから読み出せません。注入は宣言されたドメインへのリクエスト時のみホストが行います。",
@@ -4911,6 +5048,10 @@
       "pick": {
         "dialogTitle": "フォルダを選択",
         "dialogMessage": "プラグイン「{{name}}」がフォルダの選択を求めています"
+      },
+      "saveAs": {
+        "dialogTitle": "プラグイン「{{name}}」名前を付けて保存",
+        "dialogMessage": "プラグイン「{{name}}」がコピーの保存先選択を求めています"
       },
       "confirm": {
         "dialogTitle": "プラグイン「{{name}}」が確認を求めています"
@@ -5253,7 +5394,6 @@
     "expandControlledNotice": "リモート操作の通知を展開: {{label}}",
     "versionMismatch": "相手のバージョンが異なります。一部機能が制限される場合があります"
   },
-
   "accountDeletion": {
     "entryButton": "アカウントを削除",
     "entryAria": "現在のアカウントを削除",
@@ -5403,7 +5543,8 @@
     "browserWaiting": "ブラウザで認証を完了してください",
     "browserCallback": {
       "successTitle": "ログイン完了",
-      "successBody": "このページを閉じて {{appName}} に戻れます。",
+      "successBody": "ログインが完了しました。このページは閉じて構いません。",
+      "closeCountdown": "{{count}}秒後に自動で閉じます",
       "errorTitle": "ログインを完了できませんでした",
       "errorBody": "{{appName}} に戻ってもう一度ログインしてください。",
       "returnButton": "{{appName}} に戻る"
@@ -5954,6 +6095,10 @@
       "detachDevice": "デバイスを切断",
       "startDevice": "デバイスを起動",
       "stopDevice": "デバイスを停止",
+      "deleteDevice": "デバイスを削除",
+      "deleteDeviceConfirmTitle": "「{{device}}」を削除しますか？",
+      "deleteDeviceConfirmDescription": "このシミュレータと、その中に保存されているすべてのアプリ、アカウント、データを完全に削除します。この操作は取り消せません。",
+      "deleteRunningDeviceConfirmDescription": "このシミュレータは実行中です。確認すると、Cindy が関連リソースをクリーンアップしてデバイスを停止した後、保存されているすべてのアプリ、アカウント、データを完全に削除します。この操作は取り消せません。",
       "attachedDescription": "このデバイスは現在の Cindy セッションに割り当てられています。",
       "agentControlTitle": "Agent の操作権限",
       "agentControlDescription": "許可した場合のみ、Agent がこのデバイスを起動、停止、操作できます。",
@@ -6645,6 +6790,13 @@
       "move": "今すぐ移動（推奨）",
       "download": "手動でダウンロード"
     },
+    "windowsRuntimeMissing": {
+      "title": "Microsoft Visual C++ ランタイムが必要です",
+      "description": "この PC にはアップデーターに必要な Microsoft Visual C++ ランタイムがありません。ダウンロード済みの更新は保持されます。Microsoft 公式の x64 ランタイムをインストールしてから、もう一度確認してください。",
+      "download": "ランタイムをダウンロード",
+      "retry": "もう一度確認",
+      "later": "後でインストール"
+    },
     "moveToApplications": {
       "title": "アプリケーションフォルダに移動",
       "message": "{{appName}} を「アプリケーション」フォルダに移動すると、自動更新を含むより良い体験が得られます。",
@@ -7274,7 +7426,7 @@
         "title": "このモデルには今の会話が収まりません",
         "warnToast": "この会話はすでに {{used}} 使っています。切替後は新しいモデルの容量（{{total}}）の約 {{pct}}% になります",
         "overflowDescription": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy が要約してから続けます。チャット履歴は残りますが、全文をそのままは渡しません。",
-        "overflowDescriptionRemote": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。リモートのタスクでは自動的に新しいエージェント文脈へ引き継げないため、次の送信が失敗する可能性があります。このまま切り替えるか、今のモデルのままにしてください。",
+        "overflowDescriptionRemote": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
         "confirmSwitch": "切り替えて続ける",
         "cancelSwitch": "今は切り替えない"
       },
@@ -7448,12 +7600,17 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT のログインが無効になりました",
-    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
+    "systemSharedInvalidated": "Cindy はこのコンピューターの ChatGPT ログインを使用しています。まず ChatGPT App でログインを復旧してください。別の認証情報を作成したり、このコンピューターをログアウトさせたりせずに済みます。",
     "instanceIsolatedInvalidated": "Cindy は現在、個別にログインした ChatGPT アカウントを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
     "unknownInvalidated": "Cindy の現在の ChatGPT ログインは無効になりました。再度ログインしてから、再試行してください。",
     "recovered": "ChatGPT ログインが復旧しました。再試行してください。",
     "openApp": "ChatGPT App を開く",
     "relogin": "ChatGPT に再ログイン",
+    "reloginRiskTitle": "それでも Cindy から再ログインしますか？",
+    "reloginRiskDescription": "Cindy は新しい OpenAI OAuth 認証情報を作成します。通常は ChatGPT App に影響しませんが、システムの Codex と認証情報を共有している場合は、関連アプリで再ログインが必要になることがあります。",
+    "reloginRiskConfirm": "リスクを承知して続行",
+    "devWriteBlocked": "開発環境は既定で、このコンピューターの ChatGPT ログインを読み取り専用で共有するため、OAuth の開始や認証情報の変更はできません。OAuth をテストする場合は、隔離サンドボックスで XDT_ALLOW_DEV_OAUTH_WRITE=1 を明示的に設定してください。",
+    "devReadOnly": "開発環境では読み取り専用",
     "checking": "確認中…",
     "recheck": "再確認",
     "later": "後で",
@@ -7634,7 +7791,7 @@
       "switchClaudeSubscriptionTitle": "このセッションを Claude.ai サブスクリプションに切り替えて再試行",
       "switchingClaudeSubscription": "Claude.ai に切り替え中…",
       "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこのセッションの再試行に失敗しました：{{msg}}",
-      "budgetModelHint": "繰り返し失敗する場合は、通常版 GPT モデルに切り替えてお試しください。",
+      "codexAppServerRetired": "Codex サービスが再起動または交換されました。現在のリクエストは中断されたため、もう一度実行してください。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
       "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} Settings → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後 Settings で認証モードを一度切り替えて app-server を再起動してから、新しいセッションを開始してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
@@ -8201,7 +8358,12 @@
       "showMore": "さらに {{count}} 件表示",
       "showLess": "折りたたむ",
       "artifactLabel": "成果物",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}} ページ",
         "slides": "{{count}} 枚のスライド",
@@ -9104,7 +9266,15 @@
           "5": "金曜日",
           "6": "土曜日"
         },
-        "short": { "0": "日", "1": "月", "2": "火", "3": "水", "4": "木", "5": "金", "6": "土" }
+        "short": {
+          "0": "日",
+          "1": "月",
+          "2": "火",
+          "3": "水",
+          "4": "木",
+          "5": "金",
+          "6": "土"
+        }
       },
       "time": {
         "last": "前回 {{value}}",
@@ -9945,10 +10115,16 @@
       "search": "スキルを検索",
       "clearSearch": "スキル検索をクリア",
       "noSearchResults": "一致するスキルが見つかりません",
-      "browseTitle": "Skill Hub を見る",
-      "browseDesc": "もっと多くのスキルを見つけてインストール",
-      "recommended": "おすすめ",
-      "recommendedEmpty": "現在おすすめはありません",
+      "catalogFiltersAria": "SkillHub カテゴリ",
+      "catalogFilter": {
+        "public": "公開",
+        "organization": "組織",
+        "mine": "管理対象"
+      },
+      "catalogMore": "もっと見る",
+      "loadMore": "さらに読み込む",
+      "loadingMore": "読み込み中…",
+      "catalogEmpty": "このカテゴリにはスキルがありません",
       "local": "ローカルスキル",
       "localEmpty": "ローカルスキルはまだありません",
       "installed": "インストール済み",
@@ -10130,7 +10306,6 @@
       "sortDownloads": "ダウンロード数",
       "sortLatest": "最近の更新",
       "sortCreated": "最新公開",
-      "chipAvailable": "取得可能",
       "chipAll": "すべて",
       "chipMine": "管理対象",
       "ownerGroupPersonal": "個人",
@@ -10144,7 +10319,7 @@
       "installError": "不明なエラー"
     },
     "marketCard": {
-      "visibilityPublic": "XD.Inc",
+      "visibilityPublic": "公開",
       "visibilityDept": "チーム",
       "visibilityPrivate": "個人",
       "timeLabel": "公開日時",
@@ -10169,6 +10344,7 @@
       }
     },
     "publishedStatus": {
+      "waitingReview": "審査待ち",
       "machineReviewing": "機械審査中",
       "manualReviewing": "人手確認中",
       "rejected": "審査不通過"
@@ -10180,7 +10356,7 @@
       "emptyHint": "このクラウド Skill からプレビュー可能なファイルが返されませんでした"
     },
     "marketDetail": {
-      "visibilityPublic": "XD.Inc に公開",
+      "visibilityPublic": "すべてのユーザーに公開",
       "visibilityPrivate": "個人のみ",
       "visibilityDept": "チームに公開",
       "files": "ファイル",
@@ -10191,6 +10367,7 @@
       "forbidden": "この Skill を操作する権限がありません",
       "notFound": "この Skill は存在しません。リストに戻って更新してください",
       "managementApiUnavailable": "Hub 管理 API はまだ利用できません。しばらくしてから再試行してください",
+      "invalidVisibility": "この組織ではその公開範囲を利用できません。公開を選択してください",
       "default": "操作に失敗しました。しばらくしてから再試行してください"
     },
     "installPicker": {
@@ -10235,11 +10412,11 @@
       "descriptionPlaceholder": "この skill の用途を簡潔に",
       "visibilityLabel": "可視性",
       "visibilityPublicTitle": "公開",
-      "visibilityPublicDesc": "全社に公開 · デフォルト",
+      "visibilityPublicDesc": "すべてのユーザーに公開 · デフォルト",
       "versionLabel": "バージョン",
       "versionFormatHint": "形式：x.y.z（例：1.0.1）",
       "categoryLabel": "カテゴリ",
-      "categoryAuto": "自動",
+      "categoryAuto": "タグなし",
       "categoryPlaceholder": "カテゴリを選択",
       "categoryLoading": "カテゴリを読み込み中…",
       "categoryLoadFailed": "カテゴリの読み込みに失敗しました。再試行してください",
@@ -10363,6 +10540,14 @@
         "title": "キャンセル済み",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "組織カタログは読み取り専用です",
+        "message": "この組織カタログでは公開や管理を利用できません"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "公開範囲を利用できません",
+        "message": "現在の公開者が利用できる公開範囲を選択してください"
+      },
       "INTERNAL": {
         "title": "サーバーエラー",
         "message": "公開失敗、後ほど再試行してください"
@@ -10376,8 +10561,12 @@
       "dismiss": "了解",
       "passedTitle": "セキュリティスキャン通過",
       "passedDesc": "このバージョンはすべてのセキュリティチェックに合格し、マーケットに公開されました。",
+      "pendingTitle": "送信済み、プラットフォーム審査待ち",
+      "pendingDesc": "セキュリティスキャンは完了しました。プラットフォームの承認後、公開マーケットに自動公開されます。",
       "failedTitle": "セキュリティスキャン不合格",
       "failedDesc": "このバージョンはセキュリティスキャンの問題により {{status}} としてマークされ、他のユーザーはインストールできません。以下の問題を修正して再公開してください。",
+      "processingFailedTitle": "公開処理に失敗しました",
+      "processingFailedDesc": "このバージョンはアップロードされましたが、サーバーの公開処理中に内部エラーが発生しました。セキュリティチェックによる拒否ではありません。時間をおいて再公開してください。",
       "copyReviewResult": "審査結果をコピー",
       "copiedReviewResult": "コピー済み",
       "copyReviewResultFailed": "コピーに失敗しました",
@@ -10390,12 +10579,14 @@
         "passed": "通過",
         "failed": "不合格",
         "warning": "要確認",
+        "waitingReview": "審査待ち",
         "reviewing": "審査中",
         "unavailable": "利用不可"
       },
       "gateLabel": {
         "llmReview": "LLM 審査",
-        "securityScan": "セキュリティスキャン"
+        "securityScan": "セキュリティスキャン",
+        "publicationProcessing": "公開処理"
       }
     },
     "diffPanel": {
@@ -10447,7 +10638,7 @@
       "title": "公開設定を管理",
       "tierLabel": "可視性",
       "tierPublic": "公開",
-      "tierPublicDesc": "全社に公開",
+      "tierPublicDesc": "すべてのユーザーに公開",
       "tierTeam": "チーム",
       "tierTeamDesc": "指定したチームに公開",
       "tierPrivate": "自分のみ",
@@ -10455,13 +10646,18 @@
       "save": "保存",
       "saving": "保存中…",
       "saved": "公開設定を保存しました",
+      "submitReview": "審査に提出",
+      "waitingReview": "審査待ち",
+      "publicReviewSubmitted": "現在のバージョンを公開審査に提出しました",
+      "publicReviewPending": "現在のバージョンは公開審査待ちです。承認後に公開マーケットへ掲載されます。",
+      "publicReviewRejected": "公開審査で却下されました：{{reason}}",
       "impactPrivate": "保存後はこの Skill を閲覧できるのは自分のみになります。",
       "impactPrivateLeavingMarket": "保存すると公開マーケットから取り下げられ、自分のみ閲覧可になります。審査済みバージョンの承認状態は保持されます。",
       "impactPrivateTeam": "保存後は自分のみ閲覧可になり、チームはこの Skill を閲覧・管理できなくなります。",
       "impactPrivateTeamLeavingMarket": "保存すると公開マーケットから取り下げられ、自分のみ閲覧可になります。チームはこの Skill を閲覧・管理できなくなります。審査済みバージョンの承認状態は保持されます。",
       "impactTeam": "保存後は選択したチーム・部署が閲覧・ダウンロードできます。",
       "impactTeamLeavingMarket": "保存すると公開マーケットから取り下げられ、選択したチーム・部署のみが閲覧・ダウンロードできます。審査済みバージョンの承認状態は保持されます。",
-      "impactPublic": "保存すると公開マーケットに公開されます。すでに審査済みの場合は即座に公開され、審査状態は保持されます。"
+      "impactPublic": "現在のバージョンを公開審査に提出します。承認後に公開マーケットへ掲載され、新しいバージョンの公開は不要です。"
     },
     "marketEdit": {
       "saved": "マーケット表示情報を保存しました",

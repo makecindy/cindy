@@ -230,7 +230,7 @@ function sessionAgentSwitchFallback(db: Database.Database, args: unknown): void 
   transaction();
 }
 
-/** 同一任务换干净原生会话：清 sdk_session_id + 追加隐藏 context_rebuild，不改可见消息。 */
+/** 同一任务换干净原生会话：清 SDK/旧用量 + 追加隐藏 context_rebuild，不改可见消息。 */
 function contextRebuild(db: Database.Database, args: unknown): void {
   const payload = asRecord(args, 'context.rebuild args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -246,7 +246,7 @@ function contextRebuild(db: Database.Database, args: unknown): void {
   const transaction = db.transaction(() => {
     const sessionResult = db
       .prepare(
-        'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+        'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
       )
       .run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
@@ -1729,6 +1729,9 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
   const jobs = expectArray(payload.jobs, 'jobs');
   const errMsg = truncate(expectString(payload.errMsg, 'errMsg'), 2000);
   const now = expectNumber(payload.now, 'now');
+  // #3416:确定性失败(如 INVALID_MODEL)重试永远不可能成功,terminal=true 时
+  // 整批直接进 'failed' 终态,不再烧 5 次退避尝试。缺省 false 保持旧语义。
+  const terminal = payload.terminal === true;
   const updReschedule = db.prepare(
     `UPDATE embedding_jobs
         SET attempts = ?, last_error = ?, scheduled_at = ?
@@ -1745,7 +1748,7 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
       const job = asRecord(rawJob, 'failure job');
       const rowid = expectNumber(job.rowid, 'job.rowid');
       const nextAttempts = expectNumber(job.attempts, 'job.attempts') + 1;
-      if (nextAttempts >= MAX_ATTEMPTS) {
+      if (terminal || nextAttempts >= MAX_ATTEMPTS) {
         updFail.run(nextAttempts, errMsg, rowid);
         failCount++;
       } else {

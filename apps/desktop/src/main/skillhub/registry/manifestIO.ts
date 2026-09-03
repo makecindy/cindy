@@ -6,8 +6,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
-import { RegistryError, type StoredInstall, type StoredManifest } from './types.js';
+import { RegistryError, type StoredManifest } from './types.js';
 import { sanitizeSkillName } from './derivations.js';
+import { migrateStoredManifest } from './migrations.js';
 
 import { createLogger, maskPath } from '../../logger';
 
@@ -43,16 +44,9 @@ export async function readFile(skillName: string): Promise<StoredManifest | null
         `manifest 文件 skillName 字段 "${parsed.skillName}" 与传入参数 "${skillName}" 不符`,
       );
     }
-    // 老 manifest 兜底：旧字段 isMine 已退役，缺失的 authorId 补空串。
-    // 空串 authorId 不会与任何 currentUserId 匹配，等下次 sync/install 由 server 数据回填。
-    if (parsed.installs && typeof parsed.installs === 'object') {
-      for (const key of Object.keys(parsed.installs)) {
-        const e = parsed.installs[key] as StoredInstall & { isMine?: unknown };
-        if (typeof e.authorId !== 'string') e.authorId = '';
-        if ('isMine' in e) delete (e as { isMine?: unknown }).isMine;
-      }
-    }
-    return parsed;
+    const migrated = migrateStoredManifest(parsed);
+    if (migrated.changed) await writeFileAtomic(skillName, migrated.manifest);
+    return migrated.manifest;
   } catch (err) {
     if (err instanceof RegistryError) throw err;
     const code = (err as NodeJS.ErrnoException).code;

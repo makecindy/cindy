@@ -99,6 +99,30 @@ interface UsageLedger {
   mutations: number;
 }
 
+/**
+ * 读路径身份(bigint dev/ino/size)。与 fileReadBytes.FileIdentityStat 同口径:
+ * 默认 numeric Stats 在 inode > 2^53 时会把不同文件比成相等。
+ * 打开器保持私有,不作为 Agent 工具导出;本类型仅供单测构造 stub。
+ */
+export interface LibraryFileIdentity {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  isFile(): boolean;
+}
+
+/** 读路径句柄子集(可注入)。生产包一层 fs.promises.FileHandle,不导出打开器。 */
+export interface LibraryReadHandle {
+  stat: () => Promise<LibraryFileIdentity>;
+  read: (
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ) => Promise<{ bytesRead: number }>;
+  close: () => Promise<void>;
+}
+
 export interface LibraryVaultDeps {
   /** Library 根(生产 = 默认根或 binding 解析结果;每次现取,支持切换)。 */
   rootDir(): string;
@@ -117,6 +141,15 @@ export interface LibraryVaultDeps {
     warn: (msg: string, meta?: Record<string, unknown>) => void;
   };
   now?(): number;
+  /**
+   * 读路径 lstat({bigint:true}) 注入点,仅单测换链 / ino=0。生产勿设。
+   * 打开器保持私有,不作为 Agent 工具导出。
+   */
+  lstatForRead?(absPath: string): Promise<LibraryFileIdentity | null>;
+  /**
+   * 读路径打开注入点,仅单测。生产缺省走 O_RDONLY|O_NOFOLLOW,失败不得回落裸 open。
+   */
+  openForRead?(absPath: string, flags: number): Promise<LibraryReadHandle>;
 }
 
 /** Windows 保留设备名(与 fsSlot/dirDeposit 同口径;目录名撞上同样出事)。 */
@@ -222,6 +255,19 @@ function fsFailure(err: unknown, fallback: LibraryErrorCode, message: string): L
 }
 
 const fail = (errorCode: LibraryErrorCode, message: string): LibraryFailure => ({ ok: false, errorCode, message });
+
+/**
+ * `dev + ino` 是 policy-checked 路径与已打开 fd 之间的稳定身份。ino=0 表示
+ * 平台/文件系统不报告 inode(部分 Windows / 网络盘)——身份不可用,fail-closed,
+ * 禁止 `0n === 0n` 静默过闸。与 fileReadBytes.isSameFileObject 同口径。
+ */
+function isSameLibraryFileObject(expected: LibraryFileIdentity, actual: LibraryFileIdentity): boolean {
+  return expected.ino !== 0n && expected.dev === actual.dev && expected.ino === actual.ino;
+}
+
+function toLibraryFileIdentity(st: { dev: bigint; ino: bigint; size: bigint; isFile(): boolean }): LibraryFileIdentity {
+  return { dev: st.dev, ino: st.ino, size: st.size, isFile: () => st.isFile() };
+}
 
 /** 在途分块流。tmp 文件独占创建,Commit 前 title 停在 staging 区。 */
 interface ActiveStream {
@@ -463,13 +509,40 @@ export class LibraryVault {
     return { target, realBase };
   }
 
-  /** 目标本身不得是 symlink(不穿透);返回 stat 或 null(不存在)。 */
+  /** 目标本身不得是 symlink(不穿透);返回 stat 或 null(不存在)。写路径继续用 numeric。 */
   private async lstatTarget(target: string): Promise<fs.Stats | null> {
     try {
       return await fs.promises.lstat(target);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 读路径 bigint lstat(可注入)。生产走 lstat({bigint:true}),不存在返回 null。
+   * 打开器保持私有,不作为 Agent 工具导出。
+   */
+  private async lstatIdentityForRead(target: string): Promise<LibraryFileIdentity | null> {
+    if (this.deps.lstatForRead) return this.deps.lstatForRead(target);
+    try {
+      return toLibraryFileIdentity(await fs.promises.lstat(target, { bigint: true }));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 读路径打开:O_RDONLY|O_NOFOLLOW,失败不得回落 `open(path,'r')`。
+   * 生产包一层 FileHandle;单测可注入。打开器不导出。
+   */
+  private async openReadHandle(target: string, flags: number): Promise<LibraryReadHandle> {
+    if (this.deps.openForRead) return this.deps.openForRead(target, flags);
+    const fh = await fs.promises.open(target, flags);
+    return {
+      stat: async () => toLibraryFileIdentity(await fh.stat({ bigint: true })),
+      read: (buffer, offset, length, position) => fh.read(buffer, offset, length, position),
+      close: () => fh.close(),
+    };
   }
 
   /* ── 原子写核心 ─────────────────────────────────────────────────── */
@@ -609,38 +682,46 @@ export class LibraryVault {
     }
     const resolved = await this.resolveTarget(relPath);
     if (!('target' in resolved)) return resolved;
-    const st = await this.lstatTarget(resolved.target);
-    if (!st) return fail('NOT_FOUND', `文件不存在:${relPath}`);
-    if (!st.isFile()) return fail('PATH_INVALID', `不是文件:${relPath}`);
-    const offset = typeof req.offset === 'number' && Number.isInteger(req.offset) && req.offset >= 0 ? req.offset : 0;
-    if (offset > st.size) return fail('PATH_INVALID', `offset 超出文件大小(${st.size})`);
-    let length = st.size - offset;
-    if (typeof req.length === 'number' && Number.isInteger(req.length) && req.length >= 0) {
-      length = Math.min(length, req.length);
-    }
-    if (length > this.limits.readMaxBytes) {
-      return fail('TOO_LARGE', `读取长度超上限(${length} > ${this.limits.readMaxBytes});请用 offset/length 分段读`);
-    }
+    // policy-checked 路径的 bigint 身份;打开后再用同 fd fstat 复核。
+    // O_NOFOLLOW 只护最终分量;祖先换链靠 dev/ino(ino=0 fail-closed)。
+    const expected = await this.lstatIdentityForRead(resolved.target);
+    if (!expected) return fail('NOT_FOUND', `文件不存在:${relPath}`);
+    if (!expected.isFile()) return fail('PATH_INVALID', `不是文件:${relPath}`);
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    let handle: LibraryReadHandle | null = null;
     try {
-      const fh = await fs.promises.open(resolved.target, 'r');
-      try {
-        const buf = Buffer.alloc(length);
-        const { bytesRead } = length === 0 ? { bytesRead: 0 } : await fh.read(buf, 0, length, offset);
-        const out = buf.subarray(0, bytesRead);
-        const encoding = req.encoding === 'base64' ? ('base64' as const) : ('utf8' as const);
-        return {
-          ok: true as const,
-          path: relPath,
-          content: out.toString(encoding),
-          encoding,
-          bytes: bytesRead,
-          sha256: crypto.createHash('sha256').update(out).digest('hex'),
-        };
-      } finally {
-        await fh.close();
+      handle = await this.openReadHandle(resolved.target, flags);
+      const opened = await handle.stat();
+      if (!opened.isFile()) return fail('PATH_INVALID', `不是文件:${relPath}`);
+      if (!isSameLibraryFileObject(expected, opened)) {
+        return fail('INTERNAL', '读取身份校验失败(目标 identity 不一致)');
       }
+      const size = Number(opened.size);
+      const offset = typeof req.offset === 'number' && Number.isInteger(req.offset) && req.offset >= 0 ? req.offset : 0;
+      if (offset > size) return fail('PATH_INVALID', `offset 超出文件大小(${size})`);
+      let length = size - offset;
+      if (typeof req.length === 'number' && Number.isInteger(req.length) && req.length >= 0) {
+        length = Math.min(length, req.length);
+      }
+      if (length > this.limits.readMaxBytes) {
+        return fail('TOO_LARGE', `读取长度超上限(${length} > ${this.limits.readMaxBytes});请用 offset/length 分段读`);
+      }
+      const buf = Buffer.alloc(length);
+      const { bytesRead } = length === 0 ? { bytesRead: 0 } : await handle.read(buf, 0, length, offset);
+      const out = buf.subarray(0, bytesRead);
+      const encoding = req.encoding === 'base64' ? ('base64' as const) : ('utf8' as const);
+      return {
+        ok: true as const,
+        path: relPath,
+        content: out.toString(encoding),
+        encoding,
+        bytes: bytesRead,
+        sha256: crypto.createHash('sha256').update(out).digest('hex'),
+      };
     } catch (err) {
       return this.tmpFailure(err, '读取失败(主机 IO 错误)');
+    } finally {
+      if (handle) await handle.close().catch(() => {});
     }
   }
 

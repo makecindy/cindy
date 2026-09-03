@@ -1315,6 +1315,8 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 
 ### 16.2 设计规则
 
+**Desktop 登录成功回调页当前覆盖（2026-09-02）**：成功态移除「回到 Cindy」按钮，卡片收紧为 **560×500** 的内容流布局，并在底部显示本地化 3 秒倒计时；倒计时结束先移除倒计时文字，再调用 `window.close()`。失败 / Warning 保留原 **680×680** 卡片与返回操作。该条是当前产品 UX 对旧 Figma 成功态回调帧（680×680 + CTA）的明确覆盖；`figma-component-spec.md §6` 的旧节点仍作为历史视觉来源记录，现行客户端实现以本条与代码测试为准。
+
 **Token 体系**：`--login-*` 已注册于 `apps/desktop/src/renderer/themes/colors.ts`（dark 槽位当前为 light 占位值，待实现 PR 填入 §16.1 表中的目标深色值）。组件经 `LOGIN_COLORS`（桌面 `loginDesignTokens.ts`）/ `loginColors`（手机 `theme/tokens.ts`）单点消费。**禁止硬编码 hex pair**（呼应 §10）——`hardcoded-color-audit` 守护全绿才允许合入。`--login-*` 随基础 **light / dark 二态**切换（对齐 `callback-*` 族与 §15 CINDY 皮肤族的双态做法），但**不跟随具体扩展主题**——登录页只认 light / dark 模式，扩展主题不 override `--login-*`（首次亮、后续跟随上次模式见 §16.5）。
 
 **几何 / 布局常量**：固化在两个常量文件，数值权威 = `figma-component-spec §5.1` + `token-decision-table §4`，不按截图目测补值。

@@ -23,10 +23,12 @@ import {
   ShieldOff,
   Smartphone,
   Square,
+  Trash2,
   UnlockKeyhole,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import type {
@@ -57,7 +59,7 @@ interface IOSSimulatorTabBodyProps {
   shellVisible?: boolean;
 }
 
-type Operation = 'attach' | 'start' | 'stop' | 'detach' | 'grant' | 'control' | null;
+type Operation = 'attach' | 'start' | 'stop' | 'delete' | 'detach' | 'grant' | 'control' | null;
 type StandardStreamProfileName = 'low' | 'balanced' | 'high';
 type StreamProfileName = StandardStreamProfileName | 'experimental60';
 type StreamProfile = { framesPerSecond: number; jpegQuality: number; scalingPercent: number };
@@ -329,6 +331,7 @@ export function IOSSimulatorTabBody({
   const [actionError, setActionError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [operation, setOperation] = useState<Operation>(null);
+  const [deleteTarget, setDeleteTarget] = useState<IOSSimulatorPublicInstance | null>(null);
   const [unavailableDevicesExpanded, setUnavailableDevicesExpanded] = useState(false);
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [framePresentation, setFramePresentation] = useState<'jpeg' | 'h264' | null>(null);
@@ -1069,8 +1072,9 @@ export function IOSSimulatorTabBody({
           return;
         }
         const instance = resultInstance(result);
-        if (name === 'detach_device') ctx.patchState({ instanceId: null });
-        else if (instance) ctx.patchState({ instanceId: instance.instanceId });
+        if (name === 'detach_device' || name === 'delete_instance') {
+          ctx.patchState({ instanceId: null });
+        } else if (instance) ctx.patchState({ instanceId: instance.instanceId });
         await refresh();
       } catch {
         setActionError(t('rightSidebar.iosSimulator.operationErrorWithRecovery'));
@@ -2204,6 +2208,14 @@ export function IOSSimulatorTabBody({
                     disabled={busy}
                     onClick={() => void call('detach', 'detach_device', routeFor(attachedInstance))}
                   />
+                  {attachedInstance.creationProvenance === 'cindy' && (
+                    <ActionButton
+                      label={t('rightSidebar.iosSimulator.deleteDevice')}
+                      icon={Trash2}
+                      disabled={busy}
+                      onClick={() => setDeleteTarget(attachedInstance)}
+                    />
+                  )}
                 </div>
 
                 {attachedInstance.lifecycleState === 'ready' && (
@@ -2450,6 +2462,28 @@ export function IOSSimulatorTabBody({
           </>
         )}
       </div>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={t('rightSidebar.iosSimulator.deleteDeviceConfirmTitle', {
+          device: deleteTarget?.simulatorName ?? '',
+        })}
+        description={t(
+          deleteTarget?.lifecycleState === 'ready'
+            ? 'rightSidebar.iosSimulator.deleteRunningDeviceConfirmDescription'
+            : 'rightSidebar.iosSimulator.deleteDeviceConfirmDescription',
+        )}
+        confirmText={t('rightSidebar.iosSimulator.deleteDevice')}
+        confirmVariant="destructive"
+        autoFocusConfirm
+        onConfirm={() => {
+          const target = deleteTarget;
+          setDeleteTarget(null);
+          if (target) void call('delete', 'delete_instance', routeFor(target));
+        }}
+      />
     </div>
   );
 }

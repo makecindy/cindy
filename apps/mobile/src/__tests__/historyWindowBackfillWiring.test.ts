@@ -77,7 +77,7 @@ describe('history window backfill wiring', () => {
     // 换会话时整体重置,否则上个会话的已考察集合会压住新会话的补齐。
     expect(source).toContain('existingState?.sid === sessionId');
     expect(source).toContain('state.sid !== sessionIdAtStart || state.epoch !== epochAtStart');
-    expect(source).toContain('findHistoryWindowGap(messages, consideredKeys)');
+    expect(source).toContain('findHistoryWindowGap(latestMessagesRef.current, consideredKeys)');
     expect(source).toContain('...gapState.contiguous,');
     expect(source).toContain('...gapState.backfilled,');
     expect(source).toContain('...gapState.failed,');

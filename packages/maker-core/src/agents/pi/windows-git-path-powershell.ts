@@ -5,7 +5,11 @@ import type { Logger } from '../../interfaces/logger.js';
 export type WindowsGitPathLogger = Pick<Logger, 'warn'>;
 
 const DIAGNOSTIC_PREFIX = '__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__';
-const WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS = 2_000;
+// 忙碌的 Windows 宿主(如 CI hosted runner)上 PowerShell 冷启动就可能超过
+// 5 秒:2 秒预算会让清理进程在 Stop-Process 执行前就被 execFileSync 超时
+// 杀掉,后代进程泄漏(#3574 的偶发失败正是这个竞态)。清理只在探测已经
+// 失败的收尾路径运行,放宽预算不影响任何成功路径的耗时。
+const WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS = 10_000;
 
 type WindowsPowerShellProbe = 'registry' | 'network-drives' | 'path-kinds' | 'path-cleanup';
 

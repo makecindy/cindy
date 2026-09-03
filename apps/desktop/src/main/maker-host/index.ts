@@ -111,6 +111,11 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
+import {
+  captureLocalPiPackageRuntimeInvalidationSnapshot,
+  invalidateLocalPiPackageRuntimeSnapshot,
+  type PiPackageRuntimeInvalidationSnapshot,
+} from './pi-package-runtime-invalidation.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -158,6 +163,7 @@ import {
   setCodexProxyGatewayKeyReader,
   registerComposed as registerCodexProxyComposed,
   registerChildThread as registerCodexProxyChildThread,
+  setCodexAppliedCustomProviderRoutes,
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
@@ -223,6 +229,11 @@ import {
   CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
+import {
+  buildCodexCustomProviderArgs,
+  deriveCodexCustomProviderRoutes,
+  toCodexCustomProviderHostRoutes,
+} from './codex-custom-provider-route.js';
 import {
   buildCodexSubagentSpawnArgs,
   codexSubagentRouteUsesChatGptOAuth,
@@ -1429,6 +1440,18 @@ export function getMaker(): Maker {
         const endpoint = usesIsolatedProxy
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
+        const codexCustomProviderRoutes =
+          !usesIsolatedProxy && ready ? deriveCodexCustomProviderRoutes(getActiveCatalog()) : [];
+        if (!usesIsolatedProxy) {
+          // The proxy must follow the exact capability/routing snapshot frozen into
+          // this task Host, not the catalog that may already be ahead during a busy restart.
+          setCodexAppliedCustomProviderRoutes(codexCustomProviderRoutes);
+        }
+        const codexCustomProviderSpawn = buildCodexCustomProviderArgs(
+          endpoint,
+          authInjection,
+          codexCustomProviderRoutes,
+        );
         const storedSubagentModelSettings = readSubagentModelSettings();
         const mainTaskCredentialMode = ctx.requestedCredentialMode ?? credentialMode;
         let subagentProviderViews: ProviderView[] | undefined;
@@ -1542,14 +1565,18 @@ export function getMaker(): Maker {
                 })
               : []),
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
+            ...codexCustomProviderSpawn.extraArgs,
           ],
-          extraEnv: mcpExtraEnv,
+          extraEnv: { ...mcpExtraEnv, ...codexCustomProviderSpawn.extraEnv },
           ...(subagentModelFallback ? { subagentModelFallback } : {}),
           ...(subagentRoute ? { subagentRoute } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
           codexSubagentRoutingProfile,
+          ...(codexCustomProviderRoutes.length > 0
+            ? { codexCustomProviderRoutes: toCodexCustomProviderHostRoutes(codexCustomProviderRoutes) }
+            : {}),
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
           ...(browserCompanion?.status === 'ready'
             ? {
@@ -1731,7 +1758,11 @@ export function getMaker(): Maker {
     // logout + 这里这个 broadcast, 让 useCodexAuth hook 立刻进 'unauthenticated' 状态,
     // UI 弹 "请重新登录" — 否则错误只会反复埋在后台日志里。payload 字段对齐
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
-    desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason, credentialScope) => {
+    desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (
+      reason,
+      credentialScope,
+      oauthWritesBlocked,
+    ) => {
       resetProviderModelAutoRefreshCooldowns('openai');
       resetCodexModelBackfillState();
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
@@ -1760,6 +1791,7 @@ export function getMaker(): Maker {
         authenticated: false,
         errorReason: reason,
         credentialScope,
+        ...(oauthWritesBlocked ? { oauthWritesBlocked: true } : {}),
       };
       for (const win of BrowserWindow.getAllWindows()) {
         if (win.isDestroyed()) continue;
@@ -1817,6 +1849,9 @@ export function getMaker(): Maker {
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
     _initialCustomMcpRefresh = refreshCustomMcpProviders();
 
+    // Store mutations are serialized; each settled callback consumes the exact
+    // latest-byte-edge runtime snapshot for its durable mutation.
+    const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
     const buildPiAgentForDesktop = () => buildPiAgent({
       logger: desktopMakerLogger,
       turnChangeCapture: {
@@ -1844,6 +1879,63 @@ export function getMaker(): Maker {
       },
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      // Fence in-flight startups at the durable package edge, but do not close
+      // the current caller before maker-core queues its host-owned receipt and
+      // sends the extension response. The settled callback below retires only
+      // the exact local runtimes captured at the mutation's latest byte edge.
+      onPiManagedPackageMutationCommitted: async (phase = 'commit') => {
+        const maker = _maker;
+        if (!maker) return;
+        const snapshot = await captureLocalPiPackageRuntimeInvalidationSnapshot(maker);
+        if (phase === 'post-build' && pendingPiPackageRuntimeSnapshots.length > 0) {
+          // The mutation lock prevents another commit edge from interleaving.
+          // Replace the earlier snapshot so settled retirement includes every
+          // runtime admitted while optional package bytes were being written.
+          pendingPiPackageRuntimeSnapshots[pendingPiPackageRuntimeSnapshots.length - 1] = snapshot;
+        } else {
+          pendingPiPackageRuntimeSnapshots.push(snapshot);
+        }
+      },
+      onPiManagedPackageMutationSettled: async (callerSessionId, publishOutcome) => {
+        const partial = () => publishOutcome({
+          runtimeConvergence: 'partial',
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        });
+        const maker = _maker;
+        const snapshot = pendingPiPackageRuntimeSnapshots.shift();
+        if (!maker || !snapshot) {
+          partial();
+          return;
+        }
+        const callerEntries = snapshot.entries.filter(({ session }) => session.id === callerSessionId);
+        const siblingEntries = snapshot.entries.filter(({ session }) => session.id !== callerSessionId);
+        let siblingFailed = false;
+        try {
+          const siblingResult = await invalidateLocalPiPackageRuntimeSnapshot(
+            maker,
+            { entries: siblingEntries },
+          );
+          siblingFailed = siblingResult.failedSessionIds.length > 0;
+        } catch {
+          siblingFailed = true;
+        }
+        const initiallyPartial = siblingFailed
+          || callerEntries.length === 0
+          || callerEntries.some(({ metadataFailed }) => metadataFailed);
+        if (initiallyPartial) partial();
+        else publishOutcome({ runtimeConvergence: 'complete' });
+
+        if (callerEntries.length === 0) return;
+        try {
+          const callerResult = await invalidateLocalPiPackageRuntimeSnapshot(
+            maker,
+            { entries: callerEntries },
+          );
+          if (!initiallyPartial && callerResult.failedSessionIds.length > 0) partial();
+        } catch {
+          if (!initiallyPartial) partial();
+        }
+      },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
       resolvePiVisionBridgeEnv: (model) =>
@@ -2249,6 +2341,7 @@ export function registerPiAgentIfAvailable(): boolean {
  */
 export function resetMaker(): void {
   cancelCodexAuthModeChange();
+  setCodexAppliedCustomProviderRoutes([]);
   _maker = null;
   _registerPiAgent = null;
   _codexAgent = null;
@@ -2325,6 +2418,32 @@ export async function prepareCodexForAuthModeChange(): Promise<void> {
       }
     }
     guard?.assertIdle();
+    _codexCredentialChangeGuard = guard;
+    prepared = true;
+  } finally {
+    if (!prepared) {
+      guard?.release();
+    }
+  }
+}
+
+/**
+ * Hold the shared local Codex Host change guard and force-retire that Host before a custom
+ * Provider route or credential is persisted. Forced retirement closes all attached local Codex
+ * sessions at once; remote Codex and other agents use different Hosts and are unaffected.
+ */
+export async function prepareCodexForCustomProviderHostChange(): Promise<void> {
+  if (_codexCredentialChangeGuard) {
+    throw new Error('Codex credential mode change is already in progress');
+  }
+  const guard = _codexAgent
+    ? await _codexAgent.beginLocalHostCredentialChange(
+        'Codex custom Provider route or credential changed',
+      )
+    : null;
+  let prepared = false;
+  try {
+    await guard?.retireActiveHost();
     _codexCredentialChangeGuard = guard;
     prepared = true;
   } finally {

@@ -133,7 +133,7 @@ export interface IOSSimulatorAccessRequestResult {
  * Renderer-owned simulator actions. Agent-only build, install, URL, push, media,
  * and diagnostic tools must stay behind the MCP approval/control boundary.
  */
-export const IOS_SIMULATOR_RENDERER_TOOL_NAMES = [
+const IOS_SIMULATOR_RENDERER_MCP_TOOL_NAMES = [
   'attach_device',
   'detach_device',
   'start_instance',
@@ -146,6 +146,13 @@ export const IOS_SIMULATOR_RENDERER_TOOL_NAMES = [
   'lock_screen',
   'unlock_screen',
 ] as const satisfies readonly IOSSimulatorMcpToolName[];
+
+export const IOS_SIMULATOR_RENDERER_TOOL_NAMES = [
+  ...IOS_SIMULATOR_RENDERER_MCP_TOOL_NAMES,
+  // Host-only destructive lifecycle action. Keep it out of the MCP registry:
+  // the trusted Renderer confirmation flow is its sole caller.
+  'delete_instance',
+] as const;
 
 export type IOSSimulatorRendererToolName = (typeof IOS_SIMULATOR_RENDERER_TOOL_NAMES)[number];
 

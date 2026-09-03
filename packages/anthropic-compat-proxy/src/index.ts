@@ -68,6 +68,7 @@ export {
   supportsXaiReasoningModel,
   xaiBareModelId,
 } from './xai-model-input.js';
+export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
 export { createVisionBridgeTransform } from './vision-bridge-transform.js';
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';
@@ -81,6 +82,8 @@ export type {
   InstructionsRegistry,
 } from './instructions-injection.js';
 export type {
+  ForwardLifecycleObserver,
+  ForwardLifecycleFailure,
   LocalRequestHandler,
   OversizedRequestCompactor,
   ProxyHandle,

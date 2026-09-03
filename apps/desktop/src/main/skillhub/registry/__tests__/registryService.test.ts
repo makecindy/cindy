@@ -38,6 +38,7 @@ let removeInstall: typeof import('../registryService.js').removeInstall;
 let readManifest: typeof import('../registryService.js').readManifest;
 let getInstall: typeof import('../registryService.js').getInstall;
 let listAllInstalls: typeof import('../registryService.js').listAllInstalls;
+let updateCatalogScopeForSkill: typeof import('../registryService.js').updateCatalogScopeForSkill;
 
 beforeEach(async () => {
   vi.resetModules();
@@ -48,6 +49,7 @@ beforeEach(async () => {
   readManifest = svc.readManifest;
   getInstall = svc.getInstall;
   listAllInstalls = svc.listAllInstalls;
+  updateCatalogScopeForSkill = svc.updateCatalogScopeForSkill;
 });
 
 import type { StoredInstall, StoredManifest } from '../types.js';
@@ -101,6 +103,7 @@ describe('addInstall', () => {
     const manifest = expectManifest(await readManifest('my-skill'));
     expect(manifest.skillName).toBe('my-skill');
     expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.catalogScopeMigrated).toBe(true);
     const normalizedPath = path.normalize(globalPath);
     expect(manifest.installs[normalizedPath]).toEqual(entry);
   });
@@ -186,6 +189,16 @@ describe('updateInstall', () => {
     const entry = expectInstall(await getInstall('my-skill', globalPath));
     expect(entry.authorId).toBe('user_bob');
     expect(readJson(backupManifestPath('my-skill'))).toEqual(readJson(manifestPath('my-skill')));
+  });
+
+  it('可见性迁移可清除目录作用域且不会被旧数据迁移再次回填', async () => {
+    await addInstall('my-skill', globalPath, makeEntry({ catalogScope: 'market' }));
+
+    await updateCatalogScopeForSkill('my-skill', undefined);
+
+    expect((await getInstall('my-skill', globalPath))?.catalogScope).toBeUndefined();
+    expect((await readManifest('my-skill'))?.catalogScopeMigrated).toBe(true);
+    expect((await getInstall('my-skill', globalPath))?.catalogScope).toBeUndefined();
   });
 
   it('不存在的 installPath → 抛 REGISTRY_IO_FAILED', async () => {

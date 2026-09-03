@@ -26,6 +26,7 @@ type AuthStateChangedPayload = {
 
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
+  confirmThree: vi.fn(),
   getState: vi.fn(),
   triggerLogin: vi.fn(),
   cancelLogin: vi.fn(),
@@ -59,7 +60,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: mocks.confirm }),
+  useConfirmDialog: () => ({ confirm: mocks.confirm, confirmThree: mocks.confirmThree }),
 }));
 
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
@@ -76,6 +77,8 @@ describe('ErrorBanner OpenAI connection recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.stateChangedListeners.clear();
+    mocks.confirm.mockResolvedValue(true);
+    mocks.confirmThree.mockResolvedValue('tertiary');
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'refresh_token_reused',
@@ -144,12 +147,56 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
-  it('starts Cindy login for an invalidated system-shared login', async () => {
+  it('uses cause-neutral Codex app-server retirement copy and does not suggest switching models', () => {
+    render(
+      <ErrorBanner
+        error="app-server force-retired: Codex desktop auth login"
+        errorReason="app-server-force-retired"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        modelId="codex/gpt-5.6-sol"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexAppServerRetired')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.codexAppServerRestarted')).toBeNull();
+    expect(screen.queryByText('app-server force-retired: Codex desktop auth login')).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
+
+  it.each([
+    { label: 'SSH', remoteHostId: 'ssh-1' },
+    { label: 'device-link', deviceLinkDeviceId: 'device-1' },
+  ])(
+    'uses neutral force-retired copy for $label Codex sessions',
+    ({ remoteHostId, deviceLinkDeviceId }) => {
+      render(
+        <ErrorBanner
+          error="app-server force-retired: CodexAgent auth invalidated: remote credentials changed"
+          errorReason="app-server-force-retired"
+          retryText="retry this turn"
+          onRetry={vi.fn()}
+          agentKind="codex"
+          modelId="gpt-5.6-sol"
+          remoteHostId={remoteHostId}
+          deviceLinkDeviceId={deviceLinkDeviceId}
+        />,
+      );
+
+      expect(screen.getByText('chat.errorBanner.codexAppServerRetired')).toBeTruthy();
+      expect(screen.queryByText('chat.errorBanner.codexAppServerRestarted')).toBeNull();
+      expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    },
+  );
+
+  it('opens ChatGPT App without starting Cindy OAuth for an invalidated system-shared login', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'token_revoked',
       credentialScope: 'system-shared',
     });
+    mocks.confirmThree.mockResolvedValueOnce('confirm');
     render(
       <ErrorBanner
         error="token_revoked"
@@ -162,12 +209,11 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     );
 
     expect(await screen.findByText('chatgptAuthRecovery.systemSharedInvalidated')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.recheck' }));
 
-    await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledOnce());
-    expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
-    expect(await screen.findByText('chatgptAuthRecovery.recovered')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    await waitFor(() => expect(mocks.openChatGPTApp).toHaveBeenCalledOnce());
+    expect(mocks.triggerLogin).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
   });
 
   it('keeps the recovery action disabled until the credential source is known', async () => {
@@ -201,7 +247,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       });
       await initialState.promise;
     });
-    expect(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'chatgptAuthRecovery.recheck' })).toBeTruthy();
   });
 
   it('does not restore retry on a fresh mount until the replacement account probe succeeds', async () => {
@@ -265,12 +311,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.recheck' }));
 
     await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledOnce());
     expect(mocks.toastError).not.toHaveBeenCalled();
     expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.recheck' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
   });
 
@@ -295,14 +341,14 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.recheck' }));
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith('settings.connections.codex.toast.loginFailed');
     });
     expect(mocks.triggerLogin).toHaveBeenCalledOnce();
     expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.recheck' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
   });
 
@@ -731,13 +777,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(mocks.cancelLogin).not.toHaveBeenCalled();
   });
 
-  it('uses the system-shared voice recovery copy and starts Cindy login', async () => {
+  it('requires a second risk confirmation before system-shared voice recovery starts Cindy login', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'token_revoked',
       credentialScope: 'system-shared',
     });
-    mocks.confirm.mockResolvedValueOnce(true);
     const prompt = renderHook(() => useCodexSessionExpiredPrompt());
 
     act(() => {
@@ -745,16 +790,43 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     });
 
     await waitFor(() =>
-      expect(mocks.confirm).toHaveBeenCalledWith({
+      expect(mocks.confirmThree).toHaveBeenCalledWith({
         title: 'chatgptAuthRecovery.title',
         description: 'chatgptAuthRecovery.systemSharedInvalidated',
-        confirmText: 'chatgptAuthRecovery.relogin',
+        confirmText: 'chatgptAuthRecovery.openApp',
+        tertiaryText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
+        maxWidth: 520,
         autoFocusConfirm: true,
       }),
     );
+    expect(mocks.confirm).toHaveBeenCalledWith({
+      title: 'chatgptAuthRecovery.reloginRiskTitle',
+      description: 'chatgptAuthRecovery.reloginRiskDescription',
+      confirmText: 'chatgptAuthRecovery.reloginRiskConfirm',
+      cancelText: 'chatgptAuthRecovery.later',
+      confirmVariant: 'destructive',
+    });
     await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledOnce());
     expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
+  });
+
+  it('offers only the ChatGPT App when dev policy blocks OAuth writes', async () => {
+    mocks.getState.mockResolvedValue({
+      authenticated: false,
+      errorReason: 'token_revoked',
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    const prompt = renderHook(() => useCodexSessionExpiredPrompt());
+
+    act(() => {
+      expect(prompt.result.current('token_revoked')).toBe(true);
+    });
+
+    await waitFor(() => expect(mocks.openChatGPTApp).toHaveBeenCalledOnce());
+    expect(mocks.confirmThree).not.toHaveBeenCalled();
+    expect(mocks.triggerLogin).not.toHaveBeenCalled();
   });
 
   it('starts Cindy login when an authenticated system-shared hint cannot be verified', async () => {
@@ -765,7 +837,6 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       credentialScope: 'system-shared',
     });
     mocks.getCodexRateLimits.mockRejectedValueOnce(new Error('network unavailable'));
-    mocks.confirm.mockResolvedValueOnce(true);
     const prompt = renderHook(() => useCodexSessionExpiredPrompt());
 
     act(() => {
@@ -773,11 +844,13 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     });
 
     await waitFor(() =>
-      expect(mocks.confirm).toHaveBeenCalledWith({
+      expect(mocks.confirmThree).toHaveBeenCalledWith({
         title: 'chatgptAuthRecovery.title',
         description: 'chatgptAuthRecovery.systemSharedInvalidated',
-        confirmText: 'chatgptAuthRecovery.relogin',
+        confirmText: 'chatgptAuthRecovery.openApp',
+        tertiaryText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
+        maxWidth: 520,
         autoFocusConfirm: true,
       }),
     );
@@ -904,9 +977,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     );
 
     expect(screen.getByText('chat.errorBanner.codexOrganizationUsageLimit')).toBeTruthy();
-    expect(
-      screen.queryByText('chat.errorBanner.codexOrganizationUsageLimitWithReset'),
-    ).toBeNull();
+    expect(screen.queryByText('chat.errorBanner.codexOrganizationUsageLimitWithReset')).toBeNull();
   });
 
   it('keeps a transient Codex 429 on its normal rate-limit path', () => {

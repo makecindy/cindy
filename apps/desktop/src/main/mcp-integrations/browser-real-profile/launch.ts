@@ -13,7 +13,10 @@ import type {
   BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 
-import { FOREIGN_AGENT_BROWSER_ERROR } from '../../../shared/browserBackend.js';
+import {
+  FOREIGN_AGENT_BROWSER_ERROR,
+  isBrowserOpenForLoginErrorCode,
+} from '../../../shared/browserBackend.js';
 
 import { resolveSourceBrowserFromOs } from './source.js';
 import { assertManagedBrowserStopped } from './runtime-stop.js';
@@ -231,7 +234,8 @@ async function startWithSnapshot(
   },
 ): Promise<BrowserControlResult> {
   const enabled = deps.isEnabled();
-  const status = await inner.call({ action: 'status' });
+  const managedProfile = activeManagedProfileName(enabled);
+  const status = await inner.call({ action: 'status', profile: managedProfile });
   const runtimeDir = deps.getRuntimeDir();
   const revertToIsolated = () => {
     if (runtimeDir) deps.cleanup(runtimeDir);
@@ -239,7 +243,7 @@ async function startWithSnapshot(
     deps.setLastApplied(null);
     return inner.call(withActiveBrowserProfile(request, false));
   };
-  if (isRunning(status.data) && isOwnLiveManagedBrowser(status.data, runtimeDir)) {
+  if (isOwnLiveManagedBrowser(status.data, runtimeDir)) {
     return inner.call(withActiveBrowserProfile(request, enabled));
   }
 
@@ -256,7 +260,7 @@ async function startWithSnapshot(
       rememberedCdpPort: readRemembered(runtimeDir),
     })
   ) {
-    const stop = await inner.call({ action: 'stop' });
+    const stop = await inner.call({ action: 'stop', profile: managedProfile });
     try {
       assertManagedBrowserStopped({ status, stop });
     } catch (err) {
@@ -326,11 +330,11 @@ function failure(
   code: string,
   message: string,
 ): BrowserControlResult {
-  void code;
   return {
     ok: false,
     action,
     errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+    ...(isBrowserOpenForLoginErrorCode(code) ? { data: { reason: code } } : {}),
     message,
   };
 }
@@ -341,7 +345,10 @@ export function realProfileErrorFromCode(code: string, message: string): RealPro
     code === 'PROFILE_LOCKED' ||
     code === 'NO_AUTH_DB' ||
     code === 'HEADLESS_FORBIDDEN' ||
-    code === 'COPY_FAILED'
+    code === 'COPY_FAILED' ||
+    code === 'STOP_FAILED' ||
+    code === 'REAL_PROFILE_READ_DENIED' ||
+    code === 'APP_BOUND_ENCRYPTION_UNSUPPORTED'
   ) {
     return new RealProfileError(code, message);
   }

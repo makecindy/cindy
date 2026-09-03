@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
+import fsSync, {
+  mkdirSync,
   mkdtempSync,
   promises as fs,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -36,7 +38,10 @@ const runtime = vi.hoisted(() => ({
   spawns: [] as Array<{ args: string[]; env: Record<string, string | undefined>; detached?: boolean }>,
   holdMutationCommand: false,
   pendingClose: null as null | ((code: number) => void),
+  spawnHook: null as null | ((args: string[]) => void),
 }));
+
+const loggerRuntime = vi.hoisted(() => ({ warn: vi.fn() }));
 
 const processRuntime = vi.hoisted(() => ({
   killTree: vi.fn(),
@@ -61,7 +66,7 @@ vi.mock('../../agent-binaries/index.js', () => ({
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({
-    trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
+    trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: loggerRuntime.warn, error: vi.fn(), fatal: vi.fn(),
     child() { return this; },
   }),
 }));
@@ -125,6 +130,7 @@ vi.mock('node:child_process', () => ({
     };
     queueMicrotask(() => {
       if (runtime.holdMutationCommand && !args.includes('list')) return;
+      runtime.spawnHook?.(args);
       const outcome = args.includes('list') ? runtime.listOutcomes.shift() : undefined;
       if (args.includes('list')) {
         for (const handler of stdoutHandlers) {
@@ -205,6 +211,8 @@ beforeEach(async () => {
   runtime.spawns = [];
   runtime.holdMutationCommand = false;
   runtime.pendingClose = null;
+  runtime.spawnHook = null;
+  loggerRuntime.warn.mockReset();
   processRuntime.killTree.mockReset();
   processRuntime.pendingTreeSettled = null;
   lockRuntime.calls = [];
@@ -223,15 +231,10 @@ afterEach(async () => {
 async function mutateAuthorized(
   store: typeof import('../pi-package-store.js'),
   request: import('../../../shared/piPackages.js').PiPackageMutationRequest,
+  hooks?: import('../pi-package-store.js').PiPackageMutationHooks,
 ) {
   const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
-  const identity = request.action === 'set-enabled' && request.enabled === true
-    ? await store.capturePiPackageEnableIdentity(request.source)
-    : undefined;
-  const binding = identity
-    ? { expectedPackageFingerprint: identity.expectedPackageFingerprint }
-    : undefined;
-  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request, binding));
+  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request), hooks);
 }
 
 describe('Pi package executable-code boundary', () => {
@@ -333,19 +336,29 @@ describe('Pi package executable-code boundary', () => {
     expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThan(128 * 1_024);
   });
 
-  it('rejects a truncated Pi package list instead of parsing its retained tail', async () => {
+  it('keeps a valid native roster above the diagnostic stdout limit actionable', async () => {
     const entries: string[] = ['User packages:'];
+    const rootsBySource = new Map<string, string>();
     for (let index = 0; index < 128; index += 1) {
-      entries.push(
-        `  npm:package-${index}-${'s'.repeat(1_024)}`,
-        `    /managed/package-${index}/${'p'.repeat(1_024)}`,
-      );
+      const source = `npm:package-${index}-${'s'.repeat(1_024)}`;
+      const installedRoot = `/managed/package-${index}/${'p'.repeat(1_024)}`;
+      rootsBySource.set(source, installedRoot);
+      entries.push(`  ${source}`, `    ${installedRoot}`);
     }
     runtime.listOutput = `${entries.join('\n')}\n`;
     expect(Buffer.byteLength(runtime.listOutput, 'utf8')).toBeGreaterThan(128 * 1_024);
     const store = await import('../pi-package-store.js');
 
-    await expect(store.listPiPackages()).rejects.toThrow(/list output exceeded the safe limit/i);
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      available: true,
+      packages: expect.arrayContaining([
+        expect.objectContaining({ source: [...rootsBySource.keys()][0] }),
+        expect.objectContaining({ source: [...rootsBySource.keys()][127] }),
+      ]),
+    });
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual(
+      [...rootsBySource.values()],
+    );
   });
 
   it.each(['darwin'] as const)(
@@ -462,7 +475,47 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.mutatePiPackage(request, fresh)).rejects.toThrow(/invalid or expired/i);
   });
 
-  it('holds Extension packages disabled until explicit approval and re-enables them after a confirmed update', async () => {
+  it('marks only failures that reached a native command or durable state write', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+
+    const validationFailure = await mutateAuthorized(store, {
+      action: 'install',
+      source: '-invalid',
+    }).catch((error: unknown) => error);
+    expect(store.piPackageMutationMayHaveChangedState(validationFailure)).toBe(false);
+
+    runtime.exitCode = 1;
+    const runtimeFence = vi.fn();
+    const commandFailure = await mutateAuthorized(store, {
+      action: 'install',
+      source,
+    }, {
+      onRuntimeInvalidationPublished: runtimeFence,
+    }).catch((error: unknown) => error);
+    expect(store.piPackageMutationMayHaveChangedState(commandFailure)).toBe(true);
+    expect(runtimeFence).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['install', 'npm ERR! code ETARGET No matching version found'],
+    ['update', 'getaddrinfo ENOTFOUND registry.example'],
+    ['remove', 'npm ERR! code E404 package not found'],
+  ] as const)('does not request runtime convergence for a deterministic %s failure', async (
+    action,
+    stderr,
+  ) => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    runtime.exitCode = 1;
+    runtime.stderr = stderr;
+
+    const failure = await mutateAuthorized(store, { action, source }).catch((error: unknown) => error);
+
+    expect(store.piPackageMutationMayHaveChangedState(failure)).toBe(false);
+  });
+
+  it('keeps native package enablement independent from optional snapshot approval metadata', async () => {
     const { root, source } = await createPackage();
     await fs.mkdir(path.join(root, 'skills', 'sample'), { recursive: true });
     await fs.writeFile(
@@ -479,8 +532,7 @@ describe('Pi package executable-code boundary', () => {
     const initial = await store.listPiPackages();
     expect(initial.packages[0]).toMatchObject({
       source,
-      enabled: false,
-      requiresExtensionApproval: true,
+      enabled: true,
     });
     await expect(
       store.mutatePiPackage({
@@ -536,7 +588,7 @@ describe('Pi package executable-code boundary', () => {
     ])).resolves.toEqual(frozenResources);
   });
 
-  it('enables an Extension package from the same confirmed install', async () => {
+  it('enables an Extension package from the same authorized install', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
 
@@ -550,6 +602,283 @@ describe('Pi package executable-code boundary', () => {
     expect(installed.packages).toMatchObject([{ source, enabled: true }]);
   });
 
+  it('feeds installed roots to Pi native discovery without requiring Cindy approval', async () => {
+    const { root, source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
+
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
+  });
+
+  it('fails explicitly instead of widening a filtered package when settings are invalid', async () => {
+    const { root, source } = await createPackage({ source: 'npm:filtered-invalid' });
+    runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
+    const packageHome = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(packageHome, { recursive: true });
+    await fs.writeFile(path.join(packageHome, 'settings.json'), '{"packages":');
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi package filter settings unavailable',
+      { failureCategory: 'state-unavailable' },
+    );
+  });
+
+  it('preserves native filters from a valid settings file above the inspection byte limit', async () => {
+    const { root, source } = await createPackage({ source: 'npm:filtered-large-settings' });
+    runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
+    const packageHome = path.join(runtime.userData, 'pi-package-home');
+    const settingsContents = JSON.stringify({
+      packages: [{
+        source,
+        extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+        skills: [],
+      }],
+      nativePadding: 'x'.repeat(1_048_576),
+    });
+    expect(Buffer.byteLength(settingsContents)).toBeGreaterThan(1_048_576);
+    await fs.mkdir(packageHome, { recursive: true });
+    await fs.writeFile(path.join(packageHome, 'settings.json'), settingsContents);
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([{
+      source: root,
+      extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+      skills: [],
+    }]);
+    expect(loggerRuntime.warn.mock.calls).toEqual([]);
+  });
+
+  it.skipIf(!canLinkFile)('preserves native filters from a settings symlink outside package home', async () => {
+    const { root, source } = await createPackage({ source: 'npm:filtered-linked-settings' });
+    runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
+    const packageHome = path.join(runtime.userData, 'pi-package-home');
+    const externalSettings = path.join(runtime.userData, 'dotfiles-settings.json');
+    await fs.mkdir(packageHome, { recursive: true });
+    await fs.writeFile(externalSettings, JSON.stringify({
+      packages: [{
+        source,
+        extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+        skills: [],
+      }],
+    }));
+    await fs.symlink(externalSettings, path.join(packageHome, 'settings.json'), 'file');
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([{
+      source: root,
+      extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+      skills: [],
+    }]);
+    expect(loggerRuntime.warn.mock.calls).toEqual([]);
+  });
+
+  it('keeps an unfiltered native package when optional filter settings are unavailable', async () => {
+    const { root } = await createPackage({ source: 'npm:unfiltered-settings-failure' });
+    const settingsFile = path.join(runtime.userData, 'pi-package-home', 'settings.json');
+    await fs.mkdir(path.dirname(settingsFile), { recursive: true });
+    await fs.writeFile(settingsFile, '{"packages":');
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
+  });
+
+  it('preserves Pi object-form resource filters when projecting an installed root', async () => {
+    const { root, source } = await createPackage({ source: 'npm:filtered-package' });
+    runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
+    const packageHome = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(packageHome, { recursive: true });
+    await fs.writeFile(path.join(packageHome, 'settings.json'), JSON.stringify({
+      packages: [{
+        source,
+        extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+        skills: [],
+        prompts: ['prompts/review.md'],
+      }],
+    }));
+    const store = await import('../pi-package-store.js');
+
+    const projected = await store.resolveManagedPiNativePackagePaths();
+    expect(loggerRuntime.warn.mock.calls).toEqual([]);
+    expect(projected).toEqual([{
+      source: root,
+      extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+      skills: [],
+      prompts: ['prompts/review.md'],
+    }]);
+  });
+
+  it('keeps compatibility analysis informational during install', async () => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'extensions', 'index.ts'), `
+      export default function setup(pi: any) {
+        pi.on('session_start', (_event: unknown, ctx: any) => {
+          ctx.ui.setStatus('compatibility-note', 'still launchable');
+        });
+      }
+    `);
+    const store = await import('../pi-package-store.js');
+
+    const installed = await mutateAuthorized(store, { action: 'install', source });
+
+    expect(installed.affectedPackage).toMatchObject({
+      source,
+      enabled: true,
+      resources: expect.arrayContaining([expect.objectContaining({
+        kind: 'extension',
+        compatibility: 'partial',
+        compatibilityIssues: ['status-display'],
+      })]),
+    });
+  });
+
+  it('clears an old explicit disable after reinstall even when post-install analysis fails', async () => {
+    const { source } = await createPackage();
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, 'npm:keep-disabled'],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    runtime.listOutcomes.push({ stderr: 'analysis unavailable', exitCode: 1 });
+    const store = await import('../pi-package-store.js');
+
+    await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+      affectedPackage: { source, enabled: true },
+    });
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual(['npm:keep-disabled']);
+  });
+
+  it.each(['install', 'update'] as const)(
+    'builds a Git-style package on %s and republishes the runtime fence after generated bytes settle',
+    async (action) => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'generated-extension',
+      version: '1.0.0',
+      pi: {
+        extensions: ['./build/adapters/pi/extension.js'],
+        skills: ['./skills'],
+      },
+      scripts: { build: 'node build.mjs' },
+    }));
+    await fs.rm(path.join(root, 'extensions'), { recursive: true, force: true });
+    await fs.rm(path.join(root, 'prompts'), { recursive: true, force: true });
+    await fs.mkdir(path.join(root, 'skills', 'generated'), { recursive: true });
+    await fs.writeFile(path.join(root, 'skills', 'generated', 'SKILL.md'), '# Generated\n');
+    let fenceGeneration = 0;
+    let generationDuringBuild = -1;
+    runtime.spawnHook = (args) => {
+      if (args.at(-2) !== 'run' || args.at(-1) !== 'build') return;
+      generationDuringBuild = fenceGeneration;
+      const entry = path.join(root, 'build', 'adapters', 'pi', 'extension.js');
+      mkdirSync(path.dirname(entry), { recursive: true });
+      writeFileSync(entry, 'export default function setup() {}\n');
+    };
+    const store = await import('../pi-package-store.js');
+    const runtimeFence = vi.fn(() => { fenceGeneration += 1; });
+
+    const installed = await mutateAuthorized(store, { action, source }, {
+      onRuntimeInvalidationPublished: runtimeFence,
+    });
+
+    const spawnedArgs = runtime.spawns.map(({ args }) => args);
+    expect(spawnedArgs.some((args) => (
+      args.slice(-4).join('\0') === [
+        'install', '--include=dev', '--no-audit', '--no-fund',
+      ].join('\0')
+    ))).toBe(true);
+    expect(spawnedArgs.some((args) => args.slice(-2).join('\0') === 'run\0build')).toBe(true);
+    expect(installed.affectedPackage).toMatchObject({
+      source,
+      enabled: true,
+      resources: expect.arrayContaining([expect.objectContaining({ kind: 'extension' })]),
+    });
+    expect(generationDuringBuild).toBe(1);
+    expect(runtimeFence).toHaveBeenNthCalledWith(1, 'commit');
+    expect(runtimeFence).toHaveBeenNthCalledWith(2, 'post-build');
+  });
+
+  it.each([
+    [
+      'npm install',
+      'install',
+      'install',
+      'getaddrinfo ENOTFOUND https://user:api-key@example.test/pkg?token=query-secret#fragment-secret /private/host/path',
+      'source-unavailable',
+    ],
+    [
+      'npm build',
+      'update',
+      'build',
+      'fetch failed https://user:password@example.test/pkg?token=query-secret#fragment-secret /private/host/path',
+      'source-unavailable',
+    ],
+    ['normal npm install', 'install', 'install', 'npm ERR! code ETARGET No matching version found', 'version-not-found'],
+    ['normal npm build', 'update', 'build', 'npm ERR! code E404 package not found', 'package-not-found'],
+  ] as const)('keeps native Pi success and logs only a stable category after %s fails', async (
+    _label,
+    action,
+    phase,
+    stderr,
+    failureCategory,
+  ) => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'broken-generated-extension',
+      version: '1.0.0',
+      pi: {
+        extensions: ['./build/adapters/pi/extension.js'],
+        skills: ['./skills'],
+      },
+      scripts: { build: 'node build.mjs' },
+    }));
+    await fs.rm(path.join(root, 'extensions'), { recursive: true, force: true });
+    await fs.rm(path.join(root, 'prompts'), { recursive: true, force: true });
+    await fs.mkdir(path.join(root, 'skills', 'generated'), { recursive: true });
+    await fs.writeFile(path.join(root, 'skills', 'generated', 'SKILL.md'), '# Generated\n');
+    let fenceGeneration = 0;
+    let generationDuringFailure = -1;
+    runtime.spawnHook = (args) => {
+      const isTarget = phase === 'install'
+        ? args.slice(-4).join('\0') === 'install\0--include=dev\0--no-audit\0--no-fund'
+        : args.slice(-2).join('\0') === 'run\0build';
+      if (isTarget) generationDuringFailure = fenceGeneration;
+      runtime.stderr = isTarget ? stderr : '';
+      runtime.exitCode = isTarget ? 1 : 0;
+    };
+    const store = await import('../pi-package-store.js');
+    const runtimeFence = vi.fn(() => { fenceGeneration += 1; });
+
+    const result = await mutateAuthorized(store, { action, source }, {
+      onRuntimeInvalidationPublished: runtimeFence,
+    });
+
+    expect(result.affectedPackage).toMatchObject({ source, enabled: true });
+    const assistanceLog = loggerRuntime.warn.mock.calls.find(
+      ([message]) => message === (action === 'update'
+        ? 'optional Pi package update build assistance failed'
+        : 'optional Pi package build assistance failed'),
+    );
+    expect(assistanceLog?.[1]).toEqual({ failureCategory, mayHaveChangedState: true });
+    expect(generationDuringFailure).toBe(1);
+    expect(runtimeFence).toHaveBeenNthCalledWith(1, 'commit');
+    expect(runtimeFence).toHaveBeenNthCalledWith(2, 'post-build');
+    const published = JSON.stringify({ logs: loggerRuntime.warn.mock.calls, result });
+    expect(published).not.toContain('api-key');
+    expect(published).not.toContain('query-secret');
+    expect(published).not.toContain('fragment-secret');
+    expect(published).not.toContain('/private/host/path');
+  });
+
   it('keeps an explicitly disabled Extension package disabled after a confirmed update', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
@@ -561,8 +890,35 @@ describe('Pi package executable-code boundary', () => {
     expect(updated.affectedPackage).toMatchObject({
       source,
       enabled: false,
-      requiresExtensionApproval: true,
     });
+  });
+
+  it('does not re-enable a disabled package when its pre-update state read is uncertain', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
+    const stateFile = path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json');
+    const originalReadFile = fs.readFile.bind(fs);
+    let failedOnce = false;
+    const readSpy = vi.spyOn(fs, 'readFile').mockImplementation((async (
+      target: Parameters<typeof fs.readFile>[0],
+      options?: Parameters<typeof fs.readFile>[1],
+    ) => {
+      if (!failedOnce && path.resolve(String(target)) === path.resolve(stateFile)) {
+        failedOnce = true;
+        throw Object.assign(new Error('simulated EIO'), { code: 'EIO' });
+      }
+      return originalReadFile(target, options as never);
+    }) as typeof fs.readFile);
+    try {
+      await expect(mutateAuthorized(store, { action: 'update', source })).resolves.toMatchObject({
+        affectedPackage: { source, enabled: false },
+      });
+    } finally {
+      readSpy.mockRestore();
+    }
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source]);
   });
 
   it('does not disable an already-enabled npm Extension when another package is installed', async () => {
@@ -623,7 +979,7 @@ describe('Pi package executable-code boundary', () => {
     expect(installed.packages.every((pkg) => pkg.requiresExtensionApproval !== true)).toBe(true);
   });
 
-  it('does not reapprove a sibling whose scoped hoisted dependency changes during install', async () => {
+  it('does not scan or revoke sibling package identities before a native install', async () => {
     const firstSource = 'npm:@scope/stale-shared-extension';
     const secondSource = 'npm:new-shared-extension';
     const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
@@ -693,8 +1049,7 @@ describe('Pi package executable-code boundary', () => {
     expect(installed.packages).toEqual(expect.arrayContaining([
       expect.objectContaining({
         source: firstSource,
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
       }),
       expect.objectContaining({ source: secondSource, enabled: true }),
     ]));
@@ -705,8 +1060,8 @@ describe('Pi package executable-code boundary', () => {
       approvedExtensionSources: string[];
       approvedExtensionFingerprints: Record<string, string>;
     };
-    expect(state.approvedExtensionSources).toEqual([secondSource]);
-    expect(Object.keys(state.approvedExtensionFingerprints)).toEqual([secondSource]);
+    expect(state.approvedExtensionSources).toEqual([firstSource, secondSource]);
+    expect(Object.keys(state.approvedExtensionFingerprints)).toEqual([firstSource, secondSource]);
   });
 
   it.skipIf(process.platform === 'win32')(
@@ -743,45 +1098,12 @@ describe('Pi package executable-code boundary', () => {
     },
   );
 
-  it('builds a bounded Main-inspected enable identity without exposing local paths', async () => {
-    const { root, source } = await createPackage();
-    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
-      name: `trusted\n\u202E${'名'.repeat(400)}/../../private`,
-      version: `1.2.3\r\u2066${'v'.repeat(400)}`,
-      pi: { extensions: ['./extensions'], prompts: ['./prompts'] },
-    }));
-    const store = await import('../pi-package-store.js');
-
-    const before = await store.capturePiPackageEnableIdentity(source);
-    expect(before.displayLabel).not.toContain(root);
-    expect(before.displayLabel).not.toContain('\r');
-    expect(before.displayLabel).not.toContain('\u202E');
-    expect(before.displayLabel).not.toContain('\u2066');
-    expect(before.displayLabel.split('\n')).toHaveLength(2);
-    expect(before.displayLabel.split('\n')[0]).toContain(path.basename(root).slice(0, 24));
-    expect(before.expectedPackageFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(before.displayLabel).toContain(
-      `SHA-256: ${before.expectedPackageFingerprint}`,
-    );
-    expect(Buffer.byteLength(before.displayLabel, 'utf8')).toBeLessThanOrEqual(466);
-    await fs.writeFile(
-      path.join(root, 'extensions', 'index.ts'),
-      'export default function spoofedReplacement() {}',
-    );
-    const after = await store.capturePiPackageEnableIdentity(source);
-
-    expect(before.displayLabel.split('\n')[0]).toBe(after.displayLabel.split('\n')[0]);
-    expect(before.expectedPackageFingerprint).not.toBe(after.expectedPackageFingerprint);
-    expect(after.displayLabel).toContain(`SHA-256: ${after.expectedPackageFingerprint}`);
-  });
-
-  it('rejects an enable grant when another instance replaces package bytes after confirmation', async () => {
+  it('does not let package byte changes add a second decision to a precise enable action', async () => {
     const { root, source } = await createPackage();
     const firstStore = await import('../pi-package-store.js');
-    const { expectedPackageFingerprint } = await firstStore.capturePiPackageEnableIdentity(source);
     const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
     const request = { action: 'set-enabled' as const, source, enabled: true };
-    const grant = issuePiPackageMutationGrant(request, { expectedPackageFingerprint });
+    const grant = issuePiPackageMutationGrant(request);
 
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
@@ -791,11 +1113,11 @@ describe('Pi package executable-code boundary', () => {
     );
     await secondStore.listPiPackages();
 
-    await expect(firstStore.mutatePiPackage(request, grant)).rejects.toThrow(
-      /changed after authorization/i,
-    );
+    await expect(firstStore.mutatePiPackage(request, grant)).resolves.toMatchObject({
+      affectedPackage: { source, enabled: true },
+    });
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -869,7 +1191,7 @@ describe('Pi package executable-code boundary', () => {
         packageRoots: [],
       });
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -936,7 +1258,7 @@ describe('Pi package executable-code boundary', () => {
       packageRoots: [],
     });
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -1010,7 +1332,7 @@ describe('Pi package executable-code boundary', () => {
       packageRoots: [],
     });
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -1070,8 +1392,7 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.listPiPackages()).resolves.toMatchObject({
         packages: [{
           source: packageFile,
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           warning: 'inspection-failed',
         }],
       });
@@ -1120,7 +1441,7 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.listPiPackages()).resolves.toMatchObject({
         packages: [{
           source: packageFile,
-          enabled: false,
+          enabled: true,
         }],
       });
     } finally {
@@ -1345,7 +1666,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { source: sources[0], enabled: true },
-        { source: sources[1], enabled: false, warning: 'inspection-limit' },
+        { source: sources[1], enabled: true, warning: 'inspection-limit' },
       ],
     });
   });
@@ -1407,7 +1728,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { source: first.source, enabled: true },
-        { source: second.source, enabled: false, warning: 'inspection-limit' },
+        { source: second.source, enabled: true, warning: 'inspection-limit' },
       ],
     });
     const state = JSON.parse(await fs.readFile(
@@ -1478,8 +1799,8 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { source: packages[0]!.source, enabled: true },
-        { source: packages[1]!.source, enabled: false, warning: 'inspection-limit' },
-        { source: packages[2]!.source, enabled: false, warning: 'inspection-limit' },
+        { source: packages[1]!.source, enabled: true, warning: 'inspection-limit' },
+        { source: packages[2]!.source, enabled: true, warning: 'inspection-limit' },
       ],
     });
   });
@@ -1570,8 +1891,8 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { enabled: true },
-        { enabled: false, warning: 'inspection-limit' },
-        { enabled: false, warning: 'inspection-limit' },
+        { enabled: true, warning: 'inspection-limit' },
+        { enabled: true, warning: 'inspection-limit' },
       ],
     });
     const state = JSON.parse(await fs.readFile(
@@ -1655,7 +1976,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { source: ancestorRoot, enabled: true },
-        { source: descendantRoot, enabled: false, warning: 'inspection-limit' },
+        { source: descendantRoot, enabled: true, warning: 'inspection-limit' },
       ],
     });
     const state = JSON.parse(await fs.readFile(
@@ -1665,7 +1986,7 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([]);
   });
 
-  it('keeps a snapshot timeout disabled across cache expiry until staging succeeds', async () => {
+  it('keeps a snapshot timeout advisory across cache expiry until staging succeeds', async () => {
     const { root, source } = await createPackage();
     const now = Date.now();
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
@@ -1695,7 +2016,7 @@ describe('Pi package executable-code boundary', () => {
         // failure instead of rebuilding an enabled view from raw inspection.
         nowSpy.mockReturnValue(now + 2_000);
         await expect(store.listPiPackages()).resolves.toMatchObject({
-          packages: [{ source, enabled: false, warning: 'inspection-limit' }],
+          packages: [{ source, enabled: true, warning: 'inspection-limit' }],
         });
         await expect(store.listManagedPiPromptCommands()).resolves.toEqual([]);
 
@@ -1761,9 +2082,11 @@ describe('Pi package executable-code boundary', () => {
         promptTemplates: [],
         packageRoots: [],
       });
-      await vi.waitFor(() => expect(secondListener).toHaveBeenCalled(), { timeout: 2_000 });
+      await vi.waitFor(() => expect(secondListener).toHaveBeenCalledWith('external'), {
+        timeout: 2_000,
+      });
       await expect(secondStore.listPiPackages()).resolves.toMatchObject({
-        packages: [{ source, enabled: false, warning: 'inspection-limit' }],
+        packages: [{ source, enabled: true, warning: 'inspection-limit' }],
       });
 
       const firstListener = vi.fn();
@@ -1777,7 +2100,9 @@ describe('Pi package executable-code boundary', () => {
           extensions: [path.join(recoveredRoot, '0', 'extensions', 'index.ts')],
           packageRoots: [path.join(recoveredRoot, '0')],
         });
-        await vi.waitFor(() => expect(firstListener).toHaveBeenCalled(), { timeout: 2_000 });
+        await vi.waitFor(() => expect(firstListener).toHaveBeenCalledWith('external'), {
+          timeout: 2_000,
+        });
         await expect(firstStore.listPiPackages()).resolves.toMatchObject({
           packages: [{ source, enabled: true }],
         });
@@ -1882,7 +2207,7 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
-  it('preserves v1 disabled sources while migrating approval state and blocks lifecycle scripts', async () => {
+  it('preserves v1 disabled sources while migrating approval state and lets confirmed installs build', async () => {
     const { source } = await createPackage();
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     await fs.mkdir(stateDir, { recursive: true });
@@ -1918,21 +2243,475 @@ describe('Pi package executable-code boundary', () => {
 
     await mutateAuthorized(store, { action: 'install', source });
     const installSpawn = runtime.spawns.find(({ args }) => args.includes('install'));
-    expect(installSpawn?.env.npm_config_ignore_scripts).toBe('true');
-    expect(installSpawn?.env.NPM_CONFIG_IGNORE_SCRIPTS).toBe('true');
+    expect(installSpawn?.env.npm_config_ignore_scripts).toBe('false');
+    expect(installSpawn?.env.NPM_CONFIG_IGNORE_SCRIPTS).toBe('false');
     expect(installSpawn?.args).toContain('--no-approve');
+  });
+
+  it('clears a relative disable alias when the same local package is reinstalled by absolute path', async () => {
+    const relativeSource = './same-directory/relative-package';
+    const sibling = './same-directory/sibling-package';
+    const created = await createPackage({ source: relativeSource });
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const absoluteSource = path.join(stateDir, 'same-directory', 'relative-package');
+    await fs.mkdir(path.dirname(absoluteSource), { recursive: true });
+    await fs.rename(created.root, absoluteSource);
+    runtime.listOutput = `User packages:\n  ${relativeSource}\n    ${absoluteSource}\n`;
+    await fs.mkdir(stateDir, { recursive: true });
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [relativeSource, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const store = await import('../pi-package-store.js');
+    runtime.listOutcomes = Array.from({ length: 4 }, () => ({
+      stderr: 'projection unavailable',
+      exitCode: 1,
+    }));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error('simulated state EIO'), { code: 'EIO' });
+      }
+      return originalRename(from, to);
+    });
+    try {
+      await expect(mutateAuthorized(store, {
+        action: 'install',
+        source: absoluteSource,
+      })).resolves.toMatchObject({
+        projectionUnavailable: true,
+        affectedPackage: { source: absoluteSource, enabled: true },
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+    let state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([relativeSource, sibling]);
+    runtime.listOutcomes = [];
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([absoluteSource]);
+
+    await mutateAuthorized(store, { action: 'install', source: absoluteSource });
+    state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([sibling]);
   });
 
   it.each([
     ['transient I/O', 'EIO'],
     ['permission', 'EACCES'],
-  ])('fails closed without replacing disabled state after a %s read failure', async (_label, code) => {
+  ])('reconciles a reinstall after a recoverable %s disable-ledger write failure', async (_label, code) => {
+    const { source } = await createSkillOnlyPackage('npm:reinstalled-disabled-package');
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const originalRename = fs.rename.bind(fs);
+    let injected = false;
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (!injected && path.resolve(String(to)) === path.resolve(stateFile)) {
+        injected = true;
+        throw Object.assign(new Error(`simulated ${code}`), { code });
+      }
+      return originalRename(from, to);
+    });
+    try {
+      const store = await import('../pi-package-store.js');
+      await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+        affectedPackage: { source, enabled: true },
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([sibling]);
+  });
+
+  it('does not claim a private install enabled when enable-ledger reconciliation is unavailable', async () => {
+    const source = 'https://alice:s3cr3t@packages.example/context-mode.git?token=query-secret#fragment-secret';
+    await createSkillOnlyPackage(source);
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, '{invalid-state');
+    const store = await import('../pi-package-store.js');
+
+    const result = await mutateAuthorized(store, { action: 'install', source });
+    expect(result).toMatchObject({ changed: true, available: false, projectionUnavailable: true });
+    expect(result).not.toHaveProperty('affectedPackage');
+    expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
+    await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
+    const publications = `${JSON.stringify(result)}\n${JSON.stringify(loggerRuntime.warn.mock.calls)}`;
+    expect(publications).not.toContain('alice');
+    expect(publications).not.toContain('s3cr3t');
+    expect(publications).not.toContain('query-secret');
+    expect(publications).not.toContain('fragment-secret');
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi package installed; enable-ledger reconciliation deferred',
+      { action: 'install', failureCategory: 'state-unavailable' },
+    );
+  });
+
+  it.each(['EIO', 'EACCES'])(
+    'does not claim enabled after state and pending reconciliation both fail with %s',
+    async (code) => {
+      const { source } = await createSkillOnlyPackage(`npm:double-write-${code.toLowerCase()}`);
+      const sibling = 'npm:keep-disabled';
+      const stateDir = path.join(runtime.userData, 'pi-package-home');
+      const stateFile = path.join(stateDir, 'cindy-package-state.json');
+      const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(stateFile, JSON.stringify({
+        version: 3,
+        disabledSources: [source, sibling],
+        approvedExtensionSources: [],
+        approvedExtensionFingerprints: {},
+        snapshotUnavailableRoots: {},
+      }));
+      const originalRename = fs.rename.bind(fs);
+      const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        if ([stateFile, pendingFile].some((file) => path.resolve(String(to)) === path.resolve(file))) {
+          throw Object.assign(new Error(`private path ${code}`), { code });
+        }
+        return originalRename(from, to);
+      });
+      const runtimeFence = vi.fn();
+      try {
+        const store = await import('../pi-package-store.js');
+        const result = await mutateAuthorized(store, { action: 'install', source }, {
+          onRuntimeInvalidationPublished: runtimeFence,
+        });
+        expect(result).toMatchObject({
+          changed: true,
+          available: false,
+          packages: [],
+          projectionUnavailable: true,
+        });
+        expect(result).not.toHaveProperty('affectedPackage');
+        expect(runtimeFence).toHaveBeenCalledOnce();
+        expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
+        expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toMatchObject({
+          disabledSources: [source, sibling],
+        });
+        await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
+
+        vi.resetModules();
+        const peerStore = await import('../pi-package-store.js');
+        await expect(peerStore.listPiPackages()).resolves.toMatchObject({
+          packages: [expect.objectContaining({ source, enabled: false })],
+        });
+        await expect(peerStore.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
+      } finally {
+        renameSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(['EIO', 'EACCES'])(
+    'keeps committed install enablement authoritative when pending cleanup fails with %s',
+    async (code) => {
+      const { root, source } = await createSkillOnlyPackage(`npm:pending-cleanup-${code.toLowerCase()}`);
+      const disabledSibling = 'npm:keep-disabled';
+      const pendingSibling = 'npm:keep-pending';
+      const stateDir = path.join(runtime.userData, 'pi-package-home');
+      const stateFile = path.join(stateDir, 'cindy-package-state.json');
+      const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(stateFile, JSON.stringify({
+        version: 3,
+        disabledSources: [source, disabledSibling],
+        approvedExtensionSources: [],
+        approvedExtensionFingerprints: {},
+        snapshotUnavailableRoots: {},
+      }));
+      await fs.writeFile(pendingFile, JSON.stringify([source, pendingSibling]));
+      const originalReadFile = fs.readFile.bind(fs);
+      let pendingReadFailures = 1;
+      const readSpy = vi.spyOn(fs, 'readFile').mockImplementation((async (
+        target: Parameters<typeof fs.readFile>[0],
+        options?: Parameters<typeof fs.readFile>[1],
+      ) => {
+        if (path.resolve(String(target)) === path.resolve(pendingFile)
+          && pendingReadFailures > 0) {
+          pendingReadFailures -= 1;
+          throw Object.assign(new Error(`simulated ${code}`), { code });
+        }
+        return originalReadFile(target, options as never);
+      }) as typeof fs.readFile);
+      const originalRename = fs.rename.bind(fs);
+      const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        if (path.resolve(String(to)) === path.resolve(pendingFile)) {
+          throw Object.assign(new Error(`simulated ${code}`), { code });
+        }
+        return originalRename(from, to);
+      });
+      const runtimeFence = vi.fn();
+      try {
+        const store = await import('../pi-package-store.js');
+        const result = await mutateAuthorized(store, { action: 'install', source }, {
+          onRuntimeInvalidationPublished: runtimeFence,
+        });
+        expect(result).toMatchObject({
+          changed: true,
+          available: true,
+          affectedPackage: { source, enabled: true },
+        });
+        expect(result).not.toHaveProperty('projectionUnavailable');
+        expect(runtimeFence).toHaveBeenCalledOnce();
+        expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toMatchObject({
+          disabledSources: [disabledSibling],
+        });
+        expect(JSON.parse(await fs.readFile(pendingFile, 'utf8'))).toEqual([source, pendingSibling]);
+
+        vi.resetModules();
+        const peerStore = await import('../pi-package-store.js');
+        await expect(peerStore.listPiPackages()).resolves.toMatchObject({
+          packages: [expect.objectContaining({ source, enabled: true })],
+        });
+        await expect(peerStore.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
+      } finally {
+        readSpy.mockRestore();
+        renameSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    ['transient I/O', 'EIO'],
+    ['permission', 'EACCES'],
+  ])('keeps native install successful through persistent %s and reconciles after recovery', async (_label, code) => {
+    const { root, source } = await createSkillOnlyPackage(`npm:persistently-disabled-${code.toLowerCase()}`);
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error(`simulated ${code}`), { code });
+      }
+      return originalRename(from, to);
+    });
+    const store = await import('../pi-package-store.js');
+    try {
+      await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+        affectedPackage: { source, enabled: true },
+      });
+      await expect(store.listPiPackages()).resolves.toMatchObject({
+        packages: [expect.objectContaining({ source, enabled: true })],
+      });
+      await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
+    } finally {
+      renameSpy.mockRestore();
+    }
+    let state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source, sibling]);
+    vi.resetModules();
+    const recoveredStore = await import('../pi-package-store.js');
+    await expect(recoveredStore.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
+
+    await expect(mutateAuthorized(recoveredStore, { action: 'install', source })).resolves.toMatchObject({
+      affectedPackage: { source, enabled: true },
+    });
+    state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([sibling]);
+    await expect(fs.stat(path.join(stateDir, 'cindy-package-pending-enable.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['EIO', 'EACCES'])('does not overwrite unreadable pending-enable siblings after %s', async (code) => {
+    const { source } = await createSkillOnlyPackage(`npm:pending-read-${code.toLowerCase()}`);
+    const sibling = 'npm:sibling-pending-enable';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(pendingFile, JSON.stringify([source, sibling]));
+    const originalReadFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, 'readFile').mockImplementation((async (
+      target: Parameters<typeof fs.readFile>[0],
+      options?: Parameters<typeof fs.readFile>[1],
+    ) => {
+      if (path.resolve(String(target)) === path.resolve(pendingFile)) {
+        throw Object.assign(new Error(`private host path ${code}`), { code });
+      }
+      return originalReadFile(target, options as never);
+    }) as typeof fs.readFile);
+    const store = await import('../pi-package-store.js');
+    try {
+      await expect(store.mutatePiPackage({
+        action: 'set-enabled', source, enabled: false,
+      })).rejects.toThrow('state is unavailable');
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(JSON.parse(await fs.readFile(pendingFile, 'utf8'))).toEqual([source, sibling]);
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi pending enable reconciliation unavailable',
+      { failureCategory: 'state-unavailable' },
+    );
+    expect(JSON.stringify(loggerRuntime.warn.mock.calls)).not.toContain('private host path');
+  });
+
+  it.each([
+    { label: 'enable', enabled: true, code: 'EIO' },
+    { label: 'enable', enabled: true, code: 'EACCES' },
+    { label: 'disable', enabled: false, code: 'EIO' },
+    { label: 'disable', enabled: false, code: 'EACCES' },
+  ] as const)('does not publish $label enablement when the durable state write fails with $code', async ({
+    enabled,
+    code,
+  }) => {
+    const { source } = await createSkillOnlyPackage(`npm:toggle-write-${code.toLowerCase()}-${enabled}`);
+    const sibling = 'npm:keep-sibling-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const initialState = {
+      version: 3,
+      disabledSources: enabled ? [source, sibling] : [sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    };
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify(initialState));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error('private toggle write failure'), { code });
+      }
+      return originalRename(from, to);
+    });
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const runtimeFence = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      const failure = await mutateAuthorized(store, {
+        action: 'set-enabled', source, enabled,
+      }, { onRuntimeInvalidationPublished: runtimeFence }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(store.piPackageMutationMayHaveChangedState(failure)).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+      expect(runtimeFence).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      renameSpy.mockRestore();
+    }
+    expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toEqual(initialState);
+  });
+
+  it('lets an explicit disable cancel a pending reinstall enable without changing siblings', async () => {
+    const { root, source } = await createSkillOnlyPackage('npm:pending-enable-disabled');
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    await fs.writeFile(pendingFile, JSON.stringify([source]));
+    const originalRename = fs.rename.bind(fs);
+    let blockedReconcile = false;
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (!blockedReconcile && path.resolve(String(to)) === path.resolve(stateFile)) {
+        blockedReconcile = true;
+        throw Object.assign(new Error('simulated reconciliation EIO'), { code: 'EIO' });
+      }
+      return originalRename(from, to);
+    });
+    const store = await import('../pi-package-store.js');
+    try {
+      await expect(store.mutatePiPackage({
+        action: 'set-enabled', source, enabled: false,
+      })).resolves.toMatchObject({
+        changed: true,
+        affectedPackage: { source, enabled: false },
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+    expect(blockedReconcile).toBe(true);
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source, sibling].sort());
+    await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.not.toContain(root);
+  });
+
+  it.each(['EIO', 'EACCES'])('converges a committed pending disable when the final state write fails with %s', async (code) => {
+    const { source } = await createSkillOnlyPackage(`npm:pending-disable-edge-${code.toLowerCase()}`);
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    const initialState = {
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    };
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify(initialState));
+    await fs.writeFile(pendingFile, JSON.stringify([source]));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error('private state write failure'), { code });
+      }
+      return originalRename(from, to);
+    });
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      const failure = await store.mutatePiPackage({
+        action: 'set-enabled', source, enabled: false,
+      }).catch((error: unknown) => error);
+      expect(store.piPackageMutationMayHaveChangedState(failure)).toBe(true);
+      expect(listener).toHaveBeenCalledWith('local');
+    } finally {
+      unsubscribe();
+      renameSpy.mockRestore();
+    }
+    expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toEqual(initialState);
+    await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    ['transient I/O', 'EIO'],
+    ['permission', 'EACCES'],
+  ])('fails local projection closed through a %s Cindy-state read failure', async (_label, code) => {
     const { source } = await createSkillOnlyPackage('npm:disabled-skill-package');
+    const sibling = 'npm:sibling-disabled';
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     const stateFile = path.join(stateDir, 'cindy-package-state.json');
     const persistedState = `${JSON.stringify({
       version: 3,
-      disabledSources: [source],
+      disabledSources: [source, sibling],
       approvedExtensionSources: [],
       approvedExtensionFingerprints: {},
       snapshotUnavailableRoots: {},
@@ -1951,15 +2730,8 @@ describe('Pi package executable-code boundary', () => {
     }) as typeof fs.readFile);
     try {
       const store = await import('../pi-package-store.js');
-      await expect(store.listPiPackages()).resolves.toMatchObject({
-        packages: [{
-          source,
-          enabled: false,
-          canToggle: false,
-          warning: 'inspection-failed',
-          resources: [expect.objectContaining({ kind: 'skill' })],
-        }],
-      });
+      await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
+      await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
       await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
         extensions: [], skills: [], promptTemplates: [], packageRoots: [],
       });
@@ -1967,14 +2739,18 @@ describe('Pi package executable-code boundary', () => {
         action: 'set-enabled',
         source,
         enabled: false,
-      })).rejects.toThrow('Pi extension state is unavailable');
+      })).rejects.toThrow('state is unavailable');
+      expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'failed to read Pi extension state',
+        { failureCategory: 'state-unavailable' },
+      );
     } finally {
       readSpy.mockRestore();
     }
     await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(persistedState);
   });
 
-  it('fails closed and preserves a corrupt state file instead of treating it as empty', async () => {
+  it('fails local projection closed for corrupt Cindy state without overwriting it', async () => {
     const { source } = await createSkillOnlyPackage('npm:corrupt-state-skill-package');
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     const stateFile = path.join(stateDir, 'cindy-package-state.json');
@@ -1983,14 +2759,8 @@ describe('Pi package executable-code boundary', () => {
     await fs.writeFile(stateFile, corruptState);
     const store = await import('../pi-package-store.js');
 
-    await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{
-        source,
-        enabled: false,
-        canToggle: false,
-        warning: 'inspection-failed',
-      }],
-    });
+    await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
+    await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'corrupt-state-snapshot'),
     })).resolves.toEqual({
@@ -2000,7 +2770,22 @@ describe('Pi package executable-code boundary', () => {
       action: 'set-enabled',
       source,
       enabled: false,
-    })).rejects.toThrow('Pi extension state is unavailable');
+    })).rejects.toThrow('state is unavailable');
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(corruptState);
+  });
+
+  it('does not overwrite a corrupt disable ledger after native remove succeeds', async () => {
+    const { source } = await createSkillOnlyPackage('npm:remove-with-corrupt-state');
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const corruptState = '{"version":3,"disabledSources":[';
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, corruptState);
+    const store = await import('../pi-package-store.js');
+
+    await expect(mutateAuthorized(store, { action: 'remove', source })).resolves.toMatchObject({
+      changed: true,
+    });
     await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(corruptState);
   });
 
@@ -2057,10 +2842,121 @@ describe('Pi package executable-code boundary', () => {
 
     await mutateAuthorized(store, { action: 'install', source });
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('local');
 
     unsubscribe();
     await mutateAuthorized(store, { action: 'update', source });
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['install', { action: 'install' as const }],
+    ['update', { action: 'update' as const }],
+    ['remove', { action: 'remove' as const }],
+    ['disable', { action: 'set-enabled' as const, enabled: false }],
+  ])('publishes the %s runtime fence before starting slow result projection', async (
+    _label,
+    request,
+  ) => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const localRuntimeFence = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    let listStartedAfterFence = false;
+    runtime.spawnHook = (args) => {
+      if (args.includes('list')) listStartedAfterFence = localRuntimeFence.mock.calls.length > 0;
+    };
+    try {
+      await mutateAuthorized(store, { ...request, source }, {
+        onRuntimeInvalidationPublished: localRuntimeFence,
+      });
+      expect(listStartedAfterFence).toBe(true);
+      expect(localRuntimeFence).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith('local');
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('reconciles reinstall enablement before publishing the runtime fence', async () => {
+    const { source } = await createSkillOnlyPackage('npm:runtime-fence-reinstall');
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const store = await import('../pi-package-store.js');
+    let disabledAtFence: string[] | undefined;
+
+    await mutateAuthorized(store, { action: 'install', source }, {
+      onRuntimeInvalidationPublished: async () => {
+        disabledAtFence = (JSON.parse(await fs.readFile(stateFile, 'utf8')) as {
+          disabledSources: string[];
+        }).disabledSources;
+      },
+    });
+
+    expect(disabledAtFence).toEqual([sibling]);
+  });
+
+  it.each([
+    ['install', 'EACCES', 'access-denied'],
+    ['install', 'EIO', 'io-failure'],
+    ['update', 'EACCES', 'access-denied'],
+    ['update', 'EIO', 'io-failure'],
+    ['remove', 'EACCES', 'access-denied'],
+    ['remove', 'EIO', 'io-failure'],
+  ] as const)('keeps native %s success and local convergence when token publication fails with %s', async (
+    action,
+    errorCode,
+    causeCategory,
+  ) => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const tokenPaths = new Set([
+      path.join(tokenDir, 'cindy-package-runtime-change-token'),
+      path.join(tokenDir, 'cindy-package-change-token'),
+    ].map((value) => path.resolve(value)));
+    const originalRename = fsSync.renameSync.bind(fsSync);
+    const renameSpy = vi.spyOn(fsSync, 'renameSync').mockImplementation(((from, to) => {
+      if (tokenPaths.has(path.resolve(String(to)))) {
+        throw Object.assign(new Error('secret-token at /private/host/path'), { code: errorCode });
+      }
+      return originalRename(from, to);
+    }) as typeof fsSync.renameSync);
+    const listener = vi.fn();
+    const localRuntimeFence = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await expect(mutateAuthorized(store, { action, source }, {
+        onRuntimeInvalidationPublished: localRuntimeFence,
+      })).resolves.toMatchObject({ changed: true });
+      expect(runtime.spawns.some(({ args }) => args.includes(action))).toBe(true);
+      expect(localRuntimeFence).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith('local');
+      expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token publication failed; local convergence continued',
+        expect.objectContaining({
+          failureCategory: 'runtime-token-publication-failed',
+          causeCategory,
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        }),
+      );
+      const logged = JSON.stringify(loggerRuntime.warn.mock.calls);
+      expect(logged).not.toContain('secret-token');
+      expect(logged).not.toContain('/private/host/path');
+    } finally {
+      unsubscribe();
+      renameSpy.mockRestore();
+    }
   });
 
   it('uses one shared cross-process lock for every package mutation action', async () => {
@@ -2097,6 +2993,476 @@ describe('Pi package executable-code boundary', () => {
       call.label === 'pi-package-mutation' && (call.waitMs ?? 0) > 120_000
     ))).toBe(true);
     expect(new Set(tokens.map((token) => token.trim())).size).toBe(4);
+    expect(tokens.every((token) => token.startsWith('runtime:'))).toBe(true);
+  });
+
+  it('observes a runtime edge when legacy and view token reads fail independently', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyToken = path.join(tokenDir, 'cindy-package-change-token');
+    const viewToken = path.join(tokenDir, 'cindy-package-view-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if ([legacyToken, viewToken].includes(path.resolve(String(target)))) {
+        throw Object.assign(new Error('secret-token at /private/host/path'), { code: 'EACCES' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await fs.writeFile(runtimeToken, 'runtime:isolated-edge\n');
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      const logged = JSON.stringify(loggerRuntime.warn.mock.calls);
+      expect(logged).not.toContain('secret-token');
+      expect(logged).not.toContain('/private/host/path');
+      expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ failureCategory: 'access-denied' }),
+      );
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('converges local runtimes when a failed initial runtime-token read recovers after a peer-only edge', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyToken = path.join(tokenDir, 'cindy-package-change-token');
+    const viewToken = path.join(tokenDir, 'cindy-package-view-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:old\n'),
+      fs.writeFile(legacyToken, 'runtime:old\n'),
+      fs.writeFile(viewToken, 'view:old\n'),
+    ]);
+
+    let runtimeReadBlocked = true;
+    let legacyReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      const resolvedTarget = path.resolve(String(target));
+      if ((runtimeReadBlocked && resolvedTarget === path.resolve(runtimeToken))
+        || (legacyReadBlocked && resolvedTarget === path.resolve(legacyToken))) {
+        throw Object.assign(new Error('package token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const { invalidateLocalPiPackageRuntimesForObservedChange } = await import(
+      '../pi-package-runtime-invalidation.js'
+    );
+    const originListener = vi.fn();
+    const closeSessionIfCurrent = vi.fn(async () => undefined);
+    const localPi = { id: 'local-pi', agentKind: 'pi' };
+    const maker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
+      listActiveSessions: vi.fn(() => [localPi]),
+      getSessionMeta: vi.fn(async () => ({ remoteHostId: null, reviewMode: false })),
+      closeSessionIfCurrent,
+    };
+    const unsubscribe = store.onPiPackagesChanged((origin) => {
+      originListener(origin);
+      void invalidateLocalPiPackageRuntimesForObservedChange(maker as never, origin);
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(loggerRuntime.warn).toHaveBeenCalledWith(
+          'Pi package change token read failed',
+          expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+        );
+        expect(loggerRuntime.warn).toHaveBeenCalledWith(
+          'Pi package change token read failed',
+          expect.objectContaining({ tokenKind: 'legacy', failureCategory: 'io-failure' }),
+        );
+      });
+
+      // Recover the old legacy baseline while runtime observation stays down.
+      legacyReadBlocked = false;
+      await fs.writeFile(legacyToken, 'runtime:old\n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Simulate another Main publishing only the runtime edge while its legacy
+      // mirror write fails. The legacy file intentionally stays on the old token.
+      await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+
+      await vi.waitFor(() => expect(originListener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
+        localPi,
+        'requested',
+      ));
+      expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('converges a peer-only runtime edge after recovery from a null legacy baseline', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+
+    let runtimeReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (runtimeReadBlocked && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        throw Object.assign(new Error('runtime token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const { invalidateLocalPiPackageRuntimesForObservedChange } = await import(
+      '../pi-package-runtime-invalidation.js'
+    );
+    const originListener = vi.fn();
+    const closeSessionIfCurrent = vi.fn(async () => undefined);
+    const localPi = { id: 'local-pi-null-baseline', agentKind: 'pi' };
+    const maker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
+      listActiveSessions: vi.fn(() => [localPi]),
+      getSessionMeta: vi.fn(async () => ({ remoteHostId: null, reviewMode: false })),
+      closeSessionIfCurrent,
+    };
+    const unsubscribe = store.onPiPackagesChanged((origin) => {
+      originListener(origin);
+      void invalidateLocalPiPackageRuntimesForObservedChange(maker as never, origin);
+    });
+    try {
+      await vi.waitFor(() => expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+      ));
+
+      // Legacy is absent, so its successful read established a valid null
+      // recovery baseline before another Main publishes only the runtime edge.
+      await fs.writeFile(runtimeToken, 'runtime:peer-only-after-null\n');
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:peer-only-after-null\n');
+
+      await vi.waitFor(() => expect(originListener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
+        localPi,
+        'requested',
+      ));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(originListener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+      expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('does not invent a runtime edge when recovery has only a view-style legacy baseline', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:already-present\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), 'view:latest\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:latest\n'),
+    ]);
+
+    let runtimeReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (runtimeReadBlocked && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        throw Object.assign(new Error('runtime token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await vi.waitFor(() => expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+      ));
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:already-present\n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('does not duplicate a legacy runtime edge when the unreadable runtime token recovers old', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyToken = path.join(tokenDir, 'cindy-package-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:old\n'),
+      fs.writeFile(legacyToken, 'runtime:old\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:old\n'),
+    ]);
+
+    let runtimeReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (runtimeReadBlocked && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        throw Object.assign(new Error('runtime token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await vi.waitFor(() => expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+      ));
+      await fs.writeFile(legacyToken, 'runtime:legacy-edge\n');
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:old\n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('does not use an already-notified legacy edge as the runtime recovery baseline', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyToken = path.join(tokenDir, 'cindy-package-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:old\n'),
+      fs.writeFile(legacyToken, 'view:old\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:old\n'),
+    ]);
+
+    let runtimeReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (runtimeReadBlocked && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        throw Object.assign(new Error('runtime token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await vi.waitFor(() => expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+      ));
+      await fs.writeFile(legacyToken, 'runtime:legacy-edge\n');
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+      // Keep runtime observation down for another poll. The already-notified
+      // legacy edge must not become a new recovery comparison baseline.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:old\n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('discards an observer batch that predates a local runtime-token publication', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:old\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), 'runtime:old\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:old\n'),
+    ]);
+
+    let releaseRuntimeRead!: () => void;
+    const runtimeReadGate = new Promise<void>((resolve) => { releaseRuntimeRead = resolve; });
+    const originalOpen = fs.open.bind(fs);
+    let delayedRuntimeRead = false;
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (!delayedRuntimeRead && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        delayedRuntimeRead = true;
+        const handle = await originalOpen(target, flags, mode);
+        return {
+          stat: async () => {
+            await runtimeReadGate;
+            return handle.stat();
+          },
+          readFile: (...args: Parameters<typeof handle.readFile>) => handle.readFile(...args),
+          close: () => handle.close(),
+        } as Awaited<ReturnType<typeof fs.open>>;
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await vi.waitFor(() => expect(delayedRuntimeRead).toBe(true));
+      await mutateAuthorized(store, { action: 'install', source: 'npm:local-publication' });
+      releaseRuntimeRead();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      expect(listener).toHaveBeenCalledWith('local');
+      expect(listener).not.toHaveBeenCalledWith('external-runtime');
+    } finally {
+      releaseRuntimeRead();
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('converges exactly once when a peer edge lands before the first observation completes', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeTokenPath = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyTokenPath = path.join(tokenDir, 'cindy-package-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    const oldToken = `runtime:${Date.now() - 1_000}-111-old`;
+    await Promise.all([
+      fs.writeFile(runtimeTokenPath, `${oldToken}\n`),
+      fs.writeFile(legacyTokenPath, `${oldToken}\n`),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:old\n'),
+    ]);
+
+    let releaseInitialReads!: () => void;
+    const initialReadGate = new Promise<void>((resolve) => { releaseInitialReads = resolve; });
+    const delayedPaths = new Set<string>();
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      const resolvedTarget = path.resolve(String(target));
+      if ([runtimeTokenPath, legacyTokenPath].map((value) => path.resolve(value)).includes(resolvedTarget)
+        && !delayedPaths.has(resolvedTarget)) {
+        delayedPaths.add(resolvedTarget);
+        await initialReadGate;
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const { invalidateLocalPiPackageRuntimesForObservedChange } = await import(
+      '../pi-package-runtime-invalidation.js'
+    );
+    const originListener = vi.fn();
+    const closeSessionIfCurrent = vi.fn(async () => undefined);
+    const localPi = { id: 'first-observation-local', agentKind: 'pi' };
+    const remotePi = { id: 'first-observation-remote', agentKind: 'pi' };
+    const reviewPi = { id: 'first-observation-review', agentKind: 'pi' };
+    const nonPi = { id: 'first-observation-claude', agentKind: 'claude' };
+    const maker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
+      listActiveSessions: vi.fn(() => [localPi, remotePi, reviewPi, nonPi]),
+      getSessionMeta: vi.fn(async (sessionId: string) => ({
+        remoteHostId: sessionId === remotePi.id ? 'remote-host' : null,
+        reviewMode: sessionId === reviewPi.id,
+      })),
+      closeSessionIfCurrent,
+    };
+    const unsubscribe = store.onPiPackagesChanged((origin) => {
+      originListener(origin);
+      void invalidateLocalPiPackageRuntimesForObservedChange(maker as never, origin);
+    });
+    try {
+      await vi.waitFor(() => expect(delayedPaths.size).toBe(2));
+      const peerToken = `runtime:${Date.now()}-222-peer`;
+      await Promise.all([
+        fs.writeFile(runtimeTokenPath, `${peerToken}\n`),
+        fs.writeFile(legacyTokenPath, `${peerToken}\n`),
+      ]);
+      releaseInitialReads();
+
+      await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
+        localPi,
+        'requested',
+      ), { timeout: 2_000 });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(originListener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+      expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
+      expect(closeSessionIfCurrent).toHaveBeenCalledTimes(1);
+      expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(remotePi, 'requested');
+      expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(reviewPi, 'requested');
+    } finally {
+      releaseInitialReads();
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('uses the first successful runtime-token read as a cold-start baseline', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(tokenDir, { recursive: true });
+    const coldToken = `runtime:${Date.now() - 1_000}-111-cold`;
+    await Promise.all([
+      fs.writeFile(path.join(tokenDir, 'cindy-package-runtime-change-token'), `${coldToken}\n`),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), `${coldToken}\n`),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:cold\n'),
+    ]);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it.each([
+    ['runtime', 'cindy-package-runtime-change-token', 'runtime:next', 'external-runtime'],
+    ['legacy', 'cindy-package-change-token', 'runtime:legacy-next', 'external-runtime'],
+    ['view', 'cindy-package-view-change-token', 'view:next', 'external'],
+  ] as const)('observes an independent %s token change', async (
+    _kind,
+    filename,
+    nextToken,
+    expectedOrigin,
+  ) => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(path.join(tokenDir, 'cindy-package-runtime-change-token'), 'runtime:base\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), 'runtime:base\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:base\n'),
+    ]);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await fs.writeFile(path.join(tokenDir, filename), `${nextToken}\n`);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(expectedOrigin), {
+        timeout: 2_000,
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('propagates package and approval changes to another shared-userData instance', async () => {
@@ -2119,11 +3485,53 @@ describe('Pi package executable-code boundary', () => {
     );
     await mutateAuthorized(secondStore, { action: 'update', source });
 
-    await vi.waitFor(() => expect(listener).toHaveBeenCalled(), { timeout: 2_000 });
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+      timeout: 2_000,
+    });
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
       packages: [{ source, enabled: true }],
     });
     unsubscribe();
+  });
+
+  it('does not let an immediate view publication overwrite a peer runtime invalidation', async () => {
+    const { source } = await createPackage();
+    const firstStore = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = firstStore.onPiPackagesChanged(listener);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    vi.resetModules();
+    const secondStore = await import('../pi-package-store.js');
+    try {
+      await mutateAuthorized(secondStore, { action: 'update', source });
+      await secondStore.resolveManagedPiPackageResources({
+        snapshotRoot: path.join(runtime.userData, 'view-after-runtime-snapshot'),
+        snapshotLimits: {
+          maxEntries: 100,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 0,
+        },
+      });
+
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      await expect(fs.readFile(
+        path.join(runtime.userData, 'pi-package-home', 'cindy-package-runtime-change-token'),
+        'utf8',
+      )).resolves.toMatch(/^runtime:/);
+      await expect(fs.readFile(
+        path.join(runtime.userData, 'pi-package-home', 'cindy-package-change-token'),
+        'utf8',
+      )).resolves.toMatch(/^runtime:/);
+      await expect(fs.readFile(
+        path.join(runtime.userData, 'pi-package-home', 'cindy-package-view-change-token'),
+        'utf8',
+      )).resolves.toMatch(/^view:/);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('fails closed before touching the package tree when the shared lock is unavailable', async () => {
@@ -2167,10 +3575,13 @@ describe('Pi package executable-code boundary', () => {
     expect(lockRuntime.maxActive).toBe(1);
   });
 
-  it('rejects a stale disable after another shared-userData instance removes the package', async () => {
+  it('rejects a stale enable after external native removal without writing ghost state', async () => {
     const { source } = await createPackage();
     const installedList = runtime.listOutput;
     const firstStore = await import('../pi-package-store.js');
+    const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
+    const staleEnableRequest = { action: 'set-enabled', source, enabled: true } as const;
+    const staleEnableGrant = issuePiPackageMutationGrant(staleEnableRequest);
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
       packages: [{ source }],
     });
@@ -2184,27 +3595,36 @@ describe('Pi package executable-code boundary', () => {
     await mutateAuthorized(secondStore, { action: 'remove', source });
     runtime.listOutput = '';
 
-    await expect(firstStore.mutatePiPackage({
-      action: 'set-enabled',
-      source,
-      enabled: false,
-    })).rejects.toThrow(/not installed/);
+    const listener = vi.fn();
+    const runtimeFence = vi.fn();
+    const unsubscribe = firstStore.onPiPackagesChanged(listener);
+    try {
+      const failure = await firstStore.mutatePiPackage(
+        staleEnableRequest,
+        staleEnableGrant,
+        { onRuntimeInvalidationPublished: runtimeFence },
+      )
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({ name: 'PiPackageStateUnavailableError' });
+      expect(String(failure)).not.toContain(source);
+      expect(firstStore.piPackageMutationMayHaveChangedState(failure)).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+      expect(runtimeFence).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
 
     const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
     )) as { disabledSources: string[] };
-    expect(state.disabledSources).toEqual([]);
+    expect(state.disabledSources).not.toContain(source);
   });
 
   it('re-inspects approval state under the shared lock before staging a session snapshot', async () => {
     const { root, source } = await createPackage();
     const firstStore = await import('../pi-package-store.js');
-    await mutateAuthorized(firstStore, {
-      action: 'set-enabled',
-      source,
-      enabled: true,
-    });
+    await mutateAuthorized(firstStore, { action: 'install', source });
     const canonicalRoot = await fs.realpath(root);
     await expect(firstStore.resolveManagedPiPackageResources()).resolves.toMatchObject({
       extensions: [path.join(canonicalRoot, 'extensions', 'index.ts')],
@@ -2230,8 +3650,31 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
-  it('refreshes open settings when a failed update has already revoked approval', async () => {
+  it('preserves approval after an unchanged failed install', async () => {
     const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
+    });
+
+    runtime.listOutcomes = [{ stdout: runtime.listOutput, exitCode: 0 }];
+    runtime.exitCode = 1;
+    runtime.stderr = 'install failed';
+    await expect(mutateAuthorized(store, { action: 'install', source })).rejects.toThrow(
+      /install failed/,
+    );
+
+    runtime.exitCode = 0;
+    runtime.stderr = '';
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: true }],
+    });
+  });
+
+  it('preserves approval after an unchanged failed update and rejects later byte changes', async () => {
+    const { root, source } = await createPackage();
     const store = await import('../pi-package-store.js');
     await mutateAuthorized(store, {
       action: 'set-enabled',
@@ -2252,9 +3695,148 @@ describe('Pi package executable-code boundary', () => {
     runtime.exitCode = 0;
     runtime.stderr = '';
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
+    });
+
+    await fs.writeFile(
+      path.join(root, 'extensions', 'index.ts'),
+      'export default function changedAfterFailedUpdate() {}',
+    );
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'failed-update-changed-snapshot'),
+    })).resolves.toEqual({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: true }],
     });
     unsubscribe();
+  });
+
+  it('keeps native install success explicit when the fresh roster is unavailable', async () => {
+    const { source } = await createSkillOnlyPackage('npm:native-success-projection-unavailable');
+    runtime.listOutcomes = Array.from({ length: 4 }, () => ({
+      stderr: 'private projection failure',
+      exitCode: 1,
+    }));
+    const store = await import('../pi-package-store.js');
+
+    await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+      changed: true,
+      available: false,
+      projectionUnavailable: true,
+      affectedPackage: { source, enabled: true },
+    });
+    expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
+    const logs = JSON.stringify(loggerRuntime.warn.mock.calls);
+    expect(logs).toContain('projection-unavailable');
+    expect(logs).not.toContain('private projection failure');
+  });
+
+  it('persists an explicit disable and converges runtimes without a fresh roster read', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const runtimeFence = vi.fn();
+    runtime.listOutcomes = [{ stderr: 'list unavailable during disable', exitCode: 1 }];
+
+    const receipt = await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: false,
+    }, { onRuntimeInvalidationPublished: runtimeFence });
+
+    expect(receipt).toMatchObject({
+      changed: true,
+      available: false,
+      projectionUnavailable: true,
+    });
+    expect(runtimeFence).toHaveBeenCalledOnce();
+    expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source]);
+  });
+
+  it('durably disables a secret-bearing opaque row when the native roster is unavailable', async () => {
+    const secretSource = 'https://user:credential-secret@example.com/pkg.git?token=query-secret#fragment-secret';
+    await createPackage({ source: secretSource });
+    const store = await import('../pi-package-store.js');
+    const listed = await store.listPiPackages();
+    const row = listed.packages[0]!;
+    expect(row.source).toBe('https://example.com/pkg.git');
+    expect(row.mutationTarget).toMatch(/^cindy-pi-package:[a-f0-9]{64}$/);
+
+    runtime.spawns = [];
+    runtime.listOutcomes = [{ stderr: 'list unavailable during opaque disable', exitCode: 1 }];
+    const runtimeFence = vi.fn();
+    const receipt = await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: row.source,
+      mutationTarget: row.mutationTarget,
+      enabled: false,
+    }, { onRuntimeInvalidationPublished: runtimeFence });
+
+    expect(receipt).toMatchObject({
+      changed: true,
+      available: false,
+      projectionUnavailable: true,
+    });
+    expect(runtimeFence).toHaveBeenCalledOnce();
+    expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
+    const stateFile = path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json');
+    const stateText = await fs.readFile(stateFile, 'utf8');
+    expect(JSON.parse(stateText)).toMatchObject({ disabledSources: [row.mutationTarget] });
+    expect(stateText).not.toContain('credential-secret');
+    expect(stateText).not.toContain('query-secret');
+    expect(stateText).not.toContain('fragment-secret');
+    runtime.listOutcomes = [{ stdout: runtime.listOutput, exitCode: 0 }];
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
+
+    runtime.listOutcomes = [{ stderr: 'list unavailable during opaque enable', exitCode: 1 }];
+    const enableFence = vi.fn();
+    await expect(mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: row.source,
+      mutationTarget: row.mutationTarget,
+      enabled: true,
+    }, { onRuntimeInvalidationPublished: enableFence })).rejects.toThrow('state is unavailable');
+    expect(enableFence).not.toHaveBeenCalled();
+    expect(await fs.readFile(stateFile, 'utf8')).toBe(stateText);
+
+    runtime.listOutcomes = Array.from({ length: 2 }, () => ({
+      stdout: runtime.listOutput,
+      exitCode: 0,
+    }));
+    await expect(mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: row.source,
+      mutationTarget: row.mutationTarget,
+      enabled: true,
+    })).resolves.toMatchObject({ affectedPackage: { enabled: true } });
+    expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toMatchObject({ disabledSources: [] });
+  });
+
+  it('still requires a fresh native roster before enabling a source without an opaque target', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
+    const stateFile = path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json');
+    runtime.listOutcomes = [{ stderr: 'list unavailable during enable', exitCode: 1 }];
+    const runtimeFence = vi.fn();
+
+    await expect(mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
+    }, { onRuntimeInvalidationPublished: runtimeFence })).rejects.toThrow('state is unavailable');
+    expect(runtimeFence).not.toHaveBeenCalled();
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source]);
   });
 
   it('refreshes open settings when set-enabled persists but the follow-up list fails', async () => {
@@ -2264,16 +3846,25 @@ describe('Pi package executable-code boundary', () => {
     const unsubscribe = store.onPiPackagesChanged(listener);
     runtime.listOutcomes = [
       { stdout: runtime.listOutput, exitCode: 0 },
-      { stdout: runtime.listOutput, exitCode: 0 },
       { stderr: 'list failed after state write', exitCode: 1 },
     ];
 
-    await expect(mutateAuthorized(store, {
+    const receipt = await mutateAuthorized(store, {
       action: 'set-enabled',
       source,
       enabled: true,
-    })).rejects.toThrow(/list failed after state write/);
+    });
+    expect(receipt).toMatchObject({
+      changed: true,
+      available: false,
+      packages: [],
+      projectionUnavailable: true,
+    });
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi package mutation succeeded; Cindy list projection unavailable',
+      { action: 'set-enabled', failureCategory: 'projection-unavailable' },
+    );
 
     const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
@@ -2292,7 +3883,7 @@ describe('Pi package executable-code boundary', () => {
     unsubscribe();
   });
 
-  it('revokes approval when Pi normalizes an absolute local package source', async () => {
+  it('passes Pi’s stored local source syntax back to native update and remove', async () => {
     const { root } = await createPackage();
     const normalizedSource = path.relative(
       path.join(runtime.userData, 'pi-package-home'),
@@ -2319,25 +3910,28 @@ describe('Pi package executable-code boundary', () => {
 
     await mutateAuthorized(store, { action: 'update', source: normalizedSource });
     await mutateAuthorized(store, { action: 'remove', source: normalizedSource });
-    const canonicalRoot = await fs.realpath(root);
     expect(runtime.spawns.find(({ args }) => args.includes('update'))?.args)
-      .toContain(canonicalRoot);
+      .toContain(normalizedSource);
     expect(runtime.spawns.find(({ args }) => args.includes('remove'))?.args)
-      .toContain(canonicalRoot);
+      .toContain(normalizedSource);
   });
 
-  it('rejects URL sources that would persist embedded credentials', async () => {
+  it('passes Pi-supported credentialed URL syntax through while redacting receipts', async () => {
     const store = await import('../pi-package-store.js');
-    await expect(
-      mutateAuthorized(store, {
-        action: 'install',
-        source: 'https://user:secret@example.com/acme/package.git',
-      }),
-    ).rejects.toThrow(/credentials/);
-    expect(runtime.spawns).toEqual([]);
+    const source = 'https://user:secret@example.com/acme/package.git';
+    await expect(mutateAuthorized(store, {
+      action: 'install',
+      source,
+    })).resolves.toMatchObject({
+      affectedPackage: {
+        source: 'https://example.com/acme/package.git',
+        enabled: true,
+      },
+    });
+    expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
   });
 
-  it('quarantines oversized data-only and mixed package roots without dropping valid packages', async () => {
+  it('reports oversized Cindy analysis without disabling Pi-native package roots', async () => {
     const createLaunchPackage = async (
       source: string,
       kind: 'skill' | 'mixed',
@@ -2411,13 +4005,13 @@ describe('Pi package executable-code boundary', () => {
         { source: validSource, enabled: true },
         {
           source: oversizedDataSource,
-          enabled: false,
+          enabled: true,
           warning: 'inspection-limit',
           resources: [],
         },
         {
           source: oversizedMixedSource,
-          enabled: false,
+          enabled: true,
           warning: 'inspection-limit',
           resources: [],
         },
@@ -2463,20 +4057,18 @@ describe('Pi package executable-code boundary', () => {
       {
         source: '../direct.ts',
         name: 'direct.ts',
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
         resources: [{ kind: 'extension', name: 'direct.ts' }],
       },
       {
         source: '../convention',
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
         resources: [{ kind: 'extension', name: 'index.ts' }],
       },
     ]);
   });
 
-  it('keeps non-extension single files disabled and rejects enable attempts', async () => {
+  it('lets Pi decide how to handle a natively installed unknown single-file package', async () => {
     const directFileRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-data-file-'));
     roots.push(directFileRoot);
     const directFile = path.join(directFileRoot, 'README.md');
@@ -2488,21 +4080,17 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source,
-        enabled: false,
-        canToggle: false,
+        enabled: true,
         resources: [],
         warning: 'no-resources',
       }],
     });
-    await expect(store.capturePiPackageEnableIdentity(source)).rejects.toThrow(
-      /no launchable resources/i,
-    );
     const request = { action: 'set-enabled' as const, source, enabled: true };
     const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
     await expect(store.mutatePiPackage(
       request,
-      issuePiPackageMutationGrant(request, { expectedPackageFingerprint: null }),
-    )).rejects.toThrow(/no launchable resources/i);
+      issuePiPackageMutationGrant(request),
+    )).resolves.toMatchObject({ affectedPackage: { source, enabled: true } });
   });
 
   it('does not project convention resources that resolve outside the package root', async () => {
@@ -2527,7 +4115,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source: '../confined',
-        enabled: false,
+        enabled: true,
         resources: [],
         warning: 'no-resources',
       }],
@@ -2597,21 +4185,18 @@ describe('Pi package executable-code boundary', () => {
       packages: [
         {
           source: 'npm:empty-package',
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           resources: [],
           warning: 'no-resources',
         },
         {
           source: 'npm:theme-package',
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           resources: [{ kind: 'theme', compatibility: 'unsupported' }],
         },
         {
           source: 'npm:filtered-package',
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           resources: [],
           warning: 'no-resources',
         },
@@ -2635,7 +4220,7 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
-  it('keeps theme-only packages disabled because Cindy does not load Pi TUI themes', async () => {
+  it('lets Pi load theme-only packages despite Cindy TUI compatibility limits', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-theme-only-'));
     roots.push(root);
     const source = 'npm:theme-only';
@@ -2652,8 +4237,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source,
-        enabled: false,
-        canToggle: false,
+        enabled: true,
         resources: [{
           kind: 'theme',
           name: 'night.json',
@@ -2670,15 +4254,38 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
-  it('keeps disabled lifecycle scripts visible as a compatibility warning', async () => {
+  it('does not warn that lifecycle scripts were blocked after confirmed installs allow them', async () => {
     const { source } = await createPackage({ lifecycleScript: true });
     const store = await import('../pi-package-store.js');
-    await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, warning: 'lifecycle-scripts-disabled' }],
-    });
+    const listed = await store.listPiPackages();
+    expect(listed.packages).toMatchObject([{ source }]);
+    expect(listed.packages[0]).not.toHaveProperty('warning');
   });
 
-  it('redacts and disables unsafe URL sources already persisted by Pi', async () => {
+  it('uses an opaque mutation target whenever a multibyte source is display-truncated', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-long-source-'));
+    roots.push(root);
+    const source = `npm:${'包'.repeat(800)}`;
+    runtime.listOutput = `User packages:\n  ${source}\n    ${root}\n`;
+    const store = await import('../pi-package-store.js');
+
+    const listed = await store.listPiPackages();
+    expect(listed.packages[0]?.source).not.toBe(source);
+    expect(listed.packages[0]?.mutationTarget).toMatch(/^cindy-pi-package:[a-f0-9]{64}$/);
+    await expect(store.mutatePiPackage({
+      action: 'set-enabled',
+      source: listed.packages[0]!.source,
+      mutationTarget: listed.packages[0]!.mutationTarget,
+      enabled: false,
+    })).resolves.toMatchObject({ affectedPackage: { enabled: false } });
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([listed.packages[0]!.mutationTarget]);
+  });
+
+  it('redacts sensitive URL fields without disabling a source accepted by Pi', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-unsafe-source-'));
     roots.push(root);
     const unsafeSource = 'git:https://user:secret@example.com/acme/package.git?token=private#fragment';
@@ -2688,14 +4295,30 @@ describe('Pi package executable-code boundary', () => {
     const result = await store.listPiPackages();
     expect(result.packages).toEqual([{
       source: 'git:https://example.com/acme/package.git',
+      mutationTarget: expect.stringMatching(/^cindy-pi-package:[a-f0-9]{64}$/),
       name: 'git:https://example.com/acme/package.git',
-      enabled: false,
-      manageable: false,
+      enabled: true,
       resources: [],
       warning: 'unsafe-source',
     }]);
     expect(JSON.stringify(result)).not.toContain('secret');
     expect(JSON.stringify(result)).not.toContain('private');
+    await expect(store.mutatePiPackage({
+      action: 'set-enabled',
+      source: result.packages[0]!.source,
+      mutationTarget: result.packages[0]!.mutationTarget!,
+      enabled: false,
+    })).resolves.toMatchObject({
+      changed: true,
+      affectedPackage: { enabled: false },
+    });
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([result.packages[0]!.mutationTarget]);
+    expect(JSON.stringify(state)).not.toContain('secret');
+    expect(JSON.stringify(state)).not.toContain('private');
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'unsafe-snapshot'),
     })).resolves.toEqual({
@@ -2703,26 +4326,63 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
+  it('redacts sensitive install sources from post-mutation Main warnings', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-log-redaction-'));
+    roots.push(root);
+    const unsafeSource = 'git:https://user:secret@example.com/acme/package.git?token=private#fragment';
+    runtime.listOutput = `User packages:\n  ${unsafeSource}\n    ${root}\n`;
+    runtime.listOutcomes.push({
+      stderr: `inspection failed for ${unsafeSource}`,
+      exitCode: 1,
+    });
+    const store = await import('../pi-package-store.js');
+
+    await mutateAuthorized(store, { action: 'install', source: unsafeSource });
+
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi package installed; Cindy post-install analysis unavailable',
+      { action: 'install', failureCategory: 'projection-unavailable' },
+    );
+    const warnings = JSON.stringify(loggerRuntime.warn.mock.calls);
+    expect(warnings).not.toContain('user:secret');
+    expect(warnings).not.toContain('token=private');
+  });
+
   it('redacts unsafe saved URLs from Pi package command failures', async () => {
-    runtime.stderr = 'Failed to load https://user:secret@example.com/acme/package.git?token=private#fragment';
+    runtime.stderr = "Failed to load GIT:https://user:sec'ret@example.com/acme/package.git?token=private#fragment";
     runtime.exitCode = 1;
     const store = await import('../pi-package-store.js');
 
     const failure = await store.listPiPackages().catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain('https://example.com/acme/package.git');
-    expect((failure as Error).message).not.toContain('secret');
+    expect((failure as Error).message).toContain('GIT:https://example.com/acme/package.git');
+    expect((failure as Error).message).not.toContain("sec'ret");
+    expect((failure as Error).message).not.toContain("'ret@example.com");
     expect((failure as Error).message).not.toContain('private');
   });
 
-  it('fails closed with an inspection-limit warning for oversized manifests', async () => {
+  it('redacts every credential in compact multi-URL command failures', async () => {
+    runtime.stderr = 'Failed ["https://u1:first-secret@one.example/a","https://u2:second-secret@two.example/b?token=query-secret"]';
+    runtime.exitCode = 1;
+    const store = await import('../pi-package-store.js');
+
+    const failure = await store.listPiPackages().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).not.toContain('u1');
+    expect(message).not.toContain('first-secret');
+    expect(message).not.toContain('u2');
+    expect(message).not.toContain('second-secret');
+    expect(message).not.toContain('query-secret');
+  });
+
+  it('keeps an oversized-manifest inspection warning advisory', async () => {
     const { source } = await createPackage({ oversizedManifest: true });
     const store = await import('../pi-package-store.js');
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source,
-        enabled: false,
-        canToggle: false,
+        enabled: true,
         warning: 'inspection-limit',
         resources: [],
       }],
@@ -2748,7 +4408,6 @@ describe('Pi package executable-code boundary', () => {
     expect(result.packages[128]).toMatchObject({
       source: 'npm:package-128',
       enabled: false,
-      canToggle: false,
       warning: 'inspection-limit',
     });
     expect(result.packages[129]?.warning).toBe('inspection-limit');

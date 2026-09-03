@@ -59,6 +59,17 @@ vi.mock('../memory-settings-store.js', () => ({
   readMemorySettings: () => ({ pi: false, maker: false }),
 }));
 
+vi.mock('../pi-package-store.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../pi-package-store.js')>()),
+  resolveManagedPiNativePackagePaths: async () => [],
+  resolveManagedPiPackageResources: async () => ({
+    extensions: [],
+    skills: [],
+    promptTemplates: [],
+    packageRoots: [],
+  }),
+}));
+
 vi.mock('../pi-proxy-session-auth.js', () => ({
   registerPiProxySession: () => undefined,
 }));
