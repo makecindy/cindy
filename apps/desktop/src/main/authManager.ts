@@ -5859,9 +5859,11 @@ export async function logout(): Promise<void> {
     passportId:
       activeUser.passportId || savedVault.resources[currentAccountKey]?.metadata.passportId || '',
   };
-  const candidateAccountKeys = savedAccountSummaries(savedVault, currentAccountKey)
-    .filter((account) => account.accountKey !== currentAccountKey)
-    .map((account) => account.accountKey);
+  const candidateAccountKeys = savedVaultHasUnreadableLogoutTombstones
+    ? []
+    : savedAccountSummaries(savedVault, currentAccountKey)
+        .filter((account) => account.accountKey !== currentAccountKey)
+        .map((account) => account.accountKey);
   let removedPassport: StoredPassportSession | null = null;
 
   for (const candidateAccountKey of candidateAccountKeys) {

@@ -663,6 +663,9 @@ describe('auth login-flow reset', () => {
     expect(logoutBody).toContain('clearAuthAccountVault((vault) => {');
     expect(logoutBody).toContain('savedVaultHasUnreadableLogoutTombstones');
     expect(logoutBody).toContain(
+      'const candidateAccountKeys = savedVaultHasUnreadableLogoutTombstones',
+    );
+    expect(logoutBody).toContain(
       'replaceUnreadableLogoutTombstones: savedVaultHasUnreadableLogoutTombstones',
     );
     expect(logoutBody).toContain('removeLoggedOutVaultAccount(vault, currentIdentity)');
