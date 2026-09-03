@@ -90,6 +90,14 @@ function createHarness(options: { armed?: boolean } = {}) {
     state.maximized = false;
     windowListeners.get('unmaximize')?.();
   };
+  const showWindow = (): void => {
+    state.visible = true;
+    windowListeners.get('show')?.();
+  };
+  const restoreWindow = (): void => {
+    state.minimized = false;
+    windowListeners.get('restore')?.();
+  };
 
   return {
     state,
@@ -104,6 +112,8 @@ function createHarness(options: { armed?: boolean } = {}) {
     fireDisplay,
     osUnmaximize,
     userUnmaximize,
+    showWindow,
+    restoreWindow,
     windowListeners,
     screenListeners,
   };
@@ -178,6 +188,21 @@ describe('installMainWindowMaximizeRecovery', () => {
     expect(h.win.maximize).toHaveBeenCalledTimes(2);
   });
 
+  it('retries when the OS unmaximizes after the first settle timer', () => {
+    const h = createHarness();
+    h.state.maximized = true;
+
+    h.fireDisplay();
+    h.runTimers();
+    expect(h.win.maximize).not.toHaveBeenCalled();
+
+    h.advance(1_000);
+    h.osUnmaximize();
+    h.runTimers();
+
+    expect(h.win.maximize).toHaveBeenCalledOnce();
+  });
+
   it('honors an explicit user restore during the display-change grace window', () => {
     const h = createHarness();
     h.state.maximized = true;
@@ -207,6 +232,28 @@ describe('installMainWindowMaximizeRecovery', () => {
     expect(h.win.maximize).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['hidden', { visible: false }, 'showWindow'],
+    ['minimized', { minimized: true }, 'restoreWindow'],
+  ])('retries after a %s window becomes available', (_label, patch, makeAvailable) => {
+    const h = createHarness();
+    h.state.maximized = true;
+    Object.assign(h.state, patch);
+
+    h.fireDisplay();
+    h.runTimers();
+    expect(h.win.maximize).not.toHaveBeenCalled();
+
+    h.osUnmaximize();
+    h.runTimers();
+    h.state.maximized = false;
+    if (makeAvailable === 'showWindow') h.showWindow();
+    else h.restoreWindow();
+    h.runTimers();
+
+    expect(h.win.maximize).toHaveBeenCalledOnce();
+  });
+
   it('re-arms when the user maximizes again', () => {
     const h = createHarness({ armed: false });
 
@@ -228,6 +275,8 @@ describe('installMainWindowMaximizeRecovery', () => {
     expect(h.screen.removeListener).toHaveBeenCalledTimes(3);
     expect(h.win.removeListener).toHaveBeenCalledWith('maximize', expect.any(Function));
     expect(h.win.removeListener).toHaveBeenCalledWith('unmaximize', expect.any(Function));
+    expect(h.win.removeListener).toHaveBeenCalledWith('show', expect.any(Function));
+    expect(h.win.removeListener).toHaveBeenCalledWith('restore', expect.any(Function));
     expect(h.screenListeners.size).toBe(0);
 
     h.fireDisplay();

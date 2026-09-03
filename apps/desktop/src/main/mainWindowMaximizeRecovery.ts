@@ -35,7 +35,7 @@ const DISPLAY_CHANGE_EVENTS: readonly DisplayChangeEvent[] = [
   'display-metrics-changed',
 ];
 
-type WindowStateEvent = 'maximize' | 'unmaximize' | 'closed';
+type WindowStateEvent = 'maximize' | 'unmaximize' | 'closed' | 'show' | 'restore';
 
 export interface MaximizeRecoveryWindow {
   isDestroyed(): boolean;
@@ -94,6 +94,7 @@ export function installMainWindowMaximizeRecovery(
 
   let armed = options.armed;
   let disposed = false;
+  let pendingRecovery = false;
   let lastDisplayChangeAtMs: number | null = null;
   let reapplyTimer: unknown = null;
   let disarmTimer: unknown = null;
@@ -113,6 +114,7 @@ export function installMainWindowMaximizeRecovery(
     // any recovery work before Electron emits `unmaximize`, so a click during
     // the display-change grace window cannot be mistaken for OS re-layout.
     armed = false;
+    pendingRecovery = false;
     lastDisplayChangeAtMs = null;
     clearReapply();
     clearDisarm();
@@ -126,6 +128,8 @@ export function installMainWindowMaximizeRecovery(
     for (const event of DISPLAY_CHANGE_EVENTS) screen.removeListener(event, onDisplayChange);
     win.removeListener('maximize', onMaximize);
     win.removeListener('unmaximize', onUnmaximize);
+    win.removeListener('show', onWindowAvailable);
+    win.removeListener('restore', onWindowAvailable);
     win.removeListener('closed', dispose);
   };
 
@@ -134,9 +138,20 @@ export function installMainWindowMaximizeRecovery(
     if (disposed || !armed || win.isDestroyed()) return;
     // A hidden window (closed to tray) must not be surfaced, and a minimized
     // or fullscreen one reflects a deliberate state we should not override.
-    if (!win.isVisible() || win.isMinimized() || win.isFullScreen() || win.isMaximized()) return;
+    if (!win.isVisible() || win.isMinimized() || win.isFullScreen()) return;
+    if (win.isMaximized()) {
+      pendingRecovery = false;
+      return;
+    }
+    pendingRecovery = false;
     options.log?.info('re-applying maximized state after display change');
     win.maximize();
+  };
+
+  const scheduleReapply = (): void => {
+    if (disposed || !armed) return;
+    clearReapply();
+    reapplyTimer = setTimer(reapply, settleMs);
   };
 
   const onDisplayChange = (): void => {
@@ -145,20 +160,33 @@ export function installMainWindowMaximizeRecovery(
     // An unmaximize immediately before this change belongs to the OS re-layout.
     clearDisarm();
     if (!armed) return;
-    clearReapply();
-    reapplyTimer = setTimer(reapply, settleMs);
+    pendingRecovery = true;
+    scheduleReapply();
+  };
+
+  const onWindowAvailable = (): void => {
+    if (disposed || !armed || !pendingRecovery) return;
+    scheduleReapply();
   };
 
   const onMaximize = (): void => {
     if (disposed) return;
     clearDisarm();
     armed = true;
+    pendingRecovery = false;
   };
 
   const onUnmaximize = (): void => {
     if (disposed || !armed) return;
     const at = now();
-    if (lastDisplayChangeAtMs !== null && at - lastDisplayChangeAtMs <= graceMs) return;
+    if (lastDisplayChangeAtMs !== null && at - lastDisplayChangeAtMs <= graceMs) {
+      // Windows can emit the OS unmaximize after the first settle timer has
+      // already observed a still-maximized window. Keep the recovery request
+      // alive and retry after this late transition.
+      pendingRecovery = true;
+      scheduleReapply();
+      return;
+    }
     // Decide after the grace period: a display change arriving right after
     // means the OS restored the window, not the user.
     clearDisarm();
@@ -173,6 +201,8 @@ export function installMainWindowMaximizeRecovery(
   for (const event of DISPLAY_CHANGE_EVENTS) screen.on(event, onDisplayChange);
   win.on('maximize', onMaximize);
   win.on('unmaximize', onUnmaximize);
+  win.on('show', onWindowAvailable);
+  win.on('restore', onWindowAvailable);
   win.on('closed', dispose);
   return { dispose, notifyUserUnmaximize };
 }
