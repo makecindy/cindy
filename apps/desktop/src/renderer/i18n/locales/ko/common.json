@@ -6139,6 +6139,10 @@
       "rotateDevice": "기기 회전",
       "lockScreen": "화면 잠금",
       "unlockScreen": "화면 잠금 해제",
+      "copyScreenshot": "스크린샷 복사",
+      "screenshotCopied": "시뮬레이터 스크린샷을 복사했습니다",
+      "screenshotCopyFailed": "시뮬레이터 스크린샷을 복사하지 못했습니다. 다시 시도하세요.",
+      "moreControls": "추가 시뮬레이터 제어",
       "controlsUnavailable": "시뮬레이터 제어를 일시적으로 사용할 수 없습니다",
       "enterTextBeforeSending": "보낼 텍스트를 먼저 입력하세요",
       "agentBusyTitle": "Agent가 이 기기를 사용 중",
@@ -6174,7 +6178,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "현재 Native 가속을 사용할 수 없습니다. 다시 시도하는 동안에도 WDA 화면과 제어는 계속 사용할 수 있습니다.",
+        "available": "현재 Native 가속을 사용할 수 없습니다. 프레임 속도가 낮아지고 조작 반응이 느려질 수 있습니다.",
         "action": "Native 복구 시도",
         "recovering": "Native 가속을 복구하는 중입니다. 현재 WDA 화면과 제어는 계속 사용할 수 있습니다.",
         "recoveringAction": "Native 복구 중…",
@@ -6201,7 +6205,8 @@
         "stop": "기기 중지 중…",
         "detach": "기기 연결 해제 중…",
         "grant": "Agent 제어 권한 업데이트 중…",
-        "control": "입력 제어 업데이트 중…"
+        "control": "입력 제어 업데이트 중…",
+        "screenshot": "시뮬레이터 스크린샷 복사 중…"
       },
       "setup": {
         "localMac": "Mac의 로컬 Cindy 세션에서 이 프로젝트를 여세요.",

@@ -6139,6 +6139,10 @@
       "rotateDevice": "デバイスを回転",
       "lockScreen": "画面をロック",
       "unlockScreen": "画面をロック解除",
+      "copyScreenshot": "スクリーンショットをコピー",
+      "screenshotCopied": "シミュレータのスクリーンショットをコピーしました",
+      "screenshotCopyFailed": "シミュレータのスクリーンショットをコピーできませんでした。もう一度お試しください。",
+      "moreControls": "その他のシミュレータ操作",
       "controlsUnavailable": "シミュレータの操作は一時的に使用できません",
       "enterTextBeforeSending": "送信するテキストを入力してください",
       "agentBusyTitle": "Agent がこのデバイスを使用中",
@@ -6174,7 +6178,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "Native アクセラレーションは現在利用できません。再試行中も WDA の画面と操作は利用できます。",
+        "available": "Native アクセラレーションは現在利用できません。フレームレートが低下し、操作の反応が遅くなる場合があります。",
         "action": "Native を復旧",
         "recovering": "Native アクセラレーションを復旧しています。現在の WDA の画面と操作は引き続き利用できます。",
         "recoveringAction": "Native を復旧中…",
@@ -6201,7 +6205,8 @@
         "stop": "デバイスを停止中…",
         "detach": "デバイスを切断中…",
         "grant": "Agent の操作権限を更新中…",
-        "control": "入力制御を更新中…"
+        "control": "入力制御を更新中…",
+        "screenshot": "シミュレータのスクリーンショットをコピー中…"
       },
       "setup": {
         "localMac": "Mac のローカル Cindy セッションでこのプロジェクトを開いてください。",

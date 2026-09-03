@@ -6139,6 +6139,10 @@
       "rotateDevice": "旋轉裝置",
       "lockScreen": "鎖定螢幕",
       "unlockScreen": "解鎖螢幕",
+      "copyScreenshot": "複製截圖",
+      "screenshotCopied": "模擬器截圖已複製",
+      "screenshotCopyFailed": "無法複製模擬器截圖，請稍後再試",
+      "moreControls": "更多模擬器控制",
       "controlsUnavailable": "模擬器控制暫時不可用",
       "enterTextBeforeSending": "請先輸入要傳送的文字",
       "agentBusyTitle": "Agent 正在使用此裝置",
@@ -6174,7 +6178,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "Native 加速目前無法使用。重試期間，WDA 畫面和控制會保持可用。",
+        "available": "Native 加速目前無法使用，畫面幀率可能降低，操作延遲可能升高。",
         "action": "嘗試恢復 Native",
         "recovering": "正在恢復 Native 加速，目前的 WDA 畫面和控制會保持可用。",
         "recoveringAction": "正在恢復 Native…",
@@ -6201,7 +6205,8 @@
         "stop": "正在停止裝置…",
         "detach": "正在中斷連線裝置…",
         "grant": "正在更新 Agent 控制權限…",
-        "control": "正在更新輸入控制…"
+        "control": "正在更新輸入控制…",
+        "screenshot": "正在複製模擬器截圖…"
       },
       "setup": {
         "localMac": "請在 Mac 上的本地 Cindy 任務中開啟此專案。",

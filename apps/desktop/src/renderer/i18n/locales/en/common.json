@@ -6141,6 +6141,10 @@
       "rotateDevice": "Rotate Device",
       "lockScreen": "Lock Screen",
       "unlockScreen": "Unlock Screen",
+      "copyScreenshot": "Copy Screenshot",
+      "screenshotCopied": "Simulator screenshot copied",
+      "screenshotCopyFailed": "Couldn't copy the simulator screenshot. Try again.",
+      "moreControls": "More Simulator Controls",
       "controlsUnavailable": "Simulator controls are temporarily unavailable",
       "enterTextBeforeSending": "Enter text before sending",
       "agentBusyTitle": "Agent Using This Device",
@@ -6176,7 +6180,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "Native acceleration is unavailable. WDA stays active while you try again.",
+        "available": "Native acceleration is unavailable. Frame rates may drop and controls may respond more slowly.",
         "action": "Restore Native",
         "recovering": "Restoring Native acceleration. The current WDA view and controls stay active.",
         "recoveringAction": "Restoring Native…",
@@ -6203,7 +6207,8 @@
         "stop": "Stopping device…",
         "detach": "Detaching device…",
         "grant": "Updating Agent control…",
-        "control": "Updating input control…"
+        "control": "Updating input control…",
+        "screenshot": "Copying simulator screenshot…"
       },
       "setup": {
         "localMac": "Open this project in a local Cindy session on a Mac.",

@@ -34,6 +34,10 @@ type IOSSimulatorSessionStatus = import('../shared/iosSimulatorIpc').IOSSimulato
 type IOSSimulatorAccessRequest = import('../shared/iosSimulatorIpc').IOSSimulatorAccessRequest;
 type IOSSimulatorAccessRequestResult =
   import('../shared/iosSimulatorIpc').IOSSimulatorAccessRequestResult;
+type IOSSimulatorCopyScreenshotRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorCopyScreenshotRequest;
+type IOSSimulatorCopyScreenshotResult =
+  import('../shared/iosSimulatorIpc').IOSSimulatorCopyScreenshotResult;
 type IOSSimulatorStatusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorStatusRequest;
 type IOSSimulatorToolRequest = import('../shared/iosSimulatorIpc').IOSSimulatorToolRequest;
 type IOSSimulatorToolResponse = import('../shared/iosSimulatorIpc').IOSSimulatorToolResponse;
@@ -6362,6 +6366,9 @@ interface ElectronAPI {
         request: IOSSimulatorRetryNativeRouteRequest,
       ) => Promise<IOSSimulatorToolResponse>;
       latestFrame: (request: IOSSimulatorViewerRouteRequest) => Promise<IOSSimulatorToolResponse>;
+      copyScreenshot: (
+        request: IOSSimulatorCopyScreenshotRequest,
+      ) => Promise<IOSSimulatorCopyScreenshotResult>;
       setStreamProfile: (
         request: IOSSimulatorStreamProfileRequest,
       ) => Promise<IOSSimulatorToolResponse>;
