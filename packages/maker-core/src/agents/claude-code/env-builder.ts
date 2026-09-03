@@ -271,6 +271,86 @@ export function applySubagentModelEnv(
   else delete env.CLAUDE_CODE_SUBAGENT_MODEL;
 }
 
+export const EXPLORE_INHERIT_CAP_DISABLE_ENV = 'CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP';
+
+/**
+ * CC 判定「主模型是否在 Explore inherit cap 之内」用的家族词(2.1.259 反编译里的 `ven`,
+ * cap 值 `Cen = "opus"`,取 `ven.slice(0, indexOf(cap)+1)` = 整个数组)。CC 侧是**子串**
+ * 匹配、大小写不敏感,这里照抄它的口径,不要换成前缀或精确匹配。
+ */
+const EXPLORE_CAP_TIER_WORDS = ['haiku', 'sonnet', 'opus'] as const;
+
+/**
+ * cap 只对 Claude 家族才算「限高」。家族里不在上面三档中的成员(Fable)被 cap 收到 Opus
+ * 是上游有意的成本上限,必须保留 —— 所以这里额外识别家族标记。
+ *
+ * 与 `apps/desktop` 的 `ANTHROPIC_WIRE_MODEL_PREFIXES` 刻意不复用:那份在 main 进程,
+ * maker-core 反向 import 会破坏依赖方向(见 docs/dev-rules/architecture-invariants.md)。
+ * 两处都只是「前缀/子串兜底地板」,新增 Anthropic 家族名时同步加词即可。
+ */
+const CLAUDE_FAMILY_MARKERS = ['claude', 'fable'] as const;
+
+/**
+ * 内置 `Explore` 子代理的 inherit cap 是否该关掉。
+ *
+ * ## 上游行为(CC 2.1.198 起,CHANGELOG:「now inherits the main session's model (capped
+ * at opus) instead of running on haiku」;2.1.259 反编译)
+ *
+ * 内置 Explore 声明的是 `model: "inherit"`,但派发前先过一层 cap:
+ *
+ * ```js
+ * function FX(agent, mainLoopModel) {
+ *   if (agent.agentType !== "Explore" || agent.source !== "built-in") return agent.model;
+ *   if (env.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP) return "inherit";
+ *   return r7r(mainLoopModel) ? { inheritCap: "opus" } : "inherit";
+ * }
+ * function r7r(m) {
+ *   if (provider() !== "firstParty") return false;
+ *   return !containsAnyWord(m, ["haiku", "sonnet", "opus"]);   // 纯子串匹配
+ * }
+ * ```
+ *
+ * 而 `{ inheritCap: "opus" }` 到了 resolver 里会被拆成裸别名 `"opus"`,之后与「用户手写
+ * `model: opus`」完全同路 —— **它不是天花板,是直接替换**。
+ *
+ * ## 为什么要关
+ *
+ * 「在 cap 之内」是靠**模型名里有没有那三个词**判定的。Cindy 的 fp 路由在 CC 眼里是
+ * firstParty,而经它路由的非 Claude 模型(`gpt-5.6-sol[1m]` 等)名字里三个词都没有,于是
+ * 被判成「超过 opus」→ 静默改判成 Opus。实测:GPT 会话里 8 次 Explore 派发,3 次没带
+ * `model` 参数的全部打到 `claude-opus-5[1m]`,跨了供应商与计费(另 5 次调用时显式写了
+ * 模型,per-invocation 参数优先级更高,照旧生效)。
+ *
+ * 上游的意图对 Claude 家族是成立的(别比 Opus 更贵),对它认不出的模型则是把「未知」
+ * 当成了「更贵」。所以只在后者把开关打开,其余场景一律保持上游行为:
+ *
+ * | 主模型 | 结果 |
+ * |---|---|
+ * | Opus / Sonnet / Haiku | 不设 —— cap 本来就不触发,行为零变化 |
+ * | Fable | 不设 —— 保留上游的成本上限 |
+ * | 非 Claude(GPT / 网关模型…) | 设 —— Explore 跟随主模型 |
+ *
+ * 非 firstParty 路由本来就走不到 cap,那里设了也只是 no-op,不额外分支。
+ *
+ * ## 两处已知边界
+ *
+ * - **只在 spawn 期判一次**,与相邻的 `applySubagentModelEnv` 同语义(env 必须在 spawn 前
+ *   定好)。会话中途 `setModel` 不重算:Claude 起的会话切到 GPT 后,Explore 仍会被改判成
+ *   Opus;反向则 Explore 跟随新模型而不被限高。要闭掉得重建子进程,代价远大于收益。
+ * - **依赖一个未公开的 env**。上游哪天移除,这里静默退回现状(不会崩)。单测钉住的只是本
+ *   函数的判定表,**钉不住二进制行为** —— 上面那段反编译是 2.1.259
+ *   (`tools/claude/latest.json` 的 pin)的实测结论,升级 CC 后请回到二进制里重新核对
+ *   `FX` / `r7r` 与 `ven`／`Cen`,再决定这张表是否还成立。
+ */
+export function shouldDisableExploreInheritCap(activeModel: string | undefined): boolean {
+  const model = activeModel?.trim().toLowerCase();
+  // 拿不到本次 spawn 的模型时不猜,保持上游行为。
+  if (!model) return false;
+  if (EXPLORE_CAP_TIER_WORDS.some((word) => model.includes(word))) return false;
+  if (CLAUDE_FAMILY_MARKERS.some((word) => model.includes(word))) return false;
+  return true;
+}
+
 /**
  * 组装最终注入到 sdkQuery options.env 的字典。
  * 顺序：cleanEnv → behaviorFlags → endpoint → authEnv（鉴权最后，避免被 behaviorFlags 覆盖）
@@ -375,6 +455,17 @@ export async function buildClaudeEnv(
   // if-undefined 守卫:behaviorFlags / 用户显式覆盖优先。
   if (options.smallFastModel && env.ANTHROPIC_SMALL_FAST_MODEL === undefined) {
     env.ANTHROPIC_SMALL_FAST_MODEL = options.smallFastModel;
+  }
+
+  // 非 Claude 主模型的会话关掉内置 Explore 的 inherit cap ——
+  // 否则 CC 会把它静默改判成 Opus(判据与代价见 shouldDisableExploreInheritCap)。
+  // if-undefined 守卫:behaviorFlags 与用户显式设的值优先(这不是鉴权/路由键,
+  // 不需要像 CLAUDE_CODE_SUBAGENT_MODEL 那样强制 delete 掉继承来的残留)。
+  if (
+    env[EXPLORE_INHERIT_CAP_DISABLE_ENV] === undefined
+    && shouldDisableExploreInheritCap(options.activeModel)
+  ) {
+    env[EXPLORE_INHERIT_CAP_DISABLE_ENV] = '1';
   }
 
   // 第三道防线: 告诉 CC CLI "provider 路由由 host 接管"。

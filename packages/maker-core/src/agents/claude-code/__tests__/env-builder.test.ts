@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../../interfaces/runtime-config.js';
 import {
+  EXPLORE_INHERIT_CAP_DISABLE_ENV,
   SENSITIVE_ANTHROPIC_ENV_KEYS,
   applySubagentModelEnv,
   buildClaudeEnv,
+  shouldDisableExploreInheritCap,
 } from '../env-builder.js';
 
 const MODEL_CONTEXT_WINDOWS_ENV = 'XDT_MAKER_MODEL_CONTEXT_WINDOWS';
@@ -35,6 +37,7 @@ describe('buildClaudeEnv', () => {
   const originalSubagentModel = process.env.CLAUDE_CODE_SUBAGENT_MODEL;
   const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
   const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+  const originalExploreInheritCap = process.env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
 
   afterEach(() => {
     if (originalDisableCron === undefined) {
@@ -54,6 +57,7 @@ describe('buildClaudeEnv', () => {
     restore('CLAUDE_CODE_SUBAGENT_MODEL', originalSubagentModel);
     restore('CLAUDE_CODE_MAX_CONTEXT_TOKENS', originalMaxContextTokens);
     restore('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', originalCompactPctOverride);
+    restore(EXPLORE_INHERIT_CAP_DISABLE_ENV, originalExploreInheritCap);
   });
 
   it('disables Claude Code native cron for host-managed sessions', async () => {
@@ -348,6 +352,65 @@ describe('buildClaudeEnv', () => {
 
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
     expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+  });
+
+  describe('built-in Explore inherit cap (CC 2.1.198+)', () => {
+    // 上游把内置 Explore 的 `model: "inherit"` 按「模型名里有没有 haiku/sonnet/opus」
+    // 判定是否超过 opus,超了就**替换**成 opus。经 fp 路由的非 Claude 模型全部误判。
+    it('disables the cap for non-Claude session models so Explore inherits the parent', async () => {
+      for (const activeModel of ['gpt-5.6-sol[1m]', 'codex/gpt-5.6-sol', 'z-ai/glm-5.2[1m]']) {
+        const env = await buildClaudeEnv(createAuthAdapter(), {}, { activeModel });
+        expect(env[EXPLORE_INHERIT_CAP_DISABLE_ENV], activeModel).toBe('1');
+      }
+    });
+
+    it('keeps upstream behaviour for Claude-family session models', async () => {
+      // haiku / sonnet / opus:cap 本来就不触发,设了反而是无谓的行为变化。
+      // fable:不在那三档里 → cap 会触发,而那是上游有意的成本上限,必须保留。
+      for (const activeModel of [
+        'claude-opus-5[1m]',
+        'claude-sonnet-5',
+        'claude-haiku-4-5-20251001',
+        'claude-fable-5-1',
+        'anthropic/claude-fable-5-1',
+      ]) {
+        const env = await buildClaudeEnv(createAuthAdapter(), {}, { activeModel });
+        expect(env[EXPLORE_INHERIT_CAP_DISABLE_ENV], activeModel).toBeUndefined();
+      }
+    });
+
+    it('does not guess when the spawn model is unknown', async () => {
+      const env = await buildClaudeEnv(createAuthAdapter(), {});
+
+      expect(env[EXPLORE_INHERIT_CAP_DISABLE_ENV]).toBeUndefined();
+      expect(shouldDisableExploreInheritCap(undefined)).toBe(false);
+      expect(shouldDisableExploreInheritCap('   ')).toBe(false);
+    });
+
+    it('keeps an explicit override from behaviorFlags or the inherited host env', async () => {
+      const flagged = await buildClaudeEnv(
+        createAuthAdapter(),
+        { behaviorFlags: { [EXPLORE_INHERIT_CAP_DISABLE_ENV]: '0' } },
+        { activeModel: 'gpt-5.6-sol[1m]' },
+      );
+      expect(flagged[EXPLORE_INHERIT_CAP_DISABLE_ENV]).toBe('0');
+
+      process.env[EXPLORE_INHERIT_CAP_DISABLE_ENV] = '0';
+      const inherited = await buildClaudeEnv(createAuthAdapter(), {}, {
+        activeModel: 'gpt-5.6-sol[1m]',
+      });
+      expect(inherited[EXPLORE_INHERIT_CAP_DISABLE_ENV]).toBe('0');
+    });
+
+    it('applies to the remote spawn env too', async () => {
+      // 远端 daemon 跑的是同一个 CC CLI,同一个误判。
+      const env = await buildClaudeEnv(createAuthAdapter(), {}, {
+        mode: 'remote',
+        activeModel: 'gpt-5.6-sol[1m]',
+      });
+
+      expect(env[EXPLORE_INHERIT_CAP_DISABLE_ENV]).toBe('1');
+    });
   });
 
   it('defaults command output to plain text across common CLI color controls', async () => {
