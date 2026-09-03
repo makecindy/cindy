@@ -23,6 +23,7 @@ import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { createLogger } from './logger';
 import { getClientEndpoint } from './clientEndpointsService';
 import { isBetaChannelEnabled } from './updateChannelStore';
+import { parseAppUpdateVersion } from './updateVersionPolicy';
 
 const log = createLogger('manifestService');
 
@@ -284,9 +285,7 @@ export function clearCachedManifest(): void {
  * 不写 cache、不改当前发布通道。dev 不联网,直接返回 true。
  */
 function isUsableBetaManifest(manifest: Manifest): boolean {
-  if (typeof manifest.app?.version !== 'string' || manifest.app.version.trim().length === 0) {
-    return false;
-  }
+  if (!parseAppUpdateVersion(manifest.app?.version)) return false;
   if (process.platform !== 'linux') return true;
 
   const installer = manifest.app.installer;

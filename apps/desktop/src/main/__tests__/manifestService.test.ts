@@ -149,6 +149,19 @@ describe('probeBetaManifest', () => {
     await expect(service.probeBetaManifest()).resolves.toBe(true);
   });
 
+  it('rejects a beta manifest whose app version is not valid SemVer', async () => {
+    setRuntime('linux', 'x64');
+    mockManifestResponse(
+      JSON.stringify({
+        ...LINUX_BETA_MANIFEST,
+        app: { ...LINUX_BETA_MANIFEST.app, version: 'not-semver' },
+      }),
+    );
+    const service = await import('../manifestService');
+
+    await expect(service.probeBetaManifest()).resolves.toBe(false);
+  });
+
   it('accepts a Linux x64 beta manifest with a complete .deb installer', async () => {
     setRuntime('linux', 'x64');
     mockManifestResponse(JSON.stringify(LINUX_BETA_MANIFEST));
