@@ -3,8 +3,8 @@
  * PR 徽标在本机 gh 缺失 / 未登录时的引导判定(prGuidanceFor / prFailureCopyKey)
  * 与输入框预填事件总线(insertPromptIntoComposer / subscribePromptInsert)。
  *
- * 不变量:只有本机任务上的 gh-missing / gh-not-logged-in 把点击变成引导动作;
- * SSH / device-link 与其余失败(no-token / not-found / fetch-failed)点击仍打开 PR。
+ * 不变量:只有本机、可写输入框的任务上,gh-missing / gh-not-logged-in 才把点击变成引导;
+ * SSH / device-link / review 只读与其余失败点击仍打开 PR。
  * 预填提示词在已有草稿时必须先 splitBlock,不得拼到最后一个字符后面。
  */
 
@@ -48,15 +48,19 @@ describe('prGuidanceFor', () => {
     expect(prGuidanceFor(undefined)).toBeNull();
   });
 
-  it('Agent 不在本机时不引导:SSH(remoteHostId)与 device-link(deviceLinkDeviceId)都钳', () => {
+  it('点击无法兑现引导时退回打开 PR:远端 Agent 或只读输入框', () => {
     expect(prGuidanceFor(failed('gh-missing'), { remoteHostId: 'host-1' })).toBeNull();
     expect(prGuidanceFor(failed('gh-not-logged-in'), { remoteHostId: 'host-1' })).toBeNull();
     expect(prGuidanceFor(failed('gh-missing'), { deviceLinkDeviceId: 'dev-1' })).toBeNull();
     expect(prGuidanceFor(failed('gh-not-logged-in'), { deviceLinkDeviceId: 'dev-1' })).toBeNull();
-    expect(prGuidanceFor(failed('gh-missing'), { remoteHostId: 'host-1', deviceLinkDeviceId: 'dev-1' })).toBeNull();
-    expect(prGuidanceFor(failed('gh-missing'), { remoteHostId: null })).toBe('install');
-    expect(prGuidanceFor(failed('gh-not-logged-in'), { remoteHostId: undefined })).toBe('login');
-    expect(prGuidanceFor(failed('gh-missing'), { deviceLinkDeviceId: undefined })).toBe('install');
+    expect(prGuidanceFor(failed('gh-missing'), { readOnly: true })).toBeNull();
+    expect(prGuidanceFor(failed('gh-not-logged-in'), { readOnly: true })).toBeNull();
+    expect(prGuidanceFor(failed('gh-missing'), { remoteHostId: null, readOnly: false })).toBe(
+      'install',
+    );
+    expect(prGuidanceFor(failed('gh-not-logged-in'), { deviceLinkDeviceId: undefined })).toBe(
+      'login',
+    );
   });
 });
 

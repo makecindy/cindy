@@ -25,20 +25,21 @@ export type PrGuidanceSessionOpts = {
   remoteHostId?: string | null;
   /** device-link:本 session 归属被控设备。与 remoteHostId 互不相干,必须同时钳。 */
   deviceLinkDeviceId?: string | null;
+  /** review 等只读任务:ChatInput 永久 disabled,插入会被静默丢掉。 */
+  readOnly?: boolean;
 };
 
 /**
- * 引导只发给「gh 失败的那台机器上的 Agent」。
- * 本机桌面查的是本机 `gh auth token`;SSH / device-link 任务的 Agent 都不在这台机器上。
- * 两条远程维度任一命中 → 不引导,点击仍打开 PR。
- * (device-link 查询端已把 gh-missing / gh-not-logged-in 归一 no-token,但
- * PrRefsContext 按 PR key 共享状态,本机失败 reason 可能漏到远程任务,所以 renderer 再钳一次。)
+ * 点击会独占 chip(不再打开 PR),所以只有动作能兑现才引导:
+ *   1. 当前任务的 Agent 就在本机(非 SSH / 非 device-link)
+ *   2. 输入框能收下提示词(非 review 只读)
+ * 任一不成立 → 不引导,点击仍打开 PR。
  */
 export function prGuidanceFor(
   status: PrStatusResult | undefined,
   opts?: PrGuidanceSessionOpts,
 ): PrGuidanceAction | null {
-  if (opts?.remoteHostId || opts?.deviceLinkDeviceId) return null;
+  if (opts?.remoteHostId || opts?.deviceLinkDeviceId || opts?.readOnly) return null;
   if (!status || status.ok) return null;
   if (status.reason === 'gh-missing') return 'install';
   if (status.reason === 'gh-not-logged-in') return 'login';
