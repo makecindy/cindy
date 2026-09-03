@@ -36,7 +36,7 @@ import { buildPublishFailureEvent, shouldDispatchPublishResultFallback } from '.
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 import {
   buildSkillhubPublishParams,
-  validateRequiredCategory,
+  validatePlatformTagSelection,
   validateVisibilityScope,
   type PublishFormValues,
   type PublishVisibility,
@@ -149,7 +149,8 @@ const INITIAL_STATE: PublishState = {
   scanGates: [],
 };
 
-const PUBLISH_TEXT_LIMIT = 280;
+const DESCRIPTION_LIMIT = 2_000;
+const CHANGELOG_LIMIT = 280;
 
 /** working = 5 种 active phase 的合并语义,UI 上统一处理 */
 function isWorkingPhase(phase: PublishPhase): boolean {
@@ -681,9 +682,10 @@ export function PublishDialog({
   const nameMissing = effectiveFirstPublish && form.name.length === 0;
   const nameError = form.name.length > 0 && !isValidName(form.name);
   const displayNameError = form.displayName.length > 64;
-  const summaryError = form.summary.length > PUBLISH_TEXT_LIMIT;
+  const descriptionLength = Array.from(form.summary).length;
+  const descriptionError = descriptionLength > DESCRIPTION_LIMIT;
   const changelogRequired = !effectiveFirstPublish && form.changelog.trim().length === 0;
-  const changelogError = !effectiveFirstPublish && form.changelog.length > PUBLISH_TEXT_LIMIT;
+  const changelogError = !effectiveFirstPublish && form.changelog.length > CHANGELOG_LIMIT;
   const versionError = form.version.length > 0 && !isValidVersion(form.version);
 
   const visibilityScopeValidation = identityPolicy.ownerType
@@ -691,7 +693,7 @@ export function PublishDialog({
     : validateVisibilityScope(form);
   const visibilityAllowed = identityPolicy.allowedVisibilities.includes(form.visibility);
   const categoryValidation = effectiveFirstPublish
-    ? validateRequiredCategory({
+    ? validatePlatformTagSelection({
       loading: categoryState.loading,
       error: categoryState.error,
       categories: platformCategories,
@@ -704,7 +706,7 @@ export function PublishDialog({
     isValidVersion(form.version) &&
     categoryValidation.ok &&
     (effectiveFirstPublish ? !displayNameError : true) &&
-    (effectiveFirstPublish ? !summaryError : true) &&
+    (effectiveFirstPublish ? !descriptionError : true) &&
     !changelogRequired &&
     !changelogError &&
     visibilityAllowed &&
@@ -1057,17 +1059,16 @@ export function PublishDialog({
                     <span
                       className={cn(
                         'px-0.5 text-xs tabular-nums',
-                        summaryError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
+                        descriptionError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
                       )}
                     >
-                      {form.summary.length}/{PUBLISH_TEXT_LIMIT}
+                      {descriptionLength}/{DESCRIPTION_LIMIT}
                     </span>
                   </div>
                   <TextareaInput
                     value={form.summary}
                     onChange={(v) => setForm((f) => ({ ...f, summary: v, description: v }))}
                     placeholder={t('skillhub.publishDialog.descriptionPlaceholder')}
-                    maxLength={PUBLISH_TEXT_LIMIT}
                   />
                 </div>
               )}
@@ -1082,8 +1083,9 @@ export function PublishDialog({
                     onChange={(categorySlugs) => setForm((f) => ({ ...f, categorySlugs }))}
                     disabled={isLocked || categoryState.loading || platformCategories.length === 0}
                     ariaLabel={t('skillhub.publishDialog.categoryLabel')}
+                    placeholder={t('skillhub.publishDialog.categoryPlaceholder')}
                   />
-                  {!categoryValidation.ok && categoryValidation.reason !== 'required' && (
+                  {!categoryValidation.ok && (
                     <div className="flex items-center justify-between gap-3 px-0.5">
                       <p className="min-w-0 text-xs text-[var(--cmd-palette-item-meta)]">
                         {categoryValidation.reason === 'loading'
@@ -1107,11 +1109,6 @@ export function PublishDialog({
                         </button>
                       )}
                     </div>
-                  )}
-                  {!categoryValidation.ok && categoryValidation.reason === 'required' && (
-                    <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
-                      {t('skillhub.publishDialog.categoryRequired')}
-                    </p>
                   )}
                 </div>
               )}
@@ -1176,7 +1173,7 @@ export function PublishDialog({
                         changelogError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
                       )}
                     >
-                      {form.changelog.length}/{PUBLISH_TEXT_LIMIT}
+                      {form.changelog.length}/{CHANGELOG_LIMIT}
                     </span>
                   </div>
                   <TextareaInput
@@ -1185,7 +1182,7 @@ export function PublishDialog({
                     placeholder={t('skillhub.publishDialog.changelogPlaceholder')}
                     rows={3}
                     readOnly={isLocked}
-                    maxLength={PUBLISH_TEXT_LIMIT}
+                    maxLength={CHANGELOG_LIMIT}
                   />
                 </div>
               )}

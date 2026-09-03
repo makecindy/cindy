@@ -24,11 +24,11 @@ export interface PublishCategoryOption {
   name?: string;
 }
 
-export type RequiredCategoryValidation =
+export type PlatformTagSelectionValidation =
   | { ok: true }
-  | { ok: false; reason: 'loading' | 'load-error' | 'empty' | 'required' | 'invalid' };
+  | { ok: false; reason: 'loading' | 'load-error' | 'empty' | 'invalid' };
 
-export function validateRequiredCategory({
+export function validatePlatformTagSelection({
   loading,
   error,
   categories = [],
@@ -38,13 +38,13 @@ export function validateRequiredCategory({
   error: string | null;
   categories?: PublishCategoryOption[];
   selectedSlugs: string[];
-}): RequiredCategoryValidation {
+}): PlatformTagSelectionValidation {
+  const slugs = [...new Set(selectedSlugs.map((slug) => slug.trim()).filter(Boolean))];
+  if (slugs.length === 0) return { ok: true };
   if (loading) return { ok: false, reason: 'loading' };
   if (error) return { ok: false, reason: 'load-error' };
   if (categories.length === 0) return { ok: false, reason: 'empty' };
 
-  const slugs = [...new Set(selectedSlugs.map((slug) => slug.trim()).filter(Boolean))];
-  if (slugs.length === 0) return { ok: false, reason: 'required' };
   if (slugs.length > 50 || slugs.some((slug) => !categories.some((category) => category.slug === slug))) {
     return { ok: false, reason: 'invalid' };
   }

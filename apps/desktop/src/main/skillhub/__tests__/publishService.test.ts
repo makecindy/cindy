@@ -328,7 +328,7 @@ describe('SkillPublishService', () => {
     );
   });
 
-  it('sends the hand-filled 280-char text to Hub commit as summary', async () => {
+  it('sends the hand-filled description to Hub commit as summary', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -416,7 +416,7 @@ describe('SkillPublishService', () => {
     expect(commitCall?.[1]?.body).not.toHaveProperty('description');
   });
 
-  it('rejects a first publish without Platform tags before packing or network access', async () => {
+  it('allows a first publish without Platform tags', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -487,9 +487,15 @@ describe('SkillPublishService', () => {
       () => {},
     );
 
-    expect(result).toEqual({ success: false, errorCode: 'CATEGORY_REQUIRED' });
-    expect(pack).not.toHaveBeenCalled();
-    expect(serverApiFetch).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/commit', {
+      method: 'POST',
+      baseUrl: expect.any(Function),
+      logLabel: '/api/skills-hub',
+      body: expect.objectContaining({
+        tags: [],
+      }),
+    });
   });
 
   it('keeps an explicit empty visibleSlugs list in first-publish commit', async () => {

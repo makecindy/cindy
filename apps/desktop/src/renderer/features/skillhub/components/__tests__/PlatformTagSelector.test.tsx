@@ -19,13 +19,13 @@ describe('PlatformTagSelector', () => {
         value={['automation']}
         onChange={onChange}
         ariaLabel="Tags"
+        placeholder="Select tags (optional)"
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Automation' }).getAttribute('aria-pressed')).toBe(
-      'true',
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Productivity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tags' }));
+    expect((screen.getByRole('checkbox', { name: 'Automation' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Productivity' }));
     expect(onChange).toHaveBeenCalledWith(['automation', 'productivity']);
 
     rerender(
@@ -34,9 +34,24 @@ describe('PlatformTagSelector', () => {
         value={['automation', 'productivity']}
         onChange={onChange}
         ariaLabel="Tags"
+        placeholder="Select tags (optional)"
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Automation' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Automation' }));
     expect(onChange).toHaveBeenLastCalledWith(['productivity']);
+  });
+
+  it('shows an optional placeholder when no tags are selected', () => {
+    render(
+      <PlatformTagSelector
+        categories={categories}
+        value={[]}
+        onChange={vi.fn()}
+        ariaLabel="Tags"
+        placeholder="Select tags (optional)"
+      />,
+    );
+
+    expect(screen.getByText('Select tags (optional)')).toBeTruthy();
   });
 });

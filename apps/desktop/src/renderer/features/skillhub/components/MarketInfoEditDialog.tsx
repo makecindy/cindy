@@ -17,7 +17,7 @@ import { PlatformTagSelector } from './PlatformTagSelector';
 import type { MarketCategory } from '../../../../shared/skillhubCategory';
 import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../../shared/locale';
 
-const DESCRIPTION_LIMIT = 280;
+const DESCRIPTION_LIMIT = 2_000;
 const DISPLAY_NAME_LIMIT = 100;
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -112,9 +112,10 @@ export function MarketInfoEditDialog({
 
   const displayNameMissing = displayName.trim().length === 0;
   const displayNameOverLimit = displayName.length > DISPLAY_NAME_LIMIT;
-  const descriptionOverLimit = description.length > DESCRIPTION_LIMIT;
+  const descriptionLength = Array.from(description).length;
+  const descriptionOverLimit = descriptionLength > DESCRIPTION_LIMIT;
   const invalid = displayNameMissing || displayNameOverLimit || descriptionOverLimit
-    || categorySlugs.length === 0 || categorySlugs.length > 50;
+    || categorySlugs.length > 50;
 
   const handleSave = async () => {
     if (invalid || saving) return;
@@ -226,7 +227,7 @@ export function MarketInfoEditDialog({
                         descriptionOverLimit ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
                       )}
                     >
-                      {description.length}/{DESCRIPTION_LIMIT}
+                      {descriptionLength}/{DESCRIPTION_LIMIT}
                     </span>
                   </div>
                   <textarea
@@ -254,6 +255,7 @@ export function MarketInfoEditDialog({
                     onChange={setCategorySlugs}
                     disabled={readOnly || categoriesLoading || categories.length === 0}
                     ariaLabel={t('skillhub.publishDialog.categoryLabel')}
+                    placeholder={t('skillhub.publishDialog.categoryPlaceholder')}
                   />
                   {categoriesLoading ? (
                     <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
@@ -262,10 +264,6 @@ export function MarketInfoEditDialog({
                   ) : categories.length === 0 ? (
                     <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
                       {t('skillhub.publishDialog.categoryEmpty')}
-                    </p>
-                  ) : categorySlugs.length === 0 ? (
-                    <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
-                      {t('skillhub.publishDialog.categoryRequired')}
                     </p>
                   ) : null}
                 </div>

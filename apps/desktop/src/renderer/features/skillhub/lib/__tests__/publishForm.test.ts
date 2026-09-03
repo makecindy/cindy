@@ -4,7 +4,7 @@ import {
   buildSkillhubPublishParams,
   deptMirrorTeamSlug,
   matchesDeptMirrorTeamSlug,
-  validateRequiredCategory,
+  validatePlatformTagSelection,
   validateVisibilityScope,
   type PublishFormValues,
 } from '../publishForm';
@@ -37,53 +37,53 @@ const baseForm: PublishFormValues = {
   categorySlugs: ['engine', 'writing'],
 };
 
-describe('validateRequiredCategory', () => {
+describe('validatePlatformTagSelection', () => {
   it('blocks publishing while Hub categories are still loading', () => {
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: true,
       error: null,
       categories: [],
-      selectedSlugs: [],
+      selectedSlugs: ['engine'],
     })).toEqual({ ok: false, reason: 'loading' });
   });
 
   it('blocks publishing when Hub categories fail to load or are empty', () => {
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: 'network failed',
       categories: [],
-      selectedSlugs: [],
+      selectedSlugs: ['engine'],
     })).toEqual({ ok: false, reason: 'load-error' });
 
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories: [],
-      selectedSlugs: [],
+      selectedSlugs: ['engine'],
     })).toEqual({ ok: false, reason: 'empty' });
   });
 
-  it('requires the selected category to exist in the Hub category list', () => {
+  it('allows no tags and requires selected tags to exist in the Hub category list', () => {
     const categories = [
       { slug: 'engine', name: 'Engine' },
       { slug: 'writing', name: 'Writing' },
     ];
 
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories,
       selectedSlugs: [],
-    })).toEqual({ ok: false, reason: 'required' });
+    })).toEqual({ ok: true });
 
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories,
       selectedSlugs: ['missing'],
     })).toEqual({ ok: false, reason: 'invalid' });
 
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories,
@@ -96,7 +96,7 @@ describe('validateRequiredCategory', () => {
       slug: `tag-${index}`,
       name: `Tag ${index}`,
     }));
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories,
