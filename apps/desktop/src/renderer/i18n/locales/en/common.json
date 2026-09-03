@@ -6936,6 +6936,58 @@
     }
   },
   "newChat": {
+    "homeSuggestions": {
+      "shuffle": "Show more",
+      "dismiss": "Don't show again",
+      "downloadsDesktop": {
+        "label": "See what's piled up in Downloads and on the Desktop",
+        "prompt": "Look at my Downloads folder and Desktop. List what has piled up: the largest items, obvious duplicates, things untouched for six months or more, and anything safe to archive. For each item, say where it is, how big it is, and why you suggest dealing with it. This round is read-only; wait for me before moving or deleting anything."
+      },
+      "whatCindyCanDo": {
+        "label": "Look at this computer and tell me what you can help with",
+        "prompt": "Look at what is installed on this computer and the kinds of things I seem to work on. Then tell me the specific ways you can help, each in one sentence: when I would use it and what it would save me. Do not recite a feature list; ground it in what actually exists on this machine."
+      },
+      "recentDocs": {
+        "label": "Review my recent documents and make a list",
+        "prompt": "Look at documents I have opened or edited recently. Group them by topic, tell me how many piles of work I have, how far each has gotten, and whether anything looks abandoned. Give me a list with each file's location. Read-only; do not change my files."
+      },
+      "listCodeProjects": {
+        "label": "List the code projects on this computer",
+        "prompt": "Find code projects in the directories I commonly use. For each one, one sentence on what it is, what it is written in, and when it last changed. Then say which look like the main line of work and which look abandoned. If you find none, say so. This round is read-only; do not change any files."
+      },
+      "storageUsage": {
+        "label": "Show what's using up disk space",
+        "prompt": "Survey disk use on this computer. List directories and files from largest to smallest, and say which are caches, duplicates, or old things I probably forgot. Give a ranking plus one conclusion: which categories would free the most space. Count only; do not delete anything."
+      },
+      "unusedApps": {
+        "label": "List apps I installed but barely use",
+        "prompt": "Look at apps installed on this computer. Rank them by disk use and last-opened time, and point out which have not been opened in a long time but still take a lot of space. Give me a list; do not uninstall anything yet."
+      },
+      "uncommittedChanges": {
+        "label": "Find my latest project and check uncommitted work",
+        "prompt": "Find the code project I touched most recently. Review uncommitted changes, say what they are doing, and flag anything that looks wrong or missing. Read-only; do not change files or commit."
+      },
+      "devEnvironment": {
+        "label": "Check my development environment",
+        "prompt": "Check this machine's development environment: language runtimes and package managers, their versions, obvious conflicts or stale versions, and git config problems. Give a snapshot plus one conclusion: what to fix first. Inspect only; do not install or change config."
+      },
+      "whySlow": {
+        "label": "Find out why this computer is slow",
+        "prompt": "Find out why this computer feels slow: load, memory, disk, uptime, and the processes using the most CPU or memory. Give a short conclusion with evidence. Read-only; do not change anything, kill processes, or ask what I have open."
+      },
+      "diagnoseNetwork": {
+        "label": "Diagnose my network speed",
+        "prompt": "Diagnose this computer's network: ping, DNS, and whether it is wired or Wi-Fi. Give a one- or two-sentence conclusion. Do not run a long speed test or ask about my ISP."
+      },
+      "subscriptionSpend": {
+        "label": "Tally my subscription spending",
+        "prompt": "Scan Downloads, receipts, and local invoices for subscription charges. List service names and amounts. If you find nothing, say so. Do not change subscriptions, ask for a bank card, or sign in to email."
+      },
+      "expenseTracker": {
+        "label": "Make a simple expense tracker",
+        "prompt": "In this conversation's workspace, make a local expense tracker I can open: date, amount, category, notes. No backend, and do not ask which extra features I want."
+      }
+    },
     "noProvider": {
       "title": "No connected source for this model",
       "description": "The current model has no connected source. Connect one in Settings to start sending.",
@@ -7519,6 +7571,15 @@
     }
   },
   "onboarding": {
+    "homeZeroModel": {
+      "title": "Sign in to Cindy to continue",
+      "desc": "You don’t have any models yet. Sign in to Cindy to use dozens of top-tier models.",
+      "cta": "Sign in to Cindy",
+      "cloudTitle": "Continue with Cindy",
+      "cloudDesc": "You don’t have any models yet. Enable the official service to use dozens of top-tier models.",
+      "cloudCta": "Get started",
+      "ownApi": "I have my own model API"
+    },
     "connectProvider": {
       "title": "Connect a model provider to get started",
       "desc": "No models are available yet. Connect a provider to start chatting.",
@@ -10139,6 +10200,11 @@
       "clearSearch": "Clear skill search",
       "noSearchResults": "No matching skills found",
       "catalogFiltersAria": "SkillHub categories",
+      "categoryFiltersAria": "Filter skills by category",
+      "scrollCategoriesLeft": "View more categories to the left",
+      "scrollCategoriesRight": "View more categories to the right",
+      "categoryScrollAtStart": "Already at the first category",
+      "categoryScrollAtEnd": "Already at the last category",
       "catalogFilter": {
         "public": "Public",
         "organization": "Organization",
@@ -10438,14 +10504,12 @@
       "visibilityPublicDesc": "Visible to all users · Default",
       "versionLabel": "Version",
       "versionFormatHint": "Format: x.y.z (e.g. 1.0.1)",
-      "categoryLabel": "Category",
-      "categoryAuto": "No Tag",
-      "categoryPlaceholder": "Select a category",
-      "categoryLoading": "Loading categories…",
-      "categoryLoadFailed": "Failed to load categories. Please retry.",
-      "categoryEmpty": "No categories are available",
-      "categoryRequired": "Select a category before publishing",
-      "categoryInvalid": "This category is no longer available. Select another one.",
+      "categoryLabel": "Tags",
+      "categoryPlaceholder": "Select tags (optional)",
+      "categoryLoading": "Loading tags…",
+      "categoryLoadFailed": "Failed to load tags. Please retry.",
+      "categoryEmpty": "No Platform tags are available",
+      "categoryInvalid": "One or more tags are no longer available. Select again.",
       "retryLoadCategories": "Retry",
       "extraDeptGroup": "Departments",
       "extraTeamGroup": "Teams",

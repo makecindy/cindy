@@ -6934,6 +6934,58 @@
     }
   },
   "newChat": {
+    "homeSuggestions": {
+      "shuffle": "換一批",
+      "dismiss": "不再顯示",
+      "downloadsDesktop": {
+        "label": "看看我的下載和桌面堆了什麼，列一份該清理的清單",
+        "prompt": "看一下我的下載資料夾和桌面，統計都堆了些什麼：占空間最大的、明顯重複的、半年以上沒動過的、以及能安全封存的。給我一份清單，每一項標清在哪、多大、為什麼建議處理。這一輪只看不動，等我確認再說要不要動手。"
+      },
+      "whatCindyCanDo": {
+        "label": "看看我這台電腦上都有什麼，你能幫我做哪些事",
+        "prompt": "看一下我這台電腦上裝了什麼、我平時在弄什麼類型的東西，據此判斷我大概是做什麼的。然後告訴我：以你的能力，最能幫到我的具體是哪幾件事，每件用一句話說清在什麼場景下用、能替我省掉什麼。不要念功能清單，要針對我這台機器上真實存在的東西說。"
+      },
+      "recentDocs": {
+        "label": "看一遍我最近在弄的文件，幫我理成一份清單",
+        "prompt": "看一下我最近一段時間打開和改過的文件，按主題歸一歸，告訴我我手上大概有幾攤事、每攤到哪一步了、有沒有明顯爛尾的。給我一份清單，標清每份檔案在哪。唯讀，不要動我的檔案。"
+      },
+      "listCodeProjects": {
+        "label": "把我電腦上的程式專案列出來，講清每個是幹什麼的",
+        "prompt": "在我常用的目錄裡找出所有程式專案，列成一份清單：每個專案一句話說清是幹什麼的、用什麼寫的、最近一次改動是什麼時候。然後指出哪幾個看起來是主線、哪幾個像是已經放棄的。如果一個都沒找到，直接告訴我沒找到。這一輪唯讀，不要改任何檔案。"
+      },
+      "storageUsage": {
+        "label": "盤一下這台電腦的儲存，空間到底被什麼吃掉了",
+        "prompt": "盤一遍這台電腦的儲存：按占用從大到小列出目錄和檔案，指出哪些是快取、哪些是重複、哪些是我大概忘了的舊東西。給我一份占用排行加一句結論：刪掉哪幾類能騰出最多空間。只統計，不要刪任何東西。"
+      },
+      "unusedApps": {
+        "label": "盤一下我裝了哪些應用，哪些很久沒用還占著地方",
+        "prompt": "看一下這台電腦裝了哪些應用，按占用空間和最近使用時間排一排，指出哪些很久沒打開還占著大塊地方。給我一份清單，先不要解除安裝任何東西。"
+      },
+      "uncommittedChanges": {
+        "label": "找出我最近在改的專案，看看有什麼沒提交的、有沒有隱患",
+        "prompt": "找出我最近動過的那個程式專案，看一遍還沒提交的改動，告訴我這些改動在幹什麼、有沒有明顯的問題或漏掉的地方。唯讀，不要動我的檔案，也不要提交任何東西。"
+      },
+      "devEnvironment": {
+        "label": "檢查一遍我的開發環境，有沒有該修的",
+        "prompt": "檢查這台機器的開發環境：裝了哪些語言執行環境和套件管理器、各自什麼版本、有沒有版本衝突或者明顯過舊的、git 設定有沒有問題。給我一份現狀清單加一句結論：哪幾處建議先修。只檢查，不要自己動手安裝或改設定。"
+      },
+      "whySlow": {
+        "label": "查查電腦為什麼卡",
+        "prompt": "查這台電腦現在為什麼卡：負載、記憶體、磁碟、開機時長、占 CPU/記憶體最多的幾個行程。用幾句話給結論和依據。唯讀，不要改任何東西，不要結束行程，不要問我開了什麼。"
+      },
+      "diagnoseNetwork": {
+        "label": "診斷一下網速",
+        "prompt": "診斷這台電腦的網路：ping、DNS、現在是有線還是 Wi-Fi，用一兩句話給結論。不要跑長時間測速，不要問電信業者。"
+      },
+      "subscriptionSpend": {
+        "label": "盤點我的訂閱支出",
+        "prompt": "掃一遍下載、收據和本機帳單，盤點我的訂閱都在扣多少錢：列出服務名和金額。找不到就直接說找不到。不要改訂閱、不要問銀行卡、不要登入信箱。"
+      },
+      "expenseTracker": {
+        "label": "做個記帳小工具",
+        "prompt": "在這個任務的工作目錄裡做一個能直接打開的本機記帳小工具：日期、金額、分類、備註。不要後端、不要問還要哪些功能。"
+      }
+    },
     "noProvider": {
       "title": "當前模型沒有可用來源",
       "description": "當前模型還沒有已連線的來源，請先在設定裡連線一個再傳送。",
@@ -7517,6 +7569,15 @@
     }
   },
   "onboarding": {
+    "homeZeroModel": {
+      "title": "登入 Cindy 繼續使用",
+      "desc": "你還未設定任何模型，登入 Cindy 後即可使用數十種頂級大模型。",
+      "cta": "登入 Cindy",
+      "cloudTitle": "使用 Cindy 繼續",
+      "cloudDesc": "你還未設定任何模型，開通官方服務即可使用數十種頂級大模型。",
+      "cloudCta": "開始使用",
+      "ownApi": "我有自己的模型 API 設定"
+    },
     "connectProvider": {
       "title": "連線一個模型供應商，開始對話",
       "desc": "還沒有可用的模型。連線任意一個供應商即可開始對話。",
@@ -10123,6 +10184,11 @@
       "clearSearch": "清除技能搜尋",
       "noSearchResults": "沒有找到匹配的技能",
       "catalogFiltersAria": "SkillHub 分類",
+      "categoryFiltersAria": "按分類篩選技能",
+      "scrollCategoriesLeft": "向左查看更多分類",
+      "scrollCategoriesRight": "向右查看更多分類",
+      "categoryScrollAtStart": "已經是第一個分類",
+      "categoryScrollAtEnd": "已經是最後一個分類",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",
@@ -10422,14 +10488,12 @@
       "visibilityPublicDesc": "所有使用者可見 · 預設",
       "versionLabel": "版本號",
       "versionFormatHint": "格式：x.y.z (例如 1.0.1)",
-      "categoryLabel": "分類",
-      "categoryAuto": "不新增標籤",
-      "categoryPlaceholder": "請選擇分類",
-      "categoryLoading": "正在載入分類…",
-      "categoryLoadFailed": "分類載入失敗，請重試",
-      "categoryEmpty": "當前沒有可用分類",
-      "categoryRequired": "請選擇分類後再發布",
-      "categoryInvalid": "當前分類已不可用，請重新選擇",
+      "categoryLabel": "標籤",
+      "categoryPlaceholder": "請選擇標籤（可選）",
+      "categoryLoading": "正在載入標籤…",
+      "categoryLoadFailed": "標籤載入失敗，請重試",
+      "categoryEmpty": "目前沒有可用的平台標籤",
+      "categoryInvalid": "一個或多個標籤已不可用，請重新選擇",
       "retryLoadCategories": "重試",
       "extraDeptGroup": "部門",
       "extraTeamGroup": "團隊",

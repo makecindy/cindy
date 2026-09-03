@@ -6934,6 +6934,58 @@
     }
   },
   "newChat": {
+    "homeSuggestions": {
+      "shuffle": "换一批",
+      "dismiss": "不再显示",
+      "downloadsDesktop": {
+        "label": "看看我的下载和桌面堆了什么，列一份该清理的清单",
+        "prompt": "看一下我的下载文件夹和桌面，统计都堆了些什么：占空间最大的、明显重复的、半年以上没动过的、以及能安全归档的。给我一份清单，每一项标清在哪、多大、为什么建议处理。这一轮只看不动，等我确认再说要不要动手。"
+      },
+      "whatCindyCanDo": {
+        "label": "看看我这台电脑上都有什么，你能帮我做哪些事",
+        "prompt": "看一下我这台电脑上装了什么、我平时在弄什么类型的东西，据此判断我大概是做什么的。然后告诉我：以你的能力，最能帮到我的具体是哪几件事，每件用一句话说清在什么场景下用、能替我省掉什么。不要念功能清单，要针对我这台机器上真实存在的东西说。"
+      },
+      "recentDocs": {
+        "label": "看一遍我最近在弄的文档，帮我理成一份清单",
+        "prompt": "看一下我最近一段时间打开和改过的文档，按主题归一归，告诉我我手上大概有几摊事、每摊到哪一步了、有没有明显烂尾的。给我一份清单，标清每份文件在哪。只读，不要动我的文件。"
+      },
+      "listCodeProjects": {
+        "label": "把我电脑上的代码项目列出来，讲清每个是干什么的",
+        "prompt": "在我常用的目录里找出所有代码项目，列成一份清单：每个项目一句话说清是干什么的、用什么写的、最近一次改动是什么时候。然后指出哪几个看起来是主线、哪几个像是已经放弃的。如果一个都没找到，直接告诉我没找到。这一轮只读，不要改任何文件。"
+      },
+      "storageUsage": {
+        "label": "盘一下这台电脑的存储，空间到底被什么吃掉了",
+        "prompt": "盘一遍这台电脑的存储：按占用从大到小列出目录和文件，指出哪些是缓存、哪些是重复、哪些是我大概忘了的旧东西。给我一份占用排行加一句结论：删掉哪几类能腾出最多空间。只统计，不要删任何东西。"
+      },
+      "unusedApps": {
+        "label": "盘一下我装了哪些应用，哪些很久没用还占着地方",
+        "prompt": "看一下这台电脑装了哪些应用，按占用空间和最近使用时间排一排，指出哪些很久没打开还占着大块地方。给我一份清单，先不要卸载任何东西。"
+      },
+      "uncommittedChanges": {
+        "label": "找出我最近在改的项目，看看有什么没提交的、有没有隐患",
+        "prompt": "找出我最近动过的那个代码项目，看一遍还没提交的改动，告诉我这些改动在干什么、有没有明显的问题或漏掉的地方。只读，不要动我的文件，也不要提交任何东西。"
+      },
+      "devEnvironment": {
+        "label": "检查一遍我的开发环境，有没有该修的",
+        "prompt": "检查这台机器的开发环境：装了哪些语言运行时和包管理器、各自什么版本、有没有版本冲突或者明显过旧的、git 配置有没有问题。给我一份现状清单加一句结论：哪几处建议先修。只检查，不要自己动手装或改配置。"
+      },
+      "whySlow": {
+        "label": "查查电脑为什么卡",
+        "prompt": "查这台电脑现在为什么卡：负载、内存、磁盘、开机时长、占 CPU/内存最多的几个进程。用几句话给结论和依据。只读，不要改任何东西，不要杀进程，不要问我开了什么。"
+      },
+      "diagnoseNetwork": {
+        "label": "诊断一下网速",
+        "prompt": "诊断这台电脑的网络：ping、DNS、现在是有线还是 Wi-Fi，用一两句话给结论。不要跑长时间测速，不要问运营商。"
+      },
+      "subscriptionSpend": {
+        "label": "盘点我的订阅支出",
+        "prompt": "扫一遍下载、收据和本地账单，盘点我的订阅都在扣多少钱：列出服务名和金额。找不到就直接说找不到。不要改订阅、不要问银行卡、不要登录邮箱。"
+      },
+      "expenseTracker": {
+        "label": "做个记账小工具",
+        "prompt": "在这个任务的工作目录里做一个能直接打开的本地记账小工具：日期、金额、分类、备注。不要后端、不要问还要哪些功能。"
+      }
+    },
     "noProvider": {
       "title": "当前模型没有可用来源",
       "description": "当前模型还没有已连接的来源，请先在设置里连接一个再发送。",
@@ -7517,6 +7569,15 @@
     }
   },
   "onboarding": {
+    "homeZeroModel": {
+      "title": "登录 Cindy 继续使用",
+      "desc": "你还未配置任何模型，登录 Cindy 后即可使用数十种顶级大模型。",
+      "cta": "登录 Cindy",
+      "cloudTitle": "使用 Cindy 继续",
+      "cloudDesc": "你还未配置任何模型，开通官方服务即可使用数十种顶级大模型。",
+      "cloudCta": "开始使用",
+      "ownApi": "我有自己的模型 API 配置"
+    },
     "connectProvider": {
       "title": "连接一个模型供应商，开始对话",
       "desc": "还没有可用的模型。连接任意一个供应商即可开始对话。",
@@ -10123,6 +10184,11 @@
       "clearSearch": "清除技能搜索",
       "noSearchResults": "没有找到匹配的技能",
       "catalogFiltersAria": "SkillHub 分类",
+      "categoryFiltersAria": "按分类筛选技能",
+      "scrollCategoriesLeft": "向左查看更多分类",
+      "scrollCategoriesRight": "向右查看更多分类",
+      "categoryScrollAtStart": "已经是第一个分类",
+      "categoryScrollAtEnd": "已经是最后一个分类",
       "catalogFilter": {
         "public": "公开",
         "organization": "组织",
@@ -10422,14 +10488,12 @@
       "visibilityPublicDesc": "所有用户可见 · 默认",
       "versionLabel": "版本号",
       "versionFormatHint": "格式：x.y.z (例如 1.0.1)",
-      "categoryLabel": "分类",
-      "categoryAuto": "不添加标签",
-      "categoryPlaceholder": "请选择分类",
-      "categoryLoading": "正在加载分类…",
-      "categoryLoadFailed": "分类加载失败，请重试",
-      "categoryEmpty": "当前没有可用分类",
-      "categoryRequired": "请选择分类后再发布",
-      "categoryInvalid": "当前分类已不可用，请重新选择",
+      "categoryLabel": "标签",
+      "categoryPlaceholder": "请选择标签（可选）",
+      "categoryLoading": "正在加载标签…",
+      "categoryLoadFailed": "标签加载失败，请重试",
+      "categoryEmpty": "当前没有可用的平台标签",
+      "categoryInvalid": "一个或多个标签已不可用，请重新选择",
       "retryLoadCategories": "重试",
       "extraDeptGroup": "部门",
       "extraTeamGroup": "团队",

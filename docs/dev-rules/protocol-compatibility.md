@@ -49,8 +49,9 @@
   顶层，否则降级客户端新增的无 scope 条目在再次升级时无法被识别。
 - `isMine` 表示归属当前个人或组织，逐 Skill 写权限只看服务端 `canManage`，客户端不得用
   账号级写能力与 `isMine` 推导管理权。
-- 作者标签通过 `tags: string[]` 传标签名称；`source=platform` 的治理标签只展示和筛选，
-  不作为作者编辑项提交。
+- Skill 标签全部由 Platform 管理；客户端通过 Skill Tab 已有的 `/categories` 能力获取可选标签，
+  发布和编辑时只在兼容字段 `tags: string[]` 中提交已存在的稳定 slug（可为空数组），不提交标签名称或多语言内容。
+- 服务端返回的 `tags` / `categories` 字段继续保持 wire 兼容，客户端不得再引入作者标签语义。
 - Cindy Skill Hub 客户端与服务端在首次对外发布前同步收紧以上契约，不为未发布过的中间
   协议增加 fallback；已经发布的旧客户端仍使用原有 XD Skill Hub endpoint，不受此契约影响。
 

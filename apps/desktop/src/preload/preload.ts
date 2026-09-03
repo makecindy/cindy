@@ -3030,7 +3030,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         };
         visibleDeptIds: string[];
         categories?: string[];
-        tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
+        tags?: Array<{ slug: string; name: string; source?: 'platform' }>;
         githubUrl?: string | null;
         publishedAt: string;
         downloads: number;
@@ -3096,6 +3096,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         summary?: string;
         description?: string;
         tags?: string[];
+        contentLocale?: import('../shared/locale').SupportedLocale;
         visibility?: 'private' | 'shared' | 'public';
         /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
         teamSlug?: string | null;
@@ -3139,13 +3140,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('skillhub:get-published-visibility', { name }),
 
     // Market 分类列表
-    listCategories: (): Promise<{
+    listCategories: (params?: {
+      scope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
+    }): Promise<{
       success: boolean;
       categories?: import('../shared/skillhubCategory').MarketCategory[];
       totalCount?: number;
       myTotalCount?: number;
       error?: string;
-    }> => ipcRenderer.invoke('skillhub:list-categories'),
+    }> => ipcRenderer.invoke('skillhub:list-categories', params),
 
     // 查询发布后的安全扫描状态
     getScanStatus: (params: {
