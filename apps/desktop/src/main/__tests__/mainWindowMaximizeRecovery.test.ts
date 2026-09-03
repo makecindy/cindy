@@ -88,7 +88,7 @@ function createHarness(options: { armed?: boolean } = {}) {
     windowListeners.get('unmaximize')?.();
   };
   const userUnmaximize = (): void => {
-    recovery.notifyUserUnmaximize();
+    recovery.notifyUserUnmaximizeIntent();
     state.maximized = false;
     windowListeners.get('unmaximize')?.();
   };
@@ -211,6 +211,40 @@ describe('installMainWindowMaximizeRecovery', () => {
 
     h.fireDisplay();
     h.userUnmaximize();
+    h.runTimers();
+
+    expect(h.win.maximize).not.toHaveBeenCalled();
+
+    h.fireDisplay();
+    h.runTimers();
+    expect(h.win.maximize).not.toHaveBeenCalled();
+  });
+
+  it('keeps recovery armed when a native restore intent is not followed by unmaximize', () => {
+    const h = createHarness();
+    h.state.maximized = true;
+
+    h.fireDisplay();
+    h.runTimers();
+    expect(h.win.maximize).not.toHaveBeenCalled();
+
+    h.recovery.notifyUserUnmaximizeIntent();
+    h.advance(600);
+    h.osUnmaximize();
+    h.runTimers();
+
+    expect(h.win.maximize).toHaveBeenCalledOnce();
+  });
+
+  it('cancels a late OS re-apply when native restore intent follows unmaximize', () => {
+    const h = createHarness();
+    h.state.maximized = true;
+
+    h.fireDisplay();
+    h.runTimers();
+    h.advance(1_000);
+    h.osUnmaximize();
+    h.recovery.notifyUserUnmaximizeIntent();
     h.runTimers();
 
     expect(h.win.maximize).not.toHaveBeenCalled();

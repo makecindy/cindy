@@ -3717,21 +3717,26 @@ const createWindow = () => {
   // state to disk on `close`. Must run before any user resize event fires.
   mainWindowState.manage(mainWindow);
   if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
-  const maximizeRecovery = installMainWindowMaximizeRecovery(mainWindow, screen, {
-    armed: shouldRestoreMaximized,
-    log: createSchedulerLogger('main-window-maximize-recovery'),
-  });
-  mainWindowMaximizeRecoveryController = maximizeRecovery;
-  const removeNativeRestoreIntent = installMainWindowNativeRestoreIntent(
-    mainWindow,
-    maximizeRecovery.notifyUserUnmaximize,
-  );
-  mainWindow.once('closed', () => {
-    removeNativeRestoreIntent();
-    if (mainWindowMaximizeRecoveryController === maximizeRecovery) {
-      mainWindowMaximizeRecoveryController = null;
-    }
-  });
+  // Windows can transiently unmaximize during display/DPI re-layout. macOS
+  // owns its native Zoom behavior, so do not install the Windows recovery
+  // state machine there.
+  if (process.platform === 'win32') {
+    const maximizeRecovery = installMainWindowMaximizeRecovery(mainWindow, screen, {
+      armed: shouldRestoreMaximized,
+      log: createSchedulerLogger('main-window-maximize-recovery'),
+    });
+    mainWindowMaximizeRecoveryController = maximizeRecovery;
+    const removeNativeRestoreIntent = installMainWindowNativeRestoreIntent(
+      mainWindow,
+      maximizeRecovery.notifyUserUnmaximizeIntent,
+    );
+    mainWindow.once('closed', () => {
+      removeNativeRestoreIntent();
+      if (mainWindowMaximizeRecoveryController === maximizeRecovery) {
+        mainWindowMaximizeRecoveryController = null;
+      }
+    });
+  }
 
   // dev-only:F12 切换 DevTools 的兜底通道。走 before-input-event 在 main 侧
   // 拦截,按键根本不进 renderer —— 不受页面内快捷键系统 / 输入焦点 / 菜单
@@ -4740,7 +4745,7 @@ const registerIpcHandlers = () => {
     if (!win) return;
     if (win.isMaximized()) {
       if (win === mainWindowRef) {
-        mainWindowMaximizeRecoveryController?.notifyUserUnmaximize();
+        mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
       }
       win.unmaximize();
     } else {

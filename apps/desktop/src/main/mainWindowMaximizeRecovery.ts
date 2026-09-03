@@ -99,13 +99,13 @@ export interface MaximizeRecoveryNativeWindow extends MaximizeRecoveryWindow {
  */
 export function installMainWindowNativeRestoreIntent(
   win: MaximizeRecoveryNativeWindow,
-  notifyUserUnmaximize: () => void,
+  notifyUserUnmaximizeIntent: () => void,
   platform: NodeJS.Platform = process.platform,
 ): () => void {
   if (platform !== 'win32') return () => {};
 
-  const onWillMove = (): void => notifyUserUnmaximize();
-  const onWillResize = (): void => notifyUserUnmaximize();
+  const onWillMove = (): void => notifyUserUnmaximizeIntent();
+  const onWillResize = (): void => notifyUserUnmaximizeIntent();
   const onBeforeMouseEvent = (_event: unknown, mouse: MaximizeRecoveryMouseInput): void => {
     if (
       mouse.type === 'mouseDown' &&
@@ -114,7 +114,7 @@ export function installMainWindowNativeRestoreIntent(
       mouse.y >= 0 &&
       mouse.y <= 46
     ) {
-      notifyUserUnmaximize();
+      notifyUserUnmaximizeIntent();
     }
   };
   const onBeforeInputEvent = (_event: unknown, input: MaximizeRecoveryInput): void => {
@@ -126,7 +126,7 @@ export function installMainWindowNativeRestoreIntent(
       input.key === 'ArrowDown' &&
       hasWindowsModifier
     ) {
-      notifyUserUnmaximize();
+      notifyUserUnmaximizeIntent();
     }
   };
 
@@ -157,13 +157,15 @@ export interface MaximizeRecoveryOptions {
    * keeps recovery armed; anything further away is treated as the user's choice.
    */
   graceMs?: number;
+  /** How long a native input signal may be paired with an actual unmaximize. */
+  userIntentMs?: number;
 }
 
 export interface MainWindowMaximizeRecoveryController {
   /** Stop listening for display and window state changes. */
   dispose(): void;
-  /** Mark the next unmaximize as an explicit user request, not OS re-layout. */
-  notifyUserUnmaximize(): void;
+  /** Record a possible user restore; it only disarms once unmaximize is observed. */
+  notifyUserUnmaximizeIntent(): void;
 }
 
 /**
@@ -181,10 +183,13 @@ export function installMainWindowMaximizeRecovery(
   const clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
   const settleMs = options.settleMs ?? 300;
   const graceMs = options.graceMs ?? 2_000;
+  const userIntentMs = options.userIntentMs ?? 500;
 
   let armed = options.armed;
   let disposed = false;
   let pendingRecovery = false;
+  let pendingUserUnmaximizeAtMs: number | null = null;
+  let lastUnmaximizeAtMs: number | null = null;
   let lastDisplayChangeAtMs: number | null = null;
   let reapplyTimer: unknown = null;
   let disarmTimer: unknown = null;
@@ -198,16 +203,31 @@ export function installMainWindowMaximizeRecovery(
     disarmTimer = null;
   };
 
-  const notifyUserUnmaximize = (): void => {
-    if (disposed) return;
-    // The renderer's custom title-bar control is an explicit user choice. Clear
-    // any recovery work before Electron emits `unmaximize`, so a click during
-    // the display-change grace window cannot be mistaken for OS re-layout.
+  const disarmForConfirmedUserUnmaximize = (): void => {
     armed = false;
     pendingRecovery = false;
+    pendingUserUnmaximizeAtMs = null;
+    lastUnmaximizeAtMs = null;
     lastDisplayChangeAtMs = null;
     clearReapply();
     clearDisarm();
+  };
+
+  const notifyUserUnmaximizeIntent = (): void => {
+    if (disposed) return;
+    const at = now();
+    // Manual move/resize can be reported immediately after `unmaximize`. Pair
+    // either event order, but never disarm for an input signal by itself.
+    if (
+      lastUnmaximizeAtMs !== null &&
+      at - lastUnmaximizeAtMs >= 0 &&
+      at - lastUnmaximizeAtMs <= userIntentMs &&
+      !win.isMaximized()
+    ) {
+      disarmForConfirmedUserUnmaximize();
+      return;
+    }
+    pendingUserUnmaximizeAtMs = at;
   };
 
   const dispose = (): void => {
@@ -264,11 +284,23 @@ export function installMainWindowMaximizeRecovery(
     clearDisarm();
     armed = true;
     pendingRecovery = false;
+    pendingUserUnmaximizeAtMs = null;
+    lastUnmaximizeAtMs = null;
   };
 
   const onUnmaximize = (): void => {
     if (disposed || !armed) return;
     const at = now();
+    lastUnmaximizeAtMs = at;
+    if (
+      pendingUserUnmaximizeAtMs !== null &&
+      at - pendingUserUnmaximizeAtMs >= 0 &&
+      at - pendingUserUnmaximizeAtMs <= userIntentMs
+    ) {
+      disarmForConfirmedUserUnmaximize();
+      return;
+    }
+    pendingUserUnmaximizeAtMs = null;
     if (lastDisplayChangeAtMs !== null && at - lastDisplayChangeAtMs <= graceMs) {
       // Windows can emit the OS unmaximize after the first settle timer has
       // already observed a still-maximized window. Keep the recovery request
@@ -294,5 +326,5 @@ export function installMainWindowMaximizeRecovery(
   win.on('show', onWindowAvailable);
   win.on('restore', onWindowAvailable);
   win.on('closed', dispose);
-  return { dispose, notifyUserUnmaximize };
+  return { dispose, notifyUserUnmaximizeIntent };
 }
