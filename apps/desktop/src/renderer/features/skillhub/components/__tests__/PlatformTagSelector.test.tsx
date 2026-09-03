@@ -54,4 +54,24 @@ describe('PlatformTagSelector', () => {
 
     expect(screen.getByText('Select tags (optional)')).toBeTruthy();
   });
+
+  it('keeps wheel events inside the portalled options list', () => {
+    const onOuterWheel = vi.fn();
+    render(
+      <div onWheel={onOuterWheel}>
+        <PlatformTagSelector
+          categories={categories}
+          value={[]}
+          onChange={vi.fn()}
+          ariaLabel="Tags"
+          placeholder="Select tags (optional)"
+        />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tags' }));
+    fireEvent.wheel(screen.getByTestId('platform-tag-options'), { deltaY: 120 });
+
+    expect(onOuterWheel).not.toHaveBeenCalled();
+  });
 });

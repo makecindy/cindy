@@ -59,12 +59,17 @@ export function PlatformTagSelector({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
+          data-testid="platform-tag-options"
           side="bottom"
           align="start"
           sideOffset={4}
           onOpenAutoFocus={(event) => event.preventDefault()}
+          onWheel={(event) => {
+            // The parent Dialog's scroll lock otherwise cancels wheel input from this portal.
+            event.stopPropagation();
+          }}
           className={cn(
-            'z-[10010] max-h-52 w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl border p-1',
+            'z-[10010] max-h-52 w-[var(--radix-popover-trigger-width)] overflow-y-auto overscroll-contain rounded-xl border p-1',
             'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
             '[box-shadow:var(--cmd-palette-shadow)]',
           )}
