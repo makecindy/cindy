@@ -292,6 +292,28 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('runs the caller guard at the final LiteLLM dispatch boundary', async () => {
+    chainState.refs = ['litellm-gpt-5.4-mini'];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'must not dispatch' } }] }),
+    } as never);
+
+    let guardCalls = 0;
+    const beforeDispatch = vi.fn(async () => {
+      guardCalls += 1;
+      return guardCalls < 3;
+    });
+    const result = await requestUtilityText(makerMock(false), 'must stay guarded', {
+      beforeDispatch,
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(beforeDispatch).toHaveBeenCalledTimes(3);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('applies paid availability only to direct XD LiteLLM utility routes', () => {
     xdPaymentRequiredRoute.mockImplementation((model) => model === 'paid-model');
 

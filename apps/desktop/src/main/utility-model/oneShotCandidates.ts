@@ -1387,6 +1387,13 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         signal: opts?.signal,
         systemPrompt: opts?.systemPrompt,
         responseInstructions: opts?.responseInstructions,
+        beforeDispatch: opts?.beforeDispatch
+          ? () => opts.beforeDispatch!({
+            providerId: utilityProfileRouteProviderId(profile),
+            agentKind: 'codex',
+            model: profile.model,
+          })
+          : undefined,
         routeStillAllowed: () => !isUtilityRoutePaymentRequired(profile),
       }),
     },
@@ -1405,6 +1412,8 @@ async function requestLiteLlmText(input: {
   signal?: AbortSignal;
   systemPrompt?: string;
   responseInstructions?: string;
+  /** Async final dispatch fence, including owner/settings checks. */
+  beforeDispatch?: () => Promise<boolean>;
   /** Synchronous owner entitlement fence immediately before the HTTP request. */
   routeStillAllowed?: () => boolean;
 }): Promise<string> {
@@ -1415,6 +1424,9 @@ async function requestLiteLlmText(input: {
   else input.signal?.addEventListener('abort', abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (input.beforeDispatch && !(await input.beforeDispatch())) {
+      throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    }
     if (input.routeStillAllowed && !input.routeStillAllowed()) {
       throw new UtilityTextExecutionError({ reason: 'request_failed' });
     }
