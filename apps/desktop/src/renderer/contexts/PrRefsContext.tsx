@@ -38,7 +38,12 @@ import {
 } from 'react';
 
 import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
-import { prStatusKey, MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
+import {
+  prStatusKey,
+  shouldApplyPrStatus,
+  MAX_STATUS_QUERIES,
+  PR_STATUS_REFRESH_INTERVAL_MS,
+} from '@/lib/prStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { isRemoteDeviceMarkedDisconnected } from '@/features/device-link/remoteProjectsStore';
 import { createLogger } from '@/lib/logger';
@@ -144,9 +149,9 @@ function createPrCacheStore(): PrCacheStore {
       for (const result of results) {
         const key = prStatusKey(result);
         const prev = statuses.get(key);
-        // 本机成功与远端 no-token/not-found 会写同一把 PR 键。失败结果不得覆盖
-        // 已有成功态,否则徽标会随两端轮询来回降级。
-        if (prev?.ok === true && result.ok === false) continue;
+        // 本机与 device-link 写同一把 PR 键。成功不被失败覆盖;本机可操作失败
+        // (gh-missing / gh-not-logged-in)不被远端归一后的 no-token 覆盖。
+        if (!shouldApplyPrStatus(prev, result)) continue;
         if (sameStatus(prev, result)) continue;
         statuses.set(key, result);
         changed = true;
