@@ -752,7 +752,7 @@
         "description": "Linux currently ships as a .deb for Ubuntu 22.04 / 24.04. When a newer build is available, the app downloads it and asks for your system password to install.",
         "item1": "First install with sudo apt install ./cindy-<version>-<arch>.deb (amd64 on x64, arm64 on arm64).",
         "item2": "In-app updates download the .deb. After you choose Update, a system prompt installs it over the current package.",
-        "item3": "Linux does not offer the beta channel or idle auto-install, because installing requires your password."
+        "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Neither architecture supports idle auto-install because installation requires system authorization."
       },
       "qnaTitle": "Ask directly",
       "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",

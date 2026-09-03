@@ -752,7 +752,7 @@
         "description": "Linux 目前提供 Ubuntu 22.04 / 24.04 的 .deb 包。有新版本时，应用会下载安装包，安装时需要系统密码。",
         "item1": "首次安装用 sudo apt install ./cindy-<版本>-<架构>.deb（x64 为 amd64，arm64 为 arm64）。",
         "item2": "应用内更新会下载 .deb，点更新后通过系统权限提示覆盖安装。",
-        "item3": "Linux 暂不提供 Beta 渠道和空闲时自动安装，因为安装需要输入密码。"
+        "item3": "Linux x64 支持 Beta 渠道，arm64 暂不支持。两种架构都不支持空闲时自动安装，因为安装需要系统授权。"
       },
       "qnaTitle": "直接提问",
       "qnaDescription": "如果 overview 里没有覆盖到你的问题，可以直接问我该怎么做。",

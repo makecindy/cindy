@@ -1142,6 +1142,8 @@ type CindyMediaPreferenceKind = {
 
 interface ElectronAPI {
   platform: string;
+  /** 当前 Desktop 构建是否具备 Beta 更新渠道。 */
+  supportsBetaUpdateChannel?: boolean;
   windowBackdropMaterial: import('../shared/windowBackdrop').WindowsBackdropMaterial;
   onWindowBackdropMaterialChanged?: (
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
