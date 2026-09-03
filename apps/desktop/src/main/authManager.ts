@@ -1559,7 +1559,8 @@ async function commitDesktopRefreshCredentials(
         options.allowUnclaimedVault === true &&
         vault.activeAccountKey === null &&
         typeof vault.signedOutAt !== 'number' &&
-        Object.keys(vault.resources).length === 0;
+        Object.keys(vault.resources).length === 0 &&
+        !loggedOutAccountKeySet(vault).has(key);
       const stillOwnsActiveSession =
         requestedTokenStillStored && (vault.activeAccountKey === key || canClaimUninitializedVault);
       const passportId = pair.membership.passportId;

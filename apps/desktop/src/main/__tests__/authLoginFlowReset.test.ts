@@ -635,8 +635,11 @@ describe('auth login-flow reset', () => {
       '\n}\n\n/**\n * Account refresh tokens',
       refreshCommitStart,
     );
-    expect(source.slice(refreshCommitStart, refreshCommitEnd)).toContain(
-      "typeof vault.signedOutAt !== 'number'",
+    const refreshCommitBody = source.slice(refreshCommitStart, refreshCommitEnd);
+    expect(refreshCommitBody).toContain("typeof vault.signedOutAt !== 'number'");
+    expect(refreshCommitBody).toContain('!loggedOutAccountKeySet(vault).has(key)');
+    expect(refreshCommitBody.indexOf('!loggedOutAccountKeySet(vault).has(key)')).toBeGreaterThan(
+      refreshCommitBody.indexOf('options.allowUnclaimedVault === true'),
     );
 
     const resourceWriteStart = source.indexOf('function writeResourceSessionToVault(');
