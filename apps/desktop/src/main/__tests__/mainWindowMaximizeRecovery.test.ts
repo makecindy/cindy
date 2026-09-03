@@ -110,6 +110,10 @@ function createHarness(options: { armed?: boolean } = {}) {
     state.minimized = false;
     windowListeners.get('restore')?.();
   };
+  const leaveFullscreen = (): void => {
+    state.fullscreen = false;
+    windowListeners.get('leave-full-screen')?.();
+  };
 
   return {
     state,
@@ -126,6 +130,7 @@ function createHarness(options: { armed?: boolean } = {}) {
     userUnmaximize,
     showWindow,
     restoreWindow,
+    leaveFullscreen,
     windowListeners,
     screenListeners,
   };
@@ -314,6 +319,23 @@ describe('installMainWindowMaximizeRecovery', () => {
     expect(h.win.maximize).toHaveBeenCalledOnce();
   });
 
+  it('retries after leaving fullscreen when a display recovery was pending', () => {
+    const h = createHarness();
+    h.state.maximized = true;
+    h.state.fullscreen = true;
+
+    h.fireDisplay();
+    h.runTimers();
+    h.osUnmaximize();
+    h.runTimers();
+    expect(h.win.maximize).not.toHaveBeenCalled();
+
+    h.leaveFullscreen();
+    h.runTimers();
+
+    expect(h.win.maximize).toHaveBeenCalledOnce();
+  });
+
   it('re-arms when the user maximizes again', () => {
     const h = createHarness({ armed: false });
 
@@ -337,6 +359,7 @@ describe('installMainWindowMaximizeRecovery', () => {
     expect(h.win.removeListener).toHaveBeenCalledWith('unmaximize', expect.any(Function));
     expect(h.win.removeListener).toHaveBeenCalledWith('show', expect.any(Function));
     expect(h.win.removeListener).toHaveBeenCalledWith('restore', expect.any(Function));
+    expect(h.win.removeListener).toHaveBeenCalledWith('leave-full-screen', expect.any(Function));
     expect(h.screenListeners.size).toBe(0);
 
     h.fireDisplay();

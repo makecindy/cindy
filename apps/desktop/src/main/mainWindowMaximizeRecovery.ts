@@ -36,7 +36,14 @@ const DISPLAY_CHANGE_EVENTS: readonly DisplayChangeEvent[] = [
 ];
 
 type WindowStateEvent =
-  'maximize' | 'unmaximize' | 'closed' | 'show' | 'restore' | 'will-move' | 'will-resize';
+  | 'maximize'
+  | 'unmaximize'
+  | 'closed'
+  | 'show'
+  | 'restore'
+  | 'leave-full-screen'
+  | 'will-move'
+  | 'will-resize';
 
 export interface MaximizeRecoveryWindow {
   isDestroyed(): boolean;
@@ -272,6 +279,7 @@ export function installMainWindowMaximizeRecovery(
     win.removeListener('unmaximize', onUnmaximize);
     win.removeListener('show', onWindowAvailable);
     win.removeListener('restore', onWindowAvailable);
+    win.removeListener('leave-full-screen', onWindowAvailable);
     win.removeListener('closed', dispose);
   };
 
@@ -357,6 +365,7 @@ export function installMainWindowMaximizeRecovery(
   win.on('unmaximize', onUnmaximize);
   win.on('show', onWindowAvailable);
   win.on('restore', onWindowAvailable);
+  win.on('leave-full-screen', onWindowAvailable);
   win.on('closed', dispose);
   return { dispose, notifyUserUnmaximizeIntent };
 }
