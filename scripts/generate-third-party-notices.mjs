@@ -61,6 +61,15 @@ function discoverWorkspaceDirs() {
 const PACKAGE_POLICIES = {
   // https://github.com/fabiospampinato/khroma (仓库内 LICENSE 为 MIT,npm 包漏带字段)
   khroma: { license: "MIT", url: "https://github.com/fabiospampinato/khroma" },
+  // 以下三个 substack 旧包经 exceljs → unzipper → binary 进入 desktop 闭包,
+  // 上游仓库已随作者删号下线,包内元数据缺失或写作 "MIT/X11"(非法 SPDX 表达)。
+  // buffers@0.1.1 包内无 license 字段:上游仓库后续 commit(1b745ee)补声明 MIT,
+  // Debian node-buffers/0.1.1-5 copyright 与 ClearlyDefined 均审定为 Expat/MIT。
+  buffers: { license: "MIT", url: "https://github.com/substack/node-buffers" },
+  // package.json 声明 "MIT/X11",归一为 MIT。
+  chainsaw: { license: "MIT", url: "https://github.com/substack/node-chainsaw" },
+  // 包内 LICENSE 文件明示 MIT/X11,归一为 MIT。
+  traverse: { license: "MIT", url: "https://github.com/substack/js-traverse" },
   // 明确选择双许可证中的宽松分支,避免声明口径含糊。
   jszip: { license: "MIT" },
   "node-forge": { license: "BSD-3-Clause" },
@@ -1354,6 +1363,7 @@ function assertTrackedBinariesRegistered() {
   const registeredPrefixes = [
     "apps/android-platform-tools-bin/",
     "apps/desktop/native/sqlite-vec/",
+    "apps/desktop/resources/cindy-updater-runtime/",
     "apps/mobile/assets/fonts/JetBrainsMono-",
   ];
   const files = execFileSync("git", ["ls-files", "-z"], {
