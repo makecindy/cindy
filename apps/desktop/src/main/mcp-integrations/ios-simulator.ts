@@ -577,6 +577,11 @@ export interface IOSSimulatorHost {
   getStatus(sessionId: string): Promise<IOSSimulatorSessionStatus>;
   /** Read-only, redacted plugin projection; never reconciles or renews an ownership lease. */
   getPluginStatus(sessionId: string): Promise<GhostIOSSimulatorStatusProbeResult>;
+  /** Capture one exact owned device as PNG bytes without creating a media attachment. */
+  captureScreenshotBytes(
+    sessionId: string,
+    route: Omit<IOSSimulatorMutationRoute, 'sessionId'>,
+  ): Promise<Buffer>;
   /** Synchronously retire media/input owned by one exact revoked renderer grant. */
   revokeRendererViewer(sessionId: string, viewerWebContentsId: number): number;
   callTool(
@@ -4325,6 +4330,40 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
     },
     getStatus: inspectForSession,
     getPluginStatus: inspectForPlugin,
+    async captureScreenshotBytes(sessionId, route) {
+      const sessionAdmissionEpoch = sessionOperationAdmissionEpochs.get(sessionId) ?? 0;
+      const instanceAdmissionEpoch = captureInstanceOperationAdmission(
+        route.instanceId,
+        'screenshot',
+      );
+      const resolved = await resolveSession(sessionId);
+      if (!resolved.ok) {
+        throw new IOSSimulatorInstanceError(
+          'INSTANCE_NOT_OWNED',
+          'The simulator is no longer attached to this task.',
+          true,
+        );
+      }
+      assertHostActive();
+      await reconcilePersistedOwnership();
+      assertHostActive();
+      return runHostMutation(
+        { ...route, sessionId: resolved.sessionId },
+        { sessionId: resolved.sessionId, origin: 'user' },
+        async (instance, signal) => {
+          assertSessionOperationAdmission(instance.sessionId, sessionAdmissionEpoch, 'screenshot');
+          assertInstanceOperationAdmission(
+            instance.instanceId,
+            instanceAdmissionEpoch,
+            'screenshot',
+          );
+          return mediaCapture.captureScreenshotBytes({
+            simulatorUdid: instance.simulatorUdid,
+            signal,
+          });
+        },
+      );
+    },
     revokeRendererViewer(sessionId, viewerWebContentsId) {
       const revokedInstanceIds = revokeRendererViewerIntents(sessionId, viewerWebContentsId);
       for (const [instanceId, viewer] of [...viewerSessions]) {
@@ -5772,7 +5811,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
             if (context?.origin !== 'user') {
               requireAgentInteractionSnapshot(instance, args);
             }
-            await running.driver.home(signal);
+            await running.driver.home(running.driverSessionId, signal);
             screenMaps.invalidate(instance.instanceId);
             return {
               backend: 'wda' as const,
@@ -7424,6 +7463,13 @@ export function callIOSSimulatorHostTool(
   sessionId: string,
 ): Promise<IOSSimulatorHostResult> {
   return initializeIOSSimulatorHost().callTool(name, args, { sessionId, origin: 'user' });
+}
+
+export function captureIOSSimulatorScreenshotBytes(
+  sessionId: string,
+  route: Omit<IOSSimulatorMutationRoute, 'sessionId'>,
+): Promise<Buffer> {
+  return initializeIOSSimulatorHost().captureScreenshotBytes(sessionId, route);
 }
 
 export function setIOSSimulatorAgentControlGrant(

@@ -754,7 +754,7 @@
         "description": "Linux は現在 Ubuntu 22.04 / 24.04 向けの .deb として提供されます。新しいビルドがある場合、アプリがダウンロードし、インストール時にシステムパスワードを求めます。",
         "item1": "初回は sudo apt install ./cindy-<バージョン>-<アーキテクチャ>.deb でインストールします（x64 は amd64、arm64 は arm64）。",
         "item2": "アプリ内更新は .deb をダウンロードします。更新を選ぶと、システム権限の確認後に上書きインストールします。",
-        "item3": "インストールにパスワードが必要なため、Linux では Beta チャネルとアイドル時の自動インストールは提供しません。"
+        "item3": "Linux x64 では Beta チャネルを利用できますが、arm64 は現時点で利用できません。インストールにはシステム認証が必要なため、どちらもアイドル時の自動インストールには対応していません。"
       },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "overview に載っていない内容でも、やりたいことを聞けば次に開く場所や進め方を案内します。",
@@ -6141,6 +6141,10 @@
       "rotateDevice": "デバイスを回転",
       "lockScreen": "画面をロック",
       "unlockScreen": "画面をロック解除",
+      "copyScreenshot": "スクリーンショットをコピー",
+      "screenshotCopied": "シミュレータのスクリーンショットをコピーしました",
+      "screenshotCopyFailed": "シミュレータのスクリーンショットをコピーできませんでした。もう一度お試しください。",
+      "moreControls": "その他のシミュレータ操作",
       "controlsUnavailable": "シミュレータの操作は一時的に使用できません",
       "enterTextBeforeSending": "送信するテキストを入力してください",
       "agentBusyTitle": "Agent がこのデバイスを使用中",
@@ -6176,7 +6180,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "Native アクセラレーションは現在利用できません。再試行中も WDA の画面と操作は利用できます。",
+        "available": "Native アクセラレーションは現在利用できません。フレームレートが低下し、操作の反応が遅くなる場合があります。",
         "action": "Native を復旧",
         "recovering": "Native アクセラレーションを復旧しています。現在の WDA の画面と操作は引き続き利用できます。",
         "recoveringAction": "Native を復旧中…",
@@ -6203,7 +6207,8 @@
         "stop": "デバイスを停止中…",
         "detach": "デバイスを切断中…",
         "grant": "Agent の操作権限を更新中…",
-        "control": "入力制御を更新中…"
+        "control": "入力制御を更新中…",
+        "screenshot": "シミュレータのスクリーンショットをコピー中…"
       },
       "setup": {
         "localMac": "Mac のローカル Cindy セッションでこのプロジェクトを開いてください。",

@@ -754,7 +754,7 @@
         "description": "Linux 目前提供 Ubuntu 22.04 / 24.04 的 .deb 包。有新版本时，应用会下载安装包，安装时需要系统密码。",
         "item1": "首次安装用 sudo apt install ./cindy-<版本>-<架构>.deb（x64 为 amd64，arm64 为 arm64）。",
         "item2": "应用内更新会下载 .deb，点更新后通过系统权限提示覆盖安装。",
-        "item3": "Linux 暂不提供 Beta 渠道和空闲时自动安装，因为安装需要输入密码。"
+        "item3": "Linux x64 支持 Beta 渠道，arm64 暂不支持。两种架构都不支持空闲时自动安装，因为安装需要系统授权。"
       },
       "qnaTitle": "直接提问",
       "qnaDescription": "如果 overview 里没有覆盖到你的问题，可以直接问我该怎么做。",
@@ -6141,6 +6141,10 @@
       "rotateDevice": "旋转设备",
       "lockScreen": "锁定屏幕",
       "unlockScreen": "解锁屏幕",
+      "copyScreenshot": "复制截图",
+      "screenshotCopied": "模拟器截图已复制",
+      "screenshotCopyFailed": "无法复制模拟器截图，请稍后重试",
+      "moreControls": "更多模拟器控制",
       "controlsUnavailable": "模拟器控制暂时不可用",
       "enterTextBeforeSending": "请先输入要发送的文本",
       "agentBusyTitle": "Agent 正在使用此设备",
@@ -6176,7 +6180,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "Native 加速当前不可用。重试期间，WDA 画面和控制会保持可用。",
+        "available": "Native 加速当前不可用，画面帧率可能降低，操作延迟可能升高。",
         "action": "尝试恢复 Native",
         "recovering": "正在恢复 Native 加速，当前 WDA 画面和控制会保持可用。",
         "recoveringAction": "正在恢复 Native…",
@@ -6203,7 +6207,8 @@
         "stop": "正在停止设备…",
         "detach": "正在断开设备…",
         "grant": "正在更新 Agent 控制权限…",
-        "control": "正在更新输入控制…"
+        "control": "正在更新输入控制…",
+        "screenshot": "正在复制模拟器截图…"
       },
       "setup": {
         "localMac": "请在 Mac 上的本地 Cindy 任务中打开此项目。",

@@ -754,7 +754,7 @@
         "description": "Linux는 현재 Ubuntu 22.04 / 24.04용 .deb로 제공됩니다. 새 빌드가 있으면 앱이 다운로드하고, 설치할 때 시스템 비밀번호를 묻습니다.",
         "item1": "처음 설치할 때는 sudo apt install ./cindy-<버전>-<아키텍처>.deb 를 사용하세요(x64는 amd64, arm64는 arm64).",
         "item2": "앱 안 업데이트는 .deb를 다운로드합니다. 업데이트를 선택하면 시스템 권한 확인 후 덮어써 설치합니다.",
-        "item3": "설치에 비밀번호가 필요하므로 Linux에서는 Beta 채널과 유휴 상태 자동 설치를 제공하지 않습니다."
+        "item3": "Linux x64에서는 Beta 채널을 사용할 수 있지만 arm64는 아직 지원하지 않습니다. 설치에는 시스템 권한 승인이 필요하므로 두 아키텍처 모두 유휴 상태 자동 설치를 지원하지 않습니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
@@ -6141,6 +6141,10 @@
       "rotateDevice": "기기 회전",
       "lockScreen": "화면 잠금",
       "unlockScreen": "화면 잠금 해제",
+      "copyScreenshot": "스크린샷 복사",
+      "screenshotCopied": "시뮬레이터 스크린샷을 복사했습니다",
+      "screenshotCopyFailed": "시뮬레이터 스크린샷을 복사하지 못했습니다. 다시 시도하세요.",
+      "moreControls": "추가 시뮬레이터 제어",
       "controlsUnavailable": "시뮬레이터 제어를 일시적으로 사용할 수 없습니다",
       "enterTextBeforeSending": "보낼 텍스트를 먼저 입력하세요",
       "agentBusyTitle": "Agent가 이 기기를 사용 중",
@@ -6176,7 +6180,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "현재 Native 가속을 사용할 수 없습니다. 다시 시도하는 동안에도 WDA 화면과 제어는 계속 사용할 수 있습니다.",
+        "available": "현재 Native 가속을 사용할 수 없습니다. 프레임 속도가 낮아지고 조작 반응이 느려질 수 있습니다.",
         "action": "Native 복구 시도",
         "recovering": "Native 가속을 복구하는 중입니다. 현재 WDA 화면과 제어는 계속 사용할 수 있습니다.",
         "recoveringAction": "Native 복구 중…",
@@ -6203,7 +6207,8 @@
         "stop": "기기 중지 중…",
         "detach": "기기 연결 해제 중…",
         "grant": "Agent 제어 권한 업데이트 중…",
-        "control": "입력 제어 업데이트 중…"
+        "control": "입력 제어 업데이트 중…",
+        "screenshot": "시뮬레이터 스크린샷 복사 중…"
       },
       "setup": {
         "localMac": "Mac의 로컬 Cindy 세션에서 이 프로젝트를 여세요.",

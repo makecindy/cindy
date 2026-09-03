@@ -340,9 +340,12 @@ import {
 import {
   captureMobileHistoryAnchor,
   isMobileHistoryAnchorSettled,
+  mobileHistoryAnchorCorrectionStatus,
+  mobileHistoryPrependUsesAppOwnedAnchor,
   mobileHistoryTopOffsetAdjustment,
   resolveMobileHistoryAnchorOffset,
   type MobileHistoryAnchor,
+  type MobileHistoryAnchorPendingCorrection,
   type MobileHistoryAnchorResolveState,
 } from '@/session/messageHistoryAnchor';
 import {
@@ -405,6 +408,9 @@ const MOBILE_MESSAGE_ESTIMATED_ITEM_SIZE = 100;
 const MOBILE_HISTORY_ANCHOR_VERIFY_MAX_FRAMES = 180;
 const MOBILE_HISTORY_ANCHOR_VERIFY_MAX_MS = 3000;
 const MOBILE_HISTORY_ANCHOR_STABLE_FRAMES = 2;
+const MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR = mobileHistoryPrependUsesAppOwnedAnchor(
+  Platform.OS,
+);
 const MOBILE_SCROLL_HISTORY_EVALUATION_INTERVAL_MS = 64;
 const ANDROID_SELECTABLE_TEXT_RUN_MAX_BLOCKS = 12;
 const ANDROID_SELECTABLE_TEXT_RUN_MAX_UTF16_LENGTH = 1800;
@@ -445,11 +451,14 @@ interface MobileHistoryPrependTransaction {
   continueAfterRegroup: boolean;
   generation: number;
   pageCommitted: boolean;
+  pendingCorrection: MobileHistoryAnchorPendingCorrection | null;
   promiseSettled: boolean;
   startItems: readonly MobileMessageRenderItem[];
   startProgressKey: string | null;
   userInitiated: boolean;
   userControlledAfterCommit: boolean;
+  userControlledDuringRequest: boolean;
+  userHandoffPending: boolean;
   verifyDeadlineAt: number;
 }
 // 「跳到底部」浮标直径:比 composer 里的语音按钮(28)大一档但不压过它,Telegram 同款层级感。
@@ -778,16 +787,15 @@ export function MessageRenderer({
   const readingOlderRef = useRef(false);
   // 每次补页分配 generation：旧会话 / 旧请求的异步 settle 不得清掉新请求的抑制态。
   const readingOlderRequestGenerationRef = useRef(0);
-  // data-change anchoring is app-owned instead of delegated to Android MVCP. The transaction
-  // keeps the old visible row pinned until the new page, layout, and non-animated correction all
-  // settle; this removes the frame where cells move before native contentOffset catches up.
+  // Android data-change anchoring is app-owned; iOS keeps LegendList/RN's atomic native MVCP.
+  // The shared transaction also suppresses follow-to-end until the page commit has settled.
   const historyPrependTransactionRef = useRef<MobileHistoryPrependTransaction | null>(null);
   const historyAnchorVerifyFrameRef = useRef<number | null>(null);
   const queuedLoadEarlierRef = useRef(false);
   const queuedLoadEarlierFlushFrameRef = useRef<number | null>(null);
-  // Keep native MVCP for ordinary data/size changes, but turn it fully off before starting a
-  // history request. LegendList maps either `data` or `size` to the same RN ScrollView prop, so
-  // `{ data:false, size:true }` would still race the app-owned prepend correction on Android.
+  // On Android, keep native MVCP for ordinary data/size changes but turn it fully off before a
+  // history request. LegendList maps either flag to the same RN ScrollView prop, so leaving size on
+  // would still race the app-owned correction. iOS never flips this state.
   const [historyPrependNativeMvcpDisabled, setHistoryPrependNativeMvcpDisabled] = useState(false);
   const historyPrependNativeMvcpDisabledRef = useRef(historyPrependNativeMvcpDisabled);
   historyPrependNativeMvcpDisabledRef.current = historyPrependNativeMvcpDisabled;
@@ -803,6 +811,9 @@ export function MessageRenderer({
   const programmaticScrollSettleAtRef = useRef(0);
   const previousFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
   const previousItemKeysRef = useRef<readonly string[]>([]);
+  // LegendList updates getState().scroll optimistically before an imperative native scroll lands.
+  // This sequence advances only from ScrollView onScroll and is the ack source for Android prepend.
+  const nativeScrollEventSequenceRef = useRef(0);
   const scrollMetricsRef = useRef<MessageScrollMetrics>({
     contentHeight: 0,
     offsetY: 0,
@@ -894,6 +905,7 @@ export function MessageRenderer({
     }
     previousItemKeysRef.current = [];
     firstVisibleIndexRef.current = 0;
+    nativeScrollEventSequenceRef.current = 0;
     scrollMetricsRef.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
     followEndPinStateRef.current = createMobileFollowEndPinState();
     initialAnchorDoneRef.current = false;
@@ -1022,12 +1034,20 @@ export function MessageRenderer({
     });
   }, []);
 
-  const captureCurrentHistoryAnchor = useCallback((): MobileHistoryAnchor | null => {
+  const captureCurrentHistoryAnchor = useCallback((useNativeViewport = false): MobileHistoryAnchor | null => {
     const listState = listRef.current?.getState();
+    const nativeMetrics = scrollMetricsRef.current;
+    const canUseNativeViewport = useNativeViewport && nativeMetrics.viewportHeight > 0;
     return listState
       ? captureMobileHistoryAnchor(
         {
           ...listState,
+          // A pending LegendList command can move `scroll` and the cached visible range before
+          // Android's ScrollView follows. Once a finger owns the viewport, derive the anchor from
+          // the last native offset and force the position lookup to ignore that optimistic range.
+          ...(canUseNativeViewport
+            ? { scroll: nativeMetrics.offsetY, start: -1 }
+            : {}),
           topOffsetAdjustment: getCurrentHistoryTopOffsetAdjustment(),
         },
         (item) => (item as MobileMessageRenderItem).key,
@@ -1045,7 +1065,7 @@ export function MessageRenderer({
     }
     regroupedHistoryContinuationRef.current = transaction.continueAfterRegroup
       && transaction.userInitiated
-      && !transaction.userControlledAfterCommit;
+      && !transaction.userControlledDuringRequest;
     historyPrependTransactionRef.current = null;
     readingOlderRef.current = false;
     setHistoryPrependNativeMvcpDisabled(false);
@@ -1056,24 +1076,46 @@ export function MessageRenderer({
     const transaction = historyPrependTransactionRef.current;
     if (!transaction || transaction.generation !== generation) return;
     if (loadingEarlierRef.current || !transaction.promiseSettled) return;
+    // A committed page still needs its anchor correction acknowledged; that case is covered by
+    // `anchorStable` below. Only hold the handoff open while the finger or momentum still owns the
+    // viewport, otherwise a page that resolves with no coordinate change could never release the
+    // transaction and native MVCP would stay off for the rest of the session.
+    if (
+      transaction.userHandoffPending
+      && (
+        isDraggingRef.current
+        || isMomentumScrollingRef.current
+        || historyTouchStartYRef.current !== null
+      )
+    ) return;
     if (transaction.pageCommitted && !transaction.anchorStable) return;
     finishHistoryPrependTransaction(generation);
   }, [finishHistoryPrependTransaction]);
 
-  const handoffHistoryPrependToUser = useCallback(() => {
+  // `viewportTakenOver` separates «a finger is on the ScrollView» from «the reader actually moved
+  // the viewport». Both must stop imperative corrections, but only the latter may cancel the
+  // regroup-only continuation: a bare tap moves nothing, and treating it as a takeover strands the
+  // reader at the top when a page merely expanded the collapsed first work group.
+  const handoffHistoryPrependToUser = useCallback((viewportTakenOver = true) => {
     const transaction = historyPrependTransactionRef.current;
     if (!transaction) return;
-    const currentAnchor = captureCurrentHistoryAnchor();
+    if (viewportTakenOver) transaction.userControlledDuringRequest = true;
+    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    transaction.userHandoffPending = true;
+    const currentAnchor = captureCurrentHistoryAnchor(true);
     if (currentAnchor) transaction.anchor = currentAnchor;
     if (!transaction.pageCommitted) return;
     transaction.userControlledAfterCommit = true;
-    transaction.anchorStable = true;
+    transaction.anchorStable = false;
+    // An imperative scroll already handed to native cannot be cancelled reliably. Stop the JS
+    // verifier from adding more commands while the finger/momentum owns the viewport, keep MVCP
+    // disabled, and reconcile from native metrics after that gesture ends.
+    transaction.pendingCorrection = null;
     if (historyAnchorVerifyFrameRef.current !== null) {
       cancelAnimationFrame(historyAnchorVerifyFrameRef.current);
       historyAnchorVerifyFrameRef.current = null;
     }
-    maybeFinishHistoryPrependTransaction(transaction.generation);
-  }, [captureCurrentHistoryAnchor, maybeFinishHistoryPrependTransaction]);
+  }, [captureCurrentHistoryAnchor]);
 
   const cancelHistoryPrependTransaction = useCallback(() => {
     readingOlderRequestGenerationRef.current += 1;
@@ -1093,6 +1135,7 @@ export function MessageRenderer({
   }, []);
 
   const scheduleHistoryAnchorRestore = useCallback((generation: number) => {
+    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1132,34 +1175,69 @@ export function MessageRenderer({
         : null;
 
       if (targetOffset !== null && listState) {
-        const currentOffset = listState.scroll;
-        const settled = isMobileHistoryAnchorSettled(
-          currentOffset,
-          targetOffset,
-          previousTargetOffset,
-          MOBILE_ANCHOR_VERIFY_TOLERANCE,
-        );
-        // Only the anchor row's resolved position matters here. A running session can keep
-        // growing below the reader while history is settling; treating every tail size change as
-        // anchor instability keeps this verifier alive for the full retry bound and needlessly
-        // churns cells/GC. If a layout change above the anchor matters, targetOffset changes and
-        // the two-frame stability check resets on its own.
-        const nextStableFrames = settled ? stableFrames + 1 : 0;
-        if (Math.abs(currentOffset - targetOffset) > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
-          scrollToOffsetProgrammatically(targetOffset, false);
-        }
-        if (nextStableFrames >= MOBILE_HISTORY_ANCHOR_STABLE_FRAMES) {
-          historyAnchorVerifyFrameRef.current = null;
-          currentTransaction.anchorStable = true;
-          maybeFinishHistoryPrependTransaction(generation);
-          return;
-        }
-        if (withinDeadline && attempts < MOBILE_HISTORY_ANCHOR_VERIFY_MAX_FRAMES) {
-          historyAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
+        // LegendList moves getState().scroll to an imperative target before the native ScrollView
+        // receives it. Using that optimistic value here used to self-confirm the correction in two
+        // frames, release MVCP, and leave Android briefly rendering the target cell window at the
+        // old physical offset. Only onScroll-backed metrics can prove the viewport actually moved.
+        const currentOffset = scrollMetricsRef.current.offsetY;
+        const pendingCorrection = currentTransaction.pendingCorrection;
+        const correctionStatus = pendingCorrection
+          ? mobileHistoryAnchorCorrectionStatus(pendingCorrection, {
+              nativeOffset: currentOffset,
+              nativeScrollSequence: nativeScrollEventSequenceRef.current,
+            }, MOBILE_ANCHOR_VERIFY_TOLERANCE)
+          : null;
+        const waitingForNativeCorrection = correctionStatus === 'waiting'
+          && Math.abs(currentOffset - targetOffset) > MOBILE_ANCHOR_VERIFY_TOLERANCE;
+        if (waitingForNativeCorrection) {
+          // Keep one command in flight while no later native event has arrived. Once a later event
+          // misses, the branch below clears this command and retries the latest resolved target at
+          // most once per native event, rather than replacing the command on every animation frame.
+          if (withinDeadline && attempts < MOBILE_HISTORY_ANCHOR_VERIFY_MAX_FRAMES) {
+            historyAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
+              historyAnchorVerifyFrameRef.current = null;
+              step(attempts + 1, 0, targetOffset);
+            });
+            return;
+          }
+        } else {
+          if (pendingCorrection) currentTransaction.pendingCorrection = null;
+          const settled = isMobileHistoryAnchorSettled(
+            currentOffset,
+            targetOffset,
+            previousTargetOffset,
+            MOBILE_ANCHOR_VERIFY_TOLERANCE,
+          );
+          // Only the anchor row's resolved position matters here. A running session can keep
+          // growing below the reader while history is settling; treating every tail size change as
+          // anchor instability keeps this verifier alive for the full retry bound and needlessly
+          // churns cells/GC. If a layout change above the anchor matters, targetOffset changes and
+          // the two-frame stability check resets on its own.
+          const nextStableFrames = settled ? stableFrames + 1 : 0;
+          if (
+            Math.abs(currentOffset - targetOffset) > MOBILE_ANCHOR_VERIFY_TOLERANCE
+            && withinDeadline
+            && attempts < MOBILE_HISTORY_ANCHOR_VERIFY_MAX_FRAMES
+          ) {
+            currentTransaction.pendingCorrection = {
+              requestedAfterNativeScrollSequence: nativeScrollEventSequenceRef.current,
+              targetOffset,
+            };
+            scrollToOffsetProgrammatically(targetOffset, false);
+          }
+          if (nextStableFrames >= MOBILE_HISTORY_ANCHOR_STABLE_FRAMES) {
             historyAnchorVerifyFrameRef.current = null;
-            step(attempts + 1, nextStableFrames, targetOffset);
-          });
-          return;
+            currentTransaction.anchorStable = true;
+            maybeFinishHistoryPrependTransaction(generation);
+            return;
+          }
+          if (withinDeadline && attempts < MOBILE_HISTORY_ANCHOR_VERIFY_MAX_FRAMES) {
+            historyAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
+              historyAnchorVerifyFrameRef.current = null;
+              step(attempts + 1, nextStableFrames, targetOffset);
+            });
+            return;
+          }
         }
       } else if (withinDeadline && attempts < MOBILE_HISTORY_ANCHOR_VERIFY_MAX_FRAMES) {
         historyAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
@@ -1169,47 +1247,12 @@ export function MessageRenderer({
         return;
       }
 
-      if (targetOffset !== null && listState) {
-        // Complex pages can keep refining estimates beyond the retry window even though the anchor
-        // key remains valid. End with two bounded, non-animated corrections instead of warning and
-        // re-enabling native MVCP against a stale offset. The history-intent guard keeps these
-        // resulting scroll events from being mistaken for a user return to the latest edge.
-        scrollToOffsetProgrammatically(targetOffset, false);
-        historyAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-          const finalTransaction = historyPrependTransactionRef.current;
-          if (
-            !finalTransaction
-            || finalTransaction.generation !== generation
-            || finalTransaction.userControlledAfterCommit
-          ) return;
-          const finalState = listRef.current?.getState();
-          const finalTarget = finalTransaction.anchor && finalState
-            ? resolveMobileMessageHistoryAnchorOffset(
-              finalTransaction.anchor,
-              finalState,
-              getCurrentHistoryTopOffsetAdjustment(),
-            )
-            : null;
-          if (finalTarget !== null) scrollToOffsetProgrammatically(finalTarget, false);
-          historyAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-            historyAnchorVerifyFrameRef.current = null;
-            const settledTransaction = historyPrependTransactionRef.current;
-            if (
-              !settledTransaction
-              || settledTransaction.generation !== generation
-              || settledTransaction.userControlledAfterCommit
-            ) return;
-            settledTransaction.anchorStable = true;
-            maybeFinishHistoryPrependTransaction(generation);
-          });
-        });
-        return;
-      }
-
-      // The key should survive a prepend. Keep an actually unresolved page bounded so malformed
-      // host data cannot lock history browsing forever; follow-to-latest remains disabled.
-      console.warn('[message-list] history prepend anchor could not be resolved before the retry bound');
+      // Do not fire unacknowledged "final" scrolls and immediately re-enable native MVCP. That old
+      // fallback raced its still-pending imperative command and amplified the visible bounce. Keep
+      // the transaction bounded, warn once, and leave the reader detached from follow-to-latest.
+      console.warn('[message-list] history prepend anchor did not settle before the retry bound');
       historyAnchorVerifyFrameRef.current = null;
+      currentTransaction.pendingCorrection = null;
       currentTransaction.anchorStable = true;
       maybeFinishHistoryPrependTransaction(generation);
     };
@@ -1226,6 +1269,7 @@ export function MessageRenderer({
   ]);
 
   const restoreHistoryAnchorOnce = useCallback((generation: number) => {
+    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1242,12 +1286,50 @@ export function MessageRenderer({
       : null;
     if (
       targetOffset !== null
-      && listState
-      && Math.abs(listState.scroll - targetOffset) > MOBILE_ANCHOR_VERIFY_TOLERANCE
+      && Math.abs(scrollMetricsRef.current.offsetY - targetOffset) > MOBILE_ANCHOR_VERIFY_TOLERANCE
     ) {
       scrollToOffsetProgrammatically(targetOffset, false);
     }
   }, [getCurrentHistoryTopOffsetAdjustment, scrollToOffsetProgrammatically]);
+
+  const scheduleHistoryPrependUserHandoffSettle = useCallback(() => {
+    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    const transaction = historyPrependTransactionRef.current;
+    if (!transaction || !transaction.userHandoffPending) return;
+    if (historyAnchorVerifyFrameRef.current !== null) return;
+    const generation = transaction.generation;
+    // onScrollEndDrag can be followed by onMomentumScrollBegin. Defer one frame so momentum gets
+    // ownership before deciding whether it is safe to resume imperative anchor verification.
+    historyAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
+      historyAnchorVerifyFrameRef.current = null;
+      const currentTransaction = historyPrependTransactionRef.current;
+      if (
+        !currentTransaction
+        || currentTransaction.generation !== generation
+        || isDraggingRef.current
+        || isMomentumScrollingRef.current
+        || historyTouchStartYRef.current !== null
+      ) return;
+
+      if (currentTransaction.pageCommitted) {
+        currentTransaction.userHandoffPending = false;
+        currentTransaction.userControlledAfterCommit = false;
+        currentTransaction.pendingCorrection = null;
+        currentTransaction.verifyDeadlineAt = 0;
+        scheduleHistoryAnchorRestore(generation);
+        return;
+      }
+      if (currentTransaction.promiseSettled && !loadingEarlierRef.current) {
+        // A failed, empty, or duplicate page changed no coordinates. Waiting until the gesture
+        // ended still guarantees that an older in-flight correction cannot race MVCP re-enable.
+        currentTransaction.userHandoffPending = false;
+        currentTransaction.userControlledAfterCommit = false;
+        currentTransaction.pendingCorrection = null;
+        currentTransaction.anchorStable = true;
+        maybeFinishHistoryPrependTransaction(generation);
+      }
+    });
+  }, [maybeFinishHistoryPrependTransaction, scheduleHistoryAnchorRestore]);
 
   // 贴底跟随的落底校验/补滚环:两条手动补滚路径——「跳到最新」(followLatestRequestKey)
   // 与 handleContentSize 的贴底追赶——都只发一次命令式 scrollToEnd,不校验是否真的到达内容
@@ -1378,6 +1460,26 @@ export function MessageRenderer({
           transaction.startItems,
           listDataRef.current,
         );
+      if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) {
+        // iOS keeps LegendList/RN MVCP enabled for the data commit. Do not follow its atomic native
+        // correction with an application scroll; only retain the transaction's follow-to-end guard.
+        transaction.anchorStable = true;
+        maybeFinishHistoryPrependTransaction(transaction.generation);
+        return;
+      }
+      if (transaction.userControlledDuringRequest) {
+        // A second gesture can begin while the remote page is in flight. Keep native MVCP disabled
+        // and issue no app scroll while the finger/momentum owns the viewport. Gesture-end resumes
+        // verification from the latest native-captured anchor and waits for its native ack.
+        transaction.userControlledAfterCommit = true;
+        transaction.anchorStable = false;
+        transaction.pendingCorrection = null;
+        // Re-arm the handoff explicitly: the gesture that took over may already have ended, in
+        // which case the scheduled settle below is the only path back to anchor verification.
+        transaction.userHandoffPending = true;
+        scheduleHistoryPrependUserHandoffSettle();
+        return;
+      }
       scheduleHistoryAnchorRestore(transaction.generation);
       maybeFinishHistoryPrependTransaction(transaction.generation);
       return;
@@ -1395,6 +1497,7 @@ export function MessageRenderer({
     loadingEarlier,
     maybeFinishHistoryPrependTransaction,
     scheduleHistoryAnchorRestore,
+    scheduleHistoryPrependUserHandoffSettle,
   ]);
   // 只认行身份（追加 / 换行 / 重排）。流式改内容会换 items 引用，但不能续安静窗。
   useEffect(() => {
@@ -1757,7 +1860,7 @@ export function MessageRenderer({
     const generation = readingOlderRequestGenerationRef.current + 1;
     readingOlderRequestGenerationRef.current = generation;
     const listState = listRef.current?.getState();
-    const anchor = listState
+    const anchor = MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR && listState
       ? captureMobileHistoryAnchor(
         {
           ...listState,
@@ -1769,15 +1872,18 @@ export function MessageRenderer({
       : null;
     historyPrependTransactionRef.current = {
       anchor,
-      anchorStable: false,
+      anchorStable: !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR,
       continueAfterRegroup: false,
       generation,
       pageCommitted: false,
+      pendingCorrection: null,
       promiseSettled: false,
       startItems: listDataRef.current,
       startProgressKey: historyProgressKey,
       userInitiated: userScrollForOlderRef.current,
       userControlledAfterCommit: false,
+      userControlledDuringRequest: false,
+      userHandoffPending: false,
       verifyDeadlineAt: 0,
     };
     readingOlderRef.current = true;
@@ -1815,9 +1921,13 @@ export function MessageRenderer({
       || isMomentumScrollingRef.current
       || historyTouchStartYRef.current !== null
     ) return;
-    // The request must not start until a committed render has removed RN's native MVCP prop.
-    // Otherwise a fast local/relay response can prepend before the prop update reaches Android.
-    if (!historyPrependNativeMvcpDisabledRef.current) {
+    // Android must not start until a committed render removes RN's native MVCP prop. Otherwise a
+    // fast local/relay response can prepend before that prop update lands. iOS keeps native MVCP
+    // throughout and can start immediately once the user's gesture is no longer active.
+    if (
+      MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR
+      && !historyPrependNativeMvcpDisabledRef.current
+    ) {
       setHistoryPrependNativeMvcpDisabled(true);
       return;
     }
@@ -1967,6 +2077,7 @@ export function MessageRenderer({
   // (readingOlderRef)期间禁止方向性恢复——load-earlier prepend 的 mVCP 补偿会产生
   // 程序化向下增量,短会话里会被误判成「用户滑回底部」。
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    nativeScrollEventSequenceRef.current += 1;
     const metrics = {
       contentHeight: event.nativeEvent.contentSize.height,
       offsetY: event.nativeEvent.contentOffset.y,
@@ -2048,7 +2159,10 @@ export function MessageRenderer({
     isMomentumScrollingRef.current = false;
     historyTouchStartYRef.current = event.nativeEvent.pageY;
     historyTouchTriggeredRef.current = false;
-  }, []);
+    // Touch-start only means the finger holds the ScrollView; it is not a viewport takeover yet.
+    // maybeTriggerHistoryTouch / onScrollBeginDrag report the real move once it clears the dead zone.
+    handoffHistoryPrependToUser(false);
+  }, [handoffHistoryPrependToUser]);
 
   const maybeTriggerHistoryTouch = useCallback((pageY: number) => {
     const startY = historyTouchStartYRef.current;
@@ -2074,14 +2188,20 @@ export function MessageRenderer({
     maybeTriggerHistoryTouch(event.nativeEvent.pageY);
     historyTouchStartYRef.current = null;
     historyTouchTriggeredRef.current = false;
+    scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
-  }, [maybeTriggerHistoryTouch, scheduleQueuedLoadEarlierFlush]);
+  }, [
+    maybeTriggerHistoryTouch,
+    scheduleHistoryPrependUserHandoffSettle,
+    scheduleQueuedLoadEarlierFlush,
+  ]);
 
   const handleHistoryTouchCancel = useCallback(() => {
     historyTouchStartYRef.current = null;
     historyTouchTriggeredRef.current = false;
+    scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
-  }, [scheduleQueuedLoadEarlierFlush]);
+  }, [scheduleHistoryPrependUserHandoffSettle, scheduleQueuedLoadEarlierFlush]);
 
   // 用户开始拖动 → 标记「上翻意图」,放行自动加载更早(onScrollBeginDrag 仅用户手势触发,
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
@@ -2115,8 +2235,13 @@ export function MessageRenderer({
     dragStartOffsetYRef.current = null;
     refreshPreviousUserTarget();
     // Wait one frame so Android can report whether this drag transitioned into momentum.
+    scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
-  }, [refreshPreviousUserTarget, scheduleQueuedLoadEarlierFlush]);
+  }, [
+    refreshPreviousUserTarget,
+    scheduleHistoryPrependUserHandoffSettle,
+    scheduleQueuedLoadEarlierFlush,
+  ]);
 
   const handleMomentumScrollBegin = useCallback(() => {
     isMomentumScrollingRef.current = true;
@@ -2125,8 +2250,13 @@ export function MessageRenderer({
   const handleMomentumScrollEnd = useCallback(() => {
     isMomentumScrollingRef.current = false;
     refreshPreviousUserTarget();
+    scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
-  }, [refreshPreviousUserTarget, scheduleQueuedLoadEarlierFlush]);
+  }, [
+    refreshPreviousUserTarget,
+    scheduleHistoryPrependUserHandoffSettle,
+    scheduleQueuedLoadEarlierFlush,
+  ]);
 
   const handleStartReached = useCallback(() => {
     attemptAutoLoadEarlier();
@@ -2503,9 +2633,9 @@ export function MessageRenderer({
         // 二分实锤,3.3.2 / 3.3.3 均复现)。
         alignItemsAtEnd
         maintainScrollAtEnd={false}
-        // Ordinary updates keep LegendList's native data/size anchoring. Manual history prepends
-        // disable the whole prop before the request starts because RN exposes one native switch:
-        // leaving either flag on would race the app-owned key/offset correction on Android.
+        // iOS always uses LegendList/RN's atomic data/size anchoring. Android history prepends
+        // temporarily disable the whole prop because RN exposes one native switch: leaving either
+        // flag on would race the app-owned key/offset correction there.
         maintainVisibleContentPosition={historyPrependNativeMvcpDisabled
           ? false
           : { data: true, size: true }}
