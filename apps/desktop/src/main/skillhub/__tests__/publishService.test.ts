@@ -104,7 +104,7 @@ vi.mock('../identityPolicy', () => ({
 }));
 
 function writeApiKeyFile() {
-  const safeStorageDir = `path.join(TEST_ROOT, 'safe-storage')`;
+  const safeStorageDir = path.join(TEST_ROOT, 'safe-storage');
   fs.mkdirSync(safeStorageDir, { recursive: true });
   fs.writeFileSync(
     `${safeStorageDir}/api_key.enc`,
@@ -165,7 +165,7 @@ describe('SkillPublishService', () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
-      `path.join(skillPath, 'SKILL.md')`,
+      path.join(skillPath, 'SKILL.md'),
       [
         '---',
         'name: lark-task',
@@ -250,7 +250,7 @@ describe('SkillPublishService', () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
-      `path.join(skillPath, 'SKILL.md')`,
+      path.join(skillPath, 'SKILL.md'),
       [
         '---',
         'name: lark-task',
@@ -589,7 +589,7 @@ describe('SkillPublishService', () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
-      `path.join(skillPath, 'SKILL.md')`,
+      path.join(skillPath, 'SKILL.md'),
       [
         '---',
         'name: lark-task',
@@ -677,7 +677,7 @@ describe('SkillPublishService', () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
-      `path.join(skillPath, 'SKILL.md')`,
+      path.join(skillPath, 'SKILL.md'),
       [
         '---',
         'name: lark-task',
