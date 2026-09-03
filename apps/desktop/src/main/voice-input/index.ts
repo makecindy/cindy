@@ -335,6 +335,12 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
     return { ok: true, actions: [], elapsedMs: 0 };
   }
 
+  // Bind dictionary learning to the owner and auxiliary chain that initiated
+  // this advisor request. Readiness and model resolution below both await, so
+  // a later account or chain switch must fail closed before any advisor fetch
+  // or dictionary mutation.
+  const ownerScopeKey = activeOwnerScopeKey();
+  const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
   const sourceLabel = options.sourceLabel ?? payload.source ?? 'in_app';
   // 锚点资格只认 main 侧由 event.sender 反查出的 fromOverlaySender，不认 payload.source
   // 这个 renderer 自报字段。锚点必须在任何 await 之前取：此刻的呈现代次才代表这次请求
@@ -387,7 +393,15 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
     const advisorAttempts: FallbackTextModelAttempt[] = readyAdvisorProfiles.map((profile) => ({
       profileId: profile.id as VoiceInputRefinerProviderKind,
       model: profile.model,
-      client: createVoiceInputTextModelClient(profile),
+      client: guardRefinerClientAgainstUnavailableRoute(
+        profile,
+        createVoiceInputTextModelClient(profile, {
+          beforeDispatch: () => {
+            assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
+            assertRefinerRouteAvailable(profile);
+          },
+        }),
+      ),
       promptCacheScope: `dictionaryLearning:${profile.id}:${senderId}`,
     }));
     const advisor = new DictationDictionaryAdvisor({
@@ -403,6 +417,7 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
       existingCandidates: toDictionaryLearningCandidateState(settings.dictionaryCandidates),
     };
     const result = await advisor.advise(adviceInput);
+    assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
     const recordResult = voiceInputDataStore.recordDictionaryLearningActions(result.actions);
     if (recordResult.newAutomaticEntries.length > 0) {
       showVoiceInputDictionaryToast(
