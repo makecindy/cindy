@@ -208,6 +208,23 @@ describe('CodexResponsesTextModelClient', () => {
     expect(undiciFetchMock).not.toHaveBeenCalled();
   });
 
+  it('runs the final dispatch guard before fetch and can fail closed', async () => {
+    const beforeDispatch = vi.fn(() => {
+      throw new Error('voice refiner catalog route unavailable');
+    });
+    const client = new CodexResponsesTextModelClient({
+      accessTokenProvider: async () => 'tok',
+      accountIdProvider: async () => null,
+      beforeDispatch,
+    });
+
+    await expect(client.requestJson({
+      model: 'm', schemaName: 's', system: 'sys', user: {},
+    })).rejects.toThrow('voice refiner catalog route unavailable');
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+  });
+
   it('surfaces stream-level errors from response.failed events', async () => {
     const onAuthInvalidated = vi.fn();
     undiciFetchMock.mockResolvedValue(makeSseResponse([

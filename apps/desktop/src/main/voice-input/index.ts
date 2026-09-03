@@ -934,10 +934,22 @@ async function getVoiceInputRefinerReadiness(
   };
 }
 
+function assertRefinerRouteAvailable(profile: VoiceInputRefinerProfile): void {
+  if (isUtilityRouteDisabled(profile)) {
+    throw new Error('voice refiner route disabled in settings');
+  }
+  if (!isActiveCatalogVoiceRefinerProfile(profile)) {
+    throw new Error('voice refiner catalog route unavailable');
+  }
+  if (isUtilityRoutePaymentRequired(profile)) {
+    throw new Error('voice refiner route requires paid entitlement');
+  }
+}
+
 /**
- * TextModelClient 的 live 可用性包装(BYOK):每次 requestJson(= 一次精修请求)
- * 前重查设置停用与 Cindy 账号付费权限；不可用即抛错，FallbackTextModelClient
- * 将其视为该档失败并自然落到下一档。
+ * TextModelClient 的 live 可用性包装(BYOK):先在 requestJson 入口快速失败，
+ * 再把同一判据传入具体 HTTP client，在每次实际 fetch 前最后复核一次。
+ * FallbackTextModelClient 会将任一复核失败视为该档失败并自然落到下一档。
  */
 function guardRefinerClientAgainstUnavailableRoute(
   profile: VoiceInputRefinerProfile,
@@ -945,17 +957,10 @@ function guardRefinerClientAgainstUnavailableRoute(
 ): TextModelClient {
   return {
     requestJson: (input) => {
-      if (isUtilityRouteDisabled(profile)) {
-        return Promise.reject(new Error('voice refiner route disabled in settings'));
-      }
-      if (!isActiveCatalogVoiceRefinerProfile(profile)) {
-        return Promise.reject(new Error('voice refiner catalog route unavailable'));
-      }
-      // Refinement may start minutes after chain resolution. Re-read the live
-      // owner-scoped catalog immediately before every direct XD request so a
-      // newly denied paid model cannot be dispatched from a retained session.
-      if (isUtilityRoutePaymentRequired(profile)) {
-        return Promise.reject(new Error('voice refiner route requires paid entitlement'));
+      try {
+        assertRefinerRouteAvailable(profile);
+      } catch (error) {
+        return Promise.reject(error);
       }
       return client.requestJson(input);
     },
@@ -975,6 +980,8 @@ function createVoiceInputTextModelClient(
     /** Idle watchdog per attempt; both clients re-arm it on every stream chunk. */
     timeoutMs?: number;
     voiceContext?: CindyVoiceRunContext;
+    /** Final route guard invoked immediately before each network dispatch. */
+    beforeDispatch?: () => void;
   },
 ): TextModelClient {
   if (options?.voiceContext) {
@@ -988,6 +995,7 @@ function createVoiceInputTextModelClient(
       ),
       onUsage: options.onUsage,
       timeoutMs: options.timeoutMs,
+      beforeDispatch: options.beforeDispatch,
     });
   }
   if (profile.transport === 'codex-responses') {
@@ -999,6 +1007,7 @@ function createVoiceInputTextModelClient(
       onAuthInvalidated: (reason) => {
         void desktopCodexAuthAdapter.invalidate(reason);
       },
+      beforeDispatch: options?.beforeDispatch,
     });
   }
 
@@ -1010,6 +1019,7 @@ function createVoiceInputTextModelClient(
       baseUrl: proxyBaseUrl,
       onUsage: options?.onUsage,
       timeoutMs: options?.timeoutMs,
+      beforeDispatch: options?.beforeDispatch,
     });
   }
 
@@ -2256,6 +2266,7 @@ export function registerVoiceInputIpc(): void {
             client: guardRefinerClientAgainstUnavailableRoute(
               profile,
               createVoiceInputTextModelClient(profile, {
+                beforeDispatch: () => assertRefinerRouteAvailable(profile),
                 timeoutMs: VOICE_INPUT_REFINER_IDLE_TIMEOUT_MS,
                 onUsage: (usage) => {
                   if (!runId) return;
