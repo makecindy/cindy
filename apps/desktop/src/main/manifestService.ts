@@ -90,6 +90,7 @@ export interface Manifest {
   /** Linux manifests omit agent assets; packaged Linux uses its official runtime fallback. */
   claudeCode?: ClaudeCodeManifest;
   codex?: CodexManifest;
+  codexPackage?: CodexManifest;
   ripgrep?: RipgrepManifest;
   pi?: PiManifest;
 }

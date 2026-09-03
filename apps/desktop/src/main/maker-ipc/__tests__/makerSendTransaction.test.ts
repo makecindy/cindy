@@ -1425,6 +1425,73 @@ describe('maker SEND transaction', () => {
     expect(newSession.send).toHaveBeenCalled();
   });
 
+  it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {
+    const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const reconcileCreateOptsWithDb = vi.fn(async (_sessionId: string, co: MakerSessionCreateOpts) => {
+      co.resumeSessionId = 'db-sdk-session-id';
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      reconcileCreateOptsWithDb,
+      bootstrapSession: vi.fn(async () => ({
+        session: newSession,
+        didInjectOrcaInstructions: true,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('orca-session', 'hello', {
+        id: 'orca-session',
+        agentKind: 'pi',
+        workingDir: 'C:\\repo',
+        model: 'k3',
+        // caller 快照携带陈旧 resume:DB 权威值必须胜出,而不是仅在缺省时补值。
+        resumeSessionId: 'stale-caller-resume',
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(reconcileCreateOptsWithDb).toHaveBeenCalledOnce();
+    // 对账必须发生在 closeSession 之前:DB 读失败时旧 runtime 不能已被关闭。
+    expect(reconcileCreateOptsWithDb.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.closeSession).mock.invocationCallOrder[0]!,
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ resumeSessionId: 'db-sdk-session-id' }),
+    );
+    expect(newSession.send).toHaveBeenCalled();
+  });
+
+  it('fails rehydrate without closing the old runtime when DB reconciliation throws (#2882)', async () => {
+    const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      reconcileCreateOptsWithDb: vi.fn(async () => {
+        throw new Error('db unavailable');
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('orca-session', 'hello', {
+        id: 'orca-session',
+        agentKind: 'pi',
+        workingDir: 'C:\\repo',
+        model: 'k3',
+      }),
+    ).resolves.toMatchObject({ accepted: false, reason: 'REHYDRATE_FAILED' });
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(oldSession.send).not.toHaveBeenCalled();
+  });
+
   it('returns rehydrate failure without sending when active Orca rehydrate fails', async () => {
     const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
     const { deps } = createDeps({

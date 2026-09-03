@@ -168,6 +168,34 @@ describe('DeferredCodexRestartService', () => {
     expect(service.isPending()).toBe(false);
   });
 
+  it('等待所有并行本地 Codex turn 都结束后只重启一次', async () => {
+    const restart = vi.fn(async () => {});
+    const busy = new Set(['codex-1', 'codex-2', 'codex-3']);
+    const { service } = createService({
+      restart,
+      hasBusyLocalCodexSession: () => busy.size > 0,
+    });
+    service.schedule('custom-provider-image-generation-enabled');
+
+    for (const sessionId of ['codex-1', 'codex-2']) {
+      busy.delete(sessionId);
+      service.onSessionSettled();
+      await vi.runOnlyPendingTimersAsync();
+      expect(restart).not.toHaveBeenCalled();
+      expect(service.isPending()).toBe(true);
+    }
+
+    busy.delete('codex-3');
+    service.onSessionSettled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(restart).toHaveBeenCalledOnce();
+    expect(service.isPending()).toBe(false);
+
+    service.onSessionSettled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
   it('restart 抛 busy(settle 与新 turn 竞态)时保留 pending 且不刷 warn, 之后重试成功', async () => {
     const restart = vi
       .fn<() => Promise<void>>()

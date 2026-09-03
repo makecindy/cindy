@@ -69,6 +69,7 @@ function fixture(): { codexHome: string; systemAuth: string; localAuth: string }
 
 function trustIsolatedAuthSandbox(): void {
   const nonce = 'a'.repeat(64);
+  const isolationName = 'test-isolated-auth';
   const now = Date.now();
   fs.writeFileSync(
     path.join(h.userDataDir, '.isolated-auth-launch-proof.json'),
@@ -78,13 +79,14 @@ function trustIsolatedAuthSandbox(): void {
       userDataDir: fs.realpathSync.native(h.userDataDir),
       profileKind: 'isolated-sandbox',
       epoch: 1,
-      isolationName: '',
+      isolationName,
       issuedAtMs: now,
       expiresAtMs: now + 60_000,
     })}\n`,
     { mode: 0o600 },
   );
   vi.stubEnv('XDT_ISOLATED', '1');
+  vi.stubEnv('XDT_ISOLATED_NAME', isolationName);
   vi.stubEnv('XDT_ISOLATED_AUTH', '1');
   vi.stubEnv('XDT_USER_DATA_DIR_EPOCH', '1');
   vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 
 // getBase() 按 kind 缓存 provisioner 实例:全部测试共享同一个 cdndProvisioner,
 // 每测试重配它的行为(而不是 mockReturnValueOnce 换实例——缓存会让新实例永远不被使用)。
@@ -6,6 +7,7 @@ const {
   appMock,
   cdndProvisioner,
   createBinaryProvisioner,
+  findDevBinary,
   findCachedLinuxRuntimeFallbackBinary,
   prepareLinuxRuntimeFallback,
 } = vi.hoisted(() => {
@@ -19,6 +21,7 @@ const {
     appMock: { isPackaged: true, getPath: vi.fn(() => '/tmp/xdt-userdata') },
     cdndProvisioner,
     createBinaryProvisioner: vi.fn(() => cdndProvisioner),
+    findDevBinary: vi.fn((): string | null => null),
     findCachedLinuxRuntimeFallbackBinary: vi.fn((): string | null => null),
     prepareLinuxRuntimeFallback: vi.fn(),
   };
@@ -29,7 +32,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 vi.mock('../agent-binaries/factory.js', () => ({ createBinaryProvisioner }));
-vi.mock('../agent-binaries/dev-fallback.js', () => ({ findDevBinary: vi.fn(() => null) }));
+vi.mock('../agent-binaries/dev-fallback.js', () => ({ findDevBinary }));
 vi.mock('../agent-binaries/linux-runtime-fallback.js', () => ({
   findCachedLinuxRuntimeFallbackBinary,
   prepareLinuxRuntimeFallback,
@@ -76,12 +79,56 @@ beforeEach(async () => {
   // mockReturnValue/mockResolvedValue,别 mockReset(会连默认实现一起清掉)。
   manifestService.getCachedManifest.mockReturnValue(null);
   manifestService.fetchManifest.mockResolvedValue(null);
+  findDevBinary.mockReset().mockReturnValue(null);
   findCachedLinuxRuntimeFallbackBinary.mockReturnValue(null);
   prepareLinuxRuntimeFallback.mockResolvedValue({
     ready: true,
     binaryPath: '/tmp/xdt-userdata/agent-runtime/claude-code/bin/claude',
     installed: true,
     source: 'installed',
+  });
+});
+
+describe('dev Codex package selection', () => {
+  it('starts Codex from the complete local package entrypoint', async () => {
+    appMock.isPackaged = false;
+    const expectedPath = '/repo/apps/codex-package-bin/linux-x64/bin/codex';
+    findDevBinary.mockReturnValue(expectedPath);
+
+    await expect(binaries.prepare('codex')).resolves.toEqual({
+      ready: true,
+      path: expectedPath,
+      downloaded: false,
+    });
+    expect(findDevBinary).toHaveBeenCalledWith({
+      vendorBinDir: 'codex-package-bin',
+      binaryName: path.join('bin', 'codex'),
+    });
+    expect(createBinaryProvisioner).not.toHaveBeenCalled();
+  });
+
+  it('starts the packaged release from the complete Codex package entrypoint', async () => {
+    const expectedPath = path.join(
+      '/tmp/xdt-userdata',
+      'codex-package',
+      '0.153.0',
+      'bin',
+      'codex',
+    );
+    cdndProvisioner.prepare.mockResolvedValueOnce({
+      ready: true,
+      binaryPath: expectedPath,
+    });
+
+    await expect(binaries.prepare('codex')).resolves.toMatchObject({
+      ready: true,
+      path: expectedPath,
+    });
+    expect(createBinaryProvisioner).toHaveBeenCalledWith(expect.objectContaining({
+      manifestField: 'codexPackage',
+      installSubdir: 'codex-package',
+      artifact: { kind: 'tar-gz-dir', binaryName: path.join('bin', 'codex') },
+    }));
   });
 });
 
@@ -218,9 +265,9 @@ describe('packaged Linux agent binary prepare', () => {
   it('peek delegates to the CDN check when the manifest publishes a linux asset', async () => {
     manifestService.getCachedManifest.mockReturnValue({
       app: { version: '0.1.59' },
-      codex: {
-        version: '0.144.6',
-        file: 'codex/0.144.6/linux-x64/codex.gz',
+      codexPackage: {
+        version: '0.153.0',
+        file: 'codex-package/0.153.0/linux-x64/codex-package.dist.tar.gz',
         sha256: 'b'.repeat(64),
         size: 5678,
       },

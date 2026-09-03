@@ -1496,6 +1496,13 @@
           "editTitle": "编辑自定义供应商",
           "desc": "配置与 OpenAI / Anthropic 兼容的供应商。"
         },
+        "imageGenerationReload": {
+          "title": "重新加载 Codex",
+          "description": "保存此图片生成配置需要重新加载 Codex，并会中断当前正在执行的 Codex 任务。",
+          "interrupt": "保存并停止",
+          "cancel": "取消",
+          "close": "关闭"
+        },
         "fields": {
           "name": "显示名称",
           "namePlaceholder": "我的 AI 供应商",
@@ -1517,6 +1524,15 @@
           "modelContextWindowTitle": "上下文窗口(tokens)。留空按 200K 保守默认；影响窗口显示与压缩阈值。",
           "modelSupportsImageInput": "支持图片输入",
           "modelSupportsImageInputHelp": "仅在该模型确实支持视觉输入时开启。保存后新建 Pi 任务生效。",
+          "runtimeAdvanced": "高级",
+          "runtimeSupportsImageGeneration": "支持图片生成与编辑",
+          "runtimeSupportsImageGenerationHelpLabel": "了解图片生成与编辑支持",
+          "runtimeSupportsImageGenerationConditionTitle": "适用条件",
+          "runtimeSupportsImageGenerationCondition": "网关需兼容 OpenAI Responses API，并支持图片生成与编辑。",
+          "runtimeSupportsImageGenerationEndpointsTitle": "接口要求",
+          "runtimeSupportsImageGenerationEndpoints": "网关必须处理以下请求：",
+          "runtimeSupportsImageGenerationPermissionsTitle": "权限与失败处理",
+          "runtimeSupportsImageGenerationPermissions": "当前 API Key、账号或用户组需有图片模型权限。此开关只声明网关能力，不会自动开通上游权限。调用失败时会显示真实上游错误，不会切换到其他图片服务。",
           "modelSupportsReasoning": "支持推理",
           "modelSupportsReasoningHelp": "仅在该模型接受推理强度时开启，并勾选它实际支持的所有档位。保存后，下一个 Pi Agent 会话生效。",
           "modelReasoningEfforts": "支持的推理强度",
@@ -3901,7 +3917,7 @@
           "label": "连接",
           "toggle": {
             "label": "启用",
-            "aria": "让这个 Cindy 在前台时使用 Xbox 手柄"
+            "aria": "让这个 Cindy 占用 Codex Micro"
           },
           "status": {
             "connecting": "正在连接",
@@ -3913,13 +3929,13 @@
             "unavailable": "当前系统暂不支持"
           },
           "descriptions": {
-            "connecting": "Cindy 正在查找 Xbox 手柄。",
-            "connected": "Cindy 在前台时会监听这只手柄。",
-            "disabled": "启用后，Cindy 在前台时会监听手柄。",
-            "present": "启用后，Cindy 在前台时会监听手柄。",
-            "not-detected": "请用 USB 或蓝牙连接 Xbox 手柄。",
-            "error": "Cindy 暂时无法读取手柄，正在重试。",
-            "unavailable": "这台电脑还不能读取 Xbox 手柄。",
+            "connecting": "Cindy 正在启动 Work Louder 设备服务。",
+            "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
+            "disabled": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
+            "present": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
+            "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
+            "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
+            "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
             "connection-timeout": "Work Louder 服务在规定时间内没有响应，Cindy 会自动重试。",
             "connection-failed": "Work Louder 服务启动失败，Cindy 会自动重试。",
             "permission-required": "macOS 拒绝了键盘访问，请在输入监控中允许 Cindy 后重试。",
@@ -3953,12 +3969,12 @@
           "title": "Agent 键",
           "source": {
             "label": "任务顺序",
-            "description": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
+            "description": "任务键按板上顺序，对应侧边栏从上到下的任务。",
             "descriptions": {
-              "sidebar": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
-              "last-sent": "AG00～AG05 按你最后一次发消息的时间，最近的排在前面。",
-              "priority": "AG00～AG05 对应前 6 个优先任务。",
-              "custom": "AG00～AG05 各自打开你指定的任务。"
+              "sidebar": "任务键按板上顺序，对应侧边栏从上到下的任务。",
+              "last-sent": "任务键按板上顺序，对应你最近发过消息的任务，越近越靠前。",
+              "priority": "任务键按板上顺序，对应优先任务。",
+              "custom": "每颗任务键打开你指定的任务。"
             },
             "value": "侧边栏顺序",
             "options": {
@@ -3975,7 +3991,16 @@
           },
           "newTask": "新任务",
           "slot": "最近第 {{position}} 个",
-          "slotAria": "AG{{slot}} 打开最近第 {{position}} 个任务"
+          "slotAria": "AG{{slot}} 打开最近第 {{position}} 个任务",
+          "role": {
+            "label": "按键用途",
+            "description": "任务键用来切换任务，并用灯光显示状态。动作键用来执行快捷操作，还可以更换键帽。",
+            "task": "任务键",
+            "action": "动作键"
+          },
+          "lightingLimit": "固件最多给板上顺序的前 6 颗任务键独立亮灯。多出来的任务键仍能切换任务。",
+          "unlitKey": "这颗键排在前 6 颗之后，没有独立状态灯。",
+          "taskHint": "推荐使用透明键帽，任务状态会有不同颜色的灯效显示。"
         },
         "commandKeys": {
           "builtInDescription": "保持键帽自带的动作，或把这个键改绑到别的动作。",
@@ -3986,7 +4011,7 @@
           "title": "麦克风",
           "separate": {
             "label": "拆分麦克风键",
-            "description": "保持 ACT10 和 ACT11 分开，不合并为一个 MIC 键。"
+            "description": "短按开始并保持录音，再按一下停止；长按松手停止。"
           }
         },
         "analog": {
@@ -4026,7 +4051,8 @@
           "tasks": "任务",
           "commands": "命令",
           "keycaps": "键帽",
-          "skills": "技能"
+          "skills": "技能",
+          "voice": "语音输入"
         },
         "layout": {
           "editor": {
@@ -4038,7 +4064,10 @@
             "cancel": "取消",
             "save": "保存",
             "assignedShortcut": "已分配动作",
-            "selectKeycap": "选择键帽 {{keycap}}"
+            "selectKeycap": "选择键帽 {{keycap}}",
+            "keyTitle": "编辑按键",
+            "keyDescription": "任务键打开任务并显示状态灯；动作键执行快捷操作，并可以选择键帽。",
+            "blank": "空白"
           },
           "keyboard": {
             "indicator": "状态指示灯",
@@ -4051,6 +4080,54 @@
             "title": "恢复键位布局",
             "description": "恢复键帽、摇杆、旋钮和麦克风分配，不改变任务顺序或灯光设置。",
             "button": "恢复布局"
+          },
+          "merge": {
+            "right": "和右边合成一颗宽键",
+            "down": "和下面合成一颗长键",
+            "split": "拆成两个按键",
+            "rightDescription": "一颗宽键帽会盖住右边那颗。被盖住的任务键会变成动作键。",
+            "downDescription": "一颗长键帽会盖住下面那颗。被盖住的任务键会变成动作键。",
+            "splitDescription": "拆开后，被盖住的那颗变回空白按键。"
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "用按键打开任务，并用灯光同步任务状态。",
+            "openAria": "打开 Work Louder Creator Micro 2 设置",
+            "connection": {
+              "toggle": {
+                "aria": "让这台 Cindy 使用 Creator Micro 2"
+              },
+              "descriptions": {
+                "connecting": "Cindy 正在启动 Work Louder 设备服务。",
+                "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
+                "disabled": "开启后，Cindy 会改写当前图层、监听按键，并用灯光显示任务状态。",
+                "present": "开启后，Cindy 会改写当前图层、监听按键，并用灯光显示任务状态。",
+                "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
+                "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
+                "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
+                "connection-timeout": "Work Louder 服务在规定时间内没有响应，Cindy 会自动重试。",
+                "connection-failed": "Work Louder 服务启动失败，Cindy 会自动重试。",
+                "permission-required": "macOS 拒绝了键盘访问，请在输入监控中允许 Cindy 后重试。",
+                "sdk-unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
+                "device-in-use": "其他应用正在占用这块键盘。请先关闭 ChatGPT 或 Input，然后再试。"
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "任务键按板上顺序，对应侧边栏从上到下的任务。",
+                  "last-sent": "任务键按板上顺序，对应你最近发过消息的任务，越近越靠前。",
+                  "priority": "任务键按板上顺序，对应优先任务。",
+                  "custom": "每颗任务键打开你指定的任务。"
+                }
+              }
+            },
+            "errors": {
+              "load": "无法加载 Creator Micro 2 设置",
+              "save": "无法保存 Creator Micro 2 设置"
+            }
           }
         }
       },
@@ -10747,10 +10824,16 @@
       "search": "搜索技能",
       "clearSearch": "清除技能搜索",
       "noSearchResults": "没有找到匹配的技能",
-      "browseTitle": "浏览 Skill Hub",
-      "browseDesc": "发现并安装更多技能",
-      "recommended": "推荐安装",
-      "recommendedEmpty": "暂无推荐",
+      "catalogFiltersAria": "SkillHub 分类",
+      "catalogFilter": {
+        "public": "公开",
+        "organization": "组织",
+        "mine": "我的管理"
+      },
+      "catalogMore": "更多",
+      "loadMore": "加载更多",
+      "loadingMore": "加载中…",
+      "catalogEmpty": "当前分类暂无技能",
       "local": "本地技能",
       "localEmpty": "还没有本地技能",
       "installed": "已安装",
@@ -10932,7 +11015,6 @@
       "sortDownloads": "下载量",
       "sortLatest": "最近更新",
       "sortCreated": "最新发布",
-      "chipAvailable": "可获取",
       "chipAll": "全部",
       "chipMine": "我的管理",
       "ownerGroupPersonal": "个人",
@@ -10946,7 +11028,7 @@
       "installError": "未知错误"
     },
     "marketCard": {
-      "visibilityPublic": "XD.Inc",
+      "visibilityPublic": "公开",
       "visibilityDept": "团队",
       "visibilityPrivate": "个人",
       "timeLabel": "发布时间",
@@ -10971,6 +11053,7 @@
       }
     },
     "publishedStatus": {
+      "waitingReview": "等待审核",
       "machineReviewing": "机审中",
       "manualReviewing": "人工复核中",
       "rejected": "审核未通过"
@@ -10982,7 +11065,7 @@
       "emptyHint": "这个云端 Skill 没有返回可预览文件"
     },
     "marketDetail": {
-      "visibilityPublic": "XD.Inc 可见",
+      "visibilityPublic": "所有用户可见",
       "visibilityPrivate": "个人可见",
       "visibilityDept": "团队可见",
       "files": "文件",
@@ -10993,6 +11076,7 @@
       "forbidden": "没有权限操作这个 Skill",
       "notFound": "这个 Skill 已不存在，请返回列表刷新",
       "managementApiUnavailable": "Hub 管理接口暂未就绪，请稍后再试",
+      "invalidVisibility": "当前组织暂不支持该可见范围，请选择公开发布",
       "default": "操作失败，请稍后重试"
     },
     "installPicker": {
@@ -11037,11 +11121,11 @@
       "descriptionPlaceholder": "简要描述该 Skill 的用途",
       "visibilityLabel": "可见性",
       "visibilityPublicTitle": "公开",
-      "visibilityPublicDesc": "全公司可见 · 默认",
+      "visibilityPublicDesc": "所有用户可见 · 默认",
       "versionLabel": "版本号",
       "versionFormatHint": "格式：x.y.z (例如 1.0.1)",
       "categoryLabel": "分类",
-      "categoryAuto": "自动",
+      "categoryAuto": "不添加标签",
       "categoryPlaceholder": "请选择分类",
       "categoryLoading": "正在加载分类…",
       "categoryLoadFailed": "分类加载失败，请重试",
@@ -11165,6 +11249,14 @@
         "title": "已取消",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "当前组织仅支持浏览",
+        "message": "当前组织的技能目录暂不支持发布或管理"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "可见范围不可用",
+        "message": "请选择当前发布身份支持的可见范围"
+      },
       "INTERNAL": {
         "title": "服务器错误",
         "message": "发布失败，请稍后重试"
@@ -11178,8 +11270,12 @@
       "dismiss": "知道了",
       "passedTitle": "安全扫描通过",
       "passedDesc": "该版本已通过所有安全检查，现已发布到市场。",
+      "pendingTitle": "已提交，等待平台审核",
+      "pendingDesc": "安全扫描已经完成，平台审核通过后会自动发布到公开市场。",
       "failedTitle": "安全扫描未通过",
       "failedDesc": "该版本因安全扫描不达标被标记为 {{status}}，暂时无法在市场中被其他用户安装。请修复以下问题后重新发布。",
+      "processingFailedTitle": "发布处理失败",
+      "processingFailedDesc": "该版本已上传，但服务器在处理发布时发生内部错误。这不是安全检查拒绝，请稍后重新发布。",
       "copyReviewResult": "复制审核结果",
       "copiedReviewResult": "已复制",
       "copyReviewResultFailed": "复制失败",
@@ -11192,12 +11288,14 @@
         "passed": "已通过",
         "failed": "未通过",
         "warning": "有风险",
+        "waitingReview": "等待审核",
         "reviewing": "审核中",
         "unavailable": "暂不可用"
       },
       "gateLabel": {
         "llmReview": "LLM 审核",
-        "securityScan": "安全扫描"
+        "securityScan": "安全扫描",
+        "publicationProcessing": "发布处理"
       }
     },
     "diffPanel": {
@@ -11249,7 +11347,7 @@
       "title": "管理可见性",
       "tierLabel": "可见性",
       "tierPublic": "公开",
-      "tierPublicDesc": "全公司可见",
+      "tierPublicDesc": "所有用户可见",
       "tierTeam": "给团队使用",
       "tierTeamDesc": "指定团队可见",
       "tierPrivate": "仅自己使用",
@@ -11257,13 +11355,18 @@
       "save": "保存",
       "saving": "保存中…",
       "saved": "管理可见性已保存",
+      "submitReview": "提交审核",
+      "waitingReview": "等待审核",
+      "publicReviewSubmitted": "已提交当前版本的公开审核",
+      "publicReviewPending": "当前版本正在等待公开审核，审核通过后会进入公开市场。",
+      "publicReviewRejected": "公开审核未通过：{{reason}}",
       "impactPrivate": "保存后，仅你可见。",
       "impactPrivateLeavingMarket": "保存后会从公开市场下架，并转为自己可见；已通过审核的版本会保留审核通过状态。",
       "impactPrivateTeam": "保存后转为自己可见；团队将看不到这个 Skill，也无法管理。",
       "impactPrivateTeamLeavingMarket": "保存后会从公开市场下架，并转为自己可见；团队将看不到这个 Skill，也无法管理。已通过审核的版本会保留审核通过状态。",
       "impactTeam": "保存后，选中的团队或部门可以看到并下载。",
       "impactTeamLeavingMarket": "保存后会从公开市场下架，只有选中的团队或部门可以看到并下载；已通过审核的版本会保留审核通过状态。",
-      "impactPublic": "保存后进入公开市场；若当前已审核通过，会立即对外可见，审核状态会保留。"
+      "impactPublic": "提交当前版本的公开审核；审核通过后进入公开市场，无需发布新版本。"
     },
     "marketEdit": {
       "saved": "市场展示信息已保存",

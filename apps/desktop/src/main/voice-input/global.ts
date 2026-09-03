@@ -66,6 +66,7 @@ const log = createLogger('voice-input-global');
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
 
 const modifierShortcutRecordingWebContentsIds = new Set<number>();
+const modifierShortcutRecordingCleanupWebContentsIds = new Set<number>();
 /**
  * 正在录制快捷键的 renderer —— 与上面那个「keys 转发名单」是两件事。
  *
@@ -77,6 +78,7 @@ const modifierShortcutRecordingWebContentsIds = new Set<number>();
  */
 const modifierShortcutRecordingSessionIds = new Set<number>();
 const activeInlineVoiceInputWebContentsIds = new Set<number>();
+const activeInlineVoiceInputCleanupWebContentsIds = new Set<number>();
 
 /**
  * 有任何窗口的快捷键录制框开着时，全局快捷键的**新激活**一律丢弃。
@@ -651,10 +653,13 @@ async function classifyMacNativeListenerFailure(): Promise<VoiceInputGlobalError
 
 export function registerActiveInlineVoiceInputWebContents(sender: WebContents): void {
   if (isGlobalVoiceInputOverlaySender(sender)) return;
-  if (activeInlineVoiceInputWebContentsIds.has(sender.id)) return;
   activeInlineVoiceInputWebContentsIds.add(sender.id);
+  if (activeInlineVoiceInputCleanupWebContentsIds.has(sender.id)) return;
+  const webContentsId = sender.id;
+  activeInlineVoiceInputCleanupWebContentsIds.add(webContentsId);
   sender.once('destroyed', () => {
-    activeInlineVoiceInputWebContentsIds.delete(sender.id);
+    activeInlineVoiceInputCleanupWebContentsIds.delete(webContentsId);
+    activeInlineVoiceInputWebContentsIds.delete(webContentsId);
   });
 }
 
@@ -1012,8 +1017,20 @@ async function recoverPendingNativeShortcutRegistration(): Promise<void> {
 function markModifierShortcutRecordingSession(sender: WebContents): void {
   if (modifierShortcutRecordingSessionIds.has(sender.id)) return;
   modifierShortcutRecordingSessionIds.add(sender.id);
+  registerModifierShortcutRecordingCleanup(sender);
+}
+
+function registerModifierShortcutRecordingCleanup(sender: WebContents): void {
+  if (modifierShortcutRecordingCleanupWebContentsIds.has(sender.id)) return;
+  const webContentsId = sender.id;
+  modifierShortcutRecordingCleanupWebContentsIds.add(webContentsId);
   sender.once('destroyed', () => {
-    modifierShortcutRecordingSessionIds.delete(sender.id);
+    modifierShortcutRecordingCleanupWebContentsIds.delete(webContentsId);
+    modifierShortcutRecordingSessionIds.delete(webContentsId);
+    modifierShortcutRecordingWebContentsIds.delete(webContentsId);
+    if (modifierShortcutRecordingWebContentsIds.size === 0) {
+      macModifierShortcutListener.stopKeyCapture();
+    }
   });
 }
 
@@ -1143,12 +1160,6 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
       // 录制会话在**尝试之前**就登记：capture 起不起来都不影响「用户正在录」这个事实。
       // （显式挂起时其实已经登记过了，这里幂等补一次，不依赖调用顺序。）
       markModifierShortcutRecordingSession(event.sender);
-      event.sender.once('destroyed', () => {
-        modifierShortcutRecordingWebContentsIds.delete(event.sender.id);
-        if (modifierShortcutRecordingWebContentsIds.size === 0) {
-          macModifierShortcutListener.stopKeyCapture();
-        }
-      });
       // 走 startMacNativeListener：startKeyCapture 也会抛（helper 源码缺失 / swiftc
       // 失败）。不接住的话下面的清理与 errorCode 分类都跑不到，本 renderer 会留在
       // 转发名单里、原始路径还会过桥给它。

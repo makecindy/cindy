@@ -91,6 +91,25 @@ describe('WorkLouderCodexHostClient', () => {
     expect(fork).toHaveBeenCalledTimes(2);
   });
 
+  it('replays a live connection when occupancy turns the device back on', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+    });
+    const status = vi.fn();
+    client.setConnectionStatusHandler(status);
+    client.setHidInputHandler(vi.fn());
+
+    client.setDeviceEnabled(false);
+    child.emit('message', { kind: 'state', status: 'connected' });
+    status.mockClear();
+
+    client.setDeviceEnabled(true);
+    expect(status).toHaveBeenCalledWith('connected');
+  });
+
   it('restarts a still-wanted host after disable finishes stopping', () => {
     const stopping = new FakeChild();
     const restarted = new FakeChild();
@@ -116,6 +135,22 @@ describe('WorkLouderCodexHostClient', () => {
     expect(fork).toHaveBeenCalledTimes(2);
     expect(restarted.postMessage).toHaveBeenCalledWith({ kind: 'init', sdkEntry: '/sdk' });
     expect(restarted.postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
+  it('forwards the owner-scoped keymap backup directory on init', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+      keymapBackupDir: () => '/tmp/cindy-owner/worklouder-creator-micro-2',
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    expect(child.postMessage).toHaveBeenCalledWith({
+      kind: 'init',
+      sdkEntry: '/sdk',
+      keymapBackupDir: '/tmp/cindy-owner/worklouder-creator-micro-2',
+    });
   });
 
   it('kills a host that never acknowledges stop after disable', async () => {
@@ -691,6 +726,25 @@ describe('WorkLouderCodexHostClient', () => {
     client.retryPermission();
 
     expect(fork).not.toHaveBeenCalled();
+  });
+
+  it('does not recycle a live host whose vendor HID is already occupied', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const onReason = vi.fn();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    client.setConnectionReasonHandler(onReason);
+    child.emit('message', { kind: 'state', status: 'connected' });
+    child.emit('message', { kind: 'state', status: 'error', reason: 'device-in-use' });
+
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(fork).toHaveBeenCalledTimes(1);
+    expect(onReason).toHaveBeenLastCalledWith('device-in-use');
   });
 });
 

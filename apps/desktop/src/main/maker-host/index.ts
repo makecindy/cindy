@@ -190,6 +190,7 @@ import {
   setCodexProxyGatewayKeyReader,
   registerComposed as registerCodexProxyComposed,
   registerChildThread as registerCodexProxyChildThread,
+  setCodexAppliedCustomProviderRoutes,
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
@@ -262,6 +263,11 @@ import {
   CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
+import {
+  buildCodexCustomProviderArgs,
+  deriveCodexCustomProviderRoutes,
+  toCodexCustomProviderHostRoutes,
+} from './codex-custom-provider-route.js';
 import {
   buildCodexSubagentSpawnArgs,
   codexSubagentRouteUsesChatGptOAuth,
@@ -1484,6 +1490,18 @@ export function getMaker(): Maker {
         const endpoint = usesIsolatedProxy
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
+        const codexCustomProviderRoutes =
+          !usesIsolatedProxy && ready ? deriveCodexCustomProviderRoutes(getActiveCatalog()) : [];
+        if (!usesIsolatedProxy) {
+          // The proxy must follow the exact capability/routing snapshot frozen into
+          // this task Host, not the catalog that may already be ahead during a busy restart.
+          setCodexAppliedCustomProviderRoutes(codexCustomProviderRoutes);
+        }
+        const codexCustomProviderSpawn = buildCodexCustomProviderArgs(
+          endpoint,
+          authInjection,
+          codexCustomProviderRoutes,
+        );
         const storedSubagentModelSettings = readSubagentModelSettings();
         const mainTaskCredentialMode = ctx.requestedCredentialMode ?? credentialMode;
         let subagentProviderViews: ProviderView[] | undefined;
@@ -1597,14 +1615,18 @@ export function getMaker(): Maker {
                 })
               : []),
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
+            ...codexCustomProviderSpawn.extraArgs,
           ],
-          extraEnv: mcpExtraEnv,
+          extraEnv: { ...mcpExtraEnv, ...codexCustomProviderSpawn.extraEnv },
           ...(subagentModelFallback ? { subagentModelFallback } : {}),
           ...(subagentRoute ? { subagentRoute } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
           codexSubagentRoutingProfile,
+          ...(codexCustomProviderRoutes.length > 0
+            ? { codexCustomProviderRoutes: toCodexCustomProviderHostRoutes(codexCustomProviderRoutes) }
+            : {}),
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
           ...(browserCompanion?.status === 'ready'
             ? {
@@ -2581,6 +2603,7 @@ export async function preflightBotRuntimeResources(
  */
 export function resetMaker(): void {
   cancelCodexAuthModeChange();
+  setCodexAppliedCustomProviderRoutes([]);
   _maker = null;
   botRuntimeResourcePreflight = null;
   _registerPiAgent = null;
@@ -2658,6 +2681,32 @@ export async function prepareCodexForAuthModeChange(): Promise<void> {
       }
     }
     guard?.assertIdle();
+    _codexCredentialChangeGuard = guard;
+    prepared = true;
+  } finally {
+    if (!prepared) {
+      guard?.release();
+    }
+  }
+}
+
+/**
+ * Hold the shared local Codex Host change guard and force-retire that Host before a custom
+ * Provider route or credential is persisted. Forced retirement closes all attached local Codex
+ * sessions at once; remote Codex and other agents use different Hosts and are unaffected.
+ */
+export async function prepareCodexForCustomProviderHostChange(): Promise<void> {
+  if (_codexCredentialChangeGuard) {
+    throw new Error('Codex credential mode change is already in progress');
+  }
+  const guard = _codexAgent
+    ? await _codexAgent.beginLocalHostCredentialChange(
+        'Codex custom Provider route or credential changed',
+      )
+    : null;
+  let prepared = false;
+  try {
+    await guard?.retireActiveHost();
     _codexCredentialChangeGuard = guard;
     prepared = true;
   } finally {

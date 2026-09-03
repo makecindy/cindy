@@ -6,7 +6,7 @@ import { net } from 'electron';
 import { getCurrentUserId } from '../../authManager';
 import type { StoredInstall } from '../registry/types';
 import { registryService } from '../registry';
-import { SkillhubAutoSyncService } from '../autoSyncService';
+import { parseAutoSyncConfig, SkillhubAutoSyncService } from '../autoSyncService';
 import type { install as installFn } from '../installService';
 
 type InstallResult = Awaited<ReturnType<typeof installFn>>;
@@ -82,18 +82,20 @@ function installEntry(version: string, overrides: Partial<StoredInstall> = {}): 
     updatedAt: 1,
     origin: 'installed',
     autoSynced: true,
+    catalogScope: 'market',
+    catalogScopeMigrated: true,
     ...overrides,
   };
 }
 
 function makeService(options: {
   userId?: string | null;
-  configSkills?: Array<string | { name: string; version?: string; enabled?: boolean }>;
+  configSkills?: Array<string | { name: string; version?: string; enabled?: boolean; catalogScope?: 'market' | 'team' }>;
   installs?: Array<{ skillName: string; installPath: string; entry: StoredInstall }>;
   listAllInstallsImpl?: () => Promise<Array<{ skillName: string; installPath: string; entry: StoredInstall }>>;
-  fetchConfigImpl?: () => Promise<Array<{ name: string; version?: string; enabled?: boolean }>>;
-  syncResults?: Array<{ name: string; exists: boolean; latestVersion?: string }>;
-  syncResponses?: Array<{ success: boolean; results?: Array<{ name: string; exists: boolean; latestVersion?: string }>; error?: string }>;
+  fetchConfigImpl?: () => Promise<Array<{ name: string; version?: string; enabled?: boolean; catalogScope?: 'market' | 'team' }>>;
+  syncResults?: Array<{ name: string; exists: boolean; latestVersion?: string; catalogScope?: 'market' | 'team' }>;
+  syncResponses?: Array<{ success: boolean; results?: Array<{ name: string; exists: boolean; latestVersion?: string; catalogScope?: 'market' | 'team' }>; error?: string }>;
   syncSuccess?: boolean;
   installImpl?: typeof installFn;
   installResults?: Array<SuccessfulInstallResult | FailedInstallResult>;
@@ -248,8 +250,8 @@ describe('SkillhubAutoSyncService', () => {
 
     expect(listIgnoredSkills).toHaveBeenCalledTimes(2);
     expect(recordCandidateSkills).toHaveBeenCalledWith('user-1', ['alpha'], { replace: true });
-    expect(syncMarket).toHaveBeenCalledWith({ slugs: ['alpha'] });
-    expect(install).toHaveBeenCalledWith({ name: 'alpha', autoSync: true }, expect.any(Function));
+    expect(syncMarket).toHaveBeenCalledWith({ skills: [{ slug: 'alpha', catalogScope: 'market' }] });
+    expect(install).toHaveBeenCalledWith({ name: 'alpha', catalogScope: 'market', autoSync: true }, expect.any(Function));
   });
 
   it('continues with non-ignored skills when only part of the config is ignored', async () => {
@@ -261,8 +263,8 @@ describe('SkillhubAutoSyncService', () => {
 
     await service.runOnceAfterLogin();
 
-    expect(syncMarket).toHaveBeenCalledWith({ slugs: ['beta'] });
-    expect(install).toHaveBeenCalledWith({ name: 'beta', autoSync: true }, expect.any(Function));
+    expect(syncMarket).toHaveBeenCalledWith({ skills: [{ slug: 'beta', catalogScope: 'market' }] });
+    expect(install).toHaveBeenCalledWith({ name: 'beta', catalogScope: 'market', autoSync: true }, expect.any(Function));
   });
 
   it('records empty fallback candidates without replacing previous remote candidates when the config fetch fails', async () => {
@@ -310,7 +312,24 @@ describe('SkillhubAutoSyncService', () => {
 
     await service.runOnceAfterLogin();
 
-    expect(install).toHaveBeenCalledWith({ name: 'alpha', autoSync: true }, expect.any(Function));
+    expect(install).toHaveBeenCalledWith({ name: 'alpha', catalogScope: 'market', autoSync: true }, expect.any(Function));
+  });
+
+  it('keeps the configured team catalog scope through sync and install', async () => {
+    const { service, syncMarket, install } = makeService({
+      configSkills: [{ name: 'alpha', catalogScope: 'team' }],
+      syncResults: [{ name: 'alpha', catalogScope: 'team', exists: true, latestVersion: '1.2.3' }],
+    });
+
+    await service.runOnceAfterLogin();
+
+    expect(syncMarket).toHaveBeenCalledWith({
+      skills: [{ slug: 'alpha', catalogScope: 'team' }],
+    });
+    expect(install).toHaveBeenCalledWith(
+      { name: 'alpha', catalogScope: 'team', autoSync: true },
+      expect.any(Function),
+    );
   });
 
   it('continues auto-sync after deleting a corrupt pending cleanup store', async () => {
@@ -324,7 +343,7 @@ describe('SkillhubAutoSyncService', () => {
 
     await service.runOnceAfterLogin();
 
-    expect(install).toHaveBeenCalledWith({ name: 'alpha', autoSync: true }, expect.any(Function));
+    expect(install).toHaveBeenCalledWith({ name: 'alpha', catalogScope: 'market', autoSync: true }, expect.any(Function));
     expect(fs.existsSync(storePath)).toBe(false);
     expect(loggerMocks.warn).toHaveBeenCalledWith(
       'parse pending cancellation cleanup store failed',
@@ -342,7 +361,7 @@ describe('SkillhubAutoSyncService', () => {
 
     await service.runOnceAfterLogin();
 
-    expect(install).toHaveBeenCalledWith({ name: 'alpha', autoSync: true }, expect.any(Function));
+    expect(install).toHaveBeenCalledWith({ name: 'alpha', catalogScope: 'market', autoSync: true }, expect.any(Function));
     expect(loggerMocks.warn).toHaveBeenCalledWith(
       'read pending cancellation cleanup store failed',
       { error: expect.any(String) },
@@ -477,7 +496,7 @@ describe('SkillhubAutoSyncService', () => {
     await service.runOnceAfterLogin();
 
     expect(install).toHaveBeenCalledWith(
-      { name: 'alpha', autoSync: true, installPath, version: '1.2.3', force: true, skipBackup: false },
+      { name: 'alpha', catalogScope: 'market', autoSync: true, installPath, version: '1.2.3', force: true, skipBackup: false },
       expect.any(Function),
     );
   });
@@ -500,7 +519,7 @@ describe('SkillhubAutoSyncService', () => {
       await service.runOnceAfterLogin();
 
       expect(install).toHaveBeenCalledWith(
-        { name: 'alpha', autoSync: true, installPath, version: '1.2.3', force: true, skipBackup: false },
+        { name: 'alpha', catalogScope: 'market', autoSync: true, installPath, version: '1.2.3', force: true, skipBackup: false },
         expect.any(Function),
       );
     } finally {
@@ -519,7 +538,7 @@ describe('SkillhubAutoSyncService', () => {
     await service.runOnceAfterLogin();
 
     expect(install).toHaveBeenCalledWith(
-      { name: 'alpha', autoSync: true, version: '1.1.0' },
+      { name: 'alpha', catalogScope: 'market', autoSync: true, version: '1.1.0' },
       expect.any(Function),
     );
   });
@@ -552,7 +571,7 @@ describe('SkillhubAutoSyncService', () => {
     await service.runOnceAfterLogin();
 
     expect(install).toHaveBeenCalledWith(
-      { name: 'alpha', autoSync: true, installPath, version: '1.1.0', force: true, skipBackup: false },
+      { name: 'alpha', catalogScope: 'market', autoSync: true, installPath, version: '1.1.0', force: true, skipBackup: false },
       expect.any(Function),
     );
   });
@@ -611,7 +630,7 @@ describe('SkillhubAutoSyncService', () => {
 
     await service.runOnceAfterLogin();
 
-    expect(install).toHaveBeenCalledWith({ name: 'alpha', autoSync: true }, expect.any(Function));
+    expect(install).toHaveBeenCalledWith({ name: 'alpha', catalogScope: 'market', autoSync: true }, expect.any(Function));
     expect(loggerMocks.warn).toHaveBeenCalledWith(
       'user-owned global skill registry entry is missing on disk',
       { slug: 'alpha', origin: 'published', installPath },
@@ -681,7 +700,7 @@ describe('SkillhubAutoSyncService', () => {
     await service.runOnceAfterLogin();
 
     expect(install).toHaveBeenCalledWith(
-      { name: 'alpha', autoSync: true, installPath, version: '1.2.3', force: true, skipBackup: false },
+      { name: 'alpha', catalogScope: 'market', autoSync: true, installPath, version: '1.2.3', force: true, skipBackup: false },
       expect.any(Function),
     );
   });
@@ -716,7 +735,7 @@ describe('SkillhubAutoSyncService', () => {
 
     await service.runOnceAfterLogin();
 
-    expect(install).toHaveBeenCalledWith({ name: 'alpha', autoSync: true }, expect.any(Function));
+    expect(install).toHaveBeenCalledWith({ name: 'alpha', catalogScope: 'market', autoSync: true }, expect.any(Function));
   });
 
   it('skips a whitelisted skill when the local version already matches SkillHub', async () => {
@@ -749,7 +768,7 @@ describe('SkillhubAutoSyncService', () => {
     await service.runOnceAfterLogin();
 
     expect(install).toHaveBeenCalledWith(
-      { name: 'alpha', autoSync: true, installPath, version: '1.2.3', force: true, skipBackup: true },
+      { name: 'alpha', catalogScope: 'market', autoSync: true, installPath, version: '1.2.3', force: true, skipBackup: true },
       expect.any(Function),
     );
     expect(loggerMocks.warn).toHaveBeenCalledWith(
@@ -804,8 +823,8 @@ describe('SkillhubAutoSyncService', () => {
     await service.runOnceAfterLogin();
 
     expect(install).toHaveBeenCalledTimes(2);
-    expect(install).toHaveBeenNthCalledWith(1, { name: 'alpha', autoSync: true }, expect.any(Function));
-    expect(install).toHaveBeenNthCalledWith(2, { name: 'beta', autoSync: true }, expect.any(Function));
+    expect(install).toHaveBeenNthCalledWith(1, { name: 'alpha', catalogScope: 'market', autoSync: true }, expect.any(Function));
+    expect(install).toHaveBeenNthCalledWith(2, { name: 'beta', catalogScope: 'market', autoSync: true }, expect.any(Function));
     expect(loggerMocks.warn).toHaveBeenCalledWith(
       'auto install/update failed',
       { slug: 'alpha', version: '1.0.0', errorCode: 'INTERNAL', message: 'boom' },
@@ -1142,7 +1161,7 @@ describe('SkillhubAutoSyncService', () => {
     await service.runOnceAfterLogin();
 
     expect(install).toHaveBeenCalledWith(
-      { name: 'alpha', autoSync: true, installPath, version: '2.0.0', force: true, skipBackup: false },
+      { name: 'alpha', catalogScope: 'market', autoSync: true, installPath, version: '2.0.0', force: true, skipBackup: false },
       expect.any(Function),
     );
     expect(cleanupInstall).toHaveBeenCalledWith({
@@ -1216,5 +1235,34 @@ describe('SkillhubAutoSyncService', () => {
 
     expect(syncMarket).toHaveBeenCalledTimes(2);
     expect(install).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('parseAutoSyncConfig', () => {
+  it('preserves explicit catalog scopes and defaults legacy string entries to market', () => {
+    expect(parseAutoSyncConfig({ skills: [
+      'public-skill',
+      { slug: 'team-skill', catalogScope: 'team' },
+      { name: 'scope-alias', scope: 'market' },
+    ] })).toEqual([
+      { name: 'public-skill', catalogScope: 'market' },
+      { name: 'team-skill', catalogScope: 'team' },
+      { name: 'scope-alias', catalogScope: 'market' },
+    ]);
+  });
+
+  it('rejects entries with an invalid explicit catalog scope', () => {
+    expect(parseAutoSyncConfig({ skills: [
+      { slug: 'wrong-scope', catalogScope: 'native' },
+    ] })).toEqual([]);
+  });
+
+  it('uses the first catalog scope when config repeats a slug for the single global install slot', () => {
+    expect(parseAutoSyncConfig({ skills: [
+      { slug: 'shared-name', catalogScope: 'team' },
+      { slug: 'shared-name', catalogScope: 'market' },
+    ] })).toEqual([
+      { name: 'shared-name', catalogScope: 'team' },
+    ]);
   });
 });

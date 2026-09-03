@@ -641,6 +641,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     }
     await loadExtraDirsIfNeeded(sessionId, createOpts, 'active-orca-rehydrate');
     try {
+      // 关旧 runtime 前先按 DB 权威口径对账执行字段(与 lazy-create 同源):caller /
+      // 队列的 createOpts 快照常不带 resumeSessionId(或带旧引擎的陈旧值),直接
+      // close+bootstrap 会启动一个没有旧 transcript 的全新原生会话(#2882:Pi 会话
+      // 中途 start_team 后丢失全部对话历史)。DB 读失败时 reconcile 抛错 → 落入下方
+      // REHYDRATE_FAILED,此时尚未 closeSession,旧 runtime 不受损。
+      await deps.reconcileCreateOptsWithDb?.(sessionId, createOpts);
       const session = await deps.withRehydrateCloseSuppressed(sessionId, async () => {
         await deps.closeSession(sessionId);
         // close 后重新 bootstrap，避免旧 SDK handle 缺 Orca MCP vendorOptions。
