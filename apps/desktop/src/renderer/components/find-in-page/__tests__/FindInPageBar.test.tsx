@@ -27,10 +27,15 @@ vi.mock('@/components/find-in-page/findInPageOwnership', () => ({
 import { FindInPageBar } from '../FindInPageBar';
 
 class MockHighlight {
-  readonly ranges: readonly AbstractRange[];
+  readonly ranges: AbstractRange[];
 
   constructor(...ranges: AbstractRange[]) {
-    this.ranges = ranges;
+    this.ranges = [...ranges];
+  }
+
+  add(range: AbstractRange) {
+    this.ranges.push(range);
+    return this;
   }
 }
 

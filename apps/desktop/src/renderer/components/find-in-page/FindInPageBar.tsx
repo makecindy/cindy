@@ -43,10 +43,14 @@ function applyFindHighlights(ranges: readonly Range[], activeIndex: number) {
   registry.delete(ACTIVE_HIGHLIGHT_NAME);
   if (ranges.length === 0) return;
 
-  registry.set(MATCH_HIGHLIGHT_NAME, new Highlight(...ranges));
+  const matchHighlight = new Highlight();
+  for (const range of ranges) matchHighlight.add(range);
+  registry.set(MATCH_HIGHLIGHT_NAME, matchHighlight);
   const activeRange = ranges[activeIndex];
   if (activeRange) {
-    registry.set(ACTIVE_HIGHLIGHT_NAME, new Highlight(activeRange));
+    const activeHighlight = new Highlight();
+    activeHighlight.add(activeRange);
+    registry.set(ACTIVE_HIGHLIGHT_NAME, activeHighlight);
   }
 }
 
@@ -155,14 +159,16 @@ function scrollRangeIntoView(range: Range) {
   if (!element) return;
 
   let ancestor: HTMLElement | null = element;
-  while (ancestor?.parentElement) {
-    ancestor = ancestor.parentElement;
+  while (ancestor) {
     const style = window.getComputedStyle(ancestor);
     const canScrollY =
-      /(auto|scroll|overlay)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight;
+      /(auto|scroll|overlay|hidden)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight;
     const canScrollX =
-      /(auto|scroll|overlay)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth;
-    if (!canScrollY && !canScrollX) continue;
+      /(auto|scroll|overlay|hidden)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth;
+    if (!canScrollY && !canScrollX) {
+      ancestor = ancestor.parentElement;
+      continue;
+    }
 
     const rect = getRangeRect(range);
     const containerRect = ancestor.getBoundingClientRect();
@@ -175,6 +181,7 @@ function scrollRangeIntoView(range: Range) {
       if (rect.left < containerRect.left) ancestor.scrollLeft -= containerRect.left - rect.left;
       else if (rect.right > containerRect.right) ancestor.scrollLeft += rect.right - containerRect.right;
     }
+    ancestor = ancestor.parentElement;
   }
 
   const rect = getRangeRect(range);
