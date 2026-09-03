@@ -118,12 +118,17 @@ import type {
   NormalizedToolDiff,
   NormalizedToolMedia,
 } from '@/session/messageNormalize';
+import type {
+  MobileToolInputDetail,
+  MobileToolInputProjection,
+} from '@/session/messageToolPayloadProjection';
 import {
   buildAttachmentPayload,
   buildDiffPayload,
   buildFilePayload,
   buildMediaPayload,
   buildMermaidPayload,
+  buildTextPayload,
   buildToolResultPayload,
   formatDiffPayloadView,
   payloadMediaKindLabel,
@@ -589,6 +594,7 @@ interface MessageActions {
   onLoadEarlier?: () => void | Promise<void>;
   onOpenForkOrigin?: () => void;
   onOpenPayload?: (payload: MessagePayload) => void;
+  onLoadToolInput?: (ref: MobileToolInputProjection) => Promise<MobileToolInputDetail>;
   onBlockingOverlayChange?: (blocked: boolean) => void;
   onMessageActionSheetOpenChange?: (clientId: string, open: boolean) => void;
   /** 正文里会话深链 chip(xdt-maker://session/…)点击回调,app 内跳转。 */
@@ -631,6 +637,7 @@ export function MessageRenderer({
   onForkMessage,
   onDeleteMessage,
   onLoadEarlier,
+  onLoadToolInput,
   onOpenForkOrigin,
   onBlockingOverlayChange,
   onOpenSessionLink,
@@ -1481,6 +1488,7 @@ export function MessageRenderer({
     onEnterShareSelection,
     onShareableMessageViewChange: handleShareableMessageViewChange,
     onOpenPayload: setPayload,
+    onLoadToolInput,
     onMessageActionSheetOpenChange: handleMessageActionSheetOpenChange,
     onResolveRemoteMedia,
     // 待发送气泡(pending_send 项)的展开态与队列操作:漏了这一项 actions.pendingSend 就是
@@ -1511,6 +1519,7 @@ export function MessageRenderer({
     onDeleteMessage,
     onForkMessage,
     onOpenForkOrigin,
+    onLoadToolInput,
     onOpenSessionLink,
     onPreviewRewind,
     onEnterShareSelection,
@@ -3718,11 +3727,75 @@ function ToolActionRow({
           {row.detail || tool.body ? (
             <Text style={styles.toolRowDetailText}>{row.detail ?? tool.body}</Text>
           ) : null}
+          {tool.toolInputProjection ? (
+            <ProjectedToolInputButton
+              key={tool.toolInputProjection.toolUseMessageId}
+              actions={actions}
+              projection={tool.toolInputProjection}
+            />
+          ) : null}
           {tool.diff ? <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} /> : null}
           {tool.secondaryBody ? <ToolResultPreview layout={contentLayout} tool={tool} onOpen={actions.onOpenPayload} /> : null}
         </View>
       ) : null}
     </View>
+  );
+}
+
+function ProjectedToolInputButton({
+  actions,
+  projection,
+}: {
+  actions: MessageActions;
+  projection: MobileToolInputProjection;
+}) {
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const [status, setStatus] = useState<'error' | 'idle' | 'loading'>('idle');
+  const requestSeqRef = useRef(0);
+
+  useEffect(() => () => {
+    requestSeqRef.current += 1;
+  }, []);
+
+  const openFullInput = useCallback(() => {
+    if (!actions.onLoadToolInput || !actions.onOpenPayload || status === 'loading') return;
+    const requestSeq = requestSeqRef.current + 1;
+    requestSeqRef.current = requestSeq;
+    setStatus('loading');
+    void actions.onLoadToolInput(projection).then((detail) => {
+      if (requestSeqRef.current !== requestSeq) return;
+      setStatus('idle');
+      actions.onOpenPayload?.(buildTextPayload(
+        t('message.renderer.toolInputTitle', { label: detail.toolName }),
+        detail.body,
+      ));
+    }).catch(() => {
+      if (requestSeqRef.current === requestSeq) setStatus('error');
+    });
+  }, [actions, projection, status, t]);
+
+  const label = status === 'loading'
+    ? t('message.renderer.loadingToolInput')
+    : status === 'error'
+      ? t('message.renderer.retryToolInput')
+      : t('message.renderer.viewToolInput');
+  return (
+    <MessageContentOpenButton
+      accessibilityLabel={label}
+      disabled={status === 'loading'}
+      onPress={openFullInput}
+      style={styles.toolInputPreview}
+      testID="message.toolInputPayloadButton"
+    >
+      <View style={styles.toolInputActionRow}>
+        {status === 'loading' ? (
+          <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />
+        ) : null}
+        <Text style={styles.toolInputActionText}>{label}</Text>
+      </View>
+    </MessageContentOpenButton>
   );
 }
 
@@ -8345,6 +8418,25 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   toolRowDetailText: {
     color: colors.textSecondary,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+  },
+  toolInputPreview: {
+    backgroundColor: colors.chatCodeSurface,
+    borderColor: colors.chatCodeBorder,
+    borderRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  toolInputActionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: MESSAGE_CONTROL_TOUCH_SIZE,
+    paddingHorizontal: spacing.sm,
+  },
+  toolInputActionText: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
     lineHeight: lineHeight.caption,
   },
   toolName: {

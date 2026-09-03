@@ -116,6 +116,10 @@
     "controlFork": "Fork session",
     "markdownDocAriaLabel": "Message body",
     "toolOutputTitle": "{{label}} output",
+    "toolInputTitle": "{{label}} input",
+    "viewToolInput": "View full input",
+    "loadingToolInput": "Loading full input",
+    "retryToolInput": "Couldn't load input. Retry",
     "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "Empty Mermaid diagram.",
     "diffEditCount": "{{n}} edits"

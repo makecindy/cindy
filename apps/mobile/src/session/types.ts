@@ -2,6 +2,7 @@ import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
 import type { MobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
+import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
 
 export type RemoteSessionStatus = 'active' | 'archived' | 'deleted';
 export type RemoteMessageRole =
@@ -114,6 +115,8 @@ export interface RemoteMessage {
   toolUseId: string | null;
   agentMeta: Record<string, unknown> | null;
   createdAt: string;
+  /** Large settled tool input released from the transcript mirror and recoverable by message id. */
+  mobileToolInputProjection?: MobileToolInputProjection;
   systemCardData?: Record<string, unknown>;
   systemCardType?: 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'auto-resume' | 'learn' | 'agent-switch';
 }

@@ -51,6 +51,7 @@ import {
   localizeToolLoopError,
   parseMobileToolLoopErrorDetails,
 } from '@/session/toolLoopErrorI18n';
+import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
 
 export type NormalizedRemoteMessageKind =
   | 'user'
@@ -108,6 +109,8 @@ export interface NormalizedRemoteMessage {
   orcaCard?: OrcaCollabCard;
   /** tool 消息专用:tool_result 是否已到达(含被隐藏的 orca 空结果),驱动工具行 running/done 状态。 */
   toolSettled?: boolean;
+  /** Large settled tool input is fetched only when the user asks to view it. */
+  toolInputProjection?: MobileToolInputProjection;
   /** Durable Agent/Task terminal lifecycle restored from tool_use metadata. */
   agentTaskStatus?: AgentTaskTerminalStatus;
   /** assistant 专用:是否本轮收尾正文(操作行只挂在收尾正文上,对齐桌面 #456);由 messageRenderModel 标注。 */
@@ -195,6 +198,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
 
     if (message.role === 'tool_use') {
       const tool = parseToolUse(message);
+      const toolInputProjection = message.mobileToolInputProjection;
       const agentTaskStatus = normalizeAgentTaskTerminalStatus(
         message.agentMeta?.agentTaskStatus,
       );
@@ -232,6 +236,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         // 结束时刻(配对 tool_result 落库时间)驱动渲染层的历史空洞判定,详见共享类型上的说明。
         settledAt: toolResultPairing.resultCreatedAtFor(message, tool),
         toolSettled: toolResultPairing.hasResultFor(message, tool),
+        ...(toolInputProjection ? { toolInputProjection } : {}),
         ...(agentTaskStatus ? { agentTaskStatus } : {}),
       });
       continue;
@@ -500,6 +505,16 @@ function parseToolUse(message: RemoteMessage): ToolUsePayload {
   const cached = toolUsePayloadByMessage.get(message);
   if (cached) return cached;
   const sharedTool = parseMessageToolUse(message);
+  const projection = message.mobileToolInputProjection;
+  if (projection) {
+    const payload = {
+      ...sharedTool,
+      toolName: projection.toolName,
+      summary: projection.summary,
+    };
+    toolUsePayloadByMessage.set(message, payload);
+    return payload;
+  }
   const { toolName, input } = sharedTool;
   const summary = toolName ? formatToolUseSummary(toolName, input) : contentToPreview(message.content);
   const diff = buildToolDiff(toolName, input);
