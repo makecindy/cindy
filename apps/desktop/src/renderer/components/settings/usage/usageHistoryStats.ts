@@ -77,7 +77,8 @@ function shiftDayKey(dayKey: string, deltaDays: number): string {
   return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
-export function usageRangeDay(range: UsageHistoryRange): string | null {
+export function usageRangeDay(range: UsageHistoryRange, todayKey?: string): string | null {
+  if (range === 'today') return todayKey ?? null;
   return range.startsWith('day:') ? range.slice(4) : null;
 }
 
@@ -110,7 +111,7 @@ export function filterUsageHistoryPayload(
 ): UsageHistoryPayload | null {
   if (!payload) return null;
 
-  const selectedDay = usageRangeDay(range);
+  const selectedDay = usageRangeDay(range, payload.todayKey);
   const rangeTodayKey = selectedDay ?? payload.todayKey;
   const modelByKey = new Map<string, UsageHistoryModel>();
   for (const row of payload.modelDaily) {

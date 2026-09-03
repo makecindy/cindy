@@ -12,6 +12,7 @@ import {
   filterUsageHistoryPayload,
   isUsageHistorySingleDay,
   isUsageHistoryEmpty,
+  usageRangeDay,
   toUsageDays,
 } from '../usageHistoryStats';
 import {
@@ -78,6 +79,14 @@ describe('isUsageHistorySingleDay', () => {
     expect(isUsageHistorySingleDay('today')).toBe(true);
     expect(isUsageHistorySingleDay('day:2026-08-20')).toBe(true);
     expect(isUsageHistorySingleDay('7d')).toBe(false);
+  });
+});
+
+describe('usageRangeDay', () => {
+  it('Today 使用 payload 的日期锚点，和图表点击当天保持同一 selectedDay', () => {
+    expect(usageRangeDay('today', '2026-08-22')).toBe('2026-08-22');
+    expect(usageRangeDay('today')).toBeNull();
+    expect(usageRangeDay('day:2026-08-20', '2026-08-22')).toBe('2026-08-20');
   });
 });
 

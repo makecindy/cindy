@@ -87,7 +87,9 @@ export function UsageHistorySection(): React.JSX.Element {
   const [range, setRange] = useState<UsageHistoryRange>('30d');
   const [heatmapWeeks, setHeatmapWeeks] = useState(20);
 
-  const selectedDay = usageRangeDay(range);
+  // The Today option is an exact-day range too: use the payload's main-side
+  // date anchor so both dropdown and chart entry points show the same selection.
+  const selectedDay = usageRangeDay(range, history?.todayKey);
   const rangeLabel = useMemo(() => {
     if (selectedDay) {
       const [year, month, day] = selectedDay.split('-').map(Number);
