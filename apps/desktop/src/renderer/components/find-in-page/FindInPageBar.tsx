@@ -78,7 +78,11 @@ function findMatchOffsets(value: string, query: string): Array<[number, number]>
   return offsets;
 }
 
-function isExcludedTextNode(node: Text, excludedRoot: HTMLElement | null): boolean {
+function isExcludedTextNode(
+  node: Text,
+  excludedRoot: HTMLElement | null,
+  visibilityCache: WeakMap<HTMLElement, boolean>,
+): boolean {
   let element = node.parentElement;
   while (element) {
     if (element === excludedRoot) return true;
@@ -92,13 +96,17 @@ function isExcludedTextNode(node: Text, excludedRoot: HTMLElement | null): boole
       return true;
     }
     if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
-    const style = window.getComputedStyle(element);
-    if (
-      style.display === 'none' ||
-      style.visibility === 'hidden' ||
-      style.visibility === 'collapse'
-    ) {
-      return true;
+    const cachedHidden = visibilityCache.get(element);
+    if (cachedHidden !== undefined) {
+      if (cachedHidden) return true;
+    } else {
+      const style = window.getComputedStyle(element);
+      const hiddenByStyle =
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        style.visibility === 'collapse';
+      visibilityCache.set(element, hiddenByStyle);
+      if (hiddenByStyle) return true;
     }
     element = element.parentElement;
   }
@@ -109,12 +117,13 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
   if (!query) return [];
 
   const matches: TextMatch[] = [];
+  const visibilityCache = new WeakMap<HTMLElement, boolean>();
   const showText = typeof NodeFilter === 'undefined' ? 4 : NodeFilter.SHOW_TEXT;
   const walker = document.createTreeWalker(document.body, showText);
   let node = walker.nextNode();
   while (node) {
     const textNode = node as Text;
-    if (!isExcludedTextNode(textNode, excludedRoot)) {
+    if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache)) {
       for (const [start, end] of findMatchOffsets(textNode.data, query)) {
         const range = document.createRange();
         range.setStart(textNode, start);
@@ -212,7 +221,13 @@ export function FindInPageBar() {
         if (textRef.current) applySearch(textRef.current, activeRef.current);
       }, MUTATION_DEBOUNCE_MS);
     });
-    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+    observer.observe(document.body, {
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['aria-hidden', 'class', 'hidden', 'style'],
+      subtree: true,
+    });
 
     return () => {
       observer.disconnect();

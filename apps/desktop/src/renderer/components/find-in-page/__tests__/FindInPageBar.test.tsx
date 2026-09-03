@@ -181,6 +181,31 @@ describe('FindInPageBar', () => {
     expect(screen.getByText('1/2')).toBeTruthy();
   });
 
+  it('refreshes matches after page visibility changes', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    document.body.append(page);
+    const input = await openFindBar();
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    page.hidden = true;
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+    expect(screen.getByText('0/0')).toBeTruthy();
+
+    page.hidden = false;
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
   it('reopens the bar and selects the whole query', async () => {
     const input = await openFindBar();
     fireEvent.change(input, { target: { value: 'foobar' } });
