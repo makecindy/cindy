@@ -406,7 +406,11 @@ export async function buildClaudeEnv(
 
   const activeContextWindow = options.modelContextWindows?.find(
     (model) => model.id === options.activeModel,
-  )?.contextWindow;
+  )?.contextWindow
+    ?? options.modelContextWindows?.find(
+      (model) => model.id.replace(/\[1m\]$/i, '')
+        === options.activeModel?.replace(/\[1m\]$/i, ''),
+    )?.contextWindow;
   if (
     activeContextWindow !== undefined
     && Number.isFinite(activeContextWindow)

@@ -326,6 +326,17 @@ describe('buildClaudeEnv', () => {
     expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
   });
 
+  it('matches a catalog model when the active SDK wire id carries [1m]', async () => {
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+
+    const env = await buildClaudeEnv(createAuthAdapter(), {}, {
+      activeModel: 'z-ai/glm-5.3[1m]',
+      modelContextWindows: [{ id: 'z-ai/glm-5.3', contextWindow: 1_000_000 }],
+    });
+
+    expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('1000000');
+  });
+
   it('does not set a context window when the selected model is provider-unrouted', async () => {
     process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
     process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';

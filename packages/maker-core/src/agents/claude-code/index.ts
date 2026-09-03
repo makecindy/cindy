@@ -48,6 +48,8 @@ import {
 } from './subagent-model-default.js';
 import {
   buildClaudeSubagentModelGuardHooks,
+  claudeSubagentModelWithContextWindow,
+  normalizeClaudeSubagentModel,
 } from './subagent-model-access.js';
 import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
@@ -1209,7 +1211,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
       sessionProviderId: opts.providerId ?? null,
-      activeModel: opts.model,
+      activeModel: sdkModel,
       modelContextWindows,
       smallFastModel,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
@@ -1275,8 +1277,6 @@ export class ClaudeCodeAgent extends BaseAgent {
         });
       }
     }
-    // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
-    applySubagentModelEnv(env, subagentDefault.envSubagentModel ?? null);
     // 每次 Agent/Task 调用都重新读取 host 的当前账号与路由事实。静态 capabilities
     // 只负责展示，不参与 deny；账号切换时 resolver 会立即看到新快照或 unknown。
     const resolveSubagentModelAccess = this.deps.resolveClaudeSubagentModelAccess
@@ -1287,6 +1287,35 @@ export class ClaudeCodeAgent extends BaseAgent {
           model,
         })
       : undefined;
+    const resolveSubagentModelContextWindow = (model: string): number | undefined => {
+      const normalized = normalizeClaudeSubagentModel(model);
+      const resolveVerified = this.deps.resolveVerifiedContextWindow;
+      if (resolveVerified) {
+        try {
+          const verified = resolveVerified(opts.providerId ?? null, normalized);
+          return typeof verified === 'number' && verified > 0 ? verified : undefined;
+        } catch {
+          return undefined;
+        }
+      }
+      const descriptor = this.capabilities.availableModels.find(
+        (item) => normalizeClaudeSubagentModel(item.id) === normalized,
+      );
+      return descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
+        ? descriptor.contextWindow
+        : undefined;
+    };
+    // Claude Code only recognizes the 1M wire suffix for native context-window
+    // accounting. Normalize the process-level default too; explicit Agent/Task
+    // calls are normalized by the PreToolUse hook below.
+    const wireSubagentDefault = subagentDefault.envSubagentModel
+      ? claudeSubagentModelWithContextWindow(
+        subagentDefault.envSubagentModel,
+        resolveSubagentModelContextWindow(subagentDefault.envSubagentModel),
+      )
+      : null;
+    // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
+    applySubagentModelEnv(env, wireSubagentDefault);
     // 远端单独一份 env:用 'remote' 模式从空字典起(不继承 desktop OS env),否则
     // Windows HOME=C:\Users\Lizi 之类污染远端 cc CLI 的 ~ 展开(session/memory
     // 落怪路径)。详见 env-builder.ts buildClaudeEnv 文档。
@@ -1295,11 +1324,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           credentialMode,
           sessionProviderId: opts.providerId ?? null,
           mode: 'remote',
-          activeModel: opts.model,
+          activeModel: sdkModel,
           modelContextWindows,
           smallFastModel,
           // 远端不做本地扫描(见上),这里的值就是路由感知后的设置值 —— 保持 env 强制覆盖语义。
-          subagentModel: subagentDefault.envSubagentModel ?? null,
+          subagentModel: wireSubagentDefault,
         })
       : null;
     // 远端 route 覆盖(route 解析见上方 credentialMode 前的 remoteRoute):
@@ -1667,15 +1696,6 @@ export class ClaudeCodeAgent extends BaseAgent {
     const localClaudeHooks = reviewMode
       ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
       : mergeClaudeHookSets(
-          // 账号/模型准入是执行前提，不是用户工具权限。放在 PreToolUse，确保
-          // Full access 也无法绕过。
-          buildClaudeSubagentModelGuardHooks(
-            resolveSubagentModelAccess,
-            subagentDefault.envSubagentModel,
-            (model) => {
-              log.warn('subagent model denied by account access preflight', { model });
-            },
-          ),
           buildClaudeLocalToolGuardHooks(
             this.deps.capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -1696,6 +1716,16 @@ export class ClaudeCodeAgent extends BaseAgent {
           // Keep the existing local routing/capture hooks first: callers and tests
           // rely on their observable order. The exact-match Orca provenance guard
           // still runs for send_to_lead after those hooks and denies descendants.
+          // 账号/模型准入是执行前提，不是用户工具权限。仍放在 PreToolUse，确保
+          // Full access 也无法绕过；它排在既有捕获/路由 hook 后，不改变既有顺序。
+          buildClaudeSubagentModelGuardHooks(
+            resolveSubagentModelAccess,
+            wireSubagentDefault ?? undefined,
+            (model) => {
+              log.warn('subagent model denied by account access preflight', { model });
+            },
+            resolveSubagentModelContextWindow,
+          ),
           buildClaudeOrcaCallerProvenanceHooks(),
           buildClaudeAskUserQuestionCallerProvenanceHooks(),
           this.deps.claudeHooks,
