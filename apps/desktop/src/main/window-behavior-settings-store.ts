@@ -8,10 +8,16 @@
  *    这是相对 PR #446 / macOS 原生 acceptFirstMouse:false 的行为变更,想要
  *    防误触的用户需在设置里显式打开)
  *  - windowsCloseBehavior: null (Windows 首次关闭时弹窗询问,选择后持久化)
+ *  - startInTrayOnLogin: false (开机自启时也照常显示窗口;想要静默启动的用户
+ *    在设置里显式打开)
  *
  * swallowActivationClick 仍由 renderer localStorage 承担运行时事实标准,main
  * 侧文件只供下次创建 BrowserWindow 时读取。windowsCloseBehavior 则完全由
  * main 侧持久化与执行,renderer 通过 IPC 读写同一份状态。
+ *
+ * 注意 startInTrayOnLogin 只记「用户想要什么」,不记「系统登录项是否已启用」——
+ * 后者的事实源是操作系统(用户可能在任务管理器或系统设置里改掉),每次都向
+ * Electron 查询,不在这里持久化,避免两份状态漂移。
  */
 
 import { app } from 'electron';
@@ -26,11 +32,13 @@ const log = desktopMakerLogger.child('window-behavior-settings-store');
 export interface WindowBehaviorSettings {
   swallowActivationClick: boolean;
   windowsCloseBehavior: WindowsCloseBehavior | null;
+  startInTrayOnLogin: boolean;
 }
 
 const DEFAULTS: WindowBehaviorSettings = {
   swallowActivationClick: false,
   windowsCloseBehavior: null,
+  startInTrayOnLogin: false,
 };
 
 function settingsFilePath(): string {
@@ -48,6 +56,10 @@ function normalize(raw: unknown): WindowBehaviorSettings {
     windowsCloseBehavior: isWindowsCloseBehavior(r.windowsCloseBehavior)
       ? r.windowsCloseBehavior
       : DEFAULTS.windowsCloseBehavior,
+    startInTrayOnLogin:
+      typeof r.startInTrayOnLogin === 'boolean'
+        ? r.startInTrayOnLogin
+        : DEFAULTS.startInTrayOnLogin,
   };
 }
 
@@ -71,6 +83,11 @@ export function writeSwallowActivationClick(swallowActivationClick: boolean): vo
 export function writeWindowsCloseBehavior(windowsCloseBehavior: WindowsCloseBehavior): void {
   store.writePatch({ windowsCloseBehavior });
   log.info('Windows close behavior written', { windowsCloseBehavior });
+}
+
+export function writeStartInTrayOnLogin(startInTrayOnLogin: boolean): void {
+  store.writePatch({ startInTrayOnLogin });
+  log.info('start in tray on login written', { startInTrayOnLogin });
 }
 
 export const __testing = { normalize };
