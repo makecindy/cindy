@@ -19,6 +19,14 @@ const tokenBarsSource = readFileSync(
   resolve(__dirname, '../components/settings/usage/UsageTokenBars.tsx'),
   'utf8',
 );
+const breakdownTablesSource = readFileSync(
+  resolve(__dirname, '../components/settings/usage/UsageBreakdownTables.tsx'),
+  'utf8',
+);
+const usageHistorySectionSource = readFileSync(
+  resolve(__dirname, '../components/settings/usage/UsageHistorySection.tsx'),
+  'utf8',
+);
 
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
@@ -76,6 +84,12 @@ describe('HomeUsageDashboard source contract', () => {
     expect(tokenBarsSource).not.toContain('boxShadow');
     expect(heatmapSource).toContain("'2px solid var(--focus-ring-soft)'");
     expect(tokenBarsSource).toContain("'2px solid var(--focus-ring-soft)'");
+  });
+
+  it('uses the shared model key rank for chart and filtered model-table colors', () => {
+    expect(usageHistorySectionSource).toContain('colorOrder={colorOrder}');
+    expect(breakdownTablesSource).toContain('usageRankOf(colorOrder, row.key)');
+    expect(breakdownTablesSource).toContain('colorOrder: string[];');
   });
 
   it('shows cached usage immediately while marking background refresh', () => {

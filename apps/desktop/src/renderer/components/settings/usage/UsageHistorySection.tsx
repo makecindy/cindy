@@ -253,7 +253,11 @@ export function UsageHistorySection(): React.JSX.Element {
           {modelRows.length > 0 && (
             <Card title={t('usageHistory.byModel.title')} subtitle={rangeLabel}>
               <div className="overflow-x-auto">
-                <UsageModelTable rows={modelRows} rangeLabel={rangeLabel} />
+                <UsageModelTable
+                  rows={modelRows}
+                  rangeLabel={rangeLabel}
+                  colorOrder={colorOrder}
+                />
               </div>
             </Card>
           )}
