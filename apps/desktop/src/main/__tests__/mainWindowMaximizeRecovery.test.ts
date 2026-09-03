@@ -283,6 +283,20 @@ describe('installMainWindowMaximizeRecovery', () => {
     expect(h.win.maximize).toHaveBeenCalledOnce();
   });
 
+  it('does not let a pre-display native intent confirm the display re-layout', () => {
+    const h = createHarness();
+    h.state.maximized = true;
+
+    h.recovery.notifyUserUnmaximizeIntent();
+    h.advance(100);
+    h.fireDisplay();
+    h.runTimers();
+    h.osUnmaximize();
+    h.runTimers();
+
+    expect(h.win.maximize).toHaveBeenCalledOnce();
+  });
+
   it('disarms after the user unmaximizes away from any display change', () => {
     const h = createHarness();
     h.state.maximized = true;

@@ -309,6 +309,9 @@ export function installMainWindowMaximizeRecovery(
     lastDisplayChangeAtMs = now();
     // An unmaximize immediately before this change belongs to the OS re-layout.
     clearDisarm();
+    // A native restore signal from the previous display generation must not
+    // confirm the OS unmaximize caused by this new display re-layout.
+    pendingUserUnmaximizeAtMs = null;
     if (!armed) return;
     pendingRecovery = true;
     scheduleReapply();
