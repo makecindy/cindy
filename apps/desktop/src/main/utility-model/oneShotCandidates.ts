@@ -630,15 +630,21 @@ async function requestDefaultUtilityText(
     : getEffectiveAuxiliaryModelChain();
   const chainSnapshot = initialChain ? stableSnapshot(initialChain) : null;
   const callerBeforeDispatch = opts?.beforeDispatch;
+  const requestSnapshotStillCurrent = (): boolean => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
+    return chainSnapshot === null
+      || stableSnapshot(getEffectiveAuxiliaryModelChain()) === chainSnapshot;
+  };
   const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
     ...opts,
     beforeDispatch: async (route) => {
-      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
-      if (
-        chainSnapshot !== null
-        && stableSnapshot(getEffectiveAuxiliaryModelChain()) !== chainSnapshot
-      ) return false;
-      return callerBeforeDispatch ? callerBeforeDispatch(route) : true;
+      if (!requestSnapshotStillCurrent()) return false;
+      if (callerBeforeDispatch && !(await callerBeforeDispatch(route))) return false;
+      // The caller guard may await account/database state. Re-check the
+      // captured owner, session boundary, and chain after that await so a
+      // concurrent account switch cannot turn a true result into permission
+      // to dispatch the old owner's prompt.
+      return requestSnapshotStillCurrent();
     },
     // Short auxiliary budgets cannot afford provider-default thinking. Callers
     // that need reasoning must pass disableReasoning: false.

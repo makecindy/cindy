@@ -250,6 +250,25 @@ describe('utility one-shot candidates', () => {
     expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
   });
 
+  it('rechecks the owner after an async caller guard before LiteLLM dispatch', async () => {
+    chainState.refs = ['litellm-gpt-5.4-mini'];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'must not dispatch' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'must stay with owner-a', {
+      beforeDispatch: async () => {
+        ownerState.key = 'owner-b';
+        return true;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('applies paid availability only to direct XD LiteLLM utility routes', () => {
     xdPaymentRequiredRoute.mockImplementation((model) => model === 'paid-model');
 

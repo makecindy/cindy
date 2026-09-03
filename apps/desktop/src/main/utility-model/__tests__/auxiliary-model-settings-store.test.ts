@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
   ownerId: 'test-owner' as string | null,
   exclusive: true,
+  exclusiveReads: [] as boolean[],
   legacyClaim: true,
 }));
 
@@ -32,7 +33,7 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 
 vi.mock('../../ownerNamespaceMigration.js', () => ({
-  hasExclusiveSharedLegacyUserDataAccess: () => h.exclusive,
+  hasExclusiveSharedLegacyUserDataAccess: () => h.exclusiveReads.shift() ?? h.exclusive,
   hasLegacyOwnerNamespaceClaim: () => h.legacyClaim,
 }));
 
@@ -85,6 +86,7 @@ describe('auxiliary-model-settings-store', () => {
     h.mode = 'cloud';
     h.ownerId = 'test-owner';
     h.exclusive = true;
+    h.exclusiveReads = [];
     h.legacyClaim = true;
     mkdirSync(path.join(h.dir, 'owner'), { recursive: true });
   });
@@ -155,6 +157,28 @@ describe('auxiliary-model-settings-store', () => {
       promptRecommendationModel: PROMPT_PIN,
     });
     h.exclusive = false;
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    await __testing.flushLegacyMigration();
+    expect(readJson(settingsPath())).toEqual({
+      sessionTitleModel: TITLE_PIN,
+      promptRecommendationModel: PROMPT_PIN,
+    });
+
+    h.exclusive = true;
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    await __testing.flushLegacyMigration();
+    expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+  });
+
+  it('rechecks shared-userData exclusivity after waiting for the migration lock', async () => {
+    writeJson(settingsPath(), {
+      sessionTitleModel: TITLE_PIN,
+      promptRecommendationModel: PROMPT_PIN,
+    });
+    // First check passes, but another shared instance appears before the
+    // updateAtomic callback obtains its lock.
+    h.exclusiveReads = [true, false];
 
     expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
     await __testing.flushLegacyMigration();

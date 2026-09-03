@@ -326,6 +326,10 @@ function scheduleLegacyMigration(): void {
     }
     let markVoiceMigrationComplete = false;
     await store.updateAtomic(() => {
+      // The lock serializes writers but does not prove that this process is
+      // still the only reader of the shared legacy schema. Re-check after
+      // acquiring it; an older primary may have started while we waited.
+      if (!hasExclusiveSharedLegacyUserDataAccess()) return {};
       // Re-read under the same lock immediately before writing. A concurrent
       // settings save wins; stale migration data is never written over it.
       const currentPlan = readLegacyMigrationPlan();
