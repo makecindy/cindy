@@ -1538,6 +1538,11 @@ export class AppServerHost {
     return this.subscribers.size;
   }
 
+  /** Whether this process already owns the live state for a root thread. */
+  hasThreadSubscription(threadId: string): boolean {
+    return this.subscribers.has(threadId);
+  }
+
   /** 是否已经 spawn 过子进程 (但可能已 close)。 */
   get hasStarted(): boolean {
     return this.client !== null;

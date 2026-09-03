@@ -20,6 +20,14 @@ export type AgentKind = 'cc' | 'codex' | 'pi';
 export type MakerVendor = AgentKind | 'orca';
 export type OrcaRole = 'lead' | 'worker';
 
+/** Provider-native fork boundary. Extend this union when another Agent adopts it. */
+export type NativeForkAnchor = {
+  agentKind: 'codex';
+  sdkSessionId: string;
+  kind: 'turn';
+  id: string;
+};
+
 /**
  * Host-side 消息来源标记：标识一条 user 消息是自动化任务注入的，
  * 而非用户手动输入。scheduler runner 落库时写入 agentMeta.origin，
@@ -48,6 +56,8 @@ export interface CcMeta {
   /** Claude transcript chain parent. Do not confuse with parentUuid, which is parent_tool_use_id. */
   transcriptParentUuid?: string;
   sdkSessionId?: string;
+  /** Exact provider boundary used by message-level fork when available. */
+  nativeForkAnchor?: NativeForkAnchor;
 
   // assistant 专属
   model?: string;
@@ -346,6 +356,9 @@ export interface AgentSwitchContent {
   toAgentKind: 'cc' | 'codex' | 'pi';
   fromModel: string | null;
   toModel: string | null;
+  /** Agent 切换时的来源快照；缺失表示旧版边界数据。 */
+  fromProviderId?: string | null;
+  toProviderId?: string | null;
   handoff: string;
   /** Phase 2:true = 目标引擎续接(resume)了自己的停泊原生会话,交接为增量模式。 */
   resumed?: boolean;

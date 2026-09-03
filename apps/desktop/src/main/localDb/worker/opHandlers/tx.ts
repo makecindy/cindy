@@ -1366,6 +1366,9 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
   const targetRowid = nullableNumber(payload.targetRowid);
   const newSession = asRecord(payload.newSession, 'newSession');
   const uuidMap = normalizeUuidMap(payload.uuidMap);
+  const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(
+    payload.nativeForkAnchorSessionMap,
+  );
   const legacyTranscriptParentUuids = normalizeStringSet(
     payload.legacyTranscriptParentUuids,
     'legacyTranscriptParentUuids',
@@ -1466,11 +1469,12 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
           resetHandoffBoundaryClientId,
         }),
         message.tool_use_id,
-        remapAgentMetaUuid(
+        remapForkedAgentMeta(
           message.agent_meta,
           uuidMap,
           legacyTranscriptParentUuids,
           toolParentUuids,
+          nativeForkAnchorSessionMap,
         ),
         message.agent_kind,
         message.created_at,
@@ -2203,11 +2207,12 @@ function extractContentText(content: unknown): string {
   return parts.join('\n\n');
 }
 
-function remapAgentMetaUuid(
+function remapForkedAgentMeta(
   raw: string | null,
   map: Map<string, string>,
   legacyTranscriptParentUuids: Set<string> = new Set(),
   toolParentUuids: Set<string> = new Set(),
+  nativeForkAnchorSessionMap: Map<string, string> = new Map(),
 ): string | null {
   if (!raw || raw === 'null') return raw;
   let parsed: Record<string, unknown>;
@@ -2241,6 +2246,19 @@ function remapAgentMetaUuid(
     if (mapped) next.transcriptParentUuid = mapped;
     else delete next.transcriptParentUuid;
   }
+  const nativeForkAnchor = next.nativeForkAnchor;
+  if (
+    next.turnCompleted === true &&
+    isRecord(nativeForkAnchor) &&
+    nativeForkAnchor.agentKind === 'codex' &&
+    nativeForkAnchor.kind === 'turn' &&
+    typeof nativeForkAnchor.id === 'string' &&
+    nativeForkAnchor.id &&
+    typeof nativeForkAnchor.sdkSessionId === 'string'
+  ) {
+    const mapped = nativeForkAnchorSessionMap.get(nativeForkAnchor.sdkSessionId);
+    if (mapped) next.nativeForkAnchor = { ...nativeForkAnchor, sdkSessionId: mapped };
+  }
   return JSON.stringify(next);
 }
 
@@ -2250,17 +2268,32 @@ function normalizeStringSet(value: unknown, label: string): Set<string> {
 }
 
 function normalizeUuidMap(value: unknown): Map<string, string> {
+  return normalizeStringMap(value, 'uuidMap');
+}
+
+function normalizeNativeForkAnchorSessionMap(value: unknown): Map<string, string> {
+  return value === undefined
+    ? new Map()
+    : normalizeStringMap(value, 'nativeForkAnchorSessionMap');
+}
+
+function normalizeStringMap(value: unknown, label: string): Map<string, string> {
   if (Array.isArray(value)) {
     return new Map(
       value.map((entry) => {
-        if (!Array.isArray(entry) || entry.length !== 2) throw invalidArgs('uuidMap entries must be pairs');
-        return [expectString(entry[0], 'uuidMap.key'), expectString(entry[1], 'uuidMap.value')];
+        if (!Array.isArray(entry) || entry.length !== 2) {
+          throw invalidArgs(`${label} entries must be pairs`);
+        }
+        return [
+          expectString(entry[0], `${label}.key`),
+          expectString(entry[1], `${label}.value`),
+        ];
       }),
     );
   }
-  const record = asRecord(value, 'uuidMap');
+  const record = asRecord(value, label);
   return new Map(
-    Object.entries(record).map(([key, mapped]) => [key, expectString(mapped, `uuidMap.${key}`)]),
+    Object.entries(record).map(([key, mapped]) => [key, expectString(mapped, `${label}.${key}`)]),
   );
 }
 
