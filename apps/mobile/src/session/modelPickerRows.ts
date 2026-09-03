@@ -265,7 +265,7 @@ export function effortLabelFromRuntime(
 }
 
 /**
- * 一级列表使用稳定 effort id 生成英文短码，避免被控端下发的长文案或混合语言挤占模型名。
+ * 一级列表使用稳定 effort id 生成英文紧凑标签，避免被控端下发的长文案或混合语言挤占模型名。
  * 非英文界面继续使用完整本地化标签；完整英文名称仍由模型选项页展示。
  */
 export function compactEffortLabelFor(

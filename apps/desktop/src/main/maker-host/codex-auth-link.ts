@@ -22,7 +22,61 @@
  * 注意: 本模块只管"安全替换"这一件事, 不做账号比对 / inode 短路 / suppress 标记等判定 ——
  * 那些仍由 auth-adapters 的 reconcile 主流程负责。
  */
+import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
+import os from 'node:os';
+import { promisify } from 'node:util';
+
+const execFileP = promisify(execFile);
+
+/**
+ * Windows: icacls 授权主体。域账户组合 `DOMAIN\\user`(缺域回退裸用户名);
+ * username 自带 `\\` 或 `@`(UPN)时视为已限定,不再拼接。
+ * 单源在本模块 —— auth-adapters 的 tightenAclWindows 同样消费(它 import 本模块,
+ * 反向 import 会成环)。
+ */
+export function resolveWindowsAclPrincipal(
+  env: Partial<Pick<NodeJS.ProcessEnv, 'USERDOMAIN' | 'USERNAME'>> = process.env,
+  fallbackUsername = os.userInfo().username,
+): string {
+  const username = env.USERNAME?.trim() || fallbackUsername.trim();
+  const domain = env.USERDOMAIN?.trim();
+  if (!domain || username.includes('\\') || username.includes('@')) return username;
+  return `${domain}\\${username}`;
+}
+
+/** unlink/rename 因 ACL 拒绝(而非文件缺席/占用等)失败。 */
+function isWindowsAclDenied(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === 'EPERM' || code === 'EACCES';
+}
+
+/**
+ * #3469: 迁移来的 auth.json 可能带着"死 SID"ACL —— 旧机器/旧账户的单条 ACE、
+ * 无继承,当前账户连 unlink 都 EPERM。best-effort 自愈:
+ *   1. `icacls /reset` 恢复父目录继承 —— codex-home 是 Cindy 在本机建的目录,
+ *      当前用户可达,继承回来即可读写删;
+ *   2. 兜底显式授当前主体 Full(reset 需要 WRITE_DAC,极端 ACL 下可能也被拒)。
+ * 只在调用方确认 EPERM/EACCES 后调用;两步都失败返回 false,由调用方按原
+ * 失败路径处理(行为不变),绝不把"修 ACL 失败"升级成新错误。
+ */
+async function healWindowsAuthAcl(
+  file: string,
+  execFileImpl: typeof execFileP = execFileP,
+): Promise<boolean> {
+  try {
+    await execFileImpl('icacls', [file, '/reset']);
+    return true;
+  } catch {
+    // fallthrough: reset 被拒时试显式授权。
+  }
+  try {
+    await execFileImpl('icacls', [file, '/grant:r', `${resolveWindowsAclPrincipal()}:F`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * relinkSharedCodexAuth 的结果分类:
@@ -62,6 +116,7 @@ export async function relinkSharedCodexAuth(
   systemAuth: string,
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
+  execFileImpl: typeof execFileP = execFileP,
 ): Promise<RelinkOutcome> {
   // 唯一 sidecar 名 (pid + 自增计数): 同进程内并发 reconcile 各用各的, 不再撞 EEXIST / ENOENT。
   const sidecar = `${myAuth}.${process.pid}.${sidecarCounter++}.linktmp`;
@@ -79,7 +134,19 @@ export async function relinkSharedCodexAuth(
 
   // POSIX rename 可原子覆盖旧文件，没有“先删后建”空窗。Windows 仍需先删目标。
   try {
-    if (platform === 'win32') await fsp.rm(myAuth, { force: true });
+    if (platform === 'win32') {
+      try {
+        await fsp.rm(myAuth, { force: true });
+      } catch (rmError) {
+        // #3469: 死 SID ACL 让 unlink EPERM → reconcile 永久 swap-failed-intact、
+        // 登录卡在最后一步。先 best-effort 修 ACL 再重试一次;修不动按原失败
+        // 路径返回,行为与修复前一致。
+        if (!isWindowsAclDenied(rmError) || !(await healWindowsAuthAcl(myAuth, execFileImpl))) {
+          throw rmError;
+        }
+        await fsp.rm(myAuth, { force: true });
+      }
+    }
     await fsp.rename(sidecar, myAuth);
     // 顺手清掉可能残留的 sidecar，避免并发下 .linktmp 堆积。
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);

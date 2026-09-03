@@ -541,12 +541,13 @@ export function registerBuiltinDesktopCommands(
       }
       // `/learn hub:<slug> [补充要求]` —— skill hub「学习此技能」预填的形态,
       // 用户可在输入框改要求、换模型后再发。slug 规则与市场一致([a-z0-9-])。
-      const hubMatch = /^hub:([a-z0-9][a-z0-9-]*)\s*/.exec(arg);
+      const hubMatch = /^hub:(?:(market|team):)?([a-z0-9][a-z0-9-]*)\s*/.exec(arg);
       const req = hubMatch
         ? {
             input: arg.slice(hubMatch[0].length).trim(),
             sourceKind: 'hub' as const,
-            hubSlug: hubMatch[1],
+            hubSlug: hubMatch[2],
+            ...(hubMatch[1] ? { hubCatalogScope: hubMatch[1] as 'market' | 'team' } : {}),
             ...(ctx.sessionId ? { originSessionId: ctx.sessionId } : {}),
           }
         : {

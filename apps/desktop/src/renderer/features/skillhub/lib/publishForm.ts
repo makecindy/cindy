@@ -32,13 +32,13 @@ export type RequiredCategoryValidation =
 export function validateRequiredCategory({
   loading,
   error,
-  categories,
+  categories = [],
   categoryMode,
   selectedSlug,
 }: {
   loading: boolean;
   error: string | null;
-  categories: PublishCategoryOption[];
+  categories?: PublishCategoryOption[];
   categoryMode: 'auto' | 'manual';
   selectedSlug: string;
 }): RequiredCategoryValidation {
@@ -115,15 +115,22 @@ export function buildSkillhubPublishParams({
   publishAbsolutePath,
   submitName,
   isFirstPublish,
+  ownerType,
+  categories = [],
 }: {
   form: PublishFormValues;
   publishAbsolutePath: string;
   submitName: string;
   isFirstPublish: boolean;
+  /** New SkillHub fixes ownership from the authenticated membership. */
+  ownerType?: 'personal' | 'organization' | null;
+  categories?: PublishCategoryOption[];
 }): SkillhubPublishParams {
   const categorySlug = form.categorySlug.trim();
+  const selectedTagName = categories.find((category) => category.slug === categorySlug)?.name?.trim();
   // 私有发布强制个人归属(Hub 约束:private + teamSlug 会 400)
-  const teamPublisher = form.visibility !== 'PRIVATE' && form.publisherMode === 'team' && form.ownerTeamSlug
+  const teamPublisher = ownerType === undefined
+    && form.visibility !== 'PRIVATE' && form.publisherMode === 'team' && form.ownerTeamSlug
     ? form.ownerTeamSlug
     : undefined;
 
@@ -136,10 +143,9 @@ export function buildSkillhubPublishParams({
     summary: form.summary,
     description: form.description,
     ...(isFirstPublish && {
-      categoryMode: form.categoryMode,
-      categories: form.categoryMode === 'manual' && categorySlug ? [categorySlug] : [],
+      tags: form.categoryMode === 'manual' && selectedTagName ? [selectedTagName] : [],
       visibility: form.visibility,
-      visibleSlugs: form.visibility === 'DEPARTMENT_SCOPED'
+      visibleSlugs: ownerType === undefined && form.visibility === 'DEPARTMENT_SCOPED'
         ? [...form.visibleDeptIds, ...form.sharedTeamSlugs]
         : [],
       ...(teamPublisher

@@ -53,9 +53,15 @@ export interface BuildHandoffOptions {
   /**
    * 交接触发原因。message-deletion 表示同一引擎因本地消息被删除而重建原生
    * 上下文；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
-   * pi-prompt-timeout 表示原生会话对 prompt 无响应后用户重试换窗。
+   * model-window-switch 表示切到更小模型前主动换窗；pi-prompt-timeout 表示原生会话
+   * 对 prompt 无响应后用户重试换窗。
    */
-  reason?: 'agent-switch' | 'message-deletion' | 'context-overflow' | 'pi-prompt-timeout';
+  reason?:
+    | 'agent-switch'
+    | 'message-deletion'
+    | 'context-overflow'
+    | 'model-window-switch'
+    | 'pi-prompt-timeout';
 }
 
 /** 最近多少个用户轮次进入逐字区(其余进单行提要区)。 */
@@ -414,6 +420,7 @@ const FORK_TERMINATOR = "== End of fork note; the user's new message follows =="
 function handoffTerminator(opts: BuildHandoffOptions): string {
   return opts.reason === 'message-deletion' ||
     opts.reason === 'context-overflow' ||
+    opts.reason === 'model-window-switch' ||
     opts.reason === 'pi-prompt-timeout'
     ? REBUILD_TERMINATOR
     : HANDOFF_TERMINATOR;
@@ -500,6 +507,7 @@ function assembleHandoffText(
   if (
     opts.reason === 'message-deletion' ||
     opts.reason === 'context-overflow' ||
+    opts.reason === 'model-window-switch' ||
     opts.reason === 'pi-prompt-timeout'
   ) {
     const rebuildCause =
@@ -507,6 +515,10 @@ function assembleHandoffText(
         ? `The previous native agent session exceeded the model's context window, so Cindy started a fresh native session in the same task. ` +
           `Below is the valid conversation history before the overflowing turn; treat only these records as the prior conversation, ` +
           `and do not try to recover, cite, or infer messages that are not listed. `
+        : opts.reason === 'model-window-switch'
+          ? `The task is switching to a model with a smaller context window, so Cindy started a fresh native session before applying that model. ` +
+            `Below is the valid conversation history carried into the smaller window; treat only these records as the prior conversation, ` +
+            `and use the history retrieval tools when an earlier detail is needed. `
         : opts.reason === 'pi-prompt-timeout'
           ? `The previous native agent session stopped responding to prompts, so Cindy started a fresh native session in the same task. ` +
             `Below is the valid conversation history before the unresponsive turn; treat only these records as the prior conversation, ` +

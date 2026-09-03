@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -7,6 +8,20 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from './server.js';
 import type { ComputerMcpDeps } from '../types.js';
+
+const canLinkFile = (() => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'computer-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 /** Temp session workingDir for path-boundary-constrained tools (recording/replay). */
 async function makeWorkingDir(): Promise<string> {
@@ -988,7 +1003,7 @@ describe('createComputerMcpServer', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'replays inside a workingDir reached through a symbolic link',
     async () => {
       const deps: ComputerMcpDeps = {
@@ -999,7 +1014,11 @@ describe('createComputerMcpServer', () => {
       const realWorkingDir = path.join(container, 'real-workspace');
       const linkedWorkingDir = path.join(container, 'linked-workspace');
       await fs.mkdir(realWorkingDir);
-      await fs.symlink(realWorkingDir, linkedWorkingDir, 'dir');
+      await fs.symlink(
+        realWorkingDir,
+        linkedWorkingDir,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
       await writeTrajectory(realWorkingDir, [
         {
           tool: 'get_window_state',
@@ -1123,7 +1142,7 @@ describe('createComputerMcpServer', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'rejects a recorded turn that escapes through a symlink',
     async () => {
       const deps: ComputerMcpDeps = {
@@ -1138,7 +1157,11 @@ describe('createComputerMcpServer', () => {
         JSON.stringify({ tool: 'get_screen_size', arguments: {} }),
         'utf8',
       );
-      await fs.symlink(outside, path.join(root, 'rec', 'turn-00001'), 'dir');
+      await fs.symlink(
+        outside,
+        path.join(root, 'rec', 'turn-00001'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
       const h = await makeHarness(deps, {
         getSessionContext: () => ({
           agentKind: 'claude-code',
@@ -1166,7 +1189,7 @@ describe('createComputerMcpServer', () => {
     },
   );
 
-  it.skipIf(process.platform === 'win32')(
+  it.skipIf(!canLinkFile)(
     'rejects a symbolic-link action file even when its target stays in the task',
     async () => {
       const deps: ComputerMcpDeps = {

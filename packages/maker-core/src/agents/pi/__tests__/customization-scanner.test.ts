@@ -288,14 +288,18 @@ describe('scanPiCustomizations', () => {
     expect(result.errors).toEqual([]);
   });
 
-  it.skipIf(process.platform === 'win32')('resolves a symlinked working directory for scanning while preserving its ownership path', async () => {
+  it.skipIf(!canLinkDirectory)('resolves a symlinked working directory for scanning while preserving its ownership path', async () => {
     const root = tempRoot();
     const repo = path.join(root, 'repo');
     const physicalCwd = path.join(repo, 'src');
     const linkedCwd = path.join(root, 'linked-cwd');
     mkdirSync(path.join(repo, '.git'), { recursive: true });
     mkdirSync(physicalCwd, { recursive: true });
-    symlinkSync(physicalCwd, linkedCwd, 'dir');
+    symlinkSync(
+      physicalCwd,
+      linkedCwd,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     writeSkill(repo, path.join('.agents', 'skills'), 'repo-skill');
 
     const result = await scanPiCustomizations({ workingDirs: [linkedCwd] });
@@ -305,12 +309,16 @@ describe('scanPiCustomizations', () => {
     expect(canonical(found?.absolutePath ?? '')).toBe(canonical(path.join(repo, '.agents', 'skills', 'repo-skill')));
   });
 
-  it.skipIf(process.platform === 'win32')('keeps lexical project aliases distinct for the same physical checkout', async () => {
+  it.skipIf(!canLinkDirectory)('keeps lexical project aliases distinct for the same physical checkout', async () => {
     const root = tempRoot();
     const repo = path.join(root, 'repo');
     const linkedRepo = path.join(root, 'linked-repo');
     mkdirSync(path.join(repo, '.git'), { recursive: true });
-    symlinkSync(repo, linkedRepo, 'dir');
+    symlinkSync(
+      repo,
+      linkedRepo,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     writeSkill(repo, path.join('.pi', 'skills'), 'aliased-skill');
 
     const items = projectItems(await scanPiCustomizations({ workingDirs: [repo, linkedRepo] }))

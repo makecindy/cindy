@@ -23,14 +23,14 @@ async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-subagent-foreground-'));
   roots.push(root);
   const configHome = path.join(root, 'pi-home');
-  const extensions = path.join(configHome, 'extensions');
+  const internalExtensions = path.join(configHome, 'internal-extensions');
   const runRoot = path.join(root, 'runs');
-  await mkdir(extensions, { recursive: true });
+  await mkdir(internalExtensions, { recursive: true });
   await mkdir(runRoot, { recursive: true });
   await writeFile(path.join(configHome, 'models.json'), JSON.stringify({
     providers: { fixture: { models: [{ id: 'fixture-model' }] } },
   }));
-  await writeFile(path.join(extensions, 'cindy-bridge.ts'), 'export default function () {}\n');
+  await writeFile(path.join(internalExtensions, 'cindy-bridge.ts'), 'export default function () {}\n');
   const permissionFile = path.join(root, 'permission.json');
   const runtimeFile = path.join(root, 'runtime.json');
   const runnerFile = path.join(root, 'runner.cjs');

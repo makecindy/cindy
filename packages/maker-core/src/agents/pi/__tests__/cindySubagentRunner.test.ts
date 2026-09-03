@@ -1011,7 +1011,7 @@ describe('Cindy durable PI Subagent runner', () => {
     expect(resumedPrompts.at(-1)).toBe('continue for a second resumed generation');
   });
 
-  it.skipIf(process.platform === 'win32')('refuses a resume catalog redirected through a symlink', async () => {
+  it('refuses a resume catalog redirected through a symlink', async () => {
     const fixture = await makeFixture();
     const first = await waitFor(async () => {
       const runs = await listPiSubagentRuns(fixture.root);
@@ -1022,7 +1022,11 @@ describe('Cindy durable PI Subagent runner', () => {
     await mkdir(outside);
     await writeFile(path.join(outside, 'models.json'), '{"providers":{"redirected":{}}}\n');
     await rm(path.join(fixture.runDir, 'pi-home'), { recursive: true });
-    await symlink(outside, path.join(fixture.runDir, 'pi-home'), 'dir');
+    await symlink(
+      outside,
+      path.join(fixture.runDir, 'pi-home'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
 
     await expect(resumePiSubagentRun(
       fixture.root,

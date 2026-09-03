@@ -199,6 +199,14 @@ let xdGatewayModels: XdGatewayModelInfo[] = [];
 /** 当前账号最近一次 `/models` 成功响应；false 时清单缺席不能作为模型不存在的 deny 证据。 */
 let xdGatewayModelsAuthoritative = false;
 /**
+ * 最近一次网关快照是否已把 embedding 能力交给网关判定。
+ *
+ * 刷新失败时会把过期的 requires_payment 行从活动目录移除；即使因此暂时没有
+ * embedding 条目，也不能再回退到 bundled embedding。账号边界显式置为 true，
+ * 直到新账号收到首个权威快照；测试清理和非账号的空快照才会重置它。
+ */
+let xdGatewayEmbeddingFallbackSuppressed = false;
+/**
  * 最近一次成功 v5 响应明确拒绝的 XD 对话路由。
  *
  * 刷新失败时活动目录会隐藏过期的付费营销行，但既有会话的派发终检仍须保留这份
@@ -865,6 +873,7 @@ function withEmptyModels(p: Provider): Provider {
 function projectXdGatewayMediaModels(
   provider: Provider,
   gatewayModels: readonly XdGatewayModelInfo[],
+  options: { authoritative: boolean },
 ): Provider {
   const imageModels = gatewayModels
     .filter((model) => model.mode === 'image_generation')
@@ -882,17 +891,39 @@ function projectXdGatewayMediaModels(
       ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
+  // Embedding is a provider-level capability, so it must be projected separately from
+  // agent-bound `models`. A gateway snapshot that explicitly includes embedding models is
+  // authoritative for the current account; payment-only entries must not unlock chat indexing.
+  const embeddingModels = gatewayModels
+    .filter((model) => model.mode === 'embedding' && model.availability === 'available')
+    .map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+    }));
+  const hasEmbeddingEntries = gatewayModels.some((model) => model.mode === 'embedding');
   const identity = { ...provider };
   delete identity.imageModels;
   delete identity.imageDefaults;
   delete identity.videoModels;
   delete identity.videoDefaults;
+  if (
+    options.authoritative ||
+    hasEmbeddingEntries ||
+    xdGatewayEmbeddingFallbackSuppressed
+  ) {
+    delete identity.embeddingModels;
+    delete identity.embeddingDefaults;
+  }
   return {
     ...identity,
     imageModels,
     videoModels,
+    ...(embeddingModels.length > 0 ? { embeddingModels } : {}),
     ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
     ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),
+    ...(embeddingModels[0]
+      ? { embeddingDefaults: { standard: embeddingModels[0].id } }
+      : {}),
   };
 }
 
@@ -1268,7 +1299,12 @@ function computeMerged(): Catalog {
         )
         .map(({ model }) => model);
     }
-    return { ...projectXdGatewayMediaModels(p, gwModels), models };
+    return {
+      ...projectXdGatewayMediaModels(p, gwModels, {
+        authoritative: xdGatewayModelsAuthoritative,
+      }),
+      models,
+    };
   });
 
   if (providers === b.providers) return b; // 无 augment、无 custom → 原样返回
@@ -1529,11 +1565,20 @@ export function setDiscoveredProviderMediaModels(
  */
 export function setXdGatewayModels(
   models: XdGatewayModelInfo[],
-  options?: { authoritative?: boolean; preservePaymentRequiredRoutes?: boolean },
+  options?: {
+    authoritative?: boolean;
+    preservePaymentRequiredRoutes?: boolean;
+    suppressEmbeddingFallback?: boolean;
+  },
 ): void {
   xdGatewayModels = [...models];
   if (options?.authoritative !== undefined) {
     xdGatewayModelsAuthoritative = options.authoritative;
+  }
+  if (options?.authoritative === true || options?.suppressEmbeddingFallback === true) {
+    xdGatewayEmbeddingFallbackSuppressed = true;
+  } else if (models.length === 0 && options?.preservePaymentRequiredRoutes !== true) {
+    xdGatewayEmbeddingFallbackSuppressed = false;
   }
   if (options?.preservePaymentRequiredRoutes !== true) {
     xdGatewayPaymentRequiredRoutes = new Set(

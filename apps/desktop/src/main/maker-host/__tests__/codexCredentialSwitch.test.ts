@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   isCodexThreadModelProviderIdentityMismatch,
+  piProxyProviderIdentity,
   prepareLocalSessionCredentialModeSwitch,
   prepareLocalCodexCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
@@ -253,6 +254,94 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       nextProviderId: 'openai',
       currentModel: 'codex/gpt-5.5',
       nextModel: 'gpt-5.4',
+    })).toBe(false);
+  });
+});
+
+describe('piProxyProviderIdentity', () => {
+  it('collapses Cindy gateway aliases to the headerless proxy identity', () => {
+    expect(piProxyProviderIdentity(null)).toBeNull();
+    expect(piProxyProviderIdentity(undefined)).toBeNull();
+    expect(piProxyProviderIdentity('xd')).toBeNull();
+    expect(piProxyProviderIdentity('cindy')).toBeNull();
+    expect(piProxyProviderIdentity('  xd  ')).toBeNull();
+  });
+
+  it('pins native subscription and BYOM sources', () => {
+    expect(piProxyProviderIdentity('xai')).toBe('xai');
+    expect(piProxyProviderIdentity('openai')).toBe('openai');
+    expect(piProxyProviderIdentity('anthropic')).toBe('anthropic');
+    expect(piProxyProviderIdentity('litellm-custom')).toBe('litellm-custom');
+  });
+});
+
+describe('shouldCloseSessionForCredentialSwitch pi proxy identity', () => {
+  it('closes idle Pi when crossing xAI and OpenAI even though both are provider-oauth', () => {
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'pi',
+      currentProviderId: 'xai',
+      nextProviderId: 'openai',
+      currentModel: 'grok-4.6',
+      nextModel: 'gpt-5.6-sol',
+    })).toBe(true);
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'pi',
+      currentProviderId: 'openai',
+      nextProviderId: 'xai',
+      currentModel: 'gpt-5.6-sol',
+      nextModel: 'grok-4.6',
+    })).toBe(true);
+  });
+
+  it('closes idle Pi when crossing native xAI and Cindy AI gateway', () => {
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'pi',
+      currentProviderId: 'xai',
+      nextProviderId: 'xd',
+      currentModel: 'grok-4.6',
+      nextModel: 'gpt-5.6-sol',
+    })).toBe(true);
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'pi',
+      currentProviderId: 'xd',
+      nextProviderId: 'xai',
+      currentModel: 'gpt-5.6-sol',
+      nextModel: 'grok-4.6',
+    })).toBe(true);
+  });
+
+  it('keeps a live Pi process for same-family model changes', () => {
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'pi',
+      currentProviderId: 'xai',
+      nextProviderId: 'xai',
+      currentModel: 'grok-4.6',
+      nextModel: 'grok-4.5',
+    })).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'pi',
+      currentProviderId: 'openai',
+      nextProviderId: 'openai',
+      currentModel: 'gpt-5.6-sol',
+      nextModel: 'gpt-5.4',
+    })).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'pi',
+      currentProviderId: 'xd',
+      nextProviderId: 'cindy',
+      currentModel: 'gpt-5.6-sol',
+      nextModel: 'gpt-5.4',
+    })).toBe(false);
+  });
+
+  it('does not close remote Pi sessions for proxy-identity switches', () => {
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'pi',
+      remoteHostId: 'remote-1',
+      currentProviderId: 'xai',
+      nextProviderId: 'openai',
+      currentModel: 'grok-4.6',
+      nextModel: 'gpt-5.6-sol',
     })).toBe(false);
   });
 });

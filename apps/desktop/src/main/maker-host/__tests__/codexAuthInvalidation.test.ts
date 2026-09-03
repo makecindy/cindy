@@ -17,6 +17,23 @@ import {
 
 const dirs: string[] = [];
 const expectedSharedLinkType = process.platform === 'win32' ? 'hardlink' : 'symlink';
+
+/** 探测真实文件 symlink 能力；Windows 未启用 Developer Mode 时会返回 EPERM。 */
+function canCreateFileSymlink(): boolean {
+  const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-invalidation-link-probe-'));
+  try {
+    const target = path.join(probeRoot, 'target');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(probeRoot, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true });
+  }
+}
+
+const canLinkFile = canCreateFileSymlink();
 const h = vi.hoisted(() => ({
   userDataDir: '',
   dataOwnerId: null as string | null,
@@ -1842,7 +1859,8 @@ describe('Codex system credential suppression marker', () => {
     }
   });
 
-  it('repairs a pre-upgrade POSIX hardlink rotated before provenance migration', async () => {
+  it('repairs a pre-upgrade POSIX hardlink rotated before provenance migration', async ({ skip }) => {
+    if (!canLinkFile) skip();
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     try {
@@ -1984,10 +2002,7 @@ describe('Codex system credential suppression marker', () => {
     }
   });
 
-  it.each([
-    { platform: 'darwin', label: 'POSIX' },
-    { platform: 'win32', label: 'Windows' },
-  ])('attributes a detached shared F1 invalidation on $label', async ({ platform }) => {
+  async function assertDetachedSharedF1Invalidation(platform: 'darwin' | 'win32'): Promise<void> {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: platform, configurable: true });
     try {
@@ -2079,6 +2094,14 @@ describe('Codex system credential suppression marker', () => {
         configurable: true,
       });
     }
+  }
+
+  it.skipIf(!canLinkFile)('attributes a detached shared F1 invalidation on POSIX', async () => {
+    await assertDetachedSharedF1Invalidation('darwin');
+  });
+
+  it('attributes a detached shared F1 invalidation on Windows', async () => {
+    await assertDetachedSharedF1Invalidation('win32');
   });
 
   it('tracks a consumed symlink target generation until a later system replacement', async () => {

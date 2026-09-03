@@ -82,10 +82,7 @@ interface ErrorBannerProps {
   remoteHostId?: string;
   /** device-link 被控端设备 id。非空表示 turn 不在本机执行，本机认证恢复入口必须禁用。 */
   deviceLinkDeviceId?: string | null;
-  /** 当前 session 的 model id。折扣版 GPT (budget, `codex/` 前缀) 报错时,在通用
-   *  错误文案后追加一句「可切到普通版 GPT 试试」的引导 (折扣版走 gateway, 偶发
-   *  限流/不可用时,普通版往往能正常出)。仅对没有专属引导的通用错误分支生效,
-   *  避免和 auth/stale/encrypted 等分支的具体指引打架。 */
+  /** 当前 session 的 model id。用于判断 OpenAI/ChatGPT 连接来源及桥接模型。 */
   modelId?: string;
   /** 当前会话显式选择的模型来源。OpenAI 重连只能处理 openai / 无显式来源的历史会话；
    * 其它 provider 的 OAuth 错误必须留给对应来源处理。 */
@@ -179,6 +176,11 @@ export function ErrorBanner({
   // 新建会话即可在新模式下生效(重开本会话走 thread/resume 也可)。'thread not found'
   // 是 codex 专属措辞,不会误伤 Claude 的错误。
   const isCodexThreadStale = /thread not found/i.test(error);
+  // 鉴权状态、配置变化或 host 无响应都可能主动退役旧的 Codex app-server。正在执行的
+  // 请求会收到同一个终态错误；reason 本身不携带足够的原因信息，因此展示中性提示。
+  const isCodexAppServerForceRetired =
+    errorReason === 'app-server-force-retired' ||
+    (agentKind === 'codex' && /app-server force-retired:/i.test(error));
   // 仅本地 Codex 会话:远端会话 rollout 在远端机器, 本地 fork 剥离做不到, 不给入口。
   const showInvalidEncryptedContentRecovery =
     agentKind === 'codex' &&
@@ -339,8 +341,7 @@ export function ErrorBanner({
   }, [error]);
 
   // hasSpecialGuidance: 是否命中下面任一「有专属可操作指引」的特殊分支。用一个在
-  // else 兜底里翻转的标志, 而不是另写一遍 5 个条件取反 —— 将来新增特殊分支只要照常
-  // 加 else if, 标志自动保持 true, 折扣版提示不会误叠加 (无需记得同步维护条件表)。
+  // else 兜底里翻转的标志, 而不是另写一遍条件取反，保证原始错误只在通用回退时展开。
   let displayError: string;
   let hasSpecialGuidance = true;
   if (isCodexResumeNotReadyProjectionError(error)) {
@@ -349,6 +350,8 @@ export function ErrorBanner({
     displayError = t('ipcError.PI_IMAGE_INPUT_UNSUPPORTED');
   } else if (isCredentialSwitchBusy) {
     displayError = t('chat.errorBanner.credentialSwitchBusy');
+  } else if (isCodexAppServerForceRetired) {
+    displayError = t('chat.errorBanner.codexAppServerRetired');
   } else if (isCodexThreadStale) {
     displayError = t('chat.errorBanner.codexThreadStale');
   } else if (showInvalidEncryptedContentRecovery) {
@@ -468,22 +471,6 @@ export function ErrorBanner({
   }
   const showUnwrappedRaw = !hasSpecialGuidance && !errorReasonI18nKey && unwrappedDisplay !== error;
 
-  // 折扣版 GPT (budget, `codex/` 前缀) 走 gateway, 偶发限流 / 后端不可用时, 普通版
-  // 往往能正常出。仅在通用错误分支 (上面没命中任何特殊分支) 追加一句切普通版的引导
-  // —— auth/stale/encrypted/session-expired 分支各自已有指引, 叠加会噪 / 打架。
-  // budget 判定与全项目一致: `codex/` 前缀。
-  // 例外:网络类分支(终止态)仍叠加 —— 折扣版 gateway 挂掉恰恰多表现为 502 /
-  // upstream unreachable,「切普通版试试」对症;自动重试中不叠(用户无需行动)。
-  // 过载类同理叠加:折扣版 gateway 的容量往往比官方版更紧,「切普通版试试」对症。
-  // 仍在自动重试时不叠(用户无需行动)——判据是有没有进度后缀,而不是 isRecoverable:
-  // 预算耗尽后的终止错误没有后缀,那时才该给建议。
-  const isBudgetModel = !!modelId && modelId.startsWith('codex/');
-  const showBudgetHint =
-    isBudgetModel &&
-    (!hasSpecialGuidance ||
-      (isNetworkishError && !isRecoverable) ||
-      (isOverloadError && !overloadRetryProgress));
-
   const handleSwitchToClaudeSubscription = async (): Promise<void> => {
     if (!onSwitchToClaudeSubscription || switchingClaudeSubscription) return;
     setSwitchingClaudeSubscription(true);
@@ -596,11 +583,6 @@ export function ErrorBanner({
         >
           {displayError}
         </span>
-        {showBudgetHint && (
-          <span className="mt-0.5 block text-xs text-red-600 dark:text-red-400 break-all">
-            {t('chat.errorBanner.budgetModelHint')}
-          </span>
-        )}
         {(isNetworkishError ||
           isOverloadError ||
           isStreamInterrupted ||

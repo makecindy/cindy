@@ -151,6 +151,76 @@ describe('AppServerHost assistant text delta routing', () => {
   });
 });
 
+describe('AppServerHost custom Provider subagent policy', () => {
+  const routes = [
+    {
+      providerId: 'images-a',
+      modelProviderId: 'cindy_custom_aaaaaaaaaaaaaaaaaaaa',
+      capabilities: { imageGeneration: true },
+      responseModels: ['image-a', 'image-a-alt'],
+    },
+    {
+      providerId: 'images-b',
+      modelProviderId: 'cindy_custom_bbbbbbbbbbbbbbbbbbbb',
+      capabilities: { imageGeneration: true },
+      responseModels: ['image-b'],
+    },
+  ];
+
+  function policy(
+    root: { providerId: string; model: string },
+    child?: { providerId: string; catalogModel: string },
+  ) {
+    const host = new AppServerHost({
+      createTransport: () => new HangingTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexCustomProviderRoutes: routes,
+      ...(child
+        ? { subagentRoute: { ...child, reasoningEffort: null } }
+        : {}),
+    });
+    return host.getCustomProviderThreadPolicy(root.providerId, root.model);
+  }
+
+  it('does not affect a non-image parent', () => {
+    expect(policy({ providerId: 'images-a', model: 'text-a' }, {
+      providerId: 'images-b',
+      catalogModel: 'image-b',
+    })).toEqual({
+      dynamicIdentity: false,
+      disableSubagents: false,
+      disableModelOverrides: false,
+    });
+  });
+
+  it.each([
+    ['same Provider eligible child', 'images-a', 'image-a-alt', false],
+    ['same Provider non-Responses child', 'images-a', 'text-a', true],
+    ['different Provider child', 'images-b', 'image-b', true],
+  ] as const)('%s', (_label, providerId, catalogModel, disableSubagents) => {
+    expect(policy(
+      { providerId: 'images-a', model: 'image-a' },
+      { providerId, catalogModel },
+    )).toEqual({
+      dynamicIdentity: true,
+      disableSubagents,
+      disableModelOverrides: true,
+    });
+  });
+
+  it('allows the second dynamic Provider with its own matching child', () => {
+    expect(policy(
+      { providerId: 'images-b', model: 'image-b' },
+      { providerId: 'images-b', catalogModel: 'image-b' },
+    )).toEqual({
+      dynamicIdentity: true,
+      disableSubagents: false,
+      disableModelOverrides: true,
+    });
+  });
+});
+
 describe('AppServerHost MCP readiness', () => {
   it('retries a negative tool probe instead of permanently caching it', async () => {
     let available = false;

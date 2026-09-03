@@ -404,6 +404,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             // 走的正是本模型,不标会在 send 前被 PiImageInputUnsupportedError 拒收。
             supportsImageInput: true,
           },
+          {
+            id: 'pi-test-small-model',
+            displayName: 'Pi Test Small Model',
+            contextWindow: 100_000,
+            efforts: [],
+            defaultEffort: null,
+          },
         ],
       },
       resolvePiAgentHome: () => agentHome,
@@ -472,6 +479,42 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         // usage:input 42 + output 7(anthropic 流里的 usage 记账)
         const usage = handle.getUsageSnapshot();
         expect(usage.tokenUsage).toBeGreaterThan(0);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'keeps the target runtime after a context-window settings reload',
+    { timeout: 60_000 },
+    async () => {
+      const agent = new PiAgent(buildDeps());
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-model-reload-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      try {
+        handle = await agent.startSession({
+          sessionId: 'itest-model-reload-session',
+          workingDir,
+          model: 'pi-test-model',
+        });
+        await handle.setModel?.('pi-test-small-model');
+        expect(handle.model).toBe('pi-test-small-model');
+        expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
+
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            if (event.type === 'done') return;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'after model switch' });
+        await done;
+
+        const request = seenRequests.slice(requestsBefore).at(-1);
+        expect(request).toBeDefined();
+        expect(JSON.parse(request!.body)).toMatchObject({ model: 'pi-test-small-model' });
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -1827,8 +1870,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         expect(keyTurn.resolverTools).toEqual([]);
         const keyFollowUp = seenRequests.slice(keyReqBefore).map((request) => request.body).join('\n');
-        expect(keyFollowUp).not.toContain('KEY_SECRET=must-not-leak');
-        expect(keyFollowUp).toContain('Cindy blocks reading credential or key paths');
+        expect(keyFollowUp).toContain('KEY_SECRET=must-not-leak');
+        expect(keyFollowUp).not.toContain('Cindy blocks reading credential or key paths');
 
         scriptedResponses.push(
           anthropicToolUseBody('grep', { pattern: 'SAFE_SELECTOR', path: 'src', glob: 'source.ts' }),
@@ -2189,16 +2232,16 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'full access still blocks credential reads (parent env holds the proxy session token)',
+    'full access does not secretly block credential-looking reads',
     { timeout: 60_000 },
     async () => {
-      // greptile 回归:bypassPermissions 提前返回不得跳过凭证路径检查,否则内置 read
-      // 可读 /proc/self/environ 之类路径拿到父进程里的代理 token,绕过审批盗刷额度。
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-perm-bypass-cred-'));
+      const secretPath = path.join(workingDir, '.env');
+      writeFileSync(secretPath, 'CRED_MARKER=pi-full-access-ok\n');
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('read', { path: '/proc/self/environ' }),
+          anthropicToolUseBody('read', { path: secretPath }),
           anthropicStreamBody('bypass cred turn finished'),
         );
         const reqBefore = seenRequests.length;
@@ -2206,13 +2249,12 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           sessionId: 'perm-bypass-cred',
           workingDir,
           permissionMode: 'bypassPermissions',
-          resolverBehavior: 'allow', // 若误弹窗且被 allow,下面的 block 理由断言就会失败
+          resolverBehavior: 'allow',
         });
-        // Full access 不弹窗,直接硬拦
         expect(resolverTools).toEqual([]);
         const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
-        expect(followUp.some((b) => b.includes('Cindy blocks reading credential or key paths'))).toBe(true);
-        expect(followUp.some((b) => b.includes('CINDY_PI_SESSION_TOKEN='))).toBe(false);
+        expect(followUp.some((b) => b.includes('Cindy blocks reading credential or key paths'))).toBe(false);
+        expect(followUp.some((b) => b.includes('CRED_MARKER=pi-full-access-ok'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
@@ -2221,16 +2263,16 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'full access blocks bash reads of process environ (parent /proc holds the secrets)',
+    'full access does not secretly block bash reads of process environ',
     { timeout: 60_000 },
     async () => {
-      // codex 回归:spawn 边界只剥子进程 env,父 pi 进程仍持有 token;bash
-      // `cat /proc/self/environ` 同 UID 直取 → 即使 Full access 也硬拦。
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-perm-bash-environ-'));
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('bash', { command: 'cat /proc/self/environ' }),
+          anthropicToolUseBody('bash', {
+            command: 'ENVIRON_MARKER=pi-full-access-ok; echo "$ENVIRON_MARKER"; cat /proc/self/environ',
+          }),
           anthropicStreamBody('bash environ turn finished'),
         );
         const reqBefore = seenRequests.length;
@@ -2242,8 +2284,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         expect(resolverTools).toEqual([]);
         const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
-        expect(followUp.some((b) => b.includes('Cindy blocks reading process environment'))).toBe(true);
-        expect(followUp.some((b) => b.includes('CINDY_PI_SESSION_TOKEN='))).toBe(false);
+        expect(followUp.some((b) => b.includes('Cindy blocks reading process environment'))).toBe(false);
+        expect(followUp.some((b) => b.includes('ENVIRON_MARKER=pi-full-access-ok'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
@@ -2401,9 +2443,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         expect(fullAccessTurn.resolverTools).toEqual([]);
         const fullAccessFollowUp = seenRequests.slice(fullAccessReqBefore).map((request) => request.body);
-        expect(fullAccessFollowUp.some((body) => body.includes('FAKE_REDIRECT_DOTENV_SECRET'))).toBe(false);
         expect(fullAccessFollowUp.some((body) => body.includes('Cindy blocks reading credential or key paths')))
-          .toBe(true);
+          .toBe(false);
+        expect(fullAccessFollowUp.some((body) => body.includes('FAKE_REDIRECT_DOTENV_SECRET'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
@@ -2453,9 +2495,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         expect(fullAccessTurn.resolverTools).toEqual([]);
         const fullAccessFollowUp = seenRequests.slice(fullAccessReqBefore).map((request) => request.body);
-        expect(fullAccessFollowUp.some((body) => body.includes('FAKE_DOTGLOB_SECRET'))).toBe(false);
         expect(fullAccessFollowUp.some((body) => body.includes('Cindy blocks reading credential or key paths')))
-          .toBe(true);
+          .toBe(false);
+        expect(fullAccessFollowUp.some((body) => body.includes('ordinary-glob-content'))).toBe(true);
 
         delete process.env.BASHOPTS;
         for (const [sessionId, command] of [
@@ -2483,7 +2525,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('bash', { command: 'shopt -s dotglob; cat <*' }),
+          anthropicToolUseBody('bash', { command: 'shopt -s dotglob; cat *' }),
           anthropicStreamBody('bash Full Access runtime dotglob turn finished'),
         );
         const runtimeFullAccessReqBefore = seenRequests.length;
@@ -2496,9 +2538,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(runtimeFullAccessTurn.resolverTools).toEqual([]);
         const runtimeFullAccessFollowUp = seenRequests.slice(runtimeFullAccessReqBefore)
           .map((request) => request.body);
-        expect(runtimeFullAccessFollowUp.some((body) => body.includes('FAKE_DOTGLOB_SECRET'))).toBe(false);
         expect(runtimeFullAccessFollowUp.some((body) =>
-          body.includes('Cindy blocks reading credential or key paths'))).toBe(true);
+          body.includes('Cindy blocks reading credential or key paths'))).toBe(false);
+        expect(runtimeFullAccessFollowUp.some((body) => body.includes('FAKE_DOTGLOB_SECRET'))).toBe(true);
 
         scriptedResponses.length = 0;
         scriptedResponses.push(
@@ -2525,6 +2567,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  // symlink-platform-skip: CDPATH and the redirect commands in this case require a POSIX Bash host.
   it.skipIf(process.platform === 'win32' || !canSymlink)(
     'auto mode fail closes inherited CDPATH while explicit relative cd keeps ordinary reads fast',
     { timeout: 60_000 },
@@ -2659,14 +2702,11 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it.skipIf(!canSymlink)(
-    'full access blocks credential reads reached through a workspace symlink',
+    'full access does not secretly block credential reads reached through a workspace symlink',
     { timeout: 60_000 },
     async () => {
-      // greptile 回归:未解析路径命不中特征,但工作区内符号链接可指向敏感目标;
-      // realpath 跟随后再判 → 即使 Full access 也硬拦。
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-perm-symlink-cred-'));
       try {
-        // 真实敏感文件(路径含 id_rsa,命中凭证特征)+ 工作区内指向它的无害名字符号链接。
         mkdirSync(path.join(workingDir, 'secrets'), { recursive: true });
         const secretPath = path.join(workingDir, 'secrets', 'id_rsa');
         writeFileSync(secretPath, 'FAKE PRIVATE KEY');
@@ -2687,8 +2727,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         expect(resolverTools).toEqual([]);
         const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
-        expect(followUp.some((b) => b.includes('Cindy blocks reading credential or key paths'))).toBe(true);
-        expect(followUp.some((b) => b.includes('FAKE PRIVATE KEY'))).toBe(false);
+        expect(followUp.some((b) => b.includes('Cindy blocks reading credential or key paths'))).toBe(false);
+        expect(followUp.some((b) => b.includes('FAKE PRIVATE KEY'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;

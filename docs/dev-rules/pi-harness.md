@@ -21,15 +21,13 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   子协议冒泡到 `index.ts handleExtensionUiRequest`,映射成 `InteractionRequest` 交 Cindy
   审批 UI。档位写 `<agentHome>/runtime/perm-<sessionId>.json`,bridge 每次 tool_call 现读
   (热切换)。
-- **Full access(`bypassPermissions`)契约(务必如实理解,勿夸大)**:该档下 Pi 的 `bash`
-  **不是**受隔离的凭证安全边界。bridge 里的凭证路径/`/proc/*/environ` 文本硬拦只是
-  **defense-in-depth**,可被变形绕过(`ps eww -p $PPID`、`find /proc -exec`、变量拼接 /
-  base64 / heredoc、重定向/`tee`/`cp`/`mv`/`python` 写文件等)。因此在 Full access 下:
-  - Pi 父进程环境里的代理 token / 网关 key / BYOM key / 外部 MCP header **可能被读取**;
-  - `readOnlyRoots`(Extra Dirs)**可能被写入**——只读语义靠 auto-review 提示与文本拦截,
-    非 OS 强制。
-  真正的强隔离需要 OS 级手段(macOS `sandbox-exec`、Linux 只读 bind mount / seccomp),
-  **本阶段未接入**。选择 Full access 即接受上述风险;需要硬边界时用 ask/auto 档,或等 OS
+- **Full access(`bypassPermissions`)契约(务必如实理解,勿夸大)**:该档与原生 Pi 对齐,
+  **不得**用凭证路径 / `/proc/*/environ` 文本硬拦拒绝原生允许的读、搜、bash。Ask/Auto
+  仍把这类调用升级为审批;Full access 选择即接受父进程环境里的代理 token / 网关 key /
+  BYOM key / 外部 MCP header **可能被读取**。允许保留的机械隔离仅限 Cindy 自身运行所必需:
+  模型不得写 agent home(`models.json` / 权限档),Extra Dirs 的结构化写工具保持只读。
+  bash 写入 Extra Dirs 仍非 OS 强制。真正的强隔离需要 OS 级手段(macOS `sandbox-exec`、
+  Linux 只读 bind mount / seccomp),**本阶段未接入**。需要硬边界时用 ask/auto 档,或等 OS
   沙箱落地。改动权限相关代码时不要再堆「看起来能拦」的正则并当成安全边界。
   与 Claude Code／Codex 一致，Pi 会话的 Full Access 也会让插件 `ghost_call` 的
   `attachments`／`dir`／`save_dir` 在 Host 侧免去额外过户确认；实现必须现读活跃 Session
@@ -61,9 +59,14 @@ Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.
 （`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC
 `set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
-下一次发送前换窗。设置页的 Pi 百分比在每次启动或恢复 Pi 任务时冻结，并写入该任务 `settings.json` 的
-`compaction.reserveTokens`（`window * (1 - pct/100)`）；切模只按这份快照重算，不回读最新全局值。
-Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
+下一次发送前换窗。设置页的 Pi 百分比默认 90%（已有显式 override 保留），在每次启动或恢复
+Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveTokens`
+（`window * (1 - pct/100)`）；切模只按这份快照重算，不回读最新全局值。
+大窗切小窗先由 Desktop 的统一目标窗口事务按目标窗口 90% 固定压力线评估（独立于 Pi
+日常自动压缩百分比），命中时换干净原生窗口；未命中时 Pi 重写 settings 后调用
+`switch_session`，必须重新 `set_model` 并用 `get_state` 校验
+provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
+子代理 route 保持 pending，失败则终止该 live 任务。Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
@@ -108,6 +111,8 @@ Cindy 是 Pi 的上游 GUI，不是 Pi 的二次安全产品。Cindy 的 Pi 集�
 允许保留的边界仅限 Cindy 自身运行所必需、且不改变 Pi 用户包结果的机械隔离（例如不把远端
 会话指向控制端本地路径、保护 Cindy 内部凭证不被写入包目录）。这类边界也不能被描述成
 Cindy 对 Pi 的产品安全升级，更不能拿来扩大阻断范围。
+
+Full access 读/搜/bash 与原生对齐的需求正本见 [`pi-full-access-native-parity.md`](pi-full-access-native-parity.md)。
 
 ## 4. 维护不变量(改动时不得破坏)
 

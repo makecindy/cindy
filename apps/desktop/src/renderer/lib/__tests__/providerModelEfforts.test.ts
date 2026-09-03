@@ -211,7 +211,11 @@ describe('resolveProviderModelEfforts', () => {
       /resolveModelEfforts\(\s*newModelId,\s*effectiveSourceId,?\s*\)/,
     );
     expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
-      '{ effort: eff, fastMode: restoredFast }',
+      'setModelWithFinalWindowConfirmation(',
+    );
+    expect(source.slice(providerChangeStart, providerChangeEnd)).toContain('effort: eff,');
+    expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
+      'fastMode: restoredFast,',
     );
   });
 });

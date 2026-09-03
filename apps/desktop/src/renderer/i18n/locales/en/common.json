@@ -15,7 +15,16 @@
     "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again.",
-    "INTERNAL": "Operation failed. Please try again later."
+    "INTERNAL": "Operation failed. Please try again later.",
+    "SSH_CONFIG_CONCURRENT_MODIFICATION": "The SSH configuration changed on disk. Reload it and try again.",
+    "SSH_CONFIG_RELOAD_REQUIRED": "The SSH config was saved, but Cindy could not refresh it. Reload the SSH configuration.",
+    "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy cannot safely manage this SSH configuration. Reload it, then verify the Cindy ownership marker and that the host alias is unique.",
+    "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy cannot safely reproduce some SSH configuration rules for this host. Terminal SSH may still work; review Match, conditional Include, IdentityAgent, IdentitiesOnly, and public-key settings.",
+    "SSH_AGENT_UNAVAILABLE": "The SSH Agent is unavailable. Start it, load the matching private key with ssh-add, and try again.",
+    "SSH_HOST_PREFS_WRITE_FAILED": "The host is still saved, but its display name or Agent Proxy settings could not be saved. Check local storage permissions and try again.",
+    "RIGHT_SIDEBAR_TOO_MANY_TABS": "This task has reached its tab limit. Close some tabs first",
+    "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab content is too large to add",
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "This tab type is unavailable"
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -165,6 +174,13 @@
       "title": "Remote machines",
       "footnote": "Phase A: SSH connection management only. Running agents on the remote arrives in a later update.",
       "viaAuth": "via {{label}}",
+      "readOnlyFromSshConfig": "Connection details come from SSH configuration",
+      "configWarning": "Cindy cannot evaluate some SSH configuration rules. The host list or connection details may differ from terminal SSH.",
+      "configDiagnostic": {
+        "io": "Cindy could not read your SSH configuration. The last successfully loaded hosts are still shown. Check file permissions and reload.",
+        "syntax": "Cindy could not parse your SSH configuration. The last successfully loaded hosts are still shown. Fix the configuration and reload.",
+        "limit": "The SSH configuration is too deeply nested or too large for Cindy to read safely. The last successfully loaded hosts are still shown."
+      },
       "empty": {
         "title": "No remote machines yet.",
         "hint": "Click \"Add\" to register one, or click the refresh icon to import from ~/.ssh/config."
@@ -196,7 +212,9 @@
       },
       "edit": {
         "title": "Edit {{id}}",
-        "submit": "Save changes"
+        "submit": "Save changes",
+        "connectionFieldsReadOnly": "Connection details from SSH configuration are read-only here. Display name, auto-connect, and Agent Proxy remain editable.",
+        "authenticationFromSshConfig": "Authentication comes from SSH configuration."
       },
       "keys": {
         "title": "Set up SSH key",
@@ -273,6 +291,8 @@
       "add": {
         "title": "Add a remote machine",
         "alias": "Alias",
+        "displayName": "Display name",
+        "displayNamePlaceholder": "Optional name shown in Cindy",
         "hostname": "Hostname",
         "user": "User",
         "port": "Port",
@@ -373,6 +393,7 @@
         "reloaded": "Reloaded ~/.ssh/config",
         "loadFailed": "Failed to load remote machines",
         "addFailed": "Failed to add machine",
+        "addConflict": "The SSH configuration changed while adding this machine. Reload it, review the host entry, and try again.",
         "connectFailed": "Connection failed",
         "disconnectFailed": "Disconnect failed",
         "removeFailed": "Remove failed",
@@ -1474,6 +1495,13 @@
           "editTitle": "Edit custom provider",
           "desc": "Configure an OpenAI / Anthropic-compatible provider."
         },
+        "imageGenerationReload": {
+          "title": "Reload Codex",
+          "description": "Saving this image generation configuration requires reloading Codex and will interrupt the Codex tasks currently in progress.",
+          "interrupt": "Save and stop",
+          "cancel": "Cancel",
+          "close": "Close"
+        },
         "fields": {
           "name": "Display name",
           "namePlaceholder": "My AI provider",
@@ -1495,6 +1523,15 @@
           "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "modelSupportsImageInput": "Supports image input",
           "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
+          "runtimeAdvanced": "Advanced",
+          "runtimeSupportsImageGeneration": "Supports image generation and editing",
+          "runtimeSupportsImageGenerationHelpLabel": "About image generation and editing support",
+          "runtimeSupportsImageGenerationConditionTitle": "When to enable",
+          "runtimeSupportsImageGenerationCondition": "Your gateway must be compatible with the OpenAI Responses API and support image generation and editing.",
+          "runtimeSupportsImageGenerationEndpointsTitle": "Required endpoints",
+          "runtimeSupportsImageGenerationEndpoints": "The gateway must handle these requests:",
+          "runtimeSupportsImageGenerationPermissionsTitle": "Access and failures",
+          "runtimeSupportsImageGenerationPermissions": "The current API key, account, or user group needs access to the image model. This switch only declares the gateway's capability and does not grant upstream access. If a request fails, Cindy shows the actual upstream error and does not switch to another image service.",
           "modelSupportsReasoning": "Supports reasoning",
           "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Changes take effect in the next Pi Agent session.",
           "modelReasoningEfforts": "Supported reasoning effort levels",
@@ -1884,11 +1921,21 @@
           "qwen38-27b": {
             "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
           },
-          "gpt-oss-20b": { "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines." },
-          "gemma4-e2b": { "blurb": "Smallest Gemma 4. Light machines, with vision." },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 small. Light daily use, with vision." },
-          "gemma4-12b": { "blurb": "Gemma 4 mid-size. Steadier chat and multimodal." },
-          "gemma4-31b": { "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory." },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines."
+          },
+          "gemma4-e2b": {
+            "blurb": "Smallest Gemma 4. Light machines, with vision."
+          },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 small. Light daily use, with vision."
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 mid-size. Steadier chat and multimodal."
+          },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory."
+          },
           "gemma4-26b": {
             "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
           },
@@ -2977,7 +3024,14 @@
           "toggleFailed": "Failed to toggle browser automation",
           "openedForLogin": "Automation browser opened — sign into the sites you need",
           "openForLoginFailed": "Failed to open the browser",
-          "foreignInstance": "Another Cindy window is already using the agent browser. Quit the other instance and try again."
+          "foreignInstance": "Another Cindy window is already using the agent browser. Quit the other instance and try again.",
+          "profileLocked": "Quit Chrome, Edge, or Brave completely (including its tray icon), then try again.",
+          "noChromium": "Chrome, Edge, Brave, or Chromium could not be found on this computer.",
+          "noAuthDb": "No browser login data was found to copy. Sign in to your regular browser first, or turn off “Use my browser logins” and sign in to the agent browser.",
+          "copyFailed": "Couldn’t copy your browser logins. Quit your regular browser completely and try again, or turn off “Use my browser logins.”",
+          "headlessForbidden": "Your browser logins can’t be used while the agent browser is running in headless mode.",
+          "stopFailed": "Close the agent browser completely, then try again.",
+          "appBoundEncryptionUnsupported": "Windows protects these browser logins with App-Bound Encryption, so Cindy can’t copy them. Turn off “Use my browser logins,” open the agent browser, and sign in there once."
         },
         "openForLogin": "Open agent browser",
         "openForLoginHint": "This is a dedicated browser for agents: it runs on your installed Chrome but with a separate profile (shown as “Cindy”), so it never touches your everyday Chrome's tabs, bookmarks, or logins. Agents open pages, read, click, and take screenshots here on your behalf. For sites that need a login, click “Open agent browser” above and sign in once — your session is kept, so the agent can keep acting as you afterward."
@@ -3557,7 +3611,7 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "Model",
-        "effortLabel": "Reasoning effort",
+        "effortLabel": "Reasoning Effort",
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
@@ -3685,6 +3739,28 @@
       "recording": "Press new shortcut…",
       "editAria": "Change shortcut for {{name}}",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex compatibility",
+          "label": "Prevent Codex from occupying the device",
+          "aria": "Prevent Codex from occupying Codex Micro",
+          "recover": "Restore environment",
+          "status": {
+            "unsupported": "macOS only",
+            "disabled": "Off",
+            "protecting": "Restart Codex",
+            "intercepted": "Protected",
+            "recovery-required": "Recovery needed",
+            "error": "Unavailable"
+          },
+          "descriptions": {
+            "unsupported": "This protection is available on macOS only.",
+            "disabled": "While Cindy is running, stop Codex from connecting to Codex Micro. Cindy itself is not restricted.",
+            "protecting": "Protection is ready. Completely quit and reopen Codex; an already-running Codex is unaffected.",
+            "intercepted": "Codex's Work Louder service was blocked. Cindy can keep using the device.",
+            "recovery-required": "Protection stopped, but NODE_OPTIONS has not been safely restored. Retry the recovery before enabling it again.",
+            "error": "Cindy could not update Codex protection. Your previous NODE_OPTIONS value was preserved or queued for recovery."
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "Previous task",
@@ -3899,12 +3975,12 @@
           "title": "Agent keys",
           "source": {
             "label": "Task order",
-            "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+            "description": "Task keys follow the sidebar from top to bottom, in board order.",
             "descriptions": {
-              "sidebar": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
-              "last-sent": "AG00–AG05 follow the six tasks you last sent a message in.",
-              "priority": "AG00–AG05 follow the first six priority tasks.",
-              "custom": "AG00–AG05 each open the task you assign."
+              "sidebar": "Task keys follow the sidebar from top to bottom, in board order.",
+              "last-sent": "Task keys follow the tasks you last sent a message in, in board order.",
+              "priority": "Task keys follow priority tasks, in board order.",
+              "custom": "Each task key opens the task you assign."
             },
             "value": "Sidebar order",
             "options": {
@@ -3921,7 +3997,16 @@
           },
           "newTask": "New task",
           "slot": "Recent {{position}}",
-          "slotAria": "AG{{slot}} opens recent task {{position}}"
+          "slotAria": "AG{{slot}} opens recent task {{position}}",
+          "role": {
+            "label": "Key role",
+            "description": "A task key switches tasks and shows their status with lighting. An action key runs a shortcut and can wear a keycap.",
+            "task": "Task key",
+            "action": "Action key"
+          },
+          "lightingLimit": "Firmware can independently light the first 6 task keys in board order. Extra task keys still switch tasks.",
+          "unlitKey": "This key is after the first 6, so it has no independent status light.",
+          "taskHint": "A clear keycap is recommended so task status can show in different colors."
         },
         "commandKeys": {
           "builtInDescription": "Leave this on the keycap default, or bind the key to something else.",
@@ -3932,7 +4017,7 @@
           "title": "Microphone",
           "separate": {
             "label": "Use separate microphone keys",
-            "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
+            "description": "A short press starts and keeps recording. Press again to stop, or hold and release to stop."
           }
         },
         "analog": {
@@ -3972,7 +4057,8 @@
           "tasks": "Tasks",
           "commands": "Commands",
           "keycaps": "Keycaps",
-          "skills": "Skills"
+          "skills": "Skills",
+          "voice": "Voice input"
         },
         "layout": {
           "editor": {
@@ -3984,7 +4070,10 @@
             "cancel": "Cancel",
             "save": "Save",
             "assignedShortcut": "Assigned action",
-            "selectKeycap": "Select keycap {{keycap}}"
+            "selectKeycap": "Select keycap {{keycap}}",
+            "keyTitle": "Edit key",
+            "keyDescription": "Task keys open tasks and show status lights. Action keys run shortcuts and can use a keycap.",
+            "blank": "Blank"
           },
           "keyboard": {
             "indicator": "Status lights",
@@ -3997,6 +4086,54 @@
             "title": "Reset key layout",
             "description": "Restore keycaps, joystick, encoder, and microphone assignments without changing task order or lighting.",
             "button": "Reset layout"
+          },
+          "merge": {
+            "right": "Combine with the key on the right",
+            "down": "Combine with the key below",
+            "split": "Split into two keys",
+            "rightDescription": "A wide keycap covers the key on the right. A covered task key becomes an action key.",
+            "downDescription": "A tall keycap covers the key below. A covered task key becomes an action key.",
+            "splitDescription": "After splitting, the covered key returns as a blank key."
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "Open tasks from the keys and mirror their status with lighting.",
+            "openAria": "Open Work Louder Creator Micro 2 settings",
+            "connection": {
+              "toggle": {
+                "aria": "Let this Cindy use Creator Micro 2"
+              },
+              "descriptions": {
+                "connecting": "Cindy is starting the Work Louder device service.",
+                "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
+                "disabled": "When enabled, Cindy rewrites the current layer, listens for key presses, and shows task status with lighting.",
+                "present": "When enabled, Cindy rewrites the current layer, listens for key presses, and shows task status with lighting.",
+                "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
+                "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
+                "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+                "connection-timeout": "The Work Louder service did not respond in time. Cindy will retry automatically.",
+                "connection-failed": "The Work Louder service failed to start. Cindy will retry automatically.",
+                "permission-required": "macOS denied keyboard access. Allow Cindy in Input Monitoring, then try again.",
+                "sdk-unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+                "device-in-use": "Another app is using this keyboard. Close ChatGPT or Input, then try again."
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "Task keys follow the sidebar from top to bottom, in board order.",
+                  "last-sent": "Task keys follow the tasks you last sent a message in, in board order.",
+                  "priority": "Task keys follow priority tasks, in board order.",
+                  "custom": "Each task key opens the task you assign."
+                }
+              }
+            },
+            "errors": {
+              "load": "Failed to load Creator Micro 2 settings",
+              "save": "Failed to save Creator Micro 2 settings"
+            }
           }
         }
       },
@@ -4693,7 +4830,7 @@
         "fsWrite": "Can write files (create / modify)",
         "fsWriteDetail": "Its own private data folder is always writable. Writes into the current session's working directory follow the session's permission mode (auto-approve modes write directly; per-action modes ask you first). Any other folder always requires your confirmation. Files are always written by the host — the plugin itself never touches your file system.",
         "libraryPersist": "Can use a durable library (large files and databases)",
-        "libraryPersistDetail": "It gets a Cindy-managed storage area for your work (canvases, images, databases) with no normal plugin data quota. All file and database operations are executed by the host; the plugin only uses relative paths inside its own library and cannot touch your other files. Uninstalling the plugin does not delete this data; deletion requires separate confirmation in Cindy settings.",
+        "libraryPersistDetail": "It gets a Cindy-managed storage area for your work (canvases, images, databases) with no normal plugin data quota. All file and database operations are executed by the host; the plugin only uses relative paths inside its own library and cannot touch your other files. It can also ask Cindy to show a library file in Finder or Explorer, or open the system Save As dialog so you choose where a copy goes; cancelling Save As copies nothing. Uninstalling the plugin does not delete this data; deletion requires separate confirmation in Cindy settings.",
         "networkHost": "Accesses the network domain {{host}}",
         "networkSecret": "Needs a credential from you: \"{{name}}\"",
         "networkSecretGhostInputDetail": "Collected by this plugin's own settings UI — the plugin page sees the value at entry time. It is then handed to the host in one step for encrypted storage; once stored, the plugin can never read it back, and the host injects it only for the domains it declares.",
@@ -4912,6 +5049,10 @@
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
+      },
+      "saveAs": {
+        "dialogTitle": "Plugin “{{name}}” — Save As",
+        "dialogMessage": "Plugin “{{name}}” is asking you to save a copy"
       },
       "confirm": {
         "dialogTitle": "Plugin “{{name}}” needs your confirmation"
@@ -5255,7 +5396,6 @@
     "expandControlledNotice": "Expand remote control notice: {{label}}",
     "versionMismatch": "Version mismatch with the other device; some features may be limited"
   },
-
   "accountDeletion": {
     "entryButton": "Delete account",
     "entryAria": "Delete the current account",
@@ -5405,7 +5545,8 @@
     "browserWaiting": "Complete verification in your browser",
     "browserCallback": {
       "successTitle": "Signed in",
-      "successBody": "You can close this page and return to {{appName}}.",
+      "successBody": "You’re signed in. You can close this page now.",
+      "closeCountdown": "Closing in {{count}}s",
       "errorTitle": "Sign-in not completed",
       "errorBody": "Please return to {{appName}} and sign in again.",
       "returnButton": "Return to {{appName}}"
@@ -5956,6 +6097,10 @@
       "detachDevice": "Detach Device",
       "startDevice": "Start Device",
       "stopDevice": "Stop Device",
+      "deleteDevice": "Delete Device",
+      "deleteDeviceConfirmTitle": "Delete {{device}}?",
+      "deleteDeviceConfirmDescription": "This permanently deletes the simulator and all apps, accounts, and data stored on it. This cannot be undone.",
+      "deleteRunningDeviceConfirmDescription": "This simulator is running. Cindy will clean up its resources, stop it, and then permanently delete all apps, accounts, and data stored on it. This cannot be undone.",
       "attachedDescription": "This device is bound to the current Cindy session.",
       "agentControlTitle": "Agent Control",
       "agentControlDescription": "Agents can start, stop, or interact with this device only when allowed.",
@@ -6647,6 +6792,13 @@
       "move": "Move Now (Recommended)",
       "download": "Download manually"
     },
+    "windowsRuntimeMissing": {
+      "title": "Microsoft Visual C++ Runtime Required",
+      "description": "This PC is missing the Microsoft Visual C++ Runtime required by the updater. The downloaded update will be kept. Install Microsoft's official x64 Runtime, then check again.",
+      "download": "Download Runtime",
+      "retry": "Check Again",
+      "later": "Install Later"
+    },
     "moveToApplications": {
       "title": "Move to Applications Folder",
       "message": "Moving {{appName}} to the Applications folder gives you a better experience, including automatic updates.",
@@ -6943,7 +7095,7 @@
       "remoteLoadFailedShort": "Model loading failed",
       "retryRemoteModels": "Reload models",
       "remoteEmpty": "This device has no available models",
-      "effortLabel": "Effort level",
+      "effortLabel": "Reasoning Effort",
       "thinking": "Thinking",
       "edit": "Edit",
       "options": "Options",
@@ -7276,7 +7428,7 @@
         "title": "This model can't fit the current conversation",
         "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
         "overflowDescription": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won't all be passed through verbatim.",
-        "overflowDescriptionRemote": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). On a remote session Cindy cannot rebuild a fresh agent context, so the next request may still fail. You can switch anyway, or keep this model.",
+        "overflowDescriptionRemote": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model.",
         "confirmSwitch": "Switch and continue",
         "cancelSwitch": "Keep this model"
       },
@@ -7457,7 +7609,7 @@
     "openApp": "Open ChatGPT App",
     "relogin": "Sign In to ChatGPT Again",
     "reloginRiskTitle": "Still sign in through Cindy?",
-    "reloginRiskDescription": "This creates a new OpenAI OAuth authorization and may immediately sign the ChatGPT App and Codex CLI out on this computer. You will need to sign in to those apps again afterward.",
+    "reloginRiskDescription": "Cindy will create a new OpenAI OAuth authorization. The ChatGPT App is usually unaffected; if it still shares credentials with system Codex, those apps may ask you to sign in again.",
     "reloginRiskConfirm": "Accept Risk and Continue",
     "devWriteBlocked": "Development builds use this computer’s ChatGPT sign-in read-only by default and cannot start OAuth or change its credentials. To test OAuth, use an isolated sandbox and explicitly set XDT_ALLOW_DEV_OAUTH_WRITE=1.",
     "devReadOnly": "Read-only in Development",
@@ -7645,7 +7797,7 @@
       "switchClaudeSubscriptionTitle": "Switch this session to the Claude.ai subscription and retry",
       "switchingClaudeSubscription": "Switching to Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
-      "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
+      "codexAppServerRetired": "The Codex service was restarted or replaced. The current request was interrupted; run it again.",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
@@ -8212,7 +8364,12 @@
       "showMore": "Show {{count}} more",
       "showLess": "Show less",
       "artifactLabel": "Artifact",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}} pages",
         "slides": "{{count}} slides",
@@ -9094,7 +9251,7 @@
     "medium": "Medium",
     "high": "High",
     "xhigh": "Extra High",
-    "max": "Max",
+    "max": "Maximum",
     "ultra": "Ultra"
   },
   "scheduler": {
@@ -9124,7 +9281,15 @@
           "5": "Friday",
           "6": "Saturday"
         },
-        "short": { "0": "Su", "1": "Mo", "2": "Tu", "3": "We", "4": "Th", "5": "Fr", "6": "Sa" }
+        "short": {
+          "0": "Su",
+          "1": "Mo",
+          "2": "Tu",
+          "3": "We",
+          "4": "Th",
+          "5": "Fr",
+          "6": "Sa"
+        }
       },
       "time": {
         "last": "Last {{value}}",
@@ -9534,13 +9699,13 @@
           "google": "Google",
           "china": "China"
         },
-        "effortHeading": "Effort",
+        "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",
-        "effortListAria": "Effort level"
+        "effortListAria": "Reasoning effort"
       }
     },
     "toast": {
@@ -9966,10 +10131,16 @@
       "search": "Search skills",
       "clearSearch": "Clear skill search",
       "noSearchResults": "No matching skills found",
-      "browseTitle": "Browse Skill Hub",
-      "browseDesc": "Discover and install more skills",
-      "recommended": "Recommended",
-      "recommendedEmpty": "No recommendations right now",
+      "catalogFiltersAria": "SkillHub categories",
+      "catalogFilter": {
+        "public": "Public",
+        "organization": "Organization",
+        "mine": "Managed"
+      },
+      "catalogMore": "More",
+      "loadMore": "Load more",
+      "loadingMore": "Loading…",
+      "catalogEmpty": "No skills in this category",
       "local": "Local Skills",
       "localEmpty": "No local skills yet",
       "installed": "Installed",
@@ -10151,7 +10322,6 @@
       "sortDownloads": "Downloads",
       "sortLatest": "Latest update",
       "sortCreated": "Latest release",
-      "chipAvailable": "Available",
       "chipAll": "All",
       "chipMine": "Managed",
       "ownerGroupPersonal": "Personal",
@@ -10165,7 +10335,7 @@
       "installError": "Unknown error"
     },
     "marketCard": {
-      "visibilityPublic": "XD.Inc",
+      "visibilityPublic": "Public",
       "visibilityDept": "Team",
       "visibilityPrivate": "Personal",
       "timeLabel": "Published time",
@@ -10190,6 +10360,7 @@
       }
     },
     "publishedStatus": {
+      "waitingReview": "Awaiting review",
       "machineReviewing": "Machine review",
       "manualReviewing": "Manual review",
       "rejected": "Review rejected"
@@ -10201,7 +10372,7 @@
       "emptyHint": "This cloud Skill did not return previewable files"
     },
     "marketDetail": {
-      "visibilityPublic": "Visible to XD.Inc",
+      "visibilityPublic": "Visible to all users",
       "visibilityPrivate": "Personal",
       "visibilityDept": "Team visible",
       "files": "Files",
@@ -10212,6 +10383,7 @@
       "forbidden": "No permission to operate on this Skill",
       "notFound": "This Skill no longer exists. Go back to the list and refresh",
       "managementApiUnavailable": "Hub management API is not ready. Please try again later",
+      "invalidVisibility": "This organization does not support that visibility. Choose Public",
       "default": "Operation failed. Please try again later"
     },
     "installPicker": {
@@ -10256,11 +10428,11 @@
       "descriptionPlaceholder": "Briefly describe this skill",
       "visibilityLabel": "Visibility",
       "visibilityPublicTitle": "Public",
-      "visibilityPublicDesc": "Visible to the whole company · Default",
+      "visibilityPublicDesc": "Visible to all users · Default",
       "versionLabel": "Version",
       "versionFormatHint": "Format: x.y.z (e.g. 1.0.1)",
       "categoryLabel": "Category",
-      "categoryAuto": "Auto",
+      "categoryAuto": "No Tag",
       "categoryPlaceholder": "Select a category",
       "categoryLoading": "Loading categories…",
       "categoryLoadFailed": "Failed to load categories. Please retry.",
@@ -10384,6 +10556,14 @@
         "title": "Cancelled",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "Organization catalog is read-only",
+        "message": "Publishing and management are not available for this organization catalog"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "Visibility unavailable",
+        "message": "Choose a visibility supported by the current publishing identity"
+      },
       "INTERNAL": {
         "title": "Server error",
         "message": "Publish failed, please retry later"
@@ -10397,8 +10577,12 @@
       "dismiss": "Got it",
       "passedTitle": "Security Scan Passed",
       "passedDesc": "This version has passed all security checks and is now live on the market.",
+      "pendingTitle": "Submitted for Platform Review",
+      "pendingDesc": "The security scan is complete. This version will be published to the public market after Platform approval.",
       "failedTitle": "Security Scan Failed",
       "failedDesc": "This version was marked as {{status}} due to security scan issues and cannot be installed by other users. Please fix the issues below and republish.",
+      "processingFailedTitle": "Publication Processing Failed",
+      "processingFailedDesc": "This version was uploaded, but the server encountered an internal error while processing it. It was not rejected by a security check; please republish later.",
       "copyReviewResult": "Copy review result",
       "copiedReviewResult": "Copied",
       "copyReviewResultFailed": "Copy failed",
@@ -10411,12 +10595,14 @@
         "passed": "Passed",
         "failed": "Failed",
         "warning": "Needs attention",
+        "waitingReview": "Awaiting review",
         "reviewing": "In review",
         "unavailable": "Unavailable"
       },
       "gateLabel": {
         "llmReview": "LLM review",
-        "securityScan": "Security scan"
+        "securityScan": "Security scan",
+        "publicationProcessing": "Publication processing"
       }
     },
     "diffPanel": {
@@ -10468,7 +10654,7 @@
       "title": "Manage visibility",
       "tierLabel": "Visibility",
       "tierPublic": "Public",
-      "tierPublicDesc": "Visible to the whole company",
+      "tierPublicDesc": "Visible to all users",
       "tierTeam": "Team",
       "tierTeamDesc": "Visible to selected teams",
       "tierPrivate": "Only me",
@@ -10476,13 +10662,18 @@
       "save": "Save",
       "saving": "Saving…",
       "saved": "Visibility settings saved",
+      "submitReview": "Submit for review",
+      "waitingReview": "Waiting for review",
+      "publicReviewSubmitted": "The current version was submitted for public review",
+      "publicReviewPending": "The current version is awaiting public review and will enter the public market after approval.",
+      "publicReviewRejected": "Public review was rejected: {{reason}}",
       "impactPrivate": "After saving, only you can see this Skill.",
       "impactPrivateLeavingMarket": "Saving will delist it from the public market and make it visible only to you; versions that passed review keep their approved status.",
       "impactPrivateTeam": "After saving, only you can see it; the team will no longer see or manage this Skill.",
       "impactPrivateTeamLeavingMarket": "Saving will delist it from the public market and make it visible only to you; the team will no longer see or manage this Skill. Versions that passed review keep their approved status.",
       "impactTeam": "After saving, the selected teams and departments can see and download it.",
       "impactTeamLeavingMarket": "Saving will delist it from the public market; only the selected teams and departments can see and download it. Versions that passed review keep their approved status.",
-      "impactPublic": "After saving it enters the public market; if already approved, it becomes publicly visible immediately and keeps its review status."
+      "impactPublic": "Submit the current version for public review. It enters the public market after approval, with no new version required."
     },
     "marketEdit": {
       "saved": "Market info saved",
@@ -10501,7 +10692,7 @@
     "workingDirPlaceholder": "Click the button on the right to pick a directory",
     "selectButton": "Select…",
     "modelLabel": "Model:",
-    "effortLabel": "Effort:",
+    "effortLabel": "Reasoning Effort:",
     "permissionLabel": "Permission:",
     "warningHint": "Modes marked ⚠ (ask/default/plan/acceptEdits) have no UI approval popup wired in stage 1; the experimental page hook auto-denies tool calls — only auto / bypassPermissions are recommended for real testing.",
     "createSession": "Create Session",
@@ -10682,7 +10873,7 @@
       "modelLabel": "Model",
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
-      "effortLabel": "Effort",
+      "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",
       "optional": "(optional)",
       "initialTaskPlaceholder": "Optional first task for this worker",

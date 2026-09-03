@@ -39,7 +39,7 @@ export function registerSessionSearchTool(
       ' 跟 memory_search 区别: memory_search 搜提炼后的 memory 分片, session_search 搜原始对话。' +
       ' 用于 "上次怎么解决这个 bug" / "用户提到过 X 在哪轮" 类场景。',
     inputShape: {
-      query: z.string().min(1).describe('搜索关键词 (短语精确匹配)'),
+      query: z.string().min(1).max(256).describe('搜索关键词 (中文按字相邻匹配, 多词 AND, 最长 256)'),
       sessionId: z.string().optional().describe('限定某 session'),
       role: z.enum(['user', 'assistant', 'system']).optional().describe('限定 message role'),
       limit: z.number().int().min(1).max(50).optional().describe('默认 10'),

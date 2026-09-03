@@ -81,7 +81,7 @@ export type AuthLoopbackPageInput = Omit<OAuthResultPageInput, 'variant'> & {
  * outside Electron; all copy arrives pre-translated from the caller.
  *
  * PR3(wave4):desktop-login source 固定走新品牌卡(pageKind='desktop-login',
- * 680×680 r36 + chibi 三表情 + U-10 跨视口缩放;参数权威见 oauthResultPage.ts
+ * 成功 560×500、失败/警告 680×680 + chibi 三表情 + U-10 跨视口缩放;参数权威见 oauthResultPage.ts
  * 的 renderBrandLoginCallbackPage 头注)。visualKind 由 variant 默认映射
  * (success→success / error→failure);文案仍由调用方经 main i18n 预翻译传入
  * (login.browserCallback.* 骨架维持现状,copyKind 仅作验收定位标签)。

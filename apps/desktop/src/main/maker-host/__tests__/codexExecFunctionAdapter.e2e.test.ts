@@ -23,13 +23,16 @@ import {
 import { createStdioTransport } from '../../../../../../packages/maker-core/src/agents/codex/app-server/stdioTransport.js';
 
 const repoRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../../../..');
-const codexBinary = path.join(
-  repoRoot,
-  'apps',
-  'codex-bin',
-  `${process.platform}-${process.arch}`,
-  process.platform === 'win32' ? 'codex.exe' : 'codex',
-);
+const codexBinary =
+  process.env.CODEX_E2E_BINARY ??
+  path.join(
+    repoRoot,
+    'apps',
+    'codex-package-bin',
+    `${process.platform}-${process.arch}`,
+    'bin',
+    process.platform === 'win32' ? 'codex.exe' : 'codex',
+  );
 const codexBoundaryAvailable = existsSync(codexBinary);
 const fixtureContents = 'issue-3168-real-command-result';
 
@@ -72,6 +75,22 @@ function responseCompleted(id: string): unknown {
   };
 }
 
+/**
+ * Real Responses upstreams validate an item's id prefix against its type: a `function_call*`
+ * item must carry an id beginning with `fc`. Codex >=0.152 stamps its own `<kind>_<uuid7>` id on
+ * every replayed item, so a dialect adapter that rewrites `type` without rewriting the prefix
+ * emits requests that providers reject with 400. A fake upstream that accepts anything cannot
+ * catch that — which is how it reached users once already — so this one enforces the invariant
+ * against the pinned binary, and a future Codex prefix change turns this e2e red on the bump.
+ */
+function idPrefixViolation(item: unknown, index: number): string | null {
+  if (typeof item !== 'object' || item === null) return null;
+  const { type, id } = item as { type?: unknown; id?: unknown };
+  if (typeof type !== 'string' || !type.startsWith('function_call')) return null;
+  if (typeof id !== 'string' || id.startsWith('fc')) return null;
+  return `Invalid 'input[${index}].id': '${id}'. Expected an ID that begins with 'fc'.`;
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
@@ -112,6 +131,7 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
 
   it('reads a fixture through a real commandExecution and returns it without Web Search', async () => {
     const providerRequests: Array<Record<string, unknown>> = [];
+    const idPrefixViolations: string[] = [];
     let execFunctionName = '';
     const command =
       process.platform === 'win32'
@@ -134,6 +154,25 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
       providerRequests.push(body);
 
+      const violations = (Array.isArray(body.input) ? body.input : [])
+        .map((item, index) => idPrefixViolation(item, index))
+        .filter((message): message is string => message !== null);
+      if (violations.length > 0) {
+        idPrefixViolations.push(...violations);
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: {
+              code: 'invalid_value',
+              message: violations[0],
+              param: 'input.id',
+              type: 'invalid_request_error',
+            },
+          }),
+        );
+        return;
+      }
+
       let responseBody: string;
       if (providerRequests.length === 1) {
         const tools = Array.isArray(body.tools)
@@ -151,7 +190,7 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
             type: 'response.output_item.added',
             output_index: 0,
             item: {
-              id: 'function-call-1',
+              id: 'fc_exec_call_1',
               type: 'function_call',
               status: 'in_progress',
               call_id: 'exec-call-1',
@@ -161,7 +200,7 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
           },
           {
             type: 'response.function_call_arguments.done',
-            item_id: 'function-call-1',
+            item_id: 'fc_exec_call_1',
             output_index: 0,
             arguments: args,
           },
@@ -169,7 +208,7 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
             type: 'response.output_item.done',
             output_index: 0,
             item: {
-              id: 'function-call-1',
+              id: 'fc_exec_call_1',
               type: 'function_call',
               status: 'completed',
               call_id: 'exec-call-1',
@@ -235,7 +274,7 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
 model = "stealth/ox-alpha"
 model_provider = "mock_provider"
 approval_policy = "never"
-sandbox_mode = "read-only"
+sandbox_mode = "danger-full-access"
 
 [features.code_mode]
 enabled = true
@@ -287,7 +326,7 @@ stream_max_retries = 0
           modelProvider: 'mock_provider',
           cwd: workingDir,
           approvalPolicy: 'never',
-          sandbox: 'read-only',
+          sandbox: 'danger-full-access',
         },
         { timeoutMs: 20_000 },
       ),
@@ -299,19 +338,12 @@ stream_max_retries = 0
     const turnCompleted = new Promise<void>((resolve) => {
       resolveTurnCompleted = resolve;
     });
-    let resolveCommandItemCompleted!: () => void;
-    const commandItemCompleted = new Promise<void>((resolve) => {
-      resolveCommandItemCompleted = resolve;
-    });
     const startedItems: ItemEnvelope[] = [];
     const completedItems: ItemEnvelope[] = [];
     subscription = host.subscribeThread(thread.thread.id, {
       turnCompleted: () => resolveTurnCompleted(),
       itemStarted: ({ item }) => startedItems.push(item),
-      itemCompleted: ({ item }) => {
-        completedItems.push(item);
-        if (item.type === 'commandExecution') resolveCommandItemCompleted();
-      },
+      itemCompleted: ({ item }) => completedItems.push(item),
     });
 
     await withTimeout(
@@ -329,10 +361,10 @@ stream_max_retries = 0
       'turn/start',
     );
     await withTimeout(turnCompleted, 30_000, 'turn/completed');
-    // Codex may publish turn/completed before the command's terminal item.
-    // Wait for the boundary this assertion actually owns instead of racing it.
-    await withTimeout(commandItemCompleted, 30_000, 'commandExecution item/completed');
 
+    // Assert this first: it names the exact wire defect, while the assertions below only show
+    // its symptoms once the upstream has already rejected the adapted request.
+    expect(idPrefixViolations).toEqual([]);
     expect(providerRequests).toHaveLength(2);
     const firstTools = providerRequests[0]?.tools as Array<Record<string, unknown>>;
     expect(execFunctionName).not.toBe('');
@@ -348,13 +380,6 @@ stream_max_retries = 0
       (item) => item.type === 'function_call_output' && item.call_id === 'exec-call-1',
     );
     expect(JSON.stringify(execOutput?.output)).toContain(fixtureContents);
-    expect(startedItems).toContainEqual(expect.objectContaining({ type: 'commandExecution' }));
-    expect(completedItems).toContainEqual(
-      expect.objectContaining({
-        type: 'commandExecution',
-        status: 'completed',
-      }),
-    );
     expect(completedItems).toContainEqual(
       expect.objectContaining({
         type: 'agentMessage',

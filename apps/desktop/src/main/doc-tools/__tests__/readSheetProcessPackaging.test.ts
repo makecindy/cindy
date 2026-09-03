@@ -94,5 +94,7 @@ const JSZip = stagedRequire('jszip');
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });
     }
-  }, 60_000);
+    // exceljs + jszip 整棵依赖树 cp 进 tmpdir + 子进程 require 探针,纯磁盘 IO;
+    // 满载 Windows runner 上 60s 盖不住,放宽避免把环境慢误判为契约失败。
+  }, 120_000);
 });

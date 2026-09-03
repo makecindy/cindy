@@ -132,6 +132,8 @@ export function useCodexSessionExpiredPrompt(options?: {
             confirmText: t(copy.confirmText),
             tertiaryText: t('chatgptAuthRecovery.relogin'),
             cancelText: t('chatgptAuthRecovery.later'),
+            // 三选一恢复操作的中文文案较长;保留默认确认框宽度会把按钮文字逐字折行。
+            maxWidth: 520,
             autoFocusConfirm: true,
           });
           if (!mountedRef.current) return;

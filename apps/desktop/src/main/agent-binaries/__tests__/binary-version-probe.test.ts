@@ -14,6 +14,12 @@ describe('binary version probe', () => {
     expect(parseBinaryVersionOutput('pi v0.84.4-beta.1\n', '')).toBe('0.84.4-beta.1');
   });
 
+  it('normalizes the Claude Code and codex --version shapes', () => {
+    expect(parseBinaryVersionOutput('2.1.258 (Claude Code)\n', '')).toBe('2.1.258');
+    expect(parseBinaryVersionOutput('codex-cli 0.145.0\n', '')).toBe('0.145.0');
+    expect(parseBinaryVersionOutput('codex-cli v0.145.0\n', '')).toBe('0.145.0');
+  });
+
   it('uses SemVer precedence for prerelease arbitration', () => {
     expect(isBinaryVersionNotOlder('0.84.5-beta.1', '0.84.4')).toBe(true);
     expect(isBinaryVersionNotOlder('0.84.5-beta.1', '0.84.5')).toBe(false);
@@ -22,6 +28,8 @@ describe('binary version probe', () => {
   it('rejects unrelated or multiline-leading output', () => {
     expect(parseBinaryVersionOutput('other 0.84.4\n', '')).toBeNull();
     expect(parseBinaryVersionOutput('warning\n0.84.4\n', '')).toBeNull();
+    expect(parseBinaryVersionOutput('codex-cli 0.145.0 (extra)\n', '')).toBeNull();
+    expect(parseBinaryVersionOutput('(Claude Code) 2.1.258\n', '')).toBeNull();
   });
 
   it('returns null instead of throwing when the executable cannot be spawned', async () => {

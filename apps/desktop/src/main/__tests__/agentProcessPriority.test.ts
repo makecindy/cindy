@@ -224,12 +224,14 @@ describe('agent process discovery', () => {
   const claudeCmd = `/users/me/library/application support/${userDataDir}/claude-code/2.1.219/claude --setting-sources user`;
   const codexCmd = `/users/me/library/application support/${userDataDir}/codex/0.145.0/codex app-server`;
   const devClaudeCmd = '/repo/apps/claude-code-bin/darwin-arm64/claude';
+  const devCodexPackageCmd = '/repo/apps/codex-package-bin/darwin-arm64/bin/codex app-server';
   const externalClaudeCmd = '/usr/local/bin/claude';
 
   it('classifies bundled claude/codex command lines and rejects external installs', () => {
     expect(classifyAgentCommandLine(claudeCmd)).toBe('claude');
     expect(classifyAgentCommandLine(codexCmd)).toBe('codex');
     expect(classifyAgentCommandLine(devClaudeCmd)).toBe('claude');
+    expect(classifyAgentCommandLine(devCodexPackageCmd)).toBe('codex');
     expect(classifyAgentCommandLine(externalClaudeCmd)).toBeNull();
     expect(classifyAgentCommandLine('/usr/bin/node some-script.js')).toBeNull();
   });

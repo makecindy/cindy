@@ -17,6 +17,8 @@ import { DEFAULT_THREAD_ID_HEADERS, selectedHeaderValue } from './headers.js';
 import type { ThreadStripController } from './thread-strip-controller.js';
 import type { RecoveryRule, RequestTransform, RequestTransformCtx } from './types.js';
 
+export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
+
 /**
  * 单个 model 的请求改写 handler。
  *

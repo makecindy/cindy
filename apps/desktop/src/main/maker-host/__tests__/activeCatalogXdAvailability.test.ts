@@ -44,6 +44,9 @@ describe('XD 网关权威模型清单重建', () => {
     const xd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
     expect(xd?.imageModels).toEqual([]);
     expect(xd?.videoModels).toEqual([]);
+    expect(xd?.embeddingModels).toEqual(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')?.embeddingModels,
+    );
   });
 
   it('显式空列表保持 XD 模型不可用', () => {
@@ -118,6 +121,20 @@ describe('XD 网关权威模型清单重建', () => {
         agents: [],
         modalities: { input: ['text', 'image'], output: ['video'] },
       },
+      {
+        id: 'voyage/voyage-4',
+        name: 'Voyage 4',
+        mode: 'embedding',
+        availability: 'available',
+        agents: [],
+      },
+      {
+        id: 'voyage/voyage-4-large',
+        name: 'Voyage 4 Large',
+        mode: 'embedding',
+        availability: 'requires_payment',
+        agents: [],
+      },
     ]);
 
     const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
@@ -130,7 +147,8 @@ describe('XD 网关权威模型清单重建', () => {
       },
     ]);
     expect(activeXd?.imageDefaults).toEqual({ standard: 'openai/gpt-image-2' });
-    expect(activeXd?.embeddingModels).toEqual([]);
+    expect(activeXd?.embeddingModels).toEqual([{ id: 'voyage/voyage-4', name: 'Voyage 4' }]);
+    expect(activeXd?.embeddingDefaults).toEqual({ standard: 'voyage/voyage-4' });
     expect(activeXd?.videoModels).toEqual([
       {
         id: 'bytedance/seedance-2.5',
@@ -140,6 +158,90 @@ describe('XD 网关权威模型清单重建', () => {
     ]);
     expect(activeXd?.videoDefaults).toEqual({ standard: 'bytedance/seedance-2.5' });
     expect(xdModels('claude-code')).toEqual([]);
+  });
+
+  it('网关明确返回仅付费 embedding 时不保留静态 embedding', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
+    if (!catalogXd) throw new Error('missing XD provider fixture');
+    catalogXd.embeddingModels = [{ id: 'voyage/voyage-4', name: 'Voyage 4' }];
+    catalogXd.embeddingDefaults = { standard: 'voyage/voyage-4' };
+
+    setActiveCatalog(catalog);
+    setXdGatewayModels([
+      {
+        id: 'voyage/voyage-4',
+        name: 'Voyage 4',
+        mode: 'embedding',
+        availability: 'requires_payment',
+        agents: [],
+      },
+    ], { authoritative: true });
+
+    const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(activeXd?.embeddingModels).toBeUndefined();
+    expect(activeXd?.embeddingDefaults).toBeUndefined();
+
+    setXdGatewayModels([], {
+      authoritative: false,
+      preservePaymentRequiredRoutes: true,
+    });
+
+    const afterRefreshFailure = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(afterRefreshFailure?.embeddingModels).toBeUndefined();
+    expect(afterRefreshFailure?.embeddingDefaults).toBeUndefined();
+  });
+
+  it('网关 embedding 缺少 availability 时不解锁静态 embedding', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
+    if (!catalogXd) throw new Error('missing XD provider fixture');
+    catalogXd.embeddingModels = [{ id: 'voyage/voyage-4', name: 'Voyage 4' }];
+    catalogXd.embeddingDefaults = { standard: 'voyage/voyage-4' };
+
+    setActiveCatalog(catalog);
+    setXdGatewayModels([
+      {
+        id: 'voyage/voyage-4',
+        name: 'Voyage 4',
+        mode: 'embedding',
+        agents: [],
+      },
+    ]);
+
+    const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(activeXd?.embeddingModels).toBeUndefined();
+    expect(activeXd?.embeddingDefaults).toBeUndefined();
+  });
+
+  it('网关权威空快照清除静态 embedding', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
+    if (!catalogXd) throw new Error('missing XD provider fixture');
+    catalogXd.embeddingModels = [{ id: 'voyage/voyage-4', name: 'Voyage 4' }];
+    catalogXd.embeddingDefaults = { standard: 'voyage/voyage-4' };
+
+    setActiveCatalog(catalog);
+    setXdGatewayModels([], { authoritative: true });
+
+    const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(activeXd?.embeddingModels).toBeUndefined();
+    expect(activeXd?.embeddingDefaults).toBeUndefined();
+  });
+
+  it('账号边界等待新快照时不回退到静态 embedding', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
+    if (!catalogXd) throw new Error('missing XD provider fixture');
+    catalogXd.embeddingModels = [{ id: 'voyage/voyage-4', name: 'Voyage 4' }];
+    catalogXd.embeddingDefaults = { standard: 'voyage/voyage-4' };
+
+    setActiveCatalog(catalog);
+    setXdGatewayModels([], { suppressEmbeddingFallback: true });
+
+    const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(activeXd?.embeddingModels).toBeUndefined();
+    expect(activeXd?.embeddingDefaults).toBeUndefined();
   });
 
   it('v3 未声明 agents 的模型不进入任何 runtime', () => {

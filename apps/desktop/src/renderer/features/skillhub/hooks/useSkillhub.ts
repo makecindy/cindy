@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { skillhubCatalogKey } from '../../../../shared/skillhubCatalog';
 import { invalidateSkillSyncRequests, registerSyncStoreSetters } from './useSkillSync';
 
 interface SkillhubProject {
@@ -165,7 +166,7 @@ export function setSyncResults(
   availableUninstalledCount?: number,
 ): void {
   const map = new Map<string, SkillhubSyncResult>();
-  for (const r of results) map.set(r.name, r);
+  for (const r of results) map.set(skillhubCatalogKey(r.name, r.catalogScope), r);
   setState({
     syncResults: map,
     syncError: null,
@@ -180,7 +181,7 @@ export function setSyncResults(
  */
 export function mergeSyncResults(results: SkillhubSyncResult[]): void {
   const map = new Map(state.syncResults);
-  for (const r of results) map.set(r.name, r);
+  for (const r of results) map.set(skillhubCatalogKey(r.name, r.catalogScope), r);
   setState({ syncResults: map });
 }
 

@@ -19,6 +19,7 @@
 | device-link relay 层定义 | 客户端 `packages/device-link-protocol`；服务端仓同名本地 package，客户端重连、IPC allowlist、隧道 payload 在 `packages/device-link` |
 | Plugin 交付与 manifest | 客户端 `packages/plugin-protocol`；服务端仓同名本地 package，desktop、`packages/cindy-tools` 与 plugin-server 分别消费本仓实现 |
 | 模型目录 | 客户端由 `packages/model-providers/src/modelAccessBean.ts` 与 `modelAccessValidator.ts` 维护；model-access-server 在服务端仓维护对应 Bean／validator，双方只共享稳定 wire 语义，不共享实现 |
+| Skill Hub | Desktop 的 `apps/desktop/src/main/skillhub` 与 `shared/skillhubCatalog.ts`；服务端仓 `packages/skill-hub-protocol` 与 `cindy-skill-hub-server` |
 | 插件来源 | 客户端不预装插件；一律通过 SkillHub 或用户手动安装 `.cindy` 包 |
 
 ## 1. 两仓本地协议演进
@@ -33,6 +34,20 @@
 - 改动一端协议实现时必须核对另一端同名实现和消费者。需要相同约束的 parser／validator
   应在两仓分别落地，并用相同的有效／无效 fixture 覆盖边界。
 - 新业务域的契约优先放进所属业务仓库；不要建立新的公共协议仓来重新引入发布耦合。
+
+### Skill Hub 目录与管理契约
+
+- `scope=market|team` 是公开与组织目录的通用读取上下文；列表得到的 scope 必须贯穿详情、
+  文件、版本、扫描、下载、Learn 和批量同步。同 slug 在不同 scope 下是两条独立记录。
+- 单条详情、批量同步等原生管理读取省略 scope，不得把省略值当成 `market`。本地 registry
+  对已发布旧版客户端遗留且缺少 scope 的安装记录一次性回填为 `team`；新记录显式保存
+  来源目录，原生管理记录则以已迁移标记保留缺省 scope。
+- `isMine` 表示归属当前个人或组织，逐 Skill 写权限只看服务端 `canManage`，客户端不得用
+  账号级写能力与 `isMine` 推导管理权。
+- 作者标签通过 `tags: string[]` 传标签名称；`source=platform` 的治理标签只展示和筛选，
+  不作为作者编辑项提交。
+- Cindy Skill Hub 客户端与服务端在首次对外发布前同步收紧以上契约，不为未发布过的中间
+  协议增加 fallback；已经发布的旧客户端仍使用原有 XD Skill Hub endpoint，不受此契约影响。
 
 ## 2. 插件来源
 

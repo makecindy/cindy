@@ -13,6 +13,7 @@
   "voiceApiBaseUrl": "https://voice.cindy.app",
   "githubApiBaseUrl": "https://github.cindy.app",
   "skillhubApiBaseUrl": "https://xd-skillhub.cindy.app",
+  "cindySkillHubApiBaseUrl": "https://skill-hub.cindy.app",
   "pluginApiBaseUrl": "https://plugin.cindy.app",
   "cdnBaseUrl": "https://hotfix.cindy.app/cindy",
   "mobileUpdateBaseUrl": "https://mobile-update.cindy.app",
