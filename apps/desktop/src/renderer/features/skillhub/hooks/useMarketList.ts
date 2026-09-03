@@ -23,6 +23,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  type DataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 import { i18n } from '@/i18n';
 import { CATEGORY_ALL, type MarketCategory } from '../../../../shared/skillhubCategory';
 import { skillhubCatalogKey, type SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
@@ -667,34 +672,50 @@ interface CategoryListState {
 const EMPTY_CATEGORY_STATE: CategoryListState = { categories: [], totalCount: 0, myTotalCount: 0 };
 
 interface ScopedCategoryListState {
+  owner: DataOwnerGeneration;
   scope: SkillhubCatalogScope;
   value: CategoryListState;
 }
 
-// 按目录作用域分别合并并发请求；完成后删除，后续 mount 仍会刷新。
-const inflightCategories = new Map<SkillhubCatalogScope, Promise<CategoryListState>>();
+// 仅在同一数据所有者代际、同一目录作用域内合并并发请求。账号边界推进后必须
+// 发起新请求，避免新账号复用旧账号仍在飞行中的分类响应。
+const inflightCategories = new Map<
+  DataOwnerGeneration,
+  Map<SkillhubCatalogScope, Promise<CategoryListState>>
+>();
 
 export function useCategoryList(scope: SkillhubCatalogScope = 'market'): CategoryListState {
+  const owner = getDataOwnerGeneration();
   const [state, setState] = useState<ScopedCategoryListState>({
+    owner,
     scope,
     value: EMPTY_CATEGORY_STATE,
   });
 
   useEffect(() => {
     let cancelled = false;
-    const existing = inflightCategories.get(scope);
+    const ownerInflight =
+      inflightCategories.get(owner) ??
+      new Map<SkillhubCatalogScope, Promise<CategoryListState>>();
+    if (!inflightCategories.has(owner)) inflightCategories.set(owner, ownerInflight);
+    const existing = ownerInflight.get(scope);
     const inflight = existing ?? window.electronAPI.skillhub.listCategories({ scope })
       .then((res) => (res.success
         ? { categories: res.categories ?? [], totalCount: res.totalCount ?? 0, myTotalCount: res.myTotalCount ?? 0 }
         : EMPTY_CATEGORY_STATE))
       .catch(() => EMPTY_CATEGORY_STATE);
-    if (!existing) inflightCategories.set(scope, inflight);
+    if (!existing) ownerInflight.set(scope, inflight);
     void inflight.then((next) => {
-      if (inflightCategories.get(scope) === inflight) inflightCategories.delete(scope);
-      if (!cancelled) setState({ scope, value: next });
+      if (ownerInflight.get(scope) === inflight) ownerInflight.delete(scope);
+      if (ownerInflight.size === 0 && inflightCategories.get(owner) === ownerInflight) {
+        inflightCategories.delete(owner);
+      }
+      if (!cancelled && isDataOwnerGenerationCurrent(owner)) {
+        setState({ owner, scope, value: next });
+      }
     });
     return () => { cancelled = true; };
-  }, [scope]);
+  }, [owner, scope]);
 
-  return state.scope === scope ? state.value : EMPTY_CATEGORY_STATE;
+  return state.owner === owner && state.scope === scope ? state.value : EMPTY_CATEGORY_STATE;
 }
