@@ -56,6 +56,7 @@ import {
 } from './mainWindowFullscreenStartup';
 import {
   installMainWindowMaximizeRecovery,
+  installMainWindowNativeRestoreIntent,
   readPersistedWindowMaximized,
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
@@ -3721,7 +3722,12 @@ const createWindow = () => {
     log: createSchedulerLogger('main-window-maximize-recovery'),
   });
   mainWindowMaximizeRecoveryController = maximizeRecovery;
+  const removeNativeRestoreIntent = installMainWindowNativeRestoreIntent(
+    mainWindow,
+    maximizeRecovery.notifyUserUnmaximize,
+  );
   mainWindow.once('closed', () => {
+    removeNativeRestoreIntent();
     if (mainWindowMaximizeRecoveryController === maximizeRecovery) {
       mainWindowMaximizeRecoveryController = null;
     }

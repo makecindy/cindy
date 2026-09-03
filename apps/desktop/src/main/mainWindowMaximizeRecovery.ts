@@ -35,7 +35,8 @@ const DISPLAY_CHANGE_EVENTS: readonly DisplayChangeEvent[] = [
   'display-metrics-changed',
 ];
 
-type WindowStateEvent = 'maximize' | 'unmaximize' | 'closed' | 'show' | 'restore';
+type WindowStateEvent =
+  'maximize' | 'unmaximize' | 'closed' | 'show' | 'restore' | 'will-move' | 'will-resize';
 
 export interface MaximizeRecoveryWindow {
   isDestroyed(): boolean;
@@ -51,6 +52,95 @@ export interface MaximizeRecoveryWindow {
 export interface MaximizeRecoveryScreen {
   on(event: DisplayChangeEvent, listener: () => void): unknown;
   removeListener(event: DisplayChangeEvent, listener: () => void): unknown;
+}
+
+interface MaximizeRecoveryInput {
+  type: string;
+  key: string;
+  meta: boolean;
+  isAutoRepeat: boolean;
+  modifiers: string[];
+}
+
+interface MaximizeRecoveryMouseInput {
+  type: string;
+  button?: string;
+  clickCount?: number;
+  y: number;
+}
+
+export interface MaximizeRecoveryNativeWindow extends MaximizeRecoveryWindow {
+  webContents: {
+    on(
+      event: 'before-input-event',
+      listener: (event: unknown, input: MaximizeRecoveryInput) => void,
+    ): unknown;
+    removeListener(
+      event: 'before-input-event',
+      listener: (event: unknown, input: MaximizeRecoveryInput) => void,
+    ): unknown;
+    on(
+      event: 'before-mouse-event',
+      listener: (event: unknown, mouse: MaximizeRecoveryMouseInput) => void,
+    ): unknown;
+    removeListener(
+      event: 'before-mouse-event',
+      listener: (event: unknown, mouse: MaximizeRecoveryMouseInput) => void,
+    ): unknown;
+  };
+}
+
+/**
+ * Marks restore gestures that do not go through Cindy's custom window-control IPC.
+ * Electron exposes manual movement/resizing separately from programmatic bounds
+ * changes, while the frameless title bar's double-click and Win+Down arrive via
+ * webContents input events. These signals precede the native `unmaximize`
+ * transition on Windows, so the recovery controller can preserve the user's choice.
+ */
+export function installMainWindowNativeRestoreIntent(
+  win: MaximizeRecoveryNativeWindow,
+  notifyUserUnmaximize: () => void,
+  platform: NodeJS.Platform = process.platform,
+): () => void {
+  if (platform !== 'win32') return () => {};
+
+  const onWillMove = (): void => notifyUserUnmaximize();
+  const onWillResize = (): void => notifyUserUnmaximize();
+  const onBeforeMouseEvent = (_event: unknown, mouse: MaximizeRecoveryMouseInput): void => {
+    if (
+      mouse.type === 'mouseDown' &&
+      mouse.button === 'left' &&
+      mouse.clickCount === 2 &&
+      mouse.y >= 0 &&
+      mouse.y <= 46
+    ) {
+      notifyUserUnmaximize();
+    }
+  };
+  const onBeforeInputEvent = (_event: unknown, input: MaximizeRecoveryInput): void => {
+    const hasWindowsModifier =
+      input.meta || input.modifiers.includes('meta') || input.modifiers.includes('command');
+    if (
+      input.type === 'keyDown' &&
+      !input.isAutoRepeat &&
+      input.key === 'ArrowDown' &&
+      hasWindowsModifier
+    ) {
+      notifyUserUnmaximize();
+    }
+  };
+
+  win.on('will-move', onWillMove);
+  win.on('will-resize', onWillResize);
+  win.webContents.on('before-mouse-event', onBeforeMouseEvent);
+  win.webContents.on('before-input-event', onBeforeInputEvent);
+
+  return (): void => {
+    win.removeListener('will-move', onWillMove);
+    win.removeListener('will-resize', onWillResize);
+    win.webContents.removeListener('before-mouse-event', onBeforeMouseEvent);
+    win.webContents.removeListener('before-input-event', onBeforeInputEvent);
+  };
 }
 
 export interface MaximizeRecoveryOptions {

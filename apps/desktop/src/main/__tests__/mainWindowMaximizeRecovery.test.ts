@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   installMainWindowMaximizeRecovery,
+  installMainWindowNativeRestoreIntent,
   readPersistedWindowMaximized,
   type DisplayChangeEvent,
+  type MaximizeRecoveryNativeWindow,
 } from '../mainWindowMaximizeRecovery';
 
 describe('readPersistedWindowMaximized', () => {
@@ -288,5 +290,136 @@ describe('installMainWindowMaximizeRecovery', () => {
     again.dispose();
     again.runTimers();
     expect(again.win.maximize).not.toHaveBeenCalled();
+  });
+});
+
+describe('installMainWindowNativeRestoreIntent', () => {
+  function createNativeHarness() {
+    type Listener = (...args: unknown[]) => void;
+    const windowListeners = new Map<string, Listener>();
+    const webContentsListeners = new Map<string, Listener>();
+    const removeListener = vi.fn((event: string) => windowListeners.delete(event));
+    const removeWebContentsListener = vi.fn((event: string) => webContentsListeners.delete(event));
+    const win = {
+      isDestroyed: () => false,
+      isVisible: () => true,
+      isMaximized: () => true,
+      isMinimized: () => false,
+      isFullScreen: () => false,
+      maximize: vi.fn(),
+      on: vi.fn((event: string, listener: Listener) => windowListeners.set(event, listener)),
+      removeListener,
+      webContents: {
+        on: vi.fn((event: string, listener: Listener) => webContentsListeners.set(event, listener)),
+        removeListener: removeWebContentsListener,
+      },
+    } as unknown as MaximizeRecoveryNativeWindow;
+    return {
+      win,
+      windowListeners,
+      webContentsListeners,
+      removeListener,
+      removeWebContentsListener,
+    };
+  }
+
+  it('marks Windows native restore gestures before unmaximize', () => {
+    const h = createNativeHarness();
+    const notify = vi.fn();
+    const dispose = installMainWindowNativeRestoreIntent(h.win, notify, 'win32');
+
+    h.windowListeners.get('will-move')?.();
+    h.windowListeners.get('will-resize')?.();
+    h.webContentsListeners.get('before-mouse-event')?.(
+      {},
+      {
+        type: 'mouseDown',
+        button: 'left',
+        clickCount: 2,
+        y: 24,
+      },
+    );
+    h.webContentsListeners.get('before-input-event')?.(
+      {},
+      {
+        type: 'keyDown',
+        key: 'ArrowDown',
+        meta: true,
+        isAutoRepeat: false,
+        modifiers: ['meta'],
+      },
+    );
+
+    expect(notify).toHaveBeenCalledTimes(4);
+
+    dispose();
+    expect(h.removeListener).toHaveBeenCalledWith('will-move', expect.any(Function));
+    expect(h.removeListener).toHaveBeenCalledWith('will-resize', expect.any(Function));
+    expect(h.removeWebContentsListener).toHaveBeenCalledWith(
+      'before-mouse-event',
+      expect.any(Function),
+    );
+    expect(h.removeWebContentsListener).toHaveBeenCalledWith(
+      'before-input-event',
+      expect.any(Function),
+    );
+    expect(h.windowListeners.size).toBe(0);
+    expect(h.webContentsListeners.size).toBe(0);
+  });
+
+  it('ignores unrelated input and non-Windows platforms', () => {
+    const h = createNativeHarness();
+    const notify = vi.fn();
+    const dispose = installMainWindowNativeRestoreIntent(h.win, notify, 'darwin');
+
+    expect(h.windowListeners.size).toBe(0);
+    expect(h.webContentsListeners.size).toBe(0);
+
+    dispose();
+    expect(notify).not.toHaveBeenCalled();
+
+    const windows = createNativeHarness();
+    const windowsNotify = vi.fn();
+    installMainWindowNativeRestoreIntent(windows.win, windowsNotify, 'win32');
+    windows.webContentsListeners.get('before-mouse-event')?.(
+      {},
+      {
+        type: 'mouseDown',
+        button: 'right',
+        clickCount: 2,
+        y: 24,
+      },
+    );
+    windows.webContentsListeners.get('before-mouse-event')?.(
+      {},
+      {
+        type: 'mouseDown',
+        button: 'left',
+        clickCount: 2,
+        y: 60,
+      },
+    );
+    windows.webContentsListeners.get('before-input-event')?.(
+      {},
+      {
+        type: 'keyDown',
+        key: 'ArrowDown',
+        meta: false,
+        isAutoRepeat: false,
+        modifiers: [],
+      },
+    );
+    windows.webContentsListeners.get('before-input-event')?.(
+      {},
+      {
+        type: 'keyDown',
+        key: 'ArrowDown',
+        meta: true,
+        isAutoRepeat: true,
+        modifiers: ['meta'],
+      },
+    );
+
+    expect(windowsNotify).not.toHaveBeenCalled();
   });
 });
