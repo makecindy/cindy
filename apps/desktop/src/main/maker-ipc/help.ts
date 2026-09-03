@@ -9,9 +9,11 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionS
 import { isAgentOneShotRouteDisabled } from '../maker-host/model-route-guard-live.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { isAuxiliaryModelCustomized } from '../utility-model/auxiliary-model-settings-store.js';
 import { agentSupportsOneShot, requestUtilityText } from '../utility-model/oneShotCandidates.js';
-import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolveAuxiliaryModelChain.js';
+import {
+  getEffectiveAuxiliaryModelChain,
+  getEffectiveAuxiliaryModelChainSnapshot,
+} from '../utility-model/resolveAuxiliaryModelChain.js';
 import { MAKER_INVOKE } from './channels.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import type {
@@ -146,7 +148,7 @@ async function routeHelpTopics(
     // Freeze this request's fallback policy before dispatch. Settings can be
     // changed while the utility model is in flight; completion must not read a
     // newer mode and accidentally cross the custom/automatic boundary.
-    const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
+    const auxiliaryChain = getEffectiveAuxiliaryModelChain();
     const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
     const utility = await requestUtilityText(maker, prompt, {
       maxTokens: 30,
@@ -158,7 +160,7 @@ async function routeHelpTopics(
     // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
     if (
       !raw &&
-      !auxiliaryModelCustomized &&
+      auxiliaryChain.source === 'auto' &&
       target.agentKind &&
       isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot) &&
       !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
@@ -366,7 +368,7 @@ export function registerMakerHelpIpc(maker: Maker): void {
         const prompt = buildHelpPrompt(history, locale, target.agentKind, docs);
         // As with topic routing, pin the fallback policy for this answer
         // request before awaiting the utility model.
-        const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
+        const auxiliaryChain = getEffectiveAuxiliaryModelChain();
         const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
         const utility = await requestUtilityText(maker, prompt, {
           ...target.options,
@@ -377,7 +379,7 @@ export function registerMakerHelpIpc(maker: Maker): void {
         // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
         if (
           !raw &&
-          !auxiliaryModelCustomized &&
+          auxiliaryChain.source === 'auto' &&
           target.agentKind &&
           isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot) &&
           !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))

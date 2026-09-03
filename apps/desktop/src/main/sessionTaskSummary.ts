@@ -28,9 +28,11 @@ import { and, count, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzl
 import { getMaker } from './maker-host/index.js';
 import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from './appSessionState.js';
-import { isAuxiliaryModelCustomized } from './utility-model/auxiliary-model-settings-store.js';
 import { agentSupportsOneShot, requestUtilityText } from './utility-model/oneShotCandidates.js';
-import { getEffectiveAuxiliaryModelChainSnapshot } from './utility-model/resolveAuxiliaryModelChain.js';
+import {
+  getEffectiveAuxiliaryModelChain,
+  getEffectiveAuxiliaryModelChainSnapshot,
+} from './utility-model/resolveAuxiliaryModelChain.js';
 import { getDbClient } from './localDb/client/current.js';
 import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';
 import { messages, sessions } from './localDb/schema.js';
@@ -284,8 +286,8 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // Capture before any async DB/model work. The fallback chain must not be
     // allowed to dispatch under a different account after an owner switch.
     const ownerScopeKey = activeOwnerScopeKey();
+    const auxiliaryChain = getEffectiveAuxiliaryModelChain();
     const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
-    const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
     const db = getDbClient().drizzle;
     const [session] = await db
       .select({
@@ -360,7 +362,7 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // 那样跨 agent 兜底 —— 会话 agent 不支持 oneShot 时直接跳过兜底(仅靠 utility-model)。
     const text = utility.ok
       ? utility.text
-      : auxiliaryModelCustomized ||
+      : auxiliaryChain.source !== 'auto' ||
           !agentSupportsOneShot(agentKind) ||
           (await isAgentOneShotRouteDisabled(agentKind)) ||
           !isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)

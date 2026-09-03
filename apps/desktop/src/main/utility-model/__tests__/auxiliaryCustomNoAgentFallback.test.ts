@@ -7,12 +7,11 @@ import { describe, expect, it } from 'vitest';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../');
 
 describe('custom auxiliary chain does not hit the session agent', () => {
-  it('Help keeps the session oneShot fallback behind isAuxiliaryModelCustomized', () => {
+  it('Help only allows the session oneShot fallback for the automatic chain', () => {
     const source = readFileSync(path.join(root, 'maker-ipc/help.ts'), 'utf8');
-    expect(
-      source.match(/const auxiliaryModelCustomized = isAuxiliaryModelCustomized\(\);/g)?.length,
-    ).toBe(2);
-    expect(source).toContain('!auxiliaryModelCustomized');
+    expect(source.match(/const auxiliaryChain = getEffectiveAuxiliaryModelChain\(\);/g)?.length).toBe(2);
+    expect(source.match(/auxiliaryChain\.source === 'auto'/g)?.length).toBe(2);
+    expect(source).not.toContain('isAuxiliaryModelCustomized');
     expect(source.match(/maker\.oneShot/g)?.length).toBeGreaterThan(0);
     expect(source).toContain('const ownerScopeKey = activeOwnerScopeKey();');
     expect(source.match(/beforeDispatch: async \(\) => isHelpOwnerScopeCurrent\(ownerScopeKey, auxiliaryChainSnapshot\)/g)?.length).toBe(4);
@@ -20,8 +19,9 @@ describe('custom auxiliary chain does not hit the session agent', () => {
 
   it('pinned-card summaries skip agent oneShot when the auxiliary list is customized', () => {
     const source = readFileSync(path.join(root, 'sessionTaskSummary.ts'), 'utf8');
-    expect(source).toContain('const auxiliaryModelCustomized = isAuxiliaryModelCustomized();');
-    expect(source).toContain('auxiliaryModelCustomized ||');
+    expect(source).toContain('const auxiliaryChain = getEffectiveAuxiliaryModelChain();');
+    expect(source).toContain("auxiliaryChain.source !== 'auto' ||");
+    expect(source).not.toContain('isAuxiliaryModelCustomized');
     expect(source).toContain('await getMaker().oneShot');
     expect(source).toContain('const ownerScopeKey = activeOwnerScopeKey();');
     expect(source).toContain('beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)');
