@@ -278,6 +278,13 @@ export interface AppServerHostOptions {
   remoteCompactionProviderId?: string;
   /** Cindy Provider codex/* 的内部 OpenAI transport identity。 */
   cindyRemoteCompactionProviderId?: string;
+  /** Generic custom Provider identities and capabilities frozen into this process. */
+  codexCustomProviderRoutes?: Array<{
+    providerId: string;
+    modelProviderId: string;
+    capabilities: Readonly<Record<string, boolean | undefined>>;
+    responseModels: readonly string[];
+  }>;
   /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   /** Cindy-side fallback used only when a subagent's actual model is not reported. */
@@ -439,6 +446,45 @@ export class AppServerHost {
 
   getCindyRemoteCompactionProviderId(): string | null {
     return this.opts.cindyRemoteCompactionProviderId ?? null;
+  }
+
+  getCustomProviderModelProviderId(
+    providerId: string | null | undefined,
+    model: string | null | undefined,
+  ): string | null {
+    if (!providerId || !model) return null;
+    const route = this.opts.codexCustomProviderRoutes?.find(
+      (candidate) => candidate.providerId === providerId,
+    );
+    return route?.responseModels.includes(model) ? route.modelProviderId : null;
+  }
+
+  getCustomProviderThreadPolicy(
+    providerId: string | null | undefined,
+    model: string | null | undefined,
+  ): {
+    dynamicIdentity: boolean;
+    disableSubagents: boolean;
+    disableModelOverrides: boolean;
+  } {
+    const route = providerId && model
+      ? this.opts.codexCustomProviderRoutes?.find(
+          (candidate) =>
+            candidate.providerId === providerId && candidate.responseModels.includes(model),
+        )
+      : undefined;
+    if (!route) {
+      return { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false };
+    }
+    const child = this.opts.subagentRoute;
+    const childCompatible = !child || (
+      child.providerId === route.providerId && route.responseModels.includes(child.catalogModel)
+    );
+    return {
+      dynamicIdentity: true,
+      disableSubagents: !childCompatible,
+      disableModelOverrides: true,
+    };
   }
 
   /**
@@ -794,7 +840,10 @@ export class AppServerHost {
    * **必须** 在 app.before-quit 显式调一次 — Windows 子进程不会随父进程死,
    * 不显式收割就成孤儿。
    */
-  async shutdown(reason = 'AppServerHost.shutdown()'): Promise<void> {
+  async shutdown(
+    reason = 'AppServerHost.shutdown()',
+    opts?: { throwOnTransportError?: boolean },
+  ): Promise<void> {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     // MCP readiness is scoped to the concrete app-server process. A normal
@@ -812,7 +861,7 @@ export class AppServerHost {
     this.client = null;
     this.startPromise = null;
     try {
-      if (c) await c.close({ reason });
+      if (c) await c.close({ reason, throwOnTransportError: opts?.throwOnTransportError });
     } finally {
       // 重置, 允许之后的 ensureStarted 重新 spawn (transport error 恢复路径)
       this.shuttingDown = false;
@@ -823,9 +872,12 @@ export class AppServerHost {
    * 终态关停。凭据/账号切换后旧 host 不能再被旧 session 闭包重新拉起；
    * transport error 自愈仍走普通 shutdown(),保留同对象重启能力。
    */
-  async retire(reason = 'AppServerHost.retire()'): Promise<void> {
+  async retire(
+    reason = 'AppServerHost.retire()',
+    opts?: { throwOnTransportError?: boolean },
+  ): Promise<void> {
     this.retired = true;
-    await this.shutdown(reason);
+    await this.shutdown(reason, opts);
   }
 
   /**

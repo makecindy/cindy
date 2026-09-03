@@ -1,6 +1,7 @@
 // ── 核心存储类型 ─────────────────────────────────────────────────────────────
 
 import type { LearnProvenance } from '../../../shared/learnTypes';
+import type { SkillhubCatalogScope } from '../../../shared/skillhubCatalog';
 
 export interface StoredInstall {
   /** 市场版本号字符串。注意:与 server latestVersion 类型对齐(string,非 number)。
@@ -27,6 +28,8 @@ export interface StoredInstall {
   origin?: 'installed' | 'published' | 'learned' | 'imported';
   /** 是否由产品自动同步流程安装。用于区分普通市场安装与用户可 opt-out 的自动同步安装。 */
   autoSynced?: boolean;
+  /** Catalog used for detail/download; absent on older registry entries. */
+  catalogScope?: SkillhubCatalogScope;
   /** /learn 蒸馏产物的溯源(仅 origin='learned' 时存在)。
    *  provenance.personal=true ⇒ 含本地会话衍生内容。当前不拦截发布 ——
    *  作为将来「发布前泛化」流程(另行独立 PR)的判定依据保留。 */
@@ -35,6 +38,8 @@ export interface StoredInstall {
 
 export interface StoredManifest {
   schemaVersion: 1;
+  /** catalogScope 缺省值迁移标记。旧客户端忽略并在 spread 写回时保留。 */
+  catalogScopeMigrated?: true;
   /** 自校验:必须等于文件名(去 .json)。不一致即抛 RegistryCorruptedError。 */
   skillName: string;
   /** key = path.normalize 后的绝对 installPath。 */

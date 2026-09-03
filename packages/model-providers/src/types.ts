@@ -170,6 +170,11 @@ export interface RoutingDescriptor {
    * 未声明表示没有足够能力信息，调用方不得按模型名猜测。
    */
   supportsResponsesCustomTools?: boolean;
+  /**
+   * 该自定义 Provider 的 Codex Responses runtime 是否支持原生图片生成与编辑。
+   * 缺省按 false 处理；它与模型图片输入能力独立，也不得从模型名推断。
+   */
+  supportsImageGeneration?: boolean;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
   /**
@@ -567,6 +572,8 @@ export interface ProviderPresetRuntime {
   baseUrl: string;
   /** 非标准推理端点的相对路径；缺省由 wire protocol 推导。 */
   requestPath?: string;
+  /** Codex Responses runtime 是否支持原生图片生成与编辑；缺省为 false。 */
+  supportsImageGeneration?: boolean;
   /** 推荐模型清单（预填进表单，用户可增删改）。 */
   models: ProviderRuntimeModelConfig[];
   /** 可选预填请求头。 */
@@ -661,6 +668,8 @@ export interface CustomProviderRuntimeConfig {
   baseUrl: string;
   /** 非标准推理端点的相对路径；缺省由 wire protocol 推导。 */
   requestPath?: string;
+  /** Codex Responses runtime 是否支持原生图片生成与编辑；缺省为 false。 */
+  supportsImageGeneration?: boolean;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
   /**

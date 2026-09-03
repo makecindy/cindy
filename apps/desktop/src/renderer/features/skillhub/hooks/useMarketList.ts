@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 
 import { i18n } from '@/i18n';
 import { CATEGORY_ALL, type MarketCategory } from '../../../../shared/skillhubCategory';
+import type { SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
 import type { HubPublishedVisibility } from '../lib/marketVisibility';
 import { filterAvailableMarketItems } from '../lib/marketDetailViewModel';
 
@@ -32,6 +33,7 @@ import { useSkillhub } from './useSkillhub';
 import { semverCompare } from '../versionUtils';
 
 export type SortBy = 'trending' | 'downloads' | 'updated_at' | 'created_at';
+export type CatalogScope = 'all' | 'market' | 'team';
 /** 'all' 表示不筛分类（显示全部）；其他值是 MarketCategory.slug。 */
 export type CategoryFilter = typeof CATEGORY_ALL | string;
 /**
@@ -53,15 +55,20 @@ export type MarketCardState =
 export interface MarketSkill {
   /** 服务端主键 = name,前端 list key 用它。 */
   name: string;
+  /** Skill 图标 URL；旧服务响应缺失时保持 undefined。 */
+  icon?: string;
   displayName: string;
   description: string;
   authorName: string;
+  /** 实际提交当前版本的成员；authorName 仍表示个人或组织归属。 */
+  publisherName?: string;
   authorId: string;
   /** 飞书头像 URL;为 null/失败时回落到 avatarInitial 字母。 */
   authorAvatarUrl: string | null;
   /** Latin/中文首字符,用于头像 fallback。 */
   avatarInitial: string;
   isMine: boolean;
+  canManage: boolean;
   latestVersion: string;
   visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
   publishedVisibility?: HubPublishedVisibility;
@@ -71,9 +78,18 @@ export interface MarketSkill {
     version: string;
     status?: string;
   };
+  visibilityReview?: {
+    requestedVisibility: 'public';
+    status: 'pending' | 'rejected';
+    reason?: string;
+  };
   visibleDeptIds: string[];
   /** 分类 slug 列表。服务端目前还未返回时给空数组兜底。 */
   categories: string[];
+  /** 服务端可搜索标签，保留显示名供详情等消费方使用。 */
+  tags: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
+  /** Skill 对应的公开仓库地址；null 表示发布者未配置。 */
+  githubUrl: string | null;
   publishedAt: string; // ISO
   /** 相对时间显示,如 "3 天前"、"昨天"、"刚刚"。 */
   relativeTime: string;
@@ -91,16 +107,21 @@ export interface MarketSkill {
   latestPublishedFromDeviceId: string | null;
   /** 派生的 card 状态,UI 直接 switch 这个字段决定按钮。 */
   cardState: MarketCardState;
+  /** 列表所在的通用目录，后续详情和安装请求必须继续携带。 */
+  catalogScope?: SkillhubCatalogScope;
 }
 
 interface ServerListItem {
   name: string;
+  icon?: string;
   displayName: string;
   description: string;
   authorId: string;
   authorName: string;
+  publisherName?: string;
   authorAvatarUrl: string | null;
   isMine: boolean;
+  canManage: boolean;
   latestVersion: string;
   visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
   publishedVisibility?: HubPublishedVisibility;
@@ -110,15 +131,23 @@ interface ServerListItem {
     version: string;
     status?: string;
   };
+  visibilityReview?: {
+    requestedVisibility: 'public';
+    status: 'pending' | 'rejected';
+    reason?: string;
+  };
   visibleDeptIds: string[];
   categories?: string[];
+  tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
+  githubUrl?: string | null;
   publishedAt: string;
   downloads?: number;
   /** 跨设备识别：null = pre-feature 历史版本 */
   latestPublishedFromDeviceId: string | null;
+  catalogScope?: SkillhubCatalogScope;
 }
 
-const PAGE_SIZE = 24;
+export const MARKET_PAGE_SIZE = 24;
 
 function deriveAvatarInitial(authorName: string): string {
   const trimmed = authorName.trim();
@@ -204,21 +233,27 @@ function mapServerToView(
   );
   return {
     name: item.name,
+    icon: item.icon,
     displayName: item.displayName,
     description: item.description,
     authorName: item.authorName,
+    publisherName: item.publisherName || item.authorName,
     authorId: item.authorId,
     authorAvatarUrl: item.authorAvatarUrl ?? null,
     avatarInitial: deriveAvatarInitial(item.authorName),
     isMine: item.isMine,
+    canManage: item.canManage,
     latestVersion: item.latestVersion,
     visibility: item.visibility,
     publishedVisibility: item.publishedVisibility,
     ownerType: item.ownerType,
     moderationStatus: item.moderationStatus,
     pendingVersion: item.pendingVersion,
+    visibilityReview: item.visibilityReview,
     visibleDeptIds: item.visibleDeptIds,
     categories: item.categories ?? [],
+    tags: item.tags ?? [],
+    githubUrl: item.githubUrl ?? null,
     publishedAt: item.publishedAt,
     relativeTime: formatMarketRelativeTime(item.publishedAt, translate),
     downloads: Number.isFinite(item.downloads) ? item.downloads ?? 0 : 0,
@@ -228,6 +263,7 @@ function mapServerToView(
     hasAnyInstall,
     latestPublishedFromDeviceId: item.latestPublishedFromDeviceId,
     cardState: deriveCardState(item, group, installingNames.has(item.name)),
+    catalogScope: item.catalogScope,
   };
 }
 
@@ -237,6 +273,8 @@ interface MarketListState {
   loadingMore: boolean;
   error: string | null;
   nextCursor: string | null;
+  resolvedScope: CatalogScope | null;
+  resolvedMine: boolean | null;
 }
 
 const INITIAL: MarketListState = {
@@ -245,12 +283,15 @@ const INITIAL: MarketListState = {
   loadingMore: false,
   error: null,
   nextCursor: null,
+  resolvedScope: null,
+  resolvedMine: null,
 };
 
 interface FetchMarketPageInput {
   cursor?: string;
   sort: SortBy;
   q: string;
+  scope: CatalogScope;
   mine: boolean;
   category?: string;
 }
@@ -260,21 +301,28 @@ type MarketPageResult =
   | { success: false; error?: string };
 
 export function useMarketList(
-  initialVisibility: Visibility = 'available',
+  initialVisibility: Visibility = 'all',
   options?: {
     /**
      * false 时完全不发市场请求(items 保持空、loading 保持 false)。
-     * 供市场不可见的账号(见 lib/marketAccess.ts)跳过网络与骨架屏;翻回 true 后自动补拉。
+     * 供本地技能 Tab 跳过云端请求与骨架屏；切回云端目录后自动补拉。
      */
     enabled?: boolean;
+    /** Initial server-side catalog partition; `all` preserves historical behavior. */
+    initialScope?: CatalogScope;
+    /** Fixed catalog surfaces can avoid an extra request by declaring their initial sort. */
+    initialSort?: SortBy;
   },
 ) {
   const enabled = options?.enabled ?? true;
   const { t, i18n: i18next } = useTranslation();
   const [searchQuery, setSearchQueryState] = useState('');
-  const [sortBy, setSortByState] = useState<SortBy>('updated_at');
+  const [sortBy, setSortByState] = useState<SortBy>(() => options?.initialSort ?? 'updated_at');
+  const [catalogScope, setCatalogScopeState] = useState<CatalogScope>(
+    () => options?.initialScope ?? 'all',
+  );
   const [categoryFilter, setCategoryFilterState] = useState<CategoryFilter>(CATEGORY_ALL);
-  // 默认 'available'：进入 Market 直接看"对自己有用"的内容。
+  // 默认展示当前身份可见的完整目录；“我的管理”由列表页显式切换。
   const [visibility, setVisibilityState] = useState<Visibility>(() => initialVisibility);
   const [state, setState] = useState<MarketListState>(INITIAL);
   // 当前正在跑 install 的 name 集合（按 name 串行；同 name 不能重复触发）
@@ -325,9 +373,10 @@ export function useMarketList(
   const requestMarketPage = useCallback(async (params: FetchMarketPageInput): Promise<MarketPageResult> => {
     const res = await window.electronAPI.skillhub.listMarket({
       cursor: params.cursor,
-      limit: PAGE_SIZE,
+      limit: MARKET_PAGE_SIZE,
       sort: params.sort,
       q: params.q || undefined,
+      scope: params.scope,
       mine: params.mine,
       available: false,
       category: params.category,
@@ -354,6 +403,7 @@ export function useMarketList(
         cursor,
         sort: params.sort,
         q: params.q,
+        scope: params.scope,
         mine: params.mine,
         category: params.category,
       });
@@ -365,7 +415,7 @@ export function useMarketList(
       collected.push(...pageItems);
       nextCursor = res.nextCursor ?? null;
       cursor = nextCursor ?? undefined;
-    } while (params.available && collected.length < PAGE_SIZE && nextCursor);
+    } while (params.available && collected.length < MARKET_PAGE_SIZE && nextCursor);
 
     return {
       success: true as const,
@@ -375,13 +425,21 @@ export function useMarketList(
   }, [requestMarketPage]);
 
   const fetchPage = useCallback(
-    async (params: { sort: SortBy; q: string; mine: boolean; available: boolean; category?: string }) => {
+    async (params: {
+      sort: SortBy;
+      q: string;
+      scope: CatalogScope;
+      mine: boolean;
+      available: boolean;
+      category?: string;
+    }) => {
       const myId = ++requestIdRef.current;
       setState((prev) => ({ ...prev, loading: true, error: null }));
       try {
         const res = await collectVisiblePage({
           sort: params.sort,
           q: params.q,
+          scope: params.scope,
           mine: params.mine,
           available: params.available,
           category: params.category,
@@ -394,6 +452,8 @@ export function useMarketList(
             loadingMore: false,
             error: res.error ?? i18n.t('skillhub.market.installError'),
             nextCursor: null,
+            resolvedScope: params.scope,
+            resolvedMine: params.mine,
           });
           return;
         }
@@ -403,6 +463,8 @@ export function useMarketList(
           loadingMore: false,
           error: null,
           nextCursor: res.nextCursor ?? null,
+          resolvedScope: params.scope,
+          resolvedMine: params.mine,
         });
       } catch (err) {
         if (myId !== requestIdRef.current) return;
@@ -412,6 +474,8 @@ export function useMarketList(
           loadingMore: false,
           error: err instanceof Error ? err.message : String(err),
           nextCursor: null,
+          resolvedScope: params.scope,
+          resolvedMine: params.mine,
         });
       }
     },
@@ -430,6 +494,7 @@ export function useMarketList(
         cursor,
         sort: sortBy,
         q: searchQuery,
+        scope: catalogScope,
         mine: visibility === 'mine',
         available: visibility === 'available',
         category: categoryFilter !== CATEGORY_ALL ? categoryFilter : undefined,
@@ -449,7 +514,7 @@ export function useMarketList(
       if (myId !== requestIdRef.current) return;
       setState((prev) => ({ ...prev, loadingMore: false }));
     }
-  }, [state.nextCursor, state.loadingMore, state.loading, sortBy, searchQuery, visibility, categoryFilter, collectVisiblePage]);
+  }, [state.nextCursor, state.loadingMore, state.loading, sortBy, searchQuery, catalogScope, visibility, categoryFilter, collectVisiblePage]);
 
   // 外部主动刷新(删除/改可见性后)→ bump tick 触发重拉
   const [reloadTick, setReloadTick] = useState(0);
@@ -462,11 +527,12 @@ export function useMarketList(
     void fetchPage({
       sort: sortBy,
       q: searchQuery,
+      scope: catalogScope,
       mine: visibility === 'mine',
       available: visibility === 'available',
       category: categoryFilter !== CATEGORY_ALL ? categoryFilter : undefined,
     });
-  }, [enabled, sortBy, searchQuery, visibility, categoryFilter, fetchPage, reloadTick]);
+  }, [enabled, sortBy, searchQuery, catalogScope, visibility, categoryFilter, fetchPage, reloadTick]);
 
   // 当本地扫描结果或 installing 集合变化时,只重新派生 cardState/installedVersion,不重发请求。
   // 依赖键用 (name, version, installing) 序列化字符串，避免对象引用变化导致每次都跑。
@@ -513,6 +579,7 @@ export function useMarketList(
 
   const setSearchQuery = useCallback((q: string) => setSearchQueryState(q), []);
   const setSortBy = useCallback((s: SortBy) => setSortByState(s), []);
+  const setCatalogScope = useCallback((scope: CatalogScope) => setCatalogScopeState(scope), []);
   const setCategoryFilter = useCallback((slug: CategoryFilter) => setCategoryFilterState(slug), []);
   const setVisibility = useCallback((v: Visibility) => setVisibilityState(v), []);
 
@@ -541,12 +608,16 @@ export function useMarketList(
     loadingMore: state.loadingMore,
     error: state.error,
     hasMore: state.nextCursor !== null,
+    resolvedScope: state.resolvedScope,
+    resolvedMine: state.resolvedMine,
     searchQuery,
     sortBy,
+    catalogScope,
     categoryFilter,
     visibility,
     setSearchQuery,
     setSortBy,
+    setCatalogScope,
     setCategoryFilter,
     setVisibility,
     loadMore,

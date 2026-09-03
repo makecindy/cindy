@@ -43,6 +43,8 @@ export interface WorkLouderCodexHostClientDeps {
   resolveSdk(): WorkLouderSdkLocation | null;
   fork(sdkEntry: string): WorkLouderCodexChildLike;
   log: WorkLouderCodexLoggerLike;
+  /** Owner-scoped directory for a Creator Micro 2 keymap backup. */
+  keymapBackupDir?: () => string | null;
   connectTimeoutMs?: number;
   disposeTimeoutMs?: number;
   /** How long a connection must stay up before the crash budget resets. */
@@ -77,6 +79,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     null;
   private connectionStatusHandler: ((status: WorkLouderCodexConnectionStatus) => void) | null =
     null;
+  private pendingCreatorKeymap: string[][] | null = null;
   private presenceHandler:
     | ((
         present: boolean,
@@ -131,6 +134,12 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     if (enabled) {
       this.updateHidListeningIntent();
       if (this.latestFrame) this.update(this.latestFrame);
+      // Occupancy can turn the device on after the host already posted
+      // `connected`. Lighting drops that status while disabled, and
+      // lastStatus === connected prevents a resend — replay it.
+      if (this.lastStatus === 'connected' || this.connectionStatus === 'connected') {
+        this.connectionStatusHandler?.('connected');
+      }
       return;
     }
     this.disconnectHost();
@@ -197,6 +206,21 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
   }
 
+  rebindCreatorKeymap(keymap: string[][]): void {
+    this.pendingCreatorKeymap = keymap;
+    if (this.disposed || !this.child) return;
+    try {
+      this.child.postMessage({
+        kind: 'rebind-creator-keymap',
+        keymap,
+      } satisfies WorkLouderCodexHostRequest);
+    } catch (error) {
+      this.deps.log.warn('failed to rebind Creator keymap', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
@@ -260,7 +284,13 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
           type: type instanceof Error ? type.name : type,
         });
       });
-      const initRequest: WorkLouderCodexHostRequest = { kind: 'init', sdkEntry: sdk.entry };
+      const keymapBackupDir = this.deps.keymapBackupDir?.() ?? undefined;
+      const initRequest: WorkLouderCodexHostRequest = {
+        kind: 'init',
+        sdkEntry: sdk.entry,
+        ...(keymapBackupDir ? { keymapBackupDir } : {}),
+        ...(this.pendingCreatorKeymap ? { creatorKeymap: this.pendingCreatorKeymap } : {}),
+      };
       startedChild.postMessage(initRequest);
       if (this.deviceEnabled) this.startConnectWatchdog(startedChild);
       this.deps.log.info('Codex Micro lighting host started', { sdkSource: sdk.source });
@@ -367,6 +397,12 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     if (message.kind === 'hid') {
       this.clearConnectWatchdog();
+      if (/^(?:AG|ACT)/.test(message.event.key)) {
+        this.deps.log.debug('Work Louder HID', {
+          key: message.event.key,
+          act: message.event.act,
+        });
+      }
       this.hidInputHandler?.(message.event);
       const slot = parseWorkLouderCodexAgentKeyPress(message.event);
       if (slot !== null) {
@@ -437,7 +473,15 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     // Pairing / USB re-enumeration leaves the native SDK handle alive but
     // unusable. ChatGPT recovers by opening a fresh transport; we do the same
     // by recycling the utility process once the live session drops.
-    if (previousStatus === 'connected') this.recycleStaleHost(child);
+    // Permission / HID contention is not a dropped cable — recycling it storms
+    // `0xE00002E2` and never lets Creator Micro 2 finish binding agent keys.
+    if (
+      previousStatus === 'connected' &&
+      message.reason !== 'permission-required' &&
+      message.reason !== 'device-in-use'
+    ) {
+      this.recycleStaleHost(child);
+    }
   }
 
   private stopHostAfterPermission(child: WorkLouderCodexChildLike): void {

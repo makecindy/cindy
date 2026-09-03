@@ -19,6 +19,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
+import {
+  setCodexAppliedCustomProviderRoutes,
+  type CodexCustomProviderRoute,
+} from '../../maker-host/codex-custom-provider-route.js';
 
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
@@ -180,6 +184,37 @@ interface RunnerHarness {
   closeSession: ReturnType<typeof vi.fn>;
 }
 
+const schedulerImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
+  {
+    providerId: 'provider-a',
+    routeId: 'a'.repeat(20),
+    modelProviderId: `cindy_custom_${'a'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model', 'a-alt-model'],
+    routing: {
+      upstream: 'https://a.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+  {
+    providerId: 'provider-b',
+    routeId: 'b'.repeat(20),
+    modelProviderId: `cindy_custom_${'b'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model'],
+    routing: {
+      upstream: 'https://b.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+];
+
 function createRunnerHarness(
   h: FakeSessionHarness,
   meta: {
@@ -248,6 +283,7 @@ async function fireToCompletion(
 
 describe('MakerScheduleRunner model selection', () => {
   beforeEach(() => {
+    setCodexAppliedCustomProviderRoutes([]);
     vi.clearAllMocks();
     mocks.createMessage.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
@@ -1038,11 +1074,7 @@ describe('MakerScheduleRunner model selection', () => {
       }));
       const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
 
-      await fireToCompletion(
-        harness,
-        h,
-        baseSchedule({ model: 'claude-from-future' }),
-      );
+      await fireToCompletion(harness, h, baseSchedule({ model: 'claude-from-future' }));
 
       expect(harness.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ model: 'claude-from-future', providerId: null }),
@@ -1269,6 +1301,125 @@ describe('MakerScheduleRunner model selection', () => {
       );
     });
 
+    it('heartbeat 在同一 dynamic Provider 的两个 Responses 模型间热切且不重建', async () => {
+      const routeA = schedulerImageGenerationRoutes[0]!;
+      setCodexAppliedCustomProviderRoutes(schedulerImageGenerationRoutes);
+      mocks.getSessionRowSnapshot.mockResolvedValue({
+        status: 'active',
+        providerId: routeA.providerId,
+      });
+      mocks.getSessionProvider.mockReturnValue(routeA.providerId);
+      const h = createSessionHarness();
+      Object.defineProperties(h.session, {
+        agentKind: { value: 'codex' },
+        model: { value: 'shared-model', writable: true },
+        codexProxyActive: { value: true },
+        codexThreadModelProviderId: { value: routeA.modelProviderId },
+      });
+      const harness = createRunnerHarness(
+        h,
+        { model: 'shared-model', workDir: '/work', sdkSessionId: 'sdk-image-a' },
+        { sessionAlive: true },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'codex',
+          model: 'a-alt-model',
+          providerId: routeA.providerId,
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(harness.closeSession).not.toHaveBeenCalled();
+      expect(h.setModel).toHaveBeenCalledWith('a-alt-model');
+    });
+
+    it('heartbeat 从 dynamic Provider A 切到 B 时只关闭目标 thread 并按 B 重建', async () => {
+      const [routeA, routeB] = schedulerImageGenerationRoutes;
+      setCodexAppliedCustomProviderRoutes(schedulerImageGenerationRoutes);
+      mocks.getSessionRowSnapshot.mockResolvedValue({
+        status: 'active',
+        providerId: routeA!.providerId,
+      });
+      mocks.getSessionProvider.mockReturnValue(routeA!.providerId);
+      const h = createSessionHarness();
+      Object.defineProperties(h.session, {
+        agentKind: { value: 'codex' },
+        model: { value: 'shared-model', writable: true },
+        codexProxyActive: { value: true },
+        codexThreadModelProviderId: { value: routeA!.modelProviderId },
+      });
+      const unrelatedBusyCodex = {
+        id: 'unrelated-busy-codex',
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => true,
+      } as unknown as Session;
+      const harness = createRunnerHarness(
+        h,
+        { model: 'shared-model', workDir: '/work', sdkSessionId: 'sdk-image-a' },
+        { sessionAlive: true, activeSessions: [h.session, unrelatedBusyCodex] },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'codex',
+          model: 'shared-model',
+          providerId: routeB!.providerId,
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(harness.closeSession).toHaveBeenCalledTimes(1);
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: routeB!.providerId, model: 'shared-model' }),
+      );
+    });
+
+    it('heartbeat 从 dynamic identity 切到同 Provider 非 Responses 模型时重建', async () => {
+      const routeA = schedulerImageGenerationRoutes[0]!;
+      setCodexAppliedCustomProviderRoutes(schedulerImageGenerationRoutes);
+      mocks.getSessionRowSnapshot.mockResolvedValue({
+        status: 'active',
+        providerId: routeA.providerId,
+      });
+      mocks.getSessionProvider.mockReturnValue(routeA.providerId);
+      const h = createSessionHarness();
+      Object.defineProperties(h.session, {
+        agentKind: { value: 'codex' },
+        model: { value: 'shared-model', writable: true },
+        codexProxyActive: { value: true },
+        codexThreadModelProviderId: { value: routeA.modelProviderId },
+      });
+      const harness = createRunnerHarness(
+        h,
+        { model: 'shared-model', workDir: '/work', sdkSessionId: 'sdk-image-a' },
+        { sessionAlive: true },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'codex',
+          model: 'chat-model',
+          providerId: routeA.providerId,
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: routeA.providerId, model: 'chat-model' }),
+      );
+    });
+
     it('heartbeat 修复 Codex thread/store 错配时只关闭目标会话，不受其它忙会话阻塞', async () => {
       mocks.getSessionRowSnapshot.mockResolvedValue({
         status: 'active',
@@ -1439,11 +1590,7 @@ describe('MakerScheduleRunner model selection', () => {
       (h.session as { agentKind: string }).agentKind = 'pi';
       const harness = createRunnerHarness(h);
 
-      await fireToCompletion(
-        harness,
-        h,
-        baseSchedule({ agentKind: 'pi', model: 'gpt-5.6-sol' }),
-      );
+      await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: 'gpt-5.6-sol' }));
 
       expect(harness.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ providerId: null }),

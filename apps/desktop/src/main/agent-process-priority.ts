@@ -86,7 +86,7 @@ export interface AgentProcessPriorityWatcher {
 
 /**
  * codex 二进制路径 marker(与 buildClaudePathMarkers 同构):
- * <userData>/codex/<ver>/ 及 dev checkout 的 apps/codex-bin/。
+ * <userData>/codex/<ver>/ 及 dev checkout 的 apps/codex-package-bin/。
  */
 export function buildCodexPathMarkers(dirNames: readonly string[]): string[] {
   return dirNames.flatMap((dirName) => {
@@ -130,6 +130,8 @@ const CODEX_MARKERS = [
   ...buildCodexPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION)),
   ...buildLinuxPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION), 'codex'),
   'apps\\codex-bin\\',
+  'apps\\codex-package-bin\\',
+  'apps/codex-package-bin/',
   'apps/codex-bin/',
 ];
 

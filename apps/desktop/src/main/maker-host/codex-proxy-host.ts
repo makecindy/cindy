@@ -28,6 +28,8 @@ import {
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
+  type ForwardLifecycleFailure,
+  type ForwardLifecycleObserver,
   type ProxyHandle,
   type ResponseObserver,
   type ResponseObserverCtx,
@@ -63,6 +65,7 @@ import {
   getSessionRoutingDescriptor,
   resolveProviderRouteById,
   resolveProviderRouteDecision,
+  resolveFrozenProviderRouteDecision,
   resolveSessionRoute,
   resolveSessionRouteDecision,
   resolvePendingSessionRouteDecision,
@@ -101,9 +104,25 @@ import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import {
+  CODEX_IMAGE_GENERATION_ACTOR_HEADER,
+  findCodexAppliedCustomProviderRoute,
+  isCodexCustomProviderNamespacePath,
+  parseCodexCustomProviderPath,
+  relativeProviderRequestPath,
+  setCodexAppliedCustomProviderRoutes as setAppliedCustomProviderRoutes,
+  type CodexCustomProviderRoute,
+} from './codex-custom-provider-route.js';
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
 const log = createMakerLogger('codex-proxy');
+const imageGenerationLog = log.child('imagegen');
+
+export function setCodexAppliedCustomProviderRoutes(
+  routes: readonly CodexCustomProviderRoute[],
+): void {
+  setAppliedCustomProviderRoutes(routes);
+}
 
 const registry = createInstructionsRegistry();
 const sessionToThread = new Map<string, string>();
@@ -2580,10 +2599,322 @@ export function decideCodexRoute(opts: {
   return { upstreamOverride: CODEX_OAUTH_UPSTREAM };
 }
 
+function codexCustomProviderRouteFailure(status: number, code: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(
+        JSON.stringify({
+          error: {
+            type: 'invalid_request_error',
+            code,
+            message: 'This custom Provider route is unavailable.',
+          },
+        }),
+      );
+    },
+  };
+}
+
+type CodexImageGenerationOperation = 'generation' | 'edit';
+type CodexImageGenerationPathClass = '/images/generations' | '/images/edits';
+interface CodexImageGenerationLogParams {
+  model?: string;
+  size?: string;
+  quality?: string;
+  background?: string;
+  n?: number;
+  output_format?: string;
+  output_compression?: number;
+  moderation?: string;
+  partial_images?: number;
+  stream?: boolean;
+  response_format?: string;
+}
+
+const IMAGE_GENERATION_STRING_LOG_MAX_LENGTH = 128;
+const IMAGE_GENERATION_URL_LOG_MAX_LENGTH = 2_048;
+const IMAGE_GENERATION_LOG_TRUNCATED = '[truncated]';
+
+function hasLogUnsafeControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x1f || codePoint === 0x7f) return true;
+  }
+  return false;
+}
+
+/** Build a new primitive-only object from the Codex 0.145 generation request allowlist. */
+function codexImageGenerationLogParams(body: unknown): CodexImageGenerationLogParams | undefined {
+  if (!isPlainObject(body)) return undefined;
+  const params: CodexImageGenerationLogParams = {};
+  const safeString = (value: unknown): string | undefined => {
+    if (typeof value !== 'string' || value.length === 0) return undefined;
+    if (hasLogUnsafeControlCharacter(value)) return undefined;
+    return value.length <= IMAGE_GENERATION_STRING_LOG_MAX_LENGTH
+      ? value
+      : IMAGE_GENERATION_LOG_TRUNCATED;
+  };
+  const stringFields = [
+    'model',
+    'size',
+    'quality',
+    'background',
+    'output_format',
+    'moderation',
+    'response_format',
+  ] as const;
+  for (const field of stringFields) {
+    const value = safeString(body[field]);
+    if (value !== undefined) params[field] = value;
+  }
+  if (Number.isSafeInteger(body.n)) params.n = body.n as number;
+  if (
+    typeof body.output_compression === 'number' &&
+    Number.isFinite(body.output_compression)
+  ) {
+    params.output_compression = body.output_compression;
+  }
+  if (Number.isSafeInteger(body.partial_images)) {
+    params.partial_images = body.partial_images as number;
+  }
+  if (typeof body.stream === 'boolean') params.stream = body.stream;
+  return Object.keys(params).length > 0 ? params : undefined;
+}
+
+/** Mirror compat-proxy's final base-path + request-path join without retaining URL secrets. */
+function codexImageGenerationLogUpstreamUrl(
+  upstream: string,
+  pathOverride: string,
+): string | undefined {
+  try {
+    const parsed = new URL(upstream);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+    const path = pathOverride.split('?', 1)[0] ?? '';
+    const basePath = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    parsed.pathname = `${basePath}${path.startsWith('/') ? path : `/${path}`}`;
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    const normalized = `${parsed.origin}${parsed.pathname}`;
+    return normalized.length <= IMAGE_GENERATION_URL_LOG_MAX_LENGTH
+      ? normalized
+      : IMAGE_GENERATION_LOG_TRUNCATED;
+  } catch {
+    return undefined;
+  }
+}
+
+function imageGenerationTransportOutcome(
+  failure: ForwardLifecycleFailure,
+):
+  | 'client_aborted'
+  | 'network_error'
+  | 'timeout'
+  | 'upstream_interrupted'
+  | 'local_retry_rejected'
+  | 'local_retry_error' {
+  if (failure === 'client-aborted') return 'client_aborted';
+  if (failure === 'request-timeout') return 'timeout';
+  if (failure === 'request-error') return 'network_error';
+  if (failure === 'retry-rejected') return 'local_retry_rejected';
+  if (failure === 'retry-error') return 'local_retry_error';
+  return 'upstream_interrupted';
+}
+
+/**
+ * Safe operational observer for the private custom-Provider Images route.
+ *
+ * This accepts only metadata already validated by the private route resolver. The returned
+ * callbacks close over fixed enums, the anonymous route hash, and the explicitly sanitized debug
+ * metadata. Neither the observer nor its factory can receive Provider identity, raw upstream
+ * input, headers, request/response bytes, or Error objects.
+ */
+function createCodexImageGenerationForwardLifecycleObserver(
+  routeId: string,
+  pathClass: CodexImageGenerationPathClass,
+  metadata: {
+    upstreamUrl?: string;
+    imageParams?: CodexImageGenerationLogParams;
+  },
+): ForwardLifecycleObserver {
+  const operation: CodexImageGenerationOperation =
+    pathClass === '/images/generations' ? 'generation' : 'edit';
+  const correlationId = randomUUID();
+  const base = {
+    correlationId,
+    operation,
+    method: 'POST' as const,
+    routeId,
+    target: 'custom-provider' as const,
+    pathClass,
+  };
+  let startedAt: number | null = null;
+  let settled = false;
+
+  const start = (): void => {
+    if (startedAt !== null) return;
+    startedAt = Date.now();
+    imageGenerationLog.info('codex_image_generation_forward_start', {
+      event: 'codex_image_generation_forward_start',
+      ...base,
+    });
+    if (
+      (
+        imageGenerationLog as typeof imageGenerationLog & { isDebugEnabled?: () => boolean }
+      ).isDebugEnabled?.() === true
+    ) {
+      imageGenerationLog.debug('codex_image_generation_forward_details', {
+        event: 'codex_image_generation_forward_details',
+        ...base,
+        ...(metadata.upstreamUrl ? { upstreamUrl: metadata.upstreamUrl } : {}),
+        ...(metadata.imageParams ? { imageParams: metadata.imageParams } : {}),
+      });
+    }
+  };
+  const durationMs = (): number => Math.max(0, Date.now() - (startedAt ?? Date.now()));
+
+  return {
+    onStart: start,
+    onComplete: (status) => {
+      if (settled || startedAt === null) return;
+      settled = true;
+      imageGenerationLog.info('codex_image_generation_forward_complete', {
+        event: 'codex_image_generation_forward_complete',
+        ...base,
+        status,
+        durationMs: durationMs(),
+        outcome: status >= 200 && status < 300 ? 'success' : 'http_error',
+      });
+    },
+    onFailure: (failure, status) => {
+      if (settled || startedAt === null) return;
+      settled = true;
+      imageGenerationLog.warn('codex_image_generation_forward_failure', {
+        event: 'codex_image_generation_forward_failure',
+        ...base,
+        ...(status === undefined ? {} : { status }),
+        durationMs: durationMs(),
+        outcome: imageGenerationTransportOutcome(failure),
+      });
+    },
+  };
+}
+
+function resolveCodexCustomProviderRoutingDecision(
+  body: unknown,
+  ctx: RequestTransformCtx,
+): RoutingDecision | null | Promise<RoutingDecision | null> | undefined {
+  const parsed = parseCodexCustomProviderPath(ctx.url);
+  if (parsed.kind === 'not-custom-provider-route') return undefined;
+  if (parsed.kind === 'invalid' || ctx.method !== 'POST') {
+    return codexCustomProviderRouteFailure(400, 'invalid_custom_provider_route');
+  }
+
+  const route = findCodexAppliedCustomProviderRoute(parsed.routeId);
+  if (!route) return codexCustomProviderRouteFailure(403, 'custom_provider_route_unavailable');
+
+  if (parsed.pathKind === 'images' && route.capabilities.imageGeneration !== true) {
+    return codexCustomProviderRouteFailure(403, 'image_generation_capability_unavailable');
+  }
+
+  const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+  if (
+    parsed.pathKind === 'responses' &&
+    (!requestModel || !route.responseModels.includes(requestModel))
+  ) {
+    return codexCustomProviderRouteFailure(403, 'custom_provider_model_mismatch');
+  }
+
+  const frozenRouting =
+    parsed.pathKind === 'responses' ? route.responseRoutingByModel[requestModel] : route.routing;
+  if (!frozenRouting) {
+    return codexCustomProviderRouteFailure(403, 'custom_provider_model_mismatch');
+  }
+  const wireModel = parsed.pathKind === 'responses' ? requestModel : undefined;
+  return resolveFrozenProviderRouteDecision(
+    route.providerId,
+    frozenRouting,
+    route.credentialRevision,
+    'codex',
+    _readGatewayKey(),
+    wireModel,
+  )
+    .then((resolved) => {
+      if (!resolved?.decision || resolved.routing.disabled) {
+        return codexCustomProviderRouteFailure(503, 'custom_provider_route_unavailable');
+      }
+      const pathOverride =
+        parsed.pathKind === 'responses'
+          ? relativeProviderRequestPath(
+              resolved.routing.upstream,
+              resolved.routing.requestPath || parsed.upstreamPath,
+            )
+          : parsed.upstreamPath;
+      if (!pathOverride) {
+        return codexCustomProviderRouteFailure(502, 'custom_provider_request_path_invalid');
+      }
+
+      const headerOverride = { ...(resolved.decision.headerOverride ?? {}) };
+      const actorHeader = Object.entries(resolved.decision.headerOverride ?? {}).find(
+        ([name]) => name.toLowerCase() === CODEX_IMAGE_GENERATION_ACTOR_HEADER,
+      );
+      for (const name of Object.keys(headerOverride)) {
+        if (name.toLowerCase() === CODEX_IMAGE_GENERATION_ACTOR_HEADER) {
+          delete headerOverride[name];
+        }
+      }
+      const headerDelete = new Set(
+        (resolved.decision.headerDelete ?? []).filter(
+          (name) => name.toLowerCase() !== CODEX_IMAGE_GENERATION_ACTOR_HEADER,
+        ),
+      );
+      if (actorHeader) {
+        headerOverride[CODEX_IMAGE_GENERATION_ACTOR_HEADER] = actorHeader[1];
+      } else {
+        headerDelete.add(CODEX_IMAGE_GENERATION_ACTOR_HEADER);
+      }
+
+      const imagePathClass = parsed.upstreamPath.split('?', 1)[0] as CodexImageGenerationPathClass;
+      const upstreamUrl = codexImageGenerationLogUpstreamUrl(
+        resolved.decision.upstreamOverride ?? resolved.routing.upstream,
+        pathOverride,
+      );
+
+      return {
+        ...resolved.decision,
+        pathOverride,
+        ...(Object.keys(headerOverride).length > 0 ? { headerOverride } : {}),
+        ...(headerDelete.size > 0 ? { headerDelete: [...headerDelete] } : {}),
+        ...(parsed.pathKind === 'images'
+          ? {
+              forwardLifecycle: createCodexImageGenerationForwardLifecycleObserver(
+                parsed.routeId,
+                imagePathClass,
+                {
+                  ...(upstreamUrl ? { upstreamUrl } : {}),
+                  ...(imagePathClass === '/images/generations'
+                    ? { imageParams: codexImageGenerationLogParams(body) }
+                    : {}),
+                },
+              ),
+            }
+          : {}),
+      };
+    })
+    .catch(() => codexCustomProviderRouteFailure(503, 'custom_provider_route_unavailable'));
+}
+
 export function createModelRoutingTransform(
   frozenAuthInjection?: CodexProxyAuthInjection,
 ): RoutingTransform {
   return (body, ctx) => {
+    const customProviderRoute = resolveCodexCustomProviderRoutingDecision(body, ctx);
+    if (customProviderRoute !== undefined) return customProviderRoute;
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
     const gatewayKey = _readGatewayKey();
@@ -2930,6 +3261,8 @@ function createCodexProxyHandle(
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
     transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter),
+    routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
+    bypassRequestTransforms: (_body, ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     transformResponse: (ctx) => execAdapter.createResponseTransform(ctx.reqId, {
       contentType: ctx.responseHeaders['content-type'] ?? '',
       contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',

@@ -18,7 +18,7 @@
  *     行为逻辑全部共享。新增 agent (e.g. gemini) 时, 一行加 CONFIG 即可。
  *   - 基础 BinaryProvisioner 实例懒加载 + 缓存 (createBinaryProvisioner 是工厂, 复用同一份 cached manifest)。
  *   - prepare(kind) 内部:
- *       dev: findDevBinary 短路, 缺失硬错 (开发者必须 git lfs pull / pnpm update:codex)
+ *       dev: findDevBinary 短路, 缺失硬错 (开发者必须 pnpm update:codex-package)
  *       Linux packaged: CDN manifest 段优先 (与 mac/win 同链, 国内可达); 资产缺失 /
  *         拉取 / 下载失败时静默回落 runtime fallback (PC 已装 CLI / 旧缓存 / userData
  *         私有安装 / 带上游 SHA-256 的官方 pin 资产, 不依赖系统 npm/curl/tar)
@@ -170,7 +170,8 @@ interface AgentBinaryConfig {
   manifestField: string;           // CDN manifest 顶层字段
   installSubdir: string;           // userData/<installSubdir>/<version>/<binary>
   binaryName: string;              // 平台相关二进制名
-  devBinDir: string;               // apps/<devBinDir>/<platform>/ (LFS bundle)
+  devBinDir: string;               // apps/<devBinDir>/<platform>/
+  devBinaryName?: string;          // dev 可覆盖入口相对路径；prod 仍使用 binaryName
   vendorTag: VendorKey;            // 'binary-download-progress' IPC payload 的 vendor 字段
   artifactKind: 'gz' | 'tar-gz-dir'; // CDN 资产形态(单文件 gz / 整目录 tar.gz)
   optionalAsset?: boolean;         // true = manifest 缺字段不算"需要下载"(可选 vendor)
@@ -186,15 +187,18 @@ const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
     devBinDir: 'claude-code-bin',
     vendorTag: 'claude',
     artifactKind: 'gz',
+    preserveLocalVersion: true,
   },
   codex: {
     vendorKey: 'codex',
     manifestField: 'codex',
     installSubdir: 'codex',
     binaryName: process.platform === 'win32' ? 'codex.exe' : 'codex',
-    devBinDir: 'codex-bin',
+    devBinDir: 'codex-package-bin',
+    devBinaryName: path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex'),
     vendorTag: 'codex',
     artifactKind: 'gz',
+    preserveLocalVersion: true,
   },
   pi: {
     vendorKey: 'pi',
@@ -279,9 +283,12 @@ export function getCachedBinaryStatus(kind: AgentBinaryKind): CachedBinaryStatus
     }
   }
 
-  // dev: 优先查 LFS bundle (apps/<devBinDir>/<platform>/<binary>)
+  // dev:优先查仓库本地 runtime(apps/<devBinDir>/<platform>/<devBinaryName>)。
   if (!app.isPackaged) {
-    const devPath = findDevBinary({ vendorBinDir: cfg.devBinDir, binaryName: cfg.binaryName });
+    const devPath = findDevBinary({
+      vendorBinDir: cfg.devBinDir,
+      binaryName: cfg.devBinaryName ?? cfg.binaryName,
+    });
     if (devPath) return { binaryReady: true, binaryPath: devPath };
   }
 
@@ -326,7 +333,10 @@ export async function prepare(
 
   // ── dev mode 短路 (与老 vendor/{claude,codex}/binaryProvisioner.ts 等价) ──
   if (!app.isPackaged) {
-    const devPath = findDevBinary({ vendorBinDir: cfg.devBinDir, binaryName: cfg.binaryName });
+    const devPath = findDevBinary({
+      vendorBinDir: cfg.devBinDir,
+      binaryName: cfg.devBinaryName ?? cfg.binaryName,
+    });
     if (devPath) {
       console.log(`[agent-binaries/${kind}] dev fallback hit: ${devPath}`);
       console.warn(`[agent-binaries/${kind}] dev fallback: SHA256 check SKIPPED — for development only`);
