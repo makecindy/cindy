@@ -72,7 +72,7 @@ export function HomeSuggestionList({
               data-testid={`home-suggestion-${id}`}
               onClick={() => onSelect(id)}
               className={cn(
-                'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-[10px] px-3',
+                'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-full px-3',
                 'text-14 text-[var(--text-secondary)] transition-colors',
                 'hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
               )}
