@@ -88,7 +88,6 @@ export function FindInPageBar() {
 
   const releaseSearchInput = useCallback(
     (pending: PendingSearchInput, restoreFocus = pending.restoreFocus) => {
-      pending.input.type = 'text';
       searchInputMirrorRef.current?.style.removeProperty('transform');
       setMaskNativeSearchInput(false);
       if (restoreFocus) restoreSearchInputFocus(pending);

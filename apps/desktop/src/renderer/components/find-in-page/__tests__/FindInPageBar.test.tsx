@@ -315,6 +315,35 @@ describe('FindInPageBar', () => {
     });
   });
 
+  it('re-masks the query when Enter restarts a pending search', async () => {
+    const input = await openFindBar();
+    input.focus();
+    fireEvent.change(input, { target: { value: 'foo' } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(120);
+      await Promise.resolve();
+    });
+
+    expect(input.type).toBe('password');
+    mocks.findInPage.mockImplementationOnce(async () => {
+      expect(input.type).toBe('password');
+      return 42;
+    });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mocks.findInPage).toHaveBeenLastCalledWith({
+      text: 'foo',
+      forward: true,
+      findNext: true,
+    });
+    expect(input.type).toBe('password');
+  });
+
   it('keeps the query excluded from the async scan until finalUpdate', async () => {
     const input = await openFindBar();
     input.focus();
