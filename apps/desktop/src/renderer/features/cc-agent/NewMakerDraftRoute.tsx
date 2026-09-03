@@ -5082,7 +5082,8 @@ export function NewMakerDraftRoute() {
         quotes: currentDraft?.quotes,
         browserComments: currentDraft?.browserComments,
       });
-      pendingHomePromptRef.current = prompt;
+      const pendingPrompt = prompt;
+      pendingHomePromptRef.current = pendingPrompt;
       void handleSend(
         prompt,
         draftInitialModel,
@@ -5091,8 +5092,12 @@ export function NewMakerDraftRoute() {
         attachmentState.attachments,
         undefined,
         { providerId: chatInitialProviderId },
-      ).then((ok) => {
-        if (ok !== false) pendingHomePromptRef.current = null;
+      ).finally(() => {
+        // 清理失败路径上的完整 prompt，避免下一次普通发送被旧建议稿覆盖。
+        // 用值校验保护连续点击两条建议时后一次 pending prompt。
+        if (pendingHomePromptRef.current === pendingPrompt) {
+          pendingHomePromptRef.current = null;
+        }
       });
     },
     [

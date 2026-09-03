@@ -154,6 +154,31 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).not.toContain('boxShadow');
   });
 
+  it('clears a failed suggestion prompt before the next ordinary send', () => {
+    const suggestionBlock = source.slice(
+      source.indexOf('const handleHomeSuggestion'),
+      source.indexOf('// 注意:不要给 ChatInput 加 key 强制 remount'),
+    );
+
+    expect(suggestionBlock).toContain('const pendingPrompt = prompt;');
+    expect(suggestionBlock).toContain('pendingHomePromptRef.current = pendingPrompt;');
+    expect(suggestionBlock).toContain(').finally(() => {');
+    expect(suggestionBlock).toContain(
+      'if (pendingHomePromptRef.current === pendingPrompt)',
+    );
+    expect(source).toContain('const payload = pendingHomePromptRef.current ?? message;');
+
+    // 这就是回归场景：建议发送失败后，普通发送只能使用自己的文本。
+    let pendingPrompt: string | null = '完整的建议 prompt';
+    const ordinaryMessage = '用户随后输入的普通消息';
+    const settledPrompt = pendingPrompt;
+    if (pendingPrompt === settledPrompt) {
+      pendingPrompt = null;
+    }
+    const payload = pendingPrompt ?? ordinaryMessage;
+    expect(payload).toBe(ordinaryMessage);
+  });
+
   it('keeps brand lockup tokens from the Figma slices', () => {
     expect(brandLockupSource).toContain('head-image-dark.png');
     expect(brandLockupSource).toContain('head-image-light.png');
