@@ -68,5 +68,14 @@ export type PrStatusResult =
       owner: string;
       repo: string;
       prNumber: number;
-      reason: 'no-token' | 'not-found' | 'fetch-failed';
+      reason: PrStatusFailureReason;
     };
+
+/**
+ * 镜像 main/git-context/prStatusService.ts 的 PrStatusFailureReason:
+ *   gh-missing / gh-not-logged-in = 本机 gh 缺失 / 未登录,徽标点击引导 Agent 处理
+ *   no-token  = 拿不到 token 且不给原因(device-link 远端结果、gh 子进程超时)
+ *   not-found = 404;fetch-failed = 网络等其它错误
+ */
+export type PrStatusFailureReason =
+  'gh-missing' | 'gh-not-logged-in' | 'no-token' | 'not-found' | 'fetch-failed';

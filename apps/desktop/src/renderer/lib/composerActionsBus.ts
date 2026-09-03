@@ -27,3 +27,26 @@ export function subscribeSessionLinkInsert(
   window.addEventListener(INSERT_SESSION_LINK_EVENT, wrapped);
   return () => window.removeEventListener(INSERT_SESSION_LINK_EVENT, wrapped);
 }
+
+const INSERT_PROMPT_EVENT = 'cindy-composer-insert-prompt';
+
+/**
+ * A request to prefill plain prompt text into a composer. The composer only
+ * inserts and focuses; the user still decides whether to send.
+ */
+export interface InsertPromptDetail {
+  targetSessionId: string;
+  text: string;
+}
+
+export function insertPromptIntoComposer(detail: InsertPromptDetail): void {
+  window.dispatchEvent(new CustomEvent<InsertPromptDetail>(INSERT_PROMPT_EVENT, { detail }));
+}
+
+export function subscribePromptInsert(handler: (detail: InsertPromptDetail) => void): () => void {
+  const wrapped = (event: Event) => {
+    handler((event as CustomEvent<InsertPromptDetail>).detail);
+  };
+  window.addEventListener(INSERT_PROMPT_EVENT, wrapped);
+  return () => window.removeEventListener(INSERT_PROMPT_EVENT, wrapped);
+}

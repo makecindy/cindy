@@ -14,7 +14,11 @@
  *   draft  GitPullRequestDraft   --text-tertiary
  *   merged GitMerge              --focus-ring(语义蓝;项目无紫 token,不为此新增)
  *   closed GitPullRequestClosed  --error-fg(语义红)
- *   未知(no-token / 查询失败)    GitPullRequest + --text-tertiary,tooltip 给提示
+ *   未知(查询失败)               GitPullRequest + --text-tertiary,tooltip 给原因
+ *
+ * 本机 gh 缺失 / 未登录时(prGuidanceFor):图标右下角加 --status-bar-accent 角点
+ *(与 unresolved 角标同一视觉语言),点击**不打开 PR**,而是把安装 / 登录提示词
+ * 填进当前任务输入框交给 Agent;tooltip 写明点击后果。
  */
 
 import { GitBranch, GitPullRequest, MessageSquare } from 'lucide-react';
@@ -26,8 +30,15 @@ import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import type { Session } from '@/lib/ccAgent.types';
 import type { PrStatusKind, PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
 import { useSessionGitContext } from '@/hooks/useSessionGitContext';
+import { insertPromptIntoComposer } from '@/lib/composerActionsBus';
 import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
-import { PR_STATUS_COLOR, PR_STATUS_ICON, pickBranchLabel } from './gitContextPrVisuals';
+import {
+  PR_STATUS_COLOR,
+  PR_STATUS_ICON,
+  pickBranchLabel,
+  prFailureCopyKey,
+  prGuidanceFor,
+} from './gitContextPrVisuals';
 
 export function GitContextBadge({ session }: { session: Session }) {
   const { t } = useTranslation();
@@ -78,24 +89,57 @@ export function GitContextBadge({ session }: { session: Session }) {
       )}
 
       {prRefs.slice(0, MAX_STATUS_QUERIES).map((ref) => (
-        <PrChip key={ref.id} prRef={ref} status={prStatuses.get(prStatusKey(ref))} />
+        <PrChip
+          key={ref.id}
+          sessionId={session.id}
+          prRef={ref}
+          status={prStatuses.get(prStatusKey(ref))}
+        />
       ))}
     </div>
   );
 }
 
-function PrChip({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult | undefined }) {
+function PrChip({
+  sessionId,
+  prRef,
+  status,
+}: {
+  sessionId: string;
+  prRef: SessionPrRef;
+  status: PrStatusResult | undefined;
+}) {
   const { t } = useTranslation();
 
   const kind: PrStatusKind | null = status?.ok ? status.status : null;
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
   const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
+  const guidance = prGuidanceFor(status);
+  const failureCopyKey = prFailureCopyKey(status);
 
   const statusLine = kind
     ? t(`ccAgent.gitContext.pr.status.${kind}`)
-    : status && !status.ok && status.reason === 'no-token'
-      ? t('ccAgent.gitContext.pr.needsToken')
+    : failureCopyKey
+      ? t(failureCopyKey)
       : t('ccAgent.gitContext.pr.statusUnknown');
+  // gh 不可用时点击 = 引导动作,tooltip 第二行写明后果;其余情况点击 = 打开 PR。
+  const actionLine = guidance
+    ? t(`ccAgent.gitContext.pr.guidance.${guidance}.hint`)
+    : t('ccAgent.gitContext.pr.clickToOpen');
+  const ariaLabel = guidance
+    ? t(`ccAgent.gitContext.pr.guidance.${guidance}.aria`, { number: prRef.prNumber })
+    : t('ccAgent.gitContext.pr.openAria', { number: prRef.prNumber });
+
+  const handleClick = () => {
+    if (!guidance) {
+      void window.electronAPI.openExternal(prRef.url);
+      return;
+    }
+    insertPromptIntoComposer({
+      targetSessionId: sessionId,
+      text: t(`ccAgent.gitContext.pr.guidance.${guidance}.prompt`),
+    });
+  };
 
   // 未解决 review thread 数:>0 才显示;GraphQL 拿不到(null)时整个信号隐藏。
   const unresolved = status?.ok && status.unresolvedCount ? status.unresolvedCount : 0;
@@ -105,8 +149,9 @@ function PrChip({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
       <Tooltip.Trigger asChild>
         <button
           type="button"
-          onClick={() => void window.electronAPI.openExternal(prRef.url)}
-          aria-label={t('ccAgent.gitContext.pr.openAria', { number: prRef.prNumber })}
+          onClick={handleClick}
+          aria-label={ariaLabel}
+          data-pr-guidance={guidance ?? undefined}
           style={WINDOW_NO_DRAG_STYLE}
           className={cn(
             'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5',
@@ -115,7 +160,16 @@ function PrChip({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
             'transition-colors focus-visible:outline-none',
           )}
         >
-          <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
+          <span className="relative shrink-0">
+            <Icon size={12} strokeWidth={1.5} className="block" style={{ color }} />
+            {guidance && (
+              <span
+                aria-hidden
+                className="absolute rounded-full bg-[var(--status-bar-accent)]"
+                style={{ width: 5, height: 5, top: -1.5, right: -1.5 }}
+              />
+            )}
+          </span>
           <span>#{prRef.prNumber}</span>
           {unresolved > 0 && (
             <span
@@ -139,6 +193,8 @@ function PrChip({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
           {unresolved > 0 && (
             <span>{t('ccAgent.gitContext.pr.unresolved', { count: unresolved })}</span>
           )}
+          {/* tooltip 两模式都是深底白字(--tooltip-text),次级信息用透明度而不是页面级 token。 */}
+          <span className="opacity-70">{actionLine}</span>
         </div>
       </Tooltip.Content>
     </Tooltip.Root>
