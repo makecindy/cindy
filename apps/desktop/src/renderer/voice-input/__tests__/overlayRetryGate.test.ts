@@ -35,6 +35,40 @@ describe('voice input overlay retry gate', () => {
     expect(overlaySource).toContain("if (!opened.success) setError(t('chatgptAuthRecovery.openAppFailed'));");
     expect(overlaySource).toContain("if (codexRecovery) {\n            void handleCodexRecovery();");
     expect(overlaySource).toContain('codexSessionPromptActiveRef.current = false;\n          void startRecording();');
+    expect(overlaySource).toContain('if (codexRecoveryPromptPending) return;');
+    expect(overlaySource).toContain('disabled={stopInFlight || codexRecoveryBusy || codexRecoveryPromptPending}');
+  });
+
+  it('drops a delayed handoff after an immediate retry and leaves the paste gate open', async () => {
+    Object.assign(globalThis, { window: { location: { href: 'http://localhost/' } } });
+    const { isCurrentCodexRecoveryPromptAttempt } = await import('../VoiceInputOverlay');
+    let currentAttemptId = 41;
+    let pending: { attemptId: number; reason: string } | null = {
+      attemptId: currentAttemptId,
+      reason: 'token_revoked',
+    };
+    let gate = true;
+    let recoveryEstablished = false;
+    let resolveState!: (reason: string) => void;
+    const delayedState = new Promise<string>((resolve) => {
+      resolveState = resolve;
+    });
+    const delayedHandoff = delayedState.then((reason) => {
+      if (!isCurrentCodexRecoveryPromptAttempt(pending, currentAttemptId, reason)) return;
+      gate = true;
+      recoveryEstablished = true;
+    });
+
+    pending = null;
+    gate = false;
+    currentAttemptId += 1;
+    resolveState('token_revoked');
+    await delayedHandoff;
+
+    expect(recoveryEstablished).toBe(false);
+    expect(gate).toBe(false);
+    expect(overlaySource).toContain('codexRecoveryPromptAttemptRef.current = null;');
+    expect(overlaySource).toContain('invalidateCodexRecoveryPrompt();');
   });
 
   it('keeps the overlay ChatGPT App capability narrowly trusted', () => {
