@@ -128,7 +128,7 @@ describe('PrStatusService', () => {
     expect(r2).toMatchObject({ ok: true, status: 'open' });
   });
 
-  it('gh 未安装透传 gh-missing;gh 超时与 readToken 抛错归为 no-token', async () => {
+  it('gh 未安装透传 gh-missing;超时 / 执行故障 / readToken 抛错归为 no-token', async () => {
     const fetchPr = vi.fn(async () => remote({}));
     const missing = new PrStatusService({
       readToken: async () => ({ ok: false, reason: 'gh-missing' }),
@@ -141,6 +141,12 @@ describe('PrStatusService', () => {
       fetchPr,
     });
     expect((await timeout.getStatuses([Q]))[0]).toMatchObject({ ok: false, reason: 'no-token' });
+
+    const execFailed = new PrStatusService({
+      readToken: async () => ({ ok: false, reason: 'gh-exec-failed' }),
+      fetchPr,
+    });
+    expect((await execFailed.getStatuses([Q]))[0]).toMatchObject({ ok: false, reason: 'no-token' });
 
     const thrown = new PrStatusService({
       readToken: async () => {

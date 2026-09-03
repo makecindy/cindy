@@ -50,3 +50,23 @@ export function subscribePromptInsert(handler: (detail: InsertPromptDetail) => v
   window.addEventListener(INSERT_PROMPT_EVENT, wrapped);
   return () => window.removeEventListener(INSERT_PROMPT_EVENT, wrapped);
 }
+
+/** TipTap chain 里预填提示词需要的最小表面,避免 composerActionsBus 依赖 Editor 类型。 */
+export interface PromptInsertChain {
+  focus: (pos: 'end') => PromptInsertChain;
+  splitBlock: () => PromptInsertChain;
+  insertContent: (text: string) => PromptInsertChain;
+  run: () => void;
+}
+
+/**
+ * 把引导提示词写成独立一段。输入框已有草稿时先 splitBlock,绝不拼到最后一个字符后面。
+ */
+export function insertPromptIntoEditor(
+  chain: PromptInsertChain,
+  opts: { isEmpty: boolean; text: string },
+): void {
+  chain.focus('end');
+  if (!opts.isEmpty) chain.splitBlock();
+  chain.insertContent(opts.text).run();
+}

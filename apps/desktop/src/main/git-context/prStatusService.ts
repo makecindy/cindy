@@ -190,11 +190,14 @@ export class PrStatusService {
       return { ok: false, ...base, reason: 'no-token' };
     }
     if (!read.ok) {
-      // gh 超时是瞬时故障,用户做不了什么,不引导;其余两种交给 UI 引导。
+      // 超时 / 执行故障用户做不了什么,不引导;缺失与未登录交给 UI 引导。
       return {
         ok: false,
         ...base,
-        reason: read.reason === 'gh-timeout' ? 'no-token' : read.reason,
+        reason:
+          read.reason === 'gh-timeout' || read.reason === 'gh-exec-failed'
+            ? 'no-token'
+            : read.reason,
       };
     }
     const token = read.token;

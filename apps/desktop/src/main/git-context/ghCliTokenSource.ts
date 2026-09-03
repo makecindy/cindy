@@ -52,11 +52,13 @@ export interface GhCliTokenSourceDeps {
 
 /**
  * 拿不到 token 的原因。UI 按它决定引导动作:
- *   gh-missing        = 二进制不存在(ENOENT / spawn 失败)→ 引导安装
+ *   gh-missing        = 二进制不存在(ENOENT / spawn 抛错)→ 引导安装
  *   gh-not-logged-in  = gh 在但 `auth token` 非零退出或输出为空 → 引导登录
  *   gh-timeout        = 子进程超时 → 用户做不了什么,当瞬时失败
+ *   gh-exec-failed    = 文件在但跑不起来(EACCES / ENOEXEC 等)→ 同超时,不引导
  */
-export type GhCliTokenUnavailableReason = 'gh-missing' | 'gh-not-logged-in' | 'gh-timeout';
+export type GhCliTokenUnavailableReason =
+  'gh-missing' | 'gh-not-logged-in' | 'gh-timeout' | 'gh-exec-failed';
 
 export type GhCliTokenReadResult =
   { ok: true; token: string } | { ok: false; reason: GhCliTokenUnavailableReason };
@@ -70,11 +72,16 @@ export interface GhCliTokenSource {
   probeAvailability(): Promise<boolean>;
 }
 
-/** execFile 回调 err 的分类。ENOENT 与 spawn 抛错都算未安装;timeout 由 killed+signal 识别。 */
+/**
+ * execFile 回调 err 的分类。
+ * Node:子进程非零退出时 `code` 是数字;spawn/exec 失败时 `code` 是字符串
+ * (ENOENT / EACCES / ENOEXEC …)。只有真正跑起来再失败才算未登录。
+ */
 function classifyExecError(err: Error): GhCliTokenUnavailableReason {
   const e = err as Error & { code?: unknown; killed?: boolean; signal?: unknown };
   if (e.code === 'ENOENT') return 'gh-missing';
   if (e.killed && typeof e.signal === 'string') return 'gh-timeout';
+  if (typeof e.code === 'string') return 'gh-exec-failed';
   return 'gh-not-logged-in';
 }
 

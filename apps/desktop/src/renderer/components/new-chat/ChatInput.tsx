@@ -104,7 +104,11 @@ import {
   isDataOwnerGenerationCurrent,
   isDataOwnerIdCurrent,
 } from '@/contexts/dataOwnerGeneration';
-import { subscribePromptInsert, subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
+import {
+  insertPromptIntoEditor,
+  subscribePromptInsert,
+  subscribeSessionLinkInsert,
+} from '@/lib/composerActionsBus';
 import {
   ModelSelector,
   resolveRemoteModelListStatus,
@@ -2839,7 +2843,7 @@ export function ChatInput({
     return subscribePromptInsert(({ targetSessionId, text }) => {
       if (targetSessionId !== sessionId || editor.isDestroyed) return;
       if (composerMutationLockedRef.current) return;
-      editor.chain().focus('end').insertContent(text).run();
+      insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
     });
   }, [editor, sessionId]);

@@ -3,14 +3,19 @@
  * PR 徽标在本机 gh 缺失 / 未登录时的引导判定(prGuidanceFor / prFailureCopyKey)
  * 与输入框预填事件总线(insertPromptIntoComposer / subscribePromptInsert)。
  *
- * 不变量:只有 gh-missing / gh-not-logged-in 两种失败把点击变成引导动作;
- * 其余失败(no-token / not-found / fetch-failed)与成功态点击仍是打开 PR。
+ * 不变量:只有本机任务上的 gh-missing / gh-not-logged-in 把点击变成引导动作;
+ * SSH(remoteHostId)与其余失败(no-token / not-found / fetch-failed)点击仍打开 PR。
+ * 预填提示词在已有草稿时必须先 splitBlock,不得拼到最后一个字符后面。
  */
 
 import { describe, expect, it, vi } from 'vitest';
 
 import { prFailureCopyKey, prGuidanceFor } from '../features/cc-agent/gitContextPrVisuals';
-import { insertPromptIntoComposer, subscribePromptInsert } from '../lib/composerActionsBus';
+import {
+  insertPromptIntoComposer,
+  insertPromptIntoEditor,
+  subscribePromptInsert,
+} from '../lib/composerActionsBus';
 import type { PrStatusFailureReason, PrStatusResult } from '../lib/gitContext.types';
 
 const base = { owner: 'makecindy', repo: 'cindy', prNumber: 3821 };
@@ -42,6 +47,13 @@ describe('prGuidanceFor', () => {
     expect(prGuidanceFor(ok)).toBeNull();
     expect(prGuidanceFor(undefined)).toBeNull();
   });
+
+  it('SSH 任务(remoteHostId)不引导:状态查询走本机 gh,提示词却会进远端 Agent', () => {
+    expect(prGuidanceFor(failed('gh-missing'), { remoteHostId: 'host-1' })).toBeNull();
+    expect(prGuidanceFor(failed('gh-not-logged-in'), { remoteHostId: 'host-1' })).toBeNull();
+    expect(prGuidanceFor(failed('gh-missing'), { remoteHostId: null })).toBe('install');
+    expect(prGuidanceFor(failed('gh-not-logged-in'), { remoteHostId: undefined })).toBe('login');
+  });
 });
 
 describe('prFailureCopyKey', () => {
@@ -70,5 +82,35 @@ describe('composerActionsBus prompt insert', () => {
     unsubscribe();
     insertPromptIntoComposer({ targetSessionId: 's1', text: 'again' });
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('空输入框直接 insertContent;已有草稿先 splitBlock 再插入,避免粘连', () => {
+    function makeChain() {
+      const chain = {
+        focus: vi.fn(),
+        splitBlock: vi.fn(),
+        insertContent: vi.fn(),
+        run: vi.fn(),
+      };
+      chain.focus.mockReturnValue(chain);
+      chain.splitBlock.mockReturnValue(chain);
+      chain.insertContent.mockReturnValue(chain);
+      return chain;
+    }
+
+    const empty = makeChain();
+    insertPromptIntoEditor(empty, { isEmpty: true, text: 'gh auth login' });
+    expect(empty.splitBlock).not.toHaveBeenCalled();
+    expect(empty.insertContent).toHaveBeenCalledWith('gh auth login');
+    expect(empty.run).toHaveBeenCalledTimes(1);
+
+    const occupied = makeChain();
+    insertPromptIntoEditor(occupied, { isEmpty: false, text: 'gh auth login' });
+    expect(occupied.splitBlock).toHaveBeenCalledTimes(1);
+    expect(occupied.insertContent).toHaveBeenCalledWith('gh auth login');
+    expect(occupied.run).toHaveBeenCalledTimes(1);
+    expect(occupied.splitBlock.mock.invocationCallOrder[0]).toBeLessThan(
+      occupied.insertContent.mock.invocationCallOrder[0],
+    );
   });
 });

@@ -20,7 +20,14 @@ import type { GitContextDirSource, PrStatusKind, PrStatusResult } from '@/lib/gi
  */
 export type PrGuidanceAction = 'install' | 'login';
 
-export function prGuidanceFor(status: PrStatusResult | undefined): PrGuidanceAction | null {
+export function prGuidanceFor(
+  status: PrStatusResult | undefined,
+  opts?: { remoteHostId?: string | null },
+): PrGuidanceAction | null {
+  // SSH 任务的 Agent 在远端跑,但 PR 状态查询走本机 gh。引导装/登远端 gh
+  // 修不了本机 token,还会挤掉始终可用的「打开 PR」。device-link 已在
+  // prStatusService 把这两种 reason 归一为 no-token;SSH 在这里钳制。
+  if (opts?.remoteHostId) return null;
   if (!status || status.ok) return null;
   if (status.reason === 'gh-missing') return 'install';
   if (status.reason === 'gh-not-logged-in') return 'login';

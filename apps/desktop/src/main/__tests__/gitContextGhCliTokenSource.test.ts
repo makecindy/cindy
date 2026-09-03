@@ -194,6 +194,16 @@ describe('createGhCliTokenSource', () => {
       expect(await src.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-timeout' });
     });
 
+    it('EACCES / ENOEXEC 等 spawn 字符串错误 → gh-exec-failed,不当成未登录', async () => {
+      for (const code of ['EACCES', 'ENOEXEC'] as const) {
+        const src = createGhCliTokenSource({
+          execFileFn: execMock((_f, cb) => cb(errWith({ code }), '', '')),
+          existsFn: () => false,
+        });
+        expect(await src.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-exec-failed' });
+      }
+    });
+
     it('与 readToken 共享同一份缓存与 in-flight:两种读法交替调用只 spawn 一次', async () => {
       const execFileFn = execMock((_f, cb) => cb(errWith({ code: 1 }), '', ''));
       const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
