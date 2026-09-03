@@ -7269,6 +7269,8 @@
       "label": "分支",
       "loading": "載入分支中…",
       "loadFailed": "分支列表載入失敗，點此重試",
+      "searchPlaceholder": "搜尋分支…",
+      "noMatch": "沒有符合的分支",
       "currentTooltip": "當前分支",
       "sourceTooltip": "worktree 源分支"
     },

@@ -7269,6 +7269,8 @@
       "label": "ブランチ",
       "loading": "ブランチを読み込み中…",
       "loadFailed": "ブランチの読み込みに失敗しました。タップして再試行",
+      "searchPlaceholder": "ブランチを検索…",
+      "noMatch": "一致するブランチがありません",
       "currentTooltip": "現在のブランチ",
       "sourceTooltip": "worktree のソースブランチ"
     },

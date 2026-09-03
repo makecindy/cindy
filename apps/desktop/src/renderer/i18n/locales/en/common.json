@@ -7271,6 +7271,8 @@
       "label": "Branch",
       "loading": "Loading branches…",
       "loadFailed": "Failed to load branches — tap to retry",
+      "searchPlaceholder": "Search branches…",
+      "noMatch": "No matching branches",
       "currentTooltip": "Current branch",
       "sourceTooltip": "Worktree source branch"
     },
