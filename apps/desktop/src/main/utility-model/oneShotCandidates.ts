@@ -577,8 +577,20 @@ async function runDefaultProfileCandidates(
       });
       return null;
     }
+    // The first guard above only covers the time spent resolving the candidate.
+    // Codex candidates can still await host startup inside `oneShot`, so pass a
+    // second guard through to the actual dispatch and re-read the profile's
+    // live disable state after any caller-owned async checks.
+    const candidateOpts: UtilityTextRequestOptions = {
+      ...(opts ?? {}),
+      beforeDispatch: async (route) => {
+        if (isUtilityRouteDisabled(candidate.profile)) return false;
+        if (opts?.beforeDispatch && !(await opts.beforeDispatch(route))) return false;
+        return !isUtilityRouteDisabled(candidate.profile);
+      },
+    };
     try {
-      const text = (await candidate.execute(prompt, opts)).trim();
+      const text = (await candidate.execute(prompt, candidateOpts)).trim();
       if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
       return {
         ok: true,

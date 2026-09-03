@@ -250,6 +250,29 @@ describe('utility one-shot candidates', () => {
     expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
   });
 
+  it('rechecks profile disable status at final Codex dispatch', async () => {
+    chainState.refs = ['codex-gpt-5.4-mini'];
+    const maker = makerMock(true);
+    vi.mocked(maker.oneShot).mockImplementation(async (_agent, _prompt, options) => {
+      readDisableOverrides.mockReturnValue({
+        disabledModels: {},
+        disabledProviders: { openai: true },
+      } as never);
+      const allowed = options?.beforeDispatch ? await options.beforeDispatch() : true;
+      if (!allowed) throw new Error('request_failed');
+      return 'must not dispatch';
+    });
+
+    const result = await requestUtilityText(maker, 'hello');
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [expect.objectContaining({ reason: 'request_failed' })],
+    });
+    expect(vi.mocked(maker.oneShot)).toHaveBeenCalledOnce();
+  });
+
   it('rechecks the owner after an async caller guard before LiteLLM dispatch', async () => {
     chainState.refs = ['litellm-gpt-5.4-mini'];
     readKey.mockReturnValue('proxy-key');

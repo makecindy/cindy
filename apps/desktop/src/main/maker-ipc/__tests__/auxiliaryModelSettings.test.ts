@@ -10,6 +10,7 @@ vi.mock('../../logger.js', () => ({
 
 vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: () => ({ providers: [] }),
+  isXdGatewayPaymentRequiredRoute: () => false,
 }));
 
 vi.mock('../../maker-host/model-disable-store.js', () => ({
@@ -27,6 +28,11 @@ vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
 
 vi.mock('../../utility-model/oneshotProviderUsability.js', () => ({
   hasOneshotProviderCredential: () => false,
+}));
+
+vi.mock('../../utility-model/oneShotCandidates.js', () => ({
+  isUtilityRouteDisabled: () => false,
+  isUtilityRoutePaymentRequired: () => false,
 }));
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({
@@ -67,6 +73,27 @@ function catalog() {
             },
           ],
         },
+      },
+    ],
+  } as never;
+}
+
+function builtinCodexCatalog() {
+  return {
+    providers: [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'oauth' },
+        routing: {
+          codex: {
+            upstream: 'https://openai.example/v1',
+            authStrategy: 'oauth-passthrough',
+          },
+        },
+        models: { codex: [] },
       },
     ],
   } as never;
@@ -119,6 +146,23 @@ describe('auxiliary model settings IPC helpers', () => {
         providerId: 'openrouter',
         modelId: 'openai/gpt-5-mini',
         available: false,
+      }),
+    ]);
+  });
+
+  it('marks a migrated utility profile available when its direct route is usable', () => {
+    const options = buildAuxiliaryModelOptions({
+      settings: { models: [PROFILE] },
+      catalog: builtinCodexCatalog(),
+      overrides: { disabledModels: {}, disabledProviders: {} },
+      hasCredential: () => true,
+    });
+
+    expect(options).toEqual([
+      expect.objectContaining({
+        id: PROFILE,
+        providerId: 'openai',
+        available: true,
       }),
     ]);
   });

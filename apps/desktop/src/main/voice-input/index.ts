@@ -2266,7 +2266,11 @@ export function registerVoiceInputIpc(): void {
             ?? `${VOICE_INPUT_REFINEMENT_CACHE_SCOPE}:${CINDY_MANAGED_REFINER_PROVIDER}`;
           refiner = new DictationRefiner({
             client: createVoiceInputTextModelClient(effectiveRefinerProfile, {
-              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
+              // Managed refinement is routed and failed over by voice-server;
+              // changing the local auxiliary chain must not cancel it. The
+              // owner fence still prevents a previous account's text from
+              // being sent after an account switch.
+              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),
               timeoutMs: VOICE_INPUT_MANAGED_REFINER_IDLE_TIMEOUT_MS,
               voiceContext,
               onUsage: ({ servedModel, ...usage }) => {

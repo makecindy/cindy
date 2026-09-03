@@ -30,7 +30,8 @@ describe('custom auxiliary chain does not hit the session agent', () => {
   it('voice refinement pins the effective auxiliary chain for the whole run', () => {
     const source = readFileSync(path.join(root, 'voice-input/index.ts'), 'utf8');
     expect(source).toContain('const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();');
-    expect(source.match(/assertVoiceInputOwnerScopeCurrent\(ownerScopeKey, auxiliaryChainSnapshot\)/g)?.length).toBe(4);
+    expect(source.match(/assertVoiceInputOwnerScopeCurrent\(ownerScopeKey, auxiliaryChainSnapshot\)/g)?.length).toBe(3);
+    expect(source).toContain('beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),');
   });
 
   it('dictionary learning uses the same owner and chain dispatch guard', () => {

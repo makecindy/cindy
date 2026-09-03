@@ -32,6 +32,10 @@ import {
   type OneshotCredentialProbe,
   type TextOneshotPinOption,
 } from '../utility-model/textOneshotPinOptions.js';
+import {
+  isUtilityRouteDisabled,
+  isUtilityRoutePaymentRequired,
+} from '../utility-model/oneShotCandidates.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
@@ -49,9 +53,22 @@ function toWireOption(option: TextOneshotPinOption, available: boolean): Auxilia
   };
 }
 
-function syntheticProfileOption(id: string): AuxiliaryModelOption {
+function syntheticProfileOption(
+  id: string,
+  args: {
+    catalog: Catalog;
+    hasCredential?: OneshotCredentialProbe;
+  },
+): AuxiliaryModelOption {
   const profile = getUtilityModelProfile(id as Parameters<typeof getUtilityModelProfile>[0]);
   const providerId = profile.transport === 'codex-responses' ? 'openai' : 'xd';
+  const provider = args.catalog.providers.find((item) => item.id === providerId);
+  const available = Boolean(
+    provider
+      && args.hasCredential?.(provider, 'codex')
+      && !isUtilityRouteDisabled(profile)
+      && !isUtilityRoutePaymentRequired(profile),
+  );
   return {
     id,
     label: `${profile.model} · ${utilityTransportLabel(profile.transport)}`,
@@ -63,7 +80,7 @@ function syntheticProfileOption(id: string): AuxiliaryModelOption {
     budget: false,
     subscription: profile.transport === 'codex-responses',
     agentSuffix: 'Codex',
-    available: false,
+    available,
   };
 }
 
@@ -97,7 +114,10 @@ export function buildAuxiliaryModelOptions(args: {
       continue;
     }
     if (isUtilityModelProviderKind(pin)) {
-      result.push(syntheticProfileOption(pin));
+      result.push(syntheticProfileOption(pin, {
+        catalog: args.catalog,
+        hasCredential: args.hasCredential,
+      }));
       continue;
     }
     const decoded = decodeCatalogModelPin(pin);
