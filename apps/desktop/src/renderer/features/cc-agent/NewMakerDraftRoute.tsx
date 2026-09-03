@@ -100,7 +100,10 @@ import {
   type VendorPrefs,
   type CollabDraft,
 } from '@/state/newMakerDraft';
-import { hasAnyModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
+import {
+  hasAnyModelEngineOverride,
+  useModelEnginePrefsVersion,
+} from '@/state/modelEnginePrefs';
 import {
   setDraftFavoriteAnchor,
   setSessionFavoriteAnchor,
@@ -2636,7 +2639,13 @@ export function NewMakerDraftRoute() {
       // 本地草稿的 Fast 直接由「新 model + 全局预设 + 来源能力」派生,patch 后同步收敛,
       // 不再维护一份可能与其它对话更新脱节的本地 state。
     },
-    [isDeviceLinkDraft, capabilities, remoteDraftState, patchActiveTuplePrefs, capabilityAgentKind],
+    [
+      isDeviceLinkDraft,
+      capabilities,
+      remoteDraftState,
+      patchActiveTuplePrefs,
+      capabilityAgentKind,
+    ],
   );
   const handleFastModeChange = useCallback(
     (enabled: boolean) => {
@@ -2864,7 +2873,8 @@ export function NewMakerDraftRoute() {
           modelId: selection.modelId,
           // resetStoredConfig 已同步删除当前行三类 override；这里重读完整 store，只有其它行也
           // 没有留下用户配置时才允许后续授权 / 推荐变化重新应用产品默认。
-          hasExternalOverrides: hasAnyModelEngineOverride() || hasAnyProviderModelOverride(),
+          hasExternalOverrides:
+            hasAnyModelEngineOverride() || hasAnyProviderModelOverride(),
         });
       } else {
         markDefaultTupleCustomized();
@@ -3461,10 +3471,10 @@ export function NewMakerDraftRoute() {
       // 按普通会话创建(2026-08-07 裁决)。confirmedIneligible === null(探测中/失败)
       // 仍走 fail-closed —— 探测不出来不等于确认不是 git。
       if (
-        selectedWorkingDir &&
-        !isRemoteProjectDraft &&
-        selectedWorktree.enabled &&
-        selectedWorktree.confirmedIneligible !== true
+        selectedWorkingDir
+        && !isRemoteProjectDraft
+        && selectedWorktree.enabled
+        && selectedWorktree.confirmedIneligible !== true
       ) {
         if (!selectedWorktree.baseRepo) {
           toast.error(t('ccAgent.draft.worktreeMissingRepo'));
@@ -3546,11 +3556,11 @@ export function NewMakerDraftRoute() {
             // 上面的发送门已阻止不完整状态；这里仍保留完整条件作副作用前的防御。
             // 旧 Desktop 可能接受未知 recoveryKey 却不持久化，不能把它当成支持端发起预创建。
             if (
-              effectiveWorkingDir &&
-              wt.enabled &&
-              wt.confirmedIneligible !== true &&
-              wt.baseRepo &&
-              wt.supportsRecoveryKeyDiscard === true
+              effectiveWorkingDir
+              && wt.enabled
+              && wt.confirmedIneligible !== true
+              && wt.baseRepo
+              && wt.supportsRecoveryKeyDiscard === true
             ) {
               // 账本必须绑定发起时的账号/本地数据 owner。账号在后续 await
               // 期间切换时，Main 会拒绝把这笔义务落入新 owner 的命名空间。
@@ -4295,7 +4305,11 @@ export function NewMakerDraftRoute() {
               ranges: readonly T[] | undefined,
             ): T[] | undefined => {
               if (!ranges) return undefined;
-              return rebaseInlineRangesAfterSlashCommandRewrite(ranges, message, dispatchedMessage);
+              return rebaseInlineRangesAfterSlashCommandRewrite(
+                ranges,
+                message,
+                dispatchedMessage,
+              );
             };
             const sendPromise = makerChatStore.sendMessage(
               newSession.id,
@@ -4467,10 +4481,10 @@ export function NewMakerDraftRoute() {
         // 与 handleSend 同口径:确认不合格时勾选记忆不生效,整段 ON 门跳过、按普通
         // 会话创建;null(探测中/失败)仍 fail closed(2026-08-07 裁决)。
         if (
-          selectedWorkingDir &&
-          !isRemoteProjectDraft &&
-          selectedWorktree.enabled &&
-          selectedWorktree.confirmedIneligible !== true
+          selectedWorkingDir
+          && !isRemoteProjectDraft
+          && selectedWorktree.enabled
+          && selectedWorktree.confirmedIneligible !== true
         ) {
           if (!selectedWorktree.baseRepo) {
             throw new Error(t('ccAgent.draft.worktreeMissingRepo'));
@@ -4557,11 +4571,11 @@ export function NewMakerDraftRoute() {
           let precreatedWorktree:
             { path: string; recoveryKey: string; createdAt: number } | undefined;
           if (
-            selectedWorkingDir &&
-            selectedWorktree.enabled &&
-            selectedWorktree.confirmedIneligible !== true &&
-            selectedWorktree.baseRepo &&
-            selectedWorktree.supportsRecoveryKeyDiscard === true
+            selectedWorkingDir
+            && selectedWorktree.enabled
+            && selectedWorktree.confirmedIneligible !== true
+            && selectedWorktree.baseRepo
+            && selectedWorktree.supportsRecoveryKeyDiscard === true
           ) {
             if (!ownerAtGoal) {
               throw new RemotePrecreatedWorktreeCleanupPendingError();
@@ -4830,10 +4844,10 @@ export function NewMakerDraftRoute() {
         // 确认不合格时按普通会话走(上方 ON 门已放行,这里必须一起排除,否则
         // baseRepo 为 null 会命中下方的非空断言)。
         const useLocalGoalWorktree = Boolean(
-          selectedWorkingDir &&
-          !isRemoteProjectDraft &&
-          selectedWorktree.enabled &&
-          selectedWorktree.confirmedIneligible !== true,
+          selectedWorkingDir
+          && !isRemoteProjectDraft
+          && selectedWorktree.enabled
+          && selectedWorktree.confirmedIneligible !== true,
         );
         goalSessionId = localDraftSessionIdRef.current;
         optimisticGoalTitle = normalizeAutoTitle(objective);
