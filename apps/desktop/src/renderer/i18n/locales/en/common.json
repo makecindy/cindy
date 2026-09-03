@@ -1495,6 +1495,13 @@
           "editTitle": "Edit custom provider",
           "desc": "Configure an OpenAI / Anthropic-compatible provider."
         },
+        "imageGenerationReload": {
+          "title": "Reload Codex",
+          "description": "Saving this image generation configuration requires reloading Codex and will interrupt the Codex tasks currently in progress.",
+          "interrupt": "Save and stop",
+          "cancel": "Cancel",
+          "close": "Close"
+        },
         "fields": {
           "name": "Display name",
           "namePlaceholder": "My AI provider",
@@ -1516,6 +1523,15 @@
           "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "modelSupportsImageInput": "Supports image input",
           "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
+          "runtimeAdvanced": "Advanced",
+          "runtimeSupportsImageGeneration": "Supports image generation and editing",
+          "runtimeSupportsImageGenerationHelpLabel": "About image generation and editing support",
+          "runtimeSupportsImageGenerationConditionTitle": "When to enable",
+          "runtimeSupportsImageGenerationCondition": "Your gateway must be compatible with the OpenAI Responses API and support image generation and editing.",
+          "runtimeSupportsImageGenerationEndpointsTitle": "Required endpoints",
+          "runtimeSupportsImageGenerationEndpoints": "The gateway must handle these requests:",
+          "runtimeSupportsImageGenerationPermissionsTitle": "Access and failures",
+          "runtimeSupportsImageGenerationPermissions": "The current API key, account, or user group needs access to the image model. This switch only declares the gateway's capability and does not grant upstream access. If a request fails, Cindy shows the actual upstream error and does not switch to another image service.",
           "modelSupportsReasoning": "Supports reasoning",
           "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Changes take effect in the next Pi Agent session.",
           "modelReasoningEfforts": "Supported reasoning effort levels",

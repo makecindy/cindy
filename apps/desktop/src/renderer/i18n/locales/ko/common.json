@@ -1495,6 +1495,13 @@
           "editTitle": "사용자 지정 제공자 편집",
           "desc": "OpenAI / Anthropic 호환 제공자를 구성합니다."
         },
+        "imageGenerationReload": {
+          "title": "Codex 다시 로드",
+          "description": "이 이미지 생성 설정을 저장하려면 Codex를 다시 로드해야 하며 현재 실행 중인 Codex 작업이 중단됩니다.",
+          "interrupt": "저장하고 중지",
+          "cancel": "취소",
+          "close": "닫기"
+        },
         "fields": {
           "name": "표시 이름",
           "namePlaceholder": "내 AI 제공자",
@@ -1516,6 +1523,15 @@
           "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
           "modelSupportsImageInput": "이미지 입력 지원",
           "modelSupportsImageInputHelp": "모델이 실제로 시각 입력을 지원할 때만 켜세요. 저장 후 새 Pi 작업부터 적용됩니다.",
+          "runtimeAdvanced": "고급",
+          "runtimeSupportsImageGeneration": "이미지 생성 및 편집 지원",
+          "runtimeSupportsImageGenerationHelpLabel": "이미지 생성 및 편집 지원 정보",
+          "runtimeSupportsImageGenerationConditionTitle": "적용 조건",
+          "runtimeSupportsImageGenerationCondition": "게이트웨이는 OpenAI Responses API와 호환되고 이미지 생성 및 편집을 지원해야 합니다.",
+          "runtimeSupportsImageGenerationEndpointsTitle": "엔드포인트 요구사항",
+          "runtimeSupportsImageGenerationEndpoints": "게이트웨이는 다음 요청을 처리해야 합니다.",
+          "runtimeSupportsImageGenerationPermissionsTitle": "권한 및 실패 처리",
+          "runtimeSupportsImageGenerationPermissions": "현재 API 키, 계정 또는 사용자 그룹에 이미지 모델 권한이 필요합니다. 이 설정은 게이트웨이 기능을 선언할 뿐이며 업스트림 권한을 자동으로 부여하지 않습니다. 호출이 실패하면 실제 업스트림 오류를 표시하며 다른 이미지 서비스로 전환하지 않습니다.",
           "modelSupportsReasoning": "추론 지원",
           "modelSupportsReasoningHelp": "모델이 추론 강도를 허용할 때만 켜고 실제로 지원하는 모든 단계를 선택하세요. 저장 후 다음 Pi Agent 세션부터 적용됩니다.",
           "modelReasoningEfforts": "지원되는 추론 강도",

@@ -232,6 +232,7 @@ function toRouting(
   modelsUrl?: string,
   wireProtocol?: "anthropic-messages" | "openai-responses" | "openai-chat",
   piCatalogProviderId?: string,
+  supportsImageGeneration?: boolean,
 ): RoutingDescriptor {
   const r: RoutingDescriptor = {
     upstream: baseUrl,
@@ -239,6 +240,9 @@ function toRouting(
     ...(agent === 'codex'
       && (wireProtocol ?? defaultWireProtocol(agent)) === 'openai-responses'
       ? { supportsResponsesCustomTools: false }
+      : {}),
+    ...(agent === 'codex' && supportsImageGeneration === true
+      ? { supportsImageGeneration: true }
       : {}),
     ...(strategy === "none" &&
     (!isLoopbackProviderUrl(baseUrl) ||
@@ -298,6 +302,7 @@ export function buildUserProvider(
       rt.modelsUrl,
       rt.wireProtocol,
       rt.piCatalogProviderId,
+      rt.supportsImageGeneration,
     );
     models[agent] = rt.models.map((m) =>
       toCatalogModel(m, config.id, agent, options.modelRegistry),

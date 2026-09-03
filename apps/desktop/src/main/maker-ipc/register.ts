@@ -378,6 +378,7 @@ import {
   getMakerIfReady,
   getPluginRegistry,
   prepareCodexForAuthModeChange,
+  prepareCodexForCustomProviderHostChange,
   restartCodexAfterAuthModeChange,
   setBeforeLocalCodexSessionStartHook,
 } from '../maker-host/index.js';
@@ -931,6 +932,10 @@ import {
   closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
+import {
+  codexCustomProviderConfigSignature,
+  hasCodexAppliedCustomProviderCapability,
+} from '../maker-host/codex-custom-provider-route.js';
 import {
   decideCodexProviderThreadRelink,
   relinkCodexProviderThread,
@@ -7068,6 +7073,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
+    codexCustomProviderConfigSignature,
+    hasAppliedCodexCustomProviderImageGeneration: (providerId) =>
+      hasCodexAppliedCustomProviderCapability(providerId, 'imageGeneration'),
+    listBusyLocalCodexSessionIds: () =>
+      maker
+        .listActiveSessions()
+        .filter(
+          (session) =>
+            session.agentKind === 'codex' &&
+            !session.remoteHostId &&
+            isLocalSessionBusy(session, isSessionInTurn),
+        )
+        .map((session) => session.id),
+    prepareCodexCustomProviderHostChange: prepareCodexForCustomProviderHostChange,
+    finalizeCodexCustomProviderHostChange: finalizeCodexAfterAuthModeChange,
+    cancelCodexCustomProviderHostChange: cancelCodexAuthModeChange,
     beginRouteMutation: (providerId) => beginProviderRouteMutation(providerId),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
     listProviderIds: () => getDesktopSelectableCatalog().providers.map((provider) => provider.id),

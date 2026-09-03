@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { createServer, request as httpRequest } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +22,7 @@ vi.setConfig({ testTimeout: 20_000 });
 const mockState = vi.hoisted(() => {
   let capturedRegistry: Registry | null = null;
   const state = {
+    logLevel: 'debug' as 'info' | 'debug',
     userData: '/tmp/xdt-maker-test',
     logDir: '/tmp/xdt-maker-test/logs',
     logger: {
@@ -63,7 +66,7 @@ vi.mock('../../appCapabilities.js', () => ({
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => mockState.logger,
-  getLogLevel: () => 'debug',
+  getLogLevel: () => mockState.logLevel,
   getLogDir: () => mockState.logDir,
 }));
 
@@ -144,6 +147,7 @@ async function freshCodexProxyHost() {
   mockState.injectionTransform.mockReturnValue(null);
   mockState.stripNonAnthropicFields.mockReset();
   mockState.stripNonAnthropicFields.mockReturnValue(null);
+  mockState.logLevel = 'debug';
   mockState.resetCapturedRegistry();
   return import('../codex-proxy-host.js');
 }
@@ -4702,7 +4706,7 @@ describe('codex proxy host', () => {
     // the schema 400 (PR #2444 Codex P1).
     const host = await freshCodexProxyHost();
     const { setXdGatewayModels, markXdGatewayModelAccessUnknown } = await import('../active-catalog.js');
-    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { clearSessionProvider } = await import('../session-provider-store.js');
     setXdGatewayModels([]);
     markXdGatewayModelAccessUnknown();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -4987,7 +4991,7 @@ describe('codex proxy host', () => {
     // transform claims this request for xd; the compat transform must match.
     const host = await freshCodexProxyHost();
     const { setXdGatewayModels } = await import('../active-catalog.js');
-    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { clearSessionProvider } = await import('../session-provider-store.js');
     setXdGatewayModels([{ id: 'x-ai/grok-4.5', agents: ['codex'] }]);
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
@@ -6213,5 +6217,974 @@ describe('createModelRoutingTransform —— Anthropic 桥的额度回调安装�
       setCustomProviders([]);
       setCustomProviderKeyReader(() => null);
     }
+  });
+});
+
+describe('createModelRoutingTransform —— custom Provider native imagegen prefix', () => {
+  it('routes generate/edit to the selected custom Provider and strips internal actor auth', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'image-provider',
+      name: 'Image Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://images.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [
+            { id: 'chat-image', name: 'Chat Image' },
+            { id: 'chat-text', name: 'Chat Text', supportsImageInput: true },
+          ],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    setCustomProviderKeyReader(() => 'provider-key');
+    const route = deriveCodexCustomProviderRoutes(catalog)[0]!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+
+    try {
+      const imageDecision = await Promise.resolve(
+        host.createModelRoutingTransform()(
+          { model: 'gpt-image-2', prompt: 'draw' },
+          {
+            reqId: 1,
+            method: 'POST',
+            url: `/_cindy/custom-provider/${route.routeId}/images/generations`,
+            headers: {
+              authorization: 'Bearer chatgpt-oauth',
+              'chatgpt-account-id': 'account',
+              'x-openai-actor-authorization': 'local-image-extension',
+            },
+          },
+        ),
+      );
+      expect(imageDecision).toEqual(
+        expect.objectContaining({
+          upstreamOverride: 'https://images.example/v1',
+          pathOverride: '/images/generations',
+          headerOverride: expect.objectContaining({ authorization: 'Bearer provider-key' }),
+          headerDelete: expect.arrayContaining([
+            'chatgpt-account-id',
+            'x-openai-actor-authorization',
+          ]),
+        }),
+      );
+
+      const responseDecision = await Promise.resolve(
+        host.createModelRoutingTransform()(
+          { model: 'chat-image', input: [] },
+          {
+            reqId: 2,
+            method: 'POST',
+            url: `/_cindy/custom-provider/${route.routeId}/responses`,
+            headers: { authorization: 'Bearer placeholder' },
+          },
+        ),
+      );
+      expect(responseDecision).toEqual(
+        expect.objectContaining({
+          upstreamOverride: 'https://images.example/v1',
+          pathOverride: '/responses',
+        }),
+      );
+
+      const secondModelDecision = await Promise.resolve(
+        host.createModelRoutingTransform()(
+          { model: 'chat-text', input: [] },
+          {
+            reqId: 3,
+            method: 'POST',
+            url: `/_cindy/custom-provider/${route.routeId}/responses`,
+            headers: {},
+          },
+        ),
+      );
+      expect(secondModelDecision).toEqual(
+        expect.objectContaining({
+          upstreamOverride: 'https://images.example/v1',
+          pathOverride: '/responses',
+        }),
+      );
+    } finally {
+      setCustomProviderKeyReader(() => null);
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('keeps auth-none, generic OAuth, and Provider-owned actor headers isolated on the prefix', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const {
+      setCustomProviderHeaderReader,
+      setCustomProviderKeyReader,
+      setOAuthTokenReader,
+    } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const providers = [
+      buildUserProvider({
+        id: 'none-images',
+        name: 'None Images',
+        auth: { method: 'none' },
+        runtimes: {
+          codex: {
+            baseUrl: 'http://127.0.0.1:44551/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [{ id: 'none-image', name: 'None Image' }],
+          },
+        },
+      }),
+      buildUserProvider({
+        id: 'oauth-images',
+        name: 'OAuth Images',
+        auth: {
+          method: 'oauth',
+          oauth: {
+            authorizeUrl: 'https://oauth-images.example/authorize',
+            tokenUrl: 'https://oauth-images.example/token',
+            clientId: 'public-client',
+            scopes: 'images',
+          },
+        },
+        runtimes: {
+          codex: {
+            baseUrl: 'https://oauth-images.example/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [{ id: 'oauth-image', name: 'OAuth Image' }],
+          },
+        },
+      }),
+      buildUserProvider({
+        id: 'actor-images',
+        name: 'Actor Images',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://actor-images.example/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            headers: { 'X-OpenAI-Actor-Authorization': 'provider-owned-actor' },
+            models: [{ id: 'actor-image', name: 'Actor Image' }],
+          },
+        },
+      }),
+    ];
+    const catalog = {
+      ...BUNDLED_CATALOG,
+      providers: [...BUNDLED_CATALOG.providers, ...providers],
+    };
+    const routes = deriveCodexCustomProviderRoutes(catalog);
+    setActiveCatalog(catalog);
+    setCustomProviderKeyReader(() => 'fake-api-key');
+    setCustomProviderHeaderReader((providerId) =>
+      providerId === 'actor-images'
+        ? { 'X-OpenAI-Actor-Authorization': 'provider-owned-actor' }
+        : null,
+    );
+    setOAuthTokenReader(() => 'fake-oauth-token');
+    host.setCodexAppliedCustomProviderRoutes(routes);
+
+    try {
+      const decisionFor = (providerId: string) => {
+        const route = routes.find((candidate) => candidate.providerId === providerId)!;
+        return Promise.resolve(host.createModelRoutingTransform()(
+          { model: 'gpt-image-2' },
+          {
+            reqId: 1,
+            method: 'POST',
+            url: `/_cindy/custom-provider/${route.routeId}/images/generations`,
+            headers: {
+              authorization: 'Bearer loopback-placeholder',
+              'x-openai-actor-authorization': 'local-image-extension',
+            },
+          },
+        ));
+      };
+      const none = await decisionFor('none-images');
+      expect(none).toEqual(expect.objectContaining({
+        upstreamOverride: 'http://127.0.0.1:44551/v1',
+        headerDelete: expect.arrayContaining([
+          'authorization',
+          'x-openai-actor-authorization',
+        ]),
+      }));
+      expect(none?.headerOverride?.authorization).toBeUndefined();
+
+      none?.forwardLifecycle?.onStart?.();
+      none?.forwardLifecycle?.onFailure?.('retry-rejected');
+      const noneLifecycleLogs = [
+        ...mockState.logger.info.mock.calls,
+        ...mockState.logger.warn.mock.calls,
+      ]
+        .map((call) => String(call[0] ?? ''))
+        .filter((line) => line.includes('codex_image_generation_forward_'));
+      expect(noneLifecycleLogs).toHaveLength(2);
+      expect(JSON.stringify(noneLifecycleLogs)).not.toContain('authSource');
+      expect(noneLifecycleLogs[1]).toContain('outcome       : local_retry_rejected');
+
+      const oauth = await decisionFor('oauth-images');
+      expect(oauth).toEqual(expect.objectContaining({
+        upstreamOverride: 'https://oauth-images.example/v1',
+        headerOverride: expect.objectContaining({ authorization: 'Bearer fake-oauth-token' }),
+        headerDelete: expect.arrayContaining(['x-openai-actor-authorization']),
+      }));
+
+      const actor = await decisionFor('actor-images');
+      expect(actor).toEqual(expect.objectContaining({
+        headerOverride: expect.objectContaining({
+          authorization: 'Bearer fake-api-key',
+          'x-openai-actor-authorization': 'provider-owned-actor',
+        }),
+      }));
+      expect(actor?.headerDelete ?? []).not.toContain('x-openai-actor-authorization');
+    } finally {
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderHeaderReader(() => null);
+      setCustomProviderKeyReader(() => null);
+      setOAuthTokenReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('rejects malformed, deleted and stale prefixed routes without falling back', async () => {
+    const host = await freshCodexProxyHost();
+    const invalid = await Promise.resolve(
+      host.createModelRoutingTransform()(
+        { model: 'gpt-image-2' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/_cindy/custom-provider/not-a-route/images/edits',
+          headers: {},
+        },
+      ),
+    );
+    expect(invalid).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+
+    const deleted = await Promise.resolve(
+      host.createModelRoutingTransform()(
+        { model: 'gpt-image-2' },
+        {
+          reqId: 2,
+          method: 'POST',
+          url: '/_cindy/custom-provider/0123456789abcdefabcd/images/edits',
+          headers: {},
+        },
+      ),
+    );
+    expect(deleted).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+  });
+
+  it('gates image endpoints by the frozen capability while keeping generic Responses routing', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'future-capability-provider',
+      name: 'Future Capability Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://future-capability.example/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'future-chat', name: 'Future Chat' }],
+        },
+      },
+    });
+    const catalog = {
+      ...BUNDLED_CATALOG,
+      providers: [...BUNDLED_CATALOG.providers, provider],
+    };
+    const route = deriveCodexCustomProviderRoutes(catalog)[0]!;
+    const futureOnlyRoute = {
+      ...route,
+      capabilities: { imageGeneration: false, futureCapabilityFixture: true },
+    };
+    setActiveCatalog(catalog);
+    setCustomProviderKeyReader(() => 'future-provider-key');
+    host.setCodexAppliedCustomProviderRoutes([futureOnlyRoute]);
+
+    try {
+      const imageDecision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'gpt-image-2' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: `/_cindy/custom-provider/${route.routeId}/images/generations`,
+          headers: {},
+        },
+      ));
+      expect(imageDecision).toEqual(
+        expect.objectContaining({ localHandler: expect.any(Function) }),
+      );
+
+      const responseDecision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'future-chat', input: [] },
+        {
+          reqId: 2,
+          method: 'POST',
+          url: `/_cindy/custom-provider/${route.routeId}/responses`,
+          headers: {},
+        },
+      ));
+      expect(responseDecision).toEqual(expect.objectContaining({
+        upstreamOverride: 'https://future-capability.example/v1',
+        pathOverride: '/responses',
+      }));
+    } finally {
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('keeps the running Host snapshot during capability/model changes and fails closed after deletion', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const beforeProvider = buildUserProvider({
+      id: 'busy-image-provider',
+      name: 'Busy Image Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://busy-images.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'old-image-chat', name: 'Old Image Chat' }],
+        },
+      },
+    });
+    const beforeCatalog = {
+      ...BUNDLED_CATALOG,
+      providers: [...BUNDLED_CATALOG.providers, beforeProvider],
+    };
+    const route = deriveCodexCustomProviderRoutes(beforeCatalog)[0]!;
+    setActiveCatalog(beforeCatalog);
+    setCustomProviderKeyReader(() => 'provider-key');
+    host.setCodexAppliedCustomProviderRoutes([route]);
+
+    try {
+      // Settings is already ahead (last true cancelled and model list replaced),
+      // while a busy turn still runs on the old app-server snapshot.
+      const changedProvider = buildUserProvider({
+        id: 'busy-image-provider',
+        name: 'Busy Image Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://busy-images.example/v1',
+            requestPath: '/v1/responses',
+            wireProtocol: 'openai-responses',
+            models: [{ id: 'new-text-chat', name: 'New Text Chat' }],
+          },
+        },
+      });
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        providers: [...BUNDLED_CATALOG.providers, changedProvider],
+      });
+
+      const oldTurnDecision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'old-image-chat', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: `/_cindy/custom-provider/${route.routeId}/responses`,
+          headers: {},
+        },
+      ));
+      expect(oldTurnDecision).toEqual(expect.objectContaining({
+        upstreamOverride: 'https://busy-images.example/v1',
+        pathOverride: '/responses',
+      }));
+
+      // Provider deletion is an irrecoverable boundary: retain the prefix
+      // ownership but reject locally, never fall through to Gateway/ChatGPT.
+      setActiveCatalog(BUNDLED_CATALOG);
+      const deletedDecision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'gpt-image-2' },
+        {
+          reqId: 2,
+          method: 'POST',
+          url: `/_cindy/custom-provider/${route.routeId}/images/edits`,
+          headers: {},
+        },
+      ));
+      expect(deletedDecision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+
+      // Once the hard cut applies the new Host snapshot, the old prefix stops selecting.
+      host.setCodexAppliedCustomProviderRoutes([]);
+      const afterRestartDecision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'gpt-image-2' },
+        {
+          reqId: 3,
+          method: 'POST',
+          url: `/_cindy/custom-provider/${route.routeId}/images/generations`,
+          headers: {},
+        },
+      ));
+      expect(afterRestartDecision).toEqual(
+        expect.objectContaining({ localHandler: expect.any(Function) }),
+      );
+    } finally {
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('never combines an old Host image route with a newer credential generation', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { beginProviderRouteMutation, setCustomProviderKeyReader } =
+      await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const providerFor = (baseUrl: string) =>
+      buildUserProvider({
+        id: 'busy-credential-image-provider',
+        name: 'Busy Credential Image Provider',
+        runtimes: {
+          codex: {
+            baseUrl,
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = providerFor('https://old-credential-images.example/v1');
+    const oldCatalog = {
+      ...BUNDLED_CATALOG,
+      providers: [...BUNDLED_CATALOG.providers, oldProvider],
+    };
+    setActiveCatalog(oldCatalog);
+    setCustomProviderKeyReader(() => 'old-provider-key');
+    const oldRoute = deriveCodexCustomProviderRoutes(oldCatalog)[0]!;
+    host.setCodexAppliedCustomProviderRoutes([oldRoute]);
+    let finishMutation: ReturnType<typeof beginProviderRouteMutation> | null = null;
+
+    try {
+      finishMutation = beginProviderRouteMutation(oldProvider.id);
+      const newProvider = providerFor('https://new-credential-images.example/v1');
+      const newCatalog = {
+        ...BUNDLED_CATALOG,
+        providers: [...BUNDLED_CATALOG.providers, newProvider],
+      };
+      setActiveCatalog(newCatalog);
+      setCustomProviderKeyReader(() => 'new-provider-key');
+
+      const duringMutation = await Promise.resolve(
+        host.createModelRoutingTransform()(
+          { model: 'gpt-image-2' },
+          {
+            reqId: 1,
+            method: 'POST',
+            url: `/_cindy/custom-provider/${oldRoute.routeId}/images/generations`,
+            headers: {},
+          },
+        ),
+      );
+      expect(duringMutation).toEqual(
+        expect.objectContaining({ localHandler: expect.any(Function) }),
+      );
+
+      finishMutation.commit();
+      finishMutation();
+      const staleHost = await Promise.resolve(
+        host.createModelRoutingTransform()(
+          { model: 'gpt-image-2' },
+          {
+            reqId: 2,
+            method: 'POST',
+            url: `/_cindy/custom-provider/${oldRoute.routeId}/images/generations`,
+            headers: {},
+          },
+        ),
+      );
+      expect(staleHost).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+
+      const newRoute = deriveCodexCustomProviderRoutes(newCatalog)[0]!;
+      host.setCodexAppliedCustomProviderRoutes([newRoute]);
+      const restartedHost = await Promise.resolve(
+        host.createModelRoutingTransform()(
+          { model: 'gpt-image-2' },
+          {
+            reqId: 3,
+            method: 'POST',
+            url: `/_cindy/custom-provider/${newRoute.routeId}/images/generations`,
+            headers: {},
+          },
+        ),
+      );
+      expect(restartedHost).toEqual(
+        expect.objectContaining({
+          upstreamOverride: 'https://new-credential-images.example/v1',
+          headerOverride: expect.objectContaining({ authorization: 'Bearer new-provider-key' }),
+        }),
+      );
+      expect(JSON.stringify(newRoute)).not.toContain('new-provider-key');
+    } finally {
+      finishMutation?.();
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('routes a real multipart edit through the prefix with byte-identical body and Provider auth', async () => {
+    const sensitiveResponseBody = '{"result":"private-upstream-response"}';
+    const received: Array<{
+      path: string;
+      headers: Record<string, string | string[] | undefined>;
+      body: Buffer;
+    }> = [];
+    const upstream = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        received.push({ path: req.url ?? '', headers: req.headers, body: Buffer.concat(chunks) });
+        res.writeHead(200, { 'content-type': 'application/json' }).end(sensitiveResponseBody);
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    let upstreamClosed = false;
+    const upstreamOrigin = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const upstreamUrl = `http://private-user:private-password@127.0.0.1:${(upstream.address() as AddressInfo).port}/v1?private-query=value#private-fragment`;
+    const expectedLoggedUpstream = `${upstreamOrigin}/v1`;
+    const host = await freshCodexProxyHost();
+    const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>(
+      '@cindy/anthropic-compat-proxy',
+    );
+    mockState.createAnthropicCompatProxy.mockImplementationOnce(
+      actualProxy.createAnthropicCompatProxy,
+    );
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderHeaderReader, setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'private-stored-provider-id',
+      name: 'Private Provider Display Name',
+      runtimes: {
+        codex: {
+          baseUrl: upstreamUrl,
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'image-chat', name: 'Image Chat' }],
+        },
+      },
+    });
+    const catalog = {
+      ...BUNDLED_CATALOG,
+      providers: [...BUNDLED_CATALOG.providers, provider],
+    };
+    const route = deriveCodexCustomProviderRoutes(catalog)[0]!;
+    setActiveCatalog(catalog);
+    setCustomProviderKeyReader(() => 'fake-provider-authorization-secret');
+    setCustomProviderHeaderReader(() => ({
+      'x-private-vendor-header': 'private-vendor-header-value',
+    }));
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    const boundary = 'cindy-native-edit';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="prompt"\r\n\r\nedit\r\n`),
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="private-image-name.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+      ),
+      Buffer.from([0, 255, 128, 13, 10, 77]),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const requestRawTarget = (
+      proxyEndpoint: string,
+      target: string,
+      method: string,
+      contentType?: string,
+      rawBody?: Buffer | string,
+    ) =>
+      new Promise<number>((resolve, reject) => {
+        const proxy = new URL(proxyEndpoint);
+        const requestBody = rawBody === undefined
+          ? undefined
+          : Buffer.isBuffer(rawBody)
+            ? rawBody
+            : Buffer.from(rawBody);
+        const req = httpRequest(
+          {
+            hostname: proxy.hostname,
+            port: proxy.port,
+            method,
+            path: target,
+            headers: {
+              ...(contentType ? { 'content-type': contentType } : {}),
+              ...(requestBody ? { 'content-length': String(requestBody.length) } : {}),
+              authorization: 'Bearer loopback-placeholder',
+            },
+          },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode ?? 0));
+          },
+        );
+        req.on('error', reject);
+        if (requestBody) req.write(requestBody);
+        req.end();
+      });
+
+    try {
+      await host.ensureCodexProxyReady();
+      const proxyEndpoint = host.getCodexProxyEndpoint();
+      mockState.logger.info.mockClear();
+      mockState.logger.warn.mockClear();
+      mockState.logger.debug.mockClear();
+      const invalidRequests = [
+        {
+          path: '/_cindy/custom-provider/not-a-route/images/edits',
+          method: 'POST',
+          contentType: `multipart/form-data; boundary=${boundary}`,
+          requestBody: body,
+        },
+        {
+          path: `/_cindy/custom-provider/${route.routeId}/images/edits/extra`,
+          method: 'POST',
+          contentType: 'application/json',
+          requestBody: '{}',
+        },
+        {
+          path: `/_cindy/custom-provider%2F${route.routeId}%2Fimages%2Fedits`,
+          method: 'POST',
+          contentType: 'application/octet-stream',
+          requestBody: body,
+        },
+        {
+          path: `/_cindy/custom-provider/${route.routeId}/images/edits`,
+          method: 'PUT',
+          contentType: `multipart/form-data; boundary=${boundary}`,
+          requestBody: body,
+        },
+        {
+          path: `/_cindy/custom-provider/${route.routeId}/files`,
+          method: 'POST',
+          contentType: 'application/json',
+          requestBody: '{}',
+        },
+        { path: '/_cindy/custom-provider', method: 'POST' },
+        { path: '/_cindy/custom-provider/', method: 'POST' },
+        // Retired capability-specific prototype namespace must fail closed, never hit Gateway.
+        { path: `/_cindy/imagegen/${route.routeId}/images/edits`, method: 'POST' },
+        { path: '//_cindy//custom-provider//', method: 'GET' },
+        { path: '/_cindy/custom-provider/../responses', method: 'POST', contentType: 'application/json', requestBody: '{}' },
+        { path: '/_cindy/custom-provider/./responses', method: 'POST' },
+        { path: '/_cindy/custom-provider/%2e%2e/responses', method: 'POST', contentType: 'text/plain', requestBody: 'opaque' },
+        { path: '/_CINDY/Custom-Provider/anything', method: 'POST' },
+        { path: '/_cindy/custom-provid%65r/anything', method: 'POST' },
+        { path: `/_cindy/custom-provider%2f${route.routeId}%2fimages%2fedits`, method: 'POST' },
+        { path: `/_cindy/custom-provider%5c${route.routeId}%5cimages%5cedits`, method: 'POST' },
+        { path: `/_cindy\\custom-provider\\${route.routeId}\\images\\edits`, method: 'POST' },
+        { path: `/_cindy/custom-provider/${route.routeId}/images/edits#fragment`, method: 'POST' },
+        { path: `/other/../_cindy/custom-provider/${route.routeId}/images/edits`, method: 'POST' },
+        {
+          path: `${proxyEndpoint}/_cindy/custom-provider/${route.routeId}/images/edits/extra`,
+          method: 'POST',
+          contentType: `multipart/form-data; boundary=${boundary}`,
+          requestBody: body,
+        },
+        {
+          path: `${proxyEndpoint}\\_cindy\\custom-provider\\${route.routeId}\\images\\edits`,
+          method: 'POST',
+          contentType: 'application/octet-stream',
+          requestBody: body,
+        },
+      ];
+      for (const invalidRequest of invalidRequests) {
+        const status = await requestRawTarget(
+          proxyEndpoint,
+          invalidRequest.path,
+          invalidRequest.method,
+          invalidRequest.contentType,
+          invalidRequest.requestBody,
+        );
+        expect(status, invalidRequest.path).toBeGreaterThanOrEqual(400);
+      }
+      expect(received).toHaveLength(0);
+      const imageGenerationLogLines = (): string[] =>
+        [...mockState.logger.info.mock.calls, ...mockState.logger.warn.mock.calls]
+          .map((call) => String(call[0] ?? ''))
+          .filter((line) => line.includes('codex_image_generation_forward_'));
+      expect(imageGenerationLogLines()).toEqual([]);
+
+      const response = await fetch(
+        `${proxyEndpoint}/_cindy/custom-provider/${route.routeId}/images/edits`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': `multipart/form-data; boundary=${boundary}`,
+            authorization: 'Bearer loopback-placeholder',
+            'x-openai-actor-authorization': 'local-image-extension',
+          },
+          body,
+        },
+      );
+      expect(response.status).toBe(200);
+      const generationBody = JSON.stringify({
+        model: 'gpt-image-2',
+        prompt: 'private-generation-prompt',
+        size: '1536x1024',
+        quality: 'high',
+        background: 'transparent',
+        n: 2,
+        output_format: 'png',
+        output_compression: 85,
+        moderation: 'auto',
+        partial_images: 1,
+        stream: false,
+        response_format: 'b64_json',
+        unknown_private_field: 'private-unknown-value',
+        input: { image_url: 'data:image/png;base64,private-base64-payload' },
+      });
+      const generationResponse = await fetch(
+        `${proxyEndpoint}/_cindy/custom-provider/${route.routeId}/images/generations`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: 'Bearer loopback-placeholder',
+            'x-openai-actor-authorization': 'local-image-extension',
+          },
+          body: generationBody,
+        },
+      );
+      expect(generationResponse.status).toBe(200);
+      const customModelBody = JSON.stringify({
+        model: 'vendor-image-model-v2',
+        prompt: 'second-private-prompt',
+      });
+      expect(
+        (
+          await fetch(`${proxyEndpoint}/_cindy/custom-provider/${route.routeId}/images/generations`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: customModelBody,
+          })
+        ).status,
+      ).toBe(200);
+      const overlongModel = `private-overlong-prefix-${'x'.repeat(140)}-private-overlong-tail`;
+      expect(
+        (
+          await fetch(`${proxyEndpoint}/_cindy/custom-provider/${route.routeId}/images/generations`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ model: overlongModel, prompt: 'third-private-prompt' }),
+          })
+        ).status,
+      ).toBe(200);
+      expect(received).toHaveLength(4);
+      expect(received[0]?.path).toBe('/v1/images/edits?private-query=value');
+      expect(received[0]?.body).toEqual(body);
+      expect(received[0]?.headers['content-type']).toBe(
+        `multipart/form-data; boundary=${boundary}`,
+      );
+      expect(received[0]?.headers['content-length']).toBe(String(body.length));
+      expect(received[0]?.headers.authorization).toBe('Bearer fake-provider-authorization-secret');
+      expect(received[0]?.headers['x-private-vendor-header']).toBe('private-vendor-header-value');
+      expect(received[0]?.headers['x-openai-actor-authorization']).toBeUndefined();
+      expect(received[1]?.path).toBe('/v1/images/generations?private-query=value');
+      expect(received[1]?.body.toString('utf8')).toBe(generationBody);
+      expect(received[1]?.headers.authorization).toBe('Bearer fake-provider-authorization-secret');
+
+      const successfulLogs = imageGenerationLogLines();
+      expect(successfulLogs).toHaveLength(8);
+      for (const [operation, expectedCount] of [
+        ['edit', 2],
+        ['generation', 6],
+      ] as const) {
+        const operationLogs = successfulLogs.filter((line) =>
+          line.includes(`operation     : ${operation}`),
+        );
+        expect(operationLogs).toHaveLength(expectedCount);
+        expect(operationLogs[0]).toContain('codex_image_generation_forward_start');
+        expect(operationLogs[1]).toContain('codex_image_generation_forward_complete');
+        const correlationIds = operationLogs.map(
+          (line) => /correlationId\s+:\s+([0-9a-f-]{36})/.exec(line)?.[1],
+        );
+        expect(correlationIds[0]).toBeTruthy();
+        expect(correlationIds[1]).toBe(correlationIds[0]);
+        expect(operationLogs[1]).toContain('status        : 200');
+        expect(operationLogs[1]).toContain('outcome       : success');
+        expect(operationLogs[1]).toMatch(/durationMs\s+:\s+\d+/);
+      }
+      for (const line of successfulLogs) {
+        expect(line).toContain(`routeId       : ${route.routeId}`);
+        expect(line).toContain('target        : custom-provider');
+        expect(line).not.toContain('authSource');
+        expect(line).not.toContain('upstreamUrl');
+        expect(line).not.toContain('imageParams');
+      }
+
+      const detailLogs = mockState.logger.debug.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .filter((line) => line.includes('codex_image_generation_forward_details'));
+      expect(detailLogs).toHaveLength(4);
+      const editDetails = detailLogs.filter((line) => /operation\s+:\s+edit/.test(line));
+      expect(editDetails).toHaveLength(1);
+      expect(editDetails[0]).toContain('upstreamUrl');
+      expect(editDetails[0]).toContain(`${expectedLoggedUpstream}/images/edits`);
+      expect(editDetails[0]).not.toContain('imageParams');
+      const generationDetails = detailLogs.filter((line) =>
+        /operation\s+:\s+generation/.test(line),
+      );
+      expect(generationDetails).toHaveLength(3);
+      expect(generationDetails[0]).toContain('upstreamUrl');
+      expect(generationDetails[0]).toContain(`${expectedLoggedUpstream}/images/generations`);
+      for (const expected of [
+        '"model": "gpt-image-2"',
+        '"size": "1536x1024"',
+        '"quality": "high"',
+        '"background": "transparent"',
+        '"n": 2',
+        '"output_format": "png"',
+        '"output_compression": 85',
+        '"moderation": "auto"',
+        '"partial_images": 1',
+        '"stream": false',
+        '"response_format": "b64_json"',
+      ]) {
+        expect(generationDetails[0]).toContain(expected);
+      }
+      expect(generationDetails[1]).toContain('"model": "vendor-image-model-v2"');
+      expect(generationDetails[2]).toContain('"model": "[truncated]"');
+      expect(JSON.stringify(detailLogs)).not.toContain('private-overlong-tail');
+
+      const sensitiveValues = [
+        'authSource',
+        upstreamUrl,
+        '127.0.0.1',
+        'private-user',
+        'private-password',
+        'private-query',
+        'private-fragment',
+        'private-stored-provider-id',
+        'Private Provider Display Name',
+        'fake-provider-authorization-secret',
+        'authorization',
+        'x-private-vendor-header',
+        'private-vendor-header-value',
+        'private-generation-prompt',
+        'private-base64-payload',
+        'private-unknown-value',
+        'second-private-prompt',
+        'third-private-prompt',
+        'private-image-name.bin',
+        'private-upstream-response',
+      ];
+      const serializedSuccessfulLogs = JSON.stringify(successfulLogs);
+      for (const sensitiveValue of sensitiveValues) {
+        expect(serializedSuccessfulLogs).not.toContain(sensitiveValue);
+      }
+      const serializedDetails = JSON.stringify(detailLogs);
+      for (const sensitiveValue of sensitiveValues.filter((value) =>
+        [upstreamUrl, '127.0.0.1'].includes(value),
+      )) {
+        expect(serializedDetails).toContain(
+          sensitiveValue === upstreamUrl ? expectedLoggedUpstream : sensitiveValue,
+        );
+      }
+      for (const sensitiveValue of sensitiveValues.filter(
+        (value) => ![upstreamUrl, '127.0.0.1'].includes(value),
+      )) {
+        expect(serializedDetails).not.toContain(sensitiveValue);
+      }
+
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      upstreamClosed = true;
+      mockState.logLevel = 'info';
+      const transportResponse = await fetch(
+        `${proxyEndpoint}/_cindy/custom-provider/${route.routeId}/images/generations`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: generationBody,
+        },
+      );
+      expect(transportResponse.status).toBe(502);
+      const transportLogs = imageGenerationLogLines().slice(8);
+      expect(transportLogs).toHaveLength(2);
+      expect(transportLogs[0]).toContain('codex_image_generation_forward_start');
+      expect(transportLogs[1]).toContain('codex_image_generation_forward_failure');
+      expect(transportLogs[1]).toContain('outcome       : network_error');
+      const transportCorrelationIds = transportLogs.map(
+        (line) => /correlationId\s+:\s+([0-9a-f-]{36})/.exec(line)?.[1],
+      );
+      expect(transportCorrelationIds[0]).toBeTruthy();
+      expect(transportCorrelationIds[1]).toBe(transportCorrelationIds[0]);
+      const serializedTransportLogs = JSON.stringify(transportLogs);
+      for (const sensitiveValue of [...sensitiveValues, 'ECONNREFUSED']) {
+        expect(serializedTransportLogs).not.toContain(sensitiveValue);
+      }
+      expect(
+        mockState.logger.debug.mock.calls.filter((call) =>
+          String(call[0] ?? '').includes('codex_image_generation_forward_details'),
+        ),
+      ).toHaveLength(4);
+      expect(mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]).not.toHaveProperty(
+        'forwardLifecycleObserver',
+      );
+    } finally {
+      await host.disposeCodexProxy();
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderHeaderReader(() => null);
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+      if (!upstreamClosed) {
+        await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      }
+    }
+  });
+
+  it('owns every private custom Provider prefix before opaque body transforms', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    const options = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+    expect(
+      options.bypassRequestTransforms(
+        {},
+        {
+          url: '/_cindy/custom-provider/0123456789abcdefabcd/images/edits',
+        },
+      ),
+    ).toBe(true);
+    expect(options.bypassRequestTransforms({}, { url: '/images/edits' })).toBe(false);
+    expect(
+      options.bypassRequestTransforms(
+        {},
+        {
+          url: '/_cindy/custom-provider/0123456789abcdefabcd/responses',
+        },
+      ),
+    ).toBe(true);
+    expect(
+      options.routeOpaqueRequestBody({
+        url: '/_cindy/custom-provider%2F0123456789abcdefabcd%2Fimages%2Fedits',
+      }),
+    ).toBe(true);
+    expect(options.routeOpaqueRequestBody({ url: '/images/edits' })).toBe(false);
   });
 });

@@ -1495,6 +1495,13 @@
           "editTitle": "编辑自定义供应商",
           "desc": "配置与 OpenAI / Anthropic 兼容的供应商。"
         },
+        "imageGenerationReload": {
+          "title": "重新加载 Codex",
+          "description": "保存此图片生成配置需要重新加载 Codex，并会中断当前正在执行的 Codex 任务。",
+          "interrupt": "保存并停止",
+          "cancel": "取消",
+          "close": "关闭"
+        },
         "fields": {
           "name": "显示名称",
           "namePlaceholder": "我的 AI 供应商",
@@ -1516,6 +1523,15 @@
           "modelContextWindowTitle": "上下文窗口(tokens)。留空按 200K 保守默认；影响窗口显示与压缩阈值。",
           "modelSupportsImageInput": "支持图片输入",
           "modelSupportsImageInputHelp": "仅在该模型确实支持视觉输入时开启。保存后新建 Pi 任务生效。",
+          "runtimeAdvanced": "高级",
+          "runtimeSupportsImageGeneration": "支持图片生成与编辑",
+          "runtimeSupportsImageGenerationHelpLabel": "了解图片生成与编辑支持",
+          "runtimeSupportsImageGenerationConditionTitle": "适用条件",
+          "runtimeSupportsImageGenerationCondition": "网关需兼容 OpenAI Responses API，并支持图片生成与编辑。",
+          "runtimeSupportsImageGenerationEndpointsTitle": "接口要求",
+          "runtimeSupportsImageGenerationEndpoints": "网关必须处理以下请求：",
+          "runtimeSupportsImageGenerationPermissionsTitle": "权限与失败处理",
+          "runtimeSupportsImageGenerationPermissions": "当前 API Key、账号或用户组需有图片模型权限。此开关只声明网关能力，不会自动开通上游权限。调用失败时会显示真实上游错误，不会切换到其他图片服务。",
           "modelSupportsReasoning": "支持推理",
           "modelSupportsReasoningHelp": "仅在该模型接受推理强度时开启，并勾选它实际支持的所有档位。保存后，下一个 Pi Agent 会话生效。",
           "modelReasoningEfforts": "支持的推理强度",

@@ -1495,6 +1495,13 @@
           "editTitle": "編輯自定義供應商",
           "desc": "配置與 OpenAI / Anthropic 相容的供應商。"
         },
+        "imageGenerationReload": {
+          "title": "重新載入 Codex",
+          "description": "儲存此圖片生成設定需要重新載入 Codex，並會中斷目前正在執行的 Codex 任務。",
+          "interrupt": "儲存並停止",
+          "cancel": "取消",
+          "close": "關閉"
+        },
         "fields": {
           "name": "顯示名稱",
           "namePlaceholder": "我的 AI 供應商",
@@ -1516,6 +1523,15 @@
           "modelContextWindowTitle": "上下文視窗(tokens)。留空按 200K 保守預設；影響視窗顯示與壓縮閾值。",
           "modelSupportsImageInput": "支援圖片輸入",
           "modelSupportsImageInputHelp": "僅在該模型確實支援視覺輸入時開啟。儲存後新建 Pi 任務生效。",
+          "runtimeAdvanced": "進階",
+          "runtimeSupportsImageGeneration": "支援圖片生成與編輯",
+          "runtimeSupportsImageGenerationHelpLabel": "瞭解圖片生成與編輯支援",
+          "runtimeSupportsImageGenerationConditionTitle": "適用條件",
+          "runtimeSupportsImageGenerationCondition": "閘道需相容 OpenAI Responses API，並支援圖片生成與編輯。",
+          "runtimeSupportsImageGenerationEndpointsTitle": "介面要求",
+          "runtimeSupportsImageGenerationEndpoints": "閘道必須處理以下請求：",
+          "runtimeSupportsImageGenerationPermissionsTitle": "權限與失敗處理",
+          "runtimeSupportsImageGenerationPermissions": "目前的 API Key、帳號或使用者群組需有圖片模型權限。此開關只宣告閘道能力，不會自動開通上游權限。呼叫失敗時會顯示真實的上游錯誤，不會切換到其他圖片服務。",
           "modelSupportsReasoning": "支援推理",
           "modelSupportsReasoningHelp": "僅在該模型接受推理強度時開啟，並勾選它實際支援的所有檔位。儲存後，下一個 Pi Agent 會話生效。",
           "modelReasoningEfforts": "支援的推理強度",

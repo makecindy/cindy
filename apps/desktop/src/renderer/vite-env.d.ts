@@ -18,6 +18,10 @@ type ModelAccessStatusPayload = import('../shared/modelAccess').ModelAccessStatu
 type AnalyticsSettingsPayload = import('../shared/analyticsSettings').AnalyticsSettingsPayload;
 type LogUploadSettingsPayload = import('../shared/logUpload').LogUploadSettingsPayload;
 type LogUploadResult = import('../shared/logUpload').LogUploadResult;
+type CustomProviderUpdateOptions =
+  import('../shared/customProviderUpdate').CustomProviderUpdateOptions;
+type CustomProviderUpdateResult =
+  import('../shared/customProviderUpdate').CustomProviderUpdateResult;
 type RsbWindowCommand = import('../shared/rightSidebarWindow').RsbWindowCommand;
 type VoiceInputPowerStatePayload =
   import('../shared/voiceInputPowerIpc').VoiceInputPowerStatePayload;
@@ -4888,11 +4892,13 @@ interface ElectronAPI {
     createCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
       keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
-    ) => Promise<{ ok: true }>;
+      options?: CustomProviderUpdateOptions,
+    ) => Promise<CustomProviderUpdateResult>;
     updateCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
       keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
-    ) => Promise<{ ok: true }>;
+      options?: CustomProviderUpdateOptions,
+    ) => Promise<CustomProviderUpdateResult>;
     deleteCustomProvider: (providerId: string) => Promise<{ ok: true }>;
     localModelStatus: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
     localModelStart: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;

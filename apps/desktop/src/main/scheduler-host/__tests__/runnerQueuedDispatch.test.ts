@@ -22,6 +22,10 @@ import { AcceptedCallbackDispatchCancelled } from '../../maker-ipc/acceptedCallb
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type { FireContext, Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import {
+  setCodexAppliedCustomProviderRoutes,
+  type CodexCustomProviderRoute,
+} from '../../maker-host/codex-custom-provider-route.js';
 
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
@@ -92,6 +96,36 @@ type SendImpl = (
 ) => Promise<SessionSendResult>;
 
 const SESSION_ID = 'bound-session';
+const queuedImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
+  {
+    providerId: 'provider-a',
+    routeId: 'a'.repeat(20),
+    modelProviderId: `cindy_custom_${'a'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model', 'a-alt-model'],
+    routing: {
+      upstream: 'https://a.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+  {
+    providerId: 'provider-b',
+    routeId: 'b'.repeat(20),
+    modelProviderId: `cindy_custom_${'b'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model'],
+    routing: {
+      upstream: 'https://b.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+];
 const SCHEDULER_TURN_ORIGIN = {
   kind: 'scheduler',
   scheduleId: 'schedule-hb',
@@ -389,6 +423,7 @@ function latestNotifiedRun(notifier: Notifier & { notify: ReturnType<typeof vi.f
 }
 
 beforeEach(() => {
+  setCodexAppliedCustomProviderRoutes([]);
   vi.clearAllMocks();
   mocks.getSessionRowSnapshot.mockResolvedValue({
     status: 'active',
@@ -535,7 +570,11 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBe('run-q1');
 
     autoResumePending = false;
-    harness.emit({ type: 'text', data: { text: 'continued result', isFinal: true }, source: 'claude-code' });
+    harness.emit({
+      type: 'text',
+      data: { text: 'continued result', isFinal: true },
+      source: 'claude-code',
+    });
     harness.emit({ type: 'done', data: {}, source: 'claude-code' });
 
     await expect(firePromise).resolves.toMatchObject({
@@ -740,9 +779,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     ctx.abortController.abort();
 
     await expect(firePromise).rejects.toThrow(/abort/i);
-    expect(queue.cancelAutoResumeCalls).toEqual([
-      { sessionId: SESSION_ID, runId: 'run-q1' },
-    ]);
+    expect(queue.cancelAutoResumeCalls).toEqual([{ sessionId: SESSION_ID, runId: 'run-q1' }]);
     expect(harness.listenerCount()).toBe(0);
   });
 
@@ -774,9 +811,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     ctx.abortController.abort();
 
     await expect(firePromise).rejects.toThrow(/aborted/i);
-    expect(queue.cancelAutoResumeCalls).toEqual([
-      { sessionId: SESSION_ID, runId: 'run-q1' },
-    ]);
+    expect(queue.cancelAutoResumeCalls).toEqual([{ sessionId: SESSION_ID, runId: 'run-q1' }]);
     expect(
       (replacement.session as unknown as { abort: ReturnType<typeof vi.fn> }).abort,
     ).toHaveBeenCalledTimes(1);
@@ -958,6 +993,82 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.setModel).not.toHaveBeenCalled();
     expect(harness.setEffort).not.toHaveBeenCalled();
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+  });
+
+  it('busy 心跳跨 dynamic identity 时不入旧 thread 队列，而是顺延到安全重建点', async () => {
+    const [routeA, routeB] = queuedImageGenerationRoutes;
+    setCodexAppliedCustomProviderRoutes(queuedImageGenerationRoutes);
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: null,
+      providerId: routeA!.providerId,
+    });
+    mocks.getSessionProvider.mockReturnValue(routeA!.providerId);
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    Object.defineProperties(harness.session, {
+      agentKind: { value: 'codex' },
+      model: { value: 'shared-model', writable: true },
+      codexProxyActive: { value: true },
+      codexThreadModelProviderId: { value: routeA!.modelProviderId },
+    });
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker } = createRunnerHarness(harness.session, queue.deps, {
+      metaModel: 'shared-model',
+    });
+
+    const result = await runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        model: 'shared-model',
+        providerId: routeB!.providerId,
+      }),
+      createFireContext(),
+    );
+
+    expect(result).toMatchObject({ sessionId: SESSION_ID, deferred: true });
+    expect(queue.enqueueCalls).toHaveLength(0);
+    expect(maker.closeSession).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
+  });
+
+  it('排队期间目标变为另一个 dynamic Provider 时在 vendor dispatch 前 fail-closed', async () => {
+    const [routeA, routeB] = queuedImageGenerationRoutes;
+    setCodexAppliedCustomProviderRoutes(queuedImageGenerationRoutes);
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: null,
+      providerId: routeA!.providerId,
+    });
+    mocks.getSessionProvider.mockReturnValue(routeA!.providerId);
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    Object.defineProperties(harness.session, {
+      agentKind: { value: 'codex' },
+      model: { value: 'shared-model', writable: true },
+      codexProxyActive: { value: true },
+      codexThreadModelProviderId: { value: routeA!.modelProviderId },
+    });
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps, {
+      metaModel: 'shared-model',
+    });
+    const schedule = heartbeatSchedule({
+      agentKind: 'codex',
+      model: 'shared-model',
+      providerId: routeA!.providerId,
+    });
+
+    const firePromise = runner.fire(schedule, createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    schedule.providerId = routeB!.providerId;
+    const rejected = expect(firePromise).rejects.toThrow(
+      'queued heartbeat Codex thread provider identity does not match the target session route',
+    );
+    await queue.accept();
+
+    await rejected;
+    expect(harness.session.abort).toHaveBeenCalled();
+    expect(harness.setModel).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
   });
 
   it('排队 Cindy Codex 在独立 Subagent 不兼容时接受正确的本地压缩身份', async () => {
@@ -1640,11 +1751,16 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
     });
 
     const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    // 这条拒绝会在 queue.accept() 内同步触发。先登记消费方，避免测试自己把
+    // 预期错误留到下一拍才观察，造成 PromiseRejectionHandledWarning。
+    const fireRejected = expect(firePromise).rejects.toThrow(/abort/i);
     await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
     await queue.accept();
 
     // 修复前这里永不 settle(fire 挂死);修复后以"用户中断"收口
-    await expect(firePromise).rejects.toThrow(/abort/i);
+    await fireRejected;
+    expect(harness.session.abort).toHaveBeenCalledTimes(1);
+    expect(harness.send).not.toHaveBeenCalled();
   });
 
   it('排队期间系统挂起:睡着的时间不计入等待额度', async () => {
