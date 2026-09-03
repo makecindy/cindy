@@ -466,22 +466,37 @@ function BranchWorktreeChip({
     [onPick],
   );
 
+  const listItems = useCallback(
+    () =>
+      Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>('button[role="option"]') ?? []),
+    [],
+  );
+
   /** 把焦点移进分支列表:delta>0 从头进,<0 从尾进;越过首项则退回搜索框。 */
-  const moveListFocus = useCallback((delta: number) => {
-    const items = Array.from(
-      listRef.current?.querySelectorAll<HTMLButtonElement>('button[role="option"]') ?? [],
-    );
-    if (items.length === 0) return;
-    const from = items.indexOf(document.activeElement as HTMLButtonElement);
-    // 焦点还在搜索框(from = -1)时,向下从首项进、向上从末项进。
-    const next = from < 0 ? (delta > 0 ? 0 : items.length - 1) : from + delta;
-    if (next < 0) {
-      inputRef.current?.focus();
-      return;
-    }
-    // 末项继续向下就停在末项;不做环绕,免得焦点从列表尾跳回头部让人丢失位置感。
-    items[Math.min(next, items.length - 1)]?.focus();
-  }, []);
+  const moveListFocus = useCallback(
+    (delta: number) => {
+      const items = listItems();
+      if (items.length === 0) return;
+      const from = items.indexOf(document.activeElement as HTMLButtonElement);
+      // 焦点还在搜索框(from = -1)时,向下从首项进、向上从末项进。
+      const next = from < 0 ? (delta > 0 ? 0 : items.length - 1) : from + delta;
+      if (next < 0) {
+        inputRef.current?.focus();
+        return;
+      }
+      // 末项继续向下就停在末项;不做环绕,免得焦点从列表尾跳回头部让人丢失位置感。
+      items[Math.min(next, items.length - 1)]?.focus();
+    },
+    [listItems],
+  );
+
+  const jumpListFocus = useCallback(
+    (to: 'first' | 'last') => {
+      const items = listItems();
+      (to === 'first' ? items[0] : items[items.length - 1])?.focus();
+    },
+    [listItems],
+  );
 
   const branchSegment = (
     <button
@@ -589,6 +604,12 @@ function BranchWorktreeChip({
           aria-label={t('newChat.branchChip.label')}
           className="flex max-h-[240px] flex-col overflow-y-auto overscroll-contain"
           onKeyDown={(e) => {
+            // Home / End 只挂在列表上,不挂搜索框 —— 在输入框里这两个键得留给文本光标。
+            if (e.key === 'Home' || e.key === 'End') {
+              e.preventDefault();
+              jumpListFocus(e.key === 'Home' ? 'first' : 'last');
+              return;
+            }
             if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
             e.preventDefault();
             moveListFocus(e.key === 'ArrowDown' ? 1 : -1);
@@ -614,12 +635,15 @@ function BranchWorktreeChip({
               {t('newChat.branchChip.noMatch')}
             </div>
           ) : (
-            filtered.map((b) => (
+            filtered.map((b, i) => (
               <button
                 key={b}
                 type="button"
                 role="option"
                 aria-selected={b === branchLabel}
+                // roving tabIndex:Tab 一次进列表、落在首项,再 Tab 就走出去。分支上百条时
+                // 逐项 Tab 穿越是灾难 —— 组内换项靠 ↑↓ 与 Home/End(容器 onKeyDown)。
+                tabIndex={i === 0 ? 0 : -1}
                 onClick={() => pick(b)}
                 className={cn(
                   'cursor-pointer truncate rounded-[8px] px-3 py-1.5 text-left text-13 text-foreground',
