@@ -10119,6 +10119,8 @@
       "categoryFiltersAria": "カテゴリでスキルを絞り込む",
       "scrollCategoriesLeft": "左のカテゴリをさらに表示",
       "scrollCategoriesRight": "右のカテゴリをさらに表示",
+      "categoryScrollAtStart": "最初のカテゴリです",
+      "categoryScrollAtEnd": "最後のカテゴリです",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",

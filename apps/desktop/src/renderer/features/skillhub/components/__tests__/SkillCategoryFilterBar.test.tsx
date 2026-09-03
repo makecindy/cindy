@@ -21,6 +21,8 @@ function renderBar(onSelectCategory = vi.fn()) {
         ariaLabel="Filter skills by category"
         scrollLeftLabel="Scroll categories left"
         scrollRightLabel="Scroll categories right"
+        scrollStartLabel="Already at the first category"
+        scrollEndLabel="Already at the last category"
         onSelectCategory={onSelectCategory}
       />,
     ),
@@ -66,7 +68,9 @@ describe('SkillCategoryFilterBar', () => {
     fireEvent.scroll(scroller);
 
     expect(
-      screen.getByRole('button', { name: 'Scroll categories left' }).hasAttribute('disabled'),
+      screen
+        .getByRole('button', { name: 'Already at the first category' })
+        .hasAttribute('disabled'),
     ).toBe(true);
     expect(
       screen.getByRole('button', { name: 'Scroll categories right' }).hasAttribute('disabled'),

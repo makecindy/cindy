@@ -352,6 +352,8 @@ export function SkillhubHomeView({
                   ariaLabel={t('skillhub.home.categoryFiltersAria')}
                   scrollLeftLabel={t('skillhub.home.scrollCategoriesLeft')}
                   scrollRightLabel={t('skillhub.home.scrollCategoriesRight')}
+                  scrollStartLabel={t('skillhub.home.categoryScrollAtStart')}
+                  scrollEndLabel={t('skillhub.home.categoryScrollAtEnd')}
                   onSelectCategory={setCategoryFilter}
                   className="mb-4"
                 />

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
+import { Tip } from '@/components/ui/tooltip';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/lib/utils';
 import { CATEGORY_ALL, type MarketCategory } from '../../../../shared/skillhubCategory';
@@ -13,6 +14,8 @@ interface SkillCategoryFilterBarProps {
   ariaLabel: string;
   scrollLeftLabel: string;
   scrollRightLabel: string;
+  scrollStartLabel: string;
+  scrollEndLabel: string;
   onSelectCategory: (category: CategoryFilter) => void;
   className?: string;
 }
@@ -44,6 +47,8 @@ export function SkillCategoryFilterBar({
   ariaLabel,
   scrollLeftLabel,
   scrollRightLabel,
+  scrollStartLabel,
+  scrollEndLabel,
   onSelectCategory,
   className,
 }: SkillCategoryFilterBarProps) {
@@ -121,21 +126,25 @@ export function SkillCategoryFilterBar({
   return (
     <div className={cn('flex min-w-0 items-center gap-1.5', className)}>
       {scrollState.overflow ? (
-        <button
-          type="button"
-          aria-label={scrollLeftLabel}
-          disabled={!scrollState.left}
-          onClick={() => scroll(-1)}
-          className={cn(
-            'inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)]',
-            'bg-[var(--surface-elevated)] text-[var(--text-secondary)] transition-colors duration-150',
-            'hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'disabled:cursor-default disabled:opacity-35',
-          )}
-        >
-          <ChevronLeft size={14} strokeWidth={1.8} aria-hidden="true" />
-        </button>
+        <Tip text={scrollState.left ? scrollLeftLabel : scrollStartLabel} side="bottom">
+          <span className="inline-flex shrink-0">
+            <button
+              type="button"
+              aria-label={scrollState.left ? scrollLeftLabel : scrollStartLabel}
+              disabled={!scrollState.left}
+              onClick={() => scroll(-1)}
+              className={cn(
+                'inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)]',
+                'bg-[var(--surface-elevated)] text-[var(--text-secondary)] transition-colors duration-150',
+                'hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                'disabled:cursor-default disabled:opacity-35',
+              )}
+            >
+              <ChevronLeft size={14} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+          </span>
+        </Tip>
       ) : null}
 
       <div
@@ -151,21 +160,25 @@ export function SkillCategoryFilterBar({
       </div>
 
       {scrollState.overflow ? (
-        <button
-          type="button"
-          aria-label={scrollRightLabel}
-          disabled={!scrollState.right}
-          onClick={() => scroll(1)}
-          className={cn(
-            'inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)]',
-            'bg-[var(--surface-elevated)] text-[var(--text-secondary)] transition-colors duration-150',
-            'hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'disabled:cursor-default disabled:opacity-35',
-          )}
-        >
-          <ChevronRight size={14} strokeWidth={1.8} aria-hidden="true" />
-        </button>
+        <Tip text={scrollState.right ? scrollRightLabel : scrollEndLabel} side="bottom">
+          <span className="inline-flex shrink-0">
+            <button
+              type="button"
+              aria-label={scrollState.right ? scrollRightLabel : scrollEndLabel}
+              disabled={!scrollState.right}
+              onClick={() => scroll(1)}
+              className={cn(
+                'inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)]',
+                'bg-[var(--surface-elevated)] text-[var(--text-secondary)] transition-colors duration-150',
+                'hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                'disabled:cursor-default disabled:opacity-35',
+              )}
+            >
+              <ChevronRight size={14} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+          </span>
+        </Tip>
       ) : null}
     </div>
   );

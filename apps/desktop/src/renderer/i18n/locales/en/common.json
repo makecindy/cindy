@@ -10135,6 +10135,8 @@
       "categoryFiltersAria": "Filter skills by category",
       "scrollCategoriesLeft": "View more categories to the left",
       "scrollCategoriesRight": "View more categories to the right",
+      "categoryScrollAtStart": "Already at the first category",
+      "categoryScrollAtEnd": "Already at the last category",
       "catalogFilter": {
         "public": "Public",
         "organization": "Organization",

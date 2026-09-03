@@ -10119,6 +10119,8 @@
       "categoryFiltersAria": "按分類篩選技能",
       "scrollCategoriesLeft": "向左查看更多分類",
       "scrollCategoriesRight": "向右查看更多分類",
+      "categoryScrollAtStart": "已經是第一個分類",
+      "categoryScrollAtEnd": "已經是最後一個分類",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",

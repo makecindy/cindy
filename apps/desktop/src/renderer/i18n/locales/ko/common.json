@@ -10119,6 +10119,8 @@
       "categoryFiltersAria": "카테고리로 스킬 필터링",
       "scrollCategoriesLeft": "왼쪽 카테고리 더 보기",
       "scrollCategoriesRight": "오른쪽 카테고리 더 보기",
+      "categoryScrollAtStart": "첫 번째 카테고리입니다",
+      "categoryScrollAtEnd": "마지막 카테고리입니다",
       "catalogFilter": {
         "public": "공개",
         "organization": "조직",
