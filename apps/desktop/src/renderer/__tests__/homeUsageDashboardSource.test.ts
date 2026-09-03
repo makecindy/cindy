@@ -210,4 +210,14 @@ describe('HomeUsageDashboard source contract', () => {
     expect(hookSource).toContain('allowPendingEstimates?: boolean;');
     expect(hookSource).toContain('if (!scope.request.allowPendingEstimates) return scope.cache;');
   });
+
+  it('keeps the settings usage loading state separate from a loaded empty payload', () => {
+    expect(usageHistorySectionSource).toContain('const loading = history === null;');
+    expect(usageHistorySectionSource).toContain(
+      'const empty = !loading && isUsageHistoryEmpty(history);',
+    );
+    expect(usageHistorySectionSource).toMatch(
+      /\{loading \? \(\s*<div[\s\S]*role="status"[\s\S]*aria-label=\{t\('usageDashboard\.updating'\)\}/,
+    );
+  });
 });
