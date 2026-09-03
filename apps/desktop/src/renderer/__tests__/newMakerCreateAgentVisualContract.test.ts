@@ -31,15 +31,33 @@ const schedulerSource = readFileSync(
   resolve(__dirname, '..', 'features', 'scheduler', 'SchedulerPage.tsx'),
   'utf8',
 );
+const pluginLayoutSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'plugin', 'PluginManagementLayout.tsx'),
+  'utf8',
+);
+const mainLayoutSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'layout', 'MainLayout.tsx'),
+  'utf8',
+);
 
 describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
   it('only reveals the custom background through readable page materials', () => {
     expect(source).toContain("backgroundImage ? 'bg-transparent' : 'bg-[var(--surface)]'");
+    expect(source).toContain('appearance-background-page-surface');
     expect(chatInputSource).toContain('isCreateAgentVariant && !!backgroundImage');
     expect(chatInputSource).toContain('var(--chat-input-bg) 84%');
     expect(settingsSource).toContain("backgroundImage ? 'bg-transparent' : 'bg-[var(--settings-bg)]'");
+    expect(settingsSource).toContain('appearance-background-page-surface');
     expect(schedulerSource).toContain(
       "backgroundImage ? 'bg-transparent' : 'bg-[hsl(var(--content-area))]'",
+    );
+    expect(schedulerSource).toContain('appearance-background-page-surface');
+    expect(pluginLayoutSource).toContain('appearance-background-page-surface');
+    expect(mainLayoutSource).toContain(
+      "data-appearance-background={backgroundImage ? 'active' : 'none'}",
+    );
+    expect(globalsSource).toContain(
+      "[data-appearance-background='active'] .appearance-background-page-surface",
     );
   });
 

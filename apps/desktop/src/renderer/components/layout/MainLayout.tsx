@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { BrowserWebviewPool } from '@/components/layout/BrowserWebviewPool';
 import { AppearanceBackground } from '@/components/layout/AppearanceBackground';
+import { useAppearanceBackground } from '@/hooks/useAppearanceBackground';
 import { ChromeActions } from '@/components/layout/ChromeActions';
 import { shouldReserveLeftChromeActions } from '@/components/layout/chromeActionsLayout';
 import { ContentHeaderSlot } from '@/components/layout/ContentHeader';
@@ -223,6 +224,7 @@ function SidebarPinSpacer({ width }: { width: number }) {
 }
 
 export function MainLayout() {
+  const { backgroundImage } = useAppearanceBackground();
   const splitGroup = useSplitGroup();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
   const [shareImportRequest, setShareImportRequest] = useState<{
@@ -1355,6 +1357,7 @@ export function MainLayout() {
     >
       <div
         ref={rowRef}
+        data-appearance-background={backgroundImage ? 'active' : 'none'}
         className={cn(
           'relative flex h-screen bg-content-area text-foreground',
           isDragging && 'select-none cursor-col-resize',

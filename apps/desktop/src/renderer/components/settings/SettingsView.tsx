@@ -215,7 +215,7 @@ export function SettingsView() {
   return (
     <div
       className={cn(
-        'h-full w-full overflow-hidden',
+        'appearance-background-page-surface h-full w-full overflow-hidden',
         backgroundImage ? 'bg-transparent' : 'bg-[var(--settings-bg)]',
       )}
       role="main"

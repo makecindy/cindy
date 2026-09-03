@@ -598,7 +598,7 @@ export function SchedulerPage() {
   return (
     <div
       className={cn(
-        'flex h-full w-full flex-col',
+        'appearance-background-page-surface flex h-full w-full flex-col',
         backgroundImage ? 'bg-transparent' : 'bg-[hsl(var(--content-area))]',
       )}
     >

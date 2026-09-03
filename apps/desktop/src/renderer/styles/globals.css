@@ -2133,6 +2133,12 @@ body.resizing-pane [data-ghost-webview] {
 [data-theme='cindy-dark'] .h-screen.bg-content-area {
   background: transparent;
 }
+/* 自定义应用背景启用时，顶层功能页必须让出整张画布；卡片、输入框与弹层仍由
+   各自的 surface token 提供可读性。统一由 MainLayout 标记状态，避免各路由的
+   独立 hook 在切页或导入图片后留下整页不透明底色。 */
+[data-appearance-background='active'] .appearance-background-page-surface {
+  background: transparent;
+}
 /* 模式1 侧栏(light):半透底,壁纸模糊由原生 vibrancy sidebar 材质提供。
    红渐变覆盖层已拆除(用户裁决 2026-07-18:Figma 该两块渐变矩形按装饰废稿处理,不实现);
    CSS backdrop-filter 已撤(A/B 实证:blur 会把透明窗背衬黑箱)。 */

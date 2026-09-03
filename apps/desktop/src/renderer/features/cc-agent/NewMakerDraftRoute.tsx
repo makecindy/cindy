@@ -5166,7 +5166,7 @@ export function NewMakerDraftRoute() {
         <div
           data-testid="create-agent-shell"
           className={cn(
-            'relative flex h-full w-full items-center justify-center overflow-x-hidden overflow-y-auto px-3 py-8', // px-3:外壳12+main32=44,与技能页(32+12滚动条槽)对齐(实测定稿 2026-07-19)
+            'appearance-background-page-surface relative flex h-full w-full items-center justify-center overflow-x-hidden overflow-y-auto px-3 py-8', // px-3:外壳12+main32=44,与技能页(32+12滚动条槽)对齐(实测定稿 2026-07-19)
             backgroundImage ? 'bg-transparent' : 'bg-[var(--surface)]',
           )}
         >
