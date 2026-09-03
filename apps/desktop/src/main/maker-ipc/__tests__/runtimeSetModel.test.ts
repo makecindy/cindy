@@ -6,6 +6,10 @@ import {
   setSessionProvider,
 } from '../../maker-host/session-provider-store.js';
 import {
+  setCodexAppliedCustomProviderRoutes,
+  type CodexCustomProviderRoute,
+} from '../../maker-host/codex-custom-provider-route.js';
+import {
   applyRuntimeSetModelChange,
   closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
@@ -33,6 +37,7 @@ const touchedSessions = new Set<string>();
 
 afterEach(() => {
   sessionProviderWriteObserver.current = null;
+  setCodexAppliedCustomProviderRoutes([]);
   for (const sessionId of touchedSessions) {
     clearSessionProvider(sessionId);
   }
@@ -43,6 +48,37 @@ function rememberSession(sessionId: string): string {
   touchedSessions.add(sessionId);
   return sessionId;
 }
+
+const imageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
+  {
+    providerId: 'provider-a',
+    routeId: 'a'.repeat(20),
+    modelProviderId: `cindy_custom_${'a'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model', 'a-alt-model'],
+    routing: {
+      upstream: 'https://a.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+  {
+    providerId: 'provider-b',
+    routeId: 'b'.repeat(20),
+    modelProviderId: `cindy_custom_${'b'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model'],
+    routing: {
+      upstream: 'https://b.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+];
 
 describe('isRemoteModelSwitchRouteChangeError', () => {
   it('recognizes both IPC codes and remote daemon message markers', () => {
@@ -116,6 +152,111 @@ describe('closeRejectedRuntimeAndRestoreControlStores', () => {
 });
 
 describe('applyRuntimeSetModelChange', () => {
+  async function applyImageGenerationRouteChange(input: {
+    testId: string;
+    currentThreadModelProviderId: string;
+    currentProviderId: string;
+    currentModel: string;
+    nextProviderId: string;
+    nextModel: string;
+  }) {
+    setCodexAppliedCustomProviderRoutes(imageGenerationRoutes);
+    const sessionId = rememberSession(input.testId);
+    setSessionProvider(sessionId, input.currentProviderId);
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        codexThreadModelProviderId: input.currentThreadModelProviderId,
+        model: input.currentModel,
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    const result = await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: input.nextModel,
+      providerId: input.nextProviderId,
+    });
+    return { result, sessionId, setModel, closeSession };
+  }
+
+  it('keeps one dynamic identity across eligible Responses models of the same Provider', async () => {
+    const routeA = imageGenerationRoutes[0]!;
+    const result = await applyImageGenerationRouteChange({
+      testId: 'imagegen-same-provider',
+      currentThreadModelProviderId: routeA.modelProviderId,
+      currentProviderId: routeA.providerId,
+      currentModel: 'shared-model',
+      nextProviderId: routeA.providerId,
+      nextModel: 'a-alt-model',
+    });
+
+    expect(result.closeSession).not.toHaveBeenCalled();
+    expect(result.setModel).toHaveBeenCalledWith('a-alt-model', { providerId: 'provider-a' });
+  });
+
+  it.each([
+    {
+      name: 'dynamic to non-Responses',
+      currentIdentity: imageGenerationRoutes[0]!.modelProviderId,
+      currentProvider: 'provider-a',
+      targetProvider: 'provider-a',
+      targetModel: 'chat-model',
+    },
+    {
+      name: 'ordinary to dynamic',
+      currentIdentity: 'cindy_gateway',
+      currentProvider: 'ordinary-provider',
+      targetProvider: 'provider-a',
+      targetModel: 'shared-model',
+    },
+    {
+      name: 'dynamic Provider A to Provider B with the same model id',
+      currentIdentity: imageGenerationRoutes[0]!.modelProviderId,
+      currentProvider: 'provider-a',
+      targetProvider: 'provider-b',
+      targetModel: 'shared-model',
+    },
+  ])('closes the live thread when crossing $name', async (testCase) => {
+    const result = await applyImageGenerationRouteChange({
+      testId: `imagegen-cross-${testCase.name}`,
+      currentThreadModelProviderId: testCase.currentIdentity,
+      currentProviderId: testCase.currentProvider,
+      currentModel: 'shared-model',
+      nextProviderId: testCase.targetProvider,
+      nextModel: testCase.targetModel,
+    });
+
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(result.sessionId)).toBe(testCase.targetProvider);
+  });
+
+  it('does not rebuild an unrelated ordinary Codex route', async () => {
+    const result = await applyImageGenerationRouteChange({
+      testId: 'imagegen-ordinary-control',
+      currentThreadModelProviderId: 'cindy_gateway',
+      currentProviderId: 'ordinary-provider',
+      currentModel: 'ordinary-model',
+      nextProviderId: 'ordinary-provider',
+      nextModel: 'ordinary-model-next',
+    });
+
+    expect(result.closeSession).not.toHaveBeenCalled();
+    expect(result.setModel).toHaveBeenCalledWith('ordinary-model-next', {
+      providerId: 'ordinary-provider',
+    });
+  });
+
   it('rolls back provider route when live setModel rejects', async () => {
     const sessionId = rememberSession('runtime-set-model-rollback');
     setSessionProvider(sessionId, 'xd');

@@ -2628,10 +2628,15 @@ async function openLoopbackBrowserAuthorization(
         ),
         body: t(isError ? 'login.browserCallback.errorBody' : 'login.browserCallback.successBody'),
         detail: isError ? result.error : undefined,
-        action: {
-          href: buildFocusDeepLink('desktop-login'),
-          label: t('login.browserCallback.returnButton'),
-        },
+        closeCountdown: isError ? undefined : t('login.browserCallback.closeCountdown'),
+        // The success page is self-closing when the browser permits it, so it
+        // only needs the return CTA on error pages where the user must retry.
+        action: isError
+          ? {
+              href: buildFocusDeepLink('desktop-login'),
+              label: t('login.browserCallback.returnButton'),
+            }
+          : undefined,
       });
     };
     const server = createServer((req, res) => {

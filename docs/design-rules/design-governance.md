@@ -86,7 +86,7 @@ protected 标签、目标道路、下一动作
 
 ### 3.1 目标层级（DTCG）
 
-`packages/design-tokens`（由后续 Token PR 建立）采用标准 DTCG JSON，三层：
+`packages/design-tokens`（DS-3 已建影子层，零运行时接线；DS-8 才生产生成切换）采用标准 DTCG JSON，三层：
 
 ```text
 reference   原始值：色阶、字号、字重、间距、圆角、动效时长
@@ -179,7 +179,8 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 | CI 门禁调整 | 新增/升级检查、required 名单变动 | 先报告后阻断 + 管理员人工审核（§8） |
 
 每张 PR 必须写明独立回退方式；任一阶段结束时仓库必须不劣于开始状态。影子 Token 包
-在约定复查期内没有真实消费者时应删除，不长期并存。已登记缺口不得描述为已完成能力；
+在约定复查期内没有真实消费者时应删除，不长期并存（DS-3 弃坑复查日期 **2026-11-01**，
+详见 `packages/design-tokens/README.md`）。已登记缺口不得描述为已完成能力；
 缺口未修复前，对应验收矩阵格不得记为通过。
 
 ## 8. 治理接线纪律
@@ -253,7 +254,7 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 | --- | --- | --- | --- |
 | DS-1 | `docs(design-system): DS-1 建立治理合同与存量门禁处置表` | 零视觉（纯文档） | ✅ #3609（2026-08-30 合入） |
 | DS-2a | `test(design-system): DS-2a 生产 UI 台账` | 零视觉 | ✅ #3648（2026-08-31 合入） |
-| DS-2b | `ci(design-system): DS-2b 主题兼容冻结守卫`（新增阻断需 §8 管理员审核） | CI 门禁 | — |
+| DS-2b | `ci(design-system): DS-2b 主题兼容冻结守卫`（新增阻断需 §8 管理员审核） | CI 门禁 | ✅ #3700（2026-09-02 合入） |
 | DS-3 | `feat(design-system): DS-3 最小语义 Token 影子层` | 零视觉 | — |
 | DS-4 | `feat(design-system): DS-4 Button 与 Input 标准组件`（落入既有 `components/ui/`） | 有意可见 | — |
 | DS-5 | `refactor(design-system): DS-5 AI 对话区 Pattern 迁移`（Tool Call / Reasoning / Message / Attachment） | 有意可见 | — |

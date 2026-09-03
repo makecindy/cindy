@@ -41,6 +41,7 @@ vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(),
     getAppPath: vi.fn(() => '/repo/apps/desktop'),
+    getPreferredSystemLanguages: vi.fn(() => ['en-US']),
     isPackaged: false,
     exit: vi.fn(),
   },
@@ -69,6 +70,7 @@ import {
   getClientEndpoint,
   getClientEndpointForRealm,
   getResolvedClientEndpoints,
+  initClientEndpoints,
   loadClientEndpointsForRealm,
   isUsingCachedClientEndpoints,
   registerClientEndpointsIpc,
@@ -104,6 +106,7 @@ const FULL_MANIFEST = JSON.stringify({
   voiceApiBaseUrl: 'https://voice.remote.example.com',
   githubApiBaseUrl: 'https://github-api.remote.example.com',
   skillhubApiBaseUrl: 'https://skillhub.remote.example.com',
+  cindySkillHubApiBaseUrl: 'https://cindy-skillhub.remote.example.com',
   pluginApiBaseUrl: 'https://plugin.remote.example.com',
   cdnBaseUrl: 'https://cdn.remote.example.com/app',
   mobileUpdateBaseUrl: 'https://mobile-update.remote.example.com',
@@ -254,6 +257,46 @@ describe('resolveEndpointSource(清单来源三选一)', () => {
     ],
   ] as const)('%s', (_label, input, expected) => {
     expect(resolveEndpointSource({ ...input, repoRoot: REPO_ROOT })).toEqual(expected);
+  });
+});
+
+describe('localhost 开发端点的 realm 固定', () => {
+  it('登录恢复切换 realm 时仍复用本地文件清单，不加载线上清单', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'client-endpoints-local-realm-'));
+    const manifestPath = path.join(root, 'endpoint.local.json');
+    const previousMode = process.env.XDT_DESKTOP_DEV_MODE;
+    const previousManifestFile = process.env.XDT_ENDPOINT_MANIFEST_FILE;
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        ...(JSON.parse(LOCAL_MANIFEST) as Record<string, unknown>),
+        cindySkillHubApiBaseUrl: 'http://localhost:3345',
+      }),
+    );
+    process.env.XDT_DESKTOP_DEV_MODE = 'local';
+    process.env.XDT_ENDPOINT_MANIFEST_FILE = manifestPath;
+
+    try {
+      await expect(initClientEndpoints()).resolves.toBe(true);
+
+      activateClientEndpointRealm('cn');
+      expect(getClientEndpoint('cindySkillHubApiBaseUrl')).toBe('http://localhost:3345');
+      activateClientEndpointRealm('global');
+      expect(getClientEndpoint('cindySkillHubApiBaseUrl')).toBe('http://localhost:3345');
+      await expect(loadClientEndpointsForRealm('cn')).resolves.toMatchObject({
+        cindySkillHubApiBaseUrl: 'http://localhost:3345',
+      });
+      await expect(loadClientEndpointsForRealm('global')).resolves.toMatchObject({
+        cindySkillHubApiBaseUrl: 'http://localhost:3345',
+      });
+      expect(netRequest).not.toHaveBeenCalled();
+    } finally {
+      if (previousMode === undefined) delete process.env.XDT_DESKTOP_DEV_MODE;
+      else process.env.XDT_DESKTOP_DEV_MODE = previousMode;
+      if (previousManifestFile === undefined) delete process.env.XDT_ENDPOINT_MANIFEST_FILE;
+      else process.env.XDT_ENDPOINT_MANIFEST_FILE = previousManifestFile;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1405,11 +1448,7 @@ describe('netlog 产物事后核对(verifyEndpointNetLogCapture)', () => {
     const captureDir = path.dirname(capture.file);
     const elsewhere = fs.mkdtempSync(path.join(logDir, 'elsewhere-'));
     fs.rmSync(captureDir, { recursive: true, force: true });
-    fs.symlinkSync(
-      elsewhere,
-      captureDir,
-      process.platform === 'win32' ? 'junction' : 'dir',
-    );
+    fs.symlinkSync(elsewhere, captureDir, process.platform === 'win32' ? 'junction' : 'dir');
     fs.writeFileSync(capture.file, '{}', 'utf8');
     expect(verifyEndpointNetLogCapture(capture)).toBe(false);
   });

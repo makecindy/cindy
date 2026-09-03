@@ -4,8 +4,16 @@ import path from 'node:path';
 import { app, BrowserWindow, ipcMain, powerMonitor, shell, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
-import { getDeepLinkMainWindow, openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
-import { createLayoutPreviewLease, layoutPreviewOwnerFromEvent } from '../input-devices/previewLease.js';
+import {
+  getDeepLinkMainWindow,
+  openMainWindowSession,
+  sendMainWindowMessage,
+} from '../deepLink.js';
+import {
+  createLayoutPreviewLease,
+  layoutPreviewOwnerFromEvent,
+  type LayoutPreviewOwner,
+} from '../input-devices/previewLease.js';
 import { registerInputDevice } from '../input-devices/registry.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
 import {
@@ -17,7 +25,6 @@ import {
 } from '../../shared/codexMicroGuard.js';
 import {
   WORKLOUDER_CODEX_ACTION_CHANNEL,
-  WORKLOUDER_CODEX_DEVICE,
   WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL,
   WORKLOUDER_CODEX_GET_STATE_CHANNEL,
   WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
@@ -27,9 +34,13 @@ import {
   WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  WORKLOUDER_DEVICES,
+  WORKLOUDER_MODELS,
+  isWorkLouderModel,
+  type WorkLouderAccessoriesState,
+  type WorkLouderModel,
   type WorkLouderCodexPreviewInput,
   type WorkLouderCodexRendererAction,
-  type WorkLouderCodexState,
 } from '../../shared/workLouderCodex.js';
 import {
   assertTrustedAppRendererEvent,
@@ -40,6 +51,7 @@ import {
   type WorkLouderSdkLocation,
 } from './WorkLouderCodexHostClient.js';
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
+import { WorkLouderAccessories, WorkLouderLayoutPreviewSession } from './accessories.js';
 import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
 import { CodexMicroGuardService } from './CodexMicroGuardService.js';
 import { createCodexMicroGuardIpc } from './codexMicroGuardIpc.js';
@@ -52,8 +64,10 @@ import {
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import {
+  readAllWorkLouderSettings,
   readWorkLouderCodexSettings,
   resetWorkLouderCodexSettings,
   writeWorkLouderCodexSettingsPatch,
@@ -123,6 +137,7 @@ const hostClient = new WorkLouderCodexHostClient({
   resolveSdk: resolveWorkLouderSdk,
   fork: forkWorkLouderHost,
   log,
+  keymapBackupDir: () => ownerScopedUserDataPath('worklouder-creator-micro-2'),
 });
 const codexMicroGuardService = new CodexMicroGuardService();
 
@@ -176,45 +191,89 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
   },
 );
 
-const layoutPreviewLease = createLayoutPreviewLease((active) => {
-  workLouderCodexLightingController.setLayoutPreviewActive(active);
+const workLouderAccessories = new WorkLouderAccessories(workLouderCodexLightingController, () => {
+  hostClient.probe();
+});
+
+const layoutPreviewSession = new WorkLouderLayoutPreviewSession();
+let layoutPreviewOwner: LayoutPreviewOwner | null = null;
+const layoutPreviewLease = createLayoutPreviewLease(
+  (active) => {
+    workLouderCodexLightingController.setLayoutPreviewActive(active);
+  },
+  () => {
+    layoutPreviewOwner = null;
+    layoutPreviewSession.setRequest(false, null);
+  },
+);
+
+function occupyingWorkLouderModel(): WorkLouderModel | null {
+  const live = workLouderCodexLightingController.getState();
+  return live.settings.deviceEnabled && isWorkLouderModel(live.device.deviceType)
+    ? live.device.deviceType
+    : null;
+}
+
+function syncLayoutPreviewLease(): void {
+  layoutPreviewLease.setActive(
+    layoutPreviewSession.shouldSuppress(occupyingWorkLouderModel()),
+    layoutPreviewOwner,
+  );
+}
+
+workLouderAccessories.subscribe(() => {
+  syncLayoutPreviewLease();
 });
 
 let settingsIpcRegistered = false;
 let inputDeviceRegistered = false;
 let permissionSettingsRetryPending = false;
 
-/** Register this board as one input-device adapter, not as the host keyboard layer. */
+/** Register each Work Louder board as its own input-device adapter. */
 export function registerWorkLouderCodexInputDevice(): void {
   if (inputDeviceRegistered) return;
   inputDeviceRegistered = true;
-  registerInputDevice({
-    descriptor: WORKLOUDER_CODEX_DEVICE,
-    start: () => {
-      registerWorkLouderCodexSettingsIpc();
-    },
-    updateSessionActivity: (activity) => {
-      workLouderCodexLightingController.updateSessionActivity(activity);
-    },
-    playWindowReveal: () => {
-      workLouderCodexLightingController.playWindowReveal();
-    },
-    resumeTaskSlots: async () => {
-      workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());
-      await workLouderCodexLightingController.resumeTaskSlots();
-    },
-    suspendTaskSlots: () => {
-      rendererTaskCatalog = null;
-      rendererTaskCatalogScope = null;
-      workLouderCodexLightingController.suspendTaskSlots();
-    },
-    dispose: async () => {
-      await Promise.all([
-        workLouderCodexLightingController.dispose(),
-        codexMicroGuardService.dispose(),
-      ]);
-    },
-  });
+  for (const model of WORKLOUDER_MODELS) {
+    registerInputDevice({
+      descriptor: WORKLOUDER_DEVICES[model],
+      start: () => {
+        registerWorkLouderCodexSettingsIpc();
+      },
+      updateSessionActivity:
+        model === 'codex-micro'
+          ? (activity) => {
+              workLouderCodexLightingController.updateSessionActivity(activity);
+            }
+          : () => undefined,
+      playWindowReveal:
+        model === 'codex-micro'
+          ? () => {
+              workLouderCodexLightingController.playWindowReveal();
+            }
+          : undefined,
+      resumeTaskSlots: async () => {
+        workLouderAccessories.applySettings(model, readWorkLouderCodexSettings(model));
+        await workLouderCodexLightingController.resumeTaskSlots();
+      },
+      suspendTaskSlots:
+        model === 'codex-micro'
+          ? () => {
+              rendererTaskCatalog = null;
+              rendererTaskCatalogScope = null;
+              workLouderCodexLightingController.suspendTaskSlots();
+            }
+          : () => undefined,
+      dispose:
+        model === 'codex-micro'
+          ? async () => {
+              await Promise.all([
+                workLouderCodexLightingController.dispose(),
+                codexMicroGuardService.dispose(),
+              ]);
+            }
+          : async () => undefined,
+    });
+  }
 }
 
 /** Registers the local-desktop-only device settings bridge after Electron is ready. */
@@ -233,15 +292,21 @@ export function registerWorkLouderCodexSettingsIpc(): void {
     hostClient.retryPermission();
   });
 
-  workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());
+  const persisted = readAllWorkLouderSettings();
+  for (const model of WORKLOUDER_MODELS) {
+    workLouderAccessories.applySettings(model, persisted[model]);
+  }
   workLouderCodexLightingController.start();
   void codexMicroGuardService.initialize();
+  if (WORKLOUDER_MODELS.some((model) => persisted[model].deviceEnabled)) {
+    hostClient.probe();
+  }
   const handlers = createWorkLouderCodexSettingsIpc({
     assertTrustedSender: (event) => assertTrustedAppRendererEvent(event as never),
-    getState: () => workLouderCodexLightingController.getState(),
+    getState: () => workLouderAccessories.getAccessories(),
     writeSettings: writeWorkLouderCodexSettingsPatch,
     resetSettings: resetWorkLouderCodexSettings,
-    applySettings: (settings) => workLouderCodexLightingController.applySettings(settings),
+    applySettings: (model, settings) => workLouderAccessories.applySettings(model, settings),
     openInputMonitoringSettings: async () => {
       if (process.platform !== 'darwin') return;
       permissionSettingsRetryPending = true;
@@ -262,16 +327,20 @@ export function registerWorkLouderCodexSettingsIpc(): void {
       rendererTaskCatalogScope = scope;
       void workLouderCodexLightingController.refreshTaskSlots().catch(() => undefined);
     },
-    setLayoutPreviewActive: (active, event) => {
-      layoutPreviewLease.setActive(active, layoutPreviewOwnerFromEvent(event));
+    setLayoutPreviewActive: (active, model, event) => {
+      layoutPreviewOwner = layoutPreviewOwnerFromEvent(event);
+      layoutPreviewSession.setRequest(active, model);
+      syncLayoutPreviewLease();
     },
   });
 
   ipcMain.handle(WORKLOUDER_CODEX_GET_STATE_CHANNEL, (event) => handlers.get(event));
-  ipcMain.handle(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, (event, patch: unknown) =>
-    handlers.set(event, patch),
+  ipcMain.handle(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, (event, model: unknown, patch: unknown) =>
+    handlers.set(event, model, patch),
   );
-  ipcMain.handle(WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL, (event) => handlers.reset(event));
+  ipcMain.handle(WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL, (event, model: unknown) =>
+    handlers.reset(event, model),
+  );
   ipcMain.handle(WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL, (event) =>
     handlers.openInputMonitoringSettings(event),
   );
@@ -296,7 +365,7 @@ export function registerWorkLouderCodexSettingsIpc(): void {
   ipcMain.handle(CODEX_MICRO_GUARD_RECOVER_CHANNEL, (event) => guardHandlers.recover(event));
   codexMicroGuardService.subscribe((state) => broadcastGuardState(state));
 
-  workLouderCodexLightingController.subscribeState((state) => {
+  workLouderAccessories.subscribe((state) => {
     broadcastState(state);
   });
 }
@@ -343,7 +412,7 @@ function dispatchPreviewInput(input: WorkLouderCodexPreviewInput): void {
   }
 }
 
-function broadcastState(state: WorkLouderCodexState): void {
+function broadcastState(state: WorkLouderAccessoriesState): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!isTrustedAppRendererWindow(window)) continue;
     window.webContents.send(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, state);

@@ -53,6 +53,7 @@ import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import { awaitDesktopLoginStateLoad } from '../../shared/authIpc';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
 
 /**
@@ -355,7 +356,12 @@ export function AuthProvider({
   }, [confirm, enableSessionExpiredPrompt, t]);
 
   const loadLoginState = useCallback(async (): Promise<DesktopLoginActionResult> => {
-    const result = await authServiceRef.current!.getLoginState();
+    // preparing 只允许在 load 进行中出现。settle / throw / 30s 超时都必须落到
+    // identifier 或既有 error 步,避免 AUTH_FLOW_SUPERSEDED + state=null 或 IPC
+    // 挂起把「正在连接登录服务」变成永不结束。
+    const result = await awaitDesktopLoginStateLoad(() =>
+      authServiceRef.current!.getLoginState(),
+    );
     setLoginState(result.state);
     return result;
   }, []);

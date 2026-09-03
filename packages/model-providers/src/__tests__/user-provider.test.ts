@@ -730,6 +730,27 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect(p.routing.pi?.wireProtocol).toBe('openai-chat');
   });
 
+  it('projects image generation independently from image input', () => {
+    const p = buildUserProvider({
+      id: 'images',
+      name: 'Images',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://images.example/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [
+            { id: 'generate', name: 'Generate' },
+            { id: 'input', name: 'Input', supportsImageInput: true },
+          ],
+        },
+      },
+    });
+    expect(p.routing.codex?.supportsImageGeneration).toBe(true);
+    expect(p.models.codex?.[0]?.supportsImageInput).toBeUndefined();
+    expect(p.models.codex?.[1]?.supportsImageInput).toBe(true);
+  });
+
   it("does not export unverified CC/Codex efforts for managed Ollama", () => {
     const p = buildUserProvider({
       id: "cindy-local-ollama",

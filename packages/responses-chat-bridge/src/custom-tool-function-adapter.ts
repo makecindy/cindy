@@ -46,6 +46,40 @@ function unwrapArguments(value: unknown): string {
   return parsed.input;
 }
 
+/**
+ * Item ids are dialect-coupled. Codex >=0.152 stamps a `<kind>_<uuid7>` id on every input item
+ * it replays, and a Responses upstream rejects an item whose id prefix disagrees with its type
+ * (`Invalid 'input[n].id' ... Expected an ID that begins with 'fc'`). Flipping an item to the
+ * function dialect therefore has to flip its id prefix too.
+ */
+const CUSTOM_TO_FUNCTION_ID_PREFIXES: ReadonlyArray<readonly [string, string]> = [
+  ['ctco_', 'fco_'],
+  ['ctc_', 'fc_'],
+];
+
+/**
+ * Rewrites one adapted item's id for the function dialect.
+ *
+ * Ids already in the function dialect are left untouched: the upstream minted them, so it is the
+ * authority on what it accepts, and `fc` is the prefix its own validator asks for. An id that is
+ * in neither dialect is dropped rather than forwarded — omitting `id` is exactly what Codex did
+ * before 0.152 and every Responses upstream accepts it, so a future Codex prefix we do not know
+ * about degrades to a missing id instead of failing the whole request. The
+ * `codexExecFunctionAdapter` e2e enforces this invariant against the pinned binary so a new
+ * prefix surfaces on the next bump instead of in production.
+ */
+function adaptItemId(item: Record<string, unknown>): Record<string, unknown> {
+  const id = item.id;
+  if (typeof id !== 'string') return item;
+  for (const [from, to] of CUSTOM_TO_FUNCTION_ID_PREFIXES) {
+    if (id.startsWith(from)) return { ...item, id: `${to}${id.slice(from.length)}` };
+  }
+  if (id.startsWith('fc')) return item;
+  const next = { ...item };
+  delete next.id;
+  return next;
+}
+
 interface AdaptedCall {
   spec: ChatBridgeToolSpec;
   arguments: string;
@@ -289,7 +323,7 @@ export function createResponsesCustomToolFunctionAdapter(
         if (!functionName) return item;
         if (item.type === 'custom_tool_call') {
           const next: Record<string, unknown> = {
-            ...item, type: 'function_call', name: functionName,
+            ...adaptItemId(item), type: 'function_call', name: functionName,
             arguments: JSON.stringify({ input: stringifyInput(item.input) }),
           };
           delete next.input;
@@ -297,7 +331,7 @@ export function createResponsesCustomToolFunctionAdapter(
           return next;
         }
         return item.type === 'custom_tool_call_output'
-          ? { ...item, type: 'function_call_output' }
+          ? { ...adaptItemId(item), type: 'function_call_output' }
           : item;
       }) : body.input;
       let toolChoice = body.tool_choice;

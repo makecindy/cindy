@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __extraDirsPathOverlapForTesting,
+  countUserExtraDirs,
+  extraDirDisplayLabel,
+  LIBRARY_EXTRA_DIR_SLOT_PREFIX,
+  MAX_EXTRA_DIRS,
+  partitionExtraDirs,
   pickAndAddExtraDir,
 } from '../components/new-chat/extraDirsActions';
 
@@ -84,5 +89,63 @@ describe('pickAndAddExtraDir', () => {
 
     expect(confirm).not.toHaveBeenCalled();
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('library 槽不占用户 EXTRA_DIRS_MAX,显示为系统项', async () => {
+    const library = `${LIBRARY_EXTRA_DIR_SLOT_PREFIX}/tmp/mivo-library`;
+    const userDirs = Array.from({ length: MAX_EXTRA_DIRS }, (_, i) => `/tmp/user-${i}`);
+    expect(countUserExtraDirs([...userDirs, library])).toBe(MAX_EXTRA_DIRS);
+    expect(partitionExtraDirs([...userDirs, library])).toEqual({
+      system: [library],
+      user: userDirs,
+    });
+    expect(extraDirDisplayLabel(library)).toBe('Mivo 作品库（只读）');
+
+    vi.stubGlobal('window', {
+      electronAPI: {
+        dialog: {
+          showOpenDirectory: vi.fn(async () => ({ success: true, path: '/tmp/another' })),
+        },
+      },
+    });
+    const onChange = vi.fn();
+    await pickAndAddExtraDir({
+      extraDirs: [...userDirs, library],
+      workingDir: '/workspace',
+      onChange,
+      confirm: vi.fn(async () => true),
+      parentDirectoryConfirm: {
+        title: 'title',
+        description: (path) => path,
+        confirmText: 'confirm',
+        cancelText: 'cancel',
+      },
+    });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('composer extraDirs UI 接线 library 槽', () => {
+  it('ChatInput 配额与计数走 countUserExtraDirs,不把 extraDirs.length 当用户名额', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { dirname, join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, '../components/new-chat/ChatInput.tsx'), 'utf8');
+    expect(source).toMatch(/countUserExtraDirs\(currentExtraDirs\) \+ countUserExtraDirs\(currentWritableDirs\)/);
+    expect(source).toMatch(/countUserExtraDirs\(extraDirs \?\? \[\]\) \+ countUserExtraDirs\(writableDirs \?\? \[\]\)/);
+    expect(source).not.toMatch(/currentExtraDirs\.length \+ currentWritableDirs\.length/);
+    expect(source).not.toMatch(/extraDirsCount=\{\(extraDirs \?\? \[\]\)\.length \+ \(writableDirs \?\? \[\]\)\.length\}/);
+  });
+
+  it('AtMentionPanel 把 library 槽显示为系统项且不提供移除按钮', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { dirname, join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, '../components/new-chat/AtMentionPanel.tsx'), 'utf8');
+    expect(source).toContain('extraDirDisplayLabel');
+    expect(source).toContain('isLibraryExtraDirSlot');
+    expect(source).toMatch(/isLibraryExtraDirSlot\(p\) \? null/);
   });
 });

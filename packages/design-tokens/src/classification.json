@@ -1,0 +1,5156 @@
+{
+  "source": "apps/desktop/src/renderer/themes/colors.ts",
+  "generatedBy": "packages/design-tokens/src/classify.ts",
+  "snapshotCount": 514,
+  "categories": {
+    "literal": 248,
+    "alias": 235,
+    "hsl-triplet": 6,
+    "runtime-derived-or-protected": 25
+  },
+  "entries": [
+    {
+      "id": "surface",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-hsl",
+      "category": "hsl-triplet",
+      "destination": "hsl-pair",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "hslPairOf": "surface",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-elevated",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-elevated-soft",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-card-ivory",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-chip",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-chip-alt",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-hover-soft",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-hover-hsl",
+      "category": "hsl-triplet",
+      "destination": "hsl-pair",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "hslPairOf": "surface-hover",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "surface-on-card",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "panel-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface",
+        "dark": "surface"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "md-table-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "md-h1-fg",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "md-h2-fg",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "md-h3-fg",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "md-h4-fg",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "md-h5-fg",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "md-h6-fg",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "md-strong-fg",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "border-default",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "border-default-hsl",
+      "category": "hsl-triplet",
+      "destination": "hsl-pair",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "hslPairOf": "border-default",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "border-shadcn-hsl",
+      "category": "hsl-triplet",
+      "destination": "hsl-pair",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "hslPairOf": "border-shadcn",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "border-transparent-mixed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "transparent",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "board",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "text-primary",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-primary-on-dark",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-primary-emphasis",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-primary-inv",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-primary-body-strong",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-primary-hsl",
+      "category": "hsl-triplet",
+      "destination": "hsl-pair",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "hslPairOf": "text-primary",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-secondary",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "protected": {
+        "family": "u2-secondary-info",
+        "owner": "DESIGN.md §15.5",
+        "rule": "U2 二级信息色，never darken unilaterally",
+        "mode": "semantic-modeled"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-secondary-cross",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "protected": {
+        "family": "u2-secondary-info",
+        "owner": "DESIGN.md §15.5",
+        "rule": "U2 二级信息色，never darken unilaterally",
+        "mode": "semantic-modeled"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-secondary-mid",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-tertiary",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-tertiary-stone",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-tertiary-mid",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-tertiary-hsl",
+      "category": "hsl-triplet",
+      "destination": "hsl-pair",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "hslPairOf": "text-tertiary",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-disabled",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-disabled-tertiary",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-placeholder",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "accent-cta-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "accent-cta-bg-pure",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "accent-emphasis",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "accent-soft",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "accent-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "accent-pure-cta-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "error-flat",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "warning-accent",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "process-agent-task-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "process-agent-service-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "process-main-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "process-renderer-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "process-gpu-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "process-utility-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "shadow-soft-panel",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "shadow",
+      "darkKind": "shadow",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "background",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "foreground",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-hsl",
+        "dark": "text-primary-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "muted",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "muted-foreground",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-shadcn-hsl",
+        "dark": "border-shadcn-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "input",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-shadcn-hsl",
+        "dark": "border-shadcn-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "switch-track-off",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "switch-thumb-off",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-on-card",
+        "dark": "surface-on-card"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "switch-disabled-opacity",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "non-color",
+      "darkKind": "non-color",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "switch-disabled-thumb-opacity",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "non-color",
+      "darkKind": "non-color",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "switch-track-on",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "primary",
+        "dark": "primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ring",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-hsl",
+        "dark": "text-primary-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "primary",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-hsl",
+        "dark": "text-primary-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "primary-foreground",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "secondary",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "secondary-foreground",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-hsl",
+        "dark": "text-primary-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "accent",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "accent-foreground",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-hsl",
+        "dark": "text-primary-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "popover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "popover-foreground",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-hsl",
+        "dark": "text-primary-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "radius",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "non-color",
+      "darkKind": "null",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "titlebar",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hsl",
+        "dark": "surface-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "titlebar-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default-hsl",
+        "dark": "border-default-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "titlebar-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "titlebar-button-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover-hsl",
+        "dark": "surface-hover-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "titlebar-control-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover-hsl",
+        "dark": "surface-hover-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "splash-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "splash-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "splash-text-muted",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "splash-text-destructive",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "splash-fade-duration",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "non-color",
+      "darkKind": "null",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "splash-fade-easing",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "non-color",
+      "darkKind": "null",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "destructive",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "confirm-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-shadow",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "shadow-soft-panel",
+        "dark": "shadow-soft-panel"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-title",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-desc",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-btn-primary-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-btn-primary-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-btn-primary-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-hover",
+        "dark": "accent-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-btn-secondary-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-btn-secondary-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-btn-secondary-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hsl",
+        "dark": "surface-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default-hsl",
+        "dark": "border-default-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-item-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover-hsl",
+        "dark": "surface-hover-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-item-active",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-item-active-foreground",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "foreground",
+        "dark": "foreground"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-item-active-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "sidebar-item-active",
+        "dark": "sidebar-item-active"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-search-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hsl",
+        "dark": "surface-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-muted",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-hsl",
+        "dark": "text-tertiary-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-action-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "search-match-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "search-match-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "update-btn-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "update-btn-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "update-btn-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "update-btn-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "transparent",
+      "darkKind": "transparent",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "content-area",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hsl",
+        "dark": "surface-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "welcome-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-hsl",
+        "dark": "text-tertiary-hsl"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-bg-base",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-bg-gradient-radial",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-bg-gradient-linear",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "css-keyword",
+      "darkKind": "css-keyword",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-panel-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-brand-accent",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "protected": {
+        "family": "cindy-skin-family",
+        "owner": "DESIGN.md §15.1",
+        "rule": "CINDY 皮肤族品牌红，实现期零裁量",
+        "mode": "register-only"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-brand-accent-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "protected": {
+        "family": "cindy-skin-family",
+        "owner": "DESIGN.md §15.1",
+        "rule": "CINDY 皮肤族品牌红（pressed），实现期零裁量",
+        "mode": "register-only"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-link-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-callback-card-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-callback-card-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-callback-title",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-callback-body",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-callback-cta-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-callback-cta-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-callback-cta-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-panel-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-control-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-action-control-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-back-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-control-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-control-border-active",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-control-border-disabled",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-control-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-control-placeholder",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-title-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-secondary-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-primary-button-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-primary-button-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-primary-button-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-disabled-button-overlay",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-disabled-button-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-disabled-button-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-inverted-button-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-link-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-link-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-error-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-deletion-bubble-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-deletion-bubble-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-splash-progress-track",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-splash-progress-fill",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-button-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-button-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-back-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-back-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-row-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-row-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-input-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-loading-ring-track",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-consent-radio-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-consent-radio-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-consent-radio-checked-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-consent-radio-check",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-consent-overlay",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-secondary-button-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-secondary-button-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-secondary-button-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-secondary-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-secondary-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-apple-circle-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "lightbox-cta-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-cta-bg-pure",
+        "dark": "accent-cta-bg-pure"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "lightbox-cta-fg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-pure-cta-fg",
+        "dark": "accent-pure-cta-fg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "lightbox-cta-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-hover",
+        "dark": "accent-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-border-focus",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-placeholder-subtle",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-placeholder",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-placeholder",
+        "dark": "text-placeholder"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "file-chip-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "drop-overlay-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "drop-overlay-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "tooltip-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "tooltip-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "file-remove-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "file-badge-pdf",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "file-badge-doc",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "file-badge-sheet",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "file-badge-slide",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "file-badge-code",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "file-badge-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-chip-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip",
+        "dark": "surface-chip"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-chip-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-chip-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-input-chip-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-shadow",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "shadow-soft-panel",
+        "dark": "shadow-soft-panel"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-item-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover",
+        "dark": "surface-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-item-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-item-meta",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-item-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-empty",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "cmd-palette-tooltip-body",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "send-btn-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-cta-bg",
+        "dark": "accent-cta-bg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "send-btn-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-on-card",
+        "dark": "surface-on-card"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "send-btn-disabled-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated-soft",
+        "dark": "surface-elevated-soft"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "send-btn-disabled-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-disabled-tertiary",
+        "dark": "text-disabled-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "send-btn-hover-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "send-btn-bg",
+        "dark": "send-btn-bg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "send-btn-pressed-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "send-btn-bg",
+        "dark": "send-btn-bg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-code-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-code-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-allow-btn-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-allow-btn-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-allow-kbd-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-allow-kbd-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-trigger-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-trigger-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-trigger-meta",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-trigger-arrow",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary-cross",
+        "dark": "text-secondary-cross"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "thinking-body-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-dropdown-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-dropdown-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-item-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover",
+        "dark": "surface-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-item-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-item-check",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-cta-bg-pure",
+        "dark": "accent-cta-bg-pure"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-item-desc",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "model-section-label",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "favorite-star",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "effort-tier-minimal",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "effort-tier-low",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "effort-tier-medium",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "effort-tier-high",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "effort-tier-xhigh",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "effort-tier-max",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "effort-tier-ultra",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "price-tier-t1",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "price-tier-t2",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "price-tier-t3",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "fast-accent",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "engine-badge-cc",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "engine-badge-codex",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "engine-badge-pi",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-item-selected-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-auto-selected-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-bypass-selected-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "warning-accent",
+        "dark": "warning-accent"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-picker-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-picker-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-item-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover",
+        "dark": "surface-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-item-name",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-item-path",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-item-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-label",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-btn-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "chat-input-bg",
+        "dark": "chat-input-bg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-btn-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-btn-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-soft",
+        "dark": "accent-soft"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "folder-btn-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-soft",
+        "dark": "accent-soft"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "workingdir-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "workingdir-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "fast-toggle-off",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "fast-toggle-track",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-disabled",
+        "dark": "text-disabled"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "chat-placeholder-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-user-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-user-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-user-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-assistant-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-tool-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary-mid",
+        "dark": "text-secondary-mid"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-code-block-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-code-block-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-code-inline-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip",
+        "dark": "surface-chip"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-md-inline-code-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-table-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-table-header-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface",
+        "dark": "surface"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-blockquote-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "agent-actions-rail",
+        "dark": "agent-actions-rail"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-blockquote-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-hr-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-scrollbar",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-scrollbar-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-cursor",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-link",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-tool-card-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-tool-card-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-tool-card-chevron",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary-mid",
+        "dark": "text-secondary-mid"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "msg-tool-card-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "todo-bar-track",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip",
+        "dark": "surface-chip"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "diff-del-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "diff-del-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "diff-del-emphasis",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "diff-add-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "pr-open-on-light",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "pr-open-on-dark",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "diff-add-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "diff-add-emphasis",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "diff-line-num",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "info-700",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "agent-actions-rail",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "annotation-accent",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "protected": {
+        "family": "annotation-accent",
+        "owner": "DESIGN.md §15.4",
+        "rule": "图片标注烧录墨色，exempt, do not change",
+        "mode": "register-only"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "quota-bar-fill",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "quota-bar-warn",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "warning-fg",
+        "dark": "warning-fg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "quota-bar-crit",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "error-flat",
+        "dark": "error-flat"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "quota-bar-track",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip",
+        "dark": "surface-chip"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "status-bar-accent",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "warning-accent",
+        "dark": "warning-accent"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "status-badge-fg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-pure-cta-fg",
+        "dark": "accent-pure-cta-fg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "surface-translucent-sidebar",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface",
+        "dark": "surface"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "surface-translucent-main",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "surface-translucent-overlay",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-search-input-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "composer-pill-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "composer-pill-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "status-bar-meta",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface",
+        "dark": "surface"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-divider",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-back-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-mid",
+        "dark": "text-tertiary-mid"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-back-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-back-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-menu-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-menu-text-selected",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-menu-bg-selected",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-menu-border-selected",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-transparent-mixed",
+        "dark": "border-transparent-mixed"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-menu-bg-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-section-title",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-section-desc",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-mid",
+        "dark": "text-tertiary-mid"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-section-sublabel",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-mid",
+        "dark": "text-tertiary-mid"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-profile-card-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-card-ivory",
+        "dark": "surface-card-ivory"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-profile-card-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-profile-avatar-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip-alt",
+        "dark": "surface-chip-alt"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-profile-avatar-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-profile-name",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-input-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-card-ivory",
+        "dark": "surface-card-ivory"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-input-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-input-border-focus",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-input-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-input-placeholder",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-placeholder",
+        "dark": "text-placeholder"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-eye-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-eye-icon-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-trash-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-trash-icon-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-source-meta",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary-cross",
+        "dark": "text-secondary-cross"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-source-link",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-error-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "error-flat",
+        "dark": "error-flat"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-badge-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-card-ivory",
+        "dark": "surface-card-ivory"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-badge-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-badge-needs-config",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-badge-saved",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-badge-connected",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "card-status-done",
+        "dark": "card-status-done"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-badge-connected-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-badge-error",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "error-flat",
+        "dark": "error-flat"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-btn-primary-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-emphasis",
+        "dark": "accent-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-btn-primary-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-btn-primary-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-emphasis",
+        "dark": "accent-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-btn-primary-hover-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-hover",
+        "dark": "accent-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-btn-secondary-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip-alt",
+        "dark": "surface-chip-alt"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-btn-secondary-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-btn-secondary-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-btn-secondary-hover-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-card-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-card-ivory",
+        "dark": "surface-card-ivory"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-card-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-social-card-pressed-bg",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-preview-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface",
+        "dark": "surface"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-preview-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-preview-border-active",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-emphasis",
+        "dark": "accent-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-icon-active",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-emphasis",
+        "dark": "accent-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-label",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-label-active",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-emphasis",
+        "dark": "accent-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-auto-light",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-theme-auto-dark",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-logout-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-logout-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-logout-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-logout-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-logout-hover-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover-soft",
+        "dark": "surface-hover-soft"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-integration-avatar-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-integration-avatar-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-integration-avatar-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-integration-subtitle",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "settings-integration-warning",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "warning-accent",
+        "dark": "warning-accent"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "remote-status-ready",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "remote-status-progress",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "remote-status-failed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "card-status-awaiting",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-draft-indicator",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "hex",
+      "darkKind": "alias",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "card-status-error",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "card-status-done",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "completion-badge-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "remote-status-disconnected",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-card-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-card-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-header-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-page-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-option-label",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-option-desc",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-option-custom",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-option-divider",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-option-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-badge-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip",
+        "dark": "surface-chip"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-badge-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-header-chip-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip",
+        "dark": "surface-chip"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-option-list-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-input-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-input-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-input-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-input-placeholder",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-placeholder",
+        "dark": "text-placeholder"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-send-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-cta-bg",
+        "dark": "accent-cta-bg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-send-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-on-card",
+        "dark": "surface-on-card"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-send-disabled-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated-soft",
+        "dark": "surface-elevated-soft"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-send-disabled-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-disabled-tertiary",
+        "dark": "text-disabled-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-answered-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-expired-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-option-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover-soft",
+        "dark": "surface-hover-soft"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-checkbox-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-checkbox-checked-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-cta-bg",
+        "dark": "accent-cta-bg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "ask-checkbox-checked-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-on-card",
+        "dark": "surface-on-card"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-card-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-card-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-header-title",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-emphasis",
+        "dark": "text-primary-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-header-hint",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-header-divider",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-toolbar-btn-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-toolbar-btn-hover-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-outline-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-outline-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-outline-label",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-outline-item-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary-stone",
+        "dark": "text-tertiary-stone"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-outline-active-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-outline-active-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-emphasis",
+        "dark": "text-primary-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-content-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-content-section",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-emphasis",
+        "dark": "text-primary-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-content-body",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-body-strong",
+        "dark": "text-primary-body-strong"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-content-divider",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-edit-body",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-body-strong",
+        "dark": "text-primary-body-strong"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-approve-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-emphasis",
+        "dark": "text-primary-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-approve-enter",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary-cross",
+        "dark": "text-secondary-cross"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-row-divider",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-fb-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary-cross",
+        "dark": "text-secondary-cross"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-fb-placeholder",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-placeholder",
+        "dark": "text-placeholder"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-fb-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-emphasis",
+        "dark": "text-primary-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-row-hover-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover-soft",
+        "dark": "surface-hover-soft"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-approve-icon-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "warning-accent",
+        "dark": "warning-accent"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-action-approve-icon-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-min-title",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-emphasis",
+        "dark": "text-primary-emphasis"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-min-icon",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary-cross",
+        "dark": "text-secondary-cross"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-bubble-badge-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-chip",
+        "dark": "surface-chip"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-bubble-badge-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-bubble-body-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary-body-strong",
+        "dark": "text-primary-body-strong"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plan-bubble-summary-text",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "color-primary",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "color-neutral-300",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-disabled",
+        "dark": "text-disabled"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "color-neutral-400",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "color-error-600",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "error-flat",
+        "dark": "error-flat"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "color-error-700",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "focus-ring",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "focus-ring-soft",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "text-selection-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "focus-ring-soft",
+        "dark": "focus-ring-soft"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "shadow-chip-raised",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "shadow",
+      "darkKind": "shadow",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "shadow-menu",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "shadow",
+      "darkKind": "shadow",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "overlay-modal",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "overlay-lightbox",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "lightbox-toolbar-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "lightbox-toolbar-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "lightbox-toolbar-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "lightbox-toolbar-fg-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "lightbox-toolbar-hover-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "error-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "error-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "error-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "error-fg-strong",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "warning-bg-soft",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "warning-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
+      "modeledAsSemantic": true
+    },
+    {
+      "id": "upgrade-banner-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "upgrade-banner-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "upgrade-banner-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "skillhub-review-pending-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "skillhub-review-pending-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "skillhub-review-pending-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "skillhub-review-quarantine-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "skillhub-review-quarantine-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "skillhub-review-quarantine-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-control-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-control-bg-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "alias",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-control-bg-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "alias",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-control-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-control-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-control-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-segment-track-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-segment-inactive-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-send-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-send-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-send-bg-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-send-bg-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-send-disabled-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-send-disabled-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-focus-ring",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-tertiary",
+        "dark": "text-tertiary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-quick-card-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-quick-card-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-quick-card-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-quick-card-icon-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-quick-card-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-quick-card-bg-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-avatar-ring",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-avatar-glass-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-avatar-inner-ring-start",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "create-agent-avatar-inner-ring-end",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-nav-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-list-muted",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-user-card-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-user-card-bg-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-user-card-border",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "sidebar-user-card-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "caret-accent",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-cta-bg",
+        "dark": "accent-cta-bg"
+      },
+      "modeledAsSemantic": false
+    }
+  ]
+}

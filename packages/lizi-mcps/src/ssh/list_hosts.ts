@@ -23,7 +23,7 @@ export function registerSshListHostsTool(
     handler: async () => {
       try {
         const pool = await deps.getPool();
-        const hosts = pool.list().map(hostBrief);
+        const hosts = pool.list().map((snapshot) => hostBrief(snapshot, deps));
         return okPayload({
           hosts,
           ...(hosts.length === 0

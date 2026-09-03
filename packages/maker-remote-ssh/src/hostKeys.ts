@@ -26,8 +26,12 @@ import path from 'node:path';
 export interface HostKeyStore {
   /** Trusted fingerprint for `key`, or null when the host is unknown. */
   get(key: string): Promise<string | null>;
-  /** Record (or overwrite) the trusted fingerprint for `key`. */
-  set(key: string, fingerprint: string): Promise<void>;
+  /**
+   * Record the trusted fingerprint for `key`. `shouldCommit` is checked inside
+   * the serialized write slot so a cancelled SSH attempt cannot persist after
+   * it has become stale while waiting for another host-key write.
+   */
+  set(key: string, fingerprint: string, shouldCommit?: () => boolean): Promise<void>;
   /**
    * Discard any in-memory cache so the next `get` or `set` re-reads from
    * the backing store. For in-memory stores this is a no-op.
@@ -105,7 +109,7 @@ export class FileHostKeyStore implements HostKeyStore {
     }
   }
 
-  async set(key: string, fingerprint: string): Promise<void> {
+  async set(key: string, fingerprint: string, shouldCommit?: () => boolean): Promise<void> {
     // Load inside the slot, not outside. If reload() is called between a
     // caller's get() and their set() (post-load/pre-persist window), an
     // outside-slot load returns a stale map reference and the conflict check
@@ -114,6 +118,7 @@ export class FileHostKeyStore implements HostKeyStore {
     // permanently poison all subsequent writes.
     const mySlot = this.writeChain.catch(() => {}).then(async () => {
       const map = await this.load();
+      if (shouldCommit && !shouldCommit()) return;
       if (map[key] === fingerprint) return; // concurrent winner already did our work
       if (map[key] !== undefined) {
         // A concurrent first-use already claimed this key with a different

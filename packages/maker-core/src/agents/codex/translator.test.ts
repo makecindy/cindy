@@ -1536,6 +1536,67 @@ describe('translateItemNotification commandExecution output normalization', () =
       isError: false,
     });
   });
+
+  // #3793:bwrap 沙箱初始化失败(命令从未执行)的 failed exec 追加宿主归因标注;
+  // 普通失败不受影响。
+  it('annotates a failed exec whose output is pure bwrap init diagnostics', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'commandExecution',
+          id: 'cmd-sandbox',
+          command: 'ls',
+          status: 'failed',
+          aggregatedOutput: 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n',
+          exitCode: 1,
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    const fullText = (full?.data as { fullText?: string }).fullText ?? '';
+    expect(fullText).toContain('Failed RTM_NEWADDR');
+    expect(fullText).toContain('[Cindy] The Codex command sandbox (bubblewrap) failed to initialize');
+    expect(full?.data).toMatchObject({ isError: true });
+  });
+
+  it('does not annotate an ordinary failed exec', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'commandExecution',
+          id: 'cmd-fail',
+          command: 'tsc',
+          status: 'failed',
+          aggregatedOutput: 'error TS2322: type mismatch\n',
+          exitCode: 2,
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect((full?.data as { fullText?: string }).fullText).toBe('error TS2322: type mismatch\n');
+  });
 });
 
 describe('translateItemNotification collabAgentToolCall', () => {

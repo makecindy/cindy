@@ -30,7 +30,7 @@ export function HomeZeroModelAction({
           <p className="text-15 font-medium leading-snug text-[var(--text-primary)]">
             {t(cloud ? 'onboarding.homeZeroModel.cloudTitle' : 'onboarding.homeZeroModel.title')}
           </p>
-          <p className="text-[12.5px] leading-relaxed text-[var(--text-secondary)]">
+          <p className="text-13 leading-relaxed text-[var(--text-secondary)]">
             {t(cloud ? 'onboarding.homeZeroModel.cloudDesc' : 'onboarding.homeZeroModel.desc')}
           </p>
         </div>
@@ -58,7 +58,7 @@ export function HomeZeroModelAction({
         type="button"
         data-testid="home-zero-model-own-api"
         onClick={() => navigate('/settings?tab=providers&wizard=1')}
-        className="mt-2 ml-2 inline-flex items-center gap-0.5 rounded-lg px-2 py-1 text-[12.5px] font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+        className="mt-2 ml-2 inline-flex items-center gap-0.5 rounded-lg px-2 py-1 text-12 font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
       >
         {t('onboarding.homeZeroModel.ownApi')}
         <ChevronRight size={13} strokeWidth={2} />

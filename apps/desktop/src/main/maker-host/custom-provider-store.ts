@@ -211,6 +211,12 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.requestPath !== undefined && !isProviderRequestPath(r.requestPath)) {
     return invalid(`runtime '${agent}' requestPath invalid`);
   }
+  if (r.supportsImageGeneration !== undefined && typeof r.supportsImageGeneration !== 'boolean') {
+    return invalid(`runtime '${agent}' supportsImageGeneration must be a boolean`);
+  }
+  if (r.supportsImageGeneration === true && agent !== 'codex') {
+    return invalid(`runtime '${agent}' supportsImageGeneration requires Codex`);
+  }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
   for (const m of r.models) {
     if (!m || typeof m !== 'object') return invalid(`runtime '${agent}' model must be an object`);
@@ -303,6 +309,20 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (!isAllowedWireProtocol(agent, r.wireProtocol)) {
       return invalid(`runtime '${agent}' wireProtocol invalid`);
     }
+  }
+  const defaultWireProtocol =
+    r.wireProtocol ?? (agent === 'codex' ? 'openai-responses' : undefined);
+  const hasResponsesRoute =
+    defaultWireProtocol === 'openai-responses' ||
+    r.models.some((model) => {
+      if (!model || typeof model !== 'object') return false;
+      const route = (model as Record<string, unknown>).route;
+      return route && typeof route === 'object' && !Array.isArray(route)
+        ? (route as Record<string, unknown>).wireProtocol === 'openai-responses'
+        : false;
+    });
+  if (r.supportsImageGeneration === true && !hasResponsesRoute) {
+    return invalid(`runtime '${agent}' supportsImageGeneration requires OpenAI Responses`);
   }
   if (r.headers !== undefined) {
     if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) {
@@ -544,6 +564,9 @@ function normalizeRuntime(
     });
   const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
   if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
+  if (agent === 'codex' && rt.supportsImageGeneration === true) {
+    out.supportsImageGeneration = true;
+  }
   if (agent !== 'pi' && rt.requestPath && rt.requestPath.trim()) {
     out.requestPath = rt.requestPath.trim();
   }
@@ -743,6 +766,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       // 旧版把 Pi 的缺省协议解释为 Chat。新写入口已要求显式 wireProtocol；仅在读取
       // 历史持久化记录时把旧语义物化，避免运行时重新猜测或按供应商穷举兼容。
       entry.wireProtocol = 'openai-chat';
+    }
+    if (agent === 'codex' && r.supportsImageGeneration === true) {
+      entry.supportsImageGeneration = true;
     }
     if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;

@@ -69,6 +69,8 @@ export interface LearnRunPublic {
   input: string;
   /** sourceKind='hub' 时的市场 slug。 */
   hubSlug?: string;
+  /** Hub 目录上下文；旧 run 缺失时默认公开目录。 */
+  hubCatalogScope?: 'market' | 'team';
   /** 蒸馏 session id(distilling 起有值,renderer 可跳转查看过程)。 */
   sessionId?: string;
   /** 触发 /learn 的会话 id(用于把状态卡插回原会话)。 */
@@ -105,6 +107,7 @@ export interface LearnStartRequest {
   input: string;
   sourceKind: LearnSourceKind;
   hubSlug?: string;
+  hubCatalogScope?: 'market' | 'team';
   originSessionId?: string;
 }
 
