@@ -70,6 +70,7 @@ import {
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
 import {
@@ -291,7 +292,7 @@ class QueuedRouteDisabledError extends Error {}
 /** Pi 原生路由热切失败；继续派发会把任务发给旧 provider，必须在 vendor 前站下。 */
 class QueuedPiRouteSyncError extends Error {}
 
-/** 当前 Codex provider store 与 live thread 身份错配；继续派发会把模型送到错误上游。 */
+/** 当前或目标 Codex 路由与 live thread 身份错配；继续派发会把模型送到错误上游。 */
 class QueuedCodexThreadIdentityMismatchError extends Error {}
 
 /**
@@ -694,6 +695,22 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 升级为可见排队)。B1 活跃礼让仍优先:用户正在对话时连队都不排,顺延到
         // 用户空闲再说。桥未注入(测试/启动早期)时走原直发路径,行为不变。
         if (this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
+          const liveSession = this.deps.maker.getSession(sessionId);
+          if (
+            liveSession &&
+            crossesCodexAppliedCustomProviderIdentity({
+              agentKind: liveSession.agentKind,
+              remoteHostId: liveSession.remoteHostId,
+              currentCodexProxyActive: liveSession.codexProxyActive,
+              currentThreadModelProviderId: liveSession.codexThreadModelProviderId,
+              targetProviderId: schedule.providerId?.trim() || row?.providerId || null,
+              targetModel: schedule.model?.trim() || meta?.model || liveSession.model,
+            })
+          ) {
+            holder.releaseAgentSwitchLock?.();
+            holder.releaseAgentSwitchLock = undefined;
+            return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+          }
           // 同任务去重快路径(内存视角)。权威判定在 enqueuePrompt 内部:它会先
           // await 崩溃恢复快照读回再查重,覆盖"重启后快照未恢复、内存队列还空"
           // 的窗口(review P1)—— 命中时返回 duplicate,下方按同一语义收口。
@@ -930,6 +947,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
               liveSession.codexCindyRemoteCompactionCompatible,
           }
         : null;
+      const crossesCustomProviderIdentity = credentialSwitchInput
+        ? crossesCodexAppliedCustomProviderIdentity({
+            agentKind: credentialSwitchInput.agentKind,
+            remoteHostId: credentialSwitchInput.remoteHostId,
+            currentCodexProxyActive: credentialSwitchInput.currentCodexProxyActive,
+            currentThreadModelProviderId: credentialSwitchInput.currentCodexThreadModelProviderId,
+            targetProviderId: credentialSwitchInput.nextProviderId,
+            targetModel: credentialSwitchInput.nextModel,
+          })
+        : false;
       if (
         liveSession &&
         credentialSwitchInput &&
@@ -950,7 +977,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
         try {
           throwIfFireAborted(ctx.signal, 'credential mode switch');
-          if (liveSession.agentKind === 'codex' && !currentThreadRouteMismatch) {
+          if (
+            liveSession.agentKind === 'codex' &&
+            !currentThreadRouteMismatch &&
+            !crossesCustomProviderIdentity
+          ) {
             await prepareLocalCodexCredentialModeSwitch({
               maker: this.deps.maker,
               isSessionInTurn,
@@ -979,7 +1010,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
           nextProviderId,
           fromModel: liveSession.model,
           toModel: model,
-          closeScope: currentThreadRouteMismatch ? 'session' : 'all-local-codex',
+          closeScope:
+            currentThreadRouteMismatch || crossesCustomProviderIdentity
+              ? 'session'
+              : 'all-local-codex',
         });
       }
     }
@@ -2070,8 +2104,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * 排队派发时刻的路由热同步:schedule 显式设置的 model / effort / 来源(供应商)
    * 优先于绑定会话当前值(与直发路径 4.4.1/4.4.2 同语义);留空沿用会话当前值。
    * 凭证形态需要关会话重建的组合(shouldCloseSessionForCredentialSwitch)无法在
-   * 派发时刻热切 —— 当前 thread 与当前 provider store 一致时跳过本轮同步、沿用
-   * 当前路由；两者已经错配时必须在 vendor dispatch 前失败，不能把新模型送到旧身份。
+   * 派发时刻热切 —— dynamic custom Provider identity 跨界或 thread/store 已错配时必须在
+   * vendor dispatch 前失败；其它可保留当前路由的凭证切换才跳过本轮同步。
    * setModel / setEffort 成功才落库 meta,失败保留旧值让下轮重试(与直发路径的
    * 复用会话语义一致)。
    */
@@ -2119,6 +2153,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
     const nextProviderId = applyProviderId ?? currentProviderId;
+    if (
+      crossesCodexAppliedCustomProviderIdentity({
+        agentKind: live.agentKind,
+        remoteHostId: live.remoteHostId,
+        currentCodexProxyActive: live.codexProxyActive,
+        currentThreadModelProviderId: live.codexThreadModelProviderId,
+        targetProviderId: nextProviderId,
+        targetModel,
+      })
+    ) {
+      throw new QueuedCodexThreadIdentityMismatchError(
+        `queued heartbeat Codex thread provider identity does not match the target session route (session "${live.id}")`,
+      );
+    }
     if (
       isCodexThreadModelProviderIdentityMismatch({
         agentKind: live.agentKind,

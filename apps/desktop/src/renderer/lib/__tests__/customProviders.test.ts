@@ -645,6 +645,43 @@ describe('providerViewToCustomProviderConfig', () => {
     ]);
   });
 
+  it('round-trips Codex image generation independently from image input', () => {
+    const provider = {
+      id: 'image-provider',
+      name: 'Image Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'https://image.example/v1',
+          authStrategy: 'api-key-header',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+        },
+      },
+      models: {
+        codex: [
+          {
+            id: 'image-model',
+            name: 'Image Model',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+            supportsImageInput: false,
+          },
+        ],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider).runtimes.codex).toMatchObject({
+      supportsImageGeneration: true,
+      models: [{ id: 'image-model', name: 'Image Model' }],
+    });
+  });
+
   it('round-trips Pi reasoning efforts from a provider view', () => {
     const provider = {
       id: 'local-reasoning',
@@ -814,6 +851,34 @@ describe('custom provider credential lifecycle', () => {
     await createCustomProvider(config, keys);
 
     expect(create).toHaveBeenCalledWith(config, keys);
+  });
+
+  it('forwards the explicit manual create restart policy through the same mutation', async () => {
+    const create = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: { createCustomProvider: create },
+      },
+    });
+    const config = {
+      id: 'new-image-provider',
+      name: 'New image provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          supportsImageGeneration: true,
+          models: [{ id: 'model', name: 'Model' }],
+        },
+      },
+    };
+    const options = {
+      source: 'manual-settings' as const,
+      codexImageGenerationRestartPolicy: 'interrupt' as const,
+    };
+
+    await createCustomProvider(config, {}, options);
+
+    expect(create).toHaveBeenCalledWith(config, {}, options);
   });
 
   it('surfaces an atomic main-process create failure', async () => {

@@ -70,7 +70,8 @@
 | `1819` | 桌面设计画布宽 | 新增 | `login-stage-width` / singleton constant | 仅设计坐标基准，不必直接等于窗口宽 |
 | `2098` | 桌面设计画布高 | 新增 | `login-stage-height` / singleton constant | 与 `login-stage-width` 成组，用于 scale / transform 计算 |
 | `934` | 桌面 Cindy 立绘尺寸 | 新增 | `login-desktop-hero-size` | `CINDY_Client` 正方形 |
-| `680` | 桌面登录组宽、WORD_MARK 宽、回调卡片尺寸 | 新增 | `login-panel-width`、`login-wordmark-frame-width`、`login-result-card-size` | 语义不同，不建议只留一个 magic number |
+| `680` | 桌面登录组宽、WORD_MARK 宽、失败 / Warning 回调卡片尺寸 | 新增 | `login-panel-width`、`login-wordmark-frame-width`、`login-result-card-size` | 语义不同，不建议只留一个 magic number；成功回调当前使用独立紧凑尺寸 |
+| `560 x 500` | Desktop 登录成功回调紧凑卡片 | 新增 | `login-result-success-card-size`（browser callback serialized layout constant） | 2026-09-02 产品 UX 覆盖旧成功态 680 x 680 + CTA；仅成功态使用，失败 / Warning 不变 |
 | `180` | 桌面 / 移动 WORD_MARK frame 高 | 新增 | `login-wordmark-frame-height` | 字标外框高度，不等于内部实际图片高度 |
 | `460 x 134` | SLOGAN frame | 新增 | `login-slogan-width`、`login-slogan-height` | 短屏移动端会缩放该 frame，但设计基准仍需保留 |
 | `620` | 登录整体高度含第三方入口 | 新增 | `login-flow-height` | 面板 `500` + gap `40` + social `80`。**2026-07-27 登录改版由 `560` 改 `620`**（面板增高 60 随之）；双端落码 = 桌面 `LOGIN_GROUP.height` / 手机 `loginSizes.flowHeight` + `LOGIN_GROUP.height` |
@@ -226,7 +227,6 @@ composer pill `#272727` / 菜单 hover / 卡片锚定选中 `#282828`(`settings-
 ### 9.5 预览与杂项
 
 `settings-theme-auto-light` = `#F2F2ED`、`settings-theme-auto-dark` = `#181818`(两模式文件同步);
-`md-table-bg` 随页底;`surface-translucent-overlay` light 暖化 / dark 平移。
+ `md-table-bg` 随页底;`surface-translucent-overlay` light 暖化 / dark 平移。
 移动端未随本轮同步(342 处命中 + 冷更确认),为已登记 follow-up;
 `text-secondary`/`text-tertiary` 命名倒置(改名方案)见 issue #2559。
-

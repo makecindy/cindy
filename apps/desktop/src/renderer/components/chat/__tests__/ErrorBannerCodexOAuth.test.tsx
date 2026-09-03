@@ -26,6 +26,7 @@ type AuthStateChangedPayload = {
 
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
+  confirmThree: vi.fn(),
   getState: vi.fn(),
   triggerLogin: vi.fn(),
   cancelLogin: vi.fn(),
@@ -59,7 +60,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: mocks.confirm }),
+  useConfirmDialog: () => ({ confirm: mocks.confirm, confirmThree: mocks.confirmThree }),
 }));
 
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
@@ -77,6 +78,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     vi.clearAllMocks();
     mocks.stateChangedListeners.clear();
     mocks.confirm.mockResolvedValue(true);
+    mocks.confirmThree.mockResolvedValue('confirm');
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'refresh_token_reused',
@@ -144,6 +146,49 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.getByText('chat.errorBanner.codexResumeNotReady')).toBeTruthy();
     expect(screen.queryByText(error)).toBeNull();
   });
+
+  it('uses cause-neutral Codex app-server retirement copy and does not suggest switching models', () => {
+    render(
+      <ErrorBanner
+        error="app-server force-retired: Codex desktop auth login"
+        errorReason="app-server-force-retired"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        modelId="codex/gpt-5.6-sol"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexAppServerRetired')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.codexAppServerRestarted')).toBeNull();
+    expect(screen.queryByText('app-server force-retired: Codex desktop auth login')).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
+
+  it.each([
+    { label: 'SSH', remoteHostId: 'ssh-1' },
+    { label: 'device-link', deviceLinkDeviceId: 'device-1' },
+  ])(
+    'uses neutral force-retired copy for $label Codex sessions',
+    ({ remoteHostId, deviceLinkDeviceId }) => {
+      render(
+        <ErrorBanner
+          error="app-server force-retired: CodexAgent auth invalidated: remote credentials changed"
+          errorReason="app-server-force-retired"
+          retryText="retry this turn"
+          onRetry={vi.fn()}
+          agentKind="codex"
+          modelId="gpt-5.6-sol"
+          remoteHostId={remoteHostId}
+          deviceLinkDeviceId={deviceLinkDeviceId}
+        />,
+      );
+
+      expect(screen.getByText('chat.errorBanner.codexAppServerRetired')).toBeTruthy();
+      expect(screen.queryByText('chat.errorBanner.codexAppServerRestarted')).toBeNull();
+      expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    },
+  );
 
   it('opens ChatGPT App without starting Cindy OAuth for an invalidated system-shared login', async () => {
     mocks.getState.mockResolvedValue({
@@ -734,16 +779,39 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     });
 
     await waitFor(() =>
-      expect(mocks.confirm).toHaveBeenCalledWith({
+      expect(mocks.confirmThree).toHaveBeenCalledWith({
         title: 'chatgptAuthRecovery.title',
         description: 'chatgptAuthRecovery.systemSharedInvalidated',
         confirmText: 'chatgptAuthRecovery.openApp',
+        tertiaryText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
+        maxWidth: 520,
         autoFocusConfirm: true,
       }),
     );
     await waitFor(() => expect(mocks.openChatGPTApp).toHaveBeenCalledOnce());
     expect(mocks.triggerLogin).not.toHaveBeenCalled();
+  });
+
+  it('hands voice recovery to its inline owner without opening a transient dialog', async () => {
+    mocks.getState.mockResolvedValue({
+      authenticated: false,
+      errorReason: 'token_revoked',
+      credentialScope: 'system-shared',
+    });
+    const onInlineRecoveryRequired = vi.fn();
+    const prompt = renderHook(() => useCodexSessionExpiredPrompt({ onInlineRecoveryRequired }));
+
+    act(() => {
+      expect(prompt.result.current('token_revoked')).toBe(true);
+    });
+
+    await waitFor(() =>
+      expect(onInlineRecoveryRequired).toHaveBeenCalledWith('token_revoked', 'system-shared'),
+    );
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmThree).not.toHaveBeenCalled();
+    expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
   });
 
   it('offers only the ChatGPT App when dev policy blocks OAuth writes', async () => {
@@ -778,11 +846,13 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     });
 
     await waitFor(() =>
-      expect(mocks.confirm).toHaveBeenCalledWith({
+      expect(mocks.confirmThree).toHaveBeenCalledWith({
         title: 'chatgptAuthRecovery.title',
         description: 'chatgptAuthRecovery.systemSharedInvalidated',
         confirmText: 'chatgptAuthRecovery.openApp',
+        tertiaryText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
+        maxWidth: 520,
         autoFocusConfirm: true,
       }),
     );

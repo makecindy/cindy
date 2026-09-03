@@ -8,6 +8,9 @@
 .githooks/** text eol=lf
 # SQLite migration 内容参与用户数据库 drift hash；跨平台统一 LF。
 apps/desktop/drizzle/**/*.sql text eol=lf
+# design-tokens 影子层生成物参与「磁盘 = 内存生成」字节一致守卫；Windows
+# autocrlf 检出转 CRLF 会让该守卫假红（classification.test.ts 实测），固定 LF。
+packages/design-tokens/src/**/*.json text eol=lf
 # sqlite-vec 扩展二进制（平台特定 .dylib / .dll）—— 走 Git LFS
 apps/desktop/native/sqlite-vec/**/*.dylib filter=lfs diff=lfs merge=lfs -text
 apps/desktop/native/sqlite-vec/**/*.dll filter=lfs diff=lfs merge=lfs -text

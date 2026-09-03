@@ -317,7 +317,7 @@ export class AppServerClient {
    * - reject 所有挂起 promise
    * - 关闭 transport (杀子进程 / 关 ssh channel)
    */
-  async close(opts?: { reason?: string }): Promise<void> {
+  async close(opts?: { reason?: string; throwOnTransportError?: boolean }): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     const reason = opts?.reason ?? 'AppServerClient.close()';
@@ -336,6 +336,7 @@ export class AppServerClient {
         await this.transport.close(reason);
       } catch (e) {
         this.logger.warn('transport.close threw', { message: (e as Error).message });
+        if (opts?.throwOnTransportError) throw e;
       }
     }
   }

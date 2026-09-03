@@ -13,6 +13,7 @@ import {
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
+import { crossesCodexAppliedCustomProviderIdentity } from './codex-custom-provider-route.js';
 import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
 import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
 
@@ -95,7 +96,10 @@ export interface PrepareLocalSessionCredentialModeSwitchResult {
 export class CredentialModeSwitchBusyError extends Error {
   readonly sessionIds: string[];
 
-  constructor(sessionIds: string[], message = `Cannot switch credential mode while local session(s) are busy: ${sessionIds.join(', ')}`) {
+  constructor(
+    sessionIds: string[],
+    message = `Cannot switch credential mode while local session(s) are busy: ${sessionIds.join(', ')}`,
+  ) {
     super(message);
     this.name = 'CredentialModeSwitchBusyError';
     this.sessionIds = sessionIds;
@@ -149,12 +153,21 @@ function normalizeProviderId(providerId: string | null | undefined): string | nu
 export function isCodexThreadModelProviderIdentityMismatch(
   input: ShouldCloseSessionForCredentialSwitchInput,
 ): boolean {
-  if (
-    input.remoteHostId ||
-    input.agentKind !== 'codex' ||
-    input.currentCodexProxyActive !== true
-  ) {
+  if (input.remoteHostId || input.agentKind !== 'codex' || input.currentCodexProxyActive !== true) {
     return false;
+  }
+
+  if (
+    crossesCodexAppliedCustomProviderIdentity({
+      agentKind: input.agentKind,
+      remoteHostId: input.remoteHostId,
+      currentCodexProxyActive: input.currentCodexProxyActive,
+      currentThreadModelProviderId: input.currentCodexThreadModelProviderId,
+      targetProviderId: input.nextProviderId,
+      targetModel: input.nextModel,
+    })
+  ) {
+    return true;
   }
 
   const nextProviderId = normalizeProviderId(input.nextProviderId);
@@ -177,9 +190,7 @@ export function isCodexThreadModelProviderIdentityMismatch(
       : effectiveNextMode !== undefined
         ? CODEX_GATEWAY_PROVIDER_ID
         : null;
-  const actualThreadModelProviderId = normalizeProviderId(
-    input.currentCodexThreadModelProviderId,
-  );
+  const actualThreadModelProviderId = normalizeProviderId(input.currentCodexThreadModelProviderId);
   const actualThreadIdentityKnown =
     actualThreadModelProviderId === CODEX_OPENAI_COMPACT_PROVIDER_ID ||
     actualThreadModelProviderId === CODEX_CINDY_COMPACT_PROVIDER_ID ||
@@ -365,10 +376,10 @@ export async function prepareLocalCodexCredentialModeSwitch(
   input: PrepareLocalCodexCredentialModeSwitchInput,
 ): Promise<PrepareLocalCodexCredentialModeSwitchResult> {
   throwIfCredentialSwitchAborted(input.signal);
-  const localCodexSessions = input.maker
-    .listActiveSessions()
-    .filter(isLocalCodexSession);
-  const busySessions = localCodexSessions.filter((session) => isSessionBusy(session, input.isSessionInTurn));
+  const localCodexSessions = input.maker.listActiveSessions().filter(isLocalCodexSession);
+  const busySessions = localCodexSessions.filter((session) =>
+    isSessionBusy(session, input.isSessionInTurn),
+  );
   if (busySessions.length > 0) {
     throw new CodexCredentialModeSwitchBusyError(
       busySessions.map((session) => session.id),

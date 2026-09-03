@@ -1322,19 +1322,27 @@ describe('LearnController 状态机', () => {
 
   it('hub 源命中同名本地 skill:本地 SKILL.md 注入 prompt 前过 redaction', async () => {
     const secret = 'sk-abcdef1234567890abcdef1234567890';
+    const fetchHubSkill = vi.fn(async () => ({
+      name: 'my-skill',
+      description: 'upstream',
+      content: '# upstream skill',
+    }));
     const h = makeHarness({
-      fetchHubSkill: async () => ({
-        name: 'my-skill',
-        description: 'upstream',
-        content: '# upstream skill',
-      }),
+      fetchHubSkill,
       dirExists: async (dir) =>
         dir.startsWith(path.join('/', 'fake-staging')) || dir === path.join('/', 'installed', 'my-skill'),
       readFileText: async () => `# local skill\napi key: ${secret}\n`,
     });
     h.setScan(goodScan());
-    const { runId } = await h.controller.startLearn({ input: '', sourceKind: 'hub', hubSlug: 'my-skill' });
+    const { runId } = await h.controller.startLearn({
+      input: '',
+      sourceKind: 'hub',
+      hubSlug: 'my-skill',
+      hubCatalogScope: 'team',
+    });
     await h.waitForStatus(runId, 'distilling');
+    expect(fetchHubSkill).toHaveBeenCalledWith('my-skill', 'team');
+    expect(h.store.get(runId)?.hubCatalogScope).toBe('team');
     expect(h.session.sent[0]).toContain('# local skill');
     expect(h.session.sent[0]).not.toContain(secret);
   });
@@ -1342,12 +1350,13 @@ describe('LearnController 状态机', () => {
   it('Claude-only 本地 skill 也算已装:注入原文、diff 有基线、标记 personal', async () => {
     const claudeDir = path.join('/', 'claude', 'skills', 'my-skill');
     let diffOldDir: string | null | undefined;
+    const fetchHubSkill = vi.fn(async () => ({
+      name: 'my-skill',
+      description: 'upstream',
+      content: '# upstream skill',
+    }));
     const h = makeHarness({
-      fetchHubSkill: async () => ({
-        name: 'my-skill',
-        description: 'upstream',
-        content: '# upstream skill',
-      }),
+      fetchHubSkill,
       search: async () => ({ hits: [], sessions: {}, nextCursor: null, vectorUsed: false }) as never,
       collectProfile: async () => ({ block: '', used: false }),
       resolveInstalledSkillDirs: (name) => [path.join('/', 'installed', name), path.join('/', 'claude', 'skills', name)],
@@ -1361,6 +1370,8 @@ describe('LearnController 状态机', () => {
     h.setScan(goodScan());
     const { runId } = await h.controller.startLearn({ input: '', sourceKind: 'hub', hubSlug: 'my-skill' });
     await h.waitForStatus(runId, 'distilling');
+    expect(fetchHubSkill).toHaveBeenCalledWith('my-skill', 'market');
+    expect(h.store.get(runId)?.hubCatalogScope).toBe('market');
     expect(h.session.sent[0]).toContain('# local Claude skill');
     expect(h.store.get(runId)!.usedSessionEvidence).toBe(true);
 

@@ -261,7 +261,7 @@ import {
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
-import { MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
+import { countUserExtraDirs, MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -4362,7 +4362,7 @@ export function ChatInput({
     if (onExtraDirsChange) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
-      const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
+      const totalDirs = countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
       actions.push({
         id: 'add-extra-dir',
         label:
@@ -4398,7 +4398,7 @@ export function ChatInput({
     ) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
-      const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
+      const totalDirs = countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
       actions.push({
         id: 'add-writable-dir',
         label:
@@ -8423,7 +8423,7 @@ export function ChatInput({
                 )}
                 {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
                 <ExtraDirsButton
-                  extraDirsCount={(extraDirs ?? []).length + (writableDirs ?? []).length}
+                  extraDirsCount={countUserExtraDirs(extraDirs ?? []) + countUserExtraDirs(writableDirs ?? [])}
                   hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}

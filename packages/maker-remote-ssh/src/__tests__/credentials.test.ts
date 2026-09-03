@@ -15,7 +15,16 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { KEY_FILE_NOT_FOUND_CODE, resolveAuth } from '../credentials.js';
+import {
+  KEY_FILE_NOT_FOUND_CODE,
+  resolveAuth,
+  SSH_CONFIG_AUTH_UNSUPPORTED_CODE,
+} from '../credentials.js';
+import {
+  previewAgentEndpoint,
+  resolveAgentEndpoint,
+  SSH_AGENT_UNAVAILABLE_CODE,
+} from '../sshAuthentication.js';
 import type { HostConfig } from '../types.js';
 
 function keyHost(over: Partial<HostConfig> & Pick<HostConfig, 'identityFile'>): HostConfig {
@@ -26,6 +35,7 @@ function keyHost(over: Partial<HostConfig> & Pick<HostConfig, 'identityFile'>): 
     user: 'admin',
     authMethod: 'key',
     source: 'manual',
+    managedByCindy: false,
     ...over,
   };
 }
@@ -58,5 +68,142 @@ describe('resolveAuth key-mode identityFile handling', () => {
     // 指向一个目录,fs.readFile 会抛 EISDIR(而非 ENOENT)→ 保留原包装。
     const host = keyHost({ identityFile: process.cwd() });
     await expect(resolveAuth(host)).rejects.toThrow(/failed to read identityFile .*EISDIR|failed to read identityFile/);
+  });
+
+  it('fails closed before reading a key when discovery marked the SSH config unsupported', async () => {
+    const host = keyHost({
+      identityFile: '/tmp/does-not-need-to-exist.key',
+      sshAuthentication: {
+        identitiesOnly: false,
+        configuredIdentityFiles: [],
+        identityFileDirectiveSeen: false,
+        identityFileNoneSeen: false,
+        unsupportedReason: 'Cindy does not evaluate a Match block that may affect this SSH host',
+      },
+    });
+
+    await expect(resolveAuth(host)).rejects.toMatchObject({
+      code: SSH_CONFIG_AUTH_UNSUPPORTED_CODE,
+    });
+  });
+});
+
+describe('resolveAuth OpenSSH agent metadata', () => {
+  it('treats only exact lowercase IdentityAgent none as the disable sentinel', () => {
+    expect(previewAgentEndpoint('none')).toMatchObject({
+      unsupportedReason: expect.stringContaining('disables SSH Agent'),
+    });
+    expect(previewAgentEndpoint('NONE')).toMatchObject({ endpoint: 'NONE' });
+  });
+
+  it('rejects unsupported IdentityAgent percent-token expansion', () => {
+    expect(previewAgentEndpoint('%d/.ssh/agent')).toMatchObject({
+      unsupportedReason: expect.stringContaining('percent-token'),
+    });
+  });
+
+  it('rejects a missing IdentityAgent environment variable', () => {
+    const name = 'CINDY_TEST_MISSING_AGENT_SOCKET';
+    const previous = process.env[name];
+    delete process.env[name];
+    try {
+      expect(previewAgentEndpoint(`$${name}`)).toMatchObject({
+        unavailableReason: expect.stringContaining('environment variable is not set'),
+      });
+    } finally {
+      if (previous !== undefined) process.env[name] = previous;
+    }
+  });
+
+  it('classifies a missing default agent endpoint as unavailable, not unsupported', async () => {
+    if (process.platform === 'win32') return;
+    const previous = process.env.SSH_AUTH_SOCK;
+    delete process.env.SSH_AUTH_SOCK;
+    try {
+      await expect(resolveAgentEndpoint()).rejects.toMatchObject({
+        code: SSH_AGENT_UNAVAILABLE_CODE,
+      });
+    } finally {
+      if (previous !== undefined) process.env.SSH_AUTH_SOCK = previous;
+    }
+  });
+
+
+  it('keeps an external IdentityFile host unfiltered when IdentitiesOnly is unset', async () => {
+    const previous = process.env.SSH_AUTH_SOCK;
+    process.env.SSH_AUTH_SOCK = '/tmp/cindy-test-agent.sock';
+    try {
+      const resolved = await resolveAuth({
+        id: 'lab',
+        hostname: '192.0.2.10',
+        port: 22,
+        user: 'developer',
+        authMethod: 'agent',
+        source: 'ssh-config',
+        managedByCindy: false,
+        sshAuthentication: {
+          identitiesOnly: false,
+          identityAgent: undefined,
+          configuredIdentityFiles: ['/Users/me/.ssh/lab.key'],
+          identityFileDirectiveSeen: true,
+          identityFileNoneSeen: false,
+        },
+      });
+      expect(resolved).toMatchObject({
+        // Windows OpenSSH uses its named pipe by default; POSIX uses the
+        // SSH_AUTH_SOCK environment variable.
+        agent: process.platform === 'win32'
+          ? '\\\\.\\pipe\\openssh-ssh-agent'
+          : '/tmp/cindy-test-agent.sock',
+        label: 'ssh-agent',
+      });
+    } finally {
+      if (previous === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = previous;
+    }
+  });
+
+  it('does not fall back to the default agent for IdentityAgent none', async () => {
+    await expect(resolveAuth({
+      id: 'disabled-agent',
+      hostname: '192.0.2.11',
+      port: 22,
+      user: 'developer',
+      authMethod: 'agent',
+      source: 'ssh-config',
+      managedByCindy: false,
+      sshAuthentication: {
+        identitiesOnly: false,
+        identityAgent: 'none',
+        configuredIdentityFiles: [],
+        identityFileDirectiveSeen: false,
+        identityFileNoneSeen: false,
+      },
+    })).rejects.toMatchObject({ code: SSH_CONFIG_AUTH_UNSUPPORTED_CODE });
+  });
+
+  it('rejects an empty IdentitiesOnly allow-list', async () => {
+    const previous = process.env.SSH_AUTH_SOCK;
+    delete process.env.SSH_AUTH_SOCK;
+    try {
+      await expect(resolveAuth({
+        id: 'empty-pin',
+        hostname: '192.0.2.12',
+        port: 22,
+        user: 'developer',
+        authMethod: 'agent',
+        source: 'ssh-config',
+        managedByCindy: false,
+        sshAuthentication: {
+          identitiesOnly: true,
+          configuredIdentityFiles: [],
+          identityFileDirectiveSeen: true,
+          identityFileNoneSeen: true,
+        },
+      })).rejects.toMatchObject({ code: SSH_CONFIG_AUTH_UNSUPPORTED_CODE });
+    } finally {
+      if (previous === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = previous;
+    }
   });
 });

@@ -44,17 +44,20 @@ const TEST_PI_BINARY = path.join(
 
 function startFakeUpstream(
   handler: (reqIndex: number, body: string, res: ServerResponse) => void,
-): Promise<{ url: string; bodies: string[]; headers: Array<Record<string, string>>; paths: string[]; close: () => Promise<void> }> {
+): Promise<{ url: string; bodies: string[]; rawBodies: Buffer[]; headers: Array<Record<string, string>>; paths: string[]; close: () => Promise<void> }> {
   const bodies: string[] = [];
+  const rawBodies: Buffer[] = [];
   const headers: Array<Record<string, string>> = [];
   const paths: string[] = [];
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
-      const body = Buffer.concat(chunks).toString('utf8');
+      const rawBody = Buffer.concat(chunks);
+      const body = rawBody.toString('utf8');
       const idx = bodies.length;
       bodies.push(body);
+      rawBodies.push(rawBody);
       const flat: Record<string, string> = {};
       for (const [k, v] of Object.entries(req.headers)) flat[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : String(v ?? '');
       headers.push(flat);
@@ -65,6 +68,7 @@ function startFakeUpstream(
   return listenOnAvailableLoopbackPort(server).then((port) => ({
     url: `http://127.0.0.1:${port}`,
     bodies,
+    rawBodies,
     headers,
     paths,
     close: () => new Promise<void>((r) => server.close(() => r())),
@@ -174,6 +178,430 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(await response.json()).toEqual({ source: 'adapted-provider' });
     expect(response.headers.get('content-length')).toBeNull();
     expect(JSON.parse(requestBody)).toEqual({ model: 'test-model', routed: true });
+  });
+
+  it('can preserve an image request body without changing normal response transforms', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = upstream.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [(body) => ({ ...(body as object), transformed: true })],
+      bypassRequestTransforms: (_body, ctx) => ctx.url.endsWith('/images/generations'),
+    });
+
+    await fetch(`${proxy.url}/v1/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"model":"gpt-image-2","prompt":"draw"}',
+    });
+    await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"model":"chat-model"}',
+    });
+
+    expect(upstream.bodies).toEqual([
+      '{"model":"gpt-image-2","prompt":"draw"}',
+      '{"model":"chat-model","transformed":true}',
+    ]);
+  });
+
+  it('routes selected multipart requests while preserving their original bytes and headers', async () => {
+    const defaultUpstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(500).end();
+    });
+    const routedUpstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+    upstreamClose = async () => {
+      await Promise.all([defaultUpstream.close(), routedUpstream.close()]);
+    };
+    const boundary = 'cindy-image-boundary';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="prompt"\r\n\r\ndraw\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="raw.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      Buffer.from([0, 255, 13, 10, 128, 42]),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: defaultUpstream.url,
+      transformRequest: [() => ({ should: 'never run' })],
+      routeOpaqueRequestBody: (ctx) => ctx.url === '/_cindy/custom-provider/route/images/edits',
+      bypassRequestTransforms: (_body, ctx) =>
+        ctx.url === '/_cindy/custom-provider/route/images/edits',
+      routingTransform: (parsed, ctx) => {
+        expect(parsed).toBeUndefined();
+        expect(ctx.headers['content-type']).toBe(`multipart/form-data; boundary=${boundary}`);
+        return {
+          upstreamOverride: routedUpstream.url,
+          pathOverride: '/images/edits',
+          headerOverride: { authorization: 'Bearer routed-key' },
+        };
+      },
+    });
+
+    const response = await fetch(`${proxy.url}/_cindy/custom-provider/route/images/edits`, {
+      method: 'POST',
+      headers: {
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'content-length': String(body.length),
+        authorization: 'Bearer loopback-placeholder',
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(defaultUpstream.rawBodies).toHaveLength(0);
+    expect(routedUpstream.paths).toEqual(['/images/edits']);
+    expect(routedUpstream.rawBodies[0]).toEqual(body);
+    expect(routedUpstream.headers[0]?.['content-type']).toBe(
+      `multipart/form-data; boundary=${boundary}`,
+    );
+    expect(routedUpstream.headers[0]?.['content-length']).toBe(String(body.length));
+    expect(routedUpstream.headers[0]?.authorization).toBe('Bearer routed-key');
+  });
+
+  it('reports content-free lifecycle events at real JSON, multipart, and transport terminal points', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(201, { 'content-type': 'application/json' }).end('{"private":"response"}');
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+    const prefix = '/_cindy/custom-provider/0123456789abcdefabcd';
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      routeOpaqueRequestBody: (ctx) => ctx.url === `${prefix}/images/edits`,
+      routingTransform: (_body, ctx) => ({
+        pathOverride: ctx.url.endsWith('/images/edits')
+          ? '/images/edits'
+          : ctx.url.endsWith('/images/generations')
+            ? '/images/generations'
+            : ctx.url,
+        ...(ctx.url.startsWith(`${prefix}/images/`)
+          ? { forwardLifecycle: {
+          onStart: () => events.push({ type: 'start' }),
+          onComplete: (status) => events.push({ type: 'complete', status }),
+          onFailure: (failure, status) => events.push({
+            type: 'transport-error',
+            failure,
+            ...(status === undefined ? {} : { status }),
+          }),
+            } }
+          : {}),
+      }),
+    });
+
+    const generation = await fetch(`${proxy.url}${prefix}/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"prompt":"private prompt"}',
+    });
+    expect(generation.status).toBe(201);
+
+    const multipart = Buffer.from('private multipart bytes');
+    const edit = await fetch(`${proxy.url}${prefix}/images/edits`, {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=private-boundary' },
+      body: multipart,
+    });
+    expect(edit.status).toBe(201);
+
+    await fetch(`${proxy.url}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    await fetch(`${proxy.url}/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(events).toEqual([
+      { type: 'start' },
+      { type: 'complete', status: 201 },
+      { type: 'start' },
+      { type: 'complete', status: 201 },
+    ]);
+
+    await upstream.close();
+    upstreamClose = async () => undefined;
+    const unavailable = await fetch(`${proxy.url}${prefix}/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"prompt":"must not reach lifecycle callbacks"}',
+    });
+    expect(unavailable.status).toBe(502);
+    expect(events.slice(4)).toEqual([
+      { type: 'start' },
+      { type: 'transport-error', failure: 'request-error' },
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(
+      /private prompt|multipart|boundary|response|127\.0\.0\.1|ECONNREFUSED/,
+    );
+  });
+
+  it('emits one terminal lifecycle event for HTTP errors, aborted responses, and successful retry', async () => {
+    const retryAttempts = new Map<string, number>();
+    const upstream = await startFakeUpstream((_idx, body, res) => {
+      const request = JSON.parse(body) as { mode?: string };
+      if (request.mode === 'http-error') {
+        res.writeHead(503, { 'content-type': 'application/json' }).end('{"private":"failure"}');
+        return;
+      }
+      if (request.mode === 'aborted-response') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write('{"private":"partial"');
+        setImmediate(() => res.destroy());
+        return;
+      }
+      const attempts = (retryAttempts.get(request.mode ?? '') ?? 0) + 1;
+      retryAttempts.set(request.mode ?? '', attempts);
+      if (request.mode === 'retry-success' && attempts === 1) {
+        res.writeHead(400, { 'content-type': 'application/json' }).end(ENC_ERROR_BODY);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+    let requestId = 0;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      routingTransform: () => {
+        const id = ++requestId;
+        return {
+          forwardLifecycle: {
+            onStart: () => events.push({ id, type: 'start' }),
+            onComplete: (status) => events.push({ id, type: 'complete', status }),
+            onFailure: (failure, status) => events.push({
+              id,
+              type: 'failure',
+              failure,
+              ...(status === undefined ? {} : { status }),
+            }),
+          },
+        };
+      },
+    });
+
+    expect((await post(proxy.url, { mode: 'http-error' })).status).toBe(503);
+    await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'aborted-response' }),
+    }).then((response) => response.text()).catch(() => undefined);
+    expect((await post(proxy.url, {
+      mode: 'retry-success',
+      input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+    })).status).toBe(200);
+
+    expect(upstream.bodies).toHaveLength(4);
+    expect(events.filter((event) => event.id === 1)).toEqual([
+      { id: 1, type: 'start' },
+      { id: 1, type: 'complete', status: 503 },
+    ]);
+    expect(events.filter((event) => event.id === 2)).toEqual([
+      { id: 2, type: 'start' },
+      {
+        id: 2,
+        type: 'failure',
+        failure: expect.stringMatching(/^response-(error|aborted|closed)$/),
+        status: 200,
+      },
+    ]);
+    expect(events.filter((event) => event.id === 3)).toEqual([
+      { id: 3, type: 'start' },
+      { id: 3, type: 'complete', status: 200 },
+    ]);
+  });
+
+  it('settles retry rejection and retry hook failure without a second upstream attempt', async () => {
+    let mode: 'idle' | 'reject' | 'throw' = 'idle';
+    const upstream = await startFakeUpstream((_idx, body, res) => {
+      mode = (JSON.parse(body) as { mode: 'reject' | 'throw' }).mode;
+      res.writeHead(400, { 'content-type': 'application/json' }).end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+    let requestId = 0;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      routingTransform: () => {
+        const id = ++requestId;
+        return {
+          forwardLifecycle: {
+            onStart: () => events.push({ id, type: 'start' }),
+            onComplete: (status) => events.push({ id, type: 'complete', status }),
+            onFailure: (failure) => events.push({ id, type: 'failure', failure }),
+          },
+        };
+      },
+      revalidateBeforeDispatch: () => {
+        if (mode === 'throw') throw new Error('private retry hook error');
+        if (mode === 'reject') {
+          return {
+            localHandler: async ({ res }) => {
+              res.writeHead(503, { 'content-type': 'application/json' }).end('{}');
+            },
+          };
+        }
+        return null;
+      },
+    });
+
+    expect((await post(proxy.url, {
+      mode: 'reject',
+      input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+    })).status).toBe(503);
+    mode = 'idle';
+    expect((await post(proxy.url, {
+      mode: 'throw',
+      input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+    })).status).toBe(503);
+
+    expect(upstream.bodies).toHaveLength(2);
+    expect(events).toEqual([
+      { id: 1, type: 'start' },
+      { id: 1, type: 'failure', failure: 'retry-rejected' },
+      { id: 2, type: 'start' },
+      { id: 2, type: 'failure', failure: 'retry-error' },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('private retry hook error');
+  });
+
+  it('rejects a transparent retry when its routed credential generation changes', async () => {
+    let generationValid = true;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      generationValid = false;
+      res.writeHead(400, { 'content-type': 'application/json' }).end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      routingTransform: () => ({
+        headerOverride: { authorization: 'Bearer old-generation-fixture' },
+        dispatchGenerationValid: () => generationValid,
+        forwardLifecycle: {
+          onStart: () => events.push({ type: 'start' }),
+          onComplete: (status) => events.push({ type: 'complete', status }),
+          onFailure: (failure) => events.push({ type: 'failure', failure }),
+        },
+      }),
+    });
+
+    expect((await post(proxy.url, {
+      input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+    })).status).toBe(503);
+    expect(upstream.bodies).toHaveLength(1);
+    expect(upstream.headers).toHaveLength(1);
+    expect(upstream.headers[0]?.authorization).toBe('Bearer old-generation-fixture');
+    expect(events).toEqual([
+      { type: 'start' },
+      { type: 'failure', failure: 'retry-rejected' },
+    ]);
+  });
+
+  it('rejects an already-stale routed decision before its first upstream dispatch', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      routingTransform: () => ({
+        dispatchGenerationValid: () => false,
+        forwardLifecycle: {
+          onStart: () => events.push({ type: 'start' }),
+          onComplete: (status) => events.push({ type: 'complete', status }),
+          onFailure: (failure) => events.push({ type: 'failure', failure }),
+        },
+      }),
+    });
+
+    expect((await post(proxy.url, { input: [] })).status).toBe(503);
+    expect(upstream.bodies).toHaveLength(0);
+    expect(upstream.headers).toHaveLength(0);
+    expect(events).toEqual([]);
+  });
+
+  it('settles a client cancellation while waiting for retry revalidation', async () => {
+    let releaseGate!: () => void;
+    let markGateEntered!: () => void;
+    const gateEntered = new Promise<void>((resolve) => { markGateEntered = resolve; });
+    const gateReleased = new Promise<void>((resolve) => { releaseGate = resolve; });
+    let retryPending = false;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      retryPending = true;
+      res.writeHead(400, { 'content-type': 'application/json' }).end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      routingTransform: () => ({
+        forwardLifecycle: {
+          onStart: () => events.push({ type: 'start' }),
+          onComplete: (status) => events.push({ type: 'complete', status }),
+          onFailure: (failure) => events.push({ type: 'failure', failure }),
+        },
+      }),
+      revalidateBeforeDispatch: () => retryPending
+        ? {
+            localHandler: async () => {
+              markGateEntered();
+              await gateReleased;
+            },
+          }
+        : null,
+    });
+
+    const controller = new AbortController();
+    const request = fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+      }),
+      signal: controller.signal,
+    }).catch(() => null);
+    await gateEntered;
+    controller.abort();
+    await request;
+    await vi.waitFor(() => expect(events).toEqual([
+      { type: 'start' },
+      { type: 'failure', failure: 'client-aborted' },
+    ]));
+    releaseGate();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(upstream.bodies).toHaveLength(1);
+    expect(events).toEqual([
+      { type: 'start' },
+      { type: 'failure', failure: 'client-aborted' },
+    ]);
   });
 
   it('settles request-scoped transform state after a non-2xx response', async () => {

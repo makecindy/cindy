@@ -38,6 +38,7 @@ let removeInstall: typeof import('../registryService.js').removeInstall;
 let readManifest: typeof import('../registryService.js').readManifest;
 let getInstall: typeof import('../registryService.js').getInstall;
 let listAllInstalls: typeof import('../registryService.js').listAllInstalls;
+let updateCatalogScopeForSkill: typeof import('../registryService.js').updateCatalogScopeForSkill;
 
 beforeEach(async () => {
   vi.resetModules();
@@ -48,6 +49,7 @@ beforeEach(async () => {
   readManifest = svc.readManifest;
   getInstall = svc.getInstall;
   listAllInstalls = svc.listAllInstalls;
+  updateCatalogScopeForSkill = svc.updateCatalogScopeForSkill;
 });
 
 import type { StoredInstall, StoredManifest } from '../types.js';
@@ -102,7 +104,7 @@ describe('addInstall', () => {
     expect(manifest.skillName).toBe('my-skill');
     expect(manifest.schemaVersion).toBe(1);
     const normalizedPath = path.normalize(globalPath);
-    expect(manifest.installs[normalizedPath]).toEqual(entry);
+    expect(manifest.installs[normalizedPath]).toEqual({ ...entry, catalogScopeMigrated: true });
   });
 
   it('同 (name, path) 重复 addInstall → 覆盖（不报错）', async () => {
@@ -165,6 +167,51 @@ describe('addInstall', () => {
   });
 });
 
+describe('catalog scope migration', () => {
+  it('migrates and persists a released-client entry while holding the service lock', async () => {
+    fs.mkdirSync(path.dirname(manifestPath('legacy-skill')), { recursive: true });
+    const installPath = path.join('/projects/legacy', '.agents', 'skills', 'legacy-skill');
+    fs.writeFileSync(manifestPath('legacy-skill'), JSON.stringify({
+      schemaVersion: 1,
+      skillName: 'legacy-skill',
+      installs: { [installPath]: makeEntry({ catalogScope: undefined, catalogScopeMigrated: undefined }) },
+    }));
+
+    const manifest = expectManifest(await readManifest('legacy-skill'));
+
+    expect(manifest.installs[installPath]).toMatchObject({
+      catalogScope: 'team',
+      catalogScopeMigrated: true,
+    });
+    expect(readJson(manifestPath('legacy-skill'))).toEqual(manifest);
+    expect(readJson(backupManifestPath('legacy-skill'))).toEqual(manifest);
+  });
+
+  it('migrates each downgrade-written entry even when an old top-level marker remains', async () => {
+    fs.mkdirSync(path.dirname(manifestPath('downgrade-skill')), { recursive: true });
+    const nativePath = path.join('/projects/native', '.agents', 'skills', 'downgrade-skill');
+    const downgradedPath = path.join('/projects/old-client', '.agents', 'skills', 'downgrade-skill');
+    fs.writeFileSync(manifestPath('downgrade-skill'), JSON.stringify({
+      schemaVersion: 1,
+      catalogScopeMigrated: true,
+      skillName: 'downgrade-skill',
+      installs: {
+        [nativePath]: makeEntry({ catalogScope: undefined, catalogScopeMigrated: true }),
+        [downgradedPath]: makeEntry({ catalogScope: undefined, catalogScopeMigrated: undefined }),
+      },
+    }));
+
+    const manifest = expectManifest(await readManifest('downgrade-skill'));
+
+    expect(manifest.installs[nativePath].catalogScope).toBeUndefined();
+    expect(manifest.installs[downgradedPath]).toMatchObject({
+      catalogScope: 'team',
+      catalogScopeMigrated: true,
+    });
+    expect(manifest).not.toHaveProperty('catalogScopeMigrated');
+  });
+});
+
 describe('updateInstall', () => {
   it('存在的 entry → 部分更新', async () => {
     await addInstall(
@@ -186,6 +233,27 @@ describe('updateInstall', () => {
     const entry = expectInstall(await getInstall('my-skill', globalPath));
     expect(entry.authorId).toBe('user_bob');
     expect(readJson(backupManifestPath('my-skill'))).toEqual(readJson(manifestPath('my-skill')));
+  });
+
+  it('可见性迁移可清除目录作用域且不会被旧数据迁移再次回填', async () => {
+    await addInstall('my-skill', globalPath, makeEntry({ catalogScope: 'market' }));
+
+    await updateCatalogScopeForSkill('my-skill', undefined, 'market');
+
+    expect((await getInstall('my-skill', globalPath))?.catalogScope).toBeUndefined();
+    expect((await getInstall('my-skill', globalPath))?.catalogScopeMigrated).toBe(true);
+    expect((await getInstall('my-skill', globalPath))?.catalogScope).toBeUndefined();
+  });
+
+  it('可见性迁移只更新来源目录相同的安装记录', async () => {
+    const teamPath = path.join('/projects/team', '.agents', 'skills', 'my-skill');
+    await addInstall('my-skill', globalPath, makeEntry({ catalogScope: 'market' }));
+    await addInstall('my-skill', teamPath, makeEntry({ catalogScope: 'team' }));
+
+    await updateCatalogScopeForSkill('my-skill', undefined, 'market');
+
+    expect((await getInstall('my-skill', globalPath))?.catalogScope).toBeUndefined();
+    expect((await getInstall('my-skill', teamPath))?.catalogScope).toBe('team');
   });
 
   it('不存在的 installPath → 抛 REGISTRY_IO_FAILED', async () => {
@@ -226,6 +294,24 @@ describe('listAllInstalls', () => {
   it('空目录 → 空数组', async () => {
     const result = await listAllInstalls();
     expect(result).toEqual([]);
+  });
+
+  it('does not trust an unlocked directory-scan snapshot before migration writeback', async () => {
+    await addInstall('my-skill', globalPath, makeEntry({ version: '2', catalogScope: 'market' }));
+    const manifestIO = await import('../manifestIO.js');
+    vi.spyOn(manifestIO, 'listAllFiles').mockResolvedValue([{
+      skillName: 'my-skill',
+      manifest: {
+        schemaVersion: 1,
+        skillName: 'my-skill',
+        installs: { [globalPath]: makeEntry({ version: '1' }) },
+      },
+    }]);
+
+    const installs = await listAllInstalls();
+
+    expect(installs).toHaveLength(1);
+    expect(installs[0]?.entry.version).toBe('2');
   });
 
   it('跨多个 manifest 文件展平所有 install', async () => {

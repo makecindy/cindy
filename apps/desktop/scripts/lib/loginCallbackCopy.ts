@@ -36,6 +36,7 @@ export const OAUTH_RESULT_LANGS = Object.keys(OAUTH_LANG_TO_APP_LOCALES) as OAut
 export interface LoginBrowserCallbackCopy {
   successTitle: string;
   successBody: string;
+  closeCountdown: string;
   errorTitle: string;
   errorBody: string;
   returnButton: string;
@@ -61,6 +62,7 @@ export function loadLoginCallbackCopy(lang: OAuthResultPageLang): LoginBrowserCa
     return {
       successTitle: resolve('successTitle'),
       successBody: resolve('successBody'),
+      closeCountdown: resolve('closeCountdown'),
       errorTitle: resolve('errorTitle'),
       errorBody: resolve('errorBody'),
       returnButton: resolve('returnButton'),

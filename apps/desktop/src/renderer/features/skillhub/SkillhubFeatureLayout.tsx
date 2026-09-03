@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import { Outlet } from 'react-router-dom';
+import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
@@ -69,7 +70,7 @@ export function useSkillhubStoreSync(): void {
     const itemKeys: Array<{ name: string; key: string }> = [];
     for (const s of skills) {
       if (s.kind !== 'skill') continue;
-      const sync = syncResults.get(s.name);
+      const sync = syncResults.get(skillhubCatalogKey(s.name, s.registryEntry?.catalogScope));
       if (!sync?.exists || !sync.isMine) continue;
       const serverAuthorId = sync.authorId ?? '';
       if (!serverAuthorId) continue; // server 没回 authorId 就别回填

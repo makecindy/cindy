@@ -1,14 +1,8 @@
 /**
  * VisibilityEditorDialog — 「管理可见性」弹窗,对齐 SkillHub 工作台同名能力。
  *
- * 一个入口管理三件事(SkillHub origin/main 语义):
- *   1. 可见范围:公开 / 给团队使用 / 仅自己使用(三卡,带「当前」徽标)
- *   2. 发布者:个人 / 团队(+ 发布团队选择)——「谁能管」
- *   3. 谁可以使用:团队可见时的额外团队/部门多选——「谁能用」
- *
- * 保存走两步(同 SkillHub web):
- *   1) PATCH metadata { visibility, teamSlug | null } —— 可见档位 + 归属
- *   2) set-visibility { visibility, visibleSlugs } —— 可见对象
+ * 归属由新服务根据当前 membership 固定：个人 Skill 只允许
+ * public/private，组织 Skill 只允许 public/shared。客户端不再提供归属转移。
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -18,13 +12,11 @@ import { Globe, Lock, Users, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
+import { useAuth } from '@/contexts/AuthContext';
+import { useSkillhubIdentityPolicy } from '../hooks/useSkillhubIdentityPolicy';
 
-import { AudiencePicker, PublisherPicker } from './TeamScopePicker';
 import { VisibilityCard } from '../PublishDialog';
 import { marketActionErrorMessage } from '../lib/marketErrors';
-import { matchesDeptMirrorTeamSlug } from '../lib/publishForm';
-import { selectableUserTeams } from '../lib/userTeams';
-import type { TeamOption } from '../lib/marketDetailViewModel';
 
 export type VisibilityTier = 'public' | 'team' | 'private';
 
@@ -37,8 +29,7 @@ type VisibilityEditorDialogProps = {
   currentTier: VisibilityTier;
   /** 当前归属:org = 团队归属 */
   currentOwnerType?: string;
-  /** 当前归属团队 slug(ownerType=org 时) */
-  currentOwnerSlug?: string;
+  publicReview?: { status: 'pending' | 'rejected'; reason?: string };
   /** 保存成功后回调(父组件刷新详情) */
   onSaved: () => void;
   /** viewer 等无写权限时:弹窗只读打开(控件禁用 + 顶部提示),不能保存。 */
@@ -51,11 +42,13 @@ export function VisibilityEditorDialog({
   skillName,
   currentTier,
   currentOwnerType,
-  currentOwnerSlug,
+  publicReview,
   onSaved,
   readOnly = false,
 }: VisibilityEditorDialogProps) {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const identityPolicy = useSkillhubIdentityPolicy(user);
   const currentOwnerIsTeam = currentOwnerType === 'org';
 
   // loading 初始为 true,且关闭时复位 —— Dialog 在数据就绪前不挂载,
@@ -64,13 +57,6 @@ export function VisibilityEditorDialog({
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tier, setTier] = useState<VisibilityTier>(currentTier);
-  const [ownerMode, setOwnerMode] = useState<'personal' | 'team'>(currentOwnerIsTeam ? 'team' : 'personal');
-  const [ownerTeamSlug, setOwnerTeamSlug] = useState<string>(currentOwnerIsTeam ? (currentOwnerSlug ?? '') : '');
-  const [deptIds, setDeptIds] = useState<string[]>([]);
-  const [deptNames, setDeptNames] = useState<string[]>([]);
-  const [teams, setTeams] = useState<TeamOption[]>([]);
-  const [visibleDeptIds, setVisibleDeptIds] = useState<string[]>([]);
-  const [sharedTeamSlugs, setSharedTeamSlugs] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) {
@@ -79,60 +65,18 @@ export function VisibilityEditorDialog({
     }
     // 每次打开都从当前状态重置(避免上次编辑残留)
     setTier(currentTier);
-    setOwnerMode(currentOwnerIsTeam ? 'team' : 'personal');
-    setOwnerTeamSlug(currentOwnerIsTeam ? (currentOwnerSlug ?? '') : '');
-    let cancelled = false;
-    setLoading(true);
     setLoadError(null);
-    void Promise.all([
-      window.electronAPI.skillhub.getPublishedVisibility(skillName),
-      window.electronAPI.skillhub.getMyDepts(),
-      window.electronAPI.skillhub.listUserTeams(),
-    ]).then(([vis, depts, teamsRes]) => {
-      if (cancelled) return;
-      setLoading(false);
-      if (!vis.success) {
-        setLoadError(marketActionErrorMessage(vis.error, vis.errorCode));
-        return;
-      }
-      const ids = depts.success ? depts.ids : [];
-      const names = depts.success ? depts.names : [];
-      setDeptIds(ids);
-      setDeptNames(names);
-      const regularTeams = teamsRes.success
-        ? selectableUserTeams(teamsRes.teams)
-        : [];
-      // 团队选项:普通团队;部门统一走 od- id(归属保存走 PATCH deptId)
-      setTeams(regularTeams
-        .map((team) => ({ slug: team.slug, name: team.name, source: team.source })));
-      // 当前归属是部门镜像团队时,映射回 od- id,让「部门」组里正确高亮
-      if (currentOwnerIsTeam && currentOwnerSlug) {
-        const ownerTeamSource = teamsRes.success
-          ? teamsRes.teams.find((team) => team.slug === currentOwnerSlug)?.source
-          : undefined;
-        const ownerOd = ids.find((id) =>
-          matchesDeptMirrorTeamSlug(id, currentOwnerSlug, ownerTeamSource));
-        if (ownerOd) setOwnerTeamSlug(ownerOd);
-      }
-      // 回显;不在我可选范围内的历史值原样保留,保存时不静默丢弃
-      setVisibleDeptIds(vis.visibleDepts ?? []);
-      setSharedTeamSlugs((vis.sharedTeams ?? []).map((team) => team.slug));
-    });
-    return () => { cancelled = true; };
-  }, [open, skillName, currentTier, currentOwnerIsTeam, currentOwnerSlug, t]);
+    setLoading(false);
+  }, [open, currentTier]);
 
   // ── 校验(对齐 SkillHub StepMeta/管理弹窗规则) ──────────────────────────
-  const needsManagementTeam = ownerMode === 'team' && !ownerTeamSlug;
-  const needsAudience =
-    tier === 'team' &&
-    !(ownerMode === 'team' && ownerTeamSlug) &&
-    visibleDeptIds.length === 0 &&
-    sharedTeamSlugs.length === 0;
-
   // ── 影响提示(SkillHub origin/main 同款文案) ───────────────────────────
   const tierChanged = tier !== currentTier;
   const leavingMarket = currentTier === 'public' && tier !== 'public';
-  const teamOwnedToPrivate = currentOwnerIsTeam && ownerMode === 'personal' && tier === 'private';
+  const teamOwnedToPrivate = currentOwnerIsTeam && tier === 'private';
+  const tierAllowed = identityPolicy.allowedVisibilities.includes(
+    tier === 'team' ? 'DEPARTMENT_SCOPED' : tier.toUpperCase() as 'PUBLIC' | 'PRIVATE',
+  );
   const impactText = useMemo(() => {
     if (tier === 'private') {
       if (teamOwnedToPrivate) {
@@ -152,39 +96,32 @@ export function VisibilityEditorDialog({
 
   const chooseTier = (next: VisibilityTier) => {
     setTier(next);
-    // 仅自己使用 → 归属强制个人(SkillHub 同款规则)
-    if (next === 'private') setOwnerMode('personal');
   };
 
   const handleSave = async () => {
-    if (needsManagementTeam || needsAudience) return;
+    const publishVisibility = tier === 'team' ? 'DEPARTMENT_SCOPED' : tier.toUpperCase();
+    if (!identityPolicy.allowedVisibilities.includes(publishVisibility as 'PUBLIC' | 'DEPARTMENT_SCOPED' | 'PRIVATE')) return;
     setSaving(true);
     try {
       const visibility = tier === 'team' ? 'shared' as const : tier;
-      // 第一步:可见档位 + 归属。teamSlug 是统一参数:普通团队 slug 或
-      // od- 部门 id(Hub 端识别前缀并懒创建镜像团队),消费方不感知差异
-      const fields: {
-        visibility: 'private' | 'shared' | 'public';
-        teamSlug?: string | null;
-      } = { visibility };
-      if (ownerMode === 'team' && ownerTeamSlug) fields.teamSlug = ownerTeamSlug;
-      else if (currentOwnerIsTeam) fields.teamSlug = null;
-      const metaRes = await window.electronAPI.skillhub.updatePublished({ name: skillName, fields });
-      if (!metaRes.success) {
-        toast.error(marketActionErrorMessage(metaRes.error, metaRes.errorCode));
-        return;
-      }
-      // 第二步:可见对象(非团队档清空)
+      const previousCatalogScope = currentTier === 'public'
+        ? 'market' as const
+        : currentTier === 'team'
+          ? 'team' as const
+          : undefined;
+      // 归属由服务端根据当前 membership 固定，客户端只修改可见性。
       const visRes = await window.electronAPI.skillhub.setPublishedVisibility({
         name: skillName,
         visibility,
-        visibleSlugs: tier === 'team' ? [...visibleDeptIds, ...sharedTeamSlugs] : [],
+        previousCatalogScope,
       });
       if (!visRes.success) {
         toast.error(marketActionErrorMessage(visRes.error, visRes.errorCode));
         return;
       }
-      toast.success(t('skillhub.visibilityEditor.saved'));
+      toast.success(visRes.result?.reviewStatus === 'pending'
+        ? t('skillhub.visibilityEditor.publicReviewSubmitted')
+        : t('skillhub.visibilityEditor.saved'));
       onOpenChange(false);
       onSaved();
     } finally {
@@ -240,12 +177,19 @@ export function VisibilityEditorDialog({
                     {t('skillhub.market.noManagePermission')}
                   </div>
                 ) : null}
+                {publicReview ? (
+                  <div className="rounded-lg px-3 py-2 text-xs bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]">
+                    {publicReview.status === 'pending'
+                      ? t('skillhub.visibilityEditor.publicReviewPending')
+                      : t('skillhub.visibilityEditor.publicReviewRejected', { reason: publicReview.reason || '—' })}
+                  </div>
+                ) : null}
                 {/* 可见范围三卡(与发布弹窗共用 VisibilityCard) */}
                 <div className="flex flex-col gap-1.5">
                   <span className="block px-0.5 text-13 font-medium text-[var(--settings-section-desc)]">
                     {t('skillhub.visibilityEditor.tierLabel')}
                   </span>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <VisibilityCard
                       value="PUBLIC"
                       label={t('skillhub.visibilityEditor.tierPublic')}
@@ -255,78 +199,29 @@ export function VisibilityEditorDialog({
                       selected={tier === 'public'}
                       onSelect={() => chooseTier('public')}
                     />
-                    <VisibilityCard
-                      value="DEPARTMENT_SCOPED"
-                      label={t('skillhub.visibilityEditor.tierTeam')}
-                      description={t('skillhub.visibilityEditor.tierTeamDesc')}
-                      icon={<Users size={14} strokeWidth={1.75} />}
-                      disabled={readOnly}
-                      selected={tier === 'team'}
-                      onSelect={() => chooseTier('team')}
-                    />
-                    <VisibilityCard
-                      value="PRIVATE"
-                      label={t('skillhub.visibilityEditor.tierPrivate')}
-                      description={t('skillhub.visibilityEditor.tierPrivateDesc')}
-                      icon={<Lock size={14} strokeWidth={1.75} />}
-                      disabled={readOnly}
-                      selected={tier === 'private'}
-                      onSelect={() => chooseTier('private')}
-                    />
+                    {identityPolicy.ownerType === 'organization' ? (
+                      <VisibilityCard
+                        value="DEPARTMENT_SCOPED"
+                        label={t('skillhub.visibilityEditor.tierTeam')}
+                        description={t('skillhub.visibilityEditor.tierTeamDesc')}
+                        icon={<Users size={14} strokeWidth={1.75} />}
+                        disabled={readOnly}
+                        selected={tier === 'team'}
+                        onSelect={() => chooseTier('team')}
+                      />
+                    ) : (
+                      <VisibilityCard
+                        value="PRIVATE"
+                        label={t('skillhub.visibilityEditor.tierPrivate')}
+                        description={t('skillhub.visibilityEditor.tierPrivateDesc')}
+                        icon={<Lock size={14} strokeWidth={1.75} />}
+                        disabled={readOnly}
+                        selected={tier === 'private'}
+                        onSelect={() => chooseTier('private')}
+                      />
+                    )}
                   </div>
                 </div>
-
-                {/* 发布者 — 与发布弹窗一致:私有档也显示,团队卡置灰 */}
-                <PublisherPicker
-                  mode={ownerMode}
-                  ownerTeamSlug={ownerTeamSlug}
-                  deptIds={deptIds}
-                  deptNames={deptNames}
-                  teams={teams}
-                  disabled={saving || readOnly}
-                  teamChoiceDisabled={tier === 'private'}
-                  onChange={({ mode, ownerTeamSlug: slug }) => {
-                    // 切到团队且未选过时,默认所属部门(第一个),其次普通团队
-                    const next = mode === 'team' && !slug
-                      ? (deptIds[0] ?? teams[0]?.slug ?? '')
-                      : slug;
-                    setOwnerMode(mode);
-                    setOwnerTeamSlug(next);
-                    if (mode === 'team' && next) {
-                      // 发布团队天然可见,不重复出现在「谁可以使用」里
-                      setSharedTeamSlugs((prev) => prev.filter((s) => s !== next));
-                      setVisibleDeptIds((prev) => prev.filter((s) => s !== next));
-                    }
-                  }}
-                />
-                {needsManagementTeam ? (
-                  <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
-                    {t('skillhub.publishDialog.publisherTeamRequired')}
-                  </p>
-                ) : null}
-
-                {/* 谁可以使用(团队档) */}
-                {tier === 'team' ? (
-                  <>
-                    <AudiencePicker
-                      value={{ visibleDeptIds, sharedTeamSlugs }}
-                      deptIds={deptIds}
-                      deptNames={deptNames}
-                      teams={teams}
-                      lockedOwnerSlug={ownerMode === 'team' && ownerTeamSlug ? ownerTeamSlug : undefined}
-                      disabled={saving || readOnly}
-                      onChange={(value) => {
-                        setVisibleDeptIds(value.visibleDeptIds);
-                        setSharedTeamSlugs(value.sharedTeamSlugs);
-                      }}
-                    />
-                    {needsAudience ? (
-                      <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
-                        {t('skillhub.publishDialog.audienceRequired')}
-                      </p>
-                    ) : null}
-                  </>
-                ) : null}
 
                 {/* 影响提示 */}
                 {impactText ? (
@@ -360,7 +255,8 @@ export function VisibilityEditorDialog({
             </button>
             <button
               type="button"
-              disabled={loading || saving || Boolean(loadError) || needsManagementTeam || needsAudience || readOnly}
+              disabled={loading || saving || Boolean(loadError) || !tierAllowed || readOnly
+                || (tier === 'public' && currentTier !== 'public' && publicReview?.status === 'pending')}
               onClick={() => void handleSave()}
               className={cn(
                 'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
@@ -371,7 +267,13 @@ export function VisibilityEditorDialog({
               )}
             >
               {saving ? <Spinner size={14} /> : null}
-              {saving ? t('skillhub.visibilityEditor.saving') : t('skillhub.visibilityEditor.save')}
+              {saving
+                ? t('skillhub.visibilityEditor.saving')
+                : tier === 'public' && currentTier !== 'public'
+                  ? publicReview?.status === 'pending'
+                    ? t('skillhub.visibilityEditor.waitingReview')
+                    : t('skillhub.visibilityEditor.submitReview')
+                  : t('skillhub.visibilityEditor.save')}
             </button>
           </div>
         </Dialog.Content>

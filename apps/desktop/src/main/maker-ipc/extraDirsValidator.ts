@@ -26,6 +26,55 @@ const log = createLogger('extra-dirs-validator');
 
 export const EXTRA_DIRS_MAX = 10;
 
+/** 与 register.ts library 槽前缀对齐:不占用户 EXTRA_DIRS_MAX=10。 */
+export const LIBRARY_EXTRA_DIR_SLOT_PREFIX = 'cindy-library:';
+
+export function isLibraryExtraDirSlot(dir: string): boolean {
+  return dir.startsWith(LIBRARY_EXTRA_DIR_SLOT_PREFIX);
+}
+
+export function libraryExtraDirSlot(root: string): string {
+  return `${LIBRARY_EXTRA_DIR_SLOT_PREFIX}${root}`;
+}
+
+export function libraryRootFromSlot(dir: string): string {
+  return isLibraryExtraDirSlot(dir) ? dir.slice(LIBRARY_EXTRA_DIR_SLOT_PREFIX.length) : dir;
+}
+
+export function splitExtraDirSlots(dirs: readonly string[]): { user: string[]; library: string[] } {
+  const user: string[] = [];
+  const library: string[] = [];
+  for (const dir of dirs) {
+    if (isLibraryExtraDirSlot(dir)) library.push(dir);
+    else user.push(dir);
+  }
+  return { user, library };
+}
+
+/** 运行时 extraDirs 去掉 library 槽前缀,只留真实绝对路径。 */
+export function extraDirsForRuntime(dirs: readonly string[]): string[] {
+  return dirs.map((dir) => libraryRootFromSlot(dir));
+}
+
+/** 保留用户自选目录,library 槽最多一条。root 为 null 则撤槽。 */
+export function nextLibraryExtraDirs(current: readonly string[], root: string | null): string[] {
+  const { user } = splitExtraDirSlots(current);
+  return root ? [...user, libraryExtraDirSlot(root)] : user;
+}
+
+/** extraDirs / writableDirs 冲突检测:把 cindy-library: 槽还原成真实根再比。 */
+export async function excludeDirectoryGrantConflictsWithSlots(
+  candidates: readonly string[],
+  blocked: readonly string[],
+): Promise<string[]> {
+  const runtimeAccepted = await excludeDirectoryGrantConflicts(
+    extraDirsForRuntime(candidates),
+    extraDirsForRuntime(blocked),
+  );
+  const accepted = new Set(runtimeAccepted);
+  return candidates.filter((dir) => accepted.has(libraryRootFromSlot(dir)));
+}
+
 export interface ValidateResult {
   /** 通过校验, 实际可用的绝对路径列表 (去重后, 顺序保留首次出现) */
   valid: string[];
@@ -80,17 +129,20 @@ export async function validateExtraDirs(
       continue;
     }
 
-    if (!path.isAbsolute(dir)) {
+    const librarySlot = isLibraryExtraDirSlot(dir);
+    const root = librarySlot ? dir.slice(LIBRARY_EXTRA_DIR_SLOT_PREFIX.length) : dir;
+
+    if (!path.isAbsolute(root)) {
       rejected.push({ path: dir, reason: 'not-absolute' });
       continue;
     }
 
     // 完全重复 — 第一次出现已 push 到 valid; 后续直接静默丢
-    if (seen.has(dir)) continue;
+    if (seen.has(dir) || seen.has(root)) continue;
 
     let stat;
     try {
-      stat = await fs.stat(dir);
+      stat = await fs.stat(root);
     } catch {
       rejected.push({ path: dir, reason: 'not-exist' });
       continue;
@@ -101,17 +153,19 @@ export async function validateExtraDirs(
     }
 
     // workingDir 子目录 / 自身 — 静默去重 (UI 上不报警, 因为加进来无意义)
-    if (wd && isSelfOrSubdir(dir, wd)) {
+    if (wd && isSelfOrSubdir(root, wd)) {
       rejected.push({ path: dir, reason: 'redundant-subdir' });
       continue;
     }
 
-    if (valid.length >= EXTRA_DIRS_MAX) {
+    const userCount = valid.filter((entry) => !isLibraryExtraDirSlot(entry)).length;
+    if (!librarySlot && userCount >= EXTRA_DIRS_MAX) {
       rejected.push({ path: dir, reason: 'over-limit' });
       continue;
     }
 
     seen.add(dir);
+    seen.add(root);
     valid.push(dir);
   }
 

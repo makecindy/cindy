@@ -12,6 +12,12 @@
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "未連線 Claude.ai 訂閱，請先連線或選擇閘道器模型",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目標裝置長時間無響應，請檢查遠端裝置後重試",
     "INTERNAL": "操作失敗，請稍後重試。",
+    "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定已在磁碟上變更，請重新載入後再試。",
+    "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已儲存，但 Cindy 重新整理失敗。請重新載入 SSH 設定。",
+    "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 無法安全管理此 SSH 設定。請重新載入，並確認 Cindy 所有權標記存在且主機別名唯一。",
+    "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 無法安全重現此主機的部分 SSH 設定規則。終端 SSH 仍可能成功；請檢查 Match、條件式 Include、IdentityAgent、IdentitiesOnly 與公開金鑰設定。",
+    "SSH_AGENT_UNAVAILABLE": "SSH Agent 目前無法使用。請啟動 SSH Agent，並用 ssh-add 載入對應私密金鑰後再試。",
+    "SSH_HOST_PREFS_WRITE_FAILED": "主機仍已儲存，但顯示名稱或 Agent Proxy 設定未能儲存。請檢查本機儲存權限後再試。",
     "REMOTE_WORKDIR_INVALID": "遠端專案目錄無效，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端專案目錄不存在，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "遠端專案路徑不是資料夾，請重新選擇專案目錄。",
@@ -168,6 +174,13 @@
       "title": "遠端機器",
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",
+      "readOnlyFromSshConfig": "連線資訊來自 SSH 設定",
+      "configWarning": "部分 SSH 設定規則 Cindy 無法解析，主機列表或連線資訊可能與終端 SSH 不一致。",
+      "configDiagnostic": {
+        "io": "Cindy 無法讀取 SSH 設定。這裡仍顯示上次成功讀取的主機；請檢查檔案權限，然後重新載入。",
+        "syntax": "Cindy 無法解析 SSH 設定。這裡仍顯示上次成功讀取的主機；請修正設定，然後重新載入。",
+        "limit": "SSH 設定的巢狀層級過深或內容過大，Cindy 無法安全讀取。這裡仍顯示上次成功讀取的主機。"
+      },
       "empty": {
         "title": "還沒有遠端機器。",
         "hint": "點選\"新增\"註冊一臺，或點重新整理圖示從 ~/.ssh/config 匯入。"
@@ -199,7 +212,9 @@
       },
       "edit": {
         "title": "編輯 {{id}}",
-        "submit": "儲存修改"
+        "submit": "儲存修改",
+        "connectionFieldsReadOnly": "來自 SSH 設定的連線資訊在此為唯讀；顯示名稱、自動連線和 Agent Proxy 仍可修改。",
+        "authenticationFromSshConfig": "驗證資訊來自 SSH 設定。"
       },
       "keys": {
         "title": "配置 SSH 金鑰",
@@ -276,6 +291,8 @@
       "add": {
         "title": "新增一臺遠端機器",
         "alias": "別名",
+        "displayName": "顯示名稱",
+        "displayNamePlaceholder": "選填，僅在 Cindy 中顯示",
         "hostname": "主機名",
         "user": "使用者",
         "port": "埠",
@@ -376,6 +393,7 @@
         "reloaded": "已重新讀取 ~/.ssh/config",
         "loadFailed": "載入遠端機器失敗",
         "addFailed": "新增機器失敗",
+        "addConflict": "新增期間 SSH 設定發生變化。請重新載入設定、檢查該主機項目後再試。",
         "connectFailed": "連線失敗",
         "disconnectFailed": "斷開失敗",
         "removeFailed": "移除失敗",
@@ -1477,6 +1495,13 @@
           "editTitle": "編輯自定義供應商",
           "desc": "配置與 OpenAI / Anthropic 相容的供應商。"
         },
+        "imageGenerationReload": {
+          "title": "重新載入 Codex",
+          "description": "儲存此圖片生成設定需要重新載入 Codex，並會中斷目前正在執行的 Codex 任務。",
+          "interrupt": "儲存並停止",
+          "cancel": "取消",
+          "close": "關閉"
+        },
         "fields": {
           "name": "顯示名稱",
           "namePlaceholder": "我的 AI 供應商",
@@ -1498,6 +1523,15 @@
           "modelContextWindowTitle": "上下文視窗(tokens)。留空按 200K 保守預設；影響視窗顯示與壓縮閾值。",
           "modelSupportsImageInput": "支援圖片輸入",
           "modelSupportsImageInputHelp": "僅在該模型確實支援視覺輸入時開啟。儲存後新建 Pi 任務生效。",
+          "runtimeAdvanced": "進階",
+          "runtimeSupportsImageGeneration": "支援圖片生成與編輯",
+          "runtimeSupportsImageGenerationHelpLabel": "瞭解圖片生成與編輯支援",
+          "runtimeSupportsImageGenerationConditionTitle": "適用條件",
+          "runtimeSupportsImageGenerationCondition": "閘道需相容 OpenAI Responses API，並支援圖片生成與編輯。",
+          "runtimeSupportsImageGenerationEndpointsTitle": "介面要求",
+          "runtimeSupportsImageGenerationEndpoints": "閘道必須處理以下請求：",
+          "runtimeSupportsImageGenerationPermissionsTitle": "權限與失敗處理",
+          "runtimeSupportsImageGenerationPermissions": "目前的 API Key、帳號或使用者群組需有圖片模型權限。此開關只宣告閘道能力，不會自動開通上游權限。呼叫失敗時會顯示真實的上游錯誤，不會切換到其他圖片服務。",
           "modelSupportsReasoning": "支援推理",
           "modelSupportsReasoningHelp": "僅在該模型接受推理強度時開啟，並勾選它實際支援的所有檔位。儲存後，下一個 Pi Agent 會話生效。",
           "modelReasoningEfforts": "支援的推理強度",
@@ -1883,15 +1917,33 @@
         "invalidLibraryName": "請輸入 Ollama 庫名，或貼上 huggingface.co 上的模型頁連結",
         "advancedExactName": "進階：精確庫名",
         "models": {
-          "qwen38-27b": { "blurb": "目前最強可本機跑的稠密模型，適合程式設計與長任務。" },
-          "gpt-oss-20b": { "blurb": "OpenAI 開源 20B，16GB 級機器上的對話與推理首選。" },
-          "gemma4-e2b": { "blurb": "Gemma 4 最小杯，輕量機器也能跑，帶視覺。" },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 小杯，輕量日常，帶視覺。" },
-          "gemma4-12b": { "blurb": "Gemma 4 中杯，日常對話與多模態更穩。" },
-          "gemma4-31b": { "blurb": "Gemma 4 大杯，對話與多模態更強，也更吃記憶體。" },
-          "gemma4-26b": { "blurb": "Gemma 4 的 MoE 中大杯，啟動參數更少，適合中高配。" },
-          "ornith15-35b": { "blurb": "Ornith 1.5 中杯 MoE，本機程式設計與 Agent 備選。" },
-          "glm-47-flash": { "blurb": "智譜新一代程式設計模型，30B MoE，適合寫程式和 Agent。" }
+          "qwen38-27b": {
+            "blurb": "目前最強可本機跑的稠密模型，適合程式設計與長任務。"
+          },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI 開源 20B，16GB 級機器上的對話與推理首選。"
+          },
+          "gemma4-e2b": {
+            "blurb": "Gemma 4 最小杯，輕量機器也能跑，帶視覺。"
+          },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 小杯，輕量日常，帶視覺。"
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 中杯，日常對話與多模態更穩。"
+          },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 大杯，對話與多模態更強，也更吃記憶體。"
+          },
+          "gemma4-26b": {
+            "blurb": "Gemma 4 的 MoE 中大杯，啟動參數更少，適合中高配。"
+          },
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 中杯 MoE，本機程式設計與 Agent 備選。"
+          },
+          "glm-47-flash": {
+            "blurb": "智譜新一代程式設計模型，30B MoE，適合寫程式和 Agent。"
+          }
         },
         "onboardingTitle": "先安裝 Ollama 執行環境",
         "onboardingBody": "安裝 Ollama 後，即可在 Cindy 中下載和使用本機模型，無需開啟 Ollama App。Ollama 是免費開源的第三方執行環境。",
@@ -3922,12 +3974,12 @@
           "title": "Agent 鍵",
           "source": {
             "label": "任務順序",
-            "description": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
+            "description": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
             "descriptions": {
-              "sidebar": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
-              "last-sent": "AG00～AG05 依你最後一次傳送訊息的時間，最近的排在前面。",
-              "priority": "AG00～AG05 對應前 6 個優先任務。",
-              "custom": "AG00～AG05 各自開啟你指定的任務。"
+              "sidebar": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
+              "last-sent": "任務鍵按板上順序，對應你最近傳送過訊息的任務，越近越靠前。",
+              "priority": "任務鍵按板上順序，對應優先任務。",
+              "custom": "每顆任務鍵開啟你指定的任務。"
             },
             "value": "側邊欄順序",
             "options": {
@@ -3944,7 +3996,16 @@
           },
           "newTask": "新任務",
           "slot": "最近第 {{position}} 個",
-          "slotAria": "AG{{slot}} 開啟最近第 {{position}} 個任務"
+          "slotAria": "AG{{slot}} 開啟最近第 {{position}} 個任務",
+          "role": {
+            "label": "按鍵用途",
+            "description": "任務鍵用來切換任務，並用燈光顯示狀態。動作鍵用來執行快捷操作，還可以更換鍵帽。",
+            "task": "任務鍵",
+            "action": "動作鍵"
+          },
+          "lightingLimit": "韌體最多給板上順序的前 6 顆任務鍵獨立亮燈。多出來的任務鍵仍能切換任務。",
+          "unlitKey": "這顆鍵排在前 6 顆之後，沒有獨立狀態燈。",
+          "taskHint": "建議使用透明鍵帽，任務狀態會以不同顏色的燈效顯示。"
         },
         "commandKeys": {
           "builtInDescription": "保持鍵帽內建的動作，或將這個鍵改綁到其他動作。",
@@ -3955,7 +4016,7 @@
           "title": "麥克風",
           "separate": {
             "label": "拆分麥克風鍵",
-            "description": "保持 ACT10 和 ACT11 分開，不合併為一個 MIC 鍵。"
+            "description": "短按開始並保持錄音，再按一下停止；長按鬆手停止。"
           }
         },
         "analog": {
@@ -3995,7 +4056,8 @@
           "tasks": "任務",
           "commands": "命令",
           "keycaps": "鍵帽",
-          "skills": "技能"
+          "skills": "技能",
+          "voice": "語音輸入"
         },
         "layout": {
           "editor": {
@@ -4007,7 +4069,10 @@
             "cancel": "取消",
             "save": "儲存",
             "assignedShortcut": "已分配動作",
-            "selectKeycap": "選擇鍵帽 {{keycap}}"
+            "selectKeycap": "選擇鍵帽 {{keycap}}",
+            "keyTitle": "編輯按鍵",
+            "keyDescription": "任務鍵開啟任務並顯示狀態燈；動作鍵執行快捷操作，並可以選擇鍵帽。",
+            "blank": "空白"
           },
           "keyboard": {
             "indicator": "狀態指示燈",
@@ -4020,6 +4085,54 @@
             "title": "恢復鍵位配置",
             "description": "恢復鍵帽、搖桿、旋鈕和麥克風分配，不變更任務順序或燈光設定。",
             "button": "恢復配置"
+          },
+          "merge": {
+            "right": "和右邊合成一顆寬鍵",
+            "down": "和下面合成一顆長鍵",
+            "split": "拆成兩個按鍵",
+            "rightDescription": "一顆寬鍵帽會蓋住右邊那顆。被蓋住的任務鍵會變成動作鍵。",
+            "downDescription": "一顆長鍵帽會蓋住下面那顆。被蓋住的任務鍵會變成動作鍵。",
+            "splitDescription": "拆開後，被蓋住的那顆變回空白按鍵。"
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "用按鍵開啟任務，並用燈光同步任務狀態。",
+            "openAria": "開啟 Work Louder Creator Micro 2 設定",
+            "connection": {
+              "toggle": {
+                "aria": "讓這台 Cindy 使用 Creator Micro 2"
+              },
+              "descriptions": {
+                "connecting": "Cindy 正在啟動 Work Louder 裝置服務。",
+                "connected": "USB 已連線，Cindy 正在監聽按鍵並同步任務燈效。",
+                "disabled": "開啟後，Cindy 會改寫目前圖層、監聽按鍵，並用燈光顯示任務狀態。",
+                "present": "開啟後，Cindy 會改寫目前圖層、監聽按鍵，並用燈光顯示任務狀態。",
+                "not-detected": "請用支援資料傳輸的 USB 線連接鍵盤；如果 ChatGPT 正在占用裝置，請先關閉。",
+                "error": "Cindy 暫時無法與鍵盤通訊，正在自動重試。",
+                "unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。",
+                "connection-timeout": "Work Louder 服務未在期限內回應，Cindy 會自動重試。",
+                "connection-failed": "Work Louder 服務啟動失敗，Cindy 會自動重試。",
+                "permission-required": "macOS 拒絕鍵盤存取，請在輸入監控中允許 Cindy 後重試。",
+                "sdk-unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。",
+                "device-in-use": "其他應用程式正在佔用這塊鍵盤。請先關閉 ChatGPT 或 Input，然後再試。"
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
+                  "last-sent": "任務鍵按板上順序，對應你最近傳送過訊息的任務，越近越靠前。",
+                  "priority": "任務鍵按板上順序，對應優先任務。",
+                  "custom": "每顆任務鍵開啟你指定的任務。"
+                }
+              }
+            },
+            "errors": {
+              "load": "無法載入 Creator Micro 2 設定",
+              "save": "無法儲存 Creator Micro 2 設定"
+            }
           }
         }
       },
@@ -4344,7 +4457,9 @@
         "openAria": "打開 PlayStation 手把設定",
         "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
         "connection": {
-          "toggle": { "aria": "讓這個 Cindy 在前景時使用 PlayStation 手把" },
+          "toggle": {
+            "aria": "讓這個 Cindy 在前景時使用 PlayStation 手把"
+          },
           "descriptions": {
             "connecting": "Cindy 正在尋找 PlayStation 手把。",
             "connected": "Cindy 在前景時會監聽這只手把。",
@@ -4361,7 +4476,9 @@
         "openAria": "打開 Switch 手把設定",
         "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
         "connection": {
-          "toggle": { "aria": "讓這個 Cindy 在前景時使用 Switch 手把" },
+          "toggle": {
+            "aria": "讓這個 Cindy 在前景時使用 Switch 手把"
+          },
           "descriptions": {
             "connecting": "Cindy 正在尋找 Switch 手把。",
             "connected": "Cindy 在前景時會監聽這只手把。",
@@ -4378,7 +4495,9 @@
         "openAria": "打開通用手把設定",
         "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
         "connection": {
-          "toggle": { "aria": "讓這個 Cindy 在前景時使用通用手把" },
+          "toggle": {
+            "aria": "讓這個 Cindy 在前景時使用通用手把"
+          },
           "descriptions": {
             "connecting": "Cindy 正在尋找手把。",
             "connected": "Cindy 在前景時會監聽這只手把。",
@@ -5275,7 +5394,6 @@
     "expandControlledNotice": "展開被控提示：{{label}}",
     "versionMismatch": "對方版本不一致，部分功能可能受限"
   },
-
   "accountDeletion": {
     "entryButton": "刪除帳號",
     "entryAria": "刪除目前帳號",
@@ -5425,7 +5543,8 @@
     "browserWaiting": "請在瀏覽器中完成驗證",
     "browserCallback": {
       "successTitle": "登入成功",
-      "successBody": "你可以關閉此頁面，回到 {{appName}} 繼續。",
+      "successBody": "登入已成功，現在可以關閉此頁面了。",
+      "closeCountdown": "{{count}}秒後自動關閉",
       "errorTitle": "登入未完成",
       "errorBody": "請回到 {{appName}} 重新登入。",
       "returnButton": "回到 {{appName}}"
@@ -7487,6 +7606,9 @@
     "recovered": "ChatGPT 登入已恢復，請重試。",
     "openApp": "開啟 ChatGPT App",
     "relogin": "重新登入 ChatGPT",
+    "reloginRiskTitle": "仍要由 Cindy 重新登入？",
+    "reloginRiskDescription": "Cindy 會建立新的 OpenAI OAuth 登入憑證。通常不會影響 ChatGPT App；如果仍與系統 Codex 共用同一份憑證，相關應用程式可能會要求你重新登入。",
+    "reloginRiskConfirm": "接受風險並繼續",
     "devWriteBlocked": "開發環境預設以唯讀方式共用本機 ChatGPT 登入，不能發起登入或改寫憑證。確需測試 OAuth 時，請使用隔離沙箱並明確設定 XDT_ALLOW_DEV_OAUTH_WRITE=1。",
     "devReadOnly": "開發環境唯讀",
     "checking": "正在檢測…",
@@ -7668,7 +7790,7 @@
       "switchClaudeSubscriptionTitle": "把當前任務切換到 Claude.ai 訂閱並重試",
       "switchingClaudeSubscription": "正在切換到 Claude.ai…",
       "claudeSubscriptionSwitchFailed": "無法切換到 Claude.ai 或重試當前任務：{{msg}}",
-      "budgetModelHint": "如果反覆失敗，可以切換到普通版 GPT 再試試。",
+      "codexAppServerRetired": "Codex 服務已重新啟動或更換；目前的請求已中斷，請重新執行。",
       "codexAuthMissing": "遠端 Codex 還沒同步登入態（401 Unauthorized）。點選右側「同步登入態」把本機 Codex 憑證推到遠端 Cindy Codex home，然後重試傳送。",
       "codexAuthMissingLocal": "Codex 憑證缺失或失效（401 Unauthorized）。請在 {{appName}} Settings → Codex 重新登入（登入後會自動重啟 Codex app-server），或在終端跑 `codex login` + 在 Settings 切換一次鑑權模式來重啟 app-server，然後新建任務再發。",
       "codexSessionExpired": "OpenAI 連線需要更新。重新連線 ChatGPT 後即可繼續；{{appName}} 不會退出系統 Codex CLI，也不會要求你重新連線其他模型來源。",
@@ -8235,7 +8357,12 @@
       "showMore": "顯示另外 {{count}} 個",
       "showLess": "收起",
       "artifactLabel": "成品",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}} 頁",
         "slides": "{{count}} 張投影片",
@@ -9139,7 +9266,15 @@
           "5": "星期五",
           "6": "星期六"
         },
-        "short": { "0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六" }
+        "short": {
+          "0": "日",
+          "1": "一",
+          "2": "二",
+          "3": "三",
+          "4": "四",
+          "5": "五",
+          "6": "六"
+        }
       },
       "time": {
         "last": "上次 {{value}}",
@@ -9980,10 +10115,16 @@
       "search": "搜尋技能",
       "clearSearch": "清除技能搜尋",
       "noSearchResults": "沒有找到匹配的技能",
-      "browseTitle": "瀏覽 Skill Hub",
-      "browseDesc": "發現並安裝更多技能",
-      "recommended": "推薦安裝",
-      "recommendedEmpty": "暫無推薦",
+      "catalogFiltersAria": "SkillHub 分類",
+      "catalogFilter": {
+        "public": "公開",
+        "organization": "組織",
+        "mine": "我的管理"
+      },
+      "catalogMore": "更多",
+      "loadMore": "載入更多",
+      "loadingMore": "載入中…",
+      "catalogEmpty": "目前分類暫無技能",
       "local": "本地技能",
       "localEmpty": "還沒有本地技能",
       "installed": "已安裝",
@@ -10165,7 +10306,6 @@
       "sortDownloads": "下載量",
       "sortLatest": "最近更新",
       "sortCreated": "最新發布",
-      "chipAvailable": "可獲取",
       "chipAll": "全部",
       "chipMine": "我的管理",
       "ownerGroupPersonal": "個人",
@@ -10179,7 +10319,7 @@
       "installError": "未知錯誤"
     },
     "marketCard": {
-      "visibilityPublic": "XD.Inc",
+      "visibilityPublic": "公開",
       "visibilityDept": "團隊",
       "visibilityPrivate": "個人",
       "timeLabel": "釋出時間",
@@ -10204,6 +10344,7 @@
       }
     },
     "publishedStatus": {
+      "waitingReview": "等待審核",
       "machineReviewing": "機審中",
       "manualReviewing": "人工複核中",
       "rejected": "稽核未通過"
@@ -10215,7 +10356,7 @@
       "emptyHint": "這個雲端 Skill 沒有返回可預覽檔案"
     },
     "marketDetail": {
-      "visibilityPublic": "XD.Inc 可見",
+      "visibilityPublic": "所有使用者可見",
       "visibilityPrivate": "個人可見",
       "visibilityDept": "團隊可見",
       "files": "檔案",
@@ -10226,6 +10367,7 @@
       "forbidden": "沒有權限操作這個 Skill",
       "notFound": "這個 Skill 已不存在，請返回列表重新整理",
       "managementApiUnavailable": "Hub 管理介面暫未就緒，請稍後再試",
+      "invalidVisibility": "目前組織暫不支援此可見範圍，請選擇公開發佈",
       "default": "操作失敗，請稍後重試"
     },
     "installPicker": {
@@ -10270,11 +10412,11 @@
       "descriptionPlaceholder": "簡要描述該 Skill 的用途",
       "visibilityLabel": "可見性",
       "visibilityPublicTitle": "公開",
-      "visibilityPublicDesc": "全公司可見 · 預設",
+      "visibilityPublicDesc": "所有使用者可見 · 預設",
       "versionLabel": "版本號",
       "versionFormatHint": "格式：x.y.z (例如 1.0.1)",
       "categoryLabel": "分類",
-      "categoryAuto": "自動",
+      "categoryAuto": "不新增標籤",
       "categoryPlaceholder": "請選擇分類",
       "categoryLoading": "正在載入分類…",
       "categoryLoadFailed": "分類載入失敗，請重試",
@@ -10398,6 +10540,14 @@
         "title": "已取消",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "目前組織僅支援瀏覽",
+        "message": "目前組織的技能目錄暫不支援發佈或管理"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "可見範圍不可用",
+        "message": "請選擇目前發佈身分支援的可見範圍"
+      },
       "INTERNAL": {
         "title": "伺服器錯誤",
         "message": "釋出失敗，請稍後重試"
@@ -10411,8 +10561,12 @@
       "dismiss": "知道了",
       "passedTitle": "安全掃描通過",
       "passedDesc": "該版本已通過所有安全檢查，現已釋出到市場。",
+      "pendingTitle": "已提交，等待平台審核",
+      "pendingDesc": "安全掃描已完成，平台審核通過後會自動釋出到公開市場。",
       "failedTitle": "安全掃描未通過",
       "failedDesc": "該版本因安全掃描不達標被標記為 {{status}}，暫時無法在市場中被其他使用者安裝。請修復以下問題後重新發布。",
+      "processingFailedTitle": "發布處理失敗",
+      "processingFailedDesc": "該版本已上傳，但伺服器處理發布時發生內部錯誤。這不是安全檢查拒絕，請稍後重新發布。",
       "copyReviewResult": "複製稽核結果",
       "copiedReviewResult": "已複製",
       "copyReviewResultFailed": "複製失敗",
@@ -10425,12 +10579,14 @@
         "passed": "已通過",
         "failed": "未通過",
         "warning": "有風險",
+        "waitingReview": "等待審核",
         "reviewing": "稽核中",
         "unavailable": "暫不可用"
       },
       "gateLabel": {
         "llmReview": "LLM 稽核",
-        "securityScan": "安全掃描"
+        "securityScan": "安全掃描",
+        "publicationProcessing": "發布處理"
       }
     },
     "diffPanel": {
@@ -10482,7 +10638,7 @@
       "title": "管理可見性",
       "tierLabel": "可見性",
       "tierPublic": "公開",
-      "tierPublicDesc": "全公司可見",
+      "tierPublicDesc": "所有使用者可見",
       "tierTeam": "給團隊使用",
       "tierTeamDesc": "指定團隊可見",
       "tierPrivate": "僅自己使用",
@@ -10490,13 +10646,18 @@
       "save": "儲存",
       "saving": "儲存中…",
       "saved": "管理可見性已儲存",
+      "submitReview": "提交稽核",
+      "waitingReview": "等待稽核",
+      "publicReviewSubmitted": "已提交目前版本的公開稽核",
+      "publicReviewPending": "目前版本正在等待公開稽核，通過後會進入公開市場。",
+      "publicReviewRejected": "公開稽核未通過：{{reason}}",
       "impactPrivate": "儲存後，僅你可見。",
       "impactPrivateLeavingMarket": "儲存後會從公開市場下架，並轉為自己可見；已通過稽核的版本會保留稽核通過狀態。",
       "impactPrivateTeam": "儲存後轉為自己可見；團隊將看不到這個 Skill，也無法管理。",
       "impactPrivateTeamLeavingMarket": "儲存後會從公開市場下架，並轉為自己可見；團隊將看不到這個 Skill，也無法管理。已通過稽核的版本會保留稽核通過狀態。",
       "impactTeam": "儲存後，選中的團隊或部門可以看到並下載。",
       "impactTeamLeavingMarket": "儲存後會從公開市場下架，只有選中的團隊或部門可以看到並下載；已通過稽核的版本會保留稽核通過狀態。",
-      "impactPublic": "儲存後進入公開市場；若當前已稽核通過，會立即對外可見，稽核狀態會保留。"
+      "impactPublic": "提交目前版本的公開稽核；稽核通過後進入公開市場，無需發布新版本。"
     },
     "marketEdit": {
       "saved": "市場展示資訊已儲存",
