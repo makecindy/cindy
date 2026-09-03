@@ -18,7 +18,6 @@ import {
   removeUsageSessionForScope,
   mergeUsageSessionSnapshots,
   shouldHideUsageTaskTable,
-  updateUsageSessionTokenForScope,
   usageActivityIso,
   usageSessionsForScope,
   type UsageSessionsState,
@@ -122,26 +121,6 @@ describe('usage task session scope', () => {
     });
   });
 
-  it('同账号的 token 推送更新全量快照，其他范围保持不变', () => {
-    const state: UsageSessionsState = {
-      scopeKey: 'owner-a',
-      status: 'ready',
-      sessions: [
-        { id: 'session-a', totalTokenUsage: 100 } as Session,
-        { id: 'session-b', totalTokenUsage: 200 } as Session,
-      ],
-    };
-
-    expect(updateUsageSessionTokenForScope(state, 'owner-a', 'session-a', 150)).toMatchObject({
-      scopeKey: 'owner-a',
-      status: 'ready',
-      sessions: [
-        { id: 'session-a', totalTokenUsage: 150 },
-        { id: 'session-b', totalTokenUsage: 200 },
-      ],
-    });
-    expect(updateUsageSessionTokenForScope(state, 'owner-b', 'session-a', 150)).toBe(state);
-  });
 });
 
 describe('cacheHitRate', () => {

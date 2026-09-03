@@ -146,14 +146,18 @@ describe('UsageHeatmap metric', () => {
     const baseline = render(
       <UsageHeatmap days={visibleDays} todayKey="2026-08-22" windowDays={7} />,
     );
-    const baselineCell = baseline.getByRole('button', { name: '2026-08-21' }).firstElementChild;
+    const baselineCell = baseline.container.querySelector<HTMLDivElement>(
+      'div[title^="2026-08-21"]',
+    );
     const baselineColor = (baselineCell as HTMLElement).style.backgroundColor;
     baseline.unmount();
 
     const withOutlier = render(
       <UsageHeatmap days={withOlderOutlier} todayKey="2026-08-22" windowDays={7} />,
     );
-    const outlierCell = withOutlier.getByRole('button', { name: '2026-08-21' }).firstElementChild;
+    const outlierCell = withOutlier.container.querySelector<HTMLDivElement>(
+      'div[title^="2026-08-21"]',
+    );
     expect((outlierCell as HTMLElement).style.backgroundColor).toBe(baselineColor);
   });
 
@@ -185,6 +189,15 @@ describe('UsageHeatmap metric', () => {
 
     fireEvent.click(getByRole('button', { name: '2026-08-21' }));
     expect(onDayClick).toHaveBeenCalledWith('2026-08-21');
+  });
+
+  it('首页非交互日期格不渲染为禁用按钮', () => {
+    const { container, queryByRole } = render(
+      <UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} metric="tokens" />,
+    );
+
+    expect(queryByRole('button', { name: '2026-08-21' })).toBeNull();
+    expect(container.querySelector('div[title^="2026-08-21"]')).toBeTruthy();
   });
 
   it('可点击日期格的可见彩色表面使用 pill 圆角', () => {

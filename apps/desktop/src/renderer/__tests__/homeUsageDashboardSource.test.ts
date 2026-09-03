@@ -86,6 +86,11 @@ describe('HomeUsageDashboard source contract', () => {
     expect(tokenBarsSource).toContain("'2px solid var(--focus-ring-soft)'");
   });
 
+  it('keeps the home heatmap non-interactive when no day callback is supplied', () => {
+    expect(heatmapSource).not.toContain('disabled={!onDayClick}');
+    expect(heatmapSource).toContain('return onDayClick ? (');
+  });
+
   it('uses the shared model key rank for chart and filtered model-table colors', () => {
     expect(usageHistorySectionSource).toContain('colorOrder={colorOrder}');
     expect(breakdownTablesSource).toContain('usageRankOf(colorOrder, row.key)');

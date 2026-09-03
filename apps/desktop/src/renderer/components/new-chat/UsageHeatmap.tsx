@@ -264,53 +264,54 @@ export function UsageHeatmap({
         <div className="flex" style={{ gap: GAP_PX }}>
           {columns.map((col, ci) => (
             <div key={ci} className="flex flex-col" style={{ gap: GAP_PX }}>
-              {col.map((cell, ri) =>
-                cell.placeholder ? (
-                  <div key={ri} style={{ width: CELL_PX, height: CELL_PX }} />
-                ) : (
+              {col.map((cell, ri) => {
+                if (cell.placeholder) {
+                  return <div key={ri} style={{ width: CELL_PX, height: CELL_PX }} />;
+                }
+
+                const title =
+                  metric === 'tokens'
+                    ? `${cell.day} · ${
+                        cell.tokens > 0
+                          ? t('usageDashboard.tokensOnly', {
+                              tokens: formatCompactTokens(cell.tokens),
+                            })
+                          : t('usageHistory.heatmap.emptyCell')
+                      }`
+                    : `${cell.day} · ${formatMoney(cell.money)}${
+                        cell.tokens > 0
+                          ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
+                          : ''
+                      }`;
+                const className = onDayClick ? 'rounded-full' : 'rounded-[3px]';
+                const style = {
+                  width: CELL_PX,
+                  height: CELL_PX,
+                  backgroundColor:
+                    cell.level === 0
+                      ? 'var(--surface-chip)'
+                      : `color-mix(in srgb, var(--accent-emphasis) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
+                  outline:
+                    selectedDay === cell.day ? '2px solid var(--focus-ring-soft)' : undefined,
+                  outlineOffset: selectedDay === cell.day ? '1px' : undefined,
+                };
+                const visual = <div title={title} className={className} style={style} />;
+
+                return onDayClick ? (
                   <button
                     key={ri}
                     type="button"
                     aria-label={cell.day}
                     aria-pressed={selectedDay === cell.day}
-                    onClick={() => onDayClick?.(cell.day)}
+                    onClick={() => onDayClick(cell.day)}
                     className="cursor-pointer rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-                    disabled={!onDayClick}
                   >
-                    <div
-                      title={
-                        metric === 'tokens'
-                          ? `${cell.day} · ${
-                              cell.tokens > 0
-                                ? t('usageDashboard.tokensOnly', {
-                                    tokens: formatCompactTokens(cell.tokens),
-                                  })
-                                : t('usageHistory.heatmap.emptyCell')
-                            }`
-                          : `${cell.day} · ${formatMoney(cell.money)}${
-                              cell.tokens > 0
-                                ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
-                                : ''
-                            }`
-                      }
-                      className={onDayClick ? 'rounded-full' : 'rounded-[3px]'}
-                      style={{
-                        width: CELL_PX,
-                        height: CELL_PX,
-                        backgroundColor:
-                          cell.level === 0
-                            ? 'var(--surface-chip)'
-                            : `color-mix(in srgb, var(--accent-emphasis) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
-                        outline:
-                          selectedDay === cell.day
-                            ? '2px solid var(--focus-ring-soft)'
-                            : undefined,
-                        outlineOffset: selectedDay === cell.day ? '1px' : undefined,
-                      }}
-                    />
+                    {visual}
                   </button>
-                ),
-              )}
+                ) : (
+                  <div key={ri}>{visual}</div>
+                );
+              })}
             </div>
           ))}
         </div>
