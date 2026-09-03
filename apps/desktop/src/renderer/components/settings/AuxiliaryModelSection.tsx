@@ -130,6 +130,7 @@ export function AuxiliaryModelSection() {
     } else if (index >= slots.length) {
       slots.push(pin);
     } else {
+      if (slots.some((entry, slotIndex) => slotIndex !== index && entry === pin)) return;
       slots[index] = pin;
     }
     const unique: string[] = [];
@@ -245,6 +246,12 @@ export function AuxiliaryModelSection() {
           <>
             {SLOT_I18N.map((slotKey, index) => {
               const pin = activeModels[index];
+              const selectedByOtherSlot = new Set(
+                activeModels.filter((entry, slotIndex) => slotIndex !== index && entry),
+              );
+              const slotOptions = options.filter(
+                (option) => option.id === pin || !selectedByOtherSlot.has(option.id),
+              );
               return (
                 <div key={slotKey}>
                   {index > 0 ? (
@@ -267,7 +274,7 @@ export function AuxiliaryModelSection() {
                         value={pin ?? undefined}
                         defaultLabel=""
                         declaredLabel={null}
-                        options={options}
+                        options={slotOptions}
                         onChange={(next) => applySlot(index, next)}
                         ariaLabel={t(`settings.auxiliaryModels.${slotKey}.ariaLabel`)}
                         dense

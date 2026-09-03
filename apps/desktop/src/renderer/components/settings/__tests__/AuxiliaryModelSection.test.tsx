@@ -64,6 +64,9 @@ vi.mock('@/cindy-brain/OneshotModelPinPicker', () => ({
         <span data-testid={`${ariaLabel}:panel`}>
           {`${Boolean(groupByProvider)}:${options.map((option) => option.group).join(',')}`}
         </span>
+        {options.map((option) => (
+          <span key={option.id} data-testid={`${ariaLabel}:option:${option.id}`} />
+        ))}
         <button
           type="button"
           aria-label={`${ariaLabel}:select`}
@@ -253,7 +256,7 @@ describe('AuxiliaryModelSection', () => {
     expect(screen.getAllByText('settings.auxiliaryModels.customize')).toHaveLength(1);
     expect(
       screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:panel').textContent,
-    ).toBe('true:Cindy AI,Cindy AI,Cindy AI,OpenRouter,Anthropic');
+    ).toBe('true:Cindy AI,OpenRouter,Anthropic');
     expect(h.set).not.toHaveBeenCalled();
   });
 
@@ -344,6 +347,36 @@ describe('AuxiliaryModelSection', () => {
       screen.getByRole('combobox', { name: 'settings.auxiliaryModels.title' }).textContent,
     ).toContain('settings.auxiliaryModels.customize');
 
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('does not offer or persist a model already selected in another slot', async () => {
+    h.get.mockResolvedValue(
+      state({
+        models: [PREFERRED_PIN, FALLBACK_PIN],
+        isCustomized: true,
+        customizedKeys: ['models'],
+        options: OPTIONS,
+      }),
+    );
+    render(<AuxiliaryModelSection />);
+
+    expect(
+      screen.queryByTestId(
+        `settings.auxiliaryModels.preferred.ariaLabel:option:${FALLBACK_PIN}`,
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(
+        `settings.auxiliaryModels.fallback1.ariaLabel:option:${PREFERRED_PIN}`,
+      ),
+    ).toBeNull();
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.auxiliaryModels.fallback1.ariaLabel:select',
+      }),
+    );
     expect(h.set).not.toHaveBeenCalled();
   });
 

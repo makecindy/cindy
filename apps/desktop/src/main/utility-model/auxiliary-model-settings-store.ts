@@ -55,6 +55,21 @@ function unscopedVoiceModelsPath(): string {
   return path.join(app.getPath('userData'), VOICE_INPUT_MODELS_FILE);
 }
 
+function readDefaultLegacyMigrationEnv(): NodeJS.ProcessEnv {
+  // Vite replaces complete `process.env.XDT_*` expressions in the main bundle.
+  // Keep these direct reads in the migration module instead of relying on the
+  // runtime `process.env` object, which may not contain build-time injections.
+  return {
+    ...process.env,
+    XDT_UTILITY_MODEL_PROVIDER: process.env.XDT_UTILITY_MODEL_PROVIDER,
+    XDT_UTILITY_MODEL: process.env.XDT_UTILITY_MODEL,
+    XDT_UTILITY_MODEL_PROVIDER_CHAIN: process.env.XDT_UTILITY_MODEL_PROVIDER_CHAIN,
+    XDT_VOICE_INPUT_REFINER_PROVIDER: process.env.XDT_VOICE_INPUT_REFINER_PROVIDER,
+    XDT_VOICE_INPUT_REFINER_MODEL: process.env.XDT_VOICE_INPUT_REFINER_MODEL,
+    XDT_VOICE_INPUT_REFINER_PROVIDER_CHAIN: process.env.XDT_VOICE_INPUT_REFINER_PROVIDER_CHAIN,
+  };
+}
+
 function migrationStatePath(): string {
   return ownerScopedUserDataPath(AUXILIARY_MODEL_MIGRATION_FILE);
 }
@@ -164,7 +179,7 @@ function hasLegacyVoiceFileOverride(raw: Record<string, unknown> | null): boolea
 
 function legacyVoiceHeadRef(
   raw: Record<string, unknown>,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = readDefaultLegacyMigrationEnv(),
 ): string | null {
   // Match the legacy VoiceInputModelSelection precedence: utility file,
   // refiner file, utility env, refiner env. In particular, an old file may
@@ -223,7 +238,7 @@ function legacyVoiceHeadRef(
  */
 function legacyVoiceOverrideRefs(
   raw: Record<string, unknown> | null,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = readDefaultLegacyMigrationEnv(),
 ): string[] {
   // Environment variables remain a live escape hatch. Only migrate when the
   // legacy file itself contains a voice/utility override; otherwise the new
