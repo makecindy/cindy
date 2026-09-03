@@ -6,7 +6,13 @@
  * 与现有 httpClient 错误对齐。
  */
 
-import type { OrcaRole, Session, SessionStatus, WorkspaceKind } from '@/lib/ccAgent.types';
+import type {
+  OrcaRole,
+  Session,
+  SessionStatus,
+  UsageHistorySession,
+  WorkspaceKind,
+} from '@/lib/ccAgent.types';
 import { ApiError } from '@/lib/httpClient';
 import { extractIpcError } from '@/utils/ipcError';
 // device-link 透明对等:fork / rewind 按 sessionId 来源路由(本机 → 本地 maker,
@@ -56,11 +62,33 @@ export type SessionListOptions = {
   usageHistory?: boolean;
 };
 
+type SessionListRegularOptions = Omit<SessionListOptions, 'usageHistory'> & {
+  usageHistory?: false | undefined;
+};
+type SessionListUsageOptions = Omit<SessionListOptions, 'usageHistory'> & {
+  usageHistory: true;
+};
+
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListRegularOptions,
+): Promise<Session[]>;
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListUsageOptions,
+): Promise<UsageHistorySession[]>;
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListOptions,
+): Promise<Session[] | UsageHistorySession[]>;
 export async function list(
   limit: number = 20,
   status?: ListStatusFilter,
   options?: SessionListOptions,
-): Promise<Session[]> {
+): Promise<Session[] | UsageHistorySession[]> {
   return wrap(window.electronAPI.localDb.sessions.list(limit, status, options));
 }
 

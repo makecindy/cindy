@@ -393,6 +393,43 @@ type LocalDbSessionListOptions = {
   fresh?: boolean;
   usageHistory?: boolean;
 };
+type LocalDbSessionListRegularOptions = Omit<LocalDbSessionListOptions, 'usageHistory'> & {
+  usageHistory?: false | undefined;
+};
+type LocalDbSessionListUsageOptions = Omit<LocalDbSessionListOptions, 'usageHistory'> & {
+  usageHistory: true;
+};
+type LocalDbSessionListResult =
+  | import('../renderer/lib/ccAgent.types').Session[]
+  | import('../renderer/lib/ccAgent.types').UsageHistorySession[];
+
+function listLocalDbSessions(
+  limit?: number,
+  status?: string,
+  options?: LocalDbSessionListRegularOptions,
+): Promise<import('../renderer/lib/ccAgent.types').Session[]>;
+function listLocalDbSessions(
+  limit?: number,
+  status?: string,
+  options?: LocalDbSessionListUsageOptions,
+): Promise<import('../renderer/lib/ccAgent.types').UsageHistorySession[]>;
+function listLocalDbSessions(
+  limit?: number,
+  status?: string,
+  options?: LocalDbSessionListOptions,
+): Promise<LocalDbSessionListResult>;
+function listLocalDbSessions(
+  limit?: number,
+  status?: string,
+  options?: LocalDbSessionListOptions,
+): Promise<LocalDbSessionListResult> {
+  return ipcRenderer.invoke(
+    'local-db:sessions:list',
+    limit,
+    status,
+    options,
+  ) as Promise<LocalDbSessionListResult>;
+}
 /**
  * 个人 Telegram bot 的传输状态(与 @cindy/im 的 IMStatus 同形; preload 不引包,
  * 就地声明)。offline = 凭证保留但用户主动下线, 与 idle(未配置)严格区分。
@@ -5018,11 +5055,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         }),
     },
     sessions: {
-      list: (
-        limit?: number,
-        status?: string,
-        options?: LocalDbSessionListOptions,
-      ): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:list', limit, status, options),
+      list: listLocalDbSessions,
       create: (body?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:create', body),
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),
