@@ -18,7 +18,7 @@
  *
  * 本机 gh 缺失 / 未登录时(prGuidanceFor):图标右下角加 --status-bar-accent 角点
  *(与 unresolved 角标同一视觉语言),点击**不打开 PR**,而是把安装 / 登录提示词
- * 填进当前任务输入框交给 Agent;tooltip 写明点击后果。SSH 任务(remoteHostId)
+ * 填进当前任务输入框交给 Agent;tooltip 写明点击后果。SSH / device-link 任务
  * 不提供引导——状态查询走本机 gh,提示词却会进远端 Agent。
  */
 
@@ -94,6 +94,7 @@ export function GitContextBadge({ session }: { session: Session }) {
           key={ref.id}
           sessionId={session.id}
           remoteHostId={session.remoteHostId}
+          deviceLinkDeviceId={session.deviceLinkDeviceId}
           prRef={ref}
           status={prStatuses.get(prStatusKey(ref))}
         />
@@ -105,11 +106,13 @@ export function GitContextBadge({ session }: { session: Session }) {
 function PrChip({
   sessionId,
   remoteHostId,
+  deviceLinkDeviceId,
   prRef,
   status,
 }: {
   sessionId: string;
   remoteHostId?: string | null;
+  deviceLinkDeviceId?: string | null;
   prRef: SessionPrRef;
   status: PrStatusResult | undefined;
 }) {
@@ -118,7 +121,7 @@ function PrChip({
   const kind: PrStatusKind | null = status?.ok ? status.status : null;
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
   const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
-  const guidance = prGuidanceFor(status, { remoteHostId });
+  const guidance = prGuidanceFor(status, { remoteHostId, deviceLinkDeviceId });
   const failureCopyKey = prFailureCopyKey(status);
 
   const statusLine = kind
