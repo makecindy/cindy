@@ -177,6 +177,80 @@ function CollaborationCardBody({
     }
   };
 
+  // A plain Cindy call is an independent background task, not a participant
+  // joining this chat. Keep it visually separate from Bot-to-Bot handoffs.
+  const isIndependentCindyTask = meta.toBotId === null && meta.role === 'delegation-request';
+  if (isIndependentCindyTask) {
+    const taskStatusLabel = row
+      ? t(`bots.collab.status.${row.status}`, { name: 'Cindy' })
+      : resolved
+        ? t('bots.collab.status.unknown', { name: 'Cindy' })
+        : t('bots.collab.status.queued', { name: 'Cindy' });
+    const taskStatusClass = !row || row.status === 'queued'
+      ? 'text-[var(--text-tertiary)]'
+      : row.status === 'completed'
+        ? 'text-[var(--status-success)]'
+        : row.status === 'failed' || row.status === 'timed-out'
+          ? 'text-[var(--status-danger)]'
+          : row.status === 'cancelled'
+            ? 'text-[var(--text-tertiary)]'
+            : 'text-[var(--status-info)]';
+    const taskTitle = meta.objective.trim() || t('bots.collab.cindyTask');
+    return (
+      <div className="my-2 w-full max-w-[560px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-11 text-[var(--text-tertiary)]">{t('bots.collab.cindyTask')}</div>
+            <div className="mt-0.5 break-words text-14 font-medium text-[var(--text-primary)]">
+              {taskTitle}
+            </div>
+          </div>
+          <span className={cn('shrink-0 rounded-full bg-[var(--surface-subtle)] px-2.5 py-1 text-11 font-medium', taskStatusClass)}>
+            {taskStatusLabel}
+          </span>
+        </div>
+        {row?.resultSummary ? (
+          <p className="mt-2 whitespace-pre-wrap break-words text-12 text-[var(--text-secondary)]">
+            {row.resultSummary}
+          </p>
+        ) : null}
+        {row?.lastError ? (
+          <p className="mt-2 whitespace-pre-wrap break-words text-12 text-[var(--error-fg)]">
+            {row.lastError}
+          </p>
+        ) : null}
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          {row?.childSessionId ? (
+            <button
+              type="button"
+              onClick={openChildTask}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+            >
+              <ExternalLink size={11} aria-hidden="true" />
+              {watchWorkLabel}
+            </button>
+          ) : null}
+          {row && active ? (
+            <button
+              type="button"
+              disabled={pending || !sessionId}
+              onClick={() => {
+                if (!sessionId) return;
+                void runAction(async () =>
+                  window.electronAPI.maker.cancelBotDelegation(sessionId, meta.delegationId),
+                );
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
+            >
+              <Square size={11} aria-hidden="true" />
+              {t('bots.collab.stop')}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   const submitInterjection = async (): Promise<void> => {
     const value = draft.trim();
     if (!value || !sessionId || pending) return;

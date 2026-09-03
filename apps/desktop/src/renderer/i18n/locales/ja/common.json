@@ -7440,6 +7440,7 @@
       "title": "説明と背景情報"
     },
     "collab": {
+      "cindyTask": "独立タスク",
       "joined": "{{name}} が会話に加わりました",
       "inboundJoined": "{{name}} から仕事が届きました",
       "guestTag": "ゲスト",

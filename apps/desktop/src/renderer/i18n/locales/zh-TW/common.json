@@ -7440,6 +7440,7 @@
       "title": "描述與背景"
     },
     "collab": {
+      "cindyTask": "獨立任務",
       "joined": "{{name}} 加入了對話",
       "inboundJoined": "{{name}} 把活交給了你",
       "guestTag": "客座",

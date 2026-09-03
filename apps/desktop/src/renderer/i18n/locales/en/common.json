@@ -7442,6 +7442,7 @@
       "title": "Description & background"
     },
     "collab": {
+      "cindyTask": "Independent task",
       "joined": "{{name}} joined the conversation",
       "inboundJoined": "{{name}} handed you this work",
       "guestTag": "Guest",

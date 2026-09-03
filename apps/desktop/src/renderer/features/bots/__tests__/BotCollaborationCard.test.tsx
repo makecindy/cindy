@@ -145,6 +145,36 @@ describe('BotCollaborationCard', () => {
     expect(screen.getByText('bots.collab.nudge')).toBeTruthy();
   });
 
+  it('renders a Cindy call as an independent task card, not as a participant joining the chat', async () => {
+    listBotDelegations.mockResolvedValue({
+      ok: true,
+      delegations: [
+        delegation('running', {
+          targetBotId: null,
+          targetBotName: 'Cindy',
+          objective: '做一个 2048 小游戏（单文件网页版）',
+        }),
+      ],
+    });
+    render(
+      <BotCollaborationCard
+        data={{
+          ...meta({
+            toBotId: null,
+            toBotName: 'Cindy',
+            objective: '做一个 2048 小游戏（单文件网页版）',
+          }),
+        }}
+        sessionId={SESSION_ID}
+      />,
+    );
+
+    expect(await screen.findByText('bots.collab.cindyTask')).toBeTruthy();
+    expect(screen.getByText('做一个 2048 小游戏（单文件网页版）')).toBeTruthy();
+    expect(screen.getByText(/bots\.collab\.status\.running/)).toBeTruthy();
+    expect(screen.queryByText(/bots\.collab\.joined/)).toBeNull();
+  });
+
   it('shows the inbound card on the target task without requester controls', async () => {
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
     render(
