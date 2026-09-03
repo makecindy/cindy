@@ -4,8 +4,9 @@
  * ChatInput.handlePaste 对剪贴板文本按以下优先级走管线,命中即停:
  *   1. 长文本(isLongPasteText)→ 整段折叠为 PastedTextChip(长 log 里的
  *      深链 / 路径不再逐个 chip 化——那是噪音不是引用);
- *   2. 深链 / 路径混排(segmentPastedContent)→ text / session / project /
- *      path 分段:session、project 即时成 chip;path 段先落纯文本,由
+ *   2. 深链 / 独立路径(segmentPastedContent)→ text / session / project /
+ *      path 分段:session、project 即时成 chip;仅整段粘贴是一个路径时,
+ *      path 段先落纯文本,由
  *      pathPaste.ts 异步 stat 确认后原地升级(见该文件头注释);
  *   3. 都不命中 → null,调用方 fall through 到默认粘贴。
  *
@@ -155,7 +156,9 @@ export function toWorkdirRelativePath(candidate: string, workingDir: string): st
 /**
  * 把粘贴文本切成 text / session / project / path 段。没有任何可变换目标时
  * 返回 null(调用方走默认粘贴)。深链的 markdown 形式(`[标题](深链)`)
- * 优先于裸形式;路径候选在剩余 text 段上做第二遍扫描。
+ * 优先于裸形式;路径只在整段粘贴除首尾空白外是单个工作区内
+ * 绝对路径时识别。这样粘贴单个路径仍是明确的文件引用操作,终端日志、
+ * 错误信息与普通叙述中的字面路径则保持原样。
  */
 export function segmentPastedContent(
   text: string,
@@ -164,8 +167,7 @@ export function segmentPastedContent(
   const deepLinkSegments = segmentDeepLinks(text);
   const workingDir = options.workingDir?.trim() || null;
 
-  let segments: PastedContentSegment[] = deepLinkSegments ?? [{ kind: 'text', text }];
-  let matchedAny = deepLinkSegments != null;
+  if (deepLinkSegments) return deepLinkSegments;
 
   // 快速早退:文本里连 workdir 前缀都没有就不做逐段路径扫描。Windows 路径
   // 大小写不敏感且 `\` / `/` 两种分隔符形态并存(Git Bash / Node 输出斜杠
@@ -177,25 +179,14 @@ export function segmentPastedContent(
         (winLike ? workingDir.toLowerCase().replace(/\\/g, '/') : workingDir).replace(/[\\/]+$/, ''),
       )
     : false;
-  if (workingDir && containsWorkdir) {
-    const withPaths: PastedContentSegment[] = [];
-    for (const seg of segments) {
-      if (seg.kind !== 'text') {
-        withPaths.push(seg);
-        continue;
-      }
-      const pathSegs = segmentPathCandidates(seg.text, workingDir);
-      if (pathSegs) {
-        matchedAny = true;
-        withPaths.push(...pathSegs);
-      } else {
-        withPaths.push(seg);
-      }
-    }
-    segments = withPaths;
-  }
-
-  return matchedAny ? segments : null;
+  if (!workingDir || !containsWorkdir) return null;
+  const pathSegments = segmentPathCandidates(text, workingDir);
+  if (!pathSegments) return null;
+  const paths = pathSegments.filter((seg) => seg.kind === 'path');
+  const hasOnlySurroundingWhitespace = pathSegments.every(
+    (seg) => seg.kind === 'path' || (seg.kind === 'text' && seg.text.trim().length === 0),
+  );
+  return paths.length === 1 && hasOnlySurroundingWhitespace ? pathSegments : null;
 }
 
 /** 深链(session + project,裸 / markdown 两形态)分段;无命中 → null。 */

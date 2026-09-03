@@ -2236,10 +2236,11 @@ export function ChatInput({
           return true;
         }
 
-        // 2. 深链 / 路径混排 → text / session / project / path 分段:
+        // 2. 深链 / 独立路径 → text / session / project / path 分段:
         //    session、project 即时成 chip(session 裸链接先短 ID 占位,标题
-        //    异步原地补齐——sessionLinkPaste.ts);path 段先落纯文本,stat
-        //    确认存在后原地升级为 @chip(pathPaste.ts)。
+        //    异步原地补齐——sessionLinkPaste.ts);整段粘贴仅为一个工作区
+        //    绝对路径时,path 段先落纯文本,stat 确认存在后原地升级
+        //    为 @chip(pathPaste.ts);日志或叙述中的路径保持字面原文。
         const segments = text
           ? segmentPastedContent(text, { workingDir: workingDirRef.current })
           : null;

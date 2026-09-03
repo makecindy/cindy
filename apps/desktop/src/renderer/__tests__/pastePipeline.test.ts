@@ -158,16 +158,30 @@ describe('segmentPastedContent — deep links', () => {
 });
 
 describe('segmentPastedContent — path candidates', () => {
-  it('emits path segments only for absolute paths inside the workingDir', () => {
+  it('keeps paths embedded in prose as literal text', () => {
     const inPath = `${WORKDIR}/apps/desktop/src/main.ts`;
     expect(
       segmentPastedContent(`报错在 ${inPath} 附近,系统文件 /etc/hosts 无关`, {
         workingDir: WORKDIR,
       }),
-    ).toEqual([
-      { kind: 'text', text: '报错在 ' },
+    ).toBeNull();
+  });
+
+  it('keeps multiline terminal output containing a Windows workspace path unchanged', () => {
+    const script = 'C:\\Code\\XDMaker\\scripts\\build.sh';
+    const output = `running build\n/bin/bash: ${script}: No such file or directory\nexit 127`;
+    expect(segmentPastedContent(output, { workingDir: WIN_WORKDIR })).toBeNull();
+  });
+
+  it('emits a path segment when the entire paste is one workspace path', () => {
+    const inPath = `${WORKDIR}/apps/desktop/src/main.ts`;
+    expect(segmentPastedContent(inPath, { workingDir: WORKDIR })).toEqual([
       { kind: 'path', path: inPath },
-      { kind: 'text', text: ' 附近,系统文件 /etc/hosts 无关' },
+    ]);
+    expect(segmentPastedContent(`  ${inPath}\n`, { workingDir: WORKDIR })).toEqual([
+      { kind: 'text', text: '  ' },
+      { kind: 'path', path: inPath },
+      { kind: 'text', text: '\n' },
     ]);
   });
 
@@ -181,54 +195,38 @@ describe('segmentPastedContent — path candidates', () => {
     expect(segmentPastedContent(`cd ${WORKDIR}/`, { workingDir: WORKDIR })).toBeNull();
   });
 
-  it('emits dir candidates without the trailing separator (review P2)', () => {
+  it('does not upgrade a path used as part of a shell command', () => {
     const dir = `${WORKDIR}/apps/desktop`;
-    expect(segmentPastedContent(`cd ${dir}/`, { workingDir: WORKDIR })).toEqual([
-      { kind: 'text', text: 'cd ' },
-      { kind: 'path', path: dir },
-      { kind: 'text', text: '/' },
-    ]);
+    expect(segmentPastedContent(`cd ${dir}/`, { workingDir: WORKDIR })).toBeNull();
   });
 
-  it('strips :line / :line:col suffixes from candidates', () => {
+  it('keeps a path with diagnostic suffix and prose as literal text', () => {
     const p = `${WORKDIR}/src/index.ts`;
-    expect(segmentPastedContent(`${p}:12:5 报错`, { workingDir: WORKDIR })).toEqual([
-      { kind: 'path', path: p },
-      { kind: 'text', text: ':12:5 报错' },
-    ]);
+    expect(segmentPastedContent(`${p}:12:5 报错`, { workingDir: WORKDIR })).toBeNull();
   });
 
   it('recognizes paths with CJK dir / file names (review P2)', () => {
     const cjkPath = `${WORKDIR}/文档/需求说明.md`;
-    expect(segmentPastedContent(`看 ${cjkPath} 这份`, { workingDir: WORKDIR })).toEqual([
-      { kind: 'text', text: '看 ' },
+    expect(segmentPastedContent(cjkPath, { workingDir: WORKDIR })).toEqual([
       { kind: 'path', path: cjkPath },
-      { kind: 'text', text: ' 这份' },
     ]);
     // 全角标点终止路径(， 全角逗号不吞进候选;ASCII 逗号是合法路径
     // 字符,紧贴场景按文档注释走「吞入候选 → stat miss 安全降级」)
-    expect(segmentPastedContent(`${cjkPath}，另外`, { workingDir: WORKDIR })).toEqual([
-      { kind: 'path', path: cjkPath },
-      { kind: 'text', text: '，另外' },
-    ]);
+    expect(segmentPastedContent(`${cjkPath}，另外`, { workingDir: WORKDIR })).toBeNull();
   });
 
   it('matches Windows paths case-insensitively against the workingDir', () => {
     const winPath = 'c:\\code\\xdmaker\\Apps\\main.ts';
-    expect(segmentPastedContent(`见 ${winPath} 一行`, { workingDir: WIN_WORKDIR })).toEqual([
-      { kind: 'text', text: '见 ' },
+    expect(segmentPastedContent(winPath, { workingDir: WIN_WORKDIR })).toEqual([
       { kind: 'path', path: winPath },
-      { kind: 'text', text: ' 一行' },
     ]);
   });
 
   it('matches Windows slash-form paths against a backslash workingDir (review P2)', () => {
     // Git Bash / Node 输出常用 C:/... 斜杠形态,workdir 存的是 C:\... 反斜杠形态。
     const slashPath = 'C:/Code/XDMaker/src/a.ts';
-    expect(segmentPastedContent(`见 ${slashPath} 一行`, { workingDir: WIN_WORKDIR })).toEqual([
-      { kind: 'text', text: '见 ' },
+    expect(segmentPastedContent(slashPath, { workingDir: WIN_WORKDIR })).toEqual([
       { kind: 'path', path: slashPath },
-      { kind: 'text', text: ' 一行' },
     ]);
     expect(toWorkdirRelativePath(slashPath, WIN_WORKDIR)).toBe('src/a.ts');
   });
@@ -237,14 +235,13 @@ describe('segmentPastedContent — path candidates', () => {
     expect(segmentPastedContent('/some/other/root/file.ts', { workingDir: WORKDIR })).toBeNull();
   });
 
-  it('scans paths inside the leftover text segments around deep links', () => {
+  it('keeps paths literal while still converting deep links in the same paste', () => {
     const p = `${WORKDIR}/README.md`;
     expect(
       segmentPastedContent(`${SESSION_URL} 里改了 ${p}`, { workingDir: WORKDIR }),
     ).toEqual([
       { kind: 'session', href: SESSION_URL, label: null },
-      { kind: 'text', text: ' 里改了 ' },
-      { kind: 'path', path: p },
+      { kind: 'text', text: ` 里改了 ${p}` },
     ]);
   });
 });
