@@ -33,6 +33,7 @@ import {
   PI_REASONING_EFFORTS,
   PI_MODEL_APIS,
   preservesPiCatalogModels,
+  PROVIDER_ACCOUNT_USAGE_INTEGRATION_IDS,
 } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -187,6 +188,20 @@ function allowedWireProtocols(agent: string): readonly ProviderWireProtocol[] {
 function isAllowedWireProtocol(agent: string, value: unknown): value is ProviderWireProtocol {
   return (
     typeof value === 'string' && allowedWireProtocols(agent).includes(value as ProviderWireProtocol)
+  );
+}
+
+function isSupportedAccountUsageCapability(
+  value: unknown,
+): value is NonNullable<CustomProviderRuntimeConfig['accountUsage']> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const capability = value as Record<string, unknown>;
+  return (
+    Object.keys(capability).length === 1
+    && typeof capability.integrationId === 'string'
+    && (PROVIDER_ACCOUNT_USAGE_INTEGRATION_IDS as readonly string[]).includes(
+      capability.integrationId,
+    )
   );
 }
 
@@ -354,6 +369,9 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       !/^[a-z0-9-]+$/.test(r.piCatalogProviderId))
   ) {
     return invalid(`runtime '${agent}' piCatalogProviderId invalid`);
+  }
+  if (r.accountUsage !== undefined && !isSupportedAccountUsageCapability(r.accountUsage)) {
+    return invalid(`runtime '${agent}' accountUsage invalid`);
   }
   return { ok: true };
 }
@@ -572,6 +590,7 @@ function normalizeRuntime(
   }
   if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
   if (agent === 'pi' && rt.piCatalogProviderId) out.piCatalogProviderId = rt.piCatalogProviderId;
+  if (rt.accountUsage) out.accountUsage = { ...rt.accountUsage };
   return out;
 }
 
@@ -783,6 +802,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       /^[a-z0-9-]+$/.test(r.piCatalogProviderId)
     ) {
       entry.piCatalogProviderId = r.piCatalogProviderId;
+    }
+    if (isSupportedAccountUsageCapability(r.accountUsage)) {
+      entry.accountUsage = { ...r.accountUsage };
     }
     out[agent] = entry;
   }

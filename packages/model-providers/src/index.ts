@@ -35,9 +35,15 @@ export type {
   OAuthAuthorizationCodeDescriptor,
   OAuthDeviceCodeDescriptor,
   OAuthProviderDescriptor,
+  ProviderAccountUsageCapability,
+  ProviderAccountUsageIntegrationId,
 } from './types.js';
 
-export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
+export {
+  PI_MODEL_APIS,
+  PI_REASONING_EFFORTS,
+  PROVIDER_ACCOUNT_USAGE_INTEGRATION_IDS,
+} from './types.js';
 
 export {
   effectivePiWireProtocol,
