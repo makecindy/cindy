@@ -53,10 +53,24 @@ export function Toast({ item }: ToastProps) {
       data-state={item.exiting ? 'exiting' : 'entering'}
       // hover 悬停时暂停自动关闭，移开后按剩余时长继续（正在阅读时不消失）
       onMouseEnter={() => toast.pauseAutoDismiss(item.id)}
-      onMouseLeave={() => toast.resumeAutoDismiss(item.id)}
+      onMouseLeave={(event) => {
+        if (!event.currentTarget.contains(document.activeElement)) {
+          toast.resumeAutoDismiss(item.id);
+        }
+      }}
+      // 操作按钮获得键盘焦点时同样暂停；否则短时 Toast 会在键盘用户操作前消失。
+      onFocusCapture={() => toast.pauseAutoDismiss(item.id)}
+      onBlurCapture={(event) => {
+        if (
+          !event.currentTarget.contains(event.relatedTarget as Node | null) &&
+          !event.currentTarget.matches(':hover')
+        ) {
+          toast.resumeAutoDismiss(item.id);
+        }
+      }}
       className={cn(
         // 基础布局：单行 pill，内容驱动宽度
-        'pointer-events-auto inline-flex items-center gap-2',
+        'pointer-events-auto inline-flex flex-wrap items-center gap-2',
         // pill 外观：完全圆角 + Card + Board
         'rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
         // padding 对称
@@ -99,6 +113,20 @@ export function Toast({ item }: ToastProps) {
       >
         {item.message}
       </span>
+
+      {item.actions?.map((action) => (
+        <button
+          key={action.label}
+          type="button"
+          aria-label={action.ariaLabel ?? action.label}
+          onClick={() => {
+            void action.onClick();
+          }}
+          className="shrink-0 rounded-md px-2 py-1 text-12 font-medium text-[var(--cmd-palette-item-text)] underline-offset-2 hover:bg-[var(--cmd-palette-border)]/50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {action.label}
+        </button>
+      ))}
     </div>
   );
 }

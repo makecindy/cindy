@@ -975,7 +975,7 @@ import { startLearnHost, getLearnController, resetLearnController } from './lear
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
-import { createLogger as createSchedulerLogger } from './logger.js';
+import { createLogger as createSchedulerLogger, getLogDir } from './logger.js';
 
 let makerProviderRefreshConfigured = false;
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
@@ -7123,12 +7123,17 @@ const registerIpcHandlers = () => {
     },
   );
 
-  // Settings → About: 打开 <userData>/logs 在系统文件管理器。
+  // Settings → About: 打开当前日志目录在系统文件管理器。
   // 路径在主进程派生（renderer 不需要也不应该知道 userData 全路径）。
-  // 目录不存在时先创建，避免空安装首次点击失败。
+  // 复用 logger.getLogDir() —— dev 模式下日志写在 apps/desktop/logs/（仓库内），
+  // packaged 模式下写在 <userData>/logs/。两套路径共用同一处真相，避免开发者点开
+  // 按钮拿到一个无关/空的目录（PR #2206 Codex P1）。
+  // 目录不存在时先创建，避免空安装首次点击失败；initLogger() 仍未跑（极端时序）
+  // 时回退到 <userData>/logs，保持原有兜底语义。
   ipcMain.handle('app:open-logs-dir', async (): Promise<{ success: boolean; error?: string }> => {
     try {
-      const logDir = path.join(app.getPath('userData'), 'logs');
+      const resolved = getLogDir().trim();
+      const logDir = resolved || path.join(app.getPath('userData'), 'logs');
       fs.mkdirSync(logDir, { recursive: true });
       const errMsg = await shell.openPath(logDir);
       if (errMsg) return { success: false, error: errMsg };
