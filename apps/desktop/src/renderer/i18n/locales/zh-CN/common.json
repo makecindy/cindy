@@ -4950,6 +4950,8 @@
         "sidebarEntryTitle": "侧边栏入口",
         "showInSidebar": "显示在侧边栏",
         "sidebarEntryDescription": "开启后，侧边栏会显示“{{title}}”。隐藏入口不会停用插件。",
+        "iosSimulatorAutoOpenTitle": "自动打开内置模拟器面板",
+        "iosSimulatorAutoOpenDescription": "启动模拟器或打开 App 后，自动在右侧显示模拟器画面。关闭后仍可手动打开，其他功能不受影响。",
         "openTool": "查看 Tool {{name}} 的详情",
         "noToolDescription": "该 Tool 暂无描述。",
         "viewAllTools": "查看更多",

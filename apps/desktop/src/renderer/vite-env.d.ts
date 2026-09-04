@@ -38,6 +38,7 @@ type IOSSimulatorCopyScreenshotRequest =
   import('../shared/iosSimulatorIpc').IOSSimulatorCopyScreenshotRequest;
 type IOSSimulatorCopyScreenshotResult =
   import('../shared/iosSimulatorIpc').IOSSimulatorCopyScreenshotResult;
+type IOSSimulatorPreferences = import('../shared/iosSimulatorIpc').IOSSimulatorPreferences;
 type IOSSimulatorStatusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorStatusRequest;
 type IOSSimulatorToolRequest = import('../shared/iosSimulatorIpc').IOSSimulatorToolRequest;
 type IOSSimulatorToolResponse = import('../shared/iosSimulatorIpc').IOSSimulatorToolResponse;
@@ -6392,6 +6393,8 @@ interface ElectronAPI {
       prepareAdb: () => Promise<AndroidAdbPreparationState>;
     };
     iosSimulator: {
+      getPreferences: () => Promise<IOSSimulatorPreferences>;
+      setAutoOpenEmbeddedPanel: (enabled: boolean) => Promise<IOSSimulatorPreferences>;
       requestAccess: (
         request: IOSSimulatorAccessRequest,
       ) => Promise<IOSSimulatorAccessRequestResult>;

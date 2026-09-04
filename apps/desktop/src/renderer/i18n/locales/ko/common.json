@@ -4950,6 +4950,8 @@
         "sidebarEntryTitle": "사이드바 항목",
         "showInSidebar": "사이드바에 표시",
         "sidebarEntryDescription": "켜면 사이드바에 “{{title}}” 항목이 표시됩니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
+        "iosSimulatorAutoOpenTitle": "내장 시뮬레이터 패널 자동 열기",
+        "iosSimulatorAutoOpenDescription": "시뮬레이터를 시작하거나 App을 실행한 뒤 오른쪽에 시뮬레이터 화면을 자동으로 표시합니다. 꺼도 수동으로 열 수 있으며 다른 기능에는 영향을 주지 않습니다.",
         "openTool": "Tool {{name}} 세부 정보 보기",
         "noToolDescription": "이 Tool에는 설명이 없습니다.",
         "viewAllTools": "더 보기",
