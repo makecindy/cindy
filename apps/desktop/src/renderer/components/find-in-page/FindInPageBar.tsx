@@ -528,7 +528,7 @@ export function FindInPageBar() {
       childList: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'open'],
       subtree: true,
     });
     return () => {

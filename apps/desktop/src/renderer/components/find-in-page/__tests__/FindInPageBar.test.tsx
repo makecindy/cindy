@@ -304,6 +304,23 @@ describe('FindInPageBar', () => {
     await waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
   });
 
+  it('refreshes matches when details sections expand or collapse', async () => {
+    const page = document.createElement('main');
+    const details = document.createElement('details');
+    details.innerHTML = '<summary>More</summary><span>foo</span>';
+    page.append(details);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('0/0')).toBeTruthy();
+
+    details.open = true;
+    await waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+
+    details.open = false;
+    await waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
+  });
+
   it('clears highlights when the query is cleared or the bar closes', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo';
