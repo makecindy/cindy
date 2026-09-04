@@ -115,6 +115,78 @@ describe('useDeviceLinkDeviceList initial request', () => {
     });
   });
 
+  it('keeps the backoff timer when presence arrives before the first snapshot', async () => {
+    let resolveBackground: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
+    let presenceChanged: ((payload: DeviceLinkPresenceSnapshot) => void) | undefined;
+    const background = new Promise<{ devices: DeviceLinkDeviceView[] }>((resolve) => {
+      resolveBackground = resolve;
+    });
+    const listDevices = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('relay unavailable'))
+      .mockReturnValueOnce(background);
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn((callback: (payload: DeviceLinkPresenceSnapshot) => void) => {
+          presenceChanged = callback;
+        }),
+        onStatusChanged: vi.fn(),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      useDeviceLinkDeviceListRequestState,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result } = renderHook(() => ({
+      devices: useDeviceLinkDeviceList(),
+      request: useDeviceLinkDeviceListRequestState(),
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.devices).toBeNull();
+    expect(result.current.request.status).toBe('error');
+
+    // With no snapshot, a busy/lastSeen presence cannot be classified as a
+    // newly visible device. It must not cancel the scheduled retry.
+    act(() =>
+      presenceChanged?.({
+        deviceId: 'self-1',
+        online: true,
+        deviceName: 'This Mac',
+        platform: 'darwin',
+        appVersion: '0.1.27',
+        lastSeenAt: 2_000,
+        remoteControlEnabled: true,
+        busy: true,
+      }),
+    );
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(result.current.request.status).toBe('error');
+
+    await act(async () => {
+      vi.advanceTimersByTime(nextDeviceListRetryDelay(0));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    resolveBackground?.({ devices: [] });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.request.status).toBe('ready');
+  });
+
   it('filters busy-only presence while a background retry is in flight when a snapshot exists', async () => {
     let resolveBackground: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let presenceChanged: ((payload: DeviceLinkPresenceSnapshot) => void) | undefined;

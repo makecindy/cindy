@@ -381,6 +381,10 @@ function ensureStarted(): void {
     // cancel the backoff and reopen the foreground loading state. Relevant
     // presence can still recover promptly, but stays in the background path.
     const retryPending = retryTimer !== null;
+    // Without a directory snapshot there is no safe way to distinguish a new
+    // device from this machine's heartbeat. Keep the scheduled backoff as the
+    // recovery source instead of letting every presence cancel it.
+    if (retryPending && devices === null) return;
     if (!shouldRefreshForPresence(devices, snap, retryPending ? 'ready' : requestState.status))
       return;
     refresh(false, retryPending);
