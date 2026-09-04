@@ -144,6 +144,18 @@ describe('FindInPageBar', () => {
     expect(screen.getByText('1/3')).toBeTruthy();
   });
 
+  it('refreshes stale ranges before navigating after page text changes', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    page.textContent = 'bar';
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByText('0/0')).toBeTruthy();
+  });
+
   it('clears highlights when the query is cleared or the bar closes', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo';
