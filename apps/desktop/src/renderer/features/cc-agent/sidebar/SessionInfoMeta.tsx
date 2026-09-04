@@ -180,7 +180,7 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
   }, [fetchStatusesForSession, prRef.sessionId]);
   // 按 key 精准订阅(2026-08-13 review P1):整表快照会让任一 PR 的刷新惊动
   // 全部已挂载徽标;usePrStatus 在本 PR 结果未变时快照引用不变、不重渲染。
-  const status = usePrStatus(prStatusKey(prRef));
+  const status = usePrStatus(prRef.sessionId, prStatusKey(prRef));
   const kind = status?.ok ? status.status : null;
   const unresolvedCount = status?.ok ? status.unresolvedCount : null;
   const showDot = shouldShowPrUnresolvedDot(kind, unresolvedCount);

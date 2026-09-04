@@ -9097,9 +9097,24 @@
           "merged": "マージ済み",
           "closed": "クローズ済み"
         },
-        "needsToken": "ローカルの gh CLI が未ログインです。Agent に gh auth login を一度実行させると PR の状態が表示されます",
+        "ghNotLoggedIn": "このマシンの gh は GitHub にログインしていないため、PR の状態を表示できません",
+        "ghMissing": "GitHub CLI（gh）が見つからないため、PR の状態を表示できません",
+        "notFound": "PR が存在しないか、現在のアカウントでは閲覧できません",
         "statusUnknown": "状態の取得に失敗しました",
         "openAria": "PR #{{number}} をブラウザで開く",
+        "clickToOpen": "クリックしてブラウザで PR を開く",
+        "guidance": {
+          "login": {
+            "hint": "クリックすると Agent がログインを手伝います",
+            "aria": "PR #{{number}} の状態を取得できません：Agent に GitHub へのログインを任せる",
+            "prompt": "GitHub CLI にログインしてください：`gh auth login -h github.com -w` を実行し、表示されたワンタイムのデバイスコードと URL を教えてください。ブラウザで認可したら、`gh auth status` でログイン成功を確認してください。"
+          },
+          "install": {
+            "hint": "クリックすると Agent がインストールとログインを手伝います",
+            "aria": "PR #{{number}} の状態を取得できません：Agent に GitHub CLI のインストールとログインを任せる",
+            "prompt": "GitHub CLI（gh）をインストールしてください（macOS は `brew install gh`、Windows は `winget install GitHub.cli`）。その後 `gh auth login -h github.com -w` を実行してログインし、表示されたワンタイムのデバイスコードと URL を教えてください。ブラウザで認可したら、`gh auth status` でログイン成功を確認してください。"
+          }
+        },
         "unresolved": "未解決のレビューコメント: {{count}} 件"
       }
     },

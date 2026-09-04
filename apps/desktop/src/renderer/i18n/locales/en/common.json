@@ -9112,9 +9112,24 @@
           "merged": "Merged",
           "closed": "Closed"
         },
-        "needsToken": "gh CLI not logged in — ask the agent to run gh auth login once to show PR status",
+        "ghNotLoggedIn": "gh is not signed in to GitHub on this machine, so PR status is unavailable",
+        "ghMissing": "GitHub CLI (gh) not found on this machine, so PR status is unavailable",
+        "notFound": "PR not found, or the current account cannot view it",
         "statusUnknown": "Failed to fetch status",
         "openAria": "Open PR #{{number}} in browser",
+        "clickToOpen": "Click to open the PR in your browser",
+        "guidance": {
+          "login": {
+            "hint": "Click to have the agent sign you in",
+            "aria": "PR #{{number}} status unavailable: have the agent sign in to GitHub",
+            "prompt": "Please sign me in to the GitHub CLI: run `gh auth login -h github.com -w`, tell me the one-time device code and URL it shows, and after I authorize in the browser, confirm with `gh auth status` that the login succeeded."
+          },
+          "install": {
+            "hint": "Click to have the agent install it and sign you in",
+            "aria": "PR #{{number}} status unavailable: have the agent install and sign in to GitHub CLI",
+            "prompt": "Please install the GitHub CLI (gh; `brew install gh` on macOS, `winget install GitHub.cli` on Windows), then run `gh auth login -h github.com -w` to sign in, tell me the one-time device code and URL it shows, and after I authorize in the browser, confirm with `gh auth status` that the login succeeded."
+          }
+        },
         "unresolved": "Unresolved review threads: {{count}}"
       }
     },

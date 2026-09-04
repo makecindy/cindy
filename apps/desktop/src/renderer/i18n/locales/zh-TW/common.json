@@ -9097,9 +9097,24 @@
           "merged": "已合併",
           "closed": "已關閉"
         },
-        "needsToken": "本地 gh CLI 未登入——讓 Agent 執行一次 gh auth login 即可顯示 PR 狀態",
+        "ghNotLoggedIn": "本機 gh 尚未登入 GitHub，看不到 PR 狀態",
+        "ghMissing": "未偵測到 GitHub CLI（gh），看不到 PR 狀態",
+        "notFound": "PR 不存在，或目前帳號無權限檢視",
         "statusUnknown": "狀態獲取失敗",
         "openAria": "在瀏覽器開啟 PR #{{number}}",
+        "clickToOpen": "點擊在瀏覽器開啟 PR",
+        "guidance": {
+          "login": {
+            "hint": "點擊讓 Agent 幫你登入",
+            "aria": "PR #{{number}} 狀態不可用：讓 Agent 登入 GitHub",
+            "prompt": "請幫我登入 GitHub CLI：執行 `gh auth login -h github.com -w`，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
+          },
+          "install": {
+            "hint": "點擊讓 Agent 幫你安裝並登入",
+            "aria": "PR #{{number}} 狀態不可用：讓 Agent 安裝並登入 GitHub CLI",
+            "prompt": "請幫我安裝 GitHub CLI（gh，macOS 用 `brew install gh`，Windows 用 `winget install GitHub.cli`），然後執行 `gh auth login -h github.com -w` 登入，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
+          }
+        },
         "unresolved": "{{count}} 條未解決的 review 評論"
       }
     },

@@ -9097,9 +9097,24 @@
           "merged": "병합됨",
           "closed": "닫힘"
         },
-        "needsToken": "로컬 gh CLI가 로그인되어 있지 않습니다. Agent에게 gh auth login을 한 번 실행하게 하면 PR 상태가 표시됩니다",
+        "ghNotLoggedIn": "이 컴퓨터의 gh가 GitHub에 로그인되어 있지 않아 PR 상태를 볼 수 없습니다",
+        "ghMissing": "GitHub CLI(gh)를 찾을 수 없어 PR 상태를 볼 수 없습니다",
+        "notFound": "PR이 없거나 현재 계정으로는 볼 수 없습니다",
         "statusUnknown": "상태를 가져오지 못했습니다",
         "openAria": "브라우저에서 PR #{{number}} 열기",
+        "clickToOpen": "클릭하여 브라우저에서 PR 열기",
+        "guidance": {
+          "login": {
+            "hint": "클릭하면 Agent가 로그인을 도와줍니다",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub 로그인 맡기기",
+            "prompt": "GitHub CLI에 로그인해 주세요: `gh auth login -h github.com -w`를 실행하고 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+          },
+          "install": {
+            "hint": "클릭하면 Agent가 설치와 로그인을 도와줍니다",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub CLI 설치와 로그인 맡기기",
+            "prompt": "GitHub CLI(gh)를 설치해 주세요(macOS는 `brew install gh`, Windows는 `winget install GitHub.cli`). 그다음 `gh auth login -h github.com -w`를 실행해 로그인하고, 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+          }
+        },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건"
       }
     },

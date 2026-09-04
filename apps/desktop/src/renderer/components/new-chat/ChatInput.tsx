@@ -104,7 +104,11 @@ import {
   isDataOwnerGenerationCurrent,
   isDataOwnerIdCurrent,
 } from '@/contexts/dataOwnerGeneration';
-import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
+import {
+  insertPromptIntoEditor,
+  subscribePromptInsert,
+  subscribeSessionLinkInsert,
+} from '@/lib/composerActionsBus';
 import {
   ModelSelector,
   resolveRemoteModelListStatus,
@@ -2829,6 +2833,19 @@ export function ChatInput({
       appendMentionChip(editor, pastedSessionChipAttrs({ href, label: null }), { at });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       resolveSessionChipTitles(editor);
+    });
+  }, [editor, sessionId]);
+
+  // 徽标类引导动作(如 PR 徽标在 gh 未登录时点击):把一句现成提示词填进
+  // 输入框并聚焦,只填不发。发送中 / 语音占用时与键盘输入同锁,静默忽略。
+  useEffect(() => {
+    if (!editor || !sessionId) return;
+    return subscribePromptInsert(sessionId, ({ targetSessionId, text }) => {
+      if (targetSessionId !== sessionId || editor.isDestroyed) return false;
+      if (composerMutationLockedRef.current) return false;
+      insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text });
+      lastComposerSelectionFromRef.current = editor.state.selection.from;
+      return true;
     });
   }, [editor, sessionId]);
 
