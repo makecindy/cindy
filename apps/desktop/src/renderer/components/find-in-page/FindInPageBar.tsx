@@ -186,10 +186,22 @@ function isCjkCharacter(value: string): boolean {
   );
 }
 
+function getCachedComputedStyle(
+  element: HTMLElement,
+  styleCache: WeakMap<HTMLElement, CSSStyleDeclaration>,
+): CSSStyleDeclaration {
+  const cachedStyle = styleCache.get(element);
+  if (cachedStyle) return cachedStyle;
+  const style = window.getComputedStyle(element);
+  styleCache.set(element, style);
+  return style;
+}
+
 function isExcludedTextNode(
   node: Text,
   excludedRoot: HTMLElement | null,
   visibilityCache: WeakMap<HTMLElement, boolean>,
+  styleCache: WeakMap<HTMLElement, CSSStyleDeclaration>,
 ): boolean {
   let element = node.parentElement;
   while (element) {
@@ -219,7 +231,7 @@ function isExcludedTextNode(
     if (cachedHidden !== undefined) {
       if (cachedHidden) return true;
     } else {
-      const style = window.getComputedStyle(element);
+      const style = getCachedComputedStyle(element, styleCache);
       const hiddenByStyle =
         style.display === 'none' ||
         style.visibility === 'hidden' ||
@@ -239,6 +251,7 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
 
   const matches: TextMatch[] = [];
   const visibilityCache = new WeakMap<HTMLElement, boolean>();
+  const styleCache = new WeakMap<HTMLElement, CSSStyleDeclaration>();
   // Keep off-screen and scrollable content searchable. Geometry-based clipping
   // guesses cannot distinguish a closed drawer from history outside a scroll
   // viewport, so only explicit hidden styles are excluded here.
@@ -246,9 +259,9 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
   let node = walker.nextNode();
   while (node) {
     const textNode = node as Text;
-    if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache)) {
+    if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache, styleCache)) {
       const parentElement = textNode.parentElement;
-      const parentStyle = parentElement ? window.getComputedStyle(parentElement) : null;
+      const parentStyle = parentElement ? getCachedComputedStyle(parentElement, styleCache) : null;
       const whiteSpace = parentStyle?.whiteSpace || 'normal';
       for (const [start, end] of findMatchOffsets(textNode.data, query, whiteSpace)) {
         const range = document.createRange();
