@@ -8,8 +8,6 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { getBotLastReadAt, markBotRead } from './botReadState';
 import type { BotChatIdentity } from './BotSessionContentHeader';
-import { deliverPendingBotPersonaAck } from './botPersonaAck';
-import { deliverPendingBotWelcome } from './botWelcome';
 
 type BotSessionGate =
   | { kind: 'loading' }
@@ -103,7 +101,7 @@ export function BotSessionView() {
               const projection = row as { id?: unknown; kind?: unknown; status?: unknown };
               return (
                 projection.id === sessionId &&
-                (projection.kind === 'chat' || projection.kind === 'route') &&
+                projection.kind === 'chat' &&
                 projection.status === 'active'
               );
             })
@@ -171,33 +169,6 @@ export function BotSessionView() {
       unsubscribe?.();
     };
   }, [botId, gate.kind, sessionId]);
-
-  // 入伙即打招呼:创建时寄存的欢迎语,在 TA 的主任务第一次真正打开时落成一条
-  // assistant 消息。幂等三重保险见 botWelcome.ts;这里只负责「什么时候交付」。
-  const welcomeReady = gate.kind === 'ready' && gate.isCanonical;
-  useEffect(() => {
-    if (!welcomeReady || !botId || !sessionId) return;
-    void deliverPendingBotWelcome(botId, sessionId, {
-      listMessages: (id) => window.electronAPI.localDb.messages.list(id, { limit: 1 }),
-      createMessage: (id, body) => window.electronAPI.localDb.messages.create(id, body),
-      // params 必须透传:`bots.welcome.generic` / `withRole` 里带 {{name}}、
-      // {{description}}。i18next 默认 skipOnVariables=true,缺变量时**原样保留**
-      // 占位符而不是报错,所以漏传的后果是伙伴张嘴第一句就是「嗨,我是{{name}}。」
-      // ——自己写的伙伴与部分 AI 生成伙伴 100% 命中。与下面 personaAck 同款签名。
-      translate: (key, params) => t(key, params),
-    });
-  }, [botId, sessionId, t, welcomeReady]);
-
-  // 调完性格,TA 用新口气回一句。与打招呼同一条注入路径,区别只有一个:确认消息
-  // 本来就发生在一段已有的对话里,所以不看任务空不空,幂等全交给 clientId
-  // (见 botPersonaAck.ts)。
-  useEffect(() => {
-    if (!welcomeReady || !botId || !sessionId) return;
-    void deliverPendingBotPersonaAck(botId, sessionId, {
-      createMessage: (id, body) => window.electronAPI.localDb.messages.create(id, body),
-      translate: (key, params) => t(key, params),
-    });
-  }, [botId, sessionId, t, welcomeReady]);
 
   if (gate.kind === 'loading') {
     return (

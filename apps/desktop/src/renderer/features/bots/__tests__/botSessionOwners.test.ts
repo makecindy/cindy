@@ -12,7 +12,11 @@ import { describe, expect, it } from 'vitest';
 
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import type { Session } from '@/lib/ccAgent.types';
-import { buildBotSessionOwners, findBotProfileForSession } from '../botSessionOwners';
+import {
+  botRouteForOwnedSession,
+  buildBotSessionOwners,
+  findBotProfileForSession,
+} from '../botSessionOwners';
 import type { BotProfile } from '../botStore';
 
 function session(id: string, over: Partial<Session> = {}): Session {
@@ -70,6 +74,15 @@ describe('伙伴归属表', () => {
     const bot = profile({ canonicalSessionId: 'stale-mirror' });
     expect(findBotProfileForSession([bot], 's-main')).toBe(bot);
     expect(findBotProfileForSession([bot], 'stale-mirror')).toBeUndefined();
+  });
+
+  it('通知点击把主任务送回伙伴页，子任务保留自己的任务地址', () => {
+    const bot = profile({ id: 'bot/a' });
+    expect(botRouteForOwnedSession([bot], 's-main')).toBe('/bots/bot%2Fa');
+    expect(botRouteForOwnedSession([bot], 's-telegram')).toBe(
+      '/bots/bot%2Fa/session/s-telegram',
+    );
+    expect(botRouteForOwnedSession([bot], 'not-owned')).toBeNull();
   });
 });
 

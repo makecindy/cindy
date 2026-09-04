@@ -236,8 +236,6 @@ function hasNestedScrollableAncestorThatCanScrollUp(
   return false;
 }
 
-import { BotGuestMessage } from '@/features/bots/BotGuestMessage';
-
 function hasNestedScrollableAncestorThatCanScrollDown(
   root: HTMLElement,
   target: EventTarget | null,
@@ -6151,9 +6149,7 @@ export function MessageStream({
                   maxWidth: contentWidth ?? 880,
                 }}
               >
-                {historyLoaded && historyCleared && (
-                  <HistoryClearedMarker />
-                )}
+                {historyLoaded && historyCleared && <HistoryClearedMarker />}
                 {/* F-SYNC-2: Loading spinner at top */}
                 {isLoadingMore && (
                   <div className="flex items-center justify-center pb-4">
@@ -6686,18 +6682,6 @@ const MessageItem = memo(function MessageItem({
   // [UI_ACTION_TRIGGER] 合成指令行:保留在 messages 里参与时序判定(error-tail
   // banner 的尾部判定不能忽视它,review P2),但不渲染任何气泡。
   if (message.isSyntheticTrigger) return null;
-  // 客座气泡:这条 user 行是委派另一方送进本任务的内容(目标伙伴的答复,或收到的
-  // 委派请求),不是本任务主人说的话 —— 换成带对方头像与「客座」标签的气泡。判据是
-  // 主进程写在 agent_meta 上的结构化标记,老镜像消息没有标记,仍走 UserMessage。
-  if (message.role === 'user' && message.guestBot) {
-    return (
-      <BotGuestMessage
-        guest={message.guestBot}
-        content={message.content}
-        workingDir={workingDir}
-      />
-    );
-  }
   switch (message.role) {
     case 'user':
       return (

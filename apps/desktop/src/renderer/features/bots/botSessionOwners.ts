@@ -27,6 +27,25 @@ export function findBotProfileForSession(
   );
 }
 
+/**
+ * Resolve the public Bot route for a notification or other session-only entry.
+ * The stable main task stays on the short Bot route; child and historical tasks
+ * retain their own session id so opening a notification never loses context.
+ */
+export function botRouteForOwnedSession(
+  profiles: readonly BotProfile[],
+  sessionId: string,
+): string | null {
+  const bot = findBotProfileForSession(profiles, sessionId);
+  if (!bot) return null;
+  const canonicalSessionId = bot.sessions.find(
+    (session) => session.role === 'canonical' || session.kind === 'chat',
+  )?.id;
+  return canonicalSessionId === sessionId
+    ? `/bots/${encodeURIComponent(bot.id)}`
+    : `/bots/${encodeURIComponent(bot.id)}/session/${encodeURIComponent(sessionId)}`;
+}
+
 export function buildBotSessionOwners(
   profiles: readonly BotProfile[],
 ): Map<string, BotSessionOwner> {

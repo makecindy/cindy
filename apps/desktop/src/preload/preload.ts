@@ -5115,29 +5115,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
       chooseAvatar: (body: { botId: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:bots:choose-avatar', body),
-      health: (botId: string): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:bots:health', botId),
-      lifecycleEvents: (body: unknown): Promise<unknown[]> =>
-        ipcRenderer.invoke('local-db:bots:lifecycle-events', body),
       searchHistory: (body: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:bots:search-history', body),
       create: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:create', body),
       update: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:update', body),
       createCanonicalSession: (body: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:bots:create-canonical-session', body),
-      compactCanonicalSession: (body: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:bots:compact-canonical-session', body),
-      /** 到点换代:打开主对话时问一次「该翻篇了吗」。没到点就原样返回。 */
-      renewIfDue: (body: {
-        botId: string;
-      }): Promise<{
-        renewed: boolean;
-        reason?: 'daily' | 'idle';
-        canonicalSessionId: string | null;
-        notify: boolean;
-      }> => ipcRenderer.invoke('local-db:bots:renew-if-due', body),
-      linkSession: (body: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:bots:link-session', body),
       history: (botId: string): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:history', botId),
     },
@@ -5479,27 +5462,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:get-capabilities', agentKind),
     listBotDelegations: (
       parentSessionId: string,
-      status?: import('../shared/botDelegation').BotDelegationStatus,
     ): Promise<import('../shared/botDelegation').BotDelegationListResult> =>
-      ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId, status),
+      ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId),
     cancelBotDelegation: (
       parentSessionId: string,
       delegationId: string,
     ): Promise<import('../shared/botDelegation').BotDelegationCancelResult> =>
       ipcRenderer.invoke('maker:bot-delegation:cancel', parentSessionId, delegationId),
-    interjectBotDelegation: (
-      parentSessionId: string,
-      delegationId: string,
-      text: string,
-      idempotencyKey?: string,
-    ): Promise<import('../shared/botCollaboration').BotDelegationInterjectResult> =>
-      ipcRenderer.invoke(
-        'maker:bot-delegation:interject',
-        parentSessionId,
-        delegationId,
-        text,
-        idempotencyKey,
-      ),
     onBotDelegationChanged: fanOutBotDelegationChanged,
     getBotDirectMessageThread: (
       threadId: string,
@@ -6418,46 +6387,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** Maker Memory 整库重置: 删 <userData>/maker-memory/ 全部 workdir 目录 + close db pool */
     makerMemoryReset: (): Promise<{ removedCount: number }> =>
       ipcRenderer.invoke('maker:maker-memory:reset'),
-
-    /**
-     * 单个伙伴的 Maker Memory 只读列表 + 单条删除 + 清空 ("TA 记得的" — 批次 β)。
-     * scope key 由 main 侧用 buildBotMemoryScopeKey(botId) 派生, 与 workdir 记忆
-     * 完全独立; 全局 Maker Memory 开关即使关闭也仍可查看/清理已有数据。
-     */
-    botMemory: {
-      list: (botId: string): Promise<import('@cindy/maker-core').MemoryRecord[]> =>
-        ipcRenderer.invoke('maker:bot-memory:list', botId),
-      delete: (botId: string, filename: string): Promise<{ ok: true }> =>
-        ipcRenderer.invoke('maker:bot-memory:delete', botId, filename),
-      clear: (botId: string): Promise<{ removedCount: number }> =>
-        ipcRenderer.invoke('maker:bot-memory:clear', botId),
-      /**
-       * 「初始记忆」落地(模板自带 / AI 生成)。按 slug 幂等: 已存在的分片不覆盖,
-       * 所以重复调用、重装或重试都只补缺的那几条。
-       */
-      seed: (
-        botId: string,
-        entries: readonly import('../shared/botMemorySeed').BotMemorySeedEntry[],
-      ): Promise<import('../shared/botMemorySeed').BotMemorySeedResult> =>
-        ipcRenderer.invoke('maker:bot-memory:seed', botId, entries),
-    },
-
-    /**
-     * 单个伙伴自己沉淀的**真技能** ("TA 学会的" — 批次 ζ)。
-     * 落盘在 <userData>/bot-skills/<botId>/, 与记忆分片是两套存储; 写入只由伙伴
-     * 自己经 save_bot_skill 完成, 设置页只读 + 单条删除。
-     */
-    botSkill: {
-      list: (botId: string): Promise<import('../shared/botSkill').BotSkillSummary[]> =>
-        ipcRenderer.invoke('maker:bot-skill:list', botId),
-      read: (
-        botId: string,
-        slug: string,
-      ): Promise<import('../shared/botSkill').BotSkillDetail | null> =>
-        ipcRenderer.invoke('maker:bot-skill:read', botId, slug),
-      delete: (botId: string, slug: string): Promise<{ ok: true; deleted: boolean }> =>
-        ipcRenderer.invoke('maker:bot-skill:delete', botId, slug),
-    },
 
     /**
      * 启动期同步三个 memory 开关的真实持久化值 (main <userData>/memory-settings.json)。

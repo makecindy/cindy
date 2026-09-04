@@ -1,9 +1,9 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 536,
+  "snapshotCount": 535,
   "categories": {
-    "literal": 261,
+    "literal": 260,
     "alias": 239,
     "hsl-triplet": 6,
     "runtime-derived-or-protected": 30
@@ -1828,14 +1828,6 @@
     },
     {
       "id": "bot-avatar-graphite-bg",
-      "category": "literal",
-      "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
-      "modeledAsSemantic": false
-    },
-    {
-      "id": "bot-guest-border",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "hex",

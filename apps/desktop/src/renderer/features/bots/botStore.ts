@@ -13,7 +13,6 @@ import {
 } from '../../../shared/botDefaults';
 import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from './botReadState';
 import type { BotGender } from '../../../shared/botGender';
-import type { BotHealthReport } from '../../../shared/botLifecycle';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
 import type { BotTemplatePresetId } from '../../../shared/botTemplatePreset';
 import { NEW_BOT_DEFAULT_PERMISSIONS, normalizeBotPermissions } from './botCapabilityDefaults';
@@ -24,9 +23,6 @@ import {
   type BotHarness,
   type BotModelRoute,
 } from '../../../shared/botModelChain';
-
-export type BotChannel =
-  'telegram' | 'feishu' | 'slack' | 'discord' | 'wechat' | 'dingtalk' | 'wecom' | 'x' | 'local';
 
 export interface BotCapabilities {
   model: string;
@@ -134,11 +130,10 @@ function normalizeStringList(value: unknown): string[] {
 export interface BotSessionProjection {
   id: string;
   title: string;
-  kind: 'chat' | 'route' | 'worker' | 'history';
-  channel: BotChannel;
+  kind: 'chat' | 'worker' | 'history';
   updatedAt: number;
   status?: 'active' | 'archived' | 'deleted';
-  role?: 'canonical' | 'route' | 'group' | 'history';
+  role?: 'canonical' | 'delegation' | 'history';
   profileVersion?: number;
   runtimeSnapshot?: {
     profileVersion: number;
@@ -156,7 +151,6 @@ export interface BotSessionProjection {
 export interface BotProfile {
   id: string;
   name: string;
-  channel: BotChannel;
   description: string;
   /**
    * 角色性别 —— 只影响界面文案里用「她」还是「他」(裁决:不用「TA」)。
@@ -446,8 +440,6 @@ function defaultCapabilities(
 export interface CreateBotProfileInput {
   name: string;
   description: string;
-  /** Kept for legacy callers; every new Bot is local-first and Channels mount later. */
-  channel?: BotChannel;
   identitySource?: string;
   userContextSource?: string;
   /**
@@ -464,6 +456,8 @@ export interface CreateBotProfileInput {
   capabilities?: Partial<BotCapabilities>;
   /** 仅用于 main 按可信内置清单安装初始 Skill；自定义伙伴不传。 */
   templateId?: BotTemplatePresetId;
+  /** Localized first message persisted by main together with the initial canonical task. */
+  welcomeMessage?: string;
 }
 
 function readProfiles(): BotProfile[] {
@@ -479,7 +473,6 @@ function readProfiles(): BotProfile[] {
       if (!(
         typeof value.id === 'string' &&
         typeof value.name === 'string' &&
-        typeof value.channel === 'string' &&
         typeof value.enabled === 'boolean' &&
         Array.isArray(value.sessions)
       ))
@@ -623,21 +616,6 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Partial<BotProfile>;
   if (typeof item.id !== 'string' || typeof item.name !== 'string') return null;
-  const channel =
-    item.channel &&
-    [
-      'telegram',
-      'feishu',
-      'slack',
-      'discord',
-      'wechat',
-      'dingtalk',
-      'wecom',
-      'x',
-      'local',
-    ].includes(item.channel)
-      ? item.channel
-      : 'local';
   const harness = normalizeBotHarness(item.capabilities?.harness);
   const rawCapabilities = item.capabilities as (BotCapabilities & { tools?: unknown }) | undefined;
   const defaults = defaultCapabilities(harness);
@@ -666,7 +644,6 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
   return {
     id: item.id,
     name: item.name,
-    channel,
     description: typeof item.description === 'string' ? item.description : '',
     identitySource: typeof item.identitySource === 'string' ? item.identitySource : '',
     userContextSource: typeof item.userContextSource === 'string' ? item.userContextSource : '',
@@ -868,12 +845,6 @@ export async function chooseBotAvatar(botId: string): Promise<BotProfile | null>
   return next;
 }
 
-export async function getBotHealth(botId: string): Promise<BotHealthReport> {
-  const api = botsApi();
-  if (!api) throw new Error('Bot storage is not ready');
-  return api.health(botId);
-}
-
 export async function runBotLifecycleAction(
   request: import('../../../shared/botLifecycle').BotLifecycleActionRequest,
 ): Promise<import('../../../shared/botLifecycle').BotLifecycleActionResult> {
@@ -952,9 +923,6 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
   const bot: BotProfile = {
     id: `bot_${now}_${Math.random().toString(36).slice(2, 8)}`,
     name: input.name.trim() || 'New Bot',
-    // A Bot is always created as a local profile. IM surfaces are mounts, not
-    // the Bot's identity/type; the requested channel is attached below.
-    channel: 'local',
     description: input.description.trim(),
     identitySource: input.identitySource?.trim() || undefined,
     userContextSource: input.userContextSource?.trim() ?? '',
@@ -1002,6 +970,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         // 阵容卡上明明写着「让她加入」,进去就变成「林律是谁」(2026-08-21 实机)。
         ...(bot.gender ? { gender: bot.gender } : {}),
         ...(input.templateId ? { templateId: input.templateId } : {}),
+        ...(input.welcomeMessage ? { welcomeMessage: input.welcomeMessage } : {}),
       }),
     );
     if (!created) throw new Error('Bot profile create returned an invalid profile');
@@ -1184,7 +1153,6 @@ export function setCanonicalBotSession(
           id: session.id,
           title: session.title,
           kind: 'chat' as const,
-          channel: bot.channel,
           updatedAt: session.updatedAt,
           status: 'active' as const,
           role: 'canonical' as const,
@@ -1194,34 +1162,6 @@ export function setCanonicalBotSession(
     };
   });
   persist();
-}
-
-export function markBotSessionArchived(
-  botId: string,
-  sessionId: string,
-  updatedAt = Date.now(),
-): void {
-  profiles = profiles.map((bot) =>
-    bot.id === botId
-      ? {
-          ...bot,
-          sessions: bot.sessions.map((item) =>
-            item.id === sessionId
-              ? {
-                  ...item,
-                  kind: 'history' as const,
-                  role: 'history' as const,
-                  status: 'archived' as const,
-                  updatedAt,
-                }
-              : item,
-          ),
-        }
-      : bot,
-  );
-  persist();
-  const api = botsApi();
-  if (api) void api.linkSession({ botId, sessionId, role: 'history' }).catch(() => undefined);
 }
 
 export function removeBotProfile(id: string): void {

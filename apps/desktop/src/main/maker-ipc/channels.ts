@@ -341,23 +341,6 @@ export const MAKER_INVOKE = {
   //   - RESET: 删 <userData>/maker-memory/ 全部内容 + close db pool
   MAKER_MEMORY_SET_ENABLED: 'maker:maker-memory:set-enabled',
   MAKER_MEMORY_RESET: 'maker:maker-memory:reset',
-  // Per-bot Maker Memory ("TA 记得的" — 批次 β) — 复用同一个 makerMemory 引擎,
-  // scope key 用 buildBotMemoryScopeKey(botId), 与 workdir 记忆完全独立,不改任何 schema。
-  BOT_MEMORY_LIST: 'maker:bot-memory:list',
-  BOT_MEMORY_DELETE: 'maker:bot-memory:delete',
-  BOT_MEMORY_CLEAR: 'maker:bot-memory:clear',
-  /**
-   * 「初始记忆」落地(模板自带的 / AI 生成的)。按 slug 幂等:已存在的分片不覆盖,
-   * 用户改过的那条不会被第二次调用冲掉。
-   */
-  BOT_MEMORY_SEED: 'maker:bot-memory:seed',
-  // Per-bot 真技能 ("TA 学会的" — 批次 ζ)。落盘在 <userData>/bot-skills/<botId>/,
-  // 与记忆分片是两套东西:记忆答"我知道什么", 技能答"这类事我怎么做", 并且会在
-  // 下一次会话被 harness 真正挂载。全部只读 + 单条删除, 设置页不新增写入口 ——
-  // 技能由伙伴自己经 save_bot_skill 沉淀。
-  BOT_SKILL_LIST: 'maker:bot-skill:list',
-  BOT_SKILL_READ: 'maker:bot-skill:read',
-  BOT_SKILL_DELETE: 'maker:bot-skill:delete',
   /**
    * 启动期 renderer 同步 main 持久化的三个 memory 开关 (maker / claudeCode / codex)。
    * main 的 <userData>/memory-settings.json 是 source of truth, renderer localStorage
@@ -499,7 +482,7 @@ export const MAKER_INVOKE = {
    * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
-  */
+   */
   PROVIDER_LIST: 'maker:provider:list',
   /**
    * 内置四家模型清单手动刷新。入参仅允许 xd / anthropic / openai / xai；
@@ -765,11 +748,6 @@ export const MAKER_INVOKE = {
   BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
   /** Cindy Bot 父任务取消仍在运行或等待中的委派。 */
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
-  /**
-   * Cindy Bot 父任务向仍在进行的委派补一句话（催促 / 补充 / 修正）。
-   * 入参 (parentSessionId, delegationId, text)；归属与状态校验都在主进程做。
-   */
-  BOT_DELEGATION_INTERJECT: 'maker:bot-delegation:interject',
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',

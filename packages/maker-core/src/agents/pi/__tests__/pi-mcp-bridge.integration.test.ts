@@ -137,7 +137,8 @@ function countToolResults(requestBody: string): number {
 }
 
 function latestToolResultContent(request: Record<string, unknown>): string {
-  const messages = request.messages as Array<{
+  const messages = request.messages as
+    | Array<{
     content?: Array<{ type?: string; content?: string }>;
   }> | undefined;
   for (const message of [...(messages ?? [])].reverse()) {
@@ -187,14 +188,13 @@ function scriptedAnthropicTurn(requestBody: string): string {
           'workflow complete: READY, SUM[16], CONFIGURED[2:safe,fast], WORKSPACE[release-notes], CONTACT[Ada]',
         );
   }
-  if (requestBody.includes('direct Bot collaboration')) {
+  if (requestBody.includes("direct agent message")) {
     return toolResultCount === 0
-      ? anthropicToolTurn(1, 'collaborate_with_bot', {
-          action: 'call',
-          target_bot_id: 'bot-b',
-          instruction: 'Return the tracked result.',
+      ? anthropicToolTurn(1, "send_to_agent", {
+          target_id: 'bot-b',
+          message: "Please review the release risk.",
         })
-      : anthropicTextTurn(2, 'tracked Bot delegation started');
+      : anthropicTextTurn(2, "message delivered");
   }
   if (requestBody.includes('direct Session task')) {
     return toolResultCount === 0
@@ -315,7 +315,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const configureCalls: Array<{ options: { retries: number; flags: string[] } }> = [];
   const workspaceLookupCalls: Array<{ query: string }> = [];
   const contactsLookupCalls: Array<{ query: string }> = [];
-  const botCollaborationCalls: Array<Record<string, unknown>> = [];
+  const agentMessageCalls: Array<Record<string, unknown>> = [];
   const sessionTaskCalls: Array<Record<string, unknown>> = [];
   const botMemoryCalls: Array<Record<string, unknown>> = [];
   // 记录假 MCP server 收到的请求 URL —— 断言真 pi(经 cindy-bridge fetch)把
@@ -598,22 +598,36 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           },
         );
         server.registerTool(
-          'collaborate_with_bot',
-          {
-            description: 'Typed Cindy Bot collaboration',
-            inputSchema: {
-              action: z.enum(['status', 'notify', 'call', 'reply', 'cancel']),
-              target_bot_id: z.string().optional(),
-              call_id: z.string().optional(),
-              instruction: z.string().optional(),
-            },
+              "send_to_agent",
+              {
+            description: "Send one asynchronous message to a teammate",
+                inputSchema: {
+                  target_id: z.string(),
+                  message: z.string(),
+                },
+              },
+              async (args) => {
+                agentMessageCalls.push(args);
+                return {
+                  content: [{ type: "text", text: "MESSAGE[bot-b:delivered]" }],
+                };
+              },
+            );
+            for (const name of [
+              "check_session_task",
+              "message_session_task",
+              "stop_session_task",
+            ]) {
+              server.registerTool(
+                name,
+                {
+                  description: name,
+                  inputSchema: { task_id: z.string() },
           },
-          async (args) => {
-            botCollaborationCalls.push(args);
-            return { content: [{ type: 'text', text: 'DELEGATION[bot-b:running]' }] };
-          },
-        );
-      } else if (isMemory) {
+          async () => ({ content: [{ type: 'text', text: "OK" }] }),
+              );
+            }
+          } else if (isMemory) {
         server.registerTool(
           'call_tool',
           {
@@ -656,7 +670,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   });
 
   function buildDeps(
-    bridgeMode: 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
+    bridgeMode:
+        | 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -848,7 +863,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   async function runOneTurn(
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
-    bridgeMode: 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
+    bridgeMode:
+        | 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
     prompt = 'call the echo tool',
   ): Promise<{
     events: AgentEvent[];
@@ -951,10 +967,10 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   );
 
   it(
-    'calls the typed Bot collaboration facade directly without MCP discovery',
-    { timeout: 90_000 },
+      "sends a typed teammate message directly without MCP discovery",
+      { timeout: 90_000 },
     async () => {
-      botCollaborationCalls.length = 0;
+        agentMessageCalls.length = 0;
       const permissions: Array<{ toolName: string; input: unknown }> = [];
       const { events, requests } = await runOneTurn(
         'ask',
@@ -965,25 +981,23 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           return { kind: 'permission', behavior: 'allow' };
         },
         'local-multi',
-        'run direct Bot collaboration',
-      );
+          "run direct agent message",
+        );
 
-      expect(botCollaborationCalls).toEqual([{
-        action: 'call',
-        target_bot_id: 'bot-b',
-        instruction: 'Return the tracked result.',
-      }]);
+      expect(agentMessageCalls).toEqual([{
+            target_id: 'bot-b',
+            message: "Please review the release risk.",
+          }]);
       expect(permissions).toEqual([{
-        toolName: 'mcp__cindy_helper__collaborate_with_bot',
-        input: {
-          action: 'call',
-          target_bot_id: 'bot-b',
-          instruction: 'Return the tracked result.',
-        },
+        toolName: "mcp__cindy_helper__send_to_agent",
+            input: {
+              target_id: 'bot-b',
+              message: "Please review the release risk.",
+            },
       }]);
       const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
         ?.map((tool) => tool.name) ?? [];
-      expect(startupToolNames).toContain('collaborate_with_bot');
+      expect(startupToolNames).toContain("send_to_agent");
       expect(startupToolNames).toContain('cindy_mcp_list_tools');
       expect(requests).toHaveLength(2);
       const finalText = events
@@ -992,7 +1006,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .filter((data) => data.isFinal)
         .map((data) => data.text)
         .join('');
-      expect(finalText).toContain('tracked Bot delegation started');
+      expect(finalText).toContain("message delivered");
     },
   );
 
@@ -1030,7 +1044,15 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
         ?.map((tool) => tool.name) ?? [];
       expect(startupToolNames).toContain('start_session_task');
-      expect(startupToolNames).toContain('collaborate_with_bot');
+      expect(startupToolNames).toEqual(
+          expect.arrayContaining([
+            "check_session_task",
+            "message_session_task",
+            "stop_session_task",
+            "send_to_agent",
+          ]),
+        );
+        expect(startupToolNames).not.toContain('collaborate_with_bot');
       expect(requests).toHaveLength(2);
       const finalText = events
         .filter((event) => event.type === 'text')
@@ -1465,11 +1487,13 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         await done;
         await waitFor(() => {
           const logs = JSON.stringify(entries);
-          return logs.includes('HTTP 401')
+          return (
+              logs.includes('HTTP 401')
             && logs.includes('connect slow_remote failed: request timed out')
             && logs.includes('connect stalling_body_remote failed: request timed out')
-            && logs.includes('connect paginated_timeout_remote failed: request timed out');
-        });
+            && logs.includes('connect paginated_timeout_remote failed: request timed out')
+            );
+          });
         const logs = JSON.stringify(entries);
         expect(logs).toContain('connect rejecting_remote failed: HTTP 401');
         expect(logs).toContain('connect slow_remote failed: request timed out');

@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 536,
+  "count": 535,
   "colors": [
     {
       "id": "surface",
@@ -1021,11 +1021,6 @@
       "id": "bot-avatar-graphite-bg",
       "light": "#e5e5e5",
       "dark": "#3c3c3a"
-    },
-    {
-      "id": "bot-guest-border",
-      "light": "#bdbdb9",
-      "dark": "#525250"
     },
     {
       "id": "bot-unread-bg",

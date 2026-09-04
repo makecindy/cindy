@@ -15,13 +15,11 @@ vi.mock('../botStore', () => ({ addBotProfileAndWait: mocks.addBotProfileAndWait
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 import { BotRosterView } from '../BotRosterView';
-import { peekPendingBotWelcomeEntry, resetPendingBotWelcomeForTests } from '../botWelcome';
 
 beforeEach(() => {
   mocks.addBotProfileAndWait.mockReset();
   mocks.addBotProfileAndWait.mockResolvedValue({ id: 'bot-new', name: 'Ops buddy' });
   mocks.navigate.mockReset();
-  resetPendingBotWelcomeForTests();
 });
 
 afterEach(() => cleanup());
@@ -107,15 +105,14 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).not.toHaveProperty('templateId');
   });
 
-  it('navigates to the new teammate and leaves a greeting', async () => {
+  it('sends the localized first greeting through the main-owned creation path', async () => {
     render(<BotRosterView />);
     fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Ops buddy' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-new'));
-    expect(peekPendingBotWelcomeEntry('bot-new')).toEqual({
-      key: 'bots.welcome.generic',
-      params: { name: 'Ops buddy' },
+    expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).toMatchObject({
+      welcomeMessage: 'bots.welcome.generic:{"name":"Ops buddy"}',
     });
   });
 

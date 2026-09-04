@@ -495,32 +495,17 @@ export interface ChatMessage {
      */
     | 'auto-resume-pending'
     | 'agent-switch'
-    /** 对进行中任务的补充消息留痕；真正的 call 统一投影为 bot-task-call。 */
-    | 'bot-collab'
-    /**
-     * 伙伴发起的可追踪独立任务。执行者可以是普通 Cindy Session 或某个伙伴，
-     * 但两者都是任务，不使用伙伴私聊的呈现语言。
-     */
-    | 'bot-task-call'
+    /** 对进行中后台任务的补充消息留痕。 */
+    | 'bot-session-task-message'
+    /** 伙伴发起的可追踪后台任务。 */
+    | 'bot-session-task'
     /**
      * 伙伴之间的私聊入口：消息正文单独存储，这里只投影一枚可打开的时间线痕迹。
-     * 它不进入左栏，也不与独立任务的 bot-task-call 卡混用。
+     * 它不进入左栏，也不与后台任务卡混用。
      */
     | 'bot-direct-message'
     | 'context-rebuild';
   systemCardData?: Record<string, unknown>;
-  /**
-   * 客座标记：这条气泡的作者不是本任务的主人，而是一次委派里的另一方（发起方任务里
-   * 目标伙伴回传的结果，或目标主任务里收到的委派请求）。renderer 据此换头像、加
-   * 「客座」标签，并提供跳到对方任务的入口。
-   */
-  guestBot?: {
-    botId: string;
-    name: string;
-    delegationId: string;
-    /** 点「看 TA 的对话」要跳去的任务；两侧方向相反，由投影时决定。 */
-    linkedSessionId: string | null;
-  };
   /** FP-3: plan_review message fields */
   planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
   planReviewRequestId?: string;
@@ -2398,7 +2383,7 @@ export interface SessionChatState {
    * 当前 terminal error 的稳定 reason key(maker-core/main 下发,如
    * 'silent-stop-exhausted')。ErrorBanner 据此渲染专用 action(「继续」按钮);
    * 仅在 error 非空时有意义,error 被清/被无 reason 的错误覆盖时同步清。
-  */
+   */
   errorReason?: string | null;
   /** Structured details for a tool-loop terminal error; null when no such error is active. */
   toolLoop?: ToolLoopErrorDetails | null;
@@ -3926,10 +3911,6 @@ function scheduleWakeBridgeReconciliation(sessionId: string): void {
   wakeBridgeReconcileTimers.set(sessionId, timer);
 }
 
-function notify(sessionId: string): void {
-  emitStateNotifications(sessionId);
-}
-
 /**
  * 「正在自动继续」ephemeral 卡的固定 clientId。每个会话一份 state，所以固定串足够；
  * 用固定值而不是随机 id，是为了让插入幂等（同一接管窗口内 projection 会 emit 多次）。
@@ -4793,7 +4774,7 @@ function mergeAgentTaskUpdate(
     // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
-    model: next.model === null ? null : next.model ?? prev.model,
+    model: next.model === null ? null : (next.model ?? prev.model),
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
 }
@@ -5377,8 +5358,8 @@ export function handleStreamEvent(
         // 直到唤醒桥接整体被清除。
         pendingTaskWakeDuringTurn:
           nextWake > 0
-          ? (state.pendingTaskWakeDuringTurn + (wakesAfterTerminal && mainTurnDoneNotCrossed ? 1 : 0))
-          : 0,
+          ? state.pendingTaskWakeDuringTurn + (wakesAfterTerminal && mainTurnDoneNotCrossed ? 1 : 0)
+            : 0,
         // 最小年龄闸的时钟起点:每次真实置位都刷新(见字段注释)。
         pendingTaskWakeArmedAt: wakesAfterTerminal ? Date.now() : state.pendingTaskWakeArmedAt,
         // 置位代次:对账收口的 ABA 防护(见字段注释)。
@@ -5558,7 +5539,7 @@ export function handleStreamEvent(
       });
 
       const terminalData = event.data as
-        { cancelled?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+        | { cancelled?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
         | null
         | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
@@ -5814,9 +5795,9 @@ export function handleStreamEvent(
         errorPersistId:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError
             ? null
-            : (typeof event.persistId === 'string' && event.persistId
+            : typeof event.persistId === 'string' && event.persistId
                 ? event.persistId
-                : state.errorPersistId),
+                : state.errorPersistId,
         isStreaming: false,
         activeTurnRetryText: null,
         continuationTurnClientId: null,
@@ -6493,16 +6474,16 @@ function handleStatusUpdate(
     // Done 前 SDK 先推了 isRunning=false 的中间 status」误判成 wake 失败。
     // pendingTaskWakeStarted:isTurnStart 已消费桥接时置 true,防止 Done 分支
     // 因 SDK 中间 isRunning=false 而重复消费下一个任务的桥接计数。
-    pendingTaskWake: isTurnStart ? Math.max(0, state.pendingTaskWake - 1) :
-      (isTurnComplete && state.pendingTaskWake > 0 && !state.agentStatus.isRunning && state.pendingTaskWakeDuringTurn === 0 && !state.pendingTaskWakeStarted) ? Math.max(0, state.pendingTaskWake - 1) :
+    pendingTaskWake: isTurnStart ? Math.max(0, state.pendingTaskWake - 1) : isTurnComplete && state.pendingTaskWake > 0 && !state.agentStatus.isRunning && state.pendingTaskWakeDuringTurn === 0 && !state.pendingTaskWakeStarted
+        ? Math.max(0, state.pendingTaskWake - 1) :
       state.pendingTaskWake,
     // 跨主 turn 标记:主 turn 自己的 Done 越过(标记仍为 true 时到达的首个 Done)后,
     // 标记使命已尽、立即退休。否则 wake turn 失败(从未 isRunning:true、无 isTurnStart)
     // 时,终态 Done 会因 !pendingTaskWakeDuringTurn 恒为 false 而永远无法清除
     // pendingTaskWake,会话永久卡在 running/Stop 态。退休只清标记、不清桥接:
     // 桥接(pendingTaskWake)仍存活,直到 wake turn 真正启动或失败。
-    pendingTaskWakeDuringTurn: isTurnStart ? 0 :
-      (isTurnComplete && state.pendingTaskWakeDuringTurn > 0) ? 0 :
+    pendingTaskWakeDuringTurn: isTurnStart ? 0 : isTurnComplete && state.pendingTaskWakeDuringTurn > 0
+        ? 0 :
       state.pendingTaskWakeDuringTurn,
     // isTurnStart 已消费标记:isTurnStart 且 pendingTaskWake > 0 时置 true(本轮
     // 桥接已消费),isTurnComplete 时复位。防止 SDK 中间推送 isRunning=false 后,
@@ -16351,17 +16332,14 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         },
       };
     }
-    // call 锚点与插话留痕共享历史 metadata，但产品语义已经分开：call 永远是
-    // 可追踪任务，只有插话是协作痕迹。旧消息无需迁移，加载时按 role 稳定投影。
+    // 后台任务锚点与补充消息留痕共享历史 metadata。只投影当前仍会生成的父任务
+    // 锚点和补充消息；旧的目标侧镜像不再生成，也不再重复画第二张任务卡。
     const collaboration = readBotCollaborationMeta(m.agentMeta?.botCollaboration);
     if (
       m.role === 'assistant'
       && (
         collaboration?.role === 'delegation-request'
-        || collaboration?.role === 'interjection'
-        || collaboration?.role === 'guest-request'
-        || collaboration?.role === 'result-mirror'
-      )
+        || collaboration?.role === 'interjection')
     ) {
       return {
         clientId: m.clientId,
@@ -16370,8 +16348,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         systemCardType:
           collaboration.role === 'interjection'
-            ? ('bot-collab' as const)
-            : ('bot-task-call' as const),
+            ? ('bot-session-task-message' as const)
+            : ('bot-session-task' as const),
         systemCardData: {
           ...collaboration,
           // 插话卡要显示催的是哪句话；锚点卡正文为空。
@@ -16440,17 +16418,6 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           },
         };
       }
-      // 客座气泡：这条 user 行不是「用户说的话」，是目标主任务里收到的委派请求。
-      // 作者身份与跳转方向都来自结构化标记，不靠正文猜。委派完成的回传已改为
-      // synthetic-trigger 隐藏行（可见终态由任务卡承载），不再产生客座结果气泡。
-      const guestBot = collaboration?.role === 'guest-request'
-        ? {
-            botId: collaboration.fromBotId,
-            name: collaboration.fromBotName,
-            delegationId: collaboration.delegationId,
-            linkedSessionId: collaboration.parentSessionId,
-          }
-        : null;
       const parsed = parseUserContent(m.content);
       // scheduler 注入的消息带 agentMeta.origin(历史加载与 messages:created
       // 直推两条路径都经过这里),透传给 UserMessage 渲染来源标签。
@@ -16482,7 +16449,6 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(delivery === 'turn' || delivery === 'steer' ? { delivery } : {}),
         ...(goalObjective ? { goalBadge: goalObjective } : {}),
         ...(hookSource ? { hookSource } : {}),
-        ...(guestBot ? { guestBot } : {}),
         // 子代理内部的 user 行(SDK parent_tool_use_id):投影给计划归属判定,
         // 否则 maker-shared 会把它当成"用户开新话题"切断主线程计划 session。
         // 只提升 SDK tool-parent 形态:legacy Claude 导入把 transcript 链边
@@ -16738,9 +16704,6 @@ function formatToolUseSummary(toolName: string, input: unknown): string {
 
   return `${toolName}()`;
 }
-
-// `notify` kept here for potential future external dispatchers.
-void notify;
 
 // ---------------------------------------------------------------------------
 // HMR teardown — ensure old listeners are disposed before the module reloads

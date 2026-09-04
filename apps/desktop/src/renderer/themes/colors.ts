@@ -944,12 +944,6 @@ registerColor('bot-avatar-graphite-bg', {
 // 不是「你现在站在这一行」。值与 focus-ring / Auto Approval / Toast info 同族 #417CDD,
 // 前景恒白(--accent-pure-cta-fg 在 Dark 会翻成黑,不能借)。
 // 作用域严格限定为伙伴列表的未读徽标与待办点,不得外溢到别的徽标、状态点或表面。
-// 客座气泡描边:比 Board(--border-default)亮一档的中性描边。「有人来串门」应该在
-// 一屏里被扫到,而不是要逐条读名字才发现;灰阶,不是新的语义色。
-registerColor('bot-guest-border', {
-  light: '#bdbdb9',
-  dark: '#525250',
-}, '客座气泡描边 — 比 Board 亮一档的中性描边(伙伴对话专用)');
 registerColor('bot-unread-bg', {
   light: '#417CDD',
   dark: '#417CDD',
@@ -2197,7 +2191,7 @@ registerColor('warning-fg', {
 // 的规矩补注册,不在消费点撒 fallback。
 //
 // 三个走 alias:错误族直接复用既有 error-* 语义槽,info 复用 info-700
-// (与 BotDelegationActivityIndicator 原先写死的 fallback 同源),这样非默认
+// 与任务状态的既有 fallback 同源,这样非默认
 // 主题对 error-* / info-700 的 override 能自动流下来,不会有一族颜色脱队。
 registerColor('text-danger', {
   light: 'var(--error-fg)',

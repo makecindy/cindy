@@ -85,7 +85,7 @@ export interface BotDirectMessageServiceDeps {
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
   }) => Promise<DispatchResult>;
-  /** Reuses delegation's canonical-session ensure path for newly-created/recovering Bots. */
+  /** Reuses the canonical-session ensure path for newly-created/recovering Bots. */
   ensureCanonicalSession?: (
     botId: string,
   ) => Promise<{ ok: true; sessionId: string } | { ok: false; errorCode: string; message: string }>;
@@ -183,7 +183,7 @@ async function loadTargetCanonicalSession(botId: string) {
 }
 
 /**
- * Hermes-style `message_agent`: a lightweight Bot-to-Bot DM over Cindy's real
+ * `send_to_agent`: a lightweight Bot-to-Bot DM over Cindy's real
  * canonical Session. It intentionally does not create delegation state,
  * workers, transcripts or a second runtime.
  */
@@ -317,16 +317,16 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     const caller = await loadCaller(input.callerSessionId);
     if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
     if (!caller || caller.sessionSource !== 'bot') {
-      return failed('NOT_A_BOT_SESSION', '当前任务不属于 Cindy Bot');
+      return failed('NOT_A_BOT_SESSION', '当前任务不属于任何伙伴');
     }
     if (caller.sessionStatus !== 'active' || caller.botStatus !== 'active') {
       return failed('BOT_SESSION_INACTIVE', '当前 Bot 主任务已暂停、归档或删除');
     }
     if (caller.role !== 'canonical' || caller.linkArchivedAt !== null) {
-      return failed('NOT_CANONICAL_BOT_SESSION', 'message_agent 只能从 Bot 主任务发送');
+      return failed('NOT_CANONICAL_BOT_SESSION', 'send_to_agent 只能从伙伴主任务发送');
     }
     if (caller.botId === input.targetBotId) {
-      return failed('SELF_MESSAGE', '不能给当前 Bot 自己发送 message_agent 消息');
+      return failed('SELF_MESSAGE', '不能给当前伙伴自己发送消息');
     }
 
     const targetProfile = await loadTargetProfile(input.targetBotId);
@@ -338,9 +338,8 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true);
     }
 
-    // Resolve on every use, not only when missing: daily rollover is a host
-    // lifecycle concern and must happen before the message is persisted or
-    // queued against a physical Session id.
+    // Resolve on every use so a missing/deleted canonical task can be repaired
+    // before the message is persisted or queued against a Session id.
     let targetSessionId: string | null = null;
     if (deps.ensureCanonicalSession) {
       const ensured = await deps.ensureCanonicalSession(input.targetBotId);
@@ -471,7 +470,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const senderId = trustedHeaderLabel(caller.botId, MAX_SENDER_ID_CHARS);
       const envelope = [
         `[Direct message from Cindy Bot "${senderName}" (${senderId})]`,
-        `Handle this in your current canonical task. If a useful answer, result, or clarification should go back, call collaborate_with_bot with action=notify and target_bot_id="${senderId}". Do not send acknowledgement-only replies.`,
+        `Handle this in your current canonical task. If a useful answer, result, or clarification should go back, call send_to_agent with target_id="${senderId}". Do not send acknowledgement-only replies.`,
         message,
       ].join('\n\n');
       const deliveryId = createId();

@@ -103,10 +103,8 @@ void i18n.use(initReactI18next).init({
     // 品牌名单一事实源:locale 文案里的 {{appName}} 全部由此注入,改名只改
     // @cindy/maker-shared/branding 的 BRAND_NAME(见该文件对"不跟随改名"标识符的说明)。
     //
-    // pronoun:伙伴文案里指代该伙伴的第三人称(「她 / 他」,自建伙伴用它的名字,
-    // 裁决:不用「TA」)。真值由各视图按当前伙伴传入(botPronounFor);这里给一个
-    // 通用兜底,保证**任何**漏传的位置都渲染成一句人话,而不是把 `{{pronoun}}`
-    // 原样显示给用户。
+    // pronoun:伙伴文案里指代该伙伴的第三人称。具体视图可按当前伙伴传入；这里给
+    // 一个通用兜底，避免漏传时把 `{{pronoun}}` 原样显示给用户。
     // 保留前缀同样只读 shared/ghost.ts 的正本。错误文案不各自枚举,
     // 新增前缀后所有装入入口会自动展示完整列表。
     defaultVariables: {

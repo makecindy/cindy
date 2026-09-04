@@ -67,14 +67,6 @@ export type RsbWindowCommand =
       /** False persists the tab without expanding the sidebar. */
       revealSidebar?: boolean;
     }
-  /** 打开/聚焦 Bot 间协作记录；每个 Bot 父任务单例。 */
-  | {
-      type: 'open-bot-delegations-tab';
-      sessionId: string;
-      focusDelegationId?: string | null;
-      focusTab?: boolean;
-      revealSidebar?: boolean;
-    }
   | {
       type: 'open-turn-review';
       sessionId: string;
@@ -118,8 +110,7 @@ export interface RsbWindowCommandRouteRequest {
 }
 
 /** main-owned 宿主裁决；renderer 只有 attached 可以写本地 store。 */
-export type RsbWindowCommandRouteResult =
-  | 'attached'
+export type RsbWindowCommandRouteResult = 'attached'
   | 'routed'
   | 'queued'
   | 'stale-context';

@@ -11,10 +11,12 @@ import type { OpenDialogOptions } from 'electron';
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../client/current';
-import type { BotsReplaceCanonicalSessionResult } from '../client/tx/types.js';
+import type {
+  BotsReparentDelegationsResult,
+  BotsReplaceCanonicalSessionResult,
+} from '../client/tx/types.js';
 import {
   botDelegations,
-  botLifecycleEvents,
   botProfileVersions,
   botProfiles,
   botRuntimeSnapshots,
@@ -47,7 +49,6 @@ import {
   writeBotProfileFolder,
 } from '../../maker-ipc/botProfileFolder.js';
 import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
-import { renewBotSessionIfDue, type BotRenewalOutcome } from '../../maker-ipc/botRenewalService.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import {
@@ -75,6 +76,8 @@ import {
   isBotTemplatePresetId,
 } from '../../../shared/botTemplatePreset.js';
 import { seedBotTemplateSkills } from '../../maker-ipc/botTemplateSkillSeed.js';
+import { createMessage } from './messages.js';
+import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 const log = createLogger('bots');
 
@@ -109,25 +112,17 @@ async function syncBotProfileFolder(
   }
 }
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
-import { cancelBotDelegationsForParentIfReady } from '../../maker-ipc/botDelegationLifecycle.js';
 import { coordinateBotCanonicalReplacement } from '../../maker-ipc/botCanonicalReplacementCoordinator.js';
 import { searchConversations } from '../conversationSearch.js';
-import type {
-  BotHealthIssue,
-  BotHealthReport,
-  BotLifecycleEventView,
-} from '../../../shared/botLifecycle.js';
 import {
   BOT_FAILURE_REASONS,
   isBotFailureAttentionWorthy,
   type BotFailureReason,
 } from '../../../shared/botFailureReason.js';
 
-type BotRole = 'canonical' | 'history';
 /** Sender of the latest visible message in a Bot's canonical chat. */
 type BotChatRole = 'user' | 'assistant';
 
-const ROLES = new Set<BotRole>(['canonical', 'history']);
 const MAX_TEXT = 4000;
 /**
  * An avatar is either a single grapheme or a reserved `cindy://avatar/…` sentinel
@@ -154,8 +149,6 @@ export interface CreateBotCanonicalSessionInput {
   expectedProfileVersion: number;
   /** Repair a dangling profile pointer only; never renew a task that still exists. */
   recoverMissingOnly?: boolean;
-  /** Internal renewal proof. Never accepted from renderer IPC. */
-  allowRotation?: boolean;
 }
 
 type CreateBotCanonicalSessionResult = {
@@ -178,9 +171,6 @@ type CanonicalLinkReconciliation = {
 let createBotCanonicalSessionImpl:
   ((input: CreateBotCanonicalSessionInput) => Promise<CreateBotCanonicalSessionResult>) | null =
   null;
-let renewBotCanonicalSessionIfDueImpl: ((botId: string) => Promise<BotRenewalOutcome>) | null =
-  null;
-const botRenewalFlights = new Map<string, Promise<BotRenewalOutcome>>();
 
 /** Main-side canonical creator shared by first creation, restore and missing-task repair. */
 export async function createBotCanonicalSession(
@@ -191,28 +181,6 @@ export async function createBotCanonicalSession(
   }
   await recoverBotTemplateSkills(input.botId);
   return createBotCanonicalSessionImpl(input);
-}
-
-/**
- * Resolve the current canonical physical Session at a safe daily boundary.
- * Every main-side caller (UI, Bot DM, delegation, automation) shares the same
- * singleflight so concurrent wakeups observe one CAS winner instead of creating
- * a second replacement or surfacing a harmless race to the user.
- */
-export async function resolveBotCanonicalSessionForUse(botId: string): Promise<BotRenewalOutcome> {
-  const renewBotCanonicalSessionIfDue = renewBotCanonicalSessionIfDueImpl;
-  if (!renewBotCanonicalSessionIfDue) {
-    throwIpcError('PRECONDITION_FAILED', 'Bot 数据服务尚未初始化');
-  }
-  const active = botRenewalFlights.get(botId);
-  if (active) return active;
-  const run = recoverBotTemplateSkills(botId)
-    .then(() => renewBotCanonicalSessionIfDue(botId))
-    .finally(() => {
-      if (botRenewalFlights.get(botId) === run) botRenewalFlights.delete(botId);
-    });
-  botRenewalFlights.set(botId, run);
-  return run;
 }
 
 /**
@@ -293,10 +261,6 @@ export async function reconcileBotProfileFolder(botId: string): Promise<void> {
   } catch (cause) {
     log.warn('reconcile bot profile folder failed', { botId, error: String(cause) });
   }
-}
-
-async function cancelBotDelegationChildren(sessionId: string, reason: string): Promise<void> {
-  await cancelBotDelegationsForParentIfReady(sessionId, reason).catch(() => undefined);
 }
 
 function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' {
@@ -619,7 +583,6 @@ async function readProfile(
           status: row.status,
           role: link.role,
           profileVersion: link.profileVersion,
-          routeKey: link.routeKey ?? undefined,
           runtimeSnapshot: runtimeBySession.has(row.id)
             ? (() => {
                 const runtime = runtimeBySession.get(row.id)!;
@@ -845,6 +808,7 @@ export async function createBotProfile(raw: unknown) {
   const skills = Array.isArray(body.skills)
     ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
     : [];
+  const welcomeMessage = readText(body.welcomeMessage, 'welcomeMessage');
   const hasRequestedCapabilities =
     body.capabilities && typeof body.capabilities === 'object' && !Array.isArray(body.capabilities);
   const requestedCapabilities = hasRequestedCapabilities
@@ -914,7 +878,30 @@ export async function createBotProfile(raw: unknown) {
     }
     assertCreationOwnerStillCurrent();
   }
-  const profile = await readProfile(db, id);
+  let profile = await readProfile(db, id);
+  if (welcomeMessage) {
+    try {
+      const canonical = await createBotCanonicalSession({
+        botId: id,
+        expectedCanonicalSessionId: null,
+        expectedProfileVersion: profile.currentVersion,
+      });
+      await createMessage(canonical.canonicalSessionId, {
+        clientId: `bot-welcome:${id}`,
+        role: 'assistant',
+        content: welcomeMessage,
+        agentKind: null,
+      });
+      profile = await readProfile(db, id);
+    } catch (cause) {
+      // The profile remains valid and can still be opened; canonical recovery is
+      // idempotent and the failure is diagnosable instead of creating a second Bot.
+      log.warn('persist initial Bot welcome failed', {
+        botId: id,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  }
   assertCreationOwnerStillCurrent();
   broadcastBotProfileChanged({ botId: id, change: 'created' });
   return profile;
@@ -1054,131 +1041,6 @@ export function registerBotIpc(): void {
     const profile = await readProfile(db, botId);
     broadcastBotProfileChanged({ botId, change: 'updated' });
     return { canceled: false, profile };
-  });
-
-  ipcMain.handle('local-db:bots:health', async (event, rawBotId: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const botId = readText(rawBotId, 'botId', 128, true);
-    const db = getDbClient().drizzle;
-    const [profile] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
-    if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    const canonicalSessionId = (await reconcileCanonicalLink(botId)).canonicalSessionId;
-    const [canonicalSession, canonicalLink, runtimeSnapshots] = await Promise.all([
-      canonicalSessionId
-        ? db.select().from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1)
-        : Promise.resolve([]),
-      canonicalSessionId
-        ? db
-            .select()
-            .from(botSessionLinks)
-            .where(eq(botSessionLinks.sessionId, canonicalSessionId))
-            .limit(1)
-        : Promise.resolve([]),
-      canonicalSessionId
-        ? db
-            .select()
-            .from(botRuntimeSnapshots)
-            .where(eq(botRuntimeSnapshots.sessionId, canonicalSessionId))
-            .orderBy(desc(botRuntimeSnapshots.preparedAt))
-            .limit(1)
-        : Promise.resolve([]),
-    ]);
-
-    const sessionRow = canonicalSession[0];
-    const linkRow = canonicalLink[0];
-    const runtime = runtimeSnapshots[0];
-    const issues: BotHealthIssue[] = [];
-
-    if (profile.status === 'error') issues.push({ code: 'profile-error' });
-    if (profile.status === 'deleting') issues.push({ code: 'lifecycle-incomplete' });
-    if (profile.status === 'active' && !canonicalSessionId)
-      issues.push({ code: 'missing-canonical' });
-    if (canonicalSessionId && !sessionRow) issues.push({ code: 'canonical-session-missing' });
-    if (sessionRow?.status === 'deleted') issues.push({ code: 'canonical-session-deleted' });
-    if (canonicalSessionId && !linkRow) issues.push({ code: 'canonical-link-missing' });
-    if (linkRow && (linkRow.botId !== botId || linkRow.role !== 'canonical')) {
-      issues.push({ code: 'canonical-link-mismatch' });
-    }
-    if (linkRow && linkRow.profileVersion < profile.currentVersion) {
-      issues.push({ code: 'profile-update-pending' });
-    }
-    if (runtime?.status === 'degraded') issues.push({ code: 'runtime-degraded' });
-    if (runtime?.status === 'failed') issues.push({ code: 'runtime-failed' });
-    const failureReason = BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason)
-      ? (profile.attentionReason as BotFailureReason)
-      : null;
-    const needsAttention =
-      profile.attentionAt !== null &&
-      failureReason !== null &&
-      isBotFailureAttentionWorthy(failureReason);
-    if (needsAttention) issues.push({ code: 'durable-attention' });
-
-    const recoveringCodes = new Set([
-      'missing-canonical',
-      'canonical-session-missing',
-      'canonical-session-deleted',
-    ]);
-    const status: BotHealthReport['status'] =
-      profile.status === 'paused' || profile.status === 'archived'
-        ? 'paused'
-        : issues.some((issue) => recoveringCodes.has(issue.code))
-          ? 'recovering'
-          : issues.length > 0
-            ? 'attention'
-            : 'healthy';
-    const report: BotHealthReport = {
-      botId,
-      status,
-      checkedAt: Date.now(),
-      failureReason,
-      needsAttention,
-      canonical: {
-        sessionId: canonicalSessionId,
-        sessionStatus: canonicalSessionId ? (sessionRow?.status ?? 'missing') : null,
-        linked: !!linkRow && linkRow.botId === botId && linkRow.role === 'canonical',
-        profileVersion: linkRow?.profileVersion ?? null,
-        runtimeStatus: runtime?.status ?? 'not-started',
-      },
-      counts: {
-        routes: 0,
-        recoveringRoutes: 0,
-        errorRoutes: 0,
-        automations: 0,
-        errorAutomations: 0,
-        deliveries: 0,
-        failedDeliveries: 0,
-        deadLetterDeliveries: 0,
-        workspaceLeases: 0,
-        errorWorkspaceLeases: 0,
-      },
-      issues,
-    };
-    return report;
-  });
-
-  ipcMain.handle('local-db:bots:lifecycle-events', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const body =
-      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-    const botId = readText(body.botId, 'botId', 128, true);
-    const limit =
-      typeof body.limit === 'number' && Number.isFinite(body.limit)
-        ? Math.max(1, Math.min(200, Math.floor(body.limit)))
-        : 50;
-    const rows = await getDbClient()
-      .drizzle.select()
-      .from(botLifecycleEvents)
-      .where(eq(botLifecycleEvents.botId, botId))
-      .orderBy(desc(botLifecycleEvents.createdAt))
-      .limit(limit);
-    return rows.map((row): BotLifecycleEventView => ({
-      id: row.id,
-      botId: row.botId,
-      sessionId: row.sessionId ?? null,
-      eventType: row.eventType,
-      payload: parseJson(row.payloadJson),
-      createdAt: row.createdAt,
-    }));
   });
 
   ipcMain.handle('local-db:bots:search-history', async (event, raw: unknown) => {
@@ -1486,7 +1348,6 @@ export function registerBotIpc(): void {
           compatibilityMissingCanonicalSessionId: recoverableCompatibilityMirror
             ? expectedCanonicalSessionId
             : null,
-          allowRotation: input.allowRotation === true,
           expectedProfileVersion,
           session: {
             id: insertRow.id,
@@ -1524,16 +1385,52 @@ export function registerBotIpc(): void {
       throwIpcError('PRECONDITION_FAILED', 'Bot 主任务创建失败');
     }
     if (archivedCanonicalSessionId) {
-      await cancelBotDelegationChildren(
-        archivedCanonicalSessionId,
-        'Parent Bot task was recovered after its canonical task disappeared.',
+      // A missing/deleted canonical is infrastructure recovery, not a user cancellation.
+      // Keep its active Session tasks alive, move their ownership to the replacement, and
+      // recreate idempotent card anchors there. Explicit archive/delete paths still cancel.
+      const reparented = await getDbClient().tx<BotsReparentDelegationsResult>(
+        'bots.reparentDelegations',
+        {
+          botId,
+          previousParentSessionId: archivedCanonicalSessionId,
+          nextParentSessionId: canonicalSessionId,
+          now: Date.now(),
+        },
       );
+      if (reparented.delegationIds.length > 0) {
+        const rows = await db
+          .select()
+          .from(botDelegations)
+          .where(inArray(botDelegations.id, reparented.delegationIds));
+        for (const row of rows) {
+          await createMessage(canonicalSessionId, {
+            clientId: BOT_DELEGATION_CLIENT_ID.parentRequest(row.id),
+            role: 'assistant',
+            content: '',
+            createdAt: row.createdAt,
+            agentKind: null,
+            agentMeta: {
+              botCollaboration: {
+                v: 1,
+                role: 'delegation-request',
+                delegationId: row.id,
+                fromBotId: botId,
+                fromBotName: profile.displayName,
+                toBotId: null,
+                toBotName: 'Cindy',
+                parentSessionId: canonicalSessionId,
+                childSessionId: row.childSessionId,
+                objective: row.objective.slice(0, 400),
+              },
+            },
+          });
+        }
+      }
       const { getMakerIfReady } = await import('../../maker-host/index.js');
       await getMakerIfReady()
         ?.closeSession(archivedCanonicalSessionId)
         .catch(() => undefined);
-      // The Profile workspace is shared by every physical Session generation.
-      // Session rollover archives rows, never the Bot's home/workspace.
+      // The Profile workspace survives recovery of a missing/deleted task.
     }
     const [canonical] = await db
       .select()
@@ -1567,9 +1464,9 @@ export function registerBotIpc(): void {
 
   createBotCanonicalSessionImpl = async (input) => {
     /*
-      开新任务之前先把家里的文件收进来 —— 这正是「下一轮」的起点。用户拿编辑器
-      改完 SOUL.md、或者伙伴自己改完自己的灵魂,都在这一刻变成一个新版本;这一轮
-      任务随即按新版本组装。
+      解析主任务前先把家里的文件收进来。用户拿编辑器改完 SOUL.md、
+      或者伙伴自己改完自己的灵魂,都在这一刻变成一个新版本;现有主任务
+      的下一轮会按新版本组装，不需要更换任务。
 
       放在锁外面:它只读文件、按需派生版本,不碰 canonical 指针,与替换协调器
       要保护的东西不重叠。失败已在内部吞掉并记一笔,最坏是这一轮还用旧身份。
@@ -1602,251 +1499,6 @@ export function registerBotIpc(): void {
       expectedProfileVersion: Number(body.expectedProfileVersion),
       recoverMissingOnly: body.recoverMissingOnly === true,
     });
-  });
-
-  ipcMain.handle('local-db:bots:compact-canonical-session', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const body =
-      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-    const botId = readText(body.botId, 'botId', 128, true);
-    const expectedCanonicalSessionId = readText(
-      body.expectedCanonicalSessionId,
-      'expectedCanonicalSessionId',
-      128,
-      true,
-    );
-    const instructions =
-      body.instructions === undefined
-        ? undefined
-        : readText(body.instructions, 'instructions', 12_000);
-    const canonicalSessionId = (await reconcileCanonicalLink(botId)).canonicalSessionId;
-    if (!canonicalSessionId) {
-      throwIpcError('PRECONDITION_FAILED', 'Bot 没有可用的 canonical Chat，请先修复主任务');
-    }
-    if (canonicalSessionId !== expectedCanonicalSessionId) {
-      throwIpcError('PRECONDITION_FAILED', 'Bot canonical Chat 已变化，请刷新后重试');
-    }
-    const [{ getMakerIfReady }, db] = await Promise.all([
-      import('../../maker-host/index.js'),
-      Promise.resolve(getDbClient().drizzle),
-    ]);
-    const maker = getMakerIfReady();
-    const live = maker?.getSession(canonicalSessionId) as
-      | {
-          capabilities?: { manualCompact?: { supported?: boolean } };
-          compactSession: (value?: string) => Promise<unknown>;
-        }
-      | undefined;
-    if (!live) {
-      return { compacted: false, canonicalSessionId, reason: 'not-running' as const };
-    }
-    if (live.capabilities?.manualCompact?.supported !== true) {
-      return { compacted: false, canonicalSessionId, reason: 'unsupported' as const };
-    }
-    const [profile] = await db
-      .select({ currentVersion: botProfiles.currentVersion })
-      .from(botProfiles)
-      .where(eq(botProfiles.id, botId))
-      .limit(1);
-    if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    const result = await live.compactSession(instructions);
-    const [updatedLink] = await db
-      .update(botSessionLinks)
-      .set({ profileVersion: profile.currentVersion })
-      .where(
-        and(
-          eq(botSessionLinks.botId, botId),
-          eq(botSessionLinks.sessionId, canonicalSessionId),
-          eq(botSessionLinks.role, 'canonical'),
-        ),
-      )
-      .returning({ id: botSessionLinks.id });
-    if (!updatedLink) {
-      throwIpcError('PRECONDITION_FAILED', 'Bot canonical Chat 已变化，请刷新后重试');
-    }
-    // Reopen the same real Session on the next turn so Cindy's normal Session
-    // bootstrap can mount the newly selected Profile version, tools and
-    // memories. The transcript/link identity never changes.
-    await maker?.closeSession(canonicalSessionId).catch(() => undefined);
-    await db.insert(botLifecycleEvents).values({
-      id: randomUUID(),
-      botId,
-      sessionId: canonicalSessionId,
-      eventType: 'canonical-compacted',
-      payloadJson: safeJson({
-        instructionsProvided: instructions !== undefined,
-        profileVersion: profile.currentVersion,
-      }),
-      createdAt: Date.now(),
-    });
-    return { compacted: true, canonicalSessionId, result };
-  });
-
-  // Lazy daily rollover: the permanent Bot identity keeps pointing at the
-  // newest physical Session while old Sessions remain searchable history.
-  renewBotCanonicalSessionIfDueImpl = async (botId: string) => {
-    // A new volume must freeze the latest Profile-folder bytes. Reconcile
-    // before taking the renewal snapshot so the Profile version used by the
-    // replacement CAS cannot become stale inside createBotCanonicalSession.
-    await reconcileBotProfileFolder(botId);
-    const db = getDbClient().drizzle;
-    return renewBotSessionIfDue(botId, {
-      readSnapshot: async (id) => {
-        const [profile] = await db
-          .select({
-            currentVersion: botProfiles.currentVersion,
-            status: botProfiles.status,
-          })
-          .from(botProfiles)
-          .where(eq(botProfiles.id, id))
-          .limit(1);
-        if (!profile) return null;
-        const canonicalResolution = await reconcileCanonicalLink(id);
-        const [version] = await db
-          .select({ capabilitiesJson: botProfileVersions.capabilitiesJson })
-          .from(botProfileVersions)
-          .where(
-            and(
-              eq(botProfileVersions.botId, id),
-              eq(botProfileVersions.version, profile.currentVersion),
-            ),
-          )
-          .limit(1);
-        return {
-          botId: id,
-          renewal: parseJson(version?.capabilitiesJson ?? '{}').renewal,
-          canonicalSessionId: canonicalResolution.canonicalSessionId,
-          currentVersion: profile.currentVersion,
-          status: profile.status,
-        };
-      },
-      readLastActivityAt: async (sessionId) => {
-        const [row] = await db
-          .select({ userSendAt: sessions.userSendAt, updatedAt: sessions.updatedAt })
-          .from(sessions)
-          .where(eq(sessions.id, sessionId))
-          .limit(1);
-        if (!row) return 0;
-        // userSendAt 是「用户最后一次说话」,比 updatedAt 更贴近「这段对话还活着吗」——
-        // 后者会被后台写入(标题、快照)顶新,据它判断会一直觉得刚聊过。
-        return row.userSendAt ?? row.updatedAt ?? 0;
-      },
-      hasActiveWork: async (id) => {
-        const canonicalSessionId = (await reconcileCanonicalLink(id)).canonicalSessionId;
-        const [{ getMakerIfReady }, delegationRows] = await Promise.all([
-          import('../../maker-host/index.js'),
-          db
-            .select({ id: botDelegations.id })
-            .from(botDelegations)
-            .where(
-              and(
-                or(eq(botDelegations.requestingBotId, id), eq(botDelegations.targetBotId, id)),
-                inArray(botDelegations.status, ['queued', 'waiting', 'running']),
-              ),
-            )
-            .limit(1),
-        ]);
-        const liveTurnActive = canonicalSessionId
-          ? getMakerIfReady()?.getSession(canonicalSessionId)?.getTurnControlSnapshot().active ===
-            true
-          : false;
-        return liveTurnActive || delegationRows.length > 0;
-      },
-      renew: async (input) =>
-        createBotCanonicalSessionPrepared({
-          botId: input.botId,
-          expectedCanonicalSessionId: input.expectedCanonicalSessionId,
-          expectedProfileVersion: input.expectedProfileVersion,
-          allowRotation: true,
-        }),
-      recordEvent: async (input) => {
-        await db.insert(botLifecycleEvents).values({
-          id: randomUUID(),
-          botId: input.botId,
-          sessionId: input.to,
-          eventType: 'renewed',
-          payloadJson: safeJson({ reason: input.reason, from: input.from, to: input.to }),
-          createdAt: Date.now(),
-        });
-      },
-    });
-  };
-
-  ipcMain.handle('local-db:bots:renew-if-due', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const body =
-      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-    const botId = readText(body.botId, 'botId', 128, true);
-    return resolveBotCanonicalSessionForUse(botId);
-  });
-
-  ipcMain.handle('local-db:bots:link-session', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const body =
-      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-    const botId = readText(body.botId, 'botId', 128, true);
-    const sessionId = readText(body.sessionId, 'sessionId', 128, true);
-    const role = readText(body.role, 'role', 16, true) as BotRole;
-    if (!ROLES.has(role)) throwIpcError('INVALID_PARAMS', `invalid Bot Session role: ${role}`);
-    const db = getDbClient().drizzle;
-    const [bot] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
-    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-    if (!bot || !session) throwIpcError('NOT_FOUND', 'Bot 或 Session 不存在');
-    if (session.source !== 'bot') {
-      // A renderer-held id is never authority to reclassify an existing task.
-      // Reclassification would hide arbitrary desktop/Review tasks from the
-      // normal Session list and would also bypass their immutable-field rules.
-      throwIpcError('INVALID_PARAMS', '只有 source=bot 的 Session 才能绑定到 Bot');
-    }
-    const hasExpectedCanonical = Object.prototype.hasOwnProperty.call(
-      body,
-      'expectedCanonicalSessionId',
-    );
-    const expectedCanonicalSessionId = hasExpectedCanonical
-      ? body.expectedCanonicalSessionId === null
-        ? null
-        : readText(body.expectedCanonicalSessionId, 'expectedCanonicalSessionId', 128)
-      : undefined;
-    const existing = await db
-      .select({
-        id: botSessionLinks.id,
-        botId: botSessionLinks.botId,
-        role: botSessionLinks.role,
-        sessionId: botSessionLinks.sessionId,
-      })
-      .from(botSessionLinks)
-      .where(eq(botSessionLinks.sessionId, sessionId))
-      .limit(1);
-    if (existing[0] && existing[0].botId !== botId) {
-      throwIpcError('PRECONDITION_FAILED', 'Session 已绑定到另一个 Bot');
-    }
-    const canonicalSessionId = (await reconcileCanonicalLink(botId)).canonicalSessionId;
-    if (role === 'history' && canonicalSessionId === sessionId) {
-      throwIpcError('PRECONDITION_FAILED', 'canonical Chat 不能降为历史；需要清理上下文请原地压缩');
-    }
-    const now = Date.now();
-    const { archivedCanonicalSessionIds } = await getDbClient().tx('bots.linkSession', {
-      botId,
-      sessionId,
-      role,
-      hasExpectedCanonical,
-      expectedCanonicalSessionId: expectedCanonicalSessionId ?? null,
-      now,
-      eventId: `${botId}:linked:${sessionId}:${now}`,
-    });
-    if (archivedCanonicalSessionIds.length > 0) {
-      const { getMakerIfReady } = await import('../../maker-host/index.js');
-      for (const archivedSessionId of archivedCanonicalSessionIds) {
-        await cancelBotDelegationChildren(
-          archivedSessionId,
-          'Parent Bot task was replaced by a new canonical task.',
-        );
-        await getMakerIfReady()
-          ?.closeSession(archivedSessionId)
-          .catch(() => undefined);
-      }
-    }
-    return readProfile(db, botId);
   });
 
   ipcMain.handle('local-db:bots:history', async (event, rawBotId: unknown) => {

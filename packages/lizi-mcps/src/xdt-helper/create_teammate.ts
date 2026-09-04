@@ -9,6 +9,7 @@ export interface CreateTeammateCallbacks {
     name: string;
     description: string;
     identitySource: string;
+    welcomeMessage: string;
   }): Promise<ControlResult<{ bot: { id: string; name: string; description: string } }, string>>;
 }
 
@@ -21,16 +22,18 @@ export function registerCreateTeammateTool(
 ): void {
   server.tool(
     'create_teammate',
-    'Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Use the official default model and an empty capability grant; the user can customize the profile later. The returned bot id is immediately usable as the target of collaborate_with_bot notify or call; creation alone does not start hidden work.',
+    "Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Use the official default model and an empty capability grant; the user can customize the profile later. Include a short natural first greeting in the user's language. The returned bot id is immediately usable as send_to_agent target_id; creation alone does not start hidden work.",
     {
       name: z.string().min(1).max(200).describe('Display name for the new teammate.'),
       description: z.string().min(1).max(4000).describe('Short role and purpose.'),
       identity_source: z.string().min(1).max(12000).describe('Concise identity instructions for the teammate.'),
+      welcome_message: z.string().min(1).max(4000).describe('Short first greeting in the user\'s language.'),
     },
-    async ({ name, description, identity_source }: {
+    async ({ name, description, identity_source, welcome_message }: {
       name: string;
       description: string;
       identity_source: string;
+      welcome_message: string;
     }) => {
       const callerSessionId = deps.getSessionContext().sessionId;
       if (!callerSessionId) {
@@ -41,6 +44,7 @@ export function registerCreateTeammateTool(
         name: name.trim(),
         description: description.trim(),
         identitySource: identity_source.trim(),
+        welcomeMessage: welcome_message.trim(),
       });
       return result.ok
         ? okPayload({ action: 'created', bot: result.bot })

@@ -29,6 +29,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/state/agentIslandActivity', () => ({
   useAgentIslandActivityMap: () => mocks.islandActivity,
 }));
+vi.mock('@/hooks/useSessionRunningStatus', () => ({
+  useSessionRunningStatus: () => ({
+    runningSessionIds: new Set<string>(),
+    notifications: new Set<string>(),
+    clearNotification: vi.fn(),
+  }),
+}));
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,

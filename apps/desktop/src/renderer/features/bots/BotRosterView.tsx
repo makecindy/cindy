@@ -15,7 +15,6 @@ import {
   getBotTemplateChoice,
   type BotTemplateChoiceId,
 } from './botTemplates';
-import { rememberPendingBotWelcome } from './botWelcome';
 
 interface BotRosterViewProps {
   /** 创建成功后的落点。默认直接进 TA 的对话。 */
@@ -73,12 +72,12 @@ export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
       const template = getBotTemplateChoice(templateId);
       const bot = await addBotProfileAndWait({
         name,
-        channel: 'local',
         description: profile.description.trim(),
         identitySource: template.identitySource,
         userContextSource: '',
         avatar: profile.avatar,
         avatarColor: profile.avatarColor,
+        welcomeMessage: t('bots.welcome.generic', { name }),
         skills: [],
         capabilities:
           template.toolsets.length > 0
@@ -86,7 +85,6 @@ export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
             : undefined,
         ...(template.id === CUSTOM_BOT_TEMPLATE_ID ? {} : { templateId: template.id }),
       });
-      rememberPendingBotWelcome(bot.id, { key: 'bots.welcome.generic', params: { name } });
       handleCreated(bot);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('bots.createWizard.createFailed'));

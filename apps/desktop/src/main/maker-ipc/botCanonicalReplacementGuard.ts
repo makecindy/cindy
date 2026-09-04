@@ -6,7 +6,7 @@ export interface BotCanonicalReplacementActivity {
   pendingInteraction: boolean;
 }
 
-/** Renew may archive a canonical task only after every execution owner is idle. */
+/** Missing/deleted canonical recovery may replace a task only after every execution owner is idle. */
 export function isBotCanonicalReplacementBusy(
   activity: BotCanonicalReplacementActivity,
 ): boolean {

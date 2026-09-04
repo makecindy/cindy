@@ -107,7 +107,7 @@ export interface BotProfileRuntimeDeps {
   /**
    * 这个伙伴的队友们(除它自己之外、还启用着的伙伴)。
    *
-   * 委派能力开着却不告诉它队友是谁,那条能力基本不会被触发 —— 见
+   * 伙伴消息能力开着却不告诉它队友是谁，那条能力基本不会被触发 —— 见
    * buildBotTeammateRoster 的说明。返回空数组表示「就它一个」。
    */
   listTeammates?: (input: { excludeBotId: string }) => Promise<
@@ -157,7 +157,7 @@ function runtimeFailureMetadata(
   stage: BotRuntimeFailureStage,
   error: unknown,
 ): Record<string, string> {
-  const source = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const source = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
   const name = error instanceof Error && error.name.trim() ? error.name.trim() : 'Error';
   const code = typeof source.code === 'string' ? source.code.trim().slice(0, 120) : '';
   return {
@@ -302,11 +302,10 @@ export function buildBotCapabilityContextPrompt(
     'You are running as a Cindy Bot with a durable Profile. This task is one active runtime of that Bot, not an ordinary standalone task.',
     ...(helperAvailable ? [
       'Use direct Bot tools named in this prompt without inventorying Cindy. Only when the user asks for an explicitly mounted external capability and its exact tool is unknown, perform one scoped discovery for that capability; do not repeatedly list the whole tool surface.',
-      "A real Cindy background task is a standalone Session in the user's task list. Start it with `start_session_task` when the user explicitly asks for a task, Session, or background task, or when development and deliverable work needs independent execution and verification. This tool never selects or wakes a Bot, including a Bot named Cindy.",
-      'Cindy Bot collaboration can discover other available Bots, hand off a bounded objective to one of them, receive the result back in this task, inspect ongoing or completed handoffs, and cancel a handoff that is still active.',
-      "Use `collaborate_with_bot` only for a named teammate: notify is a bounded direct message; call creates a tracked task performed with that teammate's Profile. Never use notify as a substitute for an independently tracked deliverable.",
-      'A Bot handoff is task delegation with a result return path. It does not rewrite another Bot\'s identity or make that Bot obey. If the user asks for obedience or control, explain this boundary and immediately offer the available delegation path instead of redirecting them to a separate team workflow.',
-    ] : []),
+          "A real Cindy background task is a standalone Session in the user's task list. Start it with `start_session_task` when the user explicitly asks for a task, Session, or background task, or when development and deliverable work needs independent execution and verification. Use `check_session_task`, `message_session_task`, and `stop_session_task` to control that same task when needed. Completion returns automatically.",
+          'Use `send_to_agent` only to send one bounded asynchronous message to a named teammate. It is not a task and has no progress or cancellation. Never use a teammate named Cindy as a substitute for `start_session_task`.',
+          "A teammate message does not rewrite another Bot's identity or make that Bot obey. If the user asks for obedience or control, explain this boundary and offer either a message or a tracked Session task, whichever matches the work.",
+        ] : []),
     'Long-term memory and your own Skills are deliberate, user-visible records, not a diary of every turn. When the user first states a specific stable preference, correction, or long-lived background fact, remember it immediately instead of waiting for repetition or sending the user to Settings. When one complete workflow succeeds in a real task and is clearly reusable, save it as a Skill after that first verified success. Ask only when long-term value is genuinely unclear. Never start a background review worker just to create memory or Skills.',
     'Before writing memory, search for an existing record and update it instead of creating a duplicate. Use a `learned-` name only for a stable reusable working habit, never for a one-off conclusion, temporary path, guess, or unverified step.',
     ...(helperAvailable ? [
@@ -675,9 +674,11 @@ export async function hydrateBotProfileRuntime(
       const selected = selectedNames.has(entry.name.trim())
         || (!!runtimeName && selectedNames.has(runtimeName));
       if (!selected) return entry;
-      return fingerprintedByName.get(entry.name.trim())
+      return (
+        fingerprintedByName.get(entry.name.trim())
         ?? (runtimeName ? fingerprintedByName.get(runtimeName) : undefined)
-        ?? { ...entry, enabled: false, runtimeStatus: 'failed' as const };
+        ?? { ...entry, enabled: false, runtimeStatus: 'failed' as const }
+      );
     });
     const usableNames = new Set(
       fingerprinted.map((entry) => entry.runtimeCommandName?.trim() || entry.name.trim()),
@@ -798,7 +799,7 @@ export async function hydrateBotProfileRuntime(
     // Bot-to-Bot messaging is a narrow canonical-Bot capability provided by
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
-    delegationEnabled: row.role === 'canonical' && helperAvailable,
+    partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
     botCreationEnabled: row.role === 'canonical' && helperAvailable,
     ownSkillsEnabled: ownSkillPluginRoot !== null,
     botModeEnabled: row.role === 'canonical',
@@ -833,13 +834,12 @@ export async function hydrateBotProfileRuntime(
     opts.writableDirs = mounted.writableDirs;
   }
   /*
-    队友名册。只在委派能力真的开着时才查 —— 关着委派的伙伴看见一份自己用不上的
+    队友名册。只在伙伴消息能力真的开着时才查 —— 关闭时看见一份自己用不上的
     名单,是纯粹的上下文浪费。查失败当作「没有队友」,绝不拦住会话启动。
   */
   const teammates =
     promptCapabilities.botModeEnabled
-      && promptCapabilities.delegationEnabled
-      && deps.listTeammates
+      && promptCapabilities.partnerActionsEnabled && deps.listTeammates
       ? await deps.listTeammates({ excludeBotId: row.botId }).catch(() => [])
       : [];
   const promptInput: BotSystemPromptInput = {

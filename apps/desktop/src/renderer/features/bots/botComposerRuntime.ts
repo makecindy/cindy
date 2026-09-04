@@ -2,14 +2,13 @@
  * 伙伴对话输入框 → 伙伴 Profile 的运行时回写。
  *
  * 背景(裁决 2026-08-19):伙伴对话恢复显示模型选择器与权限 chip。这两个控件本来
- * 只写**会话行**(`sessions.model` / `.effort` / `.permissionMode` …),而伙伴的主
- * 任务会在 Renew 时按 Profile 的 `capabilities` **重建**一条新会话
- * (`local-db:bots:create-canonical-session`)。不回写 Profile 的话,用户在对话里
- * 选的模型会在 Renew 后悄悄跳回去 —— 「改了不持久」。
+ * 只写**会话行**(`sessions.model` / `.effort` / `.permissionMode` …),而 Profile 才是
+ * 伙伴跨运行时重启与异常恢复的持久来源。不回写 Profile 的话,用户在对话里
+ * 选的模型会在下次启动时悄悄跳回去 —— 「改了不持久」。
  *
  * 所以:凡是用户在伙伴对话里显式动过的运行时选择,都按同一份语义写回 Profile,
  * 和「设置 › 高级」里的那个 ModelSelector 走完全一样的通道(`updateBotProfile`),
- * 因此版本号的处理、pendingRenew 的判定都与既有行为一致,不新增第二套语义。
+ * 因此版本号的处理与既有设置保存行为一致,不新增第二套语义。
  *
  * 权限的映射与 main 侧 `botSessionPermissionMode` 互为逆运算:
  * `bypassPermissions` ⇄ `trusted`,其余一律 `ask`。
@@ -19,7 +18,7 @@
  */
 import type { BotCapabilities } from './botStore';
 
-/** 一条会话行里与「引擎怎么跑」有关的字段(伙伴主任务重建时会用到的那些)。 */
+/** 一条会话行里与「引擎怎么跑」有关的字段。 */
 export interface BotComposerRuntimeSnapshot {
   model?: string | null;
   providerId?: string | null;
@@ -93,7 +92,7 @@ export function mergeBotComposerRuntime(
  *
  * `updateBotProfile` 需要拿当前 `capabilities` 当基底,而基底来自 renderer 的 bot
  * store。应用刚起来时 store 还没 hydrate 完,那个窗口里用户动了模型或权限,原来的
- * 代码直接 `return` —— 改动丢了,下次 Renew 又跳回旧值,全程没有任何反馈。
+ * 代码直接 `return` —— 改动丢了,下次运行时启动又跳回旧值,全程没有任何反馈。
  *
  * 现在把这次改动存住,订阅 store,等这个伙伴出现了再补写:
  *
@@ -108,7 +107,7 @@ export function mergeBotComposerRuntime(
 export interface BotRuntimeMirrorDeps {
   /** 取这个伙伴当前的能力位;store 还没这条记录时返回 null。 */
   getCapabilities: (botId: string) => BotCapabilities | null;
-  /** 真正落库。失败只影响「下次 Renew 会回跳」,不该打断正在进行的对话。 */
+  /** 真正落库。失败只影响「下次启动会回跳」,不该打断正在进行的对话。 */
   write: (botId: string, capabilities: BotCapabilities) => void;
   /** store 变化订阅,返回退订函数。 */
   subscribe: (listener: () => void) => () => void;

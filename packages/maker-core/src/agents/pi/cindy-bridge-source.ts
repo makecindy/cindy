@@ -11,8 +11,8 @@
  *  2. MCP 桥:CINDY_PI_MCP_BRIDGE 指向 host 的 localhost bridge，或用户显式配置的
  *     外部 Streamable HTTP MCP。外部认证只保存 env 引用，真值留在 Pi 父进程 env；
  *     对每个 server 走 initialize → 分页 tools/list；模型侧固定注册两个通用网关工具，
- *     cindy_helper 提供伙伴能力时再额外注册稳定的 start_session_task 与
- *     collaborate_with_bot 门面，避免模型把普通后台任务和同名 Bot 混为一谈。
+ *     cindy_helper 提供伙伴能力时再额外注册稳定的伙伴消息与 Session 任务门面，
+ *     避免模型把后台任务和同名 Bot 混为一谈。
  *     调用时再按 server/tool 路由，并把真实 mcp__<server>__<tool> 身份交给 Host 审批与审计。
  *  3. 会话树:注册 Cindy 私有 command，把 RPC prompt 桥到 ctx.navigateTree。
  *
@@ -2483,9 +2483,20 @@ interface McpServerRef {
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
 const CINDY_START_SESSION_TASK_TOOL = 'start_session_task';
-const CINDY_BOT_COLLABORATION_TOOL = 'collaborate_with_bot';
+const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task';
+const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task';
+const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
+const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
+const CINDY_DIRECT_BOT_TOOLS = new Set([
+  CINDY_START_SESSION_TASK_TOOL,
+  CINDY_CHECK_SESSION_TASK_TOOL,
+  CINDY_MESSAGE_SESSION_TASK_TOOL,
+  CINDY_STOP_SESSION_TASK_TOOL,
+  CINDY_SEND_TO_AGENT_TOOL,
+  CINDY_CREATE_TEAMMATE_TOOL,
+]);
 
 interface ConnectedMcpTool {
   serverName: string;
@@ -2811,34 +2822,22 @@ class CindyMcpGateway {
     };
   }
 
-  resolveStartSessionTask(input: unknown): ResolvedMcpGatewayCall | null {
-    const tool = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_START_SESSION_TASK_TOOL));
+  resolveDirectHelperTool(name: string, input: unknown): ResolvedMcpGatewayCall | null {
+    const tool = this.tools.get(mcpGatewayKey('cindy_helper', name));
     if (!tool) return null;
     return {
-      qualifiedName: 'mcp__cindy_helper__' + CINDY_START_SESSION_TASK_TOOL,
+      qualifiedName: 'mcp__cindy_helper__' + name,
       args: recordInput(input),
       tool,
     };
   }
 
-  resolveBotCollaboration(input: unknown): ResolvedMcpGatewayCall | null {
-    const tool = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_BOT_COLLABORATION_TOOL));
-    if (!tool) return null;
-    return {
-      qualifiedName: 'mcp__cindy_helper__' + CINDY_BOT_COLLABORATION_TOOL,
-      args: recordInput(input),
-      tool,
-    };
+  resolveStartSessionTask(input: unknown): ResolvedMcpGatewayCall | null {
+    return this.resolveDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, input);
   }
 
   resolveCreateTeammate(input: unknown): ResolvedMcpGatewayCall | null {
-    const tool = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_CREATE_TEAMMATE_TOOL));
-    if (!tool) return null;
-    return {
-      qualifiedName: 'mcp__cindy_helper__' + CINDY_CREATE_TEAMMATE_TOOL,
-      args: recordInput(input),
-      tool,
-    };
+    return this.resolveDirectHelperTool(CINDY_CREATE_TEAMMATE_TOOL, input);
   }
 
   resolveBotMemory(input: unknown): ResolvedMcpGatewayCall | null {
@@ -3079,12 +3078,12 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved);
   }
 
-  private async executeBotCollaboration(params: unknown): Promise<{
+  private async executeDirectHelperTool(name: string, params: unknown): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
-    const resolved = this.resolveBotCollaboration(params);
-    if (!resolved) throw new Error('Cindy Bot collaboration is unavailable in this task.');
+    const resolved = this.resolveDirectHelperTool(name, params);
+    if (!resolved) throw new Error('Cindy tool ' + name + ' is unavailable in this task.');
     return this.executeResolvedCall(resolved);
   }
 
@@ -3092,9 +3091,7 @@ class CindyMcpGateway {
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
-    const resolved = this.resolveStartSessionTask(params);
-    if (!resolved) throw new Error('Cindy background Session tasks are unavailable in this task.');
-    return this.executeResolvedCall(resolved);
+    return this.executeDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, params);
   }
 
   private async executeCreateTeammate(params: unknown): Promise<{
@@ -3169,7 +3166,6 @@ class CindyMcpGateway {
             title: { type: 'string', minLength: 1, maxLength: 120 },
             working_dir: { type: 'string', minLength: 1, maxLength: 1024 },
             context_refs: { type: 'array', items: { type: 'string' }, maxItems: 32 },
-            max_depth: { type: 'integer', minimum: 1, maximum: 5 },
             timeout_ms: { type: 'integer', minimum: 1000, maximum: 86400000 },
           },
           required: ['instruction'],
@@ -3180,32 +3176,77 @@ class CindyMcpGateway {
       });
     }
 
-    if (this.resolveBotCollaboration({})) {
+    if (this.resolveDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, {})) {
       pi.registerTool({
-        name: CINDY_BOT_COLLABORATION_TOOL,
-        label: 'Contact a Cindy Bot teammate',
+        name: CINDY_SEND_TO_AGENT_TOOL,
+        label: 'Send message to teammate',
         description:
-          'Contact a named Cindy Bot teammate or manage an existing tracked call. notify is a bounded direct message. call assigns independently tracked work to the named Bot and requires target_bot_id. Use start_session_task—not a Bot named Cindy—for a standalone Cindy Session task. reply answers a waiting decision or continues a call. cancel stops a call. A structured @Bot reference already contains the exact target ID, so do not list Bots first.',
+          'Send one bounded asynchronous message to a named Cindy Bot teammate. This does not create a task or progress state. Use start_session_task for tracked work. A structured @Bot reference already contains the exact target ID, so do not list Bots first.',
         parameters: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['status', 'notify', 'call', 'reply', 'cancel'] },
-            target_bot_id: { type: 'string', description: 'Exact stable Bot ID; required for notify and call, or used by status.' },
-            call_id: { type: 'string', description: 'Tracked call ID; required for reply/cancel, or used by status.' },
-            instruction: { type: 'string', description: 'Required for call/notify and reply_kind=message.' },
-            context_refs: { type: 'array', items: { type: 'string' } },
-            max_depth: { type: 'integer', minimum: 1, maximum: 5 },
-            timeout_ms: { type: 'integer', minimum: 1000, maximum: 86400000 },
-            reply_kind: { type: 'string', enum: ['approve', 'deny', 'answer', 'message'] },
-            answers: { type: 'object', additionalProperties: { type: 'string' } },
-            reason: { type: 'string' },
-            idempotency_key: { type: 'string' },
+            target_id: { type: 'string', minLength: 1, maxLength: 128 },
+            message: { type: 'string', minLength: 1, maxLength: 12000 },
           },
-          required: ['action'],
+          required: ['target_id', 'message'],
           additionalProperties: false,
         },
         execute: async (_toolCallId: string, params: unknown) =>
-          this.executeBotCollaboration(params),
+          this.executeDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, params),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_CHECK_SESSION_TASK_TOOL,
+        label: 'Check Session task',
+        description: 'Read one Session task state when the user asks for progress or automatic completion appears to be missing. Do not poll.',
+        parameters: { type: 'object',
+          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 } },
+          required: ['task_id'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) =>
+          this.executeDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, params),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_MESSAGE_SESSION_TASK_TOOL,
+        label: 'Message Session task',
+        description: 'Add instructions to the same Session task, or answer the exact approval/question it is waiting for. A terminal task resumes under the same task ID.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task_id: { type: 'string', minLength: 1, maxLength: 128 },
+            message: { type: 'string', minLength: 1, maxLength: 4000 },
+            decision: { type: 'string', enum: ['approve', 'deny'] },
+            answers: { type: 'object', additionalProperties: { type: 'string' } },
+            reason: { type: 'string', maxLength: 4000 },
+            idempotency_key: { type: 'string', minLength: 1, maxLength: 128 },
+          },
+          required: ['task_id'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) =>
+          this.executeDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, params),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_STOP_SESSION_TASK_TOOL,
+        label: 'Stop Session task',
+        description: 'Stop one running Session task and its child tasks.',
+        parameters: {
+          type: 'object',
+          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 } },
+          required: ['task_id'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) =>
+          this.executeDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, params),
       });
     }
 
@@ -3221,8 +3262,9 @@ class CindyMcpGateway {
             name: { type: 'string', minLength: 1, maxLength: 200 },
             description: { type: 'string', minLength: 1, maxLength: 4000 },
             identity_source: { type: 'string', minLength: 1, maxLength: 12000 },
+            welcome_message: { type: 'string', minLength: 1, maxLength: 4000 },
           },
-          required: ['name', 'description', 'identity_source'],
+          required: ['name', 'description', 'identity_source', 'welcome_message'],
           additionalProperties: false,
         },
         execute: async (_toolCallId: string, params: unknown) => this.executeCreateTeammate(params),
@@ -3885,23 +3927,15 @@ export default async function cindyBridge(pi: any) {
     // every existing per-server policy without loading each schema at startup.
     const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
       ? mcpGateway.resolveCall(event.input)
-      : event.toolName === CINDY_START_SESSION_TASK_TOOL
-        ? mcpGateway.resolveStartSessionTask(event.input)
-      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
-        ? mcpGateway.resolveBotCollaboration(event.input)
-        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
-          ? mcpGateway.resolveCreateTeammate(event.input)
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? mcpGateway.resolveBotMemory(event.input)
         : null;
     const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
       ? resolvedGatewayCall
-      : event.toolName === CINDY_START_SESSION_TASK_TOOL
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         ? resolvedGatewayCall
-      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
-        ? resolvedGatewayCall
-        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
-          ? resolvedGatewayCall
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? resolvedGatewayCall
         : null;
@@ -3910,9 +3944,7 @@ export default async function cindyBridge(pi: any) {
     // without showing a misleading permission prompt for the wrapper itself.
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
-        || event.toolName === CINDY_START_SESSION_TASK_TOOL
-        || event.toolName === CINDY_BOT_COLLABORATION_TOOL
-        || event.toolName === CINDY_CREATE_TEAMMATE_TOOL
+        || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;
@@ -3966,23 +3998,15 @@ export default async function cindyBridge(pi: any) {
   pi.on('tool_result', async (event: any, ctx: any) => {
     const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
       ? mcpGateway.resolveCall(event.input)
-      : event.toolName === CINDY_START_SESSION_TASK_TOOL
-        ? mcpGateway.resolveStartSessionTask(event.input)
-      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
-        ? mcpGateway.resolveBotCollaboration(event.input)
-        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
-          ? mcpGateway.resolveCreateTeammate(event.input)
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? mcpGateway.resolveBotMemory(event.input)
         : null;
     const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
       ? resolvedGatewayCall
-      : event.toolName === CINDY_START_SESSION_TASK_TOOL
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         ? resolvedGatewayCall
-      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
-        ? resolvedGatewayCall
-        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
-          ? resolvedGatewayCall
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? resolvedGatewayCall
         : null;

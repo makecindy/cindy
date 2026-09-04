@@ -156,8 +156,8 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       throwIpcError('INVALID_PARAMS', 'command.focusRunId must be string | null');
     }
     const focusProvider = r.focusProvider === null || !hasFocusProvider
-      ? r.focusProvider as null | undefined
-      : requireEnum(r.focusProvider, SUBAGENT_PROVIDERS, 'command.focusProvider');
+      ? (r.focusProvider as null | undefined)
+        : requireEnum(r.focusProvider, SUBAGENT_PROVIDERS, 'command.focusProvider');
     const hasRunFocus = typeof r.focusRunId === 'string' && r.focusRunId.length > 0;
     const hasProviderFocus = typeof focusProvider === 'string';
     if (hasRunFocus !== hasProviderFocus) {
@@ -185,33 +185,6 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       sessionId: r.sessionId,
       ...(hasFocusRunId ? { focusRunId: r.focusRunId as string | null } : {}),
       ...(hasFocusProvider ? { focusProvider } : {}),
-      ...(typeof r.focusTab === 'boolean' ? { focusTab: r.focusTab } : {}),
-      ...(typeof r.revealSidebar === 'boolean' ? { revealSidebar: r.revealSidebar } : {}),
-    };
-  }
-  if (r.type === 'open-bot-delegations-tab') {
-    const hasFocusDelegationId =
-      Object.prototype.hasOwnProperty.call(r, 'focusDelegationId')
-      && r.focusDelegationId !== undefined;
-    if (
-      hasFocusDelegationId
-      && r.focusDelegationId !== null
-      && typeof r.focusDelegationId !== 'string'
-    ) {
-      throwIpcError('INVALID_PARAMS', 'command.focusDelegationId must be string | null');
-    }
-    if (r.focusTab !== undefined && typeof r.focusTab !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'command.focusTab must be boolean');
-    }
-    if (r.revealSidebar !== undefined && typeof r.revealSidebar !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'command.revealSidebar must be boolean');
-    }
-    return {
-      type: 'open-bot-delegations-tab',
-      sessionId: r.sessionId,
-      ...(hasFocusDelegationId
-        ? { focusDelegationId: r.focusDelegationId as string | null }
-        : {}),
       ...(typeof r.focusTab === 'boolean' ? { focusTab: r.focusTab } : {}),
       ...(typeof r.revealSidebar === 'boolean' ? { revealSidebar: r.revealSidebar } : {}),
     };

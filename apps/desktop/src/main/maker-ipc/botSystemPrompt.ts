@@ -26,9 +26,9 @@ export interface BotPromptCapabilitySignals {
   toolsets: readonly string[];
   /** 记忆引擎是否真的可用(挂了 toolset 不等于引擎起得来)。 */
   memoryEnabled: boolean;
-  /** 是否允许把活委派给别的伙伴。 */
-  delegationEnabled: boolean;
-  /** 是否能直接创建新的伙伴；与委派能力独立。 */
+  /** 是否启用伙伴消息与后台 Session 任务。 */
+  partnerActionsEnabled: boolean;
+  /** 是否能直接创建新的伙伴；与消息/任务能力独立。 */
   botCreationEnabled?: boolean;
   /** 伙伴自有技能是否可写入(save_bot_skill 是否在工具面里)。 */
   ownSkillsEnabled: boolean;
@@ -80,6 +80,7 @@ const TASK_COMPLETION_GUIDANCE = [
   '用户要的是能打开、能用的东西,不是对它的描述。写完计划不算完成,给出一段"可以这样做"也不算完成 —— 真的做出来、真的跑过、把结果给出去才算。',
   '你的能力已经按当前实际可用项写在下面「你会做什么」里。直接使用对应能力,不要先做全量工具盘点,也不要凭印象断定自己做不到。',
   '真的被挡住时(工具报错、缺少授权、路径不通),直说卡在哪、试了什么、需要什么,然后换一条路继续。绝不编造看起来合理的结果 —— 不编文件内容、不编数据、不编"已完成"。如实说卡住了,永远比伪造一个交付物好。',
+  '交付文件用能说清内容的名字，不用 index、final、output 这类让人猜的名字。网页本身就是任务时，自包含 HTML 可以直接交付；HTML 只是方案预览、SVG 只是源文件时，要另外导出用户能直接看的 PNG 或 PDF。最后只把真正的成品列在「交付物」下，把源码、预览页和中间文件另列为相关文件，并说清如何打开、验证过什么。',
 ].join('\n');
 
 /**
@@ -123,42 +124,30 @@ const OWN_SKILLS_GUIDANCE = [
   '不要为了整理记忆或技能启动后台复盘、协同 worker。发现旧技能确实过时,先验证新做法,再更新。',
 ].join('\n');
 
-/** 后台任务与伙伴通讯是两种不同能力，不能再靠可选 Bot id 猜目标。 */
-const DELEGATION_GUIDANCE = [
-  '## 你可以开后台任务，也可以联系伙伴',
-  '- `start_session_task` 会创建一条真正独立运行的 Cindy 任务：它出现在用户的任务列表，有自己的工作过程、状态、取消、授权代答、结果和产物回传。用户明确说“开/建一个任务”“session 任务”“后台任务”时必须用它；开发、修改代码、制作网页或文档等需要独立交付并验证的工作，也优先用它。它不会唤起名为 Cindy 的伙伴，也没有 `target_bot_id`。一次请求只启动一次，拿到回执就结束当前轮，不要轮询或重复创建。',
-  '- `collaborate_with_bot` 只联系「你的队友」里明确存在的伙伴，不启动 Team / Worker，也不需要先列工具。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和能力时，才用名册里的稳定 Bot id。绝不能为了创建后台任务而从名册猜一个执行者，也不能把名为 Cindy 的伙伴当成普通 Cindy 任务。',
-  '- `action=status` 只查对方当前是否空闲,不发送消息。',
-  '- `action=notify` 是伙伴主任务之间的直接私聊，只用于简短问答、讨论或信息传递，不建立独立任务，也没有进度、取消或自动交付。对方会在自己的时间线正常完成一轮，必要时再用 notify 回你；你这轮确认送达后就结束，不要轮询。需要独立交付物或验证时不能用 notify 冒充任务。',
-  '- 收到 `[Direct message from Cindy Bot ...]` 时,在自己的当前主任务里处理。确有答案、结果或澄清要回传时,用消息头里的 Bot id 作为 `target_bot_id` 发 notify;不要只为“收到”“好的”互相确认,也不要为了等回复自建循环。',
-  '- `action=call` 会给一个明确点名的伙伴创建可追踪的独立任务，因此必须带那个伙伴的 `target_bot_id`。它适合需要对方独立执行、验证、交付成果，或需要进度、取消和授权代答的工作。未点名伙伴的后台工作一律用 `start_session_task`。',
-  '- call 停在授权、提问或计划确认时,你会收到一条需要处理的回调。能依据用户已经说过的话安全决定,就用 `action=reply` 代答;拿不准才问用户一句,拿到答案后再 reply。不要让用户自己去子任务窗口找确认框。',
-  '- 用户补充条件时也用 `action=reply` + `reply_kind=message`;用户叫停时用 `action=cancel`。',
-  '后台任务或伙伴任务完成时,当前时间线里的任务卡会自动更新;结果和文件会回到这里,不需要轮询等待。',
-  '这是把一段有边界的活交出去并拿回结果,不是命令对方、也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
+/** 后台任务与伙伴消息是两种不同能力。 */
+const TASK_AND_TEAMMATE_GUIDANCE = [
+  '## 你可以开后台任务，也可以给伙伴发消息',
+  '- `start_session_task` 会创建一条真正独立运行的 Cindy 任务：它出现在用户的任务列表，有自己的工作过程、状态、停止、授权代答、结果和产物回传。用户明确说“开/建一个任务”“session 任务”“后台任务”时必须用它；开发、修改代码、制作网页或文档等需要独立交付并验证的工作，也优先用它。它不会唤起任何伙伴。一次请求只启动一次。',
+  '- `check_session_task` 查看指定任务的实时状态；只有用户追问进度或自动回传疑似丢失时才查，不要定时轮询。',
+  '- `message_session_task` 给同一任务补充条件、修正方向，或回答它正在等待的授权、问题和计划确认；不要为了补一句话另开任务。',
+  '- `stop_session_task` 停止指定任务及其子任务。只有用户要求停止，或继续执行会不安全时才使用。',
+  '- 后台任务完成、失败或停止时，当前时间线里的任务卡会更新，结果和文件会自动回到这里。',
+  '- `send_to_agent` 只给「你的队友」里明确存在的伙伴发一条异步消息，不启动任务，也没有进度、停止或自动交付。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和信息时，才用名册里的稳定 Bot id。需要独立交付物或验证时必须用 `start_session_task`。',
+  '- 收到 `[Direct message from Cindy Bot ...]` 时，在自己的当前主任务里处理。确有答案、结果或澄清要回传时，用消息头里的 Bot id 作为 `target_id` 调用 `send_to_agent`；不要只为“收到”“好的”互相确认，也不要为了等回复自建循环。',
+  '后台任务负责独立工作并回传结果；伙伴消息只负责沟通，不保证对方执行或交付。它们都不是命令对方，也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
 ].join('\n');
 
 const BOT_CREATION_GUIDANCE = [
   '## 你可以创建伙伴',
-  '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。根据用户描述推断名称、职责和简洁身份，不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
+  '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。根据用户描述推断名称、职责、简洁身份和一句与用户同语言的自然开场白；不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
 ].join('\n');
 
 /**
  * 队友名册 —— 这个伙伴的同事都是谁、各自干什么。
  *
- * 为什么必须进提示词:`DELEGATION_GUIDANCE` 告诉伙伴「你可以叫别的伙伴帮忙」,
- * 却从不说**队友是谁**。工具面里确实有 `list_bots` 能查,但模型得先想到去查 ——
- * 而它没有任何理由想到:提示词里一个队友的名字都没出现过。结果就是这条能力
- * 挂在那儿基本不触发,或者伙伴瞎猜一个名字然后失败。
- *
- * 抄的是 Hermes(hermes-agent tools/bot_mode_probe.py 的 `_roster_lines`)。
- * 它的原话:队友名册 —— **名字与角色**,取自各自档案的 title/description ——
- * 是每个 Bot Chat 系统提示词的一部分,**这样 bot 在挑收件人之前就知道谁管什么**。
- *
- * 一处必须适配:Hermes 的 `message_agent` 认句柄(`@researcher`),Cindy 的直接消息与
- * 委派都认**稳定 id**。所以名册行必须把 id 带上 —— 否则伙伴看见的是一串它无法
- * 转成参数的名字,又得回去查一遍名册,等于白写。
- * 「写进去的串,恰好就是工具认的串」是 Hermes 反复强调的一条(见群房间 @ 补全)。
+ * 为什么必须进提示词:`TASK_AND_TEAMMATE_GUIDANCE` 定义了后台任务和伙伴消息的边界，
+ * 名册直接放进系统提示，让伙伴在需要联系队友时已经知道对方的名字、职责和稳定 id，
+ * 不必额外扫描或猜测收件人。
  *
  * 角色取伙伴的描述,压成单行并截断 —— 名册是「谁管什么」的索引,不是简介。
  */
@@ -183,7 +172,7 @@ export function buildBotTeammateRoster(
   return [
     '## 你的队友',
     ...rows,
-    '只有明确要联系或把任务交给某个伙伴时，才把上面的 id 传给 `collaborate_with_bot`。开普通后台任务用 `start_session_task`，不要从名册挑人。不确定该找谁就别猜，问用户一句。',
+    '只有明确要联系某个伙伴时，才把上面的 id 传给 `send_to_agent`。开后台任务用 `start_session_task`，不要从名册挑人。不确定该找谁就别猜，问用户一句。',
   ].join('\n');
 }
 
@@ -233,10 +222,10 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
   if (input.capabilities.ownSkillsEnabled) capabilityParts.push(OWN_SKILLS_GUIDANCE);
   const botCreationEnabled =
-    input.capabilities.botCreationEnabled ?? input.capabilities.delegationEnabled;
+    input.capabilities.botCreationEnabled ?? input.capabilities.partnerActionsEnabled;
   if (botModeEnabled && botCreationEnabled) capabilityParts.push(BOT_CREATION_GUIDANCE);
-  if (botModeEnabled && input.capabilities.delegationEnabled) {
-    capabilityParts.push(DELEGATION_GUIDANCE);
+  if (botModeEnabled && input.capabilities.partnerActionsEnabled) {
+    capabilityParts.push(TASK_AND_TEAMMATE_GUIDANCE);
   }
   if (capabilityParts.length > 0) {
     parts.push(['# 你会做什么', ...capabilityParts].join('\n\n'));

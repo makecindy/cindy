@@ -192,8 +192,6 @@ import {
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
-import { openBotDelegationsTab } from '@/features/right-sidebar/lib/openBotDelegationsTab';
-import { BotDelegationActivityIndicator } from '@/features/bots/BotDelegationActivityIndicator';
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import {
   BotSessionContentHeaderRegistration,
@@ -943,23 +941,9 @@ export function CCAgentSessionView({
   // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
   // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
   const botAssistantAvatar = useMemo(
-    () =>
-      botChatIdentity ? (
-        <BotAvatar bot={botChatIdentity} size="sm" />
-      ) : null,
+    () => (botChatIdentity ? <BotAvatar bot={botChatIdentity} size="sm" /> : null),
     [botChatIdentity],
   );
-
-  // Every Cindy Bot task owns one durable Bot-collaboration tab. Registration
-  // is silent: it never expands the sidebar or replaces the user's active tab.
-  useEffect(() => {
-    if (!ownsWindowRoute || !viewVisible || !sessionId || session?.source !== 'bot') return;
-    void openBotDelegationsTab(sessionId, {
-      focusTab: false,
-      revealSidebar: false,
-      userInitiated: false,
-    }).catch(() => undefined);
-  }, [ownsWindowRoute, session?.source, sessionId, viewVisible]);
 
   // worktree-parallel-sessions:订阅当前 session 的 worktree 创建态(creating/failed)。
   // 触发源:NewMakerDraftRoute 的 worktree 异步创建路径。
@@ -2856,10 +2840,10 @@ export function CCAgentSessionView({
   /*
     伙伴对话的运行时选择要写回伙伴 Profile。
 
-    输入框的模型 / 权限控件本来只改**这条会话行**,而伙伴的主任务在 Renew 时按
-    Profile 的 capabilities 重建一条新会话 —— 不回写就会「改了不持久,Renew 后
-    回跳」。这里只在用户**显式**动过控件之后触发(不是跟着 session 快照跑),
-    否则会把尚未 Renew 的旧会话值倒灌回新 Profile。
+    输入框的模型 / 权限控件本来只改**这条会话行**,而伙伴运行时会在需要时
+    从 Profile 重启 —— 不回写就会「改了不持久,下次启动回跳」。这里只在用户
+    **显式**动过控件之后触发(不是跟着 session 快照跑),否则会把旧会话值
+    倒灌回新 Profile。
     等值时 mergeBotComposerRuntime 返回 null,不发 IPC,也就不会白顶版本号。
   */
   const mirrorBotComposerRuntime = useCallback(
@@ -3441,7 +3425,7 @@ export function CCAgentSessionView({
       // replacement Session". Claude accepts /compact as an agent command;
       // Pi exposes a native compact RPC because its slash input is escaped;
       // Codex only supports upstream automatic compaction, so keep the task
-      // intact and explain the explicit Renew escape hatch.
+      // intact and explain that it manages compaction automatically.
       const botNewMatch =
         deliveryMode !== 'steer' && sessionRef.current?.source === 'bot'
           ? message.match(/^\/new(?:\s+(.*))?$/s)
@@ -4737,13 +4721,6 @@ export function CCAgentSessionView({
           </div>
         )}
 
-        {/* Bot 委派进行中状态条:与上方 bot-delegations tab 静默注册同条件(仅路由主人
-          且视图可见的 Bot 任务)。本会话没有活跃出向委派时组件自身返回 null,不占位、
-          不遮挡消息流;点击落到右栏 Bot 协同 tab。 */}
-        {ownsWindowRoute && viewVisible && sessionId && session?.source === 'bot' && (
-          <BotDelegationActivityIndicator sessionId={sessionId} maxWidth={messageWidth} />
-        )}
-
         {/* Scroll container — full height, bottom padding reserves space for input overlay.
            key={sessionId}: force a full remount on session switch so scroll state,
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
@@ -5332,26 +5309,29 @@ export function CCAgentSessionView({
                   !session?.workingDir && !worktreeCreation && 'invisible',
                 )}
               >
-                {/* Left: workingDir — 点击在系统文件管理器中打开;
+                  {/* Left: workingDir — 点击在系统文件管理器中打开;
                   click 区域宽度与文本一致(不拉伸到整行) */}
-                {worktreeCreation?.status === 'creating' ? (
+                  {worktreeCreation?.status === 'creating' ? (
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <Spinner size={12} className="text-[var(--workingdir-icon)]" />
-                    <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
-                      {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
-                      <code className="font-mono text-11 opacity-80">{worktreeCreation.name}</code>…
-                    </span>
-                  </div>
+                      <Spinner size={12} className="text-[var(--workingdir-icon)]" />
+                      <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
+                        {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
+                        <code className="font-mono text-11 opacity-80">
+                          {worktreeCreation.name}
+                        </code>
+                        …
+                      </span>
+                    </div>
                 ) : worktreeCreation?.status === 'failed' ? (
                   <Tip text={worktreeCreation.error} mono side="top">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <AlertCircle size={12} className="shrink-0 text-red-500 dark:text-red-400" />
-                      <span className="block min-w-0 truncate text-12 font-medium leading-none text-red-500 dark:text-red-400">
-                        {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
-                        {' — '}
-                        {worktreeCreation.error}
-                      </span>
-                      <button
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <AlertCircle size={12} className="shrink-0 text-red-500 dark:text-red-400" />
+                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-red-500 dark:text-red-400">
+                          {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
+                          {' — '}
+                          {worktreeCreation.error}
+                        </span>
+                        <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -5360,10 +5340,10 @@ export function CCAgentSessionView({
                         className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
                         aria-label={t('common.dismiss', 'Dismiss')}
                       >
-                        <X size={10} className="text-red-500/70 dark:text-red-400/70" />
-                      </button>
-                    </div>
-                  </Tip>
+                          <X size={10} className="text-red-500/70 dark:text-red-400/70" />
+                        </button>
+                      </div>
+                    </Tip>
                 ) : (
                   <Tip
                     text={
@@ -5373,9 +5353,9 @@ export function CCAgentSessionView({
                           // 同 workingDir 跨多 host 撞合场景下也能区分。hostId 即
                           // SSH alias (HostConfig.id), 不需要额外 lookup。
                           <>
-                            <div>Host: {session.remoteHostId}</div>
-                            <div>{composerDir}</div>
-                          </>
+                              <div>Host: {session.remoteHostId}</div>
+                              <div>{composerDir}</div>
+                            </>
                         ) : (
                           composerDir
                         )
@@ -5384,10 +5364,10 @@ export function CCAgentSessionView({
                     mono
                     side="top"
                   >
-                    {isRemoteWorktreeSession ? (
+                      {isRemoteWorktreeSession ? (
                       <div className="flex min-w-0 items-center gap-1.5">
-                        {workingDirChipContent}
-                      </div>
+                          {workingDirChipContent}
+                        </div>
                     ) : (
                       <button
                         type="button"
@@ -5395,25 +5375,25 @@ export function CCAgentSessionView({
                         onClick={handleOpenWorkingDir}
                         aria-label={t('ccAgent.layout.openWorkingDirAria')}
                       >
-                        {workingDirChipContent}
-                      </button>
+                          {workingDirChipContent}
+                        </button>
                     )}
-                  </Tip>
+                    </Tip>
                 )}
 
-                {/* Right: Context capacity indicator */}
-                <div className="flex shrink-0 items-center gap-3">
-                  {session?.usedProjectContext && (
+                  {/* Right: Context capacity indicator */}
+                  <div className="flex shrink-0 items-center gap-3">
+                    {session?.usedProjectContext && (
                     <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
-                      <Brain
+                        <Brain
                         size={14}
                         strokeWidth={1.75}
                         className="shrink-0 -translate-y-px text-foreground/70"
                         aria-label={t('ccAgent.layout.projectContextLoaded')}
                       />
-                    </Tip>
+                      </Tip>
                   )}
-                  <TodaySpendChip
+                    <TodaySpendChip
                     vendorKey={normalizeDbAgentKind(displayAgentKind)}
                     modelId={agentSwitchIntent?.model ?? session?.model ?? null}
                     providerId={
@@ -5428,7 +5408,7 @@ export function CCAgentSessionView({
                     remoteHostId={session?.remoteHostId ?? null}
                     deviceLinkDeviceId={remoteDeviceId ?? null}
                   />
-                  <ContextCapacityRing
+                    <ContextCapacityRing
                     contextTokens={agentStatus.contextTokens}
                     model={agentSwitchIntent?.model ?? session?.model ?? ''}
                     vendorKey={normalizeDbAgentKind(displayAgentKind)}
@@ -5453,8 +5433,8 @@ export function CCAgentSessionView({
                         : undefined
                     }
                   />
+                  </div>
                 </div>
-              </div>
               ) : null}
             </div>
           </div>

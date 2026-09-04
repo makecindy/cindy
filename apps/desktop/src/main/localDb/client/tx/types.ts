@@ -37,13 +37,13 @@ export type DbTxName =
   | 'bots.prepareRuntime'
   | 'bots.finishRuntime'
   | 'bots.finishDelegation'
+  | 'bots.reparentDelegations'
   | 'bots.createDelegation'
   | 'bots.reopenDelegation'
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
   | 'bots.deleteProfile'
-  | 'bots.linkSession'
   | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
@@ -591,8 +591,6 @@ export interface BotsReplaceCanonicalSessionArgs {
   expectedCanonicalSessionId: string | null;
   /** One-time compatibility evidence already validated by reconcileCanonicalLink. */
   compatibilityMissingCanonicalSessionId?: string | null;
-  /** Set only after the host renewal policy proves the live volume is due and idle. */
-  allowRotation?: boolean;
   expectedProfileVersion: number;
   session: {
     id: string;
@@ -669,6 +667,17 @@ export interface BotsFinishDelegationResult {
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
 }
 
+export interface BotsReparentDelegationsArgs {
+  botId: string;
+  previousParentSessionId: string;
+  nextParentSessionId: string;
+  now: number;
+}
+
+export interface BotsReparentDelegationsResult {
+  delegationIds: string[];
+}
+
 export interface BotsCreateDelegationArgs {
   maxActiveChildren: number;
   delegation: {
@@ -713,16 +722,6 @@ export interface BotsDeleteProfileArgs {
   keepTaskHistory: boolean;
   at: number;
 }
-export interface BotsLinkSessionArgs {
-  botId: string;
-  sessionId: string;
-  role: 'canonical' | 'history';
-  hasExpectedCanonical: boolean;
-  expectedCanonicalSessionId: string | null;
-  now: number;
-  eventId: string;
-}
-
 export type WechatInboxStatus =
   | 'pending'
   | 'dispatching'
@@ -1072,13 +1071,13 @@ export type DbTxArgsByName = {
   'bots.prepareRuntime': BotsPrepareRuntimeArgs;
   'bots.finishRuntime': BotsFinishRuntimeArgs;
   'bots.finishDelegation': BotsFinishDelegationArgs;
+  'bots.reparentDelegations': BotsReparentDelegationsArgs;
   'bots.createDelegation': BotsCreateDelegationArgs;
   'bots.reopenDelegation': BotsReopenDelegationArgs;
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
   'bots.deleteProfile': BotsDeleteProfileArgs;
-  'bots.linkSession': BotsLinkSessionArgs;
   'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
@@ -1139,13 +1138,13 @@ export type DbTxResultByName = {
   'bots.prepareRuntime': undefined;
   'bots.finishRuntime': boolean;
   'bots.finishDelegation': BotsFinishDelegationResult | null;
+  'bots.reparentDelegations': BotsReparentDelegationsResult;
   'bots.createDelegation': undefined;
   'bots.reopenDelegation': BotsReopenDelegationResult;
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
-  'bots.linkSession': { archivedCanonicalSessionIds: string[] };
   'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;

@@ -787,7 +787,7 @@ interface ChatInputProps {
    * 状态完全由 parent 持有 (controlled);ChatInput 只做展示与事件转发。
    */
   collaboration?: CollaborationMenuConfig;
-  /** Persistent Bots available as structured delegation targets in this task. */
+  /** Persistent teammates available as structured message targets in this task. */
   botMentions?: readonly ComposerBotMention[];
   /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。

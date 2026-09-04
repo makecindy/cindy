@@ -6,10 +6,7 @@
  * 空头支票复核 2026-08-19:这一屏原来摆着「新消息横幅 / 声音 / 勿扰时段」三行。
  * 前两行是真 Switch,第三行是只读文本 —— 但三者共同的问题是**没有任何消费方**:
  * 它们只写 `cindy.bots.preferences.v1` 这个 localStorage key,全仓再没有第二处
- * 读过它。而且接不上:伙伴的 canonical Session 不在
- * `DESKTOP_VISIBLE_SESSION_SOURCES` 里,压根不经过
- * `useSessionRunningStatus → notificationShowSessionEvent` 那条系统通知链,横幅
- * 与声音对伙伴消息不会触发。
+ * 读过它。伙伴现在复用全局 Session 通知链，不再维护另一套 Bot 专用开关。
  *
  * 于是三行连同无用状态文案整体删除。导入/导出(portability)整段能力随本轮砍削
  * 一并移除;这组用例只钉住剩下的两件事:

@@ -1923,7 +1923,7 @@ async function assertGenericSessionLifecycleAllowed(
   if (target?.source === 'bot') {
     throwIpcError(
       'PRECONDITION_FAILED',
-      'Bot task lifecycle is managed by Bot Renew and history controls',
+      'Bot task lifecycle is managed by teammate recovery and history controls',
     );
   }
 }

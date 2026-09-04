@@ -174,7 +174,7 @@ describe('botDirectMessageService', () => {
     expect(header).toMatch(/^\[Direct message from Cindy Bot "[^\n]+" \(bot-a\)\]$/);
     expect(header.length).toBeLessThanOrEqual(180);
     expect(envelope.split('\n\n')).toHaveLength(3);
-    expect(envelope).toContain('action=notify');
+    expect(envelope).toContain('send_to_agent');
     expect(envelope).toContain('Do not send acknowledgement-only replies.');
   });
 
@@ -262,7 +262,7 @@ describe('botDirectMessageService', () => {
     expect(result).toMatchObject({ ok: true, targetSessionId: 'b-created', wakeKind: 'created' });
   });
 
-  it('resolves renewal before every send even when the old canonical task still exists', async () => {
+  it('resolves the current canonical task before every send', async () => {
     const ensureCanonicalSession = vi.fn(async () => ({
       ok: true as const,
       sessionId: 'b-renewed',

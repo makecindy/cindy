@@ -157,10 +157,11 @@ describe('Bot task route recovery', () => {
     );
   });
 
-  it('delivers the parked greeting only once the durable Bot link has been verified', () => {
-    // 交付点必须在 gate 通过之后:URL 不是身份,先落一条消息再校验就等于让
-    // 任意 /bots/:id/session/:id 链接往别人的任务里写话。
-    expect(source).toContain('deliverPendingBotWelcome');
+  it('keeps welcome delivery out of the renderer navigation projection', () => {
+    // 欢迎语由 main 在创建伙伴和持久任务关系的同一边界内落库。URL 只负责
+    // 校验归属与展示，不能因为打开页面再产生一次消息写入。
+    expect(source).not.toContain('deliverPendingBotWelcome');
+    expect(source).not.toContain('messageService.create');
     expect(source).toContain("if (gate.kind !== 'ready'");
   });
 });

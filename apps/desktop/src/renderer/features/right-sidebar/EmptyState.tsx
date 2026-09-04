@@ -15,9 +15,7 @@ import {
   FileDiff,
   FolderOpen,
   Globe,
-  ListTodo,
-  Share2,
-  Terminal,
+  ListTodo, Terminal,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useBotTranslation } from '@/features/bots/botPronounContext';
@@ -30,9 +28,6 @@ interface EmptyStateProps {
   onAddReviewTab: () => void;
   onAddSubagentsTab: () => void;
   onAddBackgroundTasksTab: () => void;
-  /** 伙伴会话:默认只推协同,不把工程空态原样摆出来。 */
-  botSession?: boolean;
-  onAddDelegationsTab?: () => void;
   subagentsAvailable?: boolean;
 }
 
@@ -43,8 +38,6 @@ export function EmptyState({
   onAddReviewTab,
   onAddSubagentsTab,
   onAddBackgroundTasksTab,
-  botSession = false,
-  onAddDelegationsTab,
   subagentsAvailable = false,
 }: EmptyStateProps) {
   const { t } = useBotTranslation();
@@ -55,28 +48,15 @@ export function EmptyState({
           {t('rightSidebar.tabs.empty.eyebrow')}
         </span>
         <span className="text-20 font-semibold leading-tight text-[var(--text-primary)]">
-          {t(botSession ? 'rightSidebar.tabs.empty.botTitle' : 'rightSidebar.tabs.empty.title')}
+          {t('rightSidebar.tabs.empty.title')}
         </span>
         <span className="text-13 leading-relaxed text-[var(--text-tertiary)]">
-          {t(botSession ? 'rightSidebar.tabs.empty.botDesc' : 'rightSidebar.tabs.empty.desc')}
+          {t('rightSidebar.tabs.empty.desc')}
         </span>
       </div>
       <div className="flex w-full flex-col">
-        {botSession ? (
-          <>
-            {onAddDelegationsTab ? (
-              <ActionRow
-                icon={Share2}
-                label={t('rightSidebar.tabs.empty.openDelegations')}
-                sub={t('rightSidebar.tabs.empty.delegationsSub')}
-                onClick={onAddDelegationsTab}
-              />
-            ) : null}
-          </>
-        ) : null}
-        {!botSession ? (
-          <>
-            <ActionRow
+        <>
+          <ActionRow
               icon={FolderOpen}
               label={t('rightSidebar.tabs.empty.openFile')}
               sub={t('rightSidebar.tabs.empty.fileSub')}
@@ -120,7 +100,6 @@ export function EmptyState({
               onClick={onAddTerminalTab}
             />
           </>
-        ) : null}
       </div>
       <p className="px-1 text-11 text-[var(--text-tertiary)]">
         {t('rightSidebar.tabs.empty.addMoreHint')}

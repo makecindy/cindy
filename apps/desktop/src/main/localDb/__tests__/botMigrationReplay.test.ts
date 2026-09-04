@@ -15,10 +15,9 @@ import { listMigrations, runMigrationReplay } from '../migrationRunner';
  * 伙伴迁移链的回归保护静默归零。
  *
  * 撞号重排是这个仓库的常态(迁移号先到先得),所以判据得跟着内容走:含 `bot_profiles`
- * 建表语句的那一个就是它。裁剪后 Bot 的六张表(profiles / profile_versions /
- * session_links / runtime_snapshots / lifecycle_events / delegations)都在这一个
- * 迁移里一次性建出来,不再是分多个迁移逐步长出来的旧形态。找不到直接抛,不静默
- * 跳过 —— 那等于又回到没有保护的状态。
+ * 建表语句的那一个就是它。裁剪后 Bot 与伙伴私聊相关表都在这一份迁移里一次性
+ * 建立,不再是分多个迁移逐步长出来的旧形态。找不到直接抛,不静默跳过 —— 那等于
+ * 又回到没有保护的状态；具体表数由后面的结构断言负责,不在注释里写死。
  */
 const ALL_MIGRATIONS = listMigrations(path.resolve(__dirname, '../../../..', 'drizzle'));
 const BOT_MIGRATION_FILES = ALL_MIGRATIONS.filter((migration) =>
@@ -246,8 +245,9 @@ describe('Bot release migrations', () => {
         'id', 'requesting_bot_id', 'target_bot_id', 'parent_session_id', 'child_session_id',
         'objective', 'context_refs_json', 'artifact_refs_json', 'permission_snapshot_json',
         'lineage_json', 'target_profile_version', 'depth', 'budget_tokens', 'tokens_used',
-        'status', 'result_summary', 'output_artifacts_json', 'last_error',
-        'created_at', 'accepted_at', 'completed_at', 'updated_at',
+        'status', 'result_summary', 'output_artifacts_json', 'pending_interaction_json',
+        'last_error', 'run_sequence', 'created_at', 'accepted_at', 'completed_at',
+        'completion_delivered_at', 'updated_at',
       ]),
     );
 
@@ -258,11 +258,11 @@ describe('Bot release migrations', () => {
     expect(indexExists(db, 'uniq_bot_session_links_canonical_per_bot')).toBe(true);
     expect(indexExists(db, 'idx_bot_session_links_bot_role')).toBe(true);
     expect(indexExists(db, 'uniq_bot_delegations_child_session')).toBe(true);
-    expect(indexExists(db, 'right_sidebar_tabs_bot_delegations_singleton_idx')).toBe(true);
+    expect(indexExists(db, 'right_sidebar_tabs_bot_delegations_singleton_idx')).toBe(false);
     expect(indexExists(db, 'right_sidebar_tabs_bot_artifacts_singleton_idx')).toBe(true);
   });
 
-  it('enforces canonical session and sidebar tab singleton uniqueness', () => {
+  it('enforces canonical and artifact-tab uniqueness without reviving retired sidebar rules', () => {
     const db = createDb();
     runBotMigrations(db);
     db.exec(`
@@ -280,8 +280,10 @@ describe('Bot release migrations', () => {
     expect(() => db.prepare(`INSERT INTO bot_session_links
       (id, bot_id, session_id, profile_version, role, created_at)
       VALUES ('canonical-2', 'bot-1', 'session-2', 1, 'canonical', 2)`).run()).toThrow();
+    // The retired delegation sidebar kind remains readable for old databases,
+    // but no longer owns a schema-level singleton or a live UI surface.
     expect(() => db.prepare(`INSERT INTO right_sidebar_tabs (id, session_id, kind)
-      VALUES ('tab-2', 'session-1', 'bot-delegations')`).run()).toThrow();
+      VALUES ('tab-2', 'session-1', 'bot-delegations')`).run()).not.toThrow();
     expect(() => db.prepare(`INSERT INTO right_sidebar_tabs (id, session_id, kind)
       VALUES ('tab-3', 'session-1', 'bot-artifacts')`).run()).not.toThrow();
   });

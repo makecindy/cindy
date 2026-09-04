@@ -96,43 +96,47 @@ describe('伙伴成果卡', () => {
 
   afterEach(cleanup);
 
-  it('直接展示 SVG 缩略图，以网页打开 HTML，并默认收起辅助文件', async () => {
+  it('展示有名的网页成品，并默认收起 SVG、index 预览页和辅助文件', async () => {
     renderCard([
       generated('/bot/workspace/logo-A.svg'),
       generated('/bot/workspace/index.html'),
+      generated('/bot/workspace/猫岛邮局-logo-方案.html'),
       generated('/bot/workspace/_preview/C_full.png'),
       generated('/bot/workspace/styles.css'),
     ]);
 
     await screen.findByTestId('bot-generated-artifacts');
-    const svg = screen.getByRole('img', { name: 'logo-A.svg' });
-    expect(svg.getAttribute('src')).toContain('xdt-file://');
+    expect(screen.queryByRole('img', { name: 'logo-A.svg' })).toBeNull();
+    expect(screen.queryByText('logo-A.svg')).toBeNull();
+    expect(screen.queryByText('index.html')).toBeNull();
     expect(screen.queryByText('C_full.png')).toBeNull();
     expect(screen.queryByText('styles.css')).toBeNull();
 
-    fireEvent.click(screen.getByText('index.html').closest('button')!);
+    fireEvent.click(screen.getByText('猫岛邮局-logo-方案.html').closest('button')!);
     await waitFor(() => {
       expect(mocks.openHtmlFileByPreference).toHaveBeenCalledWith(
         'bot-session',
-        '/bot/workspace/index.html',
+        '/bot/workspace/猫岛邮局-logo-方案.html',
         expect.any(Function),
       );
     });
     expect(screen.queryByTestId('text-lightbox')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: '相关文件 2' }));
+    fireEvent.click(screen.getByRole('button', { name: '相关文件 4' }));
+    expect(screen.getByText('logo-A.svg')).toBeTruthy();
+    expect(screen.getByText('index.html')).toBeTruthy();
     expect(screen.getByText('C_full.png')).toBeTruthy();
     expect(screen.getByText('styles.css')).toBeTruthy();
   });
 
   it('缩略图加载失败时只降级当前成果，不让整组消失', async () => {
-    renderCard([generated('/bot/workspace/logo-A.svg')]);
+    renderCard([generated('/bot/workspace/logo-A.png')]);
 
-    const svg = await screen.findByRole('img', { name: 'logo-A.svg' });
-    fireEvent.error(svg);
+    const image = await screen.findByRole('img', { name: 'logo-A.png' });
+    fireEvent.error(image);
 
-    await waitFor(() => expect(screen.queryByRole('img', { name: 'logo-A.svg' })).toBeNull());
-    expect(screen.getByText('logo-A.svg')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('img', { name: 'logo-A.png' })).toBeNull());
+    expect(screen.getByText('logo-A.png')).toBeTruthy();
     expect(screen.getByTestId('bot-generated-artifacts')).toBeTruthy();
   });
 });

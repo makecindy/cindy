@@ -39,8 +39,8 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
  * 「今天加入 / 3 天前加入」。
  *
  * 口语相对时长，不是「加入 N 天」——这一行是给「TA 跟了我多久」一个人类回答，不是
- * 一个计数。档位与 `bots.growth.time.*` 同一口径（刚刚 / N 天前 / …），只是这里
- * 最细到天：一个伙伴是几分钟前加入的没有意义。拿不到 createdAt 就不显示，不编。
+ * 一个计数。这里只保留对长期伙伴有意义的天／月／年档位：一个伙伴是几分钟前加入
+ * 没有意义。拿不到 createdAt 就不显示，不编。
  */
 export function botJoinedRelativeKey(
   createdAt: number,
@@ -202,7 +202,7 @@ export function BotSettings({
             </span>
           ) : autosave.status === 'error' ? (
             <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
-              {t('bots.profileApply.saveFailed')}
+              {t('bots.profileSaveFailed')}
               <button
                 type="button"
                 onClick={() => void autosave.retry()}
@@ -467,20 +467,7 @@ export function BotsHomeView() {
     let cancelled = false;
     if (canonicalSessionId) {
       setIsCreatingSession(false);
-      void window.electronAPI.localDb.bots
-        .renewIfDue({ botId: selectedBot.id })
-        .catch(() => ({ renewed: false, canonicalSessionId }))
-        .then((renewal) => {
-          const activeSessionId = renewal.canonicalSessionId ?? canonicalSessionId;
-          if (activeSessionId !== canonicalSessionId) {
-            setCanonicalBotSession(selectedBot.id, {
-              id: activeSessionId,
-              title: selectedBot.name,
-              updatedAt: Date.now(),
-            });
-          }
-          return withBotCanonicalSessionReadTimeout(() => sessionService.get(activeSessionId));
-        })
+      void withBotCanonicalSessionReadTimeout(() => sessionService.get(canonicalSessionId))
         .then(async (session) => {
           if (cancelled) return;
           if (session.status !== 'active') {
@@ -519,7 +506,7 @@ export function BotsHomeView() {
           // The profile pointer is still the CAS authority even when its Session
           // row disappeared. Passing null can never repair that state because
           // main correctly sees a non-null canonical pointer. Preserve the
-          // observed id so a concurrent Renew still loses the CAS safely.
+          // observed id so a concurrent recovery still loses the CAS safely.
           const next = await createCanonicalSession(selectedBot, canonicalSessionId, true).catch(
             () => null,
           );

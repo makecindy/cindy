@@ -24,7 +24,6 @@ function bot(status: BotProfile['status']): BotProfile {
   return {
     id: 'bot-1',
     name: 'Helper',
-    channel: 'local',
     description: '',
     avatar: '🤖',
     avatarColor: 'violet',

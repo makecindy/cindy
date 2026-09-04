@@ -1,5 +1,5 @@
 /**
- * 一次 call 的状态机(伙伴目标与 Cindy 任务目标共用同一套):
+ * 一条伙伴发起的后台 Session 任务状态机：
  *
  *   queued → running ⇄ waiting → completed | failed | cancelled
  *
@@ -56,55 +56,15 @@ export interface BotDelegationCapabilitySnapshot {
   memoryEnabled: boolean;
 }
 
-export type BotCapabilityRuntimeStatus =
-  | 'ready'
-  | 'degraded'
-  | 'failed'
-  | 'unverified';
-
-export interface BotCapabilityRuntimeView {
-  status: BotCapabilityRuntimeStatus;
-  snapshotId: string | null;
-  sessionId: string | null;
-  preparedAt: number | null;
-  reason: string | null;
-  resolvedSkills: string[];
-  unavailableSkills: string[];
-  resolvedMcpServers: string[];
-  unavailableMcpServers: string[];
-  resolvedToolsets: string[];
-  unavailableToolsets: string[];
-  unavailableMemoryRefs: string[];
-}
-
 /**
- * Trustworthy delegation catalog entry. Configured values come from the
- * current immutable Profile version; runtime values come only from the latest
- * native runtime snapshot for that exact version. A Bot without such a
- * snapshot is explicitly unverified instead of being advertised as ready.
- */
-export interface BotCapabilityCatalogEntry {
-  id: string;
-  name: string;
-  description: string | null;
-  isCurrent: boolean;
-  currentVersion: number;
-  canonicalSessionId: string | null;
-  configured: BotDelegationCapabilitySnapshot;
-  runtime: BotCapabilityRuntimeView;
-  activeInboundDelegations: number;
-  activeOutboundDelegations: number;
-  busy: boolean;
-  capabilityTags: string[];
-}
-
-/**
- * Immutable execution plan captured before a child task is made visible.
+ * Execution plan captured before a child task is made visible.
  *
  * Bot Profile versions freeze identity, but capability catalogs are mutable.
  * Delegations therefore persist the exact authorization facts approved at
  * creation time. Runtime startup and restart recovery must consume this
- * snapshot instead of re-reading the Bot's current configuration.
+ * snapshot instead of re-reading the Bot's current configuration. Authorization and
+ * destination facts remain immutable; only `limits.deadlineAt` may move forward by the
+ * measured time spent waiting for a user decision.
  *
  * `targetBotId === null` means the child is a plain Cindy task (not another
  * Bot): no target Profile freeze, no target-side timeline mirror — the child
@@ -116,7 +76,7 @@ export interface BotDelegationPlanSnapshot {
   targetBotId: string | null;
   /**
    * The target Bot task that received the human-visible delegation transcript.
-   * Frozen at creation so a later Renew never splits the request and result
+   * Frozen at creation so an abnormal canonical recovery never splits the request and result
    * across two tasks. Absent for plain-Cindy delegations.
    */
   targetCanonicalSessionId?: string;
@@ -224,6 +184,8 @@ export interface BotDelegationView {
   targetBotName: string;
   parentSessionId: string | null;
   childSessionId: string | null;
+  /** The actual child Session title, including a caller-supplied task name. */
+  title: string;
   objective: string;
   contextRefs: string[];
   permissionSnapshot: Record<string, unknown>;

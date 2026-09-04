@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bot,
@@ -11,8 +11,11 @@ import {
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
+import * as sessionService from '@/lib/sessionService';
+import { isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +24,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
+import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
+import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
@@ -59,7 +64,7 @@ const UNREAD_BADGE_CLASS =
 function BotsSidebarContent() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { botId } = useParams();
+  const { botId, sessionId } = useParams();
   const bots = useBotProfiles();
   const unreadByBotId = useBotUnreadCounts();
   const rosterBots = bots.filter((bot) => bot.status !== 'archived');
@@ -104,8 +109,9 @@ function BotsSidebarContent() {
        (main/agent-island/service.ts 的 publish 两条分支都会 emit)。
      - 依赖轻：只吃 shared 里的类型，不用把整个聊天 store 拖进侧栏。
 
-    刻意**不**挂 useSessionRunningStatus —— 那个 hook 还负责完成/出错角标与系统
-    通知的状态机，在这里再挂一份会把那些副作用发两遍。
+    当前侧栏只有一个 owner：进入伙伴页时普通任务侧栏会被这个节点替换，因此这里
+    必须接手 useSessionRunningStatus。否则用户停留在伙伴页时，伙伴和普通任务的
+    完成、失败、待回复都没有系统通知。
   */
   const islandActivity = useAgentIslandActivityMap();
   const isBotWorking = (bot: BotProfile): boolean => {
@@ -119,6 +125,70 @@ function BotsSidebarContent() {
   };
   const roster = partitionBotRoster(rosterBots, { query, showHidden });
   const showSearch = rosterBots.length >= 8 || query.trim().length > 0;
+
+  const sessionOwners = useMemo(() => {
+    const next = new Map<string, { bot: BotProfile; title: string }>();
+    for (const bot of bots) {
+      for (const session of bot.sessions) next.set(session.id, { bot, title: session.title });
+    }
+    return next;
+  }, [bots]);
+  const activeBotSessionId = useMemo(() => {
+    if (sessionId) return sessionId;
+    const selectedBot = bots.find((bot) => bot.id === botId);
+    return selectedBot ? canonicalBotSessionId(selectedBot) : undefined;
+  }, [botId, bots, sessionId]);
+  const fireSessionNotification = useCallback(
+    (targetSessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+      const owner = sessionOwners.get(targetSessionId);
+      if (owner) {
+        const title =
+          owner.title.trim() && owner.title !== owner.bot.name
+            ? `${owner.bot.name} · ${owner.title}`
+            : owner.bot.name;
+        sendSessionEventNotification(targetSessionId, title, kind);
+        return;
+      }
+      // useSessionRunningStatus observes the shared runtime map, so it also
+      // keeps ordinary tasks notifying while the user is on the Bots page.
+      // Resolve their real title lazily instead of exposing an internal id.
+      void sessionService
+        .get(targetSessionId)
+        .then((session) => {
+          if (isOrcaWorkerSession(session)) return;
+          sendSessionEventNotification(
+            targetSessionId,
+            projectDraftSessionTitle(session.title, t('ccAgent.common.unnamedSession')),
+            kind,
+          );
+        })
+        .catch(() => {
+          sendSessionEventNotification(
+            targetSessionId,
+            t('ccAgent.common.unnamedSession'),
+            kind,
+          );
+        });
+    },
+    [sessionOwners, t],
+  );
+  const handleSessionDone = useCallback(
+    (targetSessionId: string) => fireSessionNotification(targetSessionId, 'done'),
+    [fireSessionNotification],
+  );
+  const handleSessionError = useCallback(
+    (targetSessionId: string) => fireSessionNotification(targetSessionId, 'error'),
+    [fireSessionNotification],
+  );
+  const handleSessionNeedsReply = useCallback(
+    (targetSessionId: string) => fireSessionNotification(targetSessionId, 'needs-reply'),
+    [fireSessionNotification],
+  );
+  useSessionRunningStatus(activeBotSessionId, {
+    onSessionDone: handleSessionDone,
+    onSessionError: handleSessionError,
+    onSessionNeedsReply: handleSessionNeedsReply,
+  });
 
   useEffect(() => {
     if (roster.visible.length === 0) return;

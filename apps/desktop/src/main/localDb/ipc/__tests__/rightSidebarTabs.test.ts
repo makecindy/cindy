@@ -57,8 +57,6 @@ function createDb(): Database.Database {
     CREATE INDEX right_sidebar_tabs_session_idx ON right_sidebar_tabs (session_id, position);
     CREATE UNIQUE INDEX right_sidebar_tabs_subagents_singleton_idx
       ON right_sidebar_tabs (session_id) WHERE kind = 'subagents';
-    CREATE UNIQUE INDEX right_sidebar_tabs_bot_delegations_singleton_idx
-      ON right_sidebar_tabs (session_id) WHERE kind = 'bot-delegations';
     CREATE UNIQUE INDEX right_sidebar_tabs_bot_artifacts_singleton_idx
       ON right_sidebar_tabs (session_id) WHERE kind = 'bot-artifacts';
   `);
@@ -347,6 +345,12 @@ describe('rightSidebarTabs IPC', () => {
         invoke('local-db:right-sidebar-tabs:ensure-singleton', {
           sessionId: 's1',
           kind: 'web-browser',
+        }),
+      ).rejects.toThrow(/INVALID_PARAMS/);
+      await expect(
+        invoke('local-db:right-sidebar-tabs:ensure-singleton', {
+          sessionId: 's1',
+          kind: 'bot-delegations',
         }),
       ).rejects.toThrow(/INVALID_PARAMS/);
     });

@@ -1,23 +1,20 @@
 import type { GeneratedFileRef } from '@/lib/generatedFiles';
 
 const PRIMARY_EXTENSIONS = new Set([
-  // 可直接预览的视觉与网页成果。
+  // 可直接打开的视觉成果。SVG 是源文件，而且当前本地协议不能
+  // 稳定给它出缩略图，所以留在「相关文件」，不冒充可见成品。
   'avif',
   'bmp',
   'gif',
   'heic',
   'heif',
-  'htm',
-  'html',
   'ico',
   'jpeg',
   'jpg',
   'png',
-  'svg',
   'tif',
   'tiff',
   'webp',
-  'xhtml',
   // 办公与媒体成果。即使不能在卡内渲染，它们仍是用户可直接使用的文件。
   'csv',
   'doc',
@@ -27,7 +24,6 @@ const PRIMARY_EXTENSIONS = new Set([
   'gltf',
   'key',
   'm4a',
-  'md',
   'mov',
   'mp3',
   'mp4',
@@ -42,13 +38,15 @@ const PRIMARY_EXTENSIONS = new Set([
   'rtf',
   'stl',
   'tsv',
-  'txt',
   'wav',
   'webm',
   'xls',
   'xlsx',
   'zip',
 ]);
+
+const HTML_EXTENSIONS = new Set(['htm', 'html', 'xhtml']);
+const GENERIC_HTML_NAMES = new Set(['index.htm', 'index.html', 'index.xhtml', 'preview.html']);
 
 const SUPPORTING_DIRECTORY_NAMES = new Set([
   '.preview',
@@ -93,7 +91,13 @@ export function isBotSupportingGeneratedFile(file: GeneratedFileRef): boolean {
 export function isBotPrimaryGeneratedFile(file: GeneratedFileRef): boolean {
   if (isBotSupportingGeneratedFile(file)) return false;
   if (file.artifact) return true;
-  return PRIMARY_EXTENSIONS.has(generatedFileExtension(file));
+  const extension = generatedFileExtension(file);
+  if (HTML_EXTENSIONS.has(extension)) {
+    // 「index.html」常常只是把多份方案拼起来的内部预览页。真正的网页
+    // 成品应该有能表达内容的名字，才会进入首层。
+    return !GENERIC_HTML_NAMES.has(file.name.toLowerCase());
+  }
+  return PRIMARY_EXTENSIONS.has(extension);
 }
 
 export function partitionBotGeneratedFiles(files: readonly GeneratedFileRef[]): {

@@ -103,7 +103,6 @@ function bot(overrides: Partial<BotProfile> = {}): BotProfile {
   return {
     id: 'bot-1',
     name: 'PR steward',
-    channel: 'local',
     description: 'Delivery steward',
     identitySource: 'Persistent role',
     userContextSource: 'Call me Chris',
@@ -122,7 +121,6 @@ function bot(overrides: Partial<BotProfile> = {}): BotProfile {
         id: 'bot-1-chat',
         title: 'Chat',
         kind: 'chat',
-        channel: 'local',
         updatedAt: 0,
         profileVersion: 1,
       },

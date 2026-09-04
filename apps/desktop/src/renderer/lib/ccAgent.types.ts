@@ -184,12 +184,9 @@ export interface CcMeta {
   reviewRun?: ReviewRunMeta;
 
   /**
-   * Host-side marker:这条消息属于一次伙伴之间的委派协作(发起方的协作卡锚点、
-   * 插话留痕,或目标伙伴的客座请求 / 客座结果)。renderer 据此把纯文本镜像升级成
-   * 协作卡与客座气泡,并在两侧任务之间提供互看跳转。
-   *
-   * 只用于展示,不进 prompt;没有本字段的老镜像消息继续按普通文本渲染。
-   * 结构与严格解析见 shared/botCollaboration.ts。
+   * Host-side marker: 后台 Session 任务的持久卡片锚点或后续消息留痕。
+   * renderer 只用它呈现和打开对应任务，不进 prompt。历史角色仍由
+   * shared/botCollaboration.ts 严格解析，但新数据不再创建伙伴客座镜像。
    */
   botCollaboration?: import('../../shared/botCollaboration').BotCollaborationMeta;
 

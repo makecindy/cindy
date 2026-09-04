@@ -15,7 +15,7 @@ const file = (path: string): GeneratedFileRef => ({
 });
 
 describe('伙伴产物分组', () => {
-  it('把 Kiro 的 SVG 与 HTML 提到成果层，把预览截图留在相关文件', () => {
+  it('不把 SVG 源文件和通用 index 预览页冒充成品', () => {
     const files = [
       file('/bot/workspace/logo-concept-A-邮筒猫徽章.svg'),
       file('/bot/workspace/logo-concept-B-猫尾小岛横版.svg'),
@@ -26,17 +26,20 @@ describe('伙伴产物分组', () => {
 
     const grouped = partitionBotGeneratedFiles(files);
 
-    expect(grouped.primary.map((item) => item.name)).toEqual([
+    expect(grouped.primary.map((item) => item.name)).toEqual([]);
+    expect(grouped.related.map((item) => item.name)).toEqual([
       'logo-concept-A-邮筒猫徽章.svg',
       'logo-concept-B-猫尾小岛横版.svg',
       'logo-concept-C-纪念邮票版.svg',
       'index.html',
+      'C_full.png',
     ]);
-    expect(grouped.related.map((item) => item.name)).toEqual(['C_full.png']);
   });
 
-  it('把网页配套源码放进相关文件，不把它们冒充成果', () => {
-    expect(isBotPrimaryGeneratedFile(file('/bot/workspace/index.html'))).toBe(true);
+  it('只把有内容名的网页当成品，配套源码收进相关文件', () => {
+    expect(isBotPrimaryGeneratedFile(file('/bot/workspace/index.html'))).toBe(false);
+    expect(isBotPrimaryGeneratedFile(file('/bot/workspace/猫岛邮局-logo-方案.html'))).toBe(true);
+    expect(isBotPrimaryGeneratedFile(file('/bot/workspace/logo.svg'))).toBe(false);
     expect(isBotPrimaryGeneratedFile(file('/bot/workspace/styles.css'))).toBe(false);
     expect(isBotPrimaryGeneratedFile(file('/bot/workspace/app.js'))).toBe(false);
     expect(isBotPrimaryGeneratedFile(file('/bot/workspace/data.json'))).toBe(false);

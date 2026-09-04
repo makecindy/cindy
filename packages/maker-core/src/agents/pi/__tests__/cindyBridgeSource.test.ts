@@ -1326,7 +1326,16 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_BOT_COLLABORATION_TOOL = 'collaborate_with_bot'",
+      "const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task'",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate'",
@@ -1334,11 +1343,9 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "name: CINDY_CREATE_TEAMMATE_TOOL",
     );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("collaborate_with_bot");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain(
-      "enum: ['status', 'delegate', 'notify', 'start_task']",
+      "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
@@ -1351,7 +1358,7 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionToolName = gatewayCall?.qualifiedName');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionInput = gatewayCall?.args');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "qualifiedName: 'mcp__cindy_helper__' + CINDY_BOT_COLLABORATION_TOOL",
+      "qualifiedName: 'mcp__cindy_helper__' + name",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "qualifiedName: 'mcp__cindy_memory__call_tool'",

@@ -38,11 +38,6 @@ import type {
   SessionSendResult,
   UserMessage,
 } from '@cindy/maker-core';
-import { buildBotMemoryScopeKey } from '@cindy/maker-core';
-import {
-  normalizeBotMemorySeedEntries,
-  selectMissingBotMemorySeedEntries,
-} from '../../shared/botMemorySeed.js';
 import {
   effectiveSourceIdForModel,
   findCatalogModel,
@@ -367,11 +362,6 @@ import {
   readClaudeApiKey,
 } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
-import {
-  deleteBotSkillForBot,
-  listBotSkillsForBot,
-  readBotSkillForBot,
-} from './botSkillService.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
 import {
   setRemoteCodexLiveTurnChecker,
@@ -672,7 +662,6 @@ import { registerAndroidAutomationHandlers } from './androidHandlers.js';
 import { registerIOSSimulatorHandlers } from './iosSimulatorHandlers.js';
 import { cancelIOSSimulatorSessionOperations } from '../mcp-integrations/ios-simulator.js';
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
-import { BOT_DELEGATION_STATUSES } from '../../shared/botDelegation.js';
 import type { CollabDispatchOutcome } from './collabSendOutcome.js';
 import {
   AcceptedCallbackDispatchCancelled,
@@ -3277,7 +3266,7 @@ const sessionTurnLeaseTracker = new SessionTurnLeaseTracker({
   warn: (message, fields) => log.warn(message, fields),
 });
 /**
- * Renew replaces the canonical task and closes its live runtime.  The same
+ * Recovering a missing/deleted canonical task can replace its runtime. The same
  * per-session lock used by message dispatch must therefore cover the final
  * busy check and the SQLite CAS; otherwise a turn can start between a renderer
  * precheck and the archive transaction and lose its terminal output.
@@ -3294,7 +3283,7 @@ export async function assertBotCanonicalReplacementIdle(sessionId: string): Prom
   if (busy) {
     throwIpcError(
       'SESSION_RUNNING',
-      'Bot 主任务仍在运行或等待交互，请等待本轮结束后再 Renew',
+      '伙伴主任务仍在运行或等待处理，现在不能恢复替代任务',
     );
   }
 }
@@ -5315,6 +5304,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true,
           })
         ) {
+          // Snapshot before the queue-drain microtask can promote the follow-up
+          // into activeTurn. Otherwise this done event could close the whole
+          // Session task while its next instructed turn has already begun.
+          const botDelegationHadPendingInputAtTerminal =
+            (agentInputCoordinatorHolder
+              ?.getQueueControlSnapshot(session.id).pendingQueue.length ?? 0) > 0;
           void (async () => {
             try {
               await workerTurnStartSequencer.waitForStart(session.id);
@@ -5345,6 +5340,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
                 resultText: finalText,
                 error: errorText,
+                hadPendingInputAtTerminal: botDelegationHadPendingInputAtTerminal,
               });
             } catch (error) {
               log.warn('Bot delegation terminal settlement failed', {
@@ -8370,7 +8366,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .select({
           botId: botSessionLinks.botId,
           role: botSessionLinks.role,
-          routeKey: botSessionLinks.routeKey,
           profileVersion: botSessionLinks.profileVersion,
           source: sessions.source,
           status: sessions.status,
@@ -8488,7 +8483,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       try {
         await ensureRemoteReadyForSessionStart({ createOpts });
-        // Resource drift is a Renew boundary, not a reason to destroy the
+        // Resource drift is a runtime restart boundary, not a reason to destroy the
         // currently healthy runtime. Resolve the exact native Skill/MCP/
         // Toolset bundle before closeSession so a failed preflight leaves the
         // old process and its resume ownership untouched.
@@ -10888,7 +10883,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }),
     ensureCanonicalSession: async (botId) => {
       if (!botDelegationServiceHolder) {
-        return { ok: false as const, errorCode: 'DELEGATION_UNAVAILABLE', message: 'Bot 委派服务尚未就绪' };
+        return { ok: false as const, errorCode: 'DELEGATION_UNAVAILABLE', message: '伙伴消息服务尚未就绪' };
       }
       return botDelegationServiceHolder.ensureCanonicalSession(botId);
     },
@@ -10923,6 +10918,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload);
     },
     resolveInteraction: resolvePendingInteraction,
+    hasPendingInput: (sessionId) =>
+      inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0,
     collectArtifacts: async (sessionId) => {
       await waitForTurnChangeSetSeal(sessionId);
       const changeSets = await listTurnChangeSets(sessionId);
@@ -10949,8 +10946,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return [...byPath.values()];
     },
-    requireRuntimeSnapshot: true,
-    isSessionTurnRunning: (sessionId) => maker.getSession(sessionId)?.isTurnRunning() ?? false,
   });
   registerBotLifecycleHandlers({
     maker,
@@ -10961,24 +10956,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(
     MAKER_INVOKE.BOT_DELEGATIONS_LIST,
-    async (event, parentSessionId: unknown, status?: unknown) => {
+    async (event, parentSessionId: unknown) => {
       assertTrustedAppRendererEvent(event);
       if (typeof parentSessionId !== 'string' || parentSessionId.length === 0) {
         throwIpcError('INVALID_PARAMS', 'parentSessionId required');
       }
-      if (
-        status !== undefined
-        && (typeof status !== 'string'
-          || !BOT_DELEGATION_STATUSES.includes(
-            status as (typeof BOT_DELEGATION_STATUSES)[number],
-          ))
-      ) {
-        throwIpcError('INVALID_PARAMS', 'invalid Bot delegation status');
-      }
-      return delegationForRestore.listDelegations(
-        parentSessionId,
-        status as (typeof BOT_DELEGATION_STATUSES)[number] | undefined,
-      );
+      return delegationForRestore.listDelegations(parentSessionId);
     },
   );
   ipcMain.handle(
@@ -11010,44 +10993,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
       }
       return delegationForRestore.cancelDelegation(parentSessionId, delegationId);
-    },
-  );
-  ipcMain.handle(
-    MAKER_INVOKE.BOT_DELEGATION_INTERJECT,
-    async (
-      event,
-      parentSessionId: unknown,
-      delegationId: unknown,
-      text: unknown,
-      idempotencyKey?: unknown,
-    ) => {
-      assertTrustedAppRendererEvent(event);
-      if (
-        typeof parentSessionId !== 'string'
-        || parentSessionId.length === 0
-        || typeof delegationId !== 'string'
-        || delegationId.length === 0
-      ) {
-        throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
-      }
-      if (typeof text !== 'string' || text.trim().length === 0) {
-        throwIpcError('INVALID_PARAMS', 'text required');
-      }
-      if (
-        idempotencyKey !== undefined
-        && (typeof idempotencyKey !== 'string' || idempotencyKey.length === 0)
-      ) {
-        throwIpcError('INVALID_PARAMS', 'idempotencyKey must be a non-empty string');
-      }
-      // 归属（委派必须由这个父任务发起）、状态（只接受进行中）与幂等都在服务里做，
-      // 这里只挡住形状不对的调用。幂等键由调用方（渲染进程一次插话一个 uuid）给，
-      // 双击 / 重挂载 / 网络重放落到同一个 clientId 上，只会催一次。
-      return delegationForRestore.interjectDelegation(
-        parentSessionId,
-        delegationId,
-        text,
-        idempotencyKey as string | undefined,
-      );
     },
   );
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
@@ -18713,139 +18658,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     log.info('maker-memory:reset');
     return maker.makerMemory.resetAll();
-  });
-
-  // Per-bot Maker Memory ("TA 记得的" — 批次 β). Bot memory lives in the same
-  // makerMemory engine as workdir memory, keyed by buildBotMemoryScopeKey(botId)
-  // (see botProfileRuntime.ts's startSession wiring) — completely independent
-  // of any workdir. skipDisabledCheck: true throughout, same choice
-  // MAKER_MEMORY_RESET/resetWorkdir already makes: a user who turned the
-  // global Maker Memory toggle off must still be able to see and clear a
-  // bot's already-written memory, not get MAKER_MEMORY_NOT_READY on their own
-  // data.
-  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_LIST, async (_e, botId: unknown) => {
-    if (typeof botId !== 'string' || !botId.trim()) {
-      throwIpcError('INVALID_PARAMS', 'botId required (string)');
-    }
-    if (!maker.makerMemory) {
-      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
-    }
-    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
-      skipDisabledCheck: true,
-    });
-    return store.list();
-  });
-
-  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_DELETE, async (_e, botId: unknown, filename: unknown) => {
-    if (typeof botId !== 'string' || !botId.trim()) {
-      throwIpcError('INVALID_PARAMS', 'botId required (string)');
-    }
-    if (typeof filename !== 'string' || !filename.trim()) {
-      throwIpcError('INVALID_PARAMS', 'filename required (string)');
-    }
-    if (!maker.makerMemory) {
-      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
-    }
-    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
-      skipDisabledCheck: true,
-    });
-    await store.delete(filename);
-    log.info('bot-memory:delete', { botId });
-    return { ok: true };
-  });
-
-  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_CLEAR, async (_e, botId: unknown) => {
-    if (typeof botId !== 'string' || !botId.trim()) {
-      throwIpcError('INVALID_PARAMS', 'botId required (string)');
-    }
-    if (!maker.makerMemory) {
-      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
-    }
-    log.info('bot-memory:clear', { botId });
-    return maker.makerMemory.resetWorkdir(buildBotMemoryScopeKey(botId));
-  });
-
-  /*
-    「初始记忆」落地。模板选卡与 AI 角色生成都走这一条 —— 一个伙伴刚加入时就该
-    有几条自己的开场笔记,而不是让「TA 记得的」空到用户以为这块坏了。
-
-    幂等以 **slug** 为准(见 shared/botMemorySeed.ts):重复调用、重装、重试都只补
-    缺的那几条,已经在库里的一律跳过。用户把某条改写成自己的说法之后,再触发一次
-    也不会被冲掉 —— 那是他的记忆,不是我们的默认值。
-
-    skipDisabledCheck 与 list/delete/clear 一致:全局 Maker Memory 开关的状态不该
-    决定「这个伙伴自带的东西有没有落地」,否则用户开回开关时看到的是一个空列表。
-  */
-  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_SEED, async (_e, botId: unknown, entries: unknown) => {
-    if (typeof botId !== 'string' || !botId.trim()) {
-      throwIpcError('INVALID_PARAMS', 'botId required (string)');
-    }
-    const normalized = normalizeBotMemorySeedEntries(entries);
-    if (normalized.length === 0) return { written: 0, skipped: 0 };
-    if (!maker.makerMemory) {
-      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
-    }
-    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
-      skipDisabledCheck: true,
-    });
-    const existing = (await store.list()).map((record) => record.slug);
-    const missing = selectMissingBotMemorySeedEntries(normalized, existing);
-    let written = 0;
-    for (const entry of missing) {
-      try {
-        await store.write({
-          type: entry.type,
-          name: entry.slug,
-          title: entry.title,
-          description: entry.description,
-          body: entry.body,
-          mode: 'create',
-        });
-        written += 1;
-      } catch (cause) {
-        // 一条写不进去(撞名竞态 / size 硬上限)不该让其余几条跟着丢。
-        log.warn('bot-memory:seed entry failed', { botId, slug: entry.slug, error: String(cause) });
-      }
-    }
-    log.info('bot-memory:seed', { botId, written, skipped: normalized.length - written });
-    return { written, skipped: normalized.length - written };
-  });
-
-  /*
-    Per-bot 真技能(「TA 学会的」)。三个入口都是只读或删除 —— 设置页不提供
-    「手写一个技能」的写入口:这个列表回答的是「TA 自己长出了什么本事」,用户手写
-    进来的东西会让它变成另一个 Skill 管理器,与产品口径不符。
-
-    与记忆那一组不同,这里不需要 skipDisabledCheck 之类的开关判断:技能是独立的
-    文件存储,不经 makerMemory 引擎。
-  */
-  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_LIST, async (_e, botId: unknown) => {
-    if (typeof botId !== 'string' || !botId.trim()) {
-      throwIpcError('INVALID_PARAMS', 'botId required (string)');
-    }
-    return listBotSkillsForBot(botId);
-  });
-
-  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_READ, async (_e, botId: unknown, slug: unknown) => {
-    if (typeof botId !== 'string' || !botId.trim()) {
-      throwIpcError('INVALID_PARAMS', 'botId required (string)');
-    }
-    if (typeof slug !== 'string' || !slug.trim()) {
-      throwIpcError('INVALID_PARAMS', 'slug required (string)');
-    }
-    return readBotSkillForBot(botId, slug);
-  });
-
-  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_DELETE, async (_e, botId: unknown, slug: unknown) => {
-    if (typeof botId !== 'string' || !botId.trim()) {
-      throwIpcError('INVALID_PARAMS', 'botId required (string)');
-    }
-    if (typeof slug !== 'string' || !slug.trim()) {
-      throwIpcError('INVALID_PARAMS', 'slug required (string)');
-    }
-    const deleted = await deleteBotSkillForBot(botId, slug);
-    log.info('bot-skill:delete', { botId, deleted });
-    return { ok: true as const, deleted };
   });
 
   // 占位：MetaAgent 入口

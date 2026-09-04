@@ -40,7 +40,6 @@ import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
-import { findBotProfileForSession } from '@/features/bots/botSessionOwners';
 import { TabBar, TabStrip } from './TabBar';
 import { EmptyState } from './EmptyState';
 import { getTabKind, hydrateTabState } from './registry';
@@ -66,8 +65,6 @@ import { initIOSSimulatorFocusBridge } from './lib/iosSimulatorFocusBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { useBotProfiles } from '@/features/bots/botStore';
-import { BotPronounProvider } from '@/features/bots/botPronounContext';
 import {
   isIOSSimulatorPluginAvailable,
   mergeAvailableTabOrder,
@@ -163,12 +160,6 @@ export function RightSidebarShell({
   railChromeActionsHitHole = false,
 }: RightSidebarShellProps) {
   const { isFullscreen } = useMacFullscreen();
-  const bots = useBotProfiles();
-  // 当前会话属于哪个伙伴。以前这里只留了一个 boolean,右侧栏那几处「{{pronoun}}
-  // 的协同 / 的作品」就永远拿不到性别,一律落到兜底词上(实测)。伙伴本体本来就
-  // 在手边,取出来供进 context,子树里的 useBotTranslation 直接就有「她 / 他」。
-  const sessionBot = sessionId ? findBotProfileForSession(bots, sessionId) : undefined;
-  const isBotSession = Boolean(sessionBot);
   const chromeActionsLeft =
     isMac && !isFullscreen
       ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
@@ -395,12 +386,14 @@ export function RightSidebarShell({
     tabs.length,
   ]);
 
-  // 面板收束(2026-08):插件页签不再注册进右侧栏。历史会话里持久化的
-  // `ghost:*` tab 是旧形态残留,发现即静默关闭 —— 这些 kind 已无渲染方,
+  // 面板收束后不再注册的历史页签在 hydration 后静默关闭，避免显示死页签。
+  // `ghost:*` 和 `bot-delegations` 只作为数据库历史值保留。
+  // 这些 kind 已无渲染方,
   // 留着只会落到 PlaceholderBody 变成"敬请期待"的死页签。
   useEffect(() => {
     if (!bucket.hydrated || !sessionId) return;
-    const legacyGhostTabs = bucket.tabs.filter((tab) => tab.kind.startsWith('ghost:'));
+    const legacyGhostTabs = bucket.tabs.filter((tab) => tab.kind.startsWith('ghost:') || tab.kind === ('bot-delegations' as TabKindId),
+    );
     if (legacyGhostTabs.length === 0) return;
     void (async () => {
       for (const tab of legacyGhostTabs) {
@@ -587,7 +580,6 @@ export function RightSidebarShell({
   }, [handleCycleTab, sessionId]);
 
   return (
-    <BotPronounProvider bot={sessionBot}>
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       {unifiedTopbar ? (
         <div
@@ -721,8 +713,6 @@ export function RightSidebarShell({
           // tab 列表为空时永远渲染 EmptyState。审查页签只通过「+」dropdown 或
           // EmptyState 的"打开审查"入口由用户主动创建。
           <EmptyState
-            botSession={isBotSession}
-            onAddDelegationsTab={() => handleAdd('bot-delegations')}
             onAddFileTab={() => handleAdd('file-browser')}
             onAddReviewTab={() => handleAdd('review')}
             onAddSubagentsTab={() => handleAdd('subagents')}
@@ -753,7 +743,6 @@ export function RightSidebarShell({
         )}
       </div>
     </div>
-    </BotPronounProvider>
   );
 }
 
