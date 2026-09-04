@@ -961,7 +961,7 @@ describe('远程交互接线不变式', () => {
     const start = src.indexOf('if (sourceRemoteDeviceId) {');
     expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, start + 4400);
-    const atomic = body.indexOf('effort: newEffort,', body.indexOf('useAtomicSelection'));
+    const atomic = body.indexOf('effort: atomicEffort,', body.indexOf('useAtomicSelection'));
     const fallback = body.indexOf('if (!useAtomicSelection) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
@@ -985,7 +985,7 @@ describe('远程交互接线不变式', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
-    const atomic = body.indexOf('effort: targetEffort,', body.indexOf('useAtomicSelection'));
+    const atomic = body.indexOf('effort: remoteAtomicEffort,', body.indexOf('useAtomicSelection'));
     const fallback = body.indexOf('if (!useAtomicSelection) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
@@ -1257,7 +1257,7 @@ describe('远程交互接线不变式', () => {
 
     const applyStart = src.indexOf('const applyModelAndEffort = async');
     expect(applyStart).toBeGreaterThan(-1);
-    const applyBody = src.slice(applyStart, applyStart + 3200);
+    const applyBody = src.slice(applyStart, applyStart + 5200);
     expect(applyBody).toContain('modelMemory?.setFast(');
     expect(applyBody).toMatch(
       /modelMemory\?\.setFast\(\s*currentModelAgentKind,\s*newProviderId,\s*modelId,\s*restoredFast,?\s*\)/,
@@ -1272,7 +1272,7 @@ describe('远程交互接线不变式', () => {
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
     const runtimeGate = body.indexOf('await setModelWithFinalWindowConfirmation(');
-    const atomicSelection = body.indexOf('effort: eff,', runtimeGate);
+    const atomicSelection = body.indexOf('effort: atomicEffort,', runtimeGate);
     const atomicFast = body.indexOf('fastMode: restoredFast,', atomicSelection);
     const applyUi = body.indexOf('applyProviderSelection();');
     expect(runtimeGate).toBeGreaterThan(-1);
@@ -1291,8 +1291,8 @@ describe('远程交互接线不变式', () => {
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
     const runtimeGate = body.indexOf('await setModelWithFinalWindowConfirmation(');
-    const atomicSelection = body.indexOf('effort: newEffort,', runtimeGate);
-    const atomicFast = body.indexOf('fastMode: restoredFast,', atomicSelection);
+    const atomicSelection = body.indexOf('effort: atomicEffort,', runtimeGate);
+    const atomicFast = body.indexOf('fastMode: atomicFast,', atomicSelection);
     const applyUi = body.indexOf('onModelDidChange?.(newModelId)');
     expect(runtimeGate).toBeGreaterThan(-1);
     expect(atomicSelection).toBeGreaterThan(runtimeGate);

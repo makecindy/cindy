@@ -1,8 +1,9 @@
-import { Lock, Star, Zap } from 'lucide-react';
+import { Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type {
   FocusEvent as ReactFocusEvent,
   KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
 } from 'react';
 
@@ -241,8 +242,8 @@ export function UnifiedModelRow({
   const provider = providers.find((item) => item.id === entry.providerId);
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
-  const reveal = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!paymentRequired) onReveal(anchor, event.currentTarget);
+  const openConfig = (element: HTMLElement) => {
+    if (!paymentRequired) onReveal(anchor, element);
   };
   const tripleTitle = `${engineOption.label}${
     config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
@@ -267,13 +268,13 @@ export function UnifiedModelRow({
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
     'data-unified-anchor': anchorKey(anchor),
-    onPointerEnter: reveal,
-    onPointerMove: reveal,
     onPointerLeave: onLeave,
-    onFocus: (event: ReactFocusEvent<HTMLDivElement>) => {
-      if (!paymentRequired) onReveal(anchor, event.currentTarget);
-    },
     onBlur: (event: ReactFocusEvent<HTMLDivElement>) => onBlurAway(event.relatedTarget),
+    onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (interactionDisabled || paymentRequired) return;
+      event.preventDefault();
+      openConfig(event.currentTarget);
+    },
     onClick: () => {
       if (interactionDisabled) return;
       if (paymentRequired) onPaymentRequired?.();
@@ -327,6 +328,28 @@ export function UnifiedModelRow({
       <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
     </button>
   ) : null;
+  const customizeButton = (
+    <button
+      type="button"
+      data-row-customize
+      disabled={interactionDisabled || paymentRequired}
+      onClick={(event) => {
+        event.stopPropagation();
+        const row = event.currentTarget.closest('[data-unified-anchor]');
+        if (row instanceof HTMLElement) openConfig(row);
+      }}
+      title={t('newChat.modelSelector.unified.customize')}
+      aria-label={t('newChat.modelSelector.unified.customize')}
+      className={cn(
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+        active
+          ? 'text-[var(--text-secondary)] opacity-100'
+          : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--text-secondary)]',
+      )}
+    >
+      <SlidersHorizontal size={14} />
+    </button>
+  );
   const paymentRequiredBadge =
     paymentRequired && paymentRequiredLabel ? (
       <span
@@ -442,6 +465,7 @@ export function UnifiedModelRow({
           />
         )}
         {starButton}
+        {customizeButton}
         {/* 右缘簇:⚡ + 档位字 + 来源字签(常驻,任何滚动位置都读得出这行是谁家的)。
             引擎不再进右簇 —— 行首徽标已承载。 */}
         <span
@@ -541,6 +565,7 @@ export function UnifiedModelRow({
           />
         )}
         {starButton}
+        {customizeButton}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
             设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
         <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">

@@ -339,7 +339,7 @@ describe('ChatInput model source switching wiring', () => {
       'engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}',
     );
     expect(chatInputSource).toContain(
-      "resolveModelSelectorAgentIdentity(runtimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??",
+      'resolveModelSelectorAgentIdentity(runtimeAgentKind, null)?.vendorKey ??',
     );
     // 草稿没有 session 身份可言,当前引擎就是 vendorKey。
     expect(chatInputSource).toContain(': (vendorKey ?? null);');
@@ -393,16 +393,17 @@ describe('ChatInput model source switching wiring', () => {
     const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
     expect(block).toContain('runtimeAgent: runtimeAgentKind ?? undefined');
     expect(block).not.toContain('runtimeAgentKind ?? currentAgent');
-    expect(block).not.toContain('runtimeAgentKind ?? vendorKeyToAgentKind');
+    expect(block).not.toContain('runtimeAgent: runtimeAgentKind ?? vendorKeyToAgentKind');
   });
 
-  it('prefers the pending switch intent target as the unified panel session agent', () => {
+  it('keeps the unified panel session agent on the live runtime, not the pending intent', () => {
     expect(chatInputSource).toContain(
       'const intentTargetAgent = agentSwitchIntent?.target ?? null;',
     );
     expect(chatInputSource).toContain(
-      'const currentAgent = intentTargetAgent ?? vendorKeyToAgentKind(vendorKey);',
+      'const currentAgent = runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey);',
     );
+    expect(chatInputSource).toContain('pendingTarget: intentTargetAgent');
   });
 
   /**
@@ -481,6 +482,44 @@ describe('ChatInput model source switching wiring', () => {
     // activeModel 的三个来源(agentSwitchIntent / pendingRemoteSwitch / initialModel)全是
     // 会话或草稿持有的 wire id;这里不得改成面板的行 id。
     expect(selectorBlock).toContain('modelId={activeModel}');
+    expect(selectorBlock).toContain('effort={activeEffort}');
+    expect(selectorBlock).toContain('agentSwitchIntent?.fastMode');
     expect(selectorBlock).not.toContain('rowModelId');
+  });
+
+  it('sends null atomic effort for models with no ranks and keeps row Fast', () => {
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+    expect(modelChange).toContain('composeAtomicModelSelection({');
+    expect(modelChange).toContain('effort: atomicEffort');
+    expect(modelChange).toContain('fastMode: atomicFast');
+    expect(modelChange).toContain('resolveRequestedEffort({');
+
+    const providerChange = chatInputSource.slice(
+      providerStart,
+      chatInputSource.indexOf('const handleProviderChange = useCallback(', providerStart),
+    );
+    expect(providerChange).toContain('reconciledFast?: boolean');
+    expect(providerChange).toContain('reconciledFast !== undefined');
+    expect(providerChange).toContain('effort: atomicEffort');
+    expect(providerChange).toContain('effort: remoteAtomicEffort');
+
+    expect(chatInputSource).toContain(
+      'handleProviderChange(providerId, modelId, effort, undefined, fast)',
+    );
+  });
+
+  it('reopen snapshot keeps intent model/source together; idle falls back to runtime provider', () => {
+    expect(chatInputSource).toContain(
+      'const activeProviderId = agentSwitchIntent ? agentSwitchIntent.providerId : selectedProviderId;',
+    );
+    expect(chatInputSource).toContain('modelId={activeModel}');
+    expect(chatInputSource).toContain('currentProviderId={activeProviderId}');
+    expect(chatInputSource).not.toContain('currentProviderId={selectedProviderId}');
+    expect(chatInputSource).toContain('agentSwitchIntent?.target');
+    expect(chatInputSource).toContain(
+      'const currentAgent = runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey);',
+    );
   });
 });

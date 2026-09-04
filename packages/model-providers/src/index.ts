@@ -145,6 +145,7 @@ export type { SectionModel, ProviderSection, ModelIconKind } from './sections.js
 export {
   resolveEffort,
   resolveRequestedEffort,
+  composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
   clampEffortToSupported,

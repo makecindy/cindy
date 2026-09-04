@@ -365,6 +365,52 @@ describe('applyRuntimeSetModelChange', () => {
     });
   });
 
+  it('hot-applies a same-provider Claude model change while the turn is running',
+    async () => {
+      // 闸门 fail-open 之后走这条:Opus → Fable / Cindy 同凭证热切,不关会话、不丢 effort。
+      const sessionId = rememberSession('runtime-set-model-claude-hot-in-turn');
+      setSessionProvider(sessionId, 'cindy');
+      const setModel = vi.fn(async () => {});
+      const closeSession = vi.fn(async () => {});
+      const registerPendingCredentialSwitch = vi.fn();
+      const maker: RuntimeSetModelMaker = {
+        getSession: () => ({
+          agentKind: 'claude-code',
+          remoteHostId: null,
+          model: 'claude-opus-5',
+          setModel,
+        }),
+        listActiveSessions: () => [
+          {
+            id: sessionId,
+            agentKind: 'claude-code',
+            remoteHostId: null,
+            isTurnRunning: () => true,
+          },
+        ],
+        closeSession,
+      };
+
+      const result = await applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'claude-fable-5',
+        providerId: 'cindy',
+        effort: 'high',
+        registerPendingCredentialSwitch,
+      });
+
+      expect(result).toEqual({ status: 'applied' });
+      expect(setModel).toHaveBeenCalledWith('claude-fable-5', {
+        providerId: 'cindy',
+        effort: 'high',
+      });
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+      expect(getSessionProvider(sessionId)).toBe('cindy');
+    },
+  );
+
   it('normalizes a whitespace provider before route and busy-session decisions', async () => {
     const sessionId = rememberSession('runtime-set-model-normalize-provider');
     const setModel = vi.fn(async () => {});

@@ -104,6 +104,11 @@ export interface UnifiedRowActionsOptions {
         currentAgent: AgentKind;
         /** 任务正在跑的引擎;缺省 = currentAgent。跨引擎确认路由必须用这个,不能用意图目标。 */
         runtimeAgent?: AgentKind;
+        /**
+         * 已登记、下一条消息才落地的切换目标。有它时,点回真实引擎也要走切换事务
+         * (same-engine-reselect 清意图);点同一个目标 Harness 的其它模型则更新意图、不再弹确认。
+         */
+        pendingTarget?: AgentKind;
         onCrossEngineSelect: (args: {
           providerId: string;
           modelId: string;
@@ -229,11 +234,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    * 点它就绕过确认(2026-08-20 review)。
    */
   const runtimeAgent = sessionEngineFilter?.runtimeAgent;
-  /** 面板展示的是待发送意图,不是正在跑的引擎。真实引擎未知时不算「已在意图上」。 */
+  const pendingTarget = sessionEngineFilter?.pendingTarget;
+  /** 挂着下一条才落地的切换意图。点回真实引擎也要走事务清掉它,不能当普通 SET_MODEL。 */
   const pendingSwitch =
     inSession &&
     runtimeAgent !== undefined &&
-    sessionEngineFilter.currentAgent !== runtimeAgent;
+    pendingTarget !== undefined &&
+    pendingTarget !== runtimeAgent;
   const shouldCrossEngine = (target: AgentKind): boolean => {
     if (sessionEngineFilter === undefined) return false;
     // 真实引擎还没确认:一律走切换确认,不能当同引擎放行。
