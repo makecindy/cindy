@@ -247,7 +247,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     // 透传过去必撞被控端 NO_PROVIDER_FOR_AGENT,协同又静默降级成单会话。
     const fn = source.slice(
       source.indexOf('function draftEnableOrcaOptions('),
-      source.indexOf('const createAgentQuickStarts'),
+      source.indexOf('async function rehomeDraftAttachments('),
     );
     expect(fn).toContain('const preferredAgent');
     // 按目标设备目录判断:首选 agent 无已连接供应商时,从三种 agent 中找可用回退。

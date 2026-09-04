@@ -31,7 +31,6 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -86,7 +85,6 @@ import type {
 } from '@cindy/maker-core';
 import type {
   IMAttachment,
-  IMFinalReplyMirror,
   InteractiveCardSpec,
   StreamingTextHandle,
 } from '@cindy/im';
@@ -184,55 +182,12 @@ function resolveTurnFileRoots(
   return remoteHostId ? [] : [workingDir];
 }
 
-function openRootDirectory(target: string): number {
-  let flags = fs.constants.O_RDONLY;
-  if (fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY;
-  return fs.openSync(target, flags);
-}
-
-function pinTurnFileRoots(
-  roots: readonly string[],
-): Array<{ dev: string; ino: string }> {
-  const pinned: Array<{ dev: string; ino: string }> = [];
-  for (const root of roots) {
-    if (!root.trim()) continue;
-    let fd: number | undefined;
-    try {
-      fd = openRootDirectory(root);
-      const st = fs.fstatSync(fd, { bigint: true });
-      if (!st.isDirectory() || st.ino === 0n) continue;
-      pinned.push({ dev: String(st.dev), ino: String(st.ino) });
-    } catch {
-      /* Unresolvable roots are omitted; an empty pin fail-closes file reuse. */
-    } finally {
-      if (fd !== undefined) fs.closeSync(fd);
-    }
-  }
-  return pinned;
-}
-
-function withTurnFileRoots(
-  mirror: IMFinalReplyMirror | undefined,
-  allowedFileRoots: string[],
-): IMFinalReplyMirror | undefined {
-  if (!mirror) return undefined;
-  return {
-    ...mirror,
-    allowedFileRoots,
-    pinnedFileRoots: pinTurnFileRoots(allowedFileRoots),
-  };
-}
-
 interface TurnState {
   /** Stable identity used by the central interaction router for this turn. */
   turnId: string;
   userId: string;
   /** thread = session 模型的会话维度键(slack thread root ts);feishu undefined。 */
   scopeKey?: string;
-  /** Optional secondary presentation target for this turn's terminal output only. */
-  finalReplyMirror?: IMFinalReplyMirror;
-  /** Releases channel-side confirmation retention when this turn leaves the queue/lifecycle. */
-  finalReplyMirrorRelease: (() => void) | null;
   initialMessageText: string;
   /** First text-delta resolves this lazily (avoids creating a card for empty turns). */
   streamingHandle: StreamingTextHandle | null;
@@ -426,8 +381,6 @@ export interface ImRunAgentTurnArgs {
   attachments: IMAttachment[];
   /** thread = session 模型的会话维度键(slack);feishu 不传。 */
   scopeKey?: string;
-  /** Secondary destination for this turn's completed answer; never affects routing. */
-  finalReplyMirror?: IMFinalReplyMirror;
   /**
    * 发给 agent 的正文覆盖(群上下文前缀拼装, 见 adapter.prepareAgentTurnText)。
    * 缺省 = text。落库(persistUserMessage)与标题生成恒用 text(渠道原文)。
@@ -768,7 +721,6 @@ export function createTurnRunner(
             ui.agent.apiKeyMissing;
           const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
           if (!consumed) await replyMissingAuth(userId, created.missingAuth, scopeKey);
-          await mirrorEarlyRejectReply(args.finalReplyMirror, text);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -789,7 +741,6 @@ export function createTurnRunner(
           if (!consumed) {
             await replyMissingAuth(userId, authStatus, scopeKey, target.attached);
           }
-          await mirrorEarlyRejectReply(withTurnFileRoots(args.finalReplyMirror, allowedFileRoots), text);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -844,8 +795,6 @@ export function createTurnRunner(
       turnId: randomUUID(),
       userId,
       scopeKey: target.scopeKey,
-      finalReplyMirror: withTurnFileRoots(args.finalReplyMirror, allowedFileRoots),
-      finalReplyMirrorRelease: null,
       initialMessageText: text,
       streamingHandle: null,
       streamingHandlePromise: null,
@@ -885,7 +834,6 @@ export function createTurnRunner(
           } else {
             await completeTurnCallbackAfterAck(turn);
           }
-          await mirrorEarlyRejectReply(turn.finalReplyMirror, ui.agent.credentialBusy);
         } else {
           await completeTurnCallbackAfterAck(turn);
         }
@@ -983,7 +931,6 @@ export function createTurnRunner(
         await completeTurnCallbackAfterAck(turn);
         return { kind: 'busy', reason: 'session_running' };
       }
-      retainTurnFinalReplyMirror(turn);
       state.sendQueue.push(item);
       log.info(`queued message for session=${row.id.slice(-8)} position=${state.sendQueue.length}`);
       // 本渠道没有未收口的 turn(纯 desktop turn 在跑) → 派发只能靠它的 stray
@@ -997,7 +944,6 @@ export function createTurnRunner(
       return { kind: 'busy', reason: 'queued_internally' };
     }
 
-    retainTurnFinalReplyMirror(turn);
     const dispatch = await dispatchQueuedSend(state, userId, item);
     if (dispatch.kind !== 'accepted') return dispatch;
     return {
@@ -1317,13 +1263,11 @@ export function createTurnRunner(
               /* The session is already detaching; reporting remains best-effort. */
             }
           }
-          releaseTurnFinalReplyMirror(item.turn);
           finishDeferredDetachIfIdle(state);
           return { kind: 'busy', reason: 'session_detaching' };
         }
         if (item.queueMode === 'external') {
           await completeTurnCallbackAfterAck(item.turn);
-          releaseTurnFinalReplyMirror(item.turn);
           return { kind: 'busy', reason: 'session_running' };
         }
         state.sendQueue.unshift(item);
@@ -1563,45 +1507,11 @@ export function createTurnRunner(
     }
   }
 
-  async function mirrorEarlyRejectReply(
-    mirror: IMFinalReplyMirror | undefined,
-    text: string,
-  ): Promise<void> {
-    await mirrorTurnFinalReply(mirror, text);
-  }
-
-  async function mirrorTurnFinalReply(
-    mirror: IMFinalReplyMirror | undefined,
-    text: string,
-    opts?: { mediaAbsPaths?: string[] },
-  ): Promise<void> {
-    if (!mirror || output.kind !== 'rich-card') return;
-    try {
-      if (opts) {
-        await output.im.mirrorFinalReply?.(mirror, text, opts);
-      } else {
-        await output.im.mirrorFinalReply?.(mirror, text);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`terminal mirror failed (non-fatal): ${msg}`);
-    }
-  }
-
-  /**
-   * Terminal streaming finalize. Parent-chat copies are supplied here — not at
-   * `startStreamingText` — so permission / ask / plan `finalizeActiveStream`
-   * cannot reuse the same card UUID for a fragment.
-   */
   async function finalizeTurnStream(turn: TurnState, finalView: string): Promise<void> {
     const handle = turn.streamingHandle;
     if (!handle) return;
     try {
-      if (turn.finalReplyMirror) {
-        await handle.finalize(finalView, { finalReplyMirror: turn.finalReplyMirror });
-      } else {
-        await handle.finalize(finalView);
-      }
+      await handle.finalize(finalView);
     } catch (err) {
       if (output.kind === 'chunked-text') {
         turn.terminalKind = 'error';
@@ -2595,38 +2505,7 @@ export function createTurnRunner(
     return true;
   }
 
-  function retainTurnFinalReplyMirror(turn: TurnState): void {
-    if (turn.finalReplyMirrorRelease || !turn.finalReplyMirror || output.kind !== 'rich-card') {
-      return;
-    }
-    try {
-      const release = output.im.retainFinalReplyMirror?.(turn.finalReplyMirror);
-      if (typeof release === 'function') turn.finalReplyMirrorRelease = release;
-    } catch (err) {
-      log.warn(
-        `final reply mirror retention failed (non-fatal): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-  }
-
-  function releaseTurnFinalReplyMirror(turn: TurnState): void {
-    const release = turn.finalReplyMirrorRelease;
-    turn.finalReplyMirrorRelease = null;
-    try {
-      release?.();
-    } catch (err) {
-      log.warn(
-        `final reply mirror retention release failed (non-fatal): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-  }
-
   function settleTurnTerminal(turn: TurnState): void {
-    releaseTurnFinalReplyMirror(turn);
     const resolve = turn.resolveTerminal;
     if (!resolve) return;
     turn.resolveTerminal = null;
@@ -2749,7 +2628,6 @@ export function createTurnRunner(
             await sendTextClaimingOpener(userId, message, state.scopeKey);
           }
         }
-        await mirrorEarlyRejectReply(failure.turn.finalReplyMirror, message);
         // 群会话「完全访问」档被强确认策略拒绝: 报错文案之外, 再给 owner
         // 私聊发一张一键修复卡(切回 auto)。只对提供 permissionModeFix 文案
         // 的渠道(飞书)与群 lane 生效 — 私聊不挂群策略, 防御性跳过; 卡片
@@ -2788,7 +2666,6 @@ export function createTurnRunner(
         /* 忽略失败：派发失败提示不能再阻塞收口。 */
       }
     }
-    releaseTurnFinalReplyMirror(failure.turn);
     if (finishDeferredDetachIfIdle(state)) return;
     // 一条 pre-dispatch failure 不能卡死后面的排队消息 — 继续放行。
     maybeDispatchNextQueued(state, userId);
@@ -2901,9 +2778,6 @@ export function createTurnRunner(
     // 创建失败集中在此捕获并 resolve null(#2164):调用点全部是 fire-and-forget
     // 的 .then(...),各自补 rejection handler 必然遗漏;失败留下脱敏日志与
     // streamingStartFailed 标记,已生成正文由收口分支一次性降级发送。
-    // Dual-delivery parent-chat copies are armed only by the true terminal
-    // finalize call. Pre-interaction fragments use the same handle contract but
-    // deliberately finalize without finalReplyMirror.
     turn.streamingHandlePromise = (async () => {
       try {
         const handle =
@@ -3053,11 +2927,6 @@ export function createTurnRunner(
           if (!consumed) {
             await sendTextClaimingOpener(userId, '✅ (本轮无文本输出)', state.scopeKey);
           }
-          await mirrorTurnFinalReply(
-            turn.finalReplyMirror,
-            '✅ (本轮无文本输出)',
-            turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-          );
         }
       } catch {
         /* swallow */
@@ -3079,11 +2948,6 @@ export function createTurnRunner(
           });
         } else {
           await output.im.sendText(userId, fallbackText, { threadTs: state.scopeKey });
-          await mirrorTurnFinalReply(
-            turn.finalReplyMirror,
-            fallbackText,
-            turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-          );
         }
         log.info(`[${channel}/turn] streaming surface unavailable — final text delivered via plain send`);
       } catch (err) {
@@ -3172,11 +3036,6 @@ export function createTurnRunner(
           if (!consumed) {
             await sendTextClaimingOpener(userId, errorText, state.scopeKey);
           }
-          await mirrorTurnFinalReply(
-            turn?.finalReplyMirror,
-            errorText,
-            turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-          );
         }
       } catch {
         /* swallow */
@@ -3460,7 +3319,6 @@ export function createTurnRunner(
     const dropped = state.sendQueue.splice(0, state.sendQueue.length);
     log.warn(`dropping ${dropped.length} queued message(s) on cleanup/detach`);
     for (const item of dropped) {
-      releaseTurnFinalReplyMirror(item.turn);
       releaseAttachedImTurnHeadless(item.turn);
       void cancelAckReaction(item.turn);
     }

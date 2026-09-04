@@ -35,6 +35,14 @@ export interface MobileHistoryAnchorResolveState {
   topOffsetAdjustment?: number;
 }
 
+export interface MobileHistoryAnchorPendingCorrection {
+  /** Native scroll-event sequence observed immediately before issuing the correction. */
+  requestedAfterNativeScrollSequence: number;
+  targetOffset: number;
+}
+
+export type MobileHistoryAnchorCorrectionStatus = 'acknowledged' | 'missed' | 'waiting';
+
 export interface MobileHistoryTopOffsetState {
   contentLength: number;
   data: readonly unknown[];
@@ -46,6 +54,38 @@ export interface MobileHistoryTopOffsetState {
 const MAX_MOBILE_HISTORY_ANCHOR_CANDIDATES = 8;
 const MAX_MOBILE_HISTORY_ANCHOR_POSITION_PROBES = 24;
 const MOBILE_HISTORY_SHORT_LIST_TOLERANCE = 2;
+
+/**
+ * Android needs the app-owned prepend transaction because its native MVCP can commit the new cell
+ * coordinates before the ScrollView offset. iOS keeps the native path, which applies the data and
+ * offset change atomically and must not be followed by imperative app scrolls.
+ */
+export function mobileHistoryPrependUsesAppOwnedAnchor(platformOS: string): boolean {
+  return platformOS === 'android';
+}
+
+/**
+ * Distinguish LegendList's optimistic internal scroll bookkeeping from a native ScrollView ack.
+ * `LegendList.getState().scroll` moves to the requested offset before the native command lands, so
+ * only a later `onScroll` sequence can prove that the physical viewport caught up.
+ */
+export function mobileHistoryAnchorCorrectionStatus(
+  correction: MobileHistoryAnchorPendingCorrection,
+  state: {
+    nativeOffset: number;
+    nativeScrollSequence: number;
+  },
+  tolerance: number,
+): MobileHistoryAnchorCorrectionStatus {
+  if (state.nativeScrollSequence <= correction.requestedAfterNativeScrollSequence) {
+    return 'waiting';
+  }
+  return Number.isFinite(state.nativeOffset)
+    && Number.isFinite(correction.targetOffset)
+    && Math.abs(state.nativeOffset - correction.targetOffset) <= Math.max(0, tolerance)
+    ? 'acknowledged'
+    : 'missed';
+}
 
 /**
  * Translate LegendList's data-relative item positions into its raw ScrollView coordinates.

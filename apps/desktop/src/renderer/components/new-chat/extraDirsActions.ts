@@ -15,6 +15,34 @@ const log = createLogger('ExtraDirsActions');
 /** 与 main 端 EXTRA_DIRS_MAX 保持一致;UI 满了 disable 添加入口。 */
 export const MAX_EXTRA_DIRS = 10;
 
+/** 与 main library 槽前缀对齐:系统项不占用户 10 名额。 */
+export const LIBRARY_EXTRA_DIR_SLOT_PREFIX = 'cindy-library:';
+
+export function isLibraryExtraDirSlot(dir: string): boolean {
+  return dir.startsWith(LIBRARY_EXTRA_DIR_SLOT_PREFIX);
+}
+
+export function extraDirDisplayLabel(dir: string): string {
+  return isLibraryExtraDirSlot(dir) ? 'Mivo 作品库（只读）' : extraDirBasename(dir);
+}
+
+export function partitionExtraDirs(dirs: readonly string[]): {
+  system: string[];
+  user: string[];
+} {
+  const system: string[] = [];
+  const user: string[] = [];
+  for (const dir of dirs) {
+    if (isLibraryExtraDirSlot(dir)) system.push(dir);
+    else user.push(dir);
+  }
+  return { system, user };
+}
+
+export function countUserExtraDirs(dirs: readonly string[]): number {
+  return dirs.filter((dir) => !isLibraryExtraDirSlot(dir)).length;
+}
+
 function normalizedPathForComparison(raw: string | null | undefined): string | null {
   const normalized = normalizeWorkingDirForStorage(raw);
   return normalized ? stripTrailingPathSeparators(normalized) : null;
@@ -99,7 +127,7 @@ export async function pickAndAddExtraDir({
   confirm,
   parentDirectoryConfirm,
 }: PickAndAddExtraDirOptions): Promise<void> {
-  if (extraDirs.length + otherDirs.length >= MAX_EXTRA_DIRS) return;
+  if (countUserExtraDirs(extraDirs) + countUserExtraDirs(otherDirs) >= MAX_EXTRA_DIRS) return;
   let picked: string | null = null;
   try {
     const r = await window.electronAPI.dialog.showOpenDirectory(

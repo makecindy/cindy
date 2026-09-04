@@ -23,7 +23,10 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-import { IOSSimulatorTabBody, setupStepKeys } from '../IOSSimulatorTabBody';
+const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
+
+import { fitSimulatorScreenSize, IOSSimulatorTabBody, setupStepKeys } from '../IOSSimulatorTabBody';
 
 const ctx: TabKindHostContext = {
   tabId: 'tab-a',
@@ -270,6 +273,7 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
     ok: true,
     data: { stream: null },
   }));
+  const copyScreenshot = vi.fn(async () => ({ ok: true as const }));
   (
     window as unknown as {
       electronAPI: {
@@ -282,6 +286,7 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
             setViewerVisibility: typeof setViewerVisibility;
             retryNativeRoute: typeof retryNativeRoute;
             latestFrame: typeof latestFrame;
+            copyScreenshot: typeof copyScreenshot;
             setStreamProfile: typeof setStreamProfile;
             liveTouch: typeof liveTouch;
             onH264Frame: typeof onH264Frame;
@@ -301,6 +306,7 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
         setViewerVisibility,
         retryNativeRoute,
         latestFrame,
+        copyScreenshot,
         setStreamProfile,
         liveTouch,
         onH264Frame,
@@ -317,6 +323,7 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
     setViewerVisibility,
     retryNativeRoute,
     latestFrame,
+    copyScreenshot,
     setStreamProfile,
     liveTouch,
     onH264Frame,
@@ -337,7 +344,28 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
   };
 }
 
+async function openMoreControls(): Promise<void> {
+  const trigger = await screen.findByRole('button', {
+    name: 'rightSidebar.iosSimulator.moreControls',
+  });
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  await screen.findByRole('menu');
+}
+
+async function openStreamProfileControls(): Promise<void> {
+  await openMoreControls();
+  const trigger = await screen.findByRole('menuitem', {
+    name: 'rightSidebar.iosSimulator.streamProfile',
+  });
+  fireEvent.keyDown(trigger, { key: 'ArrowRight' });
+  await screen.findByRole('menuitemradio', {
+    name: 'rightSidebar.iosSimulator.streamProfiles.low',
+  });
+}
+
 beforeEach(() => {
+  toastMocks.success.mockReset();
+  toastMocks.error.mockReset();
   let objectUrlSequence = 0;
   Object.defineProperty(URL, 'createObjectURL', {
     configurable: true,
@@ -375,6 +403,132 @@ afterEach(() => {
 });
 
 describe('IOSSimulatorTabBody', () => {
+  it('fits the simulator viewport within both available width and panel height', () => {
+    expect(fitSimulatorScreenSize({ width: 400, height: 800 }, 700, 900)).toEqual({
+      width: 450,
+      height: 900,
+    });
+    expect(fitSimulatorScreenSize({ width: 400, height: 800 }, 300, 900)).toEqual({
+      width: 300,
+      height: 600,
+    });
+    expect(fitSimulatorScreenSize({ width: 800, height: 400 }, 700, 900)).toEqual({
+      width: 700,
+      height: 350,
+    });
+    expect(fitSimulatorScreenSize({ width: 0, height: 800 }, 700, 900)).toBeNull();
+  });
+
+  it('fits only the device header and screen within the panel height', async () => {
+    const instance = readyInstance();
+    const api = installStatus(readyStatus(instance));
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        queueMicrotask(() => callback(0));
+        return 1;
+      }),
+    );
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    await screen.findByRole('img', {
+      name: 'rightSidebar.iosSimulator.streamAlt',
+    });
+    const panel = screen.getByTestId('ios-simulator-panel-viewport');
+    const section = screen.getByTestId('ios-simulator-viewer-section');
+    const slot = screen.getByTestId('ios-simulator-screen-slot');
+    const simulatorScreen = screen.getByTestId('ios-simulator-screen');
+    let slotWidth = 700;
+    Object.defineProperty(panel, 'clientHeight', { configurable: true, value: 1_000 });
+    Object.defineProperty(slot, 'clientWidth', {
+      configurable: true,
+      get: () => slotWidth,
+    });
+    vi.spyOn(section, 'getBoundingClientRect').mockReturnValue({
+      top: 80,
+      bottom: 980,
+    } as DOMRect);
+    vi.spyOn(slot, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          top: 150,
+          bottom: 850,
+          width: slotWidth,
+        }) as DOMRect,
+    );
+
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(Number.parseFloat(simulatorScreen.style.height)).toBeCloseTo(930);
+      expect(Number.parseFloat(simulatorScreen.style.width)).toBeCloseTo(429.01, 1);
+    });
+
+    slotWidth = 250;
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(Number.parseFloat(simulatorScreen.style.width)).toBeCloseTo(250);
+      expect(Number.parseFloat(simulatorScreen.style.height)).toBeCloseTo(541.98, 1);
+    });
+  });
+
+  it('copies a screenshot for the exact attached simulator route', async () => {
+    const instance = readyInstance();
+    const api = installStatus(readyStatus(instance));
+    let finishCopy!: () => void;
+    const copyPending = new Promise<void>((resolve) => {
+      finishCopy = resolve;
+    });
+    api.copyScreenshot.mockImplementationOnce(async () => {
+      await copyPending;
+      return { ok: true as const };
+    });
+
+    render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'rightSidebar.iosSimulator.copyScreenshot',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(api.copyScreenshot).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      });
+    });
+    expect(screen.queryByText('rightSidebar.iosSimulator.operations.screenshot')).toBeNull();
+    const loadingButton = document.querySelector<HTMLButtonElement>('button[aria-busy="true"]');
+    expect(loadingButton).toBeTruthy();
+    expect(loadingButton?.querySelector('.animate-spin')).toBeTruthy();
+
+    await act(async () => finishCopy());
+    await waitFor(() => {
+      expect(toastMocks.success).toHaveBeenCalledWith('rightSidebar.iosSimulator.screenshotCopied');
+    });
+    expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
   it('keeps Viewer status visible while control waits for renewed authorization', async () => {
     const pausedStatus = readyStatus();
     if (!pausedStatus.ok) throw new Error('Expected a ready simulator status.');
@@ -385,13 +539,16 @@ describe('IOSSimulatorTabBody', () => {
 
     await screen.findByText('rightSidebar.iosSimulator.accessRequiredTitle');
     expect(screen.getByText('iPhone 17 Pro')).toBeTruthy();
+    await openMoreControls();
     expect(
-      (
-        screen.getByRole('combobox', {
+      screen
+        .getByRole('menuitem', {
           name: 'rightSidebar.iosSimulator.streamProfile',
-        }) as HTMLSelectElement
-      ).disabled,
-    ).toBe(true);
+        })
+        .getAttribute('data-disabled'),
+    ).not.toBeNull();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
     expect(api.requestAccess).not.toHaveBeenCalled();
     api.requestAccess.mockImplementationOnce(async () => {
       api.setStatusValue({ ...pausedStatus, controlAccess: 'active' });
@@ -553,7 +710,7 @@ describe('IOSSimulatorTabBody', () => {
         platform: 'darwin',
         supported: true,
         ready: true,
-        xcodeVersion: 'Xcode 26.4',
+        xcodeVersion: 'Xcode 26.4\nBuild version 17E192',
         runtimes: [],
         devices: [
           {
@@ -577,6 +734,10 @@ describe('IOSSimulatorTabBody', () => {
     render(<IOSSimulatorTabBody state={{ instanceId: null }} ctx={ctx} />);
 
     await waitFor(() => expect(screen.getByText('iPhone 17 Pro')).toBeTruthy());
+    const environmentReady = screen.getByText('rightSidebar.iosSimulator.readyTitle');
+    expect(environmentReady.parentElement?.textContent).toContain('Xcode 26.4');
+    expect(screen.getAllByText('rightSidebar.iosSimulator.readyTitle')).toHaveLength(1);
+    expect(screen.queryByText('Build version 17E192')).toBeNull();
     expect(screen.getByText(/iOS 26\.4 · Booted/)).toBeTruthy();
     expect(screen.getByText('DEVICE-UDID-123')).toBeTruthy();
     expect(api.status).toHaveBeenCalledWith({ sessionId: 'session-a' });
@@ -757,7 +918,7 @@ describe('IOSSimulatorTabBody', () => {
       expect(screen.getByText('rightSidebar.iosSimulator.route.nativeH264')).toBeTruthy();
       expect(screen.getByText('rightSidebar.iosSimulator.route.wdaInput')).toBeTruthy();
       expect(screen.getByText('rightSidebar.iosSimulator.route.state.active')).toBeTruthy();
-      expect(screen.getByText('rightSidebar.iosSimulator.route.state.fallback')).toBeTruthy();
+      expect(screen.queryByText('rightSidebar.iosSimulator.route.state.fallback')).toBeNull();
     });
     expect(api.onRouteStatus).toHaveBeenCalledOnce();
 
@@ -802,6 +963,32 @@ describe('IOSSimulatorTabBody', () => {
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(2));
     expect(screen.getByText('rightSidebar.iosSimulator.route.wdaJpeg')).toBeTruthy();
     expect(screen.getByText('rightSidebar.iosSimulator.route.nativeHid')).toBeTruthy();
+
+    act(() => {
+      api.emitRouteStatus({
+        ...initialRouteStatus,
+        updatedAt: '2026-08-05T00:00:02.000Z',
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'active',
+          reasonCode: 'wda-active',
+        },
+        input: {
+          adapter: 'wda',
+          state: 'fallback',
+          continuous: false,
+          multiTouch: false,
+          reasonCode: 'native-capability-unavailable',
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText('rightSidebar.iosSimulator.route.wdaJpeg')).toBeTruthy();
+      expect(screen.getByText('rightSidebar.iosSimulator.route.wdaInput')).toBeTruthy();
+      expect(screen.queryByText('rightSidebar.iosSimulator.route.state.active')).toBeNull();
+      expect(screen.queryByText('rightSidebar.iosSimulator.route.state.fallback')).toBeNull();
+    });
   });
 
   it('offers 60 FPS only for active Native H.264 and keeps a 20 FPS WDA fallback', async () => {
@@ -852,28 +1039,32 @@ describe('IOSSimulatorTabBody', () => {
       />,
     );
 
-    const profileSelect = await screen.findByRole('combobox');
     await waitFor(() => expect(rendered.container.querySelector('img')).toBeTruthy());
+    await openStreamProfileControls();
     expect(
-      screen.queryByRole('option', {
+      screen.queryByRole('menuitemradio', {
         name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
       }),
     ).toBeNull();
     act(() => api.emitRouteStatus(nativeRouteStatus));
     await waitFor(() => {
       expect(
-        screen.getByRole('option', {
+        screen.getByRole('menuitemradio', {
           name: 'rightSidebar.iosSimulator.streamProfiles.highNative',
         }),
       ).toBeTruthy();
       expect(
-        screen.getByRole('option', {
+        screen.getByRole('menuitemradio', {
           name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
         }),
       ).toBeTruthy();
     });
 
-    fireEvent.change(profileSelect, { target: { value: 'high' } });
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.highNative',
+      }),
+    );
     await waitFor(() => {
       expect(api.setStreamProfile).toHaveBeenCalledWith({
         sessionId: 'session-a',
@@ -886,7 +1077,12 @@ describe('IOSSimulatorTabBody', () => {
       });
     });
 
-    fireEvent.change(profileSelect, { target: { value: 'experimental60' } });
+    await openStreamProfileControls();
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
+      }),
+    );
     await waitFor(() => {
       expect(api.setStreamProfile).toHaveBeenCalledWith({
         sessionId: 'session-a',
@@ -934,12 +1130,6 @@ describe('IOSSimulatorTabBody', () => {
     });
 
     await waitFor(() => {
-      expect(
-        screen.queryByRole('option', {
-          name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
-        }),
-      ).toBeNull();
-      expect((profileSelect as HTMLSelectElement).value).toBe('high');
       expect(api.setStreamProfile).toHaveBeenLastCalledWith({
         sessionId: 'session-a',
         instanceId: instance.instanceId,
@@ -949,6 +1139,49 @@ describe('IOSSimulatorTabBody', () => {
         profile: { framesPerSecond: 20, jpegQuality: 70, scalingPercent: 100 },
       });
     });
+    await openStreamProfileControls();
+    expect(
+      screen.queryByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
+      }),
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole('menuitemradio', {
+          name: 'rightSidebar.iosSimulator.streamProfiles.high',
+        })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+  });
+
+  it('shows stream metrics beside the ready state without covering the viewer or changing its cursor', async () => {
+    const api = installStatus(
+      readyStatus({
+        ...readyInstance(),
+        deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro',
+      }),
+    );
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+
+    const rendered = render(
+      <IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active shellVisible />,
+    );
+
+    const metrics = await screen.findByText('0.0 FPS · 393×852');
+    expect(metrics.textContent).not.toContain('rightSidebar.iosSimulator.stream.streaming');
+    const lifecycle = screen.getByText('rightSidebar.iosSimulator.lifecycle.ready');
+    expect(lifecycle.parentElement).toBe(metrics.parentElement);
+    await waitFor(() => expect(rendered.container.querySelector('img')).toBeTruthy());
+    const image = rendered.container.querySelector('img');
+    const canvas = rendered.container.querySelector('canvas');
+    const simulatorScreen = screen.getByTestId('ios-simulator-screen');
+    expect(image?.parentElement?.textContent).not.toContain('FPS');
+    expect(image?.classList.contains('cursor-crosshair')).toBe(false);
+    expect(canvas?.classList.contains('cursor-crosshair')).toBe(false);
+    expect(simulatorScreen.style.borderRadius).toBe('21.06% / 9.71%');
+    expect(simulatorScreen.classList.contains('border')).toBe(false);
+    expect(simulatorScreen.firstElementChild?.classList.contains('p-2')).toBe(false);
   });
 
   it('waits for the exact viewer claim before applying its stream profile', async () => {
@@ -1070,7 +1303,12 @@ describe('IOSSimulatorTabBody', () => {
       );
       expect(api.latestFrame).toHaveBeenCalled();
     });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'high' } });
+    await openStreamProfileControls();
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.high',
+      }),
+    );
     await waitFor(() => {
       expect(api.setStreamProfile).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1674,7 +1912,7 @@ describe('IOSSimulatorTabBody', () => {
     });
     await waitFor(() => expect(rendered.container.querySelector('img')).toBeTruthy());
     const image = rendered.container.querySelector('img');
-    expect(image?.className).toContain('w-full');
+    expect(screen.getByTestId('ios-simulator-screen-slot').className).toContain('justify-center');
     expect(image?.className).not.toContain('max-h-[520px]');
     const textInput = screen.getByLabelText(
       'rightSidebar.iosSimulator.textInputLabel',
@@ -2114,11 +2352,8 @@ describe('IOSSimulatorTabBody', () => {
     });
     expect(rendered.container.querySelector('img')).toBeNull();
     expect(
-      (
-        screen.getByRole('button', {
-          name: 'rightSidebar.iosSimulator.pressHome',
-        }) as HTMLButtonElement
-      ).disabled,
+      (rendered.container.querySelector('.lucide-house')?.closest('button') as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
   });
 
@@ -2159,7 +2394,10 @@ describe('IOSSimulatorTabBody', () => {
 
     act(() => expireFreshness?.());
 
-    expect(homeButton.disabled).toBe(true);
+    expect(
+      (rendered.container.querySelector('.lucide-house')?.closest('button') as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it('clears the last frame and keeps only recovery actions after an external shutdown', async () => {
@@ -2256,20 +2494,21 @@ describe('IOSSimulatorTabBody', () => {
       expect(screen.getByText('rightSidebar.iosSimulator.viewerStoppedDescription')).toBeTruthy();
     });
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:ios-simulator-1');
+    await openMoreControls();
     expect(
-      screen.getByRole('button', { name: 'rightSidebar.iosSimulator.startDevice' }),
+      screen.getByRole('menuitem', { name: 'rightSidebar.iosSimulator.startDevice' }),
     ).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'rightSidebar.iosSimulator.detachDevice' }),
+      screen.getByRole('menuitem', { name: 'rightSidebar.iosSimulator.detachDevice' }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole('button', { name: 'rightSidebar.iosSimulator.deleteDevice' }),
+      screen.queryByRole('menuitem', { name: 'rightSidebar.iosSimulator.deleteDevice' }),
     ).toBeNull();
     expect(
       screen.queryByRole('button', { name: 'rightSidebar.iosSimulator.pressHome' }),
     ).toBeNull();
     expect(
-      screen.queryByRole('button', { name: 'rightSidebar.iosSimulator.stopDevice' }),
+      screen.queryByRole('menuitem', { name: 'rightSidebar.iosSimulator.stopDevice' }),
     ).toBeNull();
     expect(screen.queryByText('rightSidebar.iosSimulator.agentControlTitle')).toBeNull();
   });
@@ -2286,9 +2525,12 @@ describe('IOSSimulatorTabBody', () => {
 
     render(<IOSSimulatorTabBody state={{ instanceId: instance.instanceId }} ctx={ctx} />);
 
-    const deleteButton = await screen.findByRole('button', {
+    await openMoreControls();
+    const deleteButton = await screen.findByRole('menuitem', {
       name: 'rightSidebar.iosSimulator.deleteDevice',
     });
+    expect(deleteButton.className).toContain('text-[var(--error-fg)]');
+    expect(deleteButton.className).toContain('focus:bg-[var(--error-bg)]');
     fireEvent.click(deleteButton);
     expect(screen.getByText('rightSidebar.iosSimulator.deleteDeviceConfirmTitle')).toBeTruthy();
     expect(
@@ -2326,8 +2568,9 @@ describe('IOSSimulatorTabBody', () => {
 
     render(<IOSSimulatorTabBody state={{ instanceId: instance.instanceId }} ctx={ctx} />);
 
+    await openMoreControls();
     fireEvent.click(
-      await screen.findByRole('button', {
+      await screen.findByRole('menuitem', {
         name: 'rightSidebar.iosSimulator.deleteDevice',
       }),
     );

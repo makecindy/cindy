@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAKER_EVENT_BATCH_CHANNEL } from '@cindy/device-link';
 import { clampLiveRowCreatedAt } from '@/session/messagePaging';
+import { MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES } from '@/session/messageToolPayloadProjection';
 import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -133,6 +134,36 @@ function pending(kind: string, requestId?: string, persistId?: string): PendingI
 
 describe('remoteSessionStore', () => {
   beforeEach(() => remoteSessionStore.clear());
+
+  it('releases a large persisted tool input when the matching result is appended', () => {
+    remoteSessionStore.setMessages('s1', [{
+      ...message('tool-use', 's1'),
+      role: 'tool_use',
+      toolUseId: 'toolu-1',
+      content: {
+        input: { payload: 'x'.repeat(MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES + 1) },
+        toolName: 'WebFetch',
+        toolUseId: 'toolu-1',
+      },
+    }]);
+    expect(remoteSessionStore.getMessages('s1')[0].mobileToolInputProjection).toBeUndefined();
+
+    remoteSessionStore.appendMessage('s1', {
+      ...message('tool-result', 's1'),
+      role: 'tool_result',
+      toolUseId: 'toolu-1',
+      content: 'finished',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      content: { input: null, mobilePayloadProjected: true },
+      mobileToolInputProjection: {
+        projected: true,
+        toolUseMessageId: 'tool-use',
+      },
+    });
+  });
 
   it('normalizes same-timestamp messages by host rowid', () => {
     const createdAt = '2026-01-01T00:00:00.000Z';

@@ -1157,21 +1157,27 @@ async function buildPiPrompt(message: UserMessage, opts?: { remote?: boolean }):
   return { text: textParts.join(' ').trim(), images };
 }
 
+function extraDirBasename(dir: string): string {
+  const trimmed = dir.replace(/[\\/]+$/, '');
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || 'reference';
+}
+
 function piExtraDirsPrompt(readOnlyDirs: readonly string[], writableDirs: readonly string[]): string {
   const sections: string[] = [];
   if (readOnlyDirs.length > 0) {
+    const labels = [...new Set(readOnlyDirs.map(extraDirBasename))];
     sections.push(
       '<cindy-extra-reference-directories>',
-      'The following absolute directories are available as read-only references. Do not modify them:',
-      ...readOnlyDirs.map((dir) => `- ${dir}`),
+      'This task can read the plugin library and extra references as read-only. Do not modify them:',
+      ...labels.map((label) => `- ${label}`),
       '</cindy-extra-reference-directories>',
     );
   }
   if (writableDirs.length > 0) {
     sections.push(
       '<cindy-extra-writable-directories>',
-      'The user explicitly allowed reading and writing inside these absolute directories:',
-      ...writableDirs.map((dir) => `- ${dir}`),
+      'The user explicitly allowed additional writable locations for this task. Stay inside those grants; do not write the plugin library root.',
       '</cindy-extra-writable-directories>',
     );
   }

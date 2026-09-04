@@ -452,9 +452,11 @@ export type SandboxPolicy =
 
 export interface ThreadForkParams {
   threadId: string;
+  /** Fork the source thread at this provider-native turn boundary. */
+  lastTurnId?: string;
   /** 可选: 从特定 rollout path fork (绝大多数场景用 threadId)。 */
   path?: string;
-  /** Codex 自家前端 fork 精确节点时会开启, 保留完整历史供后续 rollback。 */
+  /** Legacy fork + rollback path only; lastTurnId precision path omits it. */
   persistExtendedHistory?: boolean;
   model?: string;
   cwd?: string;

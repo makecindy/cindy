@@ -323,6 +323,11 @@ export function isMicrophoneDeviceUnavailableError(error: unknown): boolean {
   return isSelectedMicrophoneUnavailableError(error) || isDeviceConstraintError(error);
 }
 
+export function isMicrophonePermissionDeniedError(error: unknown): boolean {
+  const name = readErrorString(error, 'name');
+  return name === 'NotAllowedError' || name === 'SecurityError';
+}
+
 function isDeviceConstraintError(error: unknown): boolean {
   const name = readErrorString(error, 'name');
   const message = readErrorString(error, 'message')?.toLowerCase() ?? '';

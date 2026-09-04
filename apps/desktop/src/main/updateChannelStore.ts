@@ -22,6 +22,7 @@
 import { app } from 'electron';
 import path from 'node:path';
 
+import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
 import {
   createOverrideSettingsFile,
@@ -148,8 +149,9 @@ export async function resetUpdateChannelSettings(): Promise<UpdateChannelSetting
 
 /** manifestService 消费的单一读取入口:返回是否启用 beta(设备级)。 */
 export function isBetaChannelEnabled(): boolean {
-  // Linux 没有 beta 清单 / 热更 zip；隐藏开关后仍读落盘值会把客户端钉在不可达渠道。
-  if (process.platform === 'linux') return false;
+  // Linux 目前仅 x64 发布 beta .deb。能力不支持时忽略落盘值，避免客户端被钉在
+  // 不可达渠道；同时保留值，用户回到支持的构建后仍沿用设备级选择。
+  if (!supportsBetaUpdateChannel(process.platform, process.arch)) return false;
   return readUpdateChannelSettings().enableBeta;
 }
 

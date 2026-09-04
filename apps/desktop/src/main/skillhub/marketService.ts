@@ -1,10 +1,15 @@
 import { ServerApiError, type ApiFetchOptions } from '../serverApiClient';
 import { skillhubApiFetch } from './hubApi';
 import { mapHubSkillInfoToDesktopInfo, type HubSkillInfoForDesktop } from './infoMapping';
-import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse } from './syncMapping';
+import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse, type SkillhubSyncRef } from './syncMapping';
+import { assertSkillhubVisibilityAllowed, assertSkillhubWriteAllowed } from './identityPolicy';
+import { registryService } from './registry';
+import { createLogger } from '../logger';
+import { skillhubCatalogKey, withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 const SKILLHUB_SYNC_BATCH_SIZE = 100;
 const HUB_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
+const log = createLogger('skillhub:marketService');
 
 export type SkillhubMarketFetcher = <T>(apiPath: string, opts?: Omit<ApiFetchOptions, 'baseUrl'>) => Promise<T>;
 
@@ -38,6 +43,13 @@ function mapFirstLevelDepartments(
 
 export interface SkillhubMarketServiceOptions {
   fetch?: SkillhubMarketFetcher;
+  assertWriteAllowed?: () => void | Promise<void>;
+  assertVisibilityAllowed?: (visibility: 'private' | 'shared' | 'public') => void | Promise<void>;
+  updateRegistryCatalogScope?: (
+    name: string,
+    scope: SkillhubCatalogScope | undefined,
+    previousScope: SkillhubCatalogScope | undefined,
+  ) => Promise<void>;
 }
 
 export interface ListMarketParams {
@@ -45,6 +57,7 @@ export interface ListMarketParams {
   limit?: number;
   sort?: 'trending' | 'downloads' | 'updated_at' | 'created_at';
   q?: string;
+  scope?: 'all' | 'market' | 'team';
   mine?: boolean;
   available?: boolean;
   category?: string;
@@ -55,7 +68,8 @@ export interface UpdatePublishedFields {
   displayName?: string;
   summary?: string;
   description?: string;
-  categories?: string[];
+  tags?: string[];
+  contentLocale?: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
   visibility?: 'private' | 'shared' | 'public';
   /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
   teamSlug?: string | null;
@@ -64,8 +78,17 @@ export interface UpdatePublishedFields {
 export interface SetPublishedVisibilityParams {
   name: string;
   visibility: 'private' | 'shared' | 'public';
+  /** Catalog containing the currently visible version before this mutation. */
+  previousCatalogScope?: SkillhubCatalogScope;
   teamSlug?: string;
   visibleSlugs?: string[];
+}
+
+export interface SkillVisibilityUpdateResult {
+  slug: string;
+  visibility: 'private' | 'shared' | 'public';
+  requestedVisibility?: 'public';
+  reviewStatus?: 'pending';
 }
 
 /**
@@ -76,17 +99,38 @@ export interface SetPublishedVisibilityParams {
  */
 export class SkillhubMarketService {
   private readonly fetch: SkillhubMarketFetcher;
+  private readonly assertWriteAllowed: () => void | Promise<void>;
+  private readonly assertVisibilityAllowed: (visibility: 'private' | 'shared' | 'public') => void | Promise<void>;
+  private readonly updateRegistryCatalogScope: (
+    name: string,
+    scope: SkillhubCatalogScope | undefined,
+    previousScope: SkillhubCatalogScope | undefined,
+  ) => Promise<void>;
 
   constructor(options: SkillhubMarketServiceOptions = {}) {
     this.fetch = options.fetch ?? skillhubApiFetch;
+    this.assertWriteAllowed = options.assertWriteAllowed ?? assertSkillhubWriteAllowed;
+    this.assertVisibilityAllowed = options.assertVisibilityAllowed ?? assertSkillhubVisibilityAllowed;
+    this.updateRegistryCatalogScope = options.updateRegistryCatalogScope
+      ?? registryService.updateCatalogScopeForSkill;
   }
 
-  async sync(params: { slugs?: string[] } | undefined) {
-    const names = normalizeSkillhubSlugs(params?.slugs);
-    const hubSlugs = names.filter(isValidHubSlug);
-    const detailBatches = hubSlugs.length === 0 ? [[]] : chunkSkillhubSlugs(hubSlugs);
-    const detailResponses = await Promise.all(detailBatches.map((batch) => this.fetchSkillhubBatchDetail(batch)));
-    return buildSkillhubSyncResponse(names, detailResponses);
+  async sync(params: { skills?: unknown; slugs?: string[] } | undefined) {
+    const refs = normalizeSkillhubSyncRefs(params?.skills ?? params?.slugs);
+    const grouped = new Map<SkillhubCatalogScope | undefined, string[]>();
+    for (const ref of refs.filter(({ slug }) => isValidHubSlug(slug))) {
+      const scope = ref.catalogScope;
+      grouped.set(scope, [...(grouped.get(scope) ?? []), ref.slug]);
+    }
+    const batches = [...grouped.entries()].flatMap(([catalogScope, slugs]) =>
+      chunkSkillhubSlugs(slugs).map((batch) => ({ catalogScope, slugs: batch }))
+    );
+    const requests = batches.length > 0 ? batches : [{ catalogScope: 'market' as const, slugs: [] }];
+    const detailResponses = await Promise.all(requests.map(async ({ catalogScope, slugs }) => ({
+      catalogScope,
+      response: await this.fetchSkillhubBatchDetail(slugs, catalogScope),
+    })));
+    return buildSkillhubSyncResponse(refs, detailResponses);
   }
 
   async listMarket(params: ListMarketParams | undefined) {
@@ -114,7 +158,7 @@ export class SkillhubMarketService {
       };
     }
 
-    search.set('scope', 'all');
+    search.set('scope', params?.scope ?? 'all');
     const qs = search.toString();
     const hubResult = await this.fetch<{ items: HubSkillInfoForDesktop[]; total: number }>(
       params?.available
@@ -125,7 +169,8 @@ export class SkillhubMarketService {
         : undefined,
     );
 
-    const items = (hubResult.items ?? []).map((item) => mapHubSkillInfoToDesktopInfo(item));
+    const catalogScope = params?.scope === 'team' ? 'team' : 'market';
+    const items = (hubResult.items ?? []).map((item) => mapHubSkillInfoToDesktopInfo(item, { catalogScope }));
     const hasMore = page * pageSize < hubResult.total;
     return {
       success: true as const,
@@ -134,28 +179,28 @@ export class SkillhubMarketService {
     };
   }
 
-  async info(name: string) {
+  async info(name: string, catalogScope?: SkillhubCatalogScope) {
     const hub = await this.fetch<HubSkillInfoForDesktop | { deleted: true }>(
-      `/api/skills-hub/skills/${encodeURIComponent(name)}`,
+      withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}`, catalogScope),
     );
     if ('deleted' in hub) {
       return { success: true as const, deleted: true as const };
     }
-    const info = mapHubSkillInfoToDesktopInfo(hub);
+    const info = mapHubSkillInfoToDesktopInfo(hub, { catalogScope });
     return { success: true as const, info };
   }
 
-  async getPublishedFiles({ name, version }: { name: string; version?: string }) {
+  async getPublishedFiles({ name, version, catalogScope }: { name: string; version?: string; catalogScope?: SkillhubCatalogScope }) {
     const qs = version ? `?version=${encodeURIComponent(version)}` : '';
     const result = await this.fetch<{
       slug: string;
       version: string;
       files: Array<{ path: string; size: number; language: string; truncated: boolean }>;
-    }>(`/api/skills-hub/skills/${encodeURIComponent(name)}/files${qs}`);
+    }>(withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}/files${qs}`, catalogScope));
     return { success: true as const, ...result };
   }
 
-  async readPublishedFile({ name, path: filePath, version }: { name: string; path: string; version?: string }) {
+  async readPublishedFile({ name, path: filePath, version, catalogScope }: { name: string; path: string; version?: string; catalogScope?: SkillhubCatalogScope }) {
     const search = new URLSearchParams({ path: filePath });
     if (version) search.set('version', version);
     const result = await this.fetch<{
@@ -164,18 +209,20 @@ export class SkillhubMarketService {
       language: string;
       truncated: boolean;
       content: string;
-    }>(`/api/skills-hub/skills/${encodeURIComponent(name)}/file?${search.toString()}`);
+    }>(withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}/file?${search.toString()}`, catalogScope));
     return { success: true as const, file: result };
   }
 
-  async listPublishedVersions(name: string) {
+  async listPublishedVersions(name: string, catalogScope?: SkillhubCatalogScope) {
     const versions = await this.fetch<unknown[]>(
-      `/api/skills-hub/skills/${encodeURIComponent(name)}/versions`,
+      withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}/versions`, catalogScope),
     );
     return { success: true as const, versions };
   }
 
   async updatePublished(name: string, fields: UpdatePublishedFields) {
+    await this.assertWriteAllowed();
+    if (fields.visibility) await this.assertVisibilityAllowed(fields.visibility);
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}`,
       { method: 'PATCH', body: fields },
@@ -184,6 +231,7 @@ export class SkillhubMarketService {
   }
 
   async deletePublished(name: string) {
+    await this.assertWriteAllowed();
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}`,
       { method: 'DELETE' },
@@ -192,6 +240,7 @@ export class SkillhubMarketService {
   }
 
   async unpublishPublished(name: string) {
+    await this.assertWriteAllowed();
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}/unpublish`,
       { method: 'POST' },
@@ -199,8 +248,10 @@ export class SkillhubMarketService {
     return { success: true as const, result };
   }
 
-  async setPublishedVisibility({ name, visibility, teamSlug, visibleSlugs }: SetPublishedVisibilityParams) {
-    const result = await this.fetch<unknown>(
+  async setPublishedVisibility({ name, visibility, previousCatalogScope, teamSlug, visibleSlugs }: SetPublishedVisibilityParams) {
+    await this.assertWriteAllowed();
+    await this.assertVisibilityAllowed(visibility);
+    const result = await this.fetch<SkillVisibilityUpdateResult>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}/set-visibility`,
       {
         method: 'POST',
@@ -211,6 +262,13 @@ export class SkillhubMarketService {
         },
       },
     );
+    // A public-review request has already moved the user's management view to
+    // the native record even while the old catalog visibility remains active.
+    const targetVisibility = result.requestedVisibility ?? result.visibility;
+    const catalogScope = targetVisibility === 'shared' ? 'team' as const : undefined;
+    await this.updateRegistryCatalogScope(name, catalogScope, previousCatalogScope).catch((err) => {
+      log.warn(`[visibility] registry catalog scope update failed name=${name}:`, err);
+    });
     return { success: true as const, result };
   }
 
@@ -238,19 +296,20 @@ export class SkillhubMarketService {
     };
   }
 
-  async listCategories() {
+  async listCategories(scope: SkillhubCatalogScope = 'market') {
     const items = await this.fetch<Array<{
       slug: string;
       name: string;
       skillCount?: number;
       mySkillCount?: number;
+      source?: 'platform';
       children?: Array<{
         slug: string;
         name: string;
         skillCount?: number;
         mySkillCount?: number;
       }>;
-    }>>('/api/skills-hub/categories');
+    }>>(`/api/skills-hub/categories?scope=${scope}`);
     const categories = flattenHubCategories(items ?? []);
     const totalCount = categories.reduce((s, c) => s + c.count, 0);
     const myTotalCount = categories.reduce((s, c) => s + c.myCount, 0);
@@ -271,16 +330,17 @@ export class SkillhubMarketService {
     return { success: true as const, teams };
   }
 
-  async getScanStatus({ slug, version }: { slug: string; version?: string }) {
+  async getScanStatus({ slug, version, catalogScope }: { slug: string; version?: string; catalogScope?: SkillhubCatalogScope }) {
+    const path = `/api/skills-hub/skills/${encodeURIComponent(slug)}/scan${version ? `?version=${encodeURIComponent(version)}` : ''}`;
     const result = await this.fetch<{ status: string; gates?: unknown[]; scorecard?: unknown }>(
-      `/api/skills-hub/skills/${encodeURIComponent(slug)}/scan${version ? `?version=${encodeURIComponent(version)}` : ''}`,
+      withSkillhubCatalogScope(path, catalogScope),
       { cache: 'no-store', headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
     );
     return { success: true as const, ...result };
   }
 
-  private fetchSkillhubBatchDetail(slugs: string[]): Promise<SkillhubBatchDetailResponse> {
-    return this.fetch<SkillhubBatchDetailResponse>('/api/skills-hub/skills/batch-detail', {
+  private fetchSkillhubBatchDetail(slugs: string[], catalogScope?: SkillhubCatalogScope): Promise<SkillhubBatchDetailResponse> {
+    return this.fetch<SkillhubBatchDetailResponse>(withSkillhubCatalogScope('/api/skills-hub/skills/batch-detail', catalogScope), {
       method: 'POST',
       body: { slugs },
     });
@@ -297,6 +357,23 @@ export function normalizeSkillhubSlugs(slugs: unknown): string[] {
   return [...new Set((Array.isArray(slugs) ? slugs : []).filter(
     (slug): slug is string => typeof slug === 'string' && slug.length > 0 && slug.length <= 128,
   ))];
+}
+
+export function normalizeSkillhubSyncRefs(items: unknown): SkillhubSyncRef[] {
+  const refs = Array.isArray(items) ? items : [];
+  const byKey = new Map<string, SkillhubSyncRef>();
+  for (const item of refs) {
+    const raw = typeof item === 'string' ? { slug: item } : item;
+    if (!raw || typeof raw !== 'object') continue;
+    const slug = (raw as { slug?: unknown }).slug;
+    if (typeof slug !== 'string' || slug.length === 0 || slug.length > 128) continue;
+    const candidateScope = (raw as { catalogScope?: unknown }).catalogScope;
+    const catalogScope = candidateScope === 'team' || candidateScope === 'market'
+      ? candidateScope
+      : undefined;
+    byKey.set(skillhubCatalogKey(slug, catalogScope), { slug, catalogScope });
+  }
+  return [...byKey.values()];
 }
 
 function isValidHubSlug(slug: string): boolean {
@@ -330,17 +407,25 @@ type HubCategoryNode = {
   name: string;
   skillCount?: number;
   mySkillCount?: number;
+  source?: 'platform';
   children?: HubCategoryNode[];
 };
 
 function flattenHubCategories(nodes: HubCategoryNode[]) {
-  const out: Array<{ slug: string; name: string; count: number; myCount: number }> = [];
+  const out: Array<{
+    slug: string;
+    name: string;
+    count: number;
+    myCount: number;
+    source?: 'platform';
+  }> = [];
   const visit = (node: HubCategoryNode) => {
     out.push({
       slug: node.slug,
       name: node.name,
       count: node.skillCount ?? 0,
       myCount: node.mySkillCount ?? 0,
+      source: node.source,
     });
     for (const child of node.children ?? []) visit(child);
   };

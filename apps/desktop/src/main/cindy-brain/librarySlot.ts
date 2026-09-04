@@ -32,6 +32,45 @@ import { LibraryBindingStore, type LibraryLocationResolution } from './libraryBi
 import { LibrarySqlService, type LibrarySqlServiceDeps } from './librarySqlService.js';
 import type { LibraryDbResult } from './libraryDbCore.js';
 
+/** 正本相对键:assets/<hash 前 2 位>/<64-hex>/blob.<ext>(不是 <hash>.<ext>)。 */
+const LIBRARY_BLOB_REL_RE = /^assets\/([0-9a-f]{2})\/([0-9a-f]{64})\/blob\.([A-Za-z0-9]+)$/i;
+const LIBRARY_SIDECAR_BASENAME = new Set(['meta.json', 'preview.webp']);
+
+export function libraryBlobRelPath(hash: string, ext: string): string {
+  const cleanExt = ext.replace(/^\./, '');
+  return `assets/${hash.slice(0, 2)}/${hash}/blob.${cleanExt}`;
+}
+
+export function isLibrarySidecarRelPath(relPath: string): boolean {
+  const base = relPath.split('/').pop() ?? '';
+  return LIBRARY_SIDECAR_BASENAME.has(base);
+}
+
+export function isLibraryBlobRelPath(relPath: string): boolean {
+  const m = LIBRARY_BLOB_REL_RE.exec(relPath);
+  if (!m) return false;
+  return m[1] === m[2].slice(0, 2);
+}
+
+/**
+ * 插件回执 available 引用:协议形状不动,只改值。
+ * 已授权 + confirmed → library:assets/<2>/<hash>/blob.<ext>;
+ * 未授权维持 cindy-media://;SVG 未授权无备胎(返回 null);
+ * writing/unconfirmed/unavailable 不放开直读。
+ */
+export function libraryAvailableRef(input: {
+  authorized: boolean;
+  hash: string;
+  ext: string;
+  confirmed: boolean;
+}): string | null {
+  if (!input.confirmed) return null;
+  const ext = input.ext.replace(/^\./, '');
+  if (input.authorized) return `library:${libraryBlobRelPath(input.hash, ext)}`;
+  if (ext.toLowerCase() === 'svg') return null;
+  return `cindy-media://blobs/${input.hash}.${ext}`;
+}
+
 /** 单插件的库会话(vault + sql 绑定到同一根与 owner scope)。 */
 interface GhostLibrarySession {
   vault: LibraryVault;
@@ -41,6 +80,10 @@ interface GhostLibrarySession {
   locationKind: 'default' | 'custom';
   /** 自定义位置漂移(binding-moved/disk-missing):全部操作 unavailable。 */
   drift: 'binding-moved' | 'disk-missing' | null;
+  /** bind/unbind 代次;默认根为 0。不含绝对路径。 */
+  generation: number;
+  /** 库身份短码(default / g<generation>),不含绝对路径。 */
+  identity: string;
 }
 
 export interface GhostLibrarySlotDeps {
@@ -68,6 +111,11 @@ export interface GhostLibrarySlotDeps {
   showSaveDialog?(opts: { defaultPath: string; ghostName: string }): Promise<{ canceled: boolean; filePath?: string }>;
   /** 可注入时钟(单测限速);默认 Date.now。 */
   now?(): number;
+  /**
+   * 库根 realpath 变化后同步当前 Mivo 会话 extraDirs。
+   * root 为 null 则撤槽。失败只记日志,不挡 library 主路径。
+   */
+  syncAgentReadonlyExtraDir?(ghostId: string, root: string | null): Promise<void>;
 }
 
 const fail = (errorCode: string, message: string): GhostPipeLibraryResult => ({ ok: false, errorCode, message });
@@ -82,6 +130,8 @@ export class GhostLibrarySlot {
   private readonly lastSaveAsAttemptAt = new Map<string, number>();
   /** 全局另存为对话框在场标记(系统弹窗一次一个,不排队)。 */
   private saveAsDialogInFlight = false;
+  /** extraDirs 注入成功才握手 authorizedReadonly,失败走 cindy-media 备胎。 */
+  private extraDirGranted = false;
 
   constructor(private readonly deps: GhostLibrarySlotDeps) {}
 
@@ -151,6 +201,9 @@ export class GhostLibrarySlot {
         if (session.vault.getMeta()?.orphaned) {
           await session.vault.clearOrphaned().catch(() => {});
         }
+        await this.syncAgentReadonlyExtraDir(ghostId, session.vault.getRootDir());
+      } else {
+        await this.syncAgentReadonlyExtraDir(ghostId, null);
       }
     }
     return session;
@@ -206,7 +259,48 @@ export class GhostLibrarySlot {
       betterSqliteModulePath: this.deps.betterSqliteModulePath,
       log: this.deps.log,
     });
-    return { vault, sql, ownerScopeKey: scopeKey, locationKind: resolution.kind, drift };
+    const record = 'record' in resolution ? resolution.record : undefined;
+    const generation = record?.generation ?? 0;
+    const identity = record ? `g${generation}` : 'default';
+    return {
+      vault,
+      sql,
+      ownerScopeKey: scopeKey,
+      locationKind: resolution.kind,
+      drift,
+      generation,
+      identity,
+    };
+  }
+
+  /** open/status 握手:已授权只读布尔 + 库代次/身份。谁问谁得,不回绝对路径。 */
+  private handshakeFields(
+    session: GhostLibrarySession,
+    state: 'ready' | 'readonly' | 'unavailable',
+  ): { authorizedReadonly: boolean; libraryGeneration: number; libraryIdentity: string } {
+    return {
+      authorizedReadonly:
+        this.extraDirGranted && session.drift === null && (state === 'ready' || state === 'readonly'),
+      libraryGeneration: session.generation,
+      libraryIdentity: session.identity,
+    };
+  }
+
+  private async syncAgentReadonlyExtraDir(ghostId: string, root: string | null): Promise<void> {
+    if (!this.deps.syncAgentReadonlyExtraDir) {
+      this.extraDirGranted = root !== null;
+      return;
+    }
+    try {
+      await this.deps.syncAgentReadonlyExtraDir(ghostId, root);
+      this.extraDirGranted = root !== null;
+    } catch (error) {
+      this.extraDirGranted = false;
+      this.deps.log?.warn('library extraDirs sync failed', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async teardownSession(ghostId: string): Promise<void> {
@@ -215,6 +309,7 @@ export class GhostLibrarySlot {
     this.sessions.delete(ghostId);
     await session.sql.dispose().catch(() => {});
     await session.vault.invalidate().catch(() => {});
+    await this.syncAgentReadonlyExtraDir(ghostId, null);
   }
 
   /** 停用/卸载/owner 切换收口:作废全部会话(commit 5 的生命周期接线点)。 */
@@ -298,27 +393,33 @@ export class GhostLibrarySlot {
       return fail('LIBRARY_UNAVAILABLE', `Library 不可用(${session.drift});请在 Cindy 设置中重新确认存储位置`);
     }
     if (session.drift !== null) {
-      return {
+      const drifted = {
         ok: true as const, op: op as 'open' | 'status', state: 'unavailable' as const,
         reason: session.drift, usedBytes: 0, fileCount: 0, location: 'custom' as const,
       };
+      return { ...drifted, ...this.handshakeFields(session, 'unavailable') } as GhostPipeLibraryResult;
     }
     const vault = session.vault;
     switch (op) {
       case 'open': {
         const r = await vault.open();
         if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
-        return { ok: true, op: 'open', state: r.state, reason: r.reason ?? undefined, usedBytes: r.usedBytes, fileCount: r.fileCount, location: session.locationKind };
+        const body = {
+          ok: true as const, op: 'open' as const, state: r.state, reason: r.reason ?? undefined,
+          usedBytes: r.usedBytes, fileCount: r.fileCount, location: session.locationKind,
+        };
+        return { ...body, ...this.handshakeFields(session, r.state) } as GhostPipeLibraryResult;
       }
       case 'status': {
         const r = await vault.status();
         if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
-        return {
-          ok: true, op: 'status', state: r.state, reason: r.reason ?? undefined,
+        const body = {
+          ok: true as const, op: 'status' as const, state: r.state, reason: r.reason ?? undefined,
           usedBytes: r.usedBytes, fileCount: r.fileCount,
           diskFreeBytes: r.diskFreeBytes, softLimitBytes: r.softLimitBytes,
           softLimitExceeded: r.softLimitExceeded, location: r.location,
         };
+        return { ...body, ...this.handshakeFields(session, r.state) } as GhostPipeLibraryResult;
       }
       case 'read': {
         const r = await vault.read({ path: req.path, encoding: req.encoding, offset: req.offset, length: req.length });

@@ -17,12 +17,22 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  CircleHelp,
+  Plug,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,6 +61,7 @@ import {
   updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
+import type { CodexImageGenerationRestartPolicy } from '@/../shared/customProviderUpdate';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   areProviderRequestUrlsAllowed,
@@ -165,6 +176,12 @@ interface CustomProviderDialogProps {
   onClose: () => void;
 }
 
+interface ImageGenerationReloadConfirmation {
+  config: CustomProviderConfig;
+  keys: RuntimeKeys;
+  busyCount: number;
+}
+
 type ModelRow = ProviderRuntimeModelConfig;
 interface ModelPickerState {
   agent: DialogAgentKind;
@@ -188,6 +205,33 @@ interface RuntimeFields extends RuntimeFillDraft {
   modelsUrl: string;
   /** 隐藏字段：从 Pi 官方目录生成该 runtime；编辑保存必须无损保留。 */
   piCatalogProviderId?: string;
+  /** Codex Responses runtime 级原生图片生成能力。 */
+  supportsImageGeneration: boolean;
+}
+
+function canRuntimeUseNativeImageGeneration(runtime: RuntimeFields): boolean {
+  return (
+    runtime.wireProtocol === 'openai-responses' ||
+    runtime.models.some((model) => model.route?.wireProtocol === 'openai-responses')
+  );
+}
+
+/**
+ * Runtime 表单的唯一图片能力归一化入口。任何编辑一旦移除最后一个 Responses 前门，
+ * 立即清掉声明；之后重新加入 Responses 也不会替用户静默恢复，需要显式重新开启。
+ */
+function normalizeRuntimeImageGenerationCapability(
+  agent: DialogAgentKind,
+  runtime: RuntimeFields,
+): RuntimeFields {
+  if (
+    agent === 'codex' &&
+    runtime.supportsImageGeneration &&
+    !canRuntimeUseNativeImageGeneration(runtime)
+  ) {
+    return { ...runtime, supportsImageGeneration: false };
+  }
+  return runtime;
 }
 
 /** 每个 runtime Tab 的「测试连接」状态（idle → testing → ok/fail）。 */
@@ -209,6 +253,7 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
     piCatalogProviderId: undefined,
+    supportsImageGeneration: false,
   };
 }
 
@@ -222,7 +267,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
     for (const a of AGENTS) {
       const rc = initial.runtimes[a];
       if (!rc) continue;
-      out[a] = {
+      out[a] = normalizeRuntimeImageGenerationCapability(a, {
         baseUrl: rc.baseUrl,
         requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
         apiKey: '',
@@ -234,8 +279,9 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
             : [{ name: '', value: '' }],
         modelsUrl: rc.modelsUrl ?? '',
         piCatalogProviderId: rc.piCatalogProviderId,
+        supportsImageGeneration: a === 'codex' && rc.supportsImageGeneration === true,
         headersState: rc.headersState,
-      };
+      });
     }
   }
   return out;
@@ -477,6 +523,8 @@ export function CustomProviderDialog({
     pi: false,
   });
   const [saving, setSaving] = useState(false);
+  const [imageGenerationReloadConfirmation, setImageGenerationReloadConfirmation] =
+    useState<ImageGenerationReloadConfirmation | null>(null);
   // 鉴权形态：API key（默认）/ OAuth / 无鉴权（本机或受信自托管代理）。
   const [authMode, setAuthModeState] = useState<CustomProviderAuthMode>(
     initial?.auth?.method === 'oauth'
@@ -504,6 +552,10 @@ export function CustomProviderDialog({
   });
   // OAuth 模式下模型 / 请求头收进默认折叠的「高级配置」——模型授权后自动发现,普通用户无需碰。
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showImageGenerationAdvanced, setShowImageGenerationAdvanced] = useState(false);
+  const [imageGenerationHelpPinned, setImageGenerationHelpPinned] = useState(false);
+  const [imageGenerationHelpHovered, setImageGenerationHelpHovered] = useState(false);
+  const [imageGenerationHelpFocused, setImageGenerationHelpFocused] = useState(false);
   // 上下文窗口输入的行级草稿:受控输入若只回显已提交值,逐字符键入 `1,` 这类
   // 合法中间态会被整体校验拒绝后回滚,声明支持的分组格式只能粘贴、无法键入
   // (review P1)。草稿承载显示文本;合法完整值仍即时提交,失焦只清可提交
@@ -539,25 +591,112 @@ export function CustomProviderDialog({
   });
   const runtimeFillTriggerRef = useRef<HTMLButtonElement>(null);
   const modelPickerTriggerRef = useRef<HTMLButtonElement>(null);
+  const imageGenerationHelpTriggerRef = useRef<HTMLButtonElement>(null);
+  const imageGenerationHelpPointerLeaveTimerRef = useRef<number | null>(null);
+  const imageGenerationHelpFocusPreviewSuppressedRef = useRef(false);
+  const imageGenerationHelpPointerPreviewSuppressedRef = useRef(false);
+  const imageGenerationHelpPointerInsideRef = useRef(false);
+  const imageGenerationHelpPointerSuppressionFrameRef = useRef<number | null>(null);
+  const imageGenerationHelpPointerSuppressionGenerationRef = useRef(0);
   const modelFetchInFlightRef = useRef(false);
   const scrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
   // 已提交的层状态写入 ref，既避开 passive effect 延迟，也不暴露被放弃的并发 render。
   const childLayerRef = useRef(childLayer);
   const runtimeFillRef = useRef(runtimeFill);
   const savingRef = useRef(saving);
+  const imageGenerationReloadConfirmationRef = useRef(imageGenerationReloadConfirmation);
   const onCloseRef = useRef(onClose);
+  const showImageGenerationHelp =
+    imageGenerationHelpPinned || imageGenerationHelpHovered || imageGenerationHelpFocused;
+  const cancelImageGenerationHelpPointerLeave = useCallback(() => {
+    if (imageGenerationHelpPointerLeaveTimerRef.current === null) return;
+    window.clearTimeout(imageGenerationHelpPointerLeaveTimerRef.current);
+    imageGenerationHelpPointerLeaveTimerRef.current = null;
+  }, []);
+  const cancelImageGenerationHelpPointerSuppression = useCallback(() => {
+    imageGenerationHelpPointerSuppressionGenerationRef.current += 1;
+    if (imageGenerationHelpPointerSuppressionFrameRef.current !== null) {
+      window.cancelAnimationFrame(imageGenerationHelpPointerSuppressionFrameRef.current);
+      imageGenerationHelpPointerSuppressionFrameRef.current = null;
+    }
+    imageGenerationHelpPointerPreviewSuppressedRef.current = false;
+  }, []);
+  const suppressImageGenerationHelpPointerForExitFrame = useCallback(() => {
+    cancelImageGenerationHelpPointerSuppression();
+    if (!imageGenerationHelpPointerInsideRef.current) return;
+    imageGenerationHelpPointerPreviewSuppressedRef.current = true;
+    const generation = imageGenerationHelpPointerSuppressionGenerationRef.current;
+    imageGenerationHelpPointerSuppressionFrameRef.current = window.requestAnimationFrame(() => {
+      if (imageGenerationHelpPointerSuppressionGenerationRef.current !== generation) return;
+      imageGenerationHelpPointerSuppressionFrameRef.current = null;
+      imageGenerationHelpPointerPreviewSuppressedRef.current = false;
+    });
+  }, [cancelImageGenerationHelpPointerSuppression]);
+  const closeImageGenerationHelp = useCallback(() => {
+    cancelImageGenerationHelpPointerLeave();
+    setImageGenerationHelpPinned(false);
+    setImageGenerationHelpHovered(false);
+    setImageGenerationHelpFocused(false);
+  }, [cancelImageGenerationHelpPointerLeave]);
+  const resetImageGenerationHelp = useCallback(() => {
+    cancelImageGenerationHelpPointerSuppression();
+    imageGenerationHelpFocusPreviewSuppressedRef.current = false;
+    imageGenerationHelpPointerInsideRef.current = false;
+    closeImageGenerationHelp();
+  }, [cancelImageGenerationHelpPointerSuppression, closeImageGenerationHelp]);
+  const dismissImageGenerationHelp = useCallback(
+    (restoreTriggerFocus: boolean) => {
+      // Popover 退场和回焦可能在同一物理 focus / hover 周期内再次派发事件。
+      // focus 防护延续到真实 blur；pointer 防护仅覆盖指针确实位于交互区时的
+      // 退场帧，不能变成等待未来 pointerLeave 才解除的长期闩锁。
+      imageGenerationHelpFocusPreviewSuppressedRef.current = true;
+      suppressImageGenerationHelpPointerForExitFrame();
+      closeImageGenerationHelp();
+      if (restoreTriggerFocus) {
+        imageGenerationHelpTriggerRef.current?.focus({ preventScroll: true });
+      }
+    },
+    [closeImageGenerationHelp, suppressImageGenerationHelpPointerForExitFrame],
+  );
+  const previewImageGenerationHelp = useCallback(() => {
+    cancelImageGenerationHelpPointerLeave();
+    setImageGenerationHelpHovered(true);
+  }, [cancelImageGenerationHelpPointerLeave]);
+  const scheduleImageGenerationHelpPointerLeave = useCallback(() => {
+    cancelImageGenerationHelpPointerLeave();
+    imageGenerationHelpPointerLeaveTimerRef.current = window.setTimeout(() => {
+      imageGenerationHelpPointerLeaveTimerRef.current = null;
+      setImageGenerationHelpHovered(false);
+    }, 100);
+  }, [cancelImageGenerationHelpPointerLeave]);
+  useEffect(() => {
+    return () => {
+      cancelImageGenerationHelpPointerLeave();
+      cancelImageGenerationHelpPointerSuppression();
+      imageGenerationHelpFocusPreviewSuppressedRef.current = false;
+      imageGenerationHelpPointerInsideRef.current = false;
+    };
+  }, [cancelImageGenerationHelpPointerLeave, cancelImageGenerationHelpPointerSuppression]);
   useLayoutEffect(() => {
     childLayerRef.current = childLayer;
     runtimeFillRef.current = runtimeFill;
     savingRef.current = saving;
+    imageGenerationReloadConfirmationRef.current = imageGenerationReloadConfirmation;
     onCloseRef.current = onClose;
-  }, [childLayer, onClose, runtimeFill, saving]);
+  }, [childLayer, imageGenerationReloadConfirmation, onClose, runtimeFill, saving]);
 
   // Dismissible form contract:一个关闭输入只结算最上层一次。runtime fill / 模型选择器
   // 优先于预设菜单，最后才是表单；Cancel 仍直接表示用户要关闭表单，且无重复 ×。
   const dismissTopmostLayer = useCallback(() => {
+    if (imageGenerationReloadConfirmationRef.current) {
+      if (savingRef.current) return;
+      imageGenerationReloadConfirmationRef.current = null;
+      setImageGenerationReloadConfirmation(null);
+      return;
+    }
     if (runtimeFillRef.current) {
       runtimeFillRef.current = null;
       setRuntimeFill((current) => (current ? null : current));
@@ -579,6 +718,18 @@ export function CustomProviderDialog({
       if (event.key !== 'Escape') return;
       // IME 候选窗的 Escape 是组合输入控制，不是弹层关闭意图。
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (imageGenerationReloadConfirmationRef.current) {
+        event.preventDefault();
+        event.stopPropagation();
+        dismissTopmostLayer();
+        return;
+      }
+      if (showImageGenerationHelp) {
+        event.preventDefault();
+        event.stopPropagation();
+        dismissImageGenerationHelp(true);
+        return;
+      }
       // 单选协议菜单由 Radix 自己完成键盘关闭和焦点归还；这里只保留表单层级
       // 记录，避免 window capture 抢先吞掉它的 Escape。
       if (childLayerRef.current?.kind === 'model-protocol') return;
@@ -590,7 +741,7 @@ export function CustomProviderDialog({
     };
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [dismissTopmostLayer]);
+  }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp]);
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -638,12 +789,18 @@ export function CustomProviderDialog({
     ) => {
       setRt((prev) => {
         const updated = fn(prev);
+        const normalized = Object.fromEntries(
+          AGENTS.map((agent) => [
+            agent,
+            normalizeRuntimeImageGenerationCapability(agent, updated[agent]),
+          ]),
+        ) as Record<DialogAgentKind, RuntimeFields>;
         // Do not consume the catalog marker while the user is still editing.
         // A temporary route/model change can be reverted before Save; marker
         // ownership is decided once below from the persisted baseline and the
         // final serialized values.
-        rtRef.current = updated;
-        return updated;
+        rtRef.current = normalized;
+        return normalized;
       });
     },
     [],
@@ -774,6 +931,7 @@ export function CustomProviderDialog({
                 : [{ name: '', value: '' }],
             modelsUrl: rc.modelsUrl ?? '',
             piCatalogProviderId: rc.piCatalogProviderId,
+            supportsImageGeneration: a === 'codex' && rc.supportsImageGeneration === true,
           };
         }
         return next;
@@ -1017,7 +1175,11 @@ export function CustomProviderDialog({
           keyEditRevisionRef.current[target.agent] === 0
             ? { ...filled, apiKey: '' }
             : filled;
-        next[target.agent] = restoreHydratedKey(target.agent, endpointSafeFilled);
+        const restored = restoreHydratedKey(target.agent, {
+          ...prev[target.agent],
+          ...endpointSafeFilled,
+        });
+        next[target.agent] = restored;
       }
       return next;
     });
@@ -1094,6 +1256,12 @@ export function CustomProviderDialog({
   );
 
   const f = rt[activeTab];
+  const canShowImageGenerationAdvanced =
+    activeTab === 'codex' && canRuntimeUseNativeImageGeneration(f);
+  useEffect(() => {
+    if (canShowImageGenerationAdvanced && showImageGenerationAdvanced) return;
+    resetImageGenerationHelp();
+  }, [canShowImageGenerationAdvanced, resetImageGenerationHelp, showImageGenerationAdvanced]);
 
   /** 测试当前 Tab 的表单值（未保存也能测；key 仅内存透传给 main，不落盘）。 */
   const handleTest = useCallback(async () => {
@@ -1570,6 +1738,9 @@ export function CustomProviderDialog({
         baseUrl: rf.baseUrl.trim(),
         ...(requestPath ? { requestPath } : {}),
         ...(savedWireProtocol ? { wireProtocol: savedWireProtocol } : {}),
+        ...(a === 'codex' && rf.supportsImageGeneration && canRuntimeUseNativeImageGeneration(rf)
+          ? { supportsImageGeneration: true }
+          : {}),
         models,
         ...(Object.keys(savedHeaders).length > 0 ? { headers: savedHeaders } : {}),
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
@@ -1685,10 +1856,20 @@ export function CustomProviderDialog({
     setSaving(true);
     try {
       if (editing) {
-        await updateCustomProvider(config, keys);
+        const result = await updateCustomProvider(config, keys, { source: 'manual-settings' });
+        if (result?.ok === false) {
+          setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
+          setSaving(false);
+          return;
+        }
         toast.success(t('settings.providers.custom.toast.updated'));
       } else {
-        await createCustomProvider(config, keys);
+        const result = await createCustomProvider(config, keys, { source: 'manual-settings' });
+        if (result?.ok === false) {
+          setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
+          setSaving(false);
+          return;
+        }
         toast.success(t('settings.providers.custom.toast.created'));
       }
       // 成功:onSaved 关闭弹窗(父级 setDialog(null) 卸载本组件)。不在此 setSaving(false)——
@@ -1717,6 +1898,43 @@ export function CustomProviderDialog({
     t,
   ]);
 
+  const saveWithImageGenerationRestartPolicy = useCallback(
+    async (policy: CodexImageGenerationRestartPolicy) => {
+      const pending = imageGenerationReloadConfirmationRef.current;
+      if (!pending || savingRef.current) return;
+      setSaving(true);
+      try {
+        const options = {
+          source: 'manual-settings' as const,
+          codexImageGenerationRestartPolicy: policy,
+        };
+        const result = editing
+          ? await updateCustomProvider(pending.config, pending.keys, options)
+          : await createCustomProvider(pending.config, pending.keys, options);
+        if (result.ok === false) {
+          const next = { ...pending, busyCount: result.busyCount };
+          imageGenerationReloadConfirmationRef.current = next;
+          setImageGenerationReloadConfirmation(next);
+          setSaving(false);
+          return;
+        }
+        toast.success(
+          t(
+            editing
+              ? 'settings.providers.custom.toast.updated'
+              : 'settings.providers.custom.toast.created',
+          ),
+        );
+        onSaved();
+      } catch (error) {
+        const ipc = extractIpcError(error);
+        toast.error(ipc?.message ?? t('settings.providers.custom.toast.saveFailed'));
+        setSaving(false);
+      }
+    },
+    [editing, onSaved, t],
+  );
+
   const activeSavedBaseline = savedBaselineFor(activeTab);
   // 共享判据：当前表单的端点相对已存基线是否未变。密钥与请求头都只在
   // 端点未变时继续有效——main 侧改端点后会清掉已存头，renderer 的徽标
@@ -1736,6 +1954,55 @@ export function CustomProviderDialog({
     ? t('settings.providers.custom.fields.apiKeyEditPlaceholder')
     : t('settings.providers.custom.fields.apiKeyPlaceholder');
 
+  const renderImageGenerationHelpContent = () => {
+    const idPrefix = 'custom-provider-image-generation-help';
+    return (
+      <div className="flex flex-col gap-3">
+        <section aria-labelledby={`${idPrefix}-condition`} className="flex flex-col gap-1">
+          <div
+            id={`${idPrefix}-condition`}
+            className="text-12 font-semibold text-[var(--text-primary)]"
+          >
+            {t('settings.providers.custom.fields.runtimeSupportsImageGenerationConditionTitle')}
+          </div>
+          <p className="leading-5">
+            {t('settings.providers.custom.fields.runtimeSupportsImageGenerationCondition')}
+          </p>
+        </section>
+        <section aria-labelledby={`${idPrefix}-endpoints`} className="flex flex-col gap-1">
+          <div
+            id={`${idPrefix}-endpoints`}
+            className="text-12 font-semibold text-[var(--text-primary)]"
+          >
+            {t('settings.providers.custom.fields.runtimeSupportsImageGenerationEndpointsTitle')}
+          </div>
+          <p className="leading-5">
+            {t('settings.providers.custom.fields.runtimeSupportsImageGenerationEndpoints')}
+          </p>
+          <div className="flex flex-col items-start gap-1.5">
+            <code className="max-w-full break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
+              /images/generations
+            </code>
+            <code className="max-w-full break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
+              /images/edits
+            </code>
+          </div>
+        </section>
+        <section aria-labelledby={`${idPrefix}-permissions`} className="flex flex-col gap-1">
+          <div
+            id={`${idPrefix}-permissions`}
+            className="text-12 font-semibold text-[var(--text-primary)]"
+          >
+            {t('settings.providers.custom.fields.runtimeSupportsImageGenerationPermissionsTitle')}
+          </div>
+          <p className="leading-5">
+            {t('settings.providers.custom.fields.runtimeSupportsImageGenerationPermissions')}
+          </p>
+        </section>
+      </div>
+    );
+  };
+
   return (
     <div
       ref={scrimRef}
@@ -1751,7 +2018,7 @@ export function CustomProviderDialog({
         }
       }}
       onKeyDown={(event) => {
-        if (childLayer || runtimeFill) return;
+        if (childLayer || runtimeFill || imageGenerationReloadConfirmation) return;
         if (event.key !== 'Tab') return;
         const focusable = Array.from(
           dialogPanelRef.current?.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR) ?? [],
@@ -2495,6 +2762,144 @@ export function CustomProviderDialog({
                     {t('settings.providers.custom.fields.addHeader')}
                   </button>
                 </div>
+
+                {/* Codex Responses Provider 级能力。放在自定义请求头之后，默认收起；
+                    同一张说明卡片支持 hover/focus 临时预览和 click/tap 固定。 */}
+                {canShowImageGenerationAdvanced && (
+                  <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] pt-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (showImageGenerationAdvanced) resetImageGenerationHelp();
+                        setShowImageGenerationAdvanced((open) => !open);
+                      }}
+                      aria-expanded={showImageGenerationAdvanced}
+                      aria-controls="custom-provider-image-generation-advanced"
+                      className="group flex w-full items-center justify-between gap-3 text-left"
+                    >
+                      <span className="text-13 font-medium text-[var(--settings-section-title)]">
+                        {t('settings.providers.custom.fields.runtimeAdvanced')}
+                      </span>
+                      <ChevronDown
+                        size={14}
+                        aria-hidden
+                        className={cn(
+                          'shrink-0 text-[var(--text-tertiary)] transition-transform group-hover:text-[var(--text-primary)]',
+                          showImageGenerationAdvanced && 'rotate-180',
+                        )}
+                      />
+                    </button>
+                    {showImageGenerationAdvanced && (
+                      <div
+                        id="custom-provider-image-generation-advanced"
+                        className="flex min-h-11 items-center justify-between gap-3 rounded-lg bg-[var(--surface-elevated)] px-3 py-2.5"
+                      >
+                        <label className="flex min-w-0 cursor-pointer items-center gap-2 text-[var(--settings-section-desc)]">
+                          <input
+                            type="checkbox"
+                            checked={f.supportsImageGeneration}
+                            onChange={(event) => {
+                              const supportsImageGeneration = event.currentTarget.checked;
+                              patch('codex', (runtime) => ({
+                                ...runtime,
+                                supportsImageGeneration,
+                              }));
+                            }}
+                            className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
+                          />
+                          <span className="text-12 font-medium leading-5 text-[var(--settings-section-sublabel)]">
+                            {t('settings.providers.custom.fields.runtimeSupportsImageGeneration')}
+                          </span>
+                        </label>
+                        <Popover
+                          open={showImageGenerationHelp}
+                          onOpenChange={(open) => {
+                            if (!open) closeImageGenerationHelp();
+                          }}
+                        >
+                          <PopoverAnchor asChild>
+                            <button
+                              ref={imageGenerationHelpTriggerRef}
+                              type="button"
+                              aria-label={t(
+                                'settings.providers.custom.fields.runtimeSupportsImageGenerationHelpLabel',
+                              )}
+                              aria-expanded={showImageGenerationHelp}
+                              aria-controls="custom-provider-image-generation-help-card"
+                              onPointerEnter={() => {
+                                imageGenerationHelpPointerInsideRef.current = true;
+                                if (imageGenerationHelpPointerPreviewSuppressedRef.current) return;
+                                previewImageGenerationHelp();
+                              }}
+                              onPointerLeave={() => {
+                                imageGenerationHelpPointerInsideRef.current = false;
+                                scheduleImageGenerationHelpPointerLeave();
+                              }}
+                              onFocus={() => {
+                                if (imageGenerationHelpFocusPreviewSuppressedRef.current) return;
+                                setImageGenerationHelpFocused(true);
+                              }}
+                              onBlur={() => {
+                                imageGenerationHelpFocusPreviewSuppressedRef.current = false;
+                                setImageGenerationHelpFocused(false);
+                              }}
+                              onClick={() => {
+                                if (imageGenerationHelpPinned) {
+                                  dismissImageGenerationHelp(false);
+                                  return;
+                                }
+                                cancelImageGenerationHelpPointerLeave();
+                                imageGenerationHelpFocusPreviewSuppressedRef.current = false;
+                                imageGenerationHelpPointerPreviewSuppressedRef.current = false;
+                                setImageGenerationHelpPinned(true);
+                              }}
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                            >
+                              <CircleHelp size={15} aria-hidden />
+                            </button>
+                          </PopoverAnchor>
+                          <PopoverContent
+                            id="custom-provider-image-generation-help-card"
+                            side="top"
+                            align="end"
+                            sideOffset={8}
+                            collisionPadding={12}
+                            role={imageGenerationHelpPinned ? 'dialog' : 'tooltip'}
+                            aria-label={t(
+                              'settings.providers.custom.fields.runtimeSupportsImageGenerationHelpLabel',
+                            )}
+                            onOpenAutoFocus={(event) => event.preventDefault()}
+                            onCloseAutoFocus={(event) => event.preventDefault()}
+                            onPointerEnter={() => {
+                              imageGenerationHelpPointerInsideRef.current = true;
+                              if (imageGenerationHelpPointerPreviewSuppressedRef.current) return;
+                              previewImageGenerationHelp();
+                            }}
+                            onPointerLeave={() => {
+                              imageGenerationHelpPointerInsideRef.current = false;
+                              scheduleImageGenerationHelpPointerLeave();
+                            }}
+                            onPointerDownOutside={(event) => {
+                              if (
+                                imageGenerationHelpTriggerRef.current?.contains(
+                                  event.target as Node,
+                                )
+                              ) {
+                                event.preventDefault();
+                              }
+                            }}
+                            onFocusOutside={(event) => {
+                              if (imageGenerationHelpPinned) event.preventDefault();
+                            }}
+                            className="z-[10001] w-72 max-w-[calc(100vw-2rem)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 text-12 text-[var(--text-secondary)]"
+                          >
+                            {renderImageGenerationHelpContent()}
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
 
@@ -2561,6 +2966,7 @@ export function CustomProviderDialog({
         {/* Footer */}
         <div className="flex justify-end gap-2.5 px-6 py-4">
           <button
+            ref={saveButtonRef}
             type="button"
             onClick={onClose}
             className={cn(
@@ -2618,6 +3024,88 @@ export function CustomProviderDialog({
           onToggleField={toggleRuntimeFillField}
           onApply={applyRuntimeFill}
         />
+      )}
+      {imageGenerationReloadConfirmation && (
+        <Dialog.Root
+          open
+          onOpenChange={(open) => {
+            if (!open && !savingRef.current) {
+              imageGenerationReloadConfirmationRef.current = null;
+              setImageGenerationReloadConfirmation(null);
+            }
+          }}
+        >
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-[10002] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out" />
+            <Dialog.Content
+              aria-describedby="custom-provider-image-generation-reload-description"
+              onOpenAutoFocus={(event) => {
+                event.preventDefault();
+                document.getElementById('custom-provider-image-generation-reload-primary')?.focus();
+              }}
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                saveButtonRef.current?.focus();
+              }}
+              onEscapeKeyDown={(event) => {
+                if (saving) event.preventDefault();
+              }}
+              className={cn(
+                'fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col rounded-xl p-4 outline-none',
+                'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
+                'data-[state=open]:animate-confirm-content-layout-in data-[state=closed]:animate-confirm-content-layout-out',
+              )}
+            >
+              <button
+                type="button"
+                aria-label={t('settings.providers.custom.imageGenerationReload.close')}
+                disabled={saving}
+                onClick={() => {
+                  imageGenerationReloadConfirmationRef.current = null;
+                  setImageGenerationReloadConfirmation(null);
+                }}
+                className="absolute right-3 top-3 rounded-full p-1.5 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+              >
+                <X size={16} />
+              </button>
+              <Dialog.Title className="pr-9 text-lg font-medium text-[var(--confirm-title)]">
+                {t('settings.providers.custom.imageGenerationReload.title')}
+              </Dialog.Title>
+              <Dialog.Description
+                id="custom-provider-image-generation-reload-description"
+                className="mt-2 whitespace-pre-line text-base leading-relaxed text-[var(--confirm-desc)]"
+              >
+                {t('settings.providers.custom.imageGenerationReload.description')}
+              </Dialog.Description>
+              <div className="mt-6 flex flex-wrap justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => {
+                    imageGenerationReloadConfirmationRef.current = null;
+                    setImageGenerationReloadConfirmation(null);
+                  }}
+                  className="inline-flex min-w-[96px] items-center justify-center rounded-full border border-[var(--confirm-btn-secondary-border)] bg-transparent px-6 py-2.5 text-13 font-medium text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)] focus-visible:ring-2 focus-visible:ring-[var(--confirm-btn-secondary-border)] disabled:opacity-50"
+                >
+                  {t('settings.providers.custom.imageGenerationReload.cancel')}
+                </button>
+                <button
+                  id="custom-provider-image-generation-reload-primary"
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void saveWithImageGenerationRestartPolicy('interrupt')}
+                  className="inline-flex min-w-[96px] items-center justify-center rounded-full bg-[hsl(var(--destructive))] px-6 py-2.5 text-13 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+                >
+                  {saving ? (
+                    <Spinner size={14} />
+                  ) : (
+                    t('settings.providers.custom.imageGenerationReload.interrupt')
+                  )}
+                </button>
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
       )}
     </div>
   );

@@ -370,6 +370,74 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
 });
 
 describe('custom-provider-store CRUD (per-runtime)', () => {
+  it('accepts image generation only for a Codex runtime with an OpenAI Responses route', () => {
+    const model = { id: 'image-chat', name: 'Image Chat' };
+    expect(
+      validateCustomProviderConfig({
+        id: 'image-provider',
+        name: 'Image Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [model],
+          },
+        },
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      validateCustomProviderConfig({
+        id: 'chat-provider',
+        name: 'Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-chat',
+            supportsImageGeneration: true,
+            models: [model],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        id: 'pi-provider',
+        name: 'Pi Provider',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [model],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        id: 'mixed-provider',
+        name: 'Mixed Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-chat',
+            supportsImageGeneration: true,
+            models: [
+              {
+                ...model,
+                route: {
+                  baseUrl: 'https://example.com/responses',
+                  wireProtocol: 'openai-responses',
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it('creates, lists, gets, updates, deletes', async () => {
     mountDb();
     expect(await listCustomProviders()).toEqual([]);
@@ -536,6 +604,26 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       { id: 'legacy', name: 'Legacy' },
       { id: 'explicit-text', name: 'Explicit text' },
     ]);
+  });
+
+  it('round-trips only an explicitly enabled Codex image-generation capability', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'imagegen-provider',
+      name: 'Imagegen Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'enabled', name: 'Enabled' }, { id: 'legacy', name: 'Legacy' }],
+        },
+      },
+    });
+    expect((await getCustomProvider('imagegen-provider'))?.runtimes.codex).toMatchObject({
+      supportsImageGeneration: true,
+      models: [{ id: 'enabled', name: 'Enabled' }, { id: 'legacy', name: 'Legacy' }],
+    });
   });
 
   it('round-trips the Pi official catalog provider id without adding it to other runtimes', async () => {

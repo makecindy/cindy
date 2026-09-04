@@ -20,6 +20,21 @@
 
 import type { GhostImageAspectRatio } from '../../shared/ghost.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
+import { isLibraryBlobRelPath, isLibrarySidecarRelPath } from './librarySlot.js';
+
+/** editImage 源路径只认 library 正本 blob;sidecar / 非 blob 文件名 fail-visible。 */
+export function assertLibraryEditImageSource(relOrAbs: string): void {
+  const rel = relOrAbs.replace(/\\/g, '/');
+  const marker = '/assets/';
+  const idx = rel.lastIndexOf(marker);
+  const candidate = idx >= 0 ? rel.slice(idx + 1) : rel.split('/').slice(-4).join('/');
+  if (isLibrarySidecarRelPath(candidate)) {
+    throw new Error('sidecar meta.json/preview.webp 禁止当像素');
+  }
+  if (!isLibraryBlobRelPath(candidate)) {
+    throw new Error('editImage 只打开 library 正本 blob');
+  }
+}
 
 /** 通道适配层的出参(decodeImageResponse 的入参:字节 base64;声明格式仅作参考)。 */
 export interface ImageChannelResult {

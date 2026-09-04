@@ -25,6 +25,11 @@ describe('market route scope', () => {
     expect(localDetailSource).not.toContain('marketManagePath');
   });
 
+  it('reads rejected management versions from the native record', () => {
+    expect(localDetailSource).toContain('listPublishedVersions(entry.name)');
+    expect(localDetailSource).not.toContain('listPublishedVersions(entry.name, entry.registryEntry?.catalogScope)');
+  });
+
   it('keeps Clone wording for acquisition actions', () => {
     const marketCardSource = readFileSync(resolve(skillhubDir, 'components/MarketCard.tsx'), 'utf8');
     expect(marketCardSource).toContain('Clone');
@@ -49,7 +54,7 @@ describe('market route scope', () => {
     expect(previewSource).toContain('readPublishedFile');
     expect(previewSource).toContain('allowPrivilegedLinks={false}');
     expect(previewSource).toContain('ManageMenu');
-    expect(listSource).toContain('onManageAction={handleManageAction}');
+    expect(listSource).toContain('onManageAction={management.handleManageAction}');
     expect(previewSource).not.toContain('previewMarket');
   });
 
@@ -59,6 +64,41 @@ describe('market route scope', () => {
 
     expect(listSource).toContain('marketCardPrimaryAction');
     expect(viewModelSource).toContain("input.listVisibility === 'mine'");
+  });
+
+  it('shows the full visible catalog by default without an Available filter', () => {
+    const listSource = readFileSync(resolve(skillhubDir, 'SkillhubMarketListView.tsx'), 'utf8');
+    const hookSource = readFileSync(resolve(skillhubDir, 'hooks/useMarketList.ts'), 'utf8');
+
+    expect(listSource).not.toContain('skillhub.market.chipAvailable');
+    expect(listSource).not.toContain("setVisibility('available')");
+    expect(hookSource).toContain("initialVisibility: Visibility = 'all'");
+  });
+
+  it('uses a compact More entry for the full market and aligns import with plugin actions', () => {
+    const homeSource = readFileSync(resolve(skillhubDir, 'SkillhubHomeView.tsx'), 'utf8');
+
+    expect(homeSource).not.toContain('skillhub.home.browseTitle');
+    expect(homeSource).not.toContain('skillhub.home.browseDesc');
+    expect(homeSource).not.toContain("title={t('skillhub.home.catalog')}");
+    expect(homeSource).toContain("t('skillhub.home.catalogMore')");
+    expect(homeSource).toContain('headerActions={(');
+    expect(homeSource).toContain('plugin-management-action-trigger');
+    expect(homeSource).toContain('<SkillIcon url={s.icon} />');
+    expect(homeSource).not.toContain('<SkillSectionHeading');
+    expect(homeSource).not.toContain("label={t('skillhub.home.globalScope')}");
+  });
+
+  it('paginates both home cloud catalogs in batches of 24', () => {
+    const homeSource = readFileSync(resolve(skillhubDir, 'SkillhubHomeView.tsx'), 'utf8');
+    const hookSource = readFileSync(resolve(skillhubDir, 'hooks/useMarketList.ts'), 'utf8');
+
+    expect(hookSource).toContain('export const MARKET_PAGE_SIZE = 24');
+    expect(homeSource).toContain('length: MARKET_PAGE_SIZE');
+    expect(homeSource).not.toContain('.slice(0, HOME_CATALOG');
+    expect(homeSource).toContain('marketHasMore');
+    expect(homeSource).toContain('loadMoreMarket()');
+    expect(homeSource).toContain("t('skillhub.home.loadMore')");
   });
 });
 
@@ -74,12 +114,14 @@ describe('market management copy and errors', () => {
     expect(zhLocale).toContain('也不会删除你本机的 Skill 文件');
   });
 
-  it('consolidates ownership transfer into the manage-visibility dialog', () => {
+  it('keeps ownership fixed by membership in the manage-visibility dialog', () => {
     const editorSource = readFileSync(resolve(skillhubDir, 'components/VisibilityEditorDialog.tsx'), 'utf8');
 
     expect(editorSource).toContain('skillhub.visibilityEditor.tierLabel');
-    expect(editorSource).toContain('PublisherPicker');
-    expect(editorSource).toContain("teamSlug = null");
+    expect(editorSource).not.toContain('PublisherPicker');
+    expect(editorSource).not.toContain('fields.teamSlug');
+    expect(editorSource).toContain('identityPolicy.ownerType');
+    expect(editorSource).toContain('previousCatalogScope,');
   });
 
   it('does not expose an extra published status pill in the market preview panel', () => {
@@ -115,14 +157,17 @@ describe('market management copy and errors', () => {
     expect(listSource).toContain('previewSkill ? WINDOW_NO_DRAG_STYLE : WINDOW_DRAG_STYLE');
   });
 
-  it('updates only the Hub summary from the market info editor', () => {
+  it('updates the Hub copy, locale, and Platform tag slugs from the market info editor', () => {
     const editorSource = readFileSync(resolve(skillhubDir, 'components/MarketInfoEditDialog.tsx'), 'utf8');
     const fieldsStart = editorSource.indexOf('fields: {');
     const fieldsEnd = editorSource.indexOf('},', fieldsStart);
     const fieldsSource = editorSource.slice(fieldsStart, fieldsEnd);
 
     expect(fieldsSource).toContain('summary: description');
-    expect(fieldsSource).not.toMatch(/\n\s+description[,}]/);
+    expect(fieldsSource).toMatch(/\n\s+description,/);
+    expect(fieldsSource).toContain('contentLocale:');
+    expect(fieldsSource).toContain('tags: categorySlugs');
+    expect(fieldsSource).not.toContain('authorTagSlugs:');
   });
 
   it('keeps the confirm provider in the main App tree so AuthProvider has a stable context during HMR', () => {

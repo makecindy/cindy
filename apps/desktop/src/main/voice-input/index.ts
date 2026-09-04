@@ -1,4 +1,4 @@
-import { app, ipcMain, shell, systemPreferences } from 'electron';
+import { app, ipcMain, shell, systemPreferences, type WebContents } from 'electron';
 import fs from 'node:fs/promises';
 
 import {
@@ -279,6 +279,7 @@ export type DictionaryAdviceIpcResult =
   | { ok: false; error: string };
 
 const activeByWebContentsId = new Map<number, ActiveVoiceInput>();
+const destroyedWebContentsListeners = new Set<number>();
 let appRestoreRegistered = false;
 let cachedMicrophonePermission: VoiceInputMicrophonePermissionCache | null = null;
 let rendererVerifiedMicrophonePermission = false;
@@ -481,6 +482,52 @@ function summarizeTimelineEventForLog(event: VoiceTimelineEvent): Record<string,
     }
   }
   return summary;
+}
+
+function summarizeVoiceLatency(
+  events: ReadonlyMap<string, VoiceTimelineEvent>,
+  submitted: Extract<VoiceTimelineEvent, { type: 'submitted' }>,
+  provider: string | null,
+): Record<string, unknown> {
+  const start = events.get(`${submitted.runId}:start_clicked`);
+  const elapsed = (type: VoiceTimelineEvent['type']): number | undefined => {
+    const event = events.get(`${submitted.runId}:${type}`);
+    if (!event || !start) return undefined;
+    if ('elapsedMs' in event && typeof event.elapsedMs === 'number') return Math.round(event.elapsedMs);
+    return Math.max(0, event.at - start.at);
+  };
+  return {
+    runId: submitted.runId,
+    provider: provider ?? undefined,
+    totalMs: elapsed('submitted'),
+    firstAudioChunkMs: elapsed('first_audio_chunk'),
+    asrConnectedMs: elapsed('asr_connected'),
+    firstPartialMs: elapsed('first_partial'),
+    stableReceivedMs: elapsed('stable_received'),
+    submittedMs: elapsed('submitted'),
+    submitSource: submitted.source,
+  };
+}
+
+function registerVoiceInputWebContentsDestroyedCleanup(sender: WebContents): void {
+  const webContentsId = sender.id;
+  if (destroyedWebContentsListeners.has(webContentsId)) return;
+  destroyedWebContentsListeners.add(webContentsId);
+  sender.once('destroyed', () => {
+    destroyedWebContentsListeners.delete(webContentsId);
+    const active = activeByWebContentsId.get(webContentsId);
+    if (!active) return;
+    unregisterActiveInlineVoiceInputWebContents(webContentsId);
+    activeByWebContentsId.delete(webContentsId);
+    void (async () => {
+      await active.controller.cancel();
+      await disposeVoiceInputProvider(active.provider, 'web_contents_destroyed', {
+        sourceLanguage: active.sourceLanguage,
+        refinementEnabled: active.refinementEnabled,
+      });
+      await restoreSystemAudioForSender(webContentsId);
+    })();
+  });
 }
 
 // 'auto' must mean "let the ASR provider auto-detect", not "fall back to the
@@ -2051,13 +2098,22 @@ export function registerVoiceInputIpc(): void {
     // Refiner fallback chain: credential-ready profiles in runtime priority
     // order. The built-in default is readiness-aware (Codex ready: Codex →
     // Kimi; Codex unavailable: LiteLLM GPT → Kimi), then cooldown-aware.
-    const {
-      refinerChainProfiles,
-      refinerReadinessList,
-      readyRefinerProfiles,
-    } = shouldRefine
-      ? await resolveVoiceInputRefinerChainForRuntime(useCindyVoiceService)
-      : { refinerChainProfiles: [], refinerReadinessList: [], readyRefinerProfiles: [] };
+    // Refiner-chain and ASR-chain resolution are independent reads (settings,
+    // secret store, Codex auth state); resolving them concurrently keeps the
+    // Codex auth round trip off the ASR dial's critical path.
+    const [
+      {
+        refinerChainProfiles,
+        refinerReadinessList,
+        readyRefinerProfiles,
+      },
+      startableAsrChain,
+    ] = await Promise.all([
+      shouldRefine
+        ? resolveVoiceInputRefinerChainForRuntime(useCindyVoiceService)
+        : Promise.resolve({ refinerChainProfiles: [], refinerReadinessList: [], readyRefinerProfiles: [] }),
+      resolveStartableAsrChain(),
+    ]);
     const primaryRefinerProfile = refinerChainProfiles[0] ?? null;
     const primaryRefinerReadiness = refinerReadinessList[0] ?? null;
     const canRefine = readyRefinerProfiles.length > 0;
@@ -2089,7 +2145,6 @@ export function registerVoiceInputIpc(): void {
     // Connect-phase fallback: hand FallbackAsrProvider the full startable
     // chain. Construction is lazy — providers beyond the first are only
     // instantiated when an earlier candidate fails to connect.
-    const startableAsrChain = await resolveStartableAsrChain();
     const effectiveRefinerProfile = readyRefinerProfiles[0] ?? null;
     // BYOK mode must never allocate a managed voice-server session even when
     // the service is reachable — the user explicitly chose their own
@@ -2127,7 +2182,14 @@ export function registerVoiceInputIpc(): void {
           }
           return createVoiceInputProvider(kind, asrLanguageHint, voiceContext);
         },
-      })));
+      })), {
+        // Managed candidates allocate one voice-server session per provider.
+        // Do not hedge those requests: concurrent sessions race the shared
+        // run context's session id and can leave refinement attached to the
+        // losing session. BYOK providers have independent credentials and
+        // may use the staggered client-side hedge.
+        hedgeDelayMs: voiceContext ? null : undefined,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn('provider create failed', { error: message });
@@ -2220,8 +2282,25 @@ export function registerVoiceInputIpc(): void {
         });
       }
     }
+    const timelineEvents = new Map<string, VoiceTimelineEvent>();
     const logger = new VoiceTimelineLogger((timelineEvent) => {
       log.debug('timeline', summarizeTimelineEventForLog(timelineEvent));
+      timelineEvents.set(`${timelineEvent.runId}:${timelineEvent.type}`, timelineEvent);
+      if (timelineEvent.type === 'submitted') {
+        log.info('latency summary', summarizeVoiceLatency(
+          timelineEvents,
+          timelineEvent,
+          provider.activeProviderKind,
+        ));
+      } else if (timelineEvent.type === 'refine_accepted' || timelineEvent.type === 'refine_rejected') {
+        const start = timelineEvents.get(`${timelineEvent.runId}:start_clicked`);
+        log.info('refinement latency summary', {
+          runId: timelineEvent.runId,
+          outcome: timelineEvent.type === 'refine_accepted' ? 'accepted' : 'rejected',
+          elapsedMs: timelineEvent.elapsedMs === undefined ? undefined : Math.round(timelineEvent.elapsedMs),
+          totalMs: start ? Math.max(0, timelineEvent.at - start.at) : undefined,
+        });
+      }
       logRefineSummary(timelineEvent, refinementContext);
       if (runId) emit({ type: 'timeline', runId, event: timelineEvent });
     });
@@ -2298,20 +2377,7 @@ export function registerVoiceInputIpc(): void {
         sourceLanguage: payload?.sourceLanguage,
         refinementEnabled: Boolean(refiner),
       });
-      event.sender.once('destroyed', () => {
-        const active = activeByWebContentsId.get(event.sender.id);
-        if (active?.controller !== controller) return;
-        unregisterActiveInlineVoiceInputWebContents(event.sender.id);
-        activeByWebContentsId.delete(event.sender.id);
-        void (async () => {
-          await controller.cancel();
-          await disposeVoiceInputProvider(provider, 'web_contents_destroyed', {
-            sourceLanguage: active.sourceLanguage,
-            refinementEnabled: active.refinementEnabled,
-          });
-          await restoreSystemAudioForSender(event.sender.id);
-        })();
-      });
+      registerVoiceInputWebContentsDestroyedCleanup(event.sender);
       log.info('started', {
         runId,
         webContentsId: event.sender.id,

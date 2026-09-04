@@ -61,20 +61,22 @@ export function parseMobileDesktopCommand(
 }
 
 /**
- * `/learn [hub:<slug>] [要求]` → learn:start 请求。语义对齐桌面 builtins.ts:
- * - `hub:<slug>` 前缀 → hub 蒸馏(slug 规则 [a-z0-9-],与市场一致);
+ * `/learn [hub:[market|team:]<slug>] [要求]` → learn:start 请求。语义对齐桌面 builtins.ts:
+ * - `hub:<slug>` 前缀 → 公开目录 hub 蒸馏(slug 规则 [a-z0-9-],与市场一致);
+ * - `hub:<scope>:<slug>` → 显式目录 hub 蒸馏;
  * - 有参数 → freetext;无参数 → 蒸馏当前会话(session)。
  * 移动端总在会话内触发,originSessionId 恒有值,因此裸 /learn 不需要桌面
  * 草稿态的 usage 报错分支。
  */
 export function buildLearnStartRequest(args: string, sessionId: string): MobileLearnStartRequest {
   const arg = args.trim();
-  const hubMatch = /^hub:([a-z0-9][a-z0-9-]*)\s*/.exec(arg);
+  const hubMatch = /^hub:(?:(market|team):)?([a-z0-9][a-z0-9-]*)\s*/.exec(arg);
   if (hubMatch) {
     return {
       input: arg.slice(hubMatch[0].length).trim(),
       sourceKind: 'hub',
-      hubSlug: hubMatch[1],
+      hubSlug: hubMatch[2],
+      hubCatalogScope: (hubMatch[1] as 'market' | 'team' | undefined) ?? 'market',
       originSessionId: sessionId,
     };
   }

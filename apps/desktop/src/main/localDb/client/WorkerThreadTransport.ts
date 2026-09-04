@@ -1650,6 +1650,7 @@ function forkSession(readyDb, args) {
   const targetRowid = nullableNumber(payload.targetRowid);
   const newSession = asRecord(payload.newSession, 'newSession');
   const uuidMap = normalizeUuidMap(payload.uuidMap);
+  const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(payload.nativeForkAnchorSessionMap);
   const legacyTranscriptParentUuids = normalizeStringSet(payload.legacyTranscriptParentUuids, 'legacyTranscriptParentUuids');
   const toolParentUuids = normalizeStringSet(payload.toolParentUuids, 'toolParentUuids');
   const detachAgentSwitchSessions = payload.detachAgentSwitchSessions === true;
@@ -1696,7 +1697,7 @@ function forkSession(readyDb, args) {
     for (let i = 0; i < sourceMessages.length; i += 1) {
       const message = sourceMessages[i];
       const ids = newMessageIds[i];
-      insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role, sanitizeForkedMessageContent(message, { detachAgentSwitchSessions, resetHandoffBoundaryClientId }), message.tool_use_id, remapAgentMetaUuid(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids), message.agent_kind, message.created_at);
+      insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role, sanitizeForkedMessageContent(message, { detachAgentSwitchSessions, resetHandoffBoundaryClientId }), message.tool_use_id, remapForkedAgentMeta(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids, nativeForkAnchorSessionMap), message.agent_kind, message.created_at);
     }
   })();
   return { messageCount: sourceMessages.length };
@@ -1928,7 +1929,7 @@ function extractContentText(content) {
   return parts.join('\\n\\n');
 }
 
-function remapAgentMetaUuid(raw, map, legacyTranscriptParentUuids = new Set(), toolParentUuids = new Set()) {
+function remapForkedAgentMeta(raw, map, legacyTranscriptParentUuids = new Set(), toolParentUuids = new Set(), nativeForkAnchorSessionMap = new Map()) {
   if (!raw || raw === 'null') return raw;
   let parsed;
   try { parsed = JSON.parse(raw); } catch (_) { return raw; }
@@ -1952,6 +1953,19 @@ function remapAgentMetaUuid(raw, map, legacyTranscriptParentUuids = new Set(), t
     if (mapped) next.transcriptParentUuid = mapped;
     else delete next.transcriptParentUuid;
   }
+  const nativeForkAnchor = next.nativeForkAnchor;
+  if (
+    next.turnCompleted === true &&
+    isRecord(nativeForkAnchor) &&
+    nativeForkAnchor.agentKind === 'codex' &&
+    nativeForkAnchor.kind === 'turn' &&
+    typeof nativeForkAnchor.id === 'string' &&
+    nativeForkAnchor.id &&
+    typeof nativeForkAnchor.sdkSessionId === 'string'
+  ) {
+    const mapped = nativeForkAnchorSessionMap.get(nativeForkAnchor.sdkSessionId);
+    if (mapped) next.nativeForkAnchor = { ...nativeForkAnchor, sdkSessionId: mapped };
+  }
   return JSON.stringify(next);
 }
 
@@ -1961,14 +1975,22 @@ function normalizeStringSet(value, label) {
 }
 
 function normalizeUuidMap(value) {
+  return normalizeStringMap(value, 'uuidMap');
+}
+
+function normalizeNativeForkAnchorSessionMap(value) {
+  return value === undefined ? new Map() : normalizeStringMap(value, 'nativeForkAnchorSessionMap');
+}
+
+function normalizeStringMap(value, label) {
   if (Array.isArray(value)) {
     return new Map(value.map((entry) => {
-      if (!Array.isArray(entry) || entry.length !== 2) throw invalidArgs('uuidMap entries must be pairs');
-      return [expectString(entry[0], 'uuidMap.key'), expectString(entry[1], 'uuidMap.value')];
+      if (!Array.isArray(entry) || entry.length !== 2) throw invalidArgs(label + ' entries must be pairs');
+      return [expectString(entry[0], label + '.key'), expectString(entry[1], label + '.value')];
     }));
   }
-  const record = asRecord(value, 'uuidMap');
-  return new Map(Object.entries(record).map(([key, mapped]) => [key, expectString(mapped, 'uuidMap.' + key)]));
+  const record = asRecord(value, label);
+  return new Map(Object.entries(record).map(([key, mapped]) => [key, expectString(mapped, label + '.' + key)]));
 }
 
 function normalizeNewMessageIds(value) {

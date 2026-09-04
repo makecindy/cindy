@@ -132,7 +132,11 @@ describe('Codex Micro guard store and manager', () => {
     const linkedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-guard-link-'));
     roots.push(linkedRoot);
     fs.mkdirSync(path.join(linkedRoot, 'real'));
-    fs.symlinkSync(path.join(linkedRoot, 'real'), path.join(linkedRoot, 'support'));
+    fs.symlinkSync(
+      path.join(linkedRoot, 'real'),
+      path.join(linkedRoot, 'support'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     expect(() => new CodexMicroGuardStore(path.join(linkedRoot, 'support')).prepare()).toThrow(
       'unsafe',
     );

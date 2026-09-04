@@ -9,6 +9,7 @@ import {
   CODEX_HISTORY_OVERSIZED_REASON,
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
+  isRemoteCompactEncryptedContentError,
 } from '@cindy/maker-core';
 import {
   projectAgentFacingText,
@@ -48,7 +49,9 @@ export function isContextOverflowErrorData(data: unknown): boolean {
   const rec = data as { reason?: unknown; message?: unknown; sdkError?: unknown };
   if (rec.reason === CONTEXT_OVERFLOW_REASON) return true;
   return [rec.message, rec.sdkError].some(
-    (value) => typeof value === 'string' && isContextOverflowErrorMessage(value),
+    (value) =>
+      typeof value === 'string' &&
+      (isContextOverflowErrorMessage(value) || isRemoteCompactEncryptedContentError(value)),
   );
 }
 

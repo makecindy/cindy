@@ -20,13 +20,17 @@ import {
   beginProviderRouteMutation,
   buildLocalHandlerHeaders,
   buildRouteDecision,
+  getProviderRouteCredentialRevision,
   getSessionRoutingDescriptor,
   resolveSessionRoute,
   resolveSessionRouteDecision,
+  resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
+  setCustomProviderHeaderReader,
+  setOAuthTokenReader,
   setPendingCredentialSwitchReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
@@ -76,6 +80,7 @@ const CODEX_ACCOUNT_HEADER_DELETE = [
 afterEach(() => {
   mockGetAppCapabilities.mockReturnValue({ canUseCindyGateway: true });
   setProviderOAuthTokenReader(() => null);
+  setOAuthTokenReader(() => null);
   setPendingCredentialSwitchReader(() => undefined);
   clearSessionProvider('s-xai');
   clearSessionProvider('s-xai-rewrite');
@@ -84,6 +89,7 @@ afterEach(() => {
   setXdGatewayModels([]);
   setAnthropicDiscoveredModels([]);
   setProviderViewsReader(async () => []);
+  setCustomProviderHeaderReader(() => null);
 });
 
 describe('Pi per-model protocol routing', () => {
@@ -1189,6 +1195,198 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       upstreamOverride: 'https://new.example/v1',
       headerOverride: { authorization: 'Bearer new-key' },
     });
+  });
+
+  it('keeps frozen image routes and credentials on one generation and closes async read races', async () => {
+    const providerId = 'image-route-generation';
+    const makeProvider = (baseUrl: string) =>
+      buildUserProvider({
+        id: providerId,
+        name: 'Image Route Generation',
+        runtimes: {
+          codex: {
+            baseUrl,
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = makeProvider('https://old-images.example/v1');
+    setCustomProviders([oldProvider]);
+    setCustomProviderKeyReader(() => 'old-key');
+    const oldRevision = getProviderRouteCredentialRevision(providerId);
+    const oldRouting = oldProvider.routing.codex!;
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toMatchObject({
+      decision: {
+        upstreamOverride: 'https://old-images.example/v1',
+        headerOverride: { authorization: 'Bearer old-key' },
+      },
+    });
+
+    const finishMutation = beginProviderRouteMutation(providerId);
+    setCustomProviders([makeProvider('https://new-images.example/v1')]);
+    setCustomProviderKeyReader(() => 'new-key');
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+    finishMutation.commit();
+    finishMutation();
+
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+    const newRevision = getProviderRouteCredentialRevision(providerId);
+    const newProvider = makeProvider('https://new-images.example/v1');
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        newProvider.routing.codex!,
+        newRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toMatchObject({
+      decision: {
+        upstreamOverride: 'https://new-images.example/v1',
+        headerOverride: { authorization: 'Bearer new-key' },
+      },
+    });
+
+    let finishTokenRead!: (token: string) => void;
+    setProviderOAuthTokenReader(
+      () =>
+        new Promise<string>((resolve) => {
+          finishTokenRead = resolve;
+        }),
+    );
+    const asyncRouting = {
+      ...newProvider.routing.codex!,
+      authStrategy: 'provider-oauth-header' as const,
+    };
+    const pending = resolveFrozenProviderRouteDecision(
+      providerId,
+      asyncRouting,
+      newRevision,
+      'codex',
+      KEY,
+    );
+    await vi.waitFor(() => expect(finishTokenRead).toBeTypeOf('function'));
+    const finishTokenMutation = beginProviderRouteMutation(providerId);
+    finishTokenMutation.commit();
+    finishTokenMutation();
+    finishTokenRead('new-oauth-token');
+    await expect(pending).resolves.toBeNull();
+
+    // Recreating the same stored id cannot revive an older Host snapshot (ABA).
+    setCustomProviders([]);
+    const finishDelete = beginProviderRouteMutation(providerId);
+    finishDelete.commit();
+    finishDelete();
+    setCustomProviders([oldProvider]);
+    const finishRecreate = beginProviderRouteMutation(providerId);
+    finishRecreate.commit();
+    finishRecreate();
+    expect(getProviderRouteCredentialRevision(providerId)).not.toBe(newRevision);
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+  });
+
+  it('reads custom headers at request time and rejects a stale frozen route after header mutation', async () => {
+    const providerId = 'image-header-generation';
+    const makeProvider = (header: string) =>
+      buildUserProvider({
+        id: providerId,
+        name: 'Image Header Generation',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://header-images.example/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            headers: { Authorization: header, 'x-vendor-token': header },
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = makeProvider('Bearer old-header-secret');
+    setCustomProviders([oldProvider]);
+    setCustomProviderKeyReader(() => null);
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer old-header-secret',
+      'x-vendor-token': 'old-header-secret',
+    }));
+    const oldRevision = getProviderRouteCredentialRevision(providerId);
+    const frozenRouting = { ...oldProvider.routing.codex! };
+    delete frozenRouting.headerOverride;
+
+    const oldDecision = await resolveFrozenProviderRouteDecision(
+      providerId,
+      frozenRouting,
+      oldRevision,
+      'codex',
+      KEY,
+    );
+    expect(oldDecision).toMatchObject({
+      decision: {
+        headerOverride: {
+          authorization: 'Bearer old-header-secret',
+          'x-vendor-token': 'old-header-secret',
+        },
+      },
+    });
+    expect(oldDecision?.routing).not.toHaveProperty('headerOverride');
+    expect(oldDecision?.decision?.dispatchGenerationValid?.()).toBe(true);
+
+    const finishMutation = beginProviderRouteMutation(providerId);
+    expect(oldDecision?.decision?.dispatchGenerationValid?.()).toBe(false);
+    setCustomProviders([makeProvider('Bearer new-header-secret')]);
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer new-header-secret',
+      'x-vendor-token': 'new-header-secret',
+    }));
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        frozenRouting,
+        oldRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toBeNull();
+    finishMutation.commit();
+    finishMutation();
+
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        frozenRouting,
+        oldRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toBeNull();
+    const newProvider = makeProvider('Bearer new-header-secret');
+    const newFrozenRouting = { ...newProvider.routing.codex! };
+    delete newFrozenRouting.headerOverride;
+    const newDecision = await resolveFrozenProviderRouteDecision(
+      providerId,
+      newFrozenRouting,
+      getProviderRouteCredentialRevision(providerId),
+      'codex',
+      KEY,
+    );
+    expect(newDecision).toMatchObject({
+      decision: {
+        headerOverride: {
+          authorization: 'Bearer new-header-secret',
+          'x-vendor-token': 'new-header-secret',
+        },
+      },
+    });
+    expect(newDecision?.routing).not.toHaveProperty('headerOverride');
   });
 
   it('精确请求路径只覆盖带 model 的推理请求，不改写无 body 的控制面请求', () => {

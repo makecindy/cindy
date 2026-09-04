@@ -115,6 +115,22 @@ describe('/learn 远程路由', () => {
     ]);
   });
 
+  it('deviceId + hub:<scope>:<slug> → 保留目录作用域', async () => {
+    const { remoteInvoke, registry } = makeHarness({
+      remoteInvoke: async () => ({ runId: 'r-scope' }),
+    });
+    await registry.execute('learn', { sessionId: 'rs', deviceId: 'dev-1', args: 'hub:team:my-skill 精简点' });
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'learn:start', [
+      {
+        input: '精简点',
+        sourceKind: 'hub',
+        hubSlug: 'my-skill',
+        hubCatalogScope: 'team',
+        originSessionId: 'rs',
+      },
+    ]);
+  });
+
   it('隧道 [LEARN_BUSY] 编码 → learn-busy(与本机 err.code 同分类)', async () => {
     const { registry } = makeHarness({
       remoteInvoke: async () => {

@@ -3,14 +3,17 @@
 import { useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 const auth = vi.hoisted(() => ({
   isInitializing: false,
   canEnterApp: true,
   loginState: { step: 'identifier' },
-  beginAddAccount: vi.fn(),
-  cancelAddAccount: vi.fn(),
+  beginAddAccount: vi.fn(async () => ({
+    success: true,
+    state: { step: 'identifier' },
+  })),
+  cancelAddAccount: vi.fn(async () => undefined),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -51,13 +54,20 @@ function CoverProbe() {
   );
 }
 
+function LocationProbe() {
+  return <output data-testid="location-probe">{useLocation().pathname}</output>;
+}
+
 function Harness() {
   const [showAddAccount, setShowAddAccount] = useState(true);
   return (
     <AppShellCoverProvider>
-      <MemoryRouter initialEntries={['/add-account']}>
+      <MemoryRouter
+        initialEntries={[{ pathname: '/add-account', state: { returnTo: '/settings' } }]}
+      >
         {showAddAccount ? <AddAccountLoginPage /> : null}
         <CoverProbe />
+        <LocationProbe />
         <button type="button" onClick={() => setShowAddAccount(false)}>
           leave route
         </button>
@@ -69,7 +79,13 @@ function Harness() {
 afterEach(() => {
   cleanup();
   auth.beginAddAccount.mockReset();
+  auth.beginAddAccount.mockResolvedValue({
+    success: true,
+    state: { step: 'identifier' },
+  });
   auth.cancelAddAccount.mockReset();
+  auth.cancelAddAccount.mockResolvedValue(undefined);
+  auth.loginState = { step: 'identifier' };
 });
 
 describe('AddAccountLoginPage app-shell cover', () => {
@@ -88,5 +104,20 @@ describe('AddAccountLoginPage app-shell cover', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'close add-account login' }));
     await waitFor(() => expect(auth.cancelAddAccount).toHaveBeenCalledOnce());
+  });
+
+  it('starts a fresh flow before honoring a stale completed state', async () => {
+    auth.loginState = { step: 'completed' };
+    auth.beginAddAccount.mockImplementation(async () => {
+      auth.loginState = { step: 'identifier' };
+      return { success: true, state: auth.loginState };
+    });
+
+    render(<Harness />);
+
+    await waitFor(() => expect(auth.beginAddAccount).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.getByTestId('location-probe').textContent).toBe('/add-account'),
+    );
   });
 });

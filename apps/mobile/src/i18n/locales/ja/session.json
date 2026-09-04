@@ -250,7 +250,8 @@
   },
   "shareImage": {
     "title": "会話を共有",
-    "selectedCount": "{{count}} 件を選択中",
+    "subtitle_one": "{{count}} 件のメッセージを選択中",
+    "subtitle_other": "{{count}} 件のメッセージを選択中",
     "selectAll": "すべて選択",
     "clearAll": "選択を解除",
     "cancel": "共有をキャンセル",

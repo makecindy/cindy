@@ -2,7 +2,17 @@ import fs from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const TEST_ROOT = '/tmp/xdt-publish-service-test';
-const authState = vi.hoisted(() => ({ ownerId: 'user-1' as string | null }));
+const authState = vi.hoisted(() => ({
+  ownerId: 'user-1' as string | null,
+  membershipKind: 'personal' as 'personal' | 'org',
+  orgSlug: null as string | null,
+}));
+const serverPolicy = vi.hoisted(() => ({
+  canWrite: true,
+  ownerType: 'personal' as 'personal' | 'organization' | null,
+  allowedVisibilities: ['PUBLIC', 'PRIVATE'] as Array<'PUBLIC' | 'DEPARTMENT_SCOPED' | 'PRIVATE'>,
+  readOnlyReason: null as 'signed-out' | null,
+}));
 
 vi.mock('electron', () => ({
   app: {
@@ -71,6 +81,15 @@ vi.mock('../registry', () => ({
 vi.mock('../../authManager', () => ({
   getCurrentUserId: vi.fn(),
   getCurrentDataOwnerId: vi.fn(() => authState.ownerId),
+  getAuthState: vi.fn(() => ({
+    user: authState.ownerId
+      ? {
+          membershipKind: authState.membershipKind,
+          orgSlug: authState.orgSlug,
+          orgName: null,
+        }
+      : null,
+  })),
 }));
 
 vi.mock('../../appCapabilities.js', () => ({
@@ -78,64 +97,84 @@ vi.mock('../../appCapabilities.js', () => ({
   requireAppCapability: vi.fn(),
 }));
 
+vi.mock('../identityPolicy', () => ({
+  currentSkillhubIdentityPolicy: vi.fn(async () => ({ ...serverPolicy })),
+}));
 
 function writeApiKeyFile() {
   const safeStorageDir = `${TEST_ROOT}/safe-storage`;
   fs.mkdirSync(safeStorageDir, { recursive: true });
-  fs.writeFileSync(`${safeStorageDir}/api_key.enc`, Buffer.from('encrypted-api-key').toString('base64'));
+  fs.writeFileSync(
+    `${safeStorageDir}/api_key.enc`,
+    Buffer.from('encrypted-api-key').toString('base64'),
+  );
 }
 
 describe('SkillPublishService', () => {
   beforeEach(() => {
     authState.ownerId = 'user-1';
+    authState.membershipKind = 'personal';
+    authState.orgSlug = null;
+    serverPolicy.canWrite = true;
+    serverPolicy.ownerType = 'personal';
+    serverPolicy.allowedVisibilities = ['PUBLIC', 'PRIVATE'];
+    serverPolicy.readOnlyReason = null;
     vi.resetModules();
     vi.clearAllMocks();
     fs.rmSync(TEST_ROOT, { recursive: true, force: true });
     fs.mkdirSync(TEST_ROOT, { recursive: true });
   });
 
-  it('rejects manual-category publish requests without a category before review or upload starts', async () => {
+  it('rejects signed-out publishing before packing', async () => {
+    authState.ownerId = null;
+    serverPolicy.canWrite = false;
+    serverPolicy.ownerType = null;
+    serverPolicy.allowedVisibilities = [];
+    serverPolicy.readOnlyReason = 'signed-out';
     const { SkillPublishService } = await import('../publishService');
     const service = new SkillPublishService();
-    const events: Array<{ phase: string; errorCode?: string; message?: string }> = [];
 
-    const result = await service.publish(
-      {
-        absolutePath: '/tmp/skill',
-        name: 'lark-task',
-        isFirstPublish: true,
-        version: '1.0.0',
-        categoryMode: 'manual',
-        categories: [],
-      },
-      (event) => events.push(event),
-    );
+    await expect(service.publish({
+      absolutePath: '/tmp/skill',
+      name: 'read-only',
+      isFirstPublish: true,
+      visibility: 'PUBLIC',
+    })).resolves.toEqual({ success: false, errorCode: 'CANCELLED' });
+  });
 
-    expect(result).toEqual({ success: false, errorCode: 'CATEGORY_REQUIRED' });
-    expect(events).toEqual([
-      {
-        phase: 'failed',
-        name: 'lark-task',
-        errorCode: 'CATEGORY_REQUIRED',
-        message: '请选择分类后再发布',
-      },
-    ]);
+  it('rejects private organization publishing before packing or network access', async () => {
+    authState.membershipKind = 'org';
+    authState.orgSlug = 'acme';
+    serverPolicy.ownerType = 'organization';
+    serverPolicy.allowedVisibilities = ['PUBLIC', 'DEPARTMENT_SCOPED'];
+    const { SkillPublishService } = await import('../publishService');
+    const service = new SkillPublishService();
+
+    await expect(service.publish({
+      absolutePath: '/tmp/skill',
+      name: 'org-private',
+      isFirstPublish: true,
+      visibility: 'PRIVATE',
+    })).resolves.toEqual({ success: false, errorCode: 'INVALID_VISIBILITY' });
   });
 
   it('allows version publishes without category metadata and omits category fields from commit', async () => {
     writeApiKeyFile();
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
-    fs.writeFileSync(`${skillPath}/SKILL.md`, [
-      '---',
-      'name: lark-task',
-      'version: 1.0.0',
-      'description: Frontmatter description',
-      '---',
-      '',
-      '# Lark task',
-      '',
-    ].join('\n'));
+    fs.writeFileSync(
+      `${skillPath}/SKILL.md`,
+      [
+        '---',
+        'name: lark-task',
+        'version: 1.0.0',
+        'description: Frontmatter description',
+        '---',
+        '',
+        '# Lark task',
+        '',
+      ].join('\n'),
+    );
 
     const { serverApiFetch } = await import('../../serverApiClient');
     const { computeFolderHash } = await import('../folderHash');
@@ -148,25 +187,37 @@ describe('SkillPublishService', () => {
 
     vi.mocked(computeFolderHash).mockResolvedValue('folder-hash');
     vi.mocked(writeSnapshot).mockResolvedValue(undefined);
-    vi.mocked(pack).mockResolvedValue({ buffer: Buffer.from('zip'), size: 3, sha256: 'zip-sha', manifest: { files: [] } });
+    vi.mocked(pack).mockResolvedValue({
+      buffer: Buffer.from('zip'),
+      size: 3,
+      sha256: 'zip-sha',
+      manifest: { files: [] },
+    });
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
     vi.mocked(registryService.getInstall).mockResolvedValue(null);
     vi.mocked(net.fetch).mockResolvedValue({ ok: true, status: 200 } as Response);
-    vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string, opts?: { body?: unknown }) => {
-      if (apiPath === '/api/skills-hub/skills/publish/init') {
-        return {
-          nextVersion: '1.1.0',
-          ossKey: 'skills/lark-task/v1.1.0.zip',
-          uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
-        };
-      }
-      if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        return { slug: 'lark-task', version: (opts?.body as { version: string }).version, status: 'scanning' };
-      }
-      throw new Error(`unexpected api path ${apiPath}`);
-    });
+    vi.mocked(serverApiFetch).mockImplementation(
+      async (apiPath: string, opts?: { body?: unknown }) => {
+        if (apiPath === '/api/skills-hub/skills/publish/init') {
+          return {
+            nextVersion: '1.1.0',
+            ossKey: 'skills/lark-task/v1.1.0.zip',
+            uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
+          };
+        }
+        if (apiPath === '/api/skills-hub/skills/publish/commit') {
+          return {
+            slug: 'lark-task',
+            version: (opts?.body as { version: string }).version,
+            status: 'scanning',
+          };
+        }
+        throw new Error(`unexpected api path ${apiPath}`);
+      },
+    );
 
     const service = new SkillPublishService();
+    const scanPollSpy = vi.spyOn(service, 'startScanPoll').mockImplementation(() => {});
     const result = await service.publish(
       {
         absolutePath: skillPath,
@@ -179,31 +230,36 @@ describe('SkillPublishService', () => {
     );
 
     expect(result.success).toBe(true);
-    const commitCall = vi.mocked(serverApiFetch).mock.calls.find(([path]) => path === '/api/skills-hub/skills/publish/commit');
+    const commitCall = vi
+      .mocked(serverApiFetch)
+      .mock.calls.find(([path]) => path === '/api/skills-hub/skills/publish/commit');
     expect(commitCall?.[1]?.body).toMatchObject({
       ossKey: 'skills/lark-task/v1.1.0.zip',
       slug: 'lark-task',
       version: '1.1.0',
       changelog: 'Update flow.',
     });
-    expect(commitCall?.[1]?.body).not.toHaveProperty('categoryMode');
-    expect(commitCall?.[1]?.body).not.toHaveProperty('categories');
+    expect(commitCall?.[1]?.body).not.toHaveProperty('tags');
     expect(commitCall?.[1]?.body).not.toHaveProperty('visibility');
+    expect(scanPollSpy).toHaveBeenCalledWith('lark-task', '1.1.0');
   });
 
   it('publishes through Hub without requiring a local LLM API key file', async () => {
     const skillPath = '/tmp/xdt-publish-service-test/skill';
     fs.mkdirSync(skillPath, { recursive: true });
-    fs.writeFileSync(`${skillPath}/SKILL.md`, [
-      '---',
-      'name: lark-task',
-      'version: 1.0.0',
-      'description: Frontmatter description',
-      '---',
-      '',
-      '# Lark task',
-      '',
-    ].join('\n'));
+    fs.writeFileSync(
+      `${skillPath}/SKILL.md`,
+      [
+        '---',
+        'name: lark-task',
+        'version: 1.0.0',
+        'description: Frontmatter description',
+        '---',
+        '',
+        '# Lark task',
+        '',
+      ].join('\n'),
+    );
 
     const { serverApiFetch } = await import('../../serverApiClient');
     const { computeFolderHash } = await import('../folderHash');
@@ -216,23 +272,34 @@ describe('SkillPublishService', () => {
 
     vi.mocked(computeFolderHash).mockResolvedValue('folder-hash');
     vi.mocked(writeSnapshot).mockResolvedValue(undefined);
-    vi.mocked(pack).mockResolvedValue({ buffer: Buffer.from('zip'), size: 3, sha256: 'zip-sha', manifest: { files: [] } });
+    vi.mocked(pack).mockResolvedValue({
+      buffer: Buffer.from('zip'),
+      size: 3,
+      sha256: 'zip-sha',
+      manifest: { files: [] },
+    });
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
     vi.mocked(registryService.getInstall).mockResolvedValue(null);
     vi.mocked(net.fetch).mockResolvedValue({ ok: true, status: 200 } as Response);
-    vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string, opts?: { body?: unknown }) => {
-      if (apiPath === '/api/skills-hub/skills/publish/init') {
-        return {
-          nextVersion: '1.1.0',
-          ossKey: 'skills/lark-task/v1.1.0.zip',
-          uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
-        };
-      }
-      if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        return { slug: 'lark-task', version: (opts?.body as { version: string }).version, status: 'scanning' };
-      }
-      throw new Error(`unexpected api path ${apiPath}`);
-    });
+    vi.mocked(serverApiFetch).mockImplementation(
+      async (apiPath: string, opts?: { body?: unknown }) => {
+        if (apiPath === '/api/skills-hub/skills/publish/init') {
+          return {
+            nextVersion: '1.1.0',
+            ossKey: 'skills/lark-task/v1.1.0.zip',
+            uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
+          };
+        }
+        if (apiPath === '/api/skills-hub/skills/publish/commit') {
+          return {
+            slug: 'lark-task',
+            version: (opts?.body as { version: string }).version,
+            status: 'scanning',
+          };
+        }
+        throw new Error(`unexpected api path ${apiPath}`);
+      },
+    );
 
     const service = new SkillPublishService();
     const result = await service.publish(
@@ -252,27 +319,30 @@ describe('SkillPublishService', () => {
       baseUrl: expect.any(Function),
       logLabel: '/api/skills-hub', // 不外泄 skill 身份进 serverApiClient 日志(2026-08-06 review)
     });
-    const initCall = vi.mocked(serverApiFetch).mock.calls.find(
-      ([path]) => path === '/api/skills-hub/skills/publish/init',
-    );
+    const initCall = vi
+      .mocked(serverApiFetch)
+      .mock.calls.find(([path]) => path === '/api/skills-hub/skills/publish/init');
     const initBaseUrl = initCall?.[1]?.baseUrl;
-    expect(
-      typeof initBaseUrl === 'function' ? initBaseUrl() : initBaseUrl,
-    ).toBe('https://skillhub.test.invalid');
+    expect(typeof initBaseUrl === 'function' ? initBaseUrl() : initBaseUrl).toBe(
+      'https://skillhub.test.invalid',
+    );
   });
 
-  it('sends the hand-filled 280-char text to Hub commit as summary', async () => {
+  it('sends the hand-filled description to Hub commit as summary', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
-      '---',
-      'name: lark-task',
-      'description: Frontmatter description',
-      '---',
-      '',
-      '# Lark task',
-      '',
-    ].join('\n'));
+    fs.writeFileSync(
+      '/tmp/xdt-publish-service-test/skill/SKILL.md',
+      [
+        '---',
+        'name: lark-task',
+        'description: Frontmatter description',
+        '---',
+        '',
+        '# Lark task',
+        '',
+      ].join('\n'),
+    );
 
     const { serverApiFetch } = await import('../../serverApiClient');
     const { computeFolderHash } = await import('../folderHash');
@@ -285,23 +355,34 @@ describe('SkillPublishService', () => {
 
     vi.mocked(computeFolderHash).mockResolvedValue('folder-hash');
     vi.mocked(writeSnapshot).mockResolvedValue(undefined);
-    vi.mocked(pack).mockResolvedValue({ buffer: Buffer.from('zip'), size: 3, sha256: 'zip-sha', manifest: { files: [] } });
+    vi.mocked(pack).mockResolvedValue({
+      buffer: Buffer.from('zip'),
+      size: 3,
+      sha256: 'zip-sha',
+      manifest: { files: [] },
+    });
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
     vi.mocked(registryService.getInstall).mockResolvedValue(null);
     vi.mocked(net.fetch).mockResolvedValue({ ok: true, status: 200 } as Response);
-    vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string, opts?: { body?: unknown }) => {
-      if (apiPath === '/api/skills-hub/skills/publish/init') {
-        return {
-          nextVersion: '1.0.0',
-          ossKey: 'skills/lark-task/v1.0.0.zip',
-          uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
-        };
-      }
-      if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        return { slug: 'lark-task', version: (opts?.body as { version: string }).version, status: 'scanning' };
-      }
-      throw new Error(`unexpected api path ${apiPath}`);
-    });
+    vi.mocked(serverApiFetch).mockImplementation(
+      async (apiPath: string, opts?: { body?: unknown }) => {
+        if (apiPath === '/api/skills-hub/skills/publish/init') {
+          return {
+            nextVersion: '1.0.0',
+            ossKey: 'skills/lark-task/v1.0.0.zip',
+            uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
+          };
+        }
+        if (apiPath === '/api/skills-hub/skills/publish/commit') {
+          return {
+            slug: 'lark-task',
+            version: (opts?.body as { version: string }).version,
+            status: 'scanning',
+          };
+        }
+        throw new Error(`unexpected api path ${apiPath}`);
+      },
+    );
 
     const service = new SkillPublishService();
     const result = await service.publish(
@@ -313,8 +394,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -327,26 +407,30 @@ describe('SkillPublishService', () => {
       body: expect.objectContaining({
         displayName: 'Lark Task',
         summary: 'Publish summary',
-        categories: ['productivity'],
-        categoryMode: 'manual',
+        tags: ['productivity'],
       }),
     });
-    const commitCall = vi.mocked(serverApiFetch).mock.calls.find(([path]) => path === '/api/skills-hub/skills/publish/commit');
+    const commitCall = vi
+      .mocked(serverApiFetch)
+      .mock.calls.find(([path]) => path === '/api/skills-hub/skills/publish/commit');
     expect(commitCall?.[1]?.body).not.toHaveProperty('description');
   });
 
-  it('allows auto category mode and asks Hub to classify the skill', async () => {
+  it('allows a first publish without Platform tags', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
-      '---',
-      'name: lark-task',
-      'description: Frontmatter description',
-      '---',
-      '',
-      '# Lark task',
-      '',
-    ].join('\n'));
+    fs.writeFileSync(
+      '/tmp/xdt-publish-service-test/skill/SKILL.md',
+      [
+        '---',
+        'name: lark-task',
+        'description: Frontmatter description',
+        '---',
+        '',
+        '# Lark task',
+        '',
+      ].join('\n'),
+    );
 
     const { serverApiFetch } = await import('../../serverApiClient');
     const { computeFolderHash } = await import('../folderHash');
@@ -359,23 +443,34 @@ describe('SkillPublishService', () => {
 
     vi.mocked(computeFolderHash).mockResolvedValue('folder-hash');
     vi.mocked(writeSnapshot).mockResolvedValue(undefined);
-    vi.mocked(pack).mockResolvedValue({ buffer: Buffer.from('zip'), size: 3, sha256: 'zip-sha', manifest: { files: [] } });
+    vi.mocked(pack).mockResolvedValue({
+      buffer: Buffer.from('zip'),
+      size: 3,
+      sha256: 'zip-sha',
+      manifest: { files: [] },
+    });
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
     vi.mocked(registryService.getInstall).mockResolvedValue(null);
     vi.mocked(net.fetch).mockResolvedValue({ ok: true, status: 200 } as Response);
-    vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string, opts?: { body?: unknown }) => {
-      if (apiPath === '/api/skills-hub/skills/publish/init') {
-        return {
-          nextVersion: '1.0.0',
-          ossKey: 'skills/lark-task/v1.0.0.zip',
-          uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
-        };
-      }
-      if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        return { slug: 'lark-task', version: (opts?.body as { version: string }).version, status: 'scanning' };
-      }
-      throw new Error(`unexpected api path ${apiPath}`);
-    });
+    vi.mocked(serverApiFetch).mockImplementation(
+      async (apiPath: string, opts?: { body?: unknown }) => {
+        if (apiPath === '/api/skills-hub/skills/publish/init') {
+          return {
+            nextVersion: '1.0.0',
+            ossKey: 'skills/lark-task/v1.0.0.zip',
+            uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
+          };
+        }
+        if (apiPath === '/api/skills-hub/skills/publish/commit') {
+          return {
+            slug: 'lark-task',
+            version: (opts?.body as { version: string }).version,
+            status: 'scanning',
+          };
+        }
+        throw new Error(`unexpected api path ${apiPath}`);
+      },
+    );
 
     const service = new SkillPublishService();
     const result = await service.publish(
@@ -387,8 +482,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'auto',
-        categories: [],
+        tags: [],
       },
       () => {},
     );
@@ -399,8 +493,7 @@ describe('SkillPublishService', () => {
       baseUrl: expect.any(Function),
       logLabel: '/api/skills-hub',
       body: expect.objectContaining({
-        categoryMode: 'auto',
-        categories: [],
+        tags: [],
       }),
     });
   });
@@ -408,15 +501,18 @@ describe('SkillPublishService', () => {
   it('keeps an explicit empty visibleSlugs list in first-publish commit', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
-      '---',
-      'name: lark-task',
-      'description: Frontmatter description',
-      '---',
-      '',
-      '# Lark task',
-      '',
-    ].join('\n'));
+    fs.writeFileSync(
+      '/tmp/xdt-publish-service-test/skill/SKILL.md',
+      [
+        '---',
+        'name: lark-task',
+        'description: Frontmatter description',
+        '---',
+        '',
+        '# Lark task',
+        '',
+      ].join('\n'),
+    );
 
     const { serverApiFetch } = await import('../../serverApiClient');
     const { computeFolderHash } = await import('../folderHash');
@@ -429,23 +525,34 @@ describe('SkillPublishService', () => {
 
     vi.mocked(computeFolderHash).mockResolvedValue('folder-hash');
     vi.mocked(writeSnapshot).mockResolvedValue(undefined);
-    vi.mocked(pack).mockResolvedValue({ buffer: Buffer.from('zip'), size: 3, sha256: 'zip-sha', manifest: { files: [] } });
+    vi.mocked(pack).mockResolvedValue({
+      buffer: Buffer.from('zip'),
+      size: 3,
+      sha256: 'zip-sha',
+      manifest: { files: [] },
+    });
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
     vi.mocked(registryService.getInstall).mockResolvedValue(null);
     vi.mocked(net.fetch).mockResolvedValue({ ok: true, status: 200 } as Response);
-    vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string, opts?: { body?: unknown }) => {
-      if (apiPath === '/api/skills-hub/skills/publish/init') {
-        return {
-          nextVersion: '1.0.0',
-          ossKey: 'skills/lark-task/v1.0.0.zip',
-          uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
-        };
-      }
-      if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        return { slug: 'lark-task', version: (opts?.body as { version: string }).version, status: 'scanning' };
-      }
-      throw new Error(`unexpected api path ${apiPath}`);
-    });
+    vi.mocked(serverApiFetch).mockImplementation(
+      async (apiPath: string, opts?: { body?: unknown }) => {
+        if (apiPath === '/api/skills-hub/skills/publish/init') {
+          return {
+            nextVersion: '1.0.0',
+            ossKey: 'skills/lark-task/v1.0.0.zip',
+            uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
+          };
+        }
+        if (apiPath === '/api/skills-hub/skills/publish/commit') {
+          return {
+            slug: 'lark-task',
+            version: (opts?.body as { version: string }).version,
+            status: 'scanning',
+          };
+        }
+        throw new Error(`unexpected api path ${apiPath}`);
+      },
+    );
 
     const service = new SkillPublishService();
     const result = await service.publish(
@@ -458,8 +565,7 @@ describe('SkillPublishService', () => {
         summary: 'Publish summary',
         visibility: 'PUBLIC',
         visibleSlugs: [],
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -544,8 +650,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -639,8 +744,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['productivity'],
       },
       (event) => events.push(event),
     );
@@ -658,18 +762,24 @@ describe('SkillPublishService', () => {
     expect(events).not.toContainEqual(expect.objectContaining({ phase: 'failed' }));
   });
 
-  it('maps preserved Hub business error codes to actionable publish errors', async () => {
+  it.each([
+    ['NAME_TAKEN', 409, '名字已被占用'],
+    ['INVALID_VISIBILITY', 400, '当前组织暂不支持组织或私有可见性，请选择公开发布'],
+  ])('maps preserved Hub business error %s to an actionable publish error', async (errorCode, statusCode, message) => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
-      '---',
-      'name: lark-task',
-      'description: Frontmatter description',
-      '---',
-      '',
-      '# Lark task',
-      '',
-    ].join('\n'));
+    fs.writeFileSync(
+      '/tmp/xdt-publish-service-test/skill/SKILL.md',
+      [
+        '---',
+        'name: lark-task',
+        'description: Frontmatter description',
+        '---',
+        '',
+        '# Lark task',
+        '',
+      ].join('\n'),
+    );
 
     const { ServerApiError, serverApiFetch } = await import('../../serverApiClient');
     const { computeFolderHash } = await import('../folderHash');
@@ -678,7 +788,12 @@ describe('SkillPublishService', () => {
     const { SkillPublishService } = await import('../publishService');
 
     vi.mocked(computeFolderHash).mockResolvedValue('folder-hash-2');
-    vi.mocked(pack).mockResolvedValue({ buffer: Buffer.from('zip'), size: 3, sha256: 'zip-sha', manifest: { files: [] } });
+    vi.mocked(pack).mockResolvedValue({
+      buffer: Buffer.from('zip'),
+      size: 3,
+      sha256: 'zip-sha',
+      manifest: { files: [] },
+    });
     vi.mocked(net.fetch).mockResolvedValue({ ok: true, status: 200 } as Response);
     vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string) => {
       if (apiPath === '/api/skills-hub/skills/publish/init') {
@@ -689,7 +804,7 @@ describe('SkillPublishService', () => {
         };
       }
       if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        throw new ServerApiError('NAME_TAKEN', 409, '名字已被占用');
+        throw new ServerApiError(errorCode, statusCode, message);
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -705,14 +820,13 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        categoryMode: 'manual',
-        categories: ['productivity'],
+        tags: ['productivity'],
       },
       (event) => events.push(event),
     );
 
-    expect(result).toEqual({ success: false, errorCode: 'NAME_TAKEN' });
-    expect(events.at(-1)).toMatchObject({ phase: 'failed', errorCode: 'NAME_TAKEN' });
+    expect(result).toEqual({ success: false, errorCode });
+    expect(events.at(-1)).toMatchObject({ phase: 'failed', errorCode });
   });
 
   it('emits a failed progress event when packing throws unexpectedly', async () => {
@@ -754,21 +868,26 @@ describe('SkillPublishService', () => {
       { phase: 'packing' },
       { phase: 'failed', name: 'lark-task', errorCode: 'PACK_FAILED', message: 'zip failed' },
     ]);
-    expect(fs.readFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', 'utf8')).toBe(originalSkillMd);
+    expect(fs.readFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', 'utf8')).toBe(
+      originalSkillMd,
+    );
   });
 
   it('maps pack timeout failures to PACK_FAILED without relying on IPC rejection', async () => {
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
-      '---',
-      'name: lark-task',
-      'version: 0.9.0',
-      'description: Frontmatter description',
-      '---',
-      '',
-      '# Lark task',
-      '',
-    ].join('\n'));
+    fs.writeFileSync(
+      '/tmp/xdt-publish-service-test/skill/SKILL.md',
+      [
+        '---',
+        'name: lark-task',
+        'version: 0.9.0',
+        'description: Frontmatter description',
+        '---',
+        '',
+        '# Lark task',
+        '',
+      ].join('\n'),
+    );
 
     const { computeFolderHash } = await import('../folderHash');
     const { pack } = await import('../zipPacker');
@@ -804,25 +923,33 @@ describe('SkillPublishService', () => {
 
   it('treats cancellation during packing as CANCELLED', async () => {
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
-      '---',
-      'name: lark-task',
-      'version: 0.9.0',
-      'description: Frontmatter description',
-      '---',
-      '',
-      '# Lark task',
-      '',
-    ].join('\n'));
+    fs.writeFileSync(
+      '/tmp/xdt-publish-service-test/skill/SKILL.md',
+      [
+        '---',
+        'name: lark-task',
+        'version: 0.9.0',
+        'description: Frontmatter description',
+        '---',
+        '',
+        '# Lark task',
+        '',
+      ].join('\n'),
+    );
 
     const { computeFolderHash } = await import('../folderHash');
     const { pack } = await import('../zipPacker');
     const { SkillPublishService } = await import('../publishService');
 
     vi.mocked(computeFolderHash).mockResolvedValue('folder-hash');
-    vi.mocked(pack).mockImplementation((_absolutePath, options) => new Promise((_, reject) => {
-      options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-    }));
+    vi.mocked(pack).mockImplementation(
+      (_absolutePath, options) =>
+        new Promise((_, reject) => {
+          options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
+            once: true,
+          });
+        }),
+    );
 
     const events: Array<{ phase: string; errorCode?: string; message?: string }> = [];
     const service = new SkillPublishService();
@@ -836,7 +963,9 @@ describe('SkillPublishService', () => {
       (event) => events.push(event),
     );
 
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(events).toEqual([{ phase: 'packing' }]);
+    });
     service.cancel();
     const result = await publishPromise;
 
@@ -915,14 +1044,88 @@ describe('SkillPublishService', () => {
     }
   });
 
+  it('finishes the publish-scoped poll when machine review hands off to manual review', async () => {
+    vi.useFakeTimers();
+    try {
+      const { serverApiFetch } = await import('../../serverApiClient');
+      const { SkillPublishService } = await import('../publishService');
+
+      vi.mocked(serverApiFetch).mockResolvedValue({
+        status: 'pending',
+        gates: [{ name: 'security-scan', status: 'pass' }],
+      });
+
+      const events: Array<{ phase: string; status?: string; gates?: unknown[] }> = [];
+      const service = new SkillPublishService({
+        scanPollIntervalMs: 10,
+        onProgress: (event) => events.push(event),
+      });
+
+      service.startScanPoll('lark-task', '1.0.0');
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(events).toEqual([
+        {
+          phase: 'scan-status',
+          name: 'lark-task',
+          version: '1.0.0',
+          status: 'pending',
+          gates: [{ name: 'security-scan', status: 'pass' }],
+        },
+        {
+          phase: 'scan-result',
+          name: 'lark-task',
+          version: '1.0.0',
+          status: 'pending',
+          gates: [{ name: 'security-scan', status: 'pass' }],
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops polling when the release is waiting for Platform review', async () => {
+    vi.useFakeTimers();
+    try {
+      const { serverApiFetch } = await import('../../serverApiClient');
+      const { SkillPublishService } = await import('../publishService');
+
+      vi.mocked(serverApiFetch).mockResolvedValue({ status: 'pending', gates: [] });
+
+      const events: Array<{ phase: string; status?: string }> = [];
+      const service = new SkillPublishService({
+        scanPollIntervalMs: 10,
+        onProgress: (event) => events.push(event),
+      });
+
+      service.startScanPoll('lark-task', '1.0.0');
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(events.map((event) => [event.phase, event.status])).toEqual([
+        ['scan-status', 'pending'],
+        ['scan-result', 'pending'],
+      ]);
+      expect(serverApiFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ignores stale scan poll responses after a newer poll starts', async () => {
     vi.useFakeTimers();
     try {
       const { serverApiFetch } = await import('../../serverApiClient');
       const { SkillPublishService } = await import('../publishService');
 
-      let resolveOldPoll!: (value: { status: string; gates: Array<{ name: string; status: string }> }) => void;
-      const oldPollResult = new Promise<{ status: string; gates: Array<{ name: string; status: string }> }>((resolve) => {
+      let resolveOldPoll!: (value: {
+        status: string;
+        gates: Array<{ name: string; status: string }>;
+      }) => void;
+      const oldPollResult = new Promise<{
+        status: string;
+        gates: Array<{ name: string; status: string }>;
+      }>((resolve) => {
         resolveOldPoll = resolve;
       });
       vi.mocked(serverApiFetch)
@@ -932,7 +1135,13 @@ describe('SkillPublishService', () => {
           gates: [{ name: 'policy', status: 'pass' }],
         });
 
-      const events: Array<{ phase: string; name?: string; version?: string; status?: string; gates?: unknown[] }> = [];
+      const events: Array<{
+        phase: string;
+        name?: string;
+        version?: string;
+        status?: string;
+        gates?: unknown[];
+      }> = [];
       const service = new SkillPublishService({
         scanPollIntervalMs: 10,
         onProgress: (event) => events.push(event),

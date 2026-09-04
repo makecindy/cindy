@@ -102,6 +102,7 @@ import {
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
+  isDataOwnerIdCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
 import {
@@ -261,7 +262,7 @@ import {
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
-import { MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
+import { countUserExtraDirs, MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -2672,7 +2673,11 @@ export function ChatInput({
       // 跳过这次写入(旧会话的最终内容已由 saveCurrentEditorDraft 在切换前存妥)。
       draftSaveSchedulerRef.current?.schedule(() => {
         if (storageKeyForDraftRef.current !== sk) return;
-        if (!isDataOwnerGenerationCurrent(dataOwnerAtSchedule)) return;
+        // Owner id only: a same-owner generation bump (Ghost projection repair
+        // every access-token refresh) keeps this editor and its draft namespace
+        // valid, and nothing remounts to re-capture the generation. Gating on
+        // the exact generation silently dropped every keystroke save afterwards.
+        if (!isDataOwnerIdCurrent(dataOwnerAtSchedule)) return;
         const existing = getComposerDraft(sk);
         saveComposerDraft(
           sk,
@@ -2996,7 +3001,9 @@ export function ChatInput({
     if (!editor) return;
     const dataOwnerAtEffect = editorDataOwnerRef.current;
     return () => {
-      if (!isDataOwnerGenerationCurrent(dataOwnerAtEffect)) {
+      // Owner id only (see the keystroke save above): only a real owner change
+      // must discard the editor's snapshot instead of persisting it.
+      if (!isDataOwnerIdCurrent(dataOwnerAtEffect)) {
         draftSaveSchedulerRef.current?.cancel();
         return;
       }
@@ -3770,7 +3777,11 @@ export function ChatInput({
     if (!editor || !storageKey) return;
     const dataOwnerAtSubscription = editorDataOwnerRef.current;
     return subscribeComposerDraft(storageKey, () => {
-      if (!isDataOwnerGenerationCurrent(dataOwnerAtSubscription)) return;
+      // Owner id only: this subscription lives as long as the editor, and the
+      // draft store is namespaced by owner id, not generation. Gating on the
+      // exact generation made "add selection to chat" / rewind pre-fill silently
+      // stop reaching the editor after the first same-owner token refresh.
+      if (!isDataOwnerIdCurrent(dataOwnerAtSubscription)) return;
       const draft = getComposerDraft(storageKey);
       if (!draft) return;
       const nextBrowserComments = [...(draft.browserComments ?? [])];
@@ -4362,7 +4373,7 @@ export function ChatInput({
     if (onExtraDirsChange) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
-      const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
+      const totalDirs = countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
       actions.push({
         id: 'add-extra-dir',
         label:
@@ -4398,7 +4409,7 @@ export function ChatInput({
     ) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
-      const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
+      const totalDirs = countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
       actions.push({
         id: 'add-writable-dir',
         label:
@@ -8423,7 +8434,7 @@ export function ChatInput({
                 )}
                 {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
                 <ExtraDirsButton
-                  extraDirsCount={(extraDirs ?? []).length + (writableDirs ?? []).length}
+                  extraDirsCount={countUserExtraDirs(extraDirs ?? []) + countUserExtraDirs(writableDirs ?? [])}
                   hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}

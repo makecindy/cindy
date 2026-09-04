@@ -69,7 +69,7 @@ export function MakerExperimentalView(): ReactElement {
 
   if (!m.isReady) {
     return (
-      <div style={{ padding: 24, color: '#d4d4d4' }}>
+      <div style={{ padding: 24, color: 'var(--text-primary)' }}>
         <h2>{t('makerExperimental.notReadyHeading')}</h2>
         <p>{t('makerExperimental.notReadyBody')}</p>
       </div>
@@ -124,15 +124,15 @@ export function MakerExperimentalView(): ReactElement {
   const displayError = sendError ?? m.error;
 
   return (
-    <div style={{ padding: 24, color: '#d4d4d4', fontFamily: 'sans-serif', maxWidth: 1200 }}>
+    <div style={{ padding: 24, color: 'var(--text-primary)', fontFamily: 'sans-serif', maxWidth: 1200 }}>
       <h2 style={{ marginTop: 0 }}>{t('makerExperimental.title')}</h2>
-      <p style={{ color: '#888', fontSize: 13 }}>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
         {t('makerExperimental.description')}
       </p>
 
       {/* 配置区 */}
       <div style={{
-        background: '#1a1a1a', padding: 16, borderRadius: 8, marginBottom: 16,
+        background: 'var(--surface-elevated)', padding: 16, borderRadius: 8, marginBottom: 16,
         display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 12px', alignItems: 'center',
       }}>
         <div>{t('makerExperimental.agentLabel')}</div>
@@ -165,7 +165,7 @@ export function MakerExperimentalView(): ReactElement {
             value={workingDir}
             onChange={(e) => setWorkingDir(e.target.value)}
             disabled={!!m.session}
-            style={{ flex: 1, padding: '4px 8px', background: '#262626', color: '#d4d4d4', border: '1px solid #333' }}
+            style={{ flex: 1, padding: '4px 8px', background: 'var(--surface-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}
             placeholder={t('makerExperimental.workingDirPlaceholder')}
           />
           <button
@@ -184,9 +184,9 @@ export function MakerExperimentalView(): ReactElement {
             }}
             style={{
               padding: '4px 12px',
-              background: '#404040',
-              color: '#d4d4d4',
-              border: '1px solid #333',
+              background: 'var(--surface-chip-alt)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-default)',
               borderRadius: 4,
               cursor: m.session ? 'default' : 'pointer',
               opacity: m.session ? 0.5 : 1,
@@ -202,7 +202,7 @@ export function MakerExperimentalView(): ReactElement {
           value={model}
           onChange={(e) => setModel(e.target.value)}
           disabled={!!m.session}
-          style={{ padding: '4px 8px', background: '#262626', color: '#d4d4d4', border: '1px solid #333' }}
+          style={{ padding: '4px 8px', background: 'var(--surface-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}
         >
           {models.map((m_) => (<option key={m_} value={m_}>{m_}</option>))}
         </select>
@@ -213,7 +213,7 @@ export function MakerExperimentalView(): ReactElement {
           value={effort}
           onChange={(e) => setEffort(e.target.value as Effort)}
           disabled={!!m.session}
-          style={{ padding: '4px 8px', background: '#262626', color: '#d4d4d4', border: '1px solid #333' }}
+          style={{ padding: '4px 8px', background: 'var(--surface-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}
         >
           {[...(capabilities?.effortLevels ?? [
             { id: 'low' as Effort, displayName: 'low' },
@@ -230,7 +230,7 @@ export function MakerExperimentalView(): ReactElement {
           value={permissionMode}
           onChange={(e) => setPermissionMode(e.target.value as PermissionMode)}
           disabled={!!m.session}
-          style={{ padding: '4px 8px', background: '#262626', color: '#d4d4d4', border: '1px solid #333' }}
+          style={{ padding: '4px 8px', background: 'var(--surface-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}
         >
           {(capabilities?.permissionModes ?? [
             { id: 'auto' as PermissionMode, displayName: 'auto' },
@@ -243,7 +243,7 @@ export function MakerExperimentalView(): ReactElement {
         </select>
 
         <div></div>
-        <div style={{ fontSize: 11, color: '#737373', lineHeight: 1.4 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
           {t('makerExperimental.warningHint')}
         </div>
 
@@ -253,13 +253,13 @@ export function MakerExperimentalView(): ReactElement {
             <button
               type="button"
               onClick={handleCreate}
-              style={{ padding: '6px 16px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+              style={{ padding: '6px 16px', background: 'var(--accent-cta-bg)', color: 'var(--accent-pure-cta-fg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
             >{t('makerExperimental.createSession')}</button>
           ) : (
             <button
               type="button"
               onClick={() => void m.close()}
-              style={{ padding: '6px 16px', background: '#dc2626', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+              style={{ padding: '6px 16px', background: 'var(--error-flat)', color: 'var(--accent-pure-cta-fg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
             >{t('makerExperimental.closeSession')}</button>
           )}
         </div>
@@ -267,10 +267,10 @@ export function MakerExperimentalView(): ReactElement {
 
       {/* Session 状态 */}
       {m.session && (
-        <div style={{ background: '#1a1a1a', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 12 }}>
+        <div style={{ background: 'var(--surface-elevated)', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 12 }}>
           <div><strong>{t('makerExperimental.sessionField')}</strong> {m.session.sessionId}</div>
           <div><strong>{t('makerExperimental.agentField')}</strong> {m.session.agentKind} | <strong>{t('makerExperimental.statusField')}</strong> {m.status}</div>
-          {displayError && <div style={{ color: '#dc2626' }}><strong>{t('makerExperimental.errorField')}</strong> {displayError}</div>}
+          {displayError && <div style={{ color: 'var(--error-flat)' }}><strong>{t('makerExperimental.errorField')}</strong> {displayError}</div>}
         </div>
       )}
 
@@ -283,8 +283,8 @@ export function MakerExperimentalView(): ReactElement {
             placeholder={t('makerExperimental.messagePlaceholder')}
             rows={3}
             style={{
-              width: '100%', padding: 8, background: '#262626', color: '#d4d4d4',
-              border: '1px solid #333', borderRadius: 4, boxSizing: 'border-box',
+              width: '100%', padding: 8, background: 'var(--surface-elevated)', color: 'var(--text-primary)',
+              border: '1px solid var(--border-default)', borderRadius: 4, boxSizing: 'border-box',
             }}
           />
           <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -294,24 +294,24 @@ export function MakerExperimentalView(): ReactElement {
               onChange={(e) => setImagePath(e.target.value)}
               placeholder={t('makerExperimental.imagePathPlaceholder')}
               style={{
-                flex: 1, padding: '4px 8px', background: '#262626', color: '#d4d4d4',
-                border: '1px solid #333', borderRadius: 4,
+                flex: 1, padding: '4px 8px', background: 'var(--surface-elevated)', color: 'var(--text-primary)',
+                border: '1px solid var(--border-default)', borderRadius: 4,
               }}
             />
             <button
               type="button"
               onClick={handleSend}
-              style={{ padding: '6px 16px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+              style={{ padding: '6px 16px', background: 'var(--accent-cta-bg)', color: 'var(--accent-pure-cta-fg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
             >{t('makerExperimental.send')}</button>
             <button
               type="button"
               onClick={() => void m.abort()}
-              style={{ padding: '6px 16px', background: '#737373', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+              style={{ padding: '6px 16px', background: 'var(--surface-chip)', color: 'var(--text-primary)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
             >{t('makerExperimental.abort')}</button>
             <button
               type="button"
               onClick={m.clearEvents}
-              style={{ padding: '6px 16px', background: '#404040', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+              style={{ padding: '6px 16px', background: 'var(--surface-chip-alt)', color: 'var(--text-primary)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
             >{t('makerExperimental.clear')}</button>
           </div>
         </div>
@@ -321,16 +321,16 @@ export function MakerExperimentalView(): ReactElement {
       <div>
         <h3 style={{ marginBottom: 8 }}>{t('makerExperimental.eventsHeading', { count: m.events.length })}</h3>
         <div style={{
-          background: '#0a0a0a', padding: 12, borderRadius: 8, maxHeight: 600, overflowY: 'auto',
-          fontFamily: 'monospace', fontSize: 11, color: '#a3a3a3',
+          background: 'var(--surface-elevated)', padding: 12, borderRadius: 8, maxHeight: 600, overflowY: 'auto',
+          fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)',
         }}>
           {m.events.length === 0 ? (
-            <div style={{ color: '#525252' }}>{t('makerExperimental.noEvents')}</div>
+            <div style={{ color: 'var(--text-tertiary)' }}>{t('makerExperimental.noEvents')}</div>
           ) : (
             m.events.map((e) => (
-              <div key={e.id} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid #262626' }}>
-                <div style={{ color: '#fbbf24' }}>
-                  #{e.id} <strong>{e.event.type}</strong> <span style={{ color: '#525252' }}>({e.event.source})</span>
+              <div key={e.id} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid var(--border-default)' }}>
+                <div style={{ color: 'var(--text-secondary)' }}>
+                  #{e.id} <strong>{e.event.type}</strong> <span style={{ color: 'var(--text-tertiary)' }}>({e.event.source})</span>
                 </div>
                 <pre style={{ margin: '4px 0 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                   {JSON.stringify(e.event.data, null, 2)}

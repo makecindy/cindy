@@ -19,6 +19,7 @@ function makeRow(overrides: Partial<AgentSwitchSessionRow> = {}): AgentSwitchSes
     id: 's1',
     agentKind: 'cc',
     model: 'claude-fable-5',
+    providerId: 'xd',
     status: 'active',
     remoteHostId: null,
     orcaRole: null,
@@ -93,6 +94,8 @@ describe('performSessionAgentSwitch', () => {
     expect(boundary.toAgentKind).toBe('codex');
     expect(boundary.fromModel).toBe('claude-fable-5');
     expect(boundary.toModel).toBe('gpt-5.5');
+    expect(boundary.fromProviderId).toBe('xd');
+    expect(boundary.toProviderId).toBeNull();
     expect(boundary.fromSdkSessionId).toBe('sdk-old');
     expect(boundary.resumed).toBe(false);
     expect(boundary.consumed).toBe(false);
@@ -115,6 +118,8 @@ describe('performSessionAgentSwitch', () => {
     const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
     expect(boundary.fromAgentKind).toBe('codex');
     expect(boundary.toAgentKind).toBe('cc');
+    expect(boundary.fromProviderId).toBe('xd');
+    expect(boundary.toProviderId).toBe('xd');
   });
 
   it('codex → pi + OpenAI 关闭旧会话并保持目标 provider route', async () => {

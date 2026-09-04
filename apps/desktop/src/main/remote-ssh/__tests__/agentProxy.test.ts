@@ -63,8 +63,10 @@ import {
 import {
   getSshHostAgentProxy,
   getSshHostAutoConnect,
+  getSshHostDisplayName,
   setSshHostAgentProxy,
   setSshHostAutoConnect,
+  setSshHostDisplayName,
   type SshHostAgentProxyPref,
 } from '../ssh-host-prefs-store';
 
@@ -89,6 +91,7 @@ function makeFakeHost(opts: { marker?: string | null } = {}) {
       user: 'deploy',
       authMethod: 'agent',
       source: 'manual',
+      managedByCindy: false,
     },
     getStatus: () => 'ready',
     async exec(cmd: string, execOpts?: { input?: string }) {
@@ -141,6 +144,17 @@ describe('resolveAgentProxyUrl', () => {
   it('tunnel mode pins the fixed remote port; env mode passes the URL through', () => {
     expect(resolveAgentProxyUrl(TUNNEL_PREF)).toBe('http://127.0.0.1:17893');
     expect(resolveAgentProxyUrl(ENV_PREF)).toBe('http://127.0.0.1:7890');
+  });
+});
+
+describe('SSH host display name preference', () => {
+  it('round-trips independently from connection fields and falls back to alias', () => {
+    expect(getSshHostDisplayName('test-host')).toBe('test-host');
+    setSshHostDisplayName('test-host', 'Build box');
+    expect(getSshHostDisplayName('test-host')).toBe('Build box');
+    expect(JSON.parse(prefsFileContent ?? '{}')['test-host']).toMatchObject({
+      displayName: 'Build box',
+    });
   });
 });
 

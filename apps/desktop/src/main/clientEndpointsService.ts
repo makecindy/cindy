@@ -1153,7 +1153,18 @@ export async function initClientEndpoints(): Promise<boolean> {
   // 缓存在构建区域，不能同时塞进两区，否则升级后留下的跨区 token 会被误发。
   activeSessionRealm = resolvedRegion ?? BUILD_AUTH_REGION;
   realmEndpointCache.clear();
-  realmEndpointCache.set(activeSessionRealm, endpoints);
+  // localhost 开发模式是一套本机服务，不存在跨区端点。登录恢复仍会按凭证 realm
+  // 调用 loadClientEndpointsForRealm/activateClientEndpointRealm；若只缓存启动区域，
+  // 另一 realm 会重新拉线上清单，把本地服务悄悄替换掉。仅对明确的 local + file
+  // 启动把同一份清单固定到两个 realm；remote/CDN 与普通文件覆写仍保持区域隔离。
+  const pinLocalEndpointsToAllRealms =
+    !app.isPackaged && process.env.XDT_DESKTOP_DEV_MODE === 'local' && source.kind === 'file';
+  if (pinLocalEndpointsToAllRealms) {
+    realmEndpointCache.set('cn', endpoints);
+    realmEndpointCache.set('global', endpoints);
+  } else {
+    realmEndpointCache.set(activeSessionRealm, endpoints);
+  }
   log.info(
     'resolved from %s (%s): auth=%s cdn=%s',
     startedFromCachedManifest

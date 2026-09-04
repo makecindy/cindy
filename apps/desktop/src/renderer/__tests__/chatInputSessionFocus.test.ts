@@ -371,9 +371,9 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(chatInputSource).toContain('recoveryBatch: error as object');
     expect(chatInputSource).toContain('recoveryBatch ? { recoveryBatch } : undefined');
     expect(chatInputSource).toContain('if (!updateLive || !isCurrentComposer) return;');
-    expect(chatInputSource).toContain('if (!isDataOwnerGenerationCurrent(dataOwnerAtEffect))');
+    expect(chatInputSource).toContain('if (!isDataOwnerIdCurrent(dataOwnerAtEffect))');
     expect(chatInputSource).toContain(
-      'if (!isDataOwnerGenerationCurrent(dataOwnerAtSubscription)) return;',
+      'if (!isDataOwnerIdCurrent(dataOwnerAtSubscription)) return;',
     );
     expect(chatInputSource).toContain('browserCommentsRef.current = nextBrowserComments;');
     expect(chatInputSource).toContain('browserCommentsRef.current = restoredComments;');

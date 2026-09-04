@@ -31,7 +31,20 @@ const MIN_EXPECTED_BYTES = 1024;
 // dirDist: 产物是"目录 + 主执行文件"（非单文件），sibling-worktree 单文件复用不适用
 const KINDS = {
   claude: { binDir: 'claude-code-bin', base: 'claude', module: '../tools/claude/update.mjs' },
-  codex: { binDir: 'codex-bin', base: 'codex', module: '../tools/codex/update.mjs' },
+  codex: {
+    binDir: 'codex-package-bin',
+    base: 'codex',
+    module: '../tools/codex-package/update.mjs',
+    pinDir: 'codex-package',
+    updateScript: 'codex-package',
+    dirDist: true,
+    relativeBinaryPath: (platformKey) => path.join('bin', binFileFor('codex', platformKey)),
+    requiredDirDistFiles: (platformKey) => [
+      'codex-package.json',
+      path.join('bin', binFileFor('codex-code-mode-host', platformKey)),
+      path.join('codex-path', binFileFor('rg', platformKey)),
+    ],
+  },
   ripgrep: { binDir: 'ripgrep-bin', base: 'rg', module: '../tools/ripgrep/update.mjs' },
   pi: {
     binDir: 'pi-bin',
@@ -55,6 +68,12 @@ export function supportsCdnFallback(kind) {
   return KINDS[kind]?.dirDist !== true;
 }
 
+export function updateScriptForKind(kind) {
+  const cfg = KINDS[kind];
+  if (!cfg) throw new Error(`Unknown kind: ${kind} (known: ${Object.keys(KINDS).join(', ')})`);
+  return cfg.updateScript ?? kind;
+}
+
 export function currentPlatformKey() {
   return `${process.platform}-${process.arch}`;
 }
@@ -62,6 +81,18 @@ export function currentPlatformKey() {
 /** win32 平台二进制带 .exe 后缀；其它平台用裸名。 */
 export function binFileFor(base, platformKey) {
   return platformKey.startsWith('win32') ? `${base}.exe` : base;
+}
+
+export function binaryRelativePathFor(kind, platformKey) {
+  const cfg = KINDS[kind];
+  if (!cfg) throw new Error(`Unknown kind: ${kind} (known: ${Object.keys(KINDS).join(', ')})`);
+  return cfg.relativeBinaryPath?.(platformKey) ?? binFileFor(cfg.base, platformKey);
+}
+
+function requiredDirDistFilesFor(cfg, platformKey) {
+  return typeof cfg.requiredDirDistFiles === 'function'
+    ? cfg.requiredDirDistFiles(platformKey)
+    : (cfg.requiredDirDistFiles ?? []);
 }
 
 /** 读 apps/<binDir>/<platform>/.version 里记录的已安装版本；缺失/读失败返回 null。 */
@@ -193,25 +224,27 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   const cfg = KINDS[kind];
   if (!cfg) throw new Error(`Unknown kind: ${kind} (known: ${Object.keys(KINDS).join(', ')})`);
 
-  const binFile = binFileFor(cfg.base, platformKey);
+  const binaryRelativePath = binaryRelativePathFor(kind, platformKey);
+  const binFile = path.basename(binaryRelativePath);
   const binDirPath = path.join(ROOT, 'apps', cfg.binDir, platformKey);
-  const binPath = path.join(binDirPath, binFile);
+  const binPath = path.join(binDirPath, binaryRelativePath);
   const markerPath = path.join(binDirPath, '.version');
+  const updateScript = updateScriptForKind(kind);
 
   // 先解析 pin 版本——skip 判定必须同时比对版本，否则旧的合法二进制会让 pin 升级被静默跳过。
   const mod = await import(cfg.module);
   const version = mod.readPinnedVersion();
   if (!version) {
     throw new Error(
-      `No pinned version found for ${kind} (tools/${kind}/latest.json). ` +
-        `Run "pnpm update:${kind}" first to pin a version.`,
+      `No pinned version found for ${kind} (tools/${cfg.pinDir ?? kind}/latest.json). ` +
+        `Run "pnpm update:${updateScript}" first to pin a version.`,
     );
   }
 
   // 已就位且版本标记 == pin 才跳过；标记缺失/不匹配则刷新（promoteOnePlatform 写入标记）。
   // dirDist 的"已就位"额外要求安装清单齐全,不能只看主执行文件。
   const presentAndValid = cfg.dirDist
-    ? isValidDirDist(binDirPath, binPath, cfg.requiredDirDistFiles)
+    ? isValidDirDist(binDirPath, binPath, requiredDirDistFilesFor(cfg, platformKey))
     : isValidBinary(binPath);
   if (!force && presentAndValid && readInstalledVersion(markerPath) === version) {
     log(`${kind} ${platformKey}: already present @ ${version}, skip`);
@@ -246,10 +279,11 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
       if (!supportsCdnFallback(kind)) {
         throw new Error(
           `Failed to download ${kind} ${platformKey}@${version} from upstream: ${upstreamErr.message}. ` +
-            'This runtime is a directory distribution, so the single-binary CDN fallback is unsafe.',
+            `This runtime is a directory distribution, so the single-binary CDN fallback is unsafe. ` +
+            `Run "pnpm update:${updateScript}" manually or check network availability.`,
         );
       }
-      // claude / codex / ripgrep：上游慢/失败（含 fetch-with-timeout 的 connect/stall/total/throughput 超时）→
+      // claude / ripgrep：上游慢/失败（含 fetch-with-timeout 的 connect/stall/total/throughput 超时）→
       // 回退公司 CDN（国内快，.gz gunzip 后与上游裸二进制字节一致）。
       warn(`${kind} ${platformKey}: upstream failed/slow (${upstreamErr.message}); falling back to CDN...`);
       try {
@@ -262,7 +296,7 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
           `Failed to download ${kind} ${platformKey}@${version} from both upstream and CDN fallback:\n` +
             `  upstream: ${upstreamErr.message}\n` +
             `  CDN:      ${cdnErr.message}\n` +
-            `  Fix: run "pnpm update:${kind}" manually, or check network / CDN availability.`,
+            `  Fix: run "pnpm update:${updateScript}" manually, or check network / CDN availability.`,
         );
       }
     }
@@ -273,12 +307,12 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   // 转成显式错误。本地复用路径同样受此终检兜底。
   const installed = readInstalledVersion(markerPath);
   const finalValid = cfg.dirDist
-    ? isValidDirDist(binDirPath, binPath, cfg.requiredDirDistFiles)
+    ? isValidDirDist(binDirPath, binPath, requiredDirDistFilesFor(cfg, platformKey))
     : isValidBinary(binPath);
   if (!finalValid || installed !== version) {
     throw new Error(
       `${kind} ${platformKey}: ensure failed — expected ${version} at ${binPath} but installed marker is ${installed ?? '(none)'}. ` +
-        `The previous binary may be locked (app running); close it and retry, or run "pnpm update:${kind}".`,
+        `The previous binary may be locked (app running); close it and retry, or run "pnpm update:${updateScript}".`,
     );
   }
   return binPath;

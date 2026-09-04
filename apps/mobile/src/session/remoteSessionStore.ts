@@ -63,6 +63,7 @@ import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 import { clampLiveRowCreatedAt, compareMessageOrder, MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
+import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
 
 interface DeviceShard {
   deviceId: string;
@@ -1572,7 +1573,7 @@ function preserveSessionRuntimeFields(
 }
 
 function normalizeMessages(list: readonly RemoteMessage[]): RemoteMessage[] {
-  return [...list].sort(compareMessageOrder);
+  return projectLargeSettledToolInputs([...list].sort(compareMessageOrder));
 }
 
 function messageKey(message: RemoteMessage): string {

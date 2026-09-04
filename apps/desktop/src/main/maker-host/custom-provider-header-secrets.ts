@@ -11,6 +11,7 @@ import {
   readCustomProviderHeadersForMutation,
   removeCustomProviderHeaders,
   storeCustomProviderHeaders,
+  UNRECOVERABLE_PROVIDER_CREDENTIAL,
 } from '../secrets/providerSecretStore.js';
 import {
   listCustomProviders,
@@ -58,7 +59,10 @@ export function hydrateCustomProviderHeaders(
     if (!runtime) continue;
     try {
       const headers = readCustomProviderHeadersForMutation(config.id, agent);
-      if (headers && Object.keys(headers).length > 0) {
+      if (headers === UNRECOVERABLE_PROVIDER_CREDENTIAL) {
+        // 密文头存在但解不开：与读失败同样标为 unknown，由用户重填后覆盖。
+        runtimes[agent] = { ...runtime, headersState: 'unknown' };
+      } else if (headers && Object.keys(headers).length > 0) {
         runtimes[agent] = { ...runtime, headers, headersState: 'configured' };
       }
     } catch {
@@ -125,6 +129,10 @@ export async function listCustomProvidersWithSecureHeaders(): Promise<CustomProv
         assertSameOwner('header encryption');
         for (const agent of legacyAgents) {
           const previous = readCustomProviderHeadersForMutation(original.id, agent);
+          // 解不开的旧密文头没有可回滚的快照：保持此前抛错中止迁移的语义，不覆盖它。
+          if (previous === UNRECOVERABLE_PROVIDER_CREDENTIAL) {
+            throw new Error(`existing ${agent} custom provider headers are unreadable`);
+          }
           snapshots.push({ agent, previous });
           if (!storeCustomProviderHeaders(original.id, agent, split.headers[agent]!)) {
             throw new Error(`failed to encrypt ${agent} custom provider headers`);

@@ -250,7 +250,8 @@
   },
   "shareImage": {
     "title": "分享對話",
-    "selectedCount": "已選擇 {{count}} 條訊息",
+    "subtitle_one": "已選 {{count}} 條訊息",
+    "subtitle_other": "已選 {{count}} 條訊息",
     "selectAll": "全選",
     "clearAll": "取消全選",
     "cancel": "取消分享",

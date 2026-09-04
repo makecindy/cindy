@@ -21,6 +21,7 @@ import {
 } from './lib/marketDetailViewModel';
 import { marketActionErrorMessage } from './lib/marketErrors';
 import { marketVisibilityLabelKey } from './lib/marketVisibility';
+import { skillPublisherLabel } from './lib/publisherLabel';
 import {
   effectivePublishedStatus,
   effectivePublishedStatusVersion,
@@ -99,7 +100,7 @@ export function SkillhubMarketPreviewPanel({
     setFilesError(null);
     setSelectedPath(null);
     void window.electronAPI.skillhub
-      .getPublishedFiles({ name: skillName, version: skillVersion })
+      .getPublishedFiles({ name: skillName, version: skillVersion, catalogScope: skill?.catalogScope })
       .then((res) => {
         if (cancelled) return;
         setFilesLoading(false);
@@ -119,7 +120,7 @@ export function SkillhubMarketPreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [panelOpen, skillName, skillVersion, t]);
+  }, [panelOpen, skill?.catalogScope, skillName, skillVersion, t]);
 
   useEffect(() => {
     if (!panelOpen || !skillName || !selectedPath) {
@@ -131,7 +132,7 @@ export function SkillhubMarketPreviewPanel({
     // 不预清空 file:切换文件时保留旧内容直到新内容到达,避免空白帧
     setFileLoading(true);
     void window.electronAPI.skillhub
-      .readPublishedFile({ name: skillName, path: selectedPath, version: skillVersion })
+      .readPublishedFile({ name: skillName, path: selectedPath, version: skillVersion, catalogScope: skill?.catalogScope })
       .then((res) => {
         if (cancelled) return;
         setFileLoading(false);
@@ -150,7 +151,7 @@ export function SkillhubMarketPreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [panelOpen, selectedPath, skillName, skillVersion, t]);
+  }, [panelOpen, selectedPath, skill?.catalogScope, skillName, skillVersion, t]);
 
   const tree = useMemo(() => buildPreviewTree(files), [files]);
 
@@ -207,6 +208,7 @@ export function SkillhubMarketPreviewPanel({
                           .getScanStatus({
                             slug: skill.name,
                             version: effectivePublishedStatusVersion(skill) ?? skill.latestVersion,
+                            catalogScope: skill.catalogScope,
                           })
                           .then((res) => {
                             setScanResult(res.success
@@ -236,7 +238,7 @@ export function SkillhubMarketPreviewPanel({
                         // New Maker 草稿,用户在那里用原生入口选 agent/模型/项目,
                         // 发送时走正常建会话路径(蒸馏会话继承该会话的模型)。
                         saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
-                          text: plainTextToTiptapDoc(`/learn hub:${skill.name} `),
+                          text: plainTextToTiptapDoc(`/learn hub:${skill.catalogScope ?? 'market'}:${skill.name} `),
                           attachments: [],
                         });
                         // 草稿目标重置为本地对话:残留的 device-link 远程草稿
@@ -286,7 +288,7 @@ export function SkillhubMarketPreviewPanel({
               </div>
 
               <p className="mt-1 truncate text-xs text-[var(--cmd-palette-item-meta)]">
-                {skill.authorName} · {skill.name} · v{skill.latestVersion}
+                {skillPublisherLabel(skill)} · {skill.name} · v{skill.latestVersion}
               </p>
               {skill.description && (
                 <p className="mt-3 text-sm leading-[1.55] text-[var(--text-secondary-mid)]">

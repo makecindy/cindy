@@ -1396,9 +1396,11 @@ describe('远程交互接线不变式', () => {
     expect(body).not.toContain('persist:');
 
     const main = mainSrc('maker-ipc/register.ts');
-    const transactionStart = main.indexOf('const applyDirectoryGrants = (');
+    const transactionStart = main.indexOf('export function applyDirectoryGrants(');
     expect(transactionStart).toBeGreaterThan(-1);
-    const transaction = main.slice(transactionStart, transactionStart + 4_000);
+    const transactionEnd = main.indexOf('export async function applyLibraryReadonlyExtraDir(', transactionStart);
+    expect(transactionEnd).toBeGreaterThan(transactionStart);
+    const transaction = main.slice(transactionStart, transactionEnd);
     expect(transaction).toContain('withSendToSessionLock(sessionId');
     expect(transaction).toContain('persist: (patch) => persistSessionFields(sessionId, patch)');
   });

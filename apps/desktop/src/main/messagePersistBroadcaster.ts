@@ -343,10 +343,12 @@ function markAssistantTurnBoundary(
   sessionId: string,
   clientId: string | undefined,
   completed: boolean,
+  metaPatch?: Pick<AgentMeta, 'nativeForkAnchor'>,
 ): Promise<boolean> {
   if (!sessionId || !clientId) return Promise.resolve(false);
   return enqueueDurableWrite(`turn-boundary:${sessionId}:${clientId}:${completed}`, async (ownerScope) => {
     const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
+      ...metaPatch,
       turnCompleted: completed,
     });
     if (!patched) return false;
@@ -362,8 +364,9 @@ function markAssistantTurnBoundary(
 export function markAssistantTurnCompleted(
   sessionId: string,
   clientId: string | undefined,
+  metaPatch?: Pick<AgentMeta, 'nativeForkAnchor'>,
 ): Promise<boolean> {
-  return markAssistantTurnBoundary(sessionId, clientId, true);
+  return markAssistantTurnBoundary(sessionId, clientId, true, metaPatch);
 }
 
 /**
