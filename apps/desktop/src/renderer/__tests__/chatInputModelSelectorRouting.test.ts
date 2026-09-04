@@ -349,7 +349,6 @@ describe('ChatInput model source switching wiring', () => {
     );
     expect(chatInputSource).toContain(
       'resolveModelSelectorAgentIdentity(runtimeAgentKind, null)?.vendorKey ??',
-      'resolveModelSelectorAgentIdentity(runtimeAgentKind, null)?.vendorKey ??',
     );
     // 草稿没有 session 身份可言,当前引擎就是 vendorKey。
     expect(chatInputSource).toContain(': (vendorKey ?? null);');
