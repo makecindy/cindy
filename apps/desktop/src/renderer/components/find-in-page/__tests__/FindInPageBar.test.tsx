@@ -707,6 +707,58 @@ describe('FindInPageBar', () => {
     }
   });
 
+  it('keeps scrollable content searchable through a flexible overflow-hidden layout shell', async () => {
+    const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+    const elementRectDescriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'getBoundingClientRect',
+    );
+    const layoutShell = document.createElement('div');
+    layoutShell.style.display = 'flex';
+    layoutShell.style.flexGrow = '1';
+    layoutShell.style.overflow = 'hidden';
+    const scrollContainer = document.createElement('div');
+    scrollContainer.style.overflowY = 'auto';
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    scrollContainer.append(page);
+    layoutShell.append(scrollContainer);
+    document.body.append(layoutShell);
+
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value() {
+        return [{ top: 20, bottom: 30, left: 0, right: 100 }];
+      },
+    });
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value(this: Element) {
+        if (this === layoutShell) return { top: 0, bottom: 10, left: 0, right: 100 };
+        return { top: 0, bottom: 100, left: 0, right: 100 };
+      },
+    });
+
+    try {
+      const input = await openFindBar();
+      fireEvent.change(input, { target: { value: 'foo' } });
+
+      expect(screen.getByText('1/1')).toBeTruthy();
+      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+    } finally {
+      if (rangeRectDescriptor) {
+        Object.defineProperty(Range.prototype, 'getClientRects', rangeRectDescriptor);
+      } else {
+        delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
+      }
+      if (elementRectDescriptor) {
+        Object.defineProperty(Element.prototype, 'getBoundingClientRect', elementRectDescriptor);
+      } else {
+        delete (Element.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+      }
+    }
+  });
+
   it('applies overflow clipping only on the hidden axis', async () => {
     const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
     const elementRectDescriptor = Object.getOwnPropertyDescriptor(

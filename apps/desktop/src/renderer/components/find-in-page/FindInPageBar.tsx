@@ -210,8 +210,29 @@ function getOverflowClipAxes(style: CSSStyleDeclaration): { x: boolean; y: boole
   };
 }
 
-function isViewportShell(element: HTMLElement): boolean {
-  return element === document.documentElement || element === document.body || element.id === 'root';
+function isScrollableOverflowValue(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'auto' || normalized === 'scroll' || normalized === 'overlay';
+}
+
+function isLayoutViewportShell(
+  element: HTMLElement,
+  style: CSSStyleDeclaration,
+  hasScrollableDescendant: boolean,
+): boolean {
+  if (
+    element === document.documentElement ||
+    element === document.body ||
+    element.id === 'root'
+  ) {
+    return true;
+  }
+  if (!hasScrollableDescendant) return false;
+
+  const isFlexContainer = style.display === 'flex' || style.display === 'inline-flex';
+  const hasFlexibleExtent =
+    Number.parseFloat(style.flexGrow) > 0 || style.height === '100%' || style.width === '100%';
+  return isFlexContainer && hasFlexibleExtent;
 }
 
 interface ClippingAncestor {
@@ -222,16 +243,20 @@ interface ClippingAncestor {
 
 function getClippingAncestors(element: HTMLElement | null): ClippingAncestor[] {
   const clippingAncestors: ClippingAncestor[] = [];
+  let hasScrollableDescendant = false;
   let ancestor = element;
   while (ancestor) {
     const style = window.getComputedStyle(ancestor);
-    if (!isViewportShell(ancestor)) {
+    if (!isLayoutViewportShell(ancestor, style, hasScrollableDescendant)) {
       const overflowClipAxes = getOverflowClipAxes(style);
       if (getLineClamp(style) !== null) overflowClipAxes.y = true;
       if (overflowClipAxes.x || overflowClipAxes.y) {
         clippingAncestors.push({ element: ancestor, ...overflowClipAxes });
       }
     }
+    hasScrollableDescendant ||= [style.overflow, style.overflowX, style.overflowY].some(
+      isScrollableOverflowValue,
+    );
     ancestor = ancestor.parentElement;
   }
   return clippingAncestors;
