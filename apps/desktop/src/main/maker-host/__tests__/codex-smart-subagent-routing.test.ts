@@ -100,6 +100,20 @@ describe('Codex smart Subagent catalog', () => {
     expect(candidates).toEqual([]);
   });
 
+  it('falls back to another connected source for the same model without ChatGPT OAuth', () => {
+    const shared = model('gpt-5.6-luna', 'gpt-budget');
+    const candidates = selectCodexSmartSubagentCandidates(
+      [
+        provider('openai', [shared], { authStrategy: 'oauth-passthrough' }),
+        provider('xd', [shared]),
+      ],
+      { allowChatGptOAuth: false },
+    );
+    expect(candidates.map(({ providerId, model: entry }) => [providerId, entry.id])).toEqual([
+      ['xd', 'gpt-5.6-luna'],
+    ]);
+  });
+
   it('upgrades Luna to the parent V2 backend and clones safe metadata for routed models', () => {
     const candidates = [
       { providerId: 'openai', model: model('gpt-5.6-luna', 'gpt-budget') },

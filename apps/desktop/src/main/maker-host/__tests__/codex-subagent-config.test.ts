@@ -16,6 +16,7 @@ function settings(partial: Partial<SubagentModelSettings> = {}): SubagentModelSe
 
 const smartConfig: CodexSmartSubagentConfig = {
   catalogPath: '/tmp/cindy smart models.json',
+  routingSignature: 'smart:test',
   routes: [
     { providerId: 'openai', catalogModel: 'gpt-5.6-luna' },
     { providerId: 'xd', catalogModel: 'deepseek/deepseek-v4-flash' },

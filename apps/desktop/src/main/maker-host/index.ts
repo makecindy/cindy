@@ -21,6 +21,7 @@ import {
 import type { ProviderView } from '@cindy/model-providers';
 import {
   getActiveCatalog,
+  getActiveCatalogRevision,
   getLocalCatalogOverridesSnapshot,
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
@@ -240,7 +241,11 @@ import {
   resolveCodexSubagentRoutingProfile,
   type CodexSmartSubagentConfig,
 } from './codex-subagent-config.js';
-import { prepareCodexSmartSubagentConfig } from './codex-smart-subagent-routing.js';
+import {
+  codexSmartSubagentRoutingSignature,
+  prepareCodexSmartSubagentConfig,
+  selectCodexSmartSubagentCandidates,
+} from './codex-smart-subagent-routing.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
   registerAgentProcess,
@@ -1224,6 +1229,20 @@ export function getMaker(): Maker {
       orcaWorkerBridgeProvider,
     ];
     _codexMcpProviders = codexMcpProviders;
+    const resolveDesiredCodexSubagentRoutingSignature = async (ctx: {
+      credentialMode?: 'oauth-bearer' | 'gateway-key' | 'provider-oauth';
+      hostPurpose?: 'control-plane' | 'review';
+    }): Promise<string> => {
+      const settings = readSubagentModelSettings();
+      if (ctx.hostPurpose || !settings.codexSmartSubagentRouting) return 'default';
+      const providerViews: ProviderView[] =
+        await getDesktopProviderService().listProviders({ allowSideEffects: false });
+      const candidates = selectCodexSmartSubagentCandidates(providerViews, {
+        allowChatGptOAuth: ctx.credentialMode === 'oauth-bearer',
+      });
+      return codexSmartSubagentRoutingSignature(candidates, getActiveCatalogRevision())
+        ?? 'default';
+    };
     const codexAgent = new CodexAgent({
       auth: desktopCodexAuthAdapter,
       runtimeConfig: desktopCodexRuntimeConfig,
@@ -1328,6 +1347,8 @@ export function getMaker(): Maker {
           toMode: ctx.toMode,
         });
       },
+      resolveCodexSubagentRoutingSignature: async (_providers, ctx) =>
+        resolveDesiredCodexSubagentRoutingSignature(ctx),
       prepareCodexExtraSpawnConfig: async (providers, ctx) => {
         if (ctx.remoteHostId) {
           // The remote daemon owns its own CODEX_HOME and Chrome companion.
@@ -1463,6 +1484,7 @@ export function getMaker(): Maker {
               codexHome: getCodexHome(),
               providerViews,
               allowChatGptOAuth: authInjection === 'oauth-bearer',
+              catalogRevision: getActiveCatalogRevision(),
             }) ?? undefined;
           } catch (err) {
             desktopMakerLogger.warn(
@@ -1494,6 +1516,9 @@ export function getMaker(): Maker {
           codexProxyActive: ready,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
           codexSubagentRoutingProfile,
+          ...(smartSubagentConfig
+            ? { codexSubagentRoutingSignature: smartSubagentConfig.routingSignature }
+            : {}),
           ...(codexCustomProviderRoutes.length > 0
             ? { codexCustomProviderRoutes: toCodexCustomProviderHostRoutes(codexCustomProviderRoutes) }
             : {}),

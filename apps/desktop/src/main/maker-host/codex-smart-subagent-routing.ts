@@ -80,7 +80,10 @@ export function selectCodexSmartSubagentCandidates(
   providerViews: readonly ProviderView[],
   opts: { allowChatGptOAuth: boolean },
 ): SmartCandidate[] {
-  const connected = connectedProvidersForAgent([...providerViews], 'codex');
+  const connected = connectedProvidersForAgent([...providerViews], 'codex').filter(
+    (provider) =>
+      opts.allowChatGptOAuth || provider.routing.codex?.authStrategy !== 'oauth-passthrough',
+  );
   const ids = new Set<string>();
   for (const provider of connected) {
     for (const model of provider.models.codex ?? []) {
@@ -99,12 +102,17 @@ export function selectCodexSmartSubagentCandidates(
     const provider = connected.find((entry) => entry.id === providerId);
     const model = provider ? getModel(provider, modelId, 'codex') : undefined;
     if (!provider || !model) continue;
-    if (provider.routing.codex?.authStrategy === 'oauth-passthrough' && !opts.allowChatGptOAuth) {
-      continue;
-    }
     candidates.push({ providerId: provider.id, model });
   }
   return candidates.sort(compareCandidates).slice(0, MAX_ADDITIONAL_MODELS);
+}
+
+export function codexSmartSubagentRoutingSignature(
+  candidates: readonly SmartCandidate[],
+  catalogRevision: number,
+): string | null {
+  if (candidates.length === 0) return null;
+  return `smart:${catalogRevision}:${JSON.stringify(candidates.map(({ providerId, model }) => [providerId, model.id]))}`;
 }
 
 function reasoningLevels(model: CatalogModel, fallback: unknown): unknown {
@@ -200,6 +208,7 @@ export function prepareCodexSmartSubagentConfig(args: {
   codexHome: string;
   providerViews: readonly ProviderView[];
   allowChatGptOAuth: boolean;
+  catalogRevision: number;
 }): CodexSmartSubagentConfig | null {
   const candidates = selectCodexSmartSubagentCandidates(args.providerViews, {
     allowChatGptOAuth: args.allowChatGptOAuth,
@@ -211,5 +220,9 @@ export function prepareCodexSmartSubagentConfig(args: {
   if (!built || built.routes.length === 0) return null;
   const catalogPath = path.join(args.codexHome, SMART_CATALOG_FILE);
   atomicWriteFileSync(catalogPath, `${JSON.stringify({ models: built.models }, null, 2)}\n`);
-  return { catalogPath, routes: built.routes };
+  return {
+    catalogPath,
+    routes: built.routes,
+    routingSignature: codexSmartSubagentRoutingSignature(candidates, args.catalogRevision)!,
+  };
 }

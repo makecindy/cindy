@@ -20,6 +20,7 @@ export interface CodexSubagentRouteSnapshot {
 export interface CodexSmartSubagentConfig {
   catalogPath: string;
   routes: CodexSubagentRouteSnapshot[];
+  routingSignature: string;
 }
 
 /** TOML basic string 转义。 */

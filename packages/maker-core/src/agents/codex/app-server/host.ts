@@ -300,6 +300,8 @@ export interface AppServerHostOptions {
     catalogModel: string;
     reasoningEffort?: ReasoningEffort | null;
   }>;
+  /** Frozen identity of the Subagent routing/catalog snapshot used by this host. */
+  codexSubagentRoutingSignature?: string;
   getSubagentIdentity?: (childThreadId: string) => {
     model: string;
     reasoningEffort?: string;
@@ -521,6 +523,10 @@ export class AppServerHost {
 
   getSmartSubagentRoutes(): AppServerHostOptions['smartSubagentRoutes'] {
     return this.opts.smartSubagentRoutes;
+  }
+
+  getSubagentRoutingSignature(): string | undefined {
+    return this.opts.codexSubagentRoutingSignature;
   }
 
   getObservedSubagentIdentity(childThreadId: string): {

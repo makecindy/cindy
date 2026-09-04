@@ -356,6 +356,8 @@ export interface CodexExtraSpawnConfig {
     catalogModel: string;
     reasoningEffort?: ReasoningEffort | null;
   }>;
+  /** Frozen identity of the Subagent routing/catalog snapshot used by this host. */
+  codexSubagentRoutingSignature?: string;
   /** Whether this exact app-server spawn was provisioned with Codex Chrome. */
   codexBrowserUseAvailable?: boolean;
   /** Whether the OpenAI identity provider on this app-server may use Responses WebSocket. */
@@ -846,6 +848,15 @@ export interface AgentDeps {
       hostPurpose?: 'control-plane' | 'review';
     },
   ) => Promise<CodexExtraSpawnConfig>;
+
+  /** Recomputes the desired local Subagent routing identity before reusing a host. */
+  resolveCodexSubagentRoutingSignature?: (
+    providers: McpProvider[],
+    ctx: {
+      credentialMode?: AgentCredentialMode;
+      hostPurpose?: 'control-plane' | 'review';
+    },
+  ) => Promise<string>;
 
   /**
    * Codex-only host policy: disable local app-server plugin runtimes even when
