@@ -56,7 +56,11 @@ import {
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults.js';
 import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
-import { ownerScopedUserDataPath } from '../../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
+} from '../../appSessionState.js';
 import {
   isManagedBotAvatarUrl,
   isSupportedBotAvatarValue,
@@ -66,6 +70,8 @@ import { MAKER_PUSH } from '../../maker-ipc/channels.js';
 import { writeBlob } from '../../cindy-media/blobStore.js';
 import { recordBlob } from '../../cindy-media/ledger.js';
 import { validateBotAvatarBuffer } from './botAvatarSelection.js';
+import { isBotTemplatePresetId } from '../../../shared/botTemplatePreset.js';
+import { seedBotTemplateSkills } from '../../maker-ipc/botTemplateSkillSeed.js';
 
 const log = createLogger('bots');
 
@@ -87,10 +93,11 @@ async function syncBotProfileFolder(
   botId: string,
   identitySource: string,
   config: Record<string, unknown>,
+  userDataDir = ownerScopedUserDataPath(),
 ): Promise<void> {
   const { userContextSource } = config;
   try {
-    await writeBotProfileFolder(ownerScopedUserDataPath(), botId, {
+    await writeBotProfileFolder(userDataDir, botId, {
       identitySource,
       userContextSource: typeof userContextSource === 'string' ? userContextSource : '',
     });
@@ -179,6 +186,7 @@ export async function createBotCanonicalSession(
   if (!createBotCanonicalSessionImpl) {
     throwIpcError('PRECONDITION_FAILED', 'Bot 数据服务尚未初始化');
   }
+  await recoverBotTemplateSkills(input.botId);
   return createBotCanonicalSessionImpl(input);
 }
 
@@ -189,14 +197,17 @@ export async function createBotCanonicalSession(
  * a second replacement or surfacing a harmless race to the user.
  */
 export async function resolveBotCanonicalSessionForUse(botId: string): Promise<BotRenewalOutcome> {
-  if (!renewBotCanonicalSessionIfDueImpl) {
+  const renewBotCanonicalSessionIfDue = renewBotCanonicalSessionIfDueImpl;
+  if (!renewBotCanonicalSessionIfDue) {
     throwIpcError('PRECONDITION_FAILED', 'Bot 数据服务尚未初始化');
   }
   const active = botRenewalFlights.get(botId);
   if (active) return active;
-  const run = renewBotCanonicalSessionIfDueImpl(botId).finally(() => {
-    if (botRenewalFlights.get(botId) === run) botRenewalFlights.delete(botId);
-  });
+  const run = recoverBotTemplateSkills(botId)
+    .then(() => renewBotCanonicalSessionIfDue(botId))
+    .finally(() => {
+      if (botRenewalFlights.get(botId) === run) botRenewalFlights.delete(botId);
+    });
   botRenewalFlights.set(botId, run);
   return run;
 }
@@ -731,6 +742,60 @@ function broadcastBotProfileChanged(payload: {
   }
 }
 
+/**
+ * 模板来源跟着 Profile 持久化。初次落盘若遇到短暂文件错误，伙伴第一次开任务
+ * 或后续被唤醒时会再次补装；已存在的用户版本由 seedBotSkillIfMissing 保留。
+ */
+async function recoverBotTemplateSkills(botId: string): Promise<void> {
+  if (isAppSessionBoundaryPending()) return;
+  const ownerScopeKey = activeOwnerScopeKey();
+  const userDataDir = ownerScopedUserDataPath();
+  const db = getDbClient().drizzle;
+  try {
+    const [profile] = await db
+      .select({ currentVersion: botProfiles.currentVersion })
+      .from(botProfiles)
+      .where(eq(botProfiles.id, botId))
+      .limit(1);
+    if (!profile || isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey)
+      return;
+    const [version] = await db
+      .select({ capabilitiesJson: botProfileVersions.capabilitiesJson })
+      .from(botProfileVersions)
+      .where(
+        and(
+          eq(botProfileVersions.botId, botId),
+          eq(botProfileVersions.version, profile.currentVersion),
+        ),
+      )
+      .limit(1);
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return;
+    const templateId = parseJson(version?.capabilitiesJson ?? '{}').templateId;
+    if (!isBotTemplatePresetId(templateId)) return;
+    const seeded = await seedBotTemplateSkills(userDataDir, botId, templateId);
+    if (!seeded.completedNow) return;
+    const [canonical] = await db
+      .select({ sessionId: botSessionLinks.sessionId })
+      .from(botSessionLinks)
+      .where(
+        and(
+          eq(botSessionLinks.botId, botId),
+          eq(botSessionLinks.role, 'canonical'),
+          isNull(botSessionLinks.archivedAt),
+        ),
+      )
+      .limit(1);
+    if (canonical && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey) {
+      requestBotRuntimeEpochRefresh(canonical.sessionId, 'resource');
+    }
+  } catch (cause) {
+    log.warn('recover bot template skills failed', {
+      botId,
+      error: cause instanceof Error ? cause.name : typeof cause,
+    });
+  }
+}
+
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
 export async function createBotProfile(raw: unknown) {
   const body =
@@ -756,6 +821,25 @@ export async function createBotProfile(raw: unknown) {
     : {};
   const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
   const gender = readBotGender(body.gender);
+  const templateId = body.templateId;
+  if (templateId !== undefined && !isBotTemplatePresetId(templateId)) {
+    throwIpcError('INVALID_PARAMS', '未知的伙伴模板');
+  }
+  const creationOwnerBoundary = {
+    scopeKey: activeOwnerScopeKey(),
+    userDataDir: ownerScopedUserDataPath(),
+  };
+  const assertCreationOwnerStillCurrent = () => {
+    if (
+      isAppSessionBoundaryPending() ||
+      activeOwnerScopeKey() !== creationOwnerBoundary.scopeKey
+    ) {
+      throwIpcError('PRECONDITION_FAILED', '账号已切换，请在当前账号重新创建伙伴');
+    }
+  };
+  if (isAppSessionBoundaryPending()) {
+    throwIpcError('PRECONDITION_FAILED', '账号正在切换，请稍后重试');
+  }
   const persistedCapabilities = normalizeBotModelCapabilitiesOrThrow({
     ...(hasRequestedCapabilities ? {} : defaultNewBotCapabilities()),
     ...requestedCapabilities,
@@ -763,6 +847,7 @@ export async function createBotProfile(raw: unknown) {
     userContextSource,
     ...(gender ? { gender } : {}),
   });
+  if (templateId) persistedCapabilities.templateId = templateId;
   const now = Date.now();
   const client = getDbClient();
   const db = client.drizzle;
@@ -776,8 +861,30 @@ export async function createBotProfile(raw: unknown) {
     capabilitiesJson: safeJson(persistedCapabilities),
     now,
   });
-  await syncBotProfileFolder(id, identitySource, persistedCapabilities);
+  assertCreationOwnerStillCurrent();
+  await syncBotProfileFolder(
+    id,
+    identitySource,
+    persistedCapabilities,
+    creationOwnerBoundary.userDataDir,
+  );
+  assertCreationOwnerStillCurrent();
+  if (templateId) {
+    try {
+      await seedBotTemplateSkills(creationOwnerBoundary.userDataDir, id, templateId);
+    } catch (cause) {
+      // Profile 已经是数据库里的权威记录；辅助 Skill 安装失败不能制造一个半创建、
+      // 下次也无法恢复的幽灵伙伴。身份正文仍保留完整工作约束，错误留给日志诊断。
+      log.warn('seed bot template skills failed', {
+        botId: id,
+        templateId,
+        error: cause instanceof Error ? cause.name : typeof cause,
+      });
+    }
+    assertCreationOwnerStillCurrent();
+  }
   const profile = await readProfile(db, id);
+  assertCreationOwnerStillCurrent();
   broadcastBotProfileChanged({ botId: id, change: 'created' });
   return profile;
 }

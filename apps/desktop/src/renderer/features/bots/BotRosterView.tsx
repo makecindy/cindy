@@ -7,6 +7,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { addBotProfileAndWait, type BotProfile } from './botStore';
 import { BotBasicProfileFields, type BotBasicProfileValue } from './BotBasicProfileFields';
+import { BotAvatar } from './BotAvatar';
 import {
   BOT_TEMPLATE_CHOICES,
   CUSTOM_BOT_TEMPLATE_ID,
@@ -28,11 +29,11 @@ interface BotRosterViewProps {
 export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [templateId, setTemplateId] = useState<BotTemplateChoiceId>('programmer');
-  const initialTemplate = getBotTemplate('programmer');
+  const [templateId, setTemplateId] = useState<BotTemplateChoiceId>('cindy');
+  const initialTemplate = getBotTemplate('cindy');
   const [profile, setProfile] = useState<BotBasicProfileValue>(() => ({
-    name: t('bots.createWizard.templates.programmer.defaultName'),
-    description: t('bots.createWizard.templates.programmer.defaultDescription'),
+    name: t('bots.createWizard.templates.cindy.defaultName'),
+    description: t('bots.createWizard.templates.cindy.defaultDescription'),
     avatar: initialTemplate.avatar,
     avatarColor: initialTemplate.avatarColor,
   }));
@@ -79,6 +80,11 @@ export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
         avatar: profile.avatar,
         avatarColor: profile.avatarColor,
         skills: [],
+        capabilities:
+          template.toolsets.length > 0
+            ? { toolsetMode: 'allowlist', toolsets: [...template.toolsets] }
+            : undefined,
+        ...(template.id === CUSTOM_BOT_TEMPLATE_ID ? {} : { templateId: template.id }),
       });
       rememberPendingBotWelcome(bot.id, { key: 'bots.welcome.generic', params: { name } });
       handleCreated(bot);
@@ -120,9 +126,14 @@ export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
                 aria-pressed={selected}
               >
                 <span className="flex w-full items-start justify-between gap-3">
-                  <span className="text-24" aria-hidden>
-                    {template.avatar}
-                  </span>
+                  <BotAvatar
+                    bot={{
+                      name: t(`bots.createWizard.templates.${key}.title`),
+                      avatar: template.avatar,
+                      avatarColor: template.avatarColor,
+                    }}
+                    size="sm"
+                  />
                   {selected ? <Check size={15} className="text-[var(--accent-cta-bg)]" /> : null}
                 </span>
                 <span className="mt-3 text-14 font-medium text-[var(--text-primary)]">

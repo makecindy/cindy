@@ -6959,23 +6959,23 @@
       "createFailed": "無法建立夥伴，請重試。",
       "chooseTemplateDescription": "選擇一個起點，再確認名稱與頭像。之後新增的範本也都會從這裡建立。",
       "templates": {
-        "programmer": {
-          "title": "軟體開發",
-          "summary": "程式實作、架構分析、除錯與部署。",
-          "defaultName": "開發夥伴",
-          "defaultDescription": "負責軟體開發、技術分析、問題排查與交付驗證。"
+        "cindy": {
+          "title": "Cindy 助理",
+          "summary": "寫作、整理、分析、規劃與日常事務推進。",
+          "defaultName": "Cindy",
+          "defaultDescription": "處理日常工作與生活中的大部分需求，必要時請更合適的夥伴接手。"
         },
-        "designer": {
-          "title": "設計支援",
-          "summary": "介面、簡報、排版與視覺方案。",
-          "defaultName": "設計夥伴",
-          "defaultDescription": "負責介面設計、簡報、排版與視覺表達。"
+        "dash": {
+          "title": "Dash 公司 CEO",
+          "summary": "產品、財務、審美與管理決策。",
+          "defaultName": "Dash",
+          "defaultDescription": "負責方向判斷、方案取捨、優先順序與工作審批。"
         },
-        "counsel": {
-          "title": "法務支援",
-          "summary": "合約條款、合規風險與初步審查。",
-          "defaultName": "法務夥伴",
-          "defaultDescription": "負責合約與合規的初步梳理和風險提示，不取代專業法律意見。"
+        "lizi": {
+          "title": "LiZi 技術總監",
+          "summary": "開發、架構、除錯、發布與技術風險。",
+          "defaultName": "LiZi",
+          "defaultDescription": "負責技術問題判斷、方案制定、執行推進與結果驗證。"
         },
         "custom": {
           "title": "自訂",
@@ -7130,7 +7130,6 @@
       "deleteTitle": "永久刪除夥伴",
       "deleteDescription": "這會刪掉 {{name}}：個性、已連的通道、排定的行程都會消失。刪了找不回來。",
       "keepHistory": "保留任務記錄，將它們轉為一般的已封存任務。",
-      "confirmName": "輸入「{{name}}」確認永久刪除",
       "worktree": {
         "retain": "保留 Worktree",
         "retainDescription": "解除夥伴連結，但保留磁碟上的工作目錄和 Git 分支。",

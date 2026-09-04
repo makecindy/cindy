@@ -21,6 +21,7 @@ import {
   readBotSkill,
   renderBotSkillFile,
   saveBotSkill,
+  seedBotSkillIfMissing,
 } from '../botSkillStore';
 
 let userDataDir = '';
@@ -122,7 +123,10 @@ describe('saveBotSkill — 形成', () => {
       BotSkillStoreError,
     );
     await expect(
-      saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, body: 'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1) }),
+      saveBotSkill(userDataDir, 'bot-1', {
+        ...SAMPLE,
+        body: 'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1),
+      }),
     ).rejects.toMatchObject({ errorCode: 'SKILL_BODY_TOO_LARGE' });
     await expect(
       saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, name: '周报怎么写' }),
@@ -156,6 +160,47 @@ describe('saveBotSkill — 形成', () => {
   });
 });
 
+describe('seedBotSkillIfMissing — 内置模板安装', () => {
+  const seed = {
+    name: '决策与审批',
+    description: '处理重要工作审批时使用。',
+    body: '先给结论，再写理由、风险和下一步。',
+    slug: 'executive-decision-review',
+    now: 1_700_000_000_000,
+  };
+
+  it('writes a real skill once and preserves later user edits', async () => {
+    const first = await seedBotSkillIfMissing(userDataDir, 'bot-dash', seed);
+    expect(first.created).toBe(true);
+
+    await saveBotSkill(userDataDir, 'bot-dash', {
+      ...seed,
+      body: '这是用户改过的审批方法。',
+      now: 1_800_000_000_000,
+    });
+    const second = await seedBotSkillIfMissing(userDataDir, 'bot-dash', {
+      ...seed,
+      body: '新版内置内容也不应覆盖用户。',
+    });
+
+    expect(second.created).toBe(false);
+    expect(second.record.body).toBe('这是用户改过的审批方法。');
+  });
+
+  it('is atomic when two creation paths seed the same skill together', async () => {
+    const results = await Promise.all([
+      seedBotSkillIfMissing(userDataDir, 'bot-dash', seed),
+      seedBotSkillIfMissing(userDataDir, 'bot-dash', seed),
+    ]);
+
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    expect(await readBotSkill(userDataDir, 'bot-dash', seed.slug)).toMatchObject({
+      name: seed.name,
+      body: seed.body,
+    });
+  });
+});
+
 describe('listBotSkills / deleteBotSkill — 取与删', () => {
   it('returns an empty list before the Bot ever learned anything', async () => {
     expect(await listBotSkills(userDataDir, 'bot-1')).toEqual([]);
@@ -186,7 +231,9 @@ describe('隔离 — 一个伙伴的技能不进另一个伙伴的目录', () =>
     await saveBotSkill(userDataDir, 'bot-2', { ...SAMPLE, name: 'theirs' });
 
     expect((await listBotSkills(userDataDir, 'bot-1')).map((item) => item.name)).toEqual(['mine']);
-    expect((await listBotSkills(userDataDir, 'bot-2')).map((item) => item.name)).toEqual(['theirs']);
+    expect((await listBotSkills(userDataDir, 'bot-2')).map((item) => item.name)).toEqual([
+      'theirs',
+    ]);
     expect(botSkillRootDir(userDataDir, 'bot-1')).not.toBe(botSkillRootDir(userDataDir, 'bot-2'));
   });
 

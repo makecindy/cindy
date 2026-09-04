@@ -337,6 +337,7 @@ describe('bot profile store', () => {
         avatarColor: 'blue',
         skills: ['research'],
         capabilities: { permissions: 'trusted' },
+        templateId: 'lizi',
       });
       createdIds.push(bot.id);
       expect(bot).toMatchObject({
@@ -358,6 +359,7 @@ describe('bot profile store', () => {
           avatar: '🛠️',
           avatarColor: 'blue',
           skills: ['research'],
+          templateId: 'lizi',
           capabilities: expect.objectContaining({
             permissions: 'trusted',
           }),

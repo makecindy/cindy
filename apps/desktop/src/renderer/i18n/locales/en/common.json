@@ -6961,23 +6961,23 @@
       "createFailed": "The teammate could not be created. Try again.",
       "chooseTemplateDescription": "Choose a starting point, then confirm the name and avatar. Future templates will use this same flow.",
       "templates": {
-        "programmer": {
-          "title": "Software development",
-          "summary": "Code implementation, architecture, debugging, and deployment.",
-          "defaultName": "Development teammate",
-          "defaultDescription": "Supports software development, technical analysis, troubleshooting, and delivery verification."
+        "cindy": {
+          "title": "Cindy Assistant",
+          "summary": "Writing, organization, analysis, planning, and everyday work.",
+          "defaultName": "Cindy",
+          "defaultDescription": "Handles most everyday work and personal needs, bringing in a better-suited teammate when needed."
         },
-        "designer": {
-          "title": "Design support",
-          "summary": "Interfaces, presentations, layout, and visual direction.",
-          "defaultName": "Design teammate",
-          "defaultDescription": "Supports interface design, presentations, layout, and visual communication."
+        "dash": {
+          "title": "Dash, Company CEO",
+          "summary": "Product, finance, design judgment, and management decisions.",
+          "defaultName": "Dash",
+          "defaultDescription": "Makes direction calls, weighs options, sets priorities, and reviews important work."
         },
-        "counsel": {
-          "title": "Legal support",
-          "summary": "Contract terms, compliance risks, and preliminary review.",
-          "defaultName": "Legal teammate",
-          "defaultDescription": "Supports preliminary contract and compliance review and flags risks; it does not replace professional legal advice."
+        "lizi": {
+          "title": "LiZi, Technical Director",
+          "summary": "Development, architecture, debugging, releases, and technical risk.",
+          "defaultName": "LiZi",
+          "defaultDescription": "Owns technical diagnosis, solution design, execution, and verification."
         },
         "custom": {
           "title": "Custom",
@@ -7132,7 +7132,6 @@
       "deleteTitle": "Permanently delete teammate",
       "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
       "keepHistory": "Keep task transcripts as ordinary archived tasks.",
-      "confirmName": "Enter “{{name}}” to confirm permanent deletion",
       "worktree": {
         "retain": "Keep worktrees",
         "retainDescription": "Detach them from the teammate while keeping working directories and Git branches on disk.",

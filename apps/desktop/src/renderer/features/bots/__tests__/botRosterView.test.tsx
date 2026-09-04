@@ -31,7 +31,7 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     render(<BotRosterView />);
 
     expect(screen.getAllByRole('button', { pressed: true })).toHaveLength(1);
-    for (const id of ['programmer', 'designer', 'counsel', 'custom']) {
+    for (const id of ['cindy', 'dash', 'lizi', 'custom']) {
       expect(screen.getByText(`bots.createWizard.templates.${id}.title`)).toBeTruthy();
     }
     expect(screen.getAllByRole('button', { pressed: false })).toHaveLength(3);
@@ -55,13 +55,13 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
 
   it('uses a template as a draft in the same fields', () => {
     render(<BotRosterView />);
-    fireEvent.click(screen.getByText('bots.createWizard.templates.designer.title'));
+    fireEvent.click(screen.getByText('bots.createWizard.templates.dash.title'));
 
     expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe(
-      'bots.createWizard.templates.designer.defaultName',
+      'bots.createWizard.templates.dash.defaultName',
     );
     expect((screen.getByLabelText('bots.profile.summary') as HTMLInputElement).value).toBe(
-      'bots.createWizard.templates.designer.defaultDescription',
+      'bots.createWizard.templates.dash.defaultDescription',
     );
   });
 
@@ -77,11 +77,13 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).toMatchObject({
       name: 'Ops buddy',
       description: 'Release partner',
-      avatar: '💻',
+      avatar: 'cindy://avatar/preset/cindy',
       avatarColor: 'blue',
-      identitySource: expect.stringContaining('负责软件开发'),
+      identitySource: expect.stringContaining('Cindy 助理'),
       userContextSource: '',
       skills: [],
+      capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
+      templateId: 'cindy',
     });
   });
 
@@ -102,6 +104,7 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
       avatarColor: 'amber',
       identitySource: expect.stringContaining('由用户自定义职责'),
     });
+    expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).not.toHaveProperty('templateId');
   });
 
   it('navigates to the new teammate and leaves a greeting', async () => {

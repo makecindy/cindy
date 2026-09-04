@@ -6959,23 +6959,23 @@
       "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요.",
       "chooseTemplateDescription": "시작점을 고른 뒤 이름과 아바타를 확인하세요. 앞으로 추가될 템플릿도 이 화면에서 만듭니다.",
       "templates": {
-        "programmer": {
-          "title": "소프트웨어 개발",
-          "summary": "코드 구현, 아키텍처 분석, 디버깅, 배포를 지원합니다.",
-          "defaultName": "개발 파트너",
-          "defaultDescription": "소프트웨어 개발, 구조 분석, 문제 해결, 결과 검증을 담당합니다."
+        "cindy": {
+          "title": "Cindy 어시스턴트",
+          "summary": "작성, 정리, 분석, 계획과 일상 업무 추진.",
+          "defaultName": "Cindy",
+          "defaultDescription": "일상 업무와 생활의 다양한 요청을 처리하고 필요하면 더 적합한 동료에게 맡깁니다."
         },
-        "designer": {
-          "title": "디자인 지원",
-          "summary": "화면, 프레젠테이션, 레이아웃, 시각 방향을 지원합니다.",
-          "defaultName": "디자인 파트너",
-          "defaultDescription": "화면 디자인, 프레젠테이션, 레이아웃, 시각 표현을 담당합니다."
+        "dash": {
+          "title": "Dash 회사 CEO",
+          "summary": "제품, 재무, 디자인 판단과 경영 의사결정.",
+          "defaultName": "Dash",
+          "defaultDescription": "방향 판단, 대안 선택, 우선순위 설정과 주요 업무 승인을 담당합니다."
         },
-        "counsel": {
-          "title": "법무 지원",
-          "summary": "계약 조항, 규정 준수 위험, 초기 검토를 지원합니다.",
-          "defaultName": "법무 파트너",
-          "defaultDescription": "계약 및 규정 준수 사항의 초기 검토와 위험 안내를 담당하며 전문적인 법률 자문을 대체하지 않습니다."
+        "lizi": {
+          "title": "LiZi 엔지니어링 총괄",
+          "summary": "개발, 아키텍처, 디버깅, 출시와 엔지니어링 위험.",
+          "defaultName": "LiZi",
+          "defaultDescription": "엔지니어링 문제 판단, 해결 방안 수립, 실행 추진과 결과 검증을 담당합니다."
         },
         "custom": {
           "title": "사용자 지정",
@@ -7130,7 +7130,6 @@
       "deleteTitle": "동료 영구 삭제",
       "deleteDescription": "{{name}}을(를) 삭제합니다. 성격, 연결한 채널, 예약한 실행이 모두 사라지며 되돌릴 수 없어요.",
       "keepHistory": "작업 기록을 일반 보관 작업으로 유지합니다.",
-      "confirmName": "영구 삭제를 확인하려면 “{{name}}”을 입력하세요",
       "worktree": {
         "retain": "Worktree 유지",
         "retainDescription": "동료 연결을 해제하고 작업 디렉터리와 Git 브랜치를 디스크에 유지합니다.",

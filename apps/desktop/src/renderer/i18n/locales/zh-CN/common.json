@@ -6959,23 +6959,23 @@
       "createFailed": "无法创建伙伴，请重试。",
       "chooseTemplateDescription": "选择一个起点，再确认名称和头像。以后新增模板也都在这里创建。",
       "templates": {
-        "programmer": {
-          "title": "软件开发",
-          "summary": "代码实现、架构分析、调试与部署。",
-          "defaultName": "开发伙伴",
-          "defaultDescription": "负责软件开发、技术分析、问题排查和交付验证。"
+        "cindy": {
+          "title": "Cindy 助理",
+          "summary": "写作、整理、分析、计划和日常事务推进。",
+          "defaultName": "Cindy",
+          "defaultDescription": "处理日常工作与生活中的大部分需求，必要时请更合适的伙伴接手。"
         },
-        "designer": {
-          "title": "设计支持",
-          "summary": "界面、演示文稿、排版与视觉方案。",
-          "defaultName": "设计伙伴",
-          "defaultDescription": "负责界面设计、演示文稿、排版和视觉表达。"
+        "dash": {
+          "title": "Dash 公司 CEO",
+          "summary": "产品、财务、审美与管理决策。",
+          "defaultName": "Dash",
+          "defaultDescription": "负责方向判断、方案取舍、优先级和工作审批。"
         },
-        "counsel": {
-          "title": "法务支持",
-          "summary": "合同条款、合规风险与初步审查。",
-          "defaultName": "法务伙伴",
-          "defaultDescription": "负责合同与合规的初步梳理和风险提示，不替代专业法律意见。"
+        "lizi": {
+          "title": "LiZi 技术总监",
+          "summary": "开发、架构、调试、发布与技术风险。",
+          "defaultName": "LiZi",
+          "defaultDescription": "负责技术问题判断、方案制定、执行推进和结果验证。"
         },
         "custom": {
           "title": "自定义",
@@ -7130,7 +7130,6 @@
       "deleteTitle": "永久删除伙伴",
       "deleteDescription": "这会删掉 {{name}}：性格、已连的通道、定的日程都会没。删了找不回来。",
       "keepHistory": "保留任务记录，将它们转为普通的已归档任务。",
-      "confirmName": "输入“{{name}}”确认永久删除",
       "worktree": {
         "retain": "保留 Worktree",
         "retainDescription": "解除伙伴绑定，但保留磁盘上的工作目录和 Git 分支。",

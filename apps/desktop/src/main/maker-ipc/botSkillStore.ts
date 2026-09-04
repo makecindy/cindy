@@ -61,6 +61,14 @@ export const BOT_SKILL_MAX_BODY_BYTES = 64 * 1024;
 /** 每个伙伴的技能条数上限。超过就必须先删旧的,避免无声膨胀。 */
 export const BOT_SKILL_MAX_COUNT = 100;
 
+export interface BotSkillWriteInput {
+  name: string;
+  description: string;
+  body: string;
+  slug?: string;
+  now?: number;
+}
+
 export type BotSkillErrorCode =
   | 'INVALID_ARGS'
   | 'SKILL_NAME_UNUSABLE'
@@ -70,7 +78,10 @@ export type BotSkillErrorCode =
   | 'OWNER_SCOPE_CHANGED';
 
 export class BotSkillStoreError extends Error {
-  constructor(readonly errorCode: BotSkillErrorCode, message: string) {
+  constructor(
+    readonly errorCode: BotSkillErrorCode,
+    message: string,
+  ) {
     super(message);
     this.name = 'BotSkillStoreError';
   }
@@ -81,7 +92,8 @@ function botDirName(botId: string): string {
   const trimmed = botId.trim();
   if (!trimmed) throw new BotSkillStoreError('INVALID_ARGS', 'botId required');
   const safe = trimmed.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
-  if (!safe) throw new BotSkillStoreError('INVALID_ARGS', 'botId is not usable as a directory name');
+  if (!safe)
+    throw new BotSkillStoreError('INVALID_ARGS', 'botId is not usable as a directory name');
   return safe;
 }
 
@@ -128,7 +140,12 @@ function resolveSkillDir(userDataDir: string, botId: string, slug: string): stri
   const root = path.resolve(botSkillsDir(userDataDir, botId));
   const resolved = path.resolve(root, slug);
   const relative = path.relative(root, resolved);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || relative.includes(path.sep)) {
+  if (
+    !relative ||
+    relative.startsWith('..') ||
+    path.isAbsolute(relative) ||
+    relative.includes(path.sep)
+  ) {
     throw new BotSkillStoreError('INVALID_ARGS', `unsafe skill slug: ${slug}`);
   }
   return resolved;
@@ -136,7 +153,10 @@ function resolveSkillDir(userDataDir: string, botId: string, slug: string): stri
 
 function escapeFrontmatterValue(value: string): string {
   // 单行 YAML 标量:双引号包裹 + 转义反斜杠与引号,换行压成空格。
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ')}"`;
+  return `"${value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/[\r\n]+/g, ' ')}"`;
 }
 
 function unescapeFrontmatterValue(raw: string): string {
@@ -295,18 +315,13 @@ export async function readBotSkill(
   };
 }
 
-/**
- * 新建或更新一个技能。
- *
- * 同 slug 就是更新 —— 「再遇到同类任务发现改进点就更新它」是产品要求的一半,
- * 所以这里不做撞名保护,而是原地覆盖并刷新 updatedAt。返回值里的 `created`
- * 让调用方能分辨「学会了」和「改进了」。
- */
-export async function saveBotSkill(
-  userDataDir: string,
-  botId: string,
-  input: { name: string; description: string; body: string; slug?: string; now?: number },
-): Promise<{ record: BotSkillRecord; created: boolean }> {
+function normalizeBotSkillWriteInput(input: BotSkillWriteInput): {
+  name: string;
+  description: string;
+  body: string;
+  slug: string;
+  updatedAt: string;
+} {
   const name = input.name.trim();
   const description = input.description.trim();
   const body = input.body.trim();
@@ -314,7 +329,10 @@ export async function saveBotSkill(
     throw new BotSkillStoreError('INVALID_ARGS', 'name / description / body are all required');
   }
   if (name.length > BOT_SKILL_MAX_NAME_CHARS) {
-    throw new BotSkillStoreError('INVALID_ARGS', `name is at most ${BOT_SKILL_MAX_NAME_CHARS} characters`);
+    throw new BotSkillStoreError(
+      'INVALID_ARGS',
+      `name is at most ${BOT_SKILL_MAX_NAME_CHARS} characters`,
+    );
   }
   if (description.length > BOT_SKILL_MAX_DESCRIPTION_CHARS) {
     throw new BotSkillStoreError(
@@ -335,6 +353,78 @@ export async function saveBotSkill(
       'name could not be turned into a directory-safe slug; pass an explicit ASCII slug',
     );
   }
+  return {
+    name,
+    description,
+    body,
+    slug,
+    updatedAt: new Date(input.now ?? Date.now()).toISOString(),
+  };
+}
+
+/**
+ * 只在一个固定 slug 还不存在时写入初始技能。
+ *
+ * 这是内置伙伴模板的安装入口：模板可以给新伙伴一套真实工作方法，但绝不能在
+ * 后续启动或并发创建时覆盖用户已经编辑过的 SKILL.md。`wx` 让最终写入原子地
+ * 赢一次；输掉竞争的调用直接读取胜者留下的内容。
+ */
+export async function seedBotSkillIfMissing(
+  userDataDir: string,
+  botId: string,
+  input: BotSkillWriteInput,
+): Promise<{ record: BotSkillRecord; created: boolean }> {
+  const normalized = normalizeBotSkillWriteInput(input);
+  const existing = await readBotSkill(userDataDir, botId, normalized.slug);
+  if (existing) return { record: existing, created: false };
+
+  const skills = await listBotSkills(userDataDir, botId);
+  if (skills.length >= BOT_SKILL_MAX_COUNT) {
+    throw new BotSkillStoreError(
+      'SKILL_LIMIT_REACHED',
+      `this Bot already has ${BOT_SKILL_MAX_COUNT} skills; delete one before adding another`,
+    );
+  }
+
+  await ensureLayout(userDataDir, botId);
+  const skillDir = resolveSkillDir(userDataDir, botId, normalized.slug);
+  await fs.mkdir(skillDir, { recursive: true });
+  const filePath = path.join(skillDir, 'SKILL.md');
+  try {
+    await fs.writeFile(filePath, renderBotSkillFile(normalized), { encoding: 'utf8', flag: 'wx' });
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException)?.code !== 'EEXIST') throw cause;
+    const raced = await readBotSkill(userDataDir, botId, normalized.slug);
+    if (!raced) throw cause;
+    return { record: raced, created: false };
+  }
+  return {
+    record: {
+      slug: normalized.slug,
+      name: normalized.name,
+      description: normalized.description,
+      updatedAt: normalized.updatedAt,
+      body: normalized.body,
+      dirPath: skillDir,
+      filePath,
+    },
+    created: true,
+  };
+}
+
+/**
+ * 新建或更新一个技能。
+ *
+ * 同 slug 就是更新 —— 「再遇到同类任务发现改进点就更新它」是产品要求的一半,
+ * 所以这里不做撞名保护,而是原地覆盖并刷新 updatedAt。返回值里的 `created`
+ * 让调用方能分辨「学会了」和「改进了」。
+ */
+export async function saveBotSkill(
+  userDataDir: string,
+  botId: string,
+  input: BotSkillWriteInput,
+): Promise<{ record: BotSkillRecord; created: boolean }> {
+  const { name, description, body, slug, updatedAt } = normalizeBotSkillWriteInput(input);
   const existing = await listBotSkills(userDataDir, botId);
   const created = !existing.some((item) => item.slug === slug);
   if (created && existing.length >= BOT_SKILL_MAX_COUNT) {
@@ -346,7 +436,6 @@ export async function saveBotSkill(
   await ensureLayout(userDataDir, botId);
   const skillDir = resolveSkillDir(userDataDir, botId, slug);
   await fs.mkdir(skillDir, { recursive: true });
-  const updatedAt = new Date(input.now ?? Date.now()).toISOString();
   const filePath = path.join(skillDir, 'SKILL.md');
   // 只写 SKILL.md,不去删同目录的 skill.md:macOS / Windows 的文件系统大小写不敏感,
   // 那条「清理」会把刚写好的这份自己删掉。读取一侧本来就优先 SKILL.md。

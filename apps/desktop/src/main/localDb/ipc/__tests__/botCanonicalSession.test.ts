@@ -55,6 +55,9 @@ const h = vi.hoisted(() => ({
   ensureDialogue: vi.fn((sessionId: string) => `/tmp/cindy-bot-test/${sessionId}`),
   searchConversations: vi.fn(),
   requestRuntimeRefresh: vi.fn(),
+  seedTemplateSkills: vi.fn(async () => ({ completedNow: true, skills: [] })),
+  ownerScopeKey: 'owner-a:1',
+  ownerBoundaryPending: false,
 }));
 
 vi.mock('node:fs/promises', () => ({ default: { rm: h.remove } }));
@@ -123,6 +126,18 @@ vi.mock('../../conversationSearch.js', () => ({
 vi.mock('../../../maker-ipc/botRuntimeEpochRefreshSignal.js', () => ({
   requestBotRuntimeEpochRefresh: h.requestRuntimeRefresh,
 }));
+vi.mock('../../../maker-ipc/botTemplateSkillSeed.js', () => ({
+  seedBotTemplateSkills: h.seedTemplateSkills,
+}));
+vi.mock('../../../appSessionState.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../appSessionState.js')>();
+  return {
+    ...actual,
+    activeOwnerScopeKey: () => h.ownerScopeKey,
+    isAppSessionBoundaryPending: () => h.ownerBoundaryPending,
+    ownerScopedUserDataPath: () => `/tmp/cindy-bot-test/${h.ownerScopeKey}`,
+  };
+});
 
 import { createBotCanonicalSession, registerBotIpc } from '../bots';
 import { tx as runWorkerTx } from '../../worker/opHandlers/tx.js';
@@ -348,6 +363,8 @@ beforeEach(async () => {
   h.closeSession.mockClear();
   h.getSession.mockReset();
   h.getSession.mockReturnValue(null);
+  h.ownerScopeKey = 'owner-a:1';
+  h.ownerBoundaryPending = false;
   h.searchConversations.mockResolvedValue({
     query: '',
     results: [],
@@ -397,6 +414,86 @@ describe('Bot canonical Session lifecycle', () => {
     expect(capabilities.skills).toEqual([]);
     expect(capabilities.toolsets).toEqual([]);
     expect(capabilities.mcpServers).toEqual([]);
+  });
+
+  it('does not project a created profile across an owner switch during the database write', async () => {
+    const runTx = h.tx!;
+    h.tx = async (name, args) => {
+      const result = await runTx(name, args);
+      h.ownerScopeKey = 'owner-b:2';
+      return result;
+    };
+
+    await expect(
+      invoke('local-db:bots:create', {
+        id: 'bot-owner-switch',
+        name: 'Owner A Bot',
+        templateId: 'cindy',
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.seedTemplateSkills).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'bot-owner-switch',
+      expect.anything(),
+    );
+  });
+
+  it('persists a preset and retries its Skill install before the first task', async () => {
+    h.seedTemplateSkills.mockRejectedValueOnce(new Error('disk busy'));
+    await invoke('local-db:bots:create', {
+      id: 'bot-dash',
+      name: 'Dash',
+      templateId: 'dash',
+      capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
+    });
+
+    const row = h.sqlite!
+      .prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-dash') as { capabilities_json: string };
+    expect(JSON.parse(row.capabilities_json)).toMatchObject({
+      templateId: 'dash',
+      toolsets: ['docs'],
+    });
+
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-dash',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    expect(h.seedTemplateSkills).toHaveBeenNthCalledWith(1, expect.any(String), 'bot-dash', 'dash');
+    expect(h.seedTemplateSkills).toHaveBeenNthCalledWith(2, expect.any(String), 'bot-dash', 'dash');
+  });
+
+  it('refreshes an existing runtime after a delayed preset Skill recovery', async () => {
+    h.seedTemplateSkills
+      .mockRejectedValueOnce(new Error('disk busy'))
+      .mockRejectedValueOnce(new Error('disk still busy'));
+    await invoke('local-db:bots:create', {
+      id: 'bot-lizi',
+      name: 'LiZi',
+      templateId: 'lizi',
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-lizi',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+
+    await invoke('local-db:bots:renew-if-due', { botId: 'bot-lizi' });
+    expect(h.requestRuntimeRefresh).toHaveBeenCalledWith(created.canonicalSessionId, 'resource');
+  });
+
+  it('rejects an unknown template before creating a profile', async () => {
+    await expect(
+      invoke('local-db:bots:create', {
+        id: 'bot-unknown-template',
+        name: 'Unknown',
+        templateId: 'designer',
+      }),
+    ).rejects.toThrow('未知的伙伴模板');
+    expect(
+      h.sqlite!.prepare('SELECT id FROM bot_profiles WHERE id = ?').get('bot-unknown-template'),
+    ).toBeUndefined();
   });
 
 

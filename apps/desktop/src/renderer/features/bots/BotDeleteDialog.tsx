@@ -17,12 +17,10 @@ export function BotDeleteDialog({
   onDeleted: (botId: string) => void;
 }) {
   const { t } = useTranslation();
-  const [confirmName, setConfirmName] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    setConfirmName('');
     setFailed(false);
   }, [bot?.id]);
 
@@ -35,7 +33,7 @@ export function BotDeleteDialog({
       await runBotLifecycleAction({
         botId: bot.id,
         action: 'delete',
-        confirmName,
+        confirmName: bot.name,
         keepTaskHistory: true,
         worktreeDisposition: 'retain',
       });
@@ -70,14 +68,6 @@ export function BotDeleteDialog({
               <X size={16} />
             </Dialog.Close>
           </div>
-          <label className="mt-4 block text-12 text-[var(--text-secondary)]">
-            {t('bots.lifecycle.confirmName', { name: bot.name })}
-            <input
-              value={confirmName}
-              onChange={(event) => setConfirmName(event.target.value)}
-              className="mt-2 h-9 w-full rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-            />
-          </label>
           {failed ? (
             <p className="mt-3 text-11 text-[var(--text-danger)]" role="alert">
               {t('bots.lifecycle.actionFailed')}
@@ -93,7 +83,7 @@ export function BotDeleteDialog({
             <button
               type="button"
               onClick={() => void deleteBot()}
-              disabled={busy || confirmName !== bot.name}
+              disabled={busy}
               className="h-9 rounded-lg bg-[var(--text-danger)] px-4 text-12 font-medium text-white disabled:opacity-50"
             >
               {busy ? t('bots.lifecycle.working') : t('bots.lifecycle.delete')}

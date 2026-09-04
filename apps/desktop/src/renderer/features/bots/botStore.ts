@@ -15,6 +15,7 @@ import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from 
 import type { BotGender } from '../../../shared/botGender';
 import type { BotHealthReport } from '../../../shared/botLifecycle';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
+import type { BotTemplatePresetId } from '../../../shared/botTemplatePreset';
 import { NEW_BOT_DEFAULT_PERMISSIONS, normalizeBotPermissions } from './botCapabilityDefaults';
 import {
   BOT_MODEL_CHAIN_MAX,
@@ -461,6 +462,8 @@ export interface CreateBotProfileInput {
   avatarColor?: string;
   skills?: string[];
   capabilities?: Partial<BotCapabilities>;
+  /** 仅用于 main 按可信内置清单安装初始 Skill；自定义伙伴不传。 */
+  templateId?: BotTemplatePresetId;
 }
 
 function readProfiles(): BotProfile[] {
@@ -998,6 +1001,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         // 性别必须一起发过去,否则落库时丢掉,界面只能回落成「用名字称呼」——
         // 阵容卡上明明写着「让她加入」,进去就变成「林律是谁」(2026-08-21 实机)。
         ...(bot.gender ? { gender: bot.gender } : {}),
+        ...(input.templateId ? { templateId: input.templateId } : {}),
       }),
     );
     if (!created) throw new Error('Bot profile create returned an invalid profile');

@@ -30,7 +30,7 @@ describe('BotDeleteDialog', () => {
       />,
     );
 
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Filo' } });
+    expect(screen.queryByRole('textbox')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.delete' }));
 
     await waitFor(() =>

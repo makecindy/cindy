@@ -6959,23 +6959,23 @@
       "createFailed": "仲間を作成できませんでした。もう一度お試しください。",
       "chooseTemplateDescription": "出発点を選び、名前とアバターを確認します。今後のテンプレートも同じ画面から作成します。",
       "templates": {
-        "programmer": {
-          "title": "ソフトウェア開発",
-          "summary": "実装、アーキテクチャ分析、デバッグ、デプロイを支援します。",
-          "defaultName": "開発パートナー",
-          "defaultDescription": "ソフトウェア開発、技術分析、問題調査、納品前の検証を担当します。"
+        "cindy": {
+          "title": "Cindy アシスタント",
+          "summary": "文章作成、整理、分析、計画、日常業務の推進。",
+          "defaultName": "Cindy",
+          "defaultDescription": "日常の仕事や生活に関する幅広い依頼に対応し、必要に応じて適任の仲間に引き継ぎます。"
         },
-        "designer": {
-          "title": "デザイン支援",
-          "summary": "UI、プレゼン資料、レイアウト、ビジュアル案を支援します。",
-          "defaultName": "デザインパートナー",
-          "defaultDescription": "UI デザイン、プレゼン資料、レイアウト、視覚表現を担当します。"
+        "dash": {
+          "title": "Dash 会社 CEO",
+          "summary": "プロダクト、財務、審美、マネジメントの意思決定。",
+          "defaultName": "Dash",
+          "defaultDescription": "方向性の判断、選択肢の比較、優先順位付け、重要業務の承認を担当します。"
         },
-        "counsel": {
-          "title": "法務支援",
-          "summary": "契約条項、コンプライアンス上のリスク、初期確認を支援します。",
-          "defaultName": "法務パートナー",
-          "defaultDescription": "契約とコンプライアンスの初期整理とリスク提示を担当します。正式な法律助言に代わるものではありません。"
+        "lizi": {
+          "title": "LiZi 技術責任者",
+          "summary": "開発、アーキテクチャ、デバッグ、リリース、技術リスク。",
+          "defaultName": "LiZi",
+          "defaultDescription": "技術的な診断、解決策の設計、実行の推進、結果の検証を担当します。"
         },
         "custom": {
           "title": "カスタム",
@@ -7130,7 +7130,6 @@
       "deleteTitle": "仲間を完全に削除",
       "deleteDescription": "{{name}} を削除します。性格・つないだチャネル・予定した実行がすべてなくなり、元に戻せません。",
       "keepHistory": "タスク履歴を通常のアーカイブ済みタスクとして残す。",
-      "confirmName": "完全削除を確認するには「{{name}}」と入力してください",
       "worktree": {
         "retain": "Worktree を保持",
         "retainDescription": "仲間との関連付けを解除し、作業ディレクトリと Git ブランチをディスクに残します。",
