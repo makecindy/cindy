@@ -271,7 +271,7 @@ function isExcludedTextNode(
       );
       if (!summary || !summary.contains(node)) return true;
     }
-    if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
+    if (element.hidden) return true;
     const cachedHidden = visibilityCache.get(element);
     if (cachedHidden !== undefined) {
       if (cachedHidden) return true;
@@ -555,7 +555,7 @@ export function FindInPageBar() {
       childList: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'open'],
+      attributeFilter: ['class', 'style', 'hidden', 'open'],
       subtree: true,
     });
     return () => {

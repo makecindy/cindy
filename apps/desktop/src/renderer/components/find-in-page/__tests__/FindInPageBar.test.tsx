@@ -75,13 +75,13 @@ describe('FindInPageBar', () => {
     vi.unstubAllGlobals();
   });
 
-  it('searches page text without matching the query input or hidden content', async () => {
+  it('searches visible page text without matching the query input or hidden content', async () => {
     const page = document.createElement('main');
     page.append('foo');
-    const hidden = document.createElement('span');
-    hidden.setAttribute('aria-hidden', 'true');
-    hidden.textContent = 'foo';
-    page.append(hidden);
+    const ariaHidden = document.createElement('span');
+    ariaHidden.setAttribute('aria-hidden', 'true');
+    ariaHidden.textContent = 'foo';
+    page.append(ariaHidden);
     const cssHidden = document.createElement('span');
     cssHidden.style.display = 'none';
     cssHidden.textContent = 'foo';
@@ -101,8 +101,8 @@ describe('FindInPageBar', () => {
     const input = await openFindBar(page);
     fireEvent.change(input, { target: { value: 'foo' } });
 
-    expect(screen.getByText('1/1')).toBeTruthy();
-    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(2);
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('foo');
     expect(getHighlight(ACTIVE_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
   });
@@ -297,10 +297,10 @@ describe('FindInPageBar', () => {
     fireEvent.change(input, { target: { value: 'foo' } });
     expect(screen.getByText('1/1')).toBeTruthy();
 
-    responsive.setAttribute('aria-hidden', 'true');
+    responsive.hidden = true;
     await waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
 
-    responsive.removeAttribute('aria-hidden');
+    responsive.hidden = false;
     await waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
   });
 
