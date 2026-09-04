@@ -141,6 +141,21 @@ describe('FindInPageBar', () => {
     ]);
   });
 
+  it('case-folds Greek final sigma in either the page or the query', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'σ ς Σ';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'σ' } });
+
+    expect(screen.getByText('1/3')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.map((range) => range.toString())).toEqual([
+      'σ',
+      'ς',
+      'Σ',
+    ]);
+  });
+
   it('matches whitespace collapsed by normal text layout', async () => {
     const page = document.createElement('main');
     page.style.whiteSpace = 'normal';
@@ -354,6 +369,55 @@ describe('FindInPageBar', () => {
     transparent.style.opacity = '';
     fireEvent(window, new Event('resize'));
     expect(screen.getByText('1/2')).toBeTruthy();
+  });
+
+  it('excludes clipping-based screen-reader-only text', async () => {
+    const page = document.createElement('main');
+    const visible = document.createElement('span');
+    visible.textContent = 'foo';
+    const srOnly = document.createElement('span');
+    srOnly.textContent = 'foo';
+    Object.assign(srOnly.style, {
+      position: 'absolute',
+      width: '1px',
+      height: '1px',
+      overflow: 'hidden',
+      clip: 'rect(0px, 0px, 0px, 0px)',
+      whiteSpace: 'nowrap',
+    });
+    page.append(visible, srOnly);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+  });
+
+  it('cancels a delayed scroll when the bar closes', async () => {
+    let nextFrame = 1;
+    const pendingFrames = new Map<number, FrameRequestCallback>();
+    const cancelAnimationFrameMock = vi.fn((frame: number) => {
+      pendingFrames.delete(frame);
+    });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      const frame = nextFrame;
+      nextFrame += 1;
+      pendingFrames.set(frame, callback);
+      return frame;
+    });
+    vi.stubGlobal('cancelAnimationFrame', cancelAnimationFrameMock);
+
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+
+    expect(pendingFrames.size).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'findInPage.close' }));
+
+    expect(cancelAnimationFrameMock).toHaveBeenCalledTimes(1);
+    expect(pendingFrames.size).toBe(0);
   });
 
   it('does not refresh responsive visibility while composing with IME', async () => {

@@ -85,14 +85,14 @@ function findMatchOffsets(
   }
 
   const searchableQuery = collapseWhitespace ? query.replace(/\s+/g, ' ') : query;
-  const normalizedQuery = searchableQuery.toLocaleLowerCase();
+  const normalizedQuery = unicodeCaseFold(searchableQuery);
   const offsets: Array<[number, number]> = [];
 
   // Keep the common case on a linear `indexOf` path. Some Unicode casing rules
   // depend on surrounding characters (notably Greek sigma), or expand a code
   // point when lower-cased. Those cases fall through to the candidate-by-
   // candidate comparison below so source offsets remain exact.
-  const normalizedValue = getLinearLowercase(searchableValue);
+  const normalizedValue = getLinearCaseFold(searchableValue);
   if (normalizedValue && normalizedQuery.length === searchableQuery.length) {
     let start = 0;
     while (start <= normalizedValue.length - normalizedQuery.length) {
@@ -105,13 +105,11 @@ function findMatchOffsets(
     return offsets;
   }
 
-  // Lower-case each candidate independently instead of normalizing the whole
-  // text node first. Whole-string lower-casing is context-sensitive for some
-  // scripts (for example Greek final sigma), which can make a standalone
-  // query fail to match the same character in surrounding text.
+  // Compare each candidate independently when casing changes length or depends
+  // on context. This preserves exact source offsets for the non-linear cases.
   for (let start = 0; start <= searchableValue.length - searchableQuery.length; start += 1) {
     if (
-      searchableValue.slice(start, start + searchableQuery.length).toLocaleLowerCase() ===
+      unicodeCaseFold(searchableValue.slice(start, start + searchableQuery.length)) ===
       normalizedQuery
     ) {
       const end = start + searchableQuery.length - 1;
@@ -122,13 +120,20 @@ function findMatchOffsets(
   return offsets;
 }
 
-function getLinearLowercase(value: string): string | null {
-  const normalizedValue = value.toLocaleLowerCase();
+function unicodeCaseFold(value: string): string {
+  // JavaScript has no native Unicode case-folding API. Lower-casing followed
+  // by the canonical final-sigma mapping covers the context-sensitive Greek
+  // form while preserving the source string's UTF-16 offsets.
+  return value.toLocaleLowerCase().replace(/\u03c2/g, '\u03c3');
+}
+
+function getLinearCaseFold(value: string): string | null {
+  const normalizedValue = unicodeCaseFold(value);
   if (normalizedValue.length !== value.length) return null;
 
   let normalizedOffset = 0;
   for (const character of value) {
-    const normalizedCharacter = character.toLocaleLowerCase();
+    const normalizedCharacter = unicodeCaseFold(character);
     if (
       normalizedValue.slice(normalizedOffset, normalizedOffset + normalizedCharacter.length) !==
       normalizedCharacter
@@ -164,6 +169,21 @@ function getCodePointAt(value: string, index: number): string {
     return value.slice(index, index + 2);
   }
   return value[index];
+}
+
+function isVisuallyClipped(style: CSSStyleDeclaration): boolean {
+  const clip = style.clip.trim().toLowerCase();
+  const clipPath = style.clipPath.trim().toLowerCase();
+  const hasZeroRectClip = /^rect\(\s*0(?:px)?[ ,]+0(?:px)?[ ,]+0(?:px)?[ ,]+0(?:px)?\s*\)$/.test(
+    clip,
+  );
+  if (hasZeroRectClip) return true;
+  if (clipPath === 'none' || clipPath === '') return false;
+
+  const width = Number.parseFloat(style.width);
+  const height = Number.parseFloat(style.height);
+  const isTiny = Number.isFinite(width) && Number.isFinite(height) && width <= 1 && height <= 1;
+  return isTiny && (style.position === 'absolute' || style.position === 'fixed');
 }
 
 function isCjkCharacter(value: string): boolean {
@@ -218,7 +238,8 @@ function isExcludedTextNode(
         style.display === 'none' ||
         style.visibility === 'hidden' ||
         style.visibility === 'collapse' ||
-        style.opacity === '0';
+        style.opacity === '0' ||
+        isVisuallyClipped(style);
       visibilityCache.set(element, hiddenByStyle);
       if (hiddenByStyle) return true;
     }
@@ -341,6 +362,7 @@ export function FindInPageBar() {
   const inputRef = useRef<HTMLInputElement>(null);
   const rangesRef = useRef<Range[]>([]);
   const activeRef = useRef(0);
+  const pendingScrollFrameRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
   const compositionCommitRef = useRef<string | null>(null);
 
@@ -352,17 +374,32 @@ export function FindInPageBar() {
     clearFindHighlights();
   }, []);
 
-  const scrollToMatch = useCallback((range: Range | undefined) => {
-    if (!range) return;
-    const element = range.startContainer.parentElement;
-    if (!element || isInsideRoot(element, rootRef.current)) return;
-    scrollRangeIntoView(range);
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => {
-        if (range.startContainer.isConnected) scrollRangeIntoView(range);
-      });
+  const cancelPendingScroll = useCallback(() => {
+    const frame = pendingScrollFrameRef.current;
+    pendingScrollFrameRef.current = null;
+    if (frame !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(frame);
     }
   }, []);
+
+  const scrollToMatch = useCallback(
+    (range: Range | undefined) => {
+      cancelPendingScroll();
+      if (!range) return;
+      const element = range.startContainer.parentElement;
+      if (!element || isInsideRoot(element, rootRef.current)) return;
+      scrollRangeIntoView(range);
+      if (typeof requestAnimationFrame === 'function') {
+        pendingScrollFrameRef.current = requestAnimationFrame(() => {
+          pendingScrollFrameRef.current = null;
+          if (range.startContainer.isConnected && rangesRef.current[activeRef.current] === range) {
+            scrollRangeIntoView(range);
+          }
+        });
+      }
+    },
+    [cancelPendingScroll],
+  );
 
   const applySearch = useCallback(
     (query: string, requestedActive = 0, shouldScroll = false) => {
@@ -400,12 +437,13 @@ export function FindInPageBar() {
   );
 
   const close = useCallback(() => {
+    cancelPendingScroll();
     setOpen(false);
     setText('');
     isComposingRef.current = false;
     compositionCommitRef.current = null;
     clearSearchResults();
-  }, [clearSearchResults]);
+  }, [cancelPendingScroll, clearSearchResults]);
 
   useEffect(() => () => clearFindHighlights(), []);
 
