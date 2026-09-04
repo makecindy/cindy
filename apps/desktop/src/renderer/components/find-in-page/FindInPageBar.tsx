@@ -187,46 +187,44 @@ function getLineClamp(style: CSSStyleDeclaration): number | null {
   return Number.isFinite(lineClamp) && lineClamp > 0 ? lineClamp : null;
 }
 
-function getClampedAncestor(
-  element: HTMLElement | null,
-  clampCache: WeakMap<HTMLElement, HTMLElement | null>,
-): HTMLElement | null {
-  const path: HTMLElement[] = [];
-  let current = element;
-  let clampedAncestor: HTMLElement | null = null;
-  while (current) {
-    if (clampCache.has(current)) {
-      clampedAncestor = clampCache.get(current) ?? null;
-      break;
-    }
-    path.push(current);
-    if (getLineClamp(window.getComputedStyle(current)) !== null) {
-      clampedAncestor = current;
-      break;
-    }
-    current = current.parentElement;
-  }
-  for (const pathElement of path) clampCache.set(pathElement, clampedAncestor);
-  return clampedAncestor;
+function isOverflowClipping(style: CSSStyleDeclaration): boolean {
+  return [style.overflow, style.overflowX, style.overflowY].some((value) =>
+    value
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .some((overflow) => overflow === 'hidden' || overflow === 'clip'),
+  );
 }
 
-function isRangeVisibleInClampedAncestor(
-  range: Range,
-  clampedAncestor: HTMLElement | null,
-): boolean {
-  if (!clampedAncestor) return true;
+function isRangeVisibleWithinAncestors(range: Range, element: HTMLElement | null): boolean {
+  const clippingAncestors: HTMLElement[] = [];
+  let ancestor = element;
+  while (ancestor) {
+    const style = window.getComputedStyle(ancestor);
+    if (isOverflowClipping(style) || getLineClamp(style) !== null) {
+      clippingAncestors.push(ancestor);
+    }
+    ancestor = ancestor.parentElement;
+  }
+  if (clippingAncestors.length === 0) return true;
+
   const rects =
     typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
   if (rects.length === 0) return true;
 
-  const clipRect = clampedAncestor.getBoundingClientRect();
-  return rects.some(
-    (rect) =>
-      rect.bottom > clipRect.top &&
-      rect.top < clipRect.bottom &&
-      rect.right > clipRect.left &&
-      rect.left < clipRect.right,
-  );
+  for (const clippingAncestor of clippingAncestors) {
+    const clipRect = clippingAncestor.getBoundingClientRect();
+    const intersectsClip = rects.some(
+      (rect) =>
+        rect.bottom > clipRect.top &&
+        rect.top < clipRect.bottom &&
+        rect.right > clipRect.left &&
+        rect.left < clipRect.right,
+    );
+    if (!intersectsClip) return false;
+  }
+  return true;
 }
 
 function isCjkCharacter(value: string): boolean {
@@ -296,7 +294,6 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
 
   const matches: TextMatch[] = [];
   const visibilityCache = new WeakMap<HTMLElement, boolean>();
-  const clampCache = new WeakMap<HTMLElement, HTMLElement | null>();
   const walker = document.createTreeWalker(document.body, 4);
   let node = walker.nextNode();
   while (node) {
@@ -305,12 +302,11 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
       const whiteSpace = textNode.parentElement
         ? window.getComputedStyle(textNode.parentElement).whiteSpace || 'normal'
         : 'normal';
-      const clampedAncestor = getClampedAncestor(textNode.parentElement, clampCache);
       for (const [start, end] of findMatchOffsets(textNode.data, query, whiteSpace)) {
         const range = document.createRange();
         range.setStart(textNode, start);
         range.setEnd(textNode, end);
-        if (isRangeVisibleInClampedAncestor(range, clampedAncestor)) {
+        if (isRangeVisibleWithinAncestors(range, textNode.parentElement)) {
           matches.push({ range });
         }
       }
@@ -524,7 +520,14 @@ export function FindInPageBar() {
       if (
         !(target instanceof Node) ||
         isInsideRoot(target, rootRef.current) ||
-        (propertyName !== 'opacity' && propertyName !== 'visibility')
+        ![
+          'opacity',
+          'visibility',
+          'width',
+          'height',
+          'max-width',
+          'max-height',
+        ].includes(propertyName)
       ) {
         return;
       }

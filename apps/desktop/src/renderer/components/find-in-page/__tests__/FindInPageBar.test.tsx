@@ -593,6 +593,66 @@ describe('FindInPageBar', () => {
     }
   });
 
+  it('excludes ranges fully clipped by an overflow-hidden ancestor', async () => {
+    const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+    const elementRectDescriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'getBoundingClientRect',
+    );
+    const page = document.createElement('main');
+    const visible = document.createElement('span');
+    visible.textContent = 'foo';
+    const clippedContainer = document.createElement('div');
+    clippedContainer.style.overflow = 'hidden';
+    const clipped = document.createElement('span');
+    clipped.textContent = 'foo';
+    clippedContainer.append(clipped);
+    page.append(visible, clippedContainer);
+    let clipBottom = 10;
+
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value(this: Range) {
+        const parent = this.startContainer.parentElement;
+        const top = parent === clipped ? 20 : 0;
+        return [{ top, bottom: top + 10, left: 0, right: 100 }];
+      },
+    });
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value(this: Element) {
+        if (this === clippedContainer) return { top: 0, bottom: clipBottom, left: 0, right: 100 };
+        return { top: 0, bottom: 100, left: 0, right: 100 };
+      },
+    });
+
+    try {
+      const input = await openFindBar(page);
+      fireEvent.change(input, { target: { value: 'foo' } });
+
+      expect(screen.getByText('1/1')).toBeTruthy();
+      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('foo');
+
+      clipBottom = 100;
+      const transitionEnd = new Event('transitionend', { bubbles: true });
+      Object.defineProperty(transitionEnd, 'propertyName', { value: 'height' });
+      clippedContainer.dispatchEvent(transitionEnd);
+      await waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
+    } finally {
+      if (rangeRectDescriptor) {
+        Object.defineProperty(Range.prototype, 'getClientRects', rangeRectDescriptor);
+      } else {
+        delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
+      }
+      if (elementRectDescriptor) {
+        Object.defineProperty(Element.prototype, 'getBoundingClientRect', elementRectDescriptor);
+      } else {
+        delete (Element.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+      }
+    }
+  });
+
   it('cancels a delayed scroll when the bar closes', async () => {
     let nextFrame = 1;
     const pendingFrames = new Map<number, FrameRequestCallback>();
