@@ -175,8 +175,10 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
     历史——`docs/design-previews/**/evidence/` 下另有 19 张同类历史资产，同样按「不追溯」
     处理；要不要连带收口是独立议题；
   - 图片放 PR 时的操作说明：GitHub 的图片附件上传端点依赖网页会话，`gh` CLI 与 REST API
-    都传不了图，需由人在 PR 评论框里拖拽上传。Agent 应把图落到工作区（gitignore 覆盖的
-    临时目录）并在报告里给出路径，由人完成上传；
+    都传不了图（GraphQL 亦无公开 mutation），需由人在 PR 评论框里拖拽上传。Agent 应把图
+    落到工作区（gitignore 覆盖的临时目录）并在报告里给出路径，由人完成上传；上传后若图片
+    出现在 PR 内某条评论里，把**该评论的链接**回写进 `design-evidence` 的文本索引，
+    即成为稳定入口（issue comment URL 长期有效，附件 URL 随 CDN 变动）；
 - 本合同与 `DESIGN.md §10` 双模式交付门槛的关系：实现双模式是硬性要求；实机目检按该门槛
   执行 best-effort 并如实申报，不得把「复用了 themed 样式」上报为「双模式已验证」。
 

@@ -2,6 +2,12 @@
 
 - 分支：`ds/4-button-input-primitives`
 - 基点 SHA（开工时 `origin/main`）：`c4033acd07910b9b3c993772589dcda877188fb1`
+- 采集 commit（产生下表色值与全部截图的代码状态）：`0458af96d`（工作分支
+  `feat(design-system): DS-4 Button 与 Input 标准组件`，2026-09-04 18:44）。
+  该提交随分支 squash 合入 #3920（`ede0f7739`）。两个 SHA 之间决定按钮/输入颜色的
+  `themes/` 与 `components/ui/`（除 `input.tsx` 的调用方 style 合并次序外，采集后改的、
+  与色值无关）完全一致——检出任一者复核均可复现下表。基点 `c4033acd` 只是开工坐标，
+  **不含** DS-4 改动，不能用于复核。
 - 平台：Desktop
 - 实机沙箱：`CindyGlobal-dev2-ds-4-button-input-fcdc92`，`node scripts/desktop-whoami.mjs` 报 MATCH 本 worktree
 - 主题：CINDY Light 与 CINDY Dark（均为实机采集）
@@ -10,8 +16,10 @@
 > 本文件是可复核的**文本索引**。
 >
 > DS-4 的实机截图当时是在隔离沙箱里直接给设计师看的实时画面，批准记录见下方「有意可见差异」
-> 各条的日期。它们曾随 #3920 入仓，已由本 PR 从 tip 移除（历史不重写，见 §6）。因此本目录
-> **不再提供图片**；下表的 computed style 色值即证据本体，同环境重跑探针可复核。
+> 各条的日期。它们曾随 #3920 入仓，已由本 PR 从 tip 移除（历史不重写，见 §6）。
+> 12 张图的当前入口：PR #3931 证据评论（[issuecomment-5544942109](https://github.com/makecindy/cindy/pull/3931#issuecomment-5544942109)），
+> 含全部附件链接与逐图说明；原始字节仍可从 #3920（`ede0f7739`）的 Git 历史恢复。
+> 下表的 computed style 色值即证据本体，同环境重跑探针可复核。
 
 ## Level 2 实机逐格
 
@@ -35,21 +43,26 @@
 因此没有实机格；它由 Level 1 的 11 主题状态梯守卫覆盖。`cta` 的实机格需要 XD 资产模块
 处于可购买态，本次沙箱未构造出该状态。
 
-## 当时看过的图（不入仓，仅登记存在）
+## 当时看过的图（不入仓，附件入口见证据评论）
 
-| 图 | 内容 | 去向 |
-| --- | --- | --- |
-| 实机 · 设置 → 模型供应商 | 搜索框为 `ui/input`；Anthropic「去授权」为 secondary | 不入仓 |
-| 实机 · 添加供应商向导 | 授权 / 改用 API Key / 取消 三颗 secondary | 不入仓 |
-| G5 同值性对照 | 现状灰底 / 规范白底 secondary / 规范灰底 primary，Light 与 Dark 并排 | 不入仓 |
-| 逐格特写 × 8 | CINDY Light / Dark 各 rest / hover / pressed / disabled+hover | 不入仓；数值见上表 |
+12 张图的附件链接、采集说明与逐图对照统一放在 PR #3931 的证据评论
+（[issuecomment-5544942109](https://github.com/makecindy/cindy/pull/3931#issuecomment-5544942109)），
+下表只登记每张图的用途：
+
+| 图 | 内容 |
+| --- | --- |
+| 实机 · 设置 → 模型供应商 | 搜索框为 `ui/input`；Anthropic「去授权」为 secondary |
+| 实机 · 添加供应商向导 | 授权 / 改用 API Key / 取消 三颗 secondary |
+| G5 同值性对照 | 现状灰底 / 规范白底 secondary / 规范灰底 primary，Light 与 Dark 并排 |
+| 逐格特写 × 8 | CINDY Light / Dark 各 rest / hover / pressed / disabled+hover；数值见上表 |
 
 另有一张「设置 → 通用」实机图，含账号邮箱与组织信息，**从未入仓也不外发**——本仓公开，
 个人数据不进 Git 历史。它当时的作用是展示退出登录 / 登录更多账号两颗 secondary，
 已由上表第一、二项覆盖同一变体。
 
-初版还画过一张默认主题 token 对照图，其 hover / pressed 色号按**修复前**的绑定绘制，
-已不代表现行实现，一并不入仓；现行值以上面的实机测量表为准。
+初版还画过一张默认主题 token 对照图（`ds4-button-input-state-matrix.png`，绘制的、
+非实机），其 hover / pressed 色号按**修复前**的绑定绘制，已不代表现行实现；为完整性
+一并放进证据评论，但**不作为色值证据**，现行值以上面的实机测量表为准。
 
 ## Level 1 静态守卫
 
