@@ -175,6 +175,46 @@ describe('FindInPageBar', () => {
     expect(screen.getByText('1/1')).toBeTruthy();
   });
 
+  it('refreshes matches when a single-select option changes', async () => {
+    const page = document.createElement('main');
+    const select = document.createElement('select');
+    const first = document.createElement('option');
+    first.value = 'first';
+    first.textContent = 'first';
+    const second = document.createElement('option');
+    second.value = 'second';
+    second.textContent = 'second';
+    select.append(first, second);
+    page.append(select);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'second' } });
+    expect(screen.getByText('0/0')).toBeTruthy();
+
+    select.value = 'second';
+    fireEvent.change(select);
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('refreshes matches when responsive visibility changes on resize', async () => {
+    const page = document.createElement('main');
+    const responsive = document.createElement('span');
+    responsive.textContent = 'foo';
+    page.append(responsive);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    responsive.style.display = 'none';
+    fireEvent(window, new Event('resize'));
+    expect(screen.getByText('0/0')).toBeTruthy();
+
+    responsive.style.display = '';
+    fireEvent(window, new Event('resize'));
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
   it('reopens the bar and selects the whole query', async () => {
     const input = await openFindBar();
     fireEvent.change(input, { target: { value: 'foobar' } });

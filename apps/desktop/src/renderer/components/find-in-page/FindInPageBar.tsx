@@ -218,6 +218,25 @@ export function FindInPageBar() {
 
   useEffect(() => () => clearFindHighlights(), []);
 
+  useEffect(() => {
+    if (!open || !text) return;
+
+    const refreshSearch = () => {
+      applySearch(text, activeRef.current);
+    };
+    const handleResize = () => refreshSearch();
+    const handleChange = (event: Event) => {
+      if (event.target instanceof HTMLSelectElement) refreshSearch();
+    };
+
+    window.addEventListener('resize', handleResize);
+    document.addEventListener('change', handleChange, true);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      document.removeEventListener('change', handleChange, true);
+    };
+  }, [applySearch, open, text]);
+
   // Global find-in-page shortcut (registry 默认 Ctrl/Cmd+F, 用户可改绑) →
   // open + focus. Capture phase means editable page controls do not swallow
   // the chord before the global bar sees it.
