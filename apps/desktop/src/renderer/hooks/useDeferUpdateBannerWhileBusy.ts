@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import {
   deferUpdateBannerBecauseBusy,
   getUpdateBannerDismissState,
+  isUpdateBannerPinnedFor,
   markUpdateBannerAutoShown,
   useUpdateBannerDismiss,
 } from '@/hooks/useUpdateBannerDismiss';
@@ -13,7 +14,7 @@ import {
  * 判定复用「立即重启」二次确认的同一条 IPC(anyActivityBlockingRelaunch),renderer
  * 不枚举活动来源。有任务(或探针失败,fail closed)→ 只留头像行火焰入口;全部停下
  * 后再弹出。系统自己弹出的,后来又 busy 同样收回去;用户点 X 关掉的不自动恢复;
- * 用户点火焰唤回的钉住,busy 不再藏。
+ * 用户点火焰唤回的钉住当前这一版,busy 不再藏。待装版本变了,钉住作废并重新探针。
  *
  * 这条 IPC 是为点击「立即重启」设计的一次性探针(含 PI 目录同步扫描),不是廉价订阅。
  * 要知道「任务何时停 / 后来又没停」必须再问同一条定义,但不能把它当成 2s 热循环,
@@ -68,7 +69,7 @@ export function useDeferUpdateBannerWhileBusy(
     }
 
     const snap = getUpdateBannerDismissState();
-    if (snap.reason === 'user' || snap.pinnedByUser) return;
+    if (snap.reason === 'user' || isUpdateBannerPinnedFor(versionOrNull)) return;
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -86,7 +87,7 @@ export function useDeferUpdateBannerWhileBusy(
       // 探针落地时必须读模块现态,不能读 render 快照:restore / dismiss 可能已经
       // 发生、但这次 render 还没跟上。
       const latest = getUpdateBannerDismissState();
-      if (latest.reason === 'user' || latest.pinnedByUser) return;
+      if (latest.reason === 'user' || isUpdateBannerPinnedFor(versionOrNull)) return;
 
       if (busy) {
         deferUpdateBannerBecauseBusy(status, versionOrNull);

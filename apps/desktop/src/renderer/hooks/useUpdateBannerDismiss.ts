@@ -20,7 +20,8 @@ import { useSyncExternalStore } from 'react';
  *   时,不会因为「版本和之前 dismiss 时一样」而误 restore。
  * - **decidedVersion**:已经对某个待装版本做过「弹出 / 让路」决定。用来避免
  *   remount 时再闪一次探针空窗。系统自己弹出的横幅,后来又 busy 时仍会收回去。
- * - **pinnedByUser**:用户点火焰把横幅唤回来。这是明确要看,busy 探针不要再藏。
+ * - **pinnedByUser**:用户点火焰把横幅唤回来。只对 decidedVersion 那一版生效:
+ *   这是明确要看,busy 探针不要再藏。待装版本变了就把钉住作废,重新探针。
  * - 模块级 singleton store(useSyncExternalStore),让 UpdateBanner 与
  *   UserInfoSection 无需 context / prop-drill 就能共享同一状态。
  */
@@ -104,7 +105,7 @@ export function dismissUpdateBanner(currentStatus: string, currentVersion: strin
  */
 export function deferUpdateBannerBecauseBusy(currentStatus: string, currentVersion: string | null) {
   if (state.dismissed && state.reason === 'user') return;
-  if (state.pinnedByUser) return;
+  if (isUpdateBannerPinnedFor(currentVersion)) return;
   if (sameBusyDefer(currentStatus, currentVersion)) return;
   state = {
     dismissed: true,
@@ -119,7 +120,7 @@ export function deferUpdateBannerBecauseBusy(currentStatus: string, currentVersi
 
 export function markUpdateBannerAutoShown(currentVersion: string | null) {
   if (state.dismissed && state.reason === 'user') return;
-  if (state.pinnedByUser) return;
+  if (isUpdateBannerPinnedFor(currentVersion)) return;
   const decidedVersion = updateBannerDecisionVersion(currentVersion);
   if (
     !state.dismissed
@@ -159,6 +160,11 @@ export function clearUpdateBannerAutoDecision() {
 
 export function isUpdateBannerDecidedFor(currentVersion: string | null): boolean {
   return state.decidedVersion === updateBannerDecisionVersion(currentVersion);
+}
+
+/** 用户钉住的是当前这个待装版本,不是上一版留下的钉。 */
+export function isUpdateBannerPinnedFor(currentVersion: string | null): boolean {
+  return state.pinnedByUser && isUpdateBannerDecidedFor(currentVersion);
 }
 
 /**
