@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const sessionState = vi.hoisted(() => ({
@@ -8,12 +12,19 @@ const sessionState = vi.hoisted(() => ({
 // providerSecretStore 顶层 `import { app, safeStorage } from 'electron'` —— 这些测试
 // 注入自己的 SecretStorageIo,不会走默认 electronSecretIo,因此 electron mock 只为
 // 让 import 链在 node 测试环境下可加载(app.getPath 给个 tmp 目录即可)。
+// 严格快照用例走真实 fs + safeStorage 分支,通过 electronState 切换目录与解密结果。
+const electronState = vi.hoisted(() => ({
+  userData: '/tmp/xdt-provider-secret-test',
+  encryptionAvailable: false,
+  decryptString: (): string => '',
+}));
+
 vi.mock('electron', () => ({
-  app: { getPath: () => '/tmp/xdt-provider-secret-test' },
+  app: { getPath: () => electronState.userData },
   safeStorage: {
-    isEncryptionAvailable: () => false,
+    isEncryptionAvailable: () => electronState.encryptionAvailable,
     encryptString: () => Buffer.from(''),
-    decryptString: () => '',
+    decryptString: () => electronState.decryptString(),
   },
 }));
 
@@ -34,10 +45,13 @@ vi.mock('../../appSessionState', () => ({
 
 import {
   createProviderSecretStore,
+  readCustomProviderHeadersForMutation,
   readCustomProviderKeyForMutation,
   readGhostSecretStrict,
   readGhostSecretTailFromIo,
+  resolveOwnerScopedSecretStorageKey,
   setProviderSecretsClearedListener,
+  UNRECOVERABLE_PROVIDER_CREDENTIAL,
   type SecretStorageIo,
 } from '../providerSecretStore';
 import {
@@ -181,6 +195,61 @@ describe('providerSecrets registry', () => {
     } finally {
       sessionState.mode = previousMode;
       sessionState.dataOwnerId = previousOwnerId;
+    }
+  });
+
+  it('strict custom-provider snapshot reports ciphertext that exists but cannot be decrypted', () => {
+    const previousMode = sessionState.mode;
+    const previousOwnerId = sessionState.dataOwnerId;
+    const previousElectron = { ...electronState };
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-provider-secret-'));
+    const ownerId = 'undecryptable-owner';
+    const providerId = 'undecryptable-provider';
+    sessionState.mode = 'cloud';
+    sessionState.dataOwnerId = ownerId;
+    electronState.userData = userData;
+    electronState.encryptionAvailable = true;
+    electronState.decryptString = () => {
+      throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.');
+    };
+    try {
+      const secretDir = path.join(userData, 'safe-storage');
+      fs.mkdirSync(secretDir, { recursive: true });
+      const garbage = Buffer.from('not-a-safe-storage-blob').toString('base64');
+      for (const logicalKey of [
+        customProviderSecretStorageKey(providerId, 'codex'),
+        customProviderHeaderStorageKey(providerId, 'codex'),
+      ]) {
+        const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+        if (!scopedKey) throw new Error('test owner session is not scoped');
+        fs.writeFileSync(path.join(secretDir, `${scopedKey}.enc`), garbage, 'utf-8');
+      }
+
+      // 密文存在但解不开:第三态,而不是抛错(#3821)。
+      expect(readCustomProviderKeyForMutation(providerId, 'codex')).toBe(
+        UNRECOVERABLE_PROVIDER_CREDENTIAL,
+      );
+      expect(readCustomProviderHeadersForMutation(providerId, 'codex')).toBe(
+        UNRECOVERABLE_PROVIDER_CREDENTIAL,
+      );
+      // 解得开但不是合法头 map:同样是内容层面的永久损坏。
+      electronState.decryptString = () => '["not","an","object"]';
+      expect(readCustomProviderHeadersForMutation(providerId, 'codex')).toBe(
+        UNRECOVERABLE_PROVIDER_CREDENTIAL,
+      );
+      // 文件在、但 safeStorage 暂时不可用:仍然抛错,不能当成可覆盖。
+      electronState.encryptionAvailable = false;
+      expect(() => readCustomProviderKeyForMutation(providerId, 'codex')).toThrow(
+        /encryption is unavailable/,
+      );
+      expect(() => readCustomProviderHeadersForMutation(providerId, 'codex')).toThrow(
+        /encryption is unavailable/,
+      );
+    } finally {
+      sessionState.mode = previousMode;
+      sessionState.dataOwnerId = previousOwnerId;
+      Object.assign(electronState, previousElectron);
+      fs.rmSync(userData, { recursive: true, force: true });
     }
   });
 

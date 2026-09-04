@@ -5328,7 +5328,7 @@ function HandoffSourcePill({
     <div
       className={cn(
         'flex h-10 w-full items-center rounded-[12px] border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
-        'text-13 leading-none text-[#595959]',
+        'text-13 leading-none text-muted-foreground',
       )}
     >
       <button
@@ -5350,7 +5350,7 @@ function HandoffSourcePill({
         aria-label={t('ccAgent.handoff.pill.dismissAria')}
         className={cn(
           'mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px]',
-          'text-[#595959] transition-colors hover:bg-[var(--cmd-palette-bg)] hover:text-foreground',
+          'text-muted-foreground transition-colors hover:bg-[var(--cmd-palette-bg)] hover:text-foreground',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground',
         )}
       >
@@ -5752,7 +5752,7 @@ function ContextCapacityRing({
   const dashOffset = circumference - (circumference * pct) / 100;
 
   // Color thresholds per spec
-  const fillColor = pct > 90 ? '#EF4444' : pct > 70 ? '#F59E0B' : 'var(--msg-tool-card-chevron)';
+  const fillColor = pct > 90 ? 'var(--error-flat)' : pct > 70 ? 'var(--warning-fg)' : 'var(--msg-tool-card-chevron)';
 
   const usedTokens = Math.min(contextTokens, contextWindow || Infinity);
   const tooltipText =

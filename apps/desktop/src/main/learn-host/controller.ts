@@ -364,7 +364,7 @@ export class LearnController {
       ...(dataOwnerId ? { dataOwnerId } : {}),
       input,
       ...(req.hubSlug ? { hubSlug: req.hubSlug } : {}),
-      ...(req.hubCatalogScope ? { hubCatalogScope: req.hubCatalogScope } : {}),
+      ...(req.sourceKind === 'hub' ? { hubCatalogScope: req.hubCatalogScope ?? 'market' } : {}),
       ...(req.originSessionId ? { originSessionId: req.originSessionId } : {}),
       usedSessionEvidence: false,
       createdAt: this.now(),
@@ -397,7 +397,7 @@ export class LearnController {
     let referenceFilesOmissions: Array<{ path: string; reason: string }> | undefined;
     let evidenceQuery = run.input;
     if (run.sourceKind === 'hub' && run.hubSlug && this.deps.fetchHubSkill) {
-      const hub = await this.deps.fetchHubSkill(run.hubSlug, run.hubCatalogScope);
+      const hub = await this.deps.fetchHubSkill(run.hubSlug, run.hubCatalogScope ?? 'market');
       if (!hub) throw new LearnError('NOT_FOUND', `hub skill ${run.hubSlug} not found`);
       // fetch 的网络 await 期间可能被 cancel(cleanup 已删 staging):此处不设门
       // 的话 writeReferenceFiles 会把 _reference/ 整个重建成孤儿目录(自查)。
@@ -520,7 +520,7 @@ export class LearnController {
 
     const cleanMessage =
       run.sourceKind === 'hub'
-        ? `/learn hub:${run.hubCatalogScope ? `${run.hubCatalogScope}:` : ''}${run.hubSlug}`
+        ? `/learn hub:${run.hubCatalogScope ?? 'market'}:${run.hubSlug}`
         : run.sourceKind === 'session'
           ? '/learn (distill current conversation)'
           : `/learn ${run.input}`;
@@ -964,7 +964,7 @@ export class LearnController {
       const provenance: LearnProvenance = {
         method: 'learn',
         sourceKind: run.sourceKind,
-        ...(run.hubSlug ? { sourceRef: `${run.hubCatalogScope ? `${run.hubCatalogScope}:` : ''}${run.hubSlug}` } : {}),
+        ...(run.hubSlug ? { sourceRef: `${run.hubCatalogScope ?? 'market'}:${run.hubSlug}` } : {}),
         usedSessionEvidence: run.usedSessionEvidence,
         personal: run.usedSessionEvidence, // 硬规则:含 session 证据 ⇒ personal,不可配置
         learnedAt: Math.floor(this.now() / 1000),

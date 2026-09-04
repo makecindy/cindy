@@ -104,10 +104,16 @@ export function VisibilityEditorDialog({
     setSaving(true);
     try {
       const visibility = tier === 'team' ? 'shared' as const : tier;
+      const previousCatalogScope = currentTier === 'public'
+        ? 'market' as const
+        : currentTier === 'team'
+          ? 'team' as const
+          : undefined;
       // 归属由服务端根据当前 membership 固定，客户端只修改可见性。
       const visRes = await window.electronAPI.skillhub.setPublishedVisibility({
         name: skillName,
         visibility,
+        previousCatalogScope,
       });
       if (!visRes.success) {
         toast.error(marketActionErrorMessage(visRes.error, visRes.errorCode));

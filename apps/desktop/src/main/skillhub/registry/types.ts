@@ -30,6 +30,8 @@ export interface StoredInstall {
   autoSynced?: boolean;
   /** Catalog used for detail/download; absent on older registry entries. */
   catalogScope?: SkillhubCatalogScope;
+  /** This entry has resolved the pre-Cindy-Hub missing-scope migration. */
+  catalogScopeMigrated?: true;
   /** /learn 蒸馏产物的溯源(仅 origin='learned' 时存在)。
    *  provenance.personal=true ⇒ 含本地会话衍生内容。当前不拦截发布 ——
    *  作为将来「发布前泛化」流程(另行独立 PR)的判定依据保留。 */
@@ -38,8 +40,6 @@ export interface StoredInstall {
 
 export interface StoredManifest {
   schemaVersion: 1;
-  /** catalogScope 缺省值迁移标记。旧客户端忽略并在 spread 写回时保留。 */
-  catalogScopeMigrated?: true;
   /** 自校验:必须等于文件名(去 .json)。不一致即抛 RegistryCorruptedError。 */
   skillName: string;
   /** key = path.normalize 后的绝对 installPath。 */

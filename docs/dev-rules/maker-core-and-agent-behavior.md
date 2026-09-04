@@ -37,7 +37,10 @@ controller／进程内；重启后没有 live handle 时不凭估算换窗。Orc
 fail closed。compact 失败触发的换窗同样 fail closed，不得自动 replay 已有副作用的用户消息。
 PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
 timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host
-自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。手动压缩入口不受此规则影响，
+自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。Codex 订阅远端压缩若因
+`invalid_encrypted_content` 硬失败（`Error running remote compact task`），视为官方 compact
+确定性失败，走同一套 host-controlled rollover；单独的 `invalid_encrypted_content`（HTTP 静默剥
+推理密文范围）不得当成换窗。手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
 Cindy 保底压缩是**一套**流程，不是剥图 / 换窗两套功能。装得进当前约束就不动；

@@ -4,7 +4,7 @@
  * 三项设置:
  *  1. 「保持电脑唤醒」(keepAwake):main 用 powerSaveBlocker 防系统休眠、放行锁屏,
  *     让后台 agent / 定时任务持续运行。跨平台生效(mac/win/linux),故常驻显示。
- *  2. 「关闭主窗口时」(windowsCloseBehavior):仅 Windows 显示,选择退出或收起到托盘。
+ *  2. 「关闭主窗口时」:Windows 选择退出或收起到托盘,Linux 选择退出或最小化。
  *  3. 「后台窗口首次左键点击仅激活不透传」(swallowActivationClick,PR #446):仅
  *     macOS + Windows 有实际效果,Linux 上两条底层路径均 no-op,故该行在 Linux 隐藏。
  *
@@ -19,7 +19,14 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { useSwallowActivationClickSettings } from '@/hooks/useSwallowActivationClickSettings';
 import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
-import type { WindowsCloseBehavior } from '../../../shared/windowBehavior';
+import {
+  isLinuxCloseBehavior,
+  isWindowsCloseBehavior,
+  type LinuxCloseBehavior,
+  type WindowsCloseBehavior,
+} from '../../../shared/windowBehavior';
+
+type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 
 /** 一张开关卡片:左侧标签 + 说明(+ 可选补充说明行),右侧开关。 */
 function BehaviorCard({
@@ -74,16 +81,18 @@ export function WindowBehaviorSection() {
   // swallowActivationClick 仅 mac/win 有效,Linux 上隐藏该行;keepAwake 跨平台常驻。
   const showsSwallowActivationClick = isMac || window.electronAPI?.platform === 'win32';
   const isWindows = window.electronAPI?.platform === 'win32';
-  const [windowsCloseBehavior, setWindowsCloseBehaviorState] =
-    useState<WindowsCloseBehavior | null>(null);
+  const isLinux = window.electronAPI?.platform === 'linux';
+  const [closeBehavior, setCloseBehaviorState] = useState<DesktopCloseBehavior | null>(null);
 
   useEffect(() => {
-    if (!isWindows) return;
+    if (!isWindows && !isLinux) return;
     let active = true;
-    void window.electronAPI.windowBehavior
-      .getWindowsCloseBehavior()
+    const getCloseBehavior = isWindows
+      ? window.electronAPI.windowBehavior.getWindowsCloseBehavior
+      : window.electronAPI.windowBehavior.getLinuxCloseBehavior;
+    void getCloseBehavior()
       .then((behavior) => {
-        if (active) setWindowsCloseBehaviorState(behavior);
+        if (active) setCloseBehaviorState(behavior);
       })
       .catch(() => {
         // Keep the unselected first-close state if main is unavailable.
@@ -91,15 +100,25 @@ export function WindowBehaviorSection() {
     return () => {
       active = false;
     };
-  }, [isWindows]);
+  }, [isLinux, isWindows]);
 
-  const setWindowsCloseBehavior = (behavior: WindowsCloseBehavior): void => {
-    const previous = windowsCloseBehavior;
-    setWindowsCloseBehaviorState(behavior);
-    void window.electronAPI.windowBehavior.setWindowsCloseBehavior(behavior).catch(() => {
-      setWindowsCloseBehaviorState(previous);
+  const setCloseBehavior = (behavior: DesktopCloseBehavior): void => {
+    const previous = closeBehavior;
+    setCloseBehaviorState(behavior);
+    const update =
+      isLinux && isLinuxCloseBehavior(behavior)
+        ? window.electronAPI.windowBehavior.setLinuxCloseBehavior(behavior)
+        : isWindows && isWindowsCloseBehavior(behavior)
+          ? window.electronAPI.windowBehavior.setWindowsCloseBehavior(behavior)
+          : Promise.reject(new Error('Unsupported close behavior for this platform'));
+    void update.catch(() => {
+      setCloseBehaviorState(previous);
     });
   };
+
+  const closeBehaviorOptions: readonly DesktopCloseBehavior[] = isLinux
+    ? ['minimize', 'quit']
+    : ['tray', 'quit'];
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -115,7 +134,7 @@ export function WindowBehaviorSection() {
         ariaLabel={t('settings.devices.keepAwake')}
       />
 
-      {isWindows && (
+      {(isWindows || isLinux) && (
         <div
           className={cn(
             'flex items-center justify-between gap-3 rounded-xl p-5',
@@ -140,15 +159,15 @@ export function WindowBehaviorSection() {
             aria-label={t('settings.windowBehavior.closeBehavior.aria')}
             className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
           >
-            {(['tray', 'quit'] as const).map((behavior) => {
-              const active = windowsCloseBehavior === behavior;
+            {closeBehaviorOptions.map((behavior) => {
+              const active = closeBehavior === behavior;
               return (
                 <button
                   key={behavior}
                   type="button"
                   role="radio"
                   aria-checked={active}
-                  onClick={() => setWindowsCloseBehavior(behavior)}
+                  onClick={() => setCloseBehavior(behavior)}
                   className={cn(
                     'rounded-full px-2.5 py-1 text-xs transition-colors',
                     active

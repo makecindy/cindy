@@ -107,17 +107,27 @@ describe('dev Codex package selection', () => {
     expect(createBinaryProvisioner).not.toHaveBeenCalled();
   });
 
-  it('keeps the packaged release on the existing Codex manifest and single binary', async () => {
+  it('starts the packaged release from the complete Codex package entrypoint', async () => {
+    const expectedPath = path.join(
+      '/tmp/xdt-userdata',
+      'codex-package',
+      '0.153.0',
+      'bin',
+      'codex',
+    );
     cdndProvisioner.prepare.mockResolvedValueOnce({
       ready: true,
-      binaryPath: '/tmp/xdt-userdata/codex/0.152.0/codex',
+      binaryPath: expectedPath,
     });
 
-    await expect(binaries.prepare('codex')).resolves.toMatchObject({ ready: true });
+    await expect(binaries.prepare('codex')).resolves.toMatchObject({
+      ready: true,
+      path: expectedPath,
+    });
     expect(createBinaryProvisioner).toHaveBeenCalledWith(expect.objectContaining({
-      manifestField: 'codex',
-      installSubdir: 'codex',
-      artifact: { kind: 'gz', binaryName: 'codex' },
+      manifestField: 'codexPackage',
+      installSubdir: 'codex-package',
+      artifact: { kind: 'tar-gz-dir', binaryName: path.join('bin', 'codex') },
     }));
   });
 });
@@ -255,9 +265,9 @@ describe('packaged Linux agent binary prepare', () => {
   it('peek delegates to the CDN check when the manifest publishes a linux asset', async () => {
     manifestService.getCachedManifest.mockReturnValue({
       app: { version: '0.1.59' },
-      codex: {
-        version: '0.144.6',
-        file: 'codex/0.144.6/linux-x64/codex.gz',
+      codexPackage: {
+        version: '0.153.0',
+        file: 'codex-package/0.153.0/linux-x64/codex-package.dist.tar.gz',
         sha256: 'b'.repeat(64),
         size: 5678,
       },

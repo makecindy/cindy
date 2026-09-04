@@ -412,6 +412,7 @@ describe('orcaTeamStore', () => {
         codex_history_has_product_prompt INTEGER,
         codex_plan_json TEXT,
         extra_dirs TEXT NOT NULL DEFAULT '[]',
+        writable_dirs TEXT NOT NULL DEFAULT '[]',
         remote_host_id TEXT,
         provider_id TEXT,
         active_turn_started_at INTEGER,

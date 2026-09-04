@@ -39,6 +39,20 @@ export function isDataOwnerGenerationCurrent(
   );
 }
 
+/**
+ * Whether `owner` still names the active data owner, regardless of generation.
+ *
+ * A same-owner re-commit (Ghost projection repair, account-free repair) advances
+ * `generation` without changing the owner or its renderer-side storage
+ * namespaces, and nothing remounts. Long-lived UI that persists into the owner's
+ * namespace (a mounted composer editor) must keep working across such bumps, so
+ * it qualifies by owner id only. In-flight async work that must not span a
+ * runtime teardown keeps using {@link isDataOwnerGenerationCurrent}.
+ */
+export function isDataOwnerIdCurrent(owner: DataOwnerGeneration): boolean {
+  return current.dataOwnerId === owner.dataOwnerId;
+}
+
 /** Validate a main-process live push against the renderer's current owner. */
 export function isDataOwnerPushStampCurrent(stamp: unknown): stamp is DataOwnerPushStamp {
   if (!isDataOwnerPushStamp(stamp)) return false;

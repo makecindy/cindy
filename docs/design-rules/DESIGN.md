@@ -579,7 +579,7 @@ No gaps are currently open.
 
 Resolved items (G1–G4, 2026-06 — button-text drift, border drift, placeholder unification, radius tiering) are archived in [`design-decision-log.md`](./design-decision-log.md); each entry records the drift, the ruling, and where the conclusion was folded back (§2 / §4 / §5 / §10).
 
-Known but deliberately-deferred cleanups (e.g. hardcoded hex in `MakerExperimentalView.tsx`) are tracked in the decision log's backlog section, not here.
+Known but deliberately-deferred cleanups are tracked in the decision log's backlog section, not here.
 
 ## 14. Interaction Conventions(交互约定)
 

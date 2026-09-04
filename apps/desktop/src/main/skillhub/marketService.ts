@@ -45,7 +45,11 @@ export interface SkillhubMarketServiceOptions {
   fetch?: SkillhubMarketFetcher;
   assertWriteAllowed?: () => void | Promise<void>;
   assertVisibilityAllowed?: (visibility: 'private' | 'shared' | 'public') => void | Promise<void>;
-  updateRegistryCatalogScope?: (name: string, scope: SkillhubCatalogScope | undefined) => Promise<void>;
+  updateRegistryCatalogScope?: (
+    name: string,
+    scope: SkillhubCatalogScope | undefined,
+    previousScope: SkillhubCatalogScope | undefined,
+  ) => Promise<void>;
 }
 
 export interface ListMarketParams {
@@ -65,6 +69,7 @@ export interface UpdatePublishedFields {
   summary?: string;
   description?: string;
   tags?: string[];
+  contentLocale?: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
   visibility?: 'private' | 'shared' | 'public';
   /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
   teamSlug?: string | null;
@@ -73,6 +78,8 @@ export interface UpdatePublishedFields {
 export interface SetPublishedVisibilityParams {
   name: string;
   visibility: 'private' | 'shared' | 'public';
+  /** Catalog containing the currently visible version before this mutation. */
+  previousCatalogScope?: SkillhubCatalogScope;
   teamSlug?: string;
   visibleSlugs?: string[];
 }
@@ -94,7 +101,11 @@ export class SkillhubMarketService {
   private readonly fetch: SkillhubMarketFetcher;
   private readonly assertWriteAllowed: () => void | Promise<void>;
   private readonly assertVisibilityAllowed: (visibility: 'private' | 'shared' | 'public') => void | Promise<void>;
-  private readonly updateRegistryCatalogScope: (name: string, scope: SkillhubCatalogScope | undefined) => Promise<void>;
+  private readonly updateRegistryCatalogScope: (
+    name: string,
+    scope: SkillhubCatalogScope | undefined,
+    previousScope: SkillhubCatalogScope | undefined,
+  ) => Promise<void>;
 
   constructor(options: SkillhubMarketServiceOptions = {}) {
     this.fetch = options.fetch ?? skillhubApiFetch;
@@ -237,7 +248,7 @@ export class SkillhubMarketService {
     return { success: true as const, result };
   }
 
-  async setPublishedVisibility({ name, visibility, teamSlug, visibleSlugs }: SetPublishedVisibilityParams) {
+  async setPublishedVisibility({ name, visibility, previousCatalogScope, teamSlug, visibleSlugs }: SetPublishedVisibilityParams) {
     await this.assertWriteAllowed();
     await this.assertVisibilityAllowed(visibility);
     const result = await this.fetch<SkillVisibilityUpdateResult>(
@@ -255,7 +266,7 @@ export class SkillhubMarketService {
     // the native record even while the old catalog visibility remains active.
     const targetVisibility = result.requestedVisibility ?? result.visibility;
     const catalogScope = targetVisibility === 'shared' ? 'team' as const : undefined;
-    await this.updateRegistryCatalogScope(name, catalogScope).catch((err) => {
+    await this.updateRegistryCatalogScope(name, catalogScope, previousCatalogScope).catch((err) => {
       log.warn(`[visibility] registry catalog scope update failed name=${name}:`, err);
     });
     return { success: true as const, result };
@@ -285,20 +296,20 @@ export class SkillhubMarketService {
     };
   }
 
-  async listCategories() {
+  async listCategories(scope: SkillhubCatalogScope = 'market') {
     const items = await this.fetch<Array<{
       slug: string;
       name: string;
       skillCount?: number;
       mySkillCount?: number;
-      source?: 'author' | 'platform';
+      source?: 'platform';
       children?: Array<{
         slug: string;
         name: string;
         skillCount?: number;
         mySkillCount?: number;
       }>;
-    }>>('/api/skills-hub/categories?scope=market');
+    }>>(`/api/skills-hub/categories?scope=${scope}`);
     const categories = flattenHubCategories(items ?? []);
     const totalCount = categories.reduce((s, c) => s + c.count, 0);
     const myTotalCount = categories.reduce((s, c) => s + c.myCount, 0);
@@ -396,7 +407,7 @@ type HubCategoryNode = {
   name: string;
   skillCount?: number;
   mySkillCount?: number;
-  source?: 'author' | 'platform';
+  source?: 'platform';
   children?: HubCategoryNode[];
 };
 
@@ -406,7 +417,7 @@ function flattenHubCategories(nodes: HubCategoryNode[]) {
     name: string;
     count: number;
     myCount: number;
-    source?: 'author' | 'platform';
+    source?: 'platform';
   }> = [];
   const visit = (node: HubCategoryNode) => {
     out.push({

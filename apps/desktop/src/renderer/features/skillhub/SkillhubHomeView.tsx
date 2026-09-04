@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
+import { CATEGORY_ALL } from '../../../shared/skillhubCategory';
 import {
   Bot,
   ChevronRight,
@@ -30,7 +31,12 @@ import {
 } from '@/features/plugin/PluginManagementLayout';
 import { buildLocalSkillRoute, findLocalSkillByPath } from './lib/localRoutes';
 import { refresh as refreshSkillhub, useSkillhub } from './hooks/useSkillhub';
-import { MARKET_PAGE_SIZE, useMarketList, type MarketSkill } from './hooks/useMarketList';
+import {
+  MARKET_PAGE_SIZE,
+  useCategoryList,
+  useMarketList,
+  type MarketSkill,
+} from './hooks/useMarketList';
 import { MarketManagementDialogs, useMarketManagement } from './hooks/useMarketManagement';
 import { basename, deriveProjectWorkingDir } from './lib/pathDerivations';
 import { projectHash } from './lib/projectHash';
@@ -45,7 +51,9 @@ import {
 import { deriveSkillSource } from './lib/skillSource';
 import { skillPublisherLabel } from './lib/publisherLabel';
 import { InstallTargetPicker, type InstallTargetSkill } from './components/InstallTargetPicker';
+import { SkillCategoryFilterBar } from './components/SkillCategoryFilterBar';
 import { SkillIcon } from './components/SkillIcon';
+import { SkillTagList } from './components/SkillTagList';
 import { SkillhubMarketPreviewPanel } from './SkillhubMarketPreviewPanel';
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 
@@ -89,9 +97,11 @@ export function SkillhubHomeView({
     hasMore: marketHasMore,
     resolvedScope,
     resolvedMine,
+    categoryFilter,
     setSearchQuery,
     setSortBy,
     setCatalogScope,
+    setCategoryFilter,
     setVisibility,
     loadMore: loadMoreMarket,
     reload: reloadMarket,
@@ -100,11 +110,14 @@ export function SkillhubHomeView({
     initialScope: 'market',
     initialSort: 'trending',
   });
+  const categoryScope = marketRequest.scope === 'team' ? 'team' : 'market';
+  const { categories } = useCategoryList(categoryScope);
   useEffect(() => {
     setCatalogScope(marketRequest.scope);
     setVisibility(marketRequest.visibility);
     setSortBy(marketRequest.sort);
-  }, [marketRequest, setCatalogScope, setSortBy, setVisibility]);
+    setCategoryFilter(CATEGORY_ALL);
+  }, [marketRequest, setCatalogScope, setCategoryFilter, setSortBy, setVisibility]);
   useEffect(() => {
     setSearchQuery(query);
   }, [query, setSearchQuery]);
@@ -331,6 +344,21 @@ export function SkillhubHomeView({
           {/* ① 当前云端目录摘要 */}
           {catalogTab !== 'local' && (!normalizedQuery || catalogItems.length > 0 || marketLoading) ? (
             <section className="plugin-motion-page-section min-w-0">
+              {categories.length > 0 ? (
+                <SkillCategoryFilterBar
+                  categories={categories}
+                  selectedCategory={categoryFilter}
+                  allLabel={t('skillhub.market.categoryAll')}
+                  ariaLabel={t('skillhub.home.categoryFiltersAria')}
+                  scrollLeftLabel={t('skillhub.home.scrollCategoriesLeft')}
+                  scrollRightLabel={t('skillhub.home.scrollCategoriesRight')}
+                  scrollStartLabel={t('skillhub.home.categoryScrollAtStart')}
+                  scrollEndLabel={t('skillhub.home.categoryScrollAtEnd')}
+                  onSelectCategory={setCategoryFilter}
+                  className="mb-4"
+                />
+              ) : null}
+
               {(marketLoading || !marketResponseCurrent) && catalogItems.length === 0 ? (
                 // 占位骨架:与真实卡片同栅格、同行数、同高度,内容到位后原地替换不跳动。
                 <div className={PLUGIN_MANAGEMENT_CARD_GRID_CLASS} aria-hidden>
@@ -374,6 +402,7 @@ export function SkillhubHomeView({
                         <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--msg-assistant-text)]">
                           {s.displayName || s.name}
                         </span>
+                        <SkillTagList tags={s.tags} maxVisible={1} className="shrink-0" />
                         {s.installedLocally && (
                           <span className="shrink-0 rounded-full bg-[var(--chat-input-chip-bg)] px-1.5 py-0.5 text-10 text-[var(--cmd-palette-item-meta)]">
                             {t('skillhub.home.installed')}

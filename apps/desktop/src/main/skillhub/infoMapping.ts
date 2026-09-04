@@ -26,8 +26,8 @@ export interface HubSkillInfoForDesktop {
   updatedAt: string;
   isMine?: boolean;
   canManage?: boolean;
-  categories?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
-  tags?: Array<{ slug: string; name: string; source?: 'author' | 'platform' }>;
+  categories?: Array<{ slug: string; name: string; source?: 'platform' }>;
+  tags?: Array<{ slug: string; name: string; source?: 'platform' }>;
   githubUrl?: string | null;
   stats?: {
     downloads?: number;

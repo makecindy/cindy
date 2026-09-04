@@ -377,7 +377,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // ── SkillHub market broker IPC ───────────────────────────────────────────
   ipcMain.handle(
     'skillhub:sync',
-    async (_event, params: { slugs?: string[] } | undefined) => {
+    async (_event, params: { skills?: unknown; slugs?: string[] } | undefined) => {
       try {
         return await marketService.sync(params);
       } catch (err) {
@@ -497,9 +497,13 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:set-published-visibility',
-    async (_event, params: Parameters<SkillhubMarketService['setPublishedVisibility']>[0]) => {
+    async (_event, params: Omit<Parameters<SkillhubMarketService['setPublishedVisibility']>[0], 'previousCatalogScope'> & { previousCatalogScope?: unknown }) => {
       try {
-        return await marketService.setPublishedVisibility(params);
+        const { previousCatalogScope, ...fields } = params;
+        return await marketService.setPublishedVisibility({
+          ...fields,
+          ...(isSkillhubCatalogScope(previousCatalogScope) ? { previousCatalogScope } : {}),
+        });
       } catch (err) {
         return skillhubIpcError(err);
       }
@@ -541,9 +545,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // Market 分类列表 — 若 broker / 网络不可用，降级空数组
   ipcMain.handle(
     'skillhub:list-categories',
-    async () => {
+    async (_event, params?: { scope?: 'market' | 'team' }) => {
       try {
-        return await marketService.listCategories();
+        // Renderer payload is untrusted: only the two catalog scopes are valid,
+        // and an absent/invalid value keeps the historical market behavior.
+        const scope = params?.scope === 'team' ? 'team' : 'market';
+        return await marketService.listCategories(scope);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn('list-categories failed', message);

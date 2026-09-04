@@ -11,6 +11,7 @@ import { buildRegistry, type Catalog, type CatalogModel, type Provider } from '@
 
 import {
   checkModelRoute,
+  describeModelRouteRejection,
   materializeExclusiveProviderRoute,
   pickEnabledFallbackModel,
   resolveCurrentSetModelProviderId,
@@ -19,6 +20,26 @@ import {
   resolveSetModelGuardProviderId,
   shouldApplyExclusiveProviderReroute,
 } from '../model-route-guard.js';
+
+describe('describeModelRouteRejection', () => {
+  it('exclusive-source-unavailable 说清缺 SuperGrok/自定义源,不再冒充「设置里停用」(#3884)', () => {
+    const text = describeModelRouteRejection('exclusive-source-unavailable', 'grok-4.6', null);
+    expect(text).toContain('requires SuperGrok (xAI) or an explicitly selected custom source');
+    expect(text).not.toContain('disabled in settings');
+  });
+
+  it('其余 reason 保持既有措辞', () => {
+    expect(describeModelRouteRejection('model-disabled', 'm', null)).toBe(
+      'model "m" is disabled in settings',
+    );
+    expect(describeModelRouteRejection('explicit-source-disabled', 'm', 'p')).toBe(
+      'provider "p" is disabled for model "m" in settings',
+    );
+    expect(describeModelRouteRejection('capability-model', 'm', null)).toContain('not an agent chat model');
+    expect(describeModelRouteRejection('model-retired', 'm', null)).toContain('retired from the catalog');
+    expect(describeModelRouteRejection('payment-required', 'm', null)).toContain('requires paid access');
+  });
+});
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };

@@ -2434,11 +2434,19 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
   });
 
   it('done seal 以 durable patch 落库', async () => {
-    await expect(markAssistantTurnCompleted(SESSION, 'assistant-final')).resolves.toBe(true);
+    const nativeForkAnchor = {
+      agentKind: 'codex' as const,
+      sdkSessionId: 'source-thread',
+      kind: 'turn' as const,
+      id: 'turn-at-boundary',
+    };
+    await expect(
+      markAssistantTurnCompleted(SESSION, 'assistant-final', { nativeForkAnchor }),
+    ).resolves.toBe(true);
     expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
       SESSION,
       'assistant-final',
-      { turnCompleted: true },
+      { nativeForkAnchor, turnCompleted: true },
     );
     expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
       SESSION,

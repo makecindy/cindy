@@ -577,12 +577,14 @@
         "hint": "首次關閉時會詢問，選擇後可隨時在這裡修改。",
         "aria": "選擇關閉主視窗時的行為",
         "tray": "收起到系統匣",
+        "minimize": "最小化視窗",
         "quit": "退出 Cindy"
       },
       "closePrompt": {
         "title": "關閉 Cindy",
         "message": "關閉主視窗時要執行什麼操作？",
-        "detail": "收起到系統匣後，任務會繼續執行；右鍵系統匣圖示可以退出。你可以稍後在設定中修改。"
+        "detail": "收起到系統匣後，任務會繼續執行；右鍵系統匣圖示可以退出。你可以稍後在設定中修改。",
+        "linuxDetail": "最小化視窗後，任務會繼續執行；你可以從工作列或視窗概覽恢復 Cindy，也可以稍後在設定中修改。"
       },
       "trayMenu": {
         "show": "開啟 Cindy",
@@ -764,7 +766,7 @@
         "description": "Linux 目前提供 Ubuntu 22.04 / 24.04 的 .deb 套件。有新版本時，應用程式會下載安裝包，安裝時需要系統密碼。",
         "item1": "首次安裝用 sudo apt install ./cindy-<版本>-<架構>.deb（x64 為 amd64，arm64 為 arm64）。",
         "item2": "應用程式內更新會下載 .deb，點更新後透過系統權限提示覆蓋安裝。",
-        "item3": "Linux 暫不提供 Beta 渠道和空閒時自動安裝，因為安裝需要輸入密碼。"
+        "item3": "Linux x64 支援 Beta 渠道，arm64 暫不支援。兩種架構都不支援閒置時自動安裝，因為安裝需要系統授權。"
       },
       "qnaTitle": "直接提問",
       "qnaDescription": "如果 overview 裡沒有覆蓋到你的問題，可以直接問我該怎麼做。",
@@ -5803,20 +5805,32 @@
   "usageHistory": {
     "description": "這台裝置上 Cindy 內部產生的 token 用量。紀錄從該功能上線起累積，不回填更早的歷史。",
     "empty": "還沒有用量紀錄。跑過對話之後，這裡會開始累積。",
+    "loadFailed": "無法載入用量歷史。請重新開啟設定後再試一次。",
+    "range": {
+      "label": "時間範圍",
+      "ariaLabel": "篩選用量時間範圍",
+      "all": "所有時間",
+      "30d": "最近 30 天",
+      "7d": "最近 7 天",
+      "today": "今天"
+    },
     "cacheHitTooltip": "快取讀取 ÷（輸入 + 快取讀取 + 快取寫入），與訊息卡片同口徑。",
     "summary": {
       "title": "概覽"
     },
     "stats": {
       "todayTokens": "今日 token",
+      "todayTokensInRange": "{{range}} token",
       "totalTokens": "近 30 天 token",
+      "totalTokensInRange": "{{range}} token",
       "streak": "連續活躍天數",
       "cacheHitRate": "快取命中率(近 30 天)",
+      "cacheHitRateInRange": "快取命中率({{range}})",
       "models": "用到的模型"
     },
     "heatmap": {
       "title": "活躍熱力圖",
-      "subtitle": "近 20 週",
+      "subtitle": "近 {{count}} 週",
       "emptyCell": "當天沒有用量紀錄"
     },
     "daily": {
@@ -5829,6 +5843,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "近 30 天 token",
+        "totalInRange": "{{range}} token",
         "share": "佔比",
         "today": "今日",
         "hitRate": "快取命中率",
@@ -5841,6 +5856,7 @@
       "col": {
         "model": "模型",
         "total": "總 token",
+        "totalInRange": "{{range}} token",
         "share": "佔比",
         "input": "輸入",
         "output": "輸出",
@@ -5851,7 +5867,7 @@
     },
     "tasks": {
       "title": "最耗 token 的任務",
-      "subtitle": "近 30 天內活躍過的任務，按累計 token 排序",
+      "subtitle": "{{range}}內活躍過的任務，按累計 token 排序",
       "col": {
         "task": "任務",
         "model": "模型",
@@ -5861,7 +5877,7 @@
         "lastActive": "最後活躍"
       },
       "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
-      "tokensTooltip": "該任務的生命週期累計，不是近 30 天內的增量。"
+      "tokensTooltip": "該任務的生命週期累計；{{range}}僅用於篩選活躍任務，不代表該範圍內的增量。"
     }
   },
   "usageDashboard": {
@@ -6151,6 +6167,10 @@
       "rotateDevice": "旋轉裝置",
       "lockScreen": "鎖定螢幕",
       "unlockScreen": "解鎖螢幕",
+      "copyScreenshot": "複製截圖",
+      "screenshotCopied": "模擬器截圖已複製",
+      "screenshotCopyFailed": "無法複製模擬器截圖，請稍後再試",
+      "moreControls": "更多模擬器控制",
       "controlsUnavailable": "模擬器控制暫時不可用",
       "enterTextBeforeSending": "請先輸入要傳送的文字",
       "agentBusyTitle": "Agent 正在使用此裝置",
@@ -6186,7 +6206,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "Native 加速目前無法使用。重試期間，WDA 畫面和控制會保持可用。",
+        "available": "Native 加速目前無法使用，畫面幀率可能降低，操作延遲可能升高。",
         "action": "嘗試恢復 Native",
         "recovering": "正在恢復 Native 加速，目前的 WDA 畫面和控制會保持可用。",
         "recoveringAction": "正在恢復 Native…",
@@ -6213,7 +6233,8 @@
         "stop": "正在停止裝置…",
         "detach": "正在中斷連線裝置…",
         "grant": "正在更新 Agent 控制權限…",
-        "control": "正在更新輸入控制…"
+        "control": "正在更新輸入控制…",
+        "screenshot": "正在複製模擬器截圖…"
       },
       "setup": {
         "localMac": "請在 Mac 上的本地 Cindy 任務中開啟此專案。",
@@ -6837,7 +6858,6 @@
       "moreLabel": "更多，當前使用者：{{name}}",
       "menuSettings": "設定",
       "menuAddAccount": "登入更多帳號",
-      "menuLogout": "退出",
       "canaryBadge": "灰度使用者",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -6939,6 +6959,58 @@
     }
   },
   "newChat": {
+    "homeSuggestions": {
+      "shuffle": "換一批",
+      "dismiss": "不再顯示",
+      "downloadsDesktop": {
+        "label": "看看我的下載和桌面堆了什麼，列一份該清理的清單",
+        "prompt": "看一下我的下載資料夾和桌面，統計都堆了些什麼：占空間最大的、明顯重複的、半年以上沒動過的、以及能安全封存的。給我一份清單，每一項標清在哪、多大、為什麼建議處理。這一輪只看不動，等我確認再說要不要動手。"
+      },
+      "whatCindyCanDo": {
+        "label": "看看我這台電腦上都有什麼，你能幫我做哪些事",
+        "prompt": "看一下我這台電腦上裝了什麼、我平時在弄什麼類型的東西，據此判斷我大概是做什麼的。然後告訴我：以你的能力，最能幫到我的具體是哪幾件事，每件用一句話說清在什麼場景下用、能替我省掉什麼。不要念功能清單，要針對我這台機器上真實存在的東西說。"
+      },
+      "recentDocs": {
+        "label": "看一遍我最近在弄的文件，幫我理成一份清單",
+        "prompt": "看一下我最近一段時間打開和改過的文件，按主題歸一歸，告訴我我手上大概有幾攤事、每攤到哪一步了、有沒有明顯爛尾的。給我一份清單，標清每份檔案在哪。唯讀，不要動我的檔案。"
+      },
+      "listCodeProjects": {
+        "label": "把我電腦上的程式專案列出來，講清每個是幹什麼的",
+        "prompt": "在我常用的目錄裡找出所有程式專案，列成一份清單：每個專案一句話說清是幹什麼的、用什麼寫的、最近一次改動是什麼時候。然後指出哪幾個看起來是主線、哪幾個像是已經放棄的。如果一個都沒找到，直接告訴我沒找到。這一輪唯讀，不要改任何檔案。"
+      },
+      "storageUsage": {
+        "label": "盤一下這台電腦的儲存，空間到底被什麼吃掉了",
+        "prompt": "盤一遍這台電腦的儲存：按占用從大到小列出目錄和檔案，指出哪些是快取、哪些是重複、哪些是我大概忘了的舊東西。給我一份占用排行加一句結論：刪掉哪幾類能騰出最多空間。只統計，不要刪任何東西。"
+      },
+      "unusedApps": {
+        "label": "盤一下我裝了哪些應用，哪些很久沒用還占著地方",
+        "prompt": "看一下這台電腦裝了哪些應用，按占用空間和最近使用時間排一排，指出哪些很久沒打開還占著大塊地方。給我一份清單，先不要解除安裝任何東西。"
+      },
+      "uncommittedChanges": {
+        "label": "找出我最近在改的專案，看看有什麼沒提交的、有沒有隱患",
+        "prompt": "找出我最近動過的那個程式專案，看一遍還沒提交的改動，告訴我這些改動在幹什麼、有沒有明顯的問題或漏掉的地方。唯讀，不要動我的檔案，也不要提交任何東西。"
+      },
+      "devEnvironment": {
+        "label": "檢查一遍我的開發環境，有沒有該修的",
+        "prompt": "檢查這台機器的開發環境：裝了哪些語言執行環境和套件管理器、各自什麼版本、有沒有版本衝突或者明顯過舊的、git 設定有沒有問題。給我一份現狀清單加一句結論：哪幾處建議先修。只檢查，不要自己動手安裝或改設定。"
+      },
+      "whySlow": {
+        "label": "查查電腦為什麼卡",
+        "prompt": "查這台電腦現在為什麼卡：負載、記憶體、磁碟、開機時長、占 CPU/記憶體最多的幾個行程。用幾句話給結論和依據。唯讀，不要改任何東西，不要結束行程，不要問我開了什麼。"
+      },
+      "diagnoseNetwork": {
+        "label": "診斷一下網速",
+        "prompt": "診斷這台電腦的網路：ping、DNS、現在是有線還是 Wi-Fi，用一兩句話給結論。不要跑長時間測速，不要問電信業者。"
+      },
+      "subscriptionSpend": {
+        "label": "盤點我的訂閱支出",
+        "prompt": "掃一遍下載、收據和本機帳單，盤點我的訂閱都在扣多少錢：列出服務名和金額。找不到就直接說找不到。不要改訂閱、不要問銀行卡、不要登入信箱。"
+      },
+      "expenseTracker": {
+        "label": "做個記帳小工具",
+        "prompt": "在這個任務的工作目錄裡做一個能直接打開的本機記帳小工具：日期、金額、分類、備註。不要後端、不要問還要哪些功能。"
+      }
+    },
     "noProvider": {
       "title": "當前模型沒有可用來源",
       "description": "當前模型還沒有已連線的來源，請先在設定裡連線一個再傳送。",
@@ -7522,6 +7594,15 @@
     }
   },
   "onboarding": {
+    "homeZeroModel": {
+      "title": "登入 Cindy 繼續使用",
+      "desc": "你還未設定任何模型，登入 Cindy 後即可使用數十種頂級大模型。",
+      "cta": "登入 Cindy",
+      "cloudTitle": "使用 Cindy 繼續",
+      "cloudDesc": "你還未設定任何模型，開通官方服務即可使用數十種頂級大模型。",
+      "cloudCta": "開始使用",
+      "ownApi": "我有自己的模型 API 設定"
+    },
     "connectProvider": {
       "title": "連線一個模型供應商，開始對話",
       "desc": "還沒有可用的模型。連線任意一個供應商即可開始對話。",
@@ -9028,9 +9109,24 @@
           "merged": "已合併",
           "closed": "已關閉"
         },
-        "needsToken": "本地 gh CLI 未登入——讓 Agent 執行一次 gh auth login 即可顯示 PR 狀態",
+        "ghNotLoggedIn": "本機 gh 尚未登入 GitHub，看不到 PR 狀態",
+        "ghMissing": "未偵測到 GitHub CLI（gh），看不到 PR 狀態",
+        "notFound": "PR 不存在，或目前帳號無權限檢視",
         "statusUnknown": "狀態獲取失敗",
         "openAria": "在瀏覽器開啟 PR #{{number}}",
+        "clickToOpen": "點擊在瀏覽器開啟 PR",
+        "guidance": {
+          "login": {
+            "hint": "點擊讓 Agent 幫你登入",
+            "aria": "PR #{{number}} 狀態不可用：讓 Agent 登入 GitHub",
+            "prompt": "請幫我登入 GitHub CLI：執行 `gh auth login -h github.com -w`，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
+          },
+          "install": {
+            "hint": "點擊讓 Agent 幫你安裝並登入",
+            "aria": "PR #{{number}} 狀態不可用：讓 Agent 安裝並登入 GitHub CLI",
+            "prompt": "請幫我安裝 GitHub CLI（gh，macOS 用 `brew install gh`，Windows 用 `winget install GitHub.cli`），然後執行 `gh auth login -h github.com -w` 登入，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
+          }
+        },
         "unresolved": "{{count}} 條未解決的 review 評論"
       }
     },
@@ -10128,6 +10224,11 @@
       "clearSearch": "清除技能搜尋",
       "noSearchResults": "沒有找到匹配的技能",
       "catalogFiltersAria": "SkillHub 分類",
+      "categoryFiltersAria": "按分類篩選技能",
+      "scrollCategoriesLeft": "向左查看更多分類",
+      "scrollCategoriesRight": "向右查看更多分類",
+      "categoryScrollAtStart": "已經是第一個分類",
+      "categoryScrollAtEnd": "已經是最後一個分類",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",
@@ -10427,14 +10528,12 @@
       "visibilityPublicDesc": "所有使用者可見 · 預設",
       "versionLabel": "版本號",
       "versionFormatHint": "格式：x.y.z (例如 1.0.1)",
-      "categoryLabel": "分類",
-      "categoryAuto": "不新增標籤",
-      "categoryPlaceholder": "請選擇分類",
-      "categoryLoading": "正在載入分類…",
-      "categoryLoadFailed": "分類載入失敗，請重試",
-      "categoryEmpty": "當前沒有可用分類",
-      "categoryRequired": "請選擇分類後再發布",
-      "categoryInvalid": "當前分類已不可用，請重新選擇",
+      "categoryLabel": "標籤",
+      "categoryPlaceholder": "請選擇標籤（可選）",
+      "categoryLoading": "正在載入標籤…",
+      "categoryLoadFailed": "標籤載入失敗，請重試",
+      "categoryEmpty": "目前沒有可用的平台標籤",
+      "categoryInvalid": "一個或多個標籤已不可用，請重新選擇",
       "retryLoadCategories": "重試",
       "extraDeptGroup": "部門",
       "extraTeamGroup": "團隊",
@@ -10795,7 +10894,7 @@
     },
     "confirm": {
       "logoutTitle": "退出登入",
-      "logoutDescription": "確定要退出這台裝置上的所有帳號嗎？",
+      "logoutDescription": "確定要退出目前帳號嗎？",
       "logoutConfirm": "退出",
       "cancel": "取消",
       "sessionExpiredTitle": "登入已過期",
@@ -11246,6 +11345,32 @@
         "action": "複製訂單 ID {{id}}",
         "success": "訂單 ID 已複製",
         "failed": "複製訂單 ID 失敗，請再試一次"
+      },
+      "invoice": {
+        "action": "申請開票",
+        "title": "申請開票",
+        "description": "請將以下資訊寄送至客服信箱 {{email}}，以申請開立發票。",
+        "requiredInfo": "郵件中請提供以下資訊：",
+        "emailSubject": "申請開立訂單 {{orderId}} 的發票",
+        "emailBody": "您好，\n\n我想申請開立以下訂單的發票：\n\n────────────────────\n訂單號：{{orderId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n開票金額：{{amount}}\n發票抬頭：\n聯絡人：\n聯絡電話：\n信箱：\n────────────────────\n\n謝謝。",
+        "sendAction": "寄送開票申請",
+        "emailCopied": "客服信箱已複製",
+        "emailCopyFailed": "複製客服信箱失敗，請再試一次",
+        "sendFailed": "無法開啟郵件應用程式，請手動寄送郵件至 {{email}}。",
+        "gmailFallbackTitle": "改用 Gmail 開啟？",
+        "gmailFallbackDescription": "開票申請中包含訂單資訊。開啟 Gmail 會將這些資訊分享給 Google，是否繼續？",
+        "gmailFallbackConfirm": "開啟 Gmail",
+        "notAvailable": "暫無資訊",
+        "fields": {
+          "orderId": "訂單號",
+          "application": "應用程式",
+          "paymentMethod": "付款方式",
+          "amount": "開票金額",
+          "invoiceTitle": "發票抬頭",
+          "contact": "聯絡人",
+          "phone": "聯絡電話",
+          "email": "信箱"
+        }
       },
       "states": {
         "completed": "已完成",

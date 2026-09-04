@@ -42,6 +42,10 @@ import type {
   TurnContinuationState,
 } from '@cindy/maker-core';
 import { clampEffortToSupported } from '@cindy/model-providers';
+import {
+  describeModelRouteRejection,
+  type ModelRouteRejectReason,
+} from '../maker-host/model-route-guard.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type {
@@ -253,7 +257,10 @@ export interface MakerScheduleRunnerDeps {
     model: string,
     providerId: string | null,
   ) => Promise<
-    { kind: 'pass' } | { kind: 'reroute'; providerId: string } | { kind: 'reject'; reason: string }
+    | { kind: 'pass' }
+    | { kind: 'reroute'; providerId: string }
+    // reason 用 model-route-guard 的严格联合:文案映射穷尽 switch,新增原因编译期就暴露。
+    | { kind: 'reject'; reason: ModelRouteRejectReason }
   >;
   /**
    * 某 (来源, 模型, agent) 拷贝的能力(efforts / Fast)。effort 与 Fast 支持都是
@@ -869,7 +876,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       const verdict = await this.deps.checkModelRoute(effectiveAgentKind, model, createProviderId);
       if (verdict.kind === 'reject') {
         throw new Error(
-          `schedule route unavailable: model "${model}" is disabled in settings (${verdict.reason})`,
+          `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, model, createProviderId)} (${verdict.reason})`,
         );
       }
       if (verdict.kind === 'reroute' && shouldApplyExclusiveProviderRerouteLive(createProviderId)) {
@@ -1362,7 +1369,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         );
         if (verdict.kind === 'reject') {
           throw new Error(
-            `schedule route unavailable: model "${runtimeModel}" is disabled in settings (${verdict.reason}, revalidated before dispatch)`,
+            `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, runtimeModel, dispatchProviderId)} (${verdict.reason}, revalidated before dispatch)`,
           );
         }
         if (verdict.kind === 'reroute' && shouldApplyExclusiveProviderRerouteLive(dispatchProviderId)) {
@@ -2145,7 +2152,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       const verdict = await this.deps.checkModelRoute(live.agentKind, targetModel, routeProviderId);
       if (verdict.kind === 'reject') {
         throw new QueuedRouteDisabledError(
-          `schedule route unavailable: model "${targetModel}" is disabled in settings (${verdict.reason})`,
+          `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, targetModel, routeProviderId)} (${verdict.reason})`,
         );
       }
       if (verdict.kind === 'reroute' && shouldApplyExclusiveProviderRerouteLive(routeProviderId)) {
@@ -2210,7 +2217,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         );
         if (retained.kind === 'reject') {
           throw new QueuedRouteDisabledError(
-            `schedule route unavailable: current session route (model "${live.model}") is disabled in settings (${retained.reason})`,
+            `schedule route unavailable: current session route: ${describeModelRouteRejection(retained.reason, live.model, currentProviderId)} (${retained.reason})`,
           );
         }
       }
@@ -2277,7 +2284,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       );
       if (actual.kind === 'reject') {
         throw new QueuedRouteDisabledError(
-          `schedule route unavailable: runtime model "${runtimeModel}" is disabled in settings (${actual.reason})`,
+          `schedule route unavailable: runtime route: ${describeModelRouteRejection(actual.reason, runtimeModel, applyProviderId ?? currentProviderId)} (${actual.reason})`,
         );
       }
     }

@@ -3,13 +3,14 @@ import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowRight,
   Check,
+  CircleDollarSign,
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  CircleDollarSign,
   Copy,
   CreditCard,
   ExternalLink,
+  Mail,
   PackageOpen,
   RefreshCcw,
   X,
@@ -17,6 +18,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -31,6 +33,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import {
+  BILLING_SUPPORT_EMAIL,
   BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES,
   type BillingCatalog,
   type BillingCatalogOffer,
@@ -38,6 +41,7 @@ import {
   type BillingCatalogProduct,
   type BillingPaymentOrder,
   type BillingPendingPlanChange,
+  type BillingPurchaseOption,
   type BillingSubscription,
 } from '../../../shared/billing';
 import type {
@@ -93,6 +97,8 @@ type CurrentPlanFacts = {
 const SUBSCRIPTION_CANCELLABLE_STATUSES = BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
 
 const PLAN_CHANGE_ENTRY_STATUSES: BillingSubscription['status'][] = ['ACTIVE'];
+const INVOICE_REQUIRED_FIELDS = ['invoiceTitle', 'contact', 'phone', 'email'] as const;
+const GMAIL_COMPOSE_URL = 'https://mail.google.com/mail/?view=cm&fs=1';
 
 /**
  * 订单记录默认只列最近 10 笔。这一组回答的是「上次充了多少、那笔没付成的还在不在」,
@@ -1777,6 +1783,7 @@ function OrderHistoryCard({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const [invoiceOrder, setInvoiceOrder] = useState<BillingPaymentOrder | null>(null);
   const copyOrderId = async (orderId: string) => {
     try {
       await navigator.clipboard.writeText(orderId);
@@ -1863,14 +1870,211 @@ function OrderHistoryCard({
               >
                 {t(orderStatusLabelKey(order))}
               </span>
+              {phaseForOrder(order) === 'COMPLETED' && (
+                <button
+                  type="button"
+                  onClick={() => setInvoiceOrder(order)}
+                  className="h-7 shrink-0 select-none rounded-full border border-[var(--border-default)] px-2.5 text-10 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  {t('billing.orders.invoice.action')}
+                </button>
+              )}
             </div>
           </div>
         ))}
       </div>
+      <InvoiceRequestDialog order={invoiceOrder} onClose={() => setInvoiceOrder(null)} />
     </section>
   );
 }
 
+function InvoiceRequestDialog({
+  order,
+  onClose,
+}: {
+  order: BillingPaymentOrder | null;
+  onClose: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const sendInvoiceLockRef = useRef(false);
+  // BillingPaymentOrder does not carry the actual acquiring provider, and a
+  // terminal order usually has no paymentAction. Never present an action type
+  // such as QR_CODE/REDIRECT as the user's payment method.
+  const paymentMethod = t('billing.orders.invoice.notAvailable');
+  const buildInvoiceEmail = () => {
+    if (!order) return null;
+    const subject = t('billing.orders.invoice.emailSubject', { orderId: order.orderId });
+    const body = t('billing.orders.invoice.emailBody', {
+      orderId: order.orderId,
+      application: 'Cindy',
+      paymentMethod,
+      amount: formatMoney(order.amount, order.currency, billingLocale),
+    });
+    return { subject, body };
+  };
+  const invoiceEmail = buildInvoiceEmail();
+  const invoiceMailto =
+    invoiceEmail === null
+      ? ''
+      : `mailto:${BILLING_SUPPORT_EMAIL}?subject=${encodeURIComponent(
+          invoiceEmail.subject,
+        )}&body=${encodeURIComponent(invoiceEmail.body)}`;
+  const gmailComposeUrl =
+    invoiceEmail === null
+      ? ''
+      : `${GMAIL_COMPOSE_URL}&${new URLSearchParams({
+          to: BILLING_SUPPORT_EMAIL,
+          su: invoiceEmail.subject,
+          body: invoiceEmail.body,
+        }).toString()}`;
+  const description = t('billing.orders.invoice.description', {
+    email: BILLING_SUPPORT_EMAIL,
+  });
+  const [descriptionBeforeEmail, descriptionAfterEmail] = description.split(BILLING_SUPPORT_EMAIL);
+  const copySupportEmail = async () => {
+    try {
+      await navigator.clipboard.writeText(BILLING_SUPPORT_EMAIL);
+      toast.success(t('billing.orders.invoice.emailCopied'));
+    } catch {
+      toast.error(t('billing.orders.invoice.emailCopyFailed'));
+    }
+  };
+  const openGmailFallback = async () => {
+    if (!gmailComposeUrl) return false;
+    try {
+      const confirmed = await confirm({
+        title: t('billing.orders.invoice.gmailFallbackTitle'),
+        description: t('billing.orders.invoice.gmailFallbackDescription'),
+        confirmText: t('billing.orders.invoice.gmailFallbackConfirm'),
+        cancelText: t('billing.actions.close'),
+        autoFocusConfirm: true,
+      });
+      if (!confirmed) return false;
+      const result = await window.electronAPI.openExternal(gmailComposeUrl);
+      return result.success;
+    } catch {
+      return false;
+    }
+  };
+  const showSendFailed = () => {
+    toast.error(t('billing.orders.invoice.sendFailed', { email: BILLING_SUPPORT_EMAIL }));
+  };
+  const sendInvoiceRequest = () => {
+    if (!order || !invoiceMailto || sendInvoiceLockRef.current) return;
+    sendInvoiceLockRef.current = true;
+    void window.electronAPI
+      .openExternal(invoiceMailto)
+      .then(async (result) => {
+        if (result.success) {
+          onClose();
+          return;
+        }
+        if (await openGmailFallback()) {
+          onClose();
+          return;
+        }
+        showSendFailed();
+      })
+      .catch(async () => {
+        if (await openGmailFallback()) {
+          onClose();
+          return;
+        }
+        showSendFailed();
+      })
+      .finally(() => {
+        sendInvoiceLockRef.current = false;
+      });
+  };
+
+  const invoiceContent = order ? (
+    <div>
+      <p className="text-12 leading-5 text-[var(--confirm-desc)]">
+        {descriptionBeforeEmail}
+        <button
+          type="button"
+          onClick={() => void copySupportEmail()}
+          className="font-mono text-[var(--text-primary)] underline decoration-[var(--border-default)] underline-offset-2 transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {BILLING_SUPPORT_EMAIL}
+        </button>
+        {descriptionAfterEmail}
+      </p>
+
+      <div className="mt-4 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
+        <InvoiceInfoRow
+          label={t('billing.orders.invoice.fields.orderId')}
+          value={order.orderId}
+          mono
+        />
+        <InvoiceInfoRow label={t('billing.orders.invoice.fields.application')} value="Cindy" />
+        <InvoiceInfoRow
+          label={t('billing.orders.invoice.fields.paymentMethod')}
+          value={paymentMethod}
+        />
+        <InvoiceInfoRow
+          label={t('billing.orders.invoice.fields.amount')}
+          value={formatMoney(order.amount, order.currency, billingLocale)}
+        />
+      </div>
+
+      <div className="mt-4 py-3">
+        <p className="text-12 leading-5 text-[var(--confirm-title)]">
+          {t('billing.orders.invoice.requiredInfo')}
+        </p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-12 leading-5 text-[var(--confirm-desc)]">
+          {INVOICE_REQUIRED_FIELDS.map((field) => (
+            <li key={field}>{t(`billing.orders.invoice.fields.${field}`)}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <ConfirmDialog
+      open={order !== null}
+      onOpenChange={(open) => {
+        if (open || sendInvoiceLockRef.current) return;
+        onClose();
+      }}
+      title={t('billing.orders.invoice.title')}
+      content={invoiceContent}
+      maxWidth={460}
+      confirmText={t('billing.orders.invoice.sendAction')}
+      cancelText={t('billing.actions.close')}
+      autoFocusConfirm
+      confirmIcon={<Mail className="h-3.5 w-3.5" strokeWidth={1.8} />}
+      onConfirm={sendInvoiceRequest}
+    />
+  );
+}
+
+function InvoiceInfoRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-3 px-3.5 py-2.5 text-12">
+      <span className="text-[var(--text-primary)]">{label}</span>
+      <span
+        className={cn(
+          'min-w-0 break-all text-right text-[var(--text-primary)]',
+          mono && 'font-mono text-11',
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
 function GrantAmount({ label, amount }: { label: string; amount: string }) {
   const { i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;

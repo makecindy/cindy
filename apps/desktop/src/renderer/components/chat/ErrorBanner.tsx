@@ -38,6 +38,7 @@ import {
   isCodexSessionExpiredError,
   useCodexSessionExpiredPrompt,
 } from '@/hooks/useCodexSessionExpiredPrompt';
+import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
 import { cn } from '@/lib/utils';
 import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
@@ -144,8 +145,7 @@ export function ErrorBanner({
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
-    // 非共享凭证已有横幅说明，可直接重连；system-shared 始终由 hook 强制走
-    // “打开 ChatGPT App / 风险确认后由 Cindy 登录”的保护分支。
+    // 非共享凭证沿用原有确认/登录流程；共享凭证由横幅内联动作直接唤起 App。
     confirmBeforeLogin: false,
   });
   // SSH 与 device-link 是两种互斥的远端来源，但都不能读取或修复控制端本机认证。
@@ -369,13 +369,7 @@ export function ErrorBanner({
   } else if (isOpenAiConnectionExpired) {
     displayError = openAiConnectionRecoveredSinceError
       ? t('chatgptAuthRecovery.recovered')
-      : t(
-          openAiCredentialScope === 'system-shared'
-            ? 'chatgptAuthRecovery.systemSharedInvalidated'
-            : openAiCredentialScope === 'instance-isolated'
-              ? 'chatgptAuthRecovery.instanceIsolatedInvalidated'
-              : 'chatgptAuthRecovery.unknownInvalidated',
-        );
+      : t(codexRecoveryDescriptionKey(openAiCredentialScope));
   } else if (isCodexLocalOAuthAuthMissing) {
     displayError = t('chat.errorBanner.codexAuthMissingLocal');
   } else if (isClaudeGatewayOpusPlanMismatch) {
@@ -489,6 +483,15 @@ export function ErrorBanner({
     if (openAiRecoveryBusy) return;
     if (openAiRecoveryCheck === 'failed') {
       await refreshOpenAiAuth();
+      return;
+    }
+    if (openAiCredentialScope === 'system-shared') {
+      try {
+        const opened = await window.electronAPI.openChatGPTApp();
+        if (!opened.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      } catch {
+        toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      }
       return;
     }
     promptCodexSessionExpired(error);
@@ -614,8 +617,7 @@ export function ErrorBanner({
         )}
       </div>
       {openAiReconnectRequired && (
-        // 先走账号级服务端探测；共享凭证由恢复弹窗优先引导到 ChatGPT App，
-        // 不直接产生第二条可 refresh 的 OAuth 凭证链。
+        // 共享凭证直接唤起 ChatGPT App；返回 Cindy 后由 useCodexAuth 自动复检。
         <button
           type="button"
           onClick={() => void handleOpenAiRecovery()}
@@ -627,24 +629,18 @@ export function ErrorBanner({
             'disabled:cursor-not-allowed disabled:opacity-50',
           )}
           title={t(
-            openAiRecoveryCheck === 'failed'
-              ? 'chatgptAuthRecovery.recheck'
-              : openAiRecoveryBusy
-                ? 'chatgptAuthRecovery.checking'
-                : openAiCredentialScope === 'system-shared'
-                  ? 'chatgptAuthRecovery.recheck'
-                  : 'chatgptAuthRecovery.relogin',
+            codexRecoveryActionKey(
+              openAiCredentialScope,
+              openAiRecoveryBusy ? 'checking' : openAiRecoveryCheck,
+            ),
           )}
         >
           <Spinner icon={RefreshCw} size={12} spinning={openAiRecoveryBusy} />
           {t(
-            openAiRecoveryBusy
-              ? 'chatgptAuthRecovery.checking'
-              : openAiRecoveryCheck === 'failed'
-                ? 'chatgptAuthRecovery.recheck'
-                : openAiCredentialScope === 'system-shared'
-                  ? 'chatgptAuthRecovery.recheck'
-                  : 'chatgptAuthRecovery.relogin',
+            codexRecoveryActionKey(
+              openAiCredentialScope,
+              openAiRecoveryBusy ? 'checking' : openAiRecoveryCheck,
+            ),
           )}
         </button>
       )}

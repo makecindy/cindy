@@ -15,6 +15,18 @@ const heatmapSource = readFileSync(
   resolve(__dirname, '../components/new-chat/UsageHeatmap.tsx'),
   'utf8',
 );
+const tokenBarsSource = readFileSync(
+  resolve(__dirname, '../components/settings/usage/UsageTokenBars.tsx'),
+  'utf8',
+);
+const breakdownTablesSource = readFileSync(
+  resolve(__dirname, '../components/settings/usage/UsageBreakdownTables.tsx'),
+  'utf8',
+);
+const usageHistorySectionSource = readFileSync(
+  resolve(__dirname, '../components/settings/usage/UsageHistorySection.tsx'),
+  'utf8',
+);
 
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
@@ -67,6 +79,35 @@ describe('HomeUsageDashboard source contract', () => {
     expect(dailyBarsSource).not.toContain("money.currency ?? 'USD'");
   });
 
+  it('keeps selected usage chart days flat without ad-hoc shadows', () => {
+    expect(heatmapSource).not.toContain('boxShadow');
+    expect(tokenBarsSource).not.toContain('boxShadow');
+    expect(heatmapSource).toContain("'2px solid var(--focus-ring-soft)'");
+    expect(tokenBarsSource).toContain("'2px solid var(--focus-ring-soft)'");
+  });
+
+  it('keeps chart visuals small while giving interactive controls a stable hit target', () => {
+    expect(heatmapSource).toContain('const INTERACTIVE_CELL_PX = 24;');
+    expect(heatmapSource).toContain('const cellSize = onDayClick ? INTERACTIVE_CELL_PX : CELL_PX;');
+    expect(heatmapSource).toContain('style={{ width: cellSize, height: cellSize }}');
+    expect(tokenBarsSource).toContain('const hitHeight = Math.max(24, visualHeight);');
+    expect(tokenBarsSource).toContain('height: visualHeight');
+    expect(tokenBarsSource).toContain('minWidth: bars.list.length * 24');
+    expect(tokenBarsSource).toContain('minWidth: 24');
+    expect(tokenBarsSource).toContain('overflow-x-auto');
+  });
+
+  it('keeps the home heatmap non-interactive when no day callback is supplied', () => {
+    expect(heatmapSource).not.toContain('disabled={!onDayClick}');
+    expect(heatmapSource).toContain('return onDayClick ? (');
+  });
+
+  it('uses the shared model key rank for chart and filtered model-table colors', () => {
+    expect(usageHistorySectionSource).toContain('colorOrder={colorOrder}');
+    expect(breakdownTablesSource).toContain('usageRankOf(colorOrder, row.key)');
+    expect(breakdownTablesSource).toContain('colorOrder: string[];');
+  });
+
   it('shows cached usage immediately while marking background refresh', () => {
     expect(source).toContain(
       'const { history, refreshing: usageRefreshing } = useUsageHistory({ paused: collapsed, userId: user?.id });',
@@ -116,9 +157,9 @@ describe('HomeUsageDashboard source contract', () => {
     expect(hookSource).toContain(
       'const [historyState, setHistoryState] = useState<{ scopeKey: string; value: UsageHistoryPayload | null }>',
     );
-    expect(hookSource).toContain('setHistoryState({ scopeKey, value });');
+    expect(hookSource).toContain('setHistoryState({ scopeKey: scopedKey, value });');
     expect(hookSource).toContain(
-      'history: historyState.scopeKey === scopeKey ? historyState.value : scope.cache,',
+      'const history = historyState.scopeKey === scopedKey ? historyState.value : scope.cache;',
     );
   });
 
@@ -158,7 +199,7 @@ describe('HomeUsageDashboard source contract', () => {
     expect(hookSource).toContain('if (opts?.resetPricingRetry) scope.pricingRetryDone = false;');
     expect(hookSource).toContain('scope.pricingRetryDone = false;');
     expect(hookSource).toContain(
-      'void load(scopeKey, { forceRefresh: true, resetPricingRetry: true });',
+      'void load(scopedKey, { forceRefresh: true, resetPricingRetry: true });',
     );
   });
 
@@ -167,6 +208,51 @@ describe('HomeUsageDashboard source contract', () => {
     expect(hookSource).toContain('if (next.estimatesPending) {');
     expect(hookSource).not.toContain(
       "next.models.some((m) => m.agentKind === 'codex' && m.estimatedCostUsd === null)",
+    );
+  });
+
+  it('lets the token-only settings page consume pending estimates without changing the home gate', () => {
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
+    const settingsSource = readFileSync(
+      resolve(__dirname, '../components/settings/usage/UsageHistorySection.tsx'),
+      'utf8',
+    );
+    expect(settingsSource).toContain('allowPendingEstimates: true');
+    expect(hookSource).toContain('allowPendingEstimates?: boolean;');
+    expect(hookSource).toContain('if (!scope.request.allowPendingEstimates) return scope.cache;');
+  });
+
+  it('keeps the settings usage loading state separate from a loaded empty payload', () => {
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
+    expect(usageHistorySectionSource).toContain('const loading = history === null && refreshing;');
+    expect(usageHistorySectionSource).toContain(
+      'const loadFailed = history === null && !refreshing;',
+    );
+    expect(usageHistorySectionSource).toContain(
+      'const empty = history !== null && isUsageHistoryEmpty(history);',
+    );
+    expect(usageHistorySectionSource).toContain("t('usageHistory.loadFailed')");
+    expect(hookSource).toContain('useState(scope.cache === null || scope.refreshing)');
+    expect(hookSource.indexOf('void load(scopedKey);')).toBeLessThan(
+      hookSource.indexOf('setIsRefreshing(activeScope.refreshing);'),
+    );
+    expect(hookSource).toContain(
+      'historyState.scopeKey === scopedKey ? isRefreshing : scope.cache === null || scope.refreshing;',
+    );
+  });
+
+  it('keeps interactive usage controls discoverable and semantically selected', () => {
+    expect(usageHistorySectionSource).toContain(
+      'data-[state=checked]:bg-[var(--settings-menu-bg-selected)]',
+    );
+    expect(usageHistorySectionSource).toContain(
+      'data-[state=checked]:text-[var(--settings-menu-text-selected)]',
+    );
+    expect(heatmapSource).toContain('const accessibleLabel =');
+    expect(heatmapSource).toContain('aria-label={accessibleLabel}');
+    expect(tokenBarsSource).toContain('function parseDayKeyLocal(dayKey: string): Date');
+    expect(tokenBarsSource).toContain(
+      'aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))}',
     );
   });
 });

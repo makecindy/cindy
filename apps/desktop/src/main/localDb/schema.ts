@@ -353,7 +353,8 @@ export const messages = sqliteTable(
       // 的 onTurnErrorEvent)。drizzle 的 text enum 只是 TS 类型约束,SQLite 列
       // 无 CHECK,扩枚举不产生 migration(db:generate 应为 no-op)。
       // 'agent_switch':session 内 agent 引擎切换边界行(session-agent-switch),
-      // content 存 { fromAgentKind, toAgentKind, fromModel, toModel, handoff }。
+      // content 存 { fromAgentKind, toAgentKind, fromModel, toModel,
+      // fromProviderId?, toProviderId?, handoff }。
       // handoff 交接文本只进这里(供 UI 展开查看/debug),不作为可见消息渲染正文,
       // 也不落 user 消息——wire 注入与显示分离。
       // 'context_rebuild':消息内容删除后的内部重建标记。rewind_at 固定非 NULL,

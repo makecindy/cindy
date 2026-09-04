@@ -5,6 +5,7 @@ import path from 'node:path';
 import { TEST_CDN_BASE_URL as CDN_EXTERNAL_BASE_URL } from '../../test/vitest/clientEndpointsFixture';
 
 const originalPlatform = process.platform;
+const originalArch = process.arch;
 let TEST_ROOT: string;
 let TEST_USER_DATA: string;
 let TEST_EXE: string;
@@ -170,9 +171,14 @@ function setPlatform(value: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value, configurable: true });
 }
 
-async function freshUpdateService(platform: NodeJS.Platform) {
+function setArch(value: string): void {
+  Object.defineProperty(process, 'arch', { value, configurable: true });
+}
+
+async function freshUpdateService(platform: NodeJS.Platform, arch: string = originalArch) {
   vi.resetModules();
   setPlatform(platform);
+  setArch(arch);
   return import('../updateService');
 }
 
@@ -251,6 +257,7 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   setPlatform(originalPlatform);
+  setArch(originalArch);
 });
 
 function updateManifest(version = '0.0.65', hotfixFile?: string) {
@@ -327,7 +334,7 @@ describe('checkForUpdate Linux installer flow', () => {
       fs.writeFileSync(targetPath, 'deb');
       return { path: targetPath, size: 123 };
     });
-    const { checkForUpdate, getUpdateStatus } = await freshUpdateService('linux');
+    const { checkForUpdate, getUpdateStatus } = await freshUpdateService('linux', 'x64');
 
     const result = await checkForUpdate(linuxInstallerManifest('9.9.9'));
 
@@ -341,7 +348,7 @@ describe('checkForUpdate Linux installer flow', () => {
   });
 
   it('ignores a Linux hotfix zip and stays idle without an installer', async () => {
-    const { checkForUpdate, getUpdateStatus } = await freshUpdateService('linux');
+    const { checkForUpdate, getUpdateStatus } = await freshUpdateService('linux', 'x64');
 
     const result = await checkForUpdate({
       app: {
@@ -367,12 +374,73 @@ describe('checkForUpdate Linux installer flow', () => {
     });
   });
 
-  it('refuses the xd org beta default on Linux without writing to disk', async () => {
+  it('allows the xd org beta default on Linux x64', async () => {
     tryEnableUncustomizedBetaAtomic.mockReset();
-    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux');
+    tryEnableUncustomizedBetaAtomic.mockResolvedValue(true);
+    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', 'x64');
+
+    await expect(enableUncustomizedBetaChannel()).resolves.toBe(true);
+    expect(tryEnableUncustomizedBetaAtomic).toHaveBeenCalledOnce();
+  });
+
+  it('refuses the xd org beta default on Linux arm64 without writing to disk', async () => {
+    tryEnableUncustomizedBetaAtomic.mockReset();
+    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', 'arm64');
 
     await expect(enableUncustomizedBetaChannel()).resolves.toBe(false);
     expect(tryEnableUncustomizedBetaAtomic).not.toHaveBeenCalled();
+  });
+
+  it('allows the beta channel setting to be written on Linux x64', async () => {
+    const service = await freshUpdateService('linux', 'x64');
+    service.initUpdateService();
+    try {
+      const setHandler = ipcHandlers.get('update-channel-settings-set');
+      expect(setHandler).toBeTypeOf('function');
+
+      await expect(
+        setHandler?.({ sender: { id: 1 } }, { enableBeta: true }),
+      ).resolves.toBeDefined();
+      expect(writeEnableBeta).toHaveBeenCalledWith(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('rejects beta channel setting writes on Linux arm64', async () => {
+    const service = await freshUpdateService('linux', 'arm64');
+    service.initUpdateService();
+    try {
+      const setHandler = ipcHandlers.get('update-channel-settings-set');
+      expect(setHandler).toBeTypeOf('function');
+
+      await expect(
+        setHandler?.({ sender: { id: 1 } }, { enableBeta: true }),
+      ).rejects.toThrow('This build does not support the beta update channel');
+      expect(writeEnableBeta).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it.each([
+    { arch: 'x64', expected: true },
+    { arch: 'arm64', expected: false },
+  ])('reports a persisted beta setting correctly on Linux $arch', async ({ arch, expected }) => {
+    readUpdateChannelSettings.mockReturnValue({
+      enableBeta: true,
+      orgDefaultEnableBeta: false,
+    });
+    const service = await freshUpdateService('linux', arch);
+    service.initUpdateService();
+    try {
+      const getHandler = ipcHandlers.get('update-channel-settings-get');
+      expect(getHandler).toBeTypeOf('function');
+
+      expect(getHandler?.({ sender: { id: 1 } })).toMatchObject({ enableBeta: expected });
+    } finally {
+      service.stopUpdateService();
+    }
   });
 });
 

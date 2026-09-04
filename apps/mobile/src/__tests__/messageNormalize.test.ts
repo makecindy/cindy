@@ -7,6 +7,10 @@ import {
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
 import { buildMobileMessageCopyText } from '@/session/messageActions';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
+import {
+  MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES,
+  projectLargeSettledToolInputs,
+} from '@/session/messageToolPayloadProjection';
 import type { RemoteMessage } from '@/session/types';
 
 function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'role' | 'content'>): RemoteMessage {
@@ -23,6 +27,41 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 describe('normalizeRemoteMessages', () => {
   beforeAll(async () => {
     await i18n.changeLanguage('zh-CN');
+  });
+
+  it('renders a projected large tool input from its bounded summary and keeps its result', () => {
+    const projected = projectLargeSettledToolInputs([
+      message({
+        id: 'large-tool',
+        role: 'tool_use',
+        toolUseId: 'toolu-large',
+        content: {
+          input: { payload: 'x'.repeat(MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES + 1) },
+          toolName: 'WebFetch',
+          toolUseId: 'toolu-large',
+        },
+      }),
+      message({
+        id: 'large-result',
+        role: 'tool_result',
+        toolUseId: 'toolu-large',
+        content: 'finished',
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+    ]);
+
+    const [item] = normalizeRemoteMessages(projected);
+    expect(item).toMatchObject({
+      kind: 'tool',
+      label: 'WebFetch',
+      secondaryBody: 'finished',
+      toolSettled: true,
+      toolInputProjection: {
+        projected: true,
+        toolUseMessageId: 'large-tool',
+      },
+    });
+    expect(item.body.length).toBeLessThanOrEqual(480);
   });
 
   it('projects a persisted agent task terminal state from tool_use metadata', () => {

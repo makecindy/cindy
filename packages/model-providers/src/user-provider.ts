@@ -154,6 +154,34 @@ function registryEffortMetadata(
   return consensusRegistryEffortMetadata(fallbackMatches, agent);
 }
 
+/**
+ * Fast mode is a Codex service-tier capability, so a user provider may inherit it only when the
+ * configured model id exactly matches a Registry route for Codex. Prefix fallback is intentionally
+ * excluded: aliases can point at gateways with different billing or service-tier behavior.
+ */
+function registrySupportsFastMode(
+  registry: ModelRegistry | null | undefined,
+  modelId: string,
+  agent: AgentKind,
+): boolean {
+  if (agent !== "codex" || !registry) return false;
+
+  const matches = registry.models.filter((entry) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) && route.modelId === modelId,
+    ),
+  );
+  return (
+    matches.length > 0 &&
+    matches.every(
+      (entry) =>
+        (entry.perAgent?.[agent]?.supportsFastMode ??
+          entry.supportsFastMode) === true,
+    )
+  );
+}
+
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
 const AGENT_ORDER: readonly AgentKind[] = ["claude-code", "codex", "pi"];
 
@@ -178,6 +206,11 @@ function toCatalogModel(
     m.reasoning !== undefined
       ? undefined
       : registryEffortMetadata(modelRegistry, m.id, agent);
+  const supportsFastMode = registrySupportsFastMode(
+    modelRegistry,
+    m.id,
+    agent,
+  );
   const effectiveEfforts = registryEfforts?.efforts ?? efforts;
   const defaultEffort =
     registryEfforts?.defaultEffort ??
@@ -209,6 +242,7 @@ function toCatalogModel(
     // 图片能力必须由用户/预设明确确认；缺省不猜，防止 Pi 静默把截图降级成占位文本。
     ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
     ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
+    ...(supportsFastMode ? { supportsFastMode: true } : {}),
   };
 }
 

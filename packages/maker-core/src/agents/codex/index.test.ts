@@ -540,6 +540,7 @@ function installFakeHost(
     openAiWebSocketsEnabled?: boolean;
     userAgent?: string;
     codexHome?: string;
+    activeThreadIds?: string[];
     buildSessionMcpConfig?: (sessionInstanceId?: string) => Record<string, unknown>;
   } = {},
 ) {
@@ -594,6 +595,9 @@ function installFakeHost(
     return { release: vi.fn() };
   });
   const unsubscribeThread = vi.fn(async () => {});
+  const hasThreadSubscription = vi.fn((threadId: string) =>
+    opts.activeThreadIds?.includes(threadId) === true,
+  );
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const isCodexBrowserUseAvailable = vi.fn(
     () => opts.codexBrowserUseAvailable === true,
@@ -651,6 +655,7 @@ function installFakeHost(
     request,
     subscribeThread,
     unsubscribeThread,
+    hasThreadSubscription,
     isCodexProxyActive,
     isCodexBrowserUseAvailable,
     getCodexBrowserUseVersion,
@@ -8277,6 +8282,62 @@ describe('CodexAgent MCP thread context hooks', () => {
       await waitForExpectation(() => {
         expect(events.some((event) => event.type === 'done')).toBe(true);
       });
+      await handle.close();
+    });
+
+    it('does not arm HTTP fallback for remote compact encrypted-content 400', async () => {
+      const compactEncrypted =
+        'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }';
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-remote-compact-encrypted',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: compactEncrypted,
+          additionalDetails: compactEncrypted,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: compactEncrypted },
+        },
+      });
+
+      await waitForExpectation(() => {
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'error' &&
+              (event.data as { isTerminal?: boolean; reason?: string }).isTerminal === true &&
+              (event.data as { reason?: string }).reason === 'context-overflow',
+          ),
+        ).toBe(true);
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      expect(armCodexHttpRecovery).not.toHaveBeenCalled();
       await handle.close();
     });
 
@@ -21165,7 +21226,149 @@ describe('CodexAgent resume preparation', () => {
   });
 });
 
+describe('CodexAgent native fork anchor events', () => {
+  it('attaches the source thread and completed turn to a successful done event', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-native-fork-anchor',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-native-anchor', status: 'completed' },
+    });
+
+    await expect(nextEvent(iterator)).resolves.toMatchObject({ type: 'status' });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'done',
+      agentMeta: {
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'start-thread-id',
+          kind: 'turn',
+          id: 'turn-native-anchor',
+        },
+      },
+    });
+    await handle.close();
+  });
+});
+
 describe('CodexAgent.forkSdkSession', () => {
+  it('reuses the shared host and forks directly at a native turn', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {});
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      activeThreadIds: ['source-thread-id'],
+    });
+    const retireHostKey = vi.spyOn(
+      agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+      'retireHostKey',
+    );
+
+    const result = await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+      tailTurnsToDrop: 2,
+      workingDir: '/repo',
+    });
+
+    expect(host.getHost).toHaveBeenCalledWith(undefined, undefined, {
+      ignoreBindingLeases: 1,
+    });
+    expect(prepareCodexResumeSession).not.toHaveBeenCalled();
+    expect(host.request).toHaveBeenCalledTimes(1);
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'source-thread-id',
+      lastTurnId: 'turn-at-boundary',
+      excludeTurns: true,
+      cwd: '/repo',
+    });
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+    expect(retireHostKey).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      newSdkSessionId: 'fork-thread-id',
+      usedNativeForkAnchor: true,
+    });
+  });
+
+  it('prepares an unloaded source thread before a native-turn fork', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {});
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'imported-source-thread',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+    });
+
+    expect(prepareCodexResumeSession).toHaveBeenCalledWith('imported-source-thread');
+    expect(prepareCodexResumeSession.mock.invocationCallOrder[0]).toBeLessThan(
+      host.request.mock.invocationCallOrder[0],
+    );
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'imported-source-thread',
+      lastTurnId: 'turn-at-boundary',
+      excludeTurns: true,
+    });
+  });
+
+  it('uses the isolated rollback fallback when bounded native-turn fork is unavailable', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.144.6' });
+
+    const result = await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+      tailTurnsToDrop: 1,
+    });
+
+    expect(host.request).toHaveBeenNthCalledWith(1, Method.ThreadFork, {
+      threadId: 'source-thread-id',
+      persistExtendedHistory: true,
+    });
+    expect(host.request).toHaveBeenNthCalledWith(2, Method.ThreadRollback, {
+      threadId: 'fork-thread-id',
+      numTurns: 1,
+    });
+    expect(result.usedNativeForkAnchor).toBeUndefined();
+  });
+
+  it('fails a precise fork without retiring the shared host when child unload fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      activeThreadIds: ['source-thread-id'],
+    });
+    host.unsubscribeThread.mockRejectedValueOnce(new Error('unsubscribe failed'));
+    const retireHostKey = vi.spyOn(
+      agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+      'retireHostKey',
+    );
+
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+    })).rejects.toThrow('unsubscribe failed');
+
+    expect(retireHostKey).not.toHaveBeenCalled();
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
+  });
+
   it('prepares an imported source thread before thread/fork', async () => {
     const order: string[] = [];
     const prepareCodexResumeSession = vi.fn(async () => {

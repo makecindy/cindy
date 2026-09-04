@@ -27,10 +27,7 @@ const log = createLogger('git-context/gh-cli');
 const GH_CANDIDATES: Record<string, string[]> = {
   darwin: ['/opt/homebrew/bin/gh', '/usr/local/bin/gh'],
   linux: ['/usr/bin/gh', '/usr/local/bin/gh', '/home/linuxbrew/.linuxbrew/bin/gh'],
-  win32: [
-    'C:\\Program Files\\GitHub CLI\\gh.exe',
-    'C:\\Program Files (x86)\\GitHub CLI\\gh.exe',
-  ],
+  win32: ['C:\\Program Files\\GitHub CLI\\gh.exe', 'C:\\Program Files (x86)\\GitHub CLI\\gh.exe'],
 };
 
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
@@ -53,11 +50,39 @@ export interface GhCliTokenSourceDeps {
   now?: () => number;
 }
 
+/**
+ * 拿不到 token 的原因。UI 按它决定引导动作:
+ *   gh-missing        = 二进制不存在(ENOENT / spawn 抛错)→ 引导安装
+ *   gh-not-logged-in  = gh 在但 `auth token` 非零退出或输出为空 → 引导登录
+ *   gh-timeout        = 子进程超时 → 用户做不了什么,当瞬时失败
+ *   gh-exec-failed    = 文件在但跑不起来(EACCES / ENOEXEC 等)→ 同超时,不引导
+ */
+export type GhCliTokenUnavailableReason =
+  'gh-missing' | 'gh-not-logged-in' | 'gh-timeout' | 'gh-exec-failed';
+
+export type GhCliTokenReadResult =
+  { ok: true; token: string } | { ok: false; reason: GhCliTokenUnavailableReason };
+
 export interface GhCliTokenSource {
   /** 返回本地 gh 登录 token;未安装 / 未登录 / 超时返回 null,永不抛错。 */
   readToken(): Promise<string | null>;
+  /** 同 readToken,但保留拿不到 token 的原因(共享同一份缓存)。永不抛错。 */
+  readTokenDetailed(): Promise<GhCliTokenReadResult>;
   /** 只探测 github.com 登录可用性，不读取或缓存 token。 */
   probeAvailability(): Promise<boolean>;
+}
+
+/**
+ * execFile 回调 err 的分类。
+ * Node:子进程非零退出时 `code` 是数字;spawn/exec 失败时 `code` 是字符串
+ * (ENOENT / EACCES / ENOEXEC …)。只有真正跑起来再失败才算未登录。
+ */
+function classifyExecError(err: Error): GhCliTokenUnavailableReason {
+  const e = err as Error & { code?: unknown; killed?: boolean; signal?: unknown };
+  if (e.code === 'ENOENT') return 'gh-missing';
+  if (e.killed && typeof e.signal === 'string') return 'gh-timeout';
+  if (typeof e.code === 'string') return 'gh-exec-failed';
+  return 'gh-not-logged-in';
 }
 
 export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTokenSource {
@@ -68,8 +93,8 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
   const negativeTtl = deps.negativeCacheTtlMs ?? DEFAULT_NEGATIVE_CACHE_TTL_MS;
   const now = deps.now ?? Date.now;
 
-  let cached: { token: string | null; expiresAt: number } | null = null;
-  let inFlight: Promise<string | null> | null = null;
+  let cached: { result: GhCliTokenReadResult; expiresAt: number } | null = null;
+  let inFlight: Promise<GhCliTokenReadResult> | null = null;
 
   function resolveGhBinary(): string {
     for (const candidate of GH_CANDIDATES[platform] ?? []) {
@@ -78,25 +103,42 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
     return platform === 'win32' ? 'gh.exe' : 'gh';
   }
 
-  async function fetchToken(): Promise<string | null> {
+  async function fetchToken(): Promise<GhCliTokenReadResult> {
     const bin = resolveGhBinary();
-    return new Promise<string | null>((resolve) => {
+    return new Promise<GhCliTokenReadResult>((resolve) => {
       try {
         execFileFn(bin, ['auth', 'token'], { timeout: GH_TIMEOUT_MS }, (err, stdout) => {
           if (err) {
-            // 未安装(ENOENT)/ 未登录(exit 1)/ 超时都归一为 null,只 debug 级记录。
-            log.debug('gh auth token unavailable', { bin, err: String(err) });
-            resolve(null);
+            // 失败只 debug 级记录;原因分类留给 UI 决定引导动作。
+            const reason = classifyExecError(err);
+            log.debug('gh auth token unavailable', { bin, reason, err: String(err) });
+            resolve({ ok: false, reason });
             return;
           }
           const token = stdout.trim();
-          resolve(token.length > 0 ? token : null);
+          resolve(
+            token.length > 0 ? { ok: true, token } : { ok: false, reason: 'gh-not-logged-in' },
+          );
         });
       } catch (err) {
         log.debug('gh spawn threw', { err: String(err) });
-        resolve(null);
+        resolve({ ok: false, reason: 'gh-missing' });
       }
     });
+  }
+
+  async function readTokenDetailed(): Promise<GhCliTokenReadResult> {
+    if (cached && cached.expiresAt > now()) return cached.result;
+    if (inFlight) return inFlight;
+    inFlight = fetchToken()
+      .then((result) => {
+        cached = { result, expiresAt: now() + (result.ok ? ttl : negativeTtl) };
+        return result;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    return inFlight;
   }
 
   async function probeAvailability(): Promise<boolean> {
@@ -118,18 +160,10 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
 
   return {
     probeAvailability,
+    readTokenDetailed,
     async readToken(): Promise<string | null> {
-      if (cached && cached.expiresAt > now()) return cached.token;
-      if (inFlight) return inFlight;
-      inFlight = fetchToken()
-        .then((token) => {
-          cached = { token, expiresAt: now() + (token ? ttl : negativeTtl) };
-          return token;
-        })
-        .finally(() => {
-          inFlight = null;
-        });
-      return inFlight;
+      const result = await readTokenDetailed();
+      return result.ok ? result.token : null;
     },
   };
 }

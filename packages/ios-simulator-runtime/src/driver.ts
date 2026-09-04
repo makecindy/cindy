@@ -282,7 +282,7 @@ export interface IOSSimulatorDiscreteInputDriver extends IOSSimulatorDriverAdapt
     text: string,
     signal?: AbortSignal,
   ): Promise<void>;
-  home(signal?: AbortSignal): Promise<void>;
+  home(sessionId: string, signal?: AbortSignal): Promise<void>;
   lock(sessionId?: string, signal?: AbortSignal): Promise<void>;
   unlock(sessionId?: string, signal?: AbortSignal): Promise<void>;
   setOrientation(

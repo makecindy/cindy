@@ -46,6 +46,21 @@ describe('isContextOverflowErrorData', () => {
       isContextOverflowErrorData({ message: 'Rate limit exceeded: too many tokens per minute' }),
     ).toBe(false);
   });
+
+  it('treats Codex remote compact encrypted-content 400 as rebuildable', () => {
+    expect(
+      isContextOverflowErrorData({
+        message:
+          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
+      }),
+    ).toBe(true);
+    expect(
+      isContextOverflowErrorData({
+        message:
+          'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('shouldRebuildPiNativeSession', () => {
@@ -720,6 +735,43 @@ describe('createContextOverflowRollover', () => {
     expect(remoteDeps.closeSession).not.toHaveBeenCalled();
   });
 
+  it('rebuilds Codex remote compact encrypted-content failures without a context-overflow reason key', async () => {
+    const deps = makeDeps([
+      msg('user', '先做 A', 'u1', 1),
+      msg('assistant', '做完 A', 'a1', 2),
+      msg('user', '再做 B', 'u2', 3),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'thread-1',
+      contextTokens: 12_000,
+      contextWindow: 200_000,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    });
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', {
+        message:
+          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
+      }),
+    ).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1',
+      expect.any(String),
+      expect.objectContaining({
+        reason: 'context-overflow',
+        sourceUserClientId: 'u2',
+        sourceAgentKind: 'codex',
+      }),
+    );
+    expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '再做 B');
+  });
+
   it('rebuilds once, injects handoff, and wire-replays the same user content', async () => {
     const deps = makeDeps([
       msg('user', '先做 A', 'u1', 1),
@@ -837,6 +889,27 @@ describe('createContextOverflowRollover', () => {
       rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
     ).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds before send when the trailing error is a Codex remote compact encrypted-content 400', async () => {
+    const compactError =
+      'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }';
+    const deps = makeDeps([msg('user', '继续', 'u1'), msg('error', compactError, 'e1')]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'thread-1',
+      contextTokens: 12_000,
+      contextWindow: 200_000,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    });
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 

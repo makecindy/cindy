@@ -223,6 +223,40 @@ describe("buildUserProvider (per-runtime)", () => {
     });
   });
 
+  it("inherits Registry Fast support only for an exact Codex route model id", () => {
+    const provider = buildUserProvider(
+      {
+        id: "fast-relay",
+        name: "Fast Relay",
+        runtimes: {
+          codex: {
+            baseUrl: "https://relay.example/v1",
+            models: [
+              { id: "gpt-5.6-sol", name: "GPT-5.6-Sol" },
+              { id: "openai/gpt-5.6-sol", name: "Prefixed GPT-5.6-Sol" },
+              { id: "unregistered-model", name: "Unregistered" },
+            ],
+          },
+          "claude-code": {
+            baseUrl: "https://relay.example/anthropic",
+            models: [{ id: "gpt-5.6-sol", name: "GPT-5.6-Sol" }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+
+    expect(provider.models.codex?.[0]).toMatchObject({
+      id: "gpt-5.6-sol",
+      supportsFastMode: true,
+    });
+    expect(provider.models.codex?.[1]?.supportsFastMode).toBeUndefined();
+    expect(provider.models.codex?.[2]?.supportsFastMode).toBeUndefined();
+    expect(
+      provider.models["claude-code"]?.[0]?.supportsFastMode,
+    ).toBeUndefined();
+  });
+
 it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)', () => {
     const p = buildUserProvider(
       {

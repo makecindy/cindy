@@ -96,7 +96,11 @@ async function listBackupSkillNames(): Promise<string[]> {
 
 async function readManifestWithBackup(skillName: string): Promise<StoredManifest | null> {
   const manifest = await manifestIO.readFile(skillName);
-  if (manifest) return manifest;
+  if (manifest) {
+    const migrated = migrateStoredManifest(manifest);
+    if (migrated.changed) await writeManifestWithBackup(skillName, migrated.manifest);
+    return migrated.manifest;
+  }
 
   // 短期兼容：用户可能降级到旧版后再升回新版。旧版 orphan cleanup 在
   // ~/.agents 实体目录 + ~/.claude symlink 场景下可能误删主 registry 文件。
@@ -127,16 +131,15 @@ export async function addInstall(
     if (!existing) {
       manifest = {
         schemaVersion: 1,
-        catalogScopeMigrated: true,
         skillName,
-        installs: { [normalizedPath]: entry },
+        installs: { [normalizedPath]: { ...entry, catalogScopeMigrated: true } },
       };
     } else {
       manifest = {
         ...existing,
         installs: {
           ...existing.installs,
-          [normalizedPath]: entry,
+          [normalizedPath]: { ...entry, catalogScopeMigrated: true },
         },
       };
     }
@@ -237,8 +240,12 @@ export async function listAllInstalls(): Promise<
   Array<{ skillName: string; installPath: string; entry: StoredInstall }>
 > {
   const filesByName = new Map<string, StoredManifest>();
-  for (const { skillName, manifest } of await manifestIO.listAllFiles()) {
-    filesByName.set(skillName, manifest);
+  for (const { skillName } of await manifestIO.listAllFiles()) {
+    const manifest = await withLock(skillName, () => readManifestWithBackup(skillName)).catch((err) => {
+      log.warn(`read registry manifest failed for ${skillName}:`, err);
+      return null;
+    });
+    if (manifest) filesByName.set(skillName, manifest);
   }
   for (const skillName of await listBackupSkillNames()) {
     if (filesByName.has(skillName)) continue;
@@ -257,14 +264,22 @@ export async function listAllInstalls(): Promise<
   return result;
 }
 
-/** Re-point every local install of a slug after the server moves it between catalogs. */
+/** Re-point installs from one catalog after the server moves that record. */
 export async function updateCatalogScopeForSkill(
   skillName: string,
   catalogScope: StoredInstall['catalogScope'],
+  previousCatalogScope: StoredInstall['catalogScope'],
 ): Promise<void> {
-  const installs = (await listAllInstalls()).filter((item) => item.skillName === skillName);
-  await Promise.all(installs.map(({ installPath }) => updateInstall(skillName, installPath, {
-    catalogScope,
-    updatedAt: Math.floor(Date.now() / 1000),
-  })));
+  await withLock(skillName, async () => {
+    const existing = await readManifestWithBackup(skillName);
+    if (!existing) return;
+    const updatedAt = Math.floor(Date.now() / 1000);
+    let changed = false;
+    const installs = Object.fromEntries(Object.entries(existing.installs).map(([installPath, entry]) => {
+      if (entry.catalogScope !== previousCatalogScope) return [installPath, entry];
+      changed = true;
+      return [installPath, { ...entry, catalogScope, updatedAt }];
+    }));
+    if (changed) await writeManifestWithBackup(skillName, { ...existing, installs });
+  });
 }

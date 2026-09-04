@@ -1487,6 +1487,36 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.setEffort).not.toHaveBeenCalled(); // 终检在 effort 下发之前拦截
   });
 
+  it('exclusive grok 无 SuperGrok 且未钉自定义源时,失败原因说清缺来源而不是「设置里停用」(#3884)', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    harness.setModel.mockRejectedValue(new Error('switchModel rejected'));
+    const queue = createQueueHarness({ busy: true });
+    const checkModelRoute = vi.fn(
+      async (_agent: string, model: string, _providerId: string | null) =>
+        model === 'claude-opus-4-6'
+          ? ({ kind: 'reject', reason: 'exclusive-source-unavailable' } as const)
+          : ({ kind: 'pass' } as const),
+    );
+    const { runner } = createRunnerHarness(harness.session, queue.deps, {
+      availableModels: [
+        { id: 'claude-opus-4-6', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+        { id: 'claude-opus-4-8', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+      ],
+      checkModelRoute,
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({ model: 'claude-opus-4-8' }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    await expect(firePromise).rejects.toThrow(/requires SuperGrok \(xAI\) or an explicitly selected custom source/);
+    await expect(firePromise).rejects.not.toThrow(/disabled in settings/);
+    await expect(firePromise).rejects.toThrow(/\(exclusive-source-unavailable\)/);
+  });
+
   it('clamps follow-session queued effort to the drifted live model, not the stale baseline (PR #479 review)', async () => {
     // follow-session:schedule 无显式 model(沿用会话模型)但覆盖 effort=max。排队等待期间用户
     // 把会话切到只到 xhigh 的模型 → 本轮不 setModel、turn 跑在 live.model。effort 必须按 live.model

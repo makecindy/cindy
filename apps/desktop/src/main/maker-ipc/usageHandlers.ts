@@ -73,7 +73,11 @@ export interface MakerUsageHandlerDeps {
   consumeCodexRateLimitReset(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
   readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXaiSubscriptionUsageSnapshot(): Promise<XaiSubscriptionUsageSnapshot | null>;
-  assertTrustedSender?(event: unknown): void;
+  /**
+   * 用量历史会读取完整的 sessions 表，必须在任何参数解析或 DB 查询前确认
+   * 请求来自受信任的主页面 renderer。
+   */
+  assertTrustedSender(event: unknown): void;
   readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | null;
   triggerClaudeAccountUsageRefresh(force: boolean): Promise<void>;
   readModelPricing(): Promise<ModelPricingMap | null>;
@@ -158,12 +162,25 @@ export function registerMakerUsageHandlers(
 
   // 用量历史聚合 (首页仪表盘) — 查询型 handler, DB 出错回退空 payload 让
   // renderer 正常渲染空态 (与同文件其它 usage 读取的 fallback-data 口径一致)。
-  registry.handle(MAKER_INVOKE.USAGE_HISTORY, async (_e, opts: unknown) => {
-    const raw = (opts ?? {}) as { days?: unknown; forceRefresh?: unknown };
-    const days = typeof raw.days === 'number' && Number.isFinite(raw.days) ? raw.days : undefined;
+  registry.handle(MAKER_INVOKE.USAGE_HISTORY, async (event, opts: unknown) => {
+    deps.assertTrustedSender(event);
+    const raw = (opts ?? {}) as { days?: unknown; modelDays?: unknown; forceRefresh?: unknown };
+    const days =
+      raw.days === 'all'
+        ? ('all' as const)
+        : typeof raw.days === 'number' && Number.isFinite(raw.days)
+          ? raw.days
+          : undefined;
+    const modelDays =
+      raw.modelDays === 'all'
+        ? ('all' as const)
+        : typeof raw.modelDays === 'number' && Number.isFinite(raw.modelDays)
+          ? raw.modelDays
+          : undefined;
     const forceRefresh = raw.forceRefresh === true;
     const readOpts = {
       ...(days === undefined ? {} : { days }),
+      ...(modelDays === undefined ? {} : { modelDays }),
       ...(forceRefresh ? { forceRefresh: true } : {}),
     };
     try {

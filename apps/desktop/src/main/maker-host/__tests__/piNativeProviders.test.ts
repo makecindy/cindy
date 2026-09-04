@@ -281,7 +281,70 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       id: 'models-url-only',
       name: 'Models URL Only',
       contextWindow: 64_000,
+      // 无目录元数据的 Chat Completions 模型默认收敛 system role(#3832)。
+      compat: { supportsDeveloperRole: false },
     });
+  });
+
+  it('defaults unknown custom Chat Completions models to system role (#3832)', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'volcengine',
+          name: 'Volcengine Ark',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'doubao-seed-2-0', name: 'Doubao Seed 2.0' }],
+            }),
+          },
+        },
+      ],
+      () => 'ark-key',
+    );
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'doubao-seed-2-0',
+      compat: { supportsDeveloperRole: false },
+    });
+  });
+
+  it('does not inject the system-role fallback for non-Chat protocols (#3832)', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'custom-anthropic',
+          name: 'Custom Anthropic Compatible',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://compat.example/v1',
+              wireProtocol: 'anthropic-messages',
+              models: [{ id: 'compat-model' }],
+            }),
+          },
+        },
+        {
+          id: 'custom-responses',
+          name: 'Custom Responses Compatible',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://responses.example/v1',
+              wireProtocol: 'openai-responses',
+              models: [{ id: 'responses-model' }],
+            }),
+          },
+        },
+      ],
+      () => 'key',
+    );
+    for (const provider of providers) {
+      for (const model of provider.models) {
+        expect(model).not.toHaveProperty('compat');
+      }
+    }
   });
 
   it('does not apply official per-model routing after the user changes endpoint or protocol', () => {
@@ -378,6 +441,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: null,
         max: null,
       },
+      // 目录标记清除后无同源元数据,Chat Completions 默认收敛 system role(#3832)。
+      compat: { supportsDeveloperRole: false },
     });
   });
 
@@ -1859,9 +1924,16 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       ],
       () => null,
     );
+    const chatDefaultCompat = { compat: { supportsDeveloperRole: false } };
     expect(providers[0].models).toEqual([
-      { id: 'vision', name: 'Vision', contextWindow: undefined, input: ['text', 'image'] },
-      { id: 'legacy', name: 'Legacy', contextWindow: undefined },
+      {
+        id: 'vision',
+        name: 'Vision',
+        contextWindow: undefined,
+        input: ['text', 'image'],
+        ...chatDefaultCompat,
+      },
+      { id: 'legacy', name: 'Legacy', contextWindow: undefined, ...chatDefaultCompat },
     ]);
   });
 
@@ -2059,6 +2131,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: null,
         max: 'max',
       },
+      // 显式声明能力但无同源元数据,Chat Completions 默认收敛 system role(#3832)。
+      compat: { supportsDeveloperRole: false },
     });
   });
 });

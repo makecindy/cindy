@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -10,11 +10,13 @@ const mocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   exitLocalMode: vi.fn(),
+  handleLogout: vi.fn(),
   authState: {
     user: {
       id: 'user-123',
       name: 'Lizi',
       avatar: null,
+      email: 'lizi@example.com',
       membershipKind: 'personal' as 'personal' | 'org',
       membershipRole: 'owner' as 'owner' | 'admin' | 'member',
       orgName: null as string | null,
@@ -23,6 +25,7 @@ const mocks = vi.hoisted(() => ({
       id: string;
       name: string;
       avatar: string | null;
+      email: string | null;
       membershipKind: 'personal' | 'org';
       membershipRole: 'owner' | 'admin' | 'member';
       orgName: string | null;
@@ -45,6 +48,14 @@ vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => mocks.authState,
 }));
 
+vi.mock('@/hooks/useLogout', () => ({
+  useLogout: () => ({ handleLogout: mocks.handleLogout }),
+}));
+
+vi.mock('@/lib/makerChatStore', () => ({
+  makerChatStore: { getRunningSnapshot: () => new Map() },
+}));
+
 vi.mock('@/lib/toast', () => ({
   toast: { success: mocks.toastSuccess, error: mocks.toastError },
 }));
@@ -60,8 +71,14 @@ function renderCard() {
   return render(
     <MemoryRouter>
       <UserProfileCard />
+      <LocationProbe />
     </MemoryRouter>,
   );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
 }
 
 describe('UserProfileCard copy user ID', () => {
@@ -75,6 +92,7 @@ describe('UserProfileCard copy user ID', () => {
       id: 'user-123',
       name: 'Lizi',
       avatar: null,
+      email: 'lizi@example.com',
       membershipKind: 'personal',
       membershipRole: 'owner',
       orgName: null,
@@ -82,6 +100,7 @@ describe('UserProfileCard copy user ID', () => {
     };
     mocks.authState.mode = 'cloud';
     mocks.authState.exitLocalMode.mockReset();
+    mocks.handleLogout.mockReset();
   });
 
   afterEach(() => {
@@ -89,16 +108,21 @@ describe('UserProfileCard copy user ID', () => {
     vi.clearAllMocks();
   });
 
-  it('shows the user ID and copies it with a success toast when the ID row is clicked', async () => {
+  it('shows the email prominently and keeps a compact copyable user ID', async () => {
     renderCard();
 
-    // ID 显式展示在卡片上,且名字本身不再是可点击控件。
-    expect(screen.getByText('settings.userProfile.copyUserId.display:user-123')).toBeTruthy();
+    expect(screen.getByText('lizi@example.com')).toBeTruthy();
+    expect(screen.getByTitle('lizi@example.com')).toBeTruthy();
+    expect(screen.getByText('settings.userProfile.copyUserId.display:…-123')).toBeTruthy();
     expect(screen.getByText('Lizi').closest('button')).toBeNull();
 
+    const email = screen.getByText('lizi@example.com');
     const idButton = screen.getByRole('button', {
       name: 'settings.userProfile.copyUserId.action',
     });
+    expect(email.parentElement).toBe(idButton.parentElement);
+    expect(email.nextElementSibling).toBe(idButton);
+    expect(email.className).not.toContain('flex-1');
     expect(idButton.className).toContain('cursor-pointer');
     expect(idButton.className).toContain('hover:bg-[var(--settings-profile-avatar-bg)]');
     // 交互件圆角走 pill 档(DESIGN.md Border Radius Scale,无 6px 档)。
@@ -107,7 +131,7 @@ describe('UserProfileCard copy user ID', () => {
     const describedById = idButton.getAttribute('aria-describedby');
     expect(describedById).toBeTruthy();
     expect(document.getElementById(describedById!)?.textContent).toBe(
-      'settings.userProfile.copyUserId.display:user-123',
+      'settings.userProfile.copyUserId.display:…-123',
     );
 
     fireEvent.click(idButton);
@@ -116,12 +140,11 @@ describe('UserProfileCard copy user ID', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith('settings.userProfile.copyUserId.success');
   });
 
-  it('abbreviates a long user ID in the display while copying the full value', async () => {
+  it('shows only the final four ID characters while copying the full value', async () => {
     mocks.authState.user!.id = 'mem_0123456789abcdef0123456789abcdef';
     renderCard();
 
-    // 展示只露头 6 + 尾 4,完整值不直接渲染。
-    expect(screen.getByText('settings.userProfile.copyUserId.display:mem_01…cdef')).toBeTruthy();
+    expect(screen.getByText('settings.userProfile.copyUserId.display:…cdef')).toBeTruthy();
     expect(
       screen.queryByText(
         'settings.userProfile.copyUserId.display:mem_0123456789abcdef0123456789abcdef',
@@ -133,6 +156,14 @@ describe('UserProfileCard copy user ID', () => {
     await waitFor(() =>
       expect(mocks.writeText).toHaveBeenCalledWith('mem_0123456789abcdef0123456789abcdef'),
     );
+  });
+
+  it('keeps the compact ID available when an account has no email', () => {
+    mocks.authState.user!.email = null;
+    renderCard();
+
+    expect(screen.queryByText('lizi@example.com')).toBeNull();
+    expect(screen.getByText('settings.userProfile.copyUserId.display:…-123')).toBeTruthy();
   });
 
   it('opens the profile edit dialog when the avatar is clicked', () => {
@@ -150,6 +181,36 @@ describe('UserProfileCard copy user ID', () => {
 
     expect(screen.getByTestId('profile-edit-dialog')).toBeTruthy();
     expect(mocks.writeText).not.toHaveBeenCalled();
+  });
+
+  it('keeps cloud account actions on the right side of the profile card', async () => {
+    renderCard();
+
+    const logoutButton = screen.getByRole('button', { name: 'settings.logout.aria' });
+    const addAccountButton = screen.getByRole('button', {
+      name: 'sidebar.user.menuAddAccount',
+    });
+    expect(logoutButton).toBeTruthy();
+    expect(addAccountButton).toBeTruthy();
+
+    fireEvent.click(logoutButton);
+    expect(mocks.handleLogout).toHaveBeenCalledOnce();
+
+    fireEvent.click(addAccountButton);
+    await waitFor(() =>
+      expect(screen.getByTestId('location-probe').textContent).toBe('/add-account'),
+    );
+    expect(screen.queryByTestId('account-switcher-dialog')).toBeNull();
+    expect(addAccountButton.parentElement?.className).toContain('flex-col');
+  });
+
+  it('does not show cloud account actions in the not-signed-in card', () => {
+    mocks.authState.user = null;
+    mocks.authState.mode = 'local';
+    renderCard();
+
+    expect(screen.queryByRole('button', { name: 'settings.logout.aria' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'sidebar.user.menuAddAccount' })).toBeNull();
   });
 
   it('shows an error toast when clipboard access fails', async () => {

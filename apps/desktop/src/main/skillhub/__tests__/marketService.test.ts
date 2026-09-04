@@ -305,13 +305,13 @@ describe('SkillhubMarketService', () => {
       updateRegistryCatalogScope,
     });
 
-    await service.setPublishedVisibility({ name: 'demo', visibility: 'shared' });
-    await service.setPublishedVisibility({ name: 'demo', visibility: 'private' });
+    await service.setPublishedVisibility({ name: 'demo', visibility: 'shared', previousCatalogScope: 'market' });
+    await service.setPublishedVisibility({ name: 'demo', visibility: 'private', previousCatalogScope: 'team' });
     await service.setPublishedVisibility({ name: 'demo', visibility: 'public' });
 
-    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(1, 'demo', 'team');
-    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(2, 'demo', undefined);
-    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(3, 'demo', undefined);
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(1, 'demo', 'team', 'market');
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(2, 'demo', undefined, 'team');
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(3, 'demo', undefined, undefined);
   });
 
   it('maps categories and user departments into renderer result shapes', async () => {
@@ -364,6 +364,20 @@ describe('SkillhubMarketService', () => {
       success: true,
       teams: [{ slug: 'team-a', name: 'Team A', type: 'team' }],
     });
+  });
+
+  it('requests category lists from the selected catalog scope', async () => {
+    const { fetch, calls } = makeFetch([[]]);
+    const service = new SkillhubMarketService({ fetch });
+
+    await expect(service.listCategories('team')).resolves.toMatchObject({
+      success: true,
+      categories: [],
+    });
+    expect(calls).toEqual([{
+      path: '/api/skills-hub/categories?scope=team',
+      opts: undefined,
+    }]);
   });
 });
 

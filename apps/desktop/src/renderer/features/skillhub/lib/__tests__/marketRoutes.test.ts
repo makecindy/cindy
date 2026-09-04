@@ -25,6 +25,11 @@ describe('market route scope', () => {
     expect(localDetailSource).not.toContain('marketManagePath');
   });
 
+  it('reads rejected management versions from the native record', () => {
+    expect(localDetailSource).toContain('listPublishedVersions(entry.name)');
+    expect(localDetailSource).not.toContain('listPublishedVersions(entry.name, entry.registryEntry?.catalogScope)');
+  });
+
   it('keeps Clone wording for acquisition actions', () => {
     const marketCardSource = readFileSync(resolve(skillhubDir, 'components/MarketCard.tsx'), 'utf8');
     expect(marketCardSource).toContain('Clone');
@@ -116,6 +121,7 @@ describe('market management copy and errors', () => {
     expect(editorSource).not.toContain('PublisherPicker');
     expect(editorSource).not.toContain('fields.teamSlug');
     expect(editorSource).toContain('identityPolicy.ownerType');
+    expect(editorSource).toContain('previousCatalogScope,');
   });
 
   it('does not expose an extra published status pill in the market preview panel', () => {
@@ -151,14 +157,17 @@ describe('market management copy and errors', () => {
     expect(listSource).toContain('previewSkill ? WINDOW_NO_DRAG_STYLE : WINDOW_DRAG_STYLE');
   });
 
-  it('updates only the Hub summary from the market info editor', () => {
+  it('updates the Hub copy, locale, and Platform tag slugs from the market info editor', () => {
     const editorSource = readFileSync(resolve(skillhubDir, 'components/MarketInfoEditDialog.tsx'), 'utf8');
     const fieldsStart = editorSource.indexOf('fields: {');
     const fieldsEnd = editorSource.indexOf('},', fieldsStart);
     const fieldsSource = editorSource.slice(fieldsStart, fieldsEnd);
 
     expect(fieldsSource).toContain('summary: description');
-    expect(fieldsSource).not.toMatch(/\n\s+description[,}]/);
+    expect(fieldsSource).toMatch(/\n\s+description,/);
+    expect(fieldsSource).toContain('contentLocale:');
+    expect(fieldsSource).toContain('tags: categorySlugs');
+    expect(fieldsSource).not.toContain('authorTagSlugs:');
   });
 
   it('keeps the confirm provider in the main App tree so AuthProvider has a stable context during HMR', () => {

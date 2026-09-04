@@ -192,6 +192,29 @@ describe('WorkerThreadTransport', () => {
           50,
         ],
       });
+      await transport.send('exec', {
+        sql: `INSERT INTO messages (
+          id, client_id, session_id, role, content, agent_meta, agent_kind, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [
+          'assistant',
+          'assistant-client',
+          'src',
+          'assistant',
+          'reply',
+          JSON.stringify({
+            turnCompleted: true,
+            nativeForkAnchor: {
+              agentKind: 'codex',
+              sdkSessionId: 'source-thread',
+              kind: 'turn',
+              id: 'turn-1',
+            },
+          }),
+          'codex',
+          75,
+        ],
+      });
 
       await transport.send('tx', {
         name: 'fork.session',
@@ -225,8 +248,12 @@ describe('WorkerThreadTransport', () => {
             updatedAt: 1,
           },
           uuidMap: [],
+          nativeForkAnchorSessionMap: [['source-thread', 'child-thread']],
           detachAgentSwitchSessions: true,
-          newMessageIds: [{ id: 'forked-switch', clientId: 'forked-switch-client' }],
+          newMessageIds: [
+            { id: 'forked-switch', clientId: 'forked-switch-client' },
+            { id: 'forked-assistant', clientId: 'forked-assistant-client' },
+          ],
         },
       });
 
@@ -242,6 +269,19 @@ describe('WorkerThreadTransport', () => {
       });
       expect(JSON.parse(copiedSwitch.content)).toMatchObject({
         fromSdkSessionId: null,
+      });
+      const copiedAssistant = await transport.send<{ agent_meta: string }>('queryOne', {
+        sql: 'SELECT agent_meta FROM messages WHERE id = ?',
+        params: ['forked-assistant'],
+      });
+      expect(JSON.parse(copiedAssistant.agent_meta)).toEqual({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'child-thread',
+          kind: 'turn',
+          id: 'turn-1',
+        },
       });
     } finally {
       await transport.close();

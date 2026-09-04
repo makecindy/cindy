@@ -1,14 +1,19 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
   AlertTriangle,
+  Camera,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
+  Ellipsis,
   House,
   Keyboard,
   Loader2,
@@ -21,6 +26,7 @@ import {
   Send,
   ShieldCheck,
   ShieldOff,
+  SlidersHorizontal,
   Smartphone,
   Square,
   Trash2,
@@ -29,6 +35,20 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Tip } from '@/components/ui/tooltip';
+import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import type {
@@ -59,7 +79,8 @@ interface IOSSimulatorTabBodyProps {
   shellVisible?: boolean;
 }
 
-type Operation = 'attach' | 'start' | 'stop' | 'delete' | 'detach' | 'grant' | 'control' | null;
+type Operation =
+  'attach' | 'start' | 'stop' | 'delete' | 'detach' | 'grant' | 'control' | 'screenshot' | null;
 type StandardStreamProfileName = 'low' | 'balanced' | 'high';
 type StreamProfileName = StandardStreamProfileName | 'experimental60';
 type StreamProfile = { framesPerSecond: number; jpegQuality: number; scalingPercent: number };
@@ -72,6 +93,34 @@ type StatusErrorKey =
   | 'rightSidebar.iosSimulator.pluginSessionUnavailable'
   | 'rightSidebar.iosSimulator.pluginStateChanging'
   | 'rightSidebar.iosSimulator.statusInternalError';
+
+const MIN_FITTED_SCREEN_HEIGHT_PX = 192;
+
+interface SimulatorScreenSize {
+  width: number;
+  height: number;
+}
+
+export function fitSimulatorScreenSize(
+  viewport: Pick<IOSSimulatorPublicViewport, 'width' | 'height'> | null,
+  availableWidth: number,
+  availableHeight: number,
+): SimulatorScreenSize | null {
+  if (
+    !viewport ||
+    viewport.width <= 0 ||
+    viewport.height <= 0 ||
+    availableWidth <= 0 ||
+    availableHeight <= 0
+  ) {
+    return null;
+  }
+  const scale = Math.min(availableWidth / viewport.width, availableHeight / viewport.height);
+  return {
+    width: viewport.width * scale,
+    height: viewport.height * scale,
+  };
+}
 
 function statusErrorI18nKey(error: unknown): StatusErrorKey {
   switch (extractIpcError(error)?.code) {
@@ -183,6 +232,39 @@ function nativeRecoveryBackoff(attemptCount: number): number {
 
 function isRecoverableNativeFallback(status: IOSSimulatorPublicRouteStatus | null): boolean {
   return status?.nativeRecoveryAvailable === true;
+}
+
+function simulatorScreenCornerRatio(deviceTypeIdentifier: string): number | null {
+  const deviceType = deviceTypeIdentifier.split('.').at(-1) ?? deviceTypeIdentifier;
+  if (/^iPhone-(?:17-Pro|16-Pro)(?:-Max)?$/.test(deviceType)) return 0.2106;
+  if (/^iPhone-(?:15-Pro|14-Pro)(?:-Max)?$/.test(deviceType)) return 0.19;
+  if (/^iPhone-(?:1[2-3])(?:-|$)/.test(deviceType)) return 0.173;
+  if (/^iPhone-(?:1[4-7]|Air)(?:-|$)/.test(deviceType)) return 0.19;
+  if (/^iPhone-(?:11|XR|XS|X)(?:-|$)/.test(deviceType)) return 0.137;
+  if (
+    /^iPad-(?:A16|10th-generation|mini-(?:6th-generation|A17-Pro)|Air-(?:5th-generation|11-inch|13-inch)|Pro-(?:11-inch|12-9-inch|13-inch))/.test(
+      deviceType,
+    )
+  ) {
+    return 0.035;
+  }
+  return null;
+}
+
+function simulatorScreenCornerStyle(
+  deviceTypeIdentifier: string,
+  viewport: IOSSimulatorPublicViewport | null,
+): CSSProperties | undefined {
+  const cornerRatio = simulatorScreenCornerRatio(deviceTypeIdentifier);
+  if (!viewport || !cornerRatio || viewport.width <= 0 || viewport.height <= 0) return undefined;
+  const shortSide = Math.min(viewport.width, viewport.height);
+  const radius = shortSide * cornerRatio;
+  return {
+    borderRadius: `${((radius / viewport.width) * 100).toFixed(2)}% / ${(
+      (radius / viewport.height) *
+      100
+    ).toFixed(2)}%`,
+  };
 }
 
 /** Translate stable discovery codes instead of leaking host-side English guidance into the UI. */
@@ -347,6 +429,7 @@ export function IOSSimulatorTabBody({
   const [viewerReadyToken, setViewerReadyToken] = useState<string | null>(null);
   const [nativeRecoveryPending, setNativeRecoveryPending] = useState(false);
   const [nativeRecoveryFailed, setNativeRecoveryFailed] = useState(false);
+  const [fittedScreenSize, setFittedScreenSize] = useState<SimulatorScreenSize | null>(null);
   const requestVersionRef = useRef(0);
   const nativeRecoveryRequestRef = useRef(0);
   const frameSequenceRef = useRef(0);
@@ -377,6 +460,9 @@ export function IOSSimulatorTabBody({
   const presentationEpochRef = useRef(0);
   const frameFreshnessTimerRef = useRef<number | null>(null);
   const currentRouteStatusRef = useRef<IOSSimulatorPublicRouteStatus | null>(null);
+  const panelViewportRef = useRef<HTMLDivElement | null>(null);
+  const viewerSectionRef = useRef<HTMLElement | null>(null);
+  const viewerSlotRef = useRef<HTMLDivElement | null>(null);
   const nativeRecoveryGateRef = useRef<NativeRecoveryGate>({
     routeKey: null,
     attemptCount: 0,
@@ -534,6 +620,9 @@ export function IOSSimulatorTabBody({
   }, [ctx.sessionId, refresh]);
 
   const environment = status?.ok ? status.environment : null;
+  const compactXcodeVersion = environment?.ready
+    ? (environment.xcodeVersion?.split(/\r?\n/, 1)[0]?.trim() ?? null)
+    : null;
   const instances = status?.ok ? status.instances : [];
   const resource = status?.ok ? (status.resource ?? null) : null;
   const maxInstancesPerTask = resource?.maxInstancesPerTask ?? 4;
@@ -542,15 +631,24 @@ export function IOSSimulatorTabBody({
   const globalHardLimitReached = Boolean(resource && resource.runningCount >= resource.hardLimit);
   const attachedInstance =
     instances.find((instance) => instance.instanceId === state.instanceId) ?? instances[0] ?? null;
+  const attachedDevice = attachedInstance
+    ? (environment?.devices.find((device) => device.udid === attachedInstance.simulatorUdid) ??
+      null)
+    : null;
   const viewerRouteKey = attachedInstance
     ? `${attachedInstance.instanceId}:${attachedInstance.generation}`
     : null;
   const routeStatus = viewerRouteKey ? (routeStatuses[viewerRouteKey] ?? null) : null;
   currentRouteStatusRef.current = routeStatus;
+  const nativeRecoveryEligible = isRecoverableNativeFallback(routeStatus);
   const nativeH264Selected = Boolean(
     routeStatus?.stream.adapter === 'native-sidecar' && routeStatus.stream.encoding === 'h264',
   );
   const nativeH264Active = Boolean(nativeH264Selected && routeStatus?.stream.state === 'active');
+  const screenCornerStyle = simulatorScreenCornerStyle(
+    attachedInstance?.deviceTypeIdentifier ?? '',
+    viewport,
+  );
   const showExperimental60 =
     nativeH264Active || (nativeH264Selected && streamProfile === 'experimental60');
   const grant =
@@ -584,6 +682,7 @@ export function IOSSimulatorTabBody({
   const viewerInteractive = Boolean(
     viewerVisible && streamState === 'streaming' && presentationMatchesRoute && frameFresh && !busy,
   );
+  const screenshotAvailable = Boolean(attachedInstance?.lifecycleState === 'ready' && !busy);
   const streamRouteLabel =
     routeStatus?.stream.adapter === 'native-sidecar' && routeStatus.stream.encoding === 'h264'
       ? t('rightSidebar.iosSimulator.route.nativeH264')
@@ -602,6 +701,30 @@ export function IOSSimulatorTabBody({
   const inputRouteStateLabel = routeStatus
     ? t(`rightSidebar.iosSimulator.route.state.${routeStatus.input.state}`)
     : t('rightSidebar.iosSimulator.route.state.detecting');
+  const streamRouteStateRedundant = Boolean(
+    routeStatus?.stream.adapter === 'wda' &&
+    (routeStatus.stream.state === 'active' || routeStatus.stream.state === 'fallback'),
+  );
+  const inputRouteStateRedundant = Boolean(
+    routeStatus?.input.adapter === 'wda' &&
+    (routeStatus.input.state === 'active' || routeStatus.input.state === 'fallback'),
+  );
+  const streamProfileLabel =
+    streamProfile === 'low'
+      ? t('rightSidebar.iosSimulator.streamProfiles.low')
+      : streamProfile === 'experimental60'
+        ? t('rightSidebar.iosSimulator.streamProfiles.experimental60')
+        : streamProfile === 'balanced'
+          ? t(
+              nativeH264Active
+                ? 'rightSidebar.iosSimulator.streamProfiles.balancedNative'
+                : 'rightSidebar.iosSimulator.streamProfiles.balanced',
+            )
+          : t(
+              nativeH264Active
+                ? 'rightSidebar.iosSimulator.streamProfiles.highNative'
+                : 'rightSidebar.iosSimulator.streamProfiles.high',
+            );
   const formatActionError = useCallback(
     (result: Extract<IOSSimulatorToolResponse, { ok: false }>) =>
       t(actionErrorI18nKey(result.errorCode), {
@@ -1377,6 +1500,38 @@ export function IOSSimulatorTabBody({
     [attachedInstance, ctx.sessionId, formatActionError, refresh, t, viewerInteractive],
   );
 
+  const copyScreenshot = useCallback(async () => {
+    if (!attachedInstance || attachedInstance.lifecycleState !== 'ready' || busy) return;
+    setOperation('screenshot');
+    setActionError(null);
+    const invoke = (instance: IOSSimulatorPublicInstance) =>
+      window.electronAPI.maker.iosSimulator.copyScreenshot({
+        sessionId: ctx.sessionId,
+        ...routeFor(instance),
+      });
+    try {
+      try {
+        await invoke(attachedInstance);
+      } catch (error) {
+        const code = extractIpcError(error)?.code;
+        if (code !== 'LEASE_EXPIRED' && code !== 'STALE_GENERATION') throw error;
+        const nextStatus = await refresh();
+        const refreshedInstance = nextStatus?.ok
+          ? nextStatus.instances.find(
+              (instance) => instance.instanceId === attachedInstance.instanceId,
+            )
+          : null;
+        if (refreshedInstance?.lifecycleState !== 'ready') throw error;
+        await invoke(refreshedInstance);
+      }
+      toast.success(t('rightSidebar.iosSimulator.screenshotCopied'));
+    } catch {
+      toast.error(t('rightSidebar.iosSimulator.screenshotCopyFailed'));
+    } finally {
+      setOperation(null);
+    }
+  }, [attachedInstance, busy, ctx.sessionId, refresh, t]);
+
   const pointerRatio = useCallback(
     (event: ReactPointerEvent<HTMLImageElement | HTMLCanvasElement>) => {
       const bounds = event.currentTarget.getBoundingClientRect();
@@ -1700,6 +1855,84 @@ export function IOSSimulatorTabBody({
     [cancelActivePointerGesture],
   );
 
+  useLayoutEffect(() => {
+    if (!active || !shellVisible || attachedInstance?.lifecycleState !== 'ready' || !viewport) {
+      setFittedScreenSize(null);
+      return;
+    }
+
+    const panelViewport = panelViewportRef.current;
+    const viewerSection = viewerSectionRef.current;
+    const viewerSlot = viewerSlotRef.current;
+    if (!panelViewport || !viewerSection || !viewerSlot) return;
+
+    const update = () => {
+      const panelHeight = panelViewport.clientHeight;
+      const slotWidth = viewerSlot.clientWidth;
+      if (panelHeight <= 0 || slotWidth <= 0) {
+        setFittedScreenSize(null);
+        return;
+      }
+
+      const sectionRect = viewerSection.getBoundingClientRect();
+      const slotRect = viewerSlot.getBoundingClientRect();
+      const deviceHeaderHeight = Math.max(0, slotRect.top - sectionRect.top);
+      const availableHeight = Math.max(
+        MIN_FITTED_SCREEN_HEIGHT_PX,
+        panelHeight - deviceHeaderHeight,
+      );
+      const next = fitSimulatorScreenSize(viewport, slotWidth, availableHeight);
+      setFittedScreenSize((current) =>
+        current &&
+        next &&
+        Math.abs(current.width - next.width) < 0.5 &&
+        Math.abs(current.height - next.height) < 0.5
+          ? current
+          : next,
+      );
+    };
+
+    let animationFrame: number | null = null;
+    const scheduleUpdate = () => {
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        update();
+      });
+    };
+
+    update();
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleUpdate);
+    observer?.observe(panelViewport);
+    observer?.observe(viewerSection);
+    observer?.observe(viewerSlot);
+    window.addEventListener('resize', scheduleUpdate);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', scheduleUpdate);
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+    };
+  }, [
+    actionError,
+    active,
+    agentBusy,
+    attachedInstance?.instanceId,
+    attachedInstance?.lifecycleState,
+    compactXcodeVersion,
+    grant?.agentControl,
+    instances.length,
+    mutation?.agentPaused,
+    mutation?.takeoverPending,
+    nativeRecoveryEligible,
+    nativeRecoveryFailed,
+    nativeRecoveryPending,
+    operation,
+    shellVisible,
+    statusErrorKey,
+    viewport,
+  ]);
+
   const sendTextInput = useCallback(async () => {
     if (!textInput) return;
     if (await runInteraction('type_text', { text: textInput })) setTextInput('');
@@ -1707,6 +1940,8 @@ export function IOSSimulatorTabBody({
 
   return (
     <div
+      ref={panelViewportRef}
+      data-testid="ios-simulator-panel-viewport"
       className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--text-primary)]"
       aria-busy={busy || refreshing || requestingAccess}
     >
@@ -1717,8 +1952,29 @@ export function IOSSimulatorTabBody({
               <Smartphone size={16} className="shrink-0" aria-hidden="true" />
               <h2 className="text-14 font-medium">{t('rightSidebar.iosSimulator.title')}</h2>
             </div>
-            <p className="mt-1 text-12 leading-relaxed text-[var(--text-secondary)]">
-              {t('rightSidebar.iosSimulator.description')}
+            <p className="mt-1 flex min-w-0 items-center gap-2 text-12 leading-relaxed text-[var(--text-secondary)]">
+              {environment?.ready ? (
+                <>
+                  {compactXcodeVersion && (
+                    <>
+                      <Tip text={environment.xcodeVersion ?? compactXcodeVersion} side="bottom">
+                        <span className="shrink-0 tabular-nums">{compactXcodeVersion}</span>
+                      </Tip>
+                      <span
+                        aria-hidden="true"
+                        className="size-1 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                      />
+                    </>
+                  )}
+                  <span className="min-w-0 truncate">
+                    {t('rightSidebar.iosSimulator.readyTitle')}
+                  </span>
+                </>
+              ) : (
+                <span className="min-w-0 truncate">
+                  {t('rightSidebar.iosSimulator.description')}
+                </span>
+              )}
             </p>
           </div>
           <ActionButton
@@ -1793,7 +2049,7 @@ export function IOSSimulatorTabBody({
           </div>
         )}
 
-        {operation && (
+        {operation && operation !== 'screenshot' && (
           <div
             role="status"
             aria-live="polite"
@@ -1811,15 +2067,13 @@ export function IOSSimulatorTabBody({
 
         {environment && (
           <>
-            <StatusCard
-              icon={environment.ready ? CheckCircle2 : AlertTriangle}
-              title={t(
-                environment.ready
-                  ? 'rightSidebar.iosSimulator.readyTitle'
-                  : 'rightSidebar.iosSimulator.unavailableTitle',
-              )}
-              description={environment.xcodeVersion ?? undefined}
-            />
+            {!environment.ready && (
+              <StatusCard
+                icon={AlertTriangle}
+                title={t('rightSidebar.iosSimulator.unavailableTitle')}
+                description={environment.xcodeVersion ?? undefined}
+              />
+            )}
 
             {!environment.ready && setupKeys.length > 0 && (
               <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3">
@@ -1888,19 +2142,231 @@ export function IOSSimulatorTabBody({
             )}
 
             {attachedInstance && (
-              <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3">
+              <section
+                ref={viewerSectionRef}
+                data-testid="ios-simulator-viewer-section"
+                className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <h3 className="truncate text-12 font-medium">
                       {attachedInstance.simulatorName}
                     </h3>
-                    <p className="mt-1 text-11 text-[var(--text-secondary)]">
-                      {t('rightSidebar.iosSimulator.attachedDescription')}
-                    </p>
+                    <div className="mt-1 flex min-w-0 items-center gap-2 text-11 text-[var(--text-secondary)]">
+                      <span className="truncate">
+                        {attachedDevice?.runtimeName ??
+                          t('rightSidebar.iosSimulator.attachedDescription')}
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className="size-1 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                      />
+                      <span className="shrink-0">
+                        {t(
+                          `rightSidebar.iosSimulator.lifecycle.${attachedInstance.lifecycleState}`,
+                        )}
+                      </span>
+                      {attachedInstance.lifecycleState === 'ready' && (
+                        <>
+                          <span
+                            aria-hidden="true"
+                            className="size-1 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                          />
+                          <span className="min-w-0 truncate tabular-nums">
+                            {streamFps.toFixed(1)} FPS
+                            {viewport ? ` · ${viewport.width}×${viewport.height}` : ''}
+                          </span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <span className="shrink-0 select-none rounded-full bg-[var(--surface-chip)] px-2 py-1 text-10 text-[var(--text-secondary)]">
-                    {t(`rightSidebar.iosSimulator.lifecycle.${attachedInstance.lifecycleState}`)}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <SimulatorIconButton
+                      label={t('rightSidebar.iosSimulator.pressHome')}
+                      disabledLabel={t('rightSidebar.iosSimulator.controlsUnavailable')}
+                      icon={House}
+                      disabled={!viewerInteractive}
+                      onClick={() => void runInteraction('press_home', {})}
+                    />
+                    <SimulatorIconButton
+                      label={t('rightSidebar.iosSimulator.copyScreenshot')}
+                      disabledLabel={t(
+                        operation === 'screenshot'
+                          ? 'rightSidebar.iosSimulator.operations.screenshot'
+                          : 'rightSidebar.iosSimulator.controlsUnavailable',
+                      )}
+                      icon={operation === 'screenshot' ? Loader2 : Camera}
+                      spinning={operation === 'screenshot'}
+                      disabled={!screenshotAvailable}
+                      onClick={() => void copyScreenshot()}
+                    />
+                    <SimulatorIconButton
+                      label={t('rightSidebar.iosSimulator.rotateDevice')}
+                      disabledLabel={t('rightSidebar.iosSimulator.controlsUnavailable')}
+                      icon={RotateCw}
+                      disabled={!viewerInteractive || !viewport}
+                      onClick={() =>
+                        void runInteraction('set_orientation', {
+                          orientation:
+                            viewport?.orientation === 'LANDSCAPE' ? 'PORTRAIT' : 'LANDSCAPE',
+                        })
+                      }
+                    />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Tip text={t('rightSidebar.iosSimulator.moreControls')} side="bottom">
+                          <button
+                            type="button"
+                            aria-label={t('rightSidebar.iosSimulator.moreControls')}
+                            className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] data-[state=open]:bg-[var(--surface-hover)] data-[state=open]:text-[var(--text-primary)]"
+                          >
+                            <Ellipsis size={14} aria-hidden="true" />
+                          </button>
+                        </Tip>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-44">
+                        <DropdownMenuItem
+                          disabled={!viewerInteractive}
+                          onSelect={() => void runInteraction('lock_screen', {})}
+                        >
+                          <LockKeyhole size={14} className="mr-2 shrink-0" aria-hidden="true" />
+                          {t('rightSidebar.iosSimulator.lockScreen')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={!viewerInteractive}
+                          onSelect={() => void runInteraction('unlock_screen', {})}
+                        >
+                          <UnlockKeyhole size={14} className="mr-2 shrink-0" aria-hidden="true" />
+                          {t('rightSidebar.iosSimulator.unlockScreen')}
+                        </DropdownMenuItem>
+                        {attachedInstance.lifecycleState === 'ready' && (
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger
+                              disabled={busy}
+                              aria-label={t('rightSidebar.iosSimulator.streamProfile')}
+                              className="gap-2"
+                            >
+                              <SlidersHorizontal
+                                size={14}
+                                className="shrink-0"
+                                aria-hidden="true"
+                              />
+                              <span className="min-w-0 flex-1">
+                                {t('rightSidebar.iosSimulator.streamProfile')}
+                              </span>
+                              <span
+                                aria-hidden="true"
+                                className="max-w-28 truncate text-10 text-[var(--text-secondary)]"
+                              >
+                                {streamProfileLabel}
+                              </span>
+                              <ChevronRight
+                                size={12}
+                                className="shrink-0 text-[var(--text-tertiary)]"
+                                aria-hidden="true"
+                              />
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent
+                              sideOffset={6}
+                              collisionPadding={8}
+                              className="min-w-48"
+                            >
+                              <DropdownMenuRadioGroup
+                                value={streamProfile}
+                                onValueChange={(value) =>
+                                  void applyStreamProfile(value as StreamProfileName)
+                                }
+                              >
+                                <DropdownMenuRadioItem value="low" disabled={busy}>
+                                  {t('rightSidebar.iosSimulator.streamProfiles.low')}
+                                </DropdownMenuRadioItem>
+                                <DropdownMenuRadioItem value="balanced" disabled={busy}>
+                                  {t(
+                                    nativeH264Active
+                                      ? 'rightSidebar.iosSimulator.streamProfiles.balancedNative'
+                                      : 'rightSidebar.iosSimulator.streamProfiles.balanced',
+                                  )}
+                                </DropdownMenuRadioItem>
+                                <DropdownMenuRadioItem value="high" disabled={busy}>
+                                  {t(
+                                    nativeH264Active
+                                      ? 'rightSidebar.iosSimulator.streamProfiles.highNative'
+                                      : 'rightSidebar.iosSimulator.streamProfiles.high',
+                                  )}
+                                </DropdownMenuRadioItem>
+                                {showExperimental60 && (
+                                  <DropdownMenuRadioItem value="experimental60" disabled={busy}>
+                                    {t('rightSidebar.iosSimulator.streamProfiles.experimental60')}
+                                  </DropdownMenuRadioItem>
+                                )}
+                              </DropdownMenuRadioGroup>
+                              <DropdownMenuSeparator />
+                              <div
+                                aria-hidden="true"
+                                className="max-w-56 space-y-1 px-2 py-1 text-10 leading-relaxed text-[var(--text-secondary)]"
+                              >
+                                <div className="truncate">
+                                  {streamRouteLabel}
+                                  {!streamRouteStateRedundant && ` · ${streamRouteStateLabel}`}
+                                </div>
+                                <div className="truncate">
+                                  {inputRouteLabel}
+                                  {!inputRouteStateRedundant && ` · ${inputRouteStateLabel}`}
+                                </div>
+                                {routeStatus?.input.adapter === 'native-sidecar' &&
+                                  !routeStatus.input.multiTouch && (
+                                    <div>
+                                      {t('rightSidebar.iosSimulator.route.multiTouchUnavailable')}
+                                    </div>
+                                  )}
+                              </div>
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                        )}
+                        <DropdownMenuSeparator />
+                        {attachedInstance.lifecycleState === 'ready' ? (
+                          <DropdownMenuItem
+                            disabled={busy}
+                            onSelect={() =>
+                              void call('stop', 'stop_instance', routeFor(attachedInstance))
+                            }
+                          >
+                            <Square size={14} className="mr-2 shrink-0" aria-hidden="true" />
+                            {t('rightSidebar.iosSimulator.stopDevice')}
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            disabled={busy}
+                            onSelect={() =>
+                              void call('start', 'start_instance', routeFor(attachedInstance))
+                            }
+                          >
+                            <Play size={14} className="mr-2 shrink-0" aria-hidden="true" />
+                            {t('rightSidebar.iosSimulator.startDevice')}
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem
+                          disabled={busy}
+                          onSelect={() =>
+                            void call('detach', 'detach_device', routeFor(attachedInstance))
+                          }
+                        >
+                          <Link2Off size={14} className="mr-2 shrink-0" aria-hidden="true" />
+                          {t('rightSidebar.iosSimulator.detachDevice')}
+                        </DropdownMenuItem>
+                        {attachedInstance.creationProvenance === 'cindy' && (
+                          <DropdownMenuItem
+                            disabled={busy}
+                            onSelect={() => setDeleteTarget(attachedInstance)}
+                            className="text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg-strong)]"
+                          >
+                            <Trash2 size={14} className="mr-2 shrink-0" aria-hidden="true" />
+                            {t('rightSidebar.iosSimulator.deleteDevice')}
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </div>
 
                 {attachedInstance.lifecycleState === 'ready' &&
@@ -1939,163 +2405,142 @@ export function IOSSimulatorTabBody({
 
                 {attachedInstance.lifecycleState === 'ready' && (
                   <>
-                    <div className="mt-3 flex items-center justify-between gap-2 text-11">
-                      <span className="text-[var(--text-secondary)]">
-                        {t('rightSidebar.iosSimulator.streamProfile')}
+                    <div role="status" aria-live="polite" className="sr-only">
+                      <span>
+                        <span>{streamRouteLabel}</span>
+                        {!streamRouteStateRedundant && <span>{streamRouteStateLabel}</span>}
                       </span>
-                      <select
-                        value={streamProfile}
-                        disabled={busy}
-                        onChange={(event) =>
-                          void applyStreamProfile(event.target.value as StreamProfileName)
-                        }
-                        aria-label={t('rightSidebar.iosSimulator.streamProfile')}
-                        className="h-8 rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-11 text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                      >
-                        <option value="low">
-                          {t('rightSidebar.iosSimulator.streamProfiles.low')}
-                        </option>
-                        <option value="balanced">
-                          {t(
-                            nativeH264Active
-                              ? 'rightSidebar.iosSimulator.streamProfiles.balancedNative'
-                              : 'rightSidebar.iosSimulator.streamProfiles.balanced',
-                          )}
-                        </option>
-                        <option value="high">
-                          {t(
-                            nativeH264Active
-                              ? 'rightSidebar.iosSimulator.streamProfiles.highNative'
-                              : 'rightSidebar.iosSimulator.streamProfiles.high',
-                          )}
-                        </option>
-                        {showExperimental60 && (
-                          <option value="experimental60">
-                            {t('rightSidebar.iosSimulator.streamProfiles.experimental60')}
-                          </option>
-                        )}
-                      </select>
-                    </div>
-                    <div
-                      role="status"
-                      aria-live="polite"
-                      className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-10 text-[var(--text-secondary)] select-none"
-                    >
-                      <span>{streamRouteLabel}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{streamRouteStateLabel}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{inputRouteLabel}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{inputRouteStateLabel}</span>
+                      <span>
+                        <span>{inputRouteLabel}</span>
+                        {!inputRouteStateRedundant && <span>{inputRouteStateLabel}</span>}
+                      </span>
                       {routeStatus?.input.adapter === 'native-sidecar' &&
                         !routeStatus.input.multiTouch && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span>
-                              {t('rightSidebar.iosSimulator.route.multiTouchUnavailable')}
-                            </span>
-                          </>
+                          <span>{t('rightSidebar.iosSimulator.route.multiTouchUnavailable')}</span>
                         )}
-                      {isRecoverableNativeFallback(routeStatus) && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span
-                            role={nativeRecoveryFailed ? 'alert' : undefined}
-                            aria-live={nativeRecoveryFailed ? 'assertive' : 'polite'}
-                            className="text-pretty leading-relaxed"
-                          >
-                            {t(
-                              nativeRecoveryPending
-                                ? 'rightSidebar.iosSimulator.nativeRecovery.recovering'
-                                : nativeRecoveryFailed
-                                  ? 'rightSidebar.iosSimulator.nativeRecovery.failed'
-                                  : 'rightSidebar.iosSimulator.nativeRecovery.available',
-                            )}
-                          </span>
-                          <ActionButton
-                            label={t(
-                              nativeRecoveryPending
-                                ? 'rightSidebar.iosSimulator.nativeRecovery.recoveringAction'
-                                : 'rightSidebar.iosSimulator.nativeRecovery.action',
-                            )}
-                            icon={nativeRecoveryPending ? Loader2 : RefreshCw}
-                            spinning={nativeRecoveryPending}
-                            disabled={nativeRecoveryPending || !viewerReadyToken || controlPaused}
-                            onClick={() => void retryNativeRoute()}
-                          />
-                        </>
-                      )}
                     </div>
-                    <div className="mt-3 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface)]">
-                      <div className="relative flex min-h-48 items-center justify-center p-2">
-                        {frameUrl && presentationMatchesRoute && (
-                          <img
-                            src={frameUrl}
-                            alt={t('rightSidebar.iosSimulator.streamAlt', {
+                    {nativeRecoveryEligible && (
+                      <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-[var(--surface-subtle)] px-2.5 py-2 text-10 text-[var(--text-secondary)]">
+                        <span
+                          role={nativeRecoveryFailed ? 'alert' : undefined}
+                          aria-live={nativeRecoveryFailed ? 'assertive' : 'polite'}
+                          className="min-w-0 text-pretty leading-relaxed"
+                        >
+                          {t(
+                            nativeRecoveryPending
+                              ? 'rightSidebar.iosSimulator.nativeRecovery.recovering'
+                              : nativeRecoveryFailed
+                                ? 'rightSidebar.iosSimulator.nativeRecovery.failed'
+                                : 'rightSidebar.iosSimulator.nativeRecovery.available',
+                          )}
+                        </span>
+                        <ActionButton
+                          label={t(
+                            nativeRecoveryPending
+                              ? 'rightSidebar.iosSimulator.nativeRecovery.recoveringAction'
+                              : 'rightSidebar.iosSimulator.nativeRecovery.action',
+                          )}
+                          icon={nativeRecoveryPending ? Loader2 : RefreshCw}
+                          spinning={nativeRecoveryPending}
+                          disabled={nativeRecoveryPending || !viewerReadyToken || controlPaused}
+                          onClick={() => void retryNativeRoute()}
+                        />
+                      </div>
+                    )}
+                    <div
+                      ref={viewerSlotRef}
+                      data-testid="ios-simulator-screen-slot"
+                      className="mt-3 flex min-h-48 w-full items-center justify-center"
+                    >
+                      <div
+                        data-testid="ios-simulator-screen"
+                        className={cn(
+                          'overflow-hidden bg-[var(--surface)] [corner-shape:squircle]',
+                          fittedScreenSize ? null : 'w-full',
+                        )}
+                        style={{
+                          ...screenCornerStyle,
+                          ...(fittedScreenSize
+                            ? {
+                                width: fittedScreenSize.width,
+                                height: fittedScreenSize.height,
+                              }
+                            : null),
+                        }}
+                      >
+                        <div
+                          className={cn(
+                            'relative flex h-full w-full items-center justify-center',
+                            fittedScreenSize ? null : 'min-h-48',
+                          )}
+                        >
+                          {frameUrl && presentationMatchesRoute && (
+                            <img
+                              src={frameUrl}
+                              alt={t('rightSidebar.iosSimulator.streamAlt', {
+                                device: attachedInstance.simulatorName,
+                              })}
+                              title={t('rightSidebar.iosSimulator.gestureHint')}
+                              className={cn(
+                                'block w-full touch-none select-none object-contain',
+                                fittedScreenSize ? 'h-full' : 'h-auto',
+                                framePresentation === 'jpeg' ? null : 'hidden',
+                                busy
+                                  ? 'cursor-wait opacity-80'
+                                  : !viewerInteractive
+                                    ? 'pointer-events-none cursor-default opacity-80'
+                                    : null,
+                              )}
+                              draggable={false}
+                              onPointerDown={onViewerPointerDown}
+                              onPointerMove={onViewerPointerMove}
+                              onPointerUp={onViewerPointerUp}
+                              onPointerCancel={onViewerPointerCancel}
+                              onLostPointerCapture={onViewerLostPointerCapture}
+                            />
+                          )}
+                          <canvas
+                            ref={h264CanvasRef}
+                            role="img"
+                            aria-label={t('rightSidebar.iosSimulator.streamAlt', {
                               device: attachedInstance.simulatorName,
                             })}
+                            aria-hidden={
+                              !(presentationMatchesRoute && framePresentation === 'h264')
+                            }
                             title={t('rightSidebar.iosSimulator.gestureHint')}
                             className={cn(
-                              'block h-auto w-full touch-none select-none object-contain',
-                              framePresentation === 'jpeg' ? null : 'hidden',
+                              'block w-full touch-none select-none object-contain',
+                              fittedScreenSize ? 'h-full' : 'h-auto',
+                              presentationMatchesRoute && framePresentation === 'h264'
+                                ? null
+                                : 'hidden',
                               busy
                                 ? 'cursor-wait opacity-80'
                                 : !viewerInteractive
                                   ? 'pointer-events-none cursor-default opacity-80'
-                                  : 'cursor-crosshair',
+                                  : null,
                             )}
-                            draggable={false}
                             onPointerDown={onViewerPointerDown}
                             onPointerMove={onViewerPointerMove}
                             onPointerUp={onViewerPointerUp}
                             onPointerCancel={onViewerPointerCancel}
                             onLostPointerCapture={onViewerLostPointerCapture}
                           />
-                        )}
-                        <canvas
-                          ref={h264CanvasRef}
-                          role="img"
-                          aria-label={t('rightSidebar.iosSimulator.streamAlt', {
-                            device: attachedInstance.simulatorName,
-                          })}
-                          aria-hidden={!(presentationMatchesRoute && framePresentation === 'h264')}
-                          title={t('rightSidebar.iosSimulator.gestureHint')}
-                          className={cn(
-                            'block h-auto w-full touch-none select-none object-contain',
-                            presentationMatchesRoute && framePresentation === 'h264'
-                              ? null
-                              : 'hidden',
-                            busy
-                              ? 'cursor-wait opacity-80'
-                              : !viewerInteractive
-                                ? 'pointer-events-none cursor-default opacity-80'
-                                : 'cursor-crosshair',
+                          {!presentationMatchesRoute && (
+                            <div className="flex flex-col items-center gap-2 p-8 text-center text-11 text-[var(--text-secondary)]">
+                              <Smartphone size={22} aria-hidden="true" />
+                              <span className="text-pretty">
+                                {t('rightSidebar.iosSimulator.waitingForFrame')}
+                              </span>
+                            </div>
                           )}
-                          onPointerDown={onViewerPointerDown}
-                          onPointerMove={onViewerPointerMove}
-                          onPointerUp={onViewerPointerUp}
-                          onPointerCancel={onViewerPointerCancel}
-                          onLostPointerCapture={onViewerLostPointerCapture}
-                        />
-                        {!presentationMatchesRoute && (
-                          <div className="flex flex-col items-center gap-2 p-8 text-center text-11 text-[var(--text-secondary)]">
-                            <Smartphone size={22} aria-hidden="true" />
-                            <span className="text-pretty">
-                              {t('rightSidebar.iosSimulator.waitingForFrame')}
-                            </span>
-                          </div>
-                        )}
-                        <span className="absolute right-2 top-2 rounded-full bg-[var(--surface-chip)] px-2 py-1 text-10 tabular-nums text-[var(--text-secondary)]">
-                          {streamFps.toFixed(1)} FPS
-                          {viewport ? ` · ${viewport.width}×${viewport.height}` : ''} ·{' '}
-                          {t(`rightSidebar.iosSimulator.stream.${streamState}`)}
-                        </span>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <div className="relative min-w-48 flex-1">
+                    <div className="mt-2 flex items-center gap-2">
+                      <div className="relative min-w-0 flex-1">
                         <Keyboard
                           size={13}
                           className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary)]"
@@ -2120,40 +2565,16 @@ export function IOSSimulatorTabBody({
                           className="h-8 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface)] pl-8 pr-3 text-11 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
                         />
                       </div>
-                      <ActionButton
+                      <SimulatorIconButton
                         label={t('rightSidebar.iosSimulator.sendText')}
+                        disabledLabel={t(
+                          !viewerInteractive
+                            ? 'rightSidebar.iosSimulator.controlsUnavailable'
+                            : 'rightSidebar.iosSimulator.enterTextBeforeSending',
+                        )}
                         icon={Send}
                         disabled={!viewerInteractive || !textInput}
                         onClick={() => void sendTextInput()}
-                      />
-                      <ActionButton
-                        label={t('rightSidebar.iosSimulator.pressHome')}
-                        icon={House}
-                        disabled={!viewerInteractive}
-                        onClick={() => void runInteraction('press_home', {})}
-                      />
-                      <ActionButton
-                        label={t('rightSidebar.iosSimulator.rotateDevice')}
-                        icon={RotateCw}
-                        disabled={!viewerInteractive || !viewport}
-                        onClick={() =>
-                          void runInteraction('set_orientation', {
-                            orientation:
-                              viewport?.orientation === 'LANDSCAPE' ? 'PORTRAIT' : 'LANDSCAPE',
-                          })
-                        }
-                      />
-                      <ActionButton
-                        label={t('rightSidebar.iosSimulator.lockScreen')}
-                        icon={LockKeyhole}
-                        disabled={!viewerInteractive}
-                        onClick={() => void runInteraction('lock_screen', {})}
-                      />
-                      <ActionButton
-                        label={t('rightSidebar.iosSimulator.unlockScreen')}
-                        icon={UnlockKeyhole}
-                        disabled={!viewerInteractive}
-                        onClick={() => void runInteraction('unlock_screen', {})}
                       />
                     </div>
                     <p className="mt-2 text-pretty text-10 leading-relaxed text-[var(--text-secondary)]">
@@ -2183,40 +2604,6 @@ export function IOSSimulatorTabBody({
                     </div>
                   </div>
                 )}
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {attachedInstance.lifecycleState === 'ready' ? (
-                    <ActionButton
-                      label={t('rightSidebar.iosSimulator.stopDevice')}
-                      icon={Square}
-                      disabled={busy}
-                      onClick={() => void call('stop', 'stop_instance', routeFor(attachedInstance))}
-                    />
-                  ) : (
-                    <ActionButton
-                      label={t('rightSidebar.iosSimulator.startDevice')}
-                      icon={Play}
-                      disabled={busy}
-                      onClick={() =>
-                        void call('start', 'start_instance', routeFor(attachedInstance))
-                      }
-                    />
-                  )}
-                  <ActionButton
-                    label={t('rightSidebar.iosSimulator.detachDevice')}
-                    icon={Link2Off}
-                    disabled={busy}
-                    onClick={() => void call('detach', 'detach_device', routeFor(attachedInstance))}
-                  />
-                  {attachedInstance.creationProvenance === 'cindy' && (
-                    <ActionButton
-                      label={t('rightSidebar.iosSimulator.deleteDevice')}
-                      icon={Trash2}
-                      disabled={busy}
-                      onClick={() => setDeleteTarget(attachedInstance)}
-                    />
-                  )}
-                </div>
 
                 {attachedInstance.lifecycleState === 'ready' && (
                   <div className="mt-3 flex items-center justify-between gap-3 border-t border-[var(--border-default)] pt-3">
@@ -2520,6 +2907,65 @@ function ActionButton({
       )}
       {label}
     </button>
+  );
+}
+
+function SimulatorIconButton({
+  label,
+  disabledLabel,
+  icon: Icon,
+  disabled,
+  spinning,
+  onClick,
+}: {
+  label: string;
+  disabledLabel?: string;
+  icon: typeof AlertTriangle;
+  disabled?: boolean;
+  spinning?: boolean;
+  onClick(): void;
+}) {
+  const accessibleLabel = disabled && disabledLabel ? `${label} — ${disabledLabel}` : label;
+  const button = (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={accessibleLabel}
+      aria-hidden={disabled ? true : undefined}
+      aria-busy={spinning || undefined}
+      className={cn(
+        'inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        disabled
+          ? 'text-[var(--text-tertiary)] opacity-50'
+          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+      )}
+    >
+      <span
+        className={cn('inline-flex', spinning && 'animate-spin motion-reduce:animate-none')}
+        aria-hidden="true"
+      >
+        <Icon size={14} />
+      </span>
+    </button>
+  );
+
+  return (
+    <Tip text={accessibleLabel} side="bottom">
+      {disabled ? (
+        <span
+          role="button"
+          aria-disabled="true"
+          aria-label={accessibleLabel}
+          tabIndex={0}
+          className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {button}
+        </span>
+      ) : (
+        button
+      )}
+    </Tip>
   );
 }
 

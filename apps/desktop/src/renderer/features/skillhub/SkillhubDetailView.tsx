@@ -1919,10 +1919,7 @@ export function SkillhubDetailView() {
                   className="inline-flex h-5 shrink-0 items-center text-[var(--error-fg-strong)] hover:opacity-70 transition-opacity"
                   onClick={async () => {
                     if (!entry?.name) return;
-                    const res = await window.electronAPI.skillhub.listPublishedVersions(
-                      entry.name,
-                      entry.registryEntry?.catalogScope,
-                    );
+                    const res = await window.electronAPI.skillhub.listPublishedVersions(entry.name);
                     if (!res.success || !res.versions) {
                       setScanResult({ status: 'rejected', gates: [] });
                       return;
