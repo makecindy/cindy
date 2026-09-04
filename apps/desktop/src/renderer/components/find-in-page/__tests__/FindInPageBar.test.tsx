@@ -210,23 +210,6 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('ﬃ');
   });
 
-  it('searches visible text in same-origin iframe documents', async () => {
-    const page = document.createElement('main');
-    const frame = document.createElement('iframe');
-    page.append(frame);
-    const frameDocument = document.implementation.createHTMLDocument('frame');
-    Object.defineProperty(frameDocument, 'defaultView', { configurable: true, value: window });
-    Object.defineProperty(frame, 'contentDocument', { configurable: true, value: frameDocument });
-    frameDocument.body.textContent = 'inside frame';
-
-    const input = await openFindBar(page);
-    fireEvent.change(input, { target: { value: 'inside' } });
-
-    expect(screen.getByText('1/1')).toBeTruthy();
-    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('inside');
-    expect(frameDocument.querySelector('style[data-cindy-find-highlights]')).toBeTruthy();
-  });
-
   it('matches whitespace collapsed by normal text layout', async () => {
     const page = document.createElement('main');
     page.style.whiteSpace = 'normal';

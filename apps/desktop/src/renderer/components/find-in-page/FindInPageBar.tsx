@@ -13,103 +13,39 @@ const SEARCH_MATCH_FOREGROUND = 'hsl(var(--search-match-fg))';
 
 interface TextMatch {
   range: Range;
-  ownerDocument: Document;
 }
 
-interface HighlightContext {
-  registry: HighlightRegistry;
-  Highlight: typeof Highlight;
-}
-
-function getHighlightContext(ownerDocument: Document): HighlightContext | null {
-  const ownerWindow = ownerDocument.defaultView;
-  const css = ownerWindow?.CSS ?? (typeof CSS === 'undefined' ? null : CSS);
-  const highlightConstructor =
-    (ownerWindow as (Window & { Highlight?: typeof Highlight }) | null)?.Highlight ??
-    (typeof Highlight === 'undefined' ? null : Highlight);
-  if (!css?.highlights || !highlightConstructor) return null;
-  return { registry: css.highlights, Highlight: highlightConstructor };
-}
-
-function ensureFindHighlightStyles(ownerDocument: Document) {
-  if (
-    ownerDocument === document ||
-    ownerDocument.querySelector('style[data-cindy-find-highlights]')
-  ) {
-    return;
+function getHighlightRegistry(): HighlightRegistry | null {
+  if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined') {
+    return null;
   }
-  const style = ownerDocument.createElement('style');
-  style.setAttribute('data-cindy-find-highlights', 'true');
-  style.textContent = `
-    ::highlight(${MATCH_HIGHLIGHT_NAME}) {
-      background-color: hsl(var(--search-match-bg, 53 100% 89%));
-      color: hsl(var(--search-match-fg, 0 0% 15%));
-    }
-    ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
-      background-color: hsl(var(--search-match-bg, 53 100% 89%));
-      color: hsl(var(--search-match-fg, 0 0% 15%));
-      text-decoration: underline;
-      text-decoration-color: hsl(var(--search-match-fg, 0 0% 15%));
-      text-decoration-thickness: 2px;
-    }
-    @media (prefers-color-scheme: dark) {
-      ::highlight(${MATCH_HIGHLIGHT_NAME}),
-      ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
-        background-color: hsl(var(--search-match-bg, 40 33% 16%));
-        color: hsl(var(--search-match-fg, 0 0% 90%));
-      }
-      ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
-        text-decoration-color: hsl(var(--search-match-fg, 0 0% 90%));
-      }
-    }
-  `;
-  (ownerDocument.head ?? ownerDocument.documentElement)?.append(style);
+  return CSS.highlights;
 }
 
-function clearFindHighlights(ownerDocuments: readonly Document[] = [document]) {
-  for (const ownerDocument of new Set(ownerDocuments)) {
-    const context = getHighlightContext(ownerDocument);
-    if (context) {
-      context.registry.delete(MATCH_HIGHLIGHT_NAME);
-      context.registry.delete(ACTIVE_HIGHLIGHT_NAME);
-    }
-    if (ownerDocument !== document) {
-      ownerDocument.querySelector('style[data-cindy-find-highlights]')?.remove();
-    }
-  }
+function clearFindHighlights() {
+  const registry = getHighlightRegistry();
+  if (!registry) return;
+  registry.delete(MATCH_HIGHLIGHT_NAME);
+  registry.delete(ACTIVE_HIGHLIGHT_NAME);
 }
 
-function applyFindHighlights(
-  matches: readonly TextMatch[],
-  activeIndex: number,
-  previousDocuments: readonly Document[] = [],
-) {
-  const documents = new Set([...previousDocuments, ...matches.map((match) => match.ownerDocument)]);
-  clearFindHighlights([...documents]);
-  const matchesByDocument = new Map<Document, Range[]>();
-  for (const match of matches) {
-    const ranges = matchesByDocument.get(match.ownerDocument) ?? [];
-    ranges.push(match.range);
-    matchesByDocument.set(match.ownerDocument, ranges);
-  }
+function applyFindHighlights(matches: readonly TextMatch[], activeIndex: number) {
+  const registry = getHighlightRegistry();
+  if (!registry) return;
 
-  for (const [ownerDocument, ranges] of matchesByDocument) {
-    const context = getHighlightContext(ownerDocument);
-    if (!context || ranges.length === 0) continue;
-    ensureFindHighlightStyles(ownerDocument);
-    const matchHighlight = new context.Highlight();
-    for (const range of ranges) matchHighlight.add(range);
-    context.registry.set(MATCH_HIGHLIGHT_NAME, matchHighlight);
-  }
+  registry.delete(MATCH_HIGHLIGHT_NAME);
+  registry.delete(ACTIVE_HIGHLIGHT_NAME);
+  if (matches.length === 0) return;
 
+  const matchHighlight = new Highlight();
+  for (const match of matches) matchHighlight.add(match.range);
+  registry.set(MATCH_HIGHLIGHT_NAME, matchHighlight);
   const activeMatch = matches[activeIndex];
-  if (!activeMatch) return;
-  const context = getHighlightContext(activeMatch.ownerDocument);
-  if (!context) return;
-  ensureFindHighlightStyles(activeMatch.ownerDocument);
-  const activeHighlight = new context.Highlight();
-  activeHighlight.add(activeMatch.range);
-  context.registry.set(ACTIVE_HIGHLIGHT_NAME, activeHighlight);
+  if (activeMatch) {
+    const activeHighlight = new Highlight();
+    activeHighlight.add(activeMatch.range);
+    registry.set(ACTIVE_HIGHLIGHT_NAME, activeHighlight);
+  }
 }
 
 function findMatchOffsets(
@@ -367,7 +303,6 @@ function getLineClamp(style: CSSStyleDeclaration): number | null {
 function getClampedAncestor(
   element: HTMLElement | null,
   clampCache: WeakMap<HTMLElement, HTMLElement | null>,
-  ownerWindow: Window,
 ): HTMLElement | null {
   const path: HTMLElement[] = [];
   let current = element;
@@ -378,7 +313,7 @@ function getClampedAncestor(
       break;
     }
     path.push(current);
-    if (getLineClamp(ownerWindow.getComputedStyle(current)) !== null) {
+    if (getLineClamp(window.getComputedStyle(current)) !== null) {
       clampedAncestor = current;
       break;
     }
@@ -425,7 +360,6 @@ function isExcludedTextNode(
   node: Text,
   excludedRoot: HTMLElement | null,
   visibilityCache: WeakMap<HTMLElement, boolean>,
-  ownerWindow: Window,
 ): boolean {
   let element = node.parentElement;
   while (element) {
@@ -455,7 +389,7 @@ function isExcludedTextNode(
     if (cachedHidden !== undefined) {
       if (cachedHidden) return true;
     } else {
-      const style = ownerWindow.getComputedStyle(element);
+      const style = window.getComputedStyle(element);
       const hiddenByStyle =
         style.display === 'none' ||
         style.visibility === 'hidden' ||
@@ -470,80 +404,33 @@ function isExcludedTextNode(
   return false;
 }
 
-function collectTextMatches(
-  query: string,
-  excludedRoot: HTMLElement | null,
-  ownerDocument: Document = document,
-  visitedDocuments = new Set<Document>(),
-): TextMatch[] {
-  if (!query || visitedDocuments.has(ownerDocument)) return [];
-  const ownerWindow = ownerDocument.defaultView;
-  if (!ownerWindow || !ownerDocument.body) return [];
-  visitedDocuments.add(ownerDocument);
+function collectTextMatches(query: string, excludedRoot: HTMLElement | null): TextMatch[] {
+  if (!query) return [];
 
   const matches: TextMatch[] = [];
   const visibilityCache = new WeakMap<HTMLElement, boolean>();
   const clampCache = new WeakMap<HTMLElement, HTMLElement | null>();
-  const walker = ownerDocument.createTreeWalker(ownerDocument.body, 4);
+  const walker = document.createTreeWalker(document.body, 4);
   let node = walker.nextNode();
   while (node) {
     const textNode = node as Text;
-    if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache, ownerWindow)) {
+    if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache)) {
       const whiteSpace = textNode.parentElement
-        ? ownerWindow.getComputedStyle(textNode.parentElement).whiteSpace || 'normal'
+        ? window.getComputedStyle(textNode.parentElement).whiteSpace || 'normal'
         : 'normal';
-      const clampedAncestor = getClampedAncestor(textNode.parentElement, clampCache, ownerWindow);
+      const clampedAncestor = getClampedAncestor(textNode.parentElement, clampCache);
       for (const [start, end] of findMatchOffsets(textNode.data, query, whiteSpace)) {
-        const range = ownerDocument.createRange();
+        const range = document.createRange();
         range.setStart(textNode, start);
         range.setEnd(textNode, end);
         if (isRangeVisibleInClampedAncestor(range, clampedAncestor)) {
-          matches.push({ range, ownerDocument });
+          matches.push({ range });
         }
       }
     }
     node = walker.nextNode();
   }
-
-  for (const iframe of Array.from(ownerDocument.querySelectorAll('iframe'))) {
-    if (isExcludedElement(iframe, excludedRoot, visibilityCache, ownerWindow)) continue;
-    let childDocument: Document | null = null;
-    try {
-      childDocument = iframe.contentDocument;
-    } catch {
-      // Cross-origin frames are intentionally outside the renderer search boundary.
-    }
-    if (childDocument) {
-      matches.push(...collectTextMatches(query, null, childDocument, visitedDocuments));
-    }
-  }
   return matches;
-}
-
-function isExcludedElement(
-  element: HTMLElement,
-  excludedRoot: HTMLElement | null,
-  visibilityCache: WeakMap<HTMLElement, boolean>,
-  ownerWindow: Window,
-): boolean {
-  if (element === excludedRoot || (excludedRoot?.contains(element) ?? false)) return true;
-  let current: HTMLElement | null = element;
-  while (current) {
-    if (current.hidden || current.getAttribute('aria-hidden') === 'true') return true;
-    const cachedHidden = visibilityCache.get(current);
-    if (cachedHidden !== undefined) return cachedHidden;
-    const style = ownerWindow.getComputedStyle(current);
-    const hiddenByStyle =
-      style.display === 'none' ||
-      style.visibility === 'hidden' ||
-      style.visibility === 'collapse' ||
-      style.opacity === '0' ||
-      isVisuallyClipped(style);
-    visibilityCache.set(current, hiddenByStyle);
-    if (hiddenByStyle) return true;
-    current = current.parentElement;
-  }
-  return false;
 }
 
 function isInsideRoot(node: Node, root: HTMLElement | null): boolean {
@@ -561,14 +448,12 @@ function getRangeRect(range: Range): DOMRect | null {
 }
 
 function scrollRangeIntoView(range: Range) {
-  const ownerWindow = range.startContainer.ownerDocument?.defaultView;
-  if (!ownerWindow) return;
   const element = range.startContainer.parentElement;
   if (!element) return;
 
   let ancestor: HTMLElement | null = element;
   while (ancestor) {
-    const style = ownerWindow.getComputedStyle(ancestor);
+    const style = window.getComputedStyle(ancestor);
     const canScrollY =
       /(auto|scroll|overlay|hidden)/.test(style.overflowY) &&
       ancestor.scrollHeight > ancestor.clientHeight;
@@ -597,17 +482,17 @@ function scrollRangeIntoView(range: Range) {
   }
 
   const rect = getRangeRect(range);
-  if (!rect || typeof ownerWindow.scrollBy !== 'function') return;
-  const viewportHeight = ownerWindow.innerHeight;
-  const viewportWidth = ownerWindow.innerWidth;
+  if (!rect || typeof window.scrollBy !== 'function') return;
+  const viewportHeight = window.innerHeight;
+  const viewportWidth = window.innerWidth;
   if (rect.top < 0 || rect.bottom > viewportHeight) {
-    ownerWindow.scrollBy({
+    window.scrollBy({
       top: rect.top < 0 ? rect.top : rect.bottom - viewportHeight,
       behavior: 'auto',
     });
   }
   if (rect.left < 0 || rect.right > viewportWidth) {
-    ownerWindow.scrollBy({
+    window.scrollBy({
       left: rect.left < 0 ? rect.left : rect.right - viewportWidth,
       behavior: 'auto',
     });
@@ -635,7 +520,6 @@ export function FindInPageBar() {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const rangesRef = useRef<TextMatch[]>([]);
-  const highlightDocumentsRef = useRef<Set<Document>>(new Set([document]));
   const activeRef = useRef(0);
   const pendingScrollFrameRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
@@ -646,8 +530,7 @@ export function FindInPageBar() {
     activeRef.current = 0;
     setMatches(0);
     setActive(0);
-    clearFindHighlights([...highlightDocumentsRef.current]);
-    highlightDocumentsRef.current = new Set([document]);
+    clearFindHighlights();
   }, []);
 
   const cancelPendingScroll = useCallback(() => {
@@ -683,7 +566,6 @@ export function FindInPageBar() {
   const applySearch = useCallback(
     (query: string, requestedActive = 0, shouldScroll = false) => {
       const nextRanges = collectTextMatches(query, rootRef.current);
-      const previousDocuments = [...highlightDocumentsRef.current];
       rangesRef.current = nextRanges;
       const nextActive = nextRanges.length
         ? ((requestedActive % nextRanges.length) + nextRanges.length) % nextRanges.length
@@ -691,9 +573,7 @@ export function FindInPageBar() {
       activeRef.current = nextActive;
       setMatches(nextRanges.length);
       setActive(nextActive);
-      applyFindHighlights(nextRanges, nextActive, previousDocuments);
-      highlightDocumentsRef.current = new Set(nextRanges.map((match) => match.ownerDocument));
-      highlightDocumentsRef.current.add(document);
+      applyFindHighlights(nextRanges, nextActive);
       if (shouldScroll) scrollToMatch(nextRanges[nextActive]?.range);
     },
     [scrollToMatch],
@@ -712,7 +592,7 @@ export function FindInPageBar() {
           : ranges.length - 1;
       activeRef.current = nextActive;
       setActive(nextActive);
-      applyFindHighlights(ranges, nextActive, [...highlightDocumentsRef.current]);
+      applyFindHighlights(ranges, nextActive);
       scrollToMatch(ranges[nextActive]?.range);
     },
     [applySearch, scrollToMatch, text],
@@ -727,7 +607,7 @@ export function FindInPageBar() {
     clearSearchResults();
   }, [cancelPendingScroll, clearSearchResults]);
 
-  useEffect(() => () => clearFindHighlights([...highlightDocumentsRef.current]), []);
+  useEffect(() => () => clearFindHighlights(), []);
 
   useEffect(() => {
     if (!open || !text) return;
