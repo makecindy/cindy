@@ -156,6 +156,23 @@ describe('FindInPageBar', () => {
     ]);
   });
 
+  it('keeps ASCII case folding independent of the runtime locale', async () => {
+    const localeLowerCaseSpy = vi
+      .spyOn(String.prototype, 'toLocaleLowerCase')
+      .mockImplementation(function (this: string) {
+        return this.toLowerCase().replace(/i/g, 'ı');
+      });
+    const page = document.createElement('main');
+    page.textContent = 'I';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'i' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(localeLowerCaseSpy).not.toHaveBeenCalled();
+    localeLowerCaseSpy.mockRestore();
+  });
+
   it('matches whitespace collapsed by normal text layout', async () => {
     const page = document.createElement('main');
     page.style.whiteSpace = 'normal';
@@ -392,6 +409,58 @@ describe('FindInPageBar', () => {
 
     expect(screen.getByText('1/1')).toBeTruthy();
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+  });
+
+  it('excludes ranges below a line-clamped element viewport', async () => {
+    const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+    const elementRectDescriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'getBoundingClientRect',
+    );
+    const page = document.createElement('main');
+    const visible = document.createElement('span');
+    visible.textContent = 'foo';
+    const clamped = document.createElement('span');
+    clamped.textContent = 'foo';
+    clamped.style.display = '-webkit-box';
+    clamped.style.overflow = 'hidden';
+    clamped.style.setProperty('-webkit-line-clamp', '1');
+    page.append(visible, clamped);
+
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value(this: Range) {
+        const parent = this.startContainer.parentElement;
+        const top = parent === clamped ? 20 : 0;
+        return [{ top, bottom: top + 10, left: 0, right: 100 }];
+      },
+    });
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value(this: Element) {
+        if (this === clamped) return { top: 0, bottom: 10, left: 0, right: 100 };
+        return { top: 0, bottom: 100, left: 0, right: 100 };
+      },
+    });
+
+    try {
+      const input = await openFindBar(page);
+      fireEvent.change(input, { target: { value: 'foo' } });
+
+      expect(screen.getByText('1/1')).toBeTruthy();
+      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+    } finally {
+      if (rangeRectDescriptor) {
+        Object.defineProperty(Range.prototype, 'getClientRects', rangeRectDescriptor);
+      } else {
+        delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
+      }
+      if (elementRectDescriptor) {
+        Object.defineProperty(Element.prototype, 'getBoundingClientRect', elementRectDescriptor);
+      } else {
+        delete (Element.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+      }
+    }
   });
 
   it('cancels a delayed scroll when the bar closes', async () => {

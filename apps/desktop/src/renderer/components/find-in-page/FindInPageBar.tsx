@@ -124,7 +124,7 @@ function unicodeCaseFold(value: string): string {
   // JavaScript has no native Unicode case-folding API. Lower-casing followed
   // by the canonical final-sigma mapping covers the context-sensitive Greek
   // form while preserving the source string's UTF-16 offsets.
-  return value.toLocaleLowerCase().replace(/\u03c2/g, '\u03c3');
+  return value.toLowerCase().replace(/\u03c2/g, '\u03c3');
 }
 
 function getLinearCaseFold(value: string): string | null {
@@ -184,6 +184,44 @@ function isVisuallyClipped(style: CSSStyleDeclaration): boolean {
   const height = Number.parseFloat(style.height);
   const isTiny = Number.isFinite(width) && Number.isFinite(height) && width <= 1 && height <= 1;
   return isTiny && (style.position === 'absolute' || style.position === 'fixed');
+}
+
+function getLineClamp(style: CSSStyleDeclaration): number | null {
+  const lineClampStyle = style as CSSStyleDeclaration & {
+    lineClamp?: string;
+    webkitLineClamp?: string;
+  };
+  const value =
+    lineClampStyle.lineClamp ||
+    lineClampStyle.webkitLineClamp ||
+    style.getPropertyValue('line-clamp') ||
+    style.getPropertyValue('-webkit-line-clamp');
+  const lineClamp = Number.parseInt(value, 10);
+  return Number.isFinite(lineClamp) && lineClamp > 0 ? lineClamp : null;
+}
+
+function isRangeVisibleInClampedAncestors(range: Range): boolean {
+  const rects =
+    typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
+  if (rects.length === 0) return true;
+
+  let element = range.startContainer.parentElement;
+  while (element) {
+    const style = window.getComputedStyle(element);
+    if (getLineClamp(style) !== null) {
+      const clipRect = element.getBoundingClientRect();
+      const hasVisibleRect = rects.some(
+        (rect) =>
+          rect.bottom > clipRect.top &&
+          rect.top < clipRect.bottom &&
+          rect.right > clipRect.left &&
+          rect.left < clipRect.right,
+      );
+      if (!hasVisibleRect) return false;
+    }
+    element = element.parentElement;
+  }
+  return true;
 }
 
 function isCjkCharacter(value: string): boolean {
@@ -266,7 +304,7 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
         const range = document.createRange();
         range.setStart(textNode, start);
         range.setEnd(textNode, end);
-        matches.push({ range });
+        if (isRangeVisibleInClampedAncestors(range)) matches.push({ range });
       }
     }
     node = walker.nextNode();
