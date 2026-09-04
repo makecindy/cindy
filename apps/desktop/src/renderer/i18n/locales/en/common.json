@@ -2476,7 +2476,7 @@
       },
       "commandMenu": {
         "start": "Welcome and usage",
-        "new": "Start a new chat",
+        "new": "Create a new session",
         "help": "Show command help",
         "stop": "Stop the current task",
         "session": "Recent sessions, pick one to continue",
