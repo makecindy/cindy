@@ -23,6 +23,8 @@
 
 ## 版本记录
 
+- **2026-09-04（DS-4 Button 与 Input 标准组件）**：`components/ui/button.tsx` / `input.tsx` 落地；§4 回写高度 / hover 换色 / pressed / 字号字重 / secondary 绑 Tier-1 / ivory 登记债（拍板人 = 用户/设计师，2026-09-03）。影子包新建 component 层。路线图 DS-3 已是 #3798；DS-4 号待本张合入后回填。 同日 self-review 收口三处：hover / pressed 改为从本变体 rest 底色朝前景 color-mix 派生（初版 alias 到 `--surface-hover` 在四个暗色主题里状态不可区分，违反 §10 双模式门槛；字面量 pressed 不跟主题），新增守卫 `themes/__tests__/buttonStateContrast.test.ts` 锁 11 主题每档 ΔRGB ≥ 8；按钮 hover / active 加 `enabled:` 前缀，修禁用态仍会 hover 换色的行为回归；§4 单行输入 focus 环还原为 `--focus-ring-soft`，spec 与实现的偏差改为登记进 [`design-governance.md`](./design-governance.md) §10 待裁决表，不擅自统一。
+
 - **2026-09-02（Desktop 登录成功回调页 UX 覆盖）**：成功态移除返回 Cindy 按钮，改为 560×500 紧凑内容流卡片，底部显示本地化 3 秒倒计时并在结束时先移除文字再调用 `window.close()`；失败 / Warning 继续使用 680×680 卡片与返回操作。同步更新 `DESIGN.md §16`、`figma-component-spec.md §6`、`token-decision-table.md §4` 与客户端模板测试。
 
 - **2026-09-02（DS-3 最小语义 Token 影子层）**：新建 `packages/design-tokens`（标准 DTCG JSON，reference → semantic 两层）。数据源为 DS-2b 冻结快照，零运行时接线；弃坑复查日期 2026-11-01。不改台账、不改产品代码。路线图 DS-2b 回填为 #3700。

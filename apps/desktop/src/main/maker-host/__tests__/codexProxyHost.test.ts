@@ -1690,6 +1690,90 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
+  it('routes a smart Subagent by its requested model and records the actual identity', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'smart-subagent-provider',
+      name: 'Smart Subagent Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://smart-subagent.invalid/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { codex: [{ id: 'smart/model-cheap', name: 'Smart Cheap Model' }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'smart-subagent-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerComposed(
+      'session-smart-parent',
+      'thread-smart-parent',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'smart-subagent-provider',
+          catalogModel: 'smart/model-cheap',
+        }],
+      },
+    );
+    setSessionProvider('session-smart-parent', 'openai');
+
+    try {
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-smart-child',
+          'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-smart-parent',
+        },
+      };
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const forcedRouteTransform = transforms[3];
+      if (!forcedRouteTransform) throw new Error('expected smart Subagent route transform');
+      expect(forcedRouteTransform({
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'low' },
+        input: [],
+      }, ctx)).toEqual({
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'low' },
+        input: [],
+      });
+      expect(host.getObservedCodexSubagentIdentity('thread-smart-child')).toEqual({
+        model: 'smart/model-cheap',
+        reasoningEffort: 'low',
+      });
+
+      await expect(Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'smart/model-cheap', input: [] },
+        ctx,
+      ))).resolves.toEqual({
+        upstreamOverride: 'https://smart-subagent.invalid/v1',
+        headerOverride: { authorization: 'Bearer smart-subagent-key' },
+        headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+      });
+    } finally {
+      host.unregister('session-smart-parent');
+      clearSessionProvider('session-smart-parent');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('passes a locked Subagent effort through the Chat local bridge', async () => {
     const host = await freshCodexProxyHost();
     const { setCustomProviders } = await import('../active-catalog.js');
@@ -2731,9 +2815,9 @@ describe('codex proxy host', () => {
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
   });
 
-  it('keeps the parent websocket while routing configured subagents over HTTP', async () => {
-    // cindy_openai 保持 WS 能力；只有命中独立 subagentRoute 的 child upgrade 回 null
-    //（426 → Codex 按子会话降到 HTTP），父线程及无该路由的子线程继续走原生 WS。
+  it('keeps the parent websocket while observing every subagent over HTTP', async () => {
+    // cindy_openai 保持父线程 WS 能力；collab_spawn child upgrade 一律回 null
+    //（426 → Codex 按子会话降到 HTTP），这样 proxy 才能按请求模型路由并记录真实身份。
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
@@ -2782,7 +2866,11 @@ describe('codex proxy host', () => {
       );
       // 经血缘继承了 route 快照的已登记子线程拒绝 WS。
       host.registerChildThread('thread-ws-parent', 'thread-ws-child');
-      expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-ws-child'))).toBeNull();
+      expect(proxyOpts.resolveWebSocketUpstream(ctxForCodex145ChildPrewarm(
+        'thread-ws-child',
+        'session-ws-child',
+        'thread-ws-parent',
+      ))).toBeNull();
       // 0.145.0 child startup prewarm 可能早于 thread/started；完整握手 metadata
       // 通过显式 parent header 命中路由快照，null 由 proxy 映射为 426。
       expect(proxyOpts.resolveWebSocketUpstream(ctxForCodex145ChildPrewarm(
@@ -2804,14 +2892,12 @@ describe('codex proxy host', () => {
       ))).resolves.toEqual({
         headerOverride: { authorization: 'Bearer gateway-subagent-key' },
       });
-      // 未配置独立 route 的 collab child 不应被全局降级。
+      // 即使没有额外路由，仍需从 HTTP 请求观察 Codex 原生实际选择的 Sol/Terra。
       expect(proxyOpts.resolveWebSocketUpstream(ctxForCodex145ChildPrewarm(
         'thread-openai-child',
         'session-openai-child',
         'thread-openai-main',
-      ))).toBe(
-        'https://chatgpt.com/backend-api/codex',
-      );
+      ))).toBeNull();
     } finally {
       host.unregister('session-ws-parent');
       host.setCodexProxyGatewayKeyReader(() => null);

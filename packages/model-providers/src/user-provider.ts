@@ -32,6 +32,8 @@ export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
  * source. Preserve the stored id, but project that legacy row under a collision-free runtime id.
  */
 export const LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID = "custom:xai";
+/** Official API-key preset for xAI; distinct from the built-in SuperGrok OAuth provider. */
+export const XAI_API_CUSTOM_PROVIDER_ID = "xai-api";
 
 export function runtimeCustomProviderId(providerId: string): string {
   return providerId === "xai"
@@ -43,6 +45,71 @@ export function storedCustomProviderId(providerId: string): string {
   return providerId === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID
     ? "xai"
     : providerId;
+}
+
+function isOfficialXaiApiUpstream(upstream: string | undefined): boolean {
+  try {
+    const url = new URL(upstream ?? "");
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "api.x.ai" &&
+      (url.pathname === "/v1" || url.pathname === "/v1/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The chat-only xAI API preset uses the same public Imagine endpoints as the built-in
+ * OAuth source. Project those catalog entries onto the API-key source only after the
+ * official endpoint has been confirmed by the saved runtime routing.
+ */
+export function projectXaiApiImageModels(
+  providers: readonly Provider[],
+): readonly Provider[] {
+  const xaiSource = providers.find((provider) => provider.id === "xai");
+  if (
+    !xaiSource?.imageModels?.length ||
+    !providers.some((provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID)
+  ) {
+    return providers;
+  }
+  // 属性收窄无法跨越 map 回调边界，这里显式捕获非空清单。
+  const sourceImageModels = xaiSource.imageModels;
+  let changed = false;
+  const projected = providers.map((provider) => {
+    if (
+      provider.id !== XAI_API_CUSTOM_PROVIDER_ID ||
+      provider.source !== "user" ||
+      provider.auth.method !== "apiKey" ||
+      provider.imageModels?.length ||
+      !Object.values(provider.routing).some((routing) =>
+        isOfficialXaiApiUpstream(routing?.upstream),
+      )
+    ) {
+      return provider;
+    }
+    changed = true;
+    return { ...provider, imageModels: [...sourceImageModels] };
+  });
+  return changed ? projected : providers;
+}
+
+/**
+ * Official-API image credentials may only come from runtimes whose saved routing
+ * targets the official endpoint. Binding key reads to these agents prevents a
+ * proxy-configured runtime's key from being disclosed to api.x.ai. Agents are
+ * returned in fixed AGENT_ORDER so key selection stays deterministic when
+ * several runtimes are official.
+ */
+export function xaiApiOfficialRuntimeAgents(
+  provider: Provider | undefined,
+): readonly AgentKind[] {
+  if (!provider) return [];
+  return AGENT_ORDER.filter((agent) =>
+    isOfficialXaiApiUpstream(provider.routing[agent]?.upstream),
+  );
 }
 
 /**

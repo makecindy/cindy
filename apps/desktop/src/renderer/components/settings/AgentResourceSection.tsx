@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -40,18 +41,7 @@ const ROW_HINT_CLASS =
 /** 行间分割线:左右缩进与行内边距对齐。 */
 const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
 
-/**
- * 数字输入框的框体规格,与设置页统一输入框 `SettingsTextInput` 的 md 档一致
- * (DESIGN.md §4-5:单行输入走药丸圆角;fill 必须是 `--surface-elevated` —— 设置卡片
- * 本身是 ivory,ivory 输入压在 ivory 卡上会与背景同色、填充对比度归零)。
- * 上下调节沿用浏览器原生步进器,不自绘 —— 设置页的控件样式统一是独立议题,留待整体收敛。
- */
-const NUMBER_INPUT_CLASS = cn(
-  'h-9 w-24 shrink-0 rounded-full px-4 text-13 outline-none transition-colors',
-  'bg-[var(--surface-elevated)] text-[var(--settings-input-text)]',
-  'border border-[var(--settings-input-border)] focus:border-[var(--settings-input-border-focus)]',
-  'focus:ring-2 focus:ring-[var(--focus-ring)]',
-);
+/** 数字输入走标准 Input md 档（32/36/40 中的 36px），原生步进器不自绘。 */
 
 /**
  * 均衡档并发值:本机核数的一半,至少 2(与 main 侧 toolchain-thread-cap 的口径一致),
@@ -308,13 +298,13 @@ export function AgentResourceSection() {
               {t('settings.agentResource.maxConcurrentHint')}
             </span>
           </span>
-          <input
+          <Input
             type="number"
             min={0}
             max={MAX_CONCURRENT_CAP}
             disabled={applyingPreset}
             value={maxDraft ?? String(settings.maxConcurrentCommands)}
-            onChange={(e) => setMaxDraft(e.target.value)}
+            onChange={setMaxDraft}
             onBlur={() => {
               // 唯一提交点(DESIGN §14.3:Settings 单行编辑器 Enter 不得提交):
               // 仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
@@ -327,7 +317,8 @@ export function AgentResourceSection() {
               if (raw === settings.maxConcurrentCommands) return;
               persist('maxConcurrentCommands', raw);
             }}
-            className={NUMBER_INPUT_CLASS}
+            size="md"
+            className="w-24 shrink-0"
           />
         </label>
 

@@ -23,6 +23,7 @@ import {
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
+  HOOK_FEATURE_SESSION_NEW,
   HOOK_FEATURE_SLACK_TOOLS,
   HOOK_FEATURE_TURN_DELIVERY,
   makeBindState,
@@ -183,6 +184,7 @@ describe('hook-control runtime capability gate', () => {
     const handleTurnDelivery = vi.fn();
     const dispatcher = {
       handleDispatch: vi.fn(),
+      createSession: vi.fn(),
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
       cancel: vi.fn(),
@@ -1510,6 +1512,7 @@ const TELEGRAM_FEATURES = [
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_SESSION_PICKER,
+  HOOK_FEATURE_SESSION_NEW,
 ];
 
 const TELEGRAM_PENDING: ProviderBindStatusPayload = {
@@ -1582,6 +1585,7 @@ describe('Telegram provider capability, binding and prefs', () => {
     const handleDispatch = vi.fn();
     const dispatcher = {
       handleDispatch,
+      createSession: vi.fn(),
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
       onMessageOpResult: vi.fn(),

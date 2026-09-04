@@ -284,6 +284,8 @@ export interface AgentInputQueuedMessage {
    * 见 device-link/invoke-context 的可信度说明。
    */
   fromMobileClient?: boolean;
+  /** Main-owned provenance: this queue item entered through device-link input IPC. */
+  fromDeviceLinkClient?: boolean;
   /**
    * 一次性跳过意识拦截钩(订阅槽①)。**预留字段,v1 无调用点置位**:当前
    * 没有"强制发送"UI,被拦消息只能编辑后重发且重发仍会再审;未来落地

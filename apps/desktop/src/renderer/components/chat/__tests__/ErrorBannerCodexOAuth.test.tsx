@@ -1153,4 +1153,18 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       ).disabled,
     ).toBe(false);
   });
+
+  it('shows model access guidance instead of authentication advice for a custom provider', () => {
+    render(<ErrorBanner
+      error="Failed to authenticate. API Error: 403 user not allowed to access model"
+      errorReason="user_model_access_denied"
+      agentKind="cc"
+      providerId="custom-provider"
+      modelId="claude-opus-5"
+      retryText="retry after changing access"
+      onRetry={vi.fn()}
+    />);
+    expect(screen.getByText('chat.errorBanner.modelAccessDenied')).toBeTruthy();
+    expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
+  });
 });

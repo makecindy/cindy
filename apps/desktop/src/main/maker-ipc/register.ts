@@ -745,6 +745,7 @@ import {
   containsManagedAttachment,
   createMakerSendTransaction,
   prepareDirectoryGrantsForBootstrap,
+  stampTrustedDeviceLinkQueuedOrigin,
   stampTrustedDesktopQueuedOrigin,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
 } from './makerSendTransaction.js';
@@ -3132,33 +3133,25 @@ let libraryExtraDirSyncGeneration = 0;
 let libraryExtraDirSyncRoot: string | null = null;
 let libraryExtraDirSyncChain: Promise<void> = Promise.resolve();
 
-async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
+async function syncLibraryReadonlyExtraDir(
+  root: string | null,
+): Promise<'granted' | 'not-granted' | 'superseded'> {
   libraryExtraDirSyncRoot = root;
   const generation = ++libraryExtraDirSyncGeneration;
-  const run = async () => {
-    if (generation !== libraryExtraDirSyncGeneration) {
-      throw new Error('library extraDirs sync superseded');
-    }
+  const run = async (): Promise<'granted' | 'not-granted' | 'superseded'> => {
+    if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
     const grantRoot = libraryExtraDirSyncRoot;
     const focused = getFocusedGhostSessionId();
-    if (generation !== libraryExtraDirSyncGeneration) {
-      throw new Error('library extraDirs sync superseded');
-    }
+    if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
     const visible = await listVisibleActiveSessionIds();
-    if (generation !== libraryExtraDirSyncGeneration) {
-      throw new Error('library extraDirs sync superseded');
-    }
+    if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
     const targets = new Set(visible);
     if (focused) targets.add(focused);
     let granted = false;
     for (const sessionId of targets) {
-      if (generation !== libraryExtraDirSyncGeneration) {
-        throw new Error('library extraDirs sync superseded');
-      }
+      if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
       const remote = await sessionIsRemote(sessionId);
-      if (generation !== libraryExtraDirSyncGeneration) {
-        throw new Error('library extraDirs sync superseded');
-      }
+      if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
       const nextRoot = !remote && grantRoot && sessionId === focused ? grantRoot : null;
       try {
         await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
@@ -3170,17 +3163,16 @@ async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
         });
         if (!remote && nextRoot && sessionId === focused) throw error;
       }
-      if (generation !== libraryExtraDirSyncGeneration) {
-        throw new Error('library extraDirs sync superseded');
-      }
+      if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
     }
     if (grantRoot && !granted) {
       throw new Error('library extraDirs not granted to focused session');
     }
+    return grantRoot && granted ? 'granted' : 'not-granted';
   };
   const queued = libraryExtraDirSyncChain.then(run, run);
   libraryExtraDirSyncChain = queued.then(() => undefined, () => undefined);
-  await queued;
+  return queued;
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
@@ -7486,21 +7478,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // per-session 供应商路由:把 cc loopback proxy 看到的 x-claude-code-session-id(= sdkSessionId)
   // 反解成 xdt sessionId,供其统一路由器查该会话显式选定的供应商。sdkSessionId 唯一,直接匹配活跃会话。
-  // 热路径禁止把 ipcMaker 的 PRECONDITION_FAILED 抛进 proxy:owner boundary 期间抛错会被
-  // 引擎 fail-open 成默认 LiteLLM,provider-oauth 占位 key 原样上游 → 确定性 401。
+  // 查询异常交由 routingTransform 的 fail-closed 边界收口,不能伪装成查无会话后回落网关。
   setClaudeProxyOwnerBoundaryPendingChecker(isAppSessionBoundaryPending);
   setClaudeProxyOwnerScopeKeyReader(activeOwnerScopeKey);
   setClaudeProxySessionIdResolver((sdkSessionId) => {
-    try {
-      if (isAppSessionBoundaryPending()) return null;
-      const s = maker.listActiveSessions().find((x) => x.sdkSessionId === sdkSessionId);
-      return s ? s.id : null;
-    } catch (err) {
-      log.warn('claude proxy session resolver failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
+    if (isAppSessionBoundaryPending()) return null;
+    const s = maker.listActiveSessions().find((x) => x.sdkSessionId === sdkSessionId);
+    return s ? s.id : null;
   });
 
   // 会话移动转录迁移:活跃会话桥(查内存 sdkSessionId + 关闭 handle)。
@@ -15817,13 +15801,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputGeneration();
         // 手机来源在**入队这一刻**盖章:drain 派发时已脱离本 invoke 的 async context。
         // 无条件覆盖 —— item 来自 wire,客户端自填的 fromMobileClient 一律不生效。
-        const queued = stampTrustedDesktopQueuedOrigin(
-          stampMobileClientOrigin(
-            await hydrateQueuedAgentReferences(queuedWithAttachments, {
-              isSessionTurnRunning: (targetSessionId) =>
-                getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
-            }),
-            isMobileControllerInvoke(),
+        const queued = stampTrustedDeviceLinkQueuedOrigin(
+          stampTrustedDesktopQueuedOrigin(
+            stampMobileClientOrigin(
+              await hydrateQueuedAgentReferences(queuedWithAttachments, {
+                isSessionTurnRunning: (targetSessionId) =>
+                  getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
+              }),
+              isMobileControllerInvoke(),
+            ),
+            deviceLinkInvoke,
           ),
           deviceLinkInvoke,
         );
@@ -16029,13 +16016,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const queuedWithAttachments = materialized.item as AgentInputQueuedMessage;
         assertCurrentInputGeneration();
         // 与 enqueue 同:steer 投递也在本 invoke 的 async context 之外发生。
-        const queued = stampTrustedDesktopQueuedOrigin(
-          stampMobileClientOrigin(
-            await hydrateQueuedAgentReferences(queuedWithAttachments, {
-              isSessionTurnRunning: (targetSessionId) =>
-                getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
-            }),
-            isMobileControllerInvoke(),
+        const queued = stampTrustedDeviceLinkQueuedOrigin(
+          stampTrustedDesktopQueuedOrigin(
+            stampMobileClientOrigin(
+              await hydrateQueuedAgentReferences(queuedWithAttachments, {
+                isSessionTurnRunning: (targetSessionId) =>
+                  getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
+              }),
+              isMobileControllerInvoke(),
+            ),
+            deviceLinkInvoke,
           ),
           deviceLinkInvoke,
         );

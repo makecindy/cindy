@@ -4,18 +4,18 @@
  * 三件事严格分离(2026-08-02 架构收敛定案,协议侧契约见本仓
  * modelRegistryCanonical.ts 的「Presence, entitlement, and sale availability」):
  *  - roots:该供应商的 canonical 实体列表落在哪些 agent。实体化 / discovery /
- *    本地 override 只作用于 root;派生端(bridge / Pi)永远重算,禁止直写。
+ *    本地 override 只作用于 root；wire bridge 从 root 重算，Pi 不进入这张投影图。
  *  - membership:registry route.agents 声明「允许出现在哪些消费端」,不是 root
  *    清单——root ∩ membership 决定实体化落点,非 root 的 membership 只授权投影
  *    可达(如 anthropic route 含 codex = 允许进 codex bridge)。
  *  - transforms:投影期的 ID/能力变换(chatgpt/ 前缀、effort 封顶、fast=false),
  *    硬约束最后收口。共享变换与拓扑都集中在本模块,目录装配和续跑描述符不得各写一套。
  *
- * Pi 不在 wire enum(protocol MODEL_ACCESS_AGENTS 只有 claude-code/codex),
- * 恒定由客户端投影派生,route 永远无法点名 pi:
- *  - openai:  codex root → claude-code bridge(membership 门控) + pi bridge(恒定);
- *  - anthropic: claude-code root → codex bridge(membership 门控,fast=false) + pi 镜像(恒定);
- *  - xai:    claude-code/codex 双 root(perAgent 各自应用),pi 镜像 claude-code root(恒定);
+ * Pi 不在 wire enum(protocol MODEL_ACCESS_AGENTS 只有 claude-code/codex)，也不从这两个
+ * harness 复制。Pi 的成员与能力由客户端 Pi 原生目录和明确的 Pi 覆盖单独装配。
+ *  - openai:  codex root → claude-code bridge(membership 门控);
+ *  - anthropic: claude-code root → codex bridge(membership 门控,fast=false);
+ *  - xai:    claude-code/codex 双 root(perAgent 各自应用);
  *  - xd:     roots=∅ —— 存在性/元数据只来自 Gateway /models,registry 与本地
  *            override 永远不能凭空制造 XD 可售模型。
  */
@@ -36,8 +36,6 @@ export type RootAgentKind = 'claude-code' | 'codex';
 export interface BuiltinModelPlanePolicy {
   /** canonical 实体列表所在 agent。 */
   roots: readonly RootAgentKind[];
-  /** Pi 恒定投影使用的 canonical root;Pi 不进入 wire membership。 */
-  piRoot: RootAgentKind;
   /**
    * membership 门控的派生端:root 模型是否进入该 bridge 由 registry route.agents
    * 是否包含该 agent 决定;registry 没登记的模型(纯 discovery)不受门控,维持
@@ -48,42 +46,11 @@ export interface BuiltinModelPlanePolicy {
 
 /** 实体化 allowlist:只有这三家允许由 registry presence 长出可选实体。 */
 export const MODEL_PLANE_POLICIES: ReadonlyMap<string, BuiltinModelPlanePolicy> = new Map([
-  ['openai', { roots: ['codex'], piRoot: 'codex', membershipGatedBridges: ['claude-code'] }],
-  [
-    'anthropic',
-    { roots: ['claude-code'], piRoot: 'claude-code', membershipGatedBridges: ['codex'] },
-  ],
-  ['xai', { roots: ['claude-code', 'codex'], piRoot: 'claude-code', membershipGatedBridges: [] }],
+  ['openai', { roots: ['codex'], membershipGatedBridges: ['claude-code'] }],
+  ['anthropic', { roots: ['claude-code'], membershipGatedBridges: ['codex'] }],
+  ['xai', { roots: ['claude-code', 'codex'], membershipGatedBridges: [] }],
   // xd 有意不在表内:Gateway 独占存在性(见文件头)。
 ]);
-
-function piRegistryMatch(
-  registry: ModelRegistry,
-  providerId: string,
-  piModelId: string,
-): { entry: ModelRegistryEntry; rootModelId: string } | null {
-  const policy = MODEL_PLANE_POLICIES.get(providerId);
-  if (!policy) return null;
-  const rootModelId = canonicalRegistryEntryModelId(providerId, piModelId);
-  if (!rootModelId) return null;
-
-  const exactEntry = registry.models.find((entry) => entry.id === `${providerId}/${rootModelId}`);
-  if (exactEntry) {
-    const exactRoute = exactEntry.routes.find((route) => route.providerId === providerId);
-    if (exactRoute) {
-      const isConsumerAlias = exactRoute.modelId !== rootModelId;
-      const piReachable =
-        exactRoute.agents.includes(policy.piRoot) ||
-        (providerId === 'openai' &&
-          isConsumerAlias &&
-          exactRoute.agents.includes('claude-code'));
-      if (piReachable) return { entry: exactEntry, rootModelId };
-    }
-  }
-
-  const matched = findModelRegistryRoute(registry, providerId, rootModelId, policy.piRoot);
-  return matched ? { entry: matched.entry, rootModelId } : null;
-}
 
 function canonicalRegistryEntryModelId(providerId: string, consumerModelId: string): string | null {
   const modelId = consumerModelId.trim();
@@ -98,8 +65,7 @@ function canonicalRegistryEntryModelId(providerId: string, consumerModelId: stri
  * Registry tombstone lookup for a concrete client consumer. This mirrors the same root/bridge
  * graph used by materialization without requiring a CatalogModel entity: retired routes are
  * intentionally absent from the assembled provider list, but legacy controllers may still name
- * one explicitly. Pi maps to its canonical source root because it is client-projected and never
- * appears in the wire agent enum.
+ * one explicitly. Pi is independent from the Registry graph and is never tombstoned here.
  */
 export function isRegistryTombstoneForConsumer(
   registry: ModelRegistry | null | undefined,
@@ -110,9 +76,7 @@ export function isRegistryTombstoneForConsumer(
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!registry || !policy) return false;
 
-  if (agent === 'pi') {
-    return piRegistryMatch(registry, providerId, modelId)?.entry.status === 'retired';
-  }
+  if (agent === 'pi') return false;
   const registryAgent =
     policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent) ? agent : null;
   if (!registryAgent) return false;
@@ -126,8 +90,7 @@ export function isRegistryTombstoneForConsumer(
       (entry) => entry.id === `${providerId}/${canonicalModelId}`,
     );
     const exactRoute = exactEntry?.routes.find(
-      (route) =>
-        route.providerId === providerId && route.agents.includes(registryAgent),
+      (route) => route.providerId === providerId && route.agents.includes(registryAgent),
     );
     if (exactEntry && exactRoute) return exactEntry.status === 'retired';
   }
@@ -148,13 +111,13 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 ]);
 type Effort = CatalogModel['efforts'][number];
 
-/** Claude/Pi 的 OpenAI bridge 默认收起的旧型号;与既有目录行为保持一致。 */
+/** Claude 的 OpenAI bridge 默认收起的旧型号;与既有目录行为保持一致。 */
 const BRIDGE_DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4', 'gpt-5.4-mini']);
 
 /** anthropic-responses bridge 不会兑现的 GPT 思考档,投影时必须在客户端硬封顶。 */
 const CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS: ReadonlySet<Effort> = new Set(['max', 'ultra']);
 
-/** OpenAI Codex root → Claude/Pi bridge;目录装配与 retired 续跑共同复用。 */
+/** OpenAI Codex root → Claude bridge。 */
 export function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
   const bridgeEfforts = model.efforts.filter(
     (effort) => !CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(effort),
@@ -173,17 +136,6 @@ export function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
       : {}),
     ...(BRIDGE_DEFAULT_HIDDEN_SLUGS.has(model.id) ? { defaultEnabled: false } : {}),
   };
-}
-
-/** canonical root → Pi;Pi 始终从 policy 指定 root 派生,永不读取 wire agent membership。 */
-export function projectRootModelToPi(
-  providerId: string,
-  rootAgent: RootAgentKind,
-  model: CatalogModel,
-): CatalogModel | null {
-  const policy = MODEL_PLANE_POLICIES.get(providerId);
-  if (!policy || policy.piRoot !== rootAgent) return null;
-  return providerId === 'openai' ? toChatgptBridgeModel(model) : model;
 }
 
 /** 单 root 的 registry 消费计划:先算好,合并期零决策。 */
@@ -209,14 +161,14 @@ export interface ModelPlaneWarning {
 export interface ModelPlaneRegistryPlan {
   /** key = `${providerId}:${rootAgent}`。 */
   roots: Map<string, RootRegistryPlan>;
-  /** key = `${providerId}:${consumer}`；wire bridge 用 perAgent，Pi 用 entry 基线。 */
+  /** key = `${providerId}:${consumer}`；wire bridge 使用目标端 perAgent。 */
   consumers: Map<string, Map<string, Partial<CatalogModel>>>;
   /**
    * key = `${providerId}:${consumer}`；同一上游 modelId 的显式消费端变体。
    *
    * 这类条目用不同 canonical entry id 表达独立选择，但 route.modelId 仍保持厂商官方
    * model id。旧客户端会因没有 canonical root 而安全忽略；理解该语义的新客户端只在
-   * route 明确授权的 bridge 与 Pi 投影中物化，不污染 canonical root（尤其不改 Codex）。
+   * route 明确授权的 bridge 中物化，不污染 canonical root（尤其不改 Codex）。
    */
   consumerAdditions: Map<string, CatalogModel[]>;
   warnings: ModelPlaneWarning[];
@@ -345,13 +297,11 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
         ? entry.id.slice(canonicalPrefix.length)
         : null;
       const isConsumerAlias =
-        consumerAliasId !== null &&
-        consumerAliasId.length > 0 &&
-        consumerAliasId !== route.modelId;
+        consumerAliasId !== null && consumerAliasId.length > 0 && consumerAliasId !== route.modelId;
 
       // OpenAI 的包月长上下文是同一官方 modelId 的显式 opt-in。Registry 用不同 entry id
       // 建立独立选择，route.modelId 仍写官方裸 id；route 只点名 claude-code，因此不能为了
-      // 物化它而把 Codex root 一起抬高。Pi 继续按产品约定从同一 entry 基线投影。
+      // 物化它而把 Codex root 一起抬高。Pi 不参与 Registry consumer projection。
       if (
         route.providerId === 'openai' &&
         memberRoots.length === 0 &&
@@ -359,37 +309,32 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
         routeAgents.includes('claude-code')
       ) {
         if (status === null) continue;
-        for (const consumer of ['claude-code', 'pi'] as const) {
-          const fields = effectiveRouteFields(
-            entry,
-            consumer === 'claude-code' ? 'claude-code' : undefined,
-          );
-          if (fields.validationError) {
-            plan.warnings.push({
-              source: 'registry',
-              providerId: route.providerId,
-              agent: policy.piRoot,
-              modelId: consumerAliasId,
-              reason: `${consumer} consumer alias ${fields.validationError}`,
-            });
-            continue;
-          }
-          const materialized = toMaterializedModel(consumerAliasId, fields, status);
-          if (typeof materialized === 'string') {
-            plan.warnings.push({
-              source: 'registry',
-              providerId: route.providerId,
-              agent: policy.piRoot,
-              modelId: consumerAliasId,
-              reason: `${consumer} consumer alias ${materialized}`,
-            });
-            continue;
-          }
-          const key = consumerPlanKey(route.providerId, consumer);
-          const additions = plan.consumerAdditions.get(key) ?? [];
-          additions.push(materialized);
-          plan.consumerAdditions.set(key, additions);
+        const fields = effectiveRouteFields(entry, 'claude-code');
+        if (fields.validationError) {
+          plan.warnings.push({
+            source: 'registry',
+            providerId: route.providerId,
+            agent: 'claude-code',
+            modelId: consumerAliasId,
+            reason: `claude-code consumer alias ${fields.validationError}`,
+          });
+          continue;
         }
+        const materialized = toMaterializedModel(consumerAliasId, fields, status);
+        if (typeof materialized === 'string') {
+          plan.warnings.push({
+            source: 'registry',
+            providerId: route.providerId,
+            agent: 'claude-code',
+            modelId: consumerAliasId,
+            reason: `claude-code consumer alias ${materialized}`,
+          });
+          continue;
+        }
+        const key = consumerPlanKey(route.providerId, 'claude-code');
+        const additions = plan.consumerAdditions.get(key) ?? [];
+        additions.push(materialized);
+        plan.consumerAdditions.set(key, additions);
         continue;
       }
       // 有 lifecycle presence、却没有 canonical root 的 route 无法产生任何实体或
@@ -458,28 +403,6 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
         rootPlan.additions.push(materialized);
       }
       if (!acceptedRoot) continue;
-      // Pi 不在 wire perAgent enum 中，但它仍是 Registry 的独立消费端。它必须从
-      // entry 基线投影，不能继承 piRoot 上的 Codex/Claude 专属覆盖。
-      if (memberRoots.includes(policy.piRoot)) {
-        const fields = effectiveRouteFields(entry);
-        if (fields.validationError) {
-          plan.warnings.push({
-            source: 'registry',
-            providerId: route.providerId,
-            agent: policy.piRoot,
-            modelId: route.modelId,
-            reason: `pi baseline ${fields.validationError}`,
-          });
-        } else {
-          const key = consumerPlanKey(route.providerId, 'pi');
-          let overlays = plan.consumers.get(key);
-          if (!overlays) {
-            overlays = new Map();
-            plan.consumers.set(key, overlays);
-          }
-          overlays.set(route.modelId, toOverlay(fields, status));
-        }
-      }
       // 目标 bridge 的 effective fields = entry base + perAgent[bridge]。metadata-only
       // 仍可 overlay 已存在的 discovery bridge，但不能在下面改变投影拓扑。
       for (const bridgeAgent of policy.membershipGatedBridges) {
@@ -619,42 +542,6 @@ function toMaterializedModel(
         ? { defaultEnabled: fields.defaultEnabled }
         : {}),
   };
-}
-
-/**
- * 为已持久化 Pi 会话重建 retired 模型的运行时描述实体。
- *
- * 这不是可选目录实体化:调用方只可把结果补进当前会话私有的 models.json;公开
- * availableModels / 新路由准入仍过滤 retired。这样纯 Registry 模型在退役并重启后
- * 仍能按旧选择续跑,同时保持 MODEL_REGISTRY.md 的“不得新实体化”契约。
- */
-export function resolveRetiredRegistryModelForPi(
-  registry: ModelRegistry | null | undefined,
-  providerId: string,
-  piModelId: string,
-  options: {
-    prepareRootModel?: (params: {
-      providerId: string;
-      rootAgent: RootAgentKind;
-      model: CatalogModel;
-    }) => CatalogModel;
-  } = {},
-): CatalogModel | null {
-  const policy = MODEL_PLANE_POLICIES.get(providerId);
-  if (!registry || !policy) return null;
-  const matched = piRegistryMatch(registry, providerId, piModelId);
-  if (!matched || matched.entry.status !== 'retired') return null;
-  const fields = effectiveRouteFields(matched.entry);
-  if (fields.validationError) return null;
-  const root = toMaterializedModel(matched.rootModelId, fields, 'active');
-  if (typeof root === 'string') return null;
-  const retiredRoot = { ...root, status: 'retired' as const };
-  const preparedRoot = options.prepareRootModel?.({
-    providerId,
-    rootAgent: policy.piRoot,
-    model: retiredRoot,
-  }) ?? retiredRoot;
-  return projectRootModelToPi(providerId, policy.piRoot, preparedRoot);
 }
 
 /**

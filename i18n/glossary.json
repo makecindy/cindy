@@ -1309,6 +1309,18 @@
       "note": "产品名，五语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。"
     },
     {
+      "id": "smart-subagent-routing",
+      "status": "proposed",
+      "en": "Smart routing",
+      "translations": {
+        "zh-CN": "智能调配",
+        "zh-TW": "智慧調配",
+        "ja": "スマートルーティング",
+        "ko": "스마트 라우팅"
+      },
+      "note": "Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。"
+    },
+    {
       "id": "subagent",
       "status": "decided",
       "en": "Subagent",

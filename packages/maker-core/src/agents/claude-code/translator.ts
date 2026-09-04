@@ -36,6 +36,7 @@ import {
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
 import type { UsageTracker } from '../shared/usage-tracker.js';
+import { isModelAccessDenied } from './model-access-error.js';
 import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import {
   beginClaudeGeneration,
@@ -89,6 +90,8 @@ export interface TurnState {
     agentMeta?: Record<string, unknown>;
     errorStatus?: number | null;
     usageLimit?: boolean;
+    /** Extracted before redaction, which can make an upstream JSON envelope unparsable. */
+    modelAccessDenied?: boolean;
     retryAttempt?: number;
     maxRetries?: number;
   } | null;
@@ -1026,6 +1029,9 @@ function handleSystem(
         : `SDK API request failed: ${sdkError} (${statusLabel}${retryLabel})`,
       sdkError,
       ...(hasAssistantEnvelope ? { agentMeta: previous.agentMeta } : {}),
+      modelAccessDenied: hasAssistantEnvelope
+        ? previous.modelAccessDenied
+        : isModelAccessDenied(msg.error ?? '', msg.error_status ?? undefined),
       errorStatus: msg.error_status,
       retryAttempt: msg.attempt,
       maxRetries: msg.max_retries,
@@ -1386,6 +1392,7 @@ function handleAssistant(
       message: redactSensitiveText(errorMessage),
       sdkError: redactSensitiveText(msg.error),
       agentMeta: assistantMeta,
+      modelAccessDenied: isModelAccessDenied(errorMessage, errorSignals.errorStatus),
       ...(errorSignals.errorStatus !== undefined
         ? { errorStatus: errorSignals.errorStatus }
         : {}),
@@ -2300,6 +2307,7 @@ function handleResult(
   // interruptRequested(用户 stop / watchdog 主动 interrupt)也跳过: SDK 被 interrupt
   // 后 drain 出的 error_during_execution result 不是上游失败, 补 error 会把"用户点
   // 停止"误报成"执行失败"、并让 watchdog 场景双发 banner(见 TurnState 字段注释)。
+  let modelAccessMessage: string | undefined;
   if (msg.is_error && !ctx.turn.interruptRequested) {
     const pendingApiError = ctx.turn.pendingApiError;
     const rawResult = typeof msg.result === 'string' ? msg.result.trim() : '';
@@ -2310,6 +2318,17 @@ function handleResult(
     const errorMessage = pendingApiError?.agentMeta
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
+    const modelAccessDenied = pendingApiError?.modelAccessDenied === true
+      || isModelAccessDenied(rawResult, errorStatus ?? undefined);
+    // Keep the terminal/usage event order, but omit the SDK's misleading
+    // authentication advice and the upstream model list from terminal events.
+    const modelAccessError = modelAccessDenied ? {
+      reason: 'user_model_access_denied',
+      sdkError: 'user_model_access_denied',
+      errorStatus: 403,
+      message: 'The upstream account cannot access this model. Select another model or check its access with the provider.',
+    } : {};
+    modelAccessMessage = modelAccessError.message;
     // 上下文超限带稳定 reason key(判定在上方 endTurn 前已算好): renderer 靠它
     // 隐藏必败的 Retry(原样重发必然再撞同一个 4xx)并给出压缩 / 新开会话入口;
     // 文案匹配仅作历史持久化错误行的兜底(overload reason 同款分层)。
@@ -2337,6 +2356,7 @@ function handleResult(
             ...(pendingApiError.maxRetries !== undefined
               ? { maxRetries: pendingApiError.maxRetries }
               : {}),
+            ...modelAccessError,
           }
         : errDetail
         ? {
@@ -2345,6 +2365,7 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...modelAccessError,
           }
         // reason 是稳定 key, renderer 按它走 i18n(规则 18); message 仅作非
         // renderer 消费方(IM/orca)的兜底文案。
@@ -2376,7 +2397,7 @@ function handleResult(
       ? {
           ...msg,
           result: msg.is_error
-            ? redactSensitiveText(msg.result)
+            ? modelAccessMessage ?? redactSensitiveText(msg.result)
             : stripInternalWebCitations(msg.result),
         }
       : msg;

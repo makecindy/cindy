@@ -1442,6 +1442,11 @@ export class Session {
     return this.handle.codexThreadModelProviderId;
   }
 
+  /** Codex-only: exact provider-owned rollout/turn acceptance evidence. */
+  get codexThreadMayHaveRollout(): boolean | undefined {
+    return this.handle.codexThreadMayHaveRollout;
+  }
+
   /** Codex-only: 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
   get codexCindyRemoteCompactionCompatible(): boolean | undefined {
     return this.handle.codexCindyRemoteCompactionCompatible;

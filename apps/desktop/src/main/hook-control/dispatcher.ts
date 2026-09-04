@@ -56,6 +56,7 @@ import {
   type TaskDispatchPayload,
   type TaskRejectReason,
   type TaskSource,
+  type QueryRequestPayload,
   type TurnDeliveryPayload,
   type TurnEndPayload,
 } from '@cindy/slack-hook-protocol';
@@ -153,6 +154,8 @@ export interface HookRunRequest {
   laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
   isNew: boolean;
+  /** Create and expose the task without sending an Agent turn (`/new`). */
+  createOnly?: boolean;
   /**
    * 新建任务替换了哪条不可投递的旧任务。runner 用它从旧任务仍可读取的
    * 本地消息构造一次性 Agent 交接；省略 = 普通新建，不补旧任务上下文。
@@ -390,6 +393,11 @@ export interface HookDispatcher {
    * 走同一条串行链, 不与在途的会话定位竞争。
    */
   handleSessionArchive(connectionId: string, externalKey: string): void;
+  /** Create the next provider task immediately and return only after it exists. */
+  createSession(
+    connectionId: string,
+    request: NonNullable<QueryRequestPayload['sessionNew']>,
+  ): Promise<{ sessionId: string }>;
   /**
    * interaction.decision: 交互卡按钮回流。归属校验(requestId 必须是本连接
    * 正在执行的任务)后按 interactionId 配对 resolve; 未知 / 迟到的静默忽略。
@@ -691,7 +699,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
    * 段的两帧在同一 tick 送达, 生产可达)。链式 promise 保证同 key 严格按序。
    */
   const keyChains = new Map<string, Promise<void>>();
-  function serializeByKey(key: string, fn: () => Promise<void>): void {
+  function serializeByKey(key: string, fn: () => Promise<void>): Promise<void> {
     const prev = keyChains.get(key) ?? Promise.resolve();
     const next = prev.then(fn, fn);
     const stored = next.catch(() => undefined);
@@ -699,6 +707,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     void stored.finally(() => {
       if (keyChains.get(key) === stored) keyChains.delete(key);
     });
+    return next;
   }
   /** 同一 session 的受理段串行化，避免不同 externalKey 并发判断空闲并同时占槽。 */
   const sessionAdmissionChains = new Map<string, Promise<void>>();
@@ -2566,6 +2575,85 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           );
         }
       });
+    },
+    async createSession(connectionId, request) {
+      if (!accountActive) throw new Error('hook account is disabled');
+      if (request.externalKey === request.previousExternalKey) {
+        throw new Error('new task external key must advance');
+      }
+      const admittedGeneration = accountGeneration;
+      const config = getConnection(connectionId);
+      if (!config?.enabled) throw new Error('hook connection is disabled');
+      const source = request.source === undefined ? undefined : normalizeTaskSource(request.source);
+      let createdSessionId: string | null = null;
+      const createAndRetire = async (): Promise<void> => {
+        await serializeByKey(`${connectionId} ${request.previousExternalKey}`, async () => {
+          await serializeByKey(`${connectionId} ${request.externalKey}`, async () => {
+            if (!isCurrentGeneration(admittedGeneration)) {
+              throw new Error('hook account changed while creating the task');
+            }
+            const resolved = await resolveTarget(
+              connectionId,
+              config,
+              {
+                requestId: randomUUID(),
+                externalKey: request.externalKey,
+                workspace: request.workspace,
+                sessionId: null,
+                prompt: '',
+                ...(request.options ? { options: request.options } : {}),
+                ...(source ? { source } : {}),
+              },
+              admittedGeneration,
+            );
+            if ('reject' in resolved) {
+              throw new Error(`session creation rejected: ${resolved.reject}`);
+            }
+            if (resolved.run.isNew) {
+              const outcome = await runner.run({
+                ...resolved.run,
+                createOnly: true,
+                ...(source ? { source } : {}),
+              });
+              if (outcome.status !== 'ok') {
+                bindings.remove(connectionId, request.externalKey);
+                awaitingPersist.delete(resolved.run.sessionId);
+                await resolved.cleanupWorktree?.().catch(() => undefined);
+                throw new Error(outcome.errorMessage || 'failed to create task');
+              }
+              awaitingPersist.delete(resolved.run.sessionId);
+            }
+            // A newer Telegram update may already have materialized this same
+            // generation while `/new` was waiting on the desktop. Reuse that
+            // task instead of creating a second one for the same external key.
+            createdSessionId = resolved.run.sessionId;
+          });
+
+          // The new binding is live before the old one is retired. A failure to
+          // archive history must never route subsequent messages back to it.
+          const previous = bindings.get(connectionId, request.previousExternalKey);
+          bindings.remove(connectionId, request.previousExternalKey);
+          staleTakeoverReplacements.delete(bindingKey(connectionId, request.previousExternalKey));
+          if (previous && previous !== createdSessionId && archiveSessionRow) {
+            const info = await runner.inspect(previous);
+            if (
+              isCurrentGeneration(admittedGeneration) &&
+              info?.usable === true &&
+              info.workingDir !== null &&
+              dirStillAllowed(connectionId, info.workingDir)
+            ) {
+              await archiveSessionRow(previous).catch((err) => {
+                log.warn(
+                  `archive previous hook session ${previous} failed after /new: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              });
+            }
+          }
+        });
+      };
+      await createAndRetire();
+      if (!createdSessionId) throw new Error('task was not created');
+      return { sessionId: createdSessionId };
     },
     handleInteractionDecision(connectionId, payload) {
       if (!accountActive) return;

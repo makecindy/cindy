@@ -7364,11 +7364,17 @@ async function readPassiveIOSSimulatorPluginStatus(
   }
 }
 
+/** Test seams for the module singleton; production callers pass nothing. */
+export interface IOSSimulatorHostInitializeOptions {
+  getSession?: IOSSimulatorHostOptions['getSession'];
+}
+
 function installDefaultIOSSimulatorHost(
   lifecycle: IOSSimulatorSimctlLifecycle,
   persistedActor: ReturnType<typeof createDefaultActor>,
-  registry: IOSSimulatorOwnershipRegistryFile,
-  pendingCreateEvidence: IOSSimulatorPendingCreateEvidenceStore,
+  grantStore: IOSSimulatorDeviceGrantStore,
+  pendingCreateEvidence: IOSSimulatorPendingCreateEvidenceStore | null,
+  seams: IOSSimulatorHostInitializeOptions = {},
 ): IOSSimulatorHost {
   if (defaultIOSSimulatorRuntime) {
     persistedActor.release();
@@ -7384,9 +7390,10 @@ function installDefaultIOSSimulatorHost(
     const host = createIOSSimulatorHost({
       lifecycle,
       actor: persistedActor.actor,
-      grantStore: createRegistryBackedIOSSimulatorDeviceGrantStore(registry),
+      grantStore,
       canReconcilePendingCreates: persistedActor.canReconcilePendingCreates,
-      pendingCreateEvidence,
+      ...(pendingCreateEvidence ? { pendingCreateEvidence } : {}),
+      ...(seams.getSession ? { getSession: seams.getSession } : {}),
       driverManager: createDefaultDriverManager(),
     });
     configureIOSSimulatorRendererAccessRevocationObserver((grants) => {
@@ -7418,17 +7425,50 @@ function installDefaultIOSSimulatorHost(
  * Simulator must not prevent the instance that actually needs it from taking
  * ownership.
  */
-export function initializeIOSSimulatorHost(): IOSSimulatorHost {
+export function initializeIOSSimulatorHost(
+  options: IOSSimulatorHostInitializeOptions = {},
+): IOSSimulatorHost {
   if (defaultIOSSimulatorRuntime) return defaultIOSSimulatorRuntime.host;
   if (defaultIOSSimulatorRuntimeClosing) {
     throw new Error('The iOS Simulator host is shutting down.');
+  }
+
+  if (process.platform !== 'darwin') {
+    // Apple Simulator is macOS-only. The profile ownership registry only exists
+    // for Darwin (its writer lease is an O_EXLOCK kernel lock and
+    // acquireDarwinWriterLease() returns null elsewhere), so a registry-backed
+    // actor would report DEVICE_BUSY ("another Cindy process…") before the
+    // runtime ever gets to say UNSUPPORTED_PLATFORM — and no reboot can clear a
+    // lease that was never taken (#3914). Install an in-memory Host that never
+    // touches the registry, lock, grants or interrupted-create evidence so
+    // every entry (tool catalog, check_environment, doctor, instance queries)
+    // surfaces the real platform issue through runtime.inspect().
+    const lifecycle = createIOSSimulatorSimctlLifecycle();
+    return installDefaultIOSSimulatorHost(
+      lifecycle,
+      {
+        actor: createInMemoryActor(lifecycle),
+        flush: async () => {},
+        release: () => {},
+        canReconcilePendingCreates: () => false,
+      },
+      new IOSSimulatorDeviceGrantStore(),
+      null,
+      options,
+    );
   }
 
   const registry = createDefaultOwnershipRegistry();
   const pendingCreateEvidence = createDefaultPendingCreateEvidence(registry);
   const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry, pendingCreateEvidence);
   const persistedActor = createDefaultActor(lifecycle, registry);
-  return installDefaultIOSSimulatorHost(lifecycle, persistedActor, registry, pendingCreateEvidence);
+  return installDefaultIOSSimulatorHost(
+    lifecycle,
+    persistedActor,
+    createRegistryBackedIOSSimulatorDeviceGrantStore(registry),
+    pendingCreateEvidence,
+    options,
+  );
 }
 
 function currentIOSSimulatorHost(): IOSSimulatorHost | null {
@@ -7618,7 +7658,7 @@ export async function reconcilePersistedIOSSimulatorOwnership(
     const host = installDefaultIOSSimulatorHost(
       lifecycle,
       persistedActor,
-      registry,
+      createRegistryBackedIOSSimulatorDeviceGrantStore(registry),
       pendingCreateEvidence,
     );
     registryTransferred = true;
@@ -7688,7 +7728,7 @@ export function cleanupIOSSimulatorRemovedSession(sessionId: string): Promise<vo
     const host = installDefaultIOSSimulatorHost(
       lifecycle,
       persistedActor,
-      registry,
+      createRegistryBackedIOSSimulatorDeviceGrantStore(registry),
       pendingCreateEvidence,
     );
     registryTransferred = true;

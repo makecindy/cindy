@@ -271,6 +271,13 @@ vi.mock('../../localDb/client/current.js', () => ({
 vi.mock('../promptPrediction.js', () => ({
   generatePromptPrediction: h.predict,
 }));
+// `maker-ipc/title.ts` statically imports the auxiliary title router, whose
+// production default dependency reads the Maker facade. Keep this boundary
+// test's existing lightweight module graph instead of evaluating the full
+// maker-host assembly during collection.
+vi.mock('../../maker-host/index.js', () => ({
+  getMaker: vi.fn(() => ({})),
+}));
 vi.mock('../../messagePersistBroadcaster.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
 }));

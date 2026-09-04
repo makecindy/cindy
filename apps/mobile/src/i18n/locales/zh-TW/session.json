@@ -323,6 +323,7 @@
     "worktreeBranchSaving": "正在同步所選分支…",
     "worktreeBranchSyncFailed": "無法確認已儲存的源分支，請重新選擇分支",
     "worktreeSettingsSaving": "正在同步 worktree 設定…",
+    "worktreeSettingsSyncFailed": "無法確認已儲存的 worktree 設定，請重試開關",
     "worktreeBranchesRetry": "無法讀取分支，點按重試",
     "worktreeDetecting": "檢測環境中…",
     "worktreeRecovering": "連線恢復中，正在自動重試…",

@@ -9,7 +9,11 @@ import {
   readSchemaVersion,
 } from '../migrationRunner.js';
 import { detectSchemaDriftInDir } from '../schemaDriftCore.js';
-import { assertCjkSegRegistered, registerCjkSeg } from '../registerCjkSeg.js';
+import {
+  assertCjkSegRegistered,
+  ensureCjkFtsTempTriggersInstalled,
+  registerCjkSeg,
+} from '../registerCjkSeg.js';
 
 export interface DbWorkerRuntimeOptions {
   userId?: string;
@@ -40,9 +44,13 @@ export function createWorkerDatabase(
   const dbOpts = opts.nativeBinding ? { nativeBinding: opts.nativeBinding } : {};
   const db = new DatabaseCtor(dbPath, dbOpts);
   try {
+    // 顺序硬约束（#3841）：`applyPragmas` 里的 `temp_store = MEMORY` 一旦执行，
+    // SQLite 会立即删除连接上所有已存在的 TEMP 对象。任何 TEMP 触发器/表的创建
+    // 都必须排在 pragma 之后，否则会被原地清空且无报错。
+    applyPragmas(db);
     registerCjkSeg(db);
     assertCjkSegRegistered(db);
-    applyPragmas(db);
+    ensureCjkFtsTempTriggersInstalled(db);
 
     if (dbPath !== ':memory:') {
       const vec = loadSqliteVecAtPath(db, opts.sqliteVecExtPath);

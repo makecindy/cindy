@@ -1,11 +1,9 @@
 /**
  * registerMakerTitleIpc — maker:generate-title / maker:regenerate-title
  *
- * 给会话起一个 ≤ 20 字标题。标题 oneShot 已统一为「单次 HTTP 请求」:按本会话所属 provider
- * (WYSIWYG,与模型选择器高亮同口径:DB 显式选中优先,无则取已连接供应商的原生默认)
- * 取 catalog 配的 `titleModel`(最经济模型),用该 provider 自家凭证直起
- * (见 maker-host/title-one-shot)。无标题 wire 的会话供应商回落官方 `xd`。
- * 起不出来(零已连接 / 官方也不可用 / 凭证缺失 / HTTP 失败 / 超时)
+ * 给会话起一个 ≤ 20 字标题。自动起名与 Magic 重命名都走辅助模型链
+ * (`generateTitleWithAuxiliaryModel`)，不再按当前任务供应商目录捡最便宜的
+ * `titleModel`。起不出来(链上模型都不可用 / 凭证缺失 / HTTP 失败 / 超时)
  * → 返回 null,renderer 回落「消息前 40 字」启发式。fire-and-forget,
  * 不阻塞主流程,也不向用户暴露失败。
  *

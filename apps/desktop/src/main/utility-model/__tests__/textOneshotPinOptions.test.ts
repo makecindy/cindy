@@ -99,8 +99,8 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options).toEqual([
       {
         id: 'cat:xd:codex:codex/gpt-5.5',
-        label: 'Codex · GPT 5.5 折扣 · Cindy Gateway',
-        group: 'Cindy Gateway',
+        label: 'Codex · GPT 5.5 折扣 · Cindy AI',
+        group: 'Cindy AI',
         providerId: 'xd',
         agentKind: 'codex',
         modelId: 'codex/gpt-5.5',
@@ -309,8 +309,8 @@ describe('buildTextOneshotPinOptions', () => {
       undefined,
     );
     expect(options.map((o) => [o.id, o.label])).toEqual([
-      ['cat:xd:codex:gpt-5.5', 'Codex · GPT 5.5 · GW'],
-      ['cat:xd:claude-code:gpt-5.5', 'Claude Code · GPT 5.5 · GW'],
+      ['cat:xd:codex:gpt-5.5', 'Codex · GPT 5.5 · Cindy AI'],
+      ['cat:xd:claude-code:gpt-5.5', 'Claude Code · GPT 5.5 · Cindy AI'],
       ['cat:dual:codex:gpt-5.5', 'Codex · GPT 5.5 · Dual'],
       ['cat:dual:claude-code:gpt-5.5', 'Claude Code · GPT 5.5 · Dual'],
     ]);
@@ -339,7 +339,7 @@ describe('buildTextOneshotPinOptions', () => {
     );
 
     expect(options.map((o) => [o.id, o.label])).toEqual([
-      ['cat:xd:codex:gpt-5.5', 'Codex · GPT 5.5 · xd'],
+      ['cat:xd:codex:gpt-5.5', 'Codex · GPT 5.5 · Cindy AI'],
     ]);
   });
 

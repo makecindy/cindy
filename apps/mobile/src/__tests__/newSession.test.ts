@@ -1860,7 +1860,14 @@ describe('new session worktree wiring (source locks)', () => {
       'useRemoteNewMakerWorktreePreference(selectedDeviceId)',
     );
     expect(newSource).toContain("classification.status === 'missing'");
-    expect(newSource).toContain('worktreeHostSupportsRecoveryKeyDiscard === false');
+    expect(newSource).toContain('worktreeHostSupportsRecoveryKeyDiscardRef.current === false');
+    const seedEffect = newSource.indexOf('const worktreeSeedAgentKindRef = useRef(draft.agentKind);');
+    const seedDeps = newSource.slice(
+      newSource.indexOf('}, [', seedEffect),
+      newSource.indexOf(']);', seedEffect) + 3,
+    );
+    expect(seedDeps).toContain('worktreePreferenceSyncKey,');
+    expect(seedDeps).not.toContain('worktreeHostSupportsRecoveryKeyDiscard,');
     expect(newSource).not.toContain(
       'remoteSessionStore.setNewMakerWorktreePreference(selectedDeviceId, false);',
     );
@@ -1889,6 +1896,15 @@ describe('new session worktree wiring (source locks)', () => {
     expect(createBody).toContain('if (worktreeCreateBlocked) {');
     expect(newSource).toContain('worktreeBranchPreferenceSaving');
     expect(newSource).toContain('worktreeCreateBlocked && worktreeControlCaptionKey');
+    expect(newSource).toContain(
+      "worktreePreferenceAuthorityUnknown ? 'session.new.worktreeSettingsSyncFailed' : null",
+    );
+    expect(newSource).toContain("worktreePreferenceCreateBlocked ? 'session.new.worktreeSettingsSaving' : null");
+    expect(newSource).toContain('const resolveWorktreePreferenceGateErrorKey = useCallback(() => (');
+    expect(newSource).toContain("? 'session.new.worktreeSettingsSyncFailed'");
+    expect(newSource).toContain(": 'session.new.worktreeSettingsSaving'");
+    expect(newSource).toContain('setError(t(resolveWorktreePreferenceGateErrorKey()));');
+    expect(newSource).toContain('setGoalError(t(resolveWorktreePreferenceGateErrorKey()));');
   });
 
   it('re-probes worktree eligibility when the relay or workstation reconnects', () => {

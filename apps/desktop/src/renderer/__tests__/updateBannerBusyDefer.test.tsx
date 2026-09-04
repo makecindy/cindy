@@ -106,6 +106,26 @@ describe('update banner dismiss store', () => {
     deferUpdateBannerBecauseBusy('ready', '1.0.0');
     expect(getUpdateBannerDismissState()).toBe(first);
   });
+
+  it('does not let a busy defer hide a banner the user reopened', () => {
+    deferUpdateBannerBecauseBusy('ready', '1.0.0');
+    restoreUpdateBanner();
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
+    deferUpdateBannerBecauseBusy('ready', '1.0.0');
+    expect(getUpdateBannerDismissState().dismissed).toBe(false);
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
+  });
+
+  it('does not keep a user pin when a newer update becomes ready', () => {
+    deferUpdateBannerBecauseBusy('ready', '1.0.0');
+    restoreUpdateBanner();
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
+
+    deferUpdateBannerBecauseBusy('ready', '2.0.0');
+    expect(getUpdateBannerDismissState().reason).toBe('busy');
+    expect(getUpdateBannerDismissState().dismissedVersion).toBe('2.0.0');
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(false);
+  });
 });
 
 describe('UpdateBanner busy defer', () => {
@@ -224,5 +244,95 @@ describe('UpdateBanner busy defer', () => {
     });
     expect(screen.getByRole('button', { name: EXPANDED })).toBeTruthy();
     expect(getUpdateBannerDismissState().dismissed).toBe(false);
+  });
+
+  it('hides the expanded banner again if a later poll sees activity', async () => {
+    vi.useFakeTimers();
+    let busy = false;
+    anyActivityBlockingRelaunch.mockImplementation(() => Promise.resolve(busy));
+    render(<UpdateBanner isCollapsed={false} />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('button', { name: EXPANDED })).toBeTruthy();
+
+    busy = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_BANNER_BUSY_POLL_MS);
+    });
+    expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
+    expect(getUpdateBannerDismissState().reason).toBe('busy');
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(false);
+  });
+
+  it('pops the expanded banner again after a later busy defer goes idle', async () => {
+    vi.useFakeTimers();
+    let busy = false;
+    anyActivityBlockingRelaunch.mockImplementation(() => Promise.resolve(busy));
+    render(<UpdateBanner isCollapsed={false} />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('button', { name: EXPANDED })).toBeTruthy();
+
+    busy = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_BANNER_BUSY_POLL_MS);
+    });
+    expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
+
+    busy = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_BANNER_BUSY_POLL_MS);
+    });
+    expect(screen.getByRole('button', { name: EXPANDED })).toBeTruthy();
+    expect(getUpdateBannerDismissState().dismissed).toBe(false);
+  });
+
+  it('probes a newer update after the previous one was user-pinned', async () => {
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
+    const { rerender } = render(<UpdateBanner isCollapsed={false} />);
+    await waitFor(() => expect(getUpdateBannerDismissState().reason).toBe('busy'));
+
+    act(() => {
+      restoreUpdateBanner();
+    });
+    rerender(<UpdateBanner isCollapsed={false} />);
+    expect(await screen.findByRole('button', { name: EXPANDED })).toBeTruthy();
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
+
+    anyActivityBlockingRelaunch.mockResolvedValue(false);
+    updateStatus.current = { status: 'ready', version: '2.0.0', errorCode: null };
+    rerender(<UpdateBanner isCollapsed={false} />);
+
+    expect(await screen.findByRole('button', { name: EXPANDED })).toBeTruthy();
+    await waitFor(() => {
+      expect(getUpdateBannerDismissState().pinnedByUser).toBe(false);
+      expect(getUpdateBannerDismissState().decidedVersion).toBe('2.0.0');
+    });
+  });
+
+  it('hides a newer update when it arrives busy after a previous pin', async () => {
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
+    const { rerender } = render(<UpdateBanner isCollapsed={false} />);
+    await waitFor(() => expect(getUpdateBannerDismissState().reason).toBe('busy'));
+
+    act(() => {
+      restoreUpdateBanner();
+    });
+    rerender(<UpdateBanner isCollapsed={false} />);
+    expect(await screen.findByRole('button', { name: EXPANDED })).toBeTruthy();
+
+    updateStatus.current = { status: 'ready', version: '2.0.0', errorCode: null };
+    rerender(<UpdateBanner isCollapsed={false} />);
+
+    await waitFor(() => expect(getUpdateBannerDismissState().reason).toBe('busy'));
+    expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(false);
+    expect(getUpdateBannerDismissState().dismissedVersion).toBe('2.0.0');
   });
 });

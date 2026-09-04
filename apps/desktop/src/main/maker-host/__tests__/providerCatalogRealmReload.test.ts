@@ -187,6 +187,7 @@ import {
   buildUserProvider,
   type Catalog,
   type CustomProviderConfig,
+  XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
 import {
@@ -356,6 +357,30 @@ describe('provider catalog realm reload', () => {
     setCodexAppliedCustomProviderRoutes([]);
     setCustomProviders([]);
     h.customProviderRead.mockReset();
+  });
+
+  it('projects executable Imagine models onto the xAI API-key source', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: XAI_API_CUSTOM_PROVIDER_ID,
+        name: 'xAI API',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.x.ai/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'grok-4.6', name: 'Grok 4.6' }],
+          },
+        },
+      }),
+    ]);
+
+    const projected = getActiveCatalog().providers.find(
+      (provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID,
+    );
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
+    expect(projected?.imageModels).toEqual(bundledXai?.imageModels);
+
+    setCustomProviders([]);
   });
 
   it('does not publish a migrated snapshot after a failed CAS write', async () => {

@@ -68,6 +68,15 @@ export interface ImSessionNamespace {
    * (feishu)忽略 scopeKey, 同一 (botContextId, userId) 恒同一 id。
    */
   sessionIdFor(botContextId: string, userId: string, scopeKey?: string): string;
+  /**
+   * `/new` creates a separate Cindy task instead of clearing the SDK context on
+   * the deterministic legacy row. The active task is then resolved by the
+   * channel identity columns rather than by `sessionIdFor`.
+   *
+   * Telegram enables this. Other adapters keep their existing single-row
+   * semantics until their routing contracts are migrated deliberately.
+   */
+  createTaskOnNew?: boolean;
   /** 新建 session 行的初始 title。 */
   defaultTitle(userId: string): string;
   /**
@@ -219,13 +228,16 @@ export interface ImChannelAdapter {
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
   /**
-   * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 返回 true 的档位在
-   * dispatch 时不挂 turnPermissionPolicy(maker 不再 fail-closed, 按用户显式
-   * 选择直接执行)。飞书用它在用户于渠道设置中显式选择「完全访问」后取缔
-   * 群护栏; 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道
-   * 不实现即保持 fail-closed。
+   * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 同时传入本轮 policy，
+   * 让渠道能把会话档位授权限定到具体触发者。返回 true 时 dispatch 不挂
+   * turnPermissionPolicy(maker 不再 fail-closed, 按用户显式选择直接执行)。
+   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道不实现即保持
+   * fail-closed。
    */
-  turnPolicyOptionalForMode?(permissionMode: PermissionMode): boolean;
+  turnPolicyOptionalForMode?(
+    permissionMode: PermissionMode,
+    turnPermissionPolicy: TurnPermissionPolicy,
+  ): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
 }

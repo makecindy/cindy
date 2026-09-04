@@ -5,15 +5,13 @@
  * 纯函数注入(规则 14), 无 Electron / maker。
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildQueryResponse, type QueryResponderDeps } from '../queryResponder';
 
 const DEPS: QueryResponderDeps = {
   listWorkspaces: () => ['xdmaker', 'blog'],
-  listSessions: () => [
-    { id: 's1', title: 'Fix login', workspace: 'xdmaker', lastActiveAt: 10 },
-  ],
+  listSessions: () => [{ id: 's1', title: 'Fix login', workspace: 'xdmaker', lastActiveAt: 10 }],
   listAgentModels: () => [
     {
       agentKind: 'claude-code',
@@ -62,7 +60,13 @@ describe('buildQueryResponse', () => {
     expect(res.agents?.[0]).toEqual({
       agentKind: 'claude-code',
       models: [
-        { id: 'claude-opus-4-8', label: 'Opus 4.8', efforts: ['low', 'high'], defaultEffort: 'high', group: 'anthropic' },
+        {
+          id: 'claude-opus-4-8',
+          label: 'Opus 4.8',
+          efforts: ['low', 'high'],
+          defaultEffort: 'high',
+          group: 'anthropic',
+        },
       ],
       permissionModes: [
         { id: 'ask', label: 'Ask permissions' },
@@ -98,6 +102,29 @@ describe('buildQueryResponse', () => {
     expect(JSON.stringify(res)).not.toContain('workingDir');
   });
 
+  it('session-new: waits for the task to exist and returns its id', async () => {
+    const createSession = vi.fn(async () => ({ sessionId: 'new-task-id' }));
+    const sessionNew = {
+      previousExternalKey: 'telegram:dm:1:g1',
+      externalKey: 'telegram:dm:1:g2',
+      workspace: 'xdmaker',
+      options: { agentKind: 'pi', model: 'grok-4.6', permissionMode: 'bypassPermissions' },
+      source: { im: 'telegram', userText: '' },
+    };
+    const res = await buildQueryResponse(
+      { ...DEPS, createSession },
+      { queryId: 'q-new', kind: 'session-new', sessionNew },
+    );
+    expect(createSession).toHaveBeenCalledWith(sessionNew);
+    expect(res).toEqual({
+      queryId: 'q-new',
+      kind: 'session-new',
+      ok: true,
+      error: null,
+      sessionId: 'new-task-id',
+    });
+  });
+
   it('数据源抛错: ok=false + 原因, 不炸调用方', async () => {
     const res = await buildQueryResponse(
       {
@@ -113,7 +140,7 @@ describe('buildQueryResponse', () => {
 
   it('异步数据源: Promise 解析后照常构造, reject 时 ok=false', async () => {
     const ok = await buildQueryResponse(
-      { ...DEPS, listAgentModels: async () => (await Promise.resolve(DEPS.listAgentModels())) },
+      { ...DEPS, listAgentModels: async () => await Promise.resolve(DEPS.listAgentModels()) },
       { queryId: 'q4', kind: 'models' },
     );
     expect(ok.ok).toBe(true);

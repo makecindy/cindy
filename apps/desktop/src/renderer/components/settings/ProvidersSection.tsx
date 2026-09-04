@@ -44,6 +44,7 @@ import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
 import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
@@ -201,23 +202,9 @@ function PillButton({
   disabled?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        'flex h-8 shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-colors',
-        'border',
-        disabled && 'cursor-not-allowed opacity-60',
-      )}
-      style={{
-        backgroundColor: 'var(--settings-btn-secondary-bg)',
-        borderColor: 'var(--settings-btn-secondary-border)',
-        color: 'var(--settings-btn-secondary-text)',
-      }}
-    >
+    <Button variant="secondary" size="md" onClick={onClick} disabled={disabled}>
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -238,24 +225,9 @@ function CtaPillButton({
   className?: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity hover:opacity-90',
-        size === 'lg' ? 'h-9' : 'h-8',
-        className,
-      )}
-      style={{
-        // Black Pill(最高强调档)按 DESIGN.md §4 用 pure 对:--accent-cta-bg-pure
-        // (Light 纯黑 / Dark 纯白反转)配 --accent-pure-cta-fg。--accent-cta-bg 在
-        // 默认 Light 下是 #262626,与规范的 #000000 差一档,不能混用。
-        backgroundColor: 'var(--accent-cta-bg-pure)',
-        color: 'var(--accent-pure-cta-fg)',
-      }}
-    >
+    <Button variant="cta" size={size} onClick={onClick} className={className}>
       {label}
-    </button>
+    </Button>
   );
 }
 

@@ -41,6 +41,10 @@ export interface QueryResponderDeps {
   listAgentModels: () => AgentModelSource[] | Promise<AgentModelSource[]>;
   /** 当前账号、仅本地白名单内的隐私最小化 recent sessions。 */
   listSessions?: () => QuerySessionEntry[] | Promise<QuerySessionEntry[]>;
+  /** Provider `/new`: create and bind a blank Cindy task immediately. */
+  createSession?: (
+    request: NonNullable<QueryRequestPayload['sessionNew']>,
+  ) => Promise<{ sessionId: string }>;
 }
 
 /** 构造 query.response payload; 数据源抛错 / reject 时回 ok:false + 原因。 */
@@ -66,6 +70,19 @@ export async function buildQueryResponse(
         ok: true,
         error: null,
         sessions,
+      };
+    }
+    if (request.kind === 'session-new') {
+      if (!request.sessionNew || !deps.createSession) {
+        throw new Error('session-new-v1 was not negotiated');
+      }
+      const created = await deps.createSession(request.sessionNew);
+      return {
+        queryId: request.queryId,
+        kind: 'session-new',
+        ok: true,
+        error: null,
+        sessionId: created.sessionId,
       };
     }
     const agents: QueryAgentModels[] = (await deps.listAgentModels()).map((src) => ({

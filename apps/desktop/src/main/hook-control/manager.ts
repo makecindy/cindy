@@ -29,6 +29,7 @@ import {
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
+  HOOK_FEATURE_SESSION_NEW,
   HOOK_FEATURE_SLACK_TOOLS,
   HOOK_FEATURE_TURN_DELIVERY,
   makeBindRevoke,
@@ -692,6 +693,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 只给 Telegram 声明: msg.op 目前只有 Telegram 的执行器, X 的渲染路径
       // 不接入(#1855 的红线之一)。
       HOOK_FEATURE_MESSAGE_OPS,
+      HOOK_FEATURE_SESSION_NEW,
     ],
     isEnabled: () => store.get().telegramEnabled,
     setEnabled: (enabled) => {
@@ -2442,6 +2444,17 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
               )
                 ? (listRecentSessions?.() ?? [])
                 : Promise.reject(new Error('session-picker-v1 was not negotiated')),
+            createSession: (request) => {
+              if (
+                expectedProvider !== 'telegram' ||
+                lane === null ||
+                !lane.serverFeatures.includes(HOOK_FEATURE_SESSION_NEW) ||
+                !dispatcher
+              ) {
+                return Promise.reject(new Error('session-new-v1 was not negotiated'));
+              }
+              return dispatcher.createSession(dispatchId('telegram'), request);
+            },
           },
           msg.payload,
         ).then((response) => {

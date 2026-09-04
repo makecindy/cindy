@@ -269,7 +269,36 @@ export function createSlashHandlers(
           );
           return true;
         }
-        // 找到当前 IM 会话行；没有历史会话时按已通过认证的默认值创建一行。
+        if (adapter.sessions.createTaskOnNew) {
+          if (!repo.createFreshSession) {
+            throw new Error(`${channel} session rotation is not available`);
+          }
+          const identity: IdentityKey = {
+            channel,
+            botContextId: ctx.botContextId,
+            userId: ctx.userId,
+          };
+          const attachedTargetSessionId = bindingStore.get(identity);
+          const { previous } = await repo.createFreshSession(
+            ctx.botContextId,
+            ctx.userId,
+            undefined,
+            prepared,
+            attachedTargetSessionId
+              ? { identity, targetSessionId: attachedTargetSessionId }
+              : null,
+          );
+          // Session rotation and the persisted `/ctr` detach commit in one
+          // SQLite transaction. Only mirror that committed deletion in memory;
+          // a newer concurrent takeover is preserved by the expected target.
+          if (attachedTargetSessionId) {
+            await bindingStore.applyPersistedDetach(identity, attachedTargetSessionId);
+          }
+          if (previous) await turnRunner.disposeOneSession(previous.id);
+          await safeSendText(ctx, ui.slash.new);
+          return true;
+        }
+        // Legacy single-row channels keep their established reset semantics.
         const existing = await repo.findActiveSession(ctx.botContextId, ctx.userId);
         const row =
           existing ?? (await repo.createSession(ctx.botContextId, ctx.userId, undefined, prepared));
