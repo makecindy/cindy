@@ -456,6 +456,19 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('contextWindow: sessions.contextWindow,');
     expect(setModel).toContain('effectiveContextWindow(');
     expect(setModel).toContain('hasModelWindowContextToProtect(');
+    expect(setModel).toContain("'MODEL_CONTEXT_USAGE_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED'");
+    expect(setModel).toContain("'MODEL_WINDOW_PROTECTION_UNAVAILABLE'");
+    expect(setModel).toContain("'MODEL_SWITCH_TASK_RUNNING'");
+    expect(setModel).toContain("'MODEL_WINDOW_PREPARATION_IN_PROGRESS'");
+    expect(registerSource).toContain(
+      'function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode',
+    );
+    expect(registerSource).toContain(
+      "return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;",
+    );
     expect(setModel).toContain('await maker.getSessionMeta(sessionId)');
     expect(setModel).toContain(
       'liveSessionBeforeRouteChange?.model ?? persistedSessionMeta?.model',
