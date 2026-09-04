@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream, promises as fs } from 'node:fs';
 import { once } from 'node:events';
+import path from 'node:path';
 
 /** 与 compaction-storm 同族的终态 reason：磁盘实测活尾巴过大，不是普通 timeout。 */
 export const CODEX_HISTORY_OVERSIZED_REASON = 'codex_history_oversized';
@@ -37,6 +38,7 @@ export const CODEX_ROLLOUT_LINE_MAX_BYTES = 16 * 1024 * 1024;
  */
 export const CODEX_ROLLOUT_REPLACE_MAX_ATTEMPTS = 61;
 export const CODEX_ROLLOUT_REPLACE_RETRY_MS = 100;
+export const CODEX_HISTORY_BASE_MAX_DEPTH = 8;
 
 export class CodexRolloutScanLimitError extends Error {
   constructor(message: string) {
@@ -464,6 +466,8 @@ async function sanitizeCodexForkRolloutLines(
 export interface SanitizeCodexForkRolloutInPlaceOptions {
   replaceMaxAttempts?: number;
   replaceRetryMs?: number;
+  /** Resolve a lazy history_base thread id to its canonical rollout file. */
+  resolveHistoryBaseRollout?: (threadId: string) => string | null | Promise<string | null>;
 }
 
 interface ForkSessionMeta {
@@ -501,48 +505,112 @@ function validateLazyHistoryBase(meta: ForkSessionMeta, filePath: string): boole
   return true;
 }
 
-function detachForkLineage(meta: ForkSessionMeta): string {
+function detachForkLineage(meta: ForkSessionMeta, detachHistoryBase = false): string {
   const payload = { ...meta.payload };
   delete payload.forked_from_id;
   delete payload.forked_from_ordinal_exclusive;
+  if (detachHistoryBase) delete payload.history_base;
   return JSON.stringify({ ...meta.record, ordinal: 0, payload });
 }
 
-async function readLazyForkStats(filePath: string): Promise<RolloutSanitizeStats | null> {
-  const iterator = iterateRolloutLines(filePath)[Symbol.asyncIterator]();
-  try {
-    const first = await iterator.next();
-    if (first.done) return null;
-    const meta = parseForkSessionMeta(first.value);
-    if (!meta || !validateLazyHistoryBase(meta, filePath)) return null;
-    let unsafeLines = 0;
-    let rewrittenLines = 0;
-    while (true) {
-      const next = await iterator.next();
-      if (next.done) break;
-      if (hasUnsafeForkRolloutPayload(next.value)) unsafeLines += 1;
-      if (rewriteOversizedToolOutputImages(next.value) !== next.value) rewrittenLines += 1;
+async function readRolloutLines(filePath: string): Promise<string[]> {
+  const lines: string[] = [];
+  for await (const line of iterateRolloutLines(filePath)) lines.push(line);
+  return lines;
+}
+
+async function readRolloutPrefixLines(filePath: string, endByteOffset: number): Promise<string[]> {
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile() || stat.size > CODEX_ROLLOUT_SCAN_MAX_BYTES || endByteOffset > stat.size) {
+    if (stat.size > CODEX_ROLLOUT_SCAN_MAX_BYTES) {
+      throw new CodexRolloutScanLimitError(`Codex rollout scan exceeded ${CODEX_ROLLOUT_SCAN_MAX_BYTES} bytes`);
     }
-    if (unsafeLines > 0 || rewrittenLines > 0) {
-      throw new Error(
-        `Codex lazy fork child contains payloads that cannot be rewritten safely: ${filePath}`,
-      );
-    }
-    const { size } = await fs.stat(filePath);
-    // Codex stores the child-tail byte boundary when thread/fork creates a
-    // lazy history_base rollout. Expanding or rewriting that file changes the
-    // boundary and makes Codex 0.153 reject the next resume. The source is
-    // still projected by app-server, so keep both files byte-for-byte intact.
-    return {
-      bytesBefore: size,
-      bytesAfter: size,
-      strippedBytes: 0,
-      rewrittenLines: 0,
-      unsafeLines: 0,
-    };
-  } finally {
-    await iterator.return?.(undefined);
+    throw new Error(`Codex rollout history_base offset is out of bounds: ${filePath}`);
   }
+  const bytes = await fs.readFile(filePath);
+  if (bytes.length !== stat.size) {
+    throw new Error(`Codex rollout changed while resolving history_base: ${filePath}`);
+  }
+  if (endByteOffset < bytes.length && bytes[endByteOffset - 1] !== 0x0a) {
+    throw new Error(`Codex rollout history_base offset is not a line boundary: ${filePath}`);
+  }
+  const prefix = bytes.subarray(0, endByteOffset).toString('utf8');
+  const lines = prefix.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines.map((line) => line.endsWith('\r') ? line.slice(0, -1) : line);
+}
+
+async function materializeHistoryPrefix(
+  filePath: string,
+  lines: string[],
+  resolveHistoryBaseRollout: NonNullable<SanitizeCodexForkRolloutInPlaceOptions['resolveHistoryBaseRollout']>,
+  depth: number,
+  seen: Set<string>,
+): Promise<string[]> {
+  if (depth > CODEX_HISTORY_BASE_MAX_DEPTH) {
+    throw new Error(`Codex rollout history_base chain is too deep: ${filePath}`);
+  }
+  const meta = parseForkSessionMeta(lines[0] ?? '');
+  if (!meta) throw new Error(`Codex rollout history_base source metadata is invalid: ${filePath}`);
+  if (!validateLazyHistoryBase(meta, filePath)) return lines.slice(1);
+  const historyBase = meta.payload.history_base as Record<string, unknown>;
+  const sourcePath = await resolveHistoryBaseRollout(String(historyBase.thread_id));
+  if (!sourcePath) {
+    throw new Error(`Codex rollout history_base source is unavailable: ${historyBase.thread_id}`);
+  }
+  const canonicalSource = path.resolve(sourcePath);
+  if (seen.has(canonicalSource)) {
+    throw new Error(`Codex rollout history_base cycle detected: ${canonicalSource}`);
+  }
+  seen.add(canonicalSource);
+  try {
+    const sourceLines = await readRolloutPrefixLines(
+      sourcePath,
+      historyBase.end_byte_offset as number,
+    );
+    const sourceMeta = parseForkSessionMeta(sourceLines[0] ?? '');
+    if (!sourceMeta) {
+      throw new Error(`Codex rollout history_base source metadata is invalid: ${sourcePath}`);
+    }
+    const sourceHistory = validateLazyHistoryBase(sourceMeta, sourcePath)
+      ? await materializeHistoryPrefix(
+        sourcePath,
+        sourceLines,
+        resolveHistoryBaseRollout,
+        depth + 1,
+        seen,
+      )
+      : sourceLines.slice(1);
+    return [...sourceHistory, ...lines.slice(1)];
+  } finally {
+    seen.delete(canonicalSource);
+  }
+}
+
+async function materializeLazyForkRollout(
+  filePath: string,
+  childLines: string[],
+  childMeta: ForkSessionMeta,
+  resolveHistoryBaseRollout: NonNullable<SanitizeCodexForkRolloutInPlaceOptions['resolveHistoryBaseRollout']>,
+): Promise<string[]> {
+  const childPath = path.resolve(filePath);
+  const historyBase = childMeta.payload.history_base as Record<string, unknown>;
+  const sourcePath = await resolveHistoryBaseRollout(String(historyBase.thread_id));
+  if (!sourcePath) {
+    throw new Error(`Codex rollout history_base source is unavailable: ${historyBase.thread_id}`);
+  }
+  const sourceLines = await readRolloutPrefixLines(
+    sourcePath,
+    historyBase.end_byte_offset as number,
+  );
+  const history = await materializeHistoryPrefix(
+    sourcePath,
+    sourceLines,
+    resolveHistoryBaseRollout,
+    0,
+    new Set([childPath, path.resolve(sourcePath)]),
+  );
+  return [detachForkLineage(childMeta, true), ...history, ...childLines.slice(1)];
 }
 
 async function* iterateForkRolloutLines(filePath: string): AsyncGenerator<string> {
@@ -607,15 +675,26 @@ export async function sanitizeCodexForkRolloutFileInPlace(
   filePath: string,
   opts: SanitizeCodexForkRolloutInPlaceOptions = {},
 ): Promise<RolloutSanitizeStats> {
-  const lazyStats = await readLazyForkStats(filePath);
-  if (lazyStats) return lazyStats;
   const stagingPath = `${filePath}.cindy-sanitize-${process.pid}-${randomUUID()}.tmp`;
   try {
-    const stats = await sanitizeCodexForkRolloutLines(
-      iterateForkRolloutLines(filePath),
-      stagingPath,
-      { preserveOrdinals: true },
-    );
+    const childLines = await readRolloutLines(filePath);
+    const childMeta = parseForkSessionMeta(childLines[0] ?? '');
+    let lines: AsyncIterable<string> = iterateForkRolloutLines(filePath);
+    if (childMeta && validateLazyHistoryBase(childMeta, filePath)) {
+      if (!opts.resolveHistoryBaseRollout) {
+        throw new Error(`Codex lazy fork requires a history_base resolver: ${filePath}`);
+      }
+      const materialized = await materializeLazyForkRollout(
+        filePath,
+        childLines,
+        childMeta,
+        opts.resolveHistoryBaseRollout,
+      );
+      lines = (async function* (): AsyncGenerator<string> {
+        yield* materialized;
+      })();
+    }
+    const stats = await sanitizeCodexForkRolloutLines(lines, stagingPath, { preserveOrdinals: true });
     await replaceRolloutWithRetry(stagingPath, filePath, opts);
     return stats;
   } catch (error) {

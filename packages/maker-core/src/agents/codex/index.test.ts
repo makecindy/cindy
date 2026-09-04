@@ -21872,7 +21872,7 @@ describe('CodexAgent.forkSdkSession', () => {
     }));
   });
 
-  it('forks the canonical source and preserves the unloaded lazy child rollout', async () => {
+  it('forks the canonical source and materializes a sanitized lazy child rollout', async () => {
     const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-home-'));
     try {
       const agent = new CodexAgent(createDeps());
@@ -21925,16 +21925,17 @@ describe('CodexAgent.forkSdkSession', () => {
       expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
       const child = await fs.readFile(childRollout, 'utf8');
       expect(child).toContain('"id":"fork-thread-id"');
-      expect(child).toContain('history_base');
-      expect(child).toContain('source-thread-id');
-      expect(child).toBe(childText);
+      expect(child).not.toContain('history_base');
+      expect(child).toContain('role":"user"');
+      expect(child).not.toContain('encrypted_content');
+      expect(child).not.toBe(childText);
       expect(await fs.readFile(sourceRollout, 'utf8')).toBe(rolloutText);
     } finally {
       await fs.rm(codexHome, { recursive: true, force: true });
     }
   });
 
-  it('retires the one-shot fork host before preserving a lazy child rollout', async () => {
+  it('retires the one-shot fork host before materializing a lazy child rollout', async () => {
     const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-home-order-'));
     try {
       const agent = new CodexAgent(createDeps());
@@ -21981,7 +21982,7 @@ describe('CodexAgent.forkSdkSession', () => {
       });
 
       expect(events).toEqual(['unsubscribe', 'retire']);
-      expect(await fs.readFile(childRollout, 'utf8')).toContain('history_base');
+      expect(await fs.readFile(childRollout, 'utf8')).not.toContain('history_base');
     } finally {
       await fs.rm(codexHome, { recursive: true, force: true });
     }

@@ -262,7 +262,12 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       accessToken: 'release-token',
       accountId: 'acct-release',
     });
-    expect(fs.statSync(localAuth).ino).toBe(fs.statSync(releaseAuth).ino);
+    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(releaseAuth).ino);
+    // Codex may refresh its local auth.json in place; the Release credential must
+    // remain byte-for-byte unchanged because Dev receives a snapshot, not a link.
+    fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'dev-refresh' } }));
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
     expect(
       JSON.parse(fs.readFileSync(path.join(h.userDataDir, 'native-provider-auth.json'), 'utf8')),
     ).toMatchObject({ openai: 'owner-a' });

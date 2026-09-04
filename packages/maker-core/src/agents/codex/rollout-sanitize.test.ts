@@ -200,7 +200,7 @@ describe('sanitizeCodexForkRollout', () => {
     }
   });
 
-  it('preserves a lazy history_base child and its source byte layout', async () => {
+  it('materializes and sanitizes lazy history_base while preserving the source bytes', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-'));
     const source = path.join(dir, 'rollout-source-thread.jsonl');
     const child = path.join(dir, 'rollout-child-thread.jsonl');
@@ -230,17 +230,17 @@ describe('sanitizeCodexForkRollout', () => {
     await fs.writeFile(source, sourceText, 'utf8');
     await fs.writeFile(child, childText, 'utf8');
     try {
-      const stats = await sanitizeCodexForkRolloutFileInPlace(child);
+      const stats = await sanitizeCodexForkRolloutFileInPlace(child, {
+        resolveHistoryBaseRollout: (threadId) => threadId === 'source-thread' ? source : null,
+      });
 
       const output = await fs.readFile(child, 'utf8');
-      expect(output).toBe(childText);
-      expect(stats).toEqual({
-        bytesBefore: Buffer.byteLength(childText),
-        bytesAfter: Buffer.byteLength(childText),
-        strippedBytes: 0,
-        rewrittenLines: 0,
-        unsafeLines: 0,
-      });
+      expect(output).not.toContain('history_base');
+      expect(output).toContain('hello');
+      expect(output).toContain('world');
+      expect(output).not.toContain('encrypted_content');
+      expect(stats.unsafeLines).toBe(1);
+      expect(stats.bytesAfter).toBeGreaterThan(Buffer.byteLength(childText));
       expect(await fs.readFile(source, 'utf8')).toBe(sourceText);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
@@ -267,7 +267,9 @@ describe('sanitizeCodexForkRollout', () => {
     ].join('\n') + '\n';
     await fs.writeFile(child, childText, 'utf8');
     try {
-      await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toThrow('cannot be rewritten safely');
+      await expect(sanitizeCodexForkRolloutFileInPlace(child, {
+        resolveHistoryBaseRollout: () => null,
+      })).rejects.toThrow('history_base source is unavailable');
       expect(await fs.readFile(child, 'utf8')).toBe(childText);
       expect((await fs.readdir(dir)).some((name) => name.includes('.cindy-sanitize-'))).toBe(false);
     } finally {
@@ -319,6 +321,72 @@ describe('sanitizeCodexForkRollout', () => {
       await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toThrow('history_base fields are invalid');
       expect(await fs.readFile(child, 'utf8')).toBe(childText);
       expect((await fs.readdir(dir)).some((name) => name.includes('.cindy-sanitize-'))).toBe(false);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a lazy history_base offset that is outside the source rollout', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-offset-'));
+    const source = path.join(dir, 'rollout-source.jsonl');
+    const child = path.join(dir, 'rollout-child.jsonl');
+    const sourceText = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'source' },
+    })}\n`;
+    const childText = `${JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        id: 'child',
+        history_base: {
+          thread_id: 'source',
+          end_ordinal_exclusive: 1,
+          end_byte_offset: Buffer.byteLength(sourceText) + 1,
+        },
+      },
+    })}\n`;
+    await fs.writeFile(source, sourceText, 'utf8');
+    await fs.writeFile(child, childText, 'utf8');
+    try {
+      await expect(sanitizeCodexForkRolloutFileInPlace(child, {
+        resolveHistoryBaseRollout: () => source,
+      })).rejects.toThrow('offset is out of bounds');
+      expect(await fs.readFile(child, 'utf8')).toBe(childText);
+      expect(await fs.readFile(source, 'utf8')).toBe(sourceText);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a cyclic lazy history_base chain without changing either rollout', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-cycle-'));
+    const first = path.join(dir, 'rollout-first.jsonl');
+    const second = path.join(dir, 'rollout-second.jsonl');
+    const make = (id: string, threadId: string, endByteOffset: number) => `${JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        id,
+        history_base: {
+          thread_id: threadId,
+          end_ordinal_exclusive: 1,
+          end_byte_offset: endByteOffset,
+        },
+      },
+    })}\n`;
+    let firstText = '';
+    let secondText = '';
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      firstText = make('first', 'second', Buffer.byteLength(secondText) || 1);
+      secondText = make('second', 'first', Buffer.byteLength(firstText));
+    }
+    await fs.writeFile(first, firstText, 'utf8');
+    await fs.writeFile(second, secondText, 'utf8');
+    try {
+      await expect(sanitizeCodexForkRolloutFileInPlace(first, {
+        resolveHistoryBaseRollout: (threadId) => threadId === 'second' ? second : first,
+      })).rejects.toThrow('cycle detected');
+      expect(await fs.readFile(first, 'utf8')).toBe(firstText);
+      expect(await fs.readFile(second, 'utf8')).toBe(secondText);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

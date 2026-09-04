@@ -37,11 +37,12 @@ import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
 import {
+  copyCodexAuthSnapshot,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
   resolveWindowsAclPrincipal,
 } from './codex-auth-link.js';
-import { getPreferredSharedCodexAuthPath } from './codex-shared-auth.js';
+import { getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
 
 export { resolveWindowsAclPrincipal } from './codex-auth-link.js';
 import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
@@ -981,6 +982,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     return !app.isPackaged && !this.trustedDevOAuthWriteOverride();
   }
 
+  /**
+   * An isolated Dev may consume the Release login, but its Codex child must not
+   * receive the Release auth inode: Codex can refresh auth.json in place.
+   */
+  private shouldSnapshotReleaseCodexAuth(systemAuth: string, myAuth: string): boolean {
+    if (!this.devOAuthWritesBlocked()) return false;
+    if (path.resolve(systemAuth) !== path.resolve(getReleaseCodexAuthPath())) return false;
+    return path.resolve(systemAuth) !== path.resolve(myAuth);
+  }
+
   private warnDevOAuthWriteOverride(action: string): void {
     if (!this.trustedDevOAuthWriteOverride()) return;
     if (this.devOAuthWriteOverrideWarned) return;
@@ -1238,6 +1249,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       markNativeProviderAuthSharedSystemCredential('openai');
     }
     if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
+      if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
+        const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+        if (snapshot.kind === 'copied') {
+          markNativeProviderAuthSharedSystemCredential('openai');
+          log.info('codex auth.json detached into a read-only Release snapshot');
+        } else {
+          credPathLog.warn('failed to detach Release auth snapshot; shared link left intact', {
+            error: snapshot.error?.message,
+          });
+          throw snapshot.error ?? new Error('Failed to detach Release auth snapshot');
+        }
+      }
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
     }
@@ -1295,6 +1318,23 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 建共享链接前幂等确保 codexHome 目录存在: 首启时 assets 预热可能尚未建好目录, ENOENT
     // 会让 relink 走 link-unsupported 回退, splash 后首次 auth 查询短暂误报未登录。
     await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
+    if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
+      const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+      if (hasLocalEntry && !topology.healthy) {
+        this.lastOrphanRepair = snapshot.kind === 'copied' ? 'relinked' : 'failed';
+      }
+      if (snapshot.kind === 'copied') {
+        markNativeProviderAuthSharedSystemCredential('openai');
+        this.lastKnownCodexCredentialScope = 'system-shared';
+        log.info('codex auth.json copied from Release login for read-only Dev use');
+      } else {
+        credPathLog.warn('Release auth snapshot failed, auth.json left intact', {
+          error: snapshot.error?.message,
+        });
+        throw snapshot.error ?? new Error('Failed to copy Release auth snapshot');
+      }
+      return;
+    }
     const { kind, error, linkType } = await relinkSharedCodexAuth(systemAuth, myAuth);
     if (hasLocalEntry && !topology.healthy) {
       this.lastOrphanRepair = kind === 'linked' ? 'relinked' : 'failed';

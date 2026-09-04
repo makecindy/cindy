@@ -13275,7 +13275,9 @@ export class CodexAgent extends BaseAgent {
         await cleanupCreatedThreads();
         await retireForkHost(true);
         const childRolloutPath = await this.findRolloutPath(newSdkSessionId);
-        const sanitizeStats = await sanitizeCodexForkRolloutFileInPlace(childRolloutPath);
+        const sanitizeStats = await sanitizeCodexForkRolloutFileInPlace(childRolloutPath, {
+          resolveHistoryBaseRollout: (threadId) => this.findRolloutPath(threadId),
+        });
         log.info('fork child rollout sanitized', {
           newSdkSessionId,
           unsafeLines: sanitizeStats.unsafeLines,
