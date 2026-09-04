@@ -4,6 +4,7 @@ import {
   activateImAccountBoundary,
   captureImAccountGeneration,
   deactivateImAccountBoundary,
+  onImAccountBoundaryActivated,
   runInImAccountGeneration,
   waitForImAccountGenerationIdle,
 } from '../accountBoundary';
@@ -54,5 +55,31 @@ describe('IM account boundary', () => {
     await work;
     await draining;
     expect(drained).toBe(true);
+  });
+
+  it('notifies activation listeners only on the closed→open transition', () => {
+    // 激活通知是「账号边界 ready」广播的触发源(renderer 据此重拉渠道设置):
+    // 只在真实转换时触发一次, 重复 activate 不重复通知, 退订后不再触发。
+    deactivateImAccountBoundary();
+    const listener = vi.fn();
+    const unsubscribe = onImAccountBoundaryActivated(listener);
+    try {
+      activateImAccountBoundary();
+      expect(listener).toHaveBeenCalledTimes(1);
+      // 已激活状态下的重复 activate 是 no-op。
+      activateImAccountBoundary();
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      // 换号重连: 再经历一次 关闭→激活 仍要通知。
+      deactivateImAccountBoundary();
+      activateImAccountBoundary();
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+
+    deactivateImAccountBoundary();
+    activateImAccountBoundary();
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

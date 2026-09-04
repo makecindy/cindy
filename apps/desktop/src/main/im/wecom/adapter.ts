@@ -1,18 +1,12 @@
-import fs from 'node:fs';
-
 import type { WecomIM } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
-import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
+import {
+  ensureWecomManagedWorkingDir,
+  resolveWecomWorkingDirForNewConversation,
+} from './channelSettings';
 import { ui } from './uiText';
 import type { WecomTextInteractions } from './textInteractions';
-
-function ensureWorkingDir(botId: string): string {
-  const safeBotId = Buffer.from(botId, 'utf8').toString('base64url').slice(0, 96);
-  const dir = ownerScopedImUserDataPath('im-working-dir', `wecom-${safeBotId}`);
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
 
 function sessionSafeUserId(userId: string): string {
   return Buffer.from(userId, 'utf8').toString('base64url');
@@ -44,7 +38,12 @@ export function buildWecomAdapter(
           : `企业微信 · ${userId.slice(-6)}`,
       generatedTitlePrefix: '企业微信 · ',
       workspaceKind: 'dialogue',
-      ensureWorkingDir,
+      // 同步兜底只回稳定托管目录; 实际目录(读配置+探测用户盘)在首次对话 /
+      // /new 边界经 resolveWorkingDirForNew 异步解析。
+      ensureWorkingDir: ensureWecomManagedWorkingDir,
+      resolveWorkingDirForNew: resolveWecomWorkingDirForNewConversation,
+      // 设置页可改渠道托管目录: /new 边界刷新到最新解析结果。
+      refreshWorkingDirOnNew: true,
       extraInsertColumns: (botId, userId) => ({
         imBotContextId: botId,
         imUserId: userId,

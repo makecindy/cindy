@@ -305,9 +305,37 @@ describe('IM slash commands', () => {
       'feishu-session',
       expect.anything(),
       prepared,
-      'feishu',
+      { channel: 'feishu', refreshWorkingDir: false },
     );
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.new);
+  });
+
+  it('asks /new to refresh the working directory when the channel declares it', async () => {
+    const prepared = { ...defaultRow, agentKind: 'codex' as const, model: 'gpt-5.5' };
+    const repo = makeRepo({ prepareNewSession: vi.fn(async () => prepared) });
+    const { handlers } = makeHarness({
+      repo,
+      adapterOverrides: {
+        channel: 'wecom',
+        sessions: {
+          source: 'wecom',
+          sessionIdFor: () => 'wecom-session',
+          defaultTitle: () => 'WeCom',
+          ensureWorkingDir: () => 'F:\\XDMaker',
+          refreshWorkingDirOnNew: true,
+          extraInsertColumns: () => ({}),
+        },
+      },
+    });
+
+    await handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'ou_user' });
+
+    expect(mocks.resetSessionToDefaults).toHaveBeenCalledWith(
+      'feishu-session',
+      expect.anything(),
+      prepared,
+      { channel: 'wecom', refreshWorkingDir: true },
+    );
   });
 
   it('does not send /model picker when creating the target session would fail auth', async () => {

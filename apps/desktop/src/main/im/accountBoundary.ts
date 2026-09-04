@@ -21,10 +21,29 @@ export class ImAccountScopeClosedError extends Error {
   }
 }
 
+/** 边界从关闭走到激活(false→true 转换)时同步触发的监听器。 */
+export type ImAccountBoundaryActivationListener = () => void;
+
+const activationListeners = new Set<ImAccountBoundaryActivationListener>();
+
+/**
+ * 订阅账号边界的下一次(及后续)激活。仅在实际转换时触发 — 已激活状态下的
+ * 重复 activate 是 no-op, 不通知。返回取消订阅函数。
+ */
+export function onImAccountBoundaryActivated(
+  listener: ImAccountBoundaryActivationListener,
+): () => void {
+  activationListeners.add(listener);
+  return () => {
+    activationListeners.delete(listener);
+  };
+}
+
 export function activateImAccountBoundary(): void {
   if (active) return;
   generation += 1;
   active = true;
+  for (const listener of activationListeners) listener();
 }
 
 export function deactivateImAccountBoundary(): void {

@@ -8,7 +8,14 @@ import {
 } from '@cindy/wechat-ilink';
 
 import type { DbClient } from '../../../localDb/client/DbClient';
-import { __testing, sessionIdFor, WechatIM, type WechatIMDeps } from '../WechatIM';
+import type { ImSessionRepo, ImSessionRow } from '../../shared/sessionRepo';
+import {
+  __testing,
+  resolveWechatMessageSession,
+  sessionIdFor,
+  WechatIM,
+  type WechatIMDeps,
+} from '../WechatIM';
 
 const mediaMocks = vi.hoisted(() => ({
   removeReleasedWechatFiles: vi.fn(async () => undefined),
@@ -20,6 +27,47 @@ vi.mock('../mediaStaging', async (importOriginal) => {
     ...actual,
     removeReleasedWechatFiles: mediaMocks.removeReleasedWechatFiles,
   };
+});
+
+describe('resolveWechatMessageSession(入站消息会话解析)', () => {
+  const row = { id: 'wechat_row1', workingDir: '/tmp/im-working-dir/wechat-bot' } as ImSessionRow;
+
+  function repoWith(existing: ImSessionRow | null) {
+    return {
+      findActiveSession: vi.fn(async () => existing),
+      createSession: vi.fn(async () => ({ ...row, id: 'wechat_new' })),
+      prepareNewSession: vi.fn(async () => ({ ...row, id: 'prepared' })),
+    } as unknown as ImSessionRepo & {
+      findActiveSession: ReturnType<typeof vi.fn>;
+      createSession: ReturnType<typeof vi.fn>;
+      prepareNewSession: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  it('已有会话直接用行里的目录:不 prepareNewSession(不触发工作目录探测), 不建行', async () => {
+    const repo = repoWith(row);
+
+    await expect(resolveWechatMessageSession(repo, 'bot', 'peer')).resolves.toMatchObject({
+      id: 'wechat_row1',
+    });
+
+    expect(repo.findActiveSession).toHaveBeenCalledWith('bot', 'peer');
+    expect(repo.prepareNewSession).not.toHaveBeenCalled();
+    expect(repo.createSession).not.toHaveBeenCalled();
+  });
+
+  it('无会话行时走 createSession(prepared 缺省, 由 repo 内部只 prepare 一次)', async () => {
+    const repo = repoWith(null);
+
+    await expect(resolveWechatMessageSession(repo, 'bot', 'peer')).resolves.toMatchObject({
+      id: 'wechat_new',
+    });
+
+    expect(repo.createSession).toHaveBeenCalledTimes(1);
+    expect(repo.createSession).toHaveBeenCalledWith('bot', 'peer');
+    // 解析函数自身不得额外 prepare —— 一次建行只允许一次工作目录解析。
+    expect(repo.prepareNewSession).not.toHaveBeenCalled();
+  });
 });
 
 describe('WechatIM host boundary', () => {

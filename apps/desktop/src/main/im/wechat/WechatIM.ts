@@ -26,7 +26,7 @@ import {
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 
 import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
-import type { ImSessionRepo } from '../shared/sessionRepo';
+import type { ImSessionRepo, ImSessionRow } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
 import type { ImTurnRunner } from '../shared/turnRunner';
@@ -1525,10 +1525,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const runtime = this.#turnRuntime;
     if (!runtime) throw new Error('WECHAT_TURN_RUNTIME_NOT_ATTACHED');
     const botId = this.#epoch?.credentials.ilinkBotId ?? 'wechat';
-    const prepared = await runtime.repo.prepareNewSession(botId, message.senderId);
-    const existing = await runtime.repo.findActiveSession(botId, message.senderId);
-    const session =
-      existing ?? (await runtime.repo.createSession(botId, message.senderId, undefined, prepared));
+    const session = await resolveWechatMessageSession(runtime.repo, botId, message.senderId);
     const epoch = await this.#requireStore().getConversationEpoch(bindingEpoch, message.senderId);
     const taskId = randomUUID();
     const staged = await stageWechatTaskMedia({
@@ -1674,6 +1671,21 @@ export const WECHAT_AUTH_BASE_URL = AUTH_BASE_URL;
 export function sessionIdFor(botId: string, peerId: string): string {
   const digest = createHash('sha256').update(`${botId}\0${peerId}`).digest('hex').slice(0, 32);
   return `wechat_${digest}`;
+}
+
+/**
+ * 入站消息的会话解析:先查已有行, 无行才建(createSession 内部只 prepare 一次)。
+ * 刻意**不**提前 prepareNewSession —— 它会解析渠道工作目录(读配置 + 异步探测
+ * 用户所选目录, 网络盘下可达秒级), 已有会话的目录就在行里, 不该为每条消息
+ * 付一次探测延迟。新目录只在首条消息(建行)与 `/new` 边界生效。
+ */
+export async function resolveWechatMessageSession(
+  repo: ImSessionRepo,
+  botId: string,
+  senderId: string,
+): Promise<ImSessionRow> {
+  const existing = await repo.findActiveSession(botId, senderId);
+  return existing ?? (await repo.createSession(botId, senderId));
 }
 
 function parseTaskPayload(raw: string): WechatTaskPayload {

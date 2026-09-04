@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WechatBotSection } from '../WechatBotSection';
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   unbind: vi.fn(),
   chooseWorkingDirectory: vi.fn(),
   resetWorkingDirectory: vi.fn(),
+  refreshChannelSettings: vi.fn(async () => undefined),
   state: {
     phase: 'disconnected',
     bound: false,
@@ -44,6 +45,7 @@ vi.mock('@/hooks/useWechatBot', () => ({
     unbind: mocks.unbind,
     chooseWorkingDirectory: mocks.chooseWorkingDirectory,
     resetWorkingDirectory: mocks.resetWorkingDirectory,
+    refreshChannelSettings: mocks.refreshChannelSettings,
   }),
 }));
 
@@ -143,5 +145,25 @@ describe('WechatBotSection', () => {
       description: 'settings.wechatBot.unbind.description',
     });
     expect(mocks.unbind).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes channel settings when the card expands again', () => {
+    // 目录可能在折叠期间被删/拔盘/收回权限 — 重新展开要重拉, 让「不可用」
+    // 警告及时出现(与企微同款; 首次展开由 hook 挂载请求覆盖, 跳过)。
+    const { rerender } = render(<WechatBotSection expanded={false} onToggle={vi.fn()} />);
+    expect(mocks.refreshChannelSettings).not.toHaveBeenCalled();
+
+    rerender(<WechatBotSection expanded onToggle={vi.fn()} />);
+    expect(mocks.refreshChannelSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes channel settings when the window regains focus', () => {
+    render(<WechatBotSection expanded onToggle={vi.fn()} />);
+    expect(mocks.refreshChannelSettings).not.toHaveBeenCalled();
+
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(mocks.refreshChannelSettings).toHaveBeenCalledTimes(1);
   });
 });
