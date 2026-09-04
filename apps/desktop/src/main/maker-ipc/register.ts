@@ -674,7 +674,10 @@ import { cancelIOSSimulatorSessionOperations } from '../mcp-integrations/ios-sim
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
 import { BOT_DELEGATION_STATUSES } from '../../shared/botDelegation.js';
 import type { CollabDispatchOutcome } from './collabSendOutcome.js';
-import { runAcceptedCallback } from './acceptedCallbackRunner.js';
+import {
+  AcceptedCallbackDispatchCancelled,
+  runAcceptedCallback,
+} from './acceptedCallbackRunner.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
 import { broadcastSchedulerChanged } from './schedule.js';
@@ -10807,6 +10810,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     clientId?: string;
     files?: AgentInputQueuedMessage['files'];
     onAccepted?: () => void | Promise<void>;
+    onAcceptedRollback?: () => void | Promise<void>;
   }) => {
     if (params.clientId) {
       const [persisted] = await getDbClient()
@@ -10872,13 +10876,47 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   botDirectMessageServiceHolder = createBotDirectMessageService({
-    dispatch: ({ targetSessionId, message, persistedContent, clientId }) =>
-      dispatchBotSessionMessage({ targetSessionId, message, persistedContent, clientId }),
+    dispatch: ({
+      targetSessionId,
+      message,
+      persistedContent,
+      clientId,
+      onAccepted,
+      onAcceptedRollback,
+    }) =>
+      dispatchBotSessionMessage({
+        targetSessionId,
+        message,
+        persistedContent,
+        clientId,
+        onAccepted: onAccepted
+          ? async () => {
+              try {
+                await onAccepted();
+              } catch (error) {
+                throw new AcceptedCallbackDispatchCancelled(
+                  error instanceof Error ? error.message : String(error),
+                );
+              }
+            }
+          : undefined,
+        onAcceptedRollback,
+      }),
     ensureCanonicalSession: async (botId) => {
       if (!botDelegationServiceHolder) {
         return { ok: false as const, errorCode: 'DELEGATION_UNAVAILABLE', message: 'Bot 委派服务尚未就绪' };
       }
       return botDelegationServiceHolder.ensureCanonicalSession(botId);
+    },
+    captureOwnerScope: captureDataOwnerBroadcastScope,
+    isOwnerScopeCurrent: (scope) =>
+      isDataOwnerBroadcastScopeCurrent(
+        scope as ReturnType<typeof captureDataOwnerBroadcastScope>,
+      ),
+    onChanged: (payload, scope) => {
+      const ownerScope = scope as ReturnType<typeof captureDataOwnerBroadcastScope> | undefined;
+      if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+      broadcastToAllWindows(MAKER_PUSH.BOT_DIRECT_MESSAGE_CHANGED, payload, ownerScope);
     },
   });
   botDelegationServiceHolder?.dispose();
@@ -10957,6 +10995,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         parentSessionId,
         status as (typeof BOT_DELEGATION_STATUSES)[number] | undefined,
       );
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DIRECT_MESSAGE_THREAD_GET,
+    async (event, threadId: unknown, viewerBotId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof threadId !== 'string' || !threadId || threadId.length > 128) {
+        throwIpcError('INVALID_PARAMS', 'threadId required');
+      }
+      if (typeof viewerBotId !== 'string' || !viewerBotId || viewerBotId.length > 128) {
+        throwIpcError('INVALID_PARAMS', 'viewerBotId required');
+      }
+      if (!botDirectMessageServiceHolder) {
+        return { ok: false as const, errorCode: 'HOST_NOT_READY', message: '伙伴对话服务尚未就绪' };
+      }
+      return botDirectMessageServiceHolder.getThread(threadId, viewerBotId);
     },
   );
   ipcMain.handle(
@@ -19400,8 +19454,13 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   return changed ? ({ ...rendererEvent, data: safeData } as AgentEvent) : rendererEvent;
 }
 
-function broadcastToAllWindows(channel: string, payload: unknown): void {
-  const ownerStamp = getActiveDataOwnerPushStamp();
+function broadcastToAllWindows(
+  channel: string,
+  payload: unknown,
+  ownerScope?: ReturnType<typeof captureDataOwnerBroadcastScope>,
+): void {
+  if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+  const ownerStamp = ownerScope ? ownerScope.ownerStamp : getActiveDataOwnerPushStamp();
   if (
     channel === MAKER_PUSH.ORCA_WORKER_CHANGED &&
     payload &&

@@ -75,6 +75,7 @@ import { normalizeAgentInputClearBoundaryMs } from '../../shared/agentInputQueue
 import { hasUserVisibleText } from '../../shared/visibleText';
 import { readReviewRunMeta } from '../../shared/reviewRun';
 import { readBotCollaborationMeta } from '../../shared/botCollaboration';
+import { readBotDirectMessageMeta } from '../../shared/botDirectMessage';
 import {
   deriveAutoTitleSeed,
   reconcileSessionRefsForText,
@@ -500,6 +501,11 @@ export interface ChatMessage {
      * agentMeta.botCollaboration 派生，重开会话仍在。
      */
     | 'bot-collab'
+    /**
+     * 伙伴之间的私聊入口：消息正文单独存储，这里只投影一枚可打开的时间线痕迹。
+     * 它不进入左栏，也不与独立任务的 bot-collab 卡混用。
+     */
+    | 'bot-direct-message'
     | 'context-rebuild';
   systemCardData?: Record<string, unknown>;
   /**
@@ -16368,6 +16374,17 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           // 插话卡要显示催的是哪句话；锚点卡正文为空。
           text: typeof m.content === 'string' ? m.content : '',
         },
+      };
+    }
+    const directMessage = readBotDirectMessageMeta(m.agentMeta?.botDirectMessage);
+    if (m.role === 'assistant' && directMessage) {
+      return {
+        clientId: m.clientId,
+        role: m.role,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'bot-direct-message' as const,
+        systemCardData: { ...directMessage },
       };
     }
     // image-local-cache: user role messages may have JSON-shaped content

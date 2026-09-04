@@ -7575,6 +7575,17 @@
         "hoursMinutes": "{{h}} 時間 {{m}} 分"
       }
     },
+    "directMessage": {
+      "sentTo": "{{name}} にメッセージを送信",
+      "receivedFrom": "{{name}} からのメッセージ",
+      "exchangeCount": "{{name}} との {{count}} 件のやり取り",
+      "open": "仲間同士の会話を見る",
+      "readOnly": "この会話は閲覧専用です",
+      "close": "会話を閉じる",
+      "unavailable": "この仲間同士の会話は利用できません。",
+      "empty": "表示できるメッセージはまだありません。",
+      "limitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました"
+    },
     "channelConnect": "接続",
     "channelDisconnect": "切断",
     "joined": {

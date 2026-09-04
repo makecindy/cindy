@@ -7575,6 +7575,17 @@
         "hoursMinutes": "{{h}} 小時 {{m}} 分"
       }
     },
+    "directMessage": {
+      "sentTo": "已傳訊息給 {{name}}",
+      "receivedFrom": "訊息來自 {{name}}",
+      "exchangeCount": "與 {{name}} 的 {{count}} 則訊息往來",
+      "open": "查看夥伴之間的對話",
+      "readOnly": "此對話僅供查看",
+      "close": "關閉對話",
+      "unavailable": "這則夥伴對話已無法使用。",
+      "empty": "還沒有可查看的訊息。",
+      "limitReached": "本輪夥伴對話已達上限，雙方已回到各自的主任務"
+    },
     "channelConnect": "連接",
     "channelDisconnect": "中斷連接",
     "joined": {

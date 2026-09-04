@@ -7577,6 +7577,17 @@
         "hoursMinutes": "{{h}} h {{m}} min"
       }
     },
+    "directMessage": {
+      "sentTo": "Sent a message to {{name}}",
+      "receivedFrom": "Message from {{name}}",
+      "exchangeCount": "{{count}} messages with {{name}}",
+      "open": "View the conversation between teammates",
+      "readOnly": "This conversation is view-only",
+      "close": "Close conversation",
+      "unavailable": "This teammate conversation is no longer available.",
+      "empty": "There are no messages to view yet.",
+      "limitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks"
+    },
     "channelConnect": "Connect",
     "channelDisconnect": "Disconnect",
     "joined": {

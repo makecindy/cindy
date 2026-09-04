@@ -540,14 +540,15 @@ export function catalogSurfaces() {
     {
       id: 'desktop.bots',
       platform: 'desktop',
-      title: '伙伴（列表 / 对话 / 设置 / 历史）',
+      title: '伙伴（列表 / 对话 / 设置 / 历史 / 伙伴私聊）',
       productionEntry:
-        'hash `/bots`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务路由（BotsFeatureLayout）',
+        'hash `/bots`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务、伙伴私聊路由（BotsFeatureLayout）',
       reachableComponents: [
         'BotsHomeView',
         'BotRosterView',
         'BotSessionView',
         'BotHistorySessionView',
+        'BotDirectMessageView',
         'BotProfileSettings',
         'BotCollaborationCard',
       ],
@@ -557,6 +558,7 @@ export function catalogSurfaces() {
       routerPaths: [
         '/bots',
         '/bots/:botId',
+        '/bots/:botId/direct/:threadId',
         '/bots/:botId/history/:sessionId',
         '/bots/:botId/session/:sessionId',
         '/bots/roster',
@@ -564,6 +566,7 @@ export function catalogSurfaces() {
       routeEntryComponents: {
         '/bots': 'BotsHomeView',
         '/bots/:botId': 'BotsHomeView',
+        '/bots/:botId/direct/:threadId': 'BotDirectMessageView',
         '/bots/:botId/history/:sessionId': 'BotHistorySessionView',
         '/bots/:botId/session/:sessionId': 'BotSessionView',
         '/bots/roster': 'BotRosterView',

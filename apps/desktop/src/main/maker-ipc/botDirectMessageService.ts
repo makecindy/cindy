@@ -1,17 +1,40 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
-import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
+import { createMessage } from '../localDb/ipc/messages.js';
+import {
+  botDirectMessages,
+  botDirectMessageThreads,
+  botProfiles,
+  botSessionLinks,
+  messages,
+  sessions,
+} from '../localDb/schema.js';
+import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import {
+  BOT_DIRECT_MESSAGE_CLIENT_ID,
+  type BotDirectMessageChangedPayload,
+  type BotDirectMessageMeta,
+  type BotDirectMessageThreadResult,
+  type BotDirectMessageThreadView,
+} from '../../shared/botDirectMessage.js';
 
 const MAX_MESSAGE_CHARS = 16_000;
 const MAX_SENDER_NAME_CHARS = 48;
 const MAX_SENDER_ID_CHARS = 80;
+/** Six request/reply pairs are enough to clarify a handoff without letting two Bots chatter forever. */
+const MAX_MESSAGES_PER_THREAD = 12;
+const THREAD_IDLE_TIMEOUT_MS = 15 * 60_000;
+const LIMIT_COOLDOWN_MS = 5 * 60_000;
 
 function trustedHeaderLabel(value: string, maxChars: number): string {
-  const normalized = value
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+  const withoutControlCharacters = Array.from(value, (character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f ? ' ' : character;
+  }).join('');
+  const normalized = withoutControlCharacters
     .replace(/["\\]/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
@@ -41,6 +64,10 @@ export type BotDirectMessageResult =
       targetBotName: string;
       targetSessionId: string;
       wakeKind: BotDirectMessageWakeKind;
+      threadId: string;
+      messageCount: number;
+      remainingMessages: number;
+      conversationEnded: boolean;
     }
   | {
       ok: false;
@@ -55,12 +82,17 @@ export interface BotDirectMessageServiceDeps {
     message: string;
     persistedContent?: string;
     clientId?: string;
+    onAccepted?: () => void | Promise<void>;
+    onAcceptedRollback?: () => void | Promise<void>;
   }) => Promise<DispatchResult>;
   /** Reuses delegation's canonical-session ensure path for newly-created/recovering Bots. */
-  ensureCanonicalSession?: (botId: string) => Promise<
-    | { ok: true; sessionId: string }
-    | { ok: false; errorCode: string; message: string }
-  >;
+  ensureCanonicalSession?: (
+    botId: string,
+  ) => Promise<{ ok: true; sessionId: string } | { ok: false; errorCode: string; message: string }>;
+  captureOwnerScope?: () => unknown;
+  isOwnerScopeCurrent?: (scope: unknown) => boolean;
+  onChanged?: (payload: BotDirectMessageChangedPayload, ownerScope?: unknown) => void;
+  now?: () => number;
   createId?: () => string;
 }
 
@@ -157,18 +189,133 @@ async function loadTargetCanonicalSession(botId: string) {
  */
 export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps) {
   const createId = deps.createId ?? randomUUID;
+  const now = deps.now ?? Date.now;
+  const pairLocks = new Map<string, Promise<void>>();
+
+  const withPairLock = async <T>(key: string, run: () => Promise<T>): Promise<T> => {
+    const previous = pairLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    pairLocks.set(key, queued);
+    await previous;
+    try {
+      return await run();
+    } finally {
+      release();
+      if (pairLocks.get(key) === queued) pairLocks.delete(key);
+    }
+  };
+
+  const pairOf = (left: string, right: string): [string, string] =>
+    left.localeCompare(right) <= 0 ? [left, right] : [right, left];
+
+  const persistTimelineAnchor = async (params: {
+    threadId: string;
+    deliveryId: string;
+    sequence: number;
+    sessionId: string;
+    viewerBotId: string;
+    peerBotId: string;
+    peerBotName: string;
+    direction: BotDirectMessageMeta['direction'];
+    preview: string;
+    createdAt: number;
+  }): Promise<void> => {
+    await createMessage(params.sessionId, {
+      clientId: BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(
+        params.threadId,
+        params.deliveryId,
+        params.sessionId,
+      ),
+      role: 'assistant',
+      content: '',
+      agentKind: null,
+      createdAt: params.createdAt,
+      agentMeta: {
+        botDirectMessage: {
+          v: 1,
+          threadId: params.threadId,
+          viewerBotId: params.viewerBotId,
+          peerBotId: params.peerBotId,
+          peerBotName: params.peerBotName,
+          direction: params.direction,
+          sequence: params.sequence,
+          preview: params.preview.slice(0, 400),
+        } satisfies BotDirectMessageMeta,
+      },
+    });
+  };
+
+  const getThread = async (
+    threadId: string,
+    viewerBotId: string,
+  ): Promise<BotDirectMessageThreadResult> => {
+    const db = getDbClient().drizzle;
+    const [thread] = await db
+      .select()
+      .from(botDirectMessageThreads)
+      .where(eq(botDirectMessageThreads.id, threadId))
+      .limit(1);
+    if (!thread || (thread.botAId !== viewerBotId && thread.botBId !== viewerBotId)) {
+      return { ok: false, errorCode: 'NOT_FOUND', message: '找不到这条伙伴对话' };
+    }
+    const [profiles, rows] = await Promise.all([
+      db.select({ id: botProfiles.id, name: botProfiles.displayName }).from(botProfiles),
+      db
+        .select()
+        .from(botDirectMessages)
+        .where(eq(botDirectMessages.threadId, threadId))
+        .orderBy(asc(botDirectMessages.sequence)),
+    ]);
+    const nameOf = (botId: string): string =>
+      profiles.find((profile) => profile.id === botId)?.name ?? botId;
+    const expired = thread.status === 'active' && thread.expiresAt <= now();
+    const visibleRows = rows.filter((row) => row.deliveryStatus === 'delivered');
+    const view: BotDirectMessageThreadView = {
+      id: thread.id,
+      botAId: thread.botAId,
+      botAName: nameOf(thread.botAId),
+      botBId: thread.botBId,
+      botBName: nameOf(thread.botBId),
+      status: expired ? 'closed' : thread.status,
+      closeReason: expired ? 'idle-timeout' : thread.closeReason,
+      messageCount: visibleRows.length,
+      maxMessages: thread.maxMessages,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      closedAt: expired ? thread.expiresAt : thread.closedAt,
+      messages: visibleRows.map((row) => ({
+        id: row.id,
+        sequence: row.sequence,
+        senderBotId: row.senderBotId,
+        senderBotName: nameOf(row.senderBotId),
+        recipientBotId: row.recipientBotId,
+        recipientBotName: nameOf(row.recipientBotId),
+        content: row.content,
+        createdAt: row.createdAt,
+      })),
+    };
+    return { ok: true, thread: view };
+  };
 
   const messageAgent = async (input: {
     callerSessionId: string;
     targetBotId: string;
     message: string;
   }): Promise<BotDirectMessageResult> => {
+    const ownerScope = deps.captureOwnerScope?.();
+    const ownerIsCurrent = (): boolean =>
+      ownerScope === undefined || !deps.isOwnerScopeCurrent || deps.isOwnerScopeCurrent(ownerScope);
     const message = input.message.trim();
     if (!message || message.length > MAX_MESSAGE_CHARS) {
       return failed('INVALID_ARGS', `message 必须为 1-${MAX_MESSAGE_CHARS} 个字符`);
     }
 
     const caller = await loadCaller(input.callerSessionId);
+    if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
     if (!caller || caller.sessionSource !== 'bot') {
       return failed('NOT_A_BOT_SESSION', '当前任务不属于 Cindy Bot');
     }
@@ -183,6 +330,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     }
 
     const targetProfile = await loadTargetProfile(input.targetBotId);
+    if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
     if (!targetProfile) {
       return failed('TARGET_BOT_NOT_FOUND', '找不到目标 Bot', true);
     }
@@ -196,6 +344,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     let targetSessionId: string | null = null;
     if (deps.ensureCanonicalSession) {
       const ensured = await deps.ensureCanonicalSession(input.targetBotId);
+      if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
       if (ensured.ok) targetSessionId = ensured.sessionId;
       else return failed(ensured.errorCode, ensured.message, true);
     }
@@ -207,31 +356,298 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       return failed('TARGET_CANONICAL_UNAVAILABLE', '目标 Bot 没有可用的主任务', true);
     }
 
-    const senderName = trustedHeaderLabel(caller.botName, MAX_SENDER_NAME_CHARS);
-    const senderId = trustedHeaderLabel(caller.botId, MAX_SENDER_ID_CHARS);
-    const envelope = [
-      `[Direct message from Cindy Bot "${senderName}" (${senderId})]`,
-      message,
-    ].join('\n\n');
-    const dispatched = await deps.dispatch({
-      targetSessionId,
-      message: envelope,
-      persistedContent: envelope,
-      clientId: `bot-dm:${caller.botId}:${createId()}`,
+    const [botAId, botBId] = pairOf(caller.botId, input.targetBotId);
+    const pairKey = `${botAId}\u0000${botBId}`;
+    return withPairLock(pairKey, async () => {
+      if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
+      const db = getDbClient().drizzle;
+      const sentAt = now();
+      const activeThreads = await db
+        .select()
+        .from(botDirectMessageThreads)
+        .where(
+          and(
+            eq(botDirectMessageThreads.botAId, botAId),
+            eq(botDirectMessageThreads.botBId, botBId),
+            eq(botDirectMessageThreads.status, 'active'),
+          ),
+        )
+        .limit(1);
+      let thread: typeof botDirectMessageThreads.$inferSelect | undefined = activeThreads[0];
+
+      if (thread && thread.expiresAt <= sentAt) {
+        await db
+          .update(botDirectMessageThreads)
+          .set({
+            status: 'closed',
+            closeReason: 'idle-timeout',
+            closedAt: sentAt,
+            updatedAt: sentAt,
+          })
+          .where(eq(botDirectMessageThreads.id, thread.id));
+        thread = undefined;
+      }
+
+      if (!thread) {
+        const [latest] = await db
+          .select()
+          .from(botDirectMessageThreads)
+          .where(
+            and(
+              eq(botDirectMessageThreads.botAId, botAId),
+              eq(botDirectMessageThreads.botBId, botBId),
+            ),
+          )
+          .orderBy(desc(botDirectMessageThreads.updatedAt))
+          .limit(1);
+        if (
+          latest?.closeReason === 'message-limit' &&
+          latest.blockedUntil !== null &&
+          latest.blockedUntil > sentAt
+        ) {
+          return failed(
+            'CONVERSATION_LIMIT_REACHED',
+            '这轮伙伴对话已达到往来上限，请先回到各自主任务整理结果，稍后再开启新一轮。',
+          );
+        }
+        const threadId = createId();
+        await db.insert(botDirectMessageThreads).values({
+          id: threadId,
+          botAId,
+          botBId,
+          status: 'active',
+          closeReason: null,
+          messageCount: 0,
+          maxMessages: MAX_MESSAGES_PER_THREAD,
+          expiresAt: sentAt + THREAD_IDLE_TIMEOUT_MS,
+          blockedUntil: null,
+          createdAt: sentAt,
+          updatedAt: sentAt,
+          closedAt: null,
+        });
+        [thread] = await db
+          .select()
+          .from(botDirectMessageThreads)
+          .where(eq(botDirectMessageThreads.id, threadId))
+          .limit(1);
+      }
+      if (!thread) return failed('INTERNAL', '伙伴对话未能建立');
+
+      // A previous process may have stopped between reserving a delivery and
+      // updating the thread counter. Re-derive the small bounded count so one
+      // partial write can never wedge the pair forever or reopen extra budget.
+      const reservations = await db
+        .select({ deliveryStatus: botDirectMessages.deliveryStatus })
+        .from(botDirectMessages)
+        .where(eq(botDirectMessages.threadId, thread.id));
+      const reservedCount = reservations.filter((row) => row.deliveryStatus !== 'failed').length;
+      if (reservedCount !== thread.messageCount) {
+        await db
+          .update(botDirectMessageThreads)
+          .set({ messageCount: reservedCount })
+          .where(eq(botDirectMessageThreads.id, thread.id));
+        thread = { ...thread, messageCount: reservedCount };
+      }
+      if (thread.messageCount >= thread.maxMessages) {
+        return failed('CONVERSATION_LIMIT_REACHED', '这轮伙伴对话已达到往来上限，请先回到各自主任务整理结果。');
+      }
+
+      const recent = await db
+        .select({ senderBotId: botDirectMessages.senderBotId })
+        .from(botDirectMessages)
+        .where(
+          and(
+            eq(botDirectMessages.threadId, thread.id),
+            ne(botDirectMessages.deliveryStatus, 'failed'),
+          ),
+        )
+        .orderBy(desc(botDirectMessages.sequence))
+        .limit(2);
+      if (recent.length === 2 && recent.every((row) => row.senderBotId === caller.botId)) {
+        return failed('WAIT_FOR_PEER', '已连续发出 2 条消息，请等待对方回应后再继续。');
+      }
+
+      const senderName = trustedHeaderLabel(caller.botName, MAX_SENDER_NAME_CHARS);
+      const senderId = trustedHeaderLabel(caller.botId, MAX_SENDER_ID_CHARS);
+      const envelope = [
+        `[Direct message from Cindy Bot "${senderName}" (${senderId})]`,
+        message,
+      ].join('\n\n');
+      const deliveryId = createId();
+      const nextCount = thread.messageCount + 1;
+      const ended = nextCount >= thread.maxMessages;
+
+      // Reserve budget before enqueueing. Pending rows count against the hard
+      // loop limit, so a busy target cannot accumulate an unbounded hidden queue.
+      await db.insert(botDirectMessages).values({
+        id: deliveryId,
+        threadId: thread.id,
+        sequence: nextCount,
+        senderBotId: caller.botId,
+        recipientBotId: input.targetBotId,
+        senderSessionId: input.callerSessionId,
+        recipientSessionId: targetSessionId,
+        deliveryStatus: 'pending',
+        content: message,
+        createdAt: sentAt,
+      });
+      try {
+        await db
+          .update(botDirectMessageThreads)
+          .set({
+            messageCount: nextCount,
+            updatedAt: sentAt,
+            expiresAt: sentAt + THREAD_IDLE_TIMEOUT_MS,
+            ...(ended
+              ? {
+                  status: 'closed' as const,
+                  closeReason: 'message-limit' as const,
+                  blockedUntil: sentAt + LIMIT_COOLDOWN_MS,
+                  closedAt: sentAt,
+                }
+              : {}),
+          })
+          .where(eq(botDirectMessageThreads.id, thread.id));
+      } catch (error) {
+        await db
+          .update(botDirectMessages)
+          .set({ deliveryStatus: 'failed' })
+          .where(eq(botDirectMessages.id, deliveryId))
+          .catch(() => undefined);
+        throw error;
+      }
+
+      let accepted = false;
+      const rollbackReservation = async () => {
+        if (accepted) return;
+        await db
+          .update(botDirectMessages)
+          .set({ deliveryStatus: 'failed' })
+          .where(eq(botDirectMessages.id, deliveryId));
+        // `onAccepted` writes one anchor per canonical timeline. If its second
+        // write (or the final delivery-status update) fails, remove any partial
+        // projection so neither Bot sees a conversation entry that never
+        // became an accepted delivery.
+        await db
+          .delete(messages)
+          .where(
+            inArray(messages.clientId, [
+              BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(
+                thread.id,
+                deliveryId,
+                input.callerSessionId,
+              ),
+              BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(
+                thread.id,
+                deliveryId,
+                targetSessionId,
+              ),
+            ]),
+          )
+          .catch(() => undefined);
+        const liveReservations = await db
+          .select({ id: botDirectMessages.id })
+          .from(botDirectMessages)
+          .where(
+            and(
+              eq(botDirectMessages.threadId, thread.id),
+              ne(botDirectMessages.deliveryStatus, 'failed'),
+            ),
+          );
+        const liveCount = liveReservations.length;
+        await db
+          .update(botDirectMessageThreads)
+          .set({
+            messageCount: liveCount,
+            ...(ended && liveCount < thread.maxMessages
+              ? {
+                  status: 'active' as const,
+                  closeReason: null,
+                  blockedUntil: null,
+                  closedAt: null,
+                }
+              : {}),
+          })
+          .where(eq(botDirectMessageThreads.id, thread.id));
+      };
+
+      let dispatched: DispatchResult;
+      try {
+        dispatched = await deps.dispatch({
+          targetSessionId,
+          message: envelope,
+          // The canonical timeline gets a dedicated structured trace below. Keep
+          // the model-visible input durable while hiding the raw synthetic user row.
+          persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${envelope}`,
+          clientId: `bot-dm:${thread.id}:${deliveryId}`,
+          onAccepted: async () => {
+            if (!ownerIsCurrent()) throw new Error('owner changed before Bot message acceptance');
+            await Promise.all([
+              persistTimelineAnchor({
+                threadId: thread.id,
+                deliveryId,
+                sequence: nextCount,
+                sessionId: input.callerSessionId,
+                viewerBotId: caller.botId,
+                peerBotId: input.targetBotId,
+                peerBotName: targetProfile.name,
+                direction: 'sent',
+                preview: message,
+                createdAt: sentAt,
+              }),
+              persistTimelineAnchor({
+                threadId: thread.id,
+                deliveryId,
+                sequence: nextCount,
+                sessionId: targetSessionId,
+                viewerBotId: input.targetBotId,
+                peerBotId: caller.botId,
+                peerBotName: caller.botName,
+                direction: 'received',
+                preview: message,
+                createdAt: sentAt,
+              }),
+            ]);
+            await db
+              .update(botDirectMessages)
+              .set({ deliveryStatus: 'delivered' })
+              .where(eq(botDirectMessages.id, deliveryId));
+            accepted = true;
+            deps.onChanged?.(
+              { threadId: thread.id, participantBotIds: [botAId, botBId] },
+              ownerScope,
+            );
+          },
+          onAcceptedRollback: rollbackReservation,
+        });
+      } catch (error) {
+        await rollbackReservation().catch(() => undefined);
+        return failed(
+          'DELIVERY_NOT_ACCEPTED',
+          error instanceof Error ? error.message : String(error),
+          true,
+        );
+      }
+      if (!dispatched.ok) {
+        await rollbackReservation().catch(() => undefined);
+        return failed(dispatched.errorCode, dispatched.message, true);
+      }
+
+      return {
+        ok: true,
+        targetBotId: input.targetBotId,
+        targetBotName: targetProfile.name,
+        targetSessionId: dispatched.targetSessionId,
+        wakeKind: dispatched.wakeKind,
+        threadId: thread.id,
+        messageCount: nextCount,
+        remainingMessages: Math.max(0, thread.maxMessages - nextCount),
+        conversationEnded: ended,
+      };
     });
-    if (!dispatched.ok) {
-      return failed(dispatched.errorCode, dispatched.message, true);
-    }
-    return {
-      ok: true,
-      targetBotId: input.targetBotId,
-      targetBotName: targetProfile.name,
-      targetSessionId: dispatched.targetSessionId,
-      wakeKind: dispatched.wakeKind,
-    };
   };
 
-  return { messageAgent };
+  return { messageAgent, getThread };
 }
 
 export type BotDirectMessageService = ReturnType<typeof createBotDirectMessageService>;

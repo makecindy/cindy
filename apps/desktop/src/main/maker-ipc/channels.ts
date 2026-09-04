@@ -770,6 +770,8 @@ export const MAKER_INVOKE = {
    * 入参 (parentSessionId, delegationId, text)；归属与状态校验都在主进程做。
    */
   BOT_DELEGATION_INTERJECT: 'maker:bot-delegation:interject',
+  /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
+  BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
 } as const;
 
@@ -916,6 +918,8 @@ export const MAKER_PUSH = {
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
   /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */
   BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
+  /** Hidden Bot pair conversation accepted another message or reached its limit. */
+  BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',

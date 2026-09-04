@@ -21,7 +21,7 @@ export function registerCreateTeammateTool(
 ): void {
   server.tool(
     'create_teammate',
-    'Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Use the official default model and an empty capability grant; the user can customize the profile later.',
+    'Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Use the official default model and an empty capability grant; the user can customize the profile later. The returned bot id is immediately usable as the target of collaborate_with_bot notify or call; creation alone does not start hidden work.',
     {
       name: z.string().min(1).max(200).describe('Display name for the new teammate.'),
       description: z.string().min(1).max(4000).describe('Short role and purpose.'),

@@ -30,6 +30,7 @@ import { BotsHomeView } from '@/features/bots/BotsHomeView';
 import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
 import { BotRosterView } from '@/features/bots/BotRosterView';
 import { BotSessionView } from '@/features/bots/BotSessionView';
+import { BotDirectMessageView } from '@/features/bots/BotDirectMessageView';
 import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatureLayout';
 
 /**
@@ -128,6 +129,8 @@ export const router = createHashRouter([
                       // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
                       // 被当成一个叫 "roster" 的伙伴。
                       { path: 'roster', element: <BotRosterView /> },
+                      // 伙伴私聊只从双方时间线里的消息入口打开，不出现在左侧伙伴列表。
+                      { path: ':botId/direct/:threadId', element: <BotDirectMessageView /> },
                       { path: ':botId', element: <BotsHomeView /> },
                       { path: ':botId/session/:sessionId', element: <BotSessionView /> },
                       { path: ':botId/history/:sessionId', element: <BotHistorySessionView /> },

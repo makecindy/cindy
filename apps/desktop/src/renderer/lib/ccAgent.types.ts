@@ -194,6 +194,13 @@ export interface CcMeta {
   botCollaboration?: import('../../shared/botCollaboration').BotCollaborationMeta;
 
   /**
+   * Host-side marker for the read-only entrance to a hidden Bot pair conversation.
+   * The actual messages live in the dedicated Bot DM tables and never enter the
+   * normal task transcript through this metadata field.
+   */
+  botDirectMessage?: import('../../shared/botDirectMessage').BotDirectMessageMeta;
+
+  /**
    * Host-side marker for a Hermes-style Bot group room message. The text still
    * lives in Cindy's normal messages table; this metadata only identifies who
    * spoke so the room renderer can label it without parsing display text.

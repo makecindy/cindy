@@ -7575,6 +7575,17 @@
         "hoursMinutes": "{{h}} 小时 {{m}} 分"
       }
     },
+    "directMessage": {
+      "sentTo": "已发消息给 {{name}}",
+      "receivedFrom": "消息来自 {{name}}",
+      "exchangeCount": "与 {{name}} 的 {{count}} 条消息往来",
+      "open": "查看伙伴之间的对话",
+      "readOnly": "此对话仅供查看",
+      "close": "关闭对话",
+      "unavailable": "这条伙伴对话已不可用。",
+      "empty": "还没有可查看的消息。",
+      "limitReached": "本轮伙伴对话已到上限，双方已回到各自的主任务"
+    },
     "channelConnect": "连接",
     "channelDisconnect": "断开",
     "joined": {

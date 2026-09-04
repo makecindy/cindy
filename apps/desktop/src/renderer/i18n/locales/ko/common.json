@@ -7575,6 +7575,17 @@
         "hoursMinutes": "{{h}}시간 {{m}}분"
       }
     },
+    "directMessage": {
+      "sentTo": "{{name}}에게 메시지를 보냄",
+      "receivedFrom": "{{name}}의 메시지",
+      "exchangeCount": "{{name}}와 주고받은 메시지 {{count}}개",
+      "open": "동료 간 대화 보기",
+      "readOnly": "이 대화는 보기 전용입니다",
+      "close": "대화 닫기",
+      "unavailable": "이 동료 간 대화를 더 이상 사용할 수 없습니다.",
+      "empty": "아직 볼 수 있는 메시지가 없습니다.",
+      "limitReached": "이번 동료 간 대화가 한도에 도달해 양쪽 모두 각자의 기본 작업으로 돌아갔습니다"
+    },
     "channelConnect": "연결",
     "channelDisconnect": "연결 해제",
     "joined": {

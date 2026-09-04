@@ -396,7 +396,10 @@ export const botLifecycleEvents = sqliteTable(
   },
   (t) => ({
     idxBotCreated: index('idx_bot_lifecycle_events_bot_created').on(t.botId, t.createdAt),
-    idxSessionCreated: index('idx_bot_lifecycle_events_session_created').on(t.sessionId, t.createdAt),
+    idxSessionCreated: index('idx_bot_lifecycle_events_session_created').on(
+      t.sessionId,
+      t.createdAt,
+    ),
   }),
 );
 
@@ -449,6 +452,76 @@ export const botDelegations = sqliteTable(
     idxTargetStatus: index('idx_bot_delegations_target_status').on(t.targetBotId, t.status),
     idxParentSession: index('idx_bot_delegations_parent_session').on(t.parentSessionId),
     uniqChildSession: uniqueIndex('uniq_bot_delegations_child_session').on(t.childSessionId),
+  }),
+);
+
+/** Hidden, pair-scoped Bot conversation. It is projected into each Bot's canonical timeline. */
+export const botDirectMessageThreads = sqliteTable(
+  'bot_direct_message_threads',
+  {
+    id: text('id').primaryKey(),
+    /** Pair ids are always stored in lexical order so one pair has one active thread. */
+    botAId: text('bot_a_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    botBId: text('bot_b_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['active', 'closed'] })
+      .notNull()
+      .default('active'),
+    closeReason: text('close_reason', { enum: ['message-limit', 'idle-timeout'] }),
+    messageCount: integer('message_count').notNull().default(0),
+    maxMessages: integer('max_messages').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    blockedUntil: integer('blocked_until'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    closedAt: integer('closed_at'),
+  },
+  (t) => ({
+    uniqActivePair: uniqueIndex('uniq_bot_dm_threads_active_pair')
+      .on(t.botAId, t.botBId)
+      .where(sql`${t.status} = 'active'`),
+    idxPairUpdated: index('idx_bot_dm_threads_pair_updated').on(t.botAId, t.botBId, t.updatedAt),
+  }),
+);
+
+/** One explicit message_agent delivery inside a hidden Bot pair conversation. */
+export const botDirectMessages = sqliteTable(
+  'bot_direct_messages',
+  {
+    id: text('id').primaryKey(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => botDirectMessageThreads.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    senderBotId: text('sender_bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    recipientBotId: text('recipient_bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    senderSessionId: text('sender_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    recipientSessionId: text('recipient_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    deliveryStatus: text('delivery_status', {
+      enum: ['pending', 'delivered', 'failed'],
+    })
+      .notNull()
+      .default('pending'),
+    content: text('content').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqThreadSequence: uniqueIndex('uniq_bot_direct_messages_thread_sequence').on(
+      t.threadId,
+      t.sequence,
+    ),
+    idxThreadCreated: index('idx_bot_direct_messages_thread_created').on(t.threadId, t.createdAt),
   }),
 );
 
