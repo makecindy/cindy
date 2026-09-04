@@ -130,6 +130,19 @@ const sessionToThreads = new Map<string, Set<string>>();
 const threadToSession = new Map<string, string>();
 const subagentRouteByParentThread = new Map<string, CodexSubagentRouteSnapshot>();
 const subagentRouteByThread = new Map<string, CodexSubagentRouteSnapshot>();
+const smartSubagentRoutesByParentThread = new Map<
+  string,
+  ReadonlyMap<string, CodexSubagentRouteSnapshot>
+>();
+const smartSubagentRoutesByThread = new Map<
+  string,
+  ReadonlyMap<string, CodexSubagentRouteSnapshot>
+>();
+export interface CodexObservedSubagentIdentity {
+  model: string;
+  reasoningEffort?: string;
+}
+const observedSubagentIdentityByThread = new Map<string, CodexObservedSubagentIdentity>();
 const reviewerModelBySession = new Map<string, string>();
 const httpRecoveryReasonByThread = new Map<string, string>();
 
@@ -342,6 +355,18 @@ function subagentRouteFromHeaders(
   return subagentRouteByThread.get(threadId);
 }
 
+function smartSubagentRouteFromHeaders(
+  headers: Readonly<Record<string, string>>,
+  requestedModel: string,
+): CodexSubagentRouteSnapshot | undefined {
+  if (!requestedModel || !isCollabSpawnRequest(headers)) return undefined;
+  const threadId = selectedThreadIdFromHeaders(headers);
+  if (threadId === 'unknown') return undefined;
+  const route = smartSubagentRoutesByThread.get(threadId)?.get(requestedModel);
+  if (route) subagentRouteByThread.set(threadId, route);
+  return route;
+}
+
 /**
  * Resolve only the independent Subagent route carried by this WS upgrade.
  *
@@ -435,23 +460,65 @@ function applyReasoningEffortOverride(
   return next;
 }
 
+function observedReasoningEffort(body: Record<string, unknown>): string | undefined {
+  if (!isPlainObject(body.reasoning) || typeof body.reasoning.effort !== 'string') {
+    return undefined;
+  }
+  return body.reasoning.effort;
+}
+
+function recordObservedSubagentIdentity(
+  headers: Readonly<Record<string, string>>,
+  model: string,
+  reasoningEffort?: string,
+): void {
+  if (!model || !isCollabSpawnRequest(headers)) return;
+  const threadId = selectedThreadIdFromHeaders(headers);
+  if (threadId === 'unknown') return;
+  observedSubagentIdentityByThread.set(threadId, {
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  });
+}
+
+export function getObservedCodexSubagentIdentity(
+  childThreadId: string,
+): CodexObservedSubagentIdentity | undefined {
+  return observedSubagentIdentityByThread.get(childThreadId);
+}
+
 /**
- * 个性化 Codex Subagent 是强制路由：Codex 内部先继承父模型创建子线程，首个
- * collab_spawn 请求按血缘登记后在这里替换成用户冻结的模型与 effort。放在所有
- * Provider 能力/兼容 transforms 之前，后续判断看到的始终是真实执行模型。
+ * Codex Subagent 请求的统一观察/路由入口。旧固定路由按冻结快照替换模型；智能
+ * 调配按 Codex 在 spawn_agent 中实际选出的 model 查 Provider。没有 Cindy 路由时
+ * 也记录原生 Sol/Terra 的真实请求身份，供卡片展示。必须放在 Provider 兼容层之前。
  */
 function createForcedSubagentRequestTransform(): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
     // 先触发首个 collab_spawn 的懒血缘登记，再读取子线程冻结路由。
     sessionIdFromHeaders(ctx.headers);
-    const route = subagentRouteFromHeaders(ctx.headers);
-    if (!route) return null;
+    const requestedModel = typeof body.model === 'string' ? body.model : '';
+    const route = subagentRouteFromHeaders(ctx.headers)
+      ?? smartSubagentRouteFromHeaders(ctx.headers, requestedModel);
+    if (!route) {
+      recordObservedSubagentIdentity(
+        ctx.headers,
+        requestedModel,
+        observedReasoningEffort(body),
+      );
+      return null;
+    }
     const next: Record<string, unknown> = {
       ...body,
       model: route.catalogModel,
     };
-    return applyReasoningEffortOverride(next, route.reasoningEffort);
+    const routed = applyReasoningEffortOverride(next, route.reasoningEffort);
+    recordObservedSubagentIdentity(
+      ctx.headers,
+      route.catalogModel,
+      observedReasoningEffort(routed),
+    );
+    return routed;
   };
 }
 
@@ -3323,16 +3390,19 @@ function createCodexProxyHandle(
         });
         return null;
       }
-      // 独立 Subagent Provider 需要 HTTP body transform，但父 thread 不需要。
-      // bundled Codex 在每次 upgrade 都带 thread/session 身份，collab_spawn 还带
-      // parent thread id；只拒绝确实命中路由快照的子 thread，426 会让该子会话
-      // 自己降到 HTTP，不影响父 thread 的预热/复用 socket。
-      const subagentRoute = subagentRouteForWebSocketUpgrade(headers);
-      if (subagentRoute) {
+      // Subagent 必须走 HTTP，proxy 才能读取本次实际 model 并按智能目录路由；父
+      // thread 仍保留 WS。bundled Codex 的 collab_spawn upgrade 带有明确身份，
+      // 只拒绝这类 child，不影响父 thread 的预热/复用 socket。
+      if (isCollabSpawnRequest(headers)) {
+        const subagentRoute = subagentRouteForWebSocketUpgrade(headers);
         log.info('codex websocket declined for subagent HTTP routing', {
           threadId,
-          providerId: subagentRoute.providerId,
-          catalogModel: subagentRoute.catalogModel,
+          ...(subagentRoute
+            ? {
+                providerId: subagentRoute.providerId,
+                catalogModel: subagentRoute.catalogModel,
+              }
+            : {}),
         });
         return null;
       }
@@ -3468,7 +3538,10 @@ export function registerComposed(
   sessionId: string,
   threadId: string,
   text: string,
-  opts: { subagentRoute?: CodexSubagentRouteSnapshot } = {},
+  opts: {
+    subagentRoute?: CodexSubagentRouteSnapshot;
+    smartSubagentRoutes?: readonly CodexSubagentRouteSnapshot[];
+  } = {},
 ): void {
   bindThreadToSession(sessionId, threadId);
   registry.set(threadId, text);
@@ -3483,6 +3556,21 @@ export function registerComposed(
   } else {
     subagentRouteByParentThread.delete(threadId);
   }
+  const smartRoutes = new Map<string, CodexSubagentRouteSnapshot>();
+  for (const route of opts.smartSubagentRoutes ?? []) {
+    const providerId = route.providerId.trim();
+    const catalogModel = route.catalogModel.trim();
+    if (!providerId || !catalogModel || smartRoutes.has(catalogModel)) continue;
+    smartRoutes.set(catalogModel, {
+      providerId,
+      catalogModel,
+      ...(route.reasoningEffort !== undefined
+        ? { reasoningEffort: route.reasoningEffort }
+        : {}),
+    });
+  }
+  if (smartRoutes.size > 0) smartSubagentRoutesByParentThread.set(threadId, smartRoutes);
+  else smartSubagentRoutesByParentThread.delete(threadId);
   log.debug('registered codex prompt for thread', {
     sessionId,
     threadId,
@@ -3567,6 +3655,11 @@ export function registerChildThread(parentThreadId: string, childThreadId: strin
   } else {
     subagentRouteByThread.delete(childThreadId);
   }
+  const inheritedSmartRoutes =
+    smartSubagentRoutesByThread.get(parentThreadId)
+    ?? smartSubagentRoutesByParentThread.get(parentThreadId);
+  if (inheritedSmartRoutes) smartSubagentRoutesByThread.set(childThreadId, inheritedSmartRoutes);
+  else smartSubagentRoutesByThread.delete(childThreadId);
   log.debug('registered codex child thread route', {
     sessionId,
     parentThreadId,
@@ -3591,6 +3684,9 @@ function clearSessionThreads(sessionId: string): string[] {
       registry.delete(threadId);
       subagentRouteByParentThread.delete(threadId);
       subagentRouteByThread.delete(threadId);
+      smartSubagentRoutesByParentThread.delete(threadId);
+      smartSubagentRoutesByThread.delete(threadId);
+      observedSubagentIdentityByThread.delete(threadId);
       httpRecoveryReasonByThread.delete(threadId);
     }
   }
@@ -3635,6 +3731,9 @@ export async function disposeCodexProxy(): Promise<void> {
   threadToSession.clear();
   subagentRouteByParentThread.clear();
   subagentRouteByThread.clear();
+  smartSubagentRoutesByParentThread.clear();
+  smartSubagentRoutesByThread.clear();
+  observedSubagentIdentityByThread.clear();
   reviewerModelBySession.clear();
   httpRecoveryReasonByThread.clear();
 

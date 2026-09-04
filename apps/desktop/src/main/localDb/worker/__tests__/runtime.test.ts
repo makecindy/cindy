@@ -142,6 +142,69 @@ describe('db worker runtime', () => {
     }
   });
 
+  it('createWorkerDatabase 挂 TEMP 触发器并按字写入 FTS（#3841 生产入口）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-worker-cjk-'));
+    tempDirs.push(dir);
+    const drizzleDir = path.join(dir, 'drizzle');
+    const dbPath = path.join(dir, 'xdt-maker-test-user.db');
+    fs.mkdirSync(drizzleDir);
+    fs.writeFileSync(
+      path.join(drizzleDir, '0000_init.sql'),
+      [
+        'CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);',
+        'CREATE TABLE worker_smoke (id INTEGER PRIMARY KEY, name TEXT NOT NULL);',
+      ].join('\n'),
+      'utf-8',
+    );
+    const seed = new Database(dbPath);
+    try {
+      seed.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY,
+          client_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          rewind_at INTEGER
+        );
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+          message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, content,
+          tokenize='porter unicode61'
+        );
+        CREATE TABLE messages_fts_rows (
+          fts_rowid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          message_id TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX messages_fts_rows_message_id_idx ON messages_fts_rows(message_id);
+      `);
+      seed.prepare("INSERT INTO migration_meta (key, value) VALUES ('schema_version', '0')").run();
+    } finally {
+      seed.close();
+    }
+
+    const workerDb = createWorkerDatabase(Database, {
+      userId: 'test-user',
+      dbPath,
+      drizzleDir,
+    }, makeEvents());
+    try {
+      const installed = workerDb.prepare(
+        "SELECT count(*) AS n FROM temp.sqlite_master WHERE type='trigger' AND name IN ('messages_fts_insert_cjk','messages_fts_update_cjk')",
+      ).get() as { n: number };
+      expect(installed.n).toBe(2);
+      workerDb.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('m1', 'c', 's', 'user', '登录报错了', 1)",
+      ).run();
+      expect(
+        (workerDb.prepare('SELECT content FROM messages_fts WHERE message_id = ?').get('m1') as { content: string }).content,
+      ).toBe('登 录 报 错 了');
+    } finally {
+      workerDb.close();
+    }
+  });
+
   it('keeps startup alive when sqlite-vec load fails', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-worker-vec-'));
     tempDirs.push(dir);

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { buildComposerRichInputHtml } from '@/session/composerRichInputHtml';
 import { parseComposerWebMessage } from '@/session/composerRichInputProtocol';
@@ -41,6 +42,300 @@ describe('mobile composer rich input HTML', () => {
     expect(html).toContain('setConfig(value)');
     expect(html).toContain("style.setProperty('--chip', config.theme.chip)");
     expect(html).not.toContain('https://');
+  });
+
+  it('initializes on the Android WebView 85 API baseline', () => {
+    const legacyHtml = buildComposerRichInputHtml({
+      accessibilityLabel: '输入消息',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello' }] },
+      editable: true,
+      maxHeight: 264,
+      platform: 'android',
+      placeholder: '发送消息',
+      theme: {
+        background: '#eee',
+        border: '#aaa',
+        chip: '#ddd',
+        focus: '#555',
+        placeholder: '#777',
+        text: '#111',
+        textSecondary: '#333',
+      },
+    });
+    const script = legacyHtml.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
+    expect(script).toBeTruthy();
+
+    const messages: unknown[] = [];
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    type StubNode = {
+      classList?: { contains(value: string): boolean };
+      className?: string;
+      contentEditable?: string;
+      dataset?: Record<string, string>;
+      readonly nextSibling: StubNode | null;
+      nodeType: number;
+      nodeValue?: string;
+      parentNode: StubParent | null;
+      remove(): void;
+      setAttribute?: () => void;
+      tabIndex?: number;
+      tagName?: string;
+      textContent?: string;
+    };
+    type StubParent = {
+      appendChild(node: StubNode | StubParent): StubNode | StubParent;
+      childNodes: StubNode[];
+      insertBefore(node: StubNode, reference: StubNode | null): StubNode;
+    };
+    type StubRange = {
+      collapse(): void;
+      deleteContents(): void;
+      insertNode(node: StubNode | StubParent): void;
+      selectNodeContents(): void;
+      setStart(node: StubNode, offset: number): void;
+      setStartAfter(node: StubNode): void;
+      startNode: StubNode | null;
+      startOffset: number;
+    };
+    const detach = (node: StubNode) => {
+      const parent = node.parentNode;
+      const index = parent?.childNodes.indexOf(node) ?? -1;
+      if (parent && index >= 0) parent.childNodes.splice(index, 1);
+      node.parentNode = null;
+    };
+    const insertBefore = (
+      parent: StubParent,
+      node: StubNode,
+      reference: StubNode | null,
+    ) => {
+      detach(node);
+      const index = reference ? parent.childNodes.indexOf(reference) : -1;
+      if (index >= 0) parent.childNodes.splice(index, 0, node);
+      else parent.childNodes.push(node);
+      node.parentNode = parent;
+      return node;
+    };
+    const createNode = (nodeType: number, nodeValue?: string): StubNode => {
+      const node: StubNode = {
+        get nextSibling() {
+          const parent = node.parentNode;
+          const index = parent?.childNodes.indexOf(node) ?? -1;
+          return parent && index >= 0 ? parent.childNodes[index + 1] || null : null;
+        },
+        nodeType,
+        nodeValue,
+        parentNode: null,
+        remove() {
+          detach(node);
+        },
+      };
+      return node;
+    };
+    const createFragment = (): StubParent => {
+      const fragment: StubParent = {
+        appendChild(node) {
+          if (!('nodeType' in node)) throw new Error('Nested fragments are not supported');
+          return insertBefore(fragment, node, null);
+        },
+        childNodes: [],
+        insertBefore(node, reference) {
+          return insertBefore(fragment, node, reference);
+        },
+      };
+      return fragment;
+    };
+    const children: StubNode[] = [];
+    const root = {
+      addEventListener(type: string, listener: (...args: unknown[]) => void) {
+        listeners.set(type, listener);
+      },
+      appendChild(node: StubNode | StubParent) {
+        if ('nodeType' in node) return insertBefore(root, node, null);
+        [...node.childNodes].forEach((child) => insertBefore(root, child, null));
+        return node;
+      },
+      childNodes: children,
+      contentEditable: 'false',
+      contains(node: unknown) {
+        return children.includes(node as StubNode);
+      },
+      dataset: {} as Record<string, string>,
+      get firstChild() {
+        return children[0] || null;
+      },
+      focus() {},
+      insertBefore(node: StubNode, reference: StubNode | null) {
+        return insertBefore(root, node, reference);
+      },
+      get lastChild() {
+        return children[children.length - 1] || null;
+      },
+      removeChild(node: StubNode) {
+        detach(node);
+        return node;
+      },
+      scrollHeight: 0,
+      setAttribute() {},
+      style: {
+        paddingBottom: '',
+        paddingTop: '',
+        setProperty() {},
+      },
+    };
+    const staleNode = createNode(1);
+    staleNode.parentNode = root;
+    children.push(staleNode);
+    let activeRange: StubRange | null = null;
+    const createRange = (): StubRange => ({
+      collapse() {},
+      deleteContents() {},
+      insertNode(node) {
+        const reference = this.startNode?.nextSibling || null;
+        if ('nodeType' in node) root.insertBefore(node, reference);
+        else [...node.childNodes].forEach((child) => root.insertBefore(child, reference));
+      },
+      selectNodeContents() {},
+      setStart(node, offset) {
+        this.startNode = node;
+        this.startOffset = offset;
+      },
+      setStartAfter(node) {
+        this.startNode = node;
+        this.startOffset = 1;
+      },
+      startNode: null,
+      startOffset: 0,
+    });
+    const selection = {
+      anchorNode: null as StubNode | null,
+      anchorOffset: 0,
+      addRange(range: StubRange) {
+        activeRange = range;
+        this.anchorNode = range.startNode;
+        this.anchorOffset = range.startOffset;
+      },
+      getRangeAt() {
+        if (!activeRange) throw new Error('No active range');
+        return activeRange;
+      },
+      get rangeCount() {
+        return activeRange ? 1 : 0;
+      },
+      removeAllRanges() {
+        activeRange = null;
+        this.anchorNode = null;
+        this.anchorOffset = 0;
+      },
+    };
+    const documentStub = {
+      createComment(value: string) {
+        return createNode(8, value);
+      },
+      createDocumentFragment() {
+        return createFragment();
+      },
+      createElement(tagName: string) {
+        const element = createNode(1);
+        element.className = '';
+        element.classList = {
+          contains(value: string) {
+            return element.className?.split(/\s+/).includes(value) === true;
+          },
+        };
+        element.contentEditable = '';
+        element.dataset = {};
+        element.setAttribute = () => {};
+        element.tabIndex = 0;
+        element.tagName = tagName.toUpperCase();
+        element.textContent = '';
+        return element;
+      },
+      createRange,
+      createTextNode(value: string) {
+        return createNode(3, value);
+      },
+      documentElement: {
+        style: {
+          setProperty() {},
+        },
+      },
+      getElementById() {
+        return root;
+      },
+    };
+    const windowStub: {
+      ReactNativeWebView: { postMessage(payload: string): void };
+      cindyComposer?: { commitPaste(requestId: string, nodes: unknown[]): void };
+      getSelection(): typeof selection;
+    } = {
+      ReactNativeWebView: {
+        postMessage(payload: string) {
+          messages.push(JSON.parse(payload));
+        },
+      },
+      getSelection() {
+        return selection;
+      },
+    };
+
+    runInNewContext(
+      `Array.prototype.flatMap = undefined;\n${script}`,
+      {
+        document: documentStub,
+        Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
+        ResizeObserver: class {
+          observe() {}
+        },
+        window: windowStub,
+      },
+    );
+    expect(children).toHaveLength(1);
+    expect(children[0]).toMatchObject({ nodeType: 3, nodeValue: 'hello' });
+    expect(messages).toContainEqual({ type: 'ready' });
+    children[0].nodeValue = 'hello world';
+    listeners.get('input')?.();
+    expect(messages).toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world' }] },
+    });
+
+    const pasteRange = createRange();
+    pasteRange.setStart(children[0], String(children[0].nodeValue).length);
+    selection.addRange(pasteRange);
+    listeners.get('paste')?.({
+      clipboardData: {
+        getData: () => ' pasted',
+        items: [],
+      },
+      preventDefault() {},
+    });
+    expect(messages).toContainEqual({
+      type: 'paste-text-request',
+      requestId: '1',
+      text: ' pasted',
+    });
+    windowStub.cindyComposer?.commitPaste('1', [
+      { type: 'text', text: ' pasted' },
+      { type: 'pasted-text', text: 'full pasted text', display: 'Pasted text' },
+    ]);
+    expect(children).toHaveLength(4);
+    expect(children[1]).toMatchObject({ nodeType: 3, nodeValue: ' pasted' });
+    expect(children[2]).toMatchObject({ className: 'atom', nodeType: 1 });
+    expect(children[3]).toMatchObject({ nodeType: 3, nodeValue: '\u200B' });
+    expect(selection.anchorNode).toBe(children[3]);
+    expect(selection.anchorOffset).toBe(1);
+    expect(messages).toContainEqual({
+      type: 'change',
+      document: {
+        version: 1,
+        nodes: [
+          { type: 'text', text: 'hello world pasted' },
+          { type: 'pasted-text', text: 'full pasted text', display: 'Pasted text' },
+        ],
+      },
+    });
+    expect(legacyHtml).not.toContain('replaceChildren');
+    expect(legacyHtml).not.toContain('.flatMap(');
   });
 
   it('uses the shared compact pill geometry for atoms and slash decorations', () => {

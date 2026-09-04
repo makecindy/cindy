@@ -2261,9 +2261,23 @@ export class CodexAgent extends BaseAgent {
       }
       return requestedEffectiveMemo.value;
     };
-    const hasCompatibleSubagentRoutingProfile = async (host: AppServerHost): Promise<boolean> => {
+    const hasCompatibleSubagentRoutingProfile = async (
+      host: AppServerHost,
+      hostCredentialMode?: AgentCredentialMode,
+    ): Promise<boolean> => {
+      if (this.deps.resolveCodexSubagentRoutingSignature) {
+        const signature = host.getSubagentRoutingSignature() ?? 'default';
+        const desired = await this.deps.resolveCodexSubagentRoutingSignature(
+          this.deps.mcpProviders ?? [],
+          {
+            credentialMode: hostCredentialMode,
+            ...(opts.hostPurpose ? { hostPurpose: opts.hostPurpose } : {}),
+          },
+        );
+        return signature === desired;
+      }
       const profile = host.getSubagentRoutingProfile();
-      if (profile === 'default') return true;
+      if (profile === 'default' || profile === 'smart') return true;
       const requested = await resolveRequestedEffective();
       return profile === 'oauth-default'
         ? requested === 'oauth-bearer'
@@ -2291,7 +2305,10 @@ export class CodexAgent extends BaseAgent {
         const currentMode = this.hostCredentialModes.get(key);
         const currentEffective = this.hostEffectiveCredentialModes.get(key);
         const subagentRoutingProfileCompatible = remoteHostId
-          || await hasCompatibleSubagentRoutingProfile(existing);
+          || await hasCompatibleSubagentRoutingProfile(
+            existing,
+            currentEffective ?? currentMode,
+          );
         if (
           remoteHostId
           || (subagentRoutingProfileCompatible
@@ -2349,7 +2366,10 @@ export class CodexAgent extends BaseAgent {
           const registeredRaw = this.hostCredentialModes.get(key) ?? inflight.credentialMode;
           const registeredEffective = this.hostEffectiveCredentialModes.get(key);
           if (
-            await hasCompatibleSubagentRoutingProfile(inflightHost)
+            await hasCompatibleSubagentRoutingProfile(
+              inflightHost,
+              registeredEffective ?? registeredRaw,
+            )
             && await canReuseRegistered(inflightHost, registeredRaw, registeredEffective)
           ) {
             return inflightHost;
@@ -2365,7 +2385,10 @@ export class CodexAgent extends BaseAgent {
           async (inflightHost) => {
             if (this.hosts.get(key) === inflightHost) {
               const subagentRoutingProfileCompatible =
-                await hasCompatibleSubagentRoutingProfile(inflightHost);
+                await hasCompatibleSubagentRoutingProfile(
+                  inflightHost,
+                  this.hostEffectiveCredentialModes.get(key) ?? inflight.credentialMode,
+                );
               await this.shutdownHostForCredentialModeChange(
                 key,
                 inflightHost,
@@ -2633,6 +2656,8 @@ export class CodexAgent extends BaseAgent {
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     let subagentModelFallback: string | undefined;
     let subagentRoute: CodexExtraSpawnConfig['subagentRoute'];
+    let smartSubagentRoutes: CodexExtraSpawnConfig['smartSubagentRoutes'];
+    let codexSubagentRoutingSignature: string | undefined;
     let codexOpenAiWebSocketsEnabled = true;
     let codexSubagentRoutingProfile: CodexExtraSpawnConfig['codexSubagentRoutingProfile'] = 'default';
     for (;;) {
@@ -2663,6 +2688,8 @@ export class CodexAgent extends BaseAgent {
       buildSessionMcpConfig = undefined;
       subagentModelFallback = undefined;
       subagentRoute = undefined;
+      smartSubagentRoutes = undefined;
+      codexSubagentRoutingSignature = undefined;
       codexOpenAiWebSocketsEnabled = true;
       codexSubagentRoutingProfile = 'default';
       if (this.deps.prepareCodexExtraSpawnConfig) {
@@ -2697,6 +2724,8 @@ export class CodexAgent extends BaseAgent {
           buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           subagentModelFallback = cfg.subagentModelFallback;
           subagentRoute = cfg.subagentRoute;
+          smartSubagentRoutes = cfg.smartSubagentRoutes;
+          codexSubagentRoutingSignature = cfg.codexSubagentRoutingSignature;
           codexOpenAiWebSocketsEnabled = cfg.codexOpenAiWebSocketsEnabled !== false;
           codexSubagentRoutingProfile = cfg.codexSubagentRoutingProfile ?? 'default';
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
@@ -2809,6 +2838,10 @@ export class CodexAgent extends BaseAgent {
       buildSessionMcpConfig,
       subagentModelFallback,
       subagentRoute,
+      smartSubagentRoutes,
+      codexSubagentRoutingSignature,
+      getSubagentIdentity: (childThreadId) =>
+        this.deps.getCodexSubagentIdentity?.({ childThreadId }),
       codexOpenAiWebSocketsEnabled,
       codexSubagentRoutingProfile,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
@@ -5130,6 +5163,18 @@ export class CodexAgent extends BaseAgent {
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
       if (update) emitSubagentCardUpdate(update, descendantUpdateLifecycle(childThreadId));
+      const observedIdentity = host.getObservedSubagentIdentity?.(childThreadId);
+      const observedParentThreadId = descendantParentThreadByThreadId.get(childThreadId);
+      if (observedIdentity && observedParentThreadId) {
+        const identityUpdate = subagentLiveCards.noteDescendantThread(
+          childThreadId,
+          observedParentThreadId,
+          observedIdentity.model,
+        );
+        if (identityUpdate) {
+          emitSubagentCardUpdate(identityUpdate, descendantUpdateLifecycle(childThreadId));
+        }
+      }
 
       if (method === 'turn/completed') {
         const status = record?.turn && typeof record.turn === 'object'
@@ -5157,18 +5202,37 @@ export class CodexAgent extends BaseAgent {
      *    status=completed —— 那只是 spawn 工具调用自己收口,子线程可能还在跑。不重新声明
      *    就会把运行中的子代理提前标成完成,还会抹掉先到的 failed/stopped(review)。
      */
-    const withFrozenSubagentSpawnIdentity = <T,>(item: T, rootTurnId: string): T => {
+    const withFrozenSubagentSpawnIdentity = <T,>(item: T, _rootTurnId: string): T => {
       const registration = readCodexSubagentSpawnRegistration(item);
       if (!registration || !item || typeof item !== 'object' || Array.isArray(item)) return item;
-      const inheritedModel = turnOriginByTurnId.get(rootTurnId)?.model ?? activeTurnModel;
-      const model = configuredSubagentRoute?.catalogModel
+      const observedIdentities = registration.childThreadIds
+        .map((childThreadId) => host.getObservedSubagentIdentity?.(childThreadId))
+        .filter((identity): identity is { model: string; reasoningEffort?: string } =>
+          Boolean(identity?.model));
+      const observedModels = new Set(observedIdentities.map((identity) => identity.model));
+      const observedModel = observedIdentities.length === registration.childThreadIds.length
+        && observedModels.size === 1
+        ? observedIdentities[0]?.model
+        : undefined;
+      const model = observedModel
+        ?? configuredSubagentRoute?.catalogModel
         ?? registration.model
-        ?? configuredSubagentModelFallback
-        ?? inheritedModel;
+        ?? configuredSubagentModelFallback;
       const current = item as Record<string, unknown>;
       const next: Record<string, unknown> = { ...current };
       if (model) next.model = model;
-      if (configuredSubagentRoute) {
+      const observedEfforts = new Set(
+        observedIdentities
+          .map((identity) => identity.reasoningEffort)
+          .filter((effort): effort is string => Boolean(effort)),
+      );
+      const observedEffort = observedIdentities.length === registration.childThreadIds.length
+        && observedEfforts.size === 1
+        ? observedEfforts.values().next().value
+        : undefined;
+      if (observedEffort) {
+        next.reasoningEffort = observedEffort;
+      } else if (configuredSubagentRoute) {
         if (configuredSubagentRoute.reasoningEffort) {
           next.reasoningEffort = configuredSubagentRoute.reasoningEffort;
         } else {
@@ -5608,16 +5672,17 @@ export class CodexAgent extends BaseAgent {
 
     let registeredDeveloperInstructions = '';
     const registerCodexDeveloperInstructions = (threadId: string, text: string): void => {
-      if (!text) return;
       registeredDeveloperInstructions = text;
       const register = this.deps.registerCodexSystemPromptForThread;
       if (!register) return;
       const subagentRoute = host.getSubagentRoute?.();
+      const smartSubagentRoutes = host.getSmartSubagentRoutes?.();
       register({
         sessionId: sid,
         threadId,
         text,
         ...(subagentRoute ? { subagentRoute } : {}),
+        ...(smartSubagentRoutes ? { smartSubagentRoutes } : {}),
       });
     };
     const refreshCodexAutoReviewerRoute = (targetThreadId: string): void => {
@@ -10426,10 +10491,12 @@ export class CodexAgent extends BaseAgent {
         const childThreadId = params.thread.id;
         const parentThreadId = params.thread.parentThreadId;
         if (!parentThreadId || childThreadId === parentThreadId) return;
-        const childModel =
+        const observedIdentity = host.getObservedSubagentIdentity?.(childThreadId);
+        const childModel = observedIdentity?.model ?? (
           typeof params.thread.model === 'string' && params.thread.model.length > 0
             ? params.thread.model
-            : undefined;
+            : undefined
+        );
         registerDescendantThreadRouting(childThreadId, parentThreadId);
         const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId, childModel);
         if (replayed) {
