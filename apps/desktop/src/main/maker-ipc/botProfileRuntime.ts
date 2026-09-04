@@ -124,7 +124,7 @@ export interface BotProfileRuntimeDeps {
    */
   listOwnSkills?: (input: { botId: string }) => Promise<{
     pluginRoot: string;
-    skills: { name: string; description: string; path: string }[];
+    skills: { name: string; description: string; path: string; filePath?: string }[];
   }>;
   readSkillSource?: (input: {
     path: string;
@@ -695,7 +695,7 @@ export async function hydrateBotProfileRuntime(
     伙伴在任务里刚学会一个技能,紧接着要能续跑同一个任务;把自己写的文件也
     冻上,等于「一学会就再也 resume 不了」。
   */
-  let ownSkills: { name: string; description: string; path: string }[] = [];
+  let ownSkills: { name: string; description: string; path: string; filePath?: string }[] = [];
   let ownSkillPluginRoot: string | null = null;
   // SSH remote 会话的 harness 跑在远端文件系统上,本机 userData 里的技能目录
   // 在那边不存在 —— 与其挂一串打不开的路径,不如这类会话直接不挂。
@@ -891,6 +891,7 @@ export async function hydrateBotProfileRuntime(
               name: item.name,
               ...(item.description ? { description: item.description } : {}),
               path: item.path,
+              ...(item.filePath ? { filePath: item.filePath } : {}),
             })),
           }
         : {}),

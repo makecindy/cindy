@@ -66,6 +66,23 @@ describe('Bot Skill config', () => {
       ],
     });
   });
+
+  it('uses the SKILL.md file path for a Bot-owned Skill when provided', () => {
+    expect(buildCodexBotSkillConfigOverrides({
+      mode: 'allowlist',
+      configured: [],
+      catalog: [],
+      ownSkills: [{
+        name: 'weekly-report',
+        path: '/bots/a/skills/weekly-report',
+        filePath: '/bots/a/skills/weekly-report/SKILL.md',
+      }],
+    })).toEqual({
+      'skills.config': [
+        { path: '/bots/a/skills/weekly-report/SKILL.md', enabled: true },
+      ],
+    });
+  });
 });
 
 describe('Bot MCP config', () => {

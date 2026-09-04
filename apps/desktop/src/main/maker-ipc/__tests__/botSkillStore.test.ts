@@ -57,6 +57,7 @@ describe('normalizeBotSkillSlug', () => {
 describe('SKILL.md frontmatter', () => {
   it('round-trips name / description / updatedAt / body', () => {
     const source = renderBotSkillFile({
+      slug: 'quoted-name',
       name: 'a "quoted" name',
       description: 'line one\nline two',
       updatedAt: '2026-08-19T00:00:00.000Z',
@@ -68,6 +69,36 @@ describe('SKILL.md frontmatter', () => {
     expect(parsed.description).toBe('line one line two');
     expect(parsed.updatedAt).toBe('2026-08-19T00:00:00.000Z');
     expect(parsed.body).toBe('do the thing');
+    expect(source).toContain('name: "quoted-name"');
+    expect(source).toContain('metadata:');
+    expect(source).not.toContain('\nupdatedAt:');
+  });
+
+  it('migrates Cindy\'s legacy top-level metadata without changing the body', async () => {
+    const skillDir = path.join(botSkillsDir(userDataDir, 'bot-1'), 'weekly-report');
+    await fs.mkdir(skillDir, { recursive: true });
+    const filePath = path.join(skillDir, 'SKILL.md');
+    await fs.writeFile(
+      filePath,
+      [
+        '---',
+        'name: "周报"',
+        'description: "整理本周进展时使用。"',
+        'updatedAt: "2026-08-19T00:00:00.000Z"',
+        '---',
+        '',
+        '# 用户改过的正文',
+        '',
+      ].join('\n'),
+    );
+
+    const record = await readBotSkill(userDataDir, 'bot-1', 'weekly-report');
+
+    expect(record).toMatchObject({ name: '周报', body: '# 用户改过的正文' });
+    const migrated = await fs.readFile(filePath, 'utf8');
+    expect(migrated).toContain('name: "weekly-report"');
+    expect(migrated).toContain('displayName: "周报"');
+    expect(migrated).not.toContain('\nupdatedAt:');
   });
 
   it('still yields a body for a hand-written file without frontmatter', () => {

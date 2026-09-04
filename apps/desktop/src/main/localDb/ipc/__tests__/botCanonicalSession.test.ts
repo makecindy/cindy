@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
 
 import {
   botDelegations,
@@ -462,6 +463,44 @@ describe('Bot canonical Session lifecycle', () => {
     });
     expect(h.seedTemplateSkills).toHaveBeenNthCalledWith(1, expect.any(String), 'bot-dash', 'dash');
     expect(h.seedTemplateSkills).toHaveBeenNthCalledWith(2, expect.any(String), 'bot-dash', 'dash');
+  });
+
+  it('recovers Skills for an older built-in partner without a stored template id', async () => {
+    await invoke('local-db:bots:create', {
+      id: 'bot-legacy-cindy',
+      name: 'Cindy',
+      identitySource: BOT_TEMPLATE_PRESET_IDENTITIES.cindy,
+      capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
+    });
+    expect(h.seedTemplateSkills).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'bot-legacy-cindy',
+      'cindy',
+    );
+
+    await invoke('local-db:bots:list', {});
+
+    expect(h.seedTemplateSkills).toHaveBeenCalledWith(
+      expect.any(String),
+      'bot-legacy-cindy',
+      'cindy',
+    );
+  });
+
+  it('does not infer a template after the partner identity was customized', async () => {
+    await invoke('local-db:bots:create', {
+      id: 'bot-customized-cindy',
+      name: 'Cindy',
+      identitySource: `${BOT_TEMPLATE_PRESET_IDENTITIES.cindy}\n\n# 我的补充`,
+    });
+
+    await invoke('local-db:bots:list', {});
+
+    expect(h.seedTemplateSkills).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'bot-customized-cindy',
+      expect.anything(),
+    );
   });
 
   it('refreshes an existing runtime after a delayed preset Skill recovery', async () => {
@@ -1171,6 +1210,7 @@ it('refreshes canonical Skill resources in place when their fingerprint changes'
           name: 'weekly-report',
           description: 'How I put the weekly report together',
           path: `/userdata/bot-skills/${botId}/skills/weekly-report`,
+          filePath: `/userdata/bot-skills/${botId}/skills/weekly-report/SKILL.md`,
         }],
       }),
     }, { persistSnapshot: false });
@@ -1180,6 +1220,7 @@ it('refreshes canonical Skill resources in place when their fingerprint changes'
         name: 'weekly-report',
         description: 'How I put the weekly report together',
         path: '/userdata/bot-skills/bot-1/skills/weekly-report',
+        filePath: '/userdata/bot-skills/bot-1/skills/weekly-report/SKILL.md',
       },
     ]);
     // Claude Code 只会开关它自己发现到的 Skill,所以还要给它一个本地 plugin 根。

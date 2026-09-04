@@ -34,7 +34,7 @@ export function buildCodexBotSkillConfigOverrides(
   // plugin-root mount equivalent, so project them as explicit per-thread Skill
   // paths and let them win any accidental same-path ambient entry.
   for (const item of policy.ownSkills ?? []) {
-    const skillPath = item.path?.trim();
+    const skillPath = item.filePath?.trim() || item.path?.trim();
     if (!skillPath) continue;
     byPath.set(skillPath, { path: skillPath, enabled: true });
   }

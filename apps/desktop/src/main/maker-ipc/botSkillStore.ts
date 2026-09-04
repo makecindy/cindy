@@ -171,6 +171,7 @@ function unescapeFrontmatterValue(raw: string): string {
 }
 
 export function renderBotSkillFile(input: {
+  slug: string;
   name: string;
   description: string;
   updatedAt: string;
@@ -178,9 +179,11 @@ export function renderBotSkillFile(input: {
 }): string {
   const frontmatter = [
     '---',
-    `name: ${escapeFrontmatterValue(input.name)}`,
+    `name: ${escapeFrontmatterValue(input.slug)}`,
     `description: ${escapeFrontmatterValue(input.description)}`,
-    `updatedAt: ${escapeFrontmatterValue(input.updatedAt)}`,
+    'metadata:',
+    `  displayName: ${escapeFrontmatterValue(input.name)}`,
+    `  updatedAt: ${escapeFrontmatterValue(input.updatedAt)}`,
     '---',
   ].join('\n');
   return `${frontmatter}\n\n${input.body.trim()}\n`;
@@ -203,11 +206,42 @@ export function parseBotSkillFile(source: string): {
     fields[line.slice(0, separator).trim()] = unescapeFrontmatterValue(line.slice(separator + 1));
   }
   return {
-    name: fields.name ?? '',
+    name: fields.displayName ?? fields.name ?? '',
     description: fields.description ?? '',
     updatedAt: fields.updatedAt ?? '',
     body: normalized.slice(match[0].length).trim(),
   };
+}
+
+/**
+ * 早期 Cindy 文件把展示名与 updatedAt 都写成顶层字段，不符合通用 Skill
+ * frontmatter。只迁移这一个可精确识别的三字段旧格式，正文与用户编辑全部保留；
+ * 含有任何其它字段的手写 Skill 不动。
+ */
+async function readCompatibleBotSkillSource(filePath: string, slug: string): Promise<string> {
+  const source = await fs.readFile(filePath, 'utf8');
+  const normalized = source.replace(/\r\n/g, '\n');
+  const match = /^---\n([\s\S]*?)\n---\n?/.exec(normalized);
+  if (!match) return source;
+  const lines = match[1].split('\n');
+  const keys = lines.map((line) => line.slice(0, line.indexOf(':')).trim());
+  if (
+    lines.some((line) => /^\s/.test(line) || line.indexOf(':') <= 0) ||
+    keys.length !== 3 ||
+    !['name', 'description', 'updatedAt'].every((key) => keys.includes(key))
+  ) {
+    return source;
+  }
+  const parsed = parseBotSkillFile(source);
+  const migrated = renderBotSkillFile({
+    slug,
+    name: parsed.name || slug,
+    description: parsed.description,
+    updatedAt: parsed.updatedAt,
+    body: parsed.body,
+  });
+  await fs.writeFile(filePath, migrated, 'utf8');
+  return migrated;
 }
 
 /**
@@ -278,7 +312,7 @@ export async function listBotSkills(
     if (!filePath) continue;
     let parsed: ReturnType<typeof parseBotSkillFile>;
     try {
-      parsed = parseBotSkillFile(await fs.readFile(filePath, 'utf8'));
+      parsed = parseBotSkillFile(await readCompatibleBotSkillSource(filePath, slug));
     } catch {
       continue;
     }
@@ -303,7 +337,7 @@ export async function readBotSkill(
   const skillDir = resolveSkillDir(userDataDir, botId, slug);
   const filePath = await readSkillFilePath(skillDir);
   if (!filePath) return null;
-  const parsed = parseBotSkillFile(await fs.readFile(filePath, 'utf8'));
+  const parsed = parseBotSkillFile(await readCompatibleBotSkillSource(filePath, slug));
   return {
     slug,
     name: parsed.name || slug,
@@ -439,7 +473,11 @@ export async function saveBotSkill(
   const filePath = path.join(skillDir, 'SKILL.md');
   // 只写 SKILL.md,不去删同目录的 skill.md:macOS / Windows 的文件系统大小写不敏感,
   // 那条「清理」会把刚写好的这份自己删掉。读取一侧本来就优先 SKILL.md。
-  await fs.writeFile(filePath, renderBotSkillFile({ name, description, updatedAt, body }), 'utf8');
+  await fs.writeFile(
+    filePath,
+    renderBotSkillFile({ slug, name, description, updatedAt, body }),
+    'utf8',
+  );
   return {
     record: { slug, name, description, updatedAt, body, dirPath: skillDir, filePath },
     created,

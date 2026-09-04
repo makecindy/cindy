@@ -269,7 +269,7 @@ export async function collectBotOwnSkillMounts(
   deps: BotSkillServiceDeps = {},
 ): Promise<{
   pluginRoot: string;
-  skills: { name: string; description: string; path: string }[];
+  skills: { name: string; description: string; path: string; filePath: string }[];
 }> {
   const boundary = captureOwnerBoundary(deps);
   const userDataDir = await skillHomeOf(deps, botId, boundary);
@@ -281,6 +281,7 @@ export async function collectBotOwnSkillMounts(
       name: item.name,
       description: item.description,
       path: item.dirPath,
+      filePath: item.filePath,
     })),
   };
 }

@@ -70,7 +70,10 @@ import { MAKER_PUSH } from '../../maker-ipc/channels.js';
 import { writeBlob } from '../../cindy-media/blobStore.js';
 import { recordBlob } from '../../cindy-media/ledger.js';
 import { validateBotAvatarBuffer } from './botAvatarSelection.js';
-import { isBotTemplatePresetId } from '../../../shared/botTemplatePreset.js';
+import {
+  inferBotTemplatePresetId,
+  isBotTemplatePresetId,
+} from '../../../shared/botTemplatePreset.js';
 import { seedBotTemplateSkills } from '../../maker-ipc/botTemplateSkillSeed.js';
 
 const log = createLogger('bots');
@@ -753,14 +756,22 @@ async function recoverBotTemplateSkills(botId: string): Promise<void> {
   const db = getDbClient().drizzle;
   try {
     const [profile] = await db
-      .select({ currentVersion: botProfiles.currentVersion })
+      .select({ currentVersion: botProfiles.currentVersion, status: botProfiles.status })
       .from(botProfiles)
       .where(eq(botProfiles.id, botId))
       .limit(1);
-    if (!profile || isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey)
+    if (
+      !profile ||
+      profile.status === 'archived' ||
+      isAppSessionBoundaryPending() ||
+      activeOwnerScopeKey() !== ownerScopeKey
+    )
       return;
     const [version] = await db
-      .select({ capabilitiesJson: botProfileVersions.capabilitiesJson })
+      .select({
+        capabilitiesJson: botProfileVersions.capabilitiesJson,
+        identitySource: botProfileVersions.identitySource,
+      })
       .from(botProfileVersions)
       .where(
         and(
@@ -770,8 +781,11 @@ async function recoverBotTemplateSkills(botId: string): Promise<void> {
       )
       .limit(1);
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return;
-    const templateId = parseJson(version?.capabilitiesJson ?? '{}').templateId;
-    if (!isBotTemplatePresetId(templateId)) return;
+    const storedTemplateId = parseJson(version?.capabilitiesJson ?? '{}').templateId;
+    const templateId = isBotTemplatePresetId(storedTemplateId)
+      ? storedTemplateId
+      : inferBotTemplatePresetId(version?.identitySource ?? '');
+    if (!templateId) return;
     const seeded = await seedBotTemplateSkills(userDataDir, botId, templateId);
     if (!seeded.completedNow) return;
     const [canonical] = await db
@@ -791,6 +805,23 @@ async function recoverBotTemplateSkills(botId: string): Promise<void> {
   } catch (cause) {
     log.warn('recover bot template skills failed', {
       botId,
+      error: cause instanceof Error ? cause.name : typeof cause,
+    });
+  }
+}
+
+export async function recoverActiveBotTemplateSkills(): Promise<void> {
+  if (isAppSessionBoundaryPending()) return;
+  const client = tryGetDbClient();
+  if (!client) return;
+  try {
+    const profiles = await client.drizzle
+      .select({ id: botProfiles.id })
+      .from(botProfiles)
+      .where(ne(botProfiles.status, 'archived'));
+    await Promise.all(profiles.map(({ id }) => recoverBotTemplateSkills(id)));
+  } catch (cause) {
+    log.warn('recover active bot template skills failed', {
       error: cause instanceof Error ? cause.name : typeof cause,
     });
   }
@@ -914,9 +945,18 @@ export function registerBotIpc(): void {
     // a caller that has none (device-link, first boot) simply gets zeros.
     const lastReadAtByBotId = remote ? new Map<string, number>() : readLastReadAtMap(raw);
     const profiles = await db
-      .select({ id: botProfiles.id })
+      .select({ id: botProfiles.id, status: botProfiles.status })
       .from(botProfiles)
       .orderBy(desc(botProfiles.updatedAt));
+    // 旧版创建的内置伙伴没有 templateId。打开伙伴列表时按未修改的内置身份
+    // 精确识别并补装能力，让升级后无需删除重建；远端读取不触碰本机文件。
+    if (!remote) {
+      await Promise.all(
+        profiles
+          .filter(({ status }) => status !== 'archived')
+          .map(({ id }) => recoverBotTemplateSkills(id)),
+      );
+    }
     return Promise.all(
       profiles.map(({ id }) =>
         remote
@@ -931,6 +971,7 @@ export function registerBotIpc(): void {
     if (!remote) assertTrustedAppRendererEvent(event);
     const db = getDbClient().drizzle;
     const botId = requireString(rawId, 'botId');
+    if (!remote) await recoverBotTemplateSkills(botId);
     return remote ? readRemoteBotProfile(db, botId) : readProfile(db, botId);
   });
 

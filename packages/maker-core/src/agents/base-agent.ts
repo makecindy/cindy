@@ -1433,6 +1433,8 @@ export interface BotRuntimeOwnSkillEntry {
   description?: string;
   /** Absolute path to the Skill directory (the folder holding SKILL.md). */
   path: string;
+  /** Absolute path to SKILL.md for harnesses whose config expects the file. */
+  filePath?: string;
 }
 
 export interface BotRuntimeSkillPolicy {
