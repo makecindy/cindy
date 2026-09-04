@@ -153,6 +153,18 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('foo\nbar');
   });
 
+  it('removes normal-layout segment breaks between CJK characters', async () => {
+    const page = document.createElement('main');
+    page.style.whiteSpace = 'normal';
+    page.textContent = '你\n好';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: '你好' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('你\n好');
+  });
+
   it('walks matches with Enter, Shift+Enter, and the navigation buttons', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo foo foo';
@@ -294,6 +306,24 @@ describe('FindInPageBar', () => {
     page.textContent = 'foo';
     fireEvent.click(nextButton);
     expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('excludes content hidden by zero opacity', async () => {
+    const page = document.createElement('main');
+    const visible = document.createElement('span');
+    visible.textContent = 'foo';
+    const transparent = document.createElement('span');
+    transparent.textContent = 'foo';
+    transparent.style.opacity = '0';
+    page.append(visible, transparent);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    transparent.style.opacity = '';
+    fireEvent(window, new Event('resize'));
+    expect(screen.getByText('1/2')).toBeTruthy();
   });
 
   it('does not refresh responsive visibility while composing with IME', async () => {

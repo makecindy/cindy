@@ -63,12 +63,19 @@ function findMatchOffsets(
     if (collapseWhitespace && /\s/.test(value[index])) {
       const runStart = index;
       while (index + 1 < value.length && /\s/.test(value[index + 1])) index += 1;
+      const runEnd = index + 1;
+      const hasSegmentBreak = /[\r\n\f]/.test(value.slice(runStart, runEnd));
+      const previousCharacter = value[runStart - 1] ?? '';
+      const nextCharacter = value[runEnd] ?? '';
+      if (hasSegmentBreak && isCjkCharacter(previousCharacter) && isCjkCharacter(nextCharacter)) {
+        continue;
+      }
       if (searchableValue.at(-1) !== ' ') {
         searchableValue += ' ';
         sourceStarts.push(runStart);
-        sourceEnds.push(index + 1);
+        sourceEnds.push(runEnd);
       } else {
-        sourceEnds[sourceEnds.length - 1] = index + 1;
+        sourceEnds[sourceEnds.length - 1] = runEnd;
       }
       continue;
     }
@@ -96,6 +103,20 @@ function findMatchOffsets(
     }
   }
   return offsets;
+}
+
+function isCjkCharacter(value: string): boolean {
+  if (!value) return false;
+  const codePoint = value.codePointAt(0);
+  if (codePoint === undefined) return false;
+  return (
+    (codePoint >= 0x2e80 && codePoint <= 0x2fff) ||
+    (codePoint >= 0x3000 && codePoint <= 0x30ff) ||
+    (codePoint >= 0x3400 && codePoint <= 0x9fff) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0x20000 && codePoint <= 0x2ffff)
+  );
 }
 
 function isExcludedTextNode(
@@ -135,7 +156,8 @@ function isExcludedTextNode(
       const hiddenByStyle =
         style.display === 'none' ||
         style.visibility === 'hidden' ||
-        style.visibility === 'collapse';
+        style.visibility === 'collapse' ||
+        style.opacity === '0';
       visibilityCache.set(element, hiddenByStyle);
       if (hiddenByStyle) return true;
     }
