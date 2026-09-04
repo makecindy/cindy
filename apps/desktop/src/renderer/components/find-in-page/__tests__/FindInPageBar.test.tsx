@@ -653,6 +653,54 @@ describe('FindInPageBar', () => {
     }
   });
 
+  it('keeps ranges outside the root viewport eligible for navigation', async () => {
+    const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+    const elementRectDescriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'getBoundingClientRect',
+    );
+    const root = document.createElement('div');
+    root.id = 'root';
+    root.style.overflow = 'hidden';
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    root.append(page);
+    document.body.append(root);
+
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value() {
+        return [{ top: 20, bottom: 30, left: 0, right: 100 }];
+      },
+    });
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value(this: Element) {
+        if (this === root) return { top: 0, bottom: 10, left: 0, right: 100 };
+        return { top: 0, bottom: 100, left: 0, right: 100 };
+      },
+    });
+
+    try {
+      const input = await openFindBar();
+      fireEvent.change(input, { target: { value: 'foo' } });
+
+      expect(screen.getByText('1/1')).toBeTruthy();
+      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+    } finally {
+      if (rangeRectDescriptor) {
+        Object.defineProperty(Range.prototype, 'getClientRects', rangeRectDescriptor);
+      } else {
+        delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
+      }
+      if (elementRectDescriptor) {
+        Object.defineProperty(Element.prototype, 'getBoundingClientRect', elementRectDescriptor);
+      } else {
+        delete (Element.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+      }
+    }
+  });
+
   it('cancels a delayed scroll when the bar closes', async () => {
     let nextFrame = 1;
     const pendingFrames = new Map<number, FrameRequestCallback>();

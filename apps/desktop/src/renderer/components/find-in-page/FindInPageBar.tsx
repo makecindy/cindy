@@ -197,12 +197,19 @@ function isOverflowClipping(style: CSSStyleDeclaration): boolean {
   );
 }
 
+function isViewportShell(element: HTMLElement): boolean {
+  return element === document.documentElement || element === document.body || element.id === 'root';
+}
+
 function isRangeVisibleWithinAncestors(range: Range, element: HTMLElement | null): boolean {
   const clippingAncestors: HTMLElement[] = [];
   let ancestor = element;
   while (ancestor) {
     const style = window.getComputedStyle(ancestor);
-    if (isOverflowClipping(style) || getLineClamp(style) !== null) {
+    if (
+      !isViewportShell(ancestor) &&
+      (isOverflowClipping(style) || getLineClamp(style) !== null)
+    ) {
       clippingAncestors.push(ancestor);
     }
     ancestor = ancestor.parentElement;
