@@ -13,39 +13,103 @@ const SEARCH_MATCH_FOREGROUND = 'hsl(var(--search-match-fg))';
 
 interface TextMatch {
   range: Range;
+  ownerDocument: Document;
 }
 
-function getHighlightRegistry(): HighlightRegistry | null {
-  if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined') {
-    return null;
+interface HighlightContext {
+  registry: HighlightRegistry;
+  Highlight: typeof Highlight;
+}
+
+function getHighlightContext(ownerDocument: Document): HighlightContext | null {
+  const ownerWindow = ownerDocument.defaultView;
+  const css = ownerWindow?.CSS ?? (typeof CSS === 'undefined' ? null : CSS);
+  const highlightConstructor =
+    (ownerWindow as (Window & { Highlight?: typeof Highlight }) | null)?.Highlight ??
+    (typeof Highlight === 'undefined' ? null : Highlight);
+  if (!css?.highlights || !highlightConstructor) return null;
+  return { registry: css.highlights, Highlight: highlightConstructor };
+}
+
+function ensureFindHighlightStyles(ownerDocument: Document) {
+  if (
+    ownerDocument === document ||
+    ownerDocument.querySelector('style[data-cindy-find-highlights]')
+  ) {
+    return;
   }
-  return CSS.highlights;
+  const style = ownerDocument.createElement('style');
+  style.setAttribute('data-cindy-find-highlights', 'true');
+  style.textContent = `
+    ::highlight(${MATCH_HIGHLIGHT_NAME}) {
+      background-color: hsl(var(--search-match-bg, 53 100% 89%));
+      color: hsl(var(--search-match-fg, 0 0% 15%));
+    }
+    ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
+      background-color: hsl(var(--search-match-bg, 53 100% 89%));
+      color: hsl(var(--search-match-fg, 0 0% 15%));
+      text-decoration: underline;
+      text-decoration-color: hsl(var(--search-match-fg, 0 0% 15%));
+      text-decoration-thickness: 2px;
+    }
+    @media (prefers-color-scheme: dark) {
+      ::highlight(${MATCH_HIGHLIGHT_NAME}),
+      ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
+        background-color: hsl(var(--search-match-bg, 40 33% 16%));
+        color: hsl(var(--search-match-fg, 0 0% 90%));
+      }
+      ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
+        text-decoration-color: hsl(var(--search-match-fg, 0 0% 90%));
+      }
+    }
+  `;
+  (ownerDocument.head ?? ownerDocument.documentElement)?.append(style);
 }
 
-function clearFindHighlights() {
-  const registry = getHighlightRegistry();
-  if (!registry) return;
-  registry.delete(MATCH_HIGHLIGHT_NAME);
-  registry.delete(ACTIVE_HIGHLIGHT_NAME);
-}
-
-function applyFindHighlights(ranges: readonly Range[], activeIndex: number) {
-  const registry = getHighlightRegistry();
-  if (!registry) return;
-
-  registry.delete(MATCH_HIGHLIGHT_NAME);
-  registry.delete(ACTIVE_HIGHLIGHT_NAME);
-  if (ranges.length === 0) return;
-
-  const matchHighlight = new Highlight();
-  for (const range of ranges) matchHighlight.add(range);
-  registry.set(MATCH_HIGHLIGHT_NAME, matchHighlight);
-  const activeRange = ranges[activeIndex];
-  if (activeRange) {
-    const activeHighlight = new Highlight();
-    activeHighlight.add(activeRange);
-    registry.set(ACTIVE_HIGHLIGHT_NAME, activeHighlight);
+function clearFindHighlights(ownerDocuments: readonly Document[] = [document]) {
+  for (const ownerDocument of new Set(ownerDocuments)) {
+    const context = getHighlightContext(ownerDocument);
+    if (context) {
+      context.registry.delete(MATCH_HIGHLIGHT_NAME);
+      context.registry.delete(ACTIVE_HIGHLIGHT_NAME);
+    }
+    if (ownerDocument !== document) {
+      ownerDocument.querySelector('style[data-cindy-find-highlights]')?.remove();
+    }
   }
+}
+
+function applyFindHighlights(
+  matches: readonly TextMatch[],
+  activeIndex: number,
+  previousDocuments: readonly Document[] = [],
+) {
+  const documents = new Set([...previousDocuments, ...matches.map((match) => match.ownerDocument)]);
+  clearFindHighlights([...documents]);
+  const matchesByDocument = new Map<Document, Range[]>();
+  for (const match of matches) {
+    const ranges = matchesByDocument.get(match.ownerDocument) ?? [];
+    ranges.push(match.range);
+    matchesByDocument.set(match.ownerDocument, ranges);
+  }
+
+  for (const [ownerDocument, ranges] of matchesByDocument) {
+    const context = getHighlightContext(ownerDocument);
+    if (!context || ranges.length === 0) continue;
+    ensureFindHighlightStyles(ownerDocument);
+    const matchHighlight = new context.Highlight();
+    for (const range of ranges) matchHighlight.add(range);
+    context.registry.set(MATCH_HIGHLIGHT_NAME, matchHighlight);
+  }
+
+  const activeMatch = matches[activeIndex];
+  if (!activeMatch) return;
+  const context = getHighlightContext(activeMatch.ownerDocument);
+  if (!context) return;
+  ensureFindHighlightStyles(activeMatch.ownerDocument);
+  const activeHighlight = new context.Highlight();
+  activeHighlight.add(activeMatch.range);
+  context.registry.set(ACTIVE_HIGHLIGHT_NAME, activeHighlight);
 }
 
 function findMatchOffsets(
@@ -100,11 +164,125 @@ function findMatchOffsets(
   return offsets;
 }
 
+// JavaScript has no native Unicode full-case-folding API. These are the
+// default full-fold mappings that are not preserved by String#toLowerCase;
+// the remaining one-to-one mappings are handled by toLowerCase itself.
+const UNICODE_CASE_FOLD_OVERRIDES = new Map<number, string>([
+  [0x00b5, '\u03bc'],
+  [0x00df, 'ss'],
+  [0x0149, '\u02bcn'],
+  [0x017f, 's'],
+  [0x01f0, 'j\u030c'],
+  [0x0345, '\u03b9'],
+  [0x0390, '\u03b9\u0308\u0301'],
+  [0x03b0, '\u03c5\u0308\u0301'],
+  [0x03c2, '\u03c3'],
+  [0x03d0, '\u03b2'],
+  [0x03d1, '\u03b8'],
+  [0x03d5, '\u03c6'],
+  [0x03d6, '\u03c0'],
+  [0x03f0, '\u03ba'],
+  [0x03f1, '\u03c1'],
+  [0x03f5, '\u03b5'],
+  [0x0587, '\u0565\u0582'],
+  [0x1c80, '\u0432'],
+  [0x1c81, '\u0434'],
+  [0x1c82, '\u043e'],
+  [0x1c83, '\u0441'],
+  [0x1c84, '\u0442'],
+  [0x1c85, '\u0442'],
+  [0x1c86, '\u044a'],
+  [0x1c87, '\u0463'],
+  [0x1c88, '\ua64b'],
+  [0x1e96, 'h\u0331'],
+  [0x1e97, 't\u0308'],
+  [0x1e98, 'w\u030a'],
+  [0x1e99, 'y\u030a'],
+  [0x1e9a, 'a\u02be'],
+  [0x1e9b, '\u1e61'],
+  [0x1f50, '\u03c5\u0313'],
+  [0x1f52, '\u03c5\u0313\u0300'],
+  [0x1f54, '\u03c5\u0313\u0301'],
+  [0x1f56, '\u03c5\u0313\u0342'],
+  [0x1f80, '\u1f00\u03b9'],
+  [0x1f81, '\u1f01\u03b9'],
+  [0x1f82, '\u1f02\u03b9'],
+  [0x1f83, '\u1f03\u03b9'],
+  [0x1f84, '\u1f04\u03b9'],
+  [0x1f85, '\u1f05\u03b9'],
+  [0x1f86, '\u1f06\u03b9'],
+  [0x1f87, '\u1f07\u03b9'],
+  [0x1f90, '\u1f20\u03b9'],
+  [0x1f91, '\u1f21\u03b9'],
+  [0x1f92, '\u1f22\u03b9'],
+  [0x1f93, '\u1f23\u03b9'],
+  [0x1f94, '\u1f24\u03b9'],
+  [0x1f95, '\u1f25\u03b9'],
+  [0x1f96, '\u1f26\u03b9'],
+  [0x1f97, '\u1f27\u03b9'],
+  [0x1fa0, '\u1f60\u03b9'],
+  [0x1fa1, '\u1f61\u03b9'],
+  [0x1fa2, '\u1f62\u03b9'],
+  [0x1fa3, '\u1f63\u03b9'],
+  [0x1fa4, '\u1f64\u03b9'],
+  [0x1fa5, '\u1f65\u03b9'],
+  [0x1fa6, '\u1f66\u03b9'],
+  [0x1fa7, '\u1f67\u03b9'],
+  [0x1fb2, '\u1f70\u03b9'],
+  [0x1fb3, '\u03b1\u03b9'],
+  [0x1fb4, '\u03ac\u03b9'],
+  [0x1fb6, '\u03b1\u0342'],
+  [0x1fb7, '\u03b1\u0342\u03b9'],
+  [0x1fbe, '\u03b9'],
+  [0x1fc2, '\u1f74\u03b9'],
+  [0x1fc3, '\u03b7\u03b9'],
+  [0x1fc4, '\u03ae\u03b9'],
+  [0x1fc6, '\u03b7\u0342'],
+  [0x1fc7, '\u03b7\u0342\u03b9'],
+  [0x1fd2, '\u03b9\u0308\u0300'],
+  [0x1fd3, '\u03b9\u0308\u0301'],
+  [0x1fd6, '\u03b9\u0342'],
+  [0x1fd7, '\u03b9\u0308\u0342'],
+  [0x1fe2, '\u03c5\u0308\u0300'],
+  [0x1fe3, '\u03c5\u0308\u0301'],
+  [0x1fe4, '\u03c1\u0313'],
+  [0x1fe6, '\u03c5\u0342'],
+  [0x1fe7, '\u03c5\u0308\u0342'],
+  [0x1ff2, '\u1f7c\u03b9'],
+  [0x1ff3, '\u03c9\u03b9'],
+  [0x1ff4, '\u03ce\u03b9'],
+  [0x1ff6, '\u03c9\u0342'],
+  [0x1ff7, '\u03c9\u0342\u03b9'],
+  [0xfb00, 'ff'],
+  [0xfb01, 'fi'],
+  [0xfb02, 'fl'],
+  [0xfb03, 'ffi'],
+  [0xfb04, 'ffl'],
+  [0xfb05, 'st'],
+  [0xfb06, 'st'],
+  [0xfb13, '\u0574\u0576'],
+  [0xfb14, '\u0574\u0565'],
+  [0xfb15, '\u0574\u056b'],
+  [0xfb16, '\u057e\u0576'],
+  [0xfb17, '\u0574\u056d'],
+]);
+
 function unicodeCaseFold(value: string): string {
-  // JavaScript has no native Unicode case-folding API. Lower-casing followed
-  // by the canonical final-sigma mapping covers the context-sensitive Greek
-  // form while preserving the source string's UTF-16 offsets.
-  return value.toLowerCase().replace(/\u03c2/g, '\u03c3');
+  let folded = '';
+  for (const character of value) {
+    const lowerCharacter = character.toLowerCase();
+    const codePoint = lowerCharacter.codePointAt(0);
+    if (codePoint === undefined) continue;
+
+    if (codePoint >= 0xab70 && codePoint <= 0xabbf) {
+      folded += String.fromCodePoint(codePoint - 0x97d0);
+    } else if (codePoint >= 0x13f8 && codePoint <= 0x13fd) {
+      folded += String.fromCodePoint(codePoint - 8);
+    } else {
+      folded += UNICODE_CASE_FOLD_OVERRIDES.get(codePoint) ?? lowerCharacter;
+    }
+  }
+  return folded;
 }
 
 function foldSearchValue(
@@ -189,6 +367,7 @@ function getLineClamp(style: CSSStyleDeclaration): number | null {
 function getClampedAncestor(
   element: HTMLElement | null,
   clampCache: WeakMap<HTMLElement, HTMLElement | null>,
+  ownerWindow: Window,
 ): HTMLElement | null {
   const path: HTMLElement[] = [];
   let current = element;
@@ -199,7 +378,7 @@ function getClampedAncestor(
       break;
     }
     path.push(current);
-    if (getLineClamp(window.getComputedStyle(current)) !== null) {
+    if (getLineClamp(ownerWindow.getComputedStyle(current)) !== null) {
       clampedAncestor = current;
       break;
     }
@@ -246,6 +425,7 @@ function isExcludedTextNode(
   node: Text,
   excludedRoot: HTMLElement | null,
   visibilityCache: WeakMap<HTMLElement, boolean>,
+  ownerWindow: Window,
 ): boolean {
   let element = node.parentElement;
   while (element) {
@@ -275,7 +455,7 @@ function isExcludedTextNode(
     if (cachedHidden !== undefined) {
       if (cachedHidden) return true;
     } else {
-      const style = window.getComputedStyle(element);
+      const style = ownerWindow.getComputedStyle(element);
       const hiddenByStyle =
         style.display === 'none' ||
         style.visibility === 'hidden' ||
@@ -290,32 +470,80 @@ function isExcludedTextNode(
   return false;
 }
 
-function collectTextMatches(query: string, excludedRoot: HTMLElement | null): TextMatch[] {
-  if (!query) return [];
+function collectTextMatches(
+  query: string,
+  excludedRoot: HTMLElement | null,
+  ownerDocument: Document = document,
+  visitedDocuments = new Set<Document>(),
+): TextMatch[] {
+  if (!query || visitedDocuments.has(ownerDocument)) return [];
+  const ownerWindow = ownerDocument.defaultView;
+  if (!ownerWindow || !ownerDocument.body) return [];
+  visitedDocuments.add(ownerDocument);
 
   const matches: TextMatch[] = [];
   const visibilityCache = new WeakMap<HTMLElement, boolean>();
   const clampCache = new WeakMap<HTMLElement, HTMLElement | null>();
-  const showText = typeof NodeFilter === 'undefined' ? 4 : NodeFilter.SHOW_TEXT;
-  const walker = document.createTreeWalker(document.body, showText);
+  const walker = ownerDocument.createTreeWalker(ownerDocument.body, 4);
   let node = walker.nextNode();
   while (node) {
     const textNode = node as Text;
-    if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache)) {
+    if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache, ownerWindow)) {
       const whiteSpace = textNode.parentElement
-        ? window.getComputedStyle(textNode.parentElement).whiteSpace || 'normal'
+        ? ownerWindow.getComputedStyle(textNode.parentElement).whiteSpace || 'normal'
         : 'normal';
-      const clampedAncestor = getClampedAncestor(textNode.parentElement, clampCache);
+      const clampedAncestor = getClampedAncestor(textNode.parentElement, clampCache, ownerWindow);
       for (const [start, end] of findMatchOffsets(textNode.data, query, whiteSpace)) {
-        const range = document.createRange();
+        const range = ownerDocument.createRange();
         range.setStart(textNode, start);
         range.setEnd(textNode, end);
-        if (isRangeVisibleInClampedAncestor(range, clampedAncestor)) matches.push({ range });
+        if (isRangeVisibleInClampedAncestor(range, clampedAncestor)) {
+          matches.push({ range, ownerDocument });
+        }
       }
     }
     node = walker.nextNode();
   }
+
+  for (const iframe of Array.from(ownerDocument.querySelectorAll('iframe'))) {
+    if (isExcludedElement(iframe, excludedRoot, visibilityCache, ownerWindow)) continue;
+    let childDocument: Document | null = null;
+    try {
+      childDocument = iframe.contentDocument;
+    } catch {
+      // Cross-origin frames are intentionally outside the renderer search boundary.
+    }
+    if (childDocument) {
+      matches.push(...collectTextMatches(query, null, childDocument, visitedDocuments));
+    }
+  }
   return matches;
+}
+
+function isExcludedElement(
+  element: HTMLElement,
+  excludedRoot: HTMLElement | null,
+  visibilityCache: WeakMap<HTMLElement, boolean>,
+  ownerWindow: Window,
+): boolean {
+  if (element === excludedRoot || (excludedRoot?.contains(element) ?? false)) return true;
+  let current: HTMLElement | null = element;
+  while (current) {
+    if (current.hidden || current.getAttribute('aria-hidden') === 'true') return true;
+    const cachedHidden = visibilityCache.get(current);
+    if (cachedHidden !== undefined) return cachedHidden;
+    const style = ownerWindow.getComputedStyle(current);
+    const hiddenByStyle =
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      style.visibility === 'collapse' ||
+      style.opacity === '0' ||
+      isVisuallyClipped(style);
+    visibilityCache.set(current, hiddenByStyle);
+    if (hiddenByStyle) return true;
+    current = current.parentElement;
+  }
+  return false;
 }
 
 function isInsideRoot(node: Node, root: HTMLElement | null): boolean {
@@ -333,12 +561,14 @@ function getRangeRect(range: Range): DOMRect | null {
 }
 
 function scrollRangeIntoView(range: Range) {
+  const ownerWindow = range.startContainer.ownerDocument?.defaultView;
+  if (!ownerWindow) return;
   const element = range.startContainer.parentElement;
   if (!element) return;
 
   let ancestor: HTMLElement | null = element;
   while (ancestor) {
-    const style = window.getComputedStyle(ancestor);
+    const style = ownerWindow.getComputedStyle(ancestor);
     const canScrollY =
       /(auto|scroll|overlay|hidden)/.test(style.overflowY) &&
       ancestor.scrollHeight > ancestor.clientHeight;
@@ -367,17 +597,17 @@ function scrollRangeIntoView(range: Range) {
   }
 
   const rect = getRangeRect(range);
-  if (!rect || typeof window.scrollBy !== 'function') return;
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
+  if (!rect || typeof ownerWindow.scrollBy !== 'function') return;
+  const viewportHeight = ownerWindow.innerHeight;
+  const viewportWidth = ownerWindow.innerWidth;
   if (rect.top < 0 || rect.bottom > viewportHeight) {
-    window.scrollBy({
+    ownerWindow.scrollBy({
       top: rect.top < 0 ? rect.top : rect.bottom - viewportHeight,
       behavior: 'auto',
     });
   }
   if (rect.left < 0 || rect.right > viewportWidth) {
-    window.scrollBy({
+    ownerWindow.scrollBy({
       left: rect.left < 0 ? rect.left : rect.right - viewportWidth,
       behavior: 'auto',
     });
@@ -404,7 +634,8 @@ export function FindInPageBar() {
   const [active, setActive] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const rangesRef = useRef<Range[]>([]);
+  const rangesRef = useRef<TextMatch[]>([]);
+  const highlightDocumentsRef = useRef<Set<Document>>(new Set([document]));
   const activeRef = useRef(0);
   const pendingScrollFrameRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
@@ -415,7 +646,8 @@ export function FindInPageBar() {
     activeRef.current = 0;
     setMatches(0);
     setActive(0);
-    clearFindHighlights();
+    clearFindHighlights([...highlightDocumentsRef.current]);
+    highlightDocumentsRef.current = new Set([document]);
   }, []);
 
   const cancelPendingScroll = useCallback(() => {
@@ -436,7 +668,10 @@ export function FindInPageBar() {
       if (typeof requestAnimationFrame === 'function') {
         pendingScrollFrameRef.current = requestAnimationFrame(() => {
           pendingScrollFrameRef.current = null;
-          if (range.startContainer.isConnected && rangesRef.current[activeRef.current] === range) {
+          if (
+            range.startContainer.isConnected &&
+            rangesRef.current[activeRef.current]?.range === range
+          ) {
             scrollRangeIntoView(range);
           }
         });
@@ -447,7 +682,8 @@ export function FindInPageBar() {
 
   const applySearch = useCallback(
     (query: string, requestedActive = 0, shouldScroll = false) => {
-      const nextRanges = collectTextMatches(query, rootRef.current).map(({ range }) => range);
+      const nextRanges = collectTextMatches(query, rootRef.current);
+      const previousDocuments = [...highlightDocumentsRef.current];
       rangesRef.current = nextRanges;
       const nextActive = nextRanges.length
         ? ((requestedActive % nextRanges.length) + nextRanges.length) % nextRanges.length
@@ -455,8 +691,10 @@ export function FindInPageBar() {
       activeRef.current = nextActive;
       setMatches(nextRanges.length);
       setActive(nextActive);
-      applyFindHighlights(nextRanges, nextActive);
-      if (shouldScroll) scrollToMatch(nextRanges[nextActive]);
+      applyFindHighlights(nextRanges, nextActive, previousDocuments);
+      highlightDocumentsRef.current = new Set(nextRanges.map((match) => match.ownerDocument));
+      highlightDocumentsRef.current.add(document);
+      if (shouldScroll) scrollToMatch(nextRanges[nextActive]?.range);
     },
     [scrollToMatch],
   );
@@ -474,8 +712,8 @@ export function FindInPageBar() {
           : ranges.length - 1;
       activeRef.current = nextActive;
       setActive(nextActive);
-      applyFindHighlights(ranges, nextActive);
-      scrollToMatch(ranges[nextActive]);
+      applyFindHighlights(ranges, nextActive, [...highlightDocumentsRef.current]);
+      scrollToMatch(ranges[nextActive]?.range);
     },
     [applySearch, scrollToMatch, text],
   );
@@ -489,7 +727,7 @@ export function FindInPageBar() {
     clearSearchResults();
   }, [cancelPendingScroll, clearSearchResults]);
 
-  useEffect(() => () => clearFindHighlights(), []);
+  useEffect(() => () => clearFindHighlights([...highlightDocumentsRef.current]), []);
 
   useEffect(() => {
     if (!open || !text) return;
