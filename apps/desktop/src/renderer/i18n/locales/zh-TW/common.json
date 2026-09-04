@@ -9188,6 +9188,9 @@
     },
     "generatedFiles": {
       "title": "本條訊息生成的檔案",
+      "botTitle": "本次成果",
+      "relatedFiles": "相關檔案 {{count}}",
+      "openWebPreview": "開啟網頁預覽",
       "showMore": "顯示另外 {{count}} 個",
       "showLess": "收起",
       "artifactLabel": "成品",

@@ -3481,6 +3481,7 @@ export function MessageStream({
       historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
       turnChangeSets,
       workingDir,
+      botSessionId: simplifiedBotConversation ? sessionId : undefined,
     });
     return {
       items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCacheRef.current),
@@ -3495,6 +3496,8 @@ export function MessageStream({
     historyWindowHasIsland,
     turnChangeSets,
     workingDir,
+    simplifiedBotConversation,
+    sessionId,
   ]);
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
@@ -6219,6 +6222,7 @@ export function MessageStream({
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
                           turnSealed={item.turnSealed === true}
+                          botArtifacts={simplifiedBotConversation}
                         />
                       );
                     }

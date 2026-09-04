@@ -9189,6 +9189,9 @@
     },
     "generatedFiles": {
       "title": "이 메시지에서 생성된 파일",
+      "botTitle": "이번 결과물",
+      "relatedFiles": "관련 파일 {{count}}개",
+      "openWebPreview": "웹 미리보기 열기",
       "showMore": "{{count}}개 더 보기",
       "showLess": "간략히 보기",
       "artifactLabel": "산출물",

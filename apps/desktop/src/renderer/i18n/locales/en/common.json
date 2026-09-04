@@ -9195,6 +9195,9 @@
     },
     "generatedFiles": {
       "title": "Files created this message",
+      "botTitle": "Deliverables",
+      "relatedFiles": "{{count}} related files",
+      "openWebPreview": "Open web preview",
       "showMore": "Show {{count}} more",
       "showLess": "Show less",
       "artifactLabel": "Artifact",

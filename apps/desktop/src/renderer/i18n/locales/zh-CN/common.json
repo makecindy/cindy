@@ -9189,6 +9189,9 @@
     },
     "generatedFiles": {
       "title": "本条消息生成的文件",
+      "botTitle": "本次成果",
+      "relatedFiles": "相关文件 {{count}}",
+      "openWebPreview": "打开网页预览",
       "showMore": "显示另外 {{count}} 个",
       "showLess": "收起",
       "artifactLabel": "成品",

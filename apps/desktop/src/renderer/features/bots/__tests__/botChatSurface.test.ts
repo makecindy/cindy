@@ -126,6 +126,13 @@ describe('伙伴消息流收起内部工作过程', () => {
     expect(messageActionBar).toContain('simplifiedBotConversation ? null : costText || tokensText');
     expect(messageActionBar).toContain('simplifiedBotConversation || visible || menuOpen');
   });
+
+  it('伙伴身份同时接通专属成果采集与成果卡，普通任务不触发', () => {
+    expect(messageStream).toContain(
+      'botSessionId: simplifiedBotConversation ? sessionId : undefined',
+    );
+    expect(messageStream).toContain('botArtifacts={simplifiedBotConversation}');
+  });
 });
 
 /**

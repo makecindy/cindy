@@ -9189,6 +9189,9 @@
     },
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",
+      "botTitle": "今回の成果物",
+      "relatedFiles": "関連ファイル {{count}} 件",
+      "openWebPreview": "Webプレビューを開く",
       "showMore": "さらに {{count}} 件表示",
       "showLess": "折りたたむ",
       "artifactLabel": "成果物",
