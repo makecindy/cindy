@@ -244,6 +244,17 @@ describe('FindInPageBar', () => {
     ]);
   });
 
+  it('does not merge non-composing Hangul Jamo extensions into a source range', async () => {
+    const page = document.createElement('main');
+    page.textContent = '가\uD7CB';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: '가' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('가');
+  });
+
   it('does not expand one visible character into duplicate navigation matches', async () => {
     const page = document.createElement('main');
     page.textContent = 'ß';

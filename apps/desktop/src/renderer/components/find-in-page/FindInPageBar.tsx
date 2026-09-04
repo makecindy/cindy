@@ -175,28 +175,19 @@ function getCodePoint(value: string | undefined): number | undefined {
 function isHangulLeadingJamo(value: string | undefined): boolean {
   const codePoint = getCodePoint(value);
   if (codePoint === undefined) return false;
-  return (
-    (codePoint >= 0x1100 && codePoint <= 0x1112) ||
-    (codePoint >= 0xa960 && codePoint <= 0xa97c)
-  );
+  return codePoint >= 0x1100 && codePoint <= 0x1112;
 }
 
 function isHangulVowelJamo(value: string | undefined): boolean {
   const codePoint = getCodePoint(value);
   if (codePoint === undefined) return false;
-  return (
-    (codePoint >= 0x1161 && codePoint <= 0x1175) ||
-    (codePoint >= 0xd7b0 && codePoint <= 0xd7c6)
-  );
+  return codePoint >= 0x1161 && codePoint <= 0x1175;
 }
 
 function isHangulTrailingJamo(value: string | undefined): boolean {
   const codePoint = getCodePoint(value);
   if (codePoint === undefined) return false;
-  return (
-    (codePoint >= 0x11a8 && codePoint <= 0x11c2) ||
-    (codePoint >= 0xd7cb && codePoint <= 0xd7fb)
-  );
+  return codePoint >= 0x11a8 && codePoint <= 0x11c2;
 }
 
 function isHangulLvSyllable(value: string | undefined): boolean {
