@@ -1,5 +1,6 @@
 import { IOSSimulatorInstanceError } from '@cindy/ios-simulator-runtime';
 import type { IOSSimulatorMcpAccessDecision } from '@cindy/mcps';
+import { clipboard, nativeImage } from 'electron';
 
 import type {
   IOSSimulatorNativeH264StreamProfileRequest,
@@ -11,6 +12,7 @@ import { IOS_SIMULATOR_RENDERER_TOOL_NAMES } from '../../shared/iosSimulatorIpc.
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   callIOSSimulatorHostTool,
+  captureIOSSimulatorScreenshotBytes,
   getIOSSimulatorLatestFrame,
   getIOSSimulatorSessionStatus,
   retryIOSSimulatorNativeRoute,
@@ -49,6 +51,7 @@ type IOSSimulatorIpcOperation =
   | 'retry-native-route'
   | 'set-mutation-control'
   | 'latest-frame'
+  | 'copy-screenshot'
   | 'set-stream-profile'
   | 'live-touch';
 
@@ -61,6 +64,7 @@ const IOS_SIMULATOR_SAFE_IPC_MESSAGES: Record<IOSSimulatorIpcOperation, string> 
   'retry-native-route': 'iOS Simulator Native acceleration could not be restored.',
   'set-mutation-control': 'iOS Simulator control state could not be updated.',
   'latest-frame': 'iOS Simulator frame is temporarily unavailable.',
+  'copy-screenshot': 'iOS Simulator screenshot could not be copied.',
   'set-stream-profile': 'iOS Simulator stream settings could not be updated.',
   'live-touch': 'iOS Simulator input could not be delivered.',
 };
@@ -138,6 +142,11 @@ export interface IOSSimulatorHandlerDeps {
     route: { instanceId: string; generation: number; leaseId: string },
     viewerWebContentsId: number,
   ): Promise<IOSSimulatorToolResponse>;
+  captureScreenshotBytes(
+    sessionId: string,
+    route: { instanceId: string; generation: number; leaseId: string },
+  ): Promise<Buffer>;
+  writePngToClipboard(pngBytes: Buffer): void;
   updateViewerTouch(
     sessionId: string,
     route: { instanceId: string; generation: number; leaseId: string },
@@ -181,6 +190,18 @@ const defaultDeps: IOSSimulatorHandlerDeps = {
   retryNativeRoute: retryIOSSimulatorNativeRoute,
   setViewerStreamProfile: setIOSSimulatorViewerStreamProfile,
   getLatestFrame: getIOSSimulatorLatestFrame,
+  captureScreenshotBytes: captureIOSSimulatorScreenshotBytes,
+  writePngToClipboard: (pngBytes) => {
+    const image = nativeImage.createFromBuffer(pngBytes);
+    if (image.isEmpty()) {
+      throw new IOSSimulatorInstanceError(
+        'SCREENSHOT_CAPTURE_FAILED',
+        'The captured simulator screenshot is empty.',
+        true,
+      );
+    }
+    clipboard.writeImage(image);
+  },
   updateViewerTouch: updateIOSSimulatorViewerTouch,
   reportError: (operation, error) => {
     log.error(`iOS Simulator ${operation} IPC failed`, {
@@ -612,6 +633,21 @@ export function registerIOSSimulatorHandlers(
     return callIOSSimulatorHostForViewerSession(event, sessionId, 'latest-frame', () =>
       resolved.getLatestFrame(sessionId, route, viewerWebContentsId),
     );
+  });
+  handle(MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, async (event, payload) => {
+    const record = readRecord(payload);
+    const sessionId = readSessionId(record);
+    assertSenderViewerSession(event, sessionId);
+    const route = readViewerRoute(record);
+    const pngBytes = await callIOSSimulatorHostForSession(event, sessionId, 'copy-screenshot', () =>
+      resolved.captureScreenshotBytes(sessionId, route),
+    );
+    try {
+      resolved.writePngToClipboard(pngBytes);
+    } catch (error) {
+      throwIOSSimulatorIpcError(resolved, 'copy-screenshot', error);
+    }
+    return { ok: true as const };
   });
   handle(MAKER_INVOKE.IOS_SIMULATOR_SET_STREAM_PROFILE, async (event, payload) => {
     const record = readRecord(payload);

@@ -227,5 +227,6 @@ function remoteMessageEqual(previous: RemoteMessage, next: RemoteMessage): boole
     && previous.systemCardType === next.systemCardType
     && deepValueEqual(previous.content, next.content)
     && deepValueEqual(previous.agentMeta, next.agentMeta)
+    && deepValueEqual(previous.mobileToolInputProjection, next.mobileToolInputProjection)
     && deepValueEqual(previous.systemCardData, next.systemCardData);
 }

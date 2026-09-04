@@ -149,8 +149,17 @@ function trimTrailingSlash(s: string): string {
   return s.replace(/\/+$/, '');
 }
 
-/** 在 provider 的所有 agent 模型清单里查某 model id 的目录条目(用于取 efforts)。 */
-function findCatalogModel(provider: Provider, modelId: string) {
+/** 标题请求固定走供应商自己的原生通道，不能被其它 harness 的同名模型遮住状态。 */
+function titleCatalogAgent(providerId: string): 'claude-code' | 'codex' | null {
+  if (providerId === 'anthropic') return 'claude-code';
+  if (providerId === 'openai') return 'codex';
+  return null;
+}
+
+/** 在标题请求实际使用的 agent 清单里查模型；XD 动态模型仍跨清单查找。 */
+function findTitleCatalogModel(provider: Provider, modelId: string) {
+  const titleAgent = titleCatalogAgent(provider.id);
+  if (titleAgent) return (provider.models[titleAgent] ?? []).find((model) => model.id === modelId);
   for (const agent of provider.agents) {
     const hit = (provider.models[agent] ?? []).find((m) => m.id === modelId);
     if (hit) return hit;
@@ -229,7 +238,7 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
     case 'anthropic': {
       if (!provider.titleModel) return null;
       const model = provider.titleModel;
-      const effort = lowestEffort(findCatalogModel(provider, model)?.efforts ?? []);
+      const effort = lowestEffort(findTitleCatalogModel(provider, model)?.efforts ?? []);
       const routing = provider.routing['claude-code'];
       return routing
         ? { providerId, model, effort, wire: 'anthropic-messages', upstream: routing.upstream }
@@ -238,7 +247,7 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
     case 'openai': {
       if (!provider.titleModel) return null;
       const model = provider.titleModel;
-      const effort = lowestEffort(findCatalogModel(provider, model)?.efforts ?? []);
+      const effort = lowestEffort(findTitleCatalogModel(provider, model)?.efforts ?? []);
       const routing = provider.routing['codex'];
       return routing
         ? { providerId, model, effort, wire: 'codex-responses', upstream: routing.upstream }
@@ -538,13 +547,13 @@ log.debug('title oneShot skipped: no title target', {
     });
     return { status };
   }
-  // 标题模型这份拷贝被用户停用 → 跳过(回落启发式起名)。rail 条目带 buildRegistry
-  // 烘焙的 disabled 标志。查找必须跨该供应商的**所有 agent** 清单(findCatalogModel,
-  // 与 buildTitleTarget 解析 titleModel 的口径一致):cc 会话经 OpenAI 路由时,标题模型
-  // gpt-5.4-mini 挂在 codex 清单下,只查会话 agent 会漏掉停用标志(PR #744 review
-  // 第十一轮)。目录里完全找不到该模型时不额外拦。
+  // 标题模型这份拷贝被用户停用 → 跳过(回落启发式起名)。查标题请求实际使用的原生
+  // agent 清单，而不是会话 agent 或全部清单：OpenAI 标题走 codex，Anthropic 标题走
+  // claude-code；否则 Pi 的独立同名条目会遮住原生通道的 retired 状态。
   const railProvider = rail.find((p) => p.id === providerId);
-  const titleCatalogModel = railProvider ? findCatalogModel(railProvider, target.model) : undefined;
+  const titleCatalogModel = railProvider
+    ? findTitleCatalogModel(railProvider, target.model)
+    : undefined;
   const initialUnavailableReason = titleCatalogModel
     ? titleRouteUnavailableReason(titleCatalogModel, railProvider?.source === 'user')
     : null;
@@ -580,15 +589,19 @@ log.debug('title oneShot skipped: no title target', {
     const currentCatalog = getActiveCatalog();
     const currentProvider = currentCatalog.providers.find((provider) => provider.id === providerId);
     const currentModel = currentProvider
-      ? findCatalogModel(currentProvider, target.model)
+      ? findTitleCatalogModel(currentProvider, target.model)
       : undefined;
     if (currentModel) {
       return titleRouteUnavailableReason(currentModel, currentProvider?.source === 'user');
     }
     // retired 且没有 discovery/local addition 时不会出现在 provider.models；仍要从
     // Registry tombstone 本身识别，不能把“未实体化”误当成“没有限制”。
-    return findModelRegistryRoute(currentCatalog.modelRegistry, providerId, target.model)?.entry
-      .status === 'retired'
+    return findModelRegistryRoute(
+      currentCatalog.modelRegistry,
+      providerId,
+      target.model,
+      titleCatalogAgent(providerId) ?? undefined,
+    )?.entry.status === 'retired'
       ? 'retired'
       : null;
   };

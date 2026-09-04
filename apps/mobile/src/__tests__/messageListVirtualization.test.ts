@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 
 // 消息列表容器契约:LegendList(替代 FlatList —— 滚动 mount 卡顿的实测解,见 listperf profiling:
 // windowSize=21 的大挂载树 p95≈167ms/jank46,换 LegendList 小预渲窗口后 p95≈20ms/jank4)。
-// 关键 prop 不可回退:估高 + 小 drawDistance(挂载集小)+ 尺寸锚定 + 应用层 prepend 事务。
+// 关键 prop 不可回退:估高 + 小 drawDistance(挂载集小)+ iOS 原生 / Android 应用层 prepend 锚定。
 describe('mobile message list container', () => {
-  it('uses LegendList virtualization with app-owned history anchoring', () => {
+  it('uses LegendList virtualization with platform-scoped history anchoring', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const perfHarness = readFileSync(resolve(process.cwd(), 'app/listperf.tsx'), 'utf8');
 
@@ -41,6 +41,8 @@ describe('mobile message list container', () => {
     expect(listSource).toContain('maintainVisibleContentPosition={historyPrependNativeMvcpDisabled');
     expect(listSource).toContain('? false');
     expect(listSource).toContain(': { data: true, size: true }}');
+    expect(source).toContain('mobileHistoryPrependUsesAppOwnedAnchor(');
+    expect(source).toContain('MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR');
     expect(source).toContain('captureMobileHistoryAnchor(');
     expect(source).toContain('resolveMobileMessageHistoryAnchorOffset(');
     expect(source).toContain('getCurrentHistoryTopOffsetAdjustment()');
@@ -127,15 +129,43 @@ describe('mobile message list container', () => {
     expect(source).toContain('MOBILE_HISTORY_ANCHOR_VERIFY_MAX_FRAMES');
     expect(source).toContain('MOBILE_HISTORY_ANCHOR_VERIFY_MAX_MS');
     expect(source).toContain('Date.now() < currentTransaction.verifyDeadlineAt');
-    expect(source).toContain('Complex pages can keep refining estimates beyond the retry window');
-    expect(source).toContain('if (finalTarget !== null) scrollToOffsetProgrammatically(finalTarget, false);');
+    expect(source).toContain('mobileHistoryAnchorCorrectionStatus(pendingCorrection');
+    expect(source).toContain('nativeScrollEventSequenceRef.current += 1');
+    expect(source).toContain('const currentOffset = scrollMetricsRef.current.offsetY;');
+    expect(source).not.toContain('const currentOffset = listState.scroll;');
+    expect(source).not.toContain('if (finalTarget !== null) scrollToOffsetProgrammatically(finalTarget, false);');
     expect(source).toContain('const restoreHistoryAnchorOnce = useCallback');
     expect(source).toContain('restoreHistoryAnchorOnce(transaction.generation)');
     expect(source).toContain('transaction.userControlledAfterCommit = true');
+    expect(source).toContain('if (viewportTakenOver) transaction.userControlledDuringRequest = true;');
+    expect(source).toContain('if (transaction.userControlledDuringRequest) {');
+    // 轻点不是接管视口:touch-start 只代表手指按住 ScrollView。若把它当接管,会取消
+    // regroup-only 续拉标记,新页仅展开顶部折叠 Worked for 时用户就被留在顶部干等。
+    const touchStartStart = source.indexOf('const handleHistoryTouchStart = useCallback');
+    const touchStartEnd = source.indexOf('const maybeTriggerHistoryTouch', touchStartStart);
+    const touchStartSource = source.slice(touchStartStart, touchStartEnd);
+    expect(touchStartSource).toContain('handoffHistoryPrependToUser(false)');
+    const triggerTouchStart = source.indexOf('const maybeTriggerHistoryTouch = useCallback');
+    const triggerTouchEnd = source.indexOf('const handleHistoryTouchMove', triggerTouchStart);
+    expect(source.slice(triggerTouchStart, triggerTouchEnd)).toContain('handoffHistoryPrependToUser();');
+    // 手势接管只在手指/惯性真正持有视口时扣住事务:否则「提交前手势已结束 + 该页无坐标进展」
+    // 会永久扣住事务,native MVCP 整段关掉。提交分支必须显式重新武装 handoff,
+    // 手势早已结束时才有路径回到锚点校验并收口。
+    const maybeFinishStart = source.indexOf('const maybeFinishHistoryPrependTransaction = useCallback');
+    const maybeFinishEnd = source.indexOf('const handoffHistoryPrependToUser', maybeFinishStart);
+    const maybeFinishSource = source.slice(maybeFinishStart, maybeFinishEnd);
+    expect(maybeFinishSource).toContain('transaction.userHandoffPending');
+    expect(maybeFinishSource).toContain('isDraggingRef.current');
+    expect(maybeFinishSource).toContain('isMomentumScrollingRef.current');
+    expect(maybeFinishSource).toContain('historyTouchStartYRef.current !== null');
+    expect(source).toContain('transaction.userHandoffPending = true;');
+    expect(source).toContain('currentTransaction.userHandoffPending = false;');
     // 直接拖动结束前不发请求，避免远端页在手指仍控制 ScrollView 时落地。
     expect(source).toContain('queuedLoadEarlierRef.current = true');
     expect(source).toContain('setHistoryPrependNativeMvcpDisabled(true)');
-    expect(source).toContain('if (!historyPrependNativeMvcpDisabledRef.current)');
+    expect(source).toMatch(
+      /MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR\s+&& !historyPrependNativeMvcpDisabledRef\.current/,
+    );
     expect(source).toContain('if (!historyPrependNativeMvcpDisabled) return;');
     expect(source).toContain('flushQueuedLoadEarlier();');
     expect(source).toContain('isMomentumScrollingRef.current');

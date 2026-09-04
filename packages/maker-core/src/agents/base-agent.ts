@@ -335,7 +335,7 @@ export interface PiExtraSpawnConfigContext {
   remoteHostId?: string | null;
 }
 
-export type CodexSubagentRoutingProfile = 'default' | 'configured' | 'oauth-default';
+export type CodexSubagentRoutingProfile = 'default' | 'configured' | 'oauth-default' | 'smart';
 
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
@@ -348,8 +348,16 @@ export interface CodexExtraSpawnConfig {
   subagentRoute?: {
     providerId: string;
     catalogModel: string;
-    reasoningEffort: ReasoningEffort | null;
+    reasoningEffort?: ReasoningEffort | null;
   };
+  /** Per-model Provider routes exposed only when Cindy smart Subagent routing is enabled. */
+  smartSubagentRoutes?: Array<{
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort?: ReasoningEffort | null;
+  }>;
+  /** Frozen identity of the Subagent routing/catalog snapshot used by this host. */
+  codexSubagentRoutingSignature?: string;
   /** Whether this exact app-server spawn was provisioned with Codex Chrome. */
   codexBrowserUseAvailable?: boolean;
   /** Whether the OpenAI identity provider on this app-server may use Responses WebSocket. */
@@ -381,6 +389,8 @@ export interface CodexExtraSpawnConfig {
     capabilities: Readonly<Record<string, boolean | undefined>>;
     responseModels: readonly string[];
   }>;
+  /** One-shot cleanup for spawn-time resources when this Host is terminally retired. */
+  onHostRetired?: () => void | Promise<void>;
 }
 
 export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
@@ -854,8 +864,19 @@ export interface AgentDeps {
       customContextModel?: string;
       /** Explicit custom-provider context window for a one-session custom-context host. */
       customContextWindow?: number;
+      /** Unique app-server Host-generation identity used to scope custom-context resources. */
+      customContextHostKey?: string;
     },
   ) => Promise<CodexExtraSpawnConfig>;
+
+  /** Recomputes the desired local Subagent routing identity before reusing a host. */
+  resolveCodexSubagentRoutingSignature?: (
+    providers: McpProvider[],
+    ctx: {
+      credentialMode?: AgentCredentialMode;
+      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+    },
+  ) => Promise<string>;
 
   /**
    * Codex-only host policy: disable local app-server plugin runtimes even when
@@ -1139,9 +1160,20 @@ export interface AgentDeps {
     subagentRoute?: {
       providerId: string;
       catalogModel: string;
-      reasoningEffort: ReasoningEffort | null;
+      reasoningEffort?: ReasoningEffort | null;
     };
+    smartSubagentRoutes?: Array<{
+      providerId: string;
+      catalogModel: string;
+      reasoningEffort?: ReasoningEffort | null;
+    }>;
   }) => void;
+
+  /** Desktop proxy observation of the model actually sent for one Codex child thread. */
+  getCodexSubagentIdentity?: (args: { childThreadId: string }) => {
+    model: string;
+    reasoningEffort?: string;
+  } | undefined;
 
   /**
    * Codex 专用：WS turn 命中仅 HTTP proxy 能处理的请求体恢复错误时，通知宿主把

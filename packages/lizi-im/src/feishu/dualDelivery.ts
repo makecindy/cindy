@@ -5,8 +5,9 @@ import { createHash } from 'node:crypto';
  * two `im.message.receive_v1` events: a topic message and a main-feed copy.
  * They have different message ids but retain the same sender/chat/create-time,
  * message type, and raw content. This coordinator elects the topic event as the
- * only Agent route and records that its terminal answer needs a parent-chat
- * mirror.
+ * only Agent route and suppresses the main-feed copy so it cannot open a second
+ * turn. Cindy does not copy the bot reply to the parent group: Feishu never
+ * exposes the checkbox on the inbound event.
  */
 
 const PAIR_WINDOW_MS = 1_000;
@@ -39,13 +40,6 @@ export interface DualDeliveryInput {
 export type DualDeliveryDecision =
   | {
       kind: 'dispatch';
-      mirrorKey?: string;
-      /**
-       * Pairing was already confirmed when this topic/takeover dispatched.
-       * Terminal mirrors must not wait on a confirmation map that can be TTL
-       * or capacity pruned during a long Agent turn.
-       */
-      alreadyConfirmed?: boolean;
       /**
        * Unpaired main-feed copies call this after `openThread` returns, and
        * only when the copy is actually about to emit an Agent turn.
@@ -81,25 +75,6 @@ const recentThreads = new Map<string, number>();
 const recentFlats = new Map<string, RecentFlatRecord>();
 const topicLeases = new Map<string, RecentFlatRecord>();
 const confirmed = new Map<string, number>();
-const deferredMirrors = new Map<string, Array<() => void>>();
-/** Confirmation records retained until the elected Agent turn reaches a terminal mirror path. */
-const liveMirrorConfirmations = new Set<string>();
-
-export function retainMirrorConfirmation(key: string): void {
-  liveMirrorConfirmations.add(key);
-}
-
-export function releaseMirrorConfirmation(key: string): void {
-  if (!liveMirrorConfirmations.delete(key)) return;
-  if (!confirmed.has(key)) return;
-  const now = Date.now();
-  // A duplicate can arrive after a very long Agent turn. Once the live pin is
-  // released, restart the ordinary suppression TTL from the terminal instead
-  // of immediately pruning the old pair timestamp.
-  confirmed.delete(key);
-  confirmed.set(key, now);
-  pruneConfirmed(now);
-}
 
 function logicalSendKey(input: DualDeliveryInput): string | null {
   if (!input.createTime) return null;
@@ -118,17 +93,10 @@ function logicalSendKey(input: DualDeliveryInput): string | null {
     .digest('hex');
 }
 
-function dropDeferredMirrors(key: string): void {
-  if (!deferredMirrors.delete(key)) return;
-  // Dropped callbacks never run, so their `.finally(release)` cannot fire.
-  releaseMirrorConfirmation(key);
-}
-
 function pruneTtlMap(map: Map<string, number>, now: number): void {
   for (const [key, ts] of map) {
     if (now - ts <= LATE_COPY_TTL_MS && map.size <= MAX_RECENT) break;
     map.delete(key);
-    dropDeferredMirrors(key);
   }
 }
 
@@ -147,7 +115,6 @@ function pruneRecentFlats(now: number): void {
     if (rec.state === 'pending') continue;
     if (now - rec.ts > LATE_COPY_TTL_MS) {
       recentFlats.delete(key);
-      dropDeferredMirrors(key);
     }
   }
   if (recentFlats.size <= MAX_RECENT) return;
@@ -155,7 +122,6 @@ function pruneRecentFlats(now: number): void {
     if (recentFlats.size <= MAX_RECENT) break;
     if (rec.state === 'pending') continue;
     recentFlats.delete(key);
-    dropDeferredMirrors(key);
   }
 }
 
@@ -255,39 +221,20 @@ function abandonUnpairedFlatRoute(key: string, rec: RecentFlatRecord): void {
     recentFlats.set(key, rec);
     pruneRecentFlats(rec.ts);
   }
-  dropDeferredMirrors(key);
-  releaseMirrorConfirmation(key);
-}
-
-function flushDeferredMirrors(key: string): void {
-  const scheduled = deferredMirrors.get(key);
-  deferredMirrors.delete(key);
-  if (scheduled) releaseMirrorConfirmation(key);
-  for (const run of scheduled ?? []) {
-    try {
-      run();
-    } catch {
-      /* best-effort; caller logs inside the scheduled work */
-    }
-  }
 }
 
 function pruneConfirmed(now: number): void {
   for (const [key, ts] of confirmed) {
     if (now - ts <= CONFIRMED_TTL_MS && confirmed.size <= MAX_CONFIRMED) break;
-    if (liveMirrorConfirmations.has(key)) continue;
     confirmed.delete(key);
   }
 }
 
-function dispatchWithMirror(
-  key: string,
-  extra: Omit<Extract<DualDeliveryDecision, { kind: 'dispatch' }>, 'kind' | 'mirrorKey' | 'alreadyConfirmed'> = {},
+function dispatchRoute(
+  extra: Omit<Extract<DualDeliveryDecision, { kind: 'dispatch' }>, 'kind'> = {},
 ): DualDeliveryDecision {
   return {
     kind: 'dispatch',
-    mirrorKey: key,
-    ...(confirmed.has(key) ? { alreadyConfirmed: true } : {}),
     ...extra,
   };
 }
@@ -337,7 +284,6 @@ function confirmLogicalSend(key: string, now: number): void {
   confirmed.delete(key);
   confirmed.set(key, now);
   pruneConfirmed(now);
-  flushDeferredMirrors(key);
 }
 
 function confirmPair(key: string, entry: PendingLogicalSend): void {
@@ -371,7 +317,7 @@ export async function coordinateDualDelivery(
     if (input.threadId) {
       const lease = topicLeases.get(key);
       if (lease?.state === 'pending') {
-        return dispatchWithMirror(key, topicRouteCallbacks(key, lease));
+        return dispatchRoute(topicRouteCallbacks(key, lease));
       }
     }
     return { kind: 'suppress-main-copy' };
@@ -397,7 +343,7 @@ export async function coordinateDualDelivery(
     recentFlats.set(key, recentFlat);
     confirmLogicalSend(key, now);
     rememberRecent(recentThreads, key, now);
-    return dispatchWithMirror(key, topicRouteCallbacks(key));
+    return dispatchRoute(topicRouteCallbacks(key));
   }
   if (!input.threadId && recentFlat) {
     if (recentFlat.state === 'abandoned') {
@@ -420,7 +366,7 @@ export async function coordinateDualDelivery(
     // copy that arrived first is already parked on `entry.decision`; a later
     // flat copy is suppressed through `recentThreads`. A late topic after an
     // unpaired flat takes over unless that flat has already committed.
-    return dispatchWithMirror(key, topicRouteCallbacks(key));
+    return dispatchRoute(topicRouteCallbacks(key));
   }
 
   entry.flatMessageIds.add(input.messageId);
@@ -435,65 +381,12 @@ export async function coordinateDualDelivery(
   }
   const lease = entry.flatLease;
   return lease
-    ? dispatchWithMirror(key, {
+    ? dispatchRoute({
         commitUnpairedFlat: () => commitUnpairedFlatRoute(key, lease),
         isUnpairedFlatTakenOver: () => isUnpairedFlatTakenOver(lease),
         abandonUnpairedFlat: () => abandonUnpairedFlatRoute(key, lease),
       })
-    : dispatchWithMirror(key);
-}
-
-/** Waits only for the bounded pairing window; Agent execution itself is never delayed. */
-export async function waitForMirrorConfirmation(mirrorKey: string): Promise<boolean> {
-  pruneConfirmed(Date.now());
-  if (confirmed.has(mirrorKey)) {
-    releaseMirrorConfirmation(mirrorKey);
-    return true;
-  }
-  const entry = pending.get(mirrorKey);
-  if (!entry) return false;
-  const isConfirmed = await entry.decision;
-  if (isConfirmed) releaseMirrorConfirmation(mirrorKey);
-  return isConfirmed;
-}
-
-/**
- * Run `send` if this logical send is already confirmed, or when a late pair
- * (main-feed copy or committed-flat topic) confirms it inside the late-copy TTL.
- * No-ops once that window has expired.
- *
- * @returns whether `send` ran immediately or was queued for a later confirmation.
- */
-export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void): boolean {
-  const now = Date.now();
-  pruneConfirmed(now);
-  pruneTtlMap(recentThreads, now);
-  pruneRecentFlats(now);
-  if (confirmed.has(mirrorKey)) {
-    releaseMirrorConfirmation(mirrorKey);
-    send();
-    return true;
-  }
-  if (
-    !pending.has(mirrorKey) &&
-    !recentThreads.has(mirrorKey) &&
-    !recentFlats.has(mirrorKey)
-  ) {
-    releaseMirrorConfirmation(mirrorKey);
-    return false;
-  }
-  const queued = deferredMirrors.get(mirrorKey) ?? [];
-  queued.push(() => {
-    releaseMirrorConfirmation(mirrorKey);
-    send();
-  });
-  deferredMirrors.set(mirrorKey, queued);
-  return true;
-}
-
-/** Test-only: whether terminal-mirror retain is still holding this key. */
-export function isMirrorConfirmationRetainedForTest(mirrorKey: string): boolean {
-  return liveMirrorConfirmations.has(mirrorKey);
+    : dispatchRoute();
 }
 
 /** Test-only: pending elected-topic leases that pruneTopicLeases will not expire. */
@@ -516,6 +409,4 @@ export function resetDualDeliveryForTest(): void {
   recentFlats.clear();
   topicLeases.clear();
   confirmed.clear();
-  deferredMirrors.clear();
-  liveMirrorConfirmations.clear();
 }

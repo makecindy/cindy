@@ -365,6 +365,20 @@ describe('SkillhubMarketService', () => {
       teams: [{ slug: 'team-a', name: 'Team A', type: 'team' }],
     });
   });
+
+  it('requests category lists from the selected catalog scope', async () => {
+    const { fetch, calls } = makeFetch([[]]);
+    const service = new SkillhubMarketService({ fetch });
+
+    await expect(service.listCategories('team')).resolves.toMatchObject({
+      success: true,
+      categories: [],
+    });
+    expect(calls).toEqual([{
+      path: '/api/skills-hub/categories?scope=team',
+      opts: undefined,
+    }]);
+  });
 });
 
 describe('skillhub market helpers', () => {

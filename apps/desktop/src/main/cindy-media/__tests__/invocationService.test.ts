@@ -981,6 +981,77 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(downloadInit.headers).toBeUndefined();
   });
 
+  it('Core 命名空间模型保留供应商媒体域名的可信准入', async () => {
+    const asyncOperation = {
+      ...operation({
+        mode: 'async',
+        taskIdPath: ['task_id'],
+        poll: {
+          method: 'GET',
+          path: '/video/tasks/{taskId}',
+          statusPath: ['status'],
+          successValues: ['succeeded'],
+          failureValues: ['failed'],
+          recommendedIntervalMs: 10,
+          timeoutMs: 5_000,
+          maxResponseBytes: 1_048_576,
+          media: [{
+            path: ['video', 'download_url'],
+            encoding: 'url',
+            kind: 'video',
+            allowedUrlHosts: ['cdn.example.com'],
+          }],
+        },
+      }, '/video/tasks'),
+      capability: 'video.generate',
+    };
+    mocks.models.mockResolvedValue([
+      {
+        id: 'minimax/minimax-h3',
+        name: 'MiniMax H3',
+        providerId: 'xd',
+        mode: 'video_generation',
+      },
+    ]);
+    mocks.guide.mockResolvedValue({
+      ...resolvedGuide(asyncOperation),
+      modelId: 'minimax-h3',
+    });
+    mocks.outboundFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ task_id: 'task-1' }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: 'succeeded',
+            video: { download_url: 'https://file.minimaxi.com/generated.mp4' },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(MP4, { status: 200, headers: { 'content-type': 'video/mp4' } }),
+      );
+    mocks.ingestMedia.mockResolvedValue({
+      url: `cindy-media://blobs/${'e'.repeat(64)}.mp4`,
+    });
+
+    const prepared = await callCindyMedia({
+      action: 'prepare',
+      modelId: 'minimax/minimax-h3',
+      capability: 'video.generate',
+    });
+    const invocationId = prepared.invocation_id as string;
+    await expect(
+      callCindyMedia({ action: 'request', invocationId, body: { content: [] } }),
+    ).resolves.toMatchObject({ ok: true, status: 'pending' });
+    await expect(callCindyMedia({ action: 'poll', invocationId })).resolves.toMatchObject({
+      ok: true,
+      status: 'complete',
+      xdt_video_urls: [`cindy-media://blobs/${'e'.repeat(64)}.mp4`],
+    });
+    expect(mocks.outboundFetch.mock.calls[2][0]).toBe('https://file.minimaxi.com/generated.mp4');
+  });
+
   it('即使持久快照异常包含反斜杠路径，也在发网前拒绝跨 Gateway origin', async () => {
     mocks.guide.mockResolvedValue(
       resolvedGuide(

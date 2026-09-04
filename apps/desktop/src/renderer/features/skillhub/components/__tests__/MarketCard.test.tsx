@@ -74,4 +74,24 @@ describe('MarketCard Skill icon', () => {
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('.lucide-package')).not.toBeNull();
   });
+
+  it('shows the first tag beside the title and collapses remaining tags', () => {
+    const { container } = render(
+      <MarketCard
+        skill={{
+          ...MARKET_SKILL,
+          tags: [
+            { slug: 'automation', name: 'Automation' },
+            { slug: 'productivity', name: 'Productivity' },
+          ],
+        }}
+        primaryAction="none"
+        onClone={vi.fn()}
+      />,
+    );
+
+    const title = container.querySelector('h3');
+    expect(title?.parentElement?.textContent).toContain('Demo SkillAutomation+1');
+    expect(container.textContent).not.toContain('Productivity');
+  });
 });

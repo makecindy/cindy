@@ -173,9 +173,20 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     const element = makeNode(node);
     return node.type === 'text' ? [element] : [element, makeCaretAnchor()];
   };
+  const flattenDomNodes = (nodes) => {
+    const elements = [];
+    (nodes || []).forEach((node) => {
+      makeDomNodes(node).forEach((element) => elements.push(element));
+    });
+    return elements;
+  };
   const render = (documentValue, focusAfter) => {
     applying = true;
-    root.replaceChildren(...(documentValue.nodes || []).flatMap(makeDomNodes));
+    // Android WebView 85 lacks the modern child-replacement API; use legacy DOM primitives.
+    const fragment = document.createDocumentFragment();
+    flattenDomNodes(documentValue.nodes).forEach((node) => fragment.appendChild(node));
+    while (root.firstChild) root.removeChild(root.firstChild);
+    root.appendChild(fragment);
     applying = false;
     lastSignature = JSON.stringify(readDocument());
     reportHeight();
@@ -298,7 +309,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     pasteMarkers.delete(requestId);
     const marker = pending && pending.marker;
     if (!marker || !marker.parentNode) return;
-    const inserted = (Array.isArray(nodes) ? nodes : []).flatMap(makeDomNodes);
+    const inserted = flattenDomNodes(Array.isArray(nodes) ? nodes : []);
     inserted.forEach((node) => marker.parentNode.insertBefore(node, marker));
     const selection = window.getSelection();
     const trailing = pending && pending.anchor;

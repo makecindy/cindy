@@ -275,10 +275,24 @@ export async function prepareCodexCustomContextCatalog(params: {
   modelId: string;
   contextWindow: number;
   scanChunkBytes?: number;
+  /** In-memory smart Subagent catalog to preserve in the one-session custom-context Host. */
+  baseCatalog?: unknown;
 }): Promise<{ catalogPath: string; extraArgs: string[] }> {
   const bundled = await readBundledCatalog(params.binaryPath, params.scanChunkBytes);
+  let base = params.baseCatalog === undefined
+    ? bundled
+    : parseCodexModelCatalog(JSON.stringify(params.baseCatalog));
+  if (!base.models.some((model) => model.slug === params.modelId)) {
+    const bundledMatches = bundled.models.filter((model) => model.slug === params.modelId);
+    if (bundledMatches.length !== 1) {
+      throw new Error(
+        `current Codex binary catalog must contain exactly one model named ${JSON.stringify(params.modelId)}`,
+      );
+    }
+    base = { ...base, models: [...base.models, bundledMatches[0]!] };
+  }
   const patched = patchCodexModelMaxContextWindow(
-    bundled,
+    base,
     params.modelId,
     params.contextWindow,
   );

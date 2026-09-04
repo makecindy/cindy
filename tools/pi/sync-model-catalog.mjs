@@ -31,6 +31,10 @@ const PRESET_PROVIDER_MAP = {
 
 const PROVIDER_IDS = [...new Set([
   ...Object.values(PRESET_PROVIDER_MAP).map(({ providerId }) => providerId),
+  // Subscription providers are native Pi sources. Their membership and capabilities must not
+  // be copied from Cindy's separately discovered Claude Code or Codex catalogs.
+  'anthropic',
+  'openai-codex',
   'xai',
 ])].sort();
 

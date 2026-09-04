@@ -255,7 +255,7 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 | DS-1 | `docs(design-system): DS-1 建立治理合同与存量门禁处置表` | 零视觉（纯文档） | ✅ #3609（2026-08-30 合入） |
 | DS-2a | `test(design-system): DS-2a 生产 UI 台账` | 零视觉 | ✅ #3648（2026-08-31 合入） |
 | DS-2b | `ci(design-system): DS-2b 主题兼容冻结守卫`（新增阻断需 §8 管理员审核） | CI 门禁 | ✅ #3700（2026-09-02 合入） |
-| DS-3 | `feat(design-system): DS-3 最小语义 Token 影子层` | 零视觉 | — |
+| DS-3 | `feat(design-system): DS-3 最小语义 Token 影子层` | 零视觉 | ✅ #3798（2026-09-03 合入） |
 | DS-4 | `feat(design-system): DS-4 Button 与 Input 标准组件`（落入既有 `components/ui/`） | 有意可见 | — |
 | DS-5 | `refactor(design-system): DS-5 AI 对话区 Pattern 迁移`（Tool Call / Reasoning / Message / Attachment） | 有意可见 | — |
 | DS-6 | `refactor(design-system): DS-6 Permission Pattern 迁移`（裁决关闭后） | 有意可见 | — |

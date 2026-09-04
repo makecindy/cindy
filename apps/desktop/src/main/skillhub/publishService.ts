@@ -295,6 +295,7 @@ export class SkillPublishService {
       );
       return { success: false, errorCode: 'CANCELLED' };
     }
+    const tags = params.isFirstPublish ? normalizePublishTags(params.tags) : undefined;
     if (this.current) {
       this.emitProgress(
         {
@@ -307,8 +308,6 @@ export class SkillPublishService {
       );
       return { success: false, errorCode: 'INTERNAL' };
     }
-
-    const tags = params.isFirstPublish ? normalizePublishTags(params.tags) : undefined;
 
     const abortController = new AbortController();
     const state: InternalState = { abortController };

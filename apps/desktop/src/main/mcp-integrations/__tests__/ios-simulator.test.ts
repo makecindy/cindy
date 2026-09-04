@@ -7978,6 +7978,15 @@ describe('iOS Simulator host', () => {
       source: 'agent',
       signal: expect.any(AbortSignal),
     });
+    await expect(host.captureScreenshotBytes('session-a', route)).resolves.toEqual(
+      expect.objectContaining({ length: expect.any(Number) }),
+    );
+    await expect(
+      host.captureScreenshotBytes('session-a', {
+        ...route,
+        generation: route.generation + 1,
+      }),
+    ).rejects.toMatchObject({ code: 'STALE_GENERATION' });
     const visualBaseline = await host.callTool('capture_visual_baseline', route, {
       sessionId: 'session-a',
       origin: 'agent',
@@ -8003,6 +8012,10 @@ describe('iOS Simulator host', () => {
       signal: expect.any(AbortSignal),
     });
     expect(mediaCapture.captureScreenshotBytes).toHaveBeenNthCalledWith(2, {
+      simulatorUdid: instance.simulatorUdid,
+      signal: expect.any(AbortSignal),
+    });
+    expect(mediaCapture.captureScreenshotBytes).toHaveBeenNthCalledWith(3, {
       simulatorUdid: instance.simulatorUdid,
       signal: expect.any(AbortSignal),
     });
@@ -8516,7 +8529,7 @@ describe('iOS Simulator host', () => {
     await expect(
       host.callTool('press_home', route, { sessionId: 'session-a', origin: 'user' }),
     ).resolves.toMatchObject({ ok: true });
-    expect(driver.home).toHaveBeenCalledOnce();
+    expect(driver.home).toHaveBeenCalledWith('wda-session', expect.any(AbortSignal));
     await expect(
       host.callTool(
         'set_orientation',

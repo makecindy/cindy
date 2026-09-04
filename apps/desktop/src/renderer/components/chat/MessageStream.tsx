@@ -125,6 +125,22 @@ export function resolveProgrammaticScrollEndDecision({
   return consumeDeferredDelete ? 'consume-deferred-delete' : 'replay-deferred-delete';
 }
 
+/**
+ * 贴底时由 auto-follow 独占本轮布局变化，并消费此前记录的视口重锚。
+ * 返回 true 表示调用方必须立即结束旧视口补偿，避免其覆盖同一提交里的 pinToBottom。
+ */
+export function consumePendingReanchorForAutoFollow({
+  isNearBottom,
+  clearPendingReanchor,
+}: {
+  isNearBottom: boolean;
+  clearPendingReanchor: () => void;
+}): boolean {
+  if (!isNearBottom) return false;
+  clearPendingReanchor();
+  return true;
+}
+
 /** 以落定时的最新 DOM 几何重新计算 chip / 导航轨道目标，而不是复用 smooth 开始前的像素。 */
 export function resolveChipJumpTargetScrollTop({
   scrollTop,
@@ -5132,6 +5148,21 @@ export function MessageStream({
     const prevAllItems = prevAllItemsRef.current;
     prevVisibleItemsRef.current = visibleRenderItems;
     prevAllItemsRef.current = allRenderItems;
+
+    // #3067: turn 完成会把运行中工作组重建为完成态分组，key / 数量都可能变化。
+    // 贴底态必须始终由 auto-follow 接管；若先执行旧锚点恢复，会覆盖上方同一提交里的
+    // pinToBottom，把视口拉回本轮 user 消息。同步消费待重锚，避免用户稍后上滚时重放旧落点。
+    if (
+      consumePendingReanchorForAutoFollow({
+        isNearBottom: isNearBottomRef.current,
+        clearPendingReanchor: () => {
+          pendingReanchorScrollRef.current = null;
+        },
+      })
+    ) {
+      return;
+    }
+
     const snapshot = lastViewportTopRef.current;
     const prevSeq = prevAllItems.length > 0 ? prevAllItems : prevVisibleItems;
 
@@ -5191,8 +5222,6 @@ export function MessageStream({
       if (programmaticScrollRef.current) deferredDeleteCompensationRef.current = true;
       return;
     }
-    if (isNearBottomRef.current) return;
-
     let anchor = snapshot;
     if (restoringRef.current) {
       const snap = restoreSnapshotRef.current;

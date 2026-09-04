@@ -436,6 +436,19 @@
 
 ## Backlog(已知、刻意搁置)
 
-- `MakerExperimentalView.tsx` 通篇裸 hardcode hex(#404040 / #d4d4d4 / #262626 / #333),违反 DESIGN.md 第 10 节 token 规则。因是 experimental 视图,暂不清理,仅备忘(原 §13 旁注,2026-06)。
+- [x] **MakerExperimentalView.tsx 裸 hardcode hex 清理**(已解决 2026-08-31)
+  现状:诊断页通篇裸 hardcode 暗色 hex(页面文字、卡片、输入框、按钮、事件流等),
+  违反 DESIGN.md 第 10 节 token 规则;路由生产包按 URL 可达,Light 主题下不可读。
+  处理:全量改成语义 token(text-primary / text-secondary / text-tertiary /
+  surface-elevated / border-default / accent-cta-bg / accent-pure-cta-fg /
+  error-flat / surface-chip / surface-chip-alt),
+  双模式由 token 体系自动覆盖;新增源契约守卫 `makerExperimentalThemeContract.test.ts`
+  锁「零裸色 + token 已注册 + light/dark 双槽位」。
+  合并范围(与 PR 3 同一「renderer 硬编码颜色清理」):CCAgentSessionView handoff pill
+  两处裸灰文字色改 text-muted-foreground;context 环阈值红/橙改 error-flat /
+  warning-fg 语义 token,双模式由 token 体系覆盖。
+  review 修订(PR 3686 auto-review P1):事件流标题从 warning-accent 改为
+  text-secondary——11px 小字在 Light 白色 surface-elevated 上对比度不足,且
+  warning-accent 语义限定运行/警告状态表面,普通诊断事件标题不在其列。
 - R2 §4.3 Project_List 五点差异(2026-07-17 lead 裁决本轮不做,出处为设计阶段工作文件 `2026-07-17-r2-ui-specs.md` §4.3,不入仓库):① Project_List 三态拆分(active-task-pill / project-card / flat-list-row 不共用 `sidebar-item-active`);② 项目 header / list card 选中应中性底(`#312F2F`/`#F6F6F6`,非 `#DF0C27` 大红);③ 去 Project_List 选中组 `focus-ring-soft` 蓝 ring,改 card stroke `#DCDFE3`/`#434343`;④ 小箭头 `#A61629` 强调(非整行红底);⑤ 本轮收敛不扩战线,后续另开。
 - splash 渐变辉光层未实现(2026-07-18 backlog,待用户表态)。

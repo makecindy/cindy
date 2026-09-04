@@ -185,6 +185,12 @@ export interface IOSSimulatorViewerRouteRequest {
   leaseId: string;
 }
 
+export type IOSSimulatorCopyScreenshotRequest = IOSSimulatorViewerRouteRequest;
+
+export interface IOSSimulatorCopyScreenshotResult {
+  ok: true;
+}
+
 export interface IOSSimulatorViewerVisibilityRequest extends IOSSimulatorViewerRouteRequest {
   visible: boolean;
   /** Identifies one renderer effect lifetime so a stale close cannot stop its replacement. */

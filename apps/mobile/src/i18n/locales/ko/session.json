@@ -250,7 +250,8 @@
   },
   "shareImage": {
     "title": "대화 공유",
-    "selectedCount": "{{count}}개 선택됨",
+    "subtitle_one": "메시지 {{count}}개 선택",
+    "subtitle_other": "메시지 {{count}}개 선택",
     "selectAll": "전체 선택",
     "clearAll": "선택 해제",
     "cancel": "공유 취소",

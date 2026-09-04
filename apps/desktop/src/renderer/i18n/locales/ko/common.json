@@ -565,12 +565,14 @@
         "hint": "처음 닫을 때 묻습니다. 나중에 여기에서 변경할 수 있습니다.",
         "aria": "기본 창을 닫을 때 동작 선택",
         "tray": "트레이로 최소화",
+        "minimize": "창 최소화",
         "quit": "Cindy 종료"
       },
       "closePrompt": {
         "title": "Cindy 닫기",
         "message": "기본 창을 닫을 때 어떻게 할까요?",
-        "detail": "시스템 트레이로 최소화하면 작업이 계속 실행됩니다. 종료하려면 트레이 아이콘을 오른쪽 클릭하세요. 나중에 설정에서 변경할 수 있습니다."
+        "detail": "시스템 트레이로 최소화하면 작업이 계속 실행됩니다. 종료하려면 트레이 아이콘을 오른쪽 클릭하세요. 나중에 설정에서 변경할 수 있습니다.",
+        "linuxDetail": "창을 최소화해도 작업은 계속 실행됩니다. 작업 표시줄이나 창 개요에서 Cindy를 복원할 수 있으며, 나중에 설정에서 이 선택을 변경할 수도 있습니다."
       },
       "trayMenu": {
         "show": "Cindy 열기",
@@ -752,7 +754,7 @@
         "description": "Linux는 현재 Ubuntu 22.04 / 24.04용 .deb로 제공됩니다. 새 빌드가 있으면 앱이 다운로드하고, 설치할 때 시스템 비밀번호를 묻습니다.",
         "item1": "처음 설치할 때는 sudo apt install ./cindy-<버전>-<아키텍처>.deb 를 사용하세요(x64는 amd64, arm64는 arm64).",
         "item2": "앱 안 업데이트는 .deb를 다운로드합니다. 업데이트를 선택하면 시스템 권한 확인 후 덮어써 설치합니다.",
-        "item3": "설치에 비밀번호가 필요하므로 Linux에서는 Beta 채널과 유휴 상태 자동 설치를 제공하지 않습니다."
+        "item3": "Linux x64에서는 Beta 채널을 사용할 수 있지만 arm64는 아직 지원하지 않습니다. 설치에는 시스템 권한 승인이 필요하므로 두 아키텍처 모두 유휴 상태 자동 설치를 지원하지 않습니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
@@ -2659,28 +2661,15 @@
     },
     "subagentModels": {
       "title": "하위 에이전트",
-      "description": "Claude Code와 Codex의 하위 에이전트 모델을 선택합니다.",
+      "description": "Claude Code 기본 모델과 Codex의 하위 에이전트 할당 방식을 설정합니다.",
       "unspecified": "기본 설정 사용",
-      "hint": "Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 자동으로 적용됩니다.",
-      "codexV2ModelHint": "Claude Code는 선택한 모델을 기본값으로 사용합니다. 모든 로컬 Codex 하위 에이전트는 선택한 모델과 추론 강도로 고정됩니다.",
-      "codexOauthCompatibilityHint": "고정 하위 에이전트 라우팅과 ChatGPT OAuth는 안전하게 함께 사용할 수 없습니다. 메인 작업이 ChatGPT OAuth를 사용하거나 비 OAuth 메인 작업에서 ChatGPT OAuth 하위 에이전트를 선택하면 여기에서 지정한 모델, 제공자, 추론 강도는 적용되지 않고 메인 작업의 Codex 기본 하위 에이전트가 사용됩니다.",
+      "hint": "Claude Code 변경 사항은 새 작업부터 적용됩니다. Codex 스마트 라우팅은 Codex가 유휴 상태가 된 뒤 적용됩니다.",
       "saveFailed": "하위 에이전트 설정 저장 실패",
-      "guardrails": {
-        "title": "Codex 하위 에이전트 가드레일",
-        "enableHint": "Codex가 작업 중 일회성 하위 에이전트를 생성하도록 허용합니다. 끄면 이전 버전 멀티 에이전트(V1)와 Sol / Terra(V2) 모두에 적용됩니다.",
-        "enableAria": "Codex 하위 에이전트 허용",
-        "cindyPolicyLabel": "Cindy 사용자 지정 하위 에이전트 정책 사용",
-        "cindyPolicyHint": "켜면 Cindy가 탐색 작업에서 Codex가 하위 에이전트를 적극적으로 사용하도록 유도하는 지침을 주입합니다. 이미 계획과 위임에 능숙한 모델에서는 추가 지침이 오히려 역효과를 낼 수 있습니다. 끄면 주입을 중단하고 Codex의 기본 동작을 사용합니다.",
-        "cindyPolicyAria": "Cindy 사용자 지정 하위 에이전트 정책 사용",
-        "concurrencyLabel": "하위 에이전트 동시 실행 한도",
-        "concurrencyHint": "동시에 실행할 수 있는 하위 에이전트 수의 상한입니다. 하위 에이전트는 각각 모델 할당량을 소비합니다. Ultra 단계에서 동시 실행이 8에 도달하면 Codex가 경고합니다.",
-        "concurrencyFollowDefault": "Codex 기본값 따르기(이전 버전 V1은 6, Sol / Terra는 3)",
-        "concurrencyAria": "Codex 하위 에이전트 동시 실행 한도 조정",
-        "concurrencyCustomAria": "Codex 하위 에이전트 동시 실행 한도 사용자 지정",
-        "nestedLabel": "하위 에이전트의 하위 에이전트 생성 허용",
-        "nestedHint": "이전 버전 멀티 에이전트(V1)에만 적용되며 Sol / Terra(V2)는 이 설정을 무시합니다.",
-        "nestedAria": "하위 에이전트의 하위 에이전트 생성 허용",
-        "localOnlyHint": "이 가드레일은 이 컴퓨터에서 실행되는 Codex에만 적용되며 SSH 원격의 Codex에는 영향을 주지 않습니다."
+      "smartRouting": {
+        "label": "Codex 스마트 라우팅",
+        "nativeHint": "끄면 Cindy 재정의 없이 Codex 기본 Sol / Terra 할당을 사용합니다.",
+        "enabledHint": "켜면 Codex가 작업별로 더 많은 연결된 모델을 선택할 수 있으며 카드에는 실제 사용 모델이 표시됩니다.",
+        "aria": "Codex 스마트 라우팅 사용"
       },
       "toast": {
         "saved": "하위 에이전트 설정이 저장되었습니다",
@@ -5791,20 +5780,32 @@
   "usageHistory": {
     "description": "이 기기의 Cindy 내부에서 발생한 토큰 사용량입니다. 기능 출시 시점부터 기록이 쌓이며 이전 기록은 채워지지 않습니다.",
     "empty": "아직 사용 기록이 없습니다. 대화를 실행하면 쌓이기 시작합니다.",
+    "loadFailed": "사용량 기록을 불러오지 못했습니다. 설정을 다시 열어 재시도해 주세요.",
+    "range": {
+      "label": "기간",
+      "ariaLabel": "사용량 기간 필터",
+      "all": "전체 기간",
+      "30d": "최근 30일",
+      "7d": "최근 7일",
+      "today": "오늘"
+    },
     "cacheHitTooltip": "캐시 읽기 ÷ (입력 + 캐시 읽기 + 캐시 쓰기) — 메시지 카드와 동일한 기준입니다.",
     "summary": {
       "title": "개요"
     },
     "stats": {
       "todayTokens": "오늘 토큰",
+      "todayTokensInRange": "{{range}} 토큰",
       "totalTokens": "최근 30일 토큰",
+      "totalTokensInRange": "{{range}} 토큰",
       "streak": "연속 활동일",
       "cacheHitRate": "캐시 적중률(30일)",
+      "cacheHitRateInRange": "캐시 적중률({{range}})",
       "models": "사용한 모델"
     },
     "heatmap": {
       "title": "활동 히트맵",
-      "subtitle": "최근 20주",
+      "subtitle": "최근 {{count}}주",
       "emptyCell": "해당 날짜에 사용 기록 없음"
     },
     "daily": {
@@ -5817,6 +5818,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "최근 30일 토큰",
+        "totalInRange": "{{range}} 토큰",
         "share": "비중",
         "today": "오늘",
         "hitRate": "캐시 적중률",
@@ -5829,6 +5831,7 @@
       "col": {
         "model": "모델",
         "total": "총 토큰",
+        "totalInRange": "{{range}} 토큰",
         "share": "비중",
         "input": "입력",
         "output": "출력",
@@ -5839,7 +5842,7 @@
     },
     "tasks": {
       "title": "토큰 사용이 많은 세션",
-      "subtitle": "최근 30일 동안 활동한 세션을 누적 토큰 순으로 정렬",
+      "subtitle": "{{range}} 동안 활동한 세션을 누적 토큰 순으로 정렬",
       "col": {
         "task": "세션",
         "model": "모델",
@@ -5849,7 +5852,7 @@
         "lastActive": "마지막 활동"
       },
       "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
-      "tokensTooltip": "해당 세션의 누적 값이며 최근 30일 증가분이 아닙니다."
+      "tokensTooltip": "해당 세션의 누적 값입니다. {{range}}은(는) 활성 세션을 필터링하는 데만 사용되며 해당 기간의 증가분이 아닙니다."
     }
   },
   "usageDashboard": {
@@ -6139,6 +6142,10 @@
       "rotateDevice": "기기 회전",
       "lockScreen": "화면 잠금",
       "unlockScreen": "화면 잠금 해제",
+      "copyScreenshot": "스크린샷 복사",
+      "screenshotCopied": "시뮬레이터 스크린샷을 복사했습니다",
+      "screenshotCopyFailed": "시뮬레이터 스크린샷을 복사하지 못했습니다. 다시 시도하세요.",
+      "moreControls": "추가 시뮬레이터 제어",
       "controlsUnavailable": "시뮬레이터 제어를 일시적으로 사용할 수 없습니다",
       "enterTextBeforeSending": "보낼 텍스트를 먼저 입력하세요",
       "agentBusyTitle": "Agent가 이 기기를 사용 중",
@@ -6174,7 +6181,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "현재 Native 가속을 사용할 수 없습니다. 다시 시도하는 동안에도 WDA 화면과 제어는 계속 사용할 수 있습니다.",
+        "available": "현재 Native 가속을 사용할 수 없습니다. 프레임 속도가 낮아지고 조작 반응이 느려질 수 있습니다.",
         "action": "Native 복구 시도",
         "recovering": "Native 가속을 복구하는 중입니다. 현재 WDA 화면과 제어는 계속 사용할 수 있습니다.",
         "recoveringAction": "Native 복구 중…",
@@ -6201,7 +6208,8 @@
         "stop": "기기 중지 중…",
         "detach": "기기 연결 해제 중…",
         "grant": "Agent 제어 권한 업데이트 중…",
-        "control": "입력 제어 업데이트 중…"
+        "control": "입력 제어 업데이트 중…",
+        "screenshot": "시뮬레이터 스크린샷 복사 중…"
       },
       "setup": {
         "localMac": "Mac의 로컬 Cindy 세션에서 이 프로젝트를 여세요.",
@@ -6825,7 +6833,6 @@
       "moreLabel": "더 보기, 현재 사용자: {{name}}",
       "menuSettings": "설정",
       "menuAddAccount": "다른 계정으로 로그인",
-      "menuLogout": "로그아웃",
       "canaryBadge": "Canary 사용자",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -6927,6 +6934,58 @@
     }
   },
   "newChat": {
+    "homeSuggestions": {
+      "shuffle": "다른 제안",
+      "dismiss": "다시 보지 않기",
+      "downloadsDesktop": {
+        "label": "다운로드와 바탕화면에 쌓인 것을 정리 목록으로",
+        "prompt": "다운로드 폴더와 바탕화면을 보고 무엇이 쌓였는지 정리해 줘. 용량이 큰 것, 분명한 중복, 반년 이상 안 만진 것, 안전하게 보관할 수 있는 것을 목록으로. 각 항목은 위치, 크기, 이유를 밝혀. 이번 라운드는 읽기만. 옮기거나 지우기 전에 내가 확인할게."
+      },
+      "whatCindyCanDo": {
+        "label": "이 컴퓨터를 보고 뭘 도와줄 수 있는지 알려줘",
+        "prompt": "이 컴퓨터에 설치된 것과 평소 다루는 종류를 보고 내가 무엇을 하는 사람인지 가늠해. 그다음 네 능력으로 구체적으로 도와줄 일을 몇 가지, 한 문장씩: 언제 쓰는지, 무엇을 덜어 주는지. 기능 목록을 읽지 말고 이 머신에 실제로 있는 것에 맞춰."
+      },
+      "recentDocs": {
+        "label": "최근 문서를 보고 목록으로 정리해 줘",
+        "prompt": "최근에 열거나 고친 문서를 주제별로 묶고, 일이 몇 더미인지, 각각 어디까지 왔는지, 방치된 게 있는지 알려 줘. 각 파일 위치가 있는 목록. 읽기 전용. 파일은 건드리지 마."
+      },
+      "listCodeProjects": {
+        "label": "이 컴퓨터의 코드 프로젝트를 나열해 줘",
+        "prompt": "자주 쓰는 디렉터리에서 코드 프로젝트를 찾아, 각각 무엇을 하는지, 무엇으로 짰는지, 마지막 변경이 언제인지 한 문장으로. 본선처럼 보이는 것과 포기한 것처럼 보이는 것을 나눠. 하나도 없으면 없다고 말해. 이번 라운드는 읽기 전용. 파일은 바꾸지 마."
+      },
+      "storageUsage": {
+        "label": "디스크를 무엇이 차지하는지 살펴봐",
+        "prompt": "이 컴퓨터 저장 공간을 큰 것부터 보고, 캐시, 중복, 잊힌 오래된 것을 구분해. 점유 순위와 무엇을 지워야 공간이 가장 많이 남는지 한 줄 결론. 집계만. 지우지 마."
+      },
+      "unusedApps": {
+        "label": "설치해 두고 안 쓰는 앱을 찾아줘",
+        "prompt": "설치된 앱을 용량과 최근 사용으로 줄 세우고, 오래 안 열었는데 자리를 많이 차지하는 것을 짚어. 목록만. 아직 제거하지 마."
+      },
+      "uncommittedChanges": {
+        "label": "최근 프로젝트의 미커밋을 확인해 줘",
+        "prompt": "최근에 만진 코드 프로젝트의 커밋하지 않은 변경을 보고, 무엇을 하는지, 분명한 문제나 빠뜨린 게 있는지 알려 줘. 읽기 전용. 파일은 건드리지 말고 커밋도 하지 마."
+      },
+      "devEnvironment": {
+        "label": "개발 환경을 한 번 점검해 줘",
+        "prompt": "이 머신의 개발 환경을 점검: 언어 런타임과 패키지 매니저, 각 버전, 충돌이나 너무 오래된 것, git 설정 문제. 현황 목록과 먼저 고칠 곳 한 줄. 점검만. 설치하거나 설정을 바꾸지 마."
+      },
+      "whySlow": {
+        "label": "컴퓨터가 왜 느린지 알아봐",
+        "prompt": "이 컴퓨터가 왜 느린지 알아봐: 부하, 메모리, 디스크, 켜 둔 시간, CPU/메모리를 많이 쓰는 프로세스. 근거 있는 짧은 결론. 읽기 전용. 아무것도 바꾸지 말고, 프로세스를 죽이지 말고, 무엇을 열어 뒀는지도 묻지 마."
+      },
+      "diagnoseNetwork": {
+        "label": "네트워크 속도를 진단해 줘",
+        "prompt": "이 컴퓨터 네트워크를 진단: ping, DNS, 유선인지 Wi-Fi인지. 한두 문장 결론. 긴 속도 테스트는 하지 마. 통신사도 묻지 마."
+      },
+      "subscriptionSpend": {
+        "label": "구독 지출을 집계해 줘",
+        "prompt": "다운로드, 영수증, 로컬 청구서에서 구독 결제를 찾아 서비스 이름과 금액을 나열해. 없으면 없다고 말해. 구독은 바꾸지 말고, 카드도 묻지 말고, 메일에도 로그인하지 마."
+      },
+      "expenseTracker": {
+        "label": "간단한 가계부 도구를 만들어 줘",
+        "prompt": "이 대화 작업 공간에 바로 열 수 있는 로컬 가계부를 만들어: 날짜, 금액, 분류, 메모. 백엔드 없이. 추가 기능도 묻지 마."
+      }
+    },
     "noProvider": {
       "title": "이 모델에 연결된 소스가 없습니다",
       "description": "현재 모델에 연결된 소스가 없습니다. 설정에서 소스를 연결한 후 전송하세요.",
@@ -7510,6 +7569,15 @@
     }
   },
   "onboarding": {
+    "homeZeroModel": {
+      "title": "Cindy에 로그인하고 계속하기",
+      "desc": "아직 모델이 없습니다. Cindy에 로그인하면 수십 종의 최상위 모델을 사용할 수 있습니다.",
+      "cta": "Cindy에 로그인",
+      "cloudTitle": "Cindy로 계속하기",
+      "cloudDesc": "아직 모델이 없습니다. 공식 서비스를 켜면 수십 종의 최상위 모델을 사용할 수 있습니다.",
+      "cloudCta": "시작하기",
+      "ownApi": "내 모델 API가 있습니다"
+    },
     "connectProvider": {
       "title": "모델 제공자를 연결하고 시작하세요",
       "desc": "아직 사용 가능한 모델이 없습니다. 제공자를 연결하면 대화를 시작할 수 있습니다.",
@@ -8638,9 +8706,6 @@
         "tasksLoadFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중…",
         "tasksPartiallyFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중이며 불러온 내용만 표시합니다",
         "devicesLoading": "원격 기기를 불러오는 중…",
-        "devicesLoadFailed": "원격 기기 목록을 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
-        "devicesPartiallyFailed": "원격 기기 목록을 새로 고치지 못했습니다. 불러온 내용만 표시합니다.",
-        "retryDevices": "기기 다시 불러오기",
         "remoteSettings": "원격 연결 설정",
         "multiSelect": "다중 선택",
         "deselect": "선택 해제",
@@ -9016,9 +9081,24 @@
           "merged": "병합됨",
           "closed": "닫힘"
         },
-        "needsToken": "로컬 gh CLI가 로그인되어 있지 않습니다. Agent에게 gh auth login을 한 번 실행하게 하면 PR 상태가 표시됩니다",
+        "ghNotLoggedIn": "이 컴퓨터의 gh가 GitHub에 로그인되어 있지 않아 PR 상태를 볼 수 없습니다",
+        "ghMissing": "GitHub CLI(gh)를 찾을 수 없어 PR 상태를 볼 수 없습니다",
+        "notFound": "PR이 없거나 현재 계정으로는 볼 수 없습니다",
         "statusUnknown": "상태를 가져오지 못했습니다",
         "openAria": "브라우저에서 PR #{{number}} 열기",
+        "clickToOpen": "클릭하여 브라우저에서 PR 열기",
+        "guidance": {
+          "login": {
+            "hint": "클릭하면 Agent가 로그인을 도와줍니다",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub 로그인 맡기기",
+            "prompt": "GitHub CLI에 로그인해 주세요: `gh auth login -h github.com -w`를 실행하고 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+          },
+          "install": {
+            "hint": "클릭하면 Agent가 설치와 로그인을 도와줍니다",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub CLI 설치와 로그인 맡기기",
+            "prompt": "GitHub CLI(gh)를 설치해 주세요(macOS는 `brew install gh`, Windows는 `winget install GitHub.cli`). 그다음 `gh auth login -h github.com -w`를 실행해 로그인하고, 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+          }
+        },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건"
       }
     },
@@ -10116,6 +10196,11 @@
       "clearSearch": "스킬 검색 지우기",
       "noSearchResults": "일치하는 스킬을 찾을 수 없습니다",
       "catalogFiltersAria": "SkillHub 카테고리",
+      "categoryFiltersAria": "카테고리로 스킬 필터링",
+      "scrollCategoriesLeft": "왼쪽 카테고리 더 보기",
+      "scrollCategoriesRight": "오른쪽 카테고리 더 보기",
+      "categoryScrollAtStart": "첫 번째 카테고리입니다",
+      "categoryScrollAtEnd": "마지막 카테고리입니다",
       "catalogFilter": {
         "public": "공개",
         "organization": "조직",
@@ -10415,14 +10500,12 @@
       "visibilityPublicDesc": "모든 사용자에게 공개 · 기본값",
       "versionLabel": "버전",
       "versionFormatHint": "형식: x.y.z (예: 1.0.1)",
-      "categoryLabel": "분류",
-      "categoryAuto": "태그 없음",
-      "categoryPlaceholder": "분류 선택",
-      "categoryLoading": "분류 불러오는 중…",
-      "categoryLoadFailed": "분류를 불러오지 못했습니다. 다시 시도하세요",
-      "categoryEmpty": "사용 가능한 분류가 없습니다",
-      "categoryRequired": "게시 전에 분류를 선택하세요",
-      "categoryInvalid": "이 분류는 더 이상 사용할 수 없습니다. 다시 선택하세요",
+      "categoryLabel": "태그",
+      "categoryPlaceholder": "태그 선택 (선택 사항)",
+      "categoryLoading": "태그 불러오는 중…",
+      "categoryLoadFailed": "태그를 불러오지 못했습니다. 다시 시도하세요",
+      "categoryEmpty": "사용 가능한 플랫폼 태그가 없습니다",
+      "categoryInvalid": "더 이상 사용할 수 없는 태그가 있습니다. 다시 선택하세요",
       "retryLoadCategories": "다시 시도",
       "extraDeptGroup": "부서",
       "extraTeamGroup": "팀",
@@ -10783,7 +10866,7 @@
     },
     "confirm": {
       "logoutTitle": "로그아웃",
-      "logoutDescription": "이 기기의 모든 계정에서 로그아웃하시겠습니까?",
+      "logoutDescription": "현재 계정에서 로그아웃하시겠습니까?",
       "logoutConfirm": "로그아웃",
       "cancel": "취소",
       "sessionExpiredTitle": "로그인이 만료됨",
@@ -11234,6 +11317,32 @@
         "action": "주문 ID {{id}} 복사",
         "success": "주문 ID를 복사했습니다",
         "failed": "주문 ID를 복사하지 못했습니다. 다시 시도해 주세요."
+      },
+      "invoice": {
+        "action": "세금계산서 신청",
+        "title": "세금계산서 신청",
+        "description": "세금계산서 발급을 신청하려면 다음 정보를 {{email}}로 보내 주세요.",
+        "requiredInfo": "이메일에 다음 정보를 포함해 주세요:",
+        "emailSubject": "주문 {{orderId}} 세금계산서 발급 신청",
+        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
+        "sendAction": "세금계산서 신청 보내기",
+        "emailCopied": "고객센터 이메일을 복사했습니다",
+        "emailCopyFailed": "고객센터 이메일을 복사하지 못했습니다. 다시 시도해 주세요.",
+        "sendFailed": "이메일 앱을 열 수 없습니다. {{email}}로 직접 이메일을 보내 주세요.",
+        "gmailFallbackTitle": "Gmail을 대신 열까요?",
+        "gmailFallbackDescription": "청구서 신청에 주문 정보가 포함되어 있습니다. Gmail을 열면 이 정보가 Google에 공유됩니다. 계속하시겠어요?",
+        "gmailFallbackConfirm": "Gmail 열기",
+        "notAvailable": "정보 없음",
+        "fields": {
+          "orderId": "주문 ID",
+          "application": "애플리케이션",
+          "paymentMethod": "결제 수단",
+          "amount": "발행 금액",
+          "invoiceTitle": "청구서 제목",
+          "contact": "담당자",
+          "phone": "전화번호",
+          "email": "이메일"
+        }
       },
       "states": {
         "completed": "완료",

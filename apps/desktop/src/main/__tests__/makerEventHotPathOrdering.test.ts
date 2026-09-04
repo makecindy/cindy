@@ -548,9 +548,8 @@ describe('maker:event hot path ordering', () => {
     expect(boundaryBlock).toContain("event.type === 'done'");
     expect(boundaryBlock).toContain("event.source !== 'codex'");
     expect(boundaryBlock).toContain('isSuccessfulCodexDoneEventData(event.data)');
-    expect(boundaryBlock).toContain(
-      'markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId)',
-    );
+    expect(boundaryBlock).toContain('markAssistantTurnCompleted(');
+    expect(boundaryBlock).toContain('nativeForkAnchor ? { nativeForkAnchor } : undefined');
     expect(boundaryBlock).toContain(
       'markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId)',
     );

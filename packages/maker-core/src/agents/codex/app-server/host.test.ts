@@ -259,6 +259,24 @@ describe('AppServerHost custom Provider subagent policy', () => {
 });
 
 describe('AppServerHost MCP readiness', () => {
+  it('releases Host-owned resources only on terminal retire and only once', async () => {
+    const onRetired = vi.fn(async () => undefined);
+    const host = new AppServerHost({
+      createTransport: () => new NotificationTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      onRetired,
+    });
+
+    await host.shutdown('transport recovery');
+    expect(onRetired).not.toHaveBeenCalled();
+    await Promise.all([
+      host.retire('task finished'),
+      host.retire('duplicate cleanup'),
+    ]);
+    expect(onRetired).toHaveBeenCalledOnce();
+  });
+
   it('retries a negative tool probe instead of permanently caching it', async () => {
     let available = false;
     const transport = new NotificationTransport((method) => (

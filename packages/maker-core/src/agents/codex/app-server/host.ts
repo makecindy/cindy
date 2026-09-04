@@ -293,12 +293,25 @@ export interface AppServerHostOptions {
   subagentRoute?: {
     providerId: string;
     catalogModel: string;
-    reasoningEffort: ReasoningEffort | null;
+    reasoningEffort?: ReasoningEffort | null;
   };
+  smartSubagentRoutes?: Array<{
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort?: ReasoningEffort | null;
+  }>;
+  /** Frozen identity of the Subagent routing/catalog snapshot used by this host. */
+  codexSubagentRoutingSignature?: string;
+  getSubagentIdentity?: (childThreadId: string) => {
+    model: string;
+    reasoningEffort?: string;
+  } | undefined;
   /** Whether the OpenAI identity provider may use Responses WebSocket on this host. */
   codexOpenAiWebSocketsEnabled?: boolean;
   /** Host-level Subagent route profile used to prevent incompatible local host reuse. */
   codexSubagentRoutingProfile?: CodexSubagentRoutingProfile;
+  /** One-shot cleanup for resources owned by this Host generation, run only on terminal retire. */
+  onRetired?: () => void | Promise<void>;
 }
 
 interface BufferedNotification {
@@ -346,6 +359,7 @@ export class AppServerHost {
 
   private shuttingDown = false;
   private retired = false;
+  private retirementPromise: Promise<void> | null = null;
 
   constructor(private readonly opts: AppServerHostOptions) {
     if (typeof opts.createTransport !== 'function') {
@@ -505,9 +519,24 @@ export class AppServerHost {
   getSubagentRoute(): {
     providerId: string;
     catalogModel: string;
-    reasoningEffort: ReasoningEffort | null;
+    reasoningEffort?: ReasoningEffort | null;
   } | undefined {
     return this.opts.subagentRoute;
+  }
+
+  getSmartSubagentRoutes(): AppServerHostOptions['smartSubagentRoutes'] {
+    return this.opts.smartSubagentRoutes;
+  }
+
+  getSubagentRoutingSignature(): string | undefined {
+    return this.opts.codexSubagentRoutingSignature;
+  }
+
+  getObservedSubagentIdentity(childThreadId: string): {
+    model: string;
+    reasoningEffort?: string;
+  } | undefined {
+    return this.opts.getSubagentIdentity?.(childThreadId);
   }
 
   getOpenAiWebSocketsEnabled(): boolean {
@@ -887,7 +916,20 @@ export class AppServerHost {
     opts?: { throwOnTransportError?: boolean },
   ): Promise<void> {
     this.retired = true;
-    await this.shutdown(reason, opts);
+    this.retirementPromise ??= (async () => {
+      try {
+        await this.shutdown(reason, opts);
+      } finally {
+        await Promise.resolve()
+          .then(() => this.opts.onRetired?.())
+          .catch((error) => {
+            this.logger.warn('app-server Host retirement cleanup failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+      }
+    })();
+    await this.retirementPromise;
   }
 
   /**
@@ -1546,6 +1588,11 @@ export class AppServerHost {
   /** 当前活跃 subscriber 数 — diagnostics, 不参与业务。 */
   get activeSubscriptions(): number {
     return this.subscribers.size;
+  }
+
+  /** Whether this process already owns the live state for a root thread. */
+  hasThreadSubscription(threadId: string): boolean {
+    return this.subscribers.has(threadId);
   }
 
   /** 是否已经 spawn 过子进程 (但可能已 close)。 */

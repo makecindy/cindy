@@ -448,6 +448,11 @@ export interface ForkSdkSessionOptions {
    * Codex 精确 fork 使用 thread/rollback 实现；Claude 路径不消费此字段。
    */
   tailTurnsToDrop?: number;
+  /**
+   * Codex only: provider-native turn boundary for a direct thread/fork.
+   * Old messages omit it and keep using tailTurnsToDrop + rollback.
+   */
+  lastTurnId?: string;
   /** 新 session title (可选, 仅给 SDK 写入 jsonl 头)。 */
   title?: string;
   /** workingDir — 用于定位 Claude SDK project JSONL 并修复 fork 后的 uuid 引用。 */
@@ -476,6 +481,8 @@ export interface ForkSdkSessionResult {
    * upToMessageId 锚点能在新 jsonl 里查到。
    */
   uuidMap: Map<string, string>;
+  /** Codex only: copied native turn ids remain valid in the returned child thread. */
+  usedNativeForkAnchor?: boolean;
   /** Pi-only runtime command catalog captured from the forked runtime, if available. */
   runtimeCapabilities?: PiRuntimeCapabilityManifest;
 }

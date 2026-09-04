@@ -162,6 +162,29 @@ describe('ConfirmDialog 长内容布局', () => {
     expect(flashScrollbar).not.toHaveBeenCalled();
   });
 
+  it('三按钮长文案保持单行,空间不足时整组换行', () => {
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="连接恢复"
+        description="说明"
+        confirmText="打开 ChatGPT App"
+        tertiaryText="重新登录 ChatGPT"
+        cancelText="稍后处理"
+      />,
+    );
+    const dialog = screen.getByRole('alertdialog');
+    const actionRow = screen.getByRole('button', { name: '打开 ChatGPT App' })
+      .parentElement as HTMLElement;
+    expect(actionRow.className).toContain('flex-wrap');
+    for (const label of ['打开 ChatGPT App', '重新登录 ChatGPT', '稍后处理']) {
+      expect(screen.getByRole('button', { name: label }).className).toContain('whitespace-nowrap');
+      expect(screen.getByRole('button', { name: label }).className).toContain('shrink-0');
+    }
+    expect(dialog).toBeTruthy();
+  });
+
   it('手输确认逐字匹配且正文可选择，前后空格不能绕过 id 核对', () => {
     const onConfirm = vi.fn();
     render(

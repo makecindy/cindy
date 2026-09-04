@@ -106,6 +106,7 @@ import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import {
   CODEX_IMAGE_GENERATION_ACTOR_HEADER,
+  codexCustomProviderRoutesSignature,
   findCodexAppliedCustomProviderRoute,
   isCodexCustomProviderNamespacePath,
   parseCodexCustomProviderPath,
@@ -130,6 +131,19 @@ const sessionToThreads = new Map<string, Set<string>>();
 const threadToSession = new Map<string, string>();
 const subagentRouteByParentThread = new Map<string, CodexSubagentRouteSnapshot>();
 const subagentRouteByThread = new Map<string, CodexSubagentRouteSnapshot>();
+const smartSubagentRoutesByParentThread = new Map<
+  string,
+  ReadonlyMap<string, CodexSubagentRouteSnapshot>
+>();
+const smartSubagentRoutesByThread = new Map<
+  string,
+  ReadonlyMap<string, CodexSubagentRouteSnapshot>
+>();
+export interface CodexObservedSubagentIdentity {
+  model: string;
+  reasoningEffort?: string;
+}
+const observedSubagentIdentityByThread = new Map<string, CodexObservedSubagentIdentity>();
 const reviewerModelBySession = new Map<string, string>();
 const httpRecoveryReasonByThread = new Map<string, string>();
 
@@ -142,6 +156,18 @@ let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
 const _controlPlaneHandles = new Map<CodexProxyAuthInjection, ProxyHandle>();
 const _controlPlaneStartPromises = new Map<CodexProxyAuthInjection, Promise<void>>();
+interface CustomContextProxyEntry {
+  handle: ProxyHandle;
+  authInjection: CodexProxyAuthInjection;
+  routeSignature: string;
+  scopeGeneration: number;
+}
+const _customContextHandles = new Map<string, CustomContextProxyEntry>();
+const _customContextStartPromises = new Map<
+  string,
+  { authInjection: CodexProxyAuthInjection; routeSignature: string; promise: Promise<void> }
+>();
+const _customContextGenerations = new Map<string, number>();
 let _disposeGeneration = 0;
 let dumpSeq = 0;
 
@@ -342,6 +368,18 @@ function subagentRouteFromHeaders(
   return subagentRouteByThread.get(threadId);
 }
 
+function smartSubagentRouteFromHeaders(
+  headers: Readonly<Record<string, string>>,
+  requestedModel: string,
+): CodexSubagentRouteSnapshot | undefined {
+  if (!requestedModel || !isCollabSpawnRequest(headers)) return undefined;
+  const threadId = selectedThreadIdFromHeaders(headers);
+  if (threadId === 'unknown') return undefined;
+  const route = smartSubagentRoutesByThread.get(threadId)?.get(requestedModel);
+  if (route) subagentRouteByThread.set(threadId, route);
+  return route;
+}
+
 /**
  * Resolve only the independent Subagent route carried by this WS upgrade.
  *
@@ -435,23 +473,65 @@ function applyReasoningEffortOverride(
   return next;
 }
 
+function observedReasoningEffort(body: Record<string, unknown>): string | undefined {
+  if (!isPlainObject(body.reasoning) || typeof body.reasoning.effort !== 'string') {
+    return undefined;
+  }
+  return body.reasoning.effort;
+}
+
+function recordObservedSubagentIdentity(
+  headers: Readonly<Record<string, string>>,
+  model: string,
+  reasoningEffort?: string,
+): void {
+  if (!model || !isCollabSpawnRequest(headers)) return;
+  const threadId = selectedThreadIdFromHeaders(headers);
+  if (threadId === 'unknown') return;
+  observedSubagentIdentityByThread.set(threadId, {
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  });
+}
+
+export function getObservedCodexSubagentIdentity(
+  childThreadId: string,
+): CodexObservedSubagentIdentity | undefined {
+  return observedSubagentIdentityByThread.get(childThreadId);
+}
+
 /**
- * 个性化 Codex Subagent 是强制路由：Codex 内部先继承父模型创建子线程，首个
- * collab_spawn 请求按血缘登记后在这里替换成用户冻结的模型与 effort。放在所有
- * Provider 能力/兼容 transforms 之前，后续判断看到的始终是真实执行模型。
+ * Codex Subagent 请求的统一观察/路由入口。旧固定路由按冻结快照替换模型；智能
+ * 调配按 Codex 在 spawn_agent 中实际选出的 model 查 Provider。没有 Cindy 路由时
+ * 也记录原生 Sol/Terra 的真实请求身份，供卡片展示。必须放在 Provider 兼容层之前。
  */
 function createForcedSubagentRequestTransform(): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
     // 先触发首个 collab_spawn 的懒血缘登记，再读取子线程冻结路由。
     sessionIdFromHeaders(ctx.headers);
-    const route = subagentRouteFromHeaders(ctx.headers);
-    if (!route) return null;
+    const requestedModel = typeof body.model === 'string' ? body.model : '';
+    const route = subagentRouteFromHeaders(ctx.headers)
+      ?? smartSubagentRouteFromHeaders(ctx.headers, requestedModel);
+    if (!route) {
+      recordObservedSubagentIdentity(
+        ctx.headers,
+        requestedModel,
+        observedReasoningEffort(body),
+      );
+      return null;
+    }
     const next: Record<string, unknown> = {
       ...body,
       model: route.catalogModel,
     };
-    return applyReasoningEffortOverride(next, route.reasoningEffort);
+    const routed = applyReasoningEffortOverride(next, route.reasoningEffort);
+    recordObservedSubagentIdentity(
+      ctx.headers,
+      route.catalogModel,
+      observedReasoningEffort(routed),
+    );
+    return routed;
   };
 }
 
@@ -2808,6 +2888,7 @@ function createCodexImageGenerationForwardLifecycleObserver(
 function resolveCodexCustomProviderRoutingDecision(
   body: unknown,
   ctx: RequestTransformCtx,
+  frozenRoutes?: readonly CodexCustomProviderRoute[],
 ): RoutingDecision | null | Promise<RoutingDecision | null> | undefined {
   const parsed = parseCodexCustomProviderPath(ctx.url);
   if (parsed.kind === 'not-custom-provider-route') return undefined;
@@ -2815,7 +2896,9 @@ function resolveCodexCustomProviderRoutingDecision(
     return codexCustomProviderRouteFailure(400, 'invalid_custom_provider_route');
   }
 
-  const route = findCodexAppliedCustomProviderRoute(parsed.routeId);
+  const route = frozenRoutes === undefined
+    ? findCodexAppliedCustomProviderRoute(parsed.routeId)
+    : frozenRoutes.find((candidate) => candidate.routeId === parsed.routeId);
   if (!route) return codexCustomProviderRouteFailure(403, 'custom_provider_route_unavailable');
 
   if (parsed.pathKind === 'images' && route.capabilities.imageGeneration !== true) {
@@ -2911,9 +2994,14 @@ function resolveCodexCustomProviderRoutingDecision(
 
 export function createModelRoutingTransform(
   frozenAuthInjection?: CodexProxyAuthInjection,
+  frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
 ): RoutingTransform {
   return (body, ctx) => {
-    const customProviderRoute = resolveCodexCustomProviderRoutingDecision(body, ctx);
+    const customProviderRoute = resolveCodexCustomProviderRoutingDecision(
+      body,
+      ctx,
+      frozenCustomProviderRoutes,
+    );
     if (customProviderRoute !== undefined) return customProviderRoute;
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
@@ -3255,6 +3343,7 @@ export function withCodexUpstreamRecording(
 
 function createCodexProxyHandle(
   frozenAuthInjection?: CodexProxyAuthInjection,
+  frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
 ): Promise<ProxyHandle> {
   const execAdapter = createResponsesCustomToolFunctionAdapter(['exec']);
   return createAnthropicCompatProxy({
@@ -3270,7 +3359,7 @@ function createCodexProxyHandle(
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
-      createModelRoutingTransform(frozenAuthInjection),
+      createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes),
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(
@@ -3323,16 +3412,19 @@ function createCodexProxyHandle(
         });
         return null;
       }
-      // 独立 Subagent Provider 需要 HTTP body transform，但父 thread 不需要。
-      // bundled Codex 在每次 upgrade 都带 thread/session 身份，collab_spawn 还带
-      // parent thread id；只拒绝确实命中路由快照的子 thread，426 会让该子会话
-      // 自己降到 HTTP，不影响父 thread 的预热/复用 socket。
-      const subagentRoute = subagentRouteForWebSocketUpgrade(headers);
-      if (subagentRoute) {
+      // Subagent 必须走 HTTP，proxy 才能读取本次实际 model 并按智能目录路由；父
+      // thread 仍保留 WS。bundled Codex 的 collab_spawn upgrade 带有明确身份，
+      // 只拒绝这类 child，不影响父 thread 的预热/复用 socket。
+      if (isCollabSpawnRequest(headers)) {
+        const subagentRoute = subagentRouteForWebSocketUpgrade(headers);
         log.info('codex websocket declined for subagent HTTP routing', {
           threadId,
-          providerId: subagentRoute.providerId,
-          catalogModel: subagentRoute.catalogModel,
+          ...(subagentRoute
+            ? {
+                providerId: subagentRoute.providerId,
+                catalogModel: subagentRoute.catalogModel,
+              }
+            : {}),
         });
         return null;
       }
@@ -3445,6 +3537,123 @@ export function getCodexControlPlaneProxyEndpoint(
 }
 
 /**
+ * Start a one-session proxy whose auth shape and custom Provider routes are frozen together.
+ * The scope key belongs to the matching custom-context AppServerHost and must be released when
+ * that Host is retired; ordinary transport recovery keeps the lease alive.
+ */
+export async function ensureCodexCustomContextProxyReady(
+  scopeKey: string,
+  authInjection: CodexProxyAuthInjection,
+  routes: readonly CodexCustomProviderRoute[],
+): Promise<void> {
+  const key = scopeKey.trim();
+  if (!key) throw new Error('custom-context Codex proxy requires a scope key');
+  const routeSignature = codexCustomProviderRoutesSignature(routes);
+  const current = _customContextHandles.get(key);
+  if (
+    current?.authInjection === authInjection
+    && current.routeSignature === routeSignature
+  ) return;
+  const starting = _customContextStartPromises.get(key);
+  if (
+    starting?.authInjection === authInjection
+    && starting.routeSignature === routeSignature
+  ) return starting.promise;
+  if (current || starting) await releaseCodexCustomContextProxy(key);
+
+  const scopeGeneration = _customContextGenerations.get(key) ?? 0;
+  const disposeGeneration = _disposeGeneration;
+  let promise!: Promise<void>;
+  promise = (async () => {
+    try {
+      const handle = await createCodexProxyHandle(authInjection, [...routes]);
+      if (
+        disposeGeneration !== _disposeGeneration
+        || scopeGeneration !== (_customContextGenerations.get(key) ?? 0)
+      ) {
+        await handle.dispose().catch((err) => {
+          log.warn('codex custom-context proxy start raced with release', {
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+        return;
+      }
+      _customContextHandles.set(key, {
+        handle,
+        authInjection,
+        routeSignature,
+        scopeGeneration,
+      });
+      log.info('codex custom-context proxy ready', {
+        url: handle.url,
+        routeCount: routes.length,
+      });
+    } catch (err) {
+      _customContextHandles.delete(key);
+      log.error('codex custom-context proxy failed to start', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      if (_customContextStartPromises.get(key)?.promise === promise) {
+        _customContextStartPromises.delete(key);
+      }
+    }
+  })();
+  _customContextStartPromises.set(key, { authInjection, routeSignature, promise });
+  return promise;
+}
+
+export function isCodexCustomContextProxyHandleReady(scopeKey: string): boolean {
+  return _customContextHandles.has(scopeKey);
+}
+
+export function getCodexCustomContextProxyEndpoint(scopeKey: string): string {
+  const handle = _customContextHandles.get(scopeKey)?.handle;
+  if (handle) return handle.url;
+  const fallbackEndpoint = buildCodexGatewayBaseUrl();
+  log.warn('codex custom-context proxy not ready, falling back to direct gateway', {
+    fallbackEndpoint,
+  });
+  return fallbackEndpoint;
+}
+
+export async function releaseCodexCustomContextProxy(scopeKey: string): Promise<void> {
+  const key = scopeKey.trim();
+  if (!key) return;
+  const releaseGeneration = (_customContextGenerations.get(key) ?? 0) + 1;
+  _customContextGenerations.set(key, releaseGeneration);
+  const starting = _customContextStartPromises.get(key)?.promise;
+  if (starting) await starting.catch(() => undefined);
+  const entry = _customContextHandles.get(key);
+  if (!entry || entry.scopeGeneration >= releaseGeneration) {
+    if (
+      !entry
+      && !_customContextStartPromises.has(key)
+      && _customContextGenerations.get(key) === releaseGeneration
+    ) {
+      _customContextGenerations.delete(key);
+    }
+    return;
+  }
+  _customContextHandles.delete(key);
+  try {
+    await entry.handle.dispose();
+  } catch (err) {
+    log.warn('codex custom-context proxy dispose failed', {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    if (
+      !_customContextHandles.has(key)
+      && !_customContextStartPromises.has(key)
+      && _customContextGenerations.get(key) === releaseGeneration
+    ) {
+      _customContextGenerations.delete(key);
+    }
+  }
+}
+
+/**
  * 给 Codex app-server 用的 provider base_url —— 永远是 loopback proxy 的 root。
  *
  * codex 向 `${base_url}/responses` 发请求 → proxy 收 `/responses`。proxy 默认上游
@@ -3468,7 +3677,10 @@ export function registerComposed(
   sessionId: string,
   threadId: string,
   text: string,
-  opts: { subagentRoute?: CodexSubagentRouteSnapshot } = {},
+  opts: {
+    subagentRoute?: CodexSubagentRouteSnapshot;
+    smartSubagentRoutes?: readonly CodexSubagentRouteSnapshot[];
+  } = {},
 ): void {
   bindThreadToSession(sessionId, threadId);
   registry.set(threadId, text);
@@ -3483,6 +3695,21 @@ export function registerComposed(
   } else {
     subagentRouteByParentThread.delete(threadId);
   }
+  const smartRoutes = new Map<string, CodexSubagentRouteSnapshot>();
+  for (const route of opts.smartSubagentRoutes ?? []) {
+    const providerId = route.providerId.trim();
+    const catalogModel = route.catalogModel.trim();
+    if (!providerId || !catalogModel || smartRoutes.has(catalogModel)) continue;
+    smartRoutes.set(catalogModel, {
+      providerId,
+      catalogModel,
+      ...(route.reasoningEffort !== undefined
+        ? { reasoningEffort: route.reasoningEffort }
+        : {}),
+    });
+  }
+  if (smartRoutes.size > 0) smartSubagentRoutesByParentThread.set(threadId, smartRoutes);
+  else smartSubagentRoutesByParentThread.delete(threadId);
   log.debug('registered codex prompt for thread', {
     sessionId,
     threadId,
@@ -3567,6 +3794,11 @@ export function registerChildThread(parentThreadId: string, childThreadId: strin
   } else {
     subagentRouteByThread.delete(childThreadId);
   }
+  const inheritedSmartRoutes =
+    smartSubagentRoutesByThread.get(parentThreadId)
+    ?? smartSubagentRoutesByParentThread.get(parentThreadId);
+  if (inheritedSmartRoutes) smartSubagentRoutesByThread.set(childThreadId, inheritedSmartRoutes);
+  else smartSubagentRoutesByThread.delete(childThreadId);
   log.debug('registered codex child thread route', {
     sessionId,
     parentThreadId,
@@ -3591,6 +3823,9 @@ function clearSessionThreads(sessionId: string): string[] {
       registry.delete(threadId);
       subagentRouteByParentThread.delete(threadId);
       subagentRouteByThread.delete(threadId);
+      smartSubagentRoutesByParentThread.delete(threadId);
+      smartSubagentRoutesByThread.delete(threadId);
+      observedSubagentIdentityByThread.delete(threadId);
       httpRecoveryReasonByThread.delete(threadId);
     }
   }
@@ -3635,6 +3870,9 @@ export async function disposeCodexProxy(): Promise<void> {
   threadToSession.clear();
   subagentRouteByParentThread.clear();
   subagentRouteByThread.clear();
+  smartSubagentRoutesByParentThread.clear();
+  smartSubagentRoutesByThread.clear();
+  observedSubagentIdentityByThread.clear();
   reviewerModelBySession.clear();
   httpRecoveryReasonByThread.clear();
 
@@ -3652,6 +3890,19 @@ export async function disposeCodexProxy(): Promise<void> {
   const controlPlaneHandles = Array.from(_controlPlaneHandles.values());
   _controlPlaneHandles.clear();
 
+  if (_customContextStartPromises.size > 0) {
+    await Promise.allSettled(
+      Array.from(_customContextStartPromises.values(), (entry) => entry.promise),
+    );
+    _customContextStartPromises.clear();
+  }
+  const customContextHandles = Array.from(
+    _customContextHandles.values(),
+    (entry) => entry.handle,
+  );
+  _customContextHandles.clear();
+  _customContextGenerations.clear();
+
   if (h) {
     try {
       await h.dispose();
@@ -3664,6 +3915,15 @@ export async function disposeCodexProxy(): Promise<void> {
       await handle.dispose();
     } catch (err) {
       log.warn('codex control-plane proxy dispose failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }));
+  await Promise.all(customContextHandles.map(async (handle) => {
+    try {
+      await handle.dispose();
+    } catch (err) {
+      log.warn('codex custom-context proxy dispose failed', {
         err: err instanceof Error ? err.message : String(err),
       });
     }

@@ -178,17 +178,57 @@ describe('cjkSeg 跨副本一致性', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const restored = source.slice(start, end).replaceAll(String.raw`\\p`, String.raw`\p`);
-    const register = new Function(
-      `"use strict"; ${restored}; return registerCjkSeg;`,
-    )() as (db: Database.Database) => void;
+    const { register, ensure } = new Function(
+      `"use strict"; ${restored}; return { register: registerCjkSeg, ensure: ensureCjkFtsTempTriggersInstalled };`,
+    )() as {
+      register: (db: Database.Database) => void;
+      ensure: (db: Database.Database) => void;
+    };
     const db = new Database(':memory:');
     try {
+      db.exec(`
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          rewind_at INTEGER
+        );
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+          message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, content,
+          tokenize='porter unicode61'
+        );
+        CREATE TABLE messages_fts_rows (
+          fts_rowid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          message_id TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX messages_fts_rows_message_id_idx ON messages_fts_rows(message_id);
+      `);
       register(db);
       const sqlSeg = db.prepare('SELECT cjk_seg(?) AS v');
       for (const sample of CORPUS) {
         expect((sqlSeg.get(sample) as { v: string | null }).v).toBe(cjkSeg(sample));
       }
       expect((sqlSeg.get(null) as { v: string | null }).v).toBe(cjkSeg(null));
+      const installed = db.prepare(
+        "SELECT count(*) AS n FROM temp.sqlite_master WHERE type='trigger' AND name IN ('messages_fts_insert_cjk','messages_fts_update_cjk')",
+      ).get() as { n: number };
+      expect(installed.n).toBe(2);
+      db.exec('DROP TRIGGER IF EXISTS temp.messages_fts_insert_cjk');
+      db.exec('DROP TRIGGER IF EXISTS temp.messages_fts_update_cjk');
+      ensure(db);
+      ensure(db);
+      expect(
+        (db.prepare(
+          "SELECT count(*) AS n FROM temp.sqlite_master WHERE type='trigger' AND name IN ('messages_fts_insert_cjk','messages_fts_update_cjk')",
+        ).get() as { n: number }).n,
+      ).toBe(2);
+      db.prepare(
+        "INSERT INTO messages (id, session_id, role, content) VALUES ('m1', 's', 'user', '登录报错了')",
+      ).run();
+      expect(
+        (db.prepare('SELECT content FROM messages_fts WHERE message_id = ?').get('m1') as { content: string }).content,
+      ).toBe('登 录 报 错 了');
     } finally {
       db.close();
     }

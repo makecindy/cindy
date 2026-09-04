@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   captureMobileHistoryAnchor,
   isMobileHistoryAnchorSettled,
+  mobileHistoryAnchorCorrectionStatus,
+  mobileHistoryPrependUsesAppOwnedAnchor,
   mobileHistoryTopOffsetAdjustment,
   resolveMobileHistoryAnchorOffset,
 } from '@/session/messageHistoryAnchor';
@@ -14,6 +16,35 @@ import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
 import type { RemoteMessage } from '@/session/types';
 
 describe('messageHistoryAnchor', () => {
+  it('uses native prepend anchoring on iOS and app-owned anchoring only on Android', () => {
+    expect(mobileHistoryPrependUsesAppOwnedAnchor('ios')).toBe(false);
+    expect(mobileHistoryPrependUsesAppOwnedAnchor('android')).toBe(true);
+    expect(mobileHistoryPrependUsesAppOwnedAnchor('web')).toBe(false);
+  });
+
+  it('waits for the native viewport instead of trusting LegendList optimistic scroll state', () => {
+    const correction = {
+      requestedAfterNativeScrollSequence: 12,
+      targetOffset: 11_330,
+    };
+
+    // LegendList.getState().scroll may already equal 11_330 here, but no new native onScroll has
+    // acknowledged it yet. The transaction must stay locked instead of re-enabling MVCP early.
+    expect(mobileHistoryAnchorCorrectionStatus(correction, {
+      nativeOffset: 8_000,
+      nativeScrollSequence: 12,
+    }, 2)).toBe('waiting');
+    // A residual native event at the old coordinate is not the command acknowledgment either.
+    expect(mobileHistoryAnchorCorrectionStatus(correction, {
+      nativeOffset: 8_000,
+      nativeScrollSequence: 13,
+    }, 2)).toBe('missed');
+    expect(mobileHistoryAnchorCorrectionStatus(correction, {
+      nativeOffset: 11_329,
+      nativeScrollSequence: 14,
+    }, 2)).toBe('acknowledged');
+  });
+
   it('captures the first visible row in LegendList coordinates', () => {
     const anchor = captureMobileHistoryAnchor({
       data: [{ key: 'm1' }, { key: 'm2' }, { key: 'm3' }],

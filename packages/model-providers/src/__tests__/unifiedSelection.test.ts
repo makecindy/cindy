@@ -515,7 +515,7 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(bridgeOnly, 'openai', 'gpt-legacy')).toBe('claude-code');
   });
 
-  it('xai 双 root → claude-code(piRoot 也是 cc)', () => {
+  it('xai 双 root 推荐 claude-code', () => {
     expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('claude-code');
     expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('claude-code');
   });

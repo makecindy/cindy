@@ -281,7 +281,195 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       id: 'models-url-only',
       name: 'Models URL Only',
       contextWindow: 64_000,
+      // 无目录元数据的 Chat Completions 模型默认收敛 system role(#3832)。
+      compat: { supportsDeveloperRole: false },
     });
+  });
+
+  it('同源本地 Pi 元数据补齐能力，但不覆盖下发文件的上下文', () => {
+    const bundled = new Map([
+      [
+        'bundled-provider',
+        new Map([
+          [
+            'server-model',
+            piBundledModel('server-model', 'openai-completions', {
+              baseUrl: 'https://api.example/v1',
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+              input: ['text', 'image'],
+            }),
+          ],
+        ]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'server-models',
+          name: 'Server Models',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://api.example/v1',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'server-model', name: 'Server Model', contextWindow: 64_000 }],
+            }),
+          },
+        },
+      ],
+      () => null,
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'server-model',
+      contextWindow: 64_000,
+      maxTokens: 128_000,
+      input: ['text', 'image'],
+      reasoning: true,
+    });
+  });
+
+  it('同 origin 的 bundled 元数据不能把用户代理路径改回原生路径', () => {
+    const bundled = new Map([
+      [
+        'bundled-provider',
+        new Map([
+          [
+            'server-model',
+            piBundledModel('server-model', 'openai-completions', {
+              baseUrl: 'https://api.example/native/v1',
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            }),
+          ],
+        ]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'proxied-models',
+          name: 'Proxied Models',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://api.example/user-proxy/v1',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'server-model', name: 'Server Model' }],
+            }),
+          },
+        },
+      ],
+      () => null,
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]).toMatchObject({
+      baseUrl: 'https://api.example/user-proxy/v1',
+      api: 'openai-completions',
+    });
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'server-model',
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+    });
+    expect(providers[0]?.models[0]).not.toHaveProperty('baseUrl');
+  });
+
+  it('下发协议与本地 Pi 元数据冲突时不借用本地能力', () => {
+    const bundled = new Map([
+      [
+        'bundled-provider',
+        new Map([['server-model', piBundledModel('server-model', 'anthropic-messages')]]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'server-models',
+          name: 'Server Models',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              wireProtocol: 'openai-responses',
+              models: [{ id: 'server-model', name: 'Server Model' }],
+            }),
+          },
+        },
+      ],
+      () => null,
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]?.models[0]).toMatchObject({ id: 'server-model', name: 'Server Model' });
+    expect(providers[0]?.models[0]).not.toHaveProperty('reasoning');
+    expect(providers[0]?.models[0]).not.toHaveProperty('input');
+  });
+
+  it('defaults unknown custom Chat Completions models to system role (#3832)', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'volcengine',
+          name: 'Volcengine Ark',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'doubao-seed-2-0', name: 'Doubao Seed 2.0' }],
+            }),
+          },
+        },
+      ],
+      () => 'ark-key',
+    );
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'doubao-seed-2-0',
+      compat: { supportsDeveloperRole: false },
+    });
+  });
+
+  it('does not inject the system-role fallback for non-Chat protocols (#3832)', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'custom-anthropic',
+          name: 'Custom Anthropic Compatible',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://compat.example/v1',
+              wireProtocol: 'anthropic-messages',
+              models: [{ id: 'compat-model' }],
+            }),
+          },
+        },
+        {
+          id: 'custom-responses',
+          name: 'Custom Responses Compatible',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://responses.example/v1',
+              wireProtocol: 'openai-responses',
+              models: [{ id: 'responses-model' }],
+            }),
+          },
+        },
+      ],
+      () => 'key',
+    );
+    for (const provider of providers) {
+      for (const model of provider.models) {
+        expect(model).not.toHaveProperty('compat');
+      }
+    }
   });
 
   it('does not apply official per-model routing after the user changes endpoint or protocol', () => {
@@ -378,6 +566,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: null,
         max: null,
       },
+      // 目录标记清除后无同源元数据,Chat Completions 默认收敛 system role(#3832)。
+      compat: { supportsDeveloperRole: false },
     });
   });
 
@@ -739,6 +929,38 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       wireId: 'gpt-5.6-sol[1m]',
       catalogAddition: true,
       contextWindow: 1_000_000,
+    });
+  });
+
+  it('preserves Pi native wire values when the catalog overlays OpenAI effort membership', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.pi = [
+      {
+        id: 'chatgpt/gpt-5.6-sol',
+        name: 'GPT-5.6 Sol',
+        contextWindow: 272_000,
+        efforts: ['minimal', 'xhigh', 'max'],
+        defaultEffort: 'xhigh',
+      },
+    ];
+    const bundled = piBundledModel('gpt-5.6-sol', 'openai-codex-responses', {
+      thinkingLevelMap: { minimal: 'low', xhigh: 'xhigh', max: 'max' },
+    });
+
+    const model = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([['openai-codex', new Map([[bundled.id, bundled]])]]),
+    ).providers.find((candidate) => candidate.id === 'openai-codex')?.models[0];
+
+    expect(model?.thinkingLevelMap).toEqual({
+      minimal: 'low',
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: 'xhigh',
+      max: 'max',
     });
   });
 
@@ -1451,7 +1673,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     ).toThrow('Unsupported PI wire protocol: future-protocol');
   });
 
-  it('uses same-origin PI bundled protocol knowledge when no endpoint default is configured', () => {
+  it('uses same-origin PI bundled protocol knowledge without borrowing its endpoint path', () => {
     const bundled = new Map([
       [
         'zai',
@@ -1506,16 +1728,15 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     );
 
     expect(providers[0]).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic',
       api: 'openai-completions',
       models: [
-        {
-          id: 'glm-5.2',
-          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
-        },
+        { id: 'glm-5.2' },
         { id: 'glm-5.3', api: 'anthropic-messages' },
       ],
     });
     expect(providers[0]?.models[0]?.api).toBeUndefined();
+    expect(providers[0]?.models[0]).not.toHaveProperty('baseUrl');
   });
 
   it('does not infer ambiguous duplicate model ids from PI bundled providers', () => {
@@ -1859,9 +2080,16 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       ],
       () => null,
     );
+    const chatDefaultCompat = { compat: { supportsDeveloperRole: false } };
     expect(providers[0].models).toEqual([
-      { id: 'vision', name: 'Vision', contextWindow: undefined, input: ['text', 'image'] },
-      { id: 'legacy', name: 'Legacy', contextWindow: undefined },
+      {
+        id: 'vision',
+        name: 'Vision',
+        contextWindow: undefined,
+        input: ['text', 'image'],
+        ...chatDefaultCompat,
+      },
+      { id: 'legacy', name: 'Legacy', contextWindow: undefined, ...chatDefaultCompat },
     ]);
   });
 
@@ -2059,6 +2287,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: null,
         max: 'max',
       },
+      // 显式声明能力但无同源元数据,Chat Completions 默认收敛 system role(#3832)。
+      compat: { supportsDeveloperRole: false },
     });
   });
 });

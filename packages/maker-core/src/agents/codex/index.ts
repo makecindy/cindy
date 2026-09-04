@@ -10,7 +10,7 @@
  *  - ✅ Approval:  setRequestHandler 接 commandExecution / fileChange RequestApproval
  *                  → dispatchInteraction (复用 Claude 那条 PermissionPrompt 通道)
  *  - ✅ 运行时切:  setModel / setEffort / setPermissionMode 都生效, 下一 turn 自动透传
- *  - ✅ Fork:      thread/fork + optional thread/rollback → 新 thread_id
+ *  - ✅ Fork:      thread/fork(lastTurnId)；旧历史回退 fork + rollback → 新 thread_id
  *  - ✅ oneShot:   走 host 临时 thread (起标题), Phase 4 删 SDK dep 后唯一通路
  *
  * 输出契约:
@@ -109,6 +109,7 @@ import {
   overloadRetryDelayMs,
   parseOverloadError,
 } from '../shared/overload-error.js';
+import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { buildCodexEnv } from './env-builder.js';
 import {
   buildCodexCapabilityConfigOverrides,
@@ -362,6 +363,22 @@ function normalizeTailTurnsToDrop(value: number | undefined): number {
   return Math.max(0, Math.floor(value));
 }
 
+function normalizeNativeForkTurnId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function nativeForkAnchorAgentMeta(threadId: string, turnId: string): Record<string, unknown> {
+  return {
+    nativeForkAnchor: {
+      agentKind: 'codex',
+      sdkSessionId: threadId,
+      kind: 'turn',
+      id: turnId,
+    },
+  };
+}
+
 function prefixId(value: string | undefined): string | undefined {
   return value ? value.slice(0, 8) : undefined;
 }
@@ -567,6 +584,11 @@ function supportsCodexResumeExcludeTurns(userAgent: string | undefined): boolean
  */
 function supportsCodexForkExcludeTurns(userAgent: string | undefined): boolean {
   return codexUserAgentAtLeast(userAgent, [0, 145, 0]);
+}
+
+/** Direct lastTurnId fork is used only together with the bounded response contract. */
+function supportsCodexNativeTurnFork(userAgent: string | undefined): boolean {
+  return supportsCodexForkExcludeTurns(userAgent);
 }
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
@@ -2234,9 +2256,23 @@ export class CodexAgent extends BaseAgent {
       }
       return requestedEffectiveMemo.value;
     };
-    const hasCompatibleSubagentRoutingProfile = async (host: AppServerHost): Promise<boolean> => {
+    const hasCompatibleSubagentRoutingProfile = async (
+      host: AppServerHost,
+      hostCredentialMode?: AgentCredentialMode,
+    ): Promise<boolean> => {
+      if (this.deps.resolveCodexSubagentRoutingSignature) {
+        const signature = host.getSubagentRoutingSignature() ?? 'default';
+        const desired = await this.deps.resolveCodexSubagentRoutingSignature(
+          this.deps.mcpProviders ?? [],
+          {
+            credentialMode: hostCredentialMode,
+            ...(opts.hostPurpose ? { hostPurpose: opts.hostPurpose } : {}),
+          },
+        );
+        return signature === desired;
+      }
       const profile = host.getSubagentRoutingProfile();
-      if (profile === 'default') return true;
+      if (profile === 'default' || profile === 'smart') return true;
       const requested = await resolveRequestedEffective();
       return profile === 'oauth-default'
         ? requested === 'oauth-bearer'
@@ -2264,7 +2300,10 @@ export class CodexAgent extends BaseAgent {
         const currentMode = this.hostCredentialModes.get(key);
         const currentEffective = this.hostEffectiveCredentialModes.get(key);
         const subagentRoutingProfileCompatible = remoteHostId
-          || await hasCompatibleSubagentRoutingProfile(existing);
+          || await hasCompatibleSubagentRoutingProfile(
+            existing,
+            currentEffective ?? currentMode,
+          );
         if (
           remoteHostId
           || (subagentRoutingProfileCompatible
@@ -2322,7 +2361,10 @@ export class CodexAgent extends BaseAgent {
           const registeredRaw = this.hostCredentialModes.get(key) ?? inflight.credentialMode;
           const registeredEffective = this.hostEffectiveCredentialModes.get(key);
           if (
-            await hasCompatibleSubagentRoutingProfile(inflightHost)
+            await hasCompatibleSubagentRoutingProfile(
+              inflightHost,
+              registeredEffective ?? registeredRaw,
+            )
             && await canReuseRegistered(inflightHost, registeredRaw, registeredEffective)
           ) {
             return inflightHost;
@@ -2338,7 +2380,10 @@ export class CodexAgent extends BaseAgent {
           async (inflightHost) => {
             if (this.hosts.get(key) === inflightHost) {
               const subagentRoutingProfileCompatible =
-                await hasCompatibleSubagentRoutingProfile(inflightHost);
+                await hasCompatibleSubagentRoutingProfile(
+                  inflightHost,
+                  this.hostEffectiveCredentialModes.get(key) ?? inflight.credentialMode,
+                );
               await this.shutdownHostForCredentialModeChange(
                 key,
                 inflightHost,
@@ -2610,8 +2655,11 @@ export class CodexAgent extends BaseAgent {
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     let subagentModelFallback: string | undefined;
     let subagentRoute: CodexExtraSpawnConfig['subagentRoute'];
+    let smartSubagentRoutes: CodexExtraSpawnConfig['smartSubagentRoutes'];
+    let codexSubagentRoutingSignature: string | undefined;
     let codexOpenAiWebSocketsEnabled = true;
     let codexSubagentRoutingProfile: CodexExtraSpawnConfig['codexSubagentRoutingProfile'] = 'default';
+    let hostRetirementCleanup: CodexExtraSpawnConfig['onHostRetired'];
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -2640,8 +2688,11 @@ export class CodexAgent extends BaseAgent {
       buildSessionMcpConfig = undefined;
       subagentModelFallback = undefined;
       subagentRoute = undefined;
+      smartSubagentRoutes = undefined;
+      codexSubagentRoutingSignature = undefined;
       codexOpenAiWebSocketsEnabled = true;
       codexSubagentRoutingProfile = 'default';
+      hostRetirementCleanup = undefined;
       if (this.deps.prepareCodexExtraSpawnConfig) {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
@@ -2654,10 +2705,15 @@ export class CodexAgent extends BaseAgent {
                 : {}),
               ...(hostPurpose ? { hostPurpose } : {}),
               ...(hostPurpose === 'custom-context'
-                ? { customContextModel, customContextWindow }
+                ? {
+                    customContextModel,
+                    customContextWindow,
+                    customContextHostKey: `${key}:${generation}`,
+                  }
                 : {}),
             },
           );
+          hostRetirementCleanup = cfg.onHostRetired;
           assertCurrentGeneration('spawn config');
           if (
             cfg.requiredSpawnCredentialMode
@@ -2669,6 +2725,8 @@ export class CodexAgent extends BaseAgent {
               previousSpawnCredentialMode: spawnCredentialMode ?? 'fallback',
               requiredSpawnCredentialMode: cfg.requiredSpawnCredentialMode,
             });
+            await hostRetirementCleanup?.();
+            hostRetirementCleanup = undefined;
             spawnCredentialMode = cfg.requiredSpawnCredentialMode;
             continue;
           }
@@ -2677,6 +2735,8 @@ export class CodexAgent extends BaseAgent {
           buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           subagentModelFallback = cfg.subagentModelFallback;
           subagentRoute = cfg.subagentRoute;
+          smartSubagentRoutes = cfg.smartSubagentRoutes;
+          codexSubagentRoutingSignature = cfg.codexSubagentRoutingSignature;
           codexOpenAiWebSocketsEnabled = cfg.codexOpenAiWebSocketsEnabled !== false;
           codexSubagentRoutingProfile = cfg.codexSubagentRoutingProfile ?? 'default';
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
@@ -2703,6 +2763,8 @@ export class CodexAgent extends BaseAgent {
             codexProxyActive,
           });
         } catch (e) {
+          await hostRetirementCleanup?.();
+          hostRetirementCleanup = undefined;
           const isFatalSpawnConfigError =
             (typeof e === 'object' && e !== null &&
               (e as { codexSpawnConfigFatal?: unknown }).codexSpawnConfigFatal === true);
@@ -2725,6 +2787,8 @@ export class CodexAgent extends BaseAgent {
       }
       if (upgradedToSuperset && !codexProxyActive) {
         this.deps.logger.warn('codex createHost: superset spawn lacks loopback proxy; downgrading to gateway-key spawn', { key });
+        await hostRetirementCleanup?.();
+        hostRetirementCleanup = undefined;
         spawnCredentialMode = credentialMode;
         continue;
       }
@@ -2736,7 +2800,13 @@ export class CodexAgent extends BaseAgent {
         remotePlugin: false,
       });
     }
-    assertCurrentGeneration('transport');
+    try {
+      assertCurrentGeneration('transport');
+    } catch (error) {
+      await hostRetirementCleanup?.();
+      hostRetirementCleanup = undefined;
+      throw error;
+    }
 
     // 选 transport: 本地 → StdioTransport (spawn codex app-server)
     //               远端 → host 注入的 getRemoteCodexTransport (SSH+daemon+proxy+ws)
@@ -2789,8 +2859,13 @@ export class CodexAgent extends BaseAgent {
       buildSessionMcpConfig,
       subagentModelFallback,
       subagentRoute,
+      smartSubagentRoutes,
+      codexSubagentRoutingSignature,
+      getSubagentIdentity: (childThreadId) =>
+        this.deps.getCodexSubagentIdentity?.({ childThreadId }),
       codexOpenAiWebSocketsEnabled,
       codexSubagentRoutingProfile,
+      onRetired: hostRetirementCleanup,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
@@ -5096,6 +5171,18 @@ export class CodexAgent extends BaseAgent {
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
       if (update) emitSubagentCardUpdate(update, descendantUpdateLifecycle(childThreadId));
+      const observedIdentity = host.getObservedSubagentIdentity?.(childThreadId);
+      const observedParentThreadId = descendantParentThreadByThreadId.get(childThreadId);
+      if (observedIdentity && observedParentThreadId) {
+        const identityUpdate = subagentLiveCards.noteDescendantThread(
+          childThreadId,
+          observedParentThreadId,
+          observedIdentity.model,
+        );
+        if (identityUpdate) {
+          emitSubagentCardUpdate(identityUpdate, descendantUpdateLifecycle(childThreadId));
+        }
+      }
 
       if (method === 'turn/completed') {
         const status = record?.turn && typeof record.turn === 'object'
@@ -5123,18 +5210,37 @@ export class CodexAgent extends BaseAgent {
      *    status=completed —— 那只是 spawn 工具调用自己收口,子线程可能还在跑。不重新声明
      *    就会把运行中的子代理提前标成完成,还会抹掉先到的 failed/stopped(review)。
      */
-    const withFrozenSubagentSpawnIdentity = <T,>(item: T, rootTurnId: string): T => {
+    const withFrozenSubagentSpawnIdentity = <T,>(item: T, _rootTurnId: string): T => {
       const registration = readCodexSubagentSpawnRegistration(item);
       if (!registration || !item || typeof item !== 'object' || Array.isArray(item)) return item;
-      const inheritedModel = turnOriginByTurnId.get(rootTurnId)?.model ?? activeTurnModel;
-      const model = configuredSubagentRoute?.catalogModel
+      const observedIdentities = registration.childThreadIds
+        .map((childThreadId) => host.getObservedSubagentIdentity?.(childThreadId))
+        .filter((identity): identity is { model: string; reasoningEffort?: string } =>
+          Boolean(identity?.model));
+      const observedModels = new Set(observedIdentities.map((identity) => identity.model));
+      const observedModel = observedIdentities.length === registration.childThreadIds.length
+        && observedModels.size === 1
+        ? observedIdentities[0]?.model
+        : undefined;
+      const model = observedModel
+        ?? configuredSubagentRoute?.catalogModel
         ?? registration.model
-        ?? configuredSubagentModelFallback
-        ?? inheritedModel;
+        ?? configuredSubagentModelFallback;
       const current = item as Record<string, unknown>;
       const next: Record<string, unknown> = { ...current };
       if (model) next.model = model;
-      if (configuredSubagentRoute) {
+      const observedEfforts = new Set(
+        observedIdentities
+          .map((identity) => identity.reasoningEffort)
+          .filter((effort): effort is string => Boolean(effort)),
+      );
+      const observedEffort = observedIdentities.length === registration.childThreadIds.length
+        && observedEfforts.size === 1
+        ? observedEfforts.values().next().value
+        : undefined;
+      if (observedEffort) {
+        next.reasoningEffort = observedEffort;
+      } else if (configuredSubagentRoute) {
         if (configuredSubagentRoute.reasoningEffort) {
           next.reasoningEffort = configuredSubagentRoute.reasoningEffort;
         } else {
@@ -5573,16 +5679,17 @@ export class CodexAgent extends BaseAgent {
 
     let registeredDeveloperInstructions = '';
     const registerCodexDeveloperInstructions = (threadId: string, text: string): void => {
-      if (!text) return;
       registeredDeveloperInstructions = text;
       const register = this.deps.registerCodexSystemPromptForThread;
       if (!register) return;
       const subagentRoute = host.getSubagentRoute?.();
+      const smartSubagentRoutes = host.getSmartSubagentRoutes?.();
       register({
         sessionId: sid,
         threadId,
         text,
         ...(subagentRoute ? { subagentRoute } : {}),
+        ...(smartSubagentRoutes ? { smartSubagentRoutes } : {}),
       });
     };
     const refreshCodexAutoReviewerRoute = (targetThreadId: string): void => {
@@ -8884,6 +8991,10 @@ export class CodexAgent extends BaseAgent {
       const additionalDetails =
         typeof error?.additionalDetails === 'string' ? error.additionalDetails : null;
       if (!message && !additionalDetails) return null;
+      const classifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
+      // 远端 compact 密文 400 是 Codex 内部硬失败，HTTP 剥密文跳过 compaction blob，
+      // 重投必再 400。不得当推理密文 400 去 arm WS→HTTP recovery。
+      if (isRemoteCompactEncryptedContentError(classifyText)) return null;
       try {
         return this.deps.armCodexHttpRecovery({
           sessionId: sid,
@@ -9489,6 +9600,7 @@ export class CodexAgent extends BaseAgent {
             plan: latestPlanByTurn.get(turn.id) ?? null,
           },
           source: 'codex',
+          agentMeta: nativeForkAnchorAgentMeta(threadId, turn.id),
         };
         if (yieldClaim?.state === 'awaiting') {
           attachYieldContinuationClaim(idleStatusEvent, yieldClaim);
@@ -10381,10 +10493,12 @@ export class CodexAgent extends BaseAgent {
         const childThreadId = params.thread.id;
         const parentThreadId = params.thread.parentThreadId;
         if (!parentThreadId || childThreadId === parentThreadId) return;
-        const childModel =
+        const observedIdentity = host.getObservedSubagentIdentity?.(childThreadId);
+        const childModel = observedIdentity?.model ?? (
           typeof params.thread.model === 'string' && params.thread.model.length > 0
             ? params.thread.model
-            : undefined;
+            : undefined
+        );
         registerDescendantThreadRouting(childThreadId, parentThreadId);
         const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId, childModel);
         if (replayed) {
@@ -12823,11 +12937,11 @@ export class CodexAgent extends BaseAgent {
    *
    * 与 Claude 不同:
    *  - Claude fork 可 truncate 到指定 message uuid (sdkForkSession upToMessageId)
-   *  - Codex 协议没有 message uuid 概念; 精确 fork 需要先 fork latest,
-   *    再对新 thread 调 thread/rollback 从尾部移除 N 个 turn
+   *  - Codex 新消息保存原生 turn id,直接用 lastTurnId 精确 fork
+   *  - 老消息没有原生锚点时,仍先 fork latest 再 rollback 尾部 turn
    *
-   * opts.upToMessageId 在 Codex 这里被忽略。uuidMap 返回空 — Codex agentMeta 不存
-   * message uuid, maker 那边也找不到东西可 remap, 不会 break。
+   * opts.upToMessageId 在 Codex 这里被忽略。uuidMap 返回空 — Codex 不使用
+   * Claude message uuid；原生 turn 锚点由 usedNativeForkAnchor 单独声明可复用。
    */
   private hasLocalCodexHome(): boolean {
     return Boolean(this.codexHome) && !isRemoteLikePath(this.codexHome ?? '');
@@ -12900,9 +13014,106 @@ export class CodexAgent extends BaseAgent {
     }
   }
 
+  private async tryForkSdkSessionAtNativeTurn(
+    opts: ForkSdkSessionOptions,
+    lastTurnId: string,
+    credentialMode: AgentCredentialMode | undefined,
+  ): Promise<ForkSdkSessionResult | null> {
+    const log = this.deps.logger.child('codex/fork');
+    const sharedHostKey = hostKey();
+    let releaseHostBindingLease: (() => void) | null = null;
+    let nativeForkRequestStarted = false;
+    const startedAt = Date.now();
+    try {
+      await this.waitForHostCredentialModeSwitch(sharedHostKey);
+      releaseHostBindingLease = this.acquireHostSessionBindingLease(sharedHostKey);
+      const hostStartedAt = Date.now();
+      const sharedHost = await this.getHost(undefined, credentialMode, {
+        ignoreBindingLeases: 1,
+      });
+      const initResp = await sharedHost.ensureStarted();
+      const hostReadyMs = Date.now() - hostStartedAt;
+      if (!supportsCodexNativeTurnFork(initResp.userAgent)) {
+        log.info('native-turn fork unavailable; using legacy isolated fallback', {
+          userAgent: initResp.userAgent ?? null,
+        });
+        return null;
+      }
+
+      if (initResp.codexHome) this.codexHome = initResp.codexHome;
+      const prepareStartedAt = Date.now();
+      if (!sharedHost.hasThreadSubscription(opts.sourceSdkSessionId)) {
+        await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
+      }
+      const prepareMs = Date.now() - prepareStartedAt;
+      const forkStartedAt = Date.now();
+      nativeForkRequestStarted = true;
+      const resp = await sharedHost.request<ThreadForkResponse>(Method.ThreadFork, {
+        threadId: opts.sourceSdkSessionId,
+        lastTurnId,
+        excludeTurns: true,
+        ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
+      } satisfies ThreadForkParams);
+      const threadForkMs = Date.now() - forkStartedAt;
+      const newSdkSessionId = resp.thread.id;
+      const cleanupStartedAt = Date.now();
+      try {
+        await sharedHost.unsubscribeThread(newSdkSessionId);
+      } catch (error) {
+        log.warn('precise fork child cleanup failed', {
+          threadId: newSdkSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      const cleanupMs = Date.now() - cleanupStartedAt;
+      log.info('forkSdkSession ◀', {
+        newSdkSessionId,
+        mode: 'native-turn',
+        hostReadyMs,
+        prepareMs,
+        threadForkMs,
+        cleanupMs,
+        totalMs: Date.now() - startedAt,
+      });
+      return {
+        newSdkSessionId,
+        uuidMap: new Map(),
+        usedNativeForkAnchor: true,
+      };
+    } catch (error) {
+      if (nativeForkRequestStarted) throw error;
+      log.warn('shared host unavailable before precise fork; using legacy isolated fallback', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    } finally {
+      releaseHostBindingLease?.();
+    }
+  }
+
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);
+    const lastTurnId = normalizeNativeForkTurnId(opts.lastTurnId);
+    const forkCredentialMode = resolveAgentCredentialMode({
+      agentKind: 'codex',
+      providerId: opts.providerId,
+      model: opts.model,
+    });
+
+    // Keep exact native-turn forks on the regular host so an active source
+    // thread is already hydrated. The helper holds a binding lease across the
+    // control-plane request and returns null only before a fork is attempted.
+    if (lastTurnId && !opts.stripEncryptedReasoning) {
+      const nativeForkResult = await this.tryForkSdkSessionAtNativeTurn(
+        opts,
+        lastTurnId,
+        forkCredentialMode,
+      );
+      if (nativeForkResult) return nativeForkResult;
+    }
+
     let stripCopyPath: string | undefined;
     // 故障半径隔离(2026-08-08 实排):thread/fork 的响应体与源 thread 历史成正比、
     // 无上界 —— 47MB rollout 实测产出 31MiB 单行 NDJSON,超过 client 16MiB
@@ -12936,17 +13147,13 @@ export class CodexAgent extends BaseAgent {
     log.info('forkSdkSession ▶', {
       sourceSdkSessionId: opts.sourceSdkSessionId,
       upToMessageId: opts.upToMessageId,
+      lastTurnId,
       tailTurnsToDrop,
       stripEncryptedReasoning: opts.stripEncryptedReasoning === true,
       forkHostKey,
       note: 'Codex 精确 fork: 独立一次性 host 上 thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
     });
     try {
-      const forkCredentialMode = resolveAgentCredentialMode({
-        agentKind: 'codex',
-        providerId: opts.providerId,
-        model: opts.model,
-      });
       const host = await this.getHost(undefined, forkCredentialMode, {
         keyOverride: forkHostKey,
         hostPurpose: 'control-plane',

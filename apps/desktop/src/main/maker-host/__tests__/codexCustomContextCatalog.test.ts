@@ -121,6 +121,46 @@ describe('Codex custom context model catalog', () => {
     })).resolves.toBe(false);
   });
 
+  it('patches an in-memory smart catalog while preserving routed models and the exact bundled root descriptor', async () => {
+    const bundledRoot = {
+      slug: 'gpt-5.6-sol',
+      context_window: 272_000,
+      max_context_window: 272_000,
+      base_instructions: 'bundled root instructions',
+    };
+    const { root, binaryPath } = await createFixtureBinary({
+      models: [bundledRoot, { slug: 'gpt-5.6-terra', multi_agent_version: 'v2' }],
+    });
+    const smartModel = {
+      slug: 'deepseek/deepseek-v4-flash',
+      multi_agent_version: 'v2',
+      base_instructions: 'smart routed instructions',
+    };
+
+    const prepared = await prepareCodexCustomContextCatalog({
+      binaryPath,
+      codexHome: path.join(root, 'codex-home'),
+      modelId: 'gpt-5.6-sol',
+      contextWindow: 1_050_000,
+      scanChunkBytes: 64,
+      baseCatalog: {
+        models: [
+          { slug: 'gpt-5.6-terra', multi_agent_version: 'v2' },
+          smartModel,
+        ],
+      },
+    });
+    const written = JSON.parse(await fs.readFile(prepared.catalogPath, 'utf8')) as {
+      models: Array<Record<string, unknown>>;
+    };
+
+    expect(written.models).toContainEqual(smartModel);
+    expect(written.models).toContainEqual({
+      ...bundledRoot,
+      max_context_window: 1_050_000,
+    });
+  });
+
   it('fails closed when the exact real model slug is absent', async () => {
     const { root, binaryPath } = await createFixtureBinary({
       models: [{ slug: 'gpt-5.4', context_window: 272_000, max_context_window: 272_000 }],

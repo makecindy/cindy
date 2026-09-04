@@ -116,6 +116,10 @@
     "controlFork": "分叉任务",
     "markdownDocAriaLabel": "消息正文",
     "toolOutputTitle": "{{label}} 输出",
+    "toolInputTitle": "{{label}} 输入",
+    "viewToolInput": "查看完整输入",
+    "loadingToolInput": "正在读取完整输入",
+    "retryToolInput": "读取失败，重试",
     "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "空 Mermaid 图表。",
     "diffEditCount": "{{n}} 处编辑"

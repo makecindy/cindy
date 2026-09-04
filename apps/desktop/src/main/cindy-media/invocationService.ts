@@ -69,6 +69,11 @@ const TERMINAL_MEDIA_RESULT_ERRORS = new Set([
   'RESPONSE_TOO_LARGE',
 ]);
 const CLIENT_PROVIDER_IMAGE_GUIDE_ID = 'cindy-provider-image-v1';
+// Gateway Guides can lag behind vendor CDN rotation. Keep this map keyed by the
+// vendor namespace already present in the executable Core model identity.
+const MODEL_NAMESPACE_MEDIA_HOST_SUFFIXES = new Map<string, readonly string[]>([
+  ['minimax', ['minimax.io', 'minimaxi.com']],
+]);
 
 interface MediaConnection {
   baseUrl: string;
@@ -924,6 +929,31 @@ function completedInvocationResult(invocation: StoredMediaInvocation): Record<st
   };
 }
 
+function withVendorMediaUrlHosts(
+  guide: PreparedMediaInvocationGuide,
+): PreparedMediaInvocationGuide {
+  const namespace = guide.modelId.slice(0, guide.modelId.indexOf('/')).toLowerCase();
+  const vendorHosts = MODEL_NAMESPACE_MEDIA_HOST_SUFFIXES.get(namespace);
+  if (!vendorHosts) return guide;
+
+  const expand = (extractors: readonly MediaResultExtractor[]) =>
+    extractors.map((extractor) => {
+      if (extractor.encoding !== 'url') return extractor;
+      return {
+        ...extractor,
+        allowedUrlHosts: [...new Set([...(extractor.allowedUrlHosts ?? []), ...vendorHosts])],
+      };
+    });
+  const response = guide.response;
+  if (response.mode === 'sync') {
+    return { ...guide, response: { ...response, media: expand(response.media) } };
+  }
+  return {
+    ...guide,
+    response: { ...response, poll: { ...response.poll, media: expand(response.poll.media) } },
+  };
+}
+
 async function persistCompletedInvocation(
   invocation: StoredMediaInvocation,
   media: Record<string, unknown>,
@@ -1221,12 +1251,12 @@ async function prepareInvocation(
     }
     const { operations: _operations, ...guideProtocol } = resolvedGuide.guide;
     void _operations;
-    preparedGuide = {
+    preparedGuide = withVendorMediaUrlHosts({
       // Guide 查询键不参与调用身份；配置、持久化和 Gateway 请求始终使用完整 modelId。
       modelId: resolvedModelId,
       ...guideProtocol,
       ...operation,
-    };
+    });
   }
   await pruneInvocations(owner, db);
   assertAuthScope(scope);
