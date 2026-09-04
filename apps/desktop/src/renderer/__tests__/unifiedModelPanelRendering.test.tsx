@@ -454,6 +454,65 @@ describe('统一面板 · 会话内形态', () => {
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
   });
 
+  it('同引擎轨收藏行浮层同样不提供 Harness 切换', async () => {
+    addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'cc',
+      effort: 'medium',
+    });
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    const favoriteRow = within(screen.getAllByRole('group')[0])
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    const flyout = await openFlyoutForRow(favoriteRow);
+    expect(flyout.querySelector('[data-engine-capsule="cc"]')).toBeTruthy();
+    expect(flyout.querySelector('[data-engine-capsule="codex"]')).toBeNull();
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(listModelFavorites()[0]?.agent).toBe('cc');
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+  });
+
+  it('全部视图收藏行浮层仍可切 Harness', async () => {
+    addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'cc',
+      effort: 'medium',
+    });
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    const favoriteRow = within(screen.getAllByRole('group')[0])
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    const flyout = await openFlyoutForRow(favoriteRow);
+    expect(flyout.querySelector('[data-engine-capsule="codex"]')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="codex"]') as HTMLElement);
+    });
+    expect(listModelFavorites()[0]?.agent).toBe('codex');
+  });
+
   it('同引擎轨 leftover override 不能盖掉钉轨,点兼容行走同引擎直切', async () => {
     setModelEngineOverride('xd', 'gpt-5.5', 'codex');
     renderPanel({
@@ -2213,6 +2272,9 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
       effort: 'low',
       onEffortChange: vi.fn(),
     });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
     const flyout = await openFavoriteFlyout();
     await act(async () => {
       fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
@@ -2254,6 +2316,9 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
       effort: 'low',
       onEffortChange: vi.fn(),
     });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
     const flyout = await openFavoriteFlyout();
     await act(async () => {
       fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
@@ -2277,6 +2342,9 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
       currentProviderId: 'anthropic',
       modelId: 'claude-opus-5',
       onEffortChange: vi.fn(),
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
     });
     const flyout = await openFavoriteFlyout();
     await act(async () => {
@@ -2597,6 +2665,9 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
       onEffortChange: vi.fn(),
       onSessionFavoriteAnchorChange,
     });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
     const favoritesGroup = screen.getAllByRole('group')[0];
     const row = within(favoritesGroup)
       .getByText('GPT-5.5')
@@ -2644,6 +2715,9 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
       effort: 'low',
       onEffortChange: vi.fn(),
       onSessionFavoriteAnchorChange,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
     });
     const favoritesGroup = screen.getAllByRole('group')[0];
     const row = within(favoritesGroup)

@@ -1387,9 +1387,9 @@ export function UnifiedModelPanel({
                 effortLabelOf={effortLabelOf}
                 justFavorited={justFavorited === anchorKey(target.anchor)}
                 disabled={interactionDisabled}
-                engineLocked={effectiveRail.kind === 'engine' && !target.favorite}
+                engineLocked={effectiveRail.kind === 'engine'}
                 onEngineChange={(engine) => {
-                  if (effectiveRail.kind === 'engine' && !target.favorite) return;
+                  if (effectiveRail.kind === 'engine') return;
                   applyEngine(target.anchor, target.entry, config, engine);
                 }}
                 onEffortChange={(effort) =>
