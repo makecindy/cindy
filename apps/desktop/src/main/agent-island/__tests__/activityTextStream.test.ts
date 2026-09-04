@@ -153,4 +153,23 @@ describe('Agent Island activity text stream', () => {
     expect(metrics.jsonParseCodeUnits).toBe(payload.length);
     expect(measuredWork).toBeLessThanOrEqual(payload.length * 3 + 300);
   });
+
+  it('compacts tiny deltas while an incomplete structured stream is retained', () => {
+    const stream = createActivityTextStreamState();
+    const prefix = '{"content":"';
+    const deltaCount = 100_000;
+    appendActivityTextStream(stream, prefix);
+
+    for (let index = 0; index < deltaCount; index += 1) {
+      appendActivityTextStream(stream, 'x');
+    }
+
+    const retainedText = `${prefix}${'x'.repeat(deltaCount)}`;
+    expect(stream.mode).toBe('structured');
+    expect(stream.rawChunks.join('')).toBe(retainedText);
+    expect(stream.rawPreview).toBe(legacyNormalizeActivityText(retainedText));
+    expect(stream.rawChunks.length).toBeLessThanOrEqual(
+      Math.ceil(Math.log2(retainedText.length)) + 1,
+    );
+  });
 });

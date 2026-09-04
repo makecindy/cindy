@@ -64,7 +64,7 @@ export function appendActivityTextStream(
   }
 
   if (state.mode === 'pending') {
-    state.rawChunks.push(chunk);
+    appendRetainedRawChunk(state, chunk);
     const firstContentIndex = firstNonWhitespaceIndex(chunk, metrics);
     if (firstContentIndex < 0) return rawPreviewText(state);
 
@@ -80,7 +80,7 @@ export function appendActivityTextStream(
       return rawPreviewText(state);
     }
   } else {
-    state.rawChunks.push(chunk);
+    appendRetainedRawChunk(state, chunk);
     if (!scanStructuredChunk(state, chunk, 0, metrics)) {
       return rawPreviewText(state);
     }
@@ -107,6 +107,23 @@ export function appendActivityTextStream(
 
   switchToPlain(state);
   return rawPreviewText(state);
+}
+
+function appendRetainedRawChunk(state: ActivityTextStreamState, chunk: string): void {
+  if (!chunk) return;
+  state.rawChunks.push(chunk);
+
+  // Keep older chunks geometrically larger than newer ones. This preserves the
+  // exact JSON input and ordering while preventing one retained string object
+  // per tiny delta when a structured stream stays incomplete for a long time.
+  while (state.rawChunks.length >= 2) {
+    const newest = state.rawChunks.at(-1) ?? '';
+    const previous = state.rawChunks.at(-2) ?? '';
+    if (previous.length > newest.length * 2) return;
+    state.rawChunks.pop();
+    state.rawChunks.pop();
+    state.rawChunks.push(previous + newest);
+  }
 }
 
 export function normalizeActivityText(text: string): string {
