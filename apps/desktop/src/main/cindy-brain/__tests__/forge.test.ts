@@ -1689,6 +1689,51 @@ describe('FORGE_GUIDE', () => {
     expect(settingsSection).not.toContain('声明之外的任何外链点了没反应');
   });
 
+  it('所有插件页面只开放 HTTPS 图片直连，不扩大其它网络能力', () => {
+    const mainJsIntro = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 4. main.js 电子脑(沙箱后台逻辑)'),
+      FORGE_GUIDE.indexOf('### 4.0.1'),
+    );
+    const settingsSection = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 4.8 设置自绘(settingsHtml)+ 自定义参数存取(/kv)'),
+      FORGE_GUIDE.indexOf('## 4.9'),
+    );
+    const sandboxRedlines = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 6. 沙箱红线(平台结构保证,写了也没用)'),
+      FORGE_GUIDE.indexOf('## 7. 打包与测试'),
+    );
+
+    for (const section of [mainJsIntro, settingsSection, sandboxRedlines]) {
+      expect(section).toContain('HTTPS 图片');
+      expect(section).toContain('无通用网络直连');
+    }
+    for (const marker of [
+      '所有插件 HTML 页面',
+      'settingsHtml、panel、mainView 与逻辑页',
+      '**HTTPS 图片资源**',
+      '<img src="https://…">',
+      'background-image: url("https://…")',
+      'Electron 判定为 `image`',
+      '不会放行',
+      '`fetch()` / XHR',
+      '外部脚本',
+      '外部样式表',
+      '`http:` 图片',
+      '共用浏览器存储和',
+      '`BroadcastChannel`,脚本/样式',
+      "new BroadcastChannel('my-ghost').postMessage",
+      '完整图片 URL',
+      '`onload` / `onerror`',
+    ]) {
+      expect(settingsSection).toContain(marker);
+    }
+    for (const marker of ['fetch/XHR/', 'WebSocket', '除 HTTPS 图片外']) {
+      expect(sandboxRedlines).toContain(marker);
+    }
+    expect(FORGE_GUIDE).not.toContain('跑在无网络、无文件、无 Node');
+    expect(FORGE_GUIDE).not.toContain('默认无网络');
+  });
+
   it('分章体量守卫:每个 ## 章节须留在单次工具结果安全体量内(#890 分章投递的不变量)', () => {
     // 手册"随主机版本演进"持续增长;任一章越过单次 MCP 结果上限会静默复现 #890 于该章。
     // 上限取 32KB:当前最大章 ~22KB,余量 ~45%,越线即该拆小节。
