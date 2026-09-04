@@ -42,6 +42,7 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 import {
   createResponsesCustomToolFunctionAdapter,
   createResponsesChatHandler,
+  isUnsupportedResponsesImageErrorPayload,
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
 import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
@@ -145,6 +146,9 @@ export interface CodexObservedSubagentIdentity {
 const observedSubagentIdentityByThread = new Map<string, CodexObservedSubagentIdentity>();
 const reviewerModelBySession = new Map<string, string>();
 const httpRecoveryReasonByThread = new Map<string, string>();
+const chatImageUnsupportedRouteKeysBySession = new Map<string, Set<string>>();
+const chatImageRouteGenerationBySession = new Map<string, number | null>();
+let nextChatImageRouteGeneration = 0;
 
 const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
@@ -815,6 +819,7 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
   maxTokensField: 'max_tokens',
   reasoningField: 'none',
   streamUsage: true,
+  imageInput: 'image_url',
   // Responses fields with direct Chat equivalents. Provider-specific unsupported fields can
   // be removed later when the model capability catalog becomes more granular.
   passthroughFields: [
@@ -898,9 +903,9 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
  * - Volcengine Doubao Seed 系列
  * - Alibaba Cloud Bailian Coding Plan Qwen 3.7 Plus
  *
- * 这里认官方 DNS 边界 + 上游 model,不认 provider id(预设创建后会生成用户自定义
- * id),也不对所有 openai-chat 供应商放开。未命中继续沿用 fail-closed 默认——
- * 无图片能力的上游(如 DeepSeek)保持发送前显式报错,不静默吞图。
+ * 默认能力已启用 `imageInput: 'image_url'`（fail-open）；白名单仍显式覆盖，作为
+ * 已验证路由的可执行文档。非白名单路由由上游裁决，确认不支持后只对当前业务
+ * session + provider route 降级，后续 Retry 会剥离失败历史中的图片而不污染其它模型。
  */
 /**
  * Chat bridge 的 system 消息策略(#3531)。
@@ -994,6 +999,21 @@ function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean 
   return false;
 }
 
+function chatImageCapabilityRouteKey(
+  providerId: string,
+  upstream: string,
+  requestPath: string | undefined,
+  realModel: string,
+): string {
+  return JSON.stringify([providerId, upstream, requestPath ?? '', realModel]);
+}
+
+function markChatImageUnsupportedForSession(sessionId: string, routeKey: string): void {
+  const routeKeys = chatImageUnsupportedRouteKeysBySession.get(sessionId) ?? new Set<string>();
+  routeKeys.add(routeKey);
+  chatImageUnsupportedRouteKeysBySession.set(sessionId, routeKeys);
+}
+
 /**
  * Chat bridge 上游只收 host 明确构造的 header。绝不把 Codex/ChatGPT 请求 header
  * 原样透传，防止账号 id、OpenAI OAuth bearer 或内部 session 元数据泄漏给第三方。
@@ -1002,6 +1022,7 @@ function createChatBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
   wireModel: string,
+  threadId: string,
   requestModelOverride?: string,
   reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
@@ -1033,16 +1054,57 @@ function createChatBridgeDecision(
     realModel,
     baseCapabilities,
   );
+  const sessionId = threadToSession.get(threadId);
+  const imageRouteGeneration = sessionId
+    ? chatImageRouteGenerationBySession.get(sessionId)
+    : undefined;
+  const imageRouteKey = chatImageCapabilityRouteKey(
+    providerId,
+    route.routing.upstream,
+    route.routing.requestPath,
+    realModel,
+  );
+  const capabilitiesForImageRoute = sessionId
+    && chatImageUnsupportedRouteKeysBySession.get(sessionId)?.has(imageRouteKey)
+    ? { ...routedCapabilities }
+    : routedCapabilities;
+  if (capabilitiesForImageRoute !== routedCapabilities) {
+    delete capabilitiesForImageRoute.imageInput;
+  }
   const systemMessagePolicy = chatBridgeSystemMessagePolicyForRoute(
     route.providerId,
     route.routing.upstream,
   );
   const capabilities = systemMessagePolicy
-    ? { ...routedCapabilities, systemMessagePolicy }
-    : routedCapabilities;
-  const onUpstreamError = route.providerSource === 'user'
+    ? { ...capabilitiesForImageRoute, systemMessagePolicy }
+    : capabilitiesForImageRoute;
+  const onUpstreamError = route.providerSource === 'user' || sessionId
     ? ({ status, body }: { status: number; body: string }): void => {
-        reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
+        if (
+          sessionId
+          && imageRouteGeneration !== null
+          && imageRouteGeneration !== undefined
+          && chatImageRouteGenerationBySession.get(sessionId) === imageRouteGeneration
+          && (status === 400 || status === 415 || status === 422)
+          && isUnsupportedResponsesImageErrorPayload(body)
+        ) {
+          markChatImageUnsupportedForSession(sessionId, imageRouteKey);
+          log.info('codex chat bridge disabled image input after upstream rejection', {
+            sessionId,
+            providerId,
+            model: realModel,
+            status,
+          });
+        }
+        if (route.providerSource === 'user') {
+          reportProviderUpstreamError({
+            agent: 'codex',
+            providerId,
+            providerName,
+            status,
+            bodyText: body,
+          });
+        }
       }
     : undefined;
   const handler = createResponsesChatHandler({
@@ -1434,6 +1496,7 @@ function createLocalBridgeDecision(
       route,
       instructions,
       wireModel,
+      threadId,
       requestModelOverride,
       reasoningEffortOverride,
     );
@@ -3590,6 +3653,10 @@ function bindThreadToSession(sessionId: string, threadId: string): void {
     clearSessionThreads(previousSessionId);
   }
 
+  if (!sessionToThreads.has(sessionId)) {
+    nextChatImageRouteGeneration += 1;
+    chatImageRouteGenerationBySession.set(sessionId, nextChatImageRouteGeneration);
+  }
   sessionToThread.set(sessionId, threadId);
   const threads = sessionToThreads.get(sessionId) ?? new Set<string>();
   threads.add(threadId);
@@ -3669,11 +3736,25 @@ export function registerChildThread(parentThreadId: string, childThreadId: strin
   return true;
 }
 
+/**
+ * Task archive/delete boundary for provider-confirmed image capability state.
+ * Ordinary Codex process closes intentionally keep this state across reconnects.
+ */
+export function clearSessionChatImageCapabilityState(sessionId: string): void {
+  chatImageUnsupportedRouteKeysBySession.delete(sessionId);
+  // Keep an invalid generation until the still-running process reaches unregister.
+  // This blocks both pre-cleanup callbacks and new callbacks created in that window.
+  chatImageRouteGenerationBySession.set(sessionId, null);
+}
+
 function clearSessionThreads(sessionId: string): string[] {
   const threadIds = Array.from(sessionToThreads.get(sessionId) ?? []);
   sessionToThreads.delete(sessionId);
   sessionToThread.delete(sessionId);
   reviewerModelBySession.delete(sessionId);
+  if (chatImageRouteGenerationBySession.get(sessionId) === null) {
+    chatImageRouteGenerationBySession.delete(sessionId);
+  }
   for (const threadId of threadIds) {
     if (threadToSession.get(threadId) === sessionId) {
       // Session 关闭既可能是普通释放，也可能是 OAuth ↔ 第三方模型的 route 切换。

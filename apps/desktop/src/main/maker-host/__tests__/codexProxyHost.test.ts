@@ -801,9 +801,149 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     ['https://coding.dashscope.aliyuncs.com.evil.example/v1', 'qwen3.7-plus'],
     ['https://example.com/v1', 'qwen3.7-plus'],
     ['https://coding.dashscope.aliyuncs.com/v1', 'qwen3-coder-next'],
-  ])('keeps image input disabled for non-matching route %s / %s', async (upstream, model) => {
+  ])('enables image_url by default for non-matching route %s / %s (fail-open)', async (upstream, model) => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
-    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBeUndefined();
+    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+  });
+
+  it('keeps rejected route state across reconnects and clears it only at the task boundary', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'no-vision-chat-provider',
+        name: 'No Vision Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://no-vision.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [
+              { id: 'text-model', name: 'Text Model' },
+              { id: 'other-model', name: 'Other Model' },
+            ],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'provider-key');
+    setSessionProvider('session-no-vision', 'no-vision-chat-provider');
+    host.registerComposed('session-no-vision', 'thread-no-vision', 'PRODUCT_PROMPT');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const body = { model: 'text-model', input: [{ role: 'user', content: 'hello' }] };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-no-vision' },
+    };
+
+    try {
+      await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      const firstProvider = (mockState.createResponsesChatHandler.mock.calls.at(-1) as unknown as
+        | [{
+            capabilities?: { imageInput?: string };
+            onUpstreamError?: (args: { status: number; body: string }) => void;
+          }]
+        | undefined)?.[0];
+      expect(firstProvider?.capabilities?.imageInput).toBe('image_url');
+
+      firstProvider?.onUpstreamError?.({
+        status: 400,
+        body: 'Invalid image_url: image exceeds maximum size',
+      });
+      await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      const afterContentErrorProvider = (mockState.createResponsesChatHandler.mock.calls.at(-1) as unknown as
+        | [{
+            capabilities?: { imageInput?: string };
+            onUpstreamError?: (args: { status: number; body: string }) => void;
+          }]
+        | undefined)?.[0];
+      expect(afterContentErrorProvider?.capabilities?.imageInput).toBe('image_url');
+
+      afterContentErrorProvider?.onUpstreamError?.({
+        status: 500,
+        body: 'image_url content part is not supported by this model',
+      });
+      await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      const afterServerErrorProvider = (mockState.createResponsesChatHandler.mock.calls.at(-1) as unknown as
+        | [{
+            capabilities?: { imageInput?: string };
+            onUpstreamError?: (args: { status: number; body: string }) => void;
+          }]
+        | undefined)?.[0];
+      expect(afterServerErrorProvider?.capabilities?.imageInput).toBe('image_url');
+
+      afterServerErrorProvider?.onUpstreamError?.({
+        status: 400,
+        body: 'image_url content part is not supported by this model',
+      });
+
+      await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      const downgradedProvider = (mockState.createResponsesChatHandler.mock.calls.at(-1) as unknown as
+        | [{ capabilities?: { imageInput?: string } }]
+        | undefined)?.[0];
+      expect(downgradedProvider?.capabilities?.imageInput).toBeUndefined();
+
+      await Promise.resolve(host.createModelRoutingTransform()(
+        { ...body, model: 'other-model' },
+        ctx,
+      ));
+      const otherModelProvider = (mockState.createResponsesChatHandler.mock.calls.at(-1) as unknown as
+        | [{ capabilities?: { imageInput?: string } }]
+        | undefined)?.[0];
+      expect(otherModelProvider?.capabilities?.imageInput).toBe('image_url');
+
+      host.unregister('session-no-vision');
+      host.registerComposed('session-no-vision', 'thread-no-vision', 'PRODUCT_PROMPT');
+      await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      const reconnectedProvider = (mockState.createResponsesChatHandler.mock.calls.at(-1) as unknown as
+        | [{
+            capabilities?: { imageInput?: string };
+            onUpstreamError?: (args: { status: number; body: string }) => void;
+          }]
+        | undefined)?.[0];
+      expect(reconnectedProvider?.capabilities?.imageInput).toBeUndefined();
+
+      host.clearSessionChatImageCapabilityState('session-no-vision');
+      await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      const terminalWindowProvider = (mockState.createResponsesChatHandler.mock.calls.at(-1) as unknown as
+        | [{
+            capabilities?: { imageInput?: string };
+            onUpstreamError?: (args: { status: number; body: string }) => void;
+          }]
+        | undefined)?.[0];
+      expect(terminalWindowProvider?.capabilities?.imageInput).toBe('image_url');
+      terminalWindowProvider?.onUpstreamError?.({
+        status: 400,
+        body: 'image_url content part is not supported by this model',
+      });
+      reconnectedProvider?.onUpstreamError?.({
+        status: 400,
+        body: 'image_url content part is not supported by this model',
+      });
+      host.unregister('session-no-vision');
+      afterServerErrorProvider?.onUpstreamError?.({
+        status: 400,
+        body: 'image_url content part is not supported by this model',
+      });
+      host.registerComposed('session-no-vision', 'thread-no-vision', 'PRODUCT_PROMPT');
+      await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      const restoredProvider = (mockState.createResponsesChatHandler.mock.calls.at(-1) as unknown as
+        | [{ capabilities?: { imageInput?: string } }]
+        | undefined)?.[0];
+      expect(restoredProvider?.capabilities?.imageInput).toBe('image_url');
+    } finally {
+      host.unregister('session-no-vision');
+      host.clearSessionChatImageCapabilityState('session-no-vision');
+      clearSessionProvider('session-no-vision');
+      host.clearCodexProxyAuthInjection();
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
   });
 
   it('passes image support into the handler for a preset-derived custom Kimi route', async () => {

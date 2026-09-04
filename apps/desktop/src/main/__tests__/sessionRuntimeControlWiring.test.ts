@@ -783,6 +783,7 @@ describe('session runtime control wiring', () => {
 
     expect(closeBoundary).not.toContain('clearSessionRuntimeControlState(session.id);');
     expect(terminalCleanup).toContain('clearSessionRuntimeControlState(sessionId);');
+    expect(terminalCleanup).toContain('clearSessionChatImageCapabilityState(sessionId);');
     expect(terminalCleanup).toContain('clearSessionProvider(sessionId);');
     expect(terminalCleanup).toContain('setSessionEffort(sessionId, null);');
     expect(terminalCleanup).toContain('setSessionFastMode(sessionId, false);');

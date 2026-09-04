@@ -290,8 +290,8 @@ export interface ChatBridgeCapabilities {
    */
   reasoningHistoryField?: ChatReasoningHistoryField;
   /**
-   * Responses `input_image` 的上游等价形态。默认未声明 = fail closed；只由
-   * 已确认支持视觉输入的运行时（当前为 upstream 白名单）开启。
+   * Responses `input_image` 的上游等价形态。默认 `image_url`（fail-open：桥接层
+   * 负责格式转换，上游不支持时由客户端检测并提示用户）。
    */
   imageInput?: ChatImageInput;
   /** Responses `input_file` 的上游等价形态；默认未声明 = fail closed。 */
@@ -368,7 +368,9 @@ export interface ResponsesChatBridgeHandler {
 const UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX =
   'Responses feature is not supported by the Chat Completions bridge: ';
 const RESPONSES_IMAGE_CONTENT_PART_TYPES = new Set(['input_image', 'image_url', 'image']);
-const CODEX_UNEXPECTED_BAD_REQUEST_PREFIX = /^unexpected status 400(?: Bad Request)?: /;
+const CODEX_UNEXPECTED_BAD_REQUEST_PREFIX =
+  /^unexpected status (?:400(?: Bad Request)?|415(?: Unsupported Media Type)?|422(?: Unprocessable Entity)?): /;
+const CODEX_UNEXPECTED_STATUS_PREFIX = /^unexpected status \d{3}(?: [^:]+)?: /;
 const CODEX_ERROR_METADATA_MARKERS = [
   ', url: ',
   ', cf-ray: ',
@@ -396,14 +398,107 @@ function isUnsupportedResponsesImageFeature(feature: string): boolean {
     || contentPartType.startsWith('input_image.');
 }
 
+// Capability-rejection keywords: an upstream message that states the *model*
+// does not support image/vision input. Deliberately narrower than a generic
+// "mentions image" test: messages like "Invalid image_url: image exceeds
+// maximum size" or "image_url must be a valid URL" describe invalid *content*,
+// not a missing capability. Treating those as capability rejection would strip
+// the user's attachment and resend text without the image they asked about.
+function imageRejectionKeywords(msg: string): boolean {
+  const m = msg.toLowerCase();
+  // Capability rejection: the model/provider explicitly says it does not support
+  // image/vision input. This is distinct from content errors like "image format
+  // not supported" or "image exceeds maximum size" which describe invalid content.
+  const capabilityPhrases = [
+    'image input is not supported',
+    'vision is not supported',
+    'images are not supported',
+    'image_url content part is not supported',
+    'image content part is not supported',
+    'multimodal input is not supported',
+    'does not support image input',
+    'does not support vision input',
+    'does not support image_url',
+    'does not support images',
+    'does not support multimodal',
+    'does not support image',
+    'does not support vision',
+    'not support image',
+    'not support vision',
+    'not support multimodal',
+  ];
+  for (const phrase of capabilityPhrases) {
+    if (m.includes(phrase)) return true;
+  }
+  return false;
+}
+
 function isUnsupportedResponsesImageErrorObject(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const error = (value as Record<string, unknown>).error;
+  if (typeof error === 'string') return imageRejectionKeywords(error);
   if (typeof error !== 'object' || error === null || Array.isArray(error)) return false;
   const { code, message } = error as Record<string, unknown>;
-  if (code !== 'unsupported_feature' || typeof message !== 'string') return false;
-  const feature = unsupportedResponsesFeatureFromMessage(message);
-  return feature !== null && isUnsupportedResponsesImageFeature(feature);
+  if (typeof message !== 'string') return false;
+  // Bridge-generated unsupported_feature error (fail-closed path)
+  if (code === 'unsupported_feature') {
+    const feature = unsupportedResponsesFeatureFromMessage(message);
+    return feature !== null && isUnsupportedResponsesImageFeature(feature);
+  }
+  // Upstream provider rejection: detect image-related 400 errors from providers
+  // that don't support vision (e.g. DeepSeek, Ollama without vision model).
+  //
+  // The handler (handler.ts) wraps upstream errors as:
+  //   {error: {code: "upstream_error", message: "<raw upstream JSON body>"}}
+  // So we check both the outer code and also parse the wrapped inner error.
+  const { type } = error as Record<string, unknown>;
+  // Accept both `code` (OpenAI-style) and `type` (some providers only emit
+  // `type: 'invalid_request_error'` with no code at all) as the
+  // request-invalid signal.
+  // Accept invalid_request (400), unsupported_media_type (415), and
+  // unprocessable_entity (422) as request-invalid signals. Some providers use
+  // 415/422 to indicate the model does not accept image content parts.
+  const invalidRequest =
+    (typeof code === 'string' && (code.includes('invalid_request')
+      || code.includes('unsupported_media') || code.includes('unprocessable')))
+    || (typeof type === 'string' && (type.toLowerCase().includes('invalid_request')
+      || type.toLowerCase().includes('unsupported_media')
+      || type.toLowerCase().includes('unprocessable')));
+  if (invalidRequest
+      && !message.startsWith(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX)) {
+    if (imageRejectionKeywords(message)) return true;
+  }
+  if (code === 'upstream_error' && typeof message === 'string') {
+    const inner = parseJson(message);
+    if (inner && typeof inner === 'object' && inner !== null) {
+      const innerErr = (inner as Record<string, unknown>).error;
+      if (typeof innerErr === 'string') {
+        // Some providers (e.g. Ollama) return a native JSON error whose
+        // `error` value is a plain string, e.g. {"error":"this model
+        // does not support images"}. Classify it directly.
+        if (imageRejectionKeywords(innerErr)) return true;
+      } else if (innerErr && typeof innerErr === 'object') {
+        const ic = (innerErr as Record<string, unknown>).code;
+        const it = (innerErr as Record<string, unknown>).type;
+        const im = (innerErr as Record<string, unknown>).message;
+        const innerInvalid =
+          (typeof ic === 'string' && (ic.includes('invalid_request')
+            || ic.includes('unsupported_media') || ic.includes('unprocessable')))
+          || (typeof it === 'string' && (it.toLowerCase().includes('invalid_request')
+            || it.toLowerCase().includes('unsupported_media')
+            || it.toLowerCase().includes('unprocessable')));
+        if (innerInvalid && typeof im === 'string' && imageRejectionKeywords(im)) {
+          return true;
+        }
+      }
+    } else {
+      // Upstream returned a plain-text (non-JSON) 400 body, e.g.
+      // "image_url content part is not supported by this model". The handler
+      // wraps it as upstream_error with the raw text as message.
+      if (imageRejectionKeywords(message)) return true;
+    }
+  }
+  return false;
 }
 
 function parseJson(value: string): unknown {
@@ -449,13 +544,21 @@ export function isUnsupportedResponsesImageErrorPayload(payload: string | null):
   if (isUnsupportedResponsesImageErrorObject(parseJson(payload))) return true;
 
   const codexPrefix = CODEX_UNEXPECTED_BAD_REQUEST_PREFIX.exec(payload);
-  if (!codexPrefix) return false;
+  if (!codexPrefix) {
+    if (CODEX_UNEXPECTED_STATUS_PREFIX.test(payload)) return false;
+    return imageRejectionKeywords(payload);
+  }
   const renderedBody = payload.slice(codexPrefix[0].length);
   if (isUnsupportedResponsesImageErrorObject(parseCodexWrappedJson(renderedBody))) return true;
 
   const message = stripCodexErrorMetadata(renderedBody);
   const feature = unsupportedResponsesFeatureFromMessage(message);
-  return feature !== null && isUnsupportedResponsesImageFeature(feature);
+  if (feature !== null && isUnsupportedResponsesImageFeature(feature)) return true;
+  // Codex extracts error.message from the wrapped upstream_error envelope, so a
+  // plain-text capability rejection (e.g. "image_url content part is not
+  // supported by this model, url: ...") arrives directly after the prefix.
+  // Classify the stripped plain text with the same keyword set as the JSON path.
+  return imageRejectionKeywords(message);
 }
 
 export class UnsupportedResponsesFeatureError extends Error {
