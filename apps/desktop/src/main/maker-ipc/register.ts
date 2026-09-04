@@ -682,6 +682,10 @@ import {
 } from './agentHandoff.js';
 import {
   createContextOverflowRollover,
+  effectiveContextWindow,
+  hasModelWindowContextToProtect,
+  isContextOverflowErrorData,
+  isOversizedHistoryErrorData,
   isPiPromptRpcTimeoutError,
   lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
@@ -13811,6 +13815,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: sessions.fastMode,
           workingDir: sessions.workingDir,
           contextTokens: sessions.contextTokens,
+          contextWindow: sessions.contextWindow,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
@@ -14277,7 +14282,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       }
       let targetContextWindow: number | undefined;
-      let verifiedCurrentWindow: number | undefined;
+      let currentContextWindow: number | undefined;
+      let modelWindowContextNeedsProtection = false;
       let modelWindowRebuilt = false;
       if (runtimeAgentKind && (runtimeRouteChanged || confirmedContextWindow !== undefined)) {
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
@@ -14296,19 +14302,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             runtimeAgentKind,
           ) ?? undefined;
         const liveCurrentWindow = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextWindow;
-        // Pi's effective window is a runtime route fact; catalog/persisted values may be larger.
-        verifiedCurrentWindow =
+        const reportedCurrentWindow =
+          typeof liveCurrentWindow === 'number' &&
+          Number.isFinite(liveCurrentWindow) &&
+          liveCurrentWindow > 0
+            ? liveCurrentWindow
+            : typeof runtimeStatus.contextWindow === 'number' &&
+                Number.isFinite(runtimeStatus.contextWindow) &&
+                runtimeStatus.contextWindow > 0
+              ? runtimeStatus.contextWindow
+              : 0;
+        // Current-session usage has already been route-capped by the harness when a verified
+        // catalog ceiling exists. If the current route has no verified catalog entry, its live
+        // (or last persisted) effective window is still the best fact about the running context.
+        // Pi remains live-only because its provider/model reload can change the effective window.
+        currentContextWindow =
           runtimeAgentKind === 'pi'
             ? typeof liveCurrentWindow === 'number' &&
               Number.isFinite(liveCurrentWindow) &&
               liveCurrentWindow > 0
               ? liveCurrentWindow
               : undefined
-            : catalogCurrentWindow;
+            : effectiveContextWindow(
+                currentRuntimeModel,
+                reportedCurrentWindow,
+                catalogCurrentWindow,
+              ) || undefined;
         const targetDoesNotShrink =
-          typeof verifiedCurrentWindow === 'number' &&
+          typeof currentContextWindow === 'number' &&
           typeof verifiedTargetWindow === 'number' &&
-          verifiedTargetWindow >= verifiedCurrentWindow;
+          verifiedTargetWindow >= currentContextWindow;
         // Materialized/user-provider catalog windows can be display-only fallbacks.
         // A destructive native-context rebuild may use only a route-verified window.
         targetContextWindow = verifiedTargetWindow ?? undefined;
@@ -14346,6 +14369,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const contextTokens = liveUsageIsAuthoritative
           ? verifiedLiveContextTokens
           : (persistedContextTokens ?? 0);
+        modelWindowContextNeedsProtection = hasModelWindowContextToProtect(
+          contextTokensKnown,
+          contextTokens,
+        );
         const modelSwitchPlan = planUserRuntimeModelSwitch({
           agentKind: runtimeAgentKind ?? 'claude-code',
           model,
@@ -14649,7 +14676,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
           targetContextWindow = finalPiWindow;
-          if (finalPiWindow < verifiedCurrentWindow!) {
+          if (
+            modelWindowContextNeedsProtection &&
+            currentContextWindow !== undefined &&
+            finalPiWindow < currentContextWindow
+          ) {
             if (!contextOverflowRolloverHolder) {
               await closeRejectedPiRuntime('model-window protection was unavailable');
               throwIpcError(

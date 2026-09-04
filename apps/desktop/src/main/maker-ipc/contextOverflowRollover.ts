@@ -379,6 +379,13 @@ export type ModelWindowSwitchPreparationResult =
   | 'unknown-context'
   | 'in-flight';
 
+export function hasModelWindowContextToProtect(
+  contextTokensKnown: boolean,
+  contextTokens: number,
+): boolean {
+  return !contextTokensKnown || contextTokens !== 0;
+}
+
 export function shouldRebuildForModelWindowSwitch(input: {
   contextTokens: number;
   currentContextWindow: number;
