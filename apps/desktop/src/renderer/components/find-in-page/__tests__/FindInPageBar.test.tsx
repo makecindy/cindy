@@ -195,19 +195,19 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('i\u0307');
   });
 
-  it('matches full Unicode case folds such as sharp s and ligatures', async () => {
+  it('does not expand one visible character into duplicate navigation matches', async () => {
     const page = document.createElement('main');
-    page.textContent = 'Straße ﬃ';
+    page.textContent = 'ß';
 
     const input = await openFindBar(page);
-    fireEvent.change(input, { target: { value: 'STRASSE' } });
+    fireEvent.change(input, { target: { value: 's' } });
 
-    expect(screen.getByText('1/1')).toBeTruthy();
-    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('Straße');
+    expect(screen.getByText('0/0')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)).toBeUndefined();
 
-    fireEvent.change(input, { target: { value: 'FFI' } });
+    fireEvent.change(input, { target: { value: 'ß' } });
     expect(screen.getByText('1/1')).toBeTruthy();
-    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('ﬃ');
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('ß');
   });
 
   it('matches whitespace collapsed by normal text layout', async () => {
