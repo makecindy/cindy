@@ -1271,6 +1271,59 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
+  it('keeps a non-optional group policy in Full access so the turn fails closed', async () => {
+    mocks.peekSessionById.mockImplementationOnce(async () => ({
+      permissionMode: 'bypassPermissions',
+    } as unknown as ImSessionRow));
+    const h = createSessionHarness(
+      async () => {
+        throw new TurnPermissionPolicyUnsupportedError('pi', 'bypassPermissions');
+      },
+      'telegram-guest-full-access',
+      {
+        capabilities: {
+          turnPermissionPolicy: {
+            supported: { supported: true },
+            unsupportedPermissionModes: ['bypassPermissions'],
+          },
+        } as unknown as Capabilities,
+      },
+    );
+    mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+    const turnPermissionPolicy = {
+      origin: { kind: 'im' as const, channel: 'telegram', taskId: 'msg-guest-policy' },
+      confirmationSurface: 'channel' as const,
+      forceConfirmToolCall: () => false,
+    };
+    const optionalForMode = vi.fn(() => false);
+    const localAdapter = {
+      ...fakeAdapter,
+      turnPolicyOptionalForMode: optionalForMode,
+    } as unknown as ImChannelAdapter;
+    const localRunner = createTurnRunner(localAdapter, fakeRepo, fakeCards, {});
+
+    try {
+      const dispatch = await localRunner.dispatchAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'g/-100/77',
+        userMessageId: 'msg-guest-policy',
+        text: 'guest full access group turn',
+        attachments: [],
+        queueMode: 'external',
+        beforeProviderStart: vi.fn(async () => undefined),
+        turnPermissionPolicy,
+      });
+
+      expect(optionalForMode).toHaveBeenCalledWith('bypassPermissions', turnPermissionPolicy);
+      expect(dispatch).toEqual({
+        kind: 'rejected',
+        reason: 'TURN_PERMISSION_POLICY_UNSUPPORTED:mode:bypassPermissions',
+      });
+    } finally {
+      localRunner.disposeAllSessions();
+    }
+  });
+
   it('keeps the turn policy for other modes even with the optional-mode hook', async () => {
     mocks.peekSessionById.mockImplementationOnce(
       async () => ({ permissionMode: 'auto' } as unknown as ImSessionRow),

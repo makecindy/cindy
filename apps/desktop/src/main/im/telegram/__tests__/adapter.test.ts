@@ -7,28 +7,34 @@ import { ui } from '../uiText';
 describe('Telegram group history access scope', () => {
   const adapter = buildTelegramAdapter({} as never, {} as never);
 
-  it('honors explicit Full access while keeping the group turn policy for stricter modes', () => {
-    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions')).toBe(true);
-    expect(adapter.turnPolicyOptionalForMode?.('auto')).toBe(false);
-    expect(adapter.turnPolicyOptionalForMode?.('ask')).toBe(false);
-  });
-
-  it('attaches the confirmation policy to guest and owner group turns, but not DMs', () => {
+  it('only lets owner-triggered group turns omit the policy in Full access', () => {
     const groupEvent = {
       messageId: 'm-policy',
       speaker: { id: 'guest', name: 'Guest', isOwner: false },
     } as unknown as IMMessageEvent;
+    const guestPolicy = adapter.turnPermissionPolicyFor?.(groupEvent);
+    const ownerPolicy = adapter.turnPermissionPolicyFor?.({
+      ...groupEvent,
+      messageId: 'm-owner-policy',
+      speaker: { id: 'owner', name: 'Owner', isOwner: true },
+    } as unknown as IMMessageEvent);
 
-    expect(adapter.turnPermissionPolicyFor?.(groupEvent)).toMatchObject({
+    expect(guestPolicy).toMatchObject({
       origin: { kind: 'im', channel: 'telegram', taskId: 'm-policy' },
       confirmationSurface: 'channel',
     });
-    expect(
-      adapter.turnPermissionPolicyFor?.({
-        ...groupEvent,
-        speaker: { id: 'owner', name: 'Owner', isOwner: true },
-      } as unknown as IMMessageEvent),
-    ).toBeDefined();
+    expect(ownerPolicy).toBeDefined();
+    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', guestPolicy!)).toBe(false);
+    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', ownerPolicy!)).toBe(true);
+    expect(adapter.turnPolicyOptionalForMode?.('auto', ownerPolicy!)).toBe(false);
+    expect(adapter.turnPolicyOptionalForMode?.('ask', ownerPolicy!)).toBe(false);
+  });
+
+  it('does not attach a group confirmation policy to DMs', () => {
+    const groupEvent = {
+      messageId: 'm-policy',
+      speaker: { id: 'guest', name: 'Guest', isOwner: false },
+    } as unknown as IMMessageEvent;
     expect(
       adapter.turnPermissionPolicyFor?.({
         ...groupEvent,

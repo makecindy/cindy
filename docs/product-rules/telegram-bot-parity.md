@@ -108,7 +108,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 
 | 差异 | 官方 | 个人 | 裁决与理由 |
 |---|---|---|---|
-| 群轮次权限档 | 完全按用户配的走 | 除「完全访问」外仍强制确认破坏性操作；用户明确选择「完全访问」时按该档直接执行 | Chris 2026-09-04 实踩裁决：个人 bot 的群任务已经明确设成 Pi + Grok + Full access，Cindy 侧能继续对话，Telegram 却因额外挂的逐轮策略与 Full access 互斥而在模型启动前拒绝每条消息。**完全访问就是完全访问**，不得在运行期另起一套隐式权限配置；个人侧只在 `bypassPermissions` 下通过 `turnPolicyOptionalForMode` 取缔逐轮策略，其它权限档的群护栏与群历史 lane 隔离照常保留。官方侧继续完全按用户配置，不改服务端行为。见 `hook-control/session-runner.ts`、`im/telegram/adapter.ts` 与 `im/shared/turnRunner.ts` |
+| 群轮次权限档 | 完全按用户配的走 | 除「完全访问」外仍强制确认破坏性操作；「完全访问」只让 owner 触发的轮次按该档直接执行，非 owner 的群消息继续保留逐轮策略并 fail-closed | Chris 2026-09-04 实踩裁决：个人 bot 的群任务已经明确设成 Pi + Grok + Full access，Cindy 侧能继续对话，Telegram 却因额外挂的逐轮策略与 Full access 互斥而在模型启动前拒绝每条消息。**owner 明确选择的完全访问必须正常执行，但不能把这份授权扩给同群其他成员**；个人侧在 `bypassPermissions` 下仅对 owner 触发的 policy 通过 `turnPolicyOptionalForMode` 取缔逐轮策略，非 owner、其它权限档的群护栏与群历史 lane 隔离照常保留。官方侧继续完全按用户配置，不改服务端行为。见 `hook-control/session-runner.ts`、`im/telegram/adapter.ts` 与 `im/shared/turnRunner.ts` |
 | 私聊过程态的载体 | Telegram **草稿**（`sendDraft`），终稿一发草稿自然消失 | 真实消息，原地 `editMessageText` 覆盖 | 草稿只有官方路径拿得到。个人栈**不是零推送**：惰性占位让「没有真实内容就不建消息」，但**第一帧真实内容那次 `sendMessage` 会推送**，之后的编辑才不推送。`presentationCapabilities.ts` 的 `progressSilent: true` 说的是「过程帧不额外推送」，不是「整轮零推送」 |
 | `/status` | 有 | 无 | 官方 bot 经服务端中继，链路可断，所以有「关联状态」可看；个人 bot 由桌面直连 Bot API，没有等价概念。见注册表 `parityNote` |
 | `/unlink` | 有 | 无 | 官方 bot 的关联由服务端持有；个人 bot 的 token 是用户自填的，解绑入口在桌面设置页 |
