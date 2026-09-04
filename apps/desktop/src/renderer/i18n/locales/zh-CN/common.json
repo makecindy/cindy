@@ -7571,6 +7571,11 @@
     },
     "collab": {
       "cindyTask": "独立任务",
+      "backgroundTask": "后台任务",
+      "taskAssignedTo": "交给 {{name}} 的任务",
+      "taskFrom": "{{name}} 发来的任务",
+      "trackedTask": "独立运行并自动回传结果",
+      "stopTask": "停止任务",
       "joined": "{{name}} 加入了对话",
       "inboundJoined": "{{name}} 把活交给了你",
       "guestTag": "客座",

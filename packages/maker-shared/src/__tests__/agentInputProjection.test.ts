@@ -252,7 +252,7 @@ describe('agent-facing Composer projection', () => {
     expect(projected).toContain('Bot ID: "bot-control-1"');
     expect(projected).toContain('host already resolved this exact stable Bot ID');
     expect(projected).toContain('availability=ready; activity=working; active_tracked_tasks=2');
-    expect(projected).toContain('collaborate_with_bot once with action="delegate"');
+    expect(projected).toContain('collaborate_with_bot once with action="call"');
     expect(projected).toContain('action="notify"');
     expect(projected).toContain('notification only confirms delivery');
     expect(projected).toContain('Do not list Bots');

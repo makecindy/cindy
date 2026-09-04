@@ -196,6 +196,15 @@ function scriptedAnthropicTurn(requestBody: string): string {
         })
       : anthropicTextTurn(2, 'tracked Bot delegation started');
   }
+  if (requestBody.includes('direct Session task')) {
+    return toolResultCount === 0
+      ? anthropicToolTurn(1, 'start_session_task', {
+          title: 'Build the demo',
+          working_dir: '/repo',
+          instruction: 'Build and verify a standalone HTML demo.',
+        })
+      : anthropicTextTurn(2, 'independent Session task started');
+  }
   if (requestBody.includes('direct Bot memory')) {
     return toolResultCount === 0
       ? anthropicToolTurn(1, 'bot_memory', {
@@ -307,6 +316,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const workspaceLookupCalls: Array<{ query: string }> = [];
   const contactsLookupCalls: Array<{ query: string }> = [];
   const botCollaborationCalls: Array<Record<string, unknown>> = [];
+  const sessionTaskCalls: Array<Record<string, unknown>> = [];
   const botMemoryCalls: Array<Record<string, unknown>> = [];
   // 记录假 MCP server 收到的请求 URL —— 断言真 pi(经 cindy-bridge fetch)把
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
@@ -572,6 +582,21 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           },
         );
       } else if (isHelper) {
+        server.registerTool(
+          'start_session_task',
+          {
+            description: 'Start a real independent Cindy Session task',
+            inputSchema: {
+              instruction: z.string(),
+              title: z.string().optional(),
+              working_dir: z.string().optional(),
+            },
+          },
+          async (args) => {
+            sessionTaskCalls.push(args);
+            return { content: [{ type: 'text', text: 'SESSION_TASK[running]' }] };
+          },
+        );
         server.registerTool(
           'collaborate_with_bot',
           {
@@ -968,6 +993,52 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .map((data) => data.text)
         .join('');
       expect(finalText).toContain('tracked Bot delegation started');
+    },
+  );
+
+  it(
+    'starts a typed independent Session task without selecting a Bot',
+    { timeout: 90_000 },
+    async () => {
+      sessionTaskCalls.length = 0;
+      const permissions: Array<{ toolName: string; input: unknown }> = [];
+      const { events, requests } = await runOneTurn(
+        'ask',
+        async (req) => {
+          if (req.kind === 'permission') {
+            permissions.push({ toolName: req.toolName, input: req.input });
+          }
+          return { kind: 'permission', behavior: 'allow' };
+        },
+        'local-multi',
+        'run direct Session task',
+      );
+
+      expect(sessionTaskCalls).toEqual([{
+        title: 'Build the demo',
+        working_dir: '/repo',
+        instruction: 'Build and verify a standalone HTML demo.',
+      }]);
+      expect(permissions).toEqual([{
+        toolName: 'mcp__cindy_helper__start_session_task',
+        input: {
+          title: 'Build the demo',
+          working_dir: '/repo',
+          instruction: 'Build and verify a standalone HTML demo.',
+        },
+      }]);
+      const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
+        ?.map((tool) => tool.name) ?? [];
+      expect(startupToolNames).toContain('start_session_task');
+      expect(startupToolNames).toContain('collaborate_with_bot');
+      expect(requests).toHaveLength(2);
+      const finalText = events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.data as { text: string; isFinal?: boolean })
+        .filter((data) => data.isFinal)
+        .map((data) => data.text)
+        .join('');
+      expect(finalText).toContain('independent Session task started');
     },
   );
 

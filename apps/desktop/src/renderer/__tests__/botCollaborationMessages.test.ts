@@ -110,11 +110,14 @@ describe('mapServerMessages — Bot collaboration', () => {
     expect(mapped.systemCardData).toMatchObject({ threadId: 'dm-1', peerBotName: 'Planner' });
   });
 
-  it('derives the inline collaboration card from the delegation anchor row', () => {
+  it('derives the tracked task card from the delegation anchor row', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
-      row({ clientId: 'bot-delegation-request:delegation-1', agentMeta: { botCollaboration: META } }),
+      row({
+        clientId: 'bot-delegation-request:delegation-1',
+        agentMeta: { botCollaboration: META },
+      }),
     ]);
-    expect(mapped.systemCardType).toBe('bot-collab');
+    expect(mapped.systemCardType).toBe('bot-task-call');
     expect(mapped.systemCardData).toMatchObject({
       role: 'delegation-request',
       delegationId: 'delegation-1',
@@ -155,7 +158,7 @@ describe('mapServerMessages — Bot collaboration', () => {
     expect(mapped.systemCardType).toBeUndefined();
   });
 
-  it('turns the inbound request into the same live collaboration card', () => {
+  it('turns the inbound request into the same live task card', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
       row({
         clientId: 'bot-delegation-target-request:delegation-1',
@@ -164,7 +167,7 @@ describe('mapServerMessages — Bot collaboration', () => {
         agentMeta: { botCollaboration: { ...META, role: 'guest-request' } },
       }),
     ]);
-    expect(mapped.systemCardType).toBe('bot-collab');
+    expect(mapped.systemCardType).toBe('bot-task-call');
     expect(mapped.systemCardData).toMatchObject({
       role: 'guest-request',
       fromBotName: 'Cindy',
@@ -174,7 +177,7 @@ describe('mapServerMessages — Bot collaboration', () => {
     expect(mapped.guestBot).toBeUndefined();
   });
 
-  it('turns the inbound result mirror into a collaboration report, not a wall of text', () => {
+  it('turns the inbound result mirror into a task result, not a wall of text', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
       row({
         clientId: 'bot-delegation-target-result:delegation-1',
@@ -183,9 +186,8 @@ describe('mapServerMessages — Bot collaboration', () => {
         agentMeta: { botCollaboration: { ...META, role: 'result-mirror' } },
       }),
     ]);
-    expect(mapped.systemCardType).toBe('bot-collab');
+    expect(mapped.systemCardType).toBe('bot-task-call');
     expect(mapped.systemCardData).toMatchObject({ role: 'result-mirror' });
     expect(mapped.content).toBe('');
   });
-
 });

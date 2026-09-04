@@ -141,19 +141,30 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("exposes one direct Bot call primitive for a Bot-bound session", async () => {
+  it("separates independent Session tasks from named Bot collaboration", async () => {
     const listBots = vi.fn(async () => ({
       ok: true as const,
       bots: [{ id: "bot-b", name: "Dash Bot" }],
     }));
-    const call = vi.fn(async () => ({
-      ok: true as const,
-      delegationId: "delegation-1",
-      childSessionId: "bot-child-session",
-      status: "running",
-      targetBotId: "bot-b",
-      targetName: "Dash Bot",
-    }));
+    const call = vi.fn(async (params: { targetBotId: string | null }) =>
+      params.targetBotId === null
+        ? {
+            ok: true as const,
+            delegationId: "session-task-1",
+            childSessionId: "desktop-child-session",
+            status: "running",
+            targetBotId: null,
+            targetName: "Cindy",
+          }
+        : {
+            ok: true as const,
+            delegationId: "delegation-1",
+            childSessionId: "bot-child-session",
+            status: "running",
+            targetBotId: "bot-b",
+            targetName: "Dash Bot",
+          },
+    );
     const reply = vi.fn(async () => ({
       ok: true as const,
       delegationId: "delegation-1",
@@ -190,16 +201,22 @@ describe("cindy_helper MCP server", () => {
 
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
-      const collaborationTool = (await client.listTools()).tools.find(
+      const tools = (await client.listTools()).tools;
+      const collaborationTool = tools.find(
         (tool) => tool.name === "collaborate_with_bot",
       );
+      const sessionTaskTool = tools.find((tool) => tool.name === "start_session_task");
       expect(collaborationTool).toBeDefined();
       expect(collaborationTool?.description).toContain(
-        "Prefer it for questions, discussion, and small direct requests",
+        "brief question, discussion, or information transfer",
       );
-      expect(collaborationTool?.description).toContain(
-        "Do not choose call merely because a reply is expected",
-      );
+      expect(collaborationTool?.description).toContain("use start_session_task");
+      expect(sessionTaskTool?.description).toContain("real independent Cindy Session task");
+      expect(sessionTaskTool?.description).toContain("never calls a Cindy Bot");
+      expect((collaborationTool?.inputSchema as { properties?: Record<string, unknown> }).properties)
+        .not.toHaveProperty("working_dir");
+      expect((sessionTaskTool?.inputSchema as { properties?: Record<string, unknown> }).properties)
+        .toHaveProperty("working_dir");
       const oversized = await client.callTool({
         name: "collaborate_with_bot",
         arguments: {
@@ -239,6 +256,41 @@ describe("cindy_helper MCP server", () => {
         callerSessionId: "bot-parent-session",
         targetBotId: "bot-b",
         objective: "Return a tracked compatibility report.",
+      }));
+
+      const ambiguousCall = parsePayload(await client.callTool({
+        name: "collaborate_with_bot",
+        arguments: {
+          action: "call",
+          instruction: "Start a background task.",
+        },
+      }));
+      expect(ambiguousCall).toMatchObject({ ok: false, errorCode: "INVALID_ARGS" });
+      expect(String((ambiguousCall.data as { hint?: string }).hint)).toContain(
+        "start_session_task",
+      );
+
+      const sessionTask = parsePayload(await client.callTool({
+        name: "start_session_task",
+        arguments: {
+          title: "Build the demo",
+          working_dir: "/repo",
+          instruction: "Build and verify a standalone HTML demo.",
+        },
+      }));
+      expect(sessionTask).toMatchObject({
+        ok: true,
+        action: "start_session_task",
+        call_id: "session-task-1",
+        childSessionId: "desktop-child-session",
+        targetBotId: null,
+      });
+      expect(call).toHaveBeenLastCalledWith(expect.objectContaining({
+        callerSessionId: "bot-parent-session",
+        targetBotId: null,
+        objective: "Build and verify a standalone HTML demo.",
+        title: "Build the demo",
+        workingDir: "/repo",
       }));
 
       const replied = parsePayload(await client.callTool({

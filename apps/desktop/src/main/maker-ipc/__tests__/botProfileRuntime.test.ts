@@ -52,6 +52,8 @@ describe('Bot Profile runtime prompt', () => {
     const prompt = buildBotCapabilityContextPrompt();
     expect(prompt).toContain('You are running as a Cindy Bot');
     expect(prompt).toContain('Use direct Bot tools');
+    expect(prompt).toContain('`start_session_task`');
+    expect(prompt).toContain('never selects or wakes a Bot');
     expect(prompt).toContain('do not repeatedly list the whole tool surface');
     expect(prompt).toContain('discover other available Bots');
     expect(prompt).toContain('receive the result back in this task');
@@ -69,6 +71,7 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('not a diary of every turn');
     expect(prompt).not.toContain('`list_tools`');
     expect(prompt).not.toContain('discover other available Bots');
+    expect(prompt).not.toContain('`start_session_task`');
     expect(prompt).not.toContain('`save_bot_skill`');
   });
 

@@ -575,7 +575,7 @@ function formatReference(reference: AgentInputReference): string {
             ...(snapshot.reason ? [`Host note: ${quotedMetadata(snapshot.reason)}`] : []),
           ]
         : ['Host status: not refreshed; use collaborate_with_bot(action="status") only if the surrounding request truly asks for current status.']),
-      'Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. For work, deliverables, or anything whose result must return here, call collaborate_with_bot once with action="delegate". Use action="notify" only for a brief notice that explicitly needs no reply or result.',
+      'Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. For work, deliverables, or anything whose result must return here, call collaborate_with_bot once with action="call" and this Bot ID. Use action="notify" only for a brief notice that explicitly needs no independently tracked result.',
       'Boundary: Do not blindly forward the surrounding user text. A notification only confirms delivery and must never stand in for a tracked task.',
       '[/Referenced Cindy Bot]',
     ].join('\n');

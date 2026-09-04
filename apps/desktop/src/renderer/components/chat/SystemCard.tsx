@@ -30,7 +30,7 @@ import {
   reviewFailureCodeFromLegacyError,
   type ReviewFailureCode,
 } from '../../../shared/reviewRun';
-import { BotCollaborationCard } from '@/features/bots/BotCollaborationCard';
+import { BotCollaborationTrace, BotTaskCallCard } from '@/features/bots/BotCollaborationCard';
 import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
@@ -57,6 +57,7 @@ interface SystemCardProps {
     | 'auto-resume-pending'
     | 'agent-switch'
     | 'bot-collab'
+    | 'bot-task-call'
     | 'bot-direct-message'
     | 'context-rebuild';
   data?: Record<string, unknown>;
@@ -1339,7 +1340,9 @@ export function SystemCard({
     case 'review':
       return <ReviewCard data={data} workingDir={workingDir} />;
     case 'bot-collab':
-      return <BotCollaborationCard data={data} sessionId={sessionId} />;
+      return <BotCollaborationTrace data={data} />;
+    case 'bot-task-call':
+      return <BotTaskCallCard data={data} sessionId={sessionId} />;
     case 'bot-direct-message':
       return <BotDirectMessageCard data={data} />;
     default:

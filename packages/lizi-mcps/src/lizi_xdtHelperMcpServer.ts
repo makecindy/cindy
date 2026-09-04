@@ -260,7 +260,62 @@ function registerCallToolEntry(
   );
 }
 
-/** Bot collaboration is one direct primitive; target selection is only an argument. */
+/**
+ * Start a real Cindy Session task. This is deliberately a separate model-facing
+ * tool from Bot collaboration: a Bot named "Cindy" is still a teammate, not a
+ * substitute for an independent task in the user's task list.
+ */
+function registerStartSessionTaskEntry(
+  server: McpServer,
+  deps: XdtHelperMcpDeps,
+  sessionCtx: XdtHelperMcpSessionCtx,
+): void {
+  if (!deps.botDelegation) return;
+  server.tool(
+    'start_session_task',
+    [
+      'Start one real independent Cindy Session task in the background.',
+      'Use this when the user explicitly asks to create/start a task, Session, or background task, and for development or deliverable work that should run independently with progress, cancellation, verification, and automatic result/artifact return.',
+      'This never calls a Cindy Bot or any other teammate. To assign a named teammate, use collaborate_with_bot with action=call and that teammate\'s target_bot_id. To send a brief question or notice, use collaborate_with_bot with action=notify.',
+      'The task appears in the user\'s task list and returns its completion automatically. Start it once, end the current turn after confirming the returned receipt, and never poll or create a duplicate for the same request.',
+    ].join('\n'),
+    {
+      instruction: z.string().min(1).max(12_000),
+      title: z.string().min(1).max(120).optional(),
+      working_dir: z.string().min(1).max(1_024).optional(),
+      context_refs: z.array(z.string().max(512)).max(32).optional(),
+      max_depth: z.number().int().min(1).max(5).optional(),
+      timeout_ms: z.number().int().min(1_000).max(86_400_000).optional(),
+    },
+    async ({ instruction, title, working_dir, context_refs, max_depth, timeout_ms }) => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) {
+        return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
+      }
+      const result = await deps.botDelegation!.call({
+        callerSessionId,
+        targetBotId: null,
+        objective: instruction.trim(),
+        contextRefs: context_refs,
+        title,
+        workingDir: working_dir,
+        maxDepth: max_depth,
+        timeoutMs: timeout_ms,
+      });
+      return result.ok
+        ? okPayload({
+            ...result,
+            action: 'start_session_task',
+            call_id: result.delegationId,
+            expects_result: true,
+            guidance: 'The independent Session task is tracked. Its state, completion, failure, and artifacts return automatically; do not poll or start it again.',
+          })
+        : errorPayload(result.errorCode, result.message);
+    },
+  );
+}
+
+/** Direct messages and tracked work addressed to a named teammate. */
 function registerBotCollaborationEntry(
   server: McpServer,
   deps: XdtHelperMcpDeps,
@@ -270,10 +325,11 @@ function registerBotCollaborationEntry(
   server.tool(
     'collaborate_with_bot',
     [
-      'Use one typed Cindy Bot collaboration primitive.',
+      'Communicate with a named Cindy Bot teammate or manage an existing tracked call.',
       'status reads a Bot\'s current availability/activity and does not send anything.',
-      'notify opens or continues a bounded private conversation in both Bots\' canonical timelines. Prefer it for questions, discussion, and small direct requests to a named Bot, even when that Bot should reply later or produce one small file (for example a Hello World HTML). End the current turn after delivery; never poll.',
-      'call starts independently tracked work. Use it only when the work needs an isolated task, progress/cancellation, permission mediation, longer execution, or automatic artifact handoff. Do not choose call merely because a reply is expected. Pass target_bot_id for another Bot; omit it for a full Cindy task.',
+      'notify opens or continues a bounded private conversation in both Bots\' canonical timelines. Use it for a brief question, discussion, or information transfer that does not need an independently tracked deliverable. End the current turn after delivery; never poll.',
+      'call assigns independently tracked work to the named Bot in target_bot_id. Use it for development or deliverable work that needs its own execution context, progress/cancellation, permission mediation, verification, or automatic artifact handoff.',
+      'To start a real Cindy Session task without assigning any Bot, use start_session_task. Never use a Bot named Cindy as a proxy for that task.',
       'reply answers a waiting permission/question/plan or adds a message to an active call.',
       'cancel stops one tracked call and its descendants.',
       'When you receive a direct Bot message, handle it in the current canonical task and use notify back to the sender when a useful answer or result is expected. Avoid acknowledgement-only loops.',
@@ -281,7 +337,7 @@ function registerBotCollaborationEntry(
     ].join('\n'),
     {
       action: z.enum(['status', 'notify', 'call', 'reply', 'cancel']),
-      /** Required for status/notify; optional for call (omitted = full Cindy task). */
+      /** Required for status/notify and for starting a named-Bot call. */
       target_bot_id: z.string().min(1).max(128).optional(),
       /** Required for reply/cancel; returned by call. */
       call_id: z.string().min(1).max(128).optional(),
@@ -289,10 +345,6 @@ function registerBotCollaborationEntry(
       context_refs: z.array(z.string().max(512)).max(32).optional(),
       max_depth: z.number().int().min(1).max(5).optional(),
       timeout_ms: z.number().int().min(1_000).max(86_400_000).optional(),
-      /** call without target_bot_id only. */
-      title: z.string().min(1).max(120).optional(),
-      /** call without target_bot_id only. */
-      working_dir: z.string().min(1).max(1_024).optional(),
       reply_kind: z.enum(['approve', 'deny', 'answer', 'message']).optional(),
       answers: z.record(z.string(), z.string()).optional(),
       reason: z.string().max(4_000).optional(),
@@ -306,8 +358,6 @@ function registerBotCollaborationEntry(
       context_refs,
       max_depth,
       timeout_ms,
-      title,
-      working_dir,
       reply_kind,
       answers,
       reason,
@@ -423,19 +473,17 @@ function registerBotCollaborationEntry(
         if (!instruction?.trim()) {
           return errorPayload('INVALID_ARGS', 'instruction is required when action=call.');
         }
-        if (target_bot_id && (title !== undefined || working_dir !== undefined)) {
+        if (!target_bot_id) {
           return errorPayload(
             'INVALID_ARGS',
-            'title/working_dir only apply to a Cindy task call without target_bot_id.',
+            'target_bot_id is required when action=call. Use start_session_task for an independent Cindy Session task.',
           );
         }
         const result = await deps.botDelegation.call({
           callerSessionId,
-          targetBotId: target_bot_id ?? null,
+          targetBotId: target_bot_id,
           objective: instruction.trim(),
           contextRefs: context_refs,
-          title,
-          workingDir: working_dir,
           maxDepth: max_depth,
           timeoutMs: timeout_ms,
         });
@@ -696,6 +744,7 @@ export function createXdtHelperMcpServer(
     });
   }
 
+  registerStartSessionTaskEntry(server, deps, sessionCtx);
   registerBotCollaborationEntry(server, deps, sessionCtx);
   if (deps.botProfiles) {
     registerCreateTeammateTool(server, {

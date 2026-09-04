@@ -91,12 +91,13 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('第一次明确说出一条稳定偏好');
     expect(all).toContain('save_bot_skill');
     expect(all).toContain('第一次验证完就');
-    expect(all).toContain('把活交出去');
+    expect(all).toContain('开后台任务，也可以联系伙伴');
+    expect(all).toContain('start_session_task');
     expect(all).toContain('action=notify');
     expect(all).toContain('action=call');
-    expect(all).toContain('小活都优先走 notify');
-    expect(all).toContain('Hello World HTML”走 notify');
-    expect(all).toContain('不要仅仅因为“对方要给结果”');
+    expect(all).toContain('需要独立交付物或验证时不能用 notify');
+    expect(all).toContain('未点名伙伴的后台工作一律用 `start_session_task`');
+    expect(all).toContain('不能把名为 Cindy 的伙伴当成普通 Cindy 任务');
     expect(all).toContain('不要只为“收到”“好的”互相确认');
     expect(all).toContain('action=reply');
     expect(all).toContain('action=cancel');
@@ -258,11 +259,13 @@ describe('Bot Mode 的角色边界', () => {
         botModeEnabled: false,
       },
     });
-    expect(canonical).toContain('你可以把活交出去');
+    expect(canonical).toContain('你可以开后台任务，也可以联系伙伴');
     expect(canonical).toContain('collaborate_with_bot');
+    expect(canonical).toContain('start_session_task');
     expect(canonical).not.toContain('list_tools');
-    expect(worker).not.toContain('你可以把活交出去');
+    expect(worker).not.toContain('你可以开后台任务，也可以联系伙伴');
     expect(worker).not.toContain('collaborate_with_bot');
+    expect(worker).not.toContain('start_session_task');
   });
 });
 
@@ -323,8 +326,9 @@ describe('buildBotTeammateRoster', () => {
     const roster = buildBotTeammateRoster([{ id: 'bot-a', name: 'A' }]);
     expect(roster).toContain('别猜');
     expect(roster).toContain('collaborate_with_bot');
+    expect(roster).toContain('start_session_task');
     expect(roster).not.toContain('list_tools');
-    expect(roster).toContain('直接联系');
-    expect(roster).toContain('交活');
+    expect(roster).toContain('明确要联系');
+    expect(roster).toContain('把任务交给某个伙伴');
   });
 });

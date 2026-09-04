@@ -7573,6 +7573,11 @@
     },
     "collab": {
       "cindyTask": "Independent task",
+      "backgroundTask": "Background task",
+      "taskAssignedTo": "Task assigned to {{name}}",
+      "taskFrom": "Task from {{name}}",
+      "trackedTask": "Runs independently and returns its result",
+      "stopTask": "Stop task",
       "joined": "{{name}} joined the conversation",
       "inboundJoined": "{{name}} handed you this work",
       "guestTag": "Guest",

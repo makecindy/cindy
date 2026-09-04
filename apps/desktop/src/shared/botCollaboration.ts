@@ -1,10 +1,11 @@
 /**
- * 伙伴之间「群聊化」协作的消息级结构化标记。
+ * 伙伴发起的可追踪任务在消息流中的结构化标记。
  *
  * 委派本身的事实源仍是 `bot_delegations` 行（状态机 / 预算 / lineage）。这里补的是
- * **消息流里的锚点**：父任务与目标主任务各自的时间线上，哪几条消息属于同一次委派、
- * 各自扮演什么角色。renderer 据此把纯文本镜像升级成协作卡与客座气泡，并在两侧之间
- * 提供互看跳转。
+ * **消息流里的锚点**：父任务与目标主任务各自的时间线上，哪几条消息属于同一次任务、
+ * 各自扮演什么角色。renderer 据此投影任务卡与客座结果，并在两侧之间提供互看跳转。
+ * 字段名 `botCollaboration` 为 v1 持久化兼容保留；UI 语义按 call=任务、notify=私聊区分，
+ * 不再把具名执行者画成“加入对话”。
  *
  * 设计约束：
  *  - 只增不改。老数据（没有本标记的镜像消息）继续按普通文本渲染，不回填、不迁移。
@@ -15,7 +16,7 @@
 
 /** 委派在某条消息上扮演的角色。判据是消息落在谁的时间线上。 */
 export type BotCollaborationRole =
-  /** 父任务：委派创建时写下的协作卡锚点（空正文，只为承载卡片）。 */
+  /** 父任务：call 创建时写下的任务卡锚点（空正文，只为承载卡片）。 */
   | 'delegation-request'
   /** 父任务：目标伙伴回传的结果 —— 渲染成客座气泡。 */
   | 'guest-result'
@@ -91,7 +92,7 @@ export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta |
 
 /** 委派相关消息的幂等 clientId 前缀，main 与测试共用同一份常量。 */
 export const BOT_DELEGATION_CLIENT_ID = {
-  /** 父任务里的协作卡锚点。 */
+  /** 父任务里的任务卡锚点。 */
   parentRequest: (delegationId: string) => `bot-delegation-request:${delegationId}`,
   /** 目标主任务里的请求镜像（历史值，不可改）。 */
   targetRequest: (delegationId: string) => `bot-delegation-target-request:${delegationId}`,

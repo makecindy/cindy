@@ -7571,6 +7571,11 @@
     },
     "collab": {
       "cindyTask": "独立タスク",
+      "backgroundTask": "バックグラウンドタスク",
+      "taskAssignedTo": "{{name}} に依頼したタスク",
+      "taskFrom": "{{name}} からのタスク",
+      "trackedTask": "独立して実行し、結果を自動で返します",
+      "stopTask": "タスクを停止",
       "joined": "{{name}} が会話に加わりました",
       "inboundJoined": "{{name}} から仕事が届きました",
       "guestTag": "ゲスト",

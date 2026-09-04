@@ -134,18 +134,18 @@ describe('BotCollaborationCard', () => {
     expect(broken.firstChild).toBeNull();
   });
 
-  it('announces the guest joining and shows live status while the work runs', async () => {
+  it('renders a named-Bot call as a tracked task, never as joining the conversation', async () => {
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
 
-    expect(screen.getByText(/bots\.collab\.joined/)).toBeTruthy();
+    expect(screen.getByText(/bots\.collab\.taskAssignedTo/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText(/bots\.collab\.status\.running/)).toBeTruthy());
-    // 停止与催一下都只在还没落终态时出现。
-    expect(screen.getByText('bots.collab.stop')).toBeTruthy();
-    expect(screen.getByText('bots.collab.nudge')).toBeTruthy();
+    expect(screen.getByText('bots.collab.stopTask')).toBeTruthy();
+    expect(screen.queryByText(/bots\.collab\.joined/)).toBeNull();
+    expect(screen.queryByText('bots.collab.nudge')).toBeNull();
   });
 
-  it('renders a Cindy call as an independent task card, not as a participant joining the chat', async () => {
+  it('renders a plain Cindy Session call with the same task-card contract', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
       delegations: [
@@ -169,7 +169,7 @@ describe('BotCollaborationCard', () => {
       />,
     );
 
-    expect(await screen.findByText('bots.collab.cindyTask')).toBeTruthy();
+    expect(await screen.findByText('bots.collab.backgroundTask')).toBeTruthy();
     expect(screen.getByText('做一个 2048 小游戏（单文件网页版）')).toBeTruthy();
     expect(screen.getByText(/bots\.collab\.status\.running/)).toBeTruthy();
     expect(screen.queryByText(/bots\.collab\.joined/)).toBeNull();
@@ -184,91 +184,27 @@ describe('BotCollaborationCard', () => {
       />,
     );
 
-    expect(screen.getByText(/bots\.collab\.inboundJoined/)).toBeTruthy();
+    expect(screen.getByText(/bots\.collab\.taskFrom/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText(/bots\.collab\.status\.running/)).toBeTruthy());
     expect(screen.queryByText('bots.collab.nudge')).toBeNull();
-    expect(screen.queryByText('bots.collab.stop')).toBeNull();
+    expect(screen.queryByText('bots.collab.stopTask')).toBeNull();
     expect(listBotDelegations).toHaveBeenCalledWith(SESSION_ID);
     fireEvent.click(screen.getByText(/bots\.collab\.watchWork/));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-planner/session/child-1');
   });
 
-  it('sends a nudge to the running delegation through the host channel', async () => {
-    listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
-    render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    await waitFor(() => expect(screen.getByText('bots.collab.nudge')).toBeTruthy());
-
-    fireEvent.click(screen.getByText('bots.collab.nudge'));
-    const input = await screen.findByPlaceholderText('bots.collab.nudgePlaceholder');
-    fireEvent.change(input, { target: { value: '怎么样了？' } });
-    await act(async () => {
-      fireEvent.click(screen.getByText('bots.collab.nudgeSend'));
-    });
-
-    // 第 4 个参数是幂等键:重放 / 双击 / 重挂载都落到同一个 clientId 上,对方只被
-    // 真的催一次。值由 renderer 生成,只校验它存在且非空。
-    expect(interjectBotDelegation).toHaveBeenCalledTimes(1);
-    const [callerSessionId, delegationId, text, idempotencyKey] =
-      interjectBotDelegation.mock.calls[0] as [string, string, string, string];
-    expect([callerSessionId, delegationId, text]).toEqual([
-      SESSION_ID,
-      DELEGATION_ID,
-      '怎么样了？',
-    ]);
-    expect(typeof idempotencyKey).toBe('string');
-    expect(idempotencyKey.length).toBeGreaterThan(0);
-    // 送出后收起输入层，避免同一句话被连点两次。
-    await waitFor(() =>
-      expect(screen.queryByPlaceholderText('bots.collab.nudgePlaceholder')).toBeNull(),
-    );
-  });
-
-  it('reuses one idempotency key while the same nudge is being retried', async () => {
-    listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
-    interjectBotDelegation.mockResolvedValue({
-      ok: false as const,
-      errorCode: 'DISPATCH_FAILED',
-      message: 'nope',
-    });
-    render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    await waitFor(() => expect(screen.getByText('bots.collab.nudge')).toBeTruthy());
-    fireEvent.click(screen.getByText('bots.collab.nudge'));
-    const input = await screen.findByPlaceholderText('bots.collab.nudgePlaceholder');
-    fireEvent.change(input, { target: { value: '怎么样了？' } });
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('bots.collab.nudgeSend'));
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByText('bots.collab.nudgeSend'));
-    });
-
-    // 同一句话重试,幂等键不变 —— 服务端按 clientId 去重,不会催两遍。
-    expect(interjectBotDelegation).toHaveBeenCalledTimes(2);
-    const first = interjectBotDelegation.mock.calls[0] as unknown[];
-    const second = interjectBotDelegation.mock.calls[1] as unknown[];
-    expect(second[3]).toBe(first[3]);
-
-    // 改了正文就必须换一个键,否则新的一句会被当成旧那句的重放而被静默吞掉。
-    fireEvent.change(input, { target: { value: '换个说法' } });
-    await act(async () => {
-      fireEvent.click(screen.getByText('bots.collab.nudgeSend'));
-    });
-    expect((interjectBotDelegation.mock.calls[2] as unknown[])[3]).not.toBe(first[3]);
-  });
-
   it('stops the delegation through the existing cancel channel', async () => {
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('waiting')] });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    await waitFor(() => expect(screen.getByText('bots.collab.stop')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('bots.collab.stopTask')).toBeTruthy());
 
     await act(async () => {
-      fireEvent.click(screen.getByText('bots.collab.stop'));
+      fireEvent.click(screen.getByText('bots.collab.stopTask'));
     });
     expect(cancelBotDelegation).toHaveBeenCalledWith(SESSION_ID, DELEGATION_ID);
   });
 
-  it('collapses into a one-line report once the delegation reaches a terminal state', async () => {
+  it('keeps the finished task, duration, and work-process entry visible', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
       delegations: [
@@ -277,22 +213,18 @@ describe('BotCollaborationCard', () => {
     });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
 
-    const report = await screen.findByText(/bots\.collab\.report\.done/);
+    await screen.findByText(/bots\.collab\.status\.completed/);
     // 用时走 i18n 单位,不再是硬编码的 `42s` —— 中文界面里 `42s` 和「用时」并排
     // 读起来是两套语言。
-    expect(report.textContent).toContain('bots.collab.duration.seconds:{\\"n\\":42}');
-    expect(report.textContent).not.toContain('42s');
-    // 收拢后不再提供催 / 停：委派已经结束，按钮留着只会误导。
+    expect(screen.getByText(/bots\.collab\.duration\.seconds/).textContent).not.toContain('42s');
     expect(screen.queryByText('bots.collab.nudge')).toBeNull();
-    expect(screen.queryByText('bots.collab.stop')).toBeNull();
-
-    fireEvent.click(report);
+    expect(screen.queryByText('bots.collab.stopTask')).toBeNull();
     expect(screen.getByText('给伙伴协作做一版方案')).toBeTruthy();
     fireEvent.click(screen.getByText(/bots\.collab\.watchWork/));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-planner/session/child-1');
   });
 
-  it('puts the result summary in the expanded report, above the original objective', async () => {
+  it('shows the returned result directly on the task card', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
       delegations: [
@@ -303,17 +235,7 @@ describe('BotCollaborationCard', () => {
       ],
     });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    const report = await screen.findByText(/bots\.collab\.report\.done/);
-
-    // 折叠态只说结束了,结论要点开才看到 —— 但必须看得到:否则协作卡只留下
-    // 「当初想干什么」,用户拿不到结论就得跳去子任务。
-    expect(screen.queryByText(/三条结论/)).toBeNull();
-    fireEvent.click(report);
-    const summary = screen.getByText(/三条结论/);
-    const objective = screen.getByText('给伙伴协作做一版方案');
-    expect(summary).toBeTruthy();
-    // 先结论、后当初的目标。
-    expect(summary.compareDocumentPosition(objective) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await screen.findByText(/三条结论/)).toBeTruthy();
   });
 
   it('reports a stopped delegation as stopped, not as a failure', async () => {
@@ -322,22 +244,20 @@ describe('BotCollaborationCard', () => {
       delegations: [delegation('cancelled', { completedAt: Date.now() })],
     });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    expect(await screen.findByText(/bots\.collab\.report\.stopped/)).toBeTruthy();
+    expect(await screen.findByText(/bots\.collab\.status\.cancelled/)).toBeTruthy();
   });
 
   it('says the work has not started yet while the first handoff is still being retried', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
-      delegations: [
-        delegation('waiting', { lastError: 'AGENT_NOT_READY: pi not authenticated' }),
-      ],
+      delegations: [delegation('waiting', { lastError: 'AGENT_NOT_READY: pi not authenticated' })],
     });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
     // 「等待开始」和「正在做」以前长得一模一样：用户以为对方在干活，其实一次都没开始。
     expect(await screen.findByText('bots.collab.retrying')).toBeTruthy();
   });
 
-  it('puts the failure reason on the collapsed report line so it needs no expanding', async () => {
+  it('puts the failure reason directly on the task card', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
       delegations: [
@@ -348,8 +268,7 @@ describe('BotCollaborationCard', () => {
       ],
     });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    const line = await screen.findByText(/bots\.collab\.report\.failedReason/);
-    // 机读前缀不进人话，原因本身必须出现在折叠行上。
+    const line = await screen.findByText(/需要登录后才能执行/);
     expect(line.textContent).toContain('需要登录后才能执行');
     expect(line.textContent).not.toContain('ACCOUNT_NOT_READY');
   });
@@ -363,7 +282,7 @@ describe('BotCollaborationCard', () => {
     );
     expect(screen.getByText(/bots\.collab\.interjected/)).toBeTruthy();
     expect(screen.getByText(/先别铺开，我只要三条。/)).toBeTruthy();
-    expect(screen.queryByText('bots.collab.stop')).toBeNull();
+    expect(screen.queryByText('bots.collab.stopTask')).toBeNull();
   });
   /*
     空头支票复核 2026-08-19。委派行读不到时（列表请求失败，或这条委派已经掉出
@@ -382,7 +301,7 @@ describe('BotCollaborationCard', () => {
     // 没有背书的状态就不许有"还在跑"的动效。
     expect(container.querySelector('.animate-pulse')).toBeNull();
     // 也不该假装给得出操作。
-    expect(screen.queryByText('bots.collab.stop')).toBeNull();
+    expect(screen.queryByText('bots.collab.stopTask')).toBeNull();
     expect(screen.queryByText('bots.collab.nudge')).toBeNull();
   });
 
@@ -405,7 +324,7 @@ describe('BotCollaborationCard', () => {
     });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
 
-    await waitFor(() => expect(screen.getByText(/bots\.collab\.report\.timedOut/)).toBeTruthy());
-    expect(screen.queryByText(/bots\.collab\.report\.failed/)).toBeNull();
+    await waitFor(() => expect(screen.getByText(/bots\.collab\.status\.timed-out/)).toBeTruthy());
+    expect(screen.queryByText(/bots\.collab\.status\.failed/)).toBeNull();
   });
 });

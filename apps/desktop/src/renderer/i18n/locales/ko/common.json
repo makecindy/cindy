@@ -7571,6 +7571,11 @@
     },
     "collab": {
       "cindyTask": "독립 작업",
+      "backgroundTask": "백그라운드 작업",
+      "taskAssignedTo": "{{name}}에게 맡긴 작업",
+      "taskFrom": "{{name}}에게서 온 작업",
+      "trackedTask": "독립적으로 실행하고 결과를 자동 반환",
+      "stopTask": "작업 중지",
       "joined": "{{name}}님이 대화에 참여했습니다",
       "inboundJoined": "{{name}}님이 이 일을 맡겼습니다",
       "guestTag": "게스트",

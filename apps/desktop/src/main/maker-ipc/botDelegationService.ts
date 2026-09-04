@@ -102,7 +102,7 @@ export interface BotDelegationServiceDeps {
     createdAt?: number;
     /**
      * 只增不改的呈现标记（写进 `messages.agent_meta`）。renderer 据此把镜像消息
-     * 升级成协作卡 / 客座气泡；不带标记的老行继续按普通文本渲染。
+     * 升级成任务卡 / 客座气泡；不带标记的老行继续按普通文本渲染。
      */
     agentMeta?: Record<string, unknown>;
   }) => Promise<void>;
@@ -172,7 +172,7 @@ export function unavailableRequiredBotCapabilities(
 
 /**
  * 一次 call:把一件有边界的活交给一个伙伴(`targetBotId`)或一条普通 Cindy 任务
- * (`targetBotId: null`)。两种目标走完全相同的状态机、协作卡、回执与交付物回流;
+ * (`targetBotId: null`)。两种执行者走完全相同的状态机、任务卡、回执与交付物回流;
  * 唯一的分叉是子任务用谁的执行配置跑(伙伴的 Profile,还是发起方自己的档位)。
  */
 export interface BotCallInput {
@@ -600,8 +600,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   };
 
   /**
-   * 父任务里的协作卡锚点：空正文 + `botCollaboration` 标记，只为在发起方的消息流
-   * **原位**留下一个位置（「<目标> 加入了对话」）。卡片的实时状态、秒数与终态战报
+   * 父任务里的任务卡锚点：空正文 + `botCollaboration` v1 兼容标记，只为在发起方的消息流
+   * **原位**留下一个可追踪任务。卡片的实时状态、秒数与终态结果
    * 都由 delegation 行推送驱动，锚点本身不需要更新。
    *
    * 刻意与 `projectTargetRequest` 分开：两侧锚点都是可见工作交接的一部分。发起方
@@ -645,7 +645,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     await persistTimelineMessage({
       sessionId: plan.targetCanonicalSessionId,
       clientId: BOT_DELEGATION_CLIENT_ID.targetRequest(row.id),
-      // 目标主任务里只留协作卡锚点:真正干活的是子任务,这里再复读一遍任务全文
+      // 目标主任务里只留任务卡锚点:真正干活的是子任务,这里再复读一遍任务全文
       // 既不会叫醒目标主线程,还会把对话变成废话墙。卡上的「看工作过程」才是入口。
       role: 'assistant',
       content: '',
@@ -688,7 +688,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   /**
    * 完成信号:对模型是一条内部指令,对用户不可见。
    *
-   * 用户可见的终态由发起方消息流里的协作卡承载(delegation 行推送驱动),不再
+   * 用户可见的终态由发起方消息流里的任务卡承载(delegation 行推送驱动),不再
    * 往时间线里落一条机读文本。指令行带 UI_ACTION_TRIGGER_PREFIX,与既有的
    * 合成 UI 指令共用同一条「渲染隐藏 / 预览排除 / 搜索排除」判定链。
    *
@@ -717,9 +717,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       });
       return;
     }
-    const targetName = params.targetBotId
-      ? await requesterDisplayName(params.targetBotId)
-      : 'Cindy 任务';
+    const taskSubject = params.targetBotId
+      ? `交给「${await requesterDisplayName(params.targetBotId)}」的任务`
+      : '后台任务';
     const statusLine =
       params.status === 'completed'
         ? '已完成'
@@ -730,14 +730,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             : '失败了';
     const artifacts = params.artifacts ?? [];
     const completionMessage = [
-      `${UI_ACTION_TRIGGER_PREFIX}[协作回执] 你交给「${targetName}」的工作${statusLine}。call_id: ${params.id}`,
+      `${UI_ACTION_TRIGGER_PREFIX}[任务回执] ${taskSubject}${statusLine}。call_id: ${params.id}`,
       `目标事项: ${params.objective.slice(0, 400)}`,
       params.resultSummary ? `结果:\n${params.resultSummary}` : '',
       artifacts.length
         ? `交出的文件(${artifacts.length}):\n${artifacts.slice(0, 20).map((item) => `- ${item.absolutePath}`).join('\n')}`
         : '',
       params.lastError ? `失败原因: ${params.lastError}` : '',
-      '对话里的协作卡已更新到终态,交付文件清单也在卡片里。直接依据结果接手继续当前工作;结果不够或还想让对方接着做,用 `collaborate_with_bot` action=reply(带 call_id)继续说,不必重新发起。回复用户时不要复述本条回执,也不要提及任何内部编号。',
+      '当前时间线里的任务卡已更新到终态,交付文件清单也在卡片里。直接依据结果接手继续当前工作;结果不够或还想让执行者接着做,用 `collaborate_with_bot` action=reply(带 call_id)继续说,不必重新发起。回复用户时不要复述本条回执,也不要提及任何内部编号。',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -862,7 +862,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           eq(messages.sessionId, sessionId),
           eq(messages.role, 'assistant'),
           isNull(messages.rewindAt),
-          // 协作卡锚点(空正文)与插话留痕也是 assistant 行,但它们是这个任务**自己
+          // 任务卡锚点(空正文)与插话留痕也是 assistant 行,但它们是这个任务**自己
           // 派活**留下的注解,不是它交出的答复。嵌套委派下不排除会直接选错:上一层
           // 拿到的"结果"会变成一句催促,或干脆是空的。
           sql`(
@@ -1030,7 +1030,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     );
     if (!requesterSessionId) return;
     const message = [
-      `${UI_ACTION_TRIGGER_PREFIX}[协作需要你处理] call_id: ${row.id}`,
+      `${UI_ACTION_TRIGGER_PREFIX}[任务需要你处理] call_id: ${row.id}`,
       `类型: ${request.kind}`,
       pending.summary,
       '你是用户的代理。能按用户已表达的意图安全决定，就用 `collaborate_with_bot` action=reply 直接回答；拿不准才用一句人话问用户。不要让用户去子任务窗口处理，也不要复述内部编号。',
@@ -1253,7 +1253,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
    * 去程投递失败到无法自愈时的收口：委派立刻变成 `failed`，并把人话原因送回发起方。
    *
    * 单独抽出来是因为这条路径有三件事必须一起发生，缺一件就退化成「静默挂起」：
-   * 收口 delegation 行（协作卡据此翻终态）、中止并归档子任务、把失败当作一次结果
+   * 收口 delegation 行（任务卡据此翻终态）、中止并归档子任务、把失败当作一次结果
    * 回传（发起方的对话里必须出现这句话，而不是只在日志里）。
    */
   async function failDelegationDispatch(
@@ -1353,7 +1353,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return { ok: true, status: current?.status === 'running' ? 'running' : 'queued' };
     }
     // 去程没送出去。**不能**一律留在 queued 然后永远重试下去：没登录、子任务已归档
-    // 这类原因不会自愈，无限退避只会让协作卡永远转圈、发起方永远等不到任何交代。
+    // 这类原因不会自愈，无限退避只会让任务卡永远转圈、发起方永远等不到任何交代。
     const verdict = classifyBotDelegationDispatchFailure({
       errorCode: dispatched.errorCode,
       message: dispatched.message,
@@ -1994,7 +1994,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return {
         ok: false,
         errorCode: 'PARENT_TIMELINE_PERSIST_FAILED',
-        message: '委派未启动：无法在当前任务中保留协作卡',
+        message: '任务未启动：无法在当前时间线中保留任务卡',
       };
     }
     if (input.targetBotId) {
@@ -2044,7 +2044,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
    * 一个原语,两种目标。伙伴目标:冻结目标 Profile、在目标伙伴自己的 workspace
    * 里以它的执行配置跑,目标主任务里留一张入站卡。Cindy 任务目标:普通 desktop
    * 会话、发起方自己的执行配置与权限档、用户主任务列表里可见。之后的状态机、
-   * 协作卡、交互代答、回执与交付物回流两边完全相同。
+   * 任务卡、交互代答、回执与交付物回流两边完全相同。
    */
   const call = async (
     input: BotCallInput,

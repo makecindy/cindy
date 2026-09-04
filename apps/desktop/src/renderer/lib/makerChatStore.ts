@@ -495,15 +495,16 @@ export interface ChatMessage {
      */
     | 'auto-resume-pending'
     | 'agent-switch'
-    /**
-     * 伙伴协作卡：委派创建时落在发起方消息流里的锚点（「<目标> 加入了对话」），
-     * 以及对进行中委派的插话留痕。同 'goal-complete'，由持久化的
-     * agentMeta.botCollaboration 派生，重开会话仍在。
-     */
+    /** 对进行中任务的补充消息留痕；真正的 call 统一投影为 bot-task-call。 */
     | 'bot-collab'
     /**
+     * 伙伴发起的可追踪独立任务。执行者可以是普通 Cindy Session 或某个伙伴，
+     * 但两者都是任务，不使用伙伴私聊的呈现语言。
+     */
+    | 'bot-task-call'
+    /**
      * 伙伴之间的私聊入口：消息正文单独存储，这里只投影一枚可打开的时间线痕迹。
-     * 它不进入左栏，也不与独立任务的 bot-collab 卡混用。
+     * 它不进入左栏，也不与独立任务的 bot-task-call 卡混用。
      */
     | 'bot-direct-message'
     | 'context-rebuild';
@@ -16350,9 +16351,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         },
       };
     }
-    // 伙伴协作：委派锚点与插话留痕 → 'bot-collab' 内联卡(同 goal-complete,从持久化
-    // 的 agentMeta 派生,重开会话仍在)。没有标记的老镜像消息不会命中,继续按普通文本
-    // 渲染 —— 本批不回填历史。
+    // call 锚点与插话留痕共享历史 metadata，但产品语义已经分开：call 永远是
+    // 可追踪任务，只有插话是协作痕迹。旧消息无需迁移，加载时按 role 稳定投影。
     const collaboration = readBotCollaborationMeta(m.agentMeta?.botCollaboration);
     if (
       m.role === 'assistant'
@@ -16368,7 +16368,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         role: m.role,
         content: '',
         isStreaming: false,
-        systemCardType: 'bot-collab' as const,
+        systemCardType:
+          collaboration.role === 'interjection'
+            ? ('bot-collab' as const)
+            : ('bot-task-call' as const),
         systemCardData: {
           ...collaboration,
           // 插话卡要显示催的是哪句话；锚点卡正文为空。
@@ -16439,7 +16442,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       }
       // 客座气泡：这条 user 行不是「用户说的话」，是目标主任务里收到的委派请求。
       // 作者身份与跳转方向都来自结构化标记，不靠正文猜。委派完成的回传已改为
-      // synthetic-trigger 隐藏行（可见终态由协作卡承载），不再产生客座结果气泡。
+      // synthetic-trigger 隐藏行（可见终态由任务卡承载），不再产生客座结果气泡。
       const guestBot = collaboration?.role === 'guest-request'
         ? {
             botId: collaboration.fromBotId,
