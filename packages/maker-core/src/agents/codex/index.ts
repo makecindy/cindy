@@ -2247,8 +2247,8 @@ export class CodexAgent extends BaseAgent {
       host: AppServerHost,
       hostCredentialMode?: AgentCredentialMode,
     ): Promise<boolean> => {
-      const signature = host.getSubagentRoutingSignature();
-      if (signature && this.deps.resolveCodexSubagentRoutingSignature) {
+      if (this.deps.resolveCodexSubagentRoutingSignature) {
+        const signature = host.getSubagentRoutingSignature() ?? 'default';
         const desired = await this.deps.resolveCodexSubagentRoutingSignature(
           this.deps.mcpProviders ?? [],
           {

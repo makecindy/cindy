@@ -7408,6 +7408,49 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('rebuilds an idle default host when smart routing becomes available', async () => {
+    let smartRoutingAvailable = false;
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async () => ({
+        extraArgs: [],
+        extraEnv: {},
+        codexProxyActive: true,
+        codexSubagentRoutingProfile: smartRoutingAvailable ? 'smart' as const : 'default' as const,
+        ...(smartRoutingAvailable
+          ? { codexSubagentRoutingSignature: 'smart:catalog-1' }
+          : {}),
+      }));
+    const resolveCodexSubagentRoutingSignature = vi.fn(async () =>
+      smartRoutingAvailable ? 'smart:catalog-1' : 'default');
+    const agent = new CodexAgent(createDeps({}, {
+      prepareCodexExtraSpawnConfig,
+      resolveCodexSubagentRoutingSignature,
+    }));
+
+    const first = await agent.startSession({
+      sessionId: 'session-default-before-smart',
+      providerId: 'xd',
+      model: 'codex/gpt-5.5',
+      workingDir: '/repo-a',
+    });
+    await first.close();
+
+    smartRoutingAvailable = true;
+    const second = await agent.startSession({
+      sessionId: 'session-smart-after-default',
+      providerId: 'xd',
+      model: 'codex/gpt-5.5',
+      workingDir: '/repo-b',
+    });
+
+    expect(resolveCodexSubagentRoutingSignature).toHaveBeenCalled();
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(true);
+
+    await second.close();
+    await agent.dispose();
+  });
+
   it('rebuilds an OAuth-default host when the next main task requires configured Subagent routing', async () => {
     const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
       vi.fn(async (_providers, ctx) => ({
