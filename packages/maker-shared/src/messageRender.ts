@@ -1526,7 +1526,18 @@ function groupMessageWorkRuns<
   const flushTurn = (activeTail: boolean) => {
     if (currentTurn.length === 0) return;
     if (activeTail && isSessionStreaming) {
-      out.push(...groupActiveWorkRuns(currentTurn, turnStartMs));
+      // A new run's status can arrive before its user row. A durable done seal still closes
+      // the loaded work before it; only subsequent content may use active grouping. Keep the
+      // session running signal intact for background agents and same-turn continuation.
+      const completedIndex = currentTurn.findLastIndex((item) =>
+        isAssistantAnswerCandidate(item) && isCompletedAssistantMessage(item.message));
+      const activeStartMs = completedIndex >= 0
+        ? boundaryTimestamp(currentTurn[completedIndex])
+        : turnStartMs;
+      if (completedIndex >= 0) {
+        out.push(...groupAnsweredTurnItems(currentTurn.slice(0, completedIndex + 1), turnStartMs).items);
+      }
+      out.push(...groupActiveWorkRuns(currentTurn.slice(completedIndex + 1), activeStartMs));
       currentTurn = [];
       return;
     }

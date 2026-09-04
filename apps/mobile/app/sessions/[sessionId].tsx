@@ -4436,6 +4436,9 @@ export default function SessionScreen() {
     () => sending || canStopQueue || remoteSessionRunning || currentTurnStreaming,
     [canStopQueue, currentTurnStreaming, remoteSessionRunning, sending],
   );
+  // Sending/queueing drives the composer immediately, but cannot reopen the loaded previous
+  // turn before the new user message arrives. Only remote activity drives message grouping.
+  const isMessageListStreaming = remoteSessionRunning || currentTurnStreaming;
   // 活动条信号去抖:isSessionStreaming 由四个来源(sending / canStopQueue /
   // remoteSessionRunning / currentTurnStreaming)拼成,它们交接时会漏出一两帧空隙
   // ——实测日志里 streaming 1→0→1,活动条跟着闪一下、计时还被重置回 0s。
@@ -4668,7 +4671,7 @@ export default function SessionScreen() {
         messageStructureToken,
         options: {
           autoResumePending: inputProjection.autoResumePending,
-          isSessionStreaming,
+          isSessionStreaming: isMessageListStreaming,
           renderOrphanTaskUpdates: makerTurnRunning,
           sessionId,
         },
@@ -4715,12 +4718,12 @@ export default function SessionScreen() {
         stablePrefixItemCount,
       };
     },
-    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
   );
   const renderItems = renderWindow.items;
   const renderItemsStructureKey = useMemo(
     () => ({}),
-    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
   );
   // Reconciliation must only use committed rows. Unlike the prefix cache above, a speculative
   // render-item baseline could leak rows from an abandoned render and destabilize tail memoization.
