@@ -1896,7 +1896,15 @@ describe('new session worktree wiring (source locks)', () => {
     expect(createBody).toContain('if (worktreeCreateBlocked) {');
     expect(newSource).toContain('worktreeBranchPreferenceSaving');
     expect(newSource).toContain('worktreeCreateBlocked && worktreeControlCaptionKey');
+    expect(newSource).toContain(
+      "worktreePreferenceAuthorityUnknown ? 'session.new.worktreeSettingsSyncFailed' : null",
+    );
     expect(newSource).toContain("worktreePreferenceCreateBlocked ? 'session.new.worktreeSettingsSaving' : null");
+    expect(newSource).toContain('const resolveWorktreePreferenceGateErrorKey = useCallback(() => (');
+    expect(newSource).toContain("? 'session.new.worktreeSettingsSyncFailed'");
+    expect(newSource).toContain(": 'session.new.worktreeSettingsSaving'");
+    expect(newSource).toContain('setError(t(resolveWorktreePreferenceGateErrorKey()));');
+    expect(newSource).toContain('setGoalError(t(resolveWorktreePreferenceGateErrorKey()));');
   });
 
   it('re-probes worktree eligibility when the relay or workstation reconnects', () => {
