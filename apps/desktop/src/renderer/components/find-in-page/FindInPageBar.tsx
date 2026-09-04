@@ -507,6 +507,18 @@ export function FindInPageBar() {
     const handleChange = (event: Event) => {
       if (event.target instanceof HTMLSelectElement) refreshSearch();
     };
+    const handleTransitionEnd = (event: Event) => {
+      const target = event.target;
+      const propertyName = (event as TransitionEvent).propertyName;
+      if (
+        !(target instanceof Node) ||
+        isInsideRoot(target, rootRef.current) ||
+        (propertyName !== 'opacity' && propertyName !== 'visibility')
+      ) {
+        return;
+      }
+      refreshSearch();
+    };
     const observer =
       typeof MutationObserver === 'function'
         ? new MutationObserver((records) => {
@@ -524,6 +536,7 @@ export function FindInPageBar() {
 
     window.addEventListener('resize', handleResize);
     document.addEventListener('change', handleChange);
+    document.addEventListener('transitionend', handleTransitionEnd);
     observer?.observe(document.body, {
       childList: true,
       characterData: true,
@@ -534,6 +547,7 @@ export function FindInPageBar() {
     return () => {
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('change', handleChange);
+      document.removeEventListener('transitionend', handleTransitionEnd);
       observer?.disconnect();
       const timer = pendingMutationRefreshTimerRef.current;
       pendingMutationRefreshTimerRef.current = null;

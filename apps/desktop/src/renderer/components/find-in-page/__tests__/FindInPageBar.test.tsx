@@ -304,6 +304,25 @@ describe('FindInPageBar', () => {
     await waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
   });
 
+  it('refreshes matches when a visibility transition ends', async () => {
+    const page = document.createElement('main');
+    const responsive = document.createElement('span');
+    responsive.textContent = 'foo';
+    page.append(responsive);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    await act(async () => {
+      responsive.style.opacity = '0';
+      const transitionEnd = new Event('transitionend', { bubbles: true });
+      Object.defineProperty(transitionEnd, 'propertyName', { value: 'opacity' });
+      responsive.dispatchEvent(transitionEnd);
+    });
+    expect(screen.getByText('0/0')).toBeTruthy();
+  });
+
   it('refreshes matches when details sections expand or collapse', async () => {
     const page = document.createElement('main');
     const details = document.createElement('details');
