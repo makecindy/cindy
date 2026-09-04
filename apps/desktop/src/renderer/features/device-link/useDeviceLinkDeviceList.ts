@@ -253,7 +253,9 @@ function ensureStarted(): void {
     retryDelayMs = nextDeviceListRetryDelay(retryDelayMs);
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      refresh();
+      // 后台恢复不能把已结算的目录重新打回 initialRequestSettled=false；否则持久化的
+      // 远端选择会在每次退避尝试时暂时恢复、遮住本地侧栏。请求仍在飞，但选择/加载态保持稳定。
+      refresh(false, true);
     }, retryDelayMs);
   };
 
@@ -266,13 +268,13 @@ function ensureStarted(): void {
     if (settledChanged || requestChanged) subs.forEach((fn) => fn());
   };
 
-  const runRefresh = async (probeState: boolean): Promise<void> => {
+  const runRefresh = async (probeState: boolean, background = false): Promise<void> => {
     // getState 与 listDevices 共用同一个 operation generation。stop、状态 push、手动重试或
     // 更晚的 refresh 都会令旧操作失效，迟到的状态快照和目录快照都不得落地。
     loadGeneration += 1;
     const gen = loadGeneration;
     const statusRevisionAtStart = linkStatusRevision;
-    enterLoading();
+    if (!background) enterLoading();
 
     if (probeState || linkStatus === null) {
       try {
@@ -316,9 +318,9 @@ function ensureStarted(): void {
     }
   };
 
-  const refresh = (probeState = false): void => {
+  const refresh = (probeState = false, background = false): void => {
     clearRetryTimer();
-    void runRefresh(probeState);
+    void runRefresh(probeState, background);
   };
   refreshImpl = () => refresh(true);
   // app 生命周期常驻(侧边栏始终有订阅者),不解绑监听。

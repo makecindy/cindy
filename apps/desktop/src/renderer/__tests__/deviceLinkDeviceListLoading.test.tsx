@@ -17,10 +17,14 @@ afterEach(() => {
 
 describe('useDeviceLinkDeviceList initial request', () => {
   it('silently retries a failed directory request without a later push event', async () => {
+    let resolveRetry: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
+    const retry = new Promise<{ devices: DeviceLinkDeviceView[] }>((resolve) => {
+      resolveRetry = resolve;
+    });
     const listDevices = vi
       .fn()
       .mockRejectedValueOnce(new Error('relay unavailable'))
-      .mockResolvedValueOnce({ devices: [] });
+      .mockReturnValueOnce(retry);
     vi.useFakeTimers();
     vi.stubGlobal('electronAPI', {
       deviceLink: {
@@ -35,11 +39,13 @@ describe('useDeviceLinkDeviceList initial request', () => {
     const {
       useDeviceLinkDeviceList,
       useDeviceLinkDeviceListRequestState,
+      useDeviceLinkDeviceListSettled,
       nextDeviceListRetryDelay,
     } = await import('@/features/device-link/useDeviceLinkDeviceList');
     const { result } = renderHook(() => ({
       devices: useDeviceLinkDeviceList(),
       request: useDeviceLinkDeviceListRequestState(),
+      settled: useDeviceLinkDeviceListSettled(),
     }));
 
     await act(async () => {
@@ -47,6 +53,7 @@ describe('useDeviceLinkDeviceList initial request', () => {
       await Promise.resolve();
     });
     expect(result.current.request.status).toBe('error');
+    expect(result.current.settled).toBe(true);
     expect(listDevices).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -56,8 +63,20 @@ describe('useDeviceLinkDeviceList initial request', () => {
     });
     expect(listDevices).toHaveBeenCalledTimes(2);
     expect(result.current).toEqual({
+      devices: null,
+      request: { status: 'error', error: 'relay unavailable' },
+      settled: true,
+    });
+
+    await act(async () => {
+      resolveRetry?.({ devices: [] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current).toEqual({
       devices: [],
       request: { status: 'ready', error: null },
+      settled: true,
     });
   });
 
