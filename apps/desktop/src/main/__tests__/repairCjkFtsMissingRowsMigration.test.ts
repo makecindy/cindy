@@ -12,8 +12,7 @@ const FTS_ROLE_WHITELIST = "('user', 'assistant', 'ask_user', 'plan_review')";
 /**
  * #3841 存量补建：0100 应用后，worker 连接的 TEMP 触发器曾被
  * temp_store pragma 静默清除，增量消息进了 messages 主表但没进 FTS
- * （messages_fts_rows 缺行）。0101 对已应用 0100 的库做行级缺口检测，
- * 有缺口或 FTS 内容陈旧才走与 0100 相同的 rebuild。
+ * （messages_fts_rows 缺行）。0101 只把缺口行按字补进索引，不整表重建。
  */
 
 function setupPost0100Db(): Database.Database {
@@ -63,7 +62,7 @@ function insertOrphanMessage(db: Database.Database, id: string, content: string)
 }
 
 describe('0101 repair cjk fts missing rows', () => {
-  it('有缺口（主表有行、FTS 缺行）时 rebuild 补齐并可按字召回', () => {
+  it('有缺口（主表有行、FTS 缺行）时增量补齐并可按字召回', () => {
     const db = setupPost0100Db();
     insertOrphanMessage(db, 'gap1', '登录报错了');
     insertOrphanMessage(db, 'gap2', 'foo登录bar');
@@ -98,9 +97,8 @@ describe('0101 repair cjk fts missing rows', () => {
     db.close();
   });
 
-  it('部分缺口（旧 FTS 行仍在 + 增量缺映射）rebuild 不撞唯一索引，全量补齐', () => {
+  it('部分缺口只补增量行，已有 FTS 行的 rowid 保持不变', () => {
     const db = setupPost0100Db();
-    // 旧消息已正常进 FTS（#3841 之前写入的存量行）
     insertOrphanMessage(db, 'old1', '旧消息正常索引');
     db.prepare('INSERT INTO messages_fts_rows(message_id) VALUES (?)').run('old1');
     db.prepare(
@@ -108,7 +106,9 @@ describe('0101 repair cjk fts missing rows', () => {
        SELECT fts_rowid, 'old1', 's', 'user', '旧 消 息 正 常 索 引'
        FROM messages_fts_rows WHERE message_id = 'old1'`,
     ).run();
-    // 触发器失效期间写入的增量：主表有行、映射缺失
+    const oldRow = db
+      .prepare('SELECT fts_rowid AS n FROM messages_fts_rows WHERE message_id = ?')
+      .get('old1') as { n: number };
     insertOrphanMessage(db, 'gap1', '登录报错了');
     expect(
       db.prepare('SELECT count(*) AS n FROM messages_fts_rows').get(),
@@ -120,6 +120,9 @@ describe('0101 repair cjk fts missing rows', () => {
       db.prepare('SELECT count(*) AS n FROM messages_fts_rows').get(),
     ).toEqual({ n: 2 });
     expect(
+      (db.prepare('SELECT fts_rowid AS n FROM messages_fts_rows WHERE message_id = ?').get('old1') as { n: number }).n,
+    ).toBe(oldRow.n);
+    expect(
       (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"') as { n: number } | undefined)?.n,
     ).toBe(1);
     expect(
@@ -128,7 +131,7 @@ describe('0101 repair cjk fts missing rows', () => {
     db.close();
   });
 
-  it('mapping 齐全但 FTS 内容陈旧（原文未切词）时 rebuild 重切', () => {
+  it('mapping 齐全但 FTS 内容陈旧时不整表重切，已有行保持原文', () => {
     const db = setupPost0100Db();
     insertOrphanMessage(db, 'stale1', '登录报错了');
     db.prepare('INSERT INTO messages_fts_rows(message_id) VALUES (?)').run('stale1');
@@ -137,24 +140,26 @@ describe('0101 repair cjk fts missing rows', () => {
        SELECT fts_rowid, 'stale1', 's', 'user', '登录报错了'
        FROM messages_fts_rows WHERE message_id = 'stale1'`,
     ).run();
-    expect(
-      (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"') as { n: number } | undefined)?.n,
-    ).toBe(0);
+    const rowidBefore = db
+      .prepare('SELECT fts_rowid AS n FROM messages_fts_rows WHERE message_id = ?')
+      .get('stale1') as { n: number };
 
     migration.run(db);
 
     expect(
       db.prepare('SELECT content FROM messages_fts WHERE message_id = ?').get('stale1'),
-    ).toEqual({ content: '登 录 报 错 了' });
+    ).toEqual({ content: '登录报错了' });
+    expect(
+      (db.prepare('SELECT fts_rowid AS n FROM messages_fts_rows WHERE message_id = ?').get('stale1') as { n: number }).n,
+    ).toBe(rowidBefore.n);
     expect(
       (db.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get('"登 录"') as { n: number } | undefined)?.n,
-    ).toBe(1);
+    ).toBe(0);
     db.close();
   });
 
   it('无缺口时零改动（纯检测）', () => {
     const db = setupPost0100Db();
-    // 健康库：直接按 TEMP 触发器语义写一条（cjk_seg 化内容）
     insertOrphanMessage(db, 'ok1', '登录报错了');
     db.prepare(
       'INSERT INTO messages_fts_rows(message_id) VALUES (?)',
@@ -181,9 +186,19 @@ describe('0101 repair cjk fts missing rows', () => {
     db.close();
   });
 
-  it('messages_fts_rows 表缺失时 rebuild 后挂 TEMP 触发器，后续 INSERT 按字进 FTS', () => {
+  it('messages_fts_rows 表缺失时从现有 FTS 复用 rowid，再补缺口并挂 TEMP 触发器', () => {
     const db = setupPost0100Db();
     insertOrphanMessage(db, 'seed1', '登录报错了');
+    db.prepare('INSERT INTO messages_fts_rows(message_id) VALUES (?)').run('seed1');
+    db.prepare(
+      `INSERT INTO messages_fts(rowid, message_id, session_id, role, content)
+       SELECT fts_rowid, 'seed1', 's', 'user', '登 录 报 错 了'
+       FROM messages_fts_rows WHERE message_id = 'seed1'`,
+    ).run();
+    const seedRowid = db
+      .prepare('SELECT fts_rowid AS n FROM messages_fts_rows WHERE message_id = ?')
+      .get('seed1') as { n: number };
+    insertOrphanMessage(db, 'gap1', 'foo登录bar');
     db.exec('DROP TABLE messages_fts_rows');
     db.exec('DROP TRIGGER IF EXISTS messages_fts_insert');
 
@@ -194,12 +209,18 @@ describe('0101 repair cjk fts missing rows', () => {
     ).get() as { n: number };
     expect(installed.n).toBe(2);
     expect(
+      (db.prepare('SELECT fts_rowid AS n FROM messages_fts_rows WHERE message_id = ?').get('seed1') as { n: number }).n,
+    ).toBe(seedRowid.n);
+    expect(
       db.prepare('SELECT content FROM messages_fts WHERE message_id = ?').get('seed1'),
     ).toEqual({ content: '登 录 报 错 了' });
-    insertOrphanMessage(db, 'after1', 'foo登录bar');
+    expect(
+      db.prepare('SELECT content FROM messages_fts WHERE message_id = ?').get('gap1'),
+    ).toEqual({ content: 'foo 登 录 bar' });
+    insertOrphanMessage(db, 'after1', '边界检查');
     expect(
       db.prepare('SELECT content FROM messages_fts WHERE message_id = ?').get('after1'),
-    ).toEqual({ content: 'foo 登 录 bar' });
+    ).toEqual({ content: '边 界 检 查' });
     db.close();
   });
 
