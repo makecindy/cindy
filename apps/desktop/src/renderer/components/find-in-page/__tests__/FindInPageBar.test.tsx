@@ -287,6 +287,23 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(2);
   });
 
+  it('refreshes matches when page visibility attributes change', async () => {
+    const page = document.createElement('main');
+    const responsive = document.createElement('span');
+    responsive.textContent = 'foo';
+    page.append(responsive);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    responsive.setAttribute('aria-hidden', 'true');
+    await waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
+
+    responsive.removeAttribute('aria-hidden');
+    await waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+  });
+
   it('clears highlights when the query is cleared or the bar closes', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo';

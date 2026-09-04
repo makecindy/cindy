@@ -408,7 +408,7 @@ export function FindInPageBar() {
   const rangesRef = useRef<TextMatch[]>([]);
   const activeRef = useRef(0);
   const pendingScrollFrameRef = useRef<number | null>(null);
-  const pendingMutationRefreshFrameRef = useRef<number | null>(null);
+  const pendingMutationRefreshTimerRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
   const compositionCommitRef = useRef<string | null>(null);
 
@@ -512,30 +512,33 @@ export function FindInPageBar() {
         ? new MutationObserver((records) => {
             const root = rootRef.current;
             if (!root || records.every((record) => isInsideRoot(record.target, root))) return;
-            if (pendingMutationRefreshFrameRef.current !== null) return;
+            const pendingTimer = pendingMutationRefreshTimerRef.current;
+            if (pendingTimer !== null) window.clearTimeout(pendingTimer);
 
-            if (typeof requestAnimationFrame === 'function') {
-              pendingMutationRefreshFrameRef.current = requestAnimationFrame(() => {
-                pendingMutationRefreshFrameRef.current = null;
-                refreshSearch();
-              });
-            } else {
+            pendingMutationRefreshTimerRef.current = window.setTimeout(() => {
+              pendingMutationRefreshTimerRef.current = null;
               refreshSearch();
-            }
+            }, 120);
           })
         : null;
 
     window.addEventListener('resize', handleResize);
     document.addEventListener('change', handleChange);
-    observer?.observe(document.body, { childList: true, characterData: true, subtree: true });
+    observer?.observe(document.body, {
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+      subtree: true,
+    });
     return () => {
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('change', handleChange);
       observer?.disconnect();
-      const frame = pendingMutationRefreshFrameRef.current;
-      pendingMutationRefreshFrameRef.current = null;
-      if (frame !== null && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(frame);
+      const timer = pendingMutationRefreshTimerRef.current;
+      pendingMutationRefreshTimerRef.current = null;
+      if (timer !== null) {
+        window.clearTimeout(timer);
       }
     };
   }, [applySearch, open, text]);
