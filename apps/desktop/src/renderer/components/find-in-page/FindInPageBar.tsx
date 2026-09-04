@@ -214,8 +214,14 @@ function isViewportShell(element: HTMLElement): boolean {
   return element === document.documentElement || element === document.body || element.id === 'root';
 }
 
-function isRangeVisibleWithinAncestors(range: Range, element: HTMLElement | null): boolean {
-  const clippingAncestors: Array<{ element: HTMLElement; x: boolean; y: boolean }> = [];
+interface ClippingAncestor {
+  element: HTMLElement;
+  x: boolean;
+  y: boolean;
+}
+
+function getClippingAncestors(element: HTMLElement | null): ClippingAncestor[] {
+  const clippingAncestors: ClippingAncestor[] = [];
   let ancestor = element;
   while (ancestor) {
     const style = window.getComputedStyle(ancestor);
@@ -228,6 +234,13 @@ function isRangeVisibleWithinAncestors(range: Range, element: HTMLElement | null
     }
     ancestor = ancestor.parentElement;
   }
+  return clippingAncestors;
+}
+
+function isRangeVisibleWithinAncestors(
+  range: Range,
+  clippingAncestors: readonly ClippingAncestor[],
+): boolean {
   if (clippingAncestors.length === 0) return true;
 
   const rects =
@@ -315,19 +328,25 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
 
   const matches: TextMatch[] = [];
   const visibilityCache = new WeakMap<HTMLElement, boolean>();
+  const clippingAncestorsCache = new WeakMap<HTMLElement, ClippingAncestor[]>();
   const walker = document.createTreeWalker(document.body, 4);
   let node = walker.nextNode();
   while (node) {
     const textNode = node as Text;
     if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache)) {
-      const whiteSpace = textNode.parentElement
-        ? window.getComputedStyle(textNode.parentElement).whiteSpace || 'normal'
-        : 'normal';
+      const parentElement = textNode.parentElement;
+      const parentStyle = parentElement ? window.getComputedStyle(parentElement) : null;
+      const whiteSpace = parentStyle?.whiteSpace || 'normal';
+      let clippingAncestors = parentElement ? clippingAncestorsCache.get(parentElement) : undefined;
+      if (clippingAncestors === undefined) {
+        clippingAncestors = getClippingAncestors(parentElement);
+        if (parentElement) clippingAncestorsCache.set(parentElement, clippingAncestors);
+      }
       for (const [start, end] of findMatchOffsets(textNode.data, query, whiteSpace)) {
         const range = document.createRange();
         range.setStart(textNode, start);
         range.setEnd(textNode, end);
-        if (isRangeVisibleWithinAncestors(range, textNode.parentElement)) {
+        if (isRangeVisibleWithinAncestors(range, clippingAncestors)) {
           matches.push({ range });
         }
       }
@@ -531,7 +550,7 @@ export function FindInPageBar() {
         refreshSearch();
       }, SEARCH_REFRESH_DEBOUNCE_MS);
     };
-    const handleResize = () => refreshSearch();
+    const handleResize = () => scheduleRefresh();
     const handleChange = (event: Event) => {
       if (event.target instanceof HTMLSelectElement) refreshSearch();
     };

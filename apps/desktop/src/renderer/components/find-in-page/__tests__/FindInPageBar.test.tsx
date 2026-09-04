@@ -454,14 +454,20 @@ describe('FindInPageBar', () => {
     const input = await openFindBar(page);
     fireEvent.change(input, { target: { value: 'foo' } });
     expect(screen.getByText('1/1')).toBeTruthy();
+    const walkerSpy = vi.spyOn(document, 'createTreeWalker');
+    const initialWalkCount = walkerSpy.mock.calls.length;
 
     responsive.style.display = 'none';
     fireEvent(window, new Event('resize'));
-    expect(screen.getByText('0/0')).toBeTruthy();
+    fireEvent(window, new Event('resize'));
+    expect(walkerSpy).toHaveBeenCalledTimes(initialWalkCount);
+    await waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
 
     responsive.style.display = '';
     fireEvent(window, new Event('resize'));
-    expect(screen.getByText('1/1')).toBeTruthy();
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+    walkerSpy.mockRestore();
   });
 
   it('allows arrow navigation to rescan after a zero-result search', async () => {
@@ -511,7 +517,7 @@ describe('FindInPageBar', () => {
 
     transparent.style.opacity = '';
     fireEvent(window, new Event('resize'));
-    expect(screen.getByText('1/2')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
   });
 
   it('excludes clipping-based screen-reader-only text', async () => {
