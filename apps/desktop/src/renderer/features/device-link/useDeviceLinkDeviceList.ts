@@ -242,6 +242,7 @@ function ensureStarted(): void {
   let retryDelayMs = 0;
   let backgroundRetryGeneration: number | null = null;
   let backgroundRetryRefreshPending = false;
+  let backgroundRetryReplayActive = false;
 
   const finishRefresh = (gen: number, background: boolean): void => {
     // A foreground refresh can supersede a background retry. In that case the old
@@ -254,6 +255,7 @@ function ensureStarted(): void {
     if (gen !== loadGeneration) return;
     const shouldRefresh = backgroundRetryRefreshPending && linkStatus !== 'stopped';
     backgroundRetryRefreshPending = false;
+    backgroundRetryReplayActive = false;
     if (shouldRefresh) refresh(false, true);
   };
 
@@ -294,6 +296,7 @@ function ensureStarted(): void {
     if (!background) {
       // The foreground operation owns the current generation now; any pending
       // presence from a superseded background retry must be replayed after it.
+      if (backgroundRetryGeneration !== null) backgroundRetryReplayActive = true;
       backgroundRetryGeneration = null;
       enterLoading();
     }
@@ -365,7 +368,7 @@ function ensureStarted(): void {
   window.electronAPI.deviceLink.onPresenceChanged((snap) => {
     // 后台退避请求在飞时保留 error/settled 快照；不要让 presence 噪音把它升级成前台
     // refresh，再次触发 loading 并恢复悬空的持久化远端选择。
-    if (backgroundRetryGeneration !== null) {
+    if (backgroundRetryGeneration !== null || backgroundRetryReplayActive) {
       // 不能丢掉真实的上线 / 改名 / 能力变化:本次 REST 响应可能早于 presence,结束后
       // 追加一次后台 refresh；同一请求期间的多条 presence 合并成一次。这里按 ready
       // 语义判断字段变化，避免 error 快速路径把本机 busy / lastSeenAt 噪音也排进补拉；
@@ -388,6 +391,7 @@ function ensureStarted(): void {
       clearDevices();
       backgroundRetryGeneration = null;
       backgroundRetryRefreshPending = false;
+      backgroundRetryReplayActive = false;
       return;
     }
     // online / connecting 都是远端目录仍在作用域内的状态：开始新一轮读取。connecting 下

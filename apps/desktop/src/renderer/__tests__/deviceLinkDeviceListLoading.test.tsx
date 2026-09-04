@@ -270,6 +270,9 @@ describe('useDeviceLinkDeviceList initial request', () => {
     });
     expect(listDevices).toHaveBeenCalledTimes(2);
 
+    act(() => statusChanged?.({ status: 'online' }));
+    expect(listDevices).toHaveBeenCalledTimes(3);
+
     act(() =>
       presenceChanged?.({
         deviceId: 'peer-1',
@@ -282,8 +285,6 @@ describe('useDeviceLinkDeviceList initial request', () => {
         busy: false,
       }),
     );
-    act(() => statusChanged?.({ status: 'online' }));
-    expect(listDevices).toHaveBeenCalledTimes(3);
 
     resolveBackground?.({ devices: [] });
     await act(async () => {
