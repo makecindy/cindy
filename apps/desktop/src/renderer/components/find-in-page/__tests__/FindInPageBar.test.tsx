@@ -178,6 +178,7 @@ describe('FindInPageBar', () => {
     const page = document.createElement('main');
     page.textContent = '中文';
     const input = await openFindBar(page);
+    const walkerSpy = vi.spyOn(document, 'createTreeWalker');
 
     fireEvent.compositionStart(input);
     fireEvent.change(input, { target: { value: '中' } });
@@ -185,6 +186,10 @@ describe('FindInPageBar', () => {
 
     fireEvent.compositionEnd(input, { target: { value: '中文' } });
     expect(screen.getByText('1/1')).toBeTruthy();
+    const searchCount = walkerSpy.mock.calls.length;
+    fireEvent.change(input, { target: { value: '中文' } });
+    expect(walkerSpy).toHaveBeenCalledTimes(searchCount);
+    walkerSpy.mockRestore();
   });
 
   it('refreshes matches when a single-select option changes', async () => {
@@ -206,6 +211,30 @@ describe('FindInPageBar', () => {
     select.value = 'second';
     fireEvent.change(select);
     expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('refreshes after a controlled select restores its submitted value', async () => {
+    const page = document.createElement('main');
+    const select = document.createElement('select');
+    const first = document.createElement('option');
+    first.value = 'first';
+    first.textContent = 'first';
+    const second = document.createElement('option');
+    second.value = 'second';
+    second.textContent = 'second';
+    select.append(first, second);
+    select.addEventListener('change', () => {
+      select.value = 'first';
+    });
+    page.append(select);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'second' } });
+    expect(screen.getByText('0/0')).toBeTruthy();
+
+    select.value = 'second';
+    fireEvent.change(select);
+    expect(screen.getByText('0/0')).toBeTruthy();
   });
 
   it('refreshes matches when responsive visibility changes on resize', async () => {

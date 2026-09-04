@@ -226,6 +226,7 @@ export function FindInPageBar() {
   const rangesRef = useRef<Range[]>([]);
   const activeRef = useRef(0);
   const isComposingRef = useRef(false);
+  const compositionCommitRef = useRef<string | null>(null);
 
   const clearSearchResults = useCallback(() => {
     rangesRef.current = [];
@@ -240,6 +241,11 @@ export function FindInPageBar() {
     const element = range.startContainer.parentElement;
     if (!element || isInsideRoot(element, rootRef.current)) return;
     scrollRangeIntoView(range);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        if (range.startContainer.isConnected) scrollRangeIntoView(range);
+      });
+    }
   }, []);
 
   const applySearch = useCallback(
@@ -276,6 +282,7 @@ export function FindInPageBar() {
     setOpen(false);
     setText('');
     isComposingRef.current = false;
+    compositionCommitRef.current = null;
     clearSearchResults();
   }, [clearSearchResults]);
 
@@ -293,10 +300,10 @@ export function FindInPageBar() {
     };
 
     window.addEventListener('resize', handleResize);
-    document.addEventListener('change', handleChange, true);
+    document.addEventListener('change', handleChange);
     return () => {
       window.removeEventListener('resize', handleResize);
-      document.removeEventListener('change', handleChange, true);
+      document.removeEventListener('change', handleChange);
     };
   }, [applySearch, open, text]);
 
@@ -362,16 +369,23 @@ export function FindInPageBar() {
             const nativeIsComposing =
               'isComposing' in e.nativeEvent && e.nativeEvent.isComposing === true;
             setText(next);
+            if (compositionCommitRef.current === next) {
+              compositionCommitRef.current = null;
+              return;
+            }
+            compositionCommitRef.current = null;
             if (isComposingRef.current || nativeIsComposing) return;
             applySearch(next, 0, true);
           }}
           onCompositionStart={() => {
             isComposingRef.current = true;
+            compositionCommitRef.current = null;
             clearSearchResults();
           }}
           onCompositionEnd={(e) => {
             const committed = e.currentTarget.value;
             isComposingRef.current = false;
+            compositionCommitRef.current = committed;
             setText(committed);
             applySearch(committed, 0, true);
           }}
