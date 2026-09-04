@@ -7472,6 +7472,11 @@
       },
       "remoteSwitchFailed": "Remote setting change failed; not applied",
       "switchFailed": "Setting change failed; not applied",
+      "modelWindowUnknown": {
+        "custom": "Model not switched: the target model “{{model}}” has no context-window information. Add it under {{provider}} model settings, then retry.",
+        "builtin": "Model not switched: Cindy can’t verify the context window for “{{model}}”. Refresh the {{provider}} model list; if that still fails, reconnect the provider.",
+        "openSettings": "Open Settings"
+      },
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",

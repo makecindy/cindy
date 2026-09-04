@@ -8,7 +8,8 @@
  * 清洗必须替换工具输出里的超大 data URI、不能删整行，以保住 call/output 配对。
  * 最近一轮的图也不能豁免：实测死锁尾巴就是最后一次 compact 之后的截图。
  */
-import { createReadStream, createWriteStream } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream, promises as fs } from 'node:fs';
 import { once } from 'node:events';
 
 /** 与 compaction-storm 同族的终态 reason：磁盘实测活尾巴过大，不是普通 timeout。 */
@@ -28,6 +29,14 @@ export const CODEX_ROLLOUT_SCAN_MAX_BYTES = 256 * 1024 * 1024;
 
 /** 单行上限：必须在拼出完整字符串之前截断，不能等 readline 整行进内存。 */
 export const CODEX_ROLLOUT_LINE_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * The fork app-server may keep its rollout handle briefly after retirement on
+ * Windows. Retry only the atomic replacement, long enough to outlive the
+ * transport's five-second force-kill grace period.
+ */
+export const CODEX_ROLLOUT_REPLACE_MAX_ATTEMPTS = 61;
+export const CODEX_ROLLOUT_REPLACE_RETRY_MS = 100;
 
 export class CodexRolloutScanLimitError extends Error {
   constructor(message: string) {
@@ -353,15 +362,45 @@ async function writeChunk(stream: ReturnType<typeof createWriteStream>, chunk: s
   await once(stream, 'drain');
 }
 
+function safeForkPlaceholderLine(line: string): string {
+  try {
+    const parsed: unknown = JSON.parse(line);
+    if (!isRecord(parsed)) return line;
+    // Preserve the rollout ordinal while removing encrypted reasoning and
+    // image-generation payloads that are provider-specific or unverifiable.
+    // A normal message item is accepted by Codex's durable projection and
+    // keeps the sequence contiguous after sanitization.
+    return JSON.stringify({
+      ...parsed,
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '[content omitted]' }],
+      },
+    });
+  } catch {
+    return line;
+  }
+}
+
 export async function sanitizeCodexForkRolloutFile(
   sourcePath: string,
   copyPath: string,
+): Promise<RolloutSanitizeStats> {
+  return sanitizeCodexForkRolloutLines(iterateRolloutLines(sourcePath), copyPath);
+}
+
+async function sanitizeCodexForkRolloutLines(
+  lines: AsyncIterable<string>,
+  copyPath: string,
+  opts: { preserveOrdinals?: boolean } = {},
 ): Promise<RolloutSanitizeStats> {
   const output = createWriteStream(copyPath, { encoding: 'utf8' });
   const outputFailed = once(output, 'error').then((args) => {
     const err = Array.isArray(args) ? args[0] : args;
     throw err instanceof Error ? err : new Error(String(err));
   });
+  const outputClosed = once(output, 'close').then(() => undefined);
   void outputFailed.catch(() => undefined);
   const stats: RolloutSanitizeStats = {
     bytesBefore: 0,
@@ -374,14 +413,23 @@ export async function sanitizeCodexForkRolloutFile(
   try {
     await Promise.race([
       (async () => {
-        for await (const line of iterateRolloutLines(sourcePath)) {
+        for await (const line of lines) {
           const newline = first ? '' : '\n';
           first = false;
           const originalBytes = Buffer.byteLength(line, 'utf8') + (newline ? 1 : 0);
           stats.bytesBefore += originalBytes;
           if (hasUnsafeForkRolloutPayload(line)) {
             stats.unsafeLines += 1;
-            stats.strippedBytes += originalBytes;
+            if (!opts.preserveOrdinals) {
+              stats.strippedBytes += originalBytes;
+              continue;
+            }
+            const placeholder = safeForkPlaceholderLine(line);
+            const result = `${newline}${placeholder}`;
+            const resultBytes = Buffer.byteLength(result, 'utf8');
+            stats.bytesAfter += resultBytes;
+            stats.strippedBytes += Math.max(0, originalBytes - resultBytes);
+            await writeChunk(output, result);
             continue;
           }
           const rewritten = rewriteOversizedToolOutputImages(line);
@@ -401,11 +449,177 @@ export async function sanitizeCodexForkRolloutFile(
     ]);
   } catch (error) {
     output.destroy();
-    await outputFailed.catch(() => undefined);
+    await outputClosed.catch(() => undefined);
     throw error;
   } finally {
-    if (!output.closed) output.destroy();
+    if (!output.closed) {
+      output.destroy();
+      await outputClosed.catch(() => undefined);
+    }
   }
   stats.bytesAfter += first ? 0 : 1;
   return stats;
+}
+
+export interface SanitizeCodexForkRolloutInPlaceOptions {
+  replaceMaxAttempts?: number;
+  replaceRetryMs?: number;
+}
+
+interface ForkSessionMeta {
+  record: Record<string, unknown>;
+  payload: Record<string, unknown>;
+}
+
+function parseForkSessionMeta(line: string): ForkSessionMeta | null {
+  try {
+    const parsed: unknown = JSON.parse(line);
+    if (!isRecord(parsed) || parsed.type !== 'session_meta' || !isRecord(parsed.payload)) {
+      return null;
+    }
+    return { record: parsed, payload: parsed.payload };
+  } catch {
+    return null;
+  }
+}
+
+function validateLazyHistoryBase(meta: ForkSessionMeta, filePath: string): boolean {
+  const historyBase = meta.payload.history_base;
+  if (historyBase === undefined || historyBase === null) return false;
+  if (!isRecord(historyBase)) {
+    throw new Error(`Codex rollout history_base is invalid: ${filePath}`);
+  }
+  if (
+    typeof historyBase.thread_id !== 'string' || historyBase.thread_id.trim().length === 0 ||
+    !Number.isSafeInteger(historyBase.end_ordinal_exclusive) ||
+    (historyBase.end_ordinal_exclusive as number) <= 0 ||
+    !Number.isSafeInteger(historyBase.end_byte_offset) ||
+    (historyBase.end_byte_offset as number) <= 0
+  ) {
+    throw new Error(`Codex rollout history_base fields are invalid: ${filePath}`);
+  }
+  return true;
+}
+
+function detachForkLineage(meta: ForkSessionMeta): string {
+  const payload = { ...meta.payload };
+  delete payload.forked_from_id;
+  delete payload.forked_from_ordinal_exclusive;
+  return JSON.stringify({ ...meta.record, ordinal: 0, payload });
+}
+
+async function readLazyForkStats(filePath: string): Promise<RolloutSanitizeStats | null> {
+  const iterator = iterateRolloutLines(filePath)[Symbol.asyncIterator]();
+  try {
+    const first = await iterator.next();
+    if (first.done) return null;
+    const meta = parseForkSessionMeta(first.value);
+    if (!meta || !validateLazyHistoryBase(meta, filePath)) return null;
+    let unsafeLines = 0;
+    let rewrittenLines = 0;
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) break;
+      if (hasUnsafeForkRolloutPayload(next.value)) unsafeLines += 1;
+      if (rewriteOversizedToolOutputImages(next.value) !== next.value) rewrittenLines += 1;
+    }
+    if (unsafeLines > 0 || rewrittenLines > 0) {
+      throw new Error(
+        `Codex lazy fork child contains payloads that cannot be rewritten safely: ${filePath}`,
+      );
+    }
+    const { size } = await fs.stat(filePath);
+    // Codex stores the child-tail byte boundary when thread/fork creates a
+    // lazy history_base rollout. Expanding or rewriting that file changes the
+    // boundary and makes Codex 0.153 reject the next resume. The source is
+    // still projected by app-server, so keep both files byte-for-byte intact.
+    return {
+      bytesBefore: size,
+      bytesAfter: size,
+      strippedBytes: 0,
+      rewrittenLines: 0,
+      unsafeLines: 0,
+    };
+  } finally {
+    await iterator.return?.(undefined);
+  }
+}
+
+async function* iterateForkRolloutLines(filePath: string): AsyncGenerator<string> {
+  const iterator = iterateRolloutLines(filePath)[Symbol.asyncIterator]();
+  try {
+    const first = await iterator.next();
+    if (first.done) return;
+    const meta = parseForkSessionMeta(first.value);
+    yield meta && !validateLazyHistoryBase(meta, filePath)
+      ? detachForkLineage(meta)
+      : first.value;
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) break;
+      yield next.value;
+    }
+  } finally {
+    await iterator.return?.(undefined);
+  }
+}
+
+function isTransientRolloutReplaceError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+}
+
+async function replaceRolloutWithRetry(
+  stagingPath: string,
+  filePath: string,
+  opts: SanitizeCodexForkRolloutInPlaceOptions,
+): Promise<void> {
+  const requestedAttempts = opts.replaceMaxAttempts;
+  const maxAttempts = typeof requestedAttempts === 'number' &&
+    Number.isFinite(requestedAttempts) && requestedAttempts > 0
+    ? Math.max(1, Math.floor(requestedAttempts))
+    : CODEX_ROLLOUT_REPLACE_MAX_ATTEMPTS;
+  const requestedRetryMs = opts.replaceRetryMs;
+  const retryMs = typeof requestedRetryMs === 'number' &&
+    Number.isFinite(requestedRetryMs) && requestedRetryMs >= 0
+    ? Math.floor(requestedRetryMs)
+    : CODEX_ROLLOUT_REPLACE_RETRY_MS;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await fs.rename(stagingPath, filePath);
+      return;
+    } catch (error) {
+      if (!isTransientRolloutReplaceError(error) || attempt === maxAttempts) throw error;
+      if (retryMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, retryMs));
+      }
+    }
+  }
+}
+
+/**
+ * Replace an unloaded fork child's rollout without exposing a partial file at
+ * its canonical path. The staging file is a sibling so the final rename stays
+ * on one filesystem and is atomic.
+ */
+export async function sanitizeCodexForkRolloutFileInPlace(
+  filePath: string,
+  opts: SanitizeCodexForkRolloutInPlaceOptions = {},
+): Promise<RolloutSanitizeStats> {
+  const lazyStats = await readLazyForkStats(filePath);
+  if (lazyStats) return lazyStats;
+  const stagingPath = `${filePath}.cindy-sanitize-${process.pid}-${randomUUID()}.tmp`;
+  try {
+    const stats = await sanitizeCodexForkRolloutLines(
+      iterateForkRolloutLines(filePath),
+      stagingPath,
+      { preserveOrdinals: true },
+    );
+    await replaceRolloutWithRetry(stagingPath, filePath, opts);
+    return stats;
+  } catch (error) {
+    await fs.rm(stagingPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }

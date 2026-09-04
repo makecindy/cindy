@@ -7470,6 +7470,11 @@
       },
       "remoteSwitchFailed": "リモート設定の変更に失敗しました(未適用)",
       "switchFailed": "設定の変更に失敗しました(未適用)",
+      "modelWindowUnknown": {
+        "custom": "モデルは切り替わっていません。対象モデル「{{model}}」にコンテキストウィンドウ情報がありません。「{{provider}}」のモデル設定で追加してから再試行してください。",
+        "builtin": "モデルは切り替わっていません。対象モデル「{{model}}」のコンテキストウィンドウを確認できません。「{{provider}}」のモデル一覧を更新し、それでも失敗する場合はプロバイダーを再接続してください。",
+        "openSettings": "設定を開く"
+      },
       "permissionSwitchFailed": "権限モードの変更に失敗したため、以前の設定を維持しました",
       "fullAccessConfirmation": {
         "title": "Full access を有効にしますか？",

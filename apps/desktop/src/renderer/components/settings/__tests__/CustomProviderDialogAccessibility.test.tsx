@@ -212,6 +212,46 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
 }
 
 describe('CustomProviderDialog accessibility', () => {
+  it('opens the requested runtime and focuses the model context-window field', async () => {
+    const initial: CustomProviderConfig = {
+      id: 'deep-link-provider',
+      name: 'Deep Link Provider',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://claude.example.test',
+          models: [{ id: 'claude-model', name: 'Claude Model' }],
+        },
+        codex: {
+          baseUrl: 'https://codex.example.test',
+          models: [{ id: 'target-model', name: 'Target Model' }],
+        },
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+
+    render(
+      <CustomProviderDialog
+        initial={initial}
+        focusAgent="codex"
+        focusModelId="target-model"
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
+    expect(
+      screen
+        .getByRole('tab', { name: 'settings.providers.custom.protocol.codex' })
+        .getAttribute('aria-selected'),
+    ).toBe('true');
+    const contextWindow = screen.getByRole('textbox', {
+      name: 'settings.providers.custom.fields.modelContextWindowTitle',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(contextWindow));
+  });
+
   it('cancels a pending manual create without discarding the Provider draft', async () => {
     const { confirmation, onClose, onSaved, user } =
       await renderNewImageGenerationReloadConfirmation();

@@ -22,6 +22,7 @@ const {
   codexAuthActions,
   toastError,
   setModelVisibilitiesSpy,
+  customDialogSpy,
 } = vi.hoisted(() => ({
   wizardSpy: vi.fn(),
   providersState: { providers: [] as unknown[], order: [] as string[] },
@@ -38,6 +39,7 @@ const {
   },
   toastError: vi.fn(),
   setModelVisibilitiesSpy: vi.fn(() => true),
+  customDialogSpy: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -59,7 +61,8 @@ vi.mock('@/contexts/AuthContext', () => ({
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
-  isChatGptConnectionConnected: () => false,
+  isChatGptConnectionConnected: (state: { kind?: string; authSource?: string }) =>
+    state.kind === 'authenticated' && state.authSource === 'oauth',
   useCodexAuth: () => ({
     ...codexAuthState,
     ...codexAuthActions,
@@ -84,6 +87,12 @@ vi.mock('@/lib/toast', () => ({
 
 vi.mock('@/lib/customProviders', () => ({
   deleteCustomProvider: vi.fn(),
+  providerViewToCustomProviderConfig: (provider: ProviderView) => ({
+    id: provider.id,
+    name: provider.name,
+    auth: provider.auth,
+    runtimes: {},
+  }),
   readCustomProviderKey: vi.fn(async () => null),
   updateCustomProvider: vi.fn(),
 }));
@@ -105,7 +114,10 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 }));
 
 vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: () => null,
+  CustomProviderDialog: (props: unknown) => {
+    customDialogSpy(props);
+    return React.createElement('div', { 'data-testid': 'custom-provider-dialog-stub' });
+  },
 }));
 
 vi.mock('@/components/settings/AddProviderWizard', () => ({
@@ -184,6 +196,31 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  it('Dev 只读复用 OpenAI 登录态时保持已连接且不能断开', async () => {
+    codexAuthState.state = {
+      kind: 'authenticated',
+      authSource: 'oauth',
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    };
+    providersState.providers = [
+      makeProvider('openai', {
+        name: 'OpenAI',
+        agents: ['codex', 'claude-code'],
+        connected: true,
+        models: { codex: [], 'claude-code': [] },
+      }),
+    ];
+    renderAt('?tab=providers&connect=openai');
+
+    const disconnect = await screen.findByRole('button', {
+      name: 'settings.providers.button.disconnect',
+    });
+    expect((disconnect as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(disconnect);
+    expect(codexAuthActions.logout).not.toHaveBeenCalled();
+  });
+
   it('ChatGPT 系统共享登录失效时显示来源说明并打开 ChatGPT App', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
@@ -262,6 +299,68 @@ describe('ProvidersSection — 深链定位', () => {
       expect(screen.getByText('settings.providers.anthropic.title')).not.toBeNull(),
     );
     expect(screen.queryByTestId('wizard-stub')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('内置供应商深链会选中并定位目标模型行', async () => {
+    providersState.providers = [
+      makeProvider('openai', {
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: {
+          codex: [
+            {
+              id: 'gpt-unknown',
+              name: 'GPT Unknown',
+              contextWindow: 0,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      }),
+    ];
+    const view = renderAt('?tab=providers&connect=openai&model=gpt-unknown&agent=codex');
+
+    await waitFor(() =>
+      expect(view.container.querySelector('[data-deep-link-target="true"]')).not.toBeNull(),
+    );
+    expect(screen.getByText('GPT Unknown')).not.toBeNull();
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('自定义供应商深链会打开编辑表单并定位模型上下文窗口', async () => {
+    providersState.providers = [
+      makeProvider('custom-provider', {
+        name: 'Custom Provider',
+        source: 'user',
+        connected: true,
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        models: {
+          codex: [
+            {
+              id: 'custom-model',
+              name: 'Custom Model',
+              contextWindow: 0,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      }),
+    ];
+    renderAt('?tab=providers&connect=custom-provider&model=custom-model&agent=codex');
+
+    expect(await screen.findByTestId('custom-provider-dialog-stub')).not.toBeNull();
+    expect(customDialogSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        focusModelId: 'custom-model',
+        focusAgent: 'codex',
+        initial: expect.objectContaining({ id: 'custom-provider' }),
+      }),
+    );
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
   });
 

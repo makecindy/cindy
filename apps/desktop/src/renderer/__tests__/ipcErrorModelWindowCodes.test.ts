@@ -35,6 +35,18 @@ describe('model-window switch IPC errors', () => {
         expect(catalog.ipcError[code], `${locale}:${code}`).toEqual(expect.any(String));
         expect(catalog.ipcError[code].length, `${locale}:${code}`).toBeGreaterThan(20);
       }
+      expect(
+        catalog.newChat.chatInput.modelWindowUnknown.custom,
+        `${locale}:custom recovery`,
+      ).toContain('{{model}}');
+      expect(
+        catalog.newChat.chatInput.modelWindowUnknown.builtin,
+        `${locale}:builtin recovery`,
+      ).toContain('{{provider}}');
+      expect(
+        catalog.newChat.chatInput.modelWindowUnknown.openSettings,
+        `${locale}:settings action`,
+      ).toEqual(expect.any(String));
     }
     expect(zhCN.ipcError.MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN).toBe(
       '模型未切换：无法确认当前模型的上下文窗口。请检查自定义模型的窗口设置；若无法修改，请保留当前模型或新建任务',

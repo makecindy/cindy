@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
 	applyDesktopStartupConfigForPhase,
+	clearInheritedIsolatedAuthAuthorization,
 	clearDesktopDevCaches,
 	commandUsesUserDataDir,
 	createIsolatedAuthLaunchProof,
@@ -498,7 +499,7 @@ test("isolated auth trust gate runs before credential write flags and userData c
 
 test("isolated auth proof is minted only by this invocation's accepted flag path", () => {
 	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
-	const ambientDeleteIdx = source.indexOf("delete process.env.XDT_ISOLATED_AUTH_PROOF;");
+	const ambientDeleteIdx = source.indexOf("clearInheritedIsolatedAuthAuthorization();");
 	const authorizeIdx = source.indexOf("isolatedAuthAuthorizedByRestart = true;");
 	const mintGuardIdx = source.indexOf("if (isolatedAuthAuthorizedByRestart) {");
 	const mintIdx = source.indexOf("createIsolatedAuthLaunchProof({", mintGuardIdx);
@@ -506,6 +507,17 @@ test("isolated auth proof is minted only by this invocation's accepted flag path
 	assert.ok(authorizeIdx > ambientDeleteIdx);
 	assert.ok(mintGuardIdx > authorizeIdx);
 	assert.ok(mintIdx > mintGuardIdx);
+});
+
+test("ordinary restart drops inherited isolated-auth capabilities", () => {
+	const env = {
+		XDT_ISOLATED_AUTH: "1",
+		XDT_ALLOW_DEV_OAUTH_WRITE: "1",
+		XDT_ISOLATED_AUTH_PROOF: "stale-proof",
+		XDT_ISOLATED: "1",
+	};
+	clearInheritedIsolatedAuthAuthorization(env);
+	assert.deepEqual(env, { XDT_ISOLATED: "1" });
 });
 
 test("preserve-running only shares a target with live records from the same region", () => {

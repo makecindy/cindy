@@ -7470,6 +7470,11 @@
       },
       "remoteSwitchFailed": "远程设置切换失败，未生效",
       "switchFailed": "设置切换失败，未生效",
+      "modelWindowUnknown": {
+        "custom": "模型未切换：目标模型「{{model}}」缺少上下文窗口信息。请在「{{provider}}」的模型设置中补充后重试。",
+        "builtin": "模型未切换：无法确认目标模型「{{model}}」的上下文窗口。请刷新「{{provider}}」的模型列表；若仍失败，请重新连接该供应商。",
+        "openSettings": "去设置"
+      },
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
       "fullAccessConfirmation": {
         "title": "开启 Full access？",
