@@ -48,20 +48,51 @@ function applyFindHighlights(ranges: readonly Range[], activeIndex: number) {
   }
 }
 
-function findMatchOffsets(value: string, query: string): Array<[number, number]> {
+function findMatchOffsets(
+  value: string,
+  query: string,
+  whiteSpace = 'normal',
+): Array<[number, number]> {
   if (!value || !query) return [];
 
-  const normalizedQuery = query.toLocaleLowerCase();
+  const collapseWhitespace = ['normal', 'nowrap', 'pre-line'].includes(whiteSpace);
+  const sourceStarts: number[] = [];
+  const sourceEnds: number[] = [];
+  let searchableValue = '';
+  for (let index = 0; index < value.length; index += 1) {
+    if (collapseWhitespace && /\s/.test(value[index])) {
+      const runStart = index;
+      while (index + 1 < value.length && /\s/.test(value[index + 1])) index += 1;
+      if (searchableValue.at(-1) !== ' ') {
+        searchableValue += ' ';
+        sourceStarts.push(runStart);
+        sourceEnds.push(index + 1);
+      } else {
+        sourceEnds[sourceEnds.length - 1] = index + 1;
+      }
+      continue;
+    }
+    searchableValue += value[index];
+    sourceStarts.push(index);
+    sourceEnds.push(index + 1);
+  }
+
+  const searchableQuery = collapseWhitespace ? query.replace(/\s+/g, ' ') : query;
+  const normalizedQuery = searchableQuery.toLocaleLowerCase();
   const offsets: Array<[number, number]> = [];
 
   // Lower-case each candidate independently instead of normalizing the whole
   // text node first. Whole-string lower-casing is context-sensitive for some
   // scripts (for example Greek final sigma), which can make a standalone
   // query fail to match the same character in surrounding text.
-  for (let start = 0; start <= value.length - query.length; start += 1) {
-    if (value.slice(start, start + query.length).toLocaleLowerCase() === normalizedQuery) {
-      offsets.push([start, start + query.length]);
-      start += query.length - 1;
+  for (let start = 0; start <= searchableValue.length - searchableQuery.length; start += 1) {
+    if (
+      searchableValue.slice(start, start + searchableQuery.length).toLocaleLowerCase() ===
+      normalizedQuery
+    ) {
+      const end = start + searchableQuery.length - 1;
+      offsets.push([sourceStarts[start], sourceEnds[end]]);
+      start += searchableQuery.length - 1;
     }
   }
   return offsets;
@@ -124,7 +155,10 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
   while (node) {
     const textNode = node as Text;
     if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache)) {
-      for (const [start, end] of findMatchOffsets(textNode.data, query)) {
+      const whiteSpace = textNode.parentElement
+        ? window.getComputedStyle(textNode.parentElement).whiteSpace || 'normal'
+        : 'normal';
+      for (const [start, end] of findMatchOffsets(textNode.data, query, whiteSpace)) {
         const range = document.createRange();
         range.setStart(textNode, start);
         range.setEnd(textNode, end);
@@ -419,7 +453,7 @@ export function FindInPageBar() {
       <button
         type="button"
         aria-label={t('findInPage.previous')}
-        disabled={!text || matches === 0}
+        disabled={!text}
         onClick={() => moveActive(-1)}
         className={cn(
           'flex h-6 w-6 items-center justify-center rounded',
@@ -433,7 +467,7 @@ export function FindInPageBar() {
       <button
         type="button"
         aria-label={t('findInPage.next')}
-        disabled={!text || matches === 0}
+        disabled={!text}
         onClick={() => moveActive(1)}
         className={cn(
           'flex h-6 w-6 items-center justify-center rounded',

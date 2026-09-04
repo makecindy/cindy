@@ -141,6 +141,18 @@ describe('FindInPageBar', () => {
     ]);
   });
 
+  it('matches whitespace collapsed by normal text layout', async () => {
+    const page = document.createElement('main');
+    page.style.whiteSpace = 'normal';
+    page.textContent = 'foo\nbar';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo bar' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('foo\nbar');
+  });
+
   it('walks matches with Enter, Shift+Enter, and the navigation buttons', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo foo foo';
@@ -267,6 +279,20 @@ describe('FindInPageBar', () => {
 
     responsive.style.display = '';
     fireEvent(window, new Event('resize'));
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('allows arrow navigation to rescan after a zero-result search', async () => {
+    const page = document.createElement('main');
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+
+    expect(screen.getByText('0/0')).toBeTruthy();
+    const nextButton = screen.getByRole('button', { name: 'findInPage.next' });
+    expect((nextButton as HTMLButtonElement).disabled).toBe(false);
+
+    page.textContent = 'foo';
+    fireEvent.click(nextButton);
     expect(screen.getByText('1/1')).toBeTruthy();
   });
 
