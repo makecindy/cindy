@@ -187,14 +187,27 @@ function getLineClamp(style: CSSStyleDeclaration): number | null {
   return Number.isFinite(lineClamp) && lineClamp > 0 ? lineClamp : null;
 }
 
-function isOverflowClipping(style: CSSStyleDeclaration): boolean {
-  return [style.overflow, style.overflowX, style.overflowY].some((value) =>
-    value
-      .trim()
-      .toLowerCase()
-      .split(/\s+/)
-      .some((overflow) => overflow === 'hidden' || overflow === 'clip'),
-  );
+function isOverflowValueClipping(value: string): boolean {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .some((overflow) => overflow === 'hidden' || overflow === 'clip');
+}
+
+function getOverflowClipAxes(style: CSSStyleDeclaration): { x: boolean; y: boolean } {
+  const shorthand = style.overflow.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const overflowX = style.overflowX.trim().toLowerCase();
+  const overflowY = style.overflowY.trim().toLowerCase();
+  const shorthandX = shorthand[0] || '';
+  const shorthandY = shorthand[1] || shorthand[0] || '';
+  const usesShorthandFallback = overflowX === 'visible' && overflowY === 'visible';
+  return {
+    x: isOverflowValueClipping(overflowX) ||
+      (usesShorthandFallback && isOverflowValueClipping(shorthandX)),
+    y: isOverflowValueClipping(overflowY) ||
+      (usesShorthandFallback && isOverflowValueClipping(shorthandY)),
+  };
 }
 
 function isViewportShell(element: HTMLElement): boolean {
@@ -202,15 +215,16 @@ function isViewportShell(element: HTMLElement): boolean {
 }
 
 function isRangeVisibleWithinAncestors(range: Range, element: HTMLElement | null): boolean {
-  const clippingAncestors: HTMLElement[] = [];
+  const clippingAncestors: Array<{ element: HTMLElement; x: boolean; y: boolean }> = [];
   let ancestor = element;
   while (ancestor) {
     const style = window.getComputedStyle(ancestor);
-    if (
-      !isViewportShell(ancestor) &&
-      (isOverflowClipping(style) || getLineClamp(style) !== null)
-    ) {
-      clippingAncestors.push(ancestor);
+    if (!isViewportShell(ancestor)) {
+      const overflowClipAxes = getOverflowClipAxes(style);
+      if (getLineClamp(style) !== null) overflowClipAxes.y = true;
+      if (overflowClipAxes.x || overflowClipAxes.y) {
+        clippingAncestors.push({ element: ancestor, ...overflowClipAxes });
+      }
     }
     ancestor = ancestor.parentElement;
   }
@@ -221,14 +235,14 @@ function isRangeVisibleWithinAncestors(range: Range, element: HTMLElement | null
   if (rects.length === 0) return true;
 
   for (const clippingAncestor of clippingAncestors) {
-    const clipRect = clippingAncestor.getBoundingClientRect();
-    const intersectsClip = rects.some(
-      (rect) =>
-        rect.bottom > clipRect.top &&
-        rect.top < clipRect.bottom &&
-        rect.right > clipRect.left &&
-        rect.left < clipRect.right,
-    );
+    const clipRect = clippingAncestor.element.getBoundingClientRect();
+    const intersectsClip = rects.some((rect) => {
+      const intersectsX =
+        rect.right > clipRect.left && rect.left < clipRect.right;
+      const intersectsY =
+        rect.bottom > clipRect.top && rect.top < clipRect.bottom;
+      return (!clippingAncestor.x || intersectsX) && (!clippingAncestor.y || intersectsY);
+    });
     if (!intersectsClip) return false;
   }
   return true;
