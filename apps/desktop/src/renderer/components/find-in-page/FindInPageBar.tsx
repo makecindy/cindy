@@ -200,28 +200,46 @@ function getLineClamp(style: CSSStyleDeclaration): number | null {
   return Number.isFinite(lineClamp) && lineClamp > 0 ? lineClamp : null;
 }
 
-function isRangeVisibleInClampedAncestors(range: Range): boolean {
+function getClampedAncestor(
+  element: HTMLElement | null,
+  clampCache: WeakMap<HTMLElement, HTMLElement | null>,
+): HTMLElement | null {
+  const path: HTMLElement[] = [];
+  let current = element;
+  let clampedAncestor: HTMLElement | null = null;
+  while (current) {
+    if (clampCache.has(current)) {
+      clampedAncestor = clampCache.get(current) ?? null;
+      break;
+    }
+    path.push(current);
+    if (getLineClamp(window.getComputedStyle(current)) !== null) {
+      clampedAncestor = current;
+      break;
+    }
+    current = current.parentElement;
+  }
+  for (const pathElement of path) clampCache.set(pathElement, clampedAncestor);
+  return clampedAncestor;
+}
+
+function isRangeVisibleInClampedAncestor(
+  range: Range,
+  clampedAncestor: HTMLElement | null,
+): boolean {
+  if (!clampedAncestor) return true;
   const rects =
     typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
   if (rects.length === 0) return true;
 
-  let element = range.startContainer.parentElement;
-  while (element) {
-    const style = window.getComputedStyle(element);
-    if (getLineClamp(style) !== null) {
-      const clipRect = element.getBoundingClientRect();
-      const hasVisibleRect = rects.some(
-        (rect) =>
-          rect.bottom > clipRect.top &&
-          rect.top < clipRect.bottom &&
-          rect.right > clipRect.left &&
-          rect.left < clipRect.right,
-      );
-      if (!hasVisibleRect) return false;
-    }
-    element = element.parentElement;
-  }
-  return true;
+  const clipRect = clampedAncestor.getBoundingClientRect();
+  return rects.some(
+    (rect) =>
+      rect.bottom > clipRect.top &&
+      rect.top < clipRect.bottom &&
+      rect.right > clipRect.left &&
+      rect.left < clipRect.right,
+  );
 }
 
 function isCjkCharacter(value: string): boolean {
@@ -291,6 +309,7 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
 
   const matches: TextMatch[] = [];
   const visibilityCache = new WeakMap<HTMLElement, boolean>();
+  const clampCache = new WeakMap<HTMLElement, HTMLElement | null>();
   const showText = typeof NodeFilter === 'undefined' ? 4 : NodeFilter.SHOW_TEXT;
   const walker = document.createTreeWalker(document.body, showText);
   let node = walker.nextNode();
@@ -300,11 +319,12 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
       const whiteSpace = textNode.parentElement
         ? window.getComputedStyle(textNode.parentElement).whiteSpace || 'normal'
         : 'normal';
+      const clampedAncestor = getClampedAncestor(textNode.parentElement, clampCache);
       for (const [start, end] of findMatchOffsets(textNode.data, query, whiteSpace)) {
         const range = document.createRange();
         range.setStart(textNode, start);
         range.setEnd(textNode, end);
-        if (isRangeVisibleInClampedAncestors(range)) matches.push({ range });
+        if (isRangeVisibleInClampedAncestor(range, clampedAncestor)) matches.push({ range });
       }
     }
     node = walker.nextNode();

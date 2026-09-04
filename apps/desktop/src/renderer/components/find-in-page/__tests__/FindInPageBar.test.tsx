@@ -417,6 +417,7 @@ describe('FindInPageBar', () => {
       Element.prototype,
       'getBoundingClientRect',
     );
+    const rangeRectCalls = new Map<HTMLElement, number>();
     const page = document.createElement('main');
     const visible = document.createElement('span');
     visible.textContent = 'foo';
@@ -431,6 +432,7 @@ describe('FindInPageBar', () => {
       configurable: true,
       value(this: Range) {
         const parent = this.startContainer.parentElement;
+        if (parent) rangeRectCalls.set(parent, (rangeRectCalls.get(parent) ?? 0) + 1);
         const top = parent === clamped ? 20 : 0;
         return [{ top, bottom: top + 10, left: 0, right: 100 }];
       },
@@ -449,6 +451,8 @@ describe('FindInPageBar', () => {
 
       expect(screen.getByText('1/1')).toBeTruthy();
       expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+      expect(rangeRectCalls.get(visible)).toBe(1);
+      expect(rangeRectCalls.get(clamped)).toBe(1);
     } finally {
       if (rangeRectDescriptor) {
         Object.defineProperty(Range.prototype, 'getClientRects', rangeRectDescriptor);
