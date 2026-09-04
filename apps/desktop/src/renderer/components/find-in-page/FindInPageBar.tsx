@@ -138,6 +138,11 @@ function normalizeSearchValue(
     ) {
       end += 1;
       if (isHangulTrailingJamo(characters[end]?.value)) end += 1;
+    } else if (
+      isHangulLvSyllable(characters[index].value) &&
+      isHangulTrailingJamo(characters[end]?.value)
+    ) {
+      end += 1;
     }
     while (end < characters.length && isCombiningMark(characters[end].value)) end += 1;
 
@@ -191,6 +196,16 @@ function isHangulTrailingJamo(value: string | undefined): boolean {
   return (
     (codePoint >= 0x11a8 && codePoint <= 0x11c2) ||
     (codePoint >= 0xd7cb && codePoint <= 0xd7fb)
+  );
+}
+
+function isHangulLvSyllable(value: string | undefined): boolean {
+  const codePoint = getCodePoint(value);
+  return (
+    codePoint !== undefined &&
+    codePoint >= 0xac00 &&
+    codePoint <= 0xd7a3 &&
+    (codePoint - 0xac00) % 28 === 0
   );
 }
 

@@ -230,6 +230,20 @@ describe('FindInPageBar', () => {
     ]);
   });
 
+  it('combines a precomposed Hangul LV syllable with its trailing Jamo', async () => {
+    const page = document.createElement('main');
+    page.textContent = '각 각';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: '각' } });
+
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.map((range) => range.toString())).toEqual([
+      '각',
+      '각',
+    ]);
+  });
+
   it('does not expand one visible character into duplicate navigation matches', async () => {
     const page = document.createElement('main');
     page.textContent = 'ß';
