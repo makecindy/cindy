@@ -19,7 +19,8 @@ import { useSyncExternalStore } from 'react';
  *   /settings 往返后 remount、useUpdateStatus() 经历 idle→ready 的初始水合
  *   时,不会因为「版本和之前 dismiss 时一样」而误 restore。
  * - **decidedVersion**:已经对某个待装版本做过「弹出 / 让路」决定。用来避免
- *   remount 时再闪一次探针空窗,也避免用户点火焰唤回之后又被 busy 探针藏回去。
+ *   remount 时再闪一次探针空窗。系统自己弹出的横幅,后来又 busy 时仍会收回去。
+ * - **pinnedByUser**:用户点火焰把横幅唤回来。这是明确要看,busy 探针不要再藏。
  * - 模块级 singleton store(useSyncExternalStore),让 UpdateBanner 与
  *   UserInfoSection 无需 context / prop-drill 就能共享同一状态。
  */
@@ -32,6 +33,7 @@ interface DismissState {
   dismissedStatus: string | null;
   dismissedVersion: string | null;
   decidedVersion: string | null;
+  pinnedByUser: boolean;
 }
 
 const UNVERSIONED = '<none>';
@@ -40,13 +42,16 @@ export function updateBannerDecisionVersion(version: string | null): string {
   return version ?? UNVERSIONED;
 }
 
-let state: DismissState = {
+const INITIAL_STATE: DismissState = {
   dismissed: false,
   reason: null,
   dismissedStatus: null,
   dismissedVersion: null,
   decidedVersion: null,
+  pinnedByUser: false,
 };
+
+let state: DismissState = { ...INITIAL_STATE };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -88,15 +93,18 @@ export function dismissUpdateBanner(currentStatus: string, currentVersion: strin
     dismissedStatus: currentStatus,
     dismissedVersion: currentVersion,
     decidedVersion: state.decidedVersion,
+    pinnedByUser: false,
   };
   emit();
 }
 
 /**
- * 有任务在跑:不要弹出完整 banner,只留火焰入口。已经是用户关掉的,不要覆盖。
+ * 有任务在跑:不要弹出完整 banner,只留火焰入口。已经是用户关掉的,或用户点火焰
+ * 钉住要看的,不要覆盖。
  */
 export function deferUpdateBannerBecauseBusy(currentStatus: string, currentVersion: string | null) {
   if (state.dismissed && state.reason === 'user') return;
+  if (state.pinnedByUser) return;
   if (sameBusyDefer(currentStatus, currentVersion)) return;
   state = {
     dismissed: true,
@@ -104,25 +112,33 @@ export function deferUpdateBannerBecauseBusy(currentStatus: string, currentVersi
     dismissedStatus: currentStatus,
     dismissedVersion: currentVersion,
     decidedVersion: updateBannerDecisionVersion(currentVersion),
+    pinnedByUser: false,
   };
   emit();
 }
 
 export function markUpdateBannerAutoShown(currentVersion: string | null) {
   if (state.dismissed && state.reason === 'user') return;
+  if (state.pinnedByUser) return;
   const decidedVersion = updateBannerDecisionVersion(currentVersion);
-  if (!state.dismissed && state.reason === null && state.decidedVersion === decidedVersion) return;
+  if (
+    !state.dismissed
+    && state.reason === null
+    && state.decidedVersion === decidedVersion
+    && !state.pinnedByUser
+  ) return;
   state = {
     dismissed: false,
     reason: null,
     dismissedStatus: null,
     dismissedVersion: null,
     decidedVersion,
+    pinnedByUser: false,
   };
   emit();
 }
 
-export function restoreUpdateBanner() {
+export function restoreUpdateBanner(opts?: { pin?: boolean }) {
   if (!state.dismissed) return;
   state = {
     dismissed: false,
@@ -130,6 +146,7 @@ export function restoreUpdateBanner() {
     dismissedStatus: null,
     dismissedVersion: null,
     decidedVersion: state.decidedVersion,
+    pinnedByUser: opts?.pin !== false,
   };
   emit();
 }
@@ -161,13 +178,7 @@ export function isNewUpdateAfterDismiss(currentStatus: string, currentVersion: s
 }
 
 export function resetUpdateBannerDismissStoreForTests() {
-  state = {
-    dismissed: false,
-    reason: null,
-    dismissedStatus: null,
-    dismissedVersion: null,
-    decidedVersion: null,
-  };
+  state = { ...INITIAL_STATE };
   emit();
 }
 
@@ -178,6 +189,7 @@ export function useUpdateBannerDismiss() {
     reason: snap.reason,
     dismiss: dismissUpdateBanner,
     restore: restoreUpdateBanner,
+    pinnedByUser: snap.pinnedByUser,
     deferBecauseBusy: deferUpdateBannerBecauseBusy,
     markAutoShown: markUpdateBannerAutoShown,
     clearAutoDecision: clearUpdateBannerAutoDecision,

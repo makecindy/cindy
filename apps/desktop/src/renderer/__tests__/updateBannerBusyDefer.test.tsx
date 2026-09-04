@@ -106,6 +106,15 @@ describe('update banner dismiss store', () => {
     deferUpdateBannerBecauseBusy('ready', '1.0.0');
     expect(getUpdateBannerDismissState()).toBe(first);
   });
+
+  it('does not let a busy defer hide a banner the user reopened', () => {
+    deferUpdateBannerBecauseBusy('ready', '1.0.0');
+    restoreUpdateBanner();
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
+    deferUpdateBannerBecauseBusy('ready', '1.0.0');
+    expect(getUpdateBannerDismissState().dismissed).toBe(false);
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
+  });
 });
 
 describe('UpdateBanner busy defer', () => {
@@ -216,6 +225,53 @@ describe('UpdateBanner busy defer', () => {
       await Promise.resolve();
     });
     expect(getUpdateBannerDismissState().reason).toBe('busy');
+    expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
+
+    busy = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_BANNER_BUSY_POLL_MS);
+    });
+    expect(screen.getByRole('button', { name: EXPANDED })).toBeTruthy();
+    expect(getUpdateBannerDismissState().dismissed).toBe(false);
+  });
+
+  it('hides the expanded banner again if a later poll sees activity', async () => {
+    vi.useFakeTimers();
+    let busy = false;
+    anyActivityBlockingRelaunch.mockImplementation(() => Promise.resolve(busy));
+    render(<UpdateBanner isCollapsed={false} />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('button', { name: EXPANDED })).toBeTruthy();
+
+    busy = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_BANNER_BUSY_POLL_MS);
+    });
+    expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
+    expect(getUpdateBannerDismissState().reason).toBe('busy');
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(false);
+  });
+
+  it('pops the expanded banner again after a later busy defer goes idle', async () => {
+    vi.useFakeTimers();
+    let busy = false;
+    anyActivityBlockingRelaunch.mockImplementation(() => Promise.resolve(busy));
+    render(<UpdateBanner isCollapsed={false} />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('button', { name: EXPANDED })).toBeTruthy();
+
+    busy = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_BANNER_BUSY_POLL_MS);
+    });
     expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
 
     busy = false;
