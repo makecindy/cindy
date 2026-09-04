@@ -1,6 +1,6 @@
 # @cindy/design-tokens
 
-Cindy 设计 token 的 **DTCG 影子层**（reference → semantic）。
+Cindy 设计 token 的 **DTCG 影子层**（reference → semantic → component）。
 
 本包只是字典，**零运行时接线**：Desktop / Mobile / 任何产品 package 都不得依赖它。生产生成切换在路线图 **DS-8**；在那之前，Desktop 颜色数值权威仍是 `apps/desktop/src/renderer/themes/colors.ts`，本包的取值必须与 DS-2b 冻结快照逐值一致。
 
@@ -9,8 +9,8 @@ Cindy 设计 token 的 **DTCG 影子层**（reference → semantic）。
 治理合同 §7：影子包在约定复查期内没有真实消费者时应删除。
 
 - **复查日期：2026-11-01**
-- 届时若 DS-4 仍未开工，整包删除（revert 本 PR 即可，零运行时残留）
-- 等真做 DS-4 时再重建，不让没人消费的字典变成第三份漂移真相
+- DS-4 已开工：component 层随 Button 消费建立。零运行时接线红线仍到 DS-8。
+- 届时若仍无生产生成切换且无人维护，按治理合同 §7 评估是否删除
 
 ## 数据源
 
@@ -20,14 +20,15 @@ Cindy 设计 token 的 **DTCG 影子层**（reference → semantic）。
 
 不重新解析 `colors.ts`。重新生成：在本包目录执行 `pnpm generate`（脚本 `src/generate.ts`）。连续两次生成必须字节一致。守卫测试会核对。
 
-## 两层
+## 三层
 
 | 层 | 路径 | 内容 |
 | --- | --- | --- |
-| reference | `src/reference/color.json` | 第一批 semantic 角色实际引用的原始色值（不铺全色板） |
+| reference | `src/reference/color.json` | semantic / component 角色实际引用的原始色值（不铺全色板） |
 | semantic | `src/semantic/color.json` | DESIGN.md §10 Tier-1 的 surface / border / text / accent 四族 + status 语义；每个角色 light/dark = 冻结快照现值 |
+| component | `src/component/color.json` | DS-4 起随消费组件建立。**刻意很薄**：DS-4 的 Button hover / pressed 是 `color-mix` 运行期派生值（暗色下 `--surface-hover` 与 `--surface-chip` 同值，alias 会让悬停不可见），按治理合同 §3.4 只在 `classification.json` 登记、不建模；本层只收 `button-cta-hover` 这类能落回 semantic 的纯 alias |
 
-依赖单向：semantic → reference。不建 component 层（DS-4）。不装 Terrazzo（DS-8）。
+依赖单向：component → semantic → reference。不装 Terrazzo（DS-8）。
 
 色值一律用标准 DTCG 颜色对象（`$type: "color"` + `{colorSpace, components[, alpha]}`）：
 HSL triplet（`60 12.5% 97%`）→ `{"colorSpace":"hsl","components":[60,12.5,97]}`；

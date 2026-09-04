@@ -16,8 +16,10 @@ import {
   assertProtectedNotSemantic,
   assertSemanticExemptionsRegistered,
 } from '../guards.ts';
+import { RUNTIME_DERIVED_BUTTON_STATE_IDS } from '../component-roles.ts';
 import {
   classificationPath,
+  componentPath,
   findRepoRoot,
   referencePath,
   semanticPath,
@@ -51,6 +53,7 @@ describe('DS-3 · 分类登记', () => {
       { path: classificationPath(repoRoot), body: stableStringify(generated) },
       { path: referencePath(repoRoot), body: stableStringify(built.layers.reference) },
       { path: semanticPath(repoRoot), body: stableStringify(built.layers.semantic) },
+      { path: componentPath(repoRoot), body: stableStringify(built.layers.component) },
     ]);
     for (const file of built.files) {
       expect(readFileSync(file.path, 'utf8')).toBe(file.body);
@@ -67,6 +70,7 @@ describe('DS-3 · 分类登记', () => {
       'packages/design-tokens/src/classification.json',
       'packages/design-tokens/src/reference/color.json',
       'packages/design-tokens/src/semantic/color.json',
+      'packages/design-tokens/src/component/color.json',
     ]) {
       const attrs = execFileSync(
         'git',
@@ -76,6 +80,19 @@ describe('DS-3 · 分类登记', () => {
       expect(attrs, `${relPath} 应被 .gitattributes 钉 eol=lf，实际: ${attrs}`).toBe(
         `${relPath}: eol: lf`,
       );
+    }
+  });
+
+  it('DS-4 运行期派生的 Button 状态值只登记不建模（治理合同 §3.4）', () => {
+    // 这五个是 color-mix 派生值：暗色下 surface-hover 与 surface-chip 同值，
+    // alias 会让悬停不可见，所以只能派生。派生值不进 DTCG，但必须留登记，
+    // 防止日后被悄悄改成不跟主题的字面量。
+    for (const id of RUNTIME_DERIVED_BUTTON_STATE_IDS) {
+      const entry = generated.entries.find((item) => item.id === id);
+      expect(entry, `${id} 未出现在分类登记`).toBeTruthy();
+      expect(entry?.category, id).toBe('runtime-derived-or-protected');
+      expect(entry?.destination, id).toBe('register-only');
+      expect(entry?.modeledAsSemantic, id).toBe(false);
     }
   });
 

@@ -270,11 +270,11 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     );
 
     const buyPlan = screen.getByText('settings.providers.xd.asset.buyPlan').closest('button');
-    expect(buyPlan?.style.backgroundColor).toBe('var(--accent-cta-bg-pure)');
-    expect(buyPlan?.style.color).toBe('var(--accent-pure-cta-fg)');
+    expect(buyPlan?.className).toContain('bg-[var(--accent-cta-bg-pure)]');
+    expect(buyPlan?.className).toContain('text-[var(--accent-pure-cta-fg)]');
     const usageButton = screen.getByText('settings.providers.xd.asset.viewUsage').closest('button');
-    expect(usageButton?.style.backgroundColor).toBe('var(--settings-btn-secondary-bg)');
-    expect(usageButton?.style.color).toBe('var(--settings-btn-secondary-text)');
+    expect(usageButton?.className).toContain('bg-[var(--surface-elevated)]');
+    expect(usageButton?.className).toContain('text-[var(--text-primary)]');
     expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
     expect(screen.queryByText('settings.providers.xd.asset.upgradePlan')).toBeNull();
 
@@ -292,8 +292,8 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
 
     const upgrade = screen.getByText('settings.providers.xd.asset.upgradePlan').closest('button');
-    expect(upgrade?.style.backgroundColor).toBe('var(--accent-cta-bg-pure)');
-    expect(upgrade?.style.color).toBe('var(--accent-pure-cta-fg)');
+    expect(upgrade?.className).toContain('bg-[var(--accent-cta-bg-pure)]');
+    expect(upgrade?.className).toContain('text-[var(--accent-pure-cta-fg)]');
 
     fireEvent.click(screen.getByText('settings.providers.xd.asset.upgradePlan'));
     await waitFor(() =>
@@ -313,8 +313,8 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.queryByText('settings.providers.xd.asset.upgradePlan')).toBeNull();
 
     const topup = screen.getByText('billing.settings.topupCard.action').closest('button');
-    expect(topup?.style.backgroundColor).toBe('var(--accent-cta-bg-pure)');
-    expect(topup?.style.color).toBe('var(--accent-pure-cta-fg)');
+    expect(topup?.className).toContain('bg-[var(--accent-cta-bg-pure)]');
+    expect(topup?.className).toContain('text-[var(--accent-pure-cta-fg)]');
 
     fireEvent.click(screen.getByText('billing.settings.topupCard.action'));
     await waitFor(() =>

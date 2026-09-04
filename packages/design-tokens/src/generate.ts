@@ -5,6 +5,7 @@ import { buildLayers } from './build-layers.ts';
 import { classifySnapshot, stableStringify } from './classify.ts';
 import {
   classificationPath,
+  componentPath,
   findRepoRoot,
   referencePath,
   semanticPath,
@@ -27,6 +28,7 @@ export function buildShadowLayerFiles(repoRoot = findRepoRoot()) {
       { path: classificationPath(repoRoot), body: stableStringify(classification) },
       { path: referencePath(repoRoot), body: stableStringify(layers.reference) },
       { path: semanticPath(repoRoot), body: stableStringify(layers.semantic) },
+      { path: componentPath(repoRoot), body: stableStringify(layers.component) },
     ],
   };
 }

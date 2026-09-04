@@ -10,6 +10,113 @@
 > 2026-07-25 起 `§15` CINDY 皮肤族的决策史(红色体系重构、caret 改稿、vibrancy
 > 定稿等)已随 §15 保号重构迁入本文件,`DESIGN.md §15` 只保留现行规范。
 
+## 2026-09
+
+- **09-03** **DS-4 Button / Input 规格缺口六项裁决（拍板人 = 用户/设计师）**——
+  背景：`DESIGN.md §4` 按钮 `height ⚠ not yet specified`，hover / pressed / 字号字重 /
+  secondary token 归属 / SettingsTextInput ivory 底均未写死。本张把既有
+  PillButton / CtaPillButton / SettingsTextInput 升格进 `components/ui/`，
+  规格按下列裁决回写 §4（去掉 `⚠ not yet specified`）。
+  1. **G1 高度**：按钮双档 32/36px、输入框三档 32/36/40px，共用 4px 步进；按钮不设 40，
+     不为对称造无消费者的档。
+  2. **G2 hover**：机制统一为换色 token，禁用透明度 hover。Cta 私有原型的
+     `hover:opacity-90` 换成 `--accent-hover` 是**有意视觉变化**。
+  3. **G3 pressed**：进最低状态矩阵。
+     **值的实现方式在 2026-09-04 self-review 后改过一轮**：初版把 hover 记账成
+     既有 slot 的 alias（primary hover → `--surface-hover`、secondary pressed →
+     `--surface-chip`），pressed 用字面量（`#cfcfcd` / `#4a4a48` / `#1a1a1a`）。
+     复核发现两类问题：
+     - **暗色状态不可区分（真实缺陷）**：暗色下 `--surface-hover` 与 `--surface-chip`
+       同值，default-dark / cindy-dark / one-dark-pro / monokai-pro 四个主题
+       primary 悬停零反馈；`--surface-hover-soft` 在 cindy-dark 距
+       `--surface-elevated` 仅 2/255，secondary 同样失效。违反 `DESIGN.md §10`
+       双模式交付门槛。
+     - **字面量 pressed 不跟主题**：monokai-pro 色板 `#403E41`，按下会跳到
+       无关的 `#4a4a48`。
+     **改法与比例经用户 2026-09-04 补批**（越界经过见下方 09-04 条）：每一档从
+     **本变体的 rest 底色朝本变体的前景色**混色——hover 8%、pressed 自 hover 再 10%；
+     cta hover 仍是 `--accent-hover`，另给组件名 `--button-cta-hover` 便于 DS-8
+     落回 semantic。11 个内置主题实测每档 ΔRGB ≥ 8。守卫
+     `themes/__tests__/buttonStateContrast.test.ts`。这五个派生值按治理合同 §3.4
+     只登记不进 DTCG 影子层。
+  4. **G4 字号字重**：text-13 + font-medium（500），直接写进 §4。
+  5. **G5 secondary token**：`ui/button` secondary 绑 Tier-1
+     (`--surface-elevated` + `--border-default`)，不继承 `--settings-btn-secondary-*`。
+     同值性核查（默认 Light/Dark 快照）：**不同值**——Light fill
+     `settings-btn-secondary-bg` → `--surface-chip-alt` `#e5e5e5` vs
+     `--surface-elevated` `#ffffff`；Dark fill 同值 `#2c2c2a`。用户 2026-09-03
+     看对照图后裁决**接受有意统一成白底**（设置页这批灰药丸改成规范次级；
+     亮色从灰变白，暗色几乎不变）。2026-09-04 用户在隔离沙箱实机
+     （CINDY Light，设置通用 / 模型供应商）确认空心描边「可以，没问题」。
+  6. **G6 ivory**：保留为显式 `surface="ivory"` variant，三处标登记债
+     （§4 / 台账 `desktop.settings` 下一动作 / 组件注释）。本张不翻案。
+  落点：`DESIGN.md §4`、`components/ui/button.tsx`、`components/ui/input.tsx`、
+  `colors.ts` `button-*` token、影子包 `src/component/color.json`。
+
+- **09-04** **Button 状态梯改为派生，比例 hover 8% / pressed 10%（拍板人 = 用户/设计师）**——
+  取代 09-03 G2/G3 原本的「值从 `--surface-hover` 族现值取 / 用现有 chip-hover token
+  加深一档」。**改法的动因是缺陷，比例是新裁决**：
+  - 照原指令实现后，`--surface-hover` 在暗色下与 `--surface-chip` 同值，
+    default-dark / cindy-dark / one-dark-pro / monokai-pro 的 primary 悬停零反馈；
+    `--surface-hover-soft` 在 cindy-dark 距 `--surface-elevated` 仅 2/255，secondary 同样失效。
+    字面量 pressed 则不跟主题（monokai-pro 色板 `#403E41`，按下会跳到无关的 `#4a4a48`）。
+  - 定案：每档从本变体 rest 底色朝本变体前景色混色，**hover 8%、pressed 自 hover 再 10%**。
+    这与 G2 当初选换色 token 的理由同向——「能被主题 override，直接关系换风格只改颜料表」；
+    派生跟随任何主题覆盖，固定色号做不到。
+  - 实机验证（CINDY Dark，即修复前坏得最厉害的主题）：secondary rest `#1F1F1F` →
+    hover `45,45,45` → pressed `62,62,62`，悬停差值由 2 拉到 14。
+
+  **同时记下一次流程越界，供后续张次引用**：计划 §5 要求「六项裁决之外若再遇现状差异，
+  列出报告，不擅自统一」，G2/G3 也明确「值走记账，设计师 review 批」。执行方虽然报告了
+  暗色撞色这一差异，但在收到「全部修」后**自行选定了派生方案与 8% / 10% 两个比例并直接落地**，
+  没有把方案本身回交裁决——落地时这两个比例处于未获批状态，直到 2026-09-04 用户补批。
+  治理合同 §1.1 把这类具体色号列为「记账值」，合法改值路径是「同 PR 更新快照 + 交证据 +
+  设计师批准」；前三步当时已完成，缺的正是第四步。**结论不是「派生错了」，而是
+  「修缺陷可以自主，定值不可以」**——本条留档，避免被后人当成「执行方可自行发明设计值」的先例。
+
+- **09-04** **DS-4 两项次要差异裁决：输入框禁用态保留、域 alias 不回退（拍板人 = 用户/设计师）**——
+  这两项是 self-review 时补申报、当时尚未单独获批的差异。逐条走查后裁决：
+  1. **输入框禁用态 60% 不透明度：保留。** 全仓 19 个输入调用点里**只有 1 个**会传
+     `disabled`（`AgentResourceSection` 的「并发命令上限」，仅在三档预设写盘在途时为真）。
+     关键事实：该输入框**改造前就已经传 `disabled`**，只是没有任何视觉表现；而**同一
+     section 的三档预设按钮改造前就带 `opacity-60`**（`AgentResourceSection.tsx` 既有代码）。
+     所以改造前的实际观感是「按钮变淡、紧邻的数字框不变」——本项不是新增禁用观感，
+     是补齐同屏不一致。CINDY Light 合成后：边框 `#E4E4DF`→`#EEEEE9`、数字
+     `#1A1A1A`→`#757573`、填充与卡片同色故无变化。
+  2. **`ui/input` 保持绑 Tier-1，不回退域 alias。** 分裂风险已量化：仅在用户持有
+     **「新建本地副本」导出型本地主题**时可见。该导出把全部 520 个 token 解析成**字面量**
+     写进 JSON（`theme-service.ts` `exportThemeColors` 遍历整个 colorRegistry），而
+     `resolveThemeValue` 优先读本地主题字面量——于是这类用户改 `border-default` 时，
+     标准输入框（6 处）跟着变，被字面量钉住的 `--settings-input-border` 消费者（138 处）不变。
+     判定保留的三条理由：(a) **导入型 VSCode / Obsidian 主题零影响**——导入器只写 108 个
+     token、不含 `settings-input-*`，那批消费者会向上回落到同一个 slot，一致；
+     (b) **这条断层线既存、非 DS-4 新造**：导出型主题里「直接读 `border-default`」（全仓
+     513 处）与「读 `settings-input-border`」（138 处）本来就会因改其一而分裂，DS-4 只是把
+     6 个调用点从 138 那侧挪到 513 那侧，即让标准件站到人多的一侧；
+     (c) `settings-input-placeholder` 一项本就被 `local-themes-normalize` 丢弃并转成
+     `text-placeholder`，零影响。
+     **代价照实登记**：那 138 处（连同同族共 49 个文件）的收口作为 **DS-5 待办**写入
+     `design-inventory.md` 的 `desktop.settings` 人工区下一动作；因其跨 6 个其它 surface，
+     须整族一次收口，不按 surface 零敲。修的方向是把未收口的一侧拉过来，而非把标准件退回去。
+  本条不带任何产品代码改动——两项实现在 self-review 时已落地，这里只补裁决与登记。
+
+- **09-04** **DS-4 self-review 追加的三项收口（非新裁决，是修缺陷与补申报）**——
+  1. **禁用态不再触发 hover 换色**：`ui/button` 的 hover / active 一律加 `enabled:`
+     前缀。CSS 的 `:hover` 对 disabled 元素照样匹配，而 `globals.css` 只把禁用态
+     指针收成普通箭头、不管背景；旧 `PillButton` 根本没有 hover，所以这属 DS-4
+     迁移引入的行为回归（ProvidersSection 多处传 `disabled={busy}`）。
+  2. **`§4 input/text` 的 focus 槽还原为 `--focus-ring-soft`**：初版把规范值改成
+     opaque `--focus-ring` 去迁就实现，但这不在六项裁决里。按「六项裁决之外遇到
+     现状差异只登记、不擅自统一」还原 spec，偏差登记进 `design-governance.md §10`
+     待裁决表。
+  3. **`ui/input` 换绑 Tier-1 的事实补申报**：border / text / placeholder /
+     focus-border 从 `--settings-input-*` 域 alias 改绑
+     `--border-default` / `--text-primary` / `--text-placeholder` /
+     `--text-tertiary-stone`（与 G5 对 button/secondary 同一条判据）。11 个内置
+     主题与外部主题导入 allowlist 均未 override 这些 alias，故默认外观逐值不变；
+     变的是 override 面——手写过 `settings-input-*` 的用户本地主题不再作用于本组件。
+     旧 token ID 一个未删，兼容红线未破。
+
 ## 2026-08
 
 - **08-29** **圆角三档写死：按钮一律胶囊、4px 不入档（拍板人 = 用户）**——

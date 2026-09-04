@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 514,
+  "count": 520,
   "colors": [
     {
       "id": "surface",
@@ -2571,6 +2571,36 @@
       "id": "caret-accent",
       "light": "var(--accent-cta-bg)",
       "dark": "var(--accent-cta-bg)"
+    },
+    {
+      "id": "button-primary-hover",
+      "light": "color-mix(in srgb, var(--surface-chip) 92%, var(--text-primary))",
+      "dark": "color-mix(in srgb, var(--surface-chip) 92%, var(--text-primary))"
+    },
+    {
+      "id": "button-primary-pressed",
+      "light": "color-mix(in srgb, var(--button-primary-hover) 90%, var(--text-primary))",
+      "dark": "color-mix(in srgb, var(--button-primary-hover) 90%, var(--text-primary))"
+    },
+    {
+      "id": "button-secondary-hover",
+      "light": "color-mix(in srgb, var(--surface-elevated) 92%, var(--text-primary))",
+      "dark": "color-mix(in srgb, var(--surface-elevated) 92%, var(--text-primary))"
+    },
+    {
+      "id": "button-secondary-pressed",
+      "light": "color-mix(in srgb, var(--button-secondary-hover) 90%, var(--text-primary))",
+      "dark": "color-mix(in srgb, var(--button-secondary-hover) 90%, var(--text-primary))"
+    },
+    {
+      "id": "button-cta-hover",
+      "light": "var(--accent-hover)",
+      "dark": "var(--accent-hover)"
+    },
+    {
+      "id": "button-cta-pressed",
+      "light": "color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))",
+      "dark": "color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))"
     }
   ]
 }

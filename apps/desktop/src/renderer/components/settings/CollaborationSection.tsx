@@ -4,6 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
@@ -22,18 +23,7 @@ const ROW_HINT_CLASS =
 /** 行间分割线:左右缩进与行内边距对齐。 */
 const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
 
-/**
- * 数字输入框的框体规格,与设置页统一输入框 `SettingsTextInput` 的 md 档一致
- * (DESIGN.md §4-5:单行输入走药丸圆角;fill 必须是 `--surface-elevated` —— 设置卡片
- * 本身是 ivory,ivory 输入压在 ivory 卡上会与背景同色、填充对比度归零)。
- * 上下调节沿用浏览器原生步进器,不自绘 —— 设置页的控件样式统一是独立议题,留待整体收敛。
- */
-const NUMBER_INPUT_CLASS = cn(
-  'h-9 w-24 shrink-0 rounded-full px-4 text-13 outline-none transition-colors',
-  'bg-[var(--surface-elevated)] text-[var(--settings-input-text)]',
-  'border border-[var(--settings-input-border)] focus:border-[var(--settings-input-border-focus)]',
-  'focus:ring-2 focus:ring-[var(--focus-ring)]',
-);
+/** 数字输入走标准 Input md 档（32/36/40 中的 36px），原生步进器不自绘。 */
 
 interface CollaborationSettings {
   workerSoftLimit: number;
@@ -114,16 +104,17 @@ export function CollaborationSection() {
               {t('settings.collaboration.workerSoftLimitHint')}
             </span>
           </span>
-          <input
+          <Input
             type="number"
             min={1}
             max={settings.workerHardLimit}
-            value={settings.workerSoftLimit}
-            onChange={(e) => {
-              const v = Math.max(1, Math.min(settings.workerHardLimit, Number(e.target.value) || 1));
+            value={String(settings.workerSoftLimit)}
+            onChange={(text) => {
+              const v = Math.max(1, Math.min(settings.workerHardLimit, Number(text) || 1));
               persist('workerSoftLimit', v);
             }}
-            className={NUMBER_INPUT_CLASS}
+            size="md"
+            className="w-24 shrink-0"
           />
         </label>
 
@@ -139,16 +130,20 @@ export function CollaborationSection() {
               {t('settings.collaboration.workerHardLimitHint')}
             </span>
           </span>
-          <input
+          <Input
             type="number"
             min={settings.workerSoftLimit}
             max={20}
-            value={settings.workerHardLimit}
-            onChange={(e) => {
-              const v = Math.max(settings.workerSoftLimit, Math.min(20, Number(e.target.value) || settings.workerSoftLimit));
+            value={String(settings.workerHardLimit)}
+            onChange={(text) => {
+              const v = Math.max(
+                settings.workerSoftLimit,
+                Math.min(20, Number(text) || settings.workerSoftLimit),
+              );
               persist('workerHardLimit', v);
             }}
-            className={NUMBER_INPUT_CLASS}
+            size="md"
+            className="w-24 shrink-0"
           />
         </label>
 
@@ -164,17 +159,18 @@ export function CollaborationSection() {
               {t('settings.collaboration.idleReleaseHint')}
             </span>
           </span>
-          <input
+          <Input
             type="number"
             min={0}
             max={120}
-            value={settings.workerIdleReleaseMinutes}
-            onChange={(e) => {
-              const raw = Number(e.target.value);
+            value={String(settings.workerIdleReleaseMinutes)}
+            onChange={(text) => {
+              const raw = Number(text);
               const v = Math.max(0, Math.min(120, Number.isFinite(raw) ? Math.trunc(raw) : 0));
               persist('workerIdleReleaseMinutes', v);
             }}
-            className={NUMBER_INPUT_CLASS}
+            size="md"
+            className="w-24 shrink-0"
           />
         </label>
       </div>
