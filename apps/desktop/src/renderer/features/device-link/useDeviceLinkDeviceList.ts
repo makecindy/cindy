@@ -243,11 +243,16 @@ function ensureStarted(): void {
   let backgroundRetryGeneration: number | null = null;
   let backgroundRetryRefreshPending = false;
 
-  const finishBackgroundRetry = (gen: number): void => {
-    if (backgroundRetryGeneration !== gen) return;
-    backgroundRetryGeneration = null;
-    const shouldRefresh =
-      backgroundRetryRefreshPending && gen === loadGeneration && linkStatus !== 'stopped';
+  const finishRefresh = (gen: number, background: boolean): void => {
+    // A foreground refresh can supersede a background retry. In that case the old
+    // retry must not consume a presence queued for the newer operation; the
+    // current operation will replay it when it settles.
+    if (background) {
+      if (backgroundRetryGeneration !== gen) return;
+      backgroundRetryGeneration = null;
+    }
+    if (gen !== loadGeneration) return;
+    const shouldRefresh = backgroundRetryRefreshPending && linkStatus !== 'stopped';
     backgroundRetryRefreshPending = false;
     if (shouldRefresh) refresh(false, true);
   };
@@ -286,19 +291,24 @@ function ensureStarted(): void {
     const gen = loadGeneration;
     const statusRevisionAtStart = linkStatusRevision;
     if (background) backgroundRetryGeneration = gen;
-    if (!background) enterLoading();
+    if (!background) {
+      // The foreground operation owns the current generation now; any pending
+      // presence from a superseded background retry must be replayed after it.
+      backgroundRetryGeneration = null;
+      enterLoading();
+    }
 
     if (probeState || linkStatus === null) {
       try {
         const state = await window.electronAPI.deviceLink.getState();
         if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) {
-          finishBackgroundRetry(gen);
+          finishRefresh(gen, background);
           return;
         }
         linkStatus = state.linkStatus;
       } catch {
         if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) {
-          finishBackgroundRetry(gen);
+          finishRefresh(gen, background);
           return;
         }
         // getState 本身失败时保留既有 status 判断；未知 / 在线态仍尝试目录请求，让真正的
@@ -311,7 +321,7 @@ function ensureStarted(): void {
     // 打成 error；只有 online / connecting 下真实发出的 listDevices 失败才是连接错误。
     if (linkStatus === 'stopped') {
       clearDevices();
-      finishBackgroundRetry(gen);
+      finishRefresh(gen, background);
       return;
     }
 
@@ -319,7 +329,7 @@ function ensureStarted(): void {
       const result = await window.electronAPI.deviceLink.listDevices();
       // 期间发生过清空(stop / 登出)或更晚的 refresh → 本次响应已陈旧,丢弃。
       if (gen !== loadGeneration) {
-        finishBackgroundRetry(gen);
+        finishRefresh(gen, background);
         return;
       }
       const list = result?.devices;
@@ -332,7 +342,7 @@ function ensureStarted(): void {
     } catch (error) {
       // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
       if (gen !== loadGeneration) {
-        finishBackgroundRetry(gen);
+        finishRefresh(gen, background);
         return;
       }
       markRequestFailed(error);
@@ -341,7 +351,7 @@ function ensureStarted(): void {
       // 标成已结算，避免远端 sidebar bootstrap 因 devices 仍为 null 永久显示加载态。
       scheduleRetry();
     }
-    finishBackgroundRetry(gen);
+    finishRefresh(gen, background);
   };
 
   const refresh = (probeState = false, background = false): void => {
@@ -357,8 +367,10 @@ function ensureStarted(): void {
     // refresh，再次触发 loading 并恢复悬空的持久化远端选择。
     if (backgroundRetryGeneration !== null) {
       // 不能丢掉真实的上线 / 改名 / 能力变化:本次 REST 响应可能早于 presence,结束后
-      // 追加一次后台 refresh；同一请求期间的多条 presence 合并成一次。
-      backgroundRetryRefreshPending = true;
+      // 追加一次后台 refresh；同一请求期间的多条 presence 合并成一次。这里按 ready
+      // 语义判断字段变化，避免 error 快速路径把本机 busy / lastSeenAt 噪音也排进补拉；
+      // devices=null 时仍会放行，因为这时无法从快照判断设备是否新出现。
+      if (shouldRefreshForPresence(devices, snap, 'ready')) backgroundRetryRefreshPending = true;
       return;
     }
     if (!shouldRefreshForPresence(devices, snap, requestState.status)) return;
@@ -374,6 +386,8 @@ function ensureStarted(): void {
       clearRetryTimer();
       retryDelayMs = 0;
       clearDevices();
+      backgroundRetryGeneration = null;
+      backgroundRetryRefreshPending = false;
       return;
     }
     // online / connecting 都是远端目录仍在作用域内的状态：开始新一轮读取。connecting 下
