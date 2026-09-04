@@ -2661,28 +2661,15 @@
     },
     "subagentModels": {
       "title": "Subagent",
-      "description": "选择 Claude Code 和 Codex 的 Subagent 模型。",
+      "description": "设置 Claude Code 的默认模型，以及 Codex 的 Subagent 调配方式。",
       "unspecified": "跟随默认设置",
-      "hint": "Claude Code 的设置从新任务开始生效；Codex 的设置会在空闲后自动应用。",
-      "codexV2ModelHint": "Claude Code 使用所选模型作为默认值。Codex 的所有本机 Subagent 都固定使用所选模型和推理强度。",
-      "codexOauthCompatibilityHint": "固定 Subagent 路由与 ChatGPT OAuth 不能安全共用。主任务使用 ChatGPT OAuth，或非 OAuth 主任务指定 ChatGPT OAuth Subagent 时，Cindy 会忽略这里的模型、来源和推理强度，改用主任务的 Codex 默认 Subagent。",
+      "hint": "Claude Code 的设置从新任务开始生效；Codex 智能调配会在 Codex 空闲后应用。",
       "saveFailed": "保存 Subagent 设置失败",
-      "guardrails": {
-        "title": "Codex Subagent 护栏",
-        "enableHint": "允许 Codex 在执行任务时创建一次性 Subagent。关闭后对旧版（V1）和 Sol / Terra（V2）都生效。",
-        "enableAria": "允许 Codex 使用 Subagent",
-        "cindyPolicyLabel": "使用 Cindy 自定义 Subagent 策略",
-        "cindyPolicyHint": "开启后，Cindy 会注入策略，引导 Codex 在探索型任务中主动使用 Subagent。对于本身已擅长规划和委派的模型，额外引导可能适得其反；关闭后不再注入，改用 Codex 的原生默认行为。",
-        "cindyPolicyAria": "使用 Cindy 自定义 Subagent 策略",
-        "concurrencyLabel": "Subagent 并发上限",
-        "concurrencyHint": "同时运行的 Subagent 数量上限。每个 Subagent 都会消耗模型配额，调低更省；Ultra 档位下并发达到 8 时 Codex 会发出用量警告。",
-        "concurrencyFollowDefault": "跟随 Codex 默认（旧版 V1 为 6，Sol / Terra 为 3）",
-        "concurrencyAria": "调整 Codex Subagent 并发上限",
-        "concurrencyCustomAria": "自定义 Codex Subagent 并发上限",
-        "nestedLabel": "允许 Subagent 再创建 Subagent",
-        "nestedHint": "仅旧版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）会忽略此设置。",
-        "nestedAria": "允许 Subagent 再创建 Subagent",
-        "localOnlyHint": "以上护栏仅对本机运行的 Codex 生效，SSH 远程连接的 Codex 不受影响。"
+      "smartRouting": {
+        "label": "Codex 智能调配",
+        "nativeHint": "关闭时完全使用 Codex 原生的 Sol / Terra 分配方式。",
+        "enabledHint": "开启后，Codex 可按任务选用更多已连接模型；卡片显示实际执行模型。",
+        "aria": "启用 Codex 智能调配"
       },
       "toast": {
         "saved": "Subagent 设置已保存",

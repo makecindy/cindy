@@ -2661,28 +2661,15 @@
     },
     "subagentModels": {
       "title": "サブエージェント",
-      "description": "Claude Code と Codex のサブエージェントモデルを選択します。",
+      "description": "Claude Code の既定モデルと Codex のサブエージェント割り当て方法を設定します。",
       "unspecified": "既定の設定を使用",
-      "hint": "Claude Code の変更は新しいセッションから適用されます。Codex の変更はアイドル時に自動で適用されます。",
-      "codexV2ModelHint": "Claude Code は選択したモデルを既定値として使用します。ローカルの Codex サブエージェントはすべて、選択したモデルと推論強度に固定されます。",
-      "codexOauthCompatibilityHint": "固定したサブエージェントのルーティングと ChatGPT OAuth は安全に併用できません。メインタスクが ChatGPT OAuth を使用する場合、または非 OAuth のメインタスクで ChatGPT OAuth のサブエージェントを指定した場合、ここで選択したモデル、プロバイダー、推論強度は適用されず、メインタスクの Codex デフォルトサブエージェントが使用されます。",
+      "hint": "Claude Code の変更は新しいタスクから適用されます。Codex のスマートルーティングは Codex がアイドルになった後に適用されます。",
       "saveFailed": "サブエージェント設定の保存に失敗しました",
-      "guardrails": {
-        "title": "Codex サブエージェントガードレール",
-        "enableHint": "Codex がタスク実行中に使い捨てのサブエージェントを作成することを許可します。オフにすると旧版マルチエージェント（V1）と Sol / Terra（V2）の両方に適用されます。",
-        "enableAria": "Codex のサブエージェントを許可",
-        "cindyPolicyLabel": "Cindy のカスタムサブエージェントポリシーを使用",
-        "cindyPolicyHint": "オンにすると、Cindy は探索タスクで Codex がサブエージェントを積極的に使用するよう促すガイダンスを注入します。すでに計画と委任を得意とするモデルでは、追加のガイダンスが逆効果になる可能性があります。オフにすると注入を停止し、Codex のネイティブな既定動作を使用します。",
-        "cindyPolicyAria": "Cindy のカスタムサブエージェントポリシーを使用",
-        "concurrencyLabel": "サブエージェントの同時実行上限",
-        "concurrencyHint": "同時に実行できるサブエージェント数の上限です。サブエージェントはそれぞれモデルのクォータを消費します。Ultra 段階で同時実行が 8 に達すると Codex が警告します。",
-        "concurrencyFollowDefault": "Codex の既定に従う（旧版 V1 は 6、Sol / Terra は 3）",
-        "concurrencyAria": "Codex サブエージェントの同時実行上限を調整",
-        "concurrencyCustomAria": "Codex サブエージェントの同時実行上限をカスタマイズ",
-        "nestedLabel": "サブエージェントによるサブエージェント作成を許可",
-        "nestedHint": "旧版マルチエージェント（V1）のみ有効で、Sol / Terra（V2）はこの設定を無視します。",
-        "nestedAria": "サブエージェントによるサブエージェント作成を許可",
-        "localOnlyHint": "これらのガードレールはこのマシンで実行される Codex にのみ適用され、SSH リモートの Codex には影響しません。"
+      "smartRouting": {
+        "label": "Codex スマートルーティング",
+        "nativeHint": "オフでは Cindy の上書きを行わず、Codex 標準の Sol / Terra 割り当てを使用します。",
+        "enabledHint": "オンでは Codex がタスクごとに接続済みのモデルをより多く選択でき、カードには実際に使用したモデルが表示されます。",
+        "aria": "Codex スマートルーティングを有効にする"
       },
       "toast": {
         "saved": "サブエージェント設定を保存しました",

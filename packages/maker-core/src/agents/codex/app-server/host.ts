@@ -293,8 +293,17 @@ export interface AppServerHostOptions {
   subagentRoute?: {
     providerId: string;
     catalogModel: string;
-    reasoningEffort: ReasoningEffort | null;
+    reasoningEffort?: ReasoningEffort | null;
   };
+  smartSubagentRoutes?: Array<{
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort?: ReasoningEffort | null;
+  }>;
+  getSubagentIdentity?: (childThreadId: string) => {
+    model: string;
+    reasoningEffort?: string;
+  } | undefined;
   /** Whether the OpenAI identity provider may use Responses WebSocket on this host. */
   codexOpenAiWebSocketsEnabled?: boolean;
   /** Host-level Subagent route profile used to prevent incompatible local host reuse. */
@@ -505,9 +514,20 @@ export class AppServerHost {
   getSubagentRoute(): {
     providerId: string;
     catalogModel: string;
-    reasoningEffort: ReasoningEffort | null;
+    reasoningEffort?: ReasoningEffort | null;
   } | undefined {
     return this.opts.subagentRoute;
+  }
+
+  getSmartSubagentRoutes(): AppServerHostOptions['smartSubagentRoutes'] {
+    return this.opts.smartSubagentRoutes;
+  }
+
+  getObservedSubagentIdentity(childThreadId: string): {
+    model: string;
+    reasoningEffort?: string;
+  } | undefined {
+    return this.opts.getSubagentIdentity?.(childThreadId);
   }
 
   getOpenAiWebSocketsEnabled(): boolean {

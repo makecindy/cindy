@@ -537,6 +537,7 @@ function installFakeHost(
       catalogModel: string;
       reasoningEffort: import('./app-server/protocol.js').ReasoningEffort | null;
     };
+    observedSubagentIdentities?: Record<string, { model: string; reasoningEffort?: string }>;
     openAiWebSocketsEnabled?: boolean;
     userAgent?: string;
     codexHome?: string;
@@ -646,6 +647,9 @@ function installFakeHost(
   );
   const getSubagentModelFallback = vi.fn(() => opts.subagentModelFallback);
   const getSubagentRoute = vi.fn(() => opts.subagentRoute);
+  const getObservedSubagentIdentity = vi.fn(
+    (childThreadId: string) => opts.observedSubagentIdentities?.[childThreadId],
+  );
   const getOpenAiWebSocketsEnabled = vi.fn(() => opts.openAiWebSocketsEnabled !== false);
   const host = {
     ensureStarted,
@@ -667,6 +671,7 @@ function installFakeHost(
     getSessionMcpConfig,
     getSubagentModelFallback,
     getSubagentRoute,
+    getObservedSubagentIdentity,
     getOpenAiWebSocketsEnabled,
     getConnectionId: () => 'test-connection',
     getThreadHandlers: () => threadHandlers,
@@ -28916,6 +28921,64 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  it('updates the card from the proxy-observed child model without thread/started', async () => {
+    const observedSubagentIdentities: Record<
+      string,
+      { model: string; reasoningEffort?: string }
+    > = {};
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { observedSubagentIdentities });
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-proxy-identity',
+      model: 'codex/gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemUpdated || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-smart' } });
+    handlers.itemUpdated({
+      threadId: 'start-thread-id',
+      turnId: 'turn-smart',
+      item: {
+        id: 'spawn-smart',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-smart'],
+        status: 'inProgress',
+        model: 'codex/gpt-5.6-sol',
+        agentsStates: [],
+      },
+    });
+
+    observedSubagentIdentities['child-smart'] = {
+      model: 'z-ai/glm-5.2',
+      reasoningEffort: 'low',
+    };
+    handlers.descendantNotification('child-smart', 'turn/started', {
+      threadId: 'child-smart',
+      turn: { id: 'child-smart-turn' },
+    });
+
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as { taskId?: string; model?: string })
+        .filter((update) => update.taskId === 'spawn-smart')
+        .at(-1);
+      expect(last?.model).toBe('z-ai/glm-5.2');
+    });
+
+    await handle.close();
+  });
+
   it('forwards root and descendant Codex diffs into one merged turn capture event', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -29561,8 +29624,9 @@ describe('CodexAgent context window reporting', () => {
     // thread/started,spawn 出的子线程从来不发。血缘必须在识别 spawn item 的那一刻
     // 主动向 host 登记,子线程的实时用量与终态才路由得进来 —— 否则卡片停在 spawn
     // 时的 running 帧,无用量、永不收口。
+    const observedSubagentIdentities: Record<string, { model: string }> = {};
     const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent);
+    const host = installFakeHost(agent, undefined, { observedSubagentIdentities });
     const handle = await agent.startSession({
       sessionId: 'session-subagent-no-thread-started',
       model: 'gpt-5.4',
@@ -29597,14 +29661,14 @@ describe('CodexAgent context window reporting', () => {
         .filter((event) => event.type === 'agent_task_update')
         .map((event) => event.data as { taskId?: string; status?: string; model?: string })
         .filter((update) => update.taskId === 'spawn-v2-1');
-      // 未配置个性化子模型时，Codex 按协议继承本 turn 的父模型；卡片应冻结并显示它。
-      // 模型直接合并进 translator 原有帧，不得为显示模型额外插入第二条 running update。
+      // spawn item 没有子线程实际模型时不要拿父模型冒充；proxy 观测到请求后再补。
       expect(spawned).toEqual([
-        expect.objectContaining({ status: 'running', model: 'gpt-5.4' }),
+        expect.not.objectContaining({ model: expect.anything() }),
       ]);
     });
 
     // 子线程全程只有 item / tokenUsage / turn 通知(0.145 真实形状),没有 thread/started。
+    observedSubagentIdentities['child-thread-v2'] = { model: 'gpt-5.4' };
     handlers.descendantNotification('child-thread-v2', 'item/completed', {
       threadId: 'child-thread-v2',
       turnId: 'child-turn-v2',
