@@ -1217,6 +1217,7 @@ export default function NewRemoteSessionScreen() {
       && worktreeEligibility.status === 'eligible'
       && (!worktreeBranchPreferenceReady || worktreeBranchPreferenceError));
   const worktreeControlCaptionKey = worktreeCaptionKey
+    ?? (worktreePreferenceCreateBlocked ? 'session.new.worktreeSettingsSaving' : null)
     ?? (worktreeBranchPreferenceError ? 'session.new.worktreeBranchSyncFailed' : null);
 
   useLayoutEffect(() => {
@@ -2750,6 +2751,11 @@ export default function NewRemoteSessionScreen() {
   // 全新设备在 store 中没有镜像时本来就是默认未勾选,无需失败路径代替宿主写值。
   const worktreeSeedAgentKindRef = useRef(draft.agentKind);
   worktreeSeedAgentKindRef.current = draft.agentKind;
+  // 资格探测完成后才有这个标记。它只用于「缺字段时能不能把老被控端当 ready」,
+  // 不能进本 effect 依赖:选目录会让探测结果换代,cleanup 会把还在飞的 GET 取消掉,
+  // 合格目录上偏好门一直不放行,发送按钮就灰着还没提示。
+  const worktreeHostSupportsRecoveryKeyDiscardRef = useRef(worktreeHostSupportsRecoveryKeyDiscard);
+  worktreeHostSupportsRecoveryKeyDiscardRef.current = worktreeHostSupportsRecoveryKeyDiscard;
   useEffect(() => {
     const seq = ++worktreeSeedSeqRef.current;
     const syncKey = worktreePreferenceSyncKey;
@@ -2806,7 +2812,7 @@ export default function NewRemoteSessionScreen() {
         }
         if (
           classification.status === 'missing'
-          && worktreeHostSupportsRecoveryKeyDiscard === false
+          && worktreeHostSupportsRecoveryKeyDiscardRef.current === false
         ) {
           // Old hosts cannot persist this preference and also lack the recovery
           // capability marker. A new host can transiently return `{}` before its
@@ -2839,7 +2845,6 @@ export default function NewRemoteSessionScreen() {
     deviceLinkStatus,
     presenceVersion,
     selectedDeviceId,
-    worktreeHostSupportsRecoveryKeyDiscard,
     worktreePreferenceSyncKey,
     worktreeSeedRetryNonce,
     maker,
