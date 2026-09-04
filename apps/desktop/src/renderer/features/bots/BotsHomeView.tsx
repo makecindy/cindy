@@ -6,7 +6,6 @@ import {
   FolderOpen,
   MessageCircle,
   PlugZap,
-  RefreshCcw,
   UserRound,
 } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -17,7 +16,6 @@ import * as sessionService from '@/lib/sessionService';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
-import { cn } from '@/lib/utils';
 import { useRegisterContentHeader } from '../feature-context';
 import {
   canonicalBotSessionId,
@@ -42,27 +40,6 @@ import { BotModelChainEditor } from './BotModelChainEditor';
 import type { BotSettingsPayload } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
 
-const BOT_DETAIL_TABS = [
-  { id: 'profile', labelKey: 'bots.settingsTabs.profile', icon: UserRound },
-  { id: 'model', labelKey: 'bots.settingsTabs.model', icon: PlugZap },
-  { id: 'maintenance', labelKey: 'bots.settingsTabs.maintenance', icon: RefreshCcw },
-] as const;
-
-type BotDetailTabId = (typeof BOT_DETAIL_TABS)[number]['id'];
-
-function parseBotDetailTab(value: string | null): BotDetailTabId {
-  if (BOT_DETAIL_TABS.some((tab) => tab.id === value)) return value as BotDetailTabId;
-  if (
-    value === 'automation' ||
-    value === 'notifications' ||
-    value === 'schedule' ||
-    value === 'runtime'
-  ) {
-    return 'maintenance';
-  }
-  return 'profile';
-}
-
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 /**
@@ -86,7 +63,7 @@ export function botJoinedRelativeKey(
   return { key: 'bots.joined.years', n: Math.floor(days / 365) };
 }
 
-/** Exported for unit tests covering the settings nav / deep-link / tab-grouping behavior. */
+/** Exported for unit tests covering the unified settings page and autosave behavior. */
 export function BotSettings({
   bot,
   onBack,
@@ -97,9 +74,6 @@ export function BotSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useBotTranslation();
-  const navigate = useNavigate();
-  const [settingsSearchParams] = useSearchParams();
-  const contentRef = useRef<HTMLDivElement | null>(null);
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
@@ -108,9 +82,6 @@ export function BotSettings({
   const [avatarColor, setAvatarColor] = useState(bot.avatarColor);
   const [selectedSkills, setSelectedSkills] = useState<string[]>(bot.skills);
   const [capabilities, setCapabilities] = useState<BotCapabilities>(bot.capabilities);
-  const [activeTab, setActiveTab] = useState<BotDetailTabId>(() =>
-    parseBotDetailTab(settingsSearchParams.get('tab') ?? settingsSearchParams.get('anchor')),
-  );
   const [folderError, setFolderError] = useState<string | null>(null);
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
   const hiddenVendors = useMemo<MakerVendor[]>(() => {
@@ -136,13 +107,6 @@ export function BotSettings({
     setSelectedSkills(bot.skills);
     setCapabilities(bot.capabilities);
   }, [bot]);
-
-  useEffect(() => {
-    setActiveTab(
-      parseBotDetailTab(settingsSearchParams.get('tab') ?? settingsSearchParams.get('anchor')),
-    );
-    contentRef.current?.scrollTo({ top: 0 });
-  }, [settingsSearchParams]);
 
   const commitProfile = useCallback(
     async (payload: BotSettingsPayload) => {
@@ -311,165 +275,118 @@ export function BotSettings({
           </div>
         </aside>
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col pt-4 lg:border-l lg:border-[var(--border-default)] lg:pl-6">
-          <div
-            className="flex max-w-full shrink-0 items-end gap-6 overflow-x-auto border-b border-[var(--border-default)] pb-0"
-            role="tablist"
-            aria-label={t('bots.settingsNav.title')}
-          >
-            {BOT_DETAIL_TABS.map((tab) => {
-              const Icon = tab.icon;
-              const selected = activeTab === tab.id;
-              return (
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain pb-8 pt-4 lg:border-l lg:border-[var(--border-default)] lg:pl-6">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 pb-10">
+            <BotSettingsBlock
+              icon={UserRound}
+              title={t('bots.profile.title')}
+              hint={t('bots.profile.description')}
+            >
+              <BotBasicProfileFields
+                value={{ name, description, avatar, avatarColor }}
+                onChange={(next, kind) => {
+                  setName(next.name);
+                  setDescription(next.description);
+                  setAvatar(next.avatar);
+                  setAvatarColor(next.avatarColor);
+                  autosave.onEdit(kind);
+                }}
+              />
+            </BotSettingsBlock>
+            <BotSettingsBlock
+              icon={FolderOpen}
+              title={t('bots.homeFolder.title')}
+              hint={t('bots.homeFolder.description')}
+              action={
                 <button
-                  key={tab.id}
                   type="button"
-                  role="tab"
-                  aria-selected={selected}
+                  disabled={!bot.homeDir}
                   onClick={() => {
-                    setActiveTab(tab.id);
-                    navigate(`/bots/${bot.id}?settings=1&tab=${tab.id}`, { replace: true });
+                    if (!bot.homeDir) return;
+                    setFolderError(null);
+                    void window.electronAPI.openPath(bot.homeDir).then((result) => {
+                      if (!result.success)
+                        setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
+                    });
                   }}
-                  className={cn(
-                    '-mb-px inline-flex h-9 shrink-0 items-center gap-2 border-b-2 px-0.5 text-12 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    selected
-                      ? 'border-[var(--text-primary)] text-[var(--text-primary)]'
-                      : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-                  )}
+                  className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <Icon size={14} />
-                  {t(tab.labelKey)}
+                  {t('bots.homeFolder.open')}
                 </button>
-              );
-            })}
-          </div>
-
-          <div
-            ref={contentRef}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-8 pt-4"
-          >
-            <div className="mx-auto flex max-w-3xl flex-col gap-4 pb-10">
-              {activeTab === 'profile' ? (
-                <>
-                  <BotSettingsBlock
-                    icon={UserRound}
-                    title={t('bots.profile.title')}
-                    hint={t('bots.profile.description')}
-                  >
-                    <BotBasicProfileFields
-                      value={{ name, description, avatar, avatarColor }}
-                      onChange={(next, kind) => {
-                        setName(next.name);
-                        setDescription(next.description);
-                        setAvatar(next.avatar);
-                        setAvatarColor(next.avatarColor);
-                        autosave.onEdit(kind);
-                      }}
-                    />
-                  </BotSettingsBlock>
-                  <BotSettingsBlock
-                    icon={FolderOpen}
-                    title={t('bots.homeFolder.title')}
-                    hint={t('bots.homeFolder.description')}
-                    action={
-                      <button
-                        type="button"
-                        disabled={!bot.homeDir}
-                        onClick={() => {
-                          if (!bot.homeDir) return;
-                          setFolderError(null);
-                          void window.electronAPI.openPath(bot.homeDir).then((result) => {
-                            if (!result.success)
-                              setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
-                          });
-                        }}
-                        className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {t('bots.homeFolder.open')}
-                      </button>
-                    }
-                  >
-                    <p className="break-words text-11 leading-5 text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
-                      {t('bots.homeFolder.contents')}
-                    </p>
-                    {!capabilities.memory ? (
-                      <button
-                        type="button"
-                        onClick={() => updateCapability('memory', true)}
-                        className="mt-3 h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-                      >
-                        {t('bots.memoryRecovery.action')}
-                      </button>
-                    ) : null}
-                    {folderError ? (
-                      <p className="mt-2 text-11 text-[var(--text-danger)]" role="alert">
-                        {folderError}
-                      </p>
-                    ) : null}
-                  </BotSettingsBlock>
-                </>
-              ) : null}
-
-              {activeTab === 'model' ? (
-                <BotSettingsBlock
-                  icon={PlugZap}
-                  title={t('bots.settingsTabs.model')}
-                  hint={t('bots.modelChain.description')}
-                  action={
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const modelChain = getEffectiveBotModelChain();
-                        const primary = modelChain[0];
-                        if (!primary) return;
-                        setCapabilities((current) => ({
-                          ...current,
-                          ...primary,
-                          modelOverride: null,
-                          modelChain,
-                          modelChainOverride: null,
-                        }));
-                        autosave.onEdit('instant');
-                      }}
-                      className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-                    >
-                      {t('bots.model.restoreDefault')}
-                    </button>
-                  }
+              }
+            >
+              <p className="break-words text-11 leading-5 text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
+                {t('bots.homeFolder.contents')}
+              </p>
+              {!capabilities.memory ? (
+                <button
+                  type="button"
+                  onClick={() => updateCapability('memory', true)}
+                  className="mt-3 h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
                 >
-                  <div
-                    data-testid="bot-model-controls"
-                    className="flex w-full min-w-0 flex-col gap-5"
-                  >
-                    <BotModelChainEditor
-                      value={capabilities.modelChain}
-                      hiddenVendors={hiddenVendors}
-                      onChange={(modelChain) => {
-                        const primary = modelChain[0];
-                        if (!primary) return;
-                        setCapabilities((current) => ({
-                          ...current,
-                          ...primary,
-                          modelChain,
-                          modelChainOverride: modelChain,
-                          modelOverride: {
-                            model: primary.model,
-                            providerId: primary.providerId,
-                            effort: primary.effort,
-                            fastMode: primary.fastMode,
-                          },
-                        }));
-                        autosave.onEdit('instant');
-                      }}
-                    />
-                  </div>
-                </BotSettingsBlock>
+                  {t('bots.memoryRecovery.action')}
+                </button>
               ) : null}
-
-              {activeTab === 'maintenance' ? (
-                <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
+              {folderError ? (
+                <p className="mt-2 text-11 text-[var(--text-danger)]" role="alert">
+                  {folderError}
+                </p>
               ) : null}
-            </div>
+            </BotSettingsBlock>
+            <BotSettingsBlock
+              icon={PlugZap}
+              title={t('bots.settingsTabs.model')}
+              hint={t('bots.modelChain.description')}
+              action={
+                <button
+                  type="button"
+                  onClick={() => {
+                    const modelChain = getEffectiveBotModelChain();
+                    const primary = modelChain[0];
+                    if (!primary) return;
+                    setCapabilities((current) => ({
+                      ...current,
+                      ...primary,
+                      modelOverride: null,
+                      modelChain,
+                      modelChainOverride: null,
+                    }));
+                    autosave.onEdit('instant');
+                  }}
+                  className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                >
+                  {t('bots.model.restoreDefault')}
+                </button>
+              }
+            >
+              <div
+                data-testid="bot-model-controls"
+                className="flex w-full min-w-0 flex-col gap-5"
+              >
+                <BotModelChainEditor
+                  value={capabilities.modelChain}
+                  hiddenVendors={hiddenVendors}
+                  onChange={(modelChain) => {
+                    const primary = modelChain[0];
+                    if (!primary) return;
+                    setCapabilities((current) => ({
+                      ...current,
+                      ...primary,
+                      modelChain,
+                      modelChainOverride: modelChain,
+                      modelOverride: {
+                        model: primary.model,
+                        providerId: primary.providerId,
+                        effort: primary.effort,
+                        fastMode: primary.fastMode,
+                      },
+                    }));
+                    autosave.onEdit('instant');
+                  }}
+                />
+              </div>
+            </BotSettingsBlock>
+            <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
           </div>
         </section>
       </div>

@@ -4,8 +4,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotProfile } from '../botStore';
 
-Element.prototype.scrollTo = vi.fn();
-
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
@@ -140,10 +138,6 @@ function renderSettings(overrides: Partial<BotProfile> = {}, initialSearch = 'se
   return { ...view, onBack, onOpenSession };
 }
 
-function openTab(tab: 'profile' | 'model' | 'maintenance') {
-  fireEvent.click(screen.getByRole('tab', { name: `bots.settingsTabs.${tab}` }));
-}
-
 beforeEach(() => {
   mocks.navigate.mockReset();
   mocks.updateBotProfile.mockReset();
@@ -167,14 +161,13 @@ describe('Bot settings profile consolidation', () => {
   it('shows one inline basic-information editor and no legacy profile/persona/growth editors', () => {
     renderSettings();
 
-    expect(screen.getAllByRole('tab')).toHaveLength(3);
-    expect(
-      screen.getByRole('tab', { name: 'bots.settingsTabs.profile' }).getAttribute('aria-selected'),
-    ).toBe('true');
+    expect(screen.queryByRole('tab')).toBeNull();
     expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
     expect(screen.getByLabelText('bots.profile.summary')).toBeTruthy();
     expect(screen.getByText('bots.profile.avatar')).toBeTruthy();
     expect(screen.getByText('bots.homeFolder.title')).toBeTruthy();
+    expect(screen.getByTestId('model-selector')).toBeTruthy();
+    expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
     expect(screen.queryByText('bots.settingsTabs.growth')).toBeNull();
     expect(screen.queryByText('bots.persona.adjustButton')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -201,22 +194,12 @@ describe('Bot settings profile consolidation', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('missing');
   });
 
-  it('maps retired growth and identity deep links to basic information', () => {
+  it('ignores retired tab deep links and keeps every setting on the same page', () => {
     renderSettings({}, 'settings=1&tab=growth');
-    expect(
-      screen.getByRole('tab', { name: 'bots.settingsTabs.profile' }).getAttribute('aria-selected'),
-    ).toBe('true');
+    expect(screen.queryByRole('tab')).toBeNull();
     expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
-  });
-
-  it('keeps model and maintenance as separate focused tabs', () => {
-    renderSettings();
-    openTab('model');
     expect(screen.getByTestId('model-selector')).toBeTruthy();
-    expect(screen.queryByLabelText('bots.nameLabel')).toBeNull();
-    openTab('maintenance');
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
-    expect(screen.queryByTestId('model-selector')).toBeNull();
   });
 
   it('opens the canonical task from the Message action', () => {
