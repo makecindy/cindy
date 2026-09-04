@@ -208,6 +208,105 @@ describe('useDeviceLinkDeviceList initial request', () => {
     expect(listDevices).toHaveBeenCalledTimes(3);
   });
 
+  it('filters busy-only presence while waiting for a background retry timer', async () => {
+    let resolveBackground: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
+    let presenceChanged: ((payload: DeviceLinkPresenceSnapshot) => void) | undefined;
+    let statusChanged:
+      ((payload: { status: 'stopped' | 'connecting' | 'online' }) => void) | undefined;
+    const cachedDevices = [
+      {
+        deviceId: 'peer-1',
+        name: 'Peer Mac',
+        platform: 'darwin',
+        online: true,
+        remoteControlEnabled: true,
+        controlEnabled: true,
+        isSelf: false,
+      } as unknown as DeviceLinkDeviceView,
+    ];
+    const background = new Promise<{ devices: DeviceLinkDeviceView[] }>((resolve) => {
+      resolveBackground = resolve;
+    });
+    const listDevices = vi
+      .fn()
+      .mockResolvedValueOnce({ devices: cachedDevices })
+      .mockRejectedValueOnce(new Error('relay unavailable'))
+      .mockReturnValueOnce(background);
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn((callback: (payload: DeviceLinkPresenceSnapshot) => void) => {
+          presenceChanged = callback;
+        }),
+        onStatusChanged: vi.fn(
+          (callback: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void) => {
+            statusChanged = callback;
+          },
+        ),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      useDeviceLinkDeviceListRequestState,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result } = renderHook(() => ({
+      devices: useDeviceLinkDeviceList(),
+      request: useDeviceLinkDeviceListRequestState(),
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.request.status).toBe('ready');
+
+    // A status push starts a foreground refresh which fails and schedules the
+    // first 2s retry. A busy-only presence must leave that timer untouched.
+    act(() => statusChanged?.({ status: 'online' }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    expect(result.current.request.status).toBe('error');
+
+    // While the timer is pending, another busy-only presence must not issue a
+    // third request or reopen loading.
+    act(() =>
+      presenceChanged?.({
+        deviceId: 'peer-1',
+        online: true,
+        deviceName: 'Peer Mac',
+        platform: 'darwin',
+        appVersion: '0.1.27',
+        lastSeenAt: 2_000,
+        remoteControlEnabled: true,
+        busy: true,
+      }),
+    );
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    expect(result.current.request.status).toBe('error');
+
+    await act(async () => {
+      vi.advanceTimersByTime(nextDeviceListRetryDelay(0));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(3);
+    resolveBackground?.({ devices: cachedDevices });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.request.status).toBe('ready');
+  });
+
   it('carries a relevant presence across a foreground refresh that supersedes a background retry', async () => {
     let resolveBackground: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let resolveForeground: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;

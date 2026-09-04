@@ -376,8 +376,14 @@ function ensureStarted(): void {
       if (shouldRefreshForPresence(devices, snap, 'ready')) backgroundRetryRefreshPending = true;
       return;
     }
-    if (!shouldRefreshForPresence(devices, snap, requestState.status)) return;
-    refresh();
+    // A failed request may already have a backoff timer waiting. Treat presence
+    // as a settled snapshot in that window so busy/lastSeen heartbeats do not
+    // cancel the backoff and reopen the foreground loading state. Relevant
+    // presence can still recover promptly, but stays in the background path.
+    const retryPending = retryTimer !== null;
+    if (!shouldRefreshForPresence(devices, snap, retryPending ? 'ready' : requestState.status))
+      return;
+    refresh(false, retryPending);
   });
   window.electronAPI.deviceLink.onStatusChanged((p) => {
     linkStatusRevision += 1;
