@@ -153,6 +153,21 @@ export function stampTrustedDesktopQueuedOrigin(
   } as unknown as AgentInputQueuedMessage;
 }
 
+/**
+ * Stamp device-link provenance at the trusted input IPC boundary.  The queue
+ * drains after that AsyncLocalStorage context has ended, so the marker must
+ * travel with the main-owned item into the send transaction.
+ */
+export function stampTrustedDeviceLinkQueuedOrigin(
+  item: AgentInputQueuedMessage,
+  deviceLinkInvoke: boolean,
+): AgentInputQueuedMessage {
+  const stamped = { ...item };
+  if (deviceLinkInvoke) stamped.fromDeviceLinkClient = true;
+  else delete stamped.fromDeviceLinkClient;
+  return stamped;
+}
+
 export function restoreTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
   const queued = item as QueuedMessageWithDesktopAuthorization;
   const receipt = queued[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
@@ -206,6 +221,8 @@ type MakerSendOptions = {
    * 入队时的 async context 早已结束,只靠 isMobileClientInvoke() 实际读不到来源。
    */
   fromMobileClient?: boolean;
+  /** Coordinator-transmitted provenance for device-link input.enqueue. */
+  fromDeviceLinkClient?: boolean;
   persistUserMessage?: {
     clientId?: unknown;
     content?: unknown;
@@ -266,6 +283,8 @@ export interface MakerSendTransactionSession {
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
+  /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
+  codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
@@ -626,6 +645,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   async function rehydrateActiveOrcaSession(
     sessionId: string,
     createOpts: CreateOpts,
+    fromDeviceLinkClient: boolean,
   ): Promise<ResolveSessionResult> {
     const okRehydrate = await ensureWorkDirWithDbFallback(sessionId, createOpts);
     if (!okRehydrate) {
@@ -647,6 +667,24 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 中途 start_team 后丢失全部对话历史)。DB 读失败时 reconcile 抛错 → 落入下方
       // REHYDRATE_FAILED,此时尚未 closeSession,旧 runtime 不受损。
       await deps.reconcileCreateOptsWithDb?.(sessionId, createOpts);
+      // A newly created device-link Codex Lead has a real sdk_session_id as soon as
+      // thread/start returns, but that id is not resumable until a provider turn
+      // is accepted. The live Session is the only trustworthy local evidence at
+      // this boundary: generation 0 means no turn crossed provider acceptance.
+      // Keep the historical DB resume path for non-Orca sessions, workers, and
+      // already-used Leads.
+      if (
+        fromDeviceLinkClient &&
+        createOpts.agentKind === 'codex' &&
+        createOpts.orcaRole === 'lead' &&
+        createOpts.resumeSessionId &&
+        oldSessionCodexThreadMayHaveRollout(deps.getSession(sessionId)) === false
+      ) {
+        createOpts.resumeSessionId = undefined;
+        deps.log.info('send: fresh remote Codex Lead rehydrate starts a new thread', {
+          evidence: 'no-provider-turn-accepted',
+        });
+      }
       const session = await deps.withRehydrateCloseSuppressed(sessionId, async () => {
         await deps.closeSession(sessionId);
         // close 后重新 bootstrap，避免旧 SDK handle 缺 Orca MCP vendorOptions。
@@ -703,6 +741,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ),
       };
     }
+  }
+
+  function oldSessionCodexThreadMayHaveRollout(
+    session: MakerSendTransactionSession | null | undefined,
+  ): boolean | undefined {
+    return session?.codexThreadMayHaveRollout;
   }
 
   async function lazyCreateSession(
@@ -788,6 +832,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
@@ -835,7 +880,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 sessionId,
               });
             } else {
-              const rehydrated = await rehydrateActiveOrcaSession(sessionId, co);
+              const rehydrated = await rehydrateActiveOrcaSession(
+                sessionId,
+                co,
+                requestedSendOpts.fromDeviceLinkClient === true,
+              );
               if (rehydrated.kind === 'failure') return rehydrated.result;
               sess = rehydrated.session;
             }
@@ -856,7 +905,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (sess.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
-      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
       if (
         requestedSendOpts.ackInterruptedTurnOnDispatch !== undefined &&
         typeof requestedSendOpts.ackInterruptedTurnOnDispatch !== 'boolean'

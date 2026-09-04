@@ -694,6 +694,7 @@ import {
   containsManagedAttachment,
   createMakerSendTransaction,
   prepareDirectoryGrantsForBootstrap,
+  stampTrustedDeviceLinkQueuedOrigin,
   stampTrustedDesktopQueuedOrigin,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
 } from './makerSendTransaction.js';
@@ -14873,10 +14874,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputGeneration();
         // 手机来源在**入队这一刻**盖章:drain 派发时已脱离本 invoke 的 async context。
         // 无条件覆盖 —— item 来自 wire,客户端自填的 fromMobileClient 一律不生效。
-        const queued = stampTrustedDesktopQueuedOrigin(
-          stampMobileClientOrigin(
-            await hydrateQueuedAgentReferences(queuedWithAttachments),
-            isMobileControllerInvoke(),
+        const queued = stampTrustedDeviceLinkQueuedOrigin(
+          stampTrustedDesktopQueuedOrigin(
+            stampMobileClientOrigin(
+              await hydrateQueuedAgentReferences(queuedWithAttachments),
+              isMobileControllerInvoke(),
+            ),
+            deviceLinkInvoke,
           ),
           deviceLinkInvoke,
         );
@@ -15082,10 +15086,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const queuedWithAttachments = materialized.item as AgentInputQueuedMessage;
         assertCurrentInputGeneration();
         // 与 enqueue 同:steer 投递也在本 invoke 的 async context 之外发生。
-        const queued = stampTrustedDesktopQueuedOrigin(
-          stampMobileClientOrigin(
-            await hydrateQueuedAgentReferences(queuedWithAttachments),
-            isMobileControllerInvoke(),
+        const queued = stampTrustedDeviceLinkQueuedOrigin(
+          stampTrustedDesktopQueuedOrigin(
+            stampMobileClientOrigin(
+              await hydrateQueuedAgentReferences(queuedWithAttachments),
+              isMobileControllerInvoke(),
+            ),
+            deviceLinkInvoke,
           ),
           deviceLinkInvoke,
         );

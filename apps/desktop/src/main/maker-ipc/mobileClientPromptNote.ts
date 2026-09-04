@@ -145,6 +145,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   const opts = sendOpts as Record<string, unknown>;
   if (
     !('fromMobileClient' in opts) &&
+    !('fromDeviceLinkClient' in opts) &&
     !('expectedInputGeneration' in opts) &&
     !('expectedTurnSession' in opts) &&
     !('expectedTurnGeneration' in opts) &&
@@ -156,6 +157,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   }
   const {
     fromMobileClient: _ignoredMobile,
+    fromDeviceLinkClient: _ignoredDeviceLink,
     expectedInputGeneration: _ignoredGeneration,
     expectedTurnSession: _ignoredTurnSession,
     expectedTurnGeneration: _ignoredTurnGeneration,

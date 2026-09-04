@@ -47,7 +47,7 @@ export function registerMakerSessionSendHandler<TResult>(
       const boundaryStamp = await deps.assertRemoteInputControlBoundary?.(sessionId, sendOpts);
       const mainOwnedBoundaryStamp =
         boundaryStamp && typeof boundaryStamp === 'object' ? boundaryStamp : undefined;
-      // sendOpts 来自 wire:剥掉只允许 main 写的字段(fromMobileClient 由 coordinator
+      // sendOpts 来自 wire:剥掉只允许 main 写的字段(fromMobileClient/fromDeviceLinkClient 由 coordinator
       // 从队列项透传；turnPermissionPolicy 只由 Main 的 IM dispatcher 构造),然后由
       // main 覆盖 clear token + generation。旧控制端不带 token 也因此获得同样的 clear
       // 竞态保护,而不是在最终 fence 缺 precondition 时放行。

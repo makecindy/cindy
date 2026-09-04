@@ -1039,6 +1039,21 @@ function isExpectedTurnIdMismatchError(error: unknown): boolean {
   return code === -32600 && /expected active turn id\b[\s\S]*\bbut found\b/i.test(message);
 }
 
+/**
+ * Only the app-server's canonical missing-rollout response permits replacing
+ * a thread. Keep this fail-closed: a wrapped message, a different JSON-RPC
+ * code, or populated error data may describe a different resume failure.
+ */
+export function isExactNoRolloutThreadResumeError(error: unknown, threadId: string): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; data?: unknown; message?: unknown };
+  if (candidate.code !== -32600 || !Object.hasOwn(error, 'data') || candidate.data !== undefined) {
+    return false;
+  }
+  return candidate.message ===
+    `codex app-server thread/resume error -32600: no rollout found for thread id ${threadId}`;
+}
+
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
 // 本身没有超时, app-server 卡死时裸 await 会永久挂起 → coordinator steering marker
 // 永久残留 → 后续插话点击被静默吞掉。正常情况下 ack 是毫秒级, 10s 足够宽裕。
@@ -5550,9 +5565,61 @@ export class CodexAgent extends BaseAgent {
       userPrompt: reviewMode ? undefined : opts.userPrompt,
     });
     const useProxyChannel = isCodexProxyChannelReady();
-    let threadId: string;
+    let threadId!: string;
     let codexThreadModelProviderId: string | undefined;
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
+
+    /**
+     * Start a replacement thread after the exact provider proof that the
+     * persisted thread has no rollout. This is intentionally narrower than a
+     * generic resume retry: historical threads must continue to resume, while
+     * a thread/start id created before its first accepted turn is not resumable.
+     */
+    const startFreshThread = async (): Promise<void> => {
+      const params: ThreadStartParams = {
+        cwd: opts.workingDir,
+        ...currentThreadWorkspaceConfig(),
+        ...(sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
+        ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+        ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
+        ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+        ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
+      };
+      acquireHostBindingLeaseIfNeeded();
+      assertCurrentHost('thread/start');
+      const resp = await host.request<ThreadStartResponse>(Method.ThreadStart, params, {
+        timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+      });
+      assertCurrentHost('thread/start');
+      if (Object.hasOwn(resp, 'serviceTier')) {
+        mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+      }
+      if (mutableModel === 'gpt-5' && resp.model) {
+        mutableModel = resp.model;
+        mutableCatalogModel = resp.model;
+      }
+      threadId = resp.thread.id;
+      codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
+      refreshCodexAutoReviewerRoute(threadId);
+      if (hostUsesCodexProxy) {
+        registerCodexDeveloperInstructions(threadId, developerInstructions);
+      }
+      if (useProxyChannel) {
+        codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
+      } else if (developerInstructions) {
+        codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
+      }
+      sdkSessionId = threadId;
+      readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+      readonlyReferencesProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
+      threadMayHaveRollout = false;
+      log.info('thread/start ok', {
+        threadId,
+        model: resp.model,
+        modelProvider: codexThreadModelProviderId ?? null,
+        serviceTier: mutableServiceTier ?? null,
+      });
+    };
 
     /**
      * 会话中途把单个设置 (serviceTier / model / effort) 立即推给 app-server,
@@ -5595,7 +5662,8 @@ export class CodexAgent extends BaseAgent {
       return run;
     };
     if (opts.resumeSessionId && isLikelyValidThreadId(opts.resumeSessionId)) {
-      // Phase 3: thread/resume 真接通, 不再 fallback 到 thread/start
+      // Phase 3: thread/resume is the historical-session path. Only the exact
+      // provider "no rollout found" response below may fall back to thread/start.
       if (this.deps.prepareCodexResumeSession && !opts.remoteHostId) {
         try {
           await this.deps.prepareCodexResumeSession(opts.resumeSessionId);
@@ -5677,16 +5745,31 @@ export class CodexAgent extends BaseAgent {
           serviceTier: mutableServiceTier ?? null,
         });
       } catch (e) {
-        releaseHostBindingLeaseIfNeeded();
-        log.error('thread/resume failed', { error: String(e), resumeSessionId: opts.resumeSessionId });
-        const message = `Failed to resume Codex thread: ${String(e)}`;
-        eventQueue.push({
-          type: 'error',
-          data: { message, isTerminal: true },
-          source: 'codex',
-        });
-        eventQueue.end();
-        throw new Error(message);
+        let freshThreadStarted = false;
+        if (isExactNoRolloutThreadResumeError(e, opts.resumeSessionId)) {
+          // Codex gives an exact, provider-owned proof that this thread has
+          // never crossed a turn boundary. Only this error may switch the
+          // continuation from resume to a fresh thread/start.
+          log.info('thread/resume reported no rollout; starting a fresh thread');
+          try {
+            await startFreshThread();
+            freshThreadStarted = true;
+          } catch (freshStartError) {
+            e = freshStartError;
+          }
+        }
+        if (!freshThreadStarted) {
+          releaseHostBindingLeaseIfNeeded();
+          log.error('thread/resume failed', { error: String(e), resumeSessionId: opts.resumeSessionId });
+          const message = `Failed to resume Codex thread: ${String(e)}`;
+          eventQueue.push({
+            type: 'error',
+            data: { message, isTerminal: true },
+            source: 'codex',
+          });
+          eventQueue.end();
+          throw new Error(message);
+        }
       }
     } else {
       // developerInstructions 六段拼接 (协议见 thread/start.developerInstructions):
@@ -5702,52 +5785,8 @@ export class CodexAgent extends BaseAgent {
       // 段序语义与 claude-code 对齐(claude 的 [1] 是 SDK 内嵌 preset, 此处无对应段,
       // 故编号从 [2] 起、共六段)。空段被 .filter 跳过,
       // 内容为空时不发送 developerInstructions 字段。
-      const params: ThreadStartParams = {
-        cwd: opts.workingDir,
-        ...currentThreadWorkspaceConfig(),
-        ...(sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
-        ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
-        ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-        ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
-        ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
-      };
       try {
-        acquireHostBindingLeaseIfNeeded();
-        assertCurrentHost('thread/start');
-        const resp = await host.request<ThreadStartResponse>(Method.ThreadStart, params, {
-          timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-        });
-        assertCurrentHost('thread/start');
-        if (Object.hasOwn(resp, 'serviceTier')) {
-          mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
-        }
-        if (mutableModel === 'gpt-5' && resp.model) {
-          mutableModel = resp.model;
-          // 'gpt-5' 是「用 server 默认」的占位、本身不是目录条目,解析出的真实 id 才是
-          // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
-          mutableCatalogModel = resp.model;
-        }
-        threadId = resp.thread.id;
-        codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
-        refreshCodexAutoReviewerRoute(threadId);
-        if (hostUsesCodexProxy) {
-          registerCodexDeveloperInstructions(threadId, developerInstructions);
-        }
-        if (useProxyChannel) {
-          codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
-        } else if (developerInstructions) {
-          codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
-        }
-        sdkSessionId = threadId;
-        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
-        readonlyReferencesProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
-        threadMayHaveRollout = false;
-        log.info('thread/start ok', {
-          threadId,
-          model: resp.model,
-          modelProvider: codexThreadModelProviderId ?? null,
-          serviceTier: mutableServiceTier ?? null,
-        });
+        await startFreshThread();
       } catch (e) {
         releaseHostBindingLeaseIfNeeded();
         log.error('thread/start failed', { error: String(e) });
@@ -5986,7 +6025,7 @@ export class CodexAgent extends BaseAgent {
               }),
             });
           } catch (e) {
-            if (!/no rollout found/i.test(String(e))) throw e;
+            if (!isExactNoRolloutThreadResumeError(e, threadId)) throw e;
             if (signal?.aborted) throw new Error('Codex send cancelled before acceptance');
             threadMayHaveRollout = false;
             await replaceUnusedThreadWithCurrentProfile(signal);
@@ -11293,6 +11332,7 @@ export class CodexAgent extends BaseAgent {
       get model() { return mutableModel; },
       get codexProxyActive() { return hostUsesCodexProxy; },
       get codexThreadModelProviderId() { return codexThreadModelProviderId; },
+      get codexThreadMayHaveRollout() { return threadMayHaveRollout; },
       get codexCindyRemoteCompactionCompatible() {
         return cindyProviderRemoteCompactionCompatible;
       },

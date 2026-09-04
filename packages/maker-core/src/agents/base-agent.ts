@@ -1740,6 +1740,8 @@ export interface AgentSessionHandle {
    * 这是 thread 级冻结身份，不随 thread/settings/update 的模型切换改变。
    */
   readonly codexThreadModelProviderId?: string;
+  /** Codex-only: provider-owned proof that this thread has crossed a turn boundary. */
+  readonly codexThreadMayHaveRollout?: boolean;
   /** Codex-only: 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
   readonly codexCindyRemoteCompactionCompatible?: boolean;
   /**

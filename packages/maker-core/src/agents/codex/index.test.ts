@@ -4,7 +4,7 @@ import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { applyPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 
-import { CodexAgent } from './index.js';
+import { CodexAgent, isExactNoRolloutThreadResumeError } from './index.js';
 import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
@@ -21167,12 +21167,132 @@ describe('CodexAgent steer', () => {
 describe('CodexAgent resume preparation', () => {
   const resumeSessionId = '123e4567-e89b-12d3-a456-426614174000';
 
+  function exactNoRolloutError(threadId = resumeSessionId): Error {
+    const error = new Error(
+      `codex app-server thread/resume error -32600: no rollout found for thread id ${threadId}`,
+    );
+    Object.assign(error, { code: -32600, data: undefined });
+    return error;
+  }
+
+  it('accepts only the canonical structured app-server no-rollout error', () => {
+    expect(isExactNoRolloutThreadResumeError(exactNoRolloutError(), resumeSessionId)).toBe(true);
+    expect(isExactNoRolloutThreadResumeError(
+      Object.assign(exactNoRolloutError(), { message: `${exactNoRolloutError().message}; caused by timeout` }),
+      resumeSessionId,
+    )).toBe(false);
+    expect(isExactNoRolloutThreadResumeError(
+      Object.assign(exactNoRolloutError(), { code: -32603 }),
+      resumeSessionId,
+    )).toBe(false);
+    expect(isExactNoRolloutThreadResumeError(
+      Object.assign(exactNoRolloutError(), { data: { reason: 'wrapped' } }),
+      resumeSessionId,
+    )).toBe(false);
+  });
+
+  it('does not fallback when a wrapper merely mentions no rollout', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) {
+        const error = new Error(
+          `codex app-server thread/resume error -32600: resume failed: no rollout found for thread id ${resumeSessionId}`,
+        );
+        Object.assign(error, { code: -32600, data: undefined });
+        throw error;
+      }
+      return undefined;
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-wrapped-no-rollout',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId,
+    })).rejects.toThrow('Failed to resume Codex thread');
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
+  });
+
+  it('falls back to thread/start only when resume proves the thread has no rollout', async () => {
+    const dynamicTools = [{
+      type: 'function' as const,
+      name: 'cindy_fixture__call_tool',
+      description: 'Fixture dynamic tool.',
+      inputSchema: { type: 'object' },
+      deferLoading: false,
+    }];
+    const listTools = vi.fn(() => dynamicTools);
+    const agent = new CodexAgent(createDeps({ systemPrompt: 'runtime developer instructions' }, {
+      codexHostDynamicToolProvider: {
+        listTools,
+        callTool: vi.fn(async () => undefined),
+      },
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) throw exactNoRolloutError();
+      return undefined;
+    }, {
+      codexCustomProviderRoutes: [{
+        providerId: 'fixture-provider',
+        modelProviderId: 'fixture-model-provider',
+        capabilities: {},
+        responseModels: ['fixture-model'],
+      }],
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-fresh-resume-fallback',
+      model: 'fixture-model',
+      providerId: 'fixture-provider',
+      fastMode: true,
+      workingDir: '/device-link/repo',
+      userPrompt: 'user developer instructions',
+      vendorOptions: { orcaRole: 'lead' },
+      resumeSessionId,
+    });
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(1);
+    expect(handle.id).toBe('start-thread-id');
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      cwd?: string;
+      model?: string;
+      modelProvider?: string;
+      serviceTier?: string;
+      developerInstructions?: string;
+      dynamicTools?: unknown[];
+      config?: Record<string, unknown>;
+    };
+    expect(startParams).toMatchObject({
+      cwd: '/device-link/repo',
+      model: 'fixture-model',
+      modelProvider: 'fixture-model-provider',
+      serviceTier: 'fast',
+    });
+    expect(startParams.developerInstructions).toContain('runtime developer instructions');
+    expect(startParams.developerInstructions).toContain('user developer instructions');
+    expect(startParams.dynamicTools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'cindy_fixture__call_tool' }),
+    ]));
+    expect(listTools).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: '/device-link/repo',
+      providerId: 'fixture-provider',
+      vendorOptions: { orcaRole: 'lead' },
+    }));
+    await handle.close();
+  });
+
   it('does not call thread/resume when the host identifies an unsafe rollout', async () => {
     const prepareCodexResumeSession = vi.fn(async () => {
       throw new CodexResumePreparationBlockedError('rollout may still have a live writer');
     });
     const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
-    const host = installFakeHost(agent);
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) throw new Error('no rollout found for thread');
+      return undefined;
+    });
 
     await expect(agent.startSession({
       sessionId: 'session-blocked-resume-preparation',
@@ -21182,6 +21302,8 @@ describe('CodexAgent resume preparation', () => {
     })).rejects.toThrow('rollout may still have a live writer');
 
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
+    expect(prepareCodexResumeSession).toHaveBeenCalledOnce();
     expect((
       agent as unknown as { hostSessionBindingLeases: Map<string, number> }
     ).hostSessionBindingLeases.size).toBe(0);

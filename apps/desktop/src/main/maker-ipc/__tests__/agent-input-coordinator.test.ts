@@ -51,6 +51,24 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       origin: { kind: 'orca', senderLabel: 'Lead', displayText: text },
     });
 
+  it('forwards main-stamped device-link provenance from enqueue to send', async () => {
+    const h = createHarness();
+    const sid = 'device-link-lead';
+    await h.coordinator.ensureQueueRestored(sid);
+
+    h.coordinator.enqueue(sid, makeItem('device-link-input', 'hello', {
+      fromDeviceLinkClient: true,
+    }));
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      sid,
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ fromDeviceLinkClient: true }),
+    );
+  });
+
   it('restores first, reserves at the head with a host stamp, deduplicates, and emits once', async () => {
     const h = createHarness();
     const sid = 'priority-worker';

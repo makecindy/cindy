@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createMakerSendTransaction,
   restoreTrustedDesktopQueuedOrigin,
+  stampTrustedDeviceLinkQueuedOrigin,
   stampTrustedDesktopQueuedOrigin,
   TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
@@ -85,6 +86,17 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 }
 
 describe('maker SEND transaction', () => {
+  it('stamps device-link provenance at the enqueue boundary and rejects forged local values', () => {
+    const item = { clientId: 'input-1', text: 'hello' } as unknown as AgentInputQueuedMessage;
+    expect(stampTrustedDeviceLinkQueuedOrigin(item, true)).toMatchObject({
+      fromDeviceLinkClient: true,
+    });
+    expect(stampTrustedDeviceLinkQueuedOrigin({
+      ...item,
+      fromDeviceLinkClient: true,
+    }, false)).not.toHaveProperty('fromDeviceLinkClient');
+  });
+
   it('rejects invalid sessionId before touching transaction dependencies', async () => {
     const { deps } = createDeps();
     const transaction = createMakerSendTransaction(deps);
@@ -1464,6 +1476,160 @@ describe('maker SEND transaction', () => {
       expect.objectContaining({ resumeSessionId: 'db-sdk-session-id' }),
     );
     expect(newSession.send).toHaveBeenCalled();
+  });
+
+  it('drops a DB sdk id for a fresh remote Codex Lead whose old runtime accepted no turn', async () => {
+    const oldSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      codexThreadMayHaveRollout: false,
+    });
+    const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const reconcileCreateOptsWithDb = vi.fn(async (_sessionId: string, co: MakerSessionCreateOpts) => {
+      co.resumeSessionId = 'fresh-thread-id';
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      reconcileCreateOptsWithDb,
+      bootstrapSession: vi.fn(async (opts: MakerSessionCreateOpts) => ({
+        session: newSession,
+        didInjectOrcaInstructions: true,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('orca-session', 'hello', {
+      id: 'orca-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      remoteHostId: null,
+      orcaRole: 'lead',
+    }, { fromDeviceLinkClient: true })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: undefined,
+    }));
+    expect(reconcileCreateOptsWithDb.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.closeSession).mock.invocationCallOrder[0]!,
+    );
+    expect(vi.mocked(deps.closeSession).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.bootstrapSession).mock.invocationCallOrder[0]!,
+    );
+    expect(vi.mocked(deps.bootstrapSession).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(newSession.send).mock.invocationCallOrder[0]!,
+    );
+    expect(oldSession.send).not.toHaveBeenCalled();
+    expect(newSession.send).toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledWith(
+      'send: fresh remote Codex Lead rehydrate starts a new thread',
+      { evidence: 'no-provider-turn-accepted' },
+    );
+  });
+
+  type ResumePreservationScenario = {
+    fromDeviceLinkClient: boolean;
+    codexThreadMayHaveRollout?: boolean;
+    orcaRole?: 'lead' | 'worker';
+    remoteHostId: string | null;
+  };
+  const resumePreservationScenarios: Array<[string, ResumePreservationScenario]> = [
+    ['device-link Lead with true evidence', { fromDeviceLinkClient: true, codexThreadMayHaveRollout: true, orcaRole: 'lead' as const, remoteHostId: null }],
+    ['device-link Lead with unknown evidence', { fromDeviceLinkClient: true, orcaRole: 'lead' as const, remoteHostId: null }],
+    ['device-link Worker', { fromDeviceLinkClient: true, codexThreadMayHaveRollout: false, orcaRole: 'worker' as const, remoteHostId: null }],
+    ['device-link non-Orca session', { fromDeviceLinkClient: true, codexThreadMayHaveRollout: false, orcaRole: undefined, remoteHostId: null }],
+    ['local ordinary Lead', { fromDeviceLinkClient: false, codexThreadMayHaveRollout: false, orcaRole: 'lead' as const, remoteHostId: null }],
+    ['SSH historical Lead', { fromDeviceLinkClient: false, codexThreadMayHaveRollout: true, orcaRole: 'lead' as const, remoteHostId: 'ssh-host' }],
+  ];
+  it.each(resumePreservationScenarios)('preserves the DB sdk id for %s', async (_name, scenario) => {
+    const oldSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      ...(scenario.remoteHostId ? { remoteHostId: scenario.remoteHostId } : {}),
+      ...(scenario.codexThreadMayHaveRollout === undefined
+        ? {}
+        : { codexThreadMayHaveRollout: scenario.codexThreadMayHaveRollout }),
+    });
+    const newSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      ...(scenario.remoteHostId ? { remoteHostId: scenario.remoteHostId } : {}),
+    });
+    const reconcileCreateOptsWithDb = vi.fn(async (_sessionId: string, co: MakerSessionCreateOpts) => {
+      co.resumeSessionId = 'historical-thread-id';
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      reconcileCreateOptsWithDb,
+      bootstrapSession: vi.fn(async () => ({
+        session: newSession,
+        didInjectOrcaInstructions: true,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'orca-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      ...(scenario.remoteHostId ? { remoteHostId: scenario.remoteHostId } : {}),
+      ...(scenario.orcaRole ? { orcaRole: scenario.orcaRole } : {}),
+    };
+    const sendOpts = scenario.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : undefined;
+
+    await expect(transaction.sendToAgentAccepted('orca-session', 'hello', createOpts, sendOpts))
+      .resolves.toMatchObject({ accepted: true });
+
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: 'historical-thread-id',
+    }));
+  });
+
+  it('keeps the DB sdk id for a remote Codex Lead whose old runtime accepted a rollout', async () => {
+    const oldSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      codexThreadMayHaveRollout: true,
+    });
+    const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const reconcileCreateOptsWithDb = vi.fn(async (_sessionId: string, co: MakerSessionCreateOpts) => {
+      co.resumeSessionId = 'historical-thread-id';
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      reconcileCreateOptsWithDb,
+      bootstrapSession: vi.fn(async () => ({
+        session: newSession,
+        didInjectOrcaInstructions: true,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('orca-session', 'hello', {
+      id: 'orca-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      remoteHostId: null,
+      orcaRole: 'lead',
+    }, { fromDeviceLinkClient: true })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: 'historical-thread-id',
+    }));
+    expect(deps.log.info).not.toHaveBeenCalledWith(
+      'send: fresh remote Codex Lead rehydrate starts a new thread',
+      expect.anything(),
+    );
   });
 
   it('fails rehydrate without closing the old runtime when DB reconciliation throws (#2882)', async () => {

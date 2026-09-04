@@ -206,6 +206,8 @@ export interface AgentInputSendOpts {
    * 最终 wire 消息。**由 main 构造,不是 wire 输入。**
    */
   fromMobileClient?: boolean;
+  /** Queue provenance stamped by the controlled desktop at device-link input IPC entry. */
+  fromDeviceLinkClient?: boolean;
   /** Main-owned clear token captured when this input became active. */
   expectedClearBoundaryMs?: number | null;
   /** Main-owned input generation captured before async preparation. */
@@ -3759,6 +3761,7 @@ export class AgentInputCoordinator {
   private toProjectedItem(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
     const projected = { ...item };
     delete projected.hostAcceptedAtMs;
+    delete projected.fromDeviceLinkClient;
     delete projected.trustedSessionReferenceContexts;
     delete projected.sessionReferencesRequireTrustedSnapshot;
     delete (projected as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
@@ -4325,6 +4328,7 @@ export class AgentInputCoordinator {
         ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
         // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
+        ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         persistUserMessage: {
           clientId: head.clientId,
           content: head.persistedContent,
