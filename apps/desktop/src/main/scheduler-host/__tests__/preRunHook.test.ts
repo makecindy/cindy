@@ -10,7 +10,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildSkipResultText,
   executePreRunHook,
+  formatPreRunHookFailure,
   resolvePreRunHookTimeoutMs,
   type PreRunHookStdinPayload,
 } from '../pre-run-hook';
@@ -91,7 +93,7 @@ describe('executePreRunHook', () => {
 
   it('stdout / stderr 分别捕获', async () => {
     const result = await executePreRunHook({
-      command: 'node -e "console.log(\'to-out\');console.error(\'to-err\');process.exit(0)"',
+      command: "node -e \"console.log('to-out');console.error('to-err');process.exit(0)\"",
       stdinPayload: payload,
     });
     expect(result.stdout).toContain('to-out');
@@ -160,6 +162,55 @@ describe('executePreRunHook', () => {
     // 树杀 + 1s 强制 settle 兜底:远小于 60s 超时即返回
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   }, 15_000);
+});
+
+describe('formatPreRunHookFailure', () => {
+  it('失败摘要是人话，不含 pre-run hook', () => {
+    expect(
+      formatPreRunHookFailure({
+        status: 'failed',
+        decision: 'block',
+        exitCode: 1,
+        durationMs: 10,
+        stdout: '',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        aborted: false,
+      }),
+    ).toBe('前置检查失败（exit 1）');
+  });
+});
+
+describe('buildSkipResultText', () => {
+  const hook = {
+    status: 'skipped' as const,
+    decision: 'skip' as const,
+    exitCode: 2,
+    durationMs: 125,
+    stdout: '',
+    stderr: '',
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    aborted: false,
+  };
+
+  it('有 stdout 时用人话全文，不加机器前缀', () => {
+    const text = buildSkipResultText({
+      ...hook,
+      stdout: 'Worktree 跟上轮一致，没清。\n',
+    });
+    expect(text).toBe('Worktree 跟上轮一致，没清。');
+    expect(text).not.toContain('pre-run hook exit');
+  });
+
+  it('空 stdout 时仍给一行人话', () => {
+    const text = buildSkipResultText(hook);
+    expect(text).toContain('本轮跳过');
+    expect(text).not.toContain('pre-run hook exit');
+  });
 });
 
 describe('resolvePreRunHookTimeoutMs(无默认超时)', () => {

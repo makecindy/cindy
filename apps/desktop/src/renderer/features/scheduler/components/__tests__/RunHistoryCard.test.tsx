@@ -105,6 +105,32 @@ describe('RunHistoryCard 前置检查结果', () => {
     expect(screen.getByText('captured stderr')).toBeTruthy();
     expect(screen.getByText(/scheduler\.runs\.preRun\.truncated/)).toBeTruthy();
   });
+
+  it('跳过结果默认折叠，避免空转把 hook 全文糊在卡上', () => {
+    const { container } = renderRun({
+      id: 'run-skipped',
+      scheduleId: 'schedule-1',
+      firedAt: 1,
+      finishedAt: 11,
+      status: 'skipped',
+      readAt: 11,
+      resultText: 'Worktree 跟上轮一致，没清。',
+      preRunHookResult: {
+        status: 'skipped',
+        decision: 'skip',
+        exitCode: 2,
+        durationMs: 125,
+        stdout: 'Worktree 跟上轮一致，没清。',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        aborted: false,
+      },
+    });
+
+    expect(container.querySelector('details')?.open).toBe(false);
+  });
 });
 
 describe('RunHistoryCard 费用展示', () => {

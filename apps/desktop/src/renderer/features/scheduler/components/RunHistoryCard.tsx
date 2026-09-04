@@ -67,9 +67,13 @@ function StatusChip({ status }: { status: RunStatus }) {
 }
 
 /** 单轮前置检查摘要与完整诊断。异常/跳过默认展开，通过默认折叠。 */
-function PreRunHookResultDetails({ result }: { result: NonNullable<ScheduleRun['preRunHookResult']> }) {
+function PreRunHookResultDetails({
+  result,
+}: {
+  result: NonNullable<ScheduleRun['preRunHookResult']>;
+}) {
   const { t } = useTranslation();
-  const defaultOpen = result.status !== 'passed';
+  const defaultOpen = result.status !== 'passed' && result.status !== 'skipped';
   const outputSections = [
     { key: 'stdout', value: result.stdout, truncated: result.stdoutTruncated },
     { key: 'stderr', value: result.stderr, truncated: result.stderrTruncated },
@@ -136,13 +140,7 @@ interface Props {
   sessionReference?: SessionReference;
 }
 
-export function RunHistoryCard({
-  run,
-  agentKind,
-  onDelete,
-  onRestart,
-  sessionReference,
-}: Props) {
+export function RunHistoryCard({ run, agentKind, onDelete, onRestart, sessionReference }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);

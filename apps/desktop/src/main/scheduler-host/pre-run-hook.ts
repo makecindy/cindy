@@ -85,14 +85,9 @@ export type PreRunHookResult = PreRunHookRunResult;
 
 /** 构造 skipped run 的历史摘要，不创建会话或写入消息。 */
 export function buildSkipResultText(hook: PreRunHookResult): string {
-  const head = `pre-run hook exit ${hook.exitCode ?? '?'} — ${hook.durationMs}ms`;
   const out = hook.stdout.trim();
-  return out ? `${head} — ${firstLine(out)}` : head;
-}
-
-function firstLine(text: string): string {
-  const line = text.split(/\r?\n/, 1)[0] ?? '';
-  return line.length > 200 ? `${line.slice(0, 200)}…` : line;
+  if (out) return out;
+  return `本轮跳过（exit ${hook.exitCode ?? '?'}，${hook.durationMs}ms）`;
 }
 
 /** 显式配置的正数才启用超时;未传 / 非法 / ≤0 → undefined(不限时)。 */
@@ -167,9 +162,9 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
         error:
           partial.spawnError ??
           (timedOut
-            ? `pre-run hook timed out after ${timeoutMs ?? 0}ms`
+            ? `前置检查超时（${timeoutMs ?? 0}ms）`
             : !aborted && exitCode === null
-              ? 'pre-run hook exited without a valid result'
+              ? '前置检查没有正常结束'
               : undefined),
       });
     };
@@ -248,7 +243,7 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
 
 /** 给 run 错误、通知和日志共用的前置检查失败摘要。 */
 export function formatPreRunHookFailure(result: PreRunHookResult): string {
-  if (result.status === 'timed_out') return result.error ?? 'pre-run hook timed out';
-  if (result.error) return `pre-run hook failed: ${result.error}`;
-  return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}`;
+  if (result.status === 'timed_out') return result.error ?? '前置检查超时';
+  if (result.error) return `前置检查失败：${result.error}`;
+  return `前置检查失败（exit ${result.exitCode ?? 'unknown'}）`;
 }
