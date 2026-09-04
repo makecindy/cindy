@@ -10,6 +10,13 @@ import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../shared/liveTaskP
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
 import { formatIslandToolDetail } from './toolDetail.js';
+import {
+  appendActivityTextStream,
+  cloneActivityTextStreamState,
+  createActivityTextStreamState,
+  normalizeActivityText,
+  type ActivityTextStreamState,
+} from './activityTextStream.js';
 
 import {
   createDefaultAgentIslandDisplayConfig,
@@ -58,7 +65,6 @@ export const AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS = 4 * 60 * 60 * 1_000;
 const AGENT_ISLAND_COMPACT_CURRENT_MIN_DWELL_MS = 1_200;
 const AGENT_ISLAND_MEASURED_HEIGHT_MAX = 2_000;
 const AGENT_ISLAND_ACTIVITY_MAX_LINES = 3;
-const AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH = 280;
 const AGENT_ISLAND_COMPACT_TITLE_MAX_LENGTH = 28;
 const AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH = 120;
 
@@ -137,7 +143,7 @@ interface AgentIslandSessionState {
   activityLines: AgentIslandActivityLine[];
   activitySeq: number;
   assistantStreamLineId: string | null;
-  assistantStreamRawText: string;
+  assistantStream: ActivityTextStreamState;
   messagePreview: {
     line: AgentIslandActivityLine;
     until: number;
@@ -2171,7 +2177,7 @@ function getOrCreateSession(
     activityLines: [],
     activitySeq: 0,
     assistantStreamLineId: null,
-    assistantStreamRawText: '',
+    assistantStream: createActivityTextStreamState(),
     messagePreview: null,
     messagePreviewQueue: [],
     startedAt: now,
@@ -2190,6 +2196,7 @@ function cloneSession(session: AgentIslandSessionState): AgentIslandSessionState
     pendingInteractionDetails: new Map(session.pendingInteractionDetails),
     pendingPermissionCanAllowForSession: new Map(session.pendingPermissionCanAllowForSession),
     activityLines: session.activityLines.map((line) => ({ ...line })),
+    assistantStream: cloneActivityTextStreamState(session.assistantStream),
     messagePreview: session.messagePreview
       ? {
           line: { ...session.messagePreview.line },
@@ -2516,15 +2523,12 @@ function applyAssistantTextLine(
   rawText: string,
   isFinal: boolean,
 ): AgentIslandActivityLine | null {
-  const nextRawText = isFinal
-    ? rawText
-    : `${session.assistantStreamRawText}${rawText}`;
-  const text = normalizeActivityText(nextRawText);
+  const text = isFinal
+    ? normalizeActivityText(rawText)
+    : appendActivityTextStream(session.assistantStream, rawText);
   if (!text) {
     if (isFinal) {
       clearAssistantStream(session);
-    } else {
-      session.assistantStreamRawText = nextRawText;
     }
     return null;
   }
@@ -2542,8 +2546,6 @@ function applyAssistantTextLine(
       replaceMessagePreviewLine(session, line);
       if (isFinal) {
         clearAssistantStream(session);
-      } else {
-        session.assistantStreamRawText = nextRawText;
       }
       return line;
     }
@@ -2555,7 +2557,6 @@ function applyAssistantTextLine(
     clearAssistantStream(session);
   } else {
     session.assistantStreamLineId = line.id;
-    session.assistantStreamRawText = nextRawText;
   }
   return line;
 }
@@ -2571,7 +2572,7 @@ function replaceMessagePreviewLine(session: AgentIslandSessionState, line: Agent
 
 function clearAssistantStream(session: AgentIslandSessionState): void {
   session.assistantStreamLineId = null;
-  session.assistantStreamRawText = '';
+  session.assistantStream = createActivityTextStreamState();
 }
 
 function enqueueMessagePreview(
@@ -2599,17 +2600,6 @@ function assistantTextFromEvent(event: AgentEvent): string | null {
   return typeof data?.text === 'string' ? data.text : null;
 }
 
-function normalizeActivityText(text: string): string {
-  return extractActivityDisplayText(text)
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .slice(0, AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH)
-    .trim();
-}
-
 function normalizeInlineText(text: string): string {
   return text
     .trim()
@@ -2627,41 +2617,6 @@ function truncateInlineText(text: string, maxLength: number): string {
   const chars = Array.from(normalized);
   if (chars.length <= maxLength) return normalized;
   return `${chars.slice(0, Math.max(0, maxLength - 3)).join('')}...`;
-}
-
-function extractActivityDisplayText(rawText: string): string {
-  const trimmed = rawText.trim();
-  if (!trimmed || !/^[{[]/.test(trimmed)) return rawText;
-
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return extractTextFromStructuredContent(parsed) ?? rawText;
-  } catch {
-    return rawText;
-  }
-}
-
-function extractTextFromStructuredContent(value: unknown): string | null {
-  if (typeof value === 'string') return value.trim() || null;
-
-  if (Array.isArray(value)) {
-    const parts = value
-      .map(extractTextFromStructuredContent)
-      .filter((part): part is string => Boolean(part));
-    return parts.length > 0 ? parts.join(' ') : null;
-  }
-
-  const record = asRecord(value);
-  if (!record) return null;
-
-  for (const key of ['text', 'message', 'prompt']) {
-    const text = record[key];
-    if (typeof text === 'string' && text.trim()) return text.trim();
-  }
-
-  const content = record.content;
-  if (typeof content === 'string' && content.trim()) return content.trim();
-  return extractTextFromStructuredContent(content);
 }
 
 function projectNameFromWorkingDir(workingDir: string | null | undefined, workspaceKind?: string | null): string | null {
