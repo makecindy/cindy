@@ -36,6 +36,8 @@ const PROVIDER_IDS = [...new Set([
   // be copied from Cindy's separately discovered Claude Code or Codex catalogs.
   'anthropic',
   'openai-codex',
+  // Read public API metadata too, so Astra additions yield to native upstream entries.
+  'openai',
   'xai',
 ])].sort();
 
