@@ -408,6 +408,7 @@ export function FindInPageBar() {
   const rangesRef = useRef<TextMatch[]>([]);
   const activeRef = useRef(0);
   const pendingScrollFrameRef = useRef<number | null>(null);
+  const pendingMutationRefreshFrameRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
   const compositionCommitRef = useRef<string | null>(null);
 
@@ -506,12 +507,36 @@ export function FindInPageBar() {
     const handleChange = (event: Event) => {
       if (event.target instanceof HTMLSelectElement) refreshSearch();
     };
+    const observer =
+      typeof MutationObserver === 'function'
+        ? new MutationObserver((records) => {
+            const root = rootRef.current;
+            if (!root || records.every((record) => isInsideRoot(record.target, root))) return;
+            if (pendingMutationRefreshFrameRef.current !== null) return;
+
+            if (typeof requestAnimationFrame === 'function') {
+              pendingMutationRefreshFrameRef.current = requestAnimationFrame(() => {
+                pendingMutationRefreshFrameRef.current = null;
+                refreshSearch();
+              });
+            } else {
+              refreshSearch();
+            }
+          })
+        : null;
 
     window.addEventListener('resize', handleResize);
     document.addEventListener('change', handleChange);
+    observer?.observe(document.body, { childList: true, characterData: true, subtree: true });
     return () => {
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('change', handleChange);
+      observer?.disconnect();
+      const frame = pendingMutationRefreshFrameRef.current;
+      pendingMutationRefreshFrameRef.current = null;
+      if (frame !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(frame);
+      }
     };
   }, [applySearch, open, text]);
 

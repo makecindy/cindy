@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
@@ -273,6 +273,18 @@ describe('FindInPageBar', () => {
     page.textContent = 'bar';
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(screen.getByText('0/0')).toBeTruthy();
+  });
+
+  it('refreshes matches when page text changes while the bar is open', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'foo';
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    page.textContent = 'foo foo';
+    await waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(2);
   });
 
   it('clears highlights when the query is cleared or the bar closes', async () => {
