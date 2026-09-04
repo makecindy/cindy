@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { buildComposerRichInputHtml } from '@/session/composerRichInputHtml';
 import { parseComposerWebMessage } from '@/session/composerRichInputProtocol';
@@ -41,6 +42,111 @@ describe('mobile composer rich input HTML', () => {
     expect(html).toContain('setConfig(value)');
     expect(html).toContain("style.setProperty('--chip', config.theme.chip)");
     expect(html).not.toContain('https://');
+  });
+
+  it('initializes on the Android WebView 85 API baseline', () => {
+    const legacyHtml = buildComposerRichInputHtml({
+      accessibilityLabel: '输入消息',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello' }] },
+      editable: true,
+      maxHeight: 264,
+      platform: 'android',
+      placeholder: '发送消息',
+      theme: {
+        background: '#eee',
+        border: '#aaa',
+        chip: '#ddd',
+        focus: '#555',
+        placeholder: '#777',
+        text: '#111',
+        textSecondary: '#333',
+      },
+    });
+    const script = legacyHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    expect(script).toBeTruthy();
+
+    const messages: unknown[] = [];
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const children: unknown[] = [{}];
+    const root = {
+      addEventListener(type: string, listener: (...args: unknown[]) => void) {
+        listeners.set(type, listener);
+      },
+      appendChild(node: { childNodes?: unknown[] }) {
+        children.push(...(node.childNodes || []));
+        return node;
+      },
+      childNodes: children,
+      contentEditable: 'false',
+      dataset: {} as Record<string, string>,
+      get firstChild() {
+        return children[0] || null;
+      },
+      removeChild(node: unknown) {
+        const index = children.indexOf(node);
+        if (index >= 0) children.splice(index, 1);
+        return node;
+      },
+      scrollHeight: 0,
+      setAttribute() {},
+      style: {
+        paddingBottom: '',
+        paddingTop: '',
+        setProperty() {},
+      },
+    };
+    const documentStub = {
+      createDocumentFragment() {
+        const fragmentChildren: unknown[] = [];
+        return {
+          appendChild(node: unknown) {
+            fragmentChildren.push(node);
+            return node;
+          },
+          childNodes: fragmentChildren,
+        };
+      },
+      createTextNode(value: string) {
+        return { nodeType: 3, nodeValue: value };
+      },
+      documentElement: {
+        style: {
+          setProperty() {},
+        },
+      },
+      getElementById() {
+        return root;
+      },
+    };
+    const windowStub = {
+      ReactNativeWebView: {
+        postMessage(payload: string) {
+          messages.push(JSON.parse(payload));
+        },
+      },
+    };
+
+    runInNewContext(
+      `Array.prototype.flatMap = undefined;\n${script}`,
+      {
+        document: documentStub,
+        Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
+        ResizeObserver: class {
+          observe() {}
+        },
+        window: windowStub,
+      },
+    );
+    expect(children).toEqual([{ nodeType: 3, nodeValue: 'hello' }]);
+    expect(messages).toContainEqual({ type: 'ready' });
+    (children[0] as { nodeValue: string }).nodeValue = 'hello world';
+    listeners.get('input')?.();
+    expect(messages).toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world' }] },
+    });
+    expect(legacyHtml).not.toContain('replaceChildren');
+    expect(legacyHtml).not.toContain('.flatMap(');
   });
 
   it('uses the shared compact pill geometry for atoms and slash decorations', () => {
