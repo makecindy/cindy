@@ -173,131 +173,6 @@ function isVisuallyClipped(style: CSSStyleDeclaration): boolean {
   return isTiny && (style.position === 'absolute' || style.position === 'fixed');
 }
 
-function getLineClamp(style: CSSStyleDeclaration): number | null {
-  const lineClampStyle = style as CSSStyleDeclaration & {
-    lineClamp?: string;
-    webkitLineClamp?: string;
-  };
-  const value =
-    lineClampStyle.lineClamp ||
-    lineClampStyle.webkitLineClamp ||
-    style.getPropertyValue('line-clamp') ||
-    style.getPropertyValue('-webkit-line-clamp');
-  const lineClamp = Number.parseInt(value, 10);
-  return Number.isFinite(lineClamp) && lineClamp > 0 ? lineClamp : null;
-}
-
-function isOverflowValueClipping(value: string): boolean {
-  return value
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .some((overflow) => overflow === 'hidden' || overflow === 'clip');
-}
-
-function getOverflowClipAxes(style: CSSStyleDeclaration): { x: boolean; y: boolean } {
-  const shorthand = style.overflow.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const overflowX = style.overflowX.trim().toLowerCase();
-  const overflowY = style.overflowY.trim().toLowerCase();
-  const shorthandX = shorthand[0] || '';
-  const shorthandY = shorthand[1] || shorthand[0] || '';
-  const usesShorthandFallback = overflowX === 'visible' && overflowY === 'visible';
-  return {
-    x: isOverflowValueClipping(overflowX) ||
-      (usesShorthandFallback && isOverflowValueClipping(shorthandX)),
-    y: isOverflowValueClipping(overflowY) ||
-      (usesShorthandFallback && isOverflowValueClipping(shorthandY)),
-  };
-}
-
-function isScrollableOverflowValue(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return normalized === 'auto' || normalized === 'scroll' || normalized === 'overlay';
-}
-
-function isLayoutViewportShell(
-  element: HTMLElement,
-  style: CSSStyleDeclaration,
-  hasScrollableDescendant: boolean,
-): boolean {
-  if (
-    element === document.documentElement ||
-    element === document.body ||
-    element.id === 'root'
-  ) {
-    return true;
-  }
-  if (!hasScrollableDescendant) return false;
-
-  const isFlexContainer = style.display === 'flex' || style.display === 'inline-flex';
-  const hasFlexibleExtent =
-    Number.parseFloat(style.flexGrow) > 0 || style.height === '100%' || style.width === '100%';
-  return isFlexContainer && hasFlexibleExtent;
-}
-
-interface ClippingAncestor {
-  element: HTMLElement;
-  x: boolean;
-  y: boolean;
-  viewport?: boolean;
-}
-
-function isViewportPositioned(style: CSSStyleDeclaration): boolean {
-  const position = style.position.trim().toLowerCase();
-  const transform = style.transform.trim().toLowerCase();
-  return position === 'fixed' || (position === 'absolute' && transform !== '' && transform !== 'none');
-}
-
-function getClippingAncestors(element: HTMLElement | null): ClippingAncestor[] {
-  const clippingAncestors: ClippingAncestor[] = [];
-  let hasScrollableDescendant = false;
-  let ancestor = element;
-  while (ancestor) {
-    const style = window.getComputedStyle(ancestor);
-    if (isViewportPositioned(style)) {
-      clippingAncestors.push({ element: ancestor, x: true, y: true, viewport: true });
-    }
-    if (!isLayoutViewportShell(ancestor, style, hasScrollableDescendant)) {
-      const overflowClipAxes = getOverflowClipAxes(style);
-      if (getLineClamp(style) !== null) overflowClipAxes.y = true;
-      if (overflowClipAxes.x || overflowClipAxes.y) {
-        clippingAncestors.push({ element: ancestor, ...overflowClipAxes });
-      }
-    }
-    hasScrollableDescendant ||= [style.overflow, style.overflowX, style.overflowY].some(
-      isScrollableOverflowValue,
-    );
-    ancestor = ancestor.parentElement;
-  }
-  return clippingAncestors;
-}
-
-function isRangeVisibleWithinAncestors(
-  range: Range,
-  clippingAncestors: readonly ClippingAncestor[],
-): boolean {
-  if (clippingAncestors.length === 0) return true;
-
-  const rects =
-    typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
-  if (rects.length === 0) return true;
-
-  for (const clippingAncestor of clippingAncestors) {
-    const clipRect = clippingAncestor.viewport
-      ? { top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth }
-      : clippingAncestor.element.getBoundingClientRect();
-    const intersectsClip = rects.some((rect) => {
-      const intersectsX =
-        rect.right > clipRect.left && rect.left < clipRect.right;
-      const intersectsY =
-        rect.bottom > clipRect.top && rect.top < clipRect.bottom;
-      return (!clippingAncestor.x || intersectsX) && (!clippingAncestor.y || intersectsY);
-    });
-    if (!intersectsClip) return false;
-  }
-  return true;
-}
-
 function isCjkCharacter(value: string): boolean {
   if (!value) return false;
   const codePoint = value.codePointAt(0);
@@ -364,7 +239,9 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
 
   const matches: TextMatch[] = [];
   const visibilityCache = new WeakMap<HTMLElement, boolean>();
-  const clippingAncestorsCache = new WeakMap<HTMLElement, ClippingAncestor[]>();
+  // Keep off-screen and scrollable content searchable. Geometry-based clipping
+  // guesses cannot distinguish a closed drawer from history outside a scroll
+  // viewport, so only explicit hidden styles are excluded here.
   const walker = document.createTreeWalker(document.body, 4);
   let node = walker.nextNode();
   while (node) {
@@ -373,18 +250,11 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
       const parentElement = textNode.parentElement;
       const parentStyle = parentElement ? window.getComputedStyle(parentElement) : null;
       const whiteSpace = parentStyle?.whiteSpace || 'normal';
-      let clippingAncestors = parentElement ? clippingAncestorsCache.get(parentElement) : undefined;
-      if (clippingAncestors === undefined) {
-        clippingAncestors = getClippingAncestors(parentElement);
-        if (parentElement) clippingAncestorsCache.set(parentElement, clippingAncestors);
-      }
       for (const [start, end] of findMatchOffsets(textNode.data, query, whiteSpace)) {
         const range = document.createRange();
         range.setStart(textNode, start);
         range.setEnd(textNode, end);
-        if (isRangeVisibleWithinAncestors(range, clippingAncestors)) {
-          matches.push({ range });
-        }
+        matches.push({ range });
       }
     }
     node = walker.nextNode();

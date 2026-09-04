@@ -555,13 +555,12 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
   });
 
-  it('excludes ranges below a line-clamped element viewport', async () => {
+  it('keeps text searchable when a line clamp clips its layout', async () => {
     const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
     const elementRectDescriptor = Object.getOwnPropertyDescriptor(
       Element.prototype,
       'getBoundingClientRect',
     );
-    const rangeRectCalls = new Map<HTMLElement, number>();
     const page = document.createElement('main');
     const visible = document.createElement('span');
     visible.textContent = 'foo';
@@ -575,10 +574,7 @@ describe('FindInPageBar', () => {
     Object.defineProperty(Range.prototype, 'getClientRects', {
       configurable: true,
       value(this: Range) {
-        const parent = this.startContainer.parentElement;
-        if (parent) rangeRectCalls.set(parent, (rangeRectCalls.get(parent) ?? 0) + 1);
-        const top = parent === clamped ? 20 : 0;
-        return [{ top, bottom: top + 10, left: 0, right: 100 }];
+        return [{ top: 20, bottom: 30, left: 0, right: 100 }];
       },
     });
     Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
@@ -593,10 +589,8 @@ describe('FindInPageBar', () => {
       const input = await openFindBar(page);
       fireEvent.change(input, { target: { value: 'foo' } });
 
-      expect(screen.getByText('1/1')).toBeTruthy();
-      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
-      expect(rangeRectCalls.get(visible)).toBe(1);
-      expect(rangeRectCalls.get(clamped)).toBe(1);
+      expect(screen.getByText('1/2')).toBeTruthy();
+      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(2);
     } finally {
       if (rangeRectDescriptor) {
         Object.defineProperty(Range.prototype, 'getClientRects', rangeRectDescriptor);
@@ -611,7 +605,7 @@ describe('FindInPageBar', () => {
     }
   });
 
-  it('excludes ranges fully clipped by an overflow-hidden ancestor', async () => {
+  it('keeps text searchable through an overflow-hidden ancestor', async () => {
     const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
     const elementRectDescriptor = Object.getOwnPropertyDescriptor(
       Element.prototype,
@@ -648,9 +642,8 @@ describe('FindInPageBar', () => {
       const input = await openFindBar(page);
       fireEvent.change(input, { target: { value: 'foo' } });
 
-      expect(screen.getByText('1/1')).toBeTruthy();
-      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
-      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('foo');
+      expect(screen.getByText('1/2')).toBeTruthy();
+      expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(2);
 
       clipBottom = 100;
       const transitionEnd = new Event('transitionend', { bubbles: true });
@@ -771,7 +764,7 @@ describe('FindInPageBar', () => {
     }
   });
 
-  it('excludes transformed fixed drawer content outside the viewport', async () => {
+  it('keeps transformed drawer text searchable while it is outside the viewport', async () => {
     const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
     const elementRectDescriptor = Object.getOwnPropertyDescriptor(
       Element.prototype,
@@ -800,7 +793,7 @@ describe('FindInPageBar', () => {
     try {
       const input = await openFindBar();
       fireEvent.change(input, { target: { value: 'foo' } });
-      expect(screen.getByText('0/0')).toBeTruthy();
+      expect(screen.getByText('1/1')).toBeTruthy();
 
       drawer.style.transform = 'none';
       rangeRect = { top: 0, bottom: 10, left: 0, right: 10 };
@@ -822,7 +815,7 @@ describe('FindInPageBar', () => {
     }
   });
 
-  it('applies overflow clipping only on the hidden axis', async () => {
+  it('keeps scrollable content searchable regardless of overflow clipping', async () => {
     const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
     const elementRectDescriptor = Object.getOwnPropertyDescriptor(
       Element.prototype,
@@ -856,15 +849,13 @@ describe('FindInPageBar', () => {
       const input = await openFindBar(page);
       fireEvent.change(input, { target: { value: 'foo' } });
 
-      // The match is outside the scrollable vertical viewport but still inside
-      // the container's hidden horizontal axis, so it remains searchable.
       expect(screen.getByText('1/1')).toBeTruthy();
 
       rangeRect = { top: 0, bottom: 10, left: -20, right: -10 };
       const transitionEnd = new Event('transitionend', { bubbles: true });
       Object.defineProperty(transitionEnd, 'propertyName', { value: 'width' });
       scrollContainer.dispatchEvent(transitionEnd);
-      await waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
     } finally {
       if (rangeRectDescriptor) {
         Object.defineProperty(Range.prototype, 'getClientRects', rangeRectDescriptor);
