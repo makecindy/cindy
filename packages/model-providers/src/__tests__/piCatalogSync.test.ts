@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import piCatalog from "../../catalog/pi-model-catalog.json";
@@ -21,7 +21,7 @@ describe("Pi catalog sync upstream precedence", () => {
     "reads native public API Astra metadata through the %s sync path",
     (source) => {
       const temporary = mkdtempSync(
-        path.join(tmpdir(), "cindy-pi-catalog-sync-"),
+        path.join(tmpdir(), "cindy-pi-catalog-sync #-"),
       );
       try {
         const catalogDirectory = path.join(
@@ -70,7 +70,7 @@ describe("Pi catalog sync upstream precedence", () => {
             };
           `,
           );
-          args.push("--import", mockFetchPath);
+          args.push("--import", pathToFileURL(mockFetchPath).href);
         }
         args.push(path.join(temporary, "tools/pi/sync-model-catalog.mjs"));
         if (source === "input") args.push("--input", inputPath);
