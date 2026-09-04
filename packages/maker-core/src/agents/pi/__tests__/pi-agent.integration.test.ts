@@ -2483,7 +2483,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('bash', { command: 'cat <*' }),
+          // Bash 4+ inherits dotglob, so <* matches both fixture files and is
+          // an ambiguous redirect. Keep that operation, then read a uniquely
+          // matched ordinary file to prove Full Access reached the shell.
+          anthropicToolUseBody('bash', { command: 'cat <*; cat <ordinary.*' }),
           anthropicStreamBody('bash Full Access dotglob turn finished'),
         );
         const fullAccessReqBefore = seenRequests.length;

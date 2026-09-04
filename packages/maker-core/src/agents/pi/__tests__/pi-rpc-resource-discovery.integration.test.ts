@@ -205,11 +205,11 @@ function canonicalPath(value: string): string {
 
 function expectedExplicitProjectSkillScope(fixture: Fixture): 'project' | 'temporary' {
   if (process.platform === 'win32') return 'project';
-  // Pi v0.83.0 reports `project` on macOS when the lexical git root is already
-  // canonical. The default /var -> /private/var temp-dir alias instead yields
-  // `temporary`, so keep the fixture deterministic under either TMPDIR form.
+  // The pinned Pi reports `project` on Linux and macOS when the lexical git
+  // root is canonical. macOS's /var -> /private/var temp-dir alias instead
+  // yields `temporary`; do not assume that alias also exists on Linux.
   if (
-    process.platform === 'darwin'
+    (process.platform === 'darwin' || process.platform === 'linux')
     && path.resolve(fixture.repoRoot) === canonicalPath(fixture.repoRoot)
   ) {
     return 'project';
@@ -650,7 +650,7 @@ describe('Pi RPC resource-discovery harness lifecycle', () => {
   });
 });
 
-describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts', () => {
+describe.skipIf(!existsSync(PI_BINARY))('Pinned Pi RPC resource discovery facts', () => {
   it('records isolated global skills and omits unapproved project resources', async () => {
     const fixture = await createFixture('pi-rpc-no-trust-');
     const result = await runGetCommands({

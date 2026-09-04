@@ -105,6 +105,31 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('UpdateBanner relaunch entry', () => {
+  it('checks active work again when retrying a Linux update after repairing dependencies', async () => {
+    updateStatus.current.errorCode = 'linux_installation_unsupported';
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'update.linuxInstallation.retry' }));
+    await waitFor(() => expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1));
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(['light', 'dark'])('offers the Linux guide without restarting in %s mode', async (theme) => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    updateStatus.current.errorCode = 'linux_installation_unsupported';
+    render(<UpdateBanner isCollapsed={false} />);
+    await screen.findByText('update.linuxInstallation.title');
+    fireEvent.click(screen.getByRole('button', { name: 'update.linuxInstallation.later' }));
+    await waitFor(() => expect(screen.queryByText('update.linuxInstallation.title')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    await screen.findByText('update.linuxInstallation.title');
+    fireEvent.click(screen.getByRole('button', { name: 'update.linuxInstallation.guide' }));
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/makecindy/cindy/blob/main/docs/linux.md');
+    expect(anyActivityBlockingRelaunch).not.toHaveBeenCalled();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+    document.documentElement.classList.remove('dark');
+  });
+
   it('prompts for the VC++ Runtime, keeps the banner, and rechecks on demand', async () => {
     updateStatus.current = {
       status: 'ready',

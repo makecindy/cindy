@@ -751,10 +751,10 @@
       },
       "linuxUpdates": {
         "title": "Linux install and updates",
-        "description": "Linux currently ships as a .deb for Ubuntu 22.04 / 24.04. When a newer build is available, the app downloads it and asks for your system password to install.",
-        "item1": "First install with sudo apt install ./cindy-<version>-<arch>.deb (amd64 on x64, arm64 on arm64).",
-        "item2": "In-app updates download the .deb. After you choose Update, a system prompt installs it over the current package.",
-        "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Neither architecture supports idle auto-install because installation requires system authorization."
+        "description": "Ubuntu uses system .deb packages. Arch Linux and Omarchy use the managed user installer with the same verified .deb payload, without a Debian package manager.",
+        "item1": "Ubuntu: use sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy: follow the user-install guide in docs/linux.md.",
+        "item2": "After choosing Update, system .deb installs request authorization; managed user installs switch versions without a system password. Other package-managed installs use their package manager.",
+        "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Linux updates are applied only when you choose to restart, never automatically while idle."
       },
       "qnaTitle": "Ask directly",
       "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
@@ -814,7 +814,7 @@
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
       "autoUpdateDescription": "After an update finishes downloading, restart the app to install it when this computer has been idle for 10 minutes and no tasks are running.",
-      "linuxUpdateDescription": "When a newer build is available, Cindy downloads the .deb in the app. Installing it asks for your system password, so updates are not applied while idle.",
+      "linuxUpdateDescription": "Updates require a restart you choose. System .deb installs request your system password; managed user installs do not. Other installations use their package manager.",
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
@@ -5912,7 +5912,7 @@
       "ready": "New version ready — click the sidebar to apply",
       "manifestFailed": "Update check failed, please check your network",
       "downloadFailed": "New version download failed, try again later",
-      "manualDownload": "Download the update in the app. Installing it requires your system password."
+      "manualDownload": "Download in the app, then choose when to restart. Only system .deb installs require a system password."
     },
     "closeConfirm": {
       "title": "Confirm exit?",
@@ -6808,6 +6808,13 @@
       "description": "Please move {{appName}} to the Applications folder to enable automatic updates.",
       "move": "Move Now (Recommended)",
       "download": "Download manually"
+    },
+    "linuxInstallation": {
+      "title": "This installation cannot update itself",
+      "description": "Use your package manager, or follow the Linux user-install guide. A managed install may need missing tools or write access restored. Cindy and the downloaded update have been kept.",
+      "guide": "Open Linux guide",
+      "retry": "Check again",
+      "later": "Later"
     },
     "windowsRuntimeMissing": {
       "title": "Microsoft Visual C++ Runtime Required",
