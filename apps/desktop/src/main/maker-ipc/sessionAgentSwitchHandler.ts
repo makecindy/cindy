@@ -74,6 +74,9 @@ export interface AgentSwitchBoundaryContent {
   toAgentKind: DbAgentKind;
   fromModel: string | null;
   toModel: string | null;
+  /** 离场引擎与目标引擎各自的 provider 快照；缺失表示旧版边界。 */
+  fromProviderId?: string | null;
+  toProviderId?: string | null;
   /**
    * 旧引擎的原生 session id 快照 = 它的停泊绑定:Phase 2 切回该引擎时由
    * findParkedEngineSession 从最近一条"它离场"的边界行读回,resume 续接。
@@ -96,6 +99,7 @@ export interface AgentSwitchSessionRow {
   id: string;
   agentKind: string;
   model: string | null;
+  providerId: string | null;
   status: string;
   remoteHostId: string | null;
   orcaRole: string | null;
@@ -542,6 +546,9 @@ export async function performSessionAgentSwitch(
       toAgentKind: toDbKind,
       fromModel: row.model,
       toModel: model,
+      fromProviderId: row.providerId,
+      toProviderId:
+        normalizedProviderId === undefined ? row.providerId : normalizedProviderId,
       fromSdkSessionId: row.sdkSessionId,
       handoff,
       resumed: !!parked,

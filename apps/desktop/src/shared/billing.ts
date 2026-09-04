@@ -7,6 +7,49 @@
 
 import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
+export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
+
+/**
+ * Validates the only mailto URL that Desktop may hand to the system shell.
+ * Subject/body are display data from the renderer; recipient-affecting headers
+ * must stay outside this capability boundary.
+ */
+export function isAllowedBillingMailto(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const parsed = new URL(value);
+    const queryKeys = [...parsed.searchParams.keys()];
+    const hasDuplicateQueryKey = new Set(queryKeys).size !== queryKeys.length;
+    const subject = parsed.searchParams.get('subject');
+    const hasSubjectControlCharacter =
+      subject !== null && /[\u0000-\u001f\u007f-\u009f]/u.test(subject);
+    return (
+      parsed.protocol === 'mailto:' &&
+      decodeURIComponent(parsed.pathname).toLowerCase() === BILLING_SUPPORT_EMAIL &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.host &&
+      !parsed.hash &&
+      !hasDuplicateQueryKey &&
+      !hasSubjectControlCharacter &&
+      queryKeys.every((key) => key === 'subject' || key === 'body')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Keeps the sender check explicit at the main-process adapter boundary. The
+ * URL policy alone is not sufficient authorization for a privileged shell call.
+ */
+export function isAllowedBillingMailtoRequest(
+  value: unknown,
+  isTrustedSender: boolean,
+): value is string {
+  return isTrustedSender && isAllowedBillingMailto(value);
+}
+
 export const BILLING_INVOKE = {
   GET_BALANCE: 'billing:get-balance',
   GET_CREDIT_USAGE: 'billing:get-credit-usage',

@@ -142,12 +142,12 @@ export class DesktopSessionStorage implements SessionStorage {
     expectedSdkSessionId: string,
   ): Promise<boolean> {
     const db = getDbClient().drizzle;
-    const changed = await db
+    const result = await db
       .update(sessions)
       .set({ sdkSessionId: null, updatedAt: Date.now() })
       .where(and(eq(sessions.id, id), eq(sessions.sdkSessionId, expectedSdkSessionId)))
-      .returning({ id: sessions.id });
-    return changed.length > 0;
+      .run();
+    return result.changes > 0;
   }
 
   async delete(id: string): Promise<void> {

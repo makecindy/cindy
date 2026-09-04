@@ -14,12 +14,8 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
-import { usageRankColor } from '@/components/new-chat/usagePalette';
-import {
-  type AgentTokenRow,
-  type ModelTokenRow,
-  type UsageAgentKind,
-} from './usageHistoryStats';
+import { usageRankColor, usageRankOf } from '@/components/new-chat/usagePalette';
+import { type AgentTokenRow, type ModelTokenRow, type UsageAgentKind } from './usageHistoryStats';
 import { formatUsagePercent } from './formatUsagePercent';
 
 const UNKNOWN_VALUE = '—';
@@ -53,9 +49,7 @@ function Swatch({ rank }: { rank: number }): React.JSX.Element {
 }
 
 function HitRateCell({ value }: { value: number | null }): React.JSX.Element {
-  return (
-    <td className={TD_CLASS}>{value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}</td>
-  );
+  return <td className={TD_CLASS}>{value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}</td>;
 }
 
 function ShareCell({ share, rank }: { share: number; rank: number }): React.JSX.Element {
@@ -70,7 +64,17 @@ function ShareCell({ share, rank }: { share: number; rank: number }): React.JSX.
   );
 }
 
-export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.Element {
+export function UsageAgentTable({
+  rows,
+  rangeLabel,
+  todayLabel,
+  hideToday = false,
+}: {
+  rows: AgentTokenRow[];
+  rangeLabel: string;
+  todayLabel?: string;
+  hideToday?: boolean;
+}): React.JSX.Element {
   const { t } = useTranslation();
   const total = rows.reduce((sum, row) => sum + row.tokens, 0);
 
@@ -98,9 +102,13 @@ export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.
             <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
               {t('usageHistory.byAgent.col.agent')}
             </th>
-            <th className={TH_CLASS}>{t('usageHistory.byAgent.col.total')}</th>
+            <th className={TH_CLASS}>
+              {t('usageHistory.byAgent.col.totalInRange', { range: rangeLabel })}
+            </th>
             <th className={TH_CLASS}>{t('usageHistory.byAgent.col.share')}</th>
-            <th className={TH_CLASS}>{t('usageHistory.byAgent.col.today')}</th>
+            {!hideToday ? (
+              <th className={TH_CLASS}>{todayLabel ?? t('usageHistory.byAgent.col.today')}</th>
+            ) : null}
             <th className={TH_CLASS} title={t('usageHistory.cacheHitTooltip')}>
               {t('usageHistory.byAgent.col.hitRate')}
             </th>
@@ -122,9 +130,11 @@ export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.
                 </td>
                 <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
                 <ShareCell share={row.share} rank={rank} />
-                <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
-                  {row.todayTokens > 0 ? formatCompactTokens(row.todayTokens) : UNKNOWN_VALUE}
-                </td>
+                {!hideToday ? (
+                  <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
+                    {row.todayTokens > 0 ? formatCompactTokens(row.todayTokens) : UNKNOWN_VALUE}
+                  </td>
+                ) : null}
                 <HitRateCell value={row.cacheHitRate} />
                 <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>{row.modelCount}</td>
               </tr>
@@ -136,7 +146,15 @@ export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.
   );
 }
 
-export function UsageModelTable({ rows }: { rows: ModelTokenRow[] }): React.JSX.Element {
+export function UsageModelTable({
+  rows,
+  rangeLabel,
+  colorOrder,
+}: {
+  rows: ModelTokenRow[];
+  rangeLabel: string;
+  colorOrder: string[];
+}): React.JSX.Element {
   const { t } = useTranslation();
 
   return (
@@ -146,7 +164,9 @@ export function UsageModelTable({ rows }: { rows: ModelTokenRow[] }): React.JSX.
           <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
             {t('usageHistory.byModel.col.model')}
           </th>
-          <th className={TH_CLASS}>{t('usageHistory.byModel.col.total')}</th>
+          <th className={TH_CLASS}>
+            {t('usageHistory.byModel.col.totalInRange', { range: rangeLabel })}
+          </th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.share')}</th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.input')}</th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.output')}</th>
@@ -158,29 +178,32 @@ export function UsageModelTable({ rows }: { rows: ModelTokenRow[] }): React.JSX.
         </tr>
       </thead>
       <tbody>
-        {rows.map((row, index) => (
-          <tr key={row.key}>
-            <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
-              <span className="flex min-w-0 items-center gap-2">
-                <Swatch rank={index} />
-                <span className="truncate" title={row.model}>
-                  {formatModelShort(row.model)}
+        {rows.map((row) => {
+          const rank = usageRankOf(colorOrder, row.key);
+          return (
+            <tr key={row.key}>
+              <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <Swatch rank={rank} />
+                  <span className="truncate" title={row.model}>
+                    {formatModelShort(row.model)}
+                  </span>
+                  {/* 同一模型 id 可能跨 agent 撞名, 标签让两行区分得开 */}
+                  <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-10 leading-none text-[var(--text-tertiary)]">
+                    {row.agentKind}
+                  </span>
                 </span>
-                {/* 同一模型 id 可能跨 agent 撞名, 标签让两行区分得开 */}
-                <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-10 leading-none text-[var(--text-tertiary)]">
-                  {row.agentKind}
-                </span>
-              </span>
-            </td>
-            <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
-            <ShareCell share={row.share} rank={index} />
-            <td className={TD_CLASS}>{formatCompactTokens(row.inputTokens)}</td>
-            <td className={TD_CLASS}>{formatCompactTokens(row.outputTokens)}</td>
-            <td className={TD_CLASS}>{formatCompactTokens(row.cacheReadTokens)}</td>
-            <td className={TD_CLASS}>{formatCompactTokens(row.cacheCreateTokens)}</td>
-            <HitRateCell value={row.cacheHitRate} />
-          </tr>
-        ))}
+              </td>
+              <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
+              <ShareCell share={row.share} rank={rank} />
+              <td className={TD_CLASS}>{formatCompactTokens(row.inputTokens)}</td>
+              <td className={TD_CLASS}>{formatCompactTokens(row.outputTokens)}</td>
+              <td className={TD_CLASS}>{formatCompactTokens(row.cacheReadTokens)}</td>
+              <td className={TD_CLASS}>{formatCompactTokens(row.cacheCreateTokens)}</td>
+              <HitRateCell value={row.cacheHitRate} />
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

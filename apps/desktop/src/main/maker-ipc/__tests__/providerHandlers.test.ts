@@ -15,6 +15,10 @@ import {
   getProviderRouteCredentialRevision,
   isProviderRouteMutationInProgress,
 } from '../../maker-host/provider-route.js';
+import {
+  UNRECOVERABLE_PROVIDER_CREDENTIAL,
+  type UnrecoverableProviderCredential,
+} from '../../secrets/providerSecretStore.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
@@ -2430,6 +2434,202 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(storeCustomProviderKey).not.toHaveBeenCalled();
     expect(removeCustomProviderKey).not.toHaveBeenCalled();
     expect((await listCustomProviders())[0]?.name).toBe(config.name);
+  });
+
+  // #3821:旧密文对当前 safeStorage 主密钥解不开时,快照是「存在但不可恢复」而不是读失败。
+  // 只有显式替换值能覆盖它;保留 / 仅删除 / 端点变更清理维持严格失败。
+  function undecryptableKeyFixture() {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const calls: string[] = [];
+    const storeCustomProviderKey = vi.fn((_providerId, agent: AgentKind, value: string) => {
+      calls.push(`store:${agent}:${value}`);
+      keys.set(agent, value);
+      return true;
+    });
+    const removeCustomProviderKey = vi.fn((_providerId, agent: AgentKind) => {
+      calls.push(`remove:${agent}`);
+      keys.delete(agent);
+      return { success: true };
+    });
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => keys.get(agent) ?? null,
+      ),
+      storeCustomProviderKey,
+      removeCustomProviderKey,
+    }));
+    const claudeRuntime = {
+      baseUrl: 'https://api.example/v1',
+      models: [{ id: 'claude-model', name: 'Claude model' }],
+    };
+    return { harness, keys, calls, storeCustomProviderKey, removeCustomProviderKey, claudeRuntime };
+  }
+
+  it('overwrites an API key whose ciphertext cannot be decrypted when a replacement is supplied', async () => {
+    const { harness, keys, storeCustomProviderKey, removeCustomProviderKey, claudeRuntime } =
+      undecryptableKeyFixture();
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'undecryptable-key',
+      runtimes: { 'claude-code': claudeRuntime },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, { 'claude-code': 'old-key' });
+    // 模拟钥匙串条目已变:旧密文还在磁盘上,但解不开。
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    storeCustomProviderKey.mockClear();
+    removeCustomProviderKey.mockClear();
+
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE,
+        { ...config, name: 'Recovered' },
+        { 'claude-code': 'replacement-key' },
+      ),
+    ).resolves.toEqual({ ok: true });
+
+    expect(keys.get('claude-code')).toBe('replacement-key');
+    expect(storeCustomProviderKey).toHaveBeenCalledOnce();
+    expect(removeCustomProviderKey).not.toHaveBeenCalled();
+    expect((await listCustomProviders())[0]?.name).toBe('Recovered');
+  });
+
+  it('still refuses an endpoint change that would clear an undecryptable API key without a replacement', async () => {
+    const { harness, keys, storeCustomProviderKey, removeCustomProviderKey, claudeRuntime } =
+      undecryptableKeyFixture();
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'undecryptable-key-strict',
+      runtimes: { 'claude-code': claudeRuntime },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, { 'claude-code': 'old-key' });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    storeCustomProviderKey.mockClear();
+    removeCustomProviderKey.mockClear();
+
+    // 端点变更且未填新 key = 清理旧密钥的语义:拿不到可回滚快照,维持严格失败,不碰旧 blob。
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+        ...config,
+        runtimes: { 'claude-code': { ...claudeRuntime, baseUrl: 'https://moved.example/v1' } },
+      }),
+    ).rejects.toThrow(/existing claude-code provider credential cannot be decrypted/);
+
+    expect(keys.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    expect(storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(removeCustomProviderKey).not.toHaveBeenCalled();
+    expect((await listCustomProviders())[0]?.runtimes['claude-code']?.baseUrl).toBe(
+      claudeRuntime.baseUrl,
+    );
+  });
+
+  it('removes a replacement written over undecryptable ciphertext when the config write fails', async () => {
+    const { harness, keys, calls, claudeRuntime } = undecryptableKeyFixture();
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'undecryptable-key-rollback',
+      runtimes: {
+        codex: { baseUrl: 'https://api.example/v1', models: [{ id: 'codex-model', name: 'Codex model' }] },
+        'claude-code': claudeRuntime,
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'old-codex',
+      'claude-code': 'old-claude',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    calls.length = 0;
+    raw!.exec(`
+      CREATE TRIGGER fail_custom_provider_update
+      BEFORE UPDATE ON custom_providers
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated write failure');
+      END
+    `);
+
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE,
+        { ...config, name: 'Must not persist' },
+        { codex: 'new-codex', 'claude-code': 'new-claude' },
+      ),
+    ).rejects.toThrow(/simulated write failure/);
+
+    // 可恢复的 runtime 回滚到旧值;不可恢复的 runtime 只删掉新写入的值,不去恢复旧 blob。
+    expect(calls).toHaveLength(4);
+    expect(calls.slice(0, 2).sort()).toEqual(['store:claude-code:new-claude', 'store:codex:new-codex']);
+    expect(calls.slice(2).sort()).toEqual(['remove:claude-code', 'store:codex:old-codex']);
+    expect(keys.get('codex')).toBe('old-codex');
+    expect(keys.has('claude-code')).toBe(false);
+    expect((await listCustomProviders())[0]?.name).toBe(config.name);
+  });
+
+  it('overwrites undecryptable runtime headers only when replacement headers are supplied', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const storeCustomProviderHeaders = vi.fn(
+      (_providerId, agent: AgentKind, value: Record<string, string>) => {
+        headers.set(agent, { ...value });
+        return true;
+      },
+    );
+    const removeCustomProviderHeaders = vi.fn((_providerId, agent: AgentKind) => {
+      headers.delete(agent);
+      return { success: true };
+    });
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders,
+      removeCustomProviderHeaders,
+    }));
+    const runtime = {
+      baseUrl: 'https://api.example/v1',
+      models: [{ id: 'claude-model', name: 'Claude model' }],
+    };
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'undecryptable-headers',
+      runtimes: { 'claude-code': { ...runtime, headers: { Authorization: 'Bearer old' } } },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    storeCustomProviderHeaders.mockClear();
+    removeCustomProviderHeaders.mockClear();
+
+    // 未回传 headers = 保留旧值:不动那份解不开的密文头,纯改名照常成功。
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+        ...config,
+        name: 'Renamed',
+        runtimes: { 'claude-code': runtime },
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(headers.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+
+    // 端点变更且未回传 headers = 清理旧密文头的语义:维持严格失败。
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+        ...config,
+        runtimes: { 'claude-code': { ...runtime, baseUrl: 'https://moved.example/v1' } },
+      }),
+    ).rejects.toThrow(/existing claude-code provider headers cannot be decrypted/);
+    expect(headers.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    expect(removeCustomProviderHeaders).not.toHaveBeenCalled();
+
+    // 显式回传新 headers:允许覆盖。
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+        ...config,
+        runtimes: { 'claude-code': { ...runtime, headers: { Authorization: 'Bearer new' } } },
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(headers.get('claude-code')).toEqual({ Authorization: 'Bearer new' });
+    expect(storeCustomProviderHeaders).toHaveBeenCalledOnce();
+    expect(removeCustomProviderHeaders).not.toHaveBeenCalled();
   });
 
   it('serializes create key staging with a later cross-window update', async () => {

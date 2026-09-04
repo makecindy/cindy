@@ -46,6 +46,7 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
+import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
@@ -491,10 +492,13 @@ export interface ClassifiedCodexError {
 
 /**
  * ErrorNotification 与 turn/completed.turn.error 共用的结构化分类。
- * 只消费 Codex wire schema 的 codexErrorInfo；additionalDetails / stderr 不参与判定。
+ * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
+ * 唯一例外：远端 compact 密文 400 会把 `additionalDetails` 拼进 classify 文本，
+ * 因为用户形态经常是 message=`Error running remote compact task`、code 在 details 里。
  */
 export function classifyCodexError(error: {
   message?: string;
+  additionalDetails?: unknown;
   codexErrorInfo?: import('./app-server/protocol.js').CodexErrorInfo | null;
 } | null | undefined): ClassifiedCodexError {
   const rawMessage = error?.message ?? 'codex error';
@@ -510,9 +514,14 @@ export function classifyCodexError(error: {
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
   const isCapacityError =
     parseOverloadError(message, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  const additionalDetails =
+    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
   const reason = isCapacityError
     ? UPSTREAM_OVERLOAD_REASON
-    : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
+    : errorInfoTag === 'contextWindowExceeded' ||
+        isContextOverflowErrorMessage(message) ||
+        isRemoteCompactEncryptedContentError(compactClassifyText)
       ? CONTEXT_OVERFLOW_REASON
       : undefined;
   return {

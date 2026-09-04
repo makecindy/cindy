@@ -20,29 +20,25 @@ const {
   providersState,
   codexAuthState,
   codexAuthActions,
-  promptCodexSessionExpired,
   toastError,
   setModelVisibilitiesSpy,
-} = vi.hoisted(
-  () => ({
-    wizardSpy: vi.fn(),
-    providersState: { providers: [] as unknown[], order: [] as string[] },
-    codexAuthState: {
-      state: { kind: 'unauthenticated' } as Record<string, unknown>,
-      reconnectCredentialScope: undefined as string | undefined,
-      recoveryCheck: 'idle' as 'idle' | 'checking' | 'failed',
-    },
-    codexAuthActions: {
-      refresh: vi.fn(async () => undefined),
-      triggerLogin: vi.fn(async () => 'authenticated'),
-      cancelLogin: vi.fn(async () => undefined),
-      logout: vi.fn(async () => undefined),
-    },
-    promptCodexSessionExpired: vi.fn(() => true),
-    toastError: vi.fn(),
-    setModelVisibilitiesSpy: vi.fn(() => true),
-  }),
-);
+} = vi.hoisted(() => ({
+  wizardSpy: vi.fn(),
+  providersState: { providers: [] as unknown[], order: [] as string[] },
+  codexAuthState: {
+    state: { kind: 'unauthenticated' } as Record<string, unknown>,
+    reconnectCredentialScope: undefined as string | undefined,
+    recoveryCheck: 'idle' as 'idle' | 'checking' | 'failed',
+  },
+  codexAuthActions: {
+    refresh: vi.fn(async () => undefined),
+    triggerLogin: vi.fn(async () => 'authenticated'),
+    cancelLogin: vi.fn(async () => undefined),
+    logout: vi.fn(async () => undefined),
+  },
+  toastError: vi.fn(),
+  setModelVisibilitiesSpy: vi.fn(() => true),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
@@ -68,10 +64,6 @@ vi.mock('@/hooks/useCodexAuth', () => ({
     ...codexAuthState,
     ...codexAuthActions,
   }),
-}));
-
-vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
-  useCodexSessionExpiredPrompt: () => promptCodexSessionExpired,
 }));
 
 vi.mock('@/hooks/useApiKey', () => ({
@@ -192,7 +184,7 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
-  it('ChatGPT 系统共享登录失效时显示来源说明并进入受保护恢复流程', async () => {
+  it('ChatGPT 系统共享登录失效时显示来源说明并打开 ChatGPT App', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
       reason: 'token_revoked',
@@ -215,14 +207,13 @@ describe('ProvidersSection — 深链定位', () => {
       'var(--remote-status-failed)',
     );
     expect(await screen.findByText('chatgptAuthRecovery.systemSharedInvalidated')).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.recheck' }));
+    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
 
-    await waitFor(() => expect(promptCodexSessionExpired).toHaveBeenCalledWith('token_revoked'));
+    await waitFor(() => expect(window.electronAPI.openChatGPTApp).toHaveBeenCalledOnce());
     expect(codexAuthActions.triggerLogin).not.toHaveBeenCalled();
-    expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
   });
 
-  it('ChatGPT 系统共享重新登录被取消时保留恢复入口', async () => {
+  it('ChatGPT 系统共享打开 App 后保留恢复入口', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
       reason: 'token_revoked',
@@ -239,12 +230,11 @@ describe('ProvidersSection — 深链定位', () => {
     ];
     renderAt('?tab=providers&connect=openai');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.recheck' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
 
-    await waitFor(() => expect(promptCodexSessionExpired).toHaveBeenCalledWith('token_revoked'));
+    await waitFor(() => expect(window.electronAPI.openChatGPTApp).toHaveBeenCalledOnce());
     expect(toastError).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.recheck' })).not.toBeNull();
-    expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' })).not.toBeNull();
   });
 
   it('connect=anthropic(未占行内置渠道)→ 向导 builtin 直达;参数消费后清除', async () => {
@@ -356,9 +346,7 @@ describe('ProvidersSection — 深链定位', () => {
       ],
       false,
     );
-    expect(toastError).toHaveBeenCalledWith(
-      'settings.providers.models.visibilityWriteFailed',
-    );
+    expect(toastError).toHaveBeenCalledWith('settings.providers.models.visibilityWriteFailed');
   });
 
   it('authorization-code 自定义供应商登录期间卸载时取消本视图拥有的授权', async () => {

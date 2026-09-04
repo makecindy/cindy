@@ -586,6 +586,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
       latestFrame: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
+      copyScreenshot: (request: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('maker:ios-simulator:copy-screenshot', request),
       setStreamProfile: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('maker:ios-simulator:set-stream-profile', request),
       liveTouch: (request: unknown): Promise<unknown> =>

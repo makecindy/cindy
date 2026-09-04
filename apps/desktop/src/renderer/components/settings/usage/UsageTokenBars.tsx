@@ -45,6 +45,11 @@ function shiftDayKeyLocal(dayKey: string, deltaDays: number): string {
   return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
+function parseDayKeyLocal(dayKey: string): Date {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  return new Date(year, (month ?? 1) - 1, day ?? 1);
+}
+
 /** 与 UsageDailyBars 同一套刻度算法, 保证两张图的刻度密度一致。 */
 function niceTicks(max: number): number[] {
   if (!(max > 0)) return [];
@@ -60,13 +65,26 @@ export function UsageTokenBars({
   modelDaily,
   colorOrder,
   todayKey,
+  selectedDay,
+  onDayClick,
 }: {
   modelDaily: UsageHistoryModelDay[];
   /** 前 N 名模型 key (payload.models 排序), 决定分段与图例配色。 */
   colorOrder: string[];
   todayKey: string;
+  selectedDay?: string | null;
+  onDayClick?: (day: string) => void;
 }): React.JSX.Element {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const dateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      }),
+    [i18n.language],
+  );
 
   const bars = useMemo(() => {
     const segsByDay = new Map<string, Map<number, DaySegment>>();
@@ -133,46 +151,69 @@ export function UsageTokenBars({
             style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
           />
         ))}
-        <div className="absolute inset-0 flex items-end gap-[3px]">
-          {bars.list.map((b) => {
-            const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
-            const height = b.tokens > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
-            const titleLines = [
-              `${b.day} · ${
+        <div className="absolute inset-0 overflow-x-auto">
+          <div
+            className="flex h-full items-end gap-[3px]"
+            style={{ minWidth: bars.list.length * 24 + Math.max(0, bars.list.length - 1) * 3 }}
+          >
+            {bars.list.map((b) => {
+              const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
+              const visualHeight =
+                b.tokens > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
+              const hitHeight = Math.max(24, visualHeight);
+              const usageSummary =
                 b.tokens > 0
                   ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
-                  : t('usageHistory.heatmap.emptyCell')
-              }`,
-              ...b.segments.map(
-                (s) =>
-                  `${s.label}: ${t('usageDashboard.tokensOnly', {
-                    tokens: formatCompactTokens(s.tokens),
-                  })}`,
-              ),
-            ];
-            return (
-              <div
-                key={b.day}
-                title={titleLines.join('\n')}
-                // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
-                className="flex min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-[2px]"
-                style={{
-                  height,
-                  backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
-                }}
-              >
-                {[...b.segments].reverse().map((s) => (
-                  <div
-                    key={s.rank}
+                  : t('usageHistory.heatmap.emptyCell');
+              const titleLines = [
+                `${b.day} · ${usageSummary}`,
+                ...b.segments.map(
+                  (s) =>
+                    `${s.label}: ${t('usageDashboard.tokensOnly', {
+                      tokens: formatCompactTokens(s.tokens),
+                    })}`,
+                ),
+              ];
+              return (
+                <button
+                  key={b.day}
+                  type="button"
+                  title={titleLines.join('\n')}
+                  aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
+                  aria-pressed={selectedDay === b.day}
+                  onClick={() => onDayClick?.(b.day)}
+                  disabled={!onDayClick}
+                  // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
+                  className="flex min-w-0 flex-1 cursor-pointer items-end justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                  style={{
+                    height: hitHeight,
+                    minWidth: 24,
+                    outline: selectedDay === b.day ? '2px solid var(--focus-ring-soft)' : undefined,
+                    outlineOffset: selectedDay === b.day ? '1px' : undefined,
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="flex w-full flex-col overflow-hidden rounded-full"
                     style={{
-                      height: `${(s.tokens / b.tokens) * 100}%`,
-                      backgroundColor: usageRankColor(s.rank),
+                      height: visualHeight,
+                      backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
                     }}
-                  />
-                ))}
-              </div>
-            );
-          })}
+                  >
+                    {[...b.segments].reverse().map((s) => (
+                      <span
+                        key={s.rank}
+                        style={{
+                          height: `${(s.tokens / b.tokens) * 100}%`,
+                          backgroundColor: usageRankColor(s.rank),
+                        }}
+                      />
+                    ))}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

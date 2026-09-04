@@ -946,6 +946,7 @@ import {
 } from '../maker-host/model-disable-store.js';
 import { readProviderOrder, setProviderOrder } from '../maker-host/provider-order-store.js';
 import {
+  describeModelRouteRejection,
   resolveCurrentSetModelProviderId,
   resolveExclusiveSetModelReroute,
   resolveSetModelGuardProviderId,
@@ -5046,7 +5047,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           if (!isSuccessfulDone) {
             void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
           } else if (!isPairedFailedTurnDone) {
-            void markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId);
+            const nativeForkAnchor = eventAgentMeta?.nativeForkAnchor;
+            void markAssistantTurnCompleted(
+              session.id,
+              turnBoundaryAssistantPersistId,
+              nativeForkAnchor ? { nativeForkAnchor } : undefined,
+            );
           }
         }
         // error 行在 flushOrphanToolResults 之后入队,保证 orphan tool_result 排在
@@ -8166,17 +8172,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (verdict.kind === 'reject') {
       throwIpcError(
         'INVALID_PARAMS',
-        verdict.reason === 'explicit-source-disabled'
-          ? `provider "${providerId}" is disabled for model "${model}" in settings`
-          : verdict.reason === 'capability-model'
-            ? `model "${model}" is not an agent chat model`
-            : verdict.reason === 'model-retired'
-              ? `model "${model}" has been retired from the catalog`
-              : verdict.reason === 'payment-required'
-                ? `model "${model}" requires paid access`
-                : verdict.reason === 'exclusive-source-unavailable'
-                  ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
-                  : `model "${model}" is disabled in settings`,
+        describeModelRouteRejection(verdict.reason, model, providerId),
       );
     }
     return verdict.kind === 'reroute' ? verdict.providerId : undefined;
@@ -9790,6 +9786,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           id: sessions.id,
           agentKind: sessions.agentKind,
           model: sessions.model,
+          providerId: sessions.providerId,
           status: sessions.status,
           remoteHostId: sessions.remoteHostId,
           orcaRole: sessions.orcaRole,

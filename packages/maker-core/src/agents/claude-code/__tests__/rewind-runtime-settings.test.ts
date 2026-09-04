@@ -358,6 +358,193 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('rebuilds the local Query env when a live switch crosses the Explore inherit-cap policy', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'gpt-5.6-sol',
+      availableModels: [
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap');
+    });
+
+    const startEnv = sdkMock.query.mock.calls[0]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(startEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBe('1');
+
+    await handle.setModel?.('claude-fable-5');
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-fable-5[1m]');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+    await handle.send({ type: 'user', content: 'after crossing to fable' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    expect(firstQuery.close).toHaveBeenCalled();
+    const rebuildEnv = sdkMock.query.mock.calls[1]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(rebuildEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBeUndefined();
+    expect(sdkMock.query.mock.calls[1]?.[0]?.options?.forkSession).toBe(true);
+    expect(sdkMock.query.mock.calls[1]?.[0]?.options?.resumeSessionAt).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('rebuilds the local Query env when a live switch from Fable to GPT re-enables the cap disable flag', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap-gpt' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap-gpt');
+    });
+
+    const startEnv = sdkMock.query.mock.calls[0]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(startEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBeUndefined();
+
+    await handle.setModel?.('gpt-5.6-sol');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+    await handle.send({ type: 'user', content: 'after crossing to gpt' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    const rebuildEnv = sdkMock.query.mock.calls[1]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(rebuildEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBe('1');
+
+    await handle.close();
+  });
+
+  it('does not rebuild the Query when a live switch stays on the same Explore inherit-cap policy', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap-same' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap-same');
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    await handle.send({ type: 'user', content: 'same-policy switch' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(1);
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+
+    await handle.close();
+  });
+
+  it('rejects a remote live switch that would desync the Explore inherit-cap env', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      remoteHostId: 'remote-1',
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-remote-explore-cap' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-remote-explore-cap');
+    });
+
+    await expect(handle.setModel?.('gpt-5.6-sol')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(firstQuery.setModel).not.toHaveBeenCalled();
+    expect(handle.model).toBe('claude-fable-5');
+
+    await handle.close();
+  });
+
+  it('rejects a remote Explore inherit-cap switch even while rewind rebuild is pending', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      remoteHostId: 'remote-1',
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-remote-explore-cap-rewind' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-remote-explore-cap-rewind');
+    });
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    await expect(handle.setModel?.('gpt-5.6-sol')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(handle.model).toBe('claude-fable-5');
+
+    await handle.close();
+  });
+
   it('uses the session provider route when the same model id has different windows', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;

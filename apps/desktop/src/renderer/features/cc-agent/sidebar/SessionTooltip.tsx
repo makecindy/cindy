@@ -23,7 +23,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
 import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import { usePrStatuses } from '@/contexts/PrRefsContext';
-import { PR_STATUS_COLOR, PR_STATUS_ICON } from '../gitContextPrVisuals';
+import { PR_STATUS_COLOR, PR_STATUS_ICON, prFailureCopyKey } from '../gitContextPrVisuals';
 import { formatSidebarFutureTime } from '../lib/formatSidebarTime';
 import {
   findLatestSidebarIndexRunForSession,
@@ -103,7 +103,7 @@ function PrTooltip({
   controlledOpen?: boolean;
   children: ReactNode;
 }) {
-  const { statuses, fetchStatusesForSession } = usePrStatuses();
+  const { statuses, fetchStatusesForSession } = usePrStatuses(sessionId);
 
   useEffect(() => {
     if (controlledOpen) fetchStatusesForSession(sessionId);
@@ -238,6 +238,9 @@ function PrLine({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
   const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
   const unresolved = status?.ok && status.unresolvedCount ? status.unresolvedCount : 0;
+  // 失败态与顶栏徽标同一句原因(gh 未登录 / 未安装 / 404 …),不再静默。
+  // 侧栏行本身不承担引导动作,所以只说原因,不说"点击"。
+  const failureCopyKey = prFailureCopyKey(status);
 
   return (
     <div className="flex min-w-0 max-w-80 items-center gap-1.5">
@@ -249,6 +252,9 @@ function PrLine({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
         <span className="shrink-0 whitespace-nowrap">
           · {t(`ccAgent.gitContext.pr.status.${kind}`)}
         </span>
+      )}
+      {!kind && failureCopyKey && (
+        <span className="min-w-0 truncate text-[var(--text-tertiary)]">· {t(failureCopyKey)}</span>
       )}
       {unresolved > 0 && (
         <span

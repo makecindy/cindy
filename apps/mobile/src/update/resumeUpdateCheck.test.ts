@@ -110,35 +110,72 @@ describe('createResumeUpdateChecker OTA 静默路径', () => {
     expect(deps.checkForUpdateAsync).not.toHaveBeenCalled();
   });
 
-  it('isConsented=false → OTA skipped,整包检查仍按 bundleCheckEnabled 放行', async () => {
-    // 未同意隐私政策时不得发起带 eas-client-id 的 manifest 请求;整包 /latest 匿名不受影响。
-    const deps = makeDeps({ isConsented: () => false });
-    const { ota, bundle } = await runOnce(deps);
-    expect(ota).toBe('skipped');
-    expect(deps.checkForUpdateAsync).not.toHaveBeenCalled();
-    expect(bundle).toBe('up-to-date');
-  });
-
-  it('isConsented=true → 走正常 OTA 检查', async () => {
-    const deps = makeDeps({ isConsented: () => true });
+  it('不再依赖 analytics consent，走正常 OTA 检查', async () => {
+    const deps = makeDeps();
     const { ota } = await runOnce(deps);
     expect(ota).toBe('up-to-date');
     expect(deps.checkForUpdateAsync).toHaveBeenCalledOnce();
   });
 
-  it('check 期间撤销同意 → 下载前跳过,不 fetch', async () => {
-    // check 返回后、fetch 前同意被撤回:必须再问一次,不能继续下载带标识的资源。
-    let consented = true;
+  it('check 期间账号切换 → 下载前跳过,不 fetch', async () => {
+    let current = true;
     const deps = makeDeps({
-      isConsented: () => consented,
+      isCurrent: () => current,
       checkForUpdateAsync: vi.fn(async () => {
-        consented = false; // check 进行中用户登出,同意被清
+        current = false;
         return { isAvailable: true };
       }),
     });
     const { ota } = await runOnce(deps);
     expect(ota).toBe('skipped');
     expect(deps.checkForUpdateAsync).toHaveBeenCalledOnce();
+    expect(deps.fetchUpdateAsync).not.toHaveBeenCalled();
+  });
+
+  it('排队等待包装器期间账号切换 → 请求前跳过,不访问旧 channel', async () => {
+    let current = true;
+    let releaseQueue!: () => void;
+    const wrappedCheck = vi.fn(async () => ({ isAvailable: false }));
+    const withOtaClient: NonNullable<ResumeUpdateCheckDeps['withOtaClient']> =
+      vi.fn(async (operation) => {
+        await new Promise<void>((resolve) => { releaseQueue = resolve; });
+        return operation({
+          checkForUpdateAsync: wrappedCheck,
+          fetchUpdateAsync: vi.fn(async () => ({ isNew: false })),
+        });
+      });
+    const deps = makeDeps({
+      withOtaClient,
+      isCurrent: () => current,
+    });
+
+    const pending = runOnce(deps);
+    await vi.waitFor(() => expect(withOtaClient).toHaveBeenCalledOnce());
+    current = false;
+    releaseQueue();
+
+    await expect(pending).resolves.toMatchObject({ ota: 'skipped' });
+    expect(wrappedCheck).not.toHaveBeenCalled();
+    expect(deps.checkForUpdateAsync).not.toHaveBeenCalled();
+  });
+
+  it('用同一个包装器覆盖完整 check → fetch 事务', async () => {
+    const wrappedCheck = vi.fn(async () => ({ isAvailable: true }));
+    const wrappedFetch = vi.fn(async () => ({ isNew: true }));
+    const withOtaClient: NonNullable<ResumeUpdateCheckDeps['withOtaClient']> =
+      vi.fn(async (operation) => operation({
+        checkForUpdateAsync: wrappedCheck,
+        fetchUpdateAsync: wrappedFetch,
+      }));
+    const deps = makeDeps({ withOtaClient });
+
+    const { ota } = await runOnce(deps);
+
+    expect(ota).toBe('fetched');
+    expect(withOtaClient).toHaveBeenCalledOnce();
+    expect(wrappedCheck).toHaveBeenCalledOnce();
+    expect(wrappedFetch).toHaveBeenCalledOnce();
+    expect(deps.checkForUpdateAsync).not.toHaveBeenCalled();
     expect(deps.fetchUpdateAsync).not.toHaveBeenCalled();
   });
 
