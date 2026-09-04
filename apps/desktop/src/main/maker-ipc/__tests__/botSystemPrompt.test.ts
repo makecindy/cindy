@@ -88,7 +88,9 @@ describe('稳定层:能力必须写进提示词', () => {
       }),
     );
     expect(all).toContain('你记得住事');
+    expect(all).toContain('第一次明确说出一条稳定偏好');
     expect(all).toContain('save_bot_skill');
+    expect(all).toContain('第一次验证完就');
     expect(all).toContain('把活交出去');
     expect(all).toContain('action=notify');
     expect(all).toContain('action=call');
@@ -178,7 +180,12 @@ describe('伙伴的家', () => {
   const base = {
     displayName: '小柴',
     identity: '你是小柴。',
-    capabilities: { toolsets: [], memoryEnabled: false, delegationEnabled: false, ownSkillsEnabled: false },
+    capabilities: {
+      toolsets: [],
+      memoryEnabled: false,
+      delegationEnabled: false,
+      ownSkillsEnabled: false,
+    },
     skillIndex: [],
   };
 
@@ -203,6 +210,7 @@ describe('伙伴的家', () => {
     // 固定成员讲清楚,改灵魂的规矩讲清楚。
     expect(stable).toContain('SOUL.md');
     expect(stable).toContain('memories/USER.md');
+    expect(stable).toContain('不要自行改写 SOUL 或 system_prompt');
   });
 
   it('没有家就一个字都不提 —— 远端会话够不到本机目录', () => {
@@ -299,7 +307,11 @@ describe('buildBotTeammateRoster', () => {
 
   it('描述压成单行并截断 —— 名册是索引,不是简介', () => {
     const roster = buildBotTeammateRoster([
-      { id: 'bot-z', name: '话痨', description: `第一行\n第二行   还有   很多空格${'长'.repeat(400)}` },
+      {
+        id: 'bot-z',
+        name: '话痨',
+        description: `第一行\n第二行   还有   很多空格${'长'.repeat(400)}`,
+      },
     ]);
     expect(roster).not.toContain('\n第二行');
     expect(roster).toContain('第一行 第二行 还有 很多空格');

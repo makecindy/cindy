@@ -14,7 +14,6 @@ import {
 } from './botSystemPrompt.js';
 import { getDbClient } from '../localDb/client/current.js';
 import {
-  botLifecycleEvents,
   botProfileVersions,
   botProfiles,
   botRuntimeSnapshots,
@@ -289,11 +288,10 @@ export function buildBotProfileContextPrompt(displayName: string): string {
  * and tells the Bot to discover the live surface instead of freezing tool
  * names into a prompt that can drift from the registered server.
  *
- * 批次 ε 只加了一句 `learned-` slug 约定。它必须待在 prompt 层:哪一条经验值得
- * 留成可复用的做法,是语言理解问题,代码判不了(见 maker-core-and-agent-behavior.md
- * §2 的分界)。代码这边只负责确定性的那一半 —— 前缀检出与两个列表的切分,见
- * Renderer 的 `botGrowth.partitionBotMemoryRecords`。文本是常量,不含会话变量,
- * 因此 prompt 前缀保持稳定,不影响缓存率。
+ * `learned-` slug 约定必须待在 prompt 层:哪一条经验值得留成可复用的
+ * 做法,是语言理解问题,代码判不了(见 maker-core-and-agent-behavior.md §2 的分界)。
+ * 设置页不再为它维护第二套「成长」分类;记忆和技能的实际存储与工具契约才是真相源。
+ * 文本是常量,不含会话变量,因此 prompt 前缀保持稳定,不影响缓存率。
  */
 export function buildBotCapabilityContextPrompt(
   options: { helperAvailable?: boolean } = {},
@@ -307,7 +305,7 @@ export function buildBotCapabilityContextPrompt(
       'Cindy Bot collaboration can discover other available Bots, hand off a bounded objective to one of them, receive the result back in this task, inspect ongoing or completed handoffs, and cancel a handoff that is still active.',
       'A Bot handoff is task delegation with a result return path. It does not rewrite another Bot\'s identity or make that Bot obey. If the user asks for obedience or control, explain this boundary and immediately offer the available delegation path instead of redirecting them to a separate team workflow.',
     ] : []),
-    'Long-term memory and your own Skills are deliberate, user-visible records, not a diary of every turn. Write one only when the user explicitly asks, a preference has repeated and is stable, or a workflow has been verified and is clearly reusable. Never start a background review worker just to create memory or Skills.',
+    'Long-term memory and your own Skills are deliberate, user-visible records, not a diary of every turn. When the user first states a specific stable preference, correction, or long-lived background fact, remember it immediately instead of waiting for repetition or sending the user to Settings. When one complete workflow succeeds in a real task and is clearly reusable, save it as a Skill after that first verified success. Ask only when long-term value is genuinely unclear. Never start a background review worker just to create memory or Skills.',
     'Before writing memory, search for an existing record and update it instead of creating a duplicate. Use a `learned-` name only for a stable reusable working habit, never for a one-off conclusion, temporary path, guess, or unverified step.',
     ...(helperAvailable ? [
       'Before `save_bot_skill`, call `list_bot_skills`. Save or update a Skill only after the workflow has succeeded and the reusable steps are known. A saved Skill is mounted from the next task onward and remains visible, editable, and removable by the user.',

@@ -6956,12 +6956,45 @@
       "create": "创建伙伴"
     },
     "createWizard": {
-      "createFailed": "无法创建伙伴，请重试。"
+      "createFailed": "无法创建伙伴，请重试。",
+      "chooseTemplateDescription": "选择一个起点，再确认名称和头像。以后新增模板也都在这里创建。",
+      "templates": {
+        "control": {
+          "title": "总控",
+          "summary": "关注重要任务变化，负责协调下一步和汇报。",
+          "defaultName": "总控",
+          "defaultDescription": "盯住重要任务状态，及时协调和汇报。"
+        },
+        "prSteward": {
+          "title": "PR 总管",
+          "summary": "跟进评审、检查和交付状态。",
+          "defaultName": "PR 总管",
+          "defaultDescription": "持续跟进 PR，并把可行动的变化交回负责的任务。"
+        },
+        "assistant": {
+          "title": "普通助理",
+          "summary": "拥有独立身份与记忆，按需学习你的习惯。",
+          "defaultName": "我的助理",
+          "defaultDescription": "一个可以长期相处、逐渐熟悉你的个人助理。"
+        }
+      }
     },
     "homeFolder": {
-      "title": "TA 的文件夹",
-      "description": "灵魂、用户画像、自己学会的技能都摊在这里 —— 可以直接用编辑器改，也可以整个备份或复制一份。",
-      "open": "打开"
+      "title": "高级配置",
+      "description": "伙伴会自己维护记忆和学会的做法。只有需要纠正时，才直接打开它的文件夹。",
+      "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和记忆文件夹。模型、权限和连接仍由 Cindy 管理。",
+      "open": "打开文件夹",
+      "openFailed": "无法打开伙伴文件夹。"
+    },
+    "profile": {
+      "title": "基本信息",
+      "description": "这里只放需要你识别和称呼这位伙伴的信息，修改后会自动保存。",
+      "avatar": "头像",
+      "initial": "首字",
+      "useInitial": "使用名称首字作为头像",
+      "summary": "一句话简介",
+      "summaryPlaceholder": "例如：帮我持续跟进发布和交付",
+      "summaryHint": "用一句话说明它主要负责什么。更深的身份和做法由伙伴自己维护。"
     },
     "portability": {
       "title": "导出",
@@ -7024,6 +7057,7 @@
       "title": "设置分组"
     },
     "settingsTabs": {
+      "profile": "基本信息",
       "connections": "能力与连接",
       "growth": "记忆和成长",
       "model": "模型",

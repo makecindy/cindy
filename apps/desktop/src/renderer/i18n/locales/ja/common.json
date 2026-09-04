@@ -6956,12 +6956,45 @@
       "create": "仲間を作成"
     },
     "createWizard": {
-      "createFailed": "仲間を作成できませんでした。もう一度お試しください。"
+      "createFailed": "仲間を作成できませんでした。もう一度お試しください。",
+      "chooseTemplateDescription": "出発点を選び、名前とアバターを確認します。今後のテンプレートも同じ画面から作成します。",
+      "templates": {
+        "control": {
+          "title": "コーディネーター",
+          "summary": "重要なタスクの変化を見守り、次の行動を調整して報告します。",
+          "defaultName": "コーディネーター",
+          "defaultDescription": "重要な作業を止めず、意味のある変化を報告します。"
+        },
+        "prSteward": {
+          "title": "PR 管理役",
+          "summary": "レビュー、チェック、デリバリーの状態を追います。",
+          "defaultName": "PR 管理役",
+          "defaultDescription": "PR を前に進め、対応が必要な変化を担当タスクへ返します。"
+        },
+        "assistant": {
+          "title": "アシスタント",
+          "summary": "独立した個性と記憶を持ち、必要に応じてあなたの習慣を学びます。",
+          "defaultName": "マイアシスタント",
+          "defaultDescription": "長く付き合いながら、少しずつあなたを理解する個人アシスタントです。"
+        }
+      }
     },
     "homeFolder": {
-      "title": "このフォルダ",
-      "description": "ソウル、ユーザープロフィール、自分で覚えたスキルがそのままファイルとして置かれています。エディタで直接編集も、フォルダごとバックアップやコピーもできます。",
-      "open": "開く"
+      "title": "詳細設定",
+      "description": "仲間は記憶と身につけた手順を自分で管理します。修正が必要なときだけフォルダを直接開いてください。",
+      "contents": "SOUL.md、USER.md、system_prompt.md、skills/、memories/ が入っています。モデル、権限、接続は Cindy が管理します。",
+      "open": "フォルダを開く",
+      "openFailed": "仲間のフォルダを開けませんでした。"
+    },
+    "profile": {
+      "title": "基本情報",
+      "description": "この仲間を見分けて呼ぶための情報だけを置きます。変更は自動保存されます。",
+      "avatar": "アバター",
+      "initial": "頭文字",
+      "useInitial": "名前の頭文字をアバターに使う",
+      "summary": "一行の紹介",
+      "summaryPlaceholder": "例：リリースとデリバリーを継続して追う",
+      "summaryHint": "主な担当を一行で説明します。より深い個性や手順は仲間自身が管理します。"
     },
     "portability": {
       "title": "エクスポート",
@@ -7024,6 +7057,7 @@
       "title": "設定セクション"
     },
     "settingsTabs": {
+      "profile": "基本情報",
       "connections": "能力と接続",
       "growth": "記憶と成長",
       "model": "モデル",

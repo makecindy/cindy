@@ -3,42 +3,19 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// A stable `t` identity, like real i18next.
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: translate }),
-}));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 
 const mocks = vi.hoisted(() => ({
   addBotProfileAndWait: vi.fn(),
   navigate: vi.fn(),
 }));
-vi.mock('../botStore', () => ({
-  addBotProfileAndWait: mocks.addBotProfileAndWait,
-}));
+vi.mock('../botStore', () => ({ addBotProfileAndWait: mocks.addBotProfileAndWait }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 import { BotRosterView } from '../BotRosterView';
-import { BOT_AVATAR_HUES } from '../BotAvatar';
 import { peekPendingBotWelcomeEntry, resetPendingBotWelcomeForTests } from '../botWelcome';
-
-function fillAndSubmit(overrides: { name?: string } = {}) {
-  fireEvent.change(screen.getByLabelText('bots.descriptionLabel'), {
-    target: { value: 'Release partner' },
-  });
-  fireEvent.change(screen.getByLabelText('bots.background.title'), {
-    target: { value: 'Own release preparation and verification.' },
-  });
-  fireEvent.change(screen.getByLabelText('bots.persona.title'), {
-    target: { value: 'Be direct and warn me early.' },
-  });
-  const name = screen.getByLabelText('bots.roster.customNameLabel', {
-    selector: 'input',
-  }) as HTMLInputElement;
-  fireEvent.change(name, { target: { value: overrides.name ?? 'Ops buddy' } });
-  fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
-}
 
 beforeEach(() => {
   mocks.addBotProfileAndWait.mockReset();
@@ -49,85 +26,75 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe('BotRosterView — 手捏伙伴的自由创建表单', () => {
-  it('opens straight on the free-form identity form', () => {
+describe('BotRosterView — 唯一的伙伴创建界面', () => {
+  it('shows exactly the three starting templates and the shared basic profile fields', () => {
     render(<BotRosterView />);
 
-    expect(screen.getByText('bots.roster.customTitle')).toBeTruthy();
-    expect(screen.getByLabelText('bots.descriptionLabel')).toBeTruthy();
-    expect(screen.getByLabelText('bots.background.title')).toBeTruthy();
-    expect(screen.getByLabelText('bots.persona.title')).toBeTruthy();
-    expect(
-      screen.getByLabelText('bots.roster.customNameLabel', { selector: 'input' }),
-    ).toBeTruthy();
+    expect(screen.getAllByRole('button', { pressed: true })).toHaveLength(1);
+    for (const id of ['control', 'prSteward', 'assistant']) {
+      expect(screen.getByText(`bots.createWizard.templates.${id}.title`)).toBeTruthy();
+    }
+    expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
+    expect(screen.getByLabelText('bots.profile.summary')).toBeTruthy();
+    expect(screen.getByText('bots.profile.avatar')).toBeTruthy();
+    expect(screen.queryByText('bots.background.title')).toBeNull();
+    expect(screen.queryByText('bots.persona.title')).toBeNull();
   });
 
-  it('never paints an avatar sentinel as text', () => {
+  it('uses a template as a draft in the same fields', () => {
     render(<BotRosterView />);
-    expect(document.body.textContent).not.toContain('cindy://');
-  });
+    fireEvent.click(screen.getByText('bots.createWizard.templates.prSteward.title'));
 
-  it('disables create until a name is entered', () => {
-    render(<BotRosterView />);
-    const submit = screen.getByRole('button', { name: 'bots.roster.create' }) as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-
-    fireEvent.change(
-      screen.getByLabelText('bots.roster.customNameLabel', { selector: 'input' }),
-      { target: { value: 'Ops buddy' } },
+    expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe(
+      'bots.createWizard.templates.prSteward.defaultName',
     );
-    expect(submit.disabled).toBe(false);
+    expect((screen.getByLabelText('bots.profile.summary') as HTMLInputElement).value).toBe(
+      'bots.createWizard.templates.prSteward.defaultDescription',
+    );
   });
 
-  it("creates from the user's own description, background and personality", async () => {
-    const onCreated = vi.fn();
-    render(<BotRosterView onCreated={onCreated} />);
-
-    fillAndSubmit();
+  it('lets the user change name, summary, avatar, and hue before creation', async () => {
+    render(<BotRosterView />);
+    fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Ops buddy' } });
+    fireEvent.change(screen.getByLabelText('bots.profile.summary'), {
+      target: { value: 'Release partner' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.chooseAvatar:{"avatar":"🤖"}' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'bots.chooseAvatarColor:{"color":"teal"}' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
 
     await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
-    const payload = mocks.addBotProfileAndWait.mock.calls[0][0];
-    expect(payload).toMatchObject({
-      channel: 'local',
+    expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).toMatchObject({
       name: 'Ops buddy',
       description: 'Release partner',
-      identitySource: 'Own release preparation and verification.\n\nBe direct and warn me early.',
+      avatar: '🤖',
+      avatarColor: 'teal',
+      identitySource: expect.stringContaining('persistent Cindy assistant'),
       userContextSource: '',
       skills: [],
     });
-    expect(payload.avatar).toBe('');
-    expect(BOT_AVATAR_HUES).toContain(payload.avatarColor);
-    await waitFor(() =>
-      expect(onCreated).toHaveBeenCalledWith({ id: 'bot-new', name: 'Ops buddy' }),
-    );
   });
 
-  it('navigates to the new teammate when no onCreated is supplied', async () => {
+  it('navigates to the new teammate and leaves a greeting', async () => {
     render(<BotRosterView />);
-    fillAndSubmit();
+    fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Ops buddy' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-new'));
-  });
-
-  it('parks a generic greeting with the teammate\'s own name', async () => {
-    render(<BotRosterView />);
-    fillAndSubmit({ name: 'Ops buddy' });
-
-    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
     expect(peekPendingBotWelcomeEntry('bot-new')).toEqual({
       key: 'bots.welcome.generic',
       params: { name: 'Ops buddy' },
     });
   });
 
-  it('shows a real error message and keeps the form usable when creation fails', async () => {
+  it('keeps the unified form usable after a real create error', async () => {
     mocks.addBotProfileAndWait.mockRejectedValue(new Error('offline'));
     render(<BotRosterView />);
-    fillAndSubmit();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('offline'));
-    expect(
-      screen.getByLabelText('bots.roster.customNameLabel', { selector: 'input' }),
-    ).toBeTruthy();
+    expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
   });
 });

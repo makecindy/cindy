@@ -6958,12 +6958,45 @@
       "create": "Create teammate"
     },
     "createWizard": {
-      "createFailed": "The teammate could not be created. Try again."
+      "createFailed": "The teammate could not be created. Try again.",
+      "chooseTemplateDescription": "Choose a starting point, then confirm the name and avatar. Future templates will use this same flow.",
+      "templates": {
+        "control": {
+          "title": "Coordinator",
+          "summary": "Watches important task changes, coordinates next steps, and reports back.",
+          "defaultName": "Coordinator",
+          "defaultDescription": "Keep important work moving and report meaningful changes."
+        },
+        "prSteward": {
+          "title": "PR steward",
+          "summary": "Follows reviews, checks, and delivery state.",
+          "defaultName": "PR steward",
+          "defaultDescription": "Keep pull requests moving and route actionable changes to the owning task."
+        },
+        "assistant": {
+          "title": "Assistant",
+          "summary": "Keeps a private identity and memory, learning your habits when useful.",
+          "defaultName": "My assistant",
+          "defaultDescription": "A personal assistant that gets to know you over time."
+        }
+      }
     },
     "homeFolder": {
-      "title": "Its folder",
-      "description": "Soul, user profile and self-taught skills all live here as plain files — edit them in any editor, back the folder up, or copy it to start another teammate.",
-      "open": "Open"
+      "title": "Advanced configuration",
+      "description": "The teammate maintains its own memory and reusable ways of working. Open its folder only when something needs correcting.",
+      "contents": "Contains SOUL.md, USER.md, system_prompt.md, skills/, and memories/. Models, permissions, and connections remain managed by Cindy.",
+      "open": "Open folder",
+      "openFailed": "The teammate folder could not be opened."
+    },
+    "profile": {
+      "title": "Basic information",
+      "description": "Only the information you need to recognize and address this teammate lives here. Changes save automatically.",
+      "avatar": "Avatar",
+      "initial": "Initial",
+      "useInitial": "Use the name's initial as the avatar",
+      "summary": "One-line summary",
+      "summaryPlaceholder": "e.g. Keep releases and delivery moving",
+      "summaryHint": "Describe its main responsibility in one line. The teammate maintains deeper identity and working knowledge itself."
     },
     "portability": {
       "title": "Export",
@@ -7026,6 +7059,7 @@
       "title": "Settings sections"
     },
     "settingsTabs": {
+      "profile": "Basic information",
       "connections": "Capabilities & connections",
       "growth": "Memory & growth",
       "model": "Model",

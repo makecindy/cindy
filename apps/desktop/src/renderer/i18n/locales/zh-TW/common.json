@@ -6956,12 +6956,45 @@
       "create": "建立夥伴"
     },
     "createWizard": {
-      "createFailed": "無法建立夥伴，請重試。"
+      "createFailed": "無法建立夥伴，請重試。",
+      "chooseTemplateDescription": "選擇一個起點，再確認名稱與頭像。之後新增的範本也都會從這裡建立。",
+      "templates": {
+        "control": {
+          "title": "總控",
+          "summary": "關注重要任務變化，負責協調下一步與回報。",
+          "defaultName": "總控",
+          "defaultDescription": "盯住重要任務狀態，及時協調與回報。"
+        },
+        "prSteward": {
+          "title": "PR 總管",
+          "summary": "跟進審查、檢查與交付狀態。",
+          "defaultName": "PR 總管",
+          "defaultDescription": "持續跟進 PR，並把可行動的變化交回負責的任務。"
+        },
+        "assistant": {
+          "title": "一般助理",
+          "summary": "擁有獨立身分與記憶，按需學習你的習慣。",
+          "defaultName": "我的助理",
+          "defaultDescription": "一個可以長期相處、逐漸熟悉你的個人助理。"
+        }
+      }
     },
     "homeFolder": {
-      "title": "牠的資料夾",
-      "description": "靈魂、使用者輪廓、自己學會的技能都攤在這裡 —— 可以直接用編輯器改，也可以整個備份或複製一份。",
-      "open": "開啟"
+      "title": "進階設定",
+      "description": "夥伴會自己維護記憶與學會的做法。只有需要修正時，才直接開啟它的資料夾。",
+      "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和記憶資料夾。模型、權限和連線仍由 Cindy 管理。",
+      "open": "開啟資料夾",
+      "openFailed": "無法開啟夥伴資料夾。"
+    },
+    "profile": {
+      "title": "基本資訊",
+      "description": "這裡只放讓你辨識與稱呼這位夥伴的資訊，修改後會自動儲存。",
+      "avatar": "頭像",
+      "initial": "首字",
+      "useInitial": "使用名稱首字作為頭像",
+      "summary": "一句話簡介",
+      "summaryPlaceholder": "例如：持續幫我跟進發布與交付",
+      "summaryHint": "用一句話說明它主要負責什麼。更深的身分與做法由夥伴自己維護。"
     },
     "portability": {
       "title": "匯出",
@@ -7024,6 +7057,7 @@
       "title": "設定分組"
     },
     "settingsTabs": {
+      "profile": "基本資訊",
       "connections": "能力與連接",
       "growth": "記憶和成長",
       "model": "模型",

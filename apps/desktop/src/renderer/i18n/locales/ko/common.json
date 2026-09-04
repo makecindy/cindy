@@ -6956,12 +6956,45 @@
       "create": "동료 만들기"
     },
     "createWizard": {
-      "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요."
+      "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요.",
+      "chooseTemplateDescription": "시작점을 고른 뒤 이름과 아바타를 확인하세요. 앞으로 추가될 템플릿도 이 화면에서 만듭니다.",
+      "templates": {
+        "control": {
+          "title": "코디네이터",
+          "summary": "중요한 작업 변화를 살피고 다음 단계를 조율해 보고합니다.",
+          "defaultName": "코디네이터",
+          "defaultDescription": "중요한 작업이 멈추지 않도록 조율하고 의미 있는 변화를 보고합니다."
+        },
+        "prSteward": {
+          "title": "PR 관리자",
+          "summary": "리뷰, 검사와 전달 상태를 추적합니다.",
+          "defaultName": "PR 관리자",
+          "defaultDescription": "PR을 계속 진행하고 조치할 변화를 담당 작업에 돌려줍니다."
+        },
+        "assistant": {
+          "title": "일반 어시스턴트",
+          "summary": "독립된 정체성과 기억을 가지며 필요할 때 당신의 습관을 배웁니다.",
+          "defaultName": "나의 어시스턴트",
+          "defaultDescription": "오래 함께하며 조금씩 당신을 알아가는 개인 어시스턴트입니다."
+        }
+      }
     },
     "homeFolder": {
-      "title": "이 폴더",
-      "description": "소울, 사용자 프로필, 스스로 익힌 스킬이 모두 파일로 놓여 있습니다. 편집기로 직접 고치거나, 폴더째 백업하거나 복사할 수 있습니다.",
-      "open": "열기"
+      "title": "고급 설정",
+      "description": "동료는 기억과 익힌 작업 방식을 스스로 관리합니다. 바로잡을 때만 폴더를 직접 여세요.",
+      "contents": "SOUL.md, USER.md, system_prompt.md, skills/, memories/가 들어 있습니다. 모델, 권한과 연결은 Cindy가 관리합니다.",
+      "open": "폴더 열기",
+      "openFailed": "동료 폴더를 열 수 없습니다."
+    },
+    "profile": {
+      "title": "기본 정보",
+      "description": "이 동료를 알아보고 부르는 데 필요한 정보만 둡니다. 변경 사항은 자동 저장됩니다.",
+      "avatar": "아바타",
+      "initial": "첫 글자",
+      "useInitial": "이름 첫 글자를 아바타로 사용",
+      "summary": "한 줄 소개",
+      "summaryPlaceholder": "예: 릴리스와 전달을 계속 추적",
+      "summaryHint": "주요 역할을 한 줄로 적으세요. 더 깊은 정체성과 작업 방식은 동료가 스스로 관리합니다."
     },
     "portability": {
       "title": "내보내기",
@@ -7024,6 +7057,7 @@
       "title": "설정 섹션"
     },
     "settingsTabs": {
+      "profile": "기본 정보",
       "connections": "기능과 연결",
       "growth": "기억과 성장",
       "model": "모델",

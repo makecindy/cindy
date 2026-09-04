@@ -23,9 +23,7 @@ describe('Bot 对话的判定条件', () => {
   it('「这是跟伙伴的对话」需要路由身份与 session.source 同时成立', () => {
     // URL 只是导航投影。少了 source 这一半,任何 /bots/... 链接都能把普通任务
     // 伪装成伙伴对话。
-    expect(sessionView).toContain(
-      "botIdentity && session?.source === 'bot' ? botIdentity : null",
-    );
+    expect(sessionView).toContain("botIdentity && session?.source === 'bot' ? botIdentity : null");
   });
 
   it('气泡头像只在 Bot 对话下传给消息流', () => {
@@ -50,9 +48,7 @@ describe('Bot 对话的判定条件', () => {
 
 describe('消息流的头像挂载', () => {
   it('没有头像时原样返回气泡,不多包一层 DOM', () => {
-    const helper = messageStream.match(
-      /function withAssistantAvatar\([\s\S]*?\n}/,
-    )?.[0];
+    const helper = messageStream.match(/function withAssistantAvatar\([\s\S]*?\n}/)?.[0];
     expect(helper).toBeTruthy();
     expect(helper).toContain('if (!avatar) return bubble;');
   });
@@ -83,11 +79,13 @@ describe('伙伴输入框只保留对话动作', () => {
   });
 });
 
-describe('伙伴设置只展示伙伴自己的成长内容', () => {
-  it('不再挂载全局 Skill、内置工具与 MCP 能力目录', () => {
+describe('伙伴设置收口为基本资料与高级文件入口', () => {
+  it('不再挂载旧成长列表或全局能力目录', () => {
     expect(botSettings).not.toContain('import { BotCapabilitySettings }');
     expect(botSettings).not.toContain('<BotCapabilitySettings');
-    expect(botSettings).toContain('<BotGrowthLists');
+    expect(botSettings).not.toContain('<BotGrowthLists');
+    expect(botSettings).toContain('<BotBasicProfileFields');
+    expect(botSettings).toContain("t('bots.homeFolder.title')");
   });
 });
 
@@ -146,6 +144,8 @@ describe('伙伴对话的运行时选择回写 Profile', () => {
   });
 
   it('普通任务一行都不写:没有伙伴身份就直接返回', () => {
-    expect(sessionView).toContain('const botId = botChatIdentityRef.current?.id;\n      if (!botId) return;');
+    expect(sessionView).toContain(
+      'const botId = botChatIdentityRef.current?.id;\n      if (!botId) return;',
+    );
   });
 });

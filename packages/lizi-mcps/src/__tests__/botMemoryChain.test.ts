@@ -16,8 +16,8 @@
  *  2. 存   — 分片落在 `bot:<botId>` 的 store 目录,项目 store 一条都没有;
  *  3. 取   — 下一次会话启动读的 `store.getIndex()`(= host 的 readMemoryIndex,
  *            hydrateBotProfileRuntime 把它拼进 makerMemoryIndexSnapshot)含这条;
- *  4. 用   — 设置页「TA 记得的 / TA 学会的」读的 `store.list()` 与引擎同一份,
- *            且 `learned-` 前缀切分成立;
+ *  4. 用   — 伙伴自己读到的 `store.list()` 与引擎同一份,且 `learned-`
+ *            前缀契约成立;
  *  5. 删   — 删除 / 清空后引擎侧真没了,且下一次会话装配的索引里也不再出现。
  *
  * 无法在这里离线验证的:真 LLM 是否愿意写记忆、Electron IPC 布线、渲染层。
@@ -60,8 +60,8 @@ const OTHER_BOT_ID = 'bot-note-taker';
 const PROJECT_DIR = path.join(path.sep, 'repo', 'cindy');
 
 /**
- * 与 renderer 的 `botGrowth.partitionBotMemoryRecords` 同一条约定 —— 这里重写
- * 一遍是为了让本测试不跨包 import renderer 代码;两边一起改才对得上。
+ * `learned-` 是记忆存储与 Bot Skill 工具共享的稳定约定。深度编辑入口直接
+ * 打开伙伴的家,不再由 renderer 维护第二套分类逻辑。
  */
 const LEARNED_SLUG_PREFIX = 'learned-';
 

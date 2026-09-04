@@ -76,6 +76,8 @@ describe('Bot Profile runtime prompt', () => {
     const prompt = buildBotCapabilityContextPrompt();
     expect(prompt).toContain('Use a `learned-` name only for a stable reusable working habit');
     expect(prompt).toContain('not a diary of every turn');
+    expect(prompt).toContain('instead of waiting for repetition');
+    expect(prompt).toContain('after that first verified success');
     expect(prompt).toContain('Never start a background review worker');
     expect(prompt).toContain('never for a one-off conclusion');
   });

@@ -109,6 +109,7 @@ const DOCS_GUIDANCE = [
 const MEMORY_GUIDANCE = [
   '## 你记得住事',
   '你有一份跨会话的长期记忆,只属于你自己。值得记的是以后还用得上的东西:用户的偏好与习惯、他纠正过你的做法、长期有效的约定与背景。',
+  '用户第一次明确说出一条稳定偏好、纠正或长期背景时,确认它足够具体且不是临时状态,就主动记下,不要等他重复第二次,也不要让他再去设置页手填。拿不准是否长期有效时才问一句。',
   '记成陈述句,不要写成给自己的命令 —— 「他喜欢先看几版再定」是好记忆,「以后都先给三版」不是。',
   '不要记流水账:今天做完的事、临时状态、过几天就过期的进度,都不进记忆。',
   '记下一件事后,在回复末尾轻描淡写地带一句,让用户知道你记住了什么。',
@@ -117,7 +118,7 @@ const MEMORY_GUIDANCE = [
 /** 自有技能:与记忆的分工是「做法」vs「事实」。 */
 const OWN_SKILLS_GUIDANCE = [
   '## 你能把做法沉淀成本事',
-  '技能不是每轮复盘或流水账。只有用户明确要求,或者同类工作已经重复出现、做法经过验证且确实值得复用时,才用 `save_bot_skill` 把步骤存成自己的技能;单次结论、临时路径、猜测和未经验证的做法都不存。',
+  '技能不是每轮复盘或流水账。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_bot_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
   '存之前先用 `list_bot_skills` 查重;有同类就更新原来的,不要另造一份。技能从下一个任务开始生效,并且始终让用户看得见、改得动、删得掉。',
   '不要为了整理记忆或技能启动后台复盘、协同 worker。发现旧技能确实过时,先验证新做法,再更新。',
 ].join('\n');
@@ -170,10 +171,10 @@ export function buildBotTeammateRoster(
       const name = entry.name.trim();
       const id = entry.id.trim();
       if (!name || !id) return '';
-      const role = (entry.description ?? '').replace(/\s+/g, ' ').trim().slice(
-        0,
-        TEAMMATE_ROLE_MAX_CHARS,
-      );
+      const role = (entry.description ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, TEAMMATE_ROLE_MAX_CHARS);
       return `- ${name}(id \`${id}\`)${role ? ` —— ${role}` : ''}`;
     })
     .filter(Boolean);
@@ -198,7 +199,7 @@ function buildHomeGuidance(homeDir: string): string {
     '- `workspace/` —— 你的默认可写工作区。没有显式挂载项目时，产物和工作文件放这里。',
     '- `memories/` —— 你的长期记忆；通过 Bot Memory 工具维护。',
     '- `skills/` —— 你自己的技能；通过 Bot Skill 工具维护。',
-    '- `SOUL.md`、`memories/USER.md`、`system_prompt.md` —— 用户管理的身份与偏好，下一任务加载。',
+    '- `SOUL.md`、`memories/USER.md`、`system_prompt.md` —— 身份和高级覆盖，用户需要纠正你时可以直接编辑，下一任务加载。不要自行改写 SOUL 或 system_prompt；日常积累写进记忆和技能。',
     '',
     '不要查找或修改 Home 根部的宿主配置。外部目录、项目、Skill 和 MCP 只有用户显式挂载后才属于当前能力面。',
   ].join('\n');
@@ -230,7 +231,8 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
   if (input.capabilities.ownSkillsEnabled) capabilityParts.push(OWN_SKILLS_GUIDANCE);
-  const botCreationEnabled = input.capabilities.botCreationEnabled ?? input.capabilities.delegationEnabled;
+  const botCreationEnabled =
+    input.capabilities.botCreationEnabled ?? input.capabilities.delegationEnabled;
   if (botModeEnabled && botCreationEnabled) capabilityParts.push(BOT_CREATION_GUIDANCE);
   if (botModeEnabled && input.capabilities.delegationEnabled) {
     capabilityParts.push(DELEGATION_GUIDANCE);
@@ -269,9 +271,10 @@ export function buildBotVolatileTier(input: BotSystemPromptInput): string {
   const skillIndex = buildBotSkillIndex(input.skillIndex);
   if (skillIndex) parts.push(skillIndex);
   // 队友名册随「有哪些伙伴 / 谁改了名」变,所以在易变层 —— 与技能索引同理。
-  const teammates = input.capabilities.botModeEnabled !== false
-    ? buildBotTeammateRoster(input.teammates ?? [])
-    : '';
+  const teammates =
+    input.capabilities.botModeEnabled !== false
+      ? buildBotTeammateRoster(input.teammates ?? [])
+      : '';
   if (teammates) parts.push(teammates);
   const memory = input.memorySnapshot?.trim();
   if (memory) parts.push(memory);

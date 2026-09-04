@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BookMarked,
   Bot,
   Check,
   ChevronRight,
+  FolderOpen,
   MessageCircle,
-  Pencil,
   PlugZap,
   RefreshCcw,
   UserRound,
@@ -14,7 +13,6 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 
 import { Spinner } from '@/components/ui/spinner';
-import { Switch } from '@/components/ui/switch';
 import * as sessionService from '@/lib/sessionService';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
@@ -32,28 +30,20 @@ import {
 } from './botStore';
 import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
-import { BotProfileDialog } from './BotProfileDialog';
+import { BotBasicProfileFields } from './BotBasicProfileFields';
 import {
   createBotCanonicalSessionWithRetry,
   shouldDeferCanonicalBotSessionNavigation,
   withBotCanonicalSessionReadTimeout,
 } from './botNavigation';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
-import { BotGrowthLists } from './BotGrowthLists';
 import { BotSettingsBlock } from './BotSettingsBlock';
 import { BotModelChainEditor } from './BotModelChainEditor';
-import { BotPersonaWizard, personaSummaryText } from './BotPersonaWizard';
-import { extractPersonaFromIdentitySource, readBotBackground } from './botPersona';
-import { rememberPendingBotPersonaAck } from './botPersonaAck';
-import { resolveBotSettingsHighlight, type BotSettingsHighlightId } from './botSettingsNav';
 import type { BotSettingsPayload } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
 
-/** 成长尾注跳转后的高亮停留时长。 */
-const BOT_SETTINGS_HIGHLIGHT_MS = 2400;
-
 const BOT_DETAIL_TABS = [
-  { id: 'growth', labelKey: 'bots.settingsTabs.growth', icon: BookMarked },
+  { id: 'profile', labelKey: 'bots.settingsTabs.profile', icon: UserRound },
   { id: 'model', labelKey: 'bots.settingsTabs.model', icon: PlugZap },
   { id: 'maintenance', labelKey: 'bots.settingsTabs.maintenance', icon: RefreshCcw },
 ] as const;
@@ -70,7 +60,7 @@ function parseBotDetailTab(value: string | null): BotDetailTabId {
   ) {
     return 'maintenance';
   }
-  return 'growth';
+  return 'profile';
 }
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -109,25 +99,7 @@ export function BotSettings({
   const { t } = useBotTranslation();
   const navigate = useNavigate();
   const [settingsSearchParams] = useSearchParams();
-  // 成长尾注深链会短暂指出发生变化的列表。
-  const requestedHighlight = useMemo(
-    () => resolveBotSettingsHighlight(settingsSearchParams.get('highlight')),
-    [settingsSearchParams],
-  );
-  const [highlight, setHighlight] = useState<BotSettingsHighlightId | null>(requestedHighlight);
-  useEffect(() => {
-    setHighlight(requestedHighlight);
-    if (!requestedHighlight) return;
-    const timer = window.setTimeout(() => setHighlight(null), BOT_SETTINGS_HIGHLIGHT_MS);
-    return () => window.clearTimeout(timer);
-  }, [requestedHighlight]);
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const [personaOpen, setPersonaOpen] = useState(false);
-  /**
-   * 「刚存完性格，等着回对话」的标记。值用时间戳而不是 boolean：连着调两次性格
-   * 也各自能触发一次导航（boolean 会因为值没变而不重跑 effect）。
-   */
-  const [personaSavedAt, setPersonaSavedAt] = useState<number | null>(null);
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
@@ -139,7 +111,7 @@ export function BotSettings({
   const [activeTab, setActiveTab] = useState<BotDetailTabId>(() =>
     parseBotDetailTab(settingsSearchParams.get('tab') ?? settingsSearchParams.get('anchor')),
   );
-  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
   const hiddenVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
@@ -171,9 +143,6 @@ export function BotSettings({
     );
     contentRef.current?.scrollTo({ top: 0 });
   }, [settingsSearchParams]);
-
-  // identitySource 是权威；这里仅投影掉向导 marker 后的背景正文。
-  const background = readBotBackground(identitySource);
 
   const commitProfile = useCallback(
     async (payload: BotSettingsPayload) => {
@@ -216,27 +185,6 @@ export function BotSettings({
     });
   };
 
-  const openProfileEditor = () => {
-    setEditProfileOpen(true);
-  };
-
-  /*
-    存完性格回对话。放在 effect 里跑，是为了让这一步发生在「新 identitySource 已经
-    进了 autosave 载荷 ref」之后 —— 在 onSave 里同步 flush 会保存到旧值。
-    handleBack 而不是直接 onBack：保存失败要留在页面。
-  */
-  useEffect(() => {
-    if (personaSavedAt === null) return;
-    setPersonaSavedAt(null);
-    handleBack();
-  }, [handleBack, personaSavedAt]);
-
-  /*
-    区块标题旁那句提示只在「这一块还空着」时出现(约定见 BotSettingsBlock)。
-    这两个判断就是各自那块的「空不空」,提到这里一处算,免得在 JSX 里内联出两份
-    不一致的判据。
-  */
-  const persona = extractPersonaFromIdentitySource(identitySource);
   const joined = botJoinedRelativeKey(bot.createdAt, Date.now());
 
   // 页面里的普通 Back 行已并入顶栏面包屑。保留键盘可达的同语义出口，是为了
@@ -281,30 +229,16 @@ export function BotSettings({
     >
       {backToChatControl}
       <div className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden px-4 sm:px-6 lg:flex-row lg:px-8">
-        <aside className="mx-auto w-full shrink-0 border-b border-[var(--border-default)] pb-5 lg:mx-0 lg:h-full lg:w-80 lg:border-b-0 lg:pb-0 lg:pr-6">
-          <div className="flex min-w-0 flex-col gap-6 pt-4">
+        <aside className="mx-auto w-full min-w-0 shrink-0 overflow-hidden border-b border-[var(--border-default)] pb-5 lg:mx-0 lg:h-full lg:w-80 lg:max-w-80 lg:border-b-0 lg:pb-0 lg:pr-6">
+          <div className="flex w-full min-w-0 max-w-full flex-col gap-6 overflow-hidden pt-4">
             <header className="flex min-w-0 flex-row items-start gap-5 lg:flex-col lg:items-start lg:text-left">
-              <div className="group relative shrink-0">
-                <BotAvatar bot={{ ...bot, avatar, avatarColor }} size="lg" />
-                <button
-                  type="button"
-                  onClick={openProfileEditor}
-                  aria-label={t('bots.editProfile')}
-                  className="absolute inset-0 flex items-center justify-center rounded-full bg-[var(--overlay-modal)] text-[var(--text-primary)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-                >
-                  <Pencil size={18} />
-                </button>
-              </div>
+              <BotAvatar bot={{ ...bot, avatar, avatarColor }} size="lg" />
 
-              <div className="flex min-w-0 flex-1 flex-col items-start gap-3">
-                <div className="flex w-full min-w-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={openProfileEditor}
-                    className="min-w-0 truncate rounded-lg px-2 py-1 text-20 font-medium leading-tight text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-                  >
+              <div className="flex w-full min-w-0 max-w-full flex-1 flex-col items-start gap-2 overflow-hidden">
+                <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
+                  <h1 className="min-w-0 flex-1 truncate text-20 font-medium leading-tight text-[var(--text-primary)]">
                     {name}
-                  </button>
+                  </h1>
                   {description.trim() ? (
                     <span
                       className="max-w-[45%] shrink truncate rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
@@ -315,48 +249,15 @@ export function BotSettings({
                   ) : null}
                 </div>
                 {joined ? (
-                  <span className="px-2 text-11 text-[var(--text-tertiary)]">
+                  <span className="text-11 text-[var(--text-tertiary)]">
                     {t(joined.key, { n: joined.n })}
                   </span>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={openProfileEditor}
-                  aria-label={t('bots.background.edit')}
-                  className="w-full rounded-lg px-2 py-1 text-left hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                >
-                  <span className="block text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-                    {t('bots.background.title')}
-                  </span>
-                  <span
-                    className="mt-2 line-clamp-5 text-12 leading-5 text-[var(--text-primary)]"
-                    title={background || t('bots.background.empty')}
-                  >
-                    {background || t('bots.background.empty')}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={openProfileEditor}
-                  aria-label={persona ? t('bots.persona.title') : t('bots.persona.addButton')}
-                  className="w-full rounded-lg px-2 py-1 text-left hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                >
-                  <span className="block text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-                    {t('bots.persona.title')}
-                  </span>
-                  {persona ? (
-                    <span
-                      className="mt-2 line-clamp-5 text-12 leading-5 text-[var(--text-primary)]"
-                      title={personaSummaryText(t, persona)}
-                    >
-                      {personaSummaryText(t, persona)}
-                    </span>
-                  ) : (
-                    <span className="mt-2 block text-12 text-[var(--text-tertiary)]">
-                      {t('bots.persona.addButton')}
-                    </span>
-                  )}
-                </button>
+                {description.trim() ? (
+                  <p className="line-clamp-3 w-full max-w-full break-words text-12 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                    {description.trim()}
+                  </p>
+                ) : null}
               </div>
             </header>
 
@@ -369,13 +270,6 @@ export function BotSettings({
               >
                 <MessageCircle size={15} />
                 {t('bots.actions.message')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setPersonaOpen(true)}
-                className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-default)] px-4 text-12 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-              >
-                {t('bots.persona.adjustButton')}
               </button>
             </div>
 
@@ -455,45 +349,64 @@ export function BotSettings({
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-8 pt-4"
           >
             <div className="mx-auto flex max-w-3xl flex-col gap-4 pb-10">
-              {activeTab === 'growth' ? (
+              {activeTab === 'profile' ? (
                 <>
                   <BotSettingsBlock
-                    icon={BookMarked}
-                    title={t('bots.memoryLabel')}
-                    hint={t(
-                      capabilities.memory
-                        ? 'bots.memoryDescription'
-                        : 'bots.memoryRecovery.description',
-                    )}
-                    action={
-                      <Switch
-                        checked={capabilities.memory}
-                        onCheckedChange={(checked) => updateCapability('memory', checked)}
-                        aria-label={t('bots.memoryLabel')}
-                      />
-                    }
-                  />
-                  <BotSettingsBlock
                     icon={UserRound}
-                    title={t('bots.advancedIdentity.title')}
-                    hint={t('bots.userContextSourceDescription')}
+                    title={t('bots.profile.title')}
+                    hint={t('bots.profile.description')}
                   >
-                    <label className="flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                      {t('bots.userContextSourceLabel')}
-                      <textarea
-                        value={userContextSource}
-                        onChange={(event) => {
-                          setUserContextSource(event.target.value);
-                          autosave.onEdit('text');
-                        }}
-                        onBlur={() => void autosave.flush()}
-                        placeholder={t('bots.userContextSourcePlaceholder')}
-                        rows={5}
-                        className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-                      />
-                    </label>
+                    <BotBasicProfileFields
+                      value={{ name, description, avatar, avatarColor }}
+                      onChange={(next, kind) => {
+                        setName(next.name);
+                        setDescription(next.description);
+                        setAvatar(next.avatar);
+                        setAvatarColor(next.avatarColor);
+                        autosave.onEdit(kind);
+                      }}
+                    />
                   </BotSettingsBlock>
-                  <BotGrowthLists botId={bot.id} highlight={highlight} />
+                  <BotSettingsBlock
+                    icon={FolderOpen}
+                    title={t('bots.homeFolder.title')}
+                    hint={t('bots.homeFolder.description')}
+                    action={
+                      <button
+                        type="button"
+                        disabled={!bot.homeDir}
+                        onClick={() => {
+                          if (!bot.homeDir) return;
+                          setFolderError(null);
+                          void window.electronAPI.openPath(bot.homeDir).then((result) => {
+                            if (!result.success)
+                              setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
+                          });
+                        }}
+                        className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {t('bots.homeFolder.open')}
+                      </button>
+                    }
+                  >
+                    <p className="break-words text-11 leading-5 text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
+                      {t('bots.homeFolder.contents')}
+                    </p>
+                    {!capabilities.memory ? (
+                      <button
+                        type="button"
+                        onClick={() => updateCapability('memory', true)}
+                        className="mt-3 h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                      >
+                        {t('bots.memoryRecovery.action')}
+                      </button>
+                    ) : null}
+                    {folderError ? (
+                      <p className="mt-2 text-11 text-[var(--text-danger)]" role="alert">
+                        {folderError}
+                      </p>
+                    ) : null}
+                  </BotSettingsBlock>
                 </>
               ) : null}
 
@@ -560,46 +473,6 @@ export function BotSettings({
           </div>
         </section>
       </div>
-
-      <BotPersonaWizard
-        open={personaOpen}
-        identitySource={identitySource}
-        onOpenChange={setPersonaOpen}
-        onSave={(next) => {
-          /*
-            调完性格要能立刻**听见**新口气，所以这里做两件事：
-            1) 人格真的变了才寄存一条确认消息(botPersonaAck，幂等靠 clientId)；
-            2) 回到 TA 的对话 —— 「调整性格」是从对话里点进来的，改完停在设置页
-               等于让用户自己再点一次返回才看得到效果。
-
-            导航**不能**在这里同步做：autosave 的载荷是每次渲染写进 ref 的，
-            此刻 setIdentitySource 还没提交，同步 flush 会把**旧的** identitySource
-            当成要保存的内容发出去 —— 性格白调了。改成置一个标记，等新草稿落进
-            ref 之后的那次渲染再走 handleBack。
-          */
-          const previous = extractPersonaFromIdentitySource(identitySource);
-          const parsed = extractPersonaFromIdentitySource(next);
-          setIdentitySource(next);
-          autosave.onEdit('instant');
-          if (parsed) rememberPendingBotPersonaAck(bot.id, previous, parsed);
-          setPersonaSavedAt(Date.now());
-        }}
-      />
-
-      <BotProfileDialog
-        open={editProfileOpen}
-        onOpenChange={setEditProfileOpen}
-        value={{ name, description, identitySource, avatar, avatarColor }}
-        mode="edit"
-        onSave={(next) => {
-          setName(next.name);
-          setDescription(next.description);
-          setIdentitySource(next.identitySource);
-          setAvatar(next.avatar);
-          setAvatarColor(next.avatarColor);
-          autosave.onEdit('text');
-        }}
-      />
     </main>
   );
 }
@@ -753,7 +626,8 @@ export function BotsHomeView() {
     let cancelled = false;
     if (canonicalSessionId) {
       setIsCreatingSession(false);
-      void window.electronAPI.localDb.bots.renewIfDue({ botId: selectedBot.id })
+      void window.electronAPI.localDb.bots
+        .renewIfDue({ botId: selectedBot.id })
         .catch(() => ({ renewed: false, canonicalSessionId }))
         .then((renewal) => {
           const activeSessionId = renewal.canonicalSessionId ?? canonicalSessionId;
