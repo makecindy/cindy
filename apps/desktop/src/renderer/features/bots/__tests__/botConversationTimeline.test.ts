@@ -56,12 +56,25 @@ describe('Bot unread boundary', () => {
   const messages = [
     { clientId: 'old', role: 'assistant', createdAt: 4_000 },
     { clientId: 'user', role: 'user', createdAt: 6_000 },
+    {
+      clientId: 'internal-b2b-received',
+      role: 'assistant',
+      createdAt: 6_500,
+      systemCardType: 'bot-direct-message',
+    },
     { clientId: 'first-unread', role: 'assistant', createdAt: 7_000 },
     { clientId: 'later-unread', role: 'assistant', createdAt: 8_000 },
   ];
 
   it('anchors the divider to the first assistant reply after the entry read position', () => {
     expect(findFirstUnreadBotReplyClientId(messages, 5_000)).toBe('first-unread');
+  });
+
+  it('does not put NEW on an internal Bot-to-Bot message stamp', () => {
+    const onlyInternal = messages.filter(
+      (message) => message.clientId !== 'first-unread' && message.clientId !== 'later-unread',
+    );
+    expect(findFirstUnreadBotReplyClientId(onlyInternal, 5_000)).toBeNull();
   });
 
   it('does not create a divider without an entry boundary or a later reply', () => {

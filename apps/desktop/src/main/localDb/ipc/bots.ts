@@ -406,10 +406,11 @@ const CANONICAL_UNREAD_SCAN = 100;
  *
  * Read position is renderer state (see `features/bots/botReadState.ts`) and is
  * passed in per request — main never persists it, so this stays a pure read.
- * Only `assistant` rows count: the user's own sends are never "unread", and the
- * visibility rules are exactly the preview's (no rewind-truncated rows, no
- * hidden auto-resume prompts, nothing before the `/clear` boundary). One
- * indexed range scan per Bot on `idx_messages_session_created`, capped at
+ * Only the Bot's own `assistant` output counts: the user's sends and internal
+ * Bot-to-Bot conversation traces are never "unread". The remaining visibility
+ * rules are exactly the preview's (no rewind-truncated rows, no hidden
+ * auto-resume prompts, nothing before the `/clear` boundary). One indexed
+ * range scan per Bot on `idx_messages_session_created`, capped at
  * `CANONICAL_UNREAD_SCAN` rows.
  */
 async function countCanonicalUnread(
@@ -429,6 +430,7 @@ async function countCanonicalUnread(
         eq(messages.role, 'assistant'),
         isNull(messages.rewindAt),
         sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
         gt(messages.createdAt, boundary),
       ),
     )

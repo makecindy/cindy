@@ -3545,6 +3545,7 @@ export function MessageStream({
                 clientId: item.message.clientId,
                 createdAt: item.message.createdAt,
                 role: item.message.role,
+                systemCardType: item.message.systemCardType,
               },
             ]
           : [],

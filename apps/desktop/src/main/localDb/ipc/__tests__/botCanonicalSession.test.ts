@@ -2388,7 +2388,7 @@ describe('Bots list unread projection', () => {
     expect(await unreadFor('bot-1', { 'bot-1': -1 })).toBe(0);
   });
 
-  it('never counts the user own sends, rewound rows, or hidden auto-resume prompts', async () => {
+  it('never counts user sends, internal Bot messages, rewound rows, or auto-resume prompts', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, {
       id: 'm1',
@@ -2412,6 +2412,19 @@ describe('Bots list unread projection', () => {
     });
     insertMessage(sessionId, {
       id: 'm4',
+      role: 'assistant',
+      content: '',
+      agentMeta: {
+        botDirectMessage: {
+          v: 1,
+          threadId: 'thread-1',
+          direction: 'received',
+        },
+      },
+      createdAt: 4_500,
+    });
+    insertMessage(sessionId, {
+      id: 'm5',
       role: 'tool_use',
       content: { name: 'Bash', input: {} },
       createdAt: 5_000,
@@ -2420,7 +2433,7 @@ describe('Bots list unread projection', () => {
     expect(await unreadFor('bot-1', { 'bot-1': 1_000 })).toBe(0);
 
     insertMessage(sessionId, {
-      id: 'm5',
+      id: 'm6',
       role: 'assistant',
       content: 'The one real reply',
       createdAt: 6_000,
