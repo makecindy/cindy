@@ -1,6 +1,106 @@
 import { describe, expect, it } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 
+import { providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
+import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 import { __testing } from '../modelPriceOverrideStore';
+import { computeGatewayTurnCost } from '../turnCostCalculator';
+
+describe('standard overrides preserve independent Fast reference prices', () => {
+  const target = { providerId: 'openai', agent: 'pi' as const, modelId: 'gpt-6-astra' };
+  const reference = providerReferencePriceQuote(
+    'openai',
+    target.modelId,
+    BUNDLED_CATALOG.modelRegistry,
+    {
+      at: '2026-09-04',
+    },
+  )!;
+  const savedBase = {
+    currency: reference.currency,
+    inputPerMtok: reference.inputPerMtok,
+    outputPerMtok: reference.outputPerMtok,
+    cacheReadPerMtok: reference.cacheReadPerMtok ?? null,
+    cacheCreatePerMtok: reference.cacheCreatePerMtok ?? null,
+    inputTokenPriceBands: reference.inputTokenPriceBands,
+  };
+  const tokens = {
+    inputTokens: 200_000,
+    outputTokens: 1_000,
+    cacheReadTokens: 0,
+    cacheCreateTokens: 0,
+  };
+
+  it('keeps Astra Fast prices and window bounds separate from saved standard edits', () => {
+    const merged = __testing.mergedQuote(
+      target,
+      reference,
+      {
+        inputPerMtok: 3,
+        outputPerMtok: 7,
+        cacheReadPerMtok: null,
+        cacheCreatePerMtok: null,
+      },
+      savedBase,
+    );
+    expect(merged).toMatchObject({ source: 'user-override', inputPerMtok: 3, outputPerMtok: 7 });
+    expect(merged?.priority).toEqual(reference.priority);
+    expect(computeGatewayTurnCost(tokens, merged, 'fast')).toBeCloseTo(4.1);
+    expect(computeGatewayTurnCost(tokens, merged)).toBeCloseTo(0.607);
+    expect(computeGatewayTurnCost({ ...tokens, inputTokens: 272_001 }, merged, 'fast')).toBeNull();
+    expect(__testing.mergedQuote(target, reference, undefined)).toBe(reference);
+  });
+
+  it.each([true, false])(
+    'follows live Fast updates while standard reference bands exist: %s',
+    (keepBands) => {
+      const updated: ModelPriceQuote = {
+        ...reference,
+        outputPerMtok: 60,
+        inputTokenPriceBands: keepBands ? reference.inputTokenPriceBands : undefined,
+        priority: { inputPerMtok: 30, outputPerMtok: 120 },
+      };
+      const merged = __testing.mergedQuote(target, updated, { inputPerMtok: 3 }, savedBase);
+      expect(merged?.outputPerMtok).toBe(60);
+      expect(merged?.priority).toEqual(updated.priority);
+      expect(computeGatewayTurnCost(tokens, merged, 'fast')).toBeCloseTo(6.12);
+      expect(
+        computeGatewayTurnCost({ ...tokens, cacheCreateTokens: 1 }, merged, 'fast'),
+      ).toBeNull();
+    },
+  );
+
+  it('does not relabel USD Fast prices when the user enters CNY prices', () => {
+    const values = __testing.sparseValues(
+      { currency: 'CNY', inputPerMtok: 3, outputPerMtok: 7 },
+      savedBase,
+    );
+    const merged = __testing.mergedQuote(target, reference, values, savedBase);
+    expect(merged?.currency).toBe('CNY');
+    expect(merged?.priority).toBeUndefined();
+    expect(computeGatewayTurnCost(tokens, merged, 'fast')).toBeNull();
+  });
+
+  it.each(['currency-change', 'missing-reference', 'missing-fast'] as const)(
+    'does not invent Fast prices after %s',
+    (scenario) => {
+      const live =
+        scenario === 'missing-reference'
+          ? undefined
+          : {
+              ...reference,
+              ...(scenario === 'currency-change'
+                ? { currency: 'CNY' as const }
+                : { priority: undefined }),
+            };
+      const merged = __testing.mergedQuote(target, live, { inputPerMtok: 3 }, savedBase);
+      expect(merged?.currency).toBe('USD');
+      expect(merged?.inputPerMtok).toBe(3);
+      expect(merged?.priority).toBeUndefined();
+      expect(computeGatewayTurnCost(tokens, merged, 'fast')).toBeNull();
+    },
+  );
+});
 
 describe('model price override sparse persistence', () => {
   it('keys overrides by provider instance, runtime, and exact model id', () => {

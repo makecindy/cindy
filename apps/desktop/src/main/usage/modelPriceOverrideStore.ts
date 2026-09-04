@@ -246,7 +246,7 @@ function mergedQuote(
   baseReference?: ComparablePrice | null,
 ): ModelPriceQuote | undefined {
   if (!values) return reference;
-  const savedBaseQuote = baseReference
+  const savedBaseQuote: ModelPriceQuote | undefined = baseReference
     ? {
         providerId: target.providerId,
         modelId: target.modelId,
@@ -397,6 +397,10 @@ function mergedQuote(
     ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
+    // Standard-price edits do not change the independent Fast tariff or its currency.
+    ...(mergeReference?.priority && mergeReference.currency === currency
+      ? { priority: mergeReference.priority }
+      : {}),
   };
 }
 
