@@ -18,14 +18,19 @@ afterEach(() => {
 describe('useDeviceLinkDeviceList initial request', () => {
   it('silently retries a failed directory request without a later push event', async () => {
     let resolveRetry: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
+    let resolvePresenceRefresh: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let presenceChanged: ((payload: DeviceLinkPresenceSnapshot) => void) | undefined;
     const retry = new Promise<{ devices: DeviceLinkDeviceView[] }>((resolve) => {
       resolveRetry = resolve;
     });
+    const presenceRefresh = new Promise<{ devices: DeviceLinkDeviceView[] }>((resolve) => {
+      resolvePresenceRefresh = resolve;
+    });
     const listDevices = vi
       .fn()
       .mockRejectedValueOnce(new Error('relay unavailable'))
-      .mockReturnValueOnce(retry);
+      .mockReturnValueOnce(retry)
+      .mockReturnValueOnce(presenceRefresh);
     vi.useFakeTimers();
     vi.stubGlobal('electronAPI', {
       deviceLink: {
@@ -88,6 +93,18 @@ describe('useDeviceLinkDeviceList initial request', () => {
 
     await act(async () => {
       resolveRetry?.({ devices: [] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(3);
+    expect(result.current).toEqual({
+      devices: [],
+      request: { status: 'ready', error: null },
+      settled: true,
+    });
+
+    await act(async () => {
+      resolvePresenceRefresh?.({ devices: [] });
       await Promise.resolve();
       await Promise.resolve();
     });
