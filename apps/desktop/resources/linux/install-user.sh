@@ -50,12 +50,26 @@ new_release=''
 cleanup() {
   # Only remove this transaction's unactivated directory. In particular a
   # signal just after activation must never delete the now-current release.
+  if (( ${activation_in_progress:-0} )); then
+    rollback_activation || true
+  fi
   if [[ -n $new_release && $(readlink -- "$prefix/current" 2>/dev/null || true) != "$new_release" ]]; then
     rm -rf -- "$prefix/$new_release"
   fi
   if [[ -n ${stage:-} && -d $stage ]]; then rm -rf -- "$stage"; fi
 }
 trap cleanup EXIT
+
+write_launcher() {
+  [[ $mode == --install ]] || return 0
+  # Stage the launcher beside the other transaction files so an interrupted
+  # write cannot leave a truncated executable behind. Replacing it is safe:
+  # the managed prefix owns this stable entry point.
+  local quoted=${prefix//\'/\'\\\'\'}
+  printf '#!/bin/sh\nexec '\''%s/current/Cindy'\'' "$@"\n' "$quoted" > "$stage/launch"
+  chmod 755 "$stage/launch"
+  mv -Tf -- "$stage/launch" "$prefix/launch"
+}
 
 # Copy once, bounded and O_NOFOLLOW. Hash and extract the same private snapshot.
 cap=$((size / 1048576 + 2))
@@ -115,7 +129,10 @@ if [[ $mode == --apply ]]; then
 fi
 release="releases/$version-$digest"
 if [[ -e $prefix/$release ]]; then
-  [[ $current == "$release" ]] && exit 0
+  if [[ $current == "$release" ]]; then
+    write_launcher
+    exit 0
+  fi
   fail 'Release directory already exists; inspect it before retrying.'
 fi
 # Never install setuid/setgid helpers from a system package into user storage.
@@ -124,18 +141,72 @@ new_release=$release
 mv -- "$payload" "$prefix/$release"
 printf 'cindy-user-install-v1:%s\n' "$region" > "$stage/marker"
 mv -T -- "$stage/marker" "$marker"
+ln -s -- "$release" "$stage/current"
+had_previous=0
+previous_target=''
+if [[ -e $prefix/previous || -L $prefix/previous ]]; then
+  [[ -L $prefix/previous ]] || fail 'previous is not a managed symlink.'
+  had_previous=1
+  previous_target=$(readlink -- "$prefix/previous")
+fi
 if [[ -n $current ]]; then
   ln -s -- "$current" "$stage/previous"
-  mv -Tf -- "$stage/previous" "$prefix/previous"
+  ln -s -- "$current" "$stage/restore-current"
+  if (( had_previous )); then
+    ln -s -- "$previous_target" "$stage/restore-previous"
+  fi
 fi
-ln -s -- "$release" "$stage/current"
-# Single rename is the activation point. Old versions are never overwritten.
-mv -Tf -- "$stage/current" "$prefix/current"
+
+current_activated=0
+previous_activated=0
+rollback_activation() {
+  local rollback_failed=0
+  if (( previous_activated )); then
+    if (( had_previous )); then
+      if ! mv -Tf -- "$stage/restore-previous" "$prefix/previous"; then
+        [[ $(readlink -- "$prefix/previous" 2>/dev/null || true) == "$previous_target" ]] || rollback_failed=1
+      fi
+    else
+      rm -f -- "$prefix/previous" || rollback_failed=1
+    fi
+  fi
+  if (( current_activated )); then
+    if [[ -n $current ]]; then
+      if ! mv -Tf -- "$stage/restore-current" "$prefix/current"; then
+        [[ $(readlink -- "$prefix/current" 2>/dev/null || true) == "$current" ]] || rollback_failed=1
+      fi
+    else
+      rm -f -- "$prefix/current" || rollback_failed=1
+    fi
+  fi
+  return "$rollback_failed"
+}
+activation_in_progress=1
+
+# Commit the pointers in a recoverable order. A failed current rename leaves
+# the old previous pointer untouched; a later previous failure rolls current
+# back to its staged old target before the transaction exits.
+current_activated=1
+if mv -Tf -- "$stage/current" "$prefix/current"; then
+  :
+else
+  status=$?
+  if rollback_activation; then activation_in_progress=0; fi
+  exit "$status"
+fi
+if [[ -n $current ]]; then
+  previous_activated=1
+  if mv -Tf -- "$stage/previous" "$prefix/previous"; then
+    :
+  else
+    status=$?
+    if rollback_activation; then activation_in_progress=0; fi
+    exit "$status"
+  fi
+fi
+activation_in_progress=0
 if [[ $mode == --install ]]; then
-  # Keep launchers inside the prefix; do not overwrite other installations.
-  quoted=${prefix//\'/\'\\\'\'}
-  printf '#!/bin/sh\nexec '\''%s/current/Cindy'\'' "$@"\n' "$quoted" > "$prefix/launch"
-  chmod 755 "$prefix/launch"
+  write_launcher
   printf 'Installed Cindy %s. Start with: %s/launch\n' "$version" "$prefix"
   printf 'To add a menu entry and login links, run: bash %q %q\n' "$prefix/current/resources/linux/register-desktop.sh" "$prefix"
 fi

@@ -72,6 +72,9 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
     expect(first.status).toBe(0);
     const before = fs.readlinkSync(path.join(prefix, 'current'));
     expect(execFileSync(path.join(prefix, 'launch'), { encoding: 'utf8' })).toBe('fixture\n');
+    fs.rmSync(path.join(prefix, 'launch'));
+    expect(run('1.0.0').status).toBe(0);
+    expect(execFileSync(path.join(prefix, 'launch'), { encoding: 'utf8' })).toBe('fixture\n');
     const find = () => findLinuxUserInstallation(path.join(prefix, 'current', 'Cindy'), path.join(root, 'home'), process.getuid!());
     expect(find()).toEqual({ prefix, current: before, region: 'global' });
     expect(run('1.0.1', true, { digest: '0'.repeat(64) }).status).not.toBe(0);
@@ -79,23 +82,31 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
     expect(run('1.0.1', true, { region: 'cn' }).status).not.toBe(0);
     expect(run('1.0.3', true).status).not.toBe(0);
     expect(fs.readlinkSync(path.join(prefix, 'current'))).toBe(before);
+    expect(run('1.0.1', true).status).toBe(0);
+    const installed = fs.readlinkSync(path.join(prefix, 'current'));
+    const previousBeforeFailure = fs.readlinkSync(path.join(prefix, 'previous'));
     const faultBin = path.join(root, 'fault-bin');
     fs.mkdirSync(faultBin);
     fs.writeFileSync(path.join(faultBin, 'mv'), [
-      '#!/bin/bash', '[[ "${@: -1}" == "$CINDY_TEST_FAIL_DEST" ]] && exit 73',
+      '#!/bin/bash', 'if [[ "${@: -1}" == "$CINDY_TEST_FAIL_DEST" ]]; then',
+      '  /usr/bin/mv "$@"', '  exit 73', 'fi',
       'exec /usr/bin/mv "$@"', '',
     ].join('\n'), { mode: 0o755 });
-    expect(run('1.0.1', true, { env: {
+    expect(run('1.0.2', true, { env: {
       PATH: faultBin + path.delimiter + process.env.PATH, CINDY_TEST_FAIL_DEST: path.join(prefix, 'current'),
     } }).status).toBe(73);
-    expect(fs.readlinkSync(path.join(prefix, 'current'))).toBe(before);
-    expect(fs.existsSync(path.join(prefix, 'releases', '1.0.1-' + packages.get('1.0.1')!.digest))).toBe(false);
+    expect(fs.readlinkSync(path.join(prefix, 'current'))).toBe(installed);
+    expect(fs.readlinkSync(path.join(prefix, 'previous'))).toBe(previousBeforeFailure);
+    expect(fs.existsSync(path.join(prefix, 'releases', '1.0.2-' + packages.get('1.0.2')!.digest))).toBe(false);
+    expect(run('1.0.2', true, { env: {
+      PATH: faultBin + path.delimiter + process.env.PATH, CINDY_TEST_FAIL_DEST: path.join(prefix, 'previous'),
+    } }).status).toBe(73);
+    expect(fs.readlinkSync(path.join(prefix, 'current'))).toBe(installed);
+    expect(fs.readlinkSync(path.join(prefix, 'previous'))).toBe(previousBeforeFailure);
+    expect(fs.existsSync(path.join(prefix, 'releases', '1.0.2-' + packages.get('1.0.2')!.digest))).toBe(false);
     // Retrying after a failure immediately before the atomic rename works.
-    expect(run('1.0.1', true).status).toBe(0);
-    expect(fs.readlinkSync(path.join(prefix, 'previous'))).toBe(before);
-    const second = fs.readlinkSync(path.join(prefix, 'current'));
     expect(run('1.0.2', true).status).toBe(0);
-    expect(fs.readlinkSync(path.join(prefix, 'previous'))).toBe(second);
+    expect(fs.readlinkSync(path.join(prefix, 'previous'))).toBe(installed);
     expect(fs.existsSync(path.join(prefix, before, 'Cindy'))).toBe(true);
     expect(fs.readdirSync(path.join(prefix, 'releases')).some((name) => name.startsWith('.stage.'))).toBe(false);
     expect(find()?.current).toContain('1.0.2');
