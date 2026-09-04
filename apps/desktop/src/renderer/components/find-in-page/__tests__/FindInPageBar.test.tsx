@@ -216,6 +216,20 @@ describe('FindInPageBar', () => {
     ]);
   });
 
+  it('keeps separate Hangul Jamo syllable ranges after normalization', async () => {
+    const page = document.createElement('main');
+    page.textContent = '가가';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: '가' } });
+
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.map((range) => range.toString())).toEqual([
+      '가',
+      '가',
+    ]);
+  });
+
   it('does not expand one visible character into duplicate navigation matches', async () => {
     const page = document.createElement('main');
     page.textContent = 'ß';

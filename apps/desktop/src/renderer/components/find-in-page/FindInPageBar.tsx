@@ -132,13 +132,14 @@ function normalizeSearchValue(
   const normalizedEnds: number[] = [];
   for (let index = 0; index < characters.length; ) {
     let end = index + 1;
-    while (
-      end < characters.length &&
-      (isCombiningMark(characters[end].value) ||
-        (isHangulJamo(characters[index].value) && isHangulJamo(characters[end].value)))
+    if (
+      isHangulLeadingJamo(characters[index].value) &&
+      isHangulVowelJamo(characters[end]?.value)
     ) {
       end += 1;
+      if (isHangulTrailingJamo(characters[end]?.value)) end += 1;
     }
+    while (end < characters.length && isCombiningMark(characters[end].value)) end += 1;
 
     const normalizedChunk = characters
       .slice(index, end)
@@ -162,13 +163,34 @@ function isCombiningMark(value: string): boolean {
   return /^\p{M}$/u.test(value);
 }
 
-function isHangulJamo(value: string): boolean {
-  const codePoint = value.codePointAt(0);
+function getCodePoint(value: string | undefined): number | undefined {
+  return value?.codePointAt(0);
+}
+
+function isHangulLeadingJamo(value: string | undefined): boolean {
+  const codePoint = getCodePoint(value);
   if (codePoint === undefined) return false;
   return (
-    (codePoint >= 0x1100 && codePoint <= 0x11ff) ||
-    (codePoint >= 0xa960 && codePoint <= 0xa97f) ||
-    (codePoint >= 0xd7b0 && codePoint <= 0xd7ff)
+    (codePoint >= 0x1100 && codePoint <= 0x1112) ||
+    (codePoint >= 0xa960 && codePoint <= 0xa97c)
+  );
+}
+
+function isHangulVowelJamo(value: string | undefined): boolean {
+  const codePoint = getCodePoint(value);
+  if (codePoint === undefined) return false;
+  return (
+    (codePoint >= 0x1161 && codePoint <= 0x1175) ||
+    (codePoint >= 0xd7b0 && codePoint <= 0xd7c6)
+  );
+}
+
+function isHangulTrailingJamo(value: string | undefined): boolean {
+  const codePoint = getCodePoint(value);
+  if (codePoint === undefined) return false;
+  return (
+    (codePoint >= 0x11a8 && codePoint <= 0x11c2) ||
+    (codePoint >= 0xd7cb && codePoint <= 0xd7fb)
   );
 }
 
