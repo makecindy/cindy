@@ -908,6 +908,8 @@ export interface TokenUsageBreakdown {
   totalTokens: number;
   inputTokens: number;
   cachedInputTokens: number;
+  /** Present in Codex 0.153.0; older app-server versions omit this subset. */
+  cacheWriteInputTokens?: number;
   outputTokens: number;
   reasoningOutputTokens: number;
 }

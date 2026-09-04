@@ -247,16 +247,40 @@ function referencePriceCalendarDate(value: string | Date | undefined): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Selects a dated provider reference tariff, optionally for a specific agent/input size. */
+interface ReferencePriceOptions {
+  agent?: AgentKind;
+  inputTokens?: number;
+  at?: string | Date;
+  variant?: 'standard' | 'priority' | 'batch' | 'fast';
+}
+
 export function providerReferencePriceQuote(
   providerId: string,
   modelId: string,
   registry: ModelRegistry | null | undefined,
-  options: {
-    agent?: AgentKind;
-    inputTokens?: number;
-    at?: string | Date;
-    variant?: 'standard' | 'priority' | 'batch' | 'fast';
-  } = {},
+  options: ReferencePriceOptions = {},
+): ModelPriceQuote | undefined {
+  const quote = referencePriceQuoteForVariant(providerId, modelId, registry, options);
+  if (!quote || (options.variant ?? 'standard') !== 'standard') return quote;
+  // Usage segments call Fast "priority". Keep the standard quote for display,
+  // and project the independently declared Fast tariff for the cost calculator.
+  const fast =
+    referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'fast' }) ??
+    referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'priority' });
+  if (!fast || fast.currency !== quote.currency) return quote;
+  const { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands } = fast;
+  return {
+    ...quote,
+    priority: { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands },
+  };
+}
+
+function referencePriceQuoteForVariant(
+  providerId: string,
+  modelId: string,
+  registry: ModelRegistry | null | undefined,
+  options: ReferencePriceOptions = {},
 ): ModelPriceQuote | undefined {
   // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi(动态 BYOM,按 provider/模型
   // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。

@@ -17092,7 +17092,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
-  it('emits only monotonic request segments and keeps reasoning as a non-additive detail', async () => {
+  it.each([undefined, 20_000])('emits monotonic segments with cache-write subset %s and non-additive reasoning', async (cacheWriteInputTokens) => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
@@ -17118,6 +17118,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           totalTokens: 60_007,
           inputTokens: 60_000,
           cachedInputTokens: 10_000,
+          cacheWriteInputTokens,
           outputTokens: 7,
           reasoningOutputTokens: 3,
         },
@@ -17125,6 +17126,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           totalTokens: 60_007,
           inputTokens: 60_000,
           cachedInputTokens: 10_000,
+          cacheWriteInputTokens,
           outputTokens: 7,
           reasoningOutputTokens: 3,
         },
@@ -17170,16 +17172,16 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const done = events.find((event) => event.type === 'done');
     expect((done?.data as { usage?: unknown }).usage).toMatchObject({
-      promptTokens: 100_000,
+      promptTokens: 100_000 - (cacheWriteInputTokens ?? 0),
       completionTokens: 11,
       reasoningTokens: 5,
       cachedTokens: 15_000,
       segments: [
         {
-          inputTokens: 50_000,
+          inputTokens: 50_000 - (cacheWriteInputTokens ?? 0),
           outputTokens: 7,
           cacheReadTokens: 10_000,
-          cacheCreateTokens: 0,
+          cacheCreateTokens: cacheWriteInputTokens ?? 0,
           reasoningTokens: 3,
         },
         {

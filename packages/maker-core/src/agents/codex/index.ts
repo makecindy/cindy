@@ -10698,8 +10698,9 @@ export class CodexAgent extends BaseAgent {
         if (!last) return;
         lastTurnTokenUsage = last;
         const cached = last.cachedInputTokens ?? 0;
+        const cacheWrite = last.cacheWriteInputTokens ?? 0;
         const totalInput = last.inputTokens ?? 0;
-        const uncachedInput = Math.max(0, totalInput - cached);
+        const uncachedInput = Math.max(0, totalInput - cached - cacheWrite);
         const cumulativeTotal = params.tokenUsage?.total;
         if (!cumulativeTotal) return;
         const previousCursor = acceptedUsageTotalByThread.get(params.threadId);
@@ -10708,6 +10709,7 @@ export class CodexAgent extends BaseAgent {
         const hasBillableLast =
           last.inputTokens > 0 ||
           last.cachedInputTokens > 0 ||
+          cacheWrite > 0 ||
           last.outputTokens > 0 ||
           last.reasoningOutputTokens > 0;
         // A lower cursor can be an out-of-order frame, so it is not sufficient
@@ -10732,7 +10734,7 @@ export class CodexAgent extends BaseAgent {
             // reasoningOutputTokens again double-counts completion usage.
             outputTokens: last.outputTokens ?? 0,
             cacheReadTokens: cached,
-            cacheCreateTokens: 0,
+            cacheCreateTokens: cacheWrite,
             reasoningTokens: last.reasoningOutputTokens ?? 0,
             model: turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
             priceVariant: isFastServiceTier(
