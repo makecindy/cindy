@@ -95,6 +95,39 @@ describe('Bot 流式正文呈现', () => {
       hasBotAssistantOutputInCurrentTurn([user, mkAssistant('a1', '上一轮正文'), mkUser('u2')]),
     ).toBe(false);
   });
+
+  it('伙伴私聊往返期间持续保留双方消息戳', () => {
+    const directMessageStamp = (id: string, direction: 'sent' | 'received'): ChatMessage => ({
+      ...mkAssistant(id, ''),
+      systemCardType: 'bot-direct-message',
+      systemCardData: {
+        v: 1,
+        threadId: 'thread-1',
+        viewerBotId: 'bot-a',
+        peerBotId: 'bot-b',
+        peerBotName: '开发Bot',
+        direction,
+        sequence: direction === 'sent' ? 1 : 2,
+        preview: 'hello',
+      },
+    });
+    const messages = [
+      mkUser('u1'),
+      directMessageStamp('dm-sent', 'sent'),
+      { ...mkUser('dm-trigger'), isSyntheticTrigger: true },
+      directMessageStamp('dm-received', 'received'),
+      { ...mkAssistant('a1', '正在回复'), isStreaming: true },
+    ];
+
+    const visible = simplifyBotRenderItems(
+      groupWorkRuns(buildRenderItems(messages).items, true),
+      true,
+    );
+
+    expect(
+      visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
+    ).toEqual(['u1', 'dm-sent', 'dm-received', 'a1']);
+  });
 });
 
 const mkCompactBoundary = (id: string): ChatMessage => ({

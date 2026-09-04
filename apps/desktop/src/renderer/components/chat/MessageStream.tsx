@@ -652,6 +652,11 @@ export function simplifyBotRenderItems(
     if (index <= currentTurnStart) return true;
     if (item.type !== 'message') return false;
     if (item.message.role === 'user') return !item.message.isSyntheticTrigger;
+    // A direct-message stamp is the durable entry into the Bot-to-Bot conversation,
+    // not an expanding work/result card. The reverse delivery starts another hidden
+    // canonical turn; hiding system cards during that turn used to make the already
+    // persisted "sent" stamp flash and disappear until streaming finished.
+    if (item.message.systemCardType === 'bot-direct-message') return true;
     return (
       item.message.role === 'assistant' &&
       !item.message.systemCardType &&
