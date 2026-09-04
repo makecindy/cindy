@@ -51,22 +51,13 @@ function applyFindHighlights(ranges: readonly Range[], activeIndex: number) {
 function findMatchOffsets(value: string, query: string): Array<[number, number]> {
   if (!value || !query) return [];
 
-  const normalizedValue = value.toLocaleLowerCase();
   const normalizedQuery = query.toLocaleLowerCase();
   const offsets: Array<[number, number]> = [];
 
-  // Most scripts preserve code-unit length when lower-cased, so use the
-  // normalized string for a fast scan. The fallback keeps Range offsets in
-  // the original string when a case conversion changes length.
-  if (normalizedValue.length === value.length && normalizedQuery.length === query.length) {
-    let start = normalizedValue.indexOf(normalizedQuery);
-    while (start !== -1) {
-      offsets.push([start, start + query.length]);
-      start = normalizedValue.indexOf(normalizedQuery, start + query.length);
-    }
-    return offsets;
-  }
-
+  // Lower-case each candidate independently instead of normalizing the whole
+  // text node first. Whole-string lower-casing is context-sensitive for some
+  // scripts (for example Greek final sigma), which can make a standalone
+  // query fail to match the same character in surrounding text.
   for (let start = 0; start <= value.length - query.length; start += 1) {
     if (value.slice(start, start + query.length).toLocaleLowerCase() === normalizedQuery) {
       offsets.push([start, start + query.length]);
@@ -182,11 +173,13 @@ function scrollRangeIntoView(range: Range) {
     if (!rect) return;
     if (canScrollY) {
       if (rect.top < containerRect.top) ancestor.scrollTop -= containerRect.top - rect.top;
-      else if (rect.bottom > containerRect.bottom) ancestor.scrollTop += rect.bottom - containerRect.bottom;
+      else if (rect.bottom > containerRect.bottom)
+        ancestor.scrollTop += rect.bottom - containerRect.bottom;
     }
     if (canScrollX) {
       if (rect.left < containerRect.left) ancestor.scrollLeft -= containerRect.left - rect.left;
-      else if (rect.right > containerRect.right) ancestor.scrollLeft += rect.right - containerRect.right;
+      else if (rect.right > containerRect.right)
+        ancestor.scrollLeft += rect.right - containerRect.right;
     }
     ancestor = ancestor.parentElement;
   }
@@ -196,10 +189,16 @@ function scrollRangeIntoView(range: Range) {
   const viewportHeight = window.innerHeight;
   const viewportWidth = window.innerWidth;
   if (rect.top < 0 || rect.bottom > viewportHeight) {
-    window.scrollBy({ top: rect.top < 0 ? rect.top : rect.bottom - viewportHeight, behavior: 'auto' });
+    window.scrollBy({
+      top: rect.top < 0 ? rect.top : rect.bottom - viewportHeight,
+      behavior: 'auto',
+    });
   }
   if (rect.left < 0 || rect.right > viewportWidth) {
-    window.scrollBy({ left: rect.left < 0 ? rect.left : rect.right - viewportWidth, behavior: 'auto' });
+    window.scrollBy({
+      left: rect.left < 0 ? rect.left : rect.right - viewportWidth,
+      behavior: 'auto',
+    });
   }
 }
 
@@ -292,6 +291,7 @@ export function FindInPageBar() {
     if (!open || !text) return;
 
     const refreshSearch = () => {
+      if (isComposingRef.current) return;
       applySearch(text, activeRef.current);
     };
     const handleResize = () => refreshSearch();

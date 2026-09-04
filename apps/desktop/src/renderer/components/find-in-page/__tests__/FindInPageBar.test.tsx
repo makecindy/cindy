@@ -127,6 +127,20 @@ describe('FindInPageBar', () => {
     ]);
   });
 
+  it('matches context-sensitive Greek sigma case-insensitively', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'ΟΣ Σ';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'Σ' } });
+
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.map((range) => range.toString())).toEqual([
+      'Σ',
+      'Σ',
+    ]);
+  });
+
   it('walks matches with Enter, Shift+Enter, and the navigation buttons', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo foo foo';
@@ -254,6 +268,30 @@ describe('FindInPageBar', () => {
     responsive.style.display = '';
     fireEvent(window, new Event('resize'));
     expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('does not refresh responsive visibility while composing with IME', async () => {
+    const page = document.createElement('main');
+    const responsive = document.createElement('span');
+    responsive.textContent = 'foo';
+    page.append(responsive);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    const walkerSpy = vi.spyOn(document, 'createTreeWalker');
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: 'bar' } });
+    const searchCount = walkerSpy.mock.calls.length;
+
+    responsive.style.display = 'none';
+    fireEvent(window, new Event('resize'));
+    expect(walkerSpy).toHaveBeenCalledTimes(searchCount);
+
+    fireEvent.compositionEnd(input, { target: { value: 'bar' } });
+    expect(screen.getByText('0/0')).toBeTruthy();
+    walkerSpy.mockRestore();
   });
 
   it('reopens the bar and selects the whole query', async () => {
