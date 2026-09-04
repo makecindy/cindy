@@ -2534,6 +2534,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-reset'),
+  // 动态任务标题开关(默认关;见 session-title-settings-ipc)
+  getSessionTitleSettings: (): Promise<{
+    dynamicTitleEnabled: boolean;
+    isCustomized?: boolean;
+    defaultDynamicTitleEnabled?: boolean;
+  }> => ipcRenderer.invoke('session-title-settings-get'),
+  setSessionTitleSettings: (settings: {
+    dynamicTitleEnabled: boolean;
+  }): Promise<{
+    dynamicTitleEnabled: boolean;
+    isCustomized?: boolean;
+    defaultDynamicTitleEnabled?: boolean;
+  }> => ipcRenderer.invoke('session-title-settings-set', settings),
+  resetSessionTitleSettings: (): Promise<{
+    dynamicTitleEnabled: boolean;
+    isCustomized?: boolean;
+    defaultDynamicTitleEnabled?: boolean;
+  }> => ipcRenderer.invoke('session-title-settings-reset'),
   // beta 测试渠道(设备级)开关
   getUpdateChannelSettings: (): Promise<{
     enableBeta: boolean;

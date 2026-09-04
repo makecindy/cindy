@@ -132,6 +132,7 @@
       "ghosts": "插件"
     },
     "sections": {
+      "sessionTitle": "任務標題",
       "user": "使用者",
       "billing": "用量和計費",
       "appearance": "外觀",
@@ -780,6 +781,13 @@
       "newSession": "新任務",
       "threadEmptyTitle": "有問題儘管問",
       "threadEmptyHint": "覆蓋常見問題的快速答案，可以追問糾正"
+    },
+    "sessionTitle": {
+      "label": "自動更新任務標題",
+      "description": "任務每輪收尾後自動按「日期｜類型｜主題」更新標題，讓任務清單一眼可讀。手動改過的名字不會被覆蓋。",
+      "enabledToast": "已開啟任務標題自動更新",
+      "disabledToast": "已關閉任務標題自動更新",
+      "saveFailed": "儲存失敗，請重試"
     },
     "about": {
       "title": "關於",

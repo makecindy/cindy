@@ -20,6 +20,7 @@ import { McpServersSection } from './McpServersSection';
 import { RemoteControlSection } from './RemoteControlSection';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
+import { SessionTitleSection } from './SessionTitleSection';
 import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
 import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
 import { AgentIslandSection } from './AgentIslandSection';
@@ -438,6 +439,14 @@ export function SettingsView() {
                 </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
                   <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
+                </section>
+                {/* 任务标题自动更新：和「任务自动命名」模型选择放在一起。 */}
+                <section
+                  id="settings-session-title"
+                  className="pb-[18px]"
+                  aria-label={t('settings.sections.sessionTitle')}
+                >
+                  <SessionTitleSection />
                 </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.auxiliaryModels')}>
                   <AuxiliaryModelSection

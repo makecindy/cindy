@@ -132,6 +132,7 @@
       "ghosts": "プラグイン"
     },
     "sections": {
+      "sessionTitle": "タイトル",
       "user": "ユーザー",
       "billing": "使用量と請求",
       "appearance": "外観",
@@ -780,6 +781,13 @@
       "newSession": "新しいセッション",
       "threadEmptyTitle": "気軽に質問してください",
       "threadEmptyHint": "よくある質問にすぐ回答します。追加で質問して修正もできます"
+    },
+    "sessionTitle": {
+      "label": "タイトルを自動更新",
+      "description": "各ターンの終了後に「日付｜種別｜トピック」形式（中国語）でタイトルを自動更新し、タスク一覧をひと目で把握できます。手動で変更したタイトルは上書きされません。",
+      "enabledToast": "タイトルの自動更新を有効にしました",
+      "disabledToast": "タイトルの自動更新を無効にしました",
+      "saveFailed": "保存できませんでした。もう一度お試しください"
     },
     "about": {
       "title": "情報",

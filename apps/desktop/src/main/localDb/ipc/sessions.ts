@@ -866,6 +866,31 @@ export function setOnUserSessionTitleWritten(fn: ((sessionId: string) => void) |
   _onUserTitleWritten = fn;
 }
 
+let _onTurnEndedTitleRefresh: ((sessionId: string) => void) | null = null;
+
+/**
+ * 注入「turn ended 落库」的扩展通知(传 null 清除;由 maker-ipc 的动态任务标题
+ * 模块注册)。与下面 registerSessionIpc 里的 broadcast 注入同一触发点,但保持
+ * 依赖方向:localDb 不 import maker-ipc,由 maker-ipc 侧注册后经此槽回调。
+ */
+export function setOnSessionTurnEndedTitleRefresh(
+  fn: ((sessionId: string) => void) | null,
+): void {
+  _onTurnEndedTitleRefresh = fn;
+}
+
+function notifyTurnEndedTitleRefresh(sessionId: string): void {
+  if (!_onTurnEndedTitleRefresh) return;
+  try {
+    _onTurnEndedTitleRefresh(sessionId);
+  } catch (err) {
+    log.warn('onTurnEndedTitleRefresh notify failed', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /** 用户改名出口统一调这个(自动起名自己的写入**不**调)。 */
 function noteUserTitleWritten(sessionId: string): void {
   try {
@@ -1061,12 +1086,15 @@ export function registerSessionIpc(
   // 会话仍弹「应用退出中断」。注入而非让 sessionActiveTurn 直接 import,避免
   // 反向依赖成环(本文件已 import sessionActiveTurn)。
   setOnSessionTurnEndedPersisted(
-    (sid, endedAt, capturedOwnerScope) =>
-      broadcastSessionPatched(
+    (sid, endedAt, capturedOwnerScope) => {
+      const result = broadcastSessionPatched(
         sid,
         { lastTurnEndedAt: endedAt },
         capturedOwnerScope as OwnerScope | undefined,
-      ),
+      );
+      notifyTurnEndedTitleRefresh(sid);
+      return result;
+    },
     captureOwnerScope,
   );
   ipcMain.handle(

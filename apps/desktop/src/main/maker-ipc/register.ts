@@ -1044,6 +1044,7 @@ import {
   registerSessionAutoTitleHooks,
   scheduleSessionAutoTitle,
 } from './sessionAutoTitle.js';
+import { registerSessionDynamicTitleHooks } from './dynamicSessionTitle.js';
 import { SILENT_STOP_RESUME_PROMPT, SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
 import {
   publishUiContinuation,
@@ -6464,6 +6465,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 接上 DB 改名通知(用户手动改名后自动起名收手)与拦截意识探针(装了
   // will-user-message 钩子时不把用户原话送去标题模型)。
   registerSessionAutoTitleHooks({ isUserMessageScreeningActive: hasEnabledUserMessageHookGhost });
+  // 动态任务标题:turn ended 落库通知 → 设置开启时按 MMDD｜类型｜主题 刷新标题
+  // (fire-and-forget,失败静默;见 dynamicSessionTitle.ts)。
+  registerSessionDynamicTitleHooks();
 
   // device-link busy presence:把「本机是否有 turn 在跑」探针注入 device-link host,
   // 它每 5s 取一次、翻转才上报,让控制端设备列表显示 busy 三态(规则 2:回调注入解耦)。

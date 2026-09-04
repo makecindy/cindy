@@ -132,6 +132,7 @@
       "ghosts": "플러그인"
     },
     "sections": {
+      "sessionTitle": "작업 제목",
       "user": "사용자",
       "billing": "사용량 및 결제",
       "appearance": "외관",
@@ -780,6 +781,13 @@
       "newSession": "새 세션",
       "threadEmptyTitle": "무엇이든 물어보세요",
       "threadEmptyHint": "자주 묻는 질문에 빠르게 답하고, 이어서 질문해 바로잡을 수 있어요"
+    },
+    "sessionTitle": {
+      "label": "작업 제목 자동 업데이트",
+      "description": "각 턴이 끝난 후 「날짜｜유형｜주제」 형식(중국어)으로 제목을 자동 업데이트해 작업 목록을 한눈에 파악할 수 있습니다. 직접 변경한 제목은 덮어쓰지 않습니다.",
+      "enabledToast": "작업 제목 자동 업데이트를 켰습니다",
+      "disabledToast": "작업 제목 자동 업데이트를 껐습니다",
+      "saveFailed": "저장에 실패했습니다. 다시 시도해 주세요"
     },
     "about": {
       "title": "정보",

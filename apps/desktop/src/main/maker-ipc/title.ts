@@ -127,6 +127,24 @@ export async function generateMakerSessionTitle(
   );
 }
 
+/**
+ * 动态任务标题走同一条 title one-shot provider 通路(prompt 由调用方组装)。
+ * 与 Magic 重命名同源:走辅助模型选择,未指定时回落 WYSIWYG 标题通路。
+ */
+export async function generateDynamicTitleViaProvider(
+  sessionId: string,
+  agentKind: AgentKind,
+  prompt: string,
+): Promise<TitleOneShotResult> {
+  return generateTitleWithAuxiliaryModelResult(
+    { sessionId, agentKind, prompt },
+    {
+      readSessionProviderId: readSessionProviderIdFromDb,
+      listConnectedProviders: listConnectedProvidersForAgent,
+    },
+  );
+}
+
 /** regenerate 的依赖注入面——单测用内存实现替换 DB / LLM 调用。 */
 export interface RegenerateTitleDeps {
   /** 读会话 agentKind。会话不存在 → null(直接放弃)。 */

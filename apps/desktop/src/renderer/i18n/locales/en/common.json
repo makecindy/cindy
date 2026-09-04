@@ -132,6 +132,7 @@
       "ghosts": "Plugins"
     },
     "sections": {
+      "sessionTitle": "Task titles",
       "user": "User",
       "billing": "Usage and billing",
       "appearance": "Appearance",
@@ -780,6 +781,13 @@
       "newSession": "New session",
       "threadEmptyTitle": "Ask me anything",
       "threadEmptyHint": "Quick answers to common questions — you can follow up to correct me"
+    },
+    "sessionTitle": {
+      "label": "Auto-update task titles",
+      "description": "After each turn, task titles update automatically in Chinese as date｜type｜topic, so the task list reads at a glance. Manually renamed titles are never overwritten.",
+      "enabledToast": "Task title auto-update enabled",
+      "disabledToast": "Task title auto-update disabled",
+      "saveFailed": "Failed to save. Please try again."
     },
     "about": {
       "title": "About",

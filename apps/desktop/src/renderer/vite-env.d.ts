@@ -967,6 +967,12 @@ interface AutoUpdateSettingsPayload {
   defaultAutoRelaunchOnIdle?: boolean;
 }
 
+interface SessionTitleSettingsPayload {
+  dynamicTitleEnabled: boolean;
+  isCustomized?: boolean;
+  defaultDynamicTitleEnabled?: boolean;
+}
+
 /* ── 跨 Agent 工作区互转 wire 类型（同 main/cross-agent-convert/types.ts） ── */
 type CrossAgentMigrationKind = 'agents-md' | 'agents' | 'hooks' | 'mcp';
 type CrossAgentDirection = 'to-claude' | 'to-codex';
@@ -3617,6 +3623,12 @@ interface ElectronAPI {
     autoRelaunchOnIdle: boolean;
   }) => Promise<AutoUpdateSettingsPayload>;
   resetAutoUpdateSettings: () => Promise<AutoUpdateSettingsPayload>;
+  /** 动态任务标题开关的读/写/恢复默认。 */
+  getSessionTitleSettings: () => Promise<SessionTitleSettingsPayload>;
+  setSessionTitleSettings: (settings: {
+    dynamicTitleEnabled: boolean;
+  }) => Promise<SessionTitleSettingsPayload>;
+  resetSessionTitleSettings: () => Promise<SessionTitleSettingsPayload>;
   /** beta 测试渠道(设备级)开关的读/写/恢复默认。 */
   getUpdateChannelSettings: () => Promise<{
     enableBeta: boolean;
