@@ -91,6 +91,14 @@ describe('FindInPageBar', () => {
     const script = document.createElement('script');
     script.textContent = '// foo';
     page.append(script);
+    const select = document.createElement('select');
+    const selectedOption = document.createElement('option');
+    selectedOption.textContent = 'bar';
+    selectedOption.selected = true;
+    const unselectedOption = document.createElement('option');
+    unselectedOption.textContent = 'foo';
+    select.append(selectedOption, unselectedOption);
+    page.append(select);
 
     const input = await openFindBar(page);
     fireEvent.change(input, { target: { value: 'foo' } });

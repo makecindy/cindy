@@ -9,13 +9,8 @@ import { isFindInPageClaimed } from './findInPageOwnership';
 const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
 const ACTIVE_HIGHLIGHT_NAME = 'cindy-find-in-page-active';
 const MUTATION_DEBOUNCE_MS = 100;
-
-function semanticHsl(token: string): string {
-  // Keep the token name dynamic here because the design inventory records this
-  // legacy overlay as a zero-token surface; the browser still resolves the
-  // same semantic theme variables at runtime in both Light and Dark modes.
-  return `hsl(var(${token}))`;
-}
+const SEARCH_MATCH_BACKGROUND = 'hsl(var(--search-match-bg))';
+const SEARCH_MATCH_FOREGROUND = 'hsl(var(--search-match-fg))';
 
 interface TextMatch {
   range: Range;
@@ -98,6 +93,11 @@ function isExcludedTextNode(
       tagName === 'template'
     ) {
       return true;
+    }
+    if (tagName === 'option') {
+      const select = element.closest('select');
+      const option = element as HTMLOptionElement;
+      if (select && !select.multiple && select.size <= 1 && !option.selected) return true;
     }
     if (tagName === 'details' && !element.hasAttribute('open')) {
       const summary = Array.from(element.children).find(
@@ -360,14 +360,14 @@ export function FindInPageBar() {
     >
       <style>{`
         ::highlight(${MATCH_HIGHLIGHT_NAME}) {
-          background-color: ${semanticHsl('--search-match-bg')};
-          color: ${semanticHsl('--search-match-fg')};
+          background-color: ${SEARCH_MATCH_BACKGROUND};
+          color: ${SEARCH_MATCH_FOREGROUND};
         }
         ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
-          background-color: ${semanticHsl('--search-match-bg')};
-          color: ${semanticHsl('--search-match-fg')};
+          background-color: ${SEARCH_MATCH_BACKGROUND};
+          color: ${SEARCH_MATCH_FOREGROUND};
           text-decoration: underline;
-          text-decoration-color: ${semanticHsl('--search-match-fg')};
+          text-decoration-color: ${SEARCH_MATCH_FOREGROUND};
           text-decoration-thickness: 2px;
         }
       `}</style>
