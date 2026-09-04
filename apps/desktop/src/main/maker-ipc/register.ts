@@ -15732,12 +15732,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         typeof selection !== 'object' ||
         Array.isArray(selection) ||
         (!isSupportedRuntimeEffort(selectionEffort) &&
-          !(
-            selectionEffort === null &&
-            (internalOptions.source !== 'user' ||
-              isDeviceLinkInvoke() ||
-              confirmedContextWindow !== undefined)
-          )) ||
+          selectionEffort !== null) ||
         typeof (selection as { fastMode?: unknown }).fastMode !== 'boolean')
     ) {
       throwIpcError('INVALID_PARAMS', 'selection must contain effort + fastMode');

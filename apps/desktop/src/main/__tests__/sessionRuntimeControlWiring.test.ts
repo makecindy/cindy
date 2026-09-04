@@ -307,7 +307,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
-  it('accepts null effort for fixed-effort local retries and device-link atomic selections', () => {
+  it('accepts local user null effort at the selection gate; ranked models still fail in catalog', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -322,9 +322,15 @@ describe('session runtime control wiring', () => {
     expect(confirmation).toBeGreaterThan(-1);
     expect(confirmation).toBeLessThan(selectionValidation);
     expect(setModel).toContain(
+      '!isSupportedRuntimeEffort(selectionEffort) &&\n          selectionEffort !== null',
+    );
+    expect(setModel).not.toContain(
       "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
     expect(setModel).toContain('catalogModel.efforts.length > 0');
+    expect(setModel).toContain(
+      "internalOptions.source === 'user' &&\n          atomicSelection.effort === null &&\n          catalogModel.efforts.length > 0",
+    );
     expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
     expect(fixedEffortValidation).toBeLessThan(prepare);
     expect(prepare).toBeLessThan(apply);
@@ -412,7 +418,7 @@ describe('session runtime control wiring', () => {
       normalWakeGuard,
     );
 
-    expect(setModel).toContain('selectionEffort === null &&');
+    expect(setModel).toContain('atomicSelection.effort === null');
     expect(setModel).toContain('isDeviceLinkInvoke() ||');
     expect(setModel).toContain(
       "(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')",
