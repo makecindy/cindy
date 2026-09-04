@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { tx as runDbTx } from '../../localDb/worker/opHandlers/tx.js';
 import {
+  isSessionTurnIdleForCurrentInstance,
   readPersistedSessionTurnLeases,
   refreshSessionTurnLeaseOwner,
   releaseSessionTurnLease,
@@ -77,6 +78,24 @@ describe('shared-process session turn lease', () => {
       raw: first,
     };
   }
+
+  it('rejects idle when a replacement Session appears during the async lease probe', async () => {
+    let currentInstanceId = 'instance-a';
+    let resolveIdle!: (idle: boolean) => void;
+    const result = isSessionTurnIdleForCurrentInstance(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveIdle = resolve;
+        }),
+      () => currentInstanceId === 'instance-a',
+    );
+
+    // B is wired and stages preflight evidence before it has marked a turn started.
+    currentInstanceId = 'instance-b';
+    resolveIdle(true);
+
+    await expect(result).resolves.toBe(false);
+  });
 
   it('lets only the newest silent-stop generation own the delayed decision', () => {
     const gate = new SilentStopTurnLeaseGate();

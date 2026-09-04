@@ -7,12 +7,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  beginClaudeSessionTurnRoute,
+  clearClaudeSessionTurnRoute,
   noteClaudeSessionRequest,
   onClaudeSessionRouteChange,
   readLatestClaudeSessionRequestId,
   readClaudeSessionRoute,
+  readClaudeSessionTurnRoute,
   recordClaudeRequestRoute,
   recordClaudeSessionRoute,
+  rollbackClaudeSessionTurnRoute,
   resetClaudeSessionRouteRegistryForTest,
   takeClaudeRequestRoute,
 } from '../claude-session-route-registry';
@@ -32,12 +36,39 @@ describe('claude-session-route-registry', () => {
     expect(readClaudeSessionRoute('s2')).toBeNull();
   });
 
+  it('binds observed routes to exact turn generations across overlap', () => {
+    beginClaudeSessionTurnRoute('s1', 1);
+    recordClaudeSessionRoute('s1', 'gateway');
+    beginClaudeSessionTurnRoute('s1', 2);
+    recordClaudeSessionRoute('s1', 'subscription');
+
+    expect(readClaudeSessionTurnRoute('s1', 1)).toBe('gateway');
+    expect(readClaudeSessionTurnRoute('s1', 2)).toBe('subscription');
+    expect(readClaudeSessionRoute('s1')).toBe('subscription');
+
+    clearClaudeSessionTurnRoute('s1', 1);
+    expect(readClaudeSessionTurnRoute('s1', 1)).toBeNull();
+    expect(readClaudeSessionTurnRoute('s1', 2)).toBe('subscription');
+  });
+
+  it('clears reused-generation evidence after an undispatched rollback', () => {
+    beginClaudeSessionTurnRoute('s1', 2);
+    recordClaudeSessionRoute('s1', 'gateway');
+    rollbackClaudeSessionTurnRoute('s1', 2);
+
+    expect(readClaudeSessionTurnRoute('s1', 2)).toBeNull();
+
+    beginClaudeSessionTurnRoute('s1', 2);
+    recordClaudeSessionRoute('s1', 'subscription');
+    expect(readClaudeSessionTurnRoute('s1', 2)).toBe('subscription');
+  });
+
   it('notifies listeners only when the route value changes (idempotent hot path)', () => {
     const listener = vi.fn();
     onClaudeSessionRouteChange(listener);
 
     recordClaudeSessionRoute('s1', 'gateway');
-    recordClaudeSessionRoute('s1', 'gateway');  // 同值: 每请求都会调, 不得重复广播
+    recordClaudeSessionRoute('s1', 'gateway'); // 同值: 每请求都会调, 不得重复广播
     recordClaudeSessionRoute('s1', 'gateway');
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith('s1', 'gateway');
@@ -48,7 +79,9 @@ describe('claude-session-route-registry', () => {
   });
 
   it('isolates listener exceptions from the routing hot path and other listeners', () => {
-    const bad = vi.fn(() => { throw new Error('boom'); });
+    const bad = vi.fn(() => {
+      throw new Error('boom');
+    });
     const good = vi.fn();
     onClaudeSessionRouteChange(bad);
     onClaudeSessionRouteChange(good);

@@ -41,7 +41,51 @@ const routes = new Map<string, ClaudeSessionBillingRoute>();
 const listeners = new Set<RouteChangeListener>();
 const requestRoutes = new Map<number, ClaudeRequestRoute>();
 const latestRequestIds = new Map<string, number>();
+const activeTurnGenerations = new Map<string, number>();
+const turnRoutes = new Map<string, Map<number, ClaudeSessionBillingRoute>>();
 const MAX_REQUEST_ROUTES = 256;
+
+/** Stage the generation whose requests are about to cross the proxy truth point. */
+export function beginClaudeSessionTurnRoute(sessionId: string, turnGeneration: number): void {
+  activeTurnGenerations.set(sessionId, turnGeneration);
+  // Session can reuse a generation after a confirmed undispatched rollback.
+  turnRoutes.get(sessionId)?.delete(turnGeneration);
+}
+
+/** Remove evidence for a request that never reached provider dispatch. */
+export function rollbackClaudeSessionTurnRoute(sessionId: string, turnGeneration: number): void {
+  if (activeTurnGenerations.get(sessionId) === turnGeneration) {
+    activeTurnGenerations.delete(sessionId);
+  }
+  const routesForSession = turnRoutes.get(sessionId);
+  routesForSession?.delete(turnGeneration);
+  if (routesForSession?.size === 0) turnRoutes.delete(sessionId);
+}
+
+/** Read routing-transform evidence owned by one exact Session generation. */
+export function readClaudeSessionTurnRoute(
+  sessionId: string,
+  turnGeneration: number,
+): ClaudeSessionBillingRoute | null {
+  return turnRoutes.get(sessionId)?.get(turnGeneration) ?? null;
+}
+
+/** Retire one completed generation without disturbing an overlapping turn. */
+export function clearClaudeSessionTurnRoute(sessionId: string, turnGeneration: number): void {
+  const routesForSession = turnRoutes.get(sessionId);
+  if (routesForSession) {
+    routesForSession.delete(turnGeneration);
+    if (routesForSession.size === 0) turnRoutes.delete(sessionId);
+  }
+  if (activeTurnGenerations.get(sessionId) === turnGeneration) {
+    activeTurnGenerations.delete(sessionId);
+  }
+}
+
+export function clearClaudeSessionTurnRoutes(sessionId: string): void {
+  activeTurnGenerations.delete(sessionId);
+  turnRoutes.delete(sessionId);
+}
 
 /** 每个带会话标头的请求一开始就调用；未知路由也会使旧错误证据失效。 */
 export function noteClaudeSessionRequest(sessionId: string, reqId: number): void {
@@ -83,6 +127,15 @@ export function recordClaudeSessionRoute(
   sessionId: string,
   route: ClaudeSessionBillingRoute,
 ): void {
+  const turnGeneration = activeTurnGenerations.get(sessionId);
+  if (turnGeneration !== undefined) {
+    let routesForSession = turnRoutes.get(sessionId);
+    if (!routesForSession) {
+      routesForSession = new Map();
+      turnRoutes.set(sessionId, routesForSession);
+    }
+    routesForSession.set(turnGeneration, route);
+  }
   if (routes.get(sessionId) === route) return;
   routes.set(sessionId, route);
   for (const listener of listeners) {
@@ -113,4 +166,6 @@ export function resetClaudeSessionRouteRegistryForTest(): void {
   listeners.clear();
   requestRoutes.clear();
   latestRequestIds.clear();
+  activeTurnGenerations.clear();
+  turnRoutes.clear();
 }
