@@ -320,7 +320,31 @@ describe('FindInPageBar', () => {
       Object.defineProperty(transitionEnd, 'propertyName', { value: 'opacity' });
       responsive.dispatchEvent(transitionEnd);
     });
-    expect(screen.getByText('0/0')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
+  });
+
+  it('refreshes matches after hover and focus visibility changes', async () => {
+    const page = document.createElement('main');
+    const responsive = document.createElement('button');
+    responsive.textContent = 'foo';
+    page.append(responsive);
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    const walkerSpy = vi.spyOn(document, 'createTreeWalker');
+    const initialSearchCount = walkerSpy.mock.calls.length;
+
+    fireEvent.mouseOver(responsive);
+    await waitFor(() =>
+      expect(walkerSpy.mock.calls.length).toBeGreaterThan(initialSearchCount),
+    );
+    const hoverSearchCount = walkerSpy.mock.calls.length;
+
+    fireEvent.focusIn(responsive);
+    await waitFor(() => expect(walkerSpy.mock.calls.length).toBeGreaterThan(hoverSearchCount));
+    walkerSpy.mockRestore();
   });
 
   it('refreshes matches when details sections expand or collapse', async () => {

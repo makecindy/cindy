@@ -10,6 +10,7 @@ const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
 const ACTIVE_HIGHLIGHT_NAME = 'cindy-find-in-page-active';
 const SEARCH_MATCH_BACKGROUND = 'hsl(var(--search-match-bg))';
 const SEARCH_MATCH_FOREGROUND = 'hsl(var(--search-match-fg))';
+const SEARCH_REFRESH_DEBOUNCE_MS = 120;
 
 interface TextMatch {
   range: Range;
@@ -408,7 +409,7 @@ export function FindInPageBar() {
   const rangesRef = useRef<TextMatch[]>([]);
   const activeRef = useRef(0);
   const pendingScrollFrameRef = useRef<number | null>(null);
-  const pendingMutationRefreshTimerRef = useRef<number | null>(null);
+  const pendingRefreshTimerRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
   const compositionCommitRef = useRef<string | null>(null);
 
@@ -503,6 +504,16 @@ export function FindInPageBar() {
       if (isComposingRef.current) return;
       applySearch(text, activeRef.current);
     };
+    const scheduleRefresh = () => {
+      if (isComposingRef.current) return;
+      const pendingTimer = pendingRefreshTimerRef.current;
+      if (pendingTimer !== null) window.clearTimeout(pendingTimer);
+
+      pendingRefreshTimerRef.current = window.setTimeout(() => {
+        pendingRefreshTimerRef.current = null;
+        refreshSearch();
+      }, SEARCH_REFRESH_DEBOUNCE_MS);
+    };
     const handleResize = () => refreshSearch();
     const handleChange = (event: Event) => {
       if (event.target instanceof HTMLSelectElement) refreshSearch();
@@ -517,26 +528,29 @@ export function FindInPageBar() {
       ) {
         return;
       }
-      refreshSearch();
+      scheduleRefresh();
+    };
+    const handlePotentialVisibilityChange = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Node) || isInsideRoot(target, rootRef.current)) return;
+      scheduleRefresh();
     };
     const observer =
       typeof MutationObserver === 'function'
         ? new MutationObserver((records) => {
             const root = rootRef.current;
             if (!root || records.every((record) => isInsideRoot(record.target, root))) return;
-            const pendingTimer = pendingMutationRefreshTimerRef.current;
-            if (pendingTimer !== null) window.clearTimeout(pendingTimer);
-
-            pendingMutationRefreshTimerRef.current = window.setTimeout(() => {
-              pendingMutationRefreshTimerRef.current = null;
-              refreshSearch();
-            }, 120);
+            scheduleRefresh();
           })
         : null;
 
     window.addEventListener('resize', handleResize);
     document.addEventListener('change', handleChange);
     document.addEventListener('transitionend', handleTransitionEnd);
+    document.addEventListener('mouseover', handlePotentialVisibilityChange);
+    document.addEventListener('mouseout', handlePotentialVisibilityChange);
+    document.addEventListener('focusin', handlePotentialVisibilityChange);
+    document.addEventListener('focusout', handlePotentialVisibilityChange);
     observer?.observe(document.body, {
       childList: true,
       characterData: true,
@@ -548,9 +562,13 @@ export function FindInPageBar() {
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('change', handleChange);
       document.removeEventListener('transitionend', handleTransitionEnd);
+      document.removeEventListener('mouseover', handlePotentialVisibilityChange);
+      document.removeEventListener('mouseout', handlePotentialVisibilityChange);
+      document.removeEventListener('focusin', handlePotentialVisibilityChange);
+      document.removeEventListener('focusout', handlePotentialVisibilityChange);
       observer?.disconnect();
-      const timer = pendingMutationRefreshTimerRef.current;
-      pendingMutationRefreshTimerRef.current = null;
+      const timer = pendingRefreshTimerRef.current;
+      pendingRefreshTimerRef.current = null;
       if (timer !== null) {
         window.clearTimeout(timer);
       }
