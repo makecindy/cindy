@@ -217,6 +217,45 @@ describe('resolvePiCindyGatewayModelApi', () => {
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it.each([
+    { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses' as const, expected: true },
+    { baseUrl: 'https://private.example/v1', wireProtocol: 'openai-responses' as const, expected: false },
+    { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-chat' as const, expected: false },
+  ])('Astra API metadata requires the matching endpoint and protocol: $baseUrl $wireProtocol', ({ baseUrl, wireProtocol, expected }) => {
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'manual-openai', name: 'Manual OpenAI', auth: { method: 'apiKey' },
+      runtimes: { pi: piRuntime({ baseUrl, wireProtocol, models: [{ id: 'gpt-6-astra', name: 'Astra' }] }) },
+    }], () => 'test-key');
+    const model = providers[0]?.models[0];
+    if (expected) {
+      expect(model).toMatchObject({
+        contextWindow: 1_050_000, maxTokens: 128_000, reasoning: true,
+        input: ['text', 'image'], thinkingLevelMap: { off: 'low', max: 'max' },
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      });
+      expect(model?.baseUrl).toBeUndefined();
+    } else {
+      expect(model?.thinkingLevelMap).toBeUndefined();
+      expect(model?.contextWindow).toBeUndefined();
+    }
+  });
+
+  it('adds missing Astra subscription metadata and preserves native transport compatibility', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const build = (native?: PiBundledModelInfo) => buildPiSubscriptionNativeProviders(
+      catalog, 'http://127.0.0.1:4567/',
+      new Map([['openai-codex', new Map(native ? [['gpt-6-astra', native]] : [])]]),
+    ).providers.find((provider) => provider.id === 'openai-codex')?.models.find((model) => model.wireId === 'gpt-6-astra');
+    expect(build()).toMatchObject({
+      id: 'chatgpt/gpt-6-astra', api: 'openai-codex-responses', catalogAddition: true,
+      contextWindow: 272_000, input: ['text', 'image'], thinkingLevelMap: { max: 'max' },
+    });
+    expect(build()?.baseUrl).toBeUndefined();
+    const native = piBundledModel('gpt-6-astra', 'openai-codex-responses', { compat: { supportsStore: false } });
+    expect(build(native)).toMatchObject({ api: 'openai-codex-responses', compat: { supportsStore: false } });
+    expect(build(native)?.catalogAddition).toBeUndefined();
+  });
+
   it('keeps a legacy custom xai endpoint separate from the official SuperGrok provider', () => {
     const { providers, env } = buildPiNativeProvidersFromConfigs(
       [

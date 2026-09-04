@@ -143,7 +143,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     }
   });
 
-  it('ships only Pi-native subscription models and does not invent GPT-6 from Registry', () => {
+  it('ships Pi-native subscription models plus explicit Astra support, independent of Registry', () => {
     expect(provider('openai').models.pi?.map((model) => model.id)).toEqual([
       'chatgpt/gpt-5.3-codex-spark',
       'chatgpt/gpt-5.4',
@@ -152,9 +152,10 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       'chatgpt/gpt-5.6-luna',
       'chatgpt/gpt-5.6-sol',
       'chatgpt/gpt-5.6-terra',
+      'chatgpt/gpt-6-astra',
     ]);
     expect(
-      provider('openai').models.pi?.some((model) => model.id.startsWith('chatgpt/gpt-6')),
+      provider('openai').models.pi?.some((model) => model.id === 'chatgpt/gpt-6'),
     ).toBe(false);
     expect(provider('anthropic').models.pi).toHaveLength(14);
   });

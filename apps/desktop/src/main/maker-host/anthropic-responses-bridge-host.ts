@@ -31,6 +31,7 @@ import {
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 
 import { createMakerLogger } from './logger-adapter.js';
+import { getActiveCatalog } from './active-catalog.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { getGrokAccessToken } from './grok-oauth-login.js';
 import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';
@@ -288,6 +289,9 @@ function codexProviderConfig(): BridgeProviderConfig {
     // Fast 模式:codex models_cache 的 service_tiers 声明 {id:'priority', name:'Fast'},
     // handler 在 prefs.fast 时映射成 Responses 的 service_tier:'priority'。
     fastServiceTier: 'priority',
+    supportedReasoningEfforts: (model) => getActiveCatalog().providers
+      .find((provider) => provider.id === 'openai')?.models['claude-code']
+      ?.find((entry) => entry.id === `${CHATGPT_MODEL_PREFIX}${model}`)?.efforts,
     // codex 后端不支持 max_output_tokens(会 400),保持默认 false。
     buildHeaders: async ({ sessionId }) => {
       const { accessToken, accountId } = await getChatgptBridgeAuth();

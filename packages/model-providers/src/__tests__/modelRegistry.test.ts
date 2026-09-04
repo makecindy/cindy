@@ -10,6 +10,19 @@ import {
 const registry = BUNDLED_CATALOG.modelRegistry;
 
 describe("model registry", () => {
+  it.each([
+    { variant: "standard" as const, inputPerMtok: 10, cacheWritePerMtok: 12.5 },
+    { variant: "fast" as const, inputPerMtok: 20, cacheWritePerMtok: 25 },
+  ])("Astra $variant prices are available on the verified UTC day", ({ variant, inputPerMtok, cacheWritePerMtok }) => {
+    // September 5 in Auckland is still September 4 UTC: pricing uses the UTC day.
+    const options = { at: new Date("2026-09-04T21:00:00Z"), variant, inputTokens: 272_000 };
+    expect(resolveModelReferencePrice(registry, "openai", "gpt-6-astra", options)?.price)
+      .toMatchObject({ inputPerMtok, cacheWritePerMtok });
+    expect(resolveModelReferencePrice(registry, "openai", "gpt-6-astra", {
+      ...options, inputTokens: 272_001,
+    })).toBeUndefined();
+  });
+
   it("compares revision instants with normalized timestamps before checking content", () => {
     if (!registry) throw new Error("missing bundled registry");
     const current = { ...registry, updatedAt: "2026-08-02T02:00:00.000Z" };

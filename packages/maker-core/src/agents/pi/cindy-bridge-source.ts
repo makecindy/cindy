@@ -3059,7 +3059,29 @@ function rgGlob(
   });
 }
 
+// Astra's public Responses contract differs from older Pi serializers. Keep this at the
+// native pre-request hook so BYOM, gateway and subagent calls share the same wire correction.
+function astraResponsesPayload(payload, model) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  if (!model || model.api !== 'openai-responses') return undefined;
+  if (!/(^|\/)gpt-6-astra(?:\[1m\])?$/.test(model.id ?? '')) return undefined;
+  const out = { ...payload };
+  delete out.prompt_cache_retention;
+  out.prompt_cache_options = { ttl: '30m', ...out.prompt_cache_options };
+  delete out.temperature;
+  delete out.top_p;
+  delete out.top_logprobs;
+  if (Array.isArray(out.include)) {
+    out.include = out.include.filter((entry) => entry !== 'message.output_text.logprobs');
+  }
+  if (out.reasoning?.effort === 'none' || out.reasoning?.effort === 'minimal') {
+    out.reasoning = { ...out.reasoning, effort: 'low' };
+  }
+  return out;
+}
+
 export default async function cindyBridge(pi: any) {
+  pi.on('before_provider_request', (event, ctx) => astraResponsesPayload(event.payload, ctx.model));
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
   // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。

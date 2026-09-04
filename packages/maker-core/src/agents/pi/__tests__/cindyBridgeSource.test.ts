@@ -342,6 +342,32 @@ function loadBashTimeoutHelpers(): {
 }
 
 describe('cindy-bridge extension source', () => {
+  it('adapts Astra API payloads without changing other models or subscription requests', () => {
+    const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function astraResponsesPayload(');
+    const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge');
+    const adapt = new Function(`${CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end)}; return astraResponsesPayload;`)();
+    const original = {
+      prompt_cache_retention: '24h',
+      prompt_cache_options: { mode: 'explicit' },
+      temperature: 0.5, top_p: 1, top_logprobs: 2,
+      include: ['reasoning.encrypted_content', 'message.output_text.logprobs'],
+      reasoning: { effort: 'none', summary: 'auto' },
+      input: [{ role: 'user', content: 'hello' }],
+    };
+    const model = { id: 'gpt-6-astra', api: 'openai-responses' };
+    expect(adapt(original, model)).toEqual({
+      prompt_cache_options: { ttl: '30m', mode: 'explicit' },
+      include: ['reasoning.encrypted_content'],
+      reasoning: { effort: 'low', summary: 'auto' },
+      input: original.input,
+    });
+    expect(original.reasoning.effort).toBe('none');
+    expect(original.prompt_cache_retention).toBe('24h');
+    expect(adapt({ reasoning: { effort: 'max' } }, model).reasoning.effort).toBe('max');
+    expect(adapt(original, { ...model, id: 'gpt-5.5' })).toBeUndefined();
+    expect(adapt(original, { ...model, api: 'openai-codex-responses' })).toBeUndefined();
+  });
+
   it('is valid standalone TypeScript for the Pi runtime to load', () => {
     const result = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE, {
       compilerOptions: {

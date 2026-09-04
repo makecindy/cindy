@@ -129,7 +129,13 @@ function anthropicStreamBody(text: string): string {
 }
 
 /** 最小完整的 OpenAI Responses SSE 流：供 Pi 原生 Responses BYOM 回归使用。 */
-function responsesStreamBody(text: string, model: string): string {
+function responsesStreamBody(text: string, model: string, usage = {
+  input_tokens: 1,
+  input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+  output_tokens: 1,
+  output_tokens_details: { reasoning_tokens: 0 },
+  total_tokens: 2,
+}): string {
   const responseId = 'resp_byom_reasoning_1';
   const item = {
     id: 'msg_byom_reasoning_1',
@@ -159,13 +165,7 @@ function responsesStreamBody(text: string, model: string): string {
     tools: [],
     top_p: 1,
     truncation: 'disabled',
-    usage: {
-      input_tokens: 1,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens: 1,
-      output_tokens_details: { reasoning_tokens: 0 },
-      total_tokens: 2,
-    },
+    usage,
     metadata: {},
   };
   return sse([
@@ -1486,10 +1486,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
-  it(
-    'BYOM Responses: an explicit Pi effort reaches the upstream reasoning.effort request field',
+  it.each([
+    { model: 'byom-reasoner', effort: 'xhigh' as const },
+    { model: 'gpt-6-astra', effort: 'max' as const },
+  ])(
+    'BYOM Responses: $model sends $effort with compatible cache parameters',
     { timeout: 60_000 },
-    async () => {
+    async ({ model, effort }) => {
       const nativeSeen: Array<{
         url: string;
         auth: string | undefined;
@@ -1510,7 +1513,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             'content-type': 'text/event-stream',
             'cache-control': 'no-cache',
           });
-          res.end(responsesStreamBody('pong from Responses', 'byom-reasoner'));
+          res.end(responsesStreamBody('pong from Responses', model, {
+            input_tokens: 300_000,
+            input_tokens_details: { cached_tokens: 200_000, cache_write_tokens: 50_000 },
+            output_tokens: 100,
+            output_tokens_details: { reasoning_tokens: 0 },
+            total_tokens: 300_100,
+          }));
         });
       });
       await new Promise<void>((resolve) => nativeServer.listen(0, '127.0.0.1', resolve));
@@ -1540,16 +1549,21 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             apiKeyEnvVar: 'CINDY_PI_KEY_LOCALRESPONSES',
             models: [
               {
-                id: 'byom-reasoner',
+                id: model,
                 name: 'BYOM Reasoner',
                 reasoning: true,
+                contextWindow: 1_050_000,
+                cost: {
+                  input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5,
+                  tiers: [{ inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 }],
+                },
                 thinkingLevelMap: {
                   minimal: null,
                   low: 'low',
                   medium: null,
                   high: 'high',
                   xhigh: 'xhigh',
-                  max: null,
+                  max: model === 'gpt-6-astra' ? 'max' : null,
                 },
               },
             ],
@@ -1566,24 +1580,40 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           sessionId: 'byom-responses-session',
           workingDir,
           providerId: 'localresponses',
-          model: 'byom-reasoner',
-          effort: 'xhigh',
+          model,
+          effort,
         });
         const done = (async () => {
           for await (const event of handle!.events()) {
-            if (event.type === 'done') break;
+            if (event.type === 'done') return event;
           }
         })();
         await handle.send({ type: 'user', content: 'reason carefully' });
-        await done;
+        const completed = await done;
+        expect(completed?.data).toMatchObject({
+          status: 'completed',
+          usage: {
+            inputTokens: 50_000, outputTokens: 100,
+            cacheReadTokens: 200_000, cacheCreationTokens: 50_000,
+            segments: [expect.objectContaining({ cacheCreateTokens: 50_000, costUsd: expect.closeTo(2.6575, 10) })],
+          },
+        });
 
         expect(nativeSeen).toHaveLength(1);
         expect(nativeSeen[0]?.url).toMatch(/\/responses(?:\?|$)/);
         expect(nativeSeen[0]?.auth).toContain('responses-secret-key');
         expect(JSON.parse(nativeSeen[0]?.body ?? '{}')).toMatchObject({
-          model: 'byom-reasoner',
-          reasoning: { effort: 'xhigh' },
+          model,
+          reasoning: { effort },
         });
+        const payload = JSON.parse(nativeSeen[0]?.body ?? '{}');
+        if (model === 'gpt-6-astra') {
+          expect(payload.prompt_cache_retention).toBeUndefined();
+          expect(payload.prompt_cache_options).toEqual({ ttl: '30m' });
+        } else {
+          expect(payload.prompt_cache_retention).toBe('24h');
+          expect(payload.prompt_cache_options).toBeUndefined();
+        }
         expect(seenRequests.length).toBe(gatewayBefore);
       } finally {
         await handle?.close();

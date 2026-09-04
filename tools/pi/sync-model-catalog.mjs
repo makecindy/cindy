@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { applyKnownXaiCorrections, preferredDefaultEffort } from './xai-catalog-corrections.mjs';
+import { applyAstraCatalogAdditions } from './openai-catalog-corrections.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CATALOG_PATH = path.join(ROOT, 'packages/model-providers/catalog/providers.json');
@@ -172,6 +173,7 @@ async function main() {
     }
   }
   if (providers.xai) providers.xai = applyKnownXaiCorrections(providers.xai);
+  applyAstraCatalogAdditions(providers);
 
   const catalog = JSON.parse(await fs.readFile(CATALOG_PATH, 'utf8'));
   for (const preset of catalog.presets ?? []) {

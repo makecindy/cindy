@@ -536,6 +536,9 @@ export function buildPiSubscriptionNativeProviders(
   const officialXaiById = new Map(
     (officialPiModels('xai') ?? []).map((model) => [model.id, model]),
   );
+  const officialOpenAiById = new Map(
+    (officialPiModels('openai-codex') ?? []).map((model) => [model.id, model]),
+  );
   const env: Record<string, string> = {
     [PI_OPENAI_PROXY_KEY_ENV]: piOpenaiProxyPlaceholderJwt(),
     [PI_XAI_PROXY_API_KEY_ENV]: PI_PROVIDER_AUTH_PLACEHOLDER_KEY,
@@ -625,6 +628,16 @@ export function buildPiSubscriptionNativeProviders(
         const listedIds =
           listedModelIdsByProvider?.get(piProviderId)
           ?? listedPiModelIds(bundledModelsByProvider)?.get(piProviderId);
+        const officialOpenAi = officialOpenAiById.get(wireId);
+        if (sourceProviderId === 'openai' && !bundledModel && !listedIds?.has(wireId)
+          && officialOpenAi?.api === 'openai-codex-responses') {
+          return {
+            ...structuredClone(officialOpenAi),
+            id: model.id,
+            wireId,
+            catalogAddition: true,
+          };
+        }
         const isKnownMissingXaiModel =
           wireId === 'grok-4.6' || model.id === 'grok-4.6' || model.id.endsWith('/grok-4.6');
         const isXaiCatalogAddition =
@@ -1261,8 +1274,18 @@ export function buildPiNativeProvidersFromConfigs(
         ? officialPiModels(rt.piCatalogProviderId)
         : null;
     const officialById = new Map((official ?? []).map((model) => [model.id, model]));
+    // The pinned binary predates Astra. Exact public API endpoint/protocol matches
+    // may use our catalog addition even when the user entered the endpoint by hand.
+    // Never lend subscription capabilities to an API key or another endpoint.
+    const openaiAddition = !rt.piCatalogProviderId &&
+      runtimeApi === 'openai-responses' &&
+      officialPiRouteMatches('openai', rt.baseUrl, rt.wireProtocol)
+        ? officialPiModels('openai')?.find((model) => model.id === 'gpt-6-astra')
+        : undefined;
     const metadataModels = rt.models.map(
-      (model, index) => bundledModels[index] ?? officialById.get(model.id),
+      (model, index) => bundledModels[index] ?? officialById.get(model.id) ??
+        (model.id === openaiAddition?.id && !model.route &&
+          (!model.piApi || model.piApi === openaiAddition.api) ? openaiAddition : undefined),
     );
     const modelApis = rt.models.map(
       (model, index) =>
