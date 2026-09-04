@@ -1290,9 +1290,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       },
     );
     mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
-    const turnPermissionPolicy = {
-      origin: { kind: 'im' as const, channel: 'telegram', taskId: 'msg-guest-policy' },
-      confirmationSurface: 'channel' as const,
+    const turnPermissionPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'telegram', taskId: 'msg-guest-policy' },
+      confirmationSurface: 'channel',
       forceConfirmToolCall: () => false,
     };
     const optionalForMode = vi.fn(() => false);
