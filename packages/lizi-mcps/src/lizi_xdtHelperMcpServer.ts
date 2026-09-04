@@ -272,10 +272,11 @@ function registerBotCollaborationEntry(
     [
       'Use one typed Cindy Bot collaboration primitive.',
       'status reads a Bot\'s current availability/activity and does not send anything.',
-      'call starts tracked work. Pass target_bot_id for another Bot; omit it for a full Cindy task. Both targets use the same state, card, result, and cancellation flow.',
+      'notify opens or continues a bounded private conversation in both Bots\' canonical timelines. Prefer it for questions, discussion, and small direct requests to a named Bot, even when that Bot should reply later or produce one small file (for example a Hello World HTML). End the current turn after delivery; never poll.',
+      'call starts independently tracked work. Use it only when the work needs an isolated task, progress/cancellation, permission mediation, longer execution, or automatic artifact handoff. Do not choose call merely because a reply is expected. Pass target_bot_id for another Bot; omit it for a full Cindy task.',
       'reply answers a waiting permission/question/plan or adds a message to an active call.',
       'cancel stops one tracked call and its descendants.',
-      'notify sends a fire-and-forget notice to a Bot and only confirms delivery; never use it when a result is expected.',
+      'When you receive a direct Bot message, handle it in the current canonical task and use notify back to the sender when a useful answer or result is expected. Avoid acknowledgement-only loops.',
       'When a structured @Bot reference is present, use its Bot ID directly. Do not list the roster first.',
     ].join('\n'),
     {
@@ -391,7 +392,7 @@ function registerBotCollaborationEntry(
         ) {
           return errorPayload(
             'NOTIFY_CANNOT_TRACK_WORK',
-            '通知不接受成果或执行边界；需要回复或交付物时请改用 action=call。',
+            '伙伴私聊不接受独立任务的深度或超时设置；移除这些参数，或者在确需独立追踪工作时改用 action=call。',
           );
         }
         const result = await deps.botMessaging.messageAgent({
@@ -408,10 +409,11 @@ function registerBotCollaborationEntry(
           action: 'notify',
           delivered: true,
           expects_result: false,
+          reply_may_arrive: true,
           target_bot_id: result.targetBotId,
           target_bot_name: result.targetBotName,
           wake_kind: result.wakeKind,
-          guidance: 'Delivery is confirmed, but no reply or result is tracked. Tell the user that plainly.',
+          guidance: 'Delivery is confirmed. This is a direct conversation, not a tracked task: end this turn without polling. The target Bot may reply in a later turn.',
         });
       }
       if (!deps.botDelegation) {

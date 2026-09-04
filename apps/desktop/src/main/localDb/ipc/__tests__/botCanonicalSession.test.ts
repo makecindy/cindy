@@ -2572,6 +2572,81 @@ describe('Bot avatar sentinel persistence', () => {
 });
 
 describe('Bot teammate collaboration', () => {
+  it('does not start a call when its requesting-timeline card cannot persist', async () => {
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    await invoke('local-db:bots:create', {
+      id: 'bot-planner',
+      name: 'Planner Bot',
+      capabilities: { harness: 'codex', model: 'gpt-5.5', permissions: 'trusted' },
+    });
+
+    const dispatch = vi.fn(async () => ({
+      ok: true as const,
+      targetSessionId: 'never-dispatched',
+      wakeKind: 'already-active' as const,
+    }));
+    const abortSession = vi.fn(async () => undefined);
+    const persistTimelineMessage = vi.fn(async (params: { clientId: string }) => {
+      if (params.clientId.startsWith('bot-delegation-request:')) {
+        throw new Error('timeline temporarily unavailable');
+      }
+    });
+    const service = createBotDelegationService({
+      dispatch,
+      abortSession,
+      persistTimelineMessage,
+      now: () => 10_000,
+      createId: () => 'missing-card-call',
+    });
+
+    try {
+      const result = await service.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-planner',
+        objective: '做一件不能隐身启动的工作。',
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        errorCode: 'PARENT_TIMELINE_PERSIST_FAILED',
+      });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(persistTimelineMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ clientId: 'bot-delegation-request:missing-card-call' }),
+      );
+      expect(persistTimelineMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ clientId: 'bot-delegation-target-request:missing-card-call' }),
+      );
+      expect(persistTimelineMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ clientId: 'bot-delegation-target-result:missing-card-call' }),
+      );
+      expect(abortSession).toHaveBeenCalledTimes(1);
+      expect(
+        h.sqlite!
+          .prepare('SELECT status FROM bot_delegations WHERE id = ?')
+          .pluck()
+          .get('missing-card-call'),
+      ).toBe('failed');
+
+      // A restart must not backfill an orphan result card into the target task when the
+      // corresponding request was never projected and the work never started.
+      persistTimelineMessage.mockClear();
+      await service.restore();
+      expect(persistTimelineMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ clientId: 'bot-delegation-target-request:missing-card-call' }),
+      );
+      expect(persistTimelineMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ clientId: 'bot-delegation-target-result:missing-card-call' }),
+      );
+    } finally {
+      service.dispose();
+    }
+  });
+
   it('runs a two-stage teammate relay and lets the requester interject mid-flight', async () => {
     // 连环编排的完整链路：Cindy 先叫策划，策划完再拿它的结论去叫设计；期间还能
     // 对正在忙的伙伴补一句话。断言覆盖三件事：委派先后成立、消息流里的锚点顺序

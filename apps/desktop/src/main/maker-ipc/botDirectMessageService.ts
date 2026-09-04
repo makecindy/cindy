@@ -471,6 +471,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const senderId = trustedHeaderLabel(caller.botId, MAX_SENDER_ID_CHARS);
       const envelope = [
         `[Direct message from Cindy Bot "${senderName}" (${senderId})]`,
+        `Handle this in your current canonical task. If a useful answer, result, or clarification should go back, call collaborate_with_bot with action=notify and target_bot_id="${senderId}". Do not send acknowledgement-only replies.`,
         message,
       ].join('\n\n');
       const deliveryId = createId();

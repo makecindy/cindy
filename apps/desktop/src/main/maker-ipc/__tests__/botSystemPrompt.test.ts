@@ -92,6 +92,10 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('把活交出去');
     expect(all).toContain('action=notify');
     expect(all).toContain('action=call');
+    expect(all).toContain('小活都优先走 notify');
+    expect(all).toContain('Hello World HTML”走 notify');
+    expect(all).toContain('不要仅仅因为“对方要给结果”');
+    expect(all).toContain('不要只为“收到”“好的”互相确认');
     expect(all).toContain('action=reply');
     expect(all).toContain('action=cancel');
     expect(all).not.toContain('action=start_task');

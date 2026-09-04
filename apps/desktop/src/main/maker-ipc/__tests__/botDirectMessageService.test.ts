@@ -173,7 +173,9 @@ describe('botDirectMessageService', () => {
     const [header] = envelope.split('\n');
     expect(header).toMatch(/^\[Direct message from Cindy Bot "[^\n]+" \(bot-a\)\]$/);
     expect(header.length).toBeLessThanOrEqual(180);
-    expect(envelope.split('\n\n')).toHaveLength(2);
+    expect(envelope.split('\n\n')).toHaveLength(3);
+    expect(envelope).toContain('action=notify');
+    expect(envelope).toContain('Do not send acknowledgement-only replies.');
   });
 
   it.each([

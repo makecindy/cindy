@@ -604,8 +604,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
    * **原位**留下一个位置（「<目标> 加入了对话」）。卡片的实时状态、秒数与终态战报
    * 都由 delegation 行推送驱动，锚点本身不需要更新。
    *
-   * 刻意与 `projectTargetRequest` 分开：目标侧那条镜像是真实工作交接，写不进去就
-   * 必须让委派失败；这一条只是发起方视角的呈现，写不进去只降级成「没有卡」。
+   * 刻意与 `projectTargetRequest` 分开：两侧锚点都是可见工作交接的一部分。发起方
+   * 锚点写不进去时必须在 dispatch 前失败，不能让任务在没有入口的情况下隐身启动；
+   * 目标侧镜像写不进去时同样必须让委派失败。
    */
   const projectParentRequest = async (row: Pick<DelegationRow,
     | 'id'
@@ -791,6 +792,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     lastError?: string | null;
     tokensUsed?: number;
     abortChild?: boolean;
+    /** Parent-card failure happens before the target is told; do not create a result-only target card. */
+    projectTargetResult?: boolean;
   }): Promise<{
     id: string;
     parentSessionId: string | null;
@@ -836,7 +839,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         .from(botDelegations)
         .where(eq(botDelegations.id, updated.id))
         .limit(1);
-      if (terminalRow) {
+      if (terminalRow && params.projectTargetResult !== false) {
         await projectTargetResult(terminalRow).catch((error) => {
           log.warn('failed to project Bot delegation result into target canonical task', {
             delegationId: terminalRow.id,
@@ -1972,6 +1975,28 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       permissionSnapshotJson,
       createdAt,
     };
+    // The requesting timeline is the user's only guaranteed place to find and
+    // control this call. Persist its card before exposing the request to the
+    // target; a call without this anchor must never start invisibly.
+    try {
+      await projectParentRequest(mirrorRow);
+    } catch (error) {
+      const lastError = `PARENT_TIMELINE_PERSIST_FAILED: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      await updateTerminal({
+        delegationId,
+        status: 'failed',
+        lastError,
+        abortChild: true,
+        projectTargetResult: false,
+      });
+      return {
+        ok: false,
+        errorCode: 'PARENT_TIMELINE_PERSIST_FAILED',
+        message: '委派未启动：无法在当前任务中保留协作卡',
+      };
+    }
     if (input.targetBotId) {
       try {
         await projectTargetRequest(mirrorRow);
@@ -2004,12 +2029,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         };
       }
     }
-    await projectParentRequest(mirrorRow).catch((error) => {
-      log.warn('failed to anchor the Bot collaboration card in the requesting task', {
-        delegationId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
     scheduleTimeout(delegationId, plan.limits.deadlineAt);
     const dispatchResult = await attemptDispatch(delegationId);
     return {
@@ -2973,6 +2992,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           inArray(botDelegations.status, ['completed', 'failed', 'cancelled', 'timed-out']),
           isNull(messages.id),
           sql`json_type(${botDelegations.permissionSnapshotJson}, '$.targetCanonicalSessionId') = 'text'`,
+          sql`exists (
+            select 1
+            from messages as target_request
+            where target_request.session_id = json_extract(
+              ${botDelegations.permissionSnapshotJson},
+              '$.targetCanonicalSessionId'
+            )
+              and target_request.client_id = 'bot-delegation-target-request:' || ${botDelegations.id}
+          )`,
         ),
       );
     for (const { delegation: row } of terminalRows) {

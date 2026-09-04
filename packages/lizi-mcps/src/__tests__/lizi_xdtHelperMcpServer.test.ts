@@ -194,6 +194,12 @@ describe("cindy_helper MCP server", () => {
         (tool) => tool.name === "collaborate_with_bot",
       );
       expect(collaborationTool).toBeDefined();
+      expect(collaborationTool?.description).toContain(
+        "Prefer it for questions, discussion, and small direct requests",
+      );
+      expect(collaborationTool?.description).toContain(
+        "Do not choose call merely because a reply is expected",
+      );
       const oversized = await client.callTool({
         name: "collaborate_with_bot",
         arguments: {
@@ -272,7 +278,7 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("sends a fire-and-forget notice only through the unified collaboration tool", async () => {
+  it("sends a bounded direct conversation message through the unified collaboration tool", async () => {
     const messageAgent = vi.fn(async () => ({
       ok: true as const,
       targetBotId: "bot-b",
@@ -306,6 +312,7 @@ describe("cindy_helper MCP server", () => {
         action: "notify",
         delivered: true,
         expects_result: false,
+        reply_may_arrive: true,
       });
       expect(messageAgent).toHaveBeenCalledWith({
         callerSessionId: "bot-a-main",
