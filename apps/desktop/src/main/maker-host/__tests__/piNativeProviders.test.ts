@@ -332,6 +332,54 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
+  it('同 origin 的 bundled 元数据不能把用户代理路径改回原生路径', () => {
+    const bundled = new Map([
+      [
+        'bundled-provider',
+        new Map([
+          [
+            'server-model',
+            piBundledModel('server-model', 'openai-completions', {
+              baseUrl: 'https://api.example/native/v1',
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            }),
+          ],
+        ]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'proxied-models',
+          name: 'Proxied Models',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://api.example/user-proxy/v1',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'server-model', name: 'Server Model' }],
+            }),
+          },
+        },
+      ],
+      () => null,
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]).toMatchObject({
+      baseUrl: 'https://api.example/user-proxy/v1',
+      api: 'openai-completions',
+    });
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'server-model',
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+    });
+    expect(providers[0]?.models[0]).not.toHaveProperty('baseUrl');
+  });
+
   it('下发协议与本地 Pi 元数据冲突时不借用本地能力', () => {
     const bundled = new Map([
       [
@@ -1625,7 +1673,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     ).toThrow('Unsupported PI wire protocol: future-protocol');
   });
 
-  it('uses same-origin PI bundled protocol knowledge when no endpoint default is configured', () => {
+  it('uses same-origin PI bundled protocol knowledge without borrowing its endpoint path', () => {
     const bundled = new Map([
       [
         'zai',
@@ -1680,16 +1728,15 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     );
 
     expect(providers[0]).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic',
       api: 'openai-completions',
       models: [
-        {
-          id: 'glm-5.2',
-          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
-        },
+        { id: 'glm-5.2' },
         { id: 'glm-5.3', api: 'anthropic-messages' },
       ],
     });
     expect(providers[0]?.models[0]?.api).toBeUndefined();
+    expect(providers[0]?.models[0]).not.toHaveProperty('baseUrl');
   });
 
   it('does not infer ambiguous duplicate model ids from PI bundled providers', () => {

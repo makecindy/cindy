@@ -1324,12 +1324,11 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
+        // bundled/official rows may lend protocol-compatible capabilities, but never routing.
+        // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
+        // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
         const modelBaseUrl =
-          explicitRouteApi === modelApi
-            ? explicitRoute?.baseUrl
-            : bundledModel?.api === modelApi
-              ? bundledModel.baseUrl
-              : undefined;
+          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
         const spec = {
           id: m.id,
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
