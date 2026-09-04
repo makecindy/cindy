@@ -1001,15 +1001,12 @@
         },
         "refiner": {
           "label": "Refinement model",
-          "hint": "Model used to clean up dictated text.",
+          "hint": "Follows the auxiliary model.",
+          "followAuxiliary": "Follow auxiliary model",
+          "followHint": "Refinement follows Settings → Personalization → Auxiliary models. Cindy-hosted voice is unchanged; refinement still runs on the server.",
+          "openAuxiliary": "Open auxiliary models",
+          "cannotRefine": "The current auxiliary models cannot refine speech (for example Claude Messages only), so this dictation will not be refined.",
           "ariaLabel": "Voice refinement model"
-        },
-        "refinerFallback": {
-          "label": "Refinement fallback",
-          "hint": "Backup model used only when the primary refiner fails; off by default.",
-          "ariaLabel": "Voice refinement fallback model selection",
-          "none": "No fallback",
-          "noneDescription": "Keep the raw transcript when the primary model fails"
         },
         "customAsr": {
           "optionLabel": "Custom realtime ASR",
@@ -2662,28 +2659,15 @@
     },
     "subagentModels": {
       "title": "Subagents",
-      "description": "Choose the Subagent model for Claude Code and Codex.",
+      "description": "Set the default Claude Code model and how Codex assigns Subagents.",
       "unspecified": "Use default setting",
-      "hint": "Claude Code changes apply to new sessions. Codex changes apply automatically when it is idle.",
-      "codexV2ModelHint": "Claude Code uses the selected model as its default. All local Codex Subagents are locked to the selected model and reasoning effort.",
-      "codexOauthCompatibilityHint": "Fixed Subagent routing cannot safely share a task with ChatGPT OAuth. When the main Codex task uses ChatGPT OAuth, or a non-OAuth main task selects a ChatGPT OAuth Subagent, Cindy ignores the model, provider, and reasoning effort selected here and uses that task’s default Codex Subagent.",
+      "hint": "Claude Code changes apply to new tasks. Codex smart routing applies after Codex becomes idle.",
       "saveFailed": "Failed to save subagent settings",
-      "guardrails": {
-        "title": "Codex subagent guardrails",
-        "enableHint": "Allow Codex to spawn one-off subagents while working. Turning this off applies to both legacy multi-agent (V1) and Sol / Terra (V2).",
-        "enableAria": "Allow Codex subagents",
-        "cindyPolicyLabel": "Use Cindy’s custom subagent policy",
-        "cindyPolicyHint": "When enabled, Cindy injects guidance that encourages Codex to use subagents proactively for exploratory tasks. For models that already plan and delegate well, the extra guidance may be counterproductive. Turn it off to use Codex’s native default behavior instead.",
-        "cindyPolicyAria": "Use Cindy’s custom subagent policy",
-        "concurrencyLabel": "Concurrent subagent limit",
-        "concurrencyHint": "Maximum number of subagents running at the same time. Each subagent consumes model quota; Codex warns when concurrency reaches 8 at Ultra reasoning.",
-        "concurrencyFollowDefault": "Follow Codex default (6 for legacy V1, 3 for Sol / Terra)",
-        "concurrencyAria": "Adjust the Codex concurrent subagent limit",
-        "concurrencyCustomAria": "Customize the Codex concurrent subagent limit",
-        "nestedLabel": "Allow subagents to spawn subagents",
-        "nestedHint": "Only applies to legacy multi-agent (V1); Sol / Terra (V2) ignore this setting.",
-        "nestedAria": "Allow subagents to spawn subagents",
-        "localOnlyHint": "These guardrails only apply to Codex running on this machine; Codex over SSH remotes is not affected."
+      "smartRouting": {
+        "label": "Codex smart routing",
+        "nativeHint": "Off uses Codex’s native Sol / Terra assignment without Cindy overrides.",
+        "enabledHint": "On lets Codex choose more connected models per task; cards show the model actually used.",
+        "aria": "Enable Codex smart routing"
       },
       "toast": {
         "saved": "Subagent settings saved",
@@ -2692,28 +2676,40 @@
     },
     "auxiliaryModels": {
       "title": "Auxiliary models",
-      "description": "Choose one Agent and model pair for automatic task naming and another for composer prompt suggestions.",
-      "sessionTitle": {
-        "label": "Automatic task naming",
-        "description": "Applies to Claude Code, Codex, and Pi tasks, plus manual AI renaming.",
-        "ariaLabel": "Choose the automatic task naming model",
-        "automatic": "Automatic (follow the current task)"
+      "description": "Used for automatic task naming and AI rename, composer prompt suggestions, Help, pinned task summaries, IM / Feishu titles and group-context checks, scheduled-task scripts, plugin quick Q&A “follow default”, and BYOK voice refinement.",
+      "automatic": "Automatic recommendation",
+      "customize": "Custom",
+      "preferred": {
+        "label": "Preferred",
+        "description": "The first model used for short auxiliary text.",
+        "ariaLabel": "Choose the preferred auxiliary model"
       },
-      "promptRecommendation": {
-        "label": "Composer prompt suggestions",
-        "description": "Used only when prompt recommendations are enabled under Tips.",
-        "ariaLabel": "Choose the composer prompt suggestion model",
-        "automatic": "Automatic (keep current routing)"
+      "fallback1": {
+        "label": "Fallback 1",
+        "description": "Used if the preferred model is unavailable. Optional.",
+        "ariaLabel": "Choose the first fallback auxiliary model"
       },
+      "fallback2": {
+        "label": "Fallback 2",
+        "description": "Used if the first two models are unavailable. Optional.",
+        "ariaLabel": "Choose the second fallback auxiliary model"
+      },
+      "emptySlot": "Not selected",
+      "customHint": "A custom chain is tried in this order only. If none of them work, Cindy will not switch to another model.",
+      "signInHint": "Sign in to Cindy to use the automatic recommendations. While signed out, choose a configured model from another provider under Custom.",
       "chooseAgent": "Choose an Agent",
       "backToAgents": "Back to Agent selection",
-      "explicitRouteHint": "An explicit selection uses only that Agent and model. If unavailable, Cindy will not switch automatically.",
       "searchPlaceholder": "Search models or providers",
       "noResults": "No available models",
       "unavailable": "Currently unavailable",
       "budget": "Discount",
       "subscription": "Subscription",
-      "saveFailed": "Failed to save auxiliary model settings"
+      "saveFailed": "Failed to save auxiliary model settings",
+      "chain": {
+        "cindyHy3": "Hy3",
+        "cindyDeepseekV4Flash": "DeepSeek v4 flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
     },
     "compaction": {
       "title": "Context compaction",
@@ -7912,6 +7908,7 @@
       "networkHideRaw": "Hide raw error",
       "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in",
+      "modelAccessDenied": "The upstream account cannot access this model. Select another model or check its access with the provider",
       "silentStopContinue": "Continue",
       "silentStopContinueTitle": "Continue the current task",
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
@@ -8734,9 +8731,6 @@
         "tasksLoadFailed": "Can't reach sessions on {{device}} right now — retrying automatically…",
         "tasksPartiallyFailed": "Can't reach sessions on {{device}} right now — retrying automatically; showing what's already loaded",
         "devicesLoading": "Loading remote devices…",
-        "devicesLoadFailed": "Couldn't load the remote device list. Check the connection and try again.",
-        "devicesPartiallyFailed": "The remote device list couldn't be refreshed. Showing only content that loaded successfully.",
-        "retryDevices": "Reload devices",
         "remoteSettings": "Remote connection settings",
         "multiSelect": "Multi-select",
         "deselect": "Deselect",

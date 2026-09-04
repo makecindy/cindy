@@ -156,7 +156,8 @@ describe('LiteLlmTextModelClient', () => {
         { choices: [{ delta: { content: '{"text":"refined"}' } }] },
       ]));
 
-    const client = new LiteLlmTextModelClient({ requestTargetProvider });
+    const beforeDispatch = vi.fn();
+    const client = new LiteLlmTextModelClient({ requestTargetProvider, beforeDispatch });
 
     await expect(client.requestJson<{ text: string }>({
       model: 'm',
@@ -168,6 +169,7 @@ describe('LiteLlmTextModelClient', () => {
     expect(requestTargetProvider).toHaveBeenNthCalledWith(1, undefined);
     expect(requestTargetProvider).toHaveBeenNthCalledWith(2, { forceRefresh: true });
     expect(undiciFetchMock).toHaveBeenCalledTimes(2);
+    expect(beforeDispatch).toHaveBeenCalledTimes(2);
     expect(undiciFetchMock.mock.calls[0]?.[1]).toMatchObject({
       headers: expect.objectContaining({ Authorization: 'Bearer stale-token' }),
     });

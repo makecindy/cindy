@@ -51,6 +51,8 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.collapseInfoValue': `Collapse ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.panelNotDocked': 'Not docked',
         'settings.ghosts.detail.cindyPrefs.noModels': 'No models available',
+        'settings.providers.openai.title': 'OpenAI',
+        'settings.providers.xd.title': 'Cindy AI',
         'settings.defaults.restore': 'Restore default',
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
@@ -790,8 +792,8 @@ describe('Ghost plugin detail sections', () => {
               options: [
                 {
                   id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
+                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
+                  group: 'Cindy AI',
                   providerId: 'xd',
                   agentKind: 'codex',
                   modelId: 'codex/gpt-5.5',
@@ -868,7 +870,7 @@ describe('Ghost plugin detail sections', () => {
     fireEvent.click(agentList.querySelector('[data-agent-kind="codex"]')!);
 
     let codexModels = await screen.findByRole('listbox');
-    expect(within(codexModels).getByText('GW')).toBeTruthy();
+    expect(within(codexModels).getByText('Cindy AI')).toBeTruthy();
     expect(within(codexModels).getByText('OpenAI')).toBeTruthy();
     expect(codexModels.querySelector('[data-pin-id*="claude-code"]')).toBeNull();
 
@@ -931,8 +933,8 @@ describe('Ghost plugin detail sections', () => {
               options: [
                 {
                   id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
+                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
+                  group: 'Cindy AI',
                   providerId: 'xd',
                   agentKind: 'codex',
                   modelId: 'codex/gpt-5.5',
@@ -991,8 +993,8 @@ describe('Ghost plugin detail sections', () => {
               options: [
                 {
                   id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
+                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
+                  group: 'Cindy AI',
                   providerId: 'xd',
                   agentKind: 'codex',
                   modelId: 'codex/gpt-5.5',

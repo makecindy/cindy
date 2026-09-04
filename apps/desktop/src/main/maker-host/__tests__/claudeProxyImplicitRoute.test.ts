@@ -57,8 +57,9 @@ import {
   setProviderViewsReader,
 } from '../provider-route';
 import { getActiveCatalog, setCustomProviders } from '../active-catalog';
+import * as providerRoute from '../provider-route';
 import { buildRegistry, buildUserProvider } from '@cindy/model-providers';
-import { clearSessionProvider } from '../session-provider-store';
+import { clearSessionProvider, setSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
@@ -103,6 +104,7 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);
     setProviderViewsReader(async () => []);
@@ -193,6 +195,72 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     );
     expect(decision).toBeNull();
   });
+
+  it.each(['missing-provider', 'missing-runtime'] as const)(
+    'bound custom provider fails closed while %s, then recovers on the next request (#3631)',
+    async (missing) => {
+      setClaudeProxySessionIdResolver(() => 'sess-race');
+      setSessionProvider('sess-race', 'zhipu-plan');
+      const headers = { 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' };
+      // The real catalog refresh API can remove a provider or its Claude runtime
+      // while the persisted session still points at that provider.
+      setCustomProviders(missing === 'missing-provider' ? [] : [buildUserProvider({
+        id: 'zhipu-plan', name: 'Zhipu Plan', runtimes: {},
+      })]);
+      const decision = await transform({ model: 'claude-opus-5' }, ctxWith(headers));
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision?.localHandler?.({ res: { writeHead, end } } as never);
+      expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({ 'retry-after': '1' }));
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'provider_route_unavailable' },
+      });
+      expect(readClaudeSessionRoute('sess-race')).toBeNull();
+
+      installZhipuProvider();
+      const retry = await transform({ model: 'claude-opus-5' }, ctxWith(headers));
+      expect(retry).toMatchObject({ upstreamOverride: ZHIPU_UPSTREAM });
+    },
+  );
+
+  it('session resolver failure is not an unbound request and cannot borrow gateway credentials (#3631)', async () => {
+    setClaudeProxySessionIdResolver(() => { throw new Error('session lookup unavailable'); });
+    const decision = await transform({ model: 'claude-opus-5' }, ctxWith({
+      'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw',
+    }));
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'routing_temporarily_unavailable' },
+    });
+  });
+
+  it.each(['async-null', 'sync-throw', 'async-reject'] as const)(
+    'an explicit custom route cannot fall through on %s (#3631)',
+    async (failure) => {
+      setClaudeProxySessionIdResolver(() => 'sess-race');
+      setSessionProvider('sess-race', 'zhipu-plan');
+      vi.spyOn(providerRoute, 'resolveSessionRouteDecision').mockImplementation(() => {
+        if (failure === 'async-null') return Promise.resolve(null);
+        if (failure === 'async-reject') return Promise.reject(new Error('route unavailable'));
+        throw new Error('route unavailable');
+      });
+      const decision = await transform({ model: 'claude-opus-5' }, ctxWith({
+        'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw',
+      }));
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision?.localHandler?.({ res: { writeHead, end } } as never);
+      expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: failure === 'async-null' ? 'provider_route_unavailable' : 'routing_temporarily_unavailable' },
+      });
+      expect(decision?.upstreamOverride).toBeUndefined();
+      expect(decision?.headerOverride).toBeUndefined();
+    },
+  );
 
   it('目录外未知模型 → ①.5 解析落空,回落 ② 段默认(与修复前一致)', async () => {
     const decision = await Promise.resolve(

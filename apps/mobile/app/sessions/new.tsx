@@ -1217,7 +1217,15 @@ export default function NewRemoteSessionScreen() {
       && worktreeEligibility.status === 'eligible'
       && (!worktreeBranchPreferenceReady || worktreeBranchPreferenceError));
   const worktreeControlCaptionKey = worktreeCaptionKey
+    ?? (worktreePreferenceAuthorityUnknown ? 'session.new.worktreeSettingsSyncFailed' : null)
+    ?? (worktreePreferenceCreateBlocked ? 'session.new.worktreeSettingsSaving' : null)
     ?? (worktreeBranchPreferenceError ? 'session.new.worktreeBranchSyncFailed' : null);
+  const resolveWorktreePreferenceGateErrorKey = useCallback(() => (
+    selectedDeviceId != null
+      && worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
+      ? 'session.new.worktreeSettingsSyncFailed'
+      : 'session.new.worktreeSettingsSaving'
+  ), [selectedDeviceId]);
 
   useLayoutEffect(() => {
     worktreePreferenceRenderedRef.current = {
@@ -2750,6 +2758,11 @@ export default function NewRemoteSessionScreen() {
   // 全新设备在 store 中没有镜像时本来就是默认未勾选,无需失败路径代替宿主写值。
   const worktreeSeedAgentKindRef = useRef(draft.agentKind);
   worktreeSeedAgentKindRef.current = draft.agentKind;
+  // 资格探测完成后才有这个标记。它只用于「缺字段时能不能把老被控端当 ready」,
+  // 不能进本 effect 依赖:选目录会让探测结果换代,cleanup 会把还在飞的 GET 取消掉,
+  // 合格目录上偏好门一直不放行,发送按钮就灰着还没提示。
+  const worktreeHostSupportsRecoveryKeyDiscardRef = useRef(worktreeHostSupportsRecoveryKeyDiscard);
+  worktreeHostSupportsRecoveryKeyDiscardRef.current = worktreeHostSupportsRecoveryKeyDiscard;
   useEffect(() => {
     const seq = ++worktreeSeedSeqRef.current;
     const syncKey = worktreePreferenceSyncKey;
@@ -2806,7 +2819,7 @@ export default function NewRemoteSessionScreen() {
         }
         if (
           classification.status === 'missing'
-          && worktreeHostSupportsRecoveryKeyDiscard === false
+          && worktreeHostSupportsRecoveryKeyDiscardRef.current === false
         ) {
           // Old hosts cannot persist this preference and also lack the recovery
           // capability marker. A new host can transiently return `{}` before its
@@ -2839,7 +2852,6 @@ export default function NewRemoteSessionScreen() {
     deviceLinkStatus,
     presenceVersion,
     selectedDeviceId,
-    worktreeHostSupportsRecoveryKeyDiscard,
     worktreePreferenceSyncKey,
     worktreeSeedRetryNonce,
     maker,
@@ -3969,7 +3981,7 @@ export default function NewRemoteSessionScreen() {
         || worktreePreferenceReadyKeyRef.current !== worktreePreferenceSyncKeyRef.current
       )
     ) {
-      setError(t('session.new.worktreeSettingsSaving'));
+      setError(t(resolveWorktreePreferenceGateErrorKey()));
       return;
     }
     if (
@@ -3988,12 +4000,12 @@ export default function NewRemoteSessionScreen() {
     if (worktreeCreateBlocked) {
       setError(worktreeCaptionKey
         ? t(worktreeCaptionKey)
-        : t('session.new.worktreeSettingsSaving'));
+        : t(resolveWorktreePreferenceGateErrorKey()));
       return;
     }
     const worktreeIntent = captureWorktreeCreateIntent();
     if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-      setError(t('session.new.worktreeSettingsSaving'));
+      setError(t(resolveWorktreePreferenceGateErrorKey()));
       return;
     }
     creatingRef.current = true;
@@ -4114,7 +4126,7 @@ export default function NewRemoteSessionScreen() {
           return;
         }
         if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-          setError(t('session.new.worktreeSettingsSaving'));
+          setError(t(resolveWorktreePreferenceGateErrorKey()));
           return;
         }
       }
@@ -4181,7 +4193,7 @@ export default function NewRemoteSessionScreen() {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-            setError(t('session.new.worktreeSettingsSaving'));
+            setError(t(resolveWorktreePreferenceGateErrorKey()));
             return;
           }
           const recoveryKey = createNewSessionId();
@@ -4222,7 +4234,7 @@ export default function NewRemoteSessionScreen() {
               recoveryKey,
               createdAt,
             });
-            setError(t('session.new.worktreeSettingsSaving'));
+            setError(t(resolveWorktreePreferenceGateErrorKey()));
             return;
           }
           const createRequest = buildWorktreeCreateRequest({
@@ -4507,6 +4519,7 @@ export default function NewRemoteSessionScreen() {
     worktreeEnabled,
     captureWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
+    resolveWorktreePreferenceGateErrorKey,
   ]);
 
   // 目标模式建会话(对齐桌面 handleCreateGoal):createSession → goal.set(被控端落
@@ -4536,7 +4549,7 @@ export default function NewRemoteSessionScreen() {
         || worktreePreferenceReadyKeyRef.current !== worktreePreferenceSyncKeyRef.current
       )
     ) {
-      setGoalError(t('session.new.worktreeSettingsSaving'));
+      setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
       return;
     }
     if (
@@ -4557,12 +4570,12 @@ export default function NewRemoteSessionScreen() {
     if (worktreeCreateBlocked) {
       setGoalError(worktreeCaptionKey
         ? t(worktreeCaptionKey)
-        : t('session.new.worktreeSettingsSaving'));
+        : t(resolveWorktreePreferenceGateErrorKey()));
       return;
     }
     const worktreeIntent = captureWorktreeCreateIntent();
     if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-      setGoalError(t('session.new.worktreeSettingsSaving'));
+      setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
       return;
     }
     // ㉙ 设备守卫入口(独立 review P1-1 + busy 泄漏):快照取自闭包 selectedDeviceId,
@@ -4696,7 +4709,7 @@ export default function NewRemoteSessionScreen() {
           return;
         }
         if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-          setGoalError(t('session.new.worktreeSettingsSaving'));
+          setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
           return;
         }
       }
@@ -4721,7 +4734,7 @@ export default function NewRemoteSessionScreen() {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-            setGoalError(t('session.new.worktreeSettingsSaving'));
+            setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
             return;
           }
           const recoveryKey = createNewSessionId();
@@ -4757,7 +4770,7 @@ export default function NewRemoteSessionScreen() {
               recoveryKey,
               createdAt,
             });
-            setGoalError(t('session.new.worktreeSettingsSaving'));
+            setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
             return;
           }
           const createRequest = buildWorktreeCreateRequest({
@@ -5279,6 +5292,7 @@ export default function NewRemoteSessionScreen() {
     worktreeEnabled,
     captureWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
+    resolveWorktreePreferenceGateErrorKey,
   ]);
 
   return (

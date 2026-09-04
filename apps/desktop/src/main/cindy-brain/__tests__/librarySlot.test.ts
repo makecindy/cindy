@@ -20,12 +20,12 @@ import type { InstalledGhost } from '../../../shared/ghost.js';
 const Ctor = Database as unknown as SqliteDatabaseConstructor;
 const GHOST_ID = 'mivo-canvas';
 
-function makeGhost(library: boolean, enabled = true): InstalledGhost {
+function makeGhost(library: boolean, enabled = true, id = GHOST_ID): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 3,
       minCindyVersion: '0.1.61',
-      id: GHOST_ID,
+      id,
       name: '测试意识',
       version: '1.0.0',
       kind: 'chip',
@@ -44,6 +44,7 @@ describe('GhostLibrarySlot', () => {
   let bindingFile: string;
   let candidate: string;
   let scopeKey: string | null = 'local:owner-a:1';
+  let ghosts: Map<string, InstalledGhost>;
   let ghost: InstalledGhost;
   let slot: GhostLibrarySlot;
   let bindingStore: LibraryBindingStore;
@@ -60,13 +61,14 @@ describe('GhostLibrarySlot', () => {
     clock = 0;
     await fs.promises.mkdir(candidate, { recursive: true });
     ghost = makeGhost(true);
+    ghosts = new Map([[GHOST_ID, ghost]]);
     bindingStore = new LibraryBindingStore({
       getFile: () => bindingFile,
       getManagedRoots: () => [path.join(tmp, 'managed')],
       getDefaultRoot: (id) => path.join(defaultRootBase, id),
     });
     const deps: GhostLibrarySlotDeps = {
-      getGhost: (id) => (id === GHOST_ID ? ghost : null),
+      getGhost: (id) => ghosts.get(id) ?? null,
       bindingStore,
       getDefaultRoot: (id) => path.join(defaultRootBase, id),
       captureOwnerScope: () => scopeKey,
@@ -97,14 +99,14 @@ describe('GhostLibrarySlot', () => {
   });
 
   it('资格审:未声明 library 能力/停用 → NOT_DECLARED', async () => {
-    ghost = makeGhost(false);
+    ghosts.set(GHOST_ID, makeGhost(false));
     const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errorCode).toBe('NOT_DECLARED');
-    ghost = makeGhost(true, false);
+    ghosts.set(GHOST_ID, makeGhost(true, false));
     const r2 = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
     expect(r2.ok).toBe(false);
-    ghost = makeGhost(true);
+    ghosts.set(GHOST_ID, makeGhost(true));
   });
 
   it('管道级全链路:open/status/write/read/rename/delete(默认根)', async () => {
@@ -512,11 +514,118 @@ describe('GhostLibrarySlot', () => {
   });
 
   it('extraDirs 同步失败则握手 authorizedReadonly=false,不假装授权', async () => {
-    syncAgentReadonlyExtraDir.mockRejectedValueOnce(new Error('require app-server 0.144.6 or newer'));
+    syncAgentReadonlyExtraDir.mockRejectedValue(new Error('require app-server 0.144.6 or newer'));
     const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
     if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
     expect((open as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
     expect(JSON.stringify(open)).not.toContain(defaultRootBase);
+  });
+
+  it('extraDirs 同步 no-op/未实写则握手 authorizedReadonly=false,不假装授权', async () => {
+    syncAgentReadonlyExtraDir.mockResolvedValue('not-granted');
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    expect((open as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(JSON.stringify(open)).not.toContain(defaultRootBase);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(
+      GHOST_ID,
+      path.join(defaultRootBase, GHOST_ID),
+    );
+  });
+
+  it('extraDirs 后来实写成功,status 握手改为 authorizedReadonly=true', async () => {
+    syncAgentReadonlyExtraDir.mockResolvedValue('not-granted');
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    expect((open as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    syncAgentReadonlyExtraDir.mockResolvedValue('granted');
+    const st = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((st as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+  });
+
+  it('extraDirs 被更新一轮取代时,已授权握手不回退成 false', async () => {
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    expect((open as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    syncAgentReadonlyExtraDir.mockResolvedValueOnce('superseded');
+    const st = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((st as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+  });
+
+  it('A 已授权后 B 被 superseded,B 不得把 A 的根当成自己已授权', async () => {
+    const otherId = 'other-library';
+    ghosts.set(otherId, makeGhost(true, true, otherId));
+    const openA = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    expect((openA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    syncAgentReadonlyExtraDir.mockResolvedValue('superseded');
+    const openB = await slot.handleLibraryRequest(otherId, { op: 'open' });
+    expect((openB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    const stA = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((stA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+  });
+
+  it('A granted 后 B granted,A 被 superseded 不得再报已授权', async () => {
+    const otherId = 'other-library';
+    ghosts.set(otherId, makeGhost(true, true, otherId));
+    const openA = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    expect((openA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    syncAgentReadonlyExtraDir.mockResolvedValue('granted');
+    const openB = await slot.handleLibraryRequest(otherId, { op: 'open' });
+    expect((openB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    syncAgentReadonlyExtraDir.mockResolvedValue('superseded');
+    const stA = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((stA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    const stB = await slot.handleLibraryRequest(otherId, { op: 'status' });
+    expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+  });
+
+  it('B granted 后 A 漂移 open 不得撤掉 B 的槽', async () => {
+    const otherId = 'other-library';
+    ghosts.set(otherId, makeGhost(true, true, otherId));
+    syncAgentReadonlyExtraDir.mockResolvedValue('granted');
+    const openB = await slot.handleLibraryRequest(otherId, { op: 'open' });
+    expect((openB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    const store = new LibraryBindingStore({
+      getFile: () => bindingFile,
+      getManagedRoots: () => [path.join(tmp, 'managed')],
+      getDefaultRoot: (id) => path.join(defaultRootBase, id),
+    });
+    await store.setBinding(GHOST_ID, candidate);
+    await fs.promises.rm(candidate, { recursive: true });
+    syncAgentReadonlyExtraDir.mockClear();
+    const openA = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    expect((openA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalled();
+    const stB = await slot.handleLibraryRequest(otherId, { op: 'status' });
+    expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+  });
+
+  it('仅 status 不挂 extraDirs;A open 后 B status 不得抢槽', async () => {
+    const first = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((first as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalled();
+
+    const otherId = 'other-library';
+    ghosts.set(otherId, makeGhost(true, true, otherId));
+    const openA = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    expect((openA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    syncAgentReadonlyExtraDir.mockClear();
+    const stB = await slot.handleLibraryRequest(otherId, { op: 'status' });
+    expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalled();
+    const stA = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((stA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+  });
+
+  it('B granted 后 A dispose 不得撤掉 B 的槽', async () => {
+    const otherId = 'other-library';
+    ghosts.set(otherId, makeGhost(true, true, otherId));
+    syncAgentReadonlyExtraDir.mockResolvedValue('granted');
+    const openB = await slot.handleLibraryRequest(otherId, { op: 'open' });
+    expect((openB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    syncAgentReadonlyExtraDir.mockClear();
+    await slot.disposeGhost(GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalled();
+    const stB = await slot.handleLibraryRequest(otherId, { op: 'status' });
+    expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
   });
 
   it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {

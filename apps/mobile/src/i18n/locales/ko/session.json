@@ -323,6 +323,7 @@
     "worktreeBranchSaving": "선택한 브랜치 동기화 중…",
     "worktreeBranchSyncFailed": "저장된 소스 브랜치를 확인할 수 없습니다. 브랜치를 다시 선택해 주세요",
     "worktreeSettingsSaving": "worktree 설정 동기화 중…",
+    "worktreeSettingsSyncFailed": "저장된 worktree 설정을 확인할 수 없습니다. 스위치를 다시 눌러 주세요",
     "worktreeBranchesRetry": "브랜치를 불러오지 못했습니다. 탭하여 다시 시도",
     "worktreeDetecting": "환경 감지 중…",
     "worktreeRecovering": "연결을 복구하는 중이며 자동으로 다시 시도하고 있습니다…",

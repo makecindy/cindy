@@ -1001,15 +1001,12 @@
         },
         "refiner": {
           "label": "정리 모델",
-          "hint": "구어체 텍스트를 정리하는 모델.",
-          "ariaLabel": "음성 정리 모델 선택"
-        },
-        "refinerFallback": {
-          "label": "다듬기 대체 모델",
-          "hint": "기본 다듬기 모델이 실패할 때만 사용하는 대체 모델. 기본적으로 사용하지 않음.",
-          "ariaLabel": "음성 다듬기 대체 모델 선택",
-          "none": "대체 모델 없음",
-          "noneDescription": "기본 모델이 실패하면 원본 인식 텍스트를 유지"
+          "hint": "보조 모델을 따릅니다.",
+          "followAuxiliary": "보조 모델 따르기",
+          "followHint": "정리 모델은 「설정 → 개인화 → 보조 모델」 순서를 따릅니다. Cindy 호스팅 음성은 영향을 받지 않으며, 정리는 서버에서 계속 실행됩니다.",
+          "openAuxiliary": "보조 모델로 이동",
+          "cannotRefine": "현재 보조 모델로는 음성을 다듬을 수 없습니다(예: Claude Messages만 해당). 이번에는 다듬지 않습니다.",
+          "ariaLabel": "음성 정리 모델"
         },
         "customAsr": {
           "optionLabel": "사용자 지정 실시간 ASR",
@@ -2661,28 +2658,15 @@
     },
     "subagentModels": {
       "title": "하위 에이전트",
-      "description": "Claude Code와 Codex의 하위 에이전트 모델을 선택합니다.",
+      "description": "Claude Code 기본 모델과 Codex의 하위 에이전트 할당 방식을 설정합니다.",
       "unspecified": "기본 설정 사용",
-      "hint": "Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 자동으로 적용됩니다.",
-      "codexV2ModelHint": "Claude Code는 선택한 모델을 기본값으로 사용합니다. 모든 로컬 Codex 하위 에이전트는 선택한 모델과 추론 강도로 고정됩니다.",
-      "codexOauthCompatibilityHint": "고정 하위 에이전트 라우팅과 ChatGPT OAuth는 안전하게 함께 사용할 수 없습니다. 메인 작업이 ChatGPT OAuth를 사용하거나 비 OAuth 메인 작업에서 ChatGPT OAuth 하위 에이전트를 선택하면 여기에서 지정한 모델, 제공자, 추론 강도는 적용되지 않고 메인 작업의 Codex 기본 하위 에이전트가 사용됩니다.",
+      "hint": "Claude Code 변경 사항은 새 작업부터 적용됩니다. Codex 스마트 라우팅은 Codex가 유휴 상태가 된 뒤 적용됩니다.",
       "saveFailed": "하위 에이전트 설정 저장 실패",
-      "guardrails": {
-        "title": "Codex 하위 에이전트 가드레일",
-        "enableHint": "Codex가 작업 중 일회성 하위 에이전트를 생성하도록 허용합니다. 끄면 이전 버전 멀티 에이전트(V1)와 Sol / Terra(V2) 모두에 적용됩니다.",
-        "enableAria": "Codex 하위 에이전트 허용",
-        "cindyPolicyLabel": "Cindy 사용자 지정 하위 에이전트 정책 사용",
-        "cindyPolicyHint": "켜면 Cindy가 탐색 작업에서 Codex가 하위 에이전트를 적극적으로 사용하도록 유도하는 지침을 주입합니다. 이미 계획과 위임에 능숙한 모델에서는 추가 지침이 오히려 역효과를 낼 수 있습니다. 끄면 주입을 중단하고 Codex의 기본 동작을 사용합니다.",
-        "cindyPolicyAria": "Cindy 사용자 지정 하위 에이전트 정책 사용",
-        "concurrencyLabel": "하위 에이전트 동시 실행 한도",
-        "concurrencyHint": "동시에 실행할 수 있는 하위 에이전트 수의 상한입니다. 하위 에이전트는 각각 모델 할당량을 소비합니다. Ultra 단계에서 동시 실행이 8에 도달하면 Codex가 경고합니다.",
-        "concurrencyFollowDefault": "Codex 기본값 따르기(이전 버전 V1은 6, Sol / Terra는 3)",
-        "concurrencyAria": "Codex 하위 에이전트 동시 실행 한도 조정",
-        "concurrencyCustomAria": "Codex 하위 에이전트 동시 실행 한도 사용자 지정",
-        "nestedLabel": "하위 에이전트의 하위 에이전트 생성 허용",
-        "nestedHint": "이전 버전 멀티 에이전트(V1)에만 적용되며 Sol / Terra(V2)는 이 설정을 무시합니다.",
-        "nestedAria": "하위 에이전트의 하위 에이전트 생성 허용",
-        "localOnlyHint": "이 가드레일은 이 컴퓨터에서 실행되는 Codex에만 적용되며 SSH 원격의 Codex에는 영향을 주지 않습니다."
+      "smartRouting": {
+        "label": "Codex 스마트 라우팅",
+        "nativeHint": "끄면 Cindy 재정의 없이 Codex 기본 Sol / Terra 할당을 사용합니다.",
+        "enabledHint": "켜면 Codex가 작업별로 더 많은 연결된 모델을 선택할 수 있으며 카드에는 실제 사용 모델이 표시됩니다.",
+        "aria": "Codex 스마트 라우팅 사용"
       },
       "toast": {
         "saved": "하위 에이전트 설정이 저장되었습니다",
@@ -2691,28 +2675,40 @@
     },
     "auxiliaryModels": {
       "title": "보조 모델",
-      "description": "작업 자동 이름 지정과 입력창 추천 프롬프트에 각각 Agent와 모델 조합을 지정합니다.",
-      "sessionTitle": {
-        "label": "작업 자동 이름 지정",
-        "description": "Claude Code, Codex, Pi 작업과 AI 수동 이름 바꾸기에 적용됩니다.",
-        "ariaLabel": "작업 자동 이름 지정 모델 선택",
-        "automatic": "자동 선택(현재 작업 따름)"
+      "description": "작업 자동 이름 지정과 AI 이름 바꾸기, 입력창 추천 프롬프트, Help, 고정된 작업 요약, IM / Feishu 제목과 그룹 맥락 판단, 예약 작업 스크립트, 플러그인 빠른 Q&A의 「기본값 따르기」, 그리고 자체 키 음성 다듬기에 사용합니다.",
+      "automatic": "자동 추천",
+      "customize": "사용자 지정",
+      "preferred": {
+        "label": "기본",
+        "description": "짧은 보조 텍스트에 먼저 사용하는 모델.",
+        "ariaLabel": "기본 보조 모델 선택"
       },
-      "promptRecommendation": {
-        "label": "입력창 추천 프롬프트",
-        "description": "‘팁’에서 입력창 추천을 켠 경우에만 사용합니다.",
-        "ariaLabel": "입력창 추천 프롬프트 모델 선택",
-        "automatic": "자동 선택(현재 라우팅 유지)"
+      "fallback1": {
+        "label": "대체 1",
+        "description": "기본 모델을 사용할 수 없을 때 쓰는 모델. 비워 둘 수 있습니다.",
+        "ariaLabel": "첫 번째 대체 보조 모델 선택"
       },
+      "fallback2": {
+        "label": "대체 2",
+        "description": "앞의 두 모델을 모두 사용할 수 없을 때 쓰는 모델. 비워 둘 수 있습니다.",
+        "ariaLabel": "두 번째 대체 보조 모델 선택"
+      },
+      "emptySlot": "선택 안 함",
+      "customHint": "사용자 지정 후에는 선택한 순서대로만 시도합니다. 모두 사용할 수 없어도 다른 모델로 바꾸지 않습니다.",
+      "signInHint": "Cindy에 로그인하면 자동 추천을 사용할 수 있습니다. 로그인하지 않은 상태에서는 「사용자 지정」에서 설정된 다른 제공자의 모델을 선택하세요.",
       "chooseAgent": "Agent 선택",
       "backToAgents": "Agent 선택으로 돌아가기",
-      "explicitRouteHint": "명시적으로 지정하면 해당 Agent와 모델만 사용합니다. 사용할 수 없어도 자동으로 전환하지 않습니다.",
       "searchPlaceholder": "모델 또는 제공자 검색",
       "noResults": "사용 가능한 모델이 없습니다",
       "unavailable": "현재 사용할 수 없음",
       "budget": "할인",
       "subscription": "구독",
-      "saveFailed": "보조 모델 설정을 저장하지 못했습니다"
+      "saveFailed": "보조 모델 설정을 저장하지 못했습니다",
+      "chain": {
+        "cindyHy3": "Hy3",
+        "cindyDeepseekV4Flash": "DeepSeek v4 flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
     },
     "compaction": {
       "title": "컨텍스트 압축",
@@ -7906,6 +7902,7 @@
       "networkHideRaw": "원본 오류 숨기기",
       "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 재시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 반복되면 로그아웃 후 다시 로그인하세요",
+      "modelAccessDenied": "연결된 서비스 계정에 이 모델의 접근 권한이 없습니다. 다른 모델로 전환하거나 제공자에게 모델 접근 권한을 확인하세요",
       "silentStopContinue": "계속",
       "silentStopContinueTitle": "현재 작업 계속",
       "piTransportClosed": "원격 Pi 연결이 끊어졌습니다(SSH 채널 닫힘). 원격 작업은 계속 실행 중입니다. 다시 연결하면 계속할 수 있습니다.",
@@ -8719,9 +8716,6 @@
         "tasksLoadFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중…",
         "tasksPartiallyFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중이며 불러온 내용만 표시합니다",
         "devicesLoading": "원격 기기를 불러오는 중…",
-        "devicesLoadFailed": "원격 기기 목록을 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
-        "devicesPartiallyFailed": "원격 기기 목록을 새로 고치지 못했습니다. 불러온 내용만 표시합니다.",
-        "retryDevices": "기기 다시 불러오기",
         "remoteSettings": "원격 연결 설정",
         "multiSelect": "다중 선택",
         "deselect": "선택 해제",

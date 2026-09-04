@@ -173,9 +173,24 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     const element = makeNode(node);
     return node.type === 'text' ? [element] : [element, makeCaretAnchor()];
   };
+  const flattenDomNodes = (nodes) => {
+    const elements = [];
+    (nodes || []).forEach((node) => {
+      makeDomNodes(node).forEach((element) => elements.push(element));
+    });
+    return elements;
+  };
   const render = (documentValue, focusAfter) => {
+    // Programmatic DOM replace (inserting a directory chip, applying a draft)
+    // can drop compositionend. If composing stays true, later input is visible
+    // but never posted, so the send button stays disabled.
+    composing = false;
     applying = true;
-    root.replaceChildren(...(documentValue.nodes || []).flatMap(makeDomNodes));
+    // Android WebView 85 lacks the modern child-replacement API; use legacy DOM primitives.
+    const fragment = document.createDocumentFragment();
+    flattenDomNodes(documentValue.nodes).forEach((node) => fragment.appendChild(node));
+    while (root.firstChild) root.removeChild(root.firstChild);
+    root.appendChild(fragment);
     applying = false;
     lastSignature = JSON.stringify(readDocument());
     reportHeight();
@@ -264,6 +279,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     selection.addRange(range);
   };
   const insertAtSelection = (node) => {
+    composing = false;
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) placeCaretAtEnd();
     const current = window.getSelection();
@@ -298,7 +314,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     pasteMarkers.delete(requestId);
     const marker = pending && pending.marker;
     if (!marker || !marker.parentNode) return;
-    const inserted = (Array.isArray(nodes) ? nodes : []).flatMap(makeDomNodes);
+    const inserted = flattenDomNodes(Array.isArray(nodes) ? nodes : []);
     inserted.forEach((node) => marker.parentNode.insertBefore(node, marker));
     const selection = window.getSelection();
     const trailing = pending && pending.anchor;
@@ -416,6 +432,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   root.addEventListener('input', notify);
   root.addEventListener('compositionstart', () => { composing = true; });
   root.addEventListener('compositionend', () => { composing = false; notify(); });
+  root.addEventListener('compositioncancel', () => { composing = false; notify(); });
   root.addEventListener('focus', () => post({ type: 'focus' }));
   root.addEventListener('blur', () => post({ type: 'blur' }));
   root.addEventListener('keydown', (event) => {

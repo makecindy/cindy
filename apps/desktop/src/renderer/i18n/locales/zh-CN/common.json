@@ -1001,15 +1001,12 @@
         },
         "refiner": {
           "label": "润色模型",
-          "hint": "整理口语文本使用的模型。",
-          "ariaLabel": "语音润色模型选择"
-        },
-        "refinerFallback": {
-          "label": "润色备选模型",
-          "hint": "主润色模型失败时改用的备选；默认不启用。",
-          "ariaLabel": "语音润色备选模型选择",
-          "none": "不使用备选",
-          "noneDescription": "主模型失败时直接保留原始识别文本"
+          "hint": "跟随辅助模型。",
+          "followAuxiliary": "跟随辅助模型",
+          "followHint": "润色模型跟随「设置 → 个性化 → 辅助模型」的顺序。Cindy 托管语音不受影响，润色仍在服务端。",
+          "openAuxiliary": "前往辅助模型",
+          "cannotRefine": "当前辅助模型无法用于语音润色（例如纯 Claude Messages），这次不润色。",
+          "ariaLabel": "语音润色模型"
         },
         "customAsr": {
           "optionLabel": "自定义实时 ASR",
@@ -2661,28 +2658,15 @@
     },
     "subagentModels": {
       "title": "Subagent",
-      "description": "选择 Claude Code 和 Codex 的 Subagent 模型。",
+      "description": "设置 Claude Code 的默认模型，以及 Codex 的 Subagent 调配方式。",
       "unspecified": "跟随默认设置",
-      "hint": "Claude Code 的设置从新任务开始生效；Codex 的设置会在空闲后自动应用。",
-      "codexV2ModelHint": "Claude Code 使用所选模型作为默认值。Codex 的所有本机 Subagent 都固定使用所选模型和推理强度。",
-      "codexOauthCompatibilityHint": "固定 Subagent 路由与 ChatGPT OAuth 不能安全共用。主任务使用 ChatGPT OAuth，或非 OAuth 主任务指定 ChatGPT OAuth Subagent 时，Cindy 会忽略这里的模型、来源和推理强度，改用主任务的 Codex 默认 Subagent。",
+      "hint": "Claude Code 的设置从新任务开始生效；Codex 智能调配会在 Codex 空闲后应用。",
       "saveFailed": "保存 Subagent 设置失败",
-      "guardrails": {
-        "title": "Codex Subagent 护栏",
-        "enableHint": "允许 Codex 在执行任务时创建一次性 Subagent。关闭后对旧版（V1）和 Sol / Terra（V2）都生效。",
-        "enableAria": "允许 Codex 使用 Subagent",
-        "cindyPolicyLabel": "使用 Cindy 自定义 Subagent 策略",
-        "cindyPolicyHint": "开启后，Cindy 会注入策略，引导 Codex 在探索型任务中主动使用 Subagent。对于本身已擅长规划和委派的模型，额外引导可能适得其反；关闭后不再注入，改用 Codex 的原生默认行为。",
-        "cindyPolicyAria": "使用 Cindy 自定义 Subagent 策略",
-        "concurrencyLabel": "Subagent 并发上限",
-        "concurrencyHint": "同时运行的 Subagent 数量上限。每个 Subagent 都会消耗模型配额，调低更省；Ultra 档位下并发达到 8 时 Codex 会发出用量警告。",
-        "concurrencyFollowDefault": "跟随 Codex 默认（旧版 V1 为 6，Sol / Terra 为 3）",
-        "concurrencyAria": "调整 Codex Subagent 并发上限",
-        "concurrencyCustomAria": "自定义 Codex Subagent 并发上限",
-        "nestedLabel": "允许 Subagent 再创建 Subagent",
-        "nestedHint": "仅旧版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）会忽略此设置。",
-        "nestedAria": "允许 Subagent 再创建 Subagent",
-        "localOnlyHint": "以上护栏仅对本机运行的 Codex 生效，SSH 远程连接的 Codex 不受影响。"
+      "smartRouting": {
+        "label": "Codex 智能调配",
+        "nativeHint": "关闭时完全使用 Codex 原生的 Sol / Terra 分配方式。",
+        "enabledHint": "开启后，Codex 可按任务选用更多已连接模型；卡片显示实际执行模型。",
+        "aria": "启用 Codex 智能调配"
       },
       "toast": {
         "saved": "Subagent 设置已保存",
@@ -2691,28 +2675,40 @@
     },
     "auxiliaryModels": {
       "title": "辅助模型",
-      "description": "为任务自动命名和输入框推荐指令分别指定一组 Agent 和模型。",
-      "sessionTitle": {
-        "label": "任务自动命名",
-        "description": "适用于 Claude Code、Codex、Pi 任务，以及手动 AI 重命名。",
-        "ariaLabel": "选择任务自动命名模型",
-        "automatic": "自动选择（跟随当前任务）"
+      "description": "用于任务自动命名和 AI 重命名、输入框推荐指令、Help、置顶任务摘要、IM / 飞书标题与群上下文判断、定时任务脚本、插件快问快答的「跟随默认」，以及自带密钥的语音润色。",
+      "automatic": "自动推荐",
+      "customize": "自定义",
+      "preferred": {
+        "label": "首选",
+        "description": "轻量文本优先使用的模型。",
+        "ariaLabel": "选择首选辅助模型"
       },
-      "promptRecommendation": {
-        "label": "输入框推荐指令",
-        "description": "仅在“小技巧”中启用输入框推荐后调用。",
-        "ariaLabel": "选择输入框推荐指令模型",
-        "automatic": "自动选择（保持当前规则）"
+      "fallback1": {
+        "label": "备选 1",
+        "description": "首选不可用时改用的模型，可留空。",
+        "ariaLabel": "选择第一备选辅助模型"
       },
+      "fallback2": {
+        "label": "备选 2",
+        "description": "前两个都不可用时改用的模型，可留空。",
+        "ariaLabel": "选择第二备选辅助模型"
+      },
+      "emptySlot": "未选择",
+      "customHint": "自定义后只按你选的顺序尝试；都不可用时不会偷偷换成别的模型。",
+      "signInHint": "登录 Cindy 后可使用自动推荐；未登录时请在自定义中选择已配置的其他供应商模型。",
       "chooseAgent": "选择 Agent",
       "backToAgents": "返回选择 Agent",
-      "explicitRouteHint": "显式指定后只使用该 Agent 和模型；不可用时不会自动切换。",
       "searchPlaceholder": "搜索模型或供应商",
       "noResults": "没有可用模型",
       "unavailable": "当前不可用",
       "budget": "折扣",
       "subscription": "订阅",
-      "saveFailed": "保存辅助模型设置失败"
+      "saveFailed": "保存辅助模型设置失败",
+      "chain": {
+        "cindyHy3": "Hy3",
+        "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
     },
     "compaction": {
       "title": "上下文压缩",
@@ -7906,6 +7902,7 @@
       "networkHideRaw": "收起原始错误",
       "gatewayProxyTokenInvalid": "Cindy AI 凭据已失效。请点击「重试」。若仍失败，请退出后重新登录",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 凭据已失效。若后续仍失败，请退出后重新登录",
+      "modelAccessDenied": "当前上游账号无权访问此模型。请切换模型，或向供应商确认模型访问权限",
       "silentStopContinue": "继续",
       "silentStopContinueTitle": "继续当前任务",
       "piTransportClosed": "远端 Pi 连接已中断（SSH 通道关闭）。远端任务仍在运行，重新连接后可以继续。",
@@ -8719,9 +8716,6 @@
         "tasksLoadFailed": "暂时读取不到 {{device}} 上的任务，正在自动重试…",
         "tasksPartiallyFailed": "暂时读取不到 {{device}} 上的任务，正在自动重试；先显示已加载的内容",
         "devicesLoading": "正在读取远程设备…",
-        "devicesLoadFailed": "无法读取远程设备列表。请检查连接后重试。",
-        "devicesPartiallyFailed": "无法刷新远程设备列表，当前仅显示已加载的内容。",
-        "retryDevices": "重新读取设备",
         "remoteSettings": "远程连接设置",
         "multiSelect": "多选",
         "deselect": "取消勾选",

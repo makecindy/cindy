@@ -1001,15 +1001,12 @@
         },
         "refiner": {
           "label": "整えモデル",
-          "hint": "話し言葉のテキストを整えるモデル。",
-          "ariaLabel": "音声整えモデルの選択"
-        },
-        "refinerFallback": {
-          "label": "整文フォールバック",
-          "hint": "メインの整文モデルが失敗したときのみ使う予備モデル。既定では無効。",
-          "ariaLabel": "音声整文フォールバックモデルの選択",
-          "none": "フォールバックなし",
-          "noneDescription": "メインモデルが失敗した場合は元の認識テキストを保持"
+          "hint": "補助モデルに従います。",
+          "followAuxiliary": "補助モデルに従う",
+          "followHint": "整えモデルは「設定 → パーソナライズ → 補助モデル」の順に従います。Cindy ホストの音声は影響を受けず、整えはサーバー側のままです。",
+          "openAuxiliary": "補助モデルへ",
+          "cannotRefine": "現在の補助モデルでは音声を整えられません（Claude Messages のみなど）。今回は整えません。",
+          "ariaLabel": "音声整えモデル"
         },
         "customAsr": {
           "optionLabel": "カスタムリアルタイム ASR",
@@ -2661,28 +2658,15 @@
     },
     "subagentModels": {
       "title": "サブエージェント",
-      "description": "Claude Code と Codex のサブエージェントモデルを選択します。",
+      "description": "Claude Code の既定モデルと Codex のサブエージェント割り当て方法を設定します。",
       "unspecified": "既定の設定を使用",
-      "hint": "Claude Code の変更は新しいセッションから適用されます。Codex の変更はアイドル時に自動で適用されます。",
-      "codexV2ModelHint": "Claude Code は選択したモデルを既定値として使用します。ローカルの Codex サブエージェントはすべて、選択したモデルと推論強度に固定されます。",
-      "codexOauthCompatibilityHint": "固定したサブエージェントのルーティングと ChatGPT OAuth は安全に併用できません。メインタスクが ChatGPT OAuth を使用する場合、または非 OAuth のメインタスクで ChatGPT OAuth のサブエージェントを指定した場合、ここで選択したモデル、プロバイダー、推論強度は適用されず、メインタスクの Codex デフォルトサブエージェントが使用されます。",
+      "hint": "Claude Code の変更は新しいタスクから適用されます。Codex のスマートルーティングは Codex がアイドルになった後に適用されます。",
       "saveFailed": "サブエージェント設定の保存に失敗しました",
-      "guardrails": {
-        "title": "Codex サブエージェントガードレール",
-        "enableHint": "Codex がタスク実行中に使い捨てのサブエージェントを作成することを許可します。オフにすると旧版マルチエージェント（V1）と Sol / Terra（V2）の両方に適用されます。",
-        "enableAria": "Codex のサブエージェントを許可",
-        "cindyPolicyLabel": "Cindy のカスタムサブエージェントポリシーを使用",
-        "cindyPolicyHint": "オンにすると、Cindy は探索タスクで Codex がサブエージェントを積極的に使用するよう促すガイダンスを注入します。すでに計画と委任を得意とするモデルでは、追加のガイダンスが逆効果になる可能性があります。オフにすると注入を停止し、Codex のネイティブな既定動作を使用します。",
-        "cindyPolicyAria": "Cindy のカスタムサブエージェントポリシーを使用",
-        "concurrencyLabel": "サブエージェントの同時実行上限",
-        "concurrencyHint": "同時に実行できるサブエージェント数の上限です。サブエージェントはそれぞれモデルのクォータを消費します。Ultra 段階で同時実行が 8 に達すると Codex が警告します。",
-        "concurrencyFollowDefault": "Codex の既定に従う（旧版 V1 は 6、Sol / Terra は 3）",
-        "concurrencyAria": "Codex サブエージェントの同時実行上限を調整",
-        "concurrencyCustomAria": "Codex サブエージェントの同時実行上限をカスタマイズ",
-        "nestedLabel": "サブエージェントによるサブエージェント作成を許可",
-        "nestedHint": "旧版マルチエージェント（V1）のみ有効で、Sol / Terra（V2）はこの設定を無視します。",
-        "nestedAria": "サブエージェントによるサブエージェント作成を許可",
-        "localOnlyHint": "これらのガードレールはこのマシンで実行される Codex にのみ適用され、SSH リモートの Codex には影響しません。"
+      "smartRouting": {
+        "label": "Codex スマートルーティング",
+        "nativeHint": "オフでは Cindy の上書きを行わず、Codex 標準の Sol / Terra 割り当てを使用します。",
+        "enabledHint": "オンでは Codex がタスクごとに接続済みのモデルをより多く選択でき、カードには実際に使用したモデルが表示されます。",
+        "aria": "Codex スマートルーティングを有効にする"
       },
       "toast": {
         "saved": "サブエージェント設定を保存しました",
@@ -2691,28 +2675,40 @@
     },
     "auxiliaryModels": {
       "title": "補助モデル",
-      "description": "タスクの自動命名と入力欄のおすすめプロンプトに、それぞれ Agent とモデルの組み合わせを指定します。",
-      "sessionTitle": {
-        "label": "タスクの自動命名",
-        "description": "Claude Code、Codex、Pi のタスクと、AI による手動の名前変更に適用されます。",
-        "ariaLabel": "タスクの自動命名モデルを選択",
-        "automatic": "自動選択（現在のタスクに従う）"
+      "description": "タスクの自動命名と AI による名前変更、入力欄のおすすめプロンプト、Help、ピン留めタスクの要約、IM / 飛書のタイトルとグループ文脈判定、スケジュール済みタスクのスクリプト、プラグインのクイック Q&A「デフォルトに従う」、および自分のキーによる音声整えに使います。",
+      "automatic": "自動おすすめ",
+      "customize": "カスタム",
+      "preferred": {
+        "label": "優先",
+        "description": "短い補助テキストで最初に使うモデル。",
+        "ariaLabel": "優先する補助モデルを選択"
       },
-      "promptRecommendation": {
-        "label": "入力欄のおすすめプロンプト",
-        "description": "「ヒント」で入力欄のおすすめを有効にした場合のみ使用します。",
-        "ariaLabel": "入力欄のおすすめプロンプト用モデルを選択",
-        "automatic": "自動選択（現在のルーティングを維持）"
+      "fallback1": {
+        "label": "予備 1",
+        "description": "優先モデルが使えないときに使うモデル。空でもかまいません。",
+        "ariaLabel": "1 番目の予備補助モデルを選択"
       },
+      "fallback2": {
+        "label": "予備 2",
+        "description": "最初の 2 つが使えないときに使うモデル。空でもかまいません。",
+        "ariaLabel": "2 番目の予備補助モデルを選択"
+      },
+      "emptySlot": "未選択",
+      "customHint": "カスタム後は選んだ順にだけ試します。どれも使えない場合、別のモデルへは切り替えません。",
+      "signInHint": "Cindy にログインすると自動おすすめを使えます。未ログイン時は「カスタム」で設定済みの他のプロバイダーのモデルを選択してください。",
       "chooseAgent": "Agent を選択",
       "backToAgents": "Agent の選択に戻る",
-      "explicitRouteHint": "明示的に指定した場合は、その Agent とモデルだけを使用します。利用できなくても自動では切り替えません。",
       "searchPlaceholder": "モデルまたはプロバイダーを検索",
       "noResults": "利用可能なモデルがありません",
       "unavailable": "現在利用不可",
       "budget": "割引",
       "subscription": "サブスクリプション",
-      "saveFailed": "補助モデル設定を保存できませんでした"
+      "saveFailed": "補助モデル設定を保存できませんでした",
+      "chain": {
+        "cindyHy3": "Hy3",
+        "cindyDeepseekV4Flash": "DeepSeek v4 flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
     },
     "compaction": {
       "title": "コンテキスト圧縮",
@@ -7906,6 +7902,7 @@
       "networkHideRaw": "元のエラーを隠す",
       "gatewayProxyTokenInvalid": "Cindy AI の認証情報が無効になりました。「再試行」をクリックしてください。繰り返す場合はサインアウトしてから再ログインしてください",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI の認証情報が無効になりました。繰り返す場合はサインアウトしてから再ログインしてください",
+      "modelAccessDenied": "接続先のアカウントにはこのモデルへのアクセス権限がありません。別のモデルに切り替えるか、プロバイダーにアクセス権限を確認してください",
       "silentStopContinue": "続行",
       "silentStopContinueTitle": "現在のタスクを続行",
       "piTransportClosed": "リモート Pi の接続が切断されました（SSH チャンネルが閉じました）。リモートのタスクは実行中のままです。再接続すると続行できます。",
@@ -8719,9 +8716,6 @@
         "tasksLoadFailed": "現在 {{device}} のセッションを読み込めません。自動的に再試行中…",
         "tasksPartiallyFailed": "現在 {{device}} のセッションを読み込めません。自動的に再試行中のため、読み込み済みの内容のみ表示しています",
         "devicesLoading": "リモートデバイスを読み込み中…",
-        "devicesLoadFailed": "リモートデバイスの一覧を読み込めませんでした。接続を確認して再試行してください。",
-        "devicesPartiallyFailed": "リモートデバイスの一覧を更新できませんでした。読み込み済みの内容のみ表示しています。",
-        "retryDevices": "デバイスを再読み込み",
         "remoteSettings": "リモート接続設定",
         "multiSelect": "複数選択",
         "deselect": "選択を解除",

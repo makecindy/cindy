@@ -1396,10 +1396,11 @@
               "supportsImageInput": true,
               "reasoning": true,
               "reasoningEfforts": [
-                "high",
-                "max"
+                "low",
+                "medium",
+                "xhigh"
               ],
-              "reasoningDefaultEffort": "high"
+              "reasoningDefaultEffort": "medium"
             },
             {
               "id": "qwen3.8-max",
@@ -1730,10 +1731,11 @@
               "supportsImageInput": true,
               "reasoning": true,
               "reasoningEfforts": [
-                "high",
-                "max"
+                "low",
+                "medium",
+                "xhigh"
               ],
-              "reasoningDefaultEffort": "high"
+              "reasoningDefaultEffort": "medium"
             },
             {
               "id": "qwen3.8-max",

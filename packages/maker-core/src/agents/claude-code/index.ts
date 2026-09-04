@@ -1005,6 +1005,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     const model = opts?.model ?? 'claude-haiku-4-5';
     const maxTokens = opts?.maxTokens ?? 100;
     const timeoutMs = opts?.timeoutMs ?? 30_000;
+    const instructions = [opts?.systemPrompt, opts?.responseInstructions]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n');
 
     // Auth gate:与 startSession 对齐 — 未授权直接拒,不让 Anthropic 请求带空 key 跑出去
     // (避免被 fallback 到用户系统级 ~/.claude/.credentials.json 之类的别处 OAuth)
@@ -1016,8 +1019,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       );
     }
     // oneShot 凭证优先走 getOneShotAuth()(host 侧直连专用,与子进程 env 正交):
-    // Claude 'oauth' 模式下 getAuthEnv() 注入的是用户订阅 token,但 oneShot 无 system prompt、
-    // 不能走订阅(会被 claude.ai OAuth 策略拒),host 通过 getOneShotAuth 固定回 gateway key +
+    // Claude 'oauth' 模式下 getAuthEnv() 注入的是用户订阅 token,但 oneShot 直连
+    // Anthropic Messages API 不能走订阅 token(会被 claude.ai OAuth 策略拒),host 通过
+    // getOneShotAuth 固定回 gateway key +
     // gateway endpoint。不实现该方法的 adapter(或回 null)→ 回退旧逻辑(getAuthEnv 里的 key + runtimeConfig.endpoint)。
     let apiKey: string | undefined;
     let baseURL = this.deps.runtimeConfig.endpoint;
@@ -1054,10 +1058,18 @@ export class ClaudeCodeAgent extends BaseAgent {
         maxRetries: 0,
       });
 
+      // Auth and host setup can await asynchronous work. Re-check the caller's
+      // ownership fence immediately before the paid provider request, matching
+      // Codex oneShot's thread/start guard.
+      if (opts?.beforeDispatch && !(await opts.beforeDispatch())) {
+        throw new OneShotError('network', 'Claude oneShot dispatch guard rejected');
+      }
+
       const resp = await client.messages.create(
         {
           model,
           max_tokens: maxTokens,
+          ...(instructions ? { system: instructions } : {}),
           messages: [{ role: 'user', content: prompt }],
         },
         { signal: timeoutController.signal },

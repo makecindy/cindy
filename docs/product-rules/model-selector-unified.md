@@ -93,7 +93,8 @@
 
 - 候选引擎 = 该模型在最终 catalog 中出现的所有 `(provider, agent)` 组合(`Provider.models: Record<AgentKind, CatalogModel[]>`),经现有可见/准入/区域/SSH 过滤后。
 - 推荐引擎 = 模型**生效来源** provider 的主 root(`MODEL_PLANE_POLICIES`:openai→codex、anthropic→claude-code;xd 按 gateway `perAgent`/membership;user provider 按其 runtime)。同名多来源时先 `effectiveSourceIdForModel` 解析生效来源再推导——**禁止读拍平去重后的列表**(registry.ts 明示)。
-- Pi 恒为候选(客户端投影,wire enum 无 pi,维持现状)。
+- Pi 的候选成员来自客户端随包的 Pi 原生目录与明确的 Pi 覆盖，不能从
+  Claude Code/Codex 的发现清单或 Registry 投影；wire enum 仍不增加 pi。
 - **原生底座(排序用,与推荐引擎分离)只标确有主场的,可空**(Chris 2026-08-13 裁决):
   anthropic→cc、openai→codex、折扣条目→codex;**多 root 全能模型(xai 系)与判不出家族的
   BYOM 一律 null = 无主场**——任何引擎视图都不降级,只有「主场明确在别处」的行才降到

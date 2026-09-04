@@ -14,6 +14,7 @@ import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError
  * active and historical views.
  */
 export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
+  user_model_access_denied: 'chat.errorBanner.modelAccessDenied',
   'empty-response': 'logic.errors.emptyResponse',
   'turn-failed': 'logic.errors.turnFailed',
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',

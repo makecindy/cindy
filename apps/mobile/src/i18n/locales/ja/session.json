@@ -323,6 +323,7 @@
     "worktreeBranchSaving": "選択したブランチを同期中…",
     "worktreeBranchSyncFailed": "保存済みのソースブランチを確認できません。ブランチを再選択してください",
     "worktreeSettingsSaving": "worktree 設定を同期中…",
+    "worktreeSettingsSyncFailed": "保存済みの worktree 設定を確認できません。スイッチを再度操作してください",
     "worktreeBranchesRetry": "ブランチを読み込めません。タップして再試行",
     "worktreeDetecting": "環境を検出中…",
     "worktreeRecovering": "接続を復旧中です。自動的に再試行しています…",
