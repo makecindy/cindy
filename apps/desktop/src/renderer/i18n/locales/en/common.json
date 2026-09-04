@@ -6961,23 +6961,27 @@
       "createFailed": "The teammate could not be created. Try again.",
       "chooseTemplateDescription": "Choose a starting point, then confirm the name and avatar. Future templates will use this same flow.",
       "templates": {
-        "control": {
-          "title": "Coordinator",
-          "summary": "Watches important task changes, coordinates next steps, and reports back.",
-          "defaultName": "Coordinator",
-          "defaultDescription": "Keep important work moving and report meaningful changes."
+        "programmer": {
+          "title": "Software development",
+          "summary": "Code implementation, architecture, debugging, and deployment.",
+          "defaultName": "Development teammate",
+          "defaultDescription": "Supports software development, technical analysis, troubleshooting, and delivery verification."
         },
-        "prSteward": {
-          "title": "PR steward",
-          "summary": "Follows reviews, checks, and delivery state.",
-          "defaultName": "PR steward",
-          "defaultDescription": "Keep pull requests moving and route actionable changes to the owning task."
+        "designer": {
+          "title": "Design support",
+          "summary": "Interfaces, presentations, layout, and visual direction.",
+          "defaultName": "Design teammate",
+          "defaultDescription": "Supports interface design, presentations, layout, and visual communication."
         },
-        "assistant": {
-          "title": "Assistant",
-          "summary": "Keeps a private identity and memory, learning your habits when useful.",
-          "defaultName": "My assistant",
-          "defaultDescription": "A personal assistant that gets to know you over time."
+        "counsel": {
+          "title": "Legal support",
+          "summary": "Contract terms, compliance risks, and preliminary review.",
+          "defaultName": "Legal teammate",
+          "defaultDescription": "Supports preliminary contract and compliance review and flags risks; it does not replace professional legal advice."
+        },
+        "custom": {
+          "title": "Custom",
+          "summary": "Start from a blank profile and define its name and responsibilities."
         }
       }
     },

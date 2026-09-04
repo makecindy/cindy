@@ -6959,23 +6959,27 @@
       "createFailed": "仲間を作成できませんでした。もう一度お試しください。",
       "chooseTemplateDescription": "出発点を選び、名前とアバターを確認します。今後のテンプレートも同じ画面から作成します。",
       "templates": {
-        "control": {
-          "title": "コーディネーター",
-          "summary": "重要なタスクの変化を見守り、次の行動を調整して報告します。",
-          "defaultName": "コーディネーター",
-          "defaultDescription": "重要な作業を止めず、意味のある変化を報告します。"
+        "programmer": {
+          "title": "ソフトウェア開発",
+          "summary": "実装、アーキテクチャ分析、デバッグ、デプロイを支援します。",
+          "defaultName": "開発パートナー",
+          "defaultDescription": "ソフトウェア開発、技術分析、問題調査、納品前の検証を担当します。"
         },
-        "prSteward": {
-          "title": "PR 管理役",
-          "summary": "レビュー、チェック、デリバリーの状態を追います。",
-          "defaultName": "PR 管理役",
-          "defaultDescription": "PR を前に進め、対応が必要な変化を担当タスクへ返します。"
+        "designer": {
+          "title": "デザイン支援",
+          "summary": "UI、プレゼン資料、レイアウト、ビジュアル案を支援します。",
+          "defaultName": "デザインパートナー",
+          "defaultDescription": "UI デザイン、プレゼン資料、レイアウト、視覚表現を担当します。"
         },
-        "assistant": {
-          "title": "アシスタント",
-          "summary": "独立した個性と記憶を持ち、必要に応じてあなたの習慣を学びます。",
-          "defaultName": "マイアシスタント",
-          "defaultDescription": "長く付き合いながら、少しずつあなたを理解する個人アシスタントです。"
+        "counsel": {
+          "title": "法務支援",
+          "summary": "契約条項、コンプライアンス上のリスク、初期確認を支援します。",
+          "defaultName": "法務パートナー",
+          "defaultDescription": "契約とコンプライアンスの初期整理とリスク提示を担当します。正式な法律助言に代わるものではありません。"
+        },
+        "custom": {
+          "title": "カスタム",
+          "summary": "空白のプロフィールから名前と担当内容を設定します。"
         }
       }
     },

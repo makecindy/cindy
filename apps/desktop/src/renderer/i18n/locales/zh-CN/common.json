@@ -6959,23 +6959,27 @@
       "createFailed": "无法创建伙伴，请重试。",
       "chooseTemplateDescription": "选择一个起点，再确认名称和头像。以后新增模板也都在这里创建。",
       "templates": {
-        "control": {
-          "title": "总控",
-          "summary": "关注重要任务变化，负责协调下一步和汇报。",
-          "defaultName": "总控",
-          "defaultDescription": "盯住重要任务状态，及时协调和汇报。"
+        "programmer": {
+          "title": "软件开发",
+          "summary": "代码实现、架构分析、调试与部署。",
+          "defaultName": "开发伙伴",
+          "defaultDescription": "负责软件开发、技术分析、问题排查和交付验证。"
         },
-        "prSteward": {
-          "title": "PR 总管",
-          "summary": "跟进评审、检查和交付状态。",
-          "defaultName": "PR 总管",
-          "defaultDescription": "持续跟进 PR，并把可行动的变化交回负责的任务。"
+        "designer": {
+          "title": "设计支持",
+          "summary": "界面、演示文稿、排版与视觉方案。",
+          "defaultName": "设计伙伴",
+          "defaultDescription": "负责界面设计、演示文稿、排版和视觉表达。"
         },
-        "assistant": {
-          "title": "普通助理",
-          "summary": "拥有独立身份与记忆，按需学习你的习惯。",
-          "defaultName": "我的助理",
-          "defaultDescription": "一个可以长期相处、逐渐熟悉你的个人助理。"
+        "counsel": {
+          "title": "法务支持",
+          "summary": "合同条款、合规风险与初步审查。",
+          "defaultName": "法务伙伴",
+          "defaultDescription": "负责合同与合规的初步梳理和风险提示，不替代专业法律意见。"
+        },
+        "custom": {
+          "title": "自定义",
+          "summary": "从空白开始，设置名称和职责。"
         }
       }
     },

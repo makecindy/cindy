@@ -6959,23 +6959,27 @@
       "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요.",
       "chooseTemplateDescription": "시작점을 고른 뒤 이름과 아바타를 확인하세요. 앞으로 추가될 템플릿도 이 화면에서 만듭니다.",
       "templates": {
-        "control": {
-          "title": "코디네이터",
-          "summary": "중요한 작업 변화를 살피고 다음 단계를 조율해 보고합니다.",
-          "defaultName": "코디네이터",
-          "defaultDescription": "중요한 작업이 멈추지 않도록 조율하고 의미 있는 변화를 보고합니다."
+        "programmer": {
+          "title": "소프트웨어 개발",
+          "summary": "코드 구현, 아키텍처 분석, 디버깅, 배포를 지원합니다.",
+          "defaultName": "개발 파트너",
+          "defaultDescription": "소프트웨어 개발, 구조 분석, 문제 해결, 결과 검증을 담당합니다."
         },
-        "prSteward": {
-          "title": "PR 관리자",
-          "summary": "리뷰, 검사와 전달 상태를 추적합니다.",
-          "defaultName": "PR 관리자",
-          "defaultDescription": "PR을 계속 진행하고 조치할 변화를 담당 작업에 돌려줍니다."
+        "designer": {
+          "title": "디자인 지원",
+          "summary": "화면, 프레젠테이션, 레이아웃, 시각 방향을 지원합니다.",
+          "defaultName": "디자인 파트너",
+          "defaultDescription": "화면 디자인, 프레젠테이션, 레이아웃, 시각 표현을 담당합니다."
         },
-        "assistant": {
-          "title": "일반 어시스턴트",
-          "summary": "독립된 정체성과 기억을 가지며 필요할 때 당신의 습관을 배웁니다.",
-          "defaultName": "나의 어시스턴트",
-          "defaultDescription": "오래 함께하며 조금씩 당신을 알아가는 개인 어시스턴트입니다."
+        "counsel": {
+          "title": "법무 지원",
+          "summary": "계약 조항, 규정 준수 위험, 초기 검토를 지원합니다.",
+          "defaultName": "법무 파트너",
+          "defaultDescription": "계약 및 규정 준수 사항의 초기 검토와 위험 안내를 담당하며 전문적인 법률 자문을 대체하지 않습니다."
+        },
+        "custom": {
+          "title": "사용자 지정",
+          "summary": "빈 프로필에서 이름과 담당 업무를 설정합니다."
         }
       }
     },

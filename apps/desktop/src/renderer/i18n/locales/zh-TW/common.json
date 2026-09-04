@@ -6959,23 +6959,27 @@
       "createFailed": "無法建立夥伴，請重試。",
       "chooseTemplateDescription": "選擇一個起點，再確認名稱與頭像。之後新增的範本也都會從這裡建立。",
       "templates": {
-        "control": {
-          "title": "總控",
-          "summary": "關注重要任務變化，負責協調下一步與回報。",
-          "defaultName": "總控",
-          "defaultDescription": "盯住重要任務狀態，及時協調與回報。"
+        "programmer": {
+          "title": "軟體開發",
+          "summary": "程式實作、架構分析、除錯與部署。",
+          "defaultName": "開發夥伴",
+          "defaultDescription": "負責軟體開發、技術分析、問題排查與交付驗證。"
         },
-        "prSteward": {
-          "title": "PR 總管",
-          "summary": "跟進審查、檢查與交付狀態。",
-          "defaultName": "PR 總管",
-          "defaultDescription": "持續跟進 PR，並把可行動的變化交回負責的任務。"
+        "designer": {
+          "title": "設計支援",
+          "summary": "介面、簡報、排版與視覺方案。",
+          "defaultName": "設計夥伴",
+          "defaultDescription": "負責介面設計、簡報、排版與視覺表達。"
         },
-        "assistant": {
-          "title": "一般助理",
-          "summary": "擁有獨立身分與記憶，按需學習你的習慣。",
-          "defaultName": "我的助理",
-          "defaultDescription": "一個可以長期相處、逐漸熟悉你的個人助理。"
+        "counsel": {
+          "title": "法務支援",
+          "summary": "合約條款、合規風險與初步審查。",
+          "defaultName": "法務夥伴",
+          "defaultDescription": "負責合約與合規的初步梳理和風險提示，不取代專業法律意見。"
+        },
+        "custom": {
+          "title": "自訂",
+          "summary": "從空白開始，設定名稱與職責。"
         }
       }
     },

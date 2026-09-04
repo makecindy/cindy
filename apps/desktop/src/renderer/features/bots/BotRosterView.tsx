@@ -7,16 +7,18 @@ import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { addBotProfileAndWait, type BotProfile } from './botStore';
 import { BotBasicProfileFields, type BotBasicProfileValue } from './BotBasicProfileFields';
-import { BOT_TEMPLATES, getBotTemplate, type BotTemplateId } from './botTemplates';
+import {
+  BOT_TEMPLATE_CHOICES,
+  CUSTOM_BOT_TEMPLATE_ID,
+  getBotTemplate,
+  getBotTemplateChoice,
+  type BotTemplateChoiceId,
+} from './botTemplates';
 import { rememberPendingBotWelcome } from './botWelcome';
 
 interface BotRosterViewProps {
   /** 创建成功后的落点。默认直接进 TA 的对话。 */
   onCreated?: (bot: BotProfile) => void;
-}
-
-function templateTranslationKey(id: BotTemplateId): string {
-  return getBotTemplate(id).translationKey;
 }
 
 /**
@@ -26,24 +28,29 @@ function templateTranslationKey(id: BotTemplateId): string {
 export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [templateId, setTemplateId] = useState<BotTemplateId>('assistant');
-  const initialTemplate = getBotTemplate('assistant');
+  const [templateId, setTemplateId] = useState<BotTemplateChoiceId>('programmer');
+  const initialTemplate = getBotTemplate('programmer');
   const [profile, setProfile] = useState<BotBasicProfileValue>(() => ({
-    name: t('bots.createWizard.templates.assistant.defaultName'),
-    description: t('bots.createWizard.templates.assistant.defaultDescription'),
+    name: t('bots.createWizard.templates.programmer.defaultName'),
+    description: t('bots.createWizard.templates.programmer.defaultDescription'),
     avatar: initialTemplate.avatar,
     avatarColor: initialTemplate.avatarColor,
   }));
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const applyTemplate = (id: BotTemplateId) => {
-    const template = getBotTemplate(id);
-    const key = templateTranslationKey(id);
+  const applyTemplate = (id: BotTemplateChoiceId) => {
+    const template = getBotTemplateChoice(id);
     setTemplateId(id);
     setProfile({
-      name: t(`bots.createWizard.templates.${key}.defaultName`),
-      description: t(`bots.createWizard.templates.${key}.defaultDescription`),
+      name:
+        id === CUSTOM_BOT_TEMPLATE_ID
+          ? ''
+          : t(`bots.createWizard.templates.${template.translationKey}.defaultName`),
+      description:
+        id === CUSTOM_BOT_TEMPLATE_ID
+          ? ''
+          : t(`bots.createWizard.templates.${template.translationKey}.defaultDescription`),
       avatar: template.avatar,
       avatarColor: template.avatarColor,
     });
@@ -62,7 +69,7 @@ export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
     setCreating(true);
     setError(null);
     try {
-      const template = getBotTemplate(templateId);
+      const template = getBotTemplateChoice(templateId);
       const bot = await addBotProfileAndWait({
         name,
         channel: 'local',
@@ -95,8 +102,8 @@ export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
           {t('bots.createWizard.chooseTemplateDescription')}
         </p>
 
-        <div className="mt-7 grid gap-3 sm:grid-cols-3">
-          {BOT_TEMPLATES.map((template) => {
+        <div className="mt-7 grid gap-3 sm:grid-cols-2">
+          {BOT_TEMPLATE_CHOICES.map((template) => {
             const selected = template.id === templateId;
             const key = template.translationKey;
             return (

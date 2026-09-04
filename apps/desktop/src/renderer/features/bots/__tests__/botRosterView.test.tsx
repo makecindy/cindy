@@ -27,13 +27,14 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('BotRosterView — 唯一的伙伴创建界面', () => {
-  it('shows exactly the three starting templates and the shared basic profile fields', () => {
+  it('shows three professional presets plus custom and the shared basic profile fields', () => {
     render(<BotRosterView />);
 
     expect(screen.getAllByRole('button', { pressed: true })).toHaveLength(1);
-    for (const id of ['control', 'prSteward', 'assistant']) {
+    for (const id of ['programmer', 'designer', 'counsel', 'custom']) {
       expect(screen.getByText(`bots.createWizard.templates.${id}.title`)).toBeTruthy();
     }
+    expect(screen.getAllByRole('button', { pressed: false })).toHaveLength(3);
     expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
     expect(screen.getByLabelText('bots.profile.summary')).toBeTruthy();
     expect(screen.queryByText('bots.profile.avatar')).toBeNull();
@@ -41,15 +42,26 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     expect(screen.queryByText('bots.persona.title')).toBeNull();
   });
 
+  it('starts custom from a blank profile and waits for a name', () => {
+    render(<BotRosterView />);
+    fireEvent.click(screen.getByText('bots.createWizard.templates.custom.title'));
+
+    expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('bots.profile.summary') as HTMLInputElement).value).toBe('');
+    expect(
+      (screen.getByRole('button', { name: 'bots.roster.create' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
   it('uses a template as a draft in the same fields', () => {
     render(<BotRosterView />);
-    fireEvent.click(screen.getByText('bots.createWizard.templates.prSteward.title'));
+    fireEvent.click(screen.getByText('bots.createWizard.templates.designer.title'));
 
     expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe(
-      'bots.createWizard.templates.prSteward.defaultName',
+      'bots.createWizard.templates.designer.defaultName',
     );
     expect((screen.getByLabelText('bots.profile.summary') as HTMLInputElement).value).toBe(
-      'bots.createWizard.templates.prSteward.defaultDescription',
+      'bots.createWizard.templates.designer.defaultDescription',
     );
   });
 
@@ -65,11 +77,30 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).toMatchObject({
       name: 'Ops buddy',
       description: 'Release partner',
-      avatar: '✦',
-      avatarColor: 'amber',
-      identitySource: expect.stringContaining('persistent Cindy assistant'),
+      avatar: '💻',
+      avatarColor: 'blue',
+      identitySource: expect.stringContaining('负责软件开发'),
       userContextSource: '',
       skills: [],
+    });
+  });
+
+  it('creates a custom teammate with a neutral professional identity', async () => {
+    render(<BotRosterView />);
+    fireEvent.click(screen.getByText('bots.createWizard.templates.custom.title'));
+    fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: '项目伙伴' } });
+    fireEvent.change(screen.getByLabelText('bots.profile.summary'), {
+      target: { value: '负责项目资料整理' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
+
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
+    expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).toMatchObject({
+      name: '项目伙伴',
+      description: '负责项目资料整理',
+      avatar: '✦',
+      avatarColor: 'amber',
+      identitySource: expect.stringContaining('由用户自定义职责'),
     });
   });
 
