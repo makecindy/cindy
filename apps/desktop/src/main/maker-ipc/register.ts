@@ -3051,33 +3051,25 @@ let libraryExtraDirSyncGeneration = 0;
 let libraryExtraDirSyncRoot: string | null = null;
 let libraryExtraDirSyncChain: Promise<void> = Promise.resolve();
 
-async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
+async function syncLibraryReadonlyExtraDir(
+  root: string | null,
+): Promise<'granted' | 'not-granted' | 'superseded'> {
   libraryExtraDirSyncRoot = root;
   const generation = ++libraryExtraDirSyncGeneration;
-  const run = async () => {
-    if (generation !== libraryExtraDirSyncGeneration) {
-      throw new Error('library extraDirs sync superseded');
-    }
+  const run = async (): Promise<'granted' | 'not-granted' | 'superseded'> => {
+    if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
     const grantRoot = libraryExtraDirSyncRoot;
     const focused = getFocusedGhostSessionId();
-    if (generation !== libraryExtraDirSyncGeneration) {
-      throw new Error('library extraDirs sync superseded');
-    }
+    if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
     const visible = await listVisibleActiveSessionIds();
-    if (generation !== libraryExtraDirSyncGeneration) {
-      throw new Error('library extraDirs sync superseded');
-    }
+    if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
     const targets = new Set(visible);
     if (focused) targets.add(focused);
     let granted = false;
     for (const sessionId of targets) {
-      if (generation !== libraryExtraDirSyncGeneration) {
-        throw new Error('library extraDirs sync superseded');
-      }
+      if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
       const remote = await sessionIsRemote(sessionId);
-      if (generation !== libraryExtraDirSyncGeneration) {
-        throw new Error('library extraDirs sync superseded');
-      }
+      if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
       const nextRoot = !remote && grantRoot && sessionId === focused ? grantRoot : null;
       try {
         await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
@@ -3089,17 +3081,16 @@ async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
         });
         if (!remote && nextRoot && sessionId === focused) throw error;
       }
-      if (generation !== libraryExtraDirSyncGeneration) {
-        throw new Error('library extraDirs sync superseded');
-      }
+      if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
     }
     if (grantRoot && !granted) {
       throw new Error('library extraDirs not granted to focused session');
     }
+    return grantRoot && granted ? 'granted' : 'not-granted';
   };
   const queued = libraryExtraDirSyncChain.then(run, run);
   libraryExtraDirSyncChain = queued.then(() => undefined, () => undefined);
-  await queued;
+  return queued;
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
