@@ -16,10 +16,10 @@
  *   closed GitPullRequestClosed  --error-fg(语义红)
  *   未知(查询失败)               GitPullRequest + --text-tertiary,tooltip 给原因
  *
- * 本机 gh 缺失 / 未登录时(prGuidanceFor):图标右下角加 --status-bar-accent 角点
- *(与 unresolved 角标同一视觉语言),点击**不打开 PR**,而是把安装 / 登录提示词
- * 填进当前任务输入框交给 Agent;tooltip 写明点击后果。SSH / device-link / review
- * 只读任务不提供引导——点击无法兑现时仍打开 PR。
+ * 本机 gh 缺失 / 未登录时(prGuidanceFor):点击把安装 / 登录提示词填进当前任务
+ * 输入框交给 Agent;tooltip 写明点击后果。不复用 unresolved 的
+ * `--status-bar-accent` 5px 角点(DESIGN.md 该点只表示未解决 review)。
+ * SSH / device-link / review 只读任务不提供引导——点击无法兑现时仍打开 PR。
  */
 
 import { GitBranch, GitPullRequest, MessageSquare } from 'lucide-react';
@@ -173,16 +173,7 @@ function PrChip({
             'transition-colors focus-visible:outline-none',
           )}
         >
-          <span className="relative shrink-0">
-            <Icon size={12} strokeWidth={1.5} className="block" style={{ color }} />
-            {guidance && (
-              <span
-                aria-hidden
-                className="absolute rounded-full bg-[var(--status-bar-accent)]"
-                style={{ width: 5, height: 5, top: -1.5, right: -1.5 }}
-              />
-            )}
-          </span>
+          <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
           <span>#{prRef.prNumber}</span>
           {unresolved > 0 && (
             <span

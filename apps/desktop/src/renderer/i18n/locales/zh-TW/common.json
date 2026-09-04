@@ -9107,12 +9107,12 @@
           "login": {
             "hint": "點擊讓 Agent 幫你登入",
             "aria": "PR #{{number}} 狀態不可用：讓 Agent 登入 GitHub",
-            "prompt": "請幫我登入 GitHub CLI：執行 `gh auth login -h github.com -p https -w`，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
+            "prompt": "請幫我登入 GitHub CLI：執行 `gh auth login -h github.com -w`，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
           },
           "install": {
             "hint": "點擊讓 Agent 幫你安裝並登入",
             "aria": "PR #{{number}} 狀態不可用：讓 Agent 安裝並登入 GitHub CLI",
-            "prompt": "請幫我安裝 GitHub CLI（gh，macOS 用 `brew install gh`，Windows 用 `winget install GitHub.cli`），然後執行 `gh auth login -h github.com -p https -w` 登入，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
+            "prompt": "請幫我安裝 GitHub CLI（gh，macOS 用 `brew install gh`，Windows 用 `winget install GitHub.cli`），然後執行 `gh auth login -h github.com -w` 登入，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
           }
         },
         "unresolved": "{{count}} 條未解決的 review 評論"
