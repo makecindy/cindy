@@ -397,7 +397,10 @@ describe('Agent Island display state', () => {
       },
     }, start + 200);
     expect(state.sessions.get('s1')).toMatchObject({
-      assistantStreamRawText: '我会先',
+      assistantStream: {
+        mode: 'plain',
+        rawPreview: '我会先',
+      },
       reconnectStatus: '（1/5）正在重连…',
     });
     expect(buildAgentIslandDisplayState(state, start + 200).sessions[0]).toMatchObject({
@@ -446,7 +449,10 @@ describe('Agent Island display state', () => {
       running: true,
       phase: 'running',
       assistantStreamLineId: null,
-      assistantStreamRawText: '',
+      assistantStream: {
+        mode: 'pending',
+        rawPreview: '',
+      },
     });
     expect(session?.activityLines.map((line) => `${line.kind}:${line.text}`)).toEqual([
       'user:run tests',
@@ -454,21 +460,29 @@ describe('Agent Island display state', () => {
     ]);
   });
 
-  it('keeps whitespace-only assistant deltas in the raw stream accumulator', () => {
+  it('keeps whitespace-only assistant deltas pending for the next visible delta', () => {
     const state = createAgentIslandState();
     const start = 1_000;
 
     applyAgentIslandUserPrompt(state, { sessionId: 's1', title: 'Task', agentKind: 'codex' }, 'run tests', start);
     applyAgentIslandEvent(state, { sessionId: 's1' }, textDeltaEvent('\n'), start + 100);
 
-    expect(state.sessions.get('s1')?.assistantStreamRawText).toBe('\n');
+    expect(state.sessions.get('s1')?.assistantStream).toMatchObject({
+      mode: 'pending',
+      rawChunks: ['\n'],
+      rawPreview: '',
+    });
     expect(state.sessions.get('s1')?.activityLines.map((line) => `${line.kind}:${line.text}`)).toEqual([
       'user:run tests',
     ]);
 
     applyAgentIslandEvent(state, { sessionId: 's1' }, textDeltaEvent('我会继续处理'), start + 200);
 
-    expect(state.sessions.get('s1')?.assistantStreamRawText).toBe('\n我会继续处理');
+    expect(state.sessions.get('s1')?.assistantStream).toMatchObject({
+      mode: 'plain',
+      rawChunks: [],
+      rawPreview: '我会继续处理',
+    });
     expect(state.sessions.get('s1')?.activityLines.map((line) => `${line.kind}:${line.text}`)).toEqual([
       'user:run tests',
       'assistant:我会继续处理',

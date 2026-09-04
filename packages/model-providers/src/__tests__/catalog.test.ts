@@ -2,8 +2,8 @@
  * 目录校验 + 内置供应商契约(2026-07-19 模型列表统一重构后的新契约)。
  *
  * **清单来源唯一化**——
- *   - anthropic / openai / xd 是动态清单供应商:bundled 目录只有身份卡,models 恒为空,
- *     清单运行时由 host 注入(SDK 发现 / codex 注册表 / 网关下发);
+ *   - anthropic / openai 的 Claude/Codex 清单动态注入，Pi 使用随包原生目录；
+ *   - xd 是动态清单供应商:bundled 目录只有身份卡,models 恒为空;
  *   - xai 的静态段是离线 fallback/元数据层；登录后的成员由账号发现决定;
  *   - presets 是自定义供应商模板,随目录 OSS 热更。
  *
@@ -23,7 +23,7 @@ import {
 } from '../registry.js';
 import type { AgentKind, Catalog, CatalogModel } from '../types.js';
 
-/** 动态清单供应商(bundled 零模型,运行时注入)。 */
+/** Claude/Codex 动态清单供应商；Anthropic/OpenAI 的 Pi 目录是独立静态快照。 */
 const DYNAMIC_PROVIDER_IDS = ['anthropic', 'openai', 'xd'] as const;
 
 /** xAI 随包 fallback 元数据清单。 */
@@ -130,13 +130,33 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect(BUNDLED_CATALOG.providers.every((p) => p.source === 'builtin')).toBe(true);
   });
 
-  it('dynamic providers ship ZERO static models (list is runtime-injected, no fallback)', () => {
+  it('dynamic providers keep Claude/Codex empty while Pi ships its independent native baseline', () => {
     for (const id of DYNAMIC_PROVIDER_IDS) {
       const p = provider(id);
       for (const agent of p.agents) {
-        expect(p.models[agent], `${id} models[${agent}] must exist (empty array)`).toEqual([]);
+        if (agent === 'pi' && (id === 'anthropic' || id === 'openai')) {
+          expect(p.models.pi?.length, `${id} must ship Pi native models`).toBeGreaterThan(0);
+        } else {
+          expect(p.models[agent], `${id} models[${agent}] must exist (empty array)`).toEqual([]);
+        }
       }
     }
+  });
+
+  it('ships only Pi-native subscription models and does not invent GPT-6 from Registry', () => {
+    expect(provider('openai').models.pi?.map((model) => model.id)).toEqual([
+      'chatgpt/gpt-5.3-codex-spark',
+      'chatgpt/gpt-5.4',
+      'chatgpt/gpt-5.4-mini',
+      'chatgpt/gpt-5.5',
+      'chatgpt/gpt-5.6-luna',
+      'chatgpt/gpt-5.6-sol',
+      'chatgpt/gpt-5.6-terra',
+    ]);
+    expect(
+      provider('openai').models.pi?.some((model) => model.id.startsWith('chatgpt/gpt-6')),
+    ).toBe(false);
+    expect(provider('anthropic').models.pi).toHaveLength(14);
   });
 
   it('xai ships a static fallback list and Pi official metadata', () => {

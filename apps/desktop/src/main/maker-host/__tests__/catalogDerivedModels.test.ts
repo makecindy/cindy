@@ -483,7 +483,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(provider!.models['claude-code']!.some((entry) => entry.id === retired.id)).toBe(true);
   });
 
-  it('纯 Registry retired 不进入公开清单,但可按统一投影重建 Pi 续跑描述符', () => {
+  it('纯 Registry retired 不会被重建成 Pi 续跑描述符', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.modelRegistry = {
       schemaVersion: 1,
@@ -524,18 +524,11 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       'openai',
       'chatgpt/gpt-retired',
       { localOverrides },
-    )).toMatchObject({
-      id: 'chatgpt/gpt-retired',
-      displayName: 'GPT Retired',
-      contextWindow: 444_000,
-      maxOutputTokens: 96_000,
-      efforts: ['minimal', 'medium', 'high'],
-      defaultEffort: 'high',
-    });
+    )).toBeNull();
     expect(resolvePiRuntimeModelDescriptor(catalog, 'anthropic', 'chatgpt/gpt-retired')).toBeNull();
   });
 
-  it('retired Pi fallback 按 addition 后 patch 的最终层顺序重建 root', () => {
+  it('本地 Codex addition/patch 也不能重建 retired Pi fallback', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.modelRegistry = {
       schemaVersion: 1,
@@ -575,15 +568,10 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       'openai',
       'chatgpt/gpt-local-revival',
       { localOverrides },
-    )).toMatchObject({
-      displayName: 'Local addition',
-      contextWindow: 600_000,
-      efforts: ['minimal', 'medium', 'high'],
-      defaultEffort: 'high',
-    });
+    )).toBeNull();
   });
 
-  it('retired OpenAI context profile 按 alias id 与 entry baseline 重建 Pi 私有描述符', () => {
+  it('retired OpenAI context profile 不会跨 harness 重建 Pi 私有描述符', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.modelRegistry = {
       schemaVersion: 1,
@@ -613,14 +601,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
 
     expect(
       resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-5.6-sol[1m]'),
-    ).toMatchObject({
-      id: 'chatgpt/gpt-5.6-sol[1m]',
-      displayName: 'GPT-5.6-Sol (1M · Higher usage)',
-      contextWindow: 1_000_000,
-      maxOutputTokens: 128_000,
-      efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
-      defaultEffort: 'medium',
-    });
+    ).toBeNull();
   });
 
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {

@@ -1,7 +1,7 @@
 /**
  * modelPlane.test.ts —— 模型平面收敛(2026-08-02)的 invariant 矩阵:
  * registry presence 实体化 / 生命周期(retired tombstone + keepSelected 豁免)/
- * 表驱动投影(bridge membership 门控、Pi 恒定派生)/ 本地 override(local 永远
+ * 表驱动投影(bridge membership 门控、Pi 独立目录)/ 本地 override(local 永远
  * 最高、addition 复活 retired、perAgent 单点修、dormant patch)/ XD 不可伪造。
  * 全部走真实 active-catalog computeMerged 管线,不 mock 合并逻辑。
  */
@@ -95,7 +95,7 @@ afterEach(() => {
 });
 
 describe('registry presence 实体化', () => {
-  it('a loaded legacy Catalog keeps its own xAI fallback membership instead of importing Pi members', () => {
+  it('a loaded legacy Catalog cannot replace the local Pi membership baseline', () => {
     const expected = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!expected) throw new Error('bundled catalog missing xai');
     const generatedCatalog = structuredClone(BUNDLED_CATALOG);
@@ -107,12 +107,10 @@ describe('registry presence 实体化', () => {
     setActiveCatalog(generatedCatalog);
     expect(models('xai', 'claude-code')).toEqual(expected.models['claude-code']);
     expect(models('xai', 'codex')).toEqual(expected.models.codex);
-    expect(models('xai', 'pi').map((model) => model.id)).toEqual(
-      expected.models['claude-code']?.map((model) => model.id.slice('xai/'.length)),
-    );
+    expect(models('xai', 'pi')).toEqual(expected.models.pi);
   });
 
-  it('远端宣告 GPT-6(status+能力自洽)→ 免发现进入 codex root,并自动派生 claude/pi bridge', () => {
+  it('远端 Registry 宣告 GPT-6 只进入 Codex/Claude，不会自动加入 Pi', () => {
     setActiveCatalog(baseCatalog([gpt6Entry()]));
     const codex = models('openai', 'codex').find((m) => m.id === 'gpt-6');
     expect(codex).toMatchObject({
@@ -125,7 +123,7 @@ describe('registry presence 实体化', () => {
       status: 'active',
     });
     expect(models('openai', 'claude-code').map((m) => m.id)).toContain('chatgpt/gpt-6');
-    expect(models('openai', 'pi').map((m) => m.id)).toContain('chatgpt/gpt-6');
+    expect(models('openai', 'pi').map((m) => m.id)).not.toContain('chatgpt/gpt-6');
   });
 
   it('公共 Registry 的 newSessionDefault 不进入 CatalogModel；默认只信区域门控后的 /models', () => {
@@ -136,10 +134,9 @@ describe('registry presence 实体化', () => {
     const pi = models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6');
     expect(codex).toBeDefined();
     expect(claude).toBeDefined();
-    expect(pi).toBeDefined();
+    expect(pi).toBeUndefined();
     expect('newSessionDefault' in codex!).toBe(false);
     expect('newSessionDefault' in claude!).toBe(false);
-    expect('newSessionDefault' in pi!).toBe(false);
   });
 
   it('bridge 在投影后应用目标端 perAgent,随后再执行 effort 硬约束', () => {
@@ -170,23 +167,16 @@ describe('registry presence 实体化', () => {
       efforts: ['low', 'medium'],
       defaultEffort: 'medium',
     });
-    // Pi 没有 wire perAgent，但仍是独立消费端：使用 entry 基线，再执行 bridge 硬约束。
-    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')).toMatchObject({
-      contextWindow: 1_000_000,
-      efforts: ['low', 'medium', 'high', 'xhigh'],
-      defaultEffort: 'xhigh',
-    });
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')).toBeUndefined();
 
     setLocalCatalogOverrides(
       overridesOf({ patches: { 'openai:gpt-6': { base: { contextWindow: 123_000 } } } }),
     );
     expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')?.contextWindow).toBe(123_000);
-    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')?.contextWindow).toBe(
-      123_000,
-    );
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')).toBeUndefined();
   });
 
-  it('同一 OpenAI modelId 的长上下文 entry 只生成 Claude/Pi 独立选择', () => {
+  it('同一 OpenAI modelId 的长上下文 Registry entry 只生成 Claude 独立选择', () => {
     setActiveCatalog(
       baseCatalog([
         gpt6Entry({ contextWindow: 272_000 }),
@@ -202,32 +192,29 @@ describe('registry presence 实体化', () => {
     expect(models('openai', 'codex').filter((m) => m.id.startsWith('gpt-6'))).toMatchObject([
       { id: 'gpt-6', contextWindow: 272_000 },
     ]);
-    for (const agent of ['claude-code', 'pi'] as const) {
-      expect(
-        models('openai', agent)
-          .filter((m) => m.id.startsWith('chatgpt/gpt-6'))
-          .map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow })),
-      ).toEqual([
-        { id: 'chatgpt/gpt-6', name: 'GPT-6', contextWindow: 272_000 },
-        {
-          id: 'chatgpt/gpt-6[1m]',
-          name: 'GPT-6 (1M · 高消耗)',
-          contextWindow: 1_000_000,
-        },
-      ]);
-    }
+    expect(
+      models('openai', 'claude-code')
+        .filter((m) => m.id.startsWith('chatgpt/gpt-6'))
+        .map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow })),
+    ).toEqual([
+      { id: 'chatgpt/gpt-6', name: 'GPT-6', contextWindow: 272_000 },
+      {
+        id: 'chatgpt/gpt-6[1m]',
+        name: 'GPT-6 (1M · 高消耗)',
+        contextWindow: 1_000_000,
+      },
+    ]);
+    expect(models('openai', 'pi').some((m) => m.id.startsWith('chatgpt/gpt-6'))).toBe(false);
     setLocalCatalogOverrides(
       overridesOf({
         patches: { 'openai:gpt-6[1m]': { base: { contextWindow: 900_000 } } },
       }),
     );
-    expect(
-      models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6[1m]')?.contextWindow,
-    ).toBe(900_000);
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6[1m]')).toBeUndefined();
     expect(getModelPlaneWarnings()).toEqual([]);
   });
 
-  it('没有 Registry entry 时 Pi 保留 Codex discovery 的既有字段', () => {
+  it('没有 Registry entry 时 Codex discovery 也不会产生 Pi 条目', () => {
     setActiveCatalog(baseCatalog());
     setDiscoveredCodexModels([
       {
@@ -239,11 +226,7 @@ describe('registry presence 实体化', () => {
       },
     ]);
 
-    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-discovered')).toMatchObject({
-      contextWindow: 272_000,
-      efforts: ['high'],
-      defaultEffort: 'high',
-    });
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-discovered')).toBeUndefined();
   });
 
   it('status 缺失 = metadata-only,不长实体;retired = tombstone,不长实体', () => {
@@ -332,7 +315,7 @@ describe('registry presence 实体化', () => {
     });
   });
 
-  it('membership 门控 bridge:route.agents 不含 claude-code → claude bridge 无、pi 恒定有', () => {
+  it('membership 门控 bridge 不会影响独立 Pi 名单', () => {
     setActiveCatalog(
       baseCatalog([
         gpt6Entry({ routes: [{ providerId: 'openai', modelId: 'gpt-6', agents: ['codex'] }] }),
@@ -340,7 +323,7 @@ describe('registry presence 实体化', () => {
     );
     expect(models('openai', 'codex').map((m) => m.id)).toContain('gpt-6');
     expect(models('openai', 'claude-code').map((m) => m.id)).not.toContain('chatgpt/gpt-6');
-    expect(models('openai', 'pi').map((m) => m.id)).toContain('chatgpt/gpt-6');
+    expect(models('openai', 'pi').map((m) => m.id)).not.toContain('chatgpt/gpt-6');
   });
 
   it('status 缺失只做 metadata overlay,不能用 membership 缩减 discovery 投影', () => {
@@ -378,7 +361,7 @@ describe('registry presence 实体化', () => {
     ]);
   });
 
-  it('anthropic membership 门控 codex bridge(fast=false 硬约束);pi 恒定镜像 root', () => {
+  it('anthropic membership 只门控 Codex bridge，Pi 保持本地原生名单', () => {
     setActiveCatalog(
       baseCatalog([
         {
@@ -395,7 +378,9 @@ describe('registry presence 实体化', () => {
     );
     expect(models('anthropic', 'claude-code').map((m) => m.id)).toEqual(['claude-next']);
     expect(models('anthropic', 'codex')).toEqual([]);
-    expect(models('anthropic', 'pi').map((m) => m.id)).toEqual(['claude-next']);
+    expect(models('anthropic', 'pi')).toEqual(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')?.models.pi,
+    );
   });
 
   it('anthropic codex bridge 应用 perAgent.codex 后仍强制 fast=false', () => {
@@ -500,10 +485,12 @@ describe('retired tombstone 与 discovery 回补', () => {
     defaultEffort: 'high',
   };
 
-  it('无 discovery 实体时仍可按 root/bridge/Pi 投影图查询 Registry tombstone', () => {
+  it('Registry tombstone 只作用于自己的 root/bridge，不扩散到 Pi', () => {
     const registry = retiredRegistry().modelRegistry;
     expect(isRegistryTombstoneForConsumer(registry, 'openai', 'gpt-dead', 'codex')).toBe(true);
-    expect(isRegistryTombstoneForConsumer(registry, 'openai', 'chatgpt/gpt-dead', 'pi')).toBe(true);
+    expect(isRegistryTombstoneForConsumer(registry, 'openai', 'chatgpt/gpt-dead', 'pi')).toBe(
+      false,
+    );
     // route.agents 未授权 Claude bridge，不能把 root tombstone 扩成不存在的消费端。
     expect(
       isRegistryTombstoneForConsumer(registry, 'openai', 'chatgpt/gpt-dead', 'claude-code'),
@@ -518,16 +505,11 @@ describe('retired tombstone 与 discovery 回补', () => {
         routes: [{ providerId: 'openai', modelId: 'gpt-6', agents: ['claude-code'] }],
       }),
     ]).modelRegistry;
+    expect(isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6[1m]', 'pi')).toBe(
+      false,
+    );
     expect(
-      isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6[1m]', 'pi'),
-    ).toBe(true);
-    expect(
-      isRegistryTombstoneForConsumer(
-        withAlias,
-        'openai',
-        'chatgpt/gpt-6[1m]',
-        'claude-code',
-      ),
+      isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6[1m]', 'claude-code'),
     ).toBe(true);
     expect(isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6', 'pi')).toBe(false);
     expect(
@@ -540,17 +522,12 @@ describe('retired tombstone 与 discovery 回补', () => {
     setDiscoveredCodexModels([discoveredDead]);
     const entry = models('openai', 'codex').find((m) => m.id === 'gpt-dead');
     expect(entry?.status).toBe('retired');
-    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')).toMatchObject({
-      contextWindow: 300_000,
-      status: 'retired',
-    });
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')).toBeUndefined();
 
     setLocalCatalogOverrides(
       overridesOf({ patches: { 'openai:gpt-dead': { base: { contextWindow: 123_000 } } } }),
     );
-    expect(
-      models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')?.contextWindow,
-    ).toBe(123_000);
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')).toBeUndefined();
 
     const views = buildRegistry(getActiveCatalog(), { openai: true });
     const withoutSelection = deriveModelList({ providers: views, agent: 'codex' });
@@ -592,11 +569,7 @@ describe('retired tombstone 与 discovery 回补', () => {
       name: 'Dead Model Revived',
       status: 'active',
     });
-    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')).toMatchObject({
-      name: 'Dead Model Revived',
-      status: 'active',
-      contextWindow: 100_000,
-    });
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')).toBeUndefined();
   });
 });
 
@@ -674,9 +647,7 @@ describe('本地 override(local 永远最高)', () => {
     });
     const claude = models('xai', 'claude-code').find((m) => m.id === 'xai/grok-test');
     expect(claude).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'] });
-    expect(models('xai', 'pi').find((m) => m.id === 'grok-test')).toMatchObject({
-      efforts: ['low', 'medium', 'high', 'xhigh'],
-    });
+    expect(models('xai', 'pi').find((m) => m.id === 'grok-test')).toBeUndefined();
     expect(models('xai', 'pi').some((m) => m.id === 'grok-pi-only-fixture')).toBe(false);
   });
 
@@ -736,7 +707,7 @@ describe('本地 override(local 永远最高)', () => {
     expect(entry?.group).toBeUndefined();
   });
 
-  it('本地 membership 与 registry 同义:可关闭/重开 bridge,Pi 仍由 root 恒定派生', () => {
+  it('本地 membership 可关闭/重开 bridge，但不会改变 Pi', () => {
     setActiveCatalog(
       baseCatalog([
         gpt6Entry({ routes: [{ providerId: 'openai', modelId: 'gpt-6', agents: ['codex'] }] }),
@@ -758,7 +729,7 @@ describe('本地 override(local 永远最高)', () => {
       }),
     );
     expect(models('openai', 'claude-code').map((m) => m.id)).not.toContain('chatgpt/gpt-6');
-    expect(models('openai', 'pi').map((m) => m.id)).toContain('chatgpt/gpt-6');
+    expect(models('openai', 'pi').map((m) => m.id)).not.toContain('chatgpt/gpt-6');
 
     setLocalCatalogOverrides(
       overridesOf({

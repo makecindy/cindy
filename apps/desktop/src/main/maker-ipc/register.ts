@@ -897,6 +897,7 @@ import {
 } from '../maker-host/model-disable-store.js';
 import { readProviderOrder, setProviderOrder } from '../maker-host/provider-order-store.js';
 import {
+  describeModelRouteRejection,
   resolveCurrentSetModelProviderId,
   resolveExclusiveSetModelReroute,
   resolveSetModelGuardProviderId,
@@ -8003,17 +8004,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (verdict.kind === 'reject') {
       throwIpcError(
         'INVALID_PARAMS',
-        verdict.reason === 'explicit-source-disabled'
-          ? `provider "${providerId}" is disabled for model "${model}" in settings`
-          : verdict.reason === 'capability-model'
-            ? `model "${model}" is not an agent chat model`
-            : verdict.reason === 'model-retired'
-              ? `model "${model}" has been retired from the catalog`
-              : verdict.reason === 'payment-required'
-                ? `model "${model}" requires paid access`
-                : verdict.reason === 'exclusive-source-unavailable'
-                  ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
-                  : `model "${model}" is disabled in settings`,
+        describeModelRouteRejection(verdict.reason, model, providerId),
       );
     }
     return verdict.kind === 'reroute' ? verdict.providerId : undefined;

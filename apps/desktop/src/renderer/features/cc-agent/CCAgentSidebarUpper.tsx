@@ -36,7 +36,6 @@ import {
   Folder,
   Loader2,
   Plug,
-  RefreshCw,
   SquarePen,
   Timer,
   Trash2,
@@ -264,7 +263,6 @@ import {
   useSwitcherDevices,
 } from '@/features/device-link/useMachineSwitcher';
 import {
-  retryDeviceLinkDeviceList,
   useDeviceLinkDeviceListSettled,
   useDeviceLinkDeviceListRequestState,
 } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -312,23 +310,22 @@ function RemoteSidebarLoadNotice({
   status,
   deviceLabel,
   partial,
-  onRetry,
 }: {
   kind: 'tasks' | 'devices';
   status: 'loading' | 'error';
   deviceLabel?: string;
   partial: boolean;
-  onRetry?: () => void;
 }) {
   const { t } = useTranslation();
   const isError = status === 'error';
   // tasks 的读取失败有完整自动恢复链路(10s 起对账退避重试 + 熔断探测恢复后自动重新
   // bootstrap),失败态只是「自动重试进行中」的状态说明,不是要求用户行动的告警——
   // 用中性样式 + role=status,且**不提供手动按钮**(2026-08 弱网实测反馈:重连必须
-  // 全自动,红色 alert + 按钮读起来像必须人工干预)。devices 目录失败没有等价的
-  // 自动重试,保持告警 + 手动重试。
+  // 全自动,红色 alert + 按钮读起来像必须人工干预)。设备目录失败不在侧栏展示:
+  // 本地与已缓存内容仍然可用,无需用连接状态打断用户。
   const autoRetrying = isError && kind === 'tasks';
   const alarming = isError && !autoRetrying;
+  const quietDeviceLoading = kind === 'devices' && status === 'loading';
   const messageKey =
     kind === 'tasks'
       ? status === 'loading'
@@ -336,22 +333,22 @@ function RemoteSidebarLoadNotice({
         : partial
           ? 'ccAgent.sidebar.machineSwitcher.tasksPartiallyFailed'
           : 'ccAgent.sidebar.machineSwitcher.tasksLoadFailed'
-      : status === 'loading'
-        ? 'ccAgent.sidebar.machineSwitcher.devicesLoading'
-        : partial
-          ? 'ccAgent.sidebar.machineSwitcher.devicesPartiallyFailed'
-          : 'ccAgent.sidebar.machineSwitcher.devicesLoadFailed';
+      : 'ccAgent.sidebar.machineSwitcher.devicesLoading';
   return (
     <div
       role={alarming ? 'alert' : 'status'}
       className={cn(
-        'border',
-        alarming
-          ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
-          : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
-        partial
-          ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
-          : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center',
+        quietDeviceLoading
+          ? 'mx-3 flex flex-col items-center gap-3 px-4 py-8 text-center text-[var(--text-secondary)]'
+          : 'border',
+        !quietDeviceLoading &&
+          (alarming
+            ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
+            : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]'),
+        !quietDeviceLoading &&
+          (partial
+            ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
+            : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center'),
       )}
     >
       {isError ? (
@@ -366,21 +363,6 @@ function RemoteSidebarLoadNotice({
           {t(messageKey, { device: deviceLabel })}
         </p>
       </div>
-      {alarming && onRetry && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full font-medium',
-            'text-[var(--error-fg-strong)] transition-colors hover:bg-[var(--surface-hover)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-            partial ? 'h-6 px-2 text-11' : 'h-7 px-3 text-xs',
-          )}
-        >
-          <RefreshCw size={12} />
-          {t('ccAgent.sidebar.machineSwitcher.retryDevices')}
-        </button>
-      )}
     </div>
   );
 }
@@ -3453,22 +3435,7 @@ function ExpandedView({
           ) : null}
           {/* 搜索时原列表只隐藏、不卸载:置顶段折叠等本地 state 才能保住。 */}
           <div hidden={searchActive} className="flex flex-col gap-2">
-            {remoteDeviceDirectoryStatus === 'error' && !hasVisibleSidebarContent ? (
-              <>
-                <MainListScopeHeader
-                  filter={filter}
-                  allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
-                  hasRemoteDevices={deviceGroupingAvailable}
-                />
-                <RemoteSidebarLoadNotice
-                  kind="devices"
-                  status="error"
-                  partial={false}
-                  onRetry={retryDeviceLinkDeviceList}
-                />
-              </>
-            ) : remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
+            {remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
               <>
                 <MainListScopeHeader
                   filter={filter}
@@ -3526,14 +3493,6 @@ function ExpandedView({
               </>
             ) : (
               <>
-                {remoteDeviceDirectoryStatus === 'error' && (
-                  <RemoteSidebarLoadNotice
-                    kind="devices"
-                    status="error"
-                    partial
-                    onRetry={retryDeviceLinkDeviceList}
-                  />
-                )}
                 {remoteSessionBootstrapFailures.length > 0 && (
                   <RemoteSidebarLoadNotice
                     kind="tasks"
@@ -3545,8 +3504,8 @@ function ExpandedView({
                 {/*
                  * 远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示。
                  * 这里可能已经有本地或旧的远程快照；把后台重拉提示插进普通文档流会让
-                 * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。错误提示仍保留
-                 * 在列表前，便于用户知道已有内容不是本轮权威结果。
+                 * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。设备目录失败
+                 * 同样不展示，继续使用本地与已缓存内容即可。
                  */}
                 <PinnedSection
                   entries={visiblePinnedEntries}
