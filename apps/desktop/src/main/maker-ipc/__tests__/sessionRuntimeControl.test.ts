@@ -93,6 +93,32 @@ describe('session runtime control state', () => {
     });
   });
 
+  it('deferred pending profile keeps the clicked high + Fast until settle', () => {
+    const sessionId = 'runtime-pending-keeps-axes';
+    const selected: SessionRuntimeProfile = {
+      agentKind: 'claude-code',
+      model: 'claude-fable-5',
+      providerId: 'cindy',
+      effort: 'high',
+      fastMode: true,
+    };
+    const generation = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: selected,
+      deferred: true,
+    });
+    expect(getSessionRuntimeControlSnapshot(sessionId).pending).toMatchObject({
+      generation,
+      profile: selected,
+    });
+    expect(settlePendingSessionRuntimeMutation(sessionId, generation)).toBe(true);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      pending: null,
+      effectiveOverride: selected,
+    });
+  });
+
   it('a user selection invalidates pending and fallback state', () => {
     const sessionId = 'runtime-user-wins';
     acceptSessionRuntimeMutation({

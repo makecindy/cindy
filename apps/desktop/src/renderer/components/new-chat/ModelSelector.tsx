@@ -606,6 +606,7 @@ interface ModelSelectorProps {
     providerId: string | null,
     reconciledModelId?: string,
     reconciledEffort?: Effort,
+    reconciledFast?: boolean,
   ) => void | boolean | Promise<void | boolean>;
   onNavigateToProviders?: () => void;
   /**
@@ -805,6 +806,7 @@ interface ModelSelectorContentProps {
     providerId: string | null,
     reconciledModelId?: string,
     reconciledEffort?: Effort,
+    reconciledFast?: boolean,
   ) => void | boolean | Promise<void | boolean>;
   onNavigateToProviders?: () => void;
   /**
@@ -1804,6 +1806,7 @@ function ModelSelectorContentView({
     id: string,
     dismiss = true,
     effortOverride?: Effort,
+    fastOverride?: boolean,
   ): void | boolean | Promise<void | boolean> => {
     if (interactionDisabled) return false;
     const dismissAfterSelection = () => {
@@ -1848,11 +1851,14 @@ function ModelSelectorContentView({
         if (sections && providerId) {
           const needsProviderRepair = !!currentProviderId && currentProviderId !== providerId;
           if (!opensConfiguration || needsProviderRepair) {
-            reselectApplied = onProviderChange?.(
-              providerId,
-              id,
-              opensConfiguration ? undefined : reconciledEffort,
-            );
+            reselectApplied =
+              !opensConfiguration && fastOverride !== undefined
+                ? onProviderChange?.(providerId, id, reconciledEffort, fastOverride)
+                : onProviderChange?.(
+                    providerId,
+                    id,
+                    opensConfiguration ? undefined : reconciledEffort,
+                  );
           }
         } else if (!opensConfiguration) {
           onModelChange(id);
@@ -1871,7 +1877,10 @@ function ModelSelectorContentView({
     }
     if (sections && providerId) {
       // 原子切 provider+model+effort; effort 由目标来源行的 catalog/记忆统一解析。
-      const applied = onProviderChange?.(providerId, id, reconciledEffort);
+      const applied =
+        fastOverride !== undefined
+          ? onProviderChange?.(providerId, id, reconciledEffort, fastOverride)
+          : onProviderChange?.(providerId, id, reconciledEffort);
       dismissAfterSelection();
       return applied;
     }
@@ -1967,7 +1976,7 @@ function ModelSelectorContentView({
       return;
     }
     const applied = await Promise.resolve(
-      handleRowSelect(args.providerId, args.wireModelId, true, args.effort),
+      handleRowSelect(args.providerId, args.wireModelId, true, args.effort, args.config.fast),
     ).catch(() => false);
     if (applied === false) return;
     onSessionFavoriteAnchorChange?.(anchor);
@@ -3299,8 +3308,8 @@ export function ModelSelector({
 
   // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
   // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
-  // 保命锁。收尾**成功也不关**(Chris 2026-08-20):切完引擎用户还要改思维 / 再点胶囊,
-  // 以前 applied=true 就收窗,表象就是「所有模型改不了 Harness」。取消 / 失败同样留在原地。
+  // 保命锁。成功后关掉选单(确认已经变成「下一条才生效」的意图,应露出 composer 提示);
+  // 取消 / 失败留在原地,方便重选。
   //
   // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
   // 不再只是确认框那一下。保命锁刻意**覆盖整个 await 期**:事务在途时面板被 Popover 的
@@ -3325,10 +3334,10 @@ export function ModelSelector({
         setKeepOpenForAgentConfirmation(true);
         try {
           const applied = await onCrossEngineSelect(args);
-          // 成功也不收选单(Chris 2026-08-20):切完引擎用户还要改思维 / 再点胶囊。
-          // 以前 `applied === true` 就把窗口关了,表象就是「所有模型改不了 Harness」——
-          // 一点胶囊选单消失,变量还没调完。取消 / 失败同样留在原地。用户自己点外面才关。
-          setOpenWithoutAutoRefresh(true);
+          // 成功后收起选单:确认切换已经落成「下一条才生效」的意图,胶囊用「下条：」标明;
+          // 窗口留着会让轨跟着意图翻到目标 Harness,再点任意模型又弹一次确认。
+          // 取消 / 失败留在原地,方便重选。
+          setOpenWithoutAutoRefresh(applied === false);
           return applied !== false;
         } finally {
           setKeepOpenForAgentConfirmation(false);
@@ -3592,7 +3601,9 @@ export function ModelSelector({
     </span>
   ) : null;
   const agentIdentityPrefix =
-    agentIdentityLabel && !isCompactToolbar && !engineMarkOption ? (
+    agentIdentityLabel &&
+    !isCompactToolbar &&
+    (!engineMarkOption || agentIdentity?.state === 'pending') ? (
       <>
         <span
           className={cn(

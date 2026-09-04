@@ -30,7 +30,6 @@ import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
 import {
-  agentKindOfEngine,
   anchorKey,
   engineOfAgentKind,
   entryMatchesModelId,
@@ -162,23 +161,24 @@ export interface UnifiedModelPanelProps {
    *   - rail 顶部多一格「同引擎」(图标 = 当前引擎),**默认选中**;该视图列
    *     引擎匹配的收藏 + 所有候选含当前引擎的模型(默认/选过的在前,仅兼容的在后);
    *   - 该视图里的模型行**显示和点选都钉在当前轨引擎**上(π 轨里点就是 Pi);
-   *     排序仍按「默认/选过的在前」,不把主场改写成当前引擎。
+   *     排序仍按「默认/选过的在前」,不把主场改写成当前引擎。浮层不提供 Harness 切换。
    *   - 显式切到「全部 / 供应商」视图时,列表顶部出现一行克制的有损警示;
    *   - 「全部」里选中一行若生效引擎 ≠ 当前引擎,走 `onCrossEngineSelect`(调用方执行
    *     performAgentSwitch 那条既有事务链路),而不是普通的 onSelect。
    *
    * `onCrossEngineSelect` 与 `currentAgent` 刻意做成**同一个对象里的必填字段**:会话内
-   * 一定存在跨引擎行(浮层引擎胶囊随时能把一行切到别的引擎),没有处理器就等于放一个
+   * 「全部 / 供应商」和浮层引擎胶囊都能把一行切到别的引擎,没有处理器就等于放一个
    * 点了什么都不会发生的行 —— 类型层面堵住这种假按钮。
    */
   sessionEngineFilter?: {
     currentAgent: AgentKind;
     /**
-     * 任务**正在跑**的引擎(不跟随切换意图)。跨引擎确认与切换路由拿它和行上的生效引擎比:
-     * 意图期 currentAgent 会翻到目标,用 currentAgent 判断会把「点 Pi 收藏」当成同引擎、
-     * 跳过确认框(Chris 2026-08-20)。缺省 = 回落 currentAgent(草稿 / 无 runtime 的入口)。
+     * 任务**正在跑**的引擎(不跟随切换意图)。跨引擎确认与切换路由拿它和行上的生效引擎比。
+     * 缺省 = 回落 currentAgent(草稿 / 无 runtime 的入口)。
      */
     runtimeAgent?: AgentKind;
+    /** 已登记、下一条消息才落地的切换目标。缺省 = 没有挂着的意图。 */
+    pendingTarget?: AgentKind;
     /**
      * 返回 `false` = 调用方**没有**执行这次切换(典型:跨引擎确认弹窗被取消)。
      * 面板本身不消费返回值,但包在外面的 ModelSelector 靠它决定「收起面板」还是
@@ -477,21 +477,17 @@ export function UnifiedModelPanel({
           modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
         agentFastModeCapable,
         // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上。
-        // 同引擎轨再加一道:没写过引擎 override 的**未选中**行钉在轨上显示/点选。
+        // 同引擎轨再加一道:未选中行显示/点选都钉在轨上 —— leftover override 不能把
+        // π 轨里的 Claude 默认模型改道跨引擎(浮层在该轨也不提供 Harness 切换)。
         // 选中行必须先钉 live 引擎(草稿/另一会话留下的全局 override 不能改写正在跑的那一行)。
-        // 未选中行的浮层显式换引擎:override 赢,否则胶囊弹回、点行仍走轨引擎。
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(() => {
           if (isSelectedModelRow && liveEngineAgent) {
             return { forceEngine: engineOfAgentKind(liveEngineAgent) };
           }
-          const override = getModelEngineOverride(entry.providerId, entry.modelId);
-          const overrideUsable =
-            override !== undefined && entry.candidates.includes(agentKindOfEngine(override));
           if (
             railForConfig.kind === 'engine' &&
-            entry.candidates.includes(railForConfig.agent) &&
-            !overrideUsable
+            entry.candidates.includes(railForConfig.agent)
           ) {
             return { forceEngine: engineOfAgentKind(railForConfig.agent) };
           }
@@ -1391,9 +1387,11 @@ export function UnifiedModelPanel({
                 effortLabelOf={effortLabelOf}
                 justFavorited={justFavorited === anchorKey(target.anchor)}
                 disabled={interactionDisabled}
-                onEngineChange={(engine) =>
-                  applyEngine(target.anchor, target.entry, config, engine)
-                }
+                engineLocked={effectiveRail.kind === 'engine' && !target.favorite}
+                onEngineChange={(engine) => {
+                  if (effectiveRail.kind === 'engine' && !target.favorite) return;
+                  applyEngine(target.anchor, target.entry, config, engine);
+                }}
                 onEffortChange={(effort) =>
                   applyEffort(target.anchor, target.entry, config, effort)
                 }

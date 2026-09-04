@@ -85,9 +85,10 @@ import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js
 import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 import {
-  assessModelSwitchContext,
-  MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
-} from '../../shared/modelSwitchAssessment.js';
+  buildDeferredRuntimeSelectionProfile,
+  nextDeferredModelWindowRetry,
+  planUserRuntimeModelSwitch,
+} from '../../shared/runtimeModelSwitchGate.js';
 import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
 import {
@@ -11576,7 +11577,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     model: string,
     providerId: string | null | undefined,
-    selection: { effort: SessionRuntimeProfile['effort']; fastMode: boolean },
+    selection: {
+      effort: SessionRuntimeProfile['effort'];
+      fastMode: boolean;
+      confirmedContextWindow?: number;
+    },
     options: InternalRuntimeSelectionOptions,
   ) => Promise<{
     deferred: boolean;
@@ -11602,24 +11607,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     settlingSessionRuntimeControls.add(sessionId);
     void (async () => {
       try {
-        const result = await applySessionRuntimeSelection(
+        const settleSelection = {
+          effort: pending.profile.effort,
+          fastMode: pending.profile.fastMode,
+        };
+        const settleOptions = {
+          source: pending.source,
+          expectedGeneration: pending.generation,
+          applyingPendingGeneration: pending.generation,
+          effortExplicit: pending.profile.effort !== null,
+          fastExplicit: true,
+          routeExplicit: isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation),
+        };
+        let result = await applySessionRuntimeSelection(
           sessionId,
           pending.profile.model,
           pending.profile.providerId,
-          {
-            effort: pending.profile.effort,
-            fastMode: pending.profile.fastMode,
-          },
-          {
-            source: pending.source,
-            expectedGeneration: pending.generation,
-            applyingPendingGeneration: pending.generation,
-            effortExplicit: pending.profile.effort !== null,
-            fastExplicit: true,
-            routeExplicit: isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation),
-          },
+          settleSelection,
+          settleOptions,
         );
-        if (runtimeSelectionRequiresModelWindowConfirmation(result)) {
+        // 回合中登记的缩窗选择:用户当时已经点过目标模型。空闲结算时若仍要确认换窗,
+        // 带着核实窗口再 apply 一次,避免把选择取消掉。
+        const windowRetry = nextDeferredModelWindowRetry(
+          runtimeSelectionRequiresModelWindowConfirmation(result),
+          result.contextWindowConfirmationRequired,
+        );
+        if (windowRetry.action === 'retry') {
+          result = await applySessionRuntimeSelection(
+            sessionId,
+            pending.profile.model,
+            pending.profile.providerId,
+            { ...settleSelection, confirmedContextWindow: windowRetry.confirmedContextWindow },
+            settleOptions,
+          );
+          if (nextDeferredModelWindowRetry(
+            runtimeSelectionRequiresModelWindowConfirmation(result),
+            result.contextWindowConfirmationRequired,
+          ).action !== 'done') {
+            throw new Error('deferred model-window selection requires unsupported confirmation');
+          }
+        } else if (windowRetry.action === 'cancel') {
           throw new Error('deferred model-window selection requires unsupported confirmation');
         }
         log.info('pending session runtime settled', {
@@ -15930,10 +15957,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const pendingAxisPatch = routeExplicit
         ? axisPatch
         : await resolvePendingRuntimeAxisPatch(sessionId, axisPatch);
-      if (runtimeStatus.remoteHostId && isSessionInTurn(sessionId)) {
-        throwIpcError('PRECONDITION_FAILED', 'busy remote task cannot change runtime selection');
-      }
-      if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
+      const deferLockedSelection = async () => {
         const meta = await maker.getSessionMeta(sessionId);
         if (!meta) return { deferred: false, superseded: true };
         if (supersededByOwnerBoundary()) {
@@ -15945,16 +15969,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
               previousProfile: internalOptions.previousProfile,
               deferred: true,
-              profile: {
+              profile: buildDeferredRuntimeSelectionProfile({
                 agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
                 model,
                 providerId:
                   effectiveProviderId === undefined
                     ? getSessionProvider(sessionId)
                     : (normalizeSessionProviderId(effectiveProviderId) ?? null),
-                effort: atomicSelection?.effort ?? null,
-                fastMode: atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
-              },
+                atomicSelection,
+                currentFastMode: getSessionFastMode(sessionId),
+              }),
             })
           : deferSessionRuntimeAxisMutation({
               sessionId,
@@ -15980,6 +16004,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           generation,
           effectiveProviderId: normalizeSessionProviderId(effectiveProviderId) ?? null,
         };
+      };
+      // 远端回合中不能 live 改 turn:登记选择,回合结束后再生效,不再 PRECONDITION 丢掉。
+      if (runtimeStatus.remoteHostId && isSessionInTurn(sessionId)) {
+        return deferLockedSelection();
+      }
+      if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
+        return deferLockedSelection();
       }
       const previousRuntime = {
         hadProviderRoute: hasSessionProvider(sessionId),
@@ -16202,7 +16233,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         (currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId);
       if (runtimeAgentKind === 'pi' && runtimeRouteChanged) {
         if (isSessionInTurn(sessionId)) {
-          throwIpcError('PRECONDITION_FAILED', 'busy Pi task cannot change runtime selection');
+          return deferLockedSelection();
         }
         if (!liveSessionBeforeRouteChange && runtimeStatus.remoteHostId) {
           throwIpcError(
@@ -16284,15 +16315,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {
           targetContextWindow = confirmedContextWindow ?? targetContextWindow;
         }
-        if (
-          (!targetContextWindow || targetContextWindow <= 0) &&
-          (runtimeAgentKind !== 'pi' || !!runtimeStatus.remoteHostId)
-        ) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'target model context window is unknown; runtime selection was not changed',
-          );
-        }
         const persistedContextTokens =
           typeof runtimeStatus.contextTokens === 'number' &&
           Number.isFinite(runtimeStatus.contextTokens) &&
@@ -16311,28 +16333,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const contextTokens = liveUsageIsAuthoritative
           ? verifiedLiveContextTokens
           : (persistedContextTokens ?? 0);
-        if (!contextTokensKnown || !verifiedCurrentWindow) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'model window switch context is unknown; runtime selection was not changed',
-          );
-        }
-        const remoteTargetAssessment = assessModelSwitchContext({
-          contextTokens,
-          targetContextWindow: verifiedTargetWindow ?? undefined,
-          autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+        const modelSwitchPlan = planUserRuntimeModelSwitch({
+          agentKind: runtimeAgentKind ?? 'claude-code',
+          model,
+          providerId: targetRouteProviderId ?? null,
+          currentFastMode: getSessionFastMode(sessionId),
+          gate: {
+            inTurn: isSessionInTurn(sessionId),
+            isRemote: !!runtimeStatus.remoteHostId || isDeviceLinkInvoke(),
+            agentKind: runtimeAgentKind,
+            runtimeRouteChanged,
+            verifiedTargetWindow,
+            verifiedCurrentWindow,
+            contextTokensKnown,
+            contextTokens,
+          },
+          ...(atomicSelection ? { selection: atomicSelection } : {}),
         });
-        const remoteRouteCannotRebuild = isDeviceLinkInvoke() || !!runtimeStatus.remoteHostId;
-        const targetRequiresRebuild =
-          !targetDoesNotShrink &&
-          (remoteTargetAssessment.level === 'danger' || remoteTargetAssessment.level === 'overflow');
-        if (remoteRouteCannotRebuild && targetRequiresRebuild) {
+        if (modelSwitchPlan.outcome === 'defer') {
+          return deferLockedSelection();
+        }
+        if (modelSwitchPlan.outcome === 'reject') {
           throwIpcError(
             'PRECONDITION_FAILED',
             'remote model-window rebuild is unsupported; runtime selection was not changed',
           );
         }
         if (
+          !modelSwitchPlan.skipRebuild &&
           runtimeAgentKind !== 'pi' &&
           typeof targetContextWindow === 'number' &&
           targetContextWindow > 0 &&
@@ -16403,10 +16431,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             };
           }
           if (preparation === 'busy') {
-            throwIpcError(
-              'PRECONDITION_FAILED',
-              'wait for the current turn to finish before switching to a smaller context window',
-            );
+            return deferLockedSelection();
           }
           if (preparation === 'remote-unsupported') {
             throwIpcError(
