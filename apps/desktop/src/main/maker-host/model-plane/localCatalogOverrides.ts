@@ -417,54 +417,6 @@ export function applyLocalOverridesToRoot(
 }
 
 /**
- * 对单个已存在 root 模型重放本地最终层。完整 addition 整条替换，patch 随后逐字段覆盖；
- * Pi 在切换到 Registry entry baseline 后用它恢复与最终 root 相同的 local > remote 优先级。
- */
-export function applyLocalOverridesToRootModel(
-  providerId: string,
-  agent: RootAgentKind,
-  model: CatalogModel,
-  overrides: ModelCatalogOverrides,
-  warnings: ModelPlaneWarning[] = [],
-): CatalogModel {
-  const key = `${providerId}:${model.id}`;
-  let out = model;
-  const addition = overrides.additions[key];
-  if (addition && entryRootAgents(addition, providerId).includes(agent)) {
-    out = additionModelFor(model.id, addition, agent) ?? out;
-  }
-  const patch = overrides.patches[key];
-  if (!patch || !entryRootAgents(patch, providerId).includes(agent)) return out;
-  const patched = overlayFields(out, effectiveFields(patch, agent));
-  if (typeof patched !== 'string') return patched;
-  warnings.push({
-    source: 'local',
-    providerId,
-    agent,
-    modelId: model.id,
-    reason: patched,
-  });
-  return out;
-}
-
-/**
- * 对 Registry retired root 重放与 active-catalog 相同的最终层顺序。
- * 完整 addition 可显式复活；仅有 patch 时无论其 status 写什么都重新压回 tombstone。
- */
-export function applyLocalOverridesToRetiredRootModel(
-  providerId: string,
-  agent: RootAgentKind,
-  model: CatalogModel,
-  overrides: ModelCatalogOverrides,
-  warnings: ModelPlaneWarning[] = [],
-): CatalogModel {
-  const overlaid = applyLocalOverridesToRootModel(providerId, agent, model, overrides, warnings);
-  return hasLocalAddition(overrides, providerId, model.id, agent)
-    ? overlaid
-    : { ...overlaid, status: 'retired' };
-}
-
-/**
  * root 投影到 bridge 后，应用目标消费端的本地 perAgent/base patch。顺序仍是
  * addition → patch；bridge 的 ID/effort/fast 硬约束由 active-catalog 最后收口。
  */

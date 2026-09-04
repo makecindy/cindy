@@ -2662,28 +2662,15 @@
     },
     "subagentModels": {
       "title": "Subagents",
-      "description": "Choose the Subagent model for Claude Code and Codex.",
+      "description": "Set the default Claude Code model and how Codex assigns Subagents.",
       "unspecified": "Use default setting",
-      "hint": "Claude Code changes apply to new sessions. Codex changes apply automatically when it is idle.",
-      "codexV2ModelHint": "Claude Code uses the selected model as its default. All local Codex Subagents are locked to the selected model and reasoning effort.",
-      "codexOauthCompatibilityHint": "Fixed Subagent routing cannot safely share a task with ChatGPT OAuth. When the main Codex task uses ChatGPT OAuth, or a non-OAuth main task selects a ChatGPT OAuth Subagent, Cindy ignores the model, provider, and reasoning effort selected here and uses that task’s default Codex Subagent.",
+      "hint": "Claude Code changes apply to new tasks. Codex smart routing applies after Codex becomes idle.",
       "saveFailed": "Failed to save subagent settings",
-      "guardrails": {
-        "title": "Codex subagent guardrails",
-        "enableHint": "Allow Codex to spawn one-off subagents while working. Turning this off applies to both legacy multi-agent (V1) and Sol / Terra (V2).",
-        "enableAria": "Allow Codex subagents",
-        "cindyPolicyLabel": "Use Cindy’s custom subagent policy",
-        "cindyPolicyHint": "When enabled, Cindy injects guidance that encourages Codex to use subagents proactively for exploratory tasks. For models that already plan and delegate well, the extra guidance may be counterproductive. Turn it off to use Codex’s native default behavior instead.",
-        "cindyPolicyAria": "Use Cindy’s custom subagent policy",
-        "concurrencyLabel": "Concurrent subagent limit",
-        "concurrencyHint": "Maximum number of subagents running at the same time. Each subagent consumes model quota; Codex warns when concurrency reaches 8 at Ultra reasoning.",
-        "concurrencyFollowDefault": "Follow Codex default (6 for legacy V1, 3 for Sol / Terra)",
-        "concurrencyAria": "Adjust the Codex concurrent subagent limit",
-        "concurrencyCustomAria": "Customize the Codex concurrent subagent limit",
-        "nestedLabel": "Allow subagents to spawn subagents",
-        "nestedHint": "Only applies to legacy multi-agent (V1); Sol / Terra (V2) ignore this setting.",
-        "nestedAria": "Allow subagents to spawn subagents",
-        "localOnlyHint": "These guardrails only apply to Codex running on this machine; Codex over SSH remotes is not affected."
+      "smartRouting": {
+        "label": "Codex smart routing",
+        "nativeHint": "Off uses Codex’s native Sol / Terra assignment without Cindy overrides.",
+        "enabledHint": "On lets Codex choose more connected models per task; cards show the model actually used.",
+        "aria": "Enable Codex smart routing"
       },
       "toast": {
         "saved": "Subagent settings saved",
