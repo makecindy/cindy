@@ -22,6 +22,7 @@ import { requireObject, requireString, throwIpcError } from '../utils/ipcValidat
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import type { BotDelegationService } from './botDelegationService.js';
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
+import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
@@ -111,6 +112,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     action: BotLifecycleActionRequest['action'],
   ): Promise<void> => {
     broadcastBotLifecycleChanged({ botId, action });
+    broadcastBotRemoteResourceChanged(botId);
     await deps.onLifecycleChanged?.(botId);
   };
 
@@ -243,6 +245,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       at,
       eventId: randomUUID(),
     });
+    broadcastBotRemoteResourceChanged(request.botId);
 
     return { warnings: [] };
   };

@@ -492,6 +492,7 @@ import {
 import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
 import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy } from './device-link/invoke-registry';
+import { registerRemoteResourcesIpc } from './device-link/remoteResourcesIpc';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
   registerWorktreeIpc,
@@ -8825,6 +8826,9 @@ app.on('ready', async () => {
   // renderer 就可能发起缓存读,而 gate 默认是"已放行"(review: copilot)。
   const startupPurgeDrain = drainPurgeQueue();
   setMirrorCacheReadGate(startupPurgeDrain);
+  // Stable module-neutral façade. Feature providers were registered with their
+  // owning modules above; future collections/actions do not add tunnel channels.
+  registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
   void startupPurgeDrain
     .then(({ purged, pending }) => {

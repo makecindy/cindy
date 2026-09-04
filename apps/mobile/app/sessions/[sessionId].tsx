@@ -159,6 +159,7 @@ import {
   type SessionExtraDirBrowserState,
 } from '@/session/SessionMenuSheet';
 import type { SessionMenuView } from '@/session/sessionMenu';
+import { isHostManagedSession } from '@/session/hostManagedSession';
 import {
   interactionKind,
   isPendingInteractionCollapsed,
@@ -1900,6 +1901,7 @@ export default function SessionScreen() {
     () => sessions.find((item) => item.id === sessionId) ?? null,
     [sessionId, sessions],
   );
+  const sessionManagedByHost = isHostManagedSession(currentSession);
   const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession);
   const isDeviceAccessRevoked = !!deviceId && revokedDevices.has(deviceId);
   // 熔断 open:被控电脑「进程活着但不回包」的半死态;relay status 恒 online,必须单独入参。
@@ -2880,15 +2882,15 @@ export default function SessionScreen() {
     <>
       <ComposerToolbarLeftGroup testID="session.composerToolbarLeft">
         {renderComposerAttachmentButton()}
-        {renderSessionPermissionButton()}
-        {planModeOn ? (
+        {!sessionManagedByHost ? renderSessionPermissionButton() : null}
+        {!sessionManagedByHost && planModeOn ? (
           <PlanModeChip
             disabled={controlBusy || !canUseRemoteSessionControls}
             onExit={() => togglePlanMode(false)}
             testID="session.planModeChip"
           />
         ) : null}
-        {composerRuntimeSummary ? (
+        {!sessionManagedByHost && composerRuntimeSummary ? (
           <ComposerRuntimePill
             disabled={controlBusy || !canUseRemoteSessionControls}
             fastOn={composerPillFastOn}
@@ -3201,6 +3203,19 @@ export default function SessionScreen() {
     setModelSheetOpen(false);
     setPermissionSheetOpen(false);
   }, [canUseRemoteSessionControls]);
+
+  useEffect(() => {
+    if (!sessionManagedByHost) return;
+    setSettingsOpen(false);
+    setModelSheetOpen(false);
+    setPermissionSheetOpen(false);
+    setSessionTreeOpen(false);
+    setSessionTreePendingOpen(false);
+    if (contextSheetView !== 'main') {
+      setContextSheetView('main');
+      setContextSheetOpen(false);
+    }
+  }, [contextSheetView, sessionManagedByHost]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -9157,6 +9172,7 @@ export default function SessionScreen() {
               ) : undefined}
               syncing={showSyncingIndicator}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
+              messageOnly={sessionManagedByHost}
               onBack={goBackToHome}
               onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}
               sessionListButtonRef={sessionListButtonRef}
@@ -9203,7 +9219,7 @@ export default function SessionScreen() {
             ) : null}
           </View>
         </View>
-        {currentSession ? (
+        {currentSession && !sessionManagedByHost ? (
           <SessionMenuSheet
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
             busy={controlBusy}
@@ -9315,7 +9331,7 @@ export default function SessionScreen() {
                   testID="session.contextSheetPhotos"
                 />
               ) : null}
-              <ContextSheetGroup label={t('session.common.groupMode')}>
+              {!sessionManagedByHost ? <ContextSheetGroup label={t('session.common.groupMode')}>
                 {planModeSupported ? (
                   // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
                   <ContextSheetRow
@@ -9345,7 +9361,7 @@ export default function SessionScreen() {
                     </>
                   ) : 'chevron'}
                 />
-              </ContextSheetGroup>
+              </ContextSheetGroup> : null}
               <ContextSheetGroup label={t('session.common.groupAdd')}>
                 <ContextSheetRow
                   accessibilityHint={composerSendUnavailableReason ?? undefined}
@@ -9420,7 +9436,7 @@ export default function SessionScreen() {
             />
           )}
         </ContextSheet>
-        {currentSession && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
+        {currentSession && !sessionManagedByHost && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
           <ModelPickerSheet
             activeModelId={modelSheetSelection.model}
             existingSessionRoute
@@ -9465,7 +9481,7 @@ export default function SessionScreen() {
         ) : null}
         {/* 权限模式独立浮窗(composer 权限图标钮点开;列表复用 MobilePermissionPickerList,
             选择走 confirmFullAccessChange + maker:set-permission-mode 后关浮窗)。 */}
-        {currentSession && runtimeOptions ? (
+        {currentSession && !sessionManagedByHost && runtimeOptions ? (
           <SheetModal
             backdropTestID="session.permissionSheet.backdrop"
             onBackdropPress={() => setPermissionSheetOpen(false)}
@@ -10056,6 +10072,7 @@ function SessionHeaderBar({
   shareSelectAllNode,
   syncing,
   messageCount,
+  messageOnly,
   onBack,
   onOpenFiles,
   onOpenSessionList,
@@ -10080,6 +10097,8 @@ function SessionHeaderBar({
   shareSelectAllNode?: ReactNode;
   syncing: boolean;
   messageCount: number;
+  /** Host-managed canonical Sessions expose conversation controls only. */
+  messageOnly: boolean;
   onBack(): void;
   /** 宽屏导航形态下提供:左上角改为三条杠,点击拉出任务列表抽屉(替代返回)。 */
   onOpenSessionList?: () => void;
@@ -10116,7 +10135,9 @@ function SessionHeaderBar({
   const actionProjection = overview ? projectMobileSessionActions(overview.actions) : null;
   // queue 入口已退役:排队消息 inline 到消息流(InlineQueueSection),不再有独立面板。
   const headerActions = (actionProjection?.primaryActions ?? [])
-    .filter((action) => action.id !== 'settings' && action.id !== 'queue');
+    .filter((action) => action.id !== 'settings'
+      && action.id !== 'queue'
+      && (!messageOnly || action.id === 'search'));
   const actionHandlers = {
     files: onOpenFiles,
     queue: () => undefined,
@@ -10172,7 +10193,7 @@ function SessionHeaderBar({
 
       <View style={styles.sessionHeaderTextBlock}>
         <View style={styles.sessionHeaderTitleRow}>
-          {currentSession?.pinnedAt ? (
+          {!messageOnly && currentSession?.pinnedAt ? (
             <Pin
               color={colors.textTertiary}
               size={iconSize.sm}
@@ -10204,14 +10225,14 @@ function SessionHeaderBar({
             testID={SESSION_ACTION_TEST_IDS[action.id]}
           />
         ))}
-        <SessionHeaderIconButton
+        {!messageOnly ? <SessionHeaderIconButton
           accessibilityLabel={t('session.screen.openSessionMenu')}
           active={false}
           disabled={!currentSession}
           icon={Ellipsis}
           onPress={currentSession ? onOpenSettings : undefined}
           testID="session.controlsToggle"
-        />
+        /> : null}
       </View>
     </View>
   );

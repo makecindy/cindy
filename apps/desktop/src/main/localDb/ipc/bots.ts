@@ -66,6 +66,7 @@ import {
   portableBotAvatarOrFallback,
 } from '../../../shared/botAvatarValue.js';
 import { MAKER_PUSH } from '../../maker-ipc/channels.js';
+import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 
 const log = createLogger('bots');
 
@@ -666,6 +667,78 @@ async function readRemoteBotProfile(
   };
 }
 
+/**
+ * User-facing Bot facts consumed by the module-neutral remote resource provider.
+ * This is an in-process connection function, not a wire DTO: the provider turns
+ * it into portable display/link/action primitives before anything crosses the
+ * device-link boundary.
+ */
+export interface BotRemoteResourceSource {
+  id: string;
+  name: string;
+  description: string;
+  avatar: string;
+  avatarColor: string;
+  status: string;
+  canonicalSessionId?: string;
+  lastMessagePreview: string | null;
+  lastMessageAt: number | null;
+  lastMessageRole: BotChatRole | null;
+  needsAttention: boolean;
+  hiddenAt: number | null;
+  pinnedAt: number | null;
+  activityAt: number;
+  currentVersion: number;
+  updatedAt: number;
+}
+
+function toBotRemoteResourceSource(
+  profile: Awaited<ReturnType<typeof readProfile>>,
+): BotRemoteResourceSource {
+  const activityAt = Math.max(
+    profile.createdAt,
+    profile.lastMessageAt ?? 0,
+    ...profile.sessions.map((session) => session.updatedAt),
+  );
+  return {
+    id: profile.id,
+    name: profile.name,
+    description: profile.description,
+    avatar: profile.avatar,
+    avatarColor: profile.avatarColor,
+    status: profile.status,
+    canonicalSessionId: profile.canonicalSessionId,
+    lastMessagePreview: profile.lastMessagePreview,
+    lastMessageAt: profile.lastMessageAt,
+    lastMessageRole: profile.lastMessageRole,
+    needsAttention: profile.needsAttention,
+    hiddenAt: profile.hiddenAt,
+    pinnedAt: profile.pinnedAt,
+    activityAt,
+    currentVersion: profile.currentVersion,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+export async function listBotRemoteResourceSources(): Promise<BotRemoteResourceSource[]> {
+  const client = tryGetDbClient();
+  if (!client) return [];
+  const db = client.drizzle;
+  const profiles = await db
+    .select({ id: botProfiles.id })
+    .from(botProfiles)
+    .orderBy(desc(botProfiles.updatedAt));
+  return Promise.all(
+    profiles.map(async ({ id }) => toBotRemoteResourceSource(await readProfile(db, id))),
+  );
+}
+
+export async function getBotRemoteResourceSource(
+  botId: string,
+): Promise<BotRemoteResourceSource> {
+  return toBotRemoteResourceSource(await readProfile(getDbClient().drizzle, botId));
+}
+
 /** Upper bound on how many Bot read positions one list call may carry. */
 const MAX_READ_STATE_ENTRIES = 500;
 
@@ -731,6 +804,7 @@ function broadcastBotProfileChanged(payload: {
   botId: string;
   change: 'created' | 'updated';
 }): void {
+  broadcastBotRemoteResourceChanged(payload.botId);
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -1136,7 +1210,9 @@ export function registerBotIpc(): void {
         .limit(1);
       if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId, 'profile');
     }
-    return readProfile(db, id);
+    const profile = await readProfile(db, id);
+    broadcastBotProfileChanged({ botId: id, change: 'updated' });
+    return profile;
   });
 
   const createBotCanonicalSessionUnlocked = async (
@@ -1322,6 +1398,7 @@ export function registerBotIpc(): void {
       .where(eq(sessions.id, canonicalSessionId))
       .limit(1);
     if (!canonical) throwIpcError('NOT_FOUND', 'Bot 主任务不存在');
+    broadcastBotProfileChanged({ botId, change: 'updated' });
     return {
       created,
       canonicalSessionId,

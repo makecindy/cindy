@@ -7,6 +7,19 @@
     "deleting": "删除中",
     "create": "新建"
   },
+  "resources": {
+    "titleFallback": "资源",
+    "loading": "正在加载…",
+    "emptyTitle": "这里暂时没有内容",
+    "emptyCopy": "电脑目前还没有提供这里的内容。",
+    "loadFailed": "无法加载内容",
+    "noHosts": "当前没有可用的兼容电脑。",
+    "noConversation": "这个项目目前没有可打开的任务。",
+    "openFailed": "无法打开任务",
+    "resolving": "正在打开最新任务…",
+    "retry": "重试",
+    "hostCount": "{{count}} 台电脑"
+  },
   "presentation": {
     "deviceList": {
       "headerAvailable": "{{count}} 台电脑可控制",

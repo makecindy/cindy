@@ -7,6 +7,19 @@
     "deleting": "Deleting",
     "create": "New"
   },
+  "resources": {
+    "titleFallback": "Resources",
+    "loading": "Loading…",
+    "emptyTitle": "Nothing here yet",
+    "emptyCopy": "This computer has not provided any items here yet.",
+    "loadFailed": "Couldn’t load these items",
+    "noHosts": "No compatible computer is available.",
+    "noConversation": "This item does not currently have a session to open.",
+    "openFailed": "Couldn’t open the session",
+    "resolving": "Opening the latest session…",
+    "retry": "Try again",
+    "hostCount": "{{count}} computers"
+  },
   "presentation": {
     "deviceList": {
       "headerAvailable": "{{count}} controllable computers",

@@ -4,6 +4,7 @@ import {
   isBotFailureAttentionWorthy,
   type BotFailureReason,
 } from '../../shared/botFailureReason.js';
+import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
 
 export interface BotAttentionWriteResult {
   reason: BotFailureReason | null;
@@ -26,6 +27,7 @@ export async function noteBotAttention(input: {
     reason,
     observedAt: input.observedAt ?? Date.now(),
   });
+  if (result.changed) broadcastBotRemoteResourceChanged(input.botId);
   return { reason, changed: result.changed };
 }
 
@@ -39,5 +41,6 @@ export async function clearBotAttention(input: {
     reason: null,
     observedAt: input.successfulAt ?? Date.now(),
   });
+  if (result.changed) broadcastBotRemoteResourceChanged(input.botId);
   return { reason: null, changed: result.changed };
 }
