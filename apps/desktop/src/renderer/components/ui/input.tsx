@@ -115,6 +115,7 @@ export function Input({
   disabled,
   autoComplete,
   spellCheck,
+  style,
   ...rest
 }: InputProps) {
   const { t } = useTranslation();
@@ -166,7 +167,9 @@ export function Input({
           error && ERROR_CHROME,
           disabled && 'cursor-not-allowed opacity-60',
         )}
-        style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+        // 调用方内联样式后置于组件内置的文本选择样式之后：caller 可以覆盖
+        // userSelect 等任何键，内置样式不再静默丢弃调用方的 style（Greptile P2）。
+        style={{ userSelect: 'text', WebkitUserSelect: 'text', ...style }}
       />
       {trailingNode}
     </div>
@@ -191,6 +194,7 @@ export function Textarea({
   error = false,
   className,
   disabled,
+  style,
   ...rest
 }: TextareaProps) {
   return (
@@ -208,8 +212,9 @@ export function Textarea({
         disabled && 'cursor-not-allowed opacity-60',
         className,
       )}
-      style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
       {...rest}
+      // 与 Input 相同的合并次序：内置文本选择样式在前，调用方 style 在后。
+      style={{ userSelect: 'text', WebkitUserSelect: 'text', ...style }}
     />
   );
 }

@@ -56,6 +56,22 @@ describe('Input', () => {
     expect(field?.getAttribute('type')).toBe('password');
     expect(screen.getByRole('button', { name: 'settings.apiKey.showKey' })).toBeTruthy();
   });
+
+  it('keeps caller inline style instead of silently dropping it', () => {
+    render(
+      <Input value="" onChange={() => {}} style={{ textAlign: 'center', width: 120 }} />,
+    );
+    const el = screen.getByRole('textbox') as HTMLInputElement;
+    expect(el.style.textAlign).toBe('center');
+    expect(el.style.width).toBe('120px');
+    // 组件内置的文本选择样式仍在，未被调用方清空。
+    expect(el.style.userSelect).toBe('text');
+  });
+
+  it('lets caller override the built-in userSelect when explicitly asked', () => {
+    render(<Input value="" onChange={() => {}} style={{ userSelect: 'none' }} />);
+    expect((screen.getByRole('textbox') as HTMLInputElement).style.userSelect).toBe('none');
+  });
 });
 
 describe('Textarea', () => {
@@ -68,6 +84,13 @@ describe('Textarea', () => {
     expect(cls).not.toContain('rounded-full');
     expect(cls).toContain('placeholder:text-[var(--text-placeholder)]');
     expect(cls).toContain('bg-[var(--surface-elevated)]');
+  });
+
+  it('keeps caller inline style on the same merge order as Input', () => {
+    render(<Textarea value="" onChange={() => {}} style={{ textAlign: 'right' }} />);
+    const el = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(el.style.textAlign).toBe('right');
+    expect(el.style.userSelect).toBe('text');
   });
 });
 
