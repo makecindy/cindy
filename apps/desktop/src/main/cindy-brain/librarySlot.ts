@@ -141,6 +141,8 @@ export class GhostLibrarySlot {
    * 所以只记当前 {ghostId, root};别人挂上或撤槽成功都要清掉这份记录。
    */
   private extraDirGrant: { ghostId: string; root: string } | null = null;
+  /** 最近一次显式 open 的插件;status 只给它复挂,别人 status 不得抢槽。 */
+  private extraDirOpenerGhostId: string | null = null;
 
   constructor(private readonly deps: GhostLibrarySlotDeps) {}
 
@@ -201,8 +203,8 @@ export class GhostLibrarySlot {
       const resolution = await this.deps.bindingStore.resolveLibraryRoot(ghostId);
       session = this.createSession(ghostId, resolution, scopeKey);
       this.sessions.set(ghostId, session);
-      // 会话建立即自动 open(幂等):消除"write 前忘 open"的脚枪;显式 open
-      // 操作仍有效,仅回状态。
+      // 会话建立即自动 open vault(幂等):消除"write 前忘 open"的脚枪。
+      // extraDirs 只在显式 open 时挂,status / 首次任意请求不得抢槽。
       if (session.drift === null) {
         await session.vault.open();
         // 重装自愈:能走到这里 = 插件已装入且启用,清掉卸载时留的 orphaned
@@ -210,8 +212,7 @@ export class GhostLibrarySlot {
         if (session.vault.getMeta()?.orphaned) {
           await session.vault.clearOrphaned().catch(() => {});
         }
-        await this.syncAgentReadonlyExtraDir(ghostId, session.vault.getRootDir());
-      } else {
+      } else if (this.extraDirGrant?.ghostId === ghostId) {
         await this.syncAgentReadonlyExtraDir(ghostId, null);
       }
     }
@@ -315,7 +316,7 @@ export class GhostLibrarySlot {
 
   private async syncAgentReadonlyExtraDir(ghostId: string, root: string | null): Promise<void> {
     if (!this.deps.syncAgentReadonlyExtraDir) {
-      if (root === null) this.clearExtraDirGrant();
+      if (root === null) this.clearExtraDirGrant(ghostId);
       else this.rememberExtraDirGrant(ghostId, root);
       return;
     }
@@ -323,7 +324,7 @@ export class GhostLibrarySlot {
       const granted = await this.deps.syncAgentReadonlyExtraDir(ghostId, root);
       if (root === null) {
         if (granted === 'superseded') return;
-        this.clearExtraDirGrant();
+        this.clearExtraDirGrant(ghostId);
         return;
       }
       if (granted === true || granted === 'granted') {
@@ -355,7 +356,10 @@ export class GhostLibrarySlot {
     this.sessions.delete(ghostId);
     await session.sql.dispose().catch(() => {});
     await session.vault.invalidate().catch(() => {});
-    await this.syncAgentReadonlyExtraDir(ghostId, null);
+    if (this.extraDirGrant?.ghostId === ghostId) {
+      await this.syncAgentReadonlyExtraDir(ghostId, null);
+    }
+    if (this.extraDirOpenerGhostId === ghostId) this.extraDirOpenerGhostId = null;
   }
 
   /** 停用/卸载/owner 切换收口:作废全部会话(commit 5 的生命周期接线点)。 */
@@ -450,6 +454,7 @@ export class GhostLibrarySlot {
       case 'open': {
         const r = await vault.open();
         if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        this.extraDirOpenerGhostId = ghostId;
         await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
         const body = {
           ok: true as const, op: 'open' as const, state: r.state, reason: r.reason ?? undefined,
@@ -460,7 +465,9 @@ export class GhostLibrarySlot {
       case 'status': {
         const r = await vault.status();
         if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
-        await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
+        if (this.extraDirOpenerGhostId === ghostId) {
+          await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
+        }
         const body = {
           ok: true as const, op: 'status' as const, state: r.state, reason: r.reason ?? undefined,
           usedBytes: r.usedBytes, fileCount: r.fileCount,

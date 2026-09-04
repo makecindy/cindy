@@ -30,6 +30,7 @@ describe('library extraDirs grant wiring', () => {
   it('slot sync refuses to no-op-success when the opener is not library-capable', () => {
     expect(body).toContain('async function syncMivoLibraryExtraDirFromSlot(');
     expect(body).toContain('if (root !== null && !isLibraryCapableGhost(findAvailableGhost(ghostId)))');
+    expect(body).toContain('if (libraryExtraDirOwnerGhostId !== null && libraryExtraDirOwnerGhostId !== ghostId)');
     expect(body).toContain("if (result === 'granted') libraryExtraDirOwnerGhostId = ghostId;");
     expect(body).toContain('return result;');
   });

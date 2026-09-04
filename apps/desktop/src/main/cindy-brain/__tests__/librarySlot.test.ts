@@ -577,7 +577,7 @@ describe('GhostLibrarySlot', () => {
     expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
   });
 
-  it('B granted 后 A 撤槽成功,B 被 superseded 不得再报已授权', async () => {
+  it('B granted 后 A 漂移 open 不得撤掉 B 的槽', async () => {
     const otherId = 'other-library';
     ghosts.set(otherId, makeGhost(true, true, otherId));
     syncAgentReadonlyExtraDir.mockResolvedValue('granted');
@@ -590,12 +590,42 @@ describe('GhostLibrarySlot', () => {
     });
     await store.setBinding(GHOST_ID, candidate);
     await fs.promises.rm(candidate, { recursive: true });
-    syncAgentReadonlyExtraDir.mockResolvedValue('not-granted');
+    syncAgentReadonlyExtraDir.mockClear();
     const openA = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
     expect((openA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
-    syncAgentReadonlyExtraDir.mockResolvedValue('superseded');
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalled();
+    const stB = await slot.handleLibraryRequest(otherId, { op: 'status' });
+    expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+  });
+
+  it('仅 status 不挂 extraDirs;A open 后 B status 不得抢槽', async () => {
+    const first = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((first as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalled();
+
+    const otherId = 'other-library';
+    ghosts.set(otherId, makeGhost(true, true, otherId));
+    const openA = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    expect((openA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    syncAgentReadonlyExtraDir.mockClear();
     const stB = await slot.handleLibraryRequest(otherId, { op: 'status' });
     expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalled();
+    const stA = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((stA as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+  });
+
+  it('B granted 后 A dispose 不得撤掉 B 的槽', async () => {
+    const otherId = 'other-library';
+    ghosts.set(otherId, makeGhost(true, true, otherId));
+    syncAgentReadonlyExtraDir.mockResolvedValue('granted');
+    const openB = await slot.handleLibraryRequest(otherId, { op: 'open' });
+    expect((openB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    syncAgentReadonlyExtraDir.mockClear();
+    await slot.disposeGhost(GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalled();
+    const stB = await slot.handleLibraryRequest(otherId, { op: 'status' });
+    expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
   });
 
   it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {

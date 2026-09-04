@@ -3214,7 +3214,8 @@ async function refreshMivoLibraryExtraDirGrant(): Promise<void> {
 
 /**
  * 槽侧同步:认发起 open 的那个 ghost,不抓清单里第一个 library 插件。
- * root 非空时必须 library 资格审过,否则不得 no-op 成功。撤槽(root=null)一律下发。
+ * root 非空时必须 library 资格审过,否则不得 no-op 成功。
+ * 撤槽(root=null)只允许当前 owner;别人撤槽不得把唯一槽拆了。
  * granted = 已把该库根写入 extraDirs;not-granted = 确定没挂上;
  * superseded = 被更新一轮取代,不等于把已挂上的槽拆了。
  */
@@ -3226,11 +3227,15 @@ async function syncMivoLibraryExtraDirFromSlot(
   if (root !== null && !isLibraryCapableGhost(findAvailableGhost(ghostId))) {
     return 'not-granted';
   }
-  const result = await libraryExtraDirSync(root);
   if (root === null) {
-    if (libraryExtraDirOwnerGhostId === ghostId) libraryExtraDirOwnerGhostId = null;
+    if (libraryExtraDirOwnerGhostId !== null && libraryExtraDirOwnerGhostId !== ghostId) {
+      return 'not-granted';
+    }
+    const result = await libraryExtraDirSync(null);
+    if (result !== 'superseded') libraryExtraDirOwnerGhostId = null;
     return result === 'superseded' ? 'superseded' : 'not-granted';
   }
+  const result = await libraryExtraDirSync(root);
   if (result === 'granted') libraryExtraDirOwnerGhostId = ghostId;
   return result;
 }
