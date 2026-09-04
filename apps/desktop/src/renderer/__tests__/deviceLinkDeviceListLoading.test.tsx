@@ -18,6 +18,7 @@ afterEach(() => {
 describe('useDeviceLinkDeviceList initial request', () => {
   it('silently retries a failed directory request without a later push event', async () => {
     let resolveRetry: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
+    let presenceChanged: ((payload: DeviceLinkPresenceSnapshot) => void) | undefined;
     const retry = new Promise<{ devices: DeviceLinkDeviceView[] }>((resolve) => {
       resolveRetry = resolve;
     });
@@ -30,7 +31,9 @@ describe('useDeviceLinkDeviceList initial request', () => {
       deviceLink: {
         listDevices,
         getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
-        onPresenceChanged: vi.fn(),
+        onPresenceChanged: vi.fn((callback: (payload: DeviceLinkPresenceSnapshot) => void) => {
+          presenceChanged = callback;
+        }),
         onStatusChanged: vi.fn(),
         onControlTargetChanged: vi.fn(),
       },
@@ -67,6 +70,21 @@ describe('useDeviceLinkDeviceList initial request', () => {
       request: { status: 'error', error: 'relay unavailable' },
       settled: true,
     });
+
+    act(() =>
+      presenceChanged?.({
+        deviceId: 'peer-1',
+        online: true,
+        deviceName: 'Peer Mac',
+        platform: 'darwin',
+        appVersion: '0.1.27',
+        lastSeenAt: 1_000,
+        remoteControlEnabled: true,
+        busy: false,
+      }),
+    );
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    expect(result.current.settled).toBe(true);
 
     await act(async () => {
       resolveRetry?.({ devices: [] });

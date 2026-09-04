@@ -240,6 +240,11 @@ function ensureStarted(): void {
   let linkStatusRevision = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryDelayMs = 0;
+  let backgroundRetryGeneration: number | null = null;
+
+  const clearBackgroundRetry = (gen: number): void => {
+    if (backgroundRetryGeneration === gen) backgroundRetryGeneration = null;
+  };
 
   const clearRetryTimer = (): void => {
     if (retryTimer !== null) {
@@ -274,15 +279,22 @@ function ensureStarted(): void {
     loadGeneration += 1;
     const gen = loadGeneration;
     const statusRevisionAtStart = linkStatusRevision;
+    if (background) backgroundRetryGeneration = gen;
     if (!background) enterLoading();
 
     if (probeState || linkStatus === null) {
       try {
         const state = await window.electronAPI.deviceLink.getState();
-        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) return;
+        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) {
+          clearBackgroundRetry(gen);
+          return;
+        }
         linkStatus = state.linkStatus;
       } catch {
-        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) return;
+        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) {
+          clearBackgroundRetry(gen);
+          return;
+        }
         // getState 本身失败时保留既有 status 判断；未知 / 在线态仍尝试目录请求，让真正的
         // listDevices 结果决定 ready/error。已知 stopped 则不能误打成远程连接失败。
       }
@@ -293,13 +305,17 @@ function ensureStarted(): void {
     // 打成 error；只有 online / connecting 下真实发出的 listDevices 失败才是连接错误。
     if (linkStatus === 'stopped') {
       clearDevices();
+      clearBackgroundRetry(gen);
       return;
     }
 
     try {
       const result = await window.electronAPI.deviceLink.listDevices();
       // 期间发生过清空(stop / 登出)或更晚的 refresh → 本次响应已陈旧,丢弃。
-      if (gen !== loadGeneration) return;
+      if (gen !== loadGeneration) {
+        clearBackgroundRetry(gen);
+        return;
+      }
       const list = result?.devices;
       if (!Array.isArray(list) || !list.every(isDeviceLinkDeviceView)) {
         throw new Error('Invalid device list response');
@@ -309,13 +325,17 @@ function ensureStarted(): void {
       setDevices(list);
     } catch (error) {
       // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
-      if (gen !== loadGeneration) return;
+      if (gen !== loadGeneration) {
+        clearBackgroundRetry(gen);
+        return;
+      }
       markRequestFailed(error);
       // 瞬态拉取失败(relay 重连中等)保持当前快照;登出 / relay 停止由下面的 'stopped'
       // 状态事件显式清空,不靠这里的失败兜底(避免一次网络抖动就清掉、闪烁)。但把请求
       // 标成已结算，避免远端 sidebar bootstrap 因 devices 仍为 null 永久显示加载态。
       scheduleRetry();
     }
+    clearBackgroundRetry(gen);
   };
 
   const refresh = (probeState = false, background = false): void => {
@@ -327,6 +347,9 @@ function ensureStarted(): void {
   // 只有相关 presence 才重拉目录(见 shouldRefreshForPresence):本机 busy 自回声与对端的
   // busy / lastSeenAt 心跳都不改变切换栏内容,却各触发一次全量 listDevices(issue #1726)。
   window.electronAPI.deviceLink.onPresenceChanged((snap) => {
+    // 后台退避请求在飞时保留 error/settled 快照；不要让 presence 噪音把它升级成前台
+    // refresh，再次触发 loading 并恢复悬空的持久化远端选择。
+    if (backgroundRetryGeneration !== null) return;
     if (!shouldRefreshForPresence(devices, snap, requestState.status)) return;
     refresh();
   });
