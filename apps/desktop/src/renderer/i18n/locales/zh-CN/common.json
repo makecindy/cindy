@@ -7337,6 +7337,8 @@
       "label": "分支",
       "loading": "加载分支中…",
       "loadFailed": "分支列表加载失败，点此重试",
+      "searchPlaceholder": "搜索分支…",
+      "noMatch": "没有匹配的分支",
       "currentTooltip": "当前分支",
       "sourceTooltip": "worktree 源分支"
     },

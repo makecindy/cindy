@@ -27,16 +27,11 @@
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { GitBranch, ChevronDown, Folder, MessageCircle } from 'lucide-react';
+import { GitBranch, ChevronDown, Folder, MessageCircle, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
 import {
   FolderPickerPopover,
@@ -45,6 +40,7 @@ import {
   type FolderPickerSelectSource,
 } from './FolderPickerPopover';
 import { resolveBranchPick } from './branchPick';
+import { filterBranches } from './branchFilter';
 import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
 
@@ -412,7 +408,9 @@ function FolderChipBig({
 
 // ── [分支 │ ☑ worktree] 联合控件(对齐 Claude Code,2026-07-29 用户裁决) ──────
 
-function BranchWorktreeChip({
+// 导出仅为让分支搜索的交互(打开即聚焦 / 过滤 / 键盘导航 / 关闭清空)能被单测直接
+// render;它不是对外 API,WorktreeChipsRow 之外不要拿它当组件用。
+export function BranchWorktreeChip({
   branchLabel,
   branches,
   branchesLoading,
@@ -450,6 +448,65 @@ function BranchWorktreeChip({
   compact?: boolean;
 }) {
   const { t } = useTranslation();
+  // 搜索词是纯视图状态:面板一关就丢弃,不入 store、不持久化,也不回传上层——
+  // 上层只关心最终选中的分支,过滤过程与它无关。
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const filtered = useMemo(() => filterBranches(branches, query), [branches, query]);
+
+  /**
+   * 关面板。关闭与清空搜索词是同一件事,收在这一个出口 —— 选中一项、Esc、点面板外
+   * 三条路径都走它。受控 Popover 的 onOpenChange 只在 Radix 自己发起关闭时触发,
+   * 程序化 setOpen(false) 不会走那条回调;两处各自记得清空的话,选中项这条路径必然
+   * 漏掉,于是上次的搜索词被带到下次打开(单测 branchPickerSearch 抓到过)。
+   */
+  const closePanel = useCallback(() => {
+    setOpen(false);
+    setQuery('');
+  }, []);
+
+  const pick = useCallback(
+    (branch: string) => {
+      onPick(branch);
+      closePanel();
+    },
+    [onPick, closePanel],
+  );
+
+  const listItems = useCallback(
+    () =>
+      Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>('button[role="option"]') ?? []),
+    [],
+  );
+
+  /** 把焦点移进分支列表:delta>0 从头进,<0 从尾进;越过首项则退回搜索框。 */
+  const moveListFocus = useCallback(
+    (delta: number) => {
+      const items = listItems();
+      if (items.length === 0) return;
+      const from = items.indexOf(document.activeElement as HTMLButtonElement);
+      // 焦点还在搜索框(from = -1)时,向下从首项进、向上从末项进。
+      const next = from < 0 ? (delta > 0 ? 0 : items.length - 1) : from + delta;
+      if (next < 0) {
+        inputRef.current?.focus();
+        return;
+      }
+      // 末项继续向下就停在末项;不做环绕,免得焦点从列表尾跳回头部让人丢失位置感。
+      items[Math.min(next, items.length - 1)]?.focus();
+    },
+    [listItems],
+  );
+
+  const jumpListFocus = useCallback(
+    (to: 'first' | 'last') => {
+      const items = listItems();
+      (to === 'first' ? items[0] : items[items.length - 1])?.focus();
+    },
+    [listItems],
+  );
 
   const branchSegment = (
     <button
@@ -497,51 +554,122 @@ function BranchWorktreeChip({
     </Tip>
   );
 
+  // 用 Popover 而非 DropdownMenu 承载这个下拉:菜单的 typeahead 会把单字符按键
+  // 拿去做菜单项跳转(@radix-ui/react-menu Content 的 onKeyDown),而 Item 的
+  // onPointerMove 还会把焦点抢到鼠标掠过的那一项 —— 两条都跟"面板里有个输入框"
+  // 冲突,后者靠 stopPropagation 也绕不掉。仓内另两处带搜索的下拉
+  // (OneshotModelPinPicker / ScriptCapabilityMultiSelect)同样是 Popover。
   const branchArea = branchInteractive ? (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        if (open) onOpenRequested();
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          closePanel();
+          return;
+        }
+        setOpen(true);
+        onOpenRequested();
       }}
     >
-      <DropdownMenuTrigger asChild>{branchTipped}</DropdownMenuTrigger>
-      <DropdownMenuContent
+      <PopoverTrigger asChild>{branchTipped}</PopoverTrigger>
+      <PopoverContent
         align="end"
         sideOffset={4}
-        className="max-h-[280px] min-w-[200px] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-lg"
+        onOpenAutoFocus={(event) => {
+          // Popover 默认把焦点压在面板本体上,这里改交给搜索框:打开即可直接打字,
+          // 不必先点一下输入框。
+          event.preventDefault();
+          inputRef.current?.focus();
+        }}
+        className="flex w-auto min-w-[200px] max-w-[320px] flex-col gap-1.5 rounded-xl border border-border bg-popover p-1.5 shadow-lg"
       >
-        {branchesLoading ? (
-          <div className="px-3 py-1.5 text-13 text-muted-foreground">
-            {t('newChat.branchChip.loading')}
-          </div>
-        ) : branchesFailed || branches.length === 0 ? (
-          /* 失败与空列表都给重试入口(空列表也可能是隧道/瞬时问题);
-             onSelect 阻止默认关闭,重试期间菜单留在原地显示 loading。 */
-          <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault();
-              onRetryBranches();
+        <div className="flex items-center gap-2 rounded-full border border-border bg-[var(--surface-elevated)] px-2.5 py-[5px]">
+          <Search size={13} className="shrink-0 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('newChat.branchChip.searchPlaceholder')}
+            aria-label={t('newChat.branchChip.searchPlaceholder')}
+            className="min-w-0 flex-1 bg-transparent text-13 text-foreground outline-none placeholder:text-[var(--text-placeholder)]"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const first = filtered[0];
+                // 没有匹配项时 Enter 什么都不做,也不关面板 —— 免得手一快就把
+                // 输错的搜索词连面板一起丢掉。
+                if (first) pick(first);
+                return;
+              }
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                moveListFocus(e.key === 'ArrowDown' ? 1 : -1);
+              }
+              // Escape 不拦,交给 Popover 自己关闭。
             }}
-            className="cursor-pointer rounded-[8px] px-3 py-1.5 text-13 text-muted-foreground focus:bg-accent focus:text-accent-foreground"
-          >
-            {t('newChat.branchChip.loadFailed')}
-          </DropdownMenuItem>
-        ) : (
-          branches.map((b) => (
-            <DropdownMenuItem
-              key={b}
-              onSelect={() => onPick(b)}
-              className={cn(
-                'cursor-pointer rounded-[8px] px-3 py-1.5 text-13 text-foreground',
-                'focus:bg-accent focus:text-accent-foreground',
-                b === branchLabel && 'bg-accent/60',
-              )}
+          />
+        </div>
+        <div
+          ref={listRef}
+          role="listbox"
+          aria-label={t('newChat.branchChip.label')}
+          className="flex max-h-[240px] flex-col overflow-y-auto overscroll-contain"
+          onKeyDown={(e) => {
+            // Home / End 只挂在列表上,不挂搜索框 —— 在输入框里这两个键得留给文本光标。
+            if (e.key === 'Home' || e.key === 'End') {
+              e.preventDefault();
+              jumpListFocus(e.key === 'Home' ? 'first' : 'last');
+              return;
+            }
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+            e.preventDefault();
+            moveListFocus(e.key === 'ArrowDown' ? 1 : -1);
+          }}
+        >
+          {branchesLoading ? (
+            <div className="px-3 py-1.5 text-13 text-muted-foreground">
+              {t('newChat.branchChip.loading')}
+            </div>
+          ) : branchesFailed || branches.length === 0 ? (
+            /* 失败与空列表都给重试入口(空列表也可能是隧道/瞬时问题);
+               这里是普通 button,点了不关面板,重试期间原地显示 loading。 */
+            <button
+              type="button"
+              onClick={onRetryBranches}
+              className="cursor-pointer rounded-[8px] px-3 py-1.5 text-left text-13 text-muted-foreground hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover focus-visible:outline-none"
             >
-              {b}
-            </DropdownMenuItem>
-          ))
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+              {t('newChat.branchChip.loadFailed')}
+            </button>
+          ) : filtered.length === 0 ? (
+            /* 有分支但搜索词一个都没命中 —— 与"加载失败"是两回事,不能复用重试文案。 */
+            <div className="px-3 py-1.5 text-13 text-muted-foreground">
+              {t('newChat.branchChip.noMatch')}
+            </div>
+          ) : (
+            filtered.map((b, i) => (
+              <button
+                key={b}
+                type="button"
+                role="option"
+                aria-selected={b === branchLabel}
+                // roving tabIndex:Tab 一次进列表、落在首项,再 Tab 就走出去。分支上百条时
+                // 逐项 Tab 穿越是灾难 —— 组内换项靠 ↑↓ 与 Home/End(容器 onKeyDown)。
+                tabIndex={i === 0 ? 0 : -1}
+                onClick={() => pick(b)}
+                className={cn(
+                  'cursor-pointer truncate rounded-[8px] px-3 py-1.5 text-left text-13 text-foreground',
+                  'hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover focus-visible:outline-none',
+                  b === branchLabel && 'bg-accent/60',
+                )}
+              >
+                {b}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   ) : (
     branchTipped
   );
