@@ -355,6 +355,9 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
       beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
     });
     if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
+    const beforeSessionAgentDispatch = async () =>
+      isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)
+      && !(await isAgentOneShotRouteDisabled(agentKind));
     // 停用轴:agent one-shot 兜底是新的付费调用,该 agent 的默认路由被停用时不派发
     // (摘要 best-effort,直接放弃本轮,PR #744 review)。
     // oneShot 能力轴:Pi 未实现 oneShot(继承 BaseAgent 的 not-implemented),对 Pi 会话
@@ -364,12 +367,11 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
       ? utility.text
       : auxiliaryChain.source !== 'auto' ||
           !agentSupportsOneShot(agentKind) ||
-          (await isAgentOneShotRouteDisabled(agentKind)) ||
-          !isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)
+          !(await beforeSessionAgentDispatch())
         ? ''
         : await getMaker().oneShot(agentKind, prompt, {
             maxTokens: 120,
-            beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
+            beforeDispatch: beforeSessionAgentDispatch,
           });
     const summary = sanitize(text, maxCharsForTier(tier));
     if (!summary) return;

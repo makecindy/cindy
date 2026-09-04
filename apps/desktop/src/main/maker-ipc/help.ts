@@ -94,6 +94,16 @@ function isHelpOwnerScopeCurrent(scopeKey: string, chainSnapshot?: string): bool
   }
 }
 
+async function isHelpSessionAgentDispatchAllowed(
+  target: HelpOneShotTarget,
+  ownerScopeKey: string,
+  auxiliaryChainSnapshot: string,
+): Promise<boolean> {
+  if (!target.agentKind) return false;
+  return isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)
+    && !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model));
+}
+
 function normalizeLocale(locale: unknown): HelpLocale {
   return locale === 'zh-CN' || locale === 'zh-TW' || locale === 'en' || locale === 'ja' || locale === 'ko'
     ? locale
@@ -157,20 +167,20 @@ async function routeHelpTopics(
     });
     if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return [];
     let raw = utility.ok ? utility.text : '';
+    const beforeSessionAgentDispatch = () =>
+      isHelpSessionAgentDispatchAllowed(target, ownerScopeKey, auxiliaryChainSnapshot);
     // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
     if (
       !raw &&
       auxiliaryChain.source === 'auto' &&
       target.agentKind &&
-      isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot) &&
-      !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
+      await beforeSessionAgentDispatch()
     ) {
-      if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return [];
       raw = await maker.oneShot(target.agentKind, prompt, {
         ...target.options,
         maxTokens: 30,
         timeoutMs: 12_000,
-        beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
+        beforeDispatch: beforeSessionAgentDispatch,
       });
     }
     if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return [];
@@ -376,18 +386,18 @@ export function registerMakerHelpIpc(maker: Maker): void {
         });
         if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return { kind: 'no-answer' };
         let raw = utility.ok ? utility.text : '';
+        const beforeSessionAgentDispatch = () =>
+          isHelpSessionAgentDispatchAllowed(target, ownerScopeKey, auxiliaryChainSnapshot);
         // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
         if (
           !raw &&
           auxiliaryChain.source === 'auto' &&
           target.agentKind &&
-          isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot) &&
-          !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
+          await beforeSessionAgentDispatch()
         ) {
-          if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return { kind: 'no-answer' };
           raw = await maker.oneShot(target.agentKind, prompt, {
             ...target.options,
-            beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
+            beforeDispatch: beforeSessionAgentDispatch,
           });
         }
         if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return { kind: 'no-answer' };
