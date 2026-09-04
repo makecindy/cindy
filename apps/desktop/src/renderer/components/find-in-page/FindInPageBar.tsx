@@ -8,7 +8,6 @@ import { isFindInPageClaimed } from './findInPageOwnership';
 
 const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
 const ACTIVE_HIGHLIGHT_NAME = 'cindy-find-in-page-active';
-const MUTATION_DEBOUNCE_MS = 100;
 const SEARCH_MATCH_BACKGROUND = 'hsl(var(--search-match-bg))';
 const SEARCH_MATCH_FOREGROUND = 'hsl(var(--search-match-fg))';
 
@@ -80,7 +79,6 @@ function findMatchOffsets(value: string, query: string): Array<[number, number]>
 function isExcludedTextNode(
   node: Text,
   excludedRoot: HTMLElement | null,
-  visibilityCache: WeakMap<HTMLElement, boolean>,
 ): boolean {
   let element = node.parentElement;
   while (element) {
@@ -106,18 +104,12 @@ function isExcludedTextNode(
       if (!summary || !summary.contains(node)) return true;
     }
     if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
-    const cachedHidden = visibilityCache.get(element);
-    if (cachedHidden !== undefined) {
-      if (cachedHidden) return true;
-    } else {
-      const style = window.getComputedStyle(element);
-      const hiddenByStyle =
-        style.display === 'none' ||
-        style.visibility === 'hidden' ||
-        style.visibility === 'collapse';
-      visibilityCache.set(element, hiddenByStyle);
-      if (hiddenByStyle) return true;
-    }
+    const style = window.getComputedStyle(element);
+    if (
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      style.visibility === 'collapse'
+    ) return true;
     element = element.parentElement;
   }
   return false;
@@ -127,13 +119,12 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
   if (!query) return [];
 
   const matches: TextMatch[] = [];
-  const visibilityCache = new WeakMap<HTMLElement, boolean>();
   const showText = typeof NodeFilter === 'undefined' ? 4 : NodeFilter.SHOW_TEXT;
   const walker = document.createTreeWalker(document.body, showText);
   let node = walker.nextNode();
   while (node) {
     const textNode = node as Text;
-    if (!isExcludedTextNode(textNode, excludedRoot, visibilityCache)) {
+    if (!isExcludedTextNode(textNode, excludedRoot)) {
       for (const [start, end] of findMatchOffsets(textNode.data, query)) {
         const range = document.createRange();
         range.setStart(textNode, start);
@@ -148,68 +139,6 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
 
 function isInsideRoot(node: Node, root: HTMLElement | null): boolean {
   return Boolean(root && (node === root || root.contains(node)));
-}
-
-function getRangeRect(range: Range): DOMRect | null {
-  const rects = typeof range.getClientRects === 'function' ? range.getClientRects() : [];
-  const rect =
-    rects[0] ??
-    (typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null);
-  if (!rect) return null;
-  if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.bottom === 0) return null;
-  return rect;
-}
-
-function scrollRangeIntoViewNow(range: Range) {
-  const element = range.startContainer.parentElement;
-  if (!element) return;
-
-  let ancestor: HTMLElement | null = element;
-  while (ancestor) {
-    const style = window.getComputedStyle(ancestor);
-    const canScrollY =
-      /(auto|scroll|overlay|hidden)/.test(style.overflowY) &&
-      ancestor.scrollHeight > ancestor.clientHeight;
-    const canScrollX =
-      /(auto|scroll|overlay|hidden)/.test(style.overflowX) &&
-      ancestor.scrollWidth > ancestor.clientWidth;
-    if (!canScrollY && !canScrollX) {
-      ancestor = ancestor.parentElement;
-      continue;
-    }
-
-    const rect = getRangeRect(range);
-    const containerRect = ancestor.getBoundingClientRect();
-    if (!rect) return;
-    if (canScrollY) {
-      if (rect.top < containerRect.top) ancestor.scrollTop -= containerRect.top - rect.top;
-      else if (rect.bottom > containerRect.bottom) ancestor.scrollTop += rect.bottom - containerRect.bottom;
-    }
-    if (canScrollX) {
-      if (rect.left < containerRect.left) ancestor.scrollLeft -= containerRect.left - rect.left;
-      else if (rect.right > containerRect.right) ancestor.scrollLeft += rect.right - containerRect.right;
-    }
-    ancestor = ancestor.parentElement;
-  }
-
-  const rect = getRangeRect(range);
-  if (!rect || typeof window.scrollBy !== 'function') return;
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
-  if (rect.top < 0 || rect.bottom > viewportHeight) {
-    window.scrollBy({ top: rect.top < 0 ? rect.top : rect.bottom - viewportHeight, behavior: 'auto' });
-  }
-  if (rect.left < 0 || rect.right > viewportWidth) {
-    window.scrollBy({ left: rect.left < 0 ? rect.left : rect.right - viewportWidth, behavior: 'auto' });
-  }
-}
-
-function scrollRangeIntoView(range: Range) {
-  scrollRangeIntoViewNow(range);
-  if (typeof requestAnimationFrame !== 'function') return;
-  requestAnimationFrame(() => {
-    if (range.startContainer.isConnected) scrollRangeIntoViewNow(range);
-  });
 }
 
 /**
@@ -234,8 +163,6 @@ export function FindInPageBar() {
   const inputRef = useRef<HTMLInputElement>(null);
   const rangesRef = useRef<Range[]>([]);
   const activeRef = useRef(0);
-  const textRef = useRef('');
-  const mutationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isComposingRef = useRef(false);
 
   const clearSearchResults = useCallback(() => {
@@ -250,7 +177,7 @@ export function FindInPageBar() {
     if (!range) return;
     const element = range.startContainer.parentElement;
     if (!element || isInsideRoot(element, rootRef.current)) return;
-    scrollRangeIntoView(range);
+    element.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   }, []);
 
   const applySearch = useCallback(
@@ -282,41 +209,9 @@ export function FindInPageBar() {
     [scrollToMatch],
   );
 
-  useEffect(() => {
-    if (!open || typeof MutationObserver === 'undefined') return;
-
-    const observer = new MutationObserver((records) => {
-      if (records.every((record) => isInsideRoot(record.target, rootRef.current))) return;
-      if (isComposingRef.current) return;
-      if (mutationTimerRef.current !== null) return;
-      mutationTimerRef.current = setTimeout(() => {
-        mutationTimerRef.current = null;
-        if (!isComposingRef.current && textRef.current) {
-          applySearch(textRef.current, activeRef.current);
-        }
-      }, MUTATION_DEBOUNCE_MS);
-    });
-    observer.observe(document.body, {
-      childList: true,
-      characterData: true,
-      attributes: true,
-      attributeFilter: ['aria-hidden', 'class', 'hidden', 'open', 'style'],
-      subtree: true,
-    });
-
-    return () => {
-      observer.disconnect();
-      if (mutationTimerRef.current !== null) {
-        clearTimeout(mutationTimerRef.current);
-        mutationTimerRef.current = null;
-      }
-    };
-  }, [applySearch, open]);
-
   const close = useCallback(() => {
     setOpen(false);
     setText('');
-    textRef.current = '';
     isComposingRef.current = false;
     clearSearchResults();
   }, [clearSearchResults]);
@@ -385,7 +280,6 @@ export function FindInPageBar() {
             const nativeIsComposing =
               'isComposing' in e.nativeEvent && e.nativeEvent.isComposing === true;
             setText(next);
-            textRef.current = next;
             if (isComposingRef.current || nativeIsComposing) return;
             applySearch(next, 0, true);
           }}
@@ -397,7 +291,6 @@ export function FindInPageBar() {
             const committed = e.currentTarget.value;
             isComposingRef.current = false;
             setText(committed);
-            textRef.current = committed;
             applySearch(committed, 0, true);
           }}
           onKeyDown={(e) => {

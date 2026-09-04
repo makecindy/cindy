@@ -57,7 +57,6 @@ function getHighlight(name: string): MockHighlight | undefined {
 
 describe('FindInPageBar', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     vi.clearAllMocks();
     mocks.shortcutHandler = null;
     highlights = new Map();
@@ -74,7 +73,6 @@ describe('FindInPageBar', () => {
     cleanup();
     document.body.replaceChildren();
     vi.unstubAllGlobals();
-    vi.useRealTimers();
   });
 
   it('searches page text without matching the query input or hidden content', async () => {
@@ -173,88 +171,7 @@ describe('FindInPageBar', () => {
     fireEvent.change(input, { target: { value: '中' } });
     expect(screen.queryByText('1/1')).toBeNull();
 
-    page.append(' 文');
-    await act(async () => {
-      await Promise.resolve();
-      vi.advanceTimersByTime(100);
-      await Promise.resolve();
-    });
-    expect(screen.queryByText('1/1')).toBeNull();
-
     fireEvent.compositionEnd(input, { target: { value: '中文' } });
-    expect(screen.getByText('1/1')).toBeTruthy();
-  });
-
-  it('refreshes matches after page text changes', async () => {
-    const page = document.createElement('main');
-    page.textContent = 'foo';
-    const input = await openFindBar(page);
-    fireEvent.change(input, { target: { value: 'foo' } });
-    expect(screen.getByText('1/1')).toBeTruthy();
-
-    page.append(' foo');
-    await act(async () => {
-      await Promise.resolve();
-      vi.advanceTimersByTime(100);
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('1/2')).toBeTruthy();
-  });
-
-  it('refreshes matches after page visibility changes', async () => {
-    const page = document.createElement('main');
-    page.textContent = 'foo';
-    document.body.append(page);
-    const input = await openFindBar();
-    fireEvent.change(input, { target: { value: 'foo' } });
-    expect(screen.getByText('1/1')).toBeTruthy();
-
-    page.hidden = true;
-    await act(async () => {
-      await Promise.resolve();
-      vi.advanceTimersByTime(100);
-      await Promise.resolve();
-    });
-    expect(screen.getByText('0/0')).toBeTruthy();
-
-    page.hidden = false;
-    await act(async () => {
-      await Promise.resolve();
-      vi.advanceTimersByTime(100);
-      await Promise.resolve();
-    });
-    expect(screen.getByText('1/1')).toBeTruthy();
-  });
-
-  it('excludes closed details content and refreshes when it opens', async () => {
-    const page = document.createElement('main');
-    const details = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = 'foo';
-    const body = document.createElement('p');
-    body.textContent = 'foo';
-    details.append(summary, body);
-    page.append(details);
-
-    const input = await openFindBar(page);
-    fireEvent.change(input, { target: { value: 'foo' } });
-    expect(screen.getByText('1/1')).toBeTruthy();
-
-    details.open = true;
-    await act(async () => {
-      await Promise.resolve();
-      vi.advanceTimersByTime(100);
-      await Promise.resolve();
-    });
-    expect(screen.getByText('1/2')).toBeTruthy();
-
-    details.open = false;
-    await act(async () => {
-      await Promise.resolve();
-      vi.advanceTimersByTime(100);
-      await Promise.resolve();
-    });
     expect(screen.getByText('1/1')).toBeTruthy();
   });
 
