@@ -234,6 +234,18 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('你\n好');
   });
 
+  it('keeps normal-layout segment breaks between Korean syllables', async () => {
+    const page = document.createElement('main');
+    page.style.whiteSpace = 'normal';
+    page.textContent = '한\n글';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: '한 글' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('한\n글');
+  });
+
   it('removes normal-layout segment breaks around supplementary-plane CJK characters', async () => {
     const page = document.createElement('main');
     page.style.whiteSpace = 'normal';
