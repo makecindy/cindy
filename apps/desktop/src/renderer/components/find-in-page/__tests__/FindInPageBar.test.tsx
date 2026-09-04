@@ -173,6 +173,28 @@ describe('FindInPageBar', () => {
     localeLowerCaseSpy.mockRestore();
   });
 
+  it('maps case-folded characters that expand back to the source range', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'İ';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'i\u0307' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('İ');
+  });
+
+  it('matches an expanded case fold when the query uses the original character', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'i\u0307';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'İ' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('i\u0307');
+  });
+
   it('matches whitespace collapsed by normal text layout', async () => {
     const page = document.createElement('main');
     page.style.whiteSpace = 'normal';

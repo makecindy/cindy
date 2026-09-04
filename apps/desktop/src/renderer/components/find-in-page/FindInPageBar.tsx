@@ -88,34 +88,14 @@ function findMatchOffsets(
   const normalizedQuery = unicodeCaseFold(searchableQuery);
   const offsets: Array<[number, number]> = [];
 
-  // Keep the common case on a linear `indexOf` path. Some Unicode casing rules
-  // depend on surrounding characters (notably Greek sigma), or expand a code
-  // point when lower-cased. Those cases fall through to the candidate-by-
-  // candidate comparison below so source offsets remain exact.
-  const normalizedValue = getLinearCaseFold(searchableValue);
-  if (normalizedValue && normalizedQuery.length === searchableQuery.length) {
-    let start = 0;
-    while (start <= normalizedValue.length - normalizedQuery.length) {
-      const matchStart = normalizedValue.indexOf(normalizedQuery, start);
-      if (matchStart < 0) break;
-      const end = matchStart + searchableQuery.length - 1;
-      offsets.push([sourceStarts[matchStart], sourceEnds[end]]);
-      start = matchStart + searchableQuery.length;
-    }
-    return offsets;
-  }
-
-  // Compare each candidate independently when casing changes length or depends
-  // on context. This preserves exact source offsets for the non-linear cases.
-  for (let start = 0; start <= searchableValue.length - searchableQuery.length; start += 1) {
-    if (
-      unicodeCaseFold(searchableValue.slice(start, start + searchableQuery.length)) ===
-      normalizedQuery
-    ) {
-      const end = start + searchableQuery.length - 1;
-      offsets.push([sourceStarts[start], sourceEnds[end]]);
-      start += searchableQuery.length - 1;
-    }
+  const foldedValue = foldSearchValue(searchableValue, sourceStarts, sourceEnds);
+  let start = 0;
+  while (start <= foldedValue.value.length - normalizedQuery.length) {
+    const matchStart = foldedValue.value.indexOf(normalizedQuery, start);
+    if (matchStart < 0) break;
+    const matchEnd = matchStart + normalizedQuery.length - 1;
+    offsets.push([foldedValue.starts[matchStart], foldedValue.ends[matchEnd]]);
+    start = matchStart + normalizedQuery.length;
   }
   return offsets;
 }
@@ -127,22 +107,28 @@ function unicodeCaseFold(value: string): string {
   return value.toLowerCase().replace(/\u03c2/g, '\u03c3');
 }
 
-function getLinearCaseFold(value: string): string | null {
-  const normalizedValue = unicodeCaseFold(value);
-  if (normalizedValue.length !== value.length) return null;
-
-  let normalizedOffset = 0;
-  for (const character of value) {
-    const normalizedCharacter = unicodeCaseFold(character);
-    if (
-      normalizedValue.slice(normalizedOffset, normalizedOffset + normalizedCharacter.length) !==
-      normalizedCharacter
-    ) {
-      return null;
+function foldSearchValue(
+  value: string,
+  sourceStarts: readonly number[],
+  sourceEnds: readonly number[],
+): { value: string; starts: number[]; ends: number[] } {
+  let foldedValue = '';
+  const starts: number[] = [];
+  const ends: number[] = [];
+  for (let index = 0; index < value.length;) {
+    const character = getCodePointAt(value, index);
+    const end = index + character.length;
+    const foldedCharacter = unicodeCaseFold(character);
+    const sourceStart = sourceStarts[index];
+    const sourceEnd = sourceEnds[end - 1];
+    foldedValue += foldedCharacter;
+    for (let offset = 0; offset < foldedCharacter.length; offset += 1) {
+      starts.push(sourceStart);
+      ends.push(sourceEnd);
     }
-    normalizedOffset += normalizedCharacter.length;
+    index = end;
   }
-  return normalizedOffset === normalizedValue.length ? normalizedValue : null;
+  return { value: foldedValue, starts, ends };
 }
 
 function getCodePointBefore(value: string, index: number): string {
