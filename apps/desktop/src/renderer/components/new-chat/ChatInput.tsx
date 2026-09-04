@@ -2841,10 +2841,11 @@ export function ChatInput({
   useEffect(() => {
     if (!editor || !sessionId) return;
     return subscribePromptInsert(({ targetSessionId, text }) => {
-      if (targetSessionId !== sessionId || editor.isDestroyed) return;
-      if (composerMutationLockedRef.current) return;
+      if (targetSessionId !== sessionId || editor.isDestroyed) return false;
+      if (composerMutationLockedRef.current) return false;
       insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
+      return true;
     });
   }, [editor, sessionId]);
 

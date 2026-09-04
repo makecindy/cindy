@@ -28,8 +28,6 @@ export function subscribeSessionLinkInsert(
   return () => window.removeEventListener(INSERT_SESSION_LINK_EVENT, wrapped);
 }
 
-const INSERT_PROMPT_EVENT = 'cindy-composer-insert-prompt';
-
 /**
  * A request to prefill plain prompt text into a composer. The composer only
  * inserts and focuses; the user still decides whether to send.
@@ -39,16 +37,27 @@ export interface InsertPromptDetail {
   text: string;
 }
 
-export function insertPromptIntoComposer(detail: InsertPromptDetail): void {
-  window.dispatchEvent(new CustomEvent<InsertPromptDetail>(INSERT_PROMPT_EVENT, { detail }));
+type PromptInsertHandler = (detail: InsertPromptDetail) => boolean;
+
+const promptInsertHandlers = new Set<PromptInsertHandler>();
+
+/**
+ * 预填提示词。返回 true = 有订阅方实际写入了输入框。
+ * Chip 点击用这个回执决定要不要退回打开 PR:没人接住就绝不能空点。
+ */
+export function insertPromptIntoComposer(detail: InsertPromptDetail): boolean {
+  let accepted = false;
+  for (const handler of promptInsertHandlers) {
+    if (handler(detail)) accepted = true;
+  }
+  return accepted;
 }
 
-export function subscribePromptInsert(handler: (detail: InsertPromptDetail) => void): () => void {
-  const wrapped = (event: Event) => {
-    handler((event as CustomEvent<InsertPromptDetail>).detail);
+export function subscribePromptInsert(handler: PromptInsertHandler): () => void {
+  promptInsertHandlers.add(handler);
+  return () => {
+    promptInsertHandlers.delete(handler);
   };
-  window.addEventListener(INSERT_PROMPT_EVENT, wrapped);
-  return () => window.removeEventListener(INSERT_PROMPT_EVENT, wrapped);
 }
 
 /** TipTap chain 里预填提示词需要的最小表面,避免 composerActionsBus 依赖 Editor 类型。 */

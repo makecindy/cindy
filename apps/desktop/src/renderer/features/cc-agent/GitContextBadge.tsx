@@ -132,7 +132,8 @@ function PrChip({
     : failureCopyKey
       ? t(failureCopyKey)
       : t('ccAgent.gitContext.pr.statusUnknown');
-  // gh 不可用时点击 = 引导动作,tooltip 第二行写明后果;其余情况点击 = 打开 PR。
+  // 引导只在 Composer 真正写入后独占点击;没人接住(确认卡/接管/准备 worktree 等
+  // 把 ChatInput 卸掉)必须退回打开 PR,不能空点。
   const actionLine = guidance
     ? t(`ccAgent.gitContext.pr.guidance.${guidance}.hint`)
     : t('ccAgent.gitContext.pr.clickToOpen');
@@ -141,14 +142,14 @@ function PrChip({
     : t('ccAgent.gitContext.pr.openAria', { number: prRef.prNumber });
 
   const handleClick = () => {
-    if (!guidance) {
-      void window.electronAPI.openExternal(prRef.url);
-      return;
+    if (guidance) {
+      const accepted = insertPromptIntoComposer({
+        targetSessionId: sessionId,
+        text: t(`ccAgent.gitContext.pr.guidance.${guidance}.prompt`),
+      });
+      if (accepted) return;
     }
-    insertPromptIntoComposer({
-      targetSessionId: sessionId,
-      text: t(`ccAgent.gitContext.pr.guidance.${guidance}.prompt`),
-    });
+    void window.electronAPI.openExternal(prRef.url);
   };
 
   // 未解决 review thread 数:>0 才显示;GraphQL 拿不到(null)时整个信号隐藏。
