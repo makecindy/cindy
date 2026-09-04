@@ -65,8 +65,8 @@ function findMatchOffsets(
       while (index + 1 < value.length && /\s/.test(value[index + 1])) index += 1;
       const runEnd = index + 1;
       const hasSegmentBreak = /[\r\n\f]/.test(value.slice(runStart, runEnd));
-      const previousCharacter = value[runStart - 1] ?? '';
-      const nextCharacter = value[runEnd] ?? '';
+      const previousCharacter = getCodePointBefore(value, runStart);
+      const nextCharacter = getCodePointAt(value, runEnd);
       if (hasSegmentBreak && isCjkCharacter(previousCharacter) && isCjkCharacter(nextCharacter)) {
         continue;
       }
@@ -88,6 +88,23 @@ function findMatchOffsets(
   const normalizedQuery = searchableQuery.toLocaleLowerCase();
   const offsets: Array<[number, number]> = [];
 
+  // Keep the common case on a linear `indexOf` path. Some Unicode casing rules
+  // depend on surrounding characters (notably Greek sigma), or expand a code
+  // point when lower-cased. Those cases fall through to the candidate-by-
+  // candidate comparison below so source offsets remain exact.
+  const normalizedValue = getLinearLowercase(searchableValue);
+  if (normalizedValue && normalizedQuery.length === searchableQuery.length) {
+    let start = 0;
+    while (start <= normalizedValue.length - normalizedQuery.length) {
+      const matchStart = normalizedValue.indexOf(normalizedQuery, start);
+      if (matchStart < 0) break;
+      const end = matchStart + searchableQuery.length - 1;
+      offsets.push([sourceStarts[matchStart], sourceEnds[end]]);
+      start = matchStart + searchableQuery.length;
+    }
+    return offsets;
+  }
+
   // Lower-case each candidate independently instead of normalizing the whole
   // text node first. Whole-string lower-casing is context-sensitive for some
   // scripts (for example Greek final sigma), which can make a standalone
@@ -103,6 +120,50 @@ function findMatchOffsets(
     }
   }
   return offsets;
+}
+
+function getLinearLowercase(value: string): string | null {
+  const normalizedValue = value.toLocaleLowerCase();
+  if (normalizedValue.length !== value.length) return null;
+
+  let normalizedOffset = 0;
+  for (const character of value) {
+    const normalizedCharacter = character.toLocaleLowerCase();
+    if (
+      normalizedValue.slice(normalizedOffset, normalizedOffset + normalizedCharacter.length) !==
+      normalizedCharacter
+    ) {
+      return null;
+    }
+    normalizedOffset += normalizedCharacter.length;
+  }
+  return normalizedOffset === normalizedValue.length ? normalizedValue : null;
+}
+
+function getCodePointBefore(value: string, index: number): string {
+  if (index <= 0) return '';
+  let start = index - 1;
+  const codeUnit = value.charCodeAt(start);
+  if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff && start > 0) {
+    const previousCodeUnit = value.charCodeAt(start - 1);
+    if (previousCodeUnit >= 0xd800 && previousCodeUnit <= 0xdbff) start -= 1;
+  }
+  return value.slice(start, index);
+}
+
+function getCodePointAt(value: string, index: number): string {
+  if (index < 0 || index >= value.length) return '';
+  const codeUnit = value.charCodeAt(index);
+  if (
+    codeUnit >= 0xd800 &&
+    codeUnit <= 0xdbff &&
+    index + 1 < value.length &&
+    value.charCodeAt(index + 1) >= 0xdc00 &&
+    value.charCodeAt(index + 1) <= 0xdfff
+  ) {
+    return value.slice(index, index + 2);
+  }
+  return value[index];
 }
 
 function isCjkCharacter(value: string): boolean {
@@ -321,10 +382,15 @@ export function FindInPageBar() {
 
   const moveActive = useCallback(
     (direction: 1 | -1) => {
+      const hadMatches = rangesRef.current.length > 0;
       if (text) applySearch(text, activeRef.current);
       const ranges = rangesRef.current;
       if (ranges.length === 0) return;
-      const nextActive = (activeRef.current + direction + ranges.length) % ranges.length;
+      const nextActive = hadMatches
+        ? (activeRef.current + direction + ranges.length) % ranges.length
+        : direction === 1
+          ? 0
+          : ranges.length - 1;
       activeRef.current = nextActive;
       setActive(nextActive);
       applyFindHighlights(ranges, nextActive);

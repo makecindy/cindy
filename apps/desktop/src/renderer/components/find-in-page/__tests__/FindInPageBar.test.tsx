@@ -165,6 +165,18 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('你\n好');
   });
 
+  it('removes normal-layout segment breaks around supplementary-plane CJK characters', async () => {
+    const page = document.createElement('main');
+    page.style.whiteSpace = 'normal';
+    page.textContent = '𠮷\n野';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: '𠮷野' } });
+
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('𠮷\n野');
+  });
+
   it('walks matches with Enter, Shift+Enter, and the navigation buttons', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo foo foo';
@@ -306,6 +318,24 @@ describe('FindInPageBar', () => {
     page.textContent = 'foo';
     fireEvent.click(nextButton);
     expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('starts at the first or last match when navigation rescans from zero results', async () => {
+    const page = document.createElement('main');
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'foo' } });
+
+    page.textContent = 'foo foo';
+    fireEvent.click(screen.getByRole('button', { name: 'findInPage.next' }));
+    expect(screen.getByText('1/2')).toBeTruthy();
+
+    page.textContent = '';
+    fireEvent.click(screen.getByRole('button', { name: 'findInPage.next' }));
+    expect(screen.getByText('0/0')).toBeTruthy();
+
+    page.textContent = 'foo foo';
+    fireEvent.click(screen.getByRole('button', { name: 'findInPage.previous' }));
+    expect(screen.getByText('2/2')).toBeTruthy();
   });
 
   it('excludes content hidden by zero opacity', async () => {
