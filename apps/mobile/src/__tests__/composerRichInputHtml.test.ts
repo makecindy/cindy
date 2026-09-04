@@ -31,6 +31,7 @@ describe('mobile composer rich input HTML', () => {
     expect(html).not.toContain('drag-start');
     expect(html).not.toContain('touchmove');
     expect(html).toContain("compositionstart");
+    expect(html).toContain("compositioncancel");
     expect(html).toContain("paste-images-start");
     expect(html).toContain('.slice(0, MAX_PASTED_IMAGE_COUNT)');
     expect(html).toContain('SUPPORTED_PASTED_IMAGE_MIME_TYPES.has(mimeType)');
@@ -265,7 +266,10 @@ describe('mobile composer rich input HTML', () => {
     };
     const windowStub: {
       ReactNativeWebView: { postMessage(payload: string): void };
-      cindyComposer?: { commitPaste(requestId: string, nodes: unknown[]): void };
+      cindyComposer?: {
+        applyDocument(value: unknown, focusAfter?: boolean): void;
+        commitPaste(requestId: string, nodes: unknown[]): void;
+      };
       getSelection(): typeof selection;
     } = {
       ReactNativeWebView: {
@@ -298,6 +302,28 @@ describe('mobile composer rich input HTML', () => {
       type: 'change',
       document: { version: 1, nodes: [{ type: 'text', text: 'hello world' }] },
     });
+
+    listeners.get('compositionstart')?.();
+    children[0].nodeValue = 'hello world composing';
+    listeners.get('input')?.();
+    expect(messages).not.toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world composing' }] },
+    });
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
+    children[0].nodeValue = 'hello world after chip';
+    listeners.get('input')?.();
+    expect(messages).toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world after chip' }] },
+    });
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
 
     const pasteRange = createRange();
     pasteRange.setStart(children[0], String(children[0].nodeValue).length);
@@ -379,6 +405,8 @@ describe('mobile composer rich input HTML', () => {
     expect(html).toContain('setCaretAfter(inserted[inserted.length - 1], current)');
     expect(html).toContain('if (isCaretAnchor(container))');
     expect(html).toContain('removeAtom(atom)');
+    expect(html).toContain('composing = false;');
+    expect(html).toContain("root.addEventListener('compositioncancel'");
   });
 
   it('escapes bootstrap markup instead of injecting it into the page', () => {

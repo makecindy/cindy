@@ -181,6 +181,10 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     return elements;
   };
   const render = (documentValue, focusAfter) => {
+    // Programmatic DOM replace (inserting a directory chip, applying a draft)
+    // can drop compositionend. If composing stays true, later input is visible
+    // but never posted, so the send button stays disabled.
+    composing = false;
     applying = true;
     // Android WebView 85 lacks the modern child-replacement API; use legacy DOM primitives.
     const fragment = document.createDocumentFragment();
@@ -275,6 +279,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     selection.addRange(range);
   };
   const insertAtSelection = (node) => {
+    composing = false;
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) placeCaretAtEnd();
     const current = window.getSelection();
@@ -427,6 +432,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   root.addEventListener('input', notify);
   root.addEventListener('compositionstart', () => { composing = true; });
   root.addEventListener('compositionend', () => { composing = false; notify(); });
+  root.addEventListener('compositioncancel', () => { composing = false; notify(); });
   root.addEventListener('focus', () => post({ type: 'focus' }));
   root.addEventListener('blur', () => post({ type: 'blur' }));
   root.addEventListener('keydown', (event) => {
