@@ -759,6 +759,57 @@ describe('FindInPageBar', () => {
     }
   });
 
+  it('excludes transformed fixed drawer content outside the viewport', async () => {
+    const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+    const elementRectDescriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'getBoundingClientRect',
+    );
+    const drawer = document.createElement('aside');
+    drawer.style.position = 'fixed';
+    drawer.style.transform = 'translateX(100%)';
+    drawer.textContent = 'foo';
+    document.body.append(drawer);
+    let rangeRect = { top: 0, bottom: 10, left: -100, right: -90 };
+
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value() {
+        return [rangeRect];
+      },
+    });
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value() {
+        return { top: 0, bottom: 100, left: 0, right: 100 };
+      },
+    });
+
+    try {
+      const input = await openFindBar();
+      fireEvent.change(input, { target: { value: 'foo' } });
+      expect(screen.getByText('0/0')).toBeTruthy();
+
+      drawer.style.transform = 'none';
+      rangeRect = { top: 0, bottom: 10, left: 0, right: 10 };
+      const transitionEnd = new Event('transitionend', { bubbles: true });
+      Object.defineProperty(transitionEnd, 'propertyName', { value: 'transform' });
+      drawer.dispatchEvent(transitionEnd);
+      await waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+    } finally {
+      if (rangeRectDescriptor) {
+        Object.defineProperty(Range.prototype, 'getClientRects', rangeRectDescriptor);
+      } else {
+        delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
+      }
+      if (elementRectDescriptor) {
+        Object.defineProperty(Element.prototype, 'getBoundingClientRect', elementRectDescriptor);
+      } else {
+        delete (Element.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+      }
+    }
+  });
+
   it('applies overflow clipping only on the hidden axis', async () => {
     const rangeRectDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
     const elementRectDescriptor = Object.getOwnPropertyDescriptor(

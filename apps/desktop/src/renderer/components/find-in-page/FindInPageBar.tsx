@@ -239,6 +239,13 @@ interface ClippingAncestor {
   element: HTMLElement;
   x: boolean;
   y: boolean;
+  viewport?: boolean;
+}
+
+function isViewportPositioned(style: CSSStyleDeclaration): boolean {
+  const position = style.position.trim().toLowerCase();
+  const transform = style.transform.trim().toLowerCase();
+  return position === 'fixed' || (position === 'absolute' && transform !== '' && transform !== 'none');
 }
 
 function getClippingAncestors(element: HTMLElement | null): ClippingAncestor[] {
@@ -247,6 +254,9 @@ function getClippingAncestors(element: HTMLElement | null): ClippingAncestor[] {
   let ancestor = element;
   while (ancestor) {
     const style = window.getComputedStyle(ancestor);
+    if (isViewportPositioned(style)) {
+      clippingAncestors.push({ element: ancestor, x: true, y: true, viewport: true });
+    }
     if (!isLayoutViewportShell(ancestor, style, hasScrollableDescendant)) {
       const overflowClipAxes = getOverflowClipAxes(style);
       if (getLineClamp(style) !== null) overflowClipAxes.y = true;
@@ -273,7 +283,9 @@ function isRangeVisibleWithinAncestors(
   if (rects.length === 0) return true;
 
   for (const clippingAncestor of clippingAncestors) {
-    const clipRect = clippingAncestor.element.getBoundingClientRect();
+    const clipRect = clippingAncestor.viewport
+      ? { top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth }
+      : clippingAncestor.element.getBoundingClientRect();
     const intersectsClip = rects.some((rect) => {
       const intersectsX =
         rect.right > clipRect.left && rect.left < clipRect.right;
@@ -592,6 +604,7 @@ export function FindInPageBar() {
           'height',
           'max-width',
           'max-height',
+          'transform',
         ].includes(propertyName)
       ) {
         return;
