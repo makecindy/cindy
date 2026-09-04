@@ -444,6 +444,18 @@
         "openDirFailed": "Failed to open folder: {{error}}",
         "refreshed": "Local themes refreshed"
       },
+      "background": {
+        "title": "Custom background",
+        "description": "Choose a local image for the main interface. Cindy keeps a managed copy of the image.",
+        "choose": "Choose image",
+        "replace": "Replace image",
+        "remove": "Remove background",
+        "preview": "Background image preview",
+        "overlay": "Readability overlay: {{value}}%",
+        "blur": "Blur: {{value}} px",
+        "importSuccess": "Background image updated",
+        "importFailed": "Could not import the background image: {{error}}"
+      },
       "font": {
         "reset": "Reset to default",
         "defaultPreset": "Default",

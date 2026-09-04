@@ -48,6 +48,7 @@ import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
+import { useAppearanceBackground } from '@/hooks/useAppearanceBackground';
 import { WorktreeChipsRow } from '@/components/new-chat/WorktreeChipsRow';
 import {
   FolderPickerPopover,
@@ -628,6 +629,7 @@ interface DraftTargetRequest {
 }
 
 export function NewMakerDraftRoute() {
+  const { backgroundImage } = useAppearanceBackground();
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
   const draft = useNewMakerDraft();
@@ -5182,7 +5184,8 @@ export function NewMakerDraftRoute() {
         <div
           data-testid="create-agent-shell"
           className={cn(
-            'relative flex h-full w-full items-center justify-center overflow-x-hidden overflow-y-auto bg-[var(--surface)] px-3 py-8', // px-3:外壳12+main32=44,与技能页(32+12滚动条槽)对齐(实测定稿 2026-07-19)
+            'appearance-background-page-surface relative flex h-full w-full items-center justify-center overflow-x-hidden overflow-y-auto px-3 py-8', // px-3:外壳12+main32=44,与技能页(32+12滚动条槽)对齐(实测定稿 2026-07-19)
+            backgroundImage ? 'bg-transparent' : 'bg-[var(--surface)]',
           )}
         >
           {/* 整页拖入遮罩(与 CCAgentSessionView 聊天区同款 token):提示文案由

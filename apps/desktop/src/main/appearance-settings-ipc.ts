@@ -22,12 +22,29 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
+import {
+  importAppearanceBackground,
+  removeAppearanceBackgroundFile,
+  removeAppearanceBackgroundFiles,
+} from './appearance-background.js';
+import { desktopMakerLogger } from './maker-host/logger-adapter.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
 export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = 'appearance-settings:changed';
 
+const log = desktopMakerLogger.child('appearance-settings-ipc');
 let registered = false;
+let backgroundMutationQueue: Promise<void> = Promise.resolve();
+
+function serializeBackgroundMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = backgroundMutationQueue.then(operation, operation);
+  backgroundMutationQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 export function registerAppearanceSettingsIpc(): void {
   if (registered) return;
@@ -57,11 +74,58 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await resetAppearanceSettings();
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    return settings;
+    return serializeBackgroundMutation(async () => {
+      const settings = await resetAppearanceSettings();
+      applyAppearanceToWindows(settings);
+      broadcast(settings);
+      await cleanupBackgroundFiles(removeAppearanceBackgroundFiles(), 'background reset cleanup');
+      return settings;
+    });
   });
+
+  ipcMain.handle('appearance-settings:background-import', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return serializeBackgroundMutation(async () => {
+      const result = await importAppearanceBackground(BrowserWindow.fromWebContents(event.sender));
+      if (result.canceled) return result;
+      let settings: AppearanceSettings;
+      try {
+        settings = await writeAppearanceSettingsPatch({ backgroundImage: result.url });
+      } catch (error) {
+        await cleanupBackgroundFiles(
+          removeAppearanceBackgroundFile(result.url),
+          'staged background rollback',
+        );
+        throw error;
+      }
+      broadcast(settings);
+      await cleanupBackgroundFiles(
+        removeAppearanceBackgroundFiles(result.url),
+        'stale background cleanup',
+      );
+      return { ...result, settings };
+    });
+  });
+
+  ipcMain.handle('appearance-settings:background-remove', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return serializeBackgroundMutation(async () => {
+      const settings = await writeAppearanceSettingsPatch({ backgroundImage: '' });
+      broadcast(settings);
+      await cleanupBackgroundFiles(removeAppearanceBackgroundFiles(), 'background removal cleanup');
+      return settings;
+    });
+  });
+}
+
+async function cleanupBackgroundFiles(operation: Promise<void>, context: string): Promise<void> {
+  try {
+    await operation;
+  } catch (error) {
+    log.warn(`${context} failed (non-fatal)`, {
+      code: (error as NodeJS.ErrnoException).code ?? 'UNKNOWN',
+    });
+  }
 }
 
 export function applyAppearanceToWindow(
@@ -82,13 +146,9 @@ export function getPersistedWindowZoom(): number {
   return readAppearanceSettings().windowZoom;
 }
 
-export async function updatePersistedWindowZoom(
-  delta: number | null,
-): Promise<AppearanceSettings> {
+export async function updatePersistedWindowZoom(delta: number | null): Promise<AppearanceSettings> {
   const settings = await updateAppearanceSettingsAtomic((current) => ({
-    windowZoom: clampAppearanceWindowZoom(
-      delta === null ? 1 : current.windowZoom + delta,
-    ),
+    windowZoom: clampAppearanceWindowZoom(delta === null ? 1 : current.windowZoom + delta),
   }));
   applyAppearanceToWindows(settings);
   broadcast(settings);
@@ -111,7 +171,15 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     throwIpcError('INVALID_PARAMS', 'appearance patch must be an object');
   }
   const raw = rawPatch as Record<string, unknown>;
-  const allowed = new Set(['uiFamily', 'codeFamily', 'uiSize', 'codeSize', 'windowZoom']);
+  const allowed = new Set([
+    'uiFamily',
+    'codeFamily',
+    'uiSize',
+    'codeSize',
+    'windowZoom',
+    'backgroundOverlay',
+    'backgroundBlur',
+  ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
@@ -138,6 +206,22 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
       'windowZoom',
       clampAppearanceWindowZoom,
       APPEARANCE_LIMITS.windowZoom,
+    );
+  }
+  if ('backgroundOverlay' in raw) {
+    patch.backgroundOverlay = parseNumber(
+      raw.backgroundOverlay,
+      'backgroundOverlay',
+      (value) => Math.min(0.9, Math.max(0.2, value)),
+      APPEARANCE_LIMITS.backgroundOverlay,
+    );
+  }
+  if ('backgroundBlur' in raw) {
+    patch.backgroundBlur = parseNumber(
+      raw.backgroundBlur,
+      'backgroundBlur',
+      (value) => Math.round(Math.min(24, Math.max(0, value))),
+      APPEARANCE_LIMITS.backgroundBlur,
     );
   }
   return patch;

@@ -444,6 +444,18 @@
         "openDirFailed": "開啟目錄失敗：{{error}}",
         "refreshed": "已重新整理本地主題"
       },
+      "background": {
+        "title": "自訂背景",
+        "description": "選擇本機圖片作為主介面背景，Cindy 會儲存一份由應用程式管理的副本。",
+        "choose": "選擇圖片",
+        "replace": "更換圖片",
+        "remove": "移除背景",
+        "preview": "背景圖片預覽",
+        "overlay": "可讀性遮罩：{{value}}%",
+        "blur": "模糊：{{value}} 像素",
+        "importSuccess": "背景圖片已更新",
+        "importFailed": "無法匯入背景圖片：{{error}}"
+      },
       "font": {
         "reset": "恢復預設",
         "defaultPreset": "預設",

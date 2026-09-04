@@ -47,6 +47,10 @@ const sidebarTopNavSource = readFileSync(
   resolve(__dirname, '..', 'components', 'sidebar', 'SidebarTopNav.tsx'),
   'utf8',
 );
+const sidebarShellSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'sidebar', 'Sidebar.tsx'),
+  'utf8',
+);
 const vendorIconSource = readFileSync(
   resolve(__dirname, '..', 'components', 'sidebar', 'VendorIcon.tsx'),
   'utf8',
@@ -57,8 +61,57 @@ const extraDirsButtonSource = readFileSync(
 );
 const colorsSource = readFileSync(resolve(__dirname, '..', 'themes', 'colors.ts'), 'utf8');
 const globalsSource = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
+const preloadSource = readFileSync(resolve(__dirname, '..', '..', 'preload', 'preload.ts'), 'utf8');
+const settingsSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'settings', 'SettingsView.tsx'),
+  'utf8',
+);
+const schedulerSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'scheduler', 'SchedulerPage.tsx'),
+  'utf8',
+);
+const pluginLayoutSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'plugin', 'PluginManagementLayout.tsx'),
+  'utf8',
+);
+const mainLayoutSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'layout', 'MainLayout.tsx'),
+  'utf8',
+);
 
 describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
+  it('only reveals the custom background through readable page materials', () => {
+    expect(source).toContain("backgroundImage ? 'bg-transparent' : 'bg-[var(--surface)]'");
+    expect(source).toContain('appearance-background-page-surface');
+    expect(chatInputSource).toContain('isCreateAgentVariant && !!backgroundImage');
+    expect(chatInputSource).toContain('var(--chat-input-bg) 84%');
+    expect(settingsSource).toContain("backgroundImage ? 'bg-transparent' : 'bg-[var(--settings-bg)]'");
+    expect(settingsSource).toContain('appearance-background-page-surface');
+    expect(schedulerSource).toContain(
+      "backgroundImage ? 'bg-transparent' : 'bg-[hsl(var(--content-area))]'",
+    );
+    expect(schedulerSource).toContain('appearance-background-page-surface');
+    expect(pluginLayoutSource).toContain('appearance-background-page-surface');
+    expect(mainLayoutSource).toContain(
+      "data-appearance-background={backgroundImage ? 'active' : 'none'}",
+    );
+    expect(globalsSource).toContain(
+      "[data-appearance-background='active'] .appearance-background-page-surface",
+    );
+  });
+
+  it('reads the latest appearance snapshot when a background-aware route mounts', () => {
+    expect(preloadSource).toContain('getSync: readAppearanceSettingsSync');
+    expect(preloadSource).toContain("ipcRenderer.sendSync('appearance-settings:get-sync')");
+    expect(preloadSource).not.toContain('getSync: (): AppearanceSettings | null => appearanceSettingsInfo');
+  });
+
+  it('keeps the default sidebar divider visible after a custom background is removed', () => {
+    expect(sidebarShellSource).toContain('borderRightColor: backgroundImage');
+    expect(sidebarShellSource).toContain('var(--border-default) 35%');
+    expect(sidebarShellSource).toContain('var(--text-secondary) 65%');
+  });
+
   it('keeps the approved CREATE AGENT shell while preserving the functional composer', () => {
     expect(source).toContain('data-testid="create-agent-shell"');
     expect(source).toContain('data-testid="create-agent-main"');

@@ -42,6 +42,7 @@ import type {
 } from '@cindy/maker-scheduler';
 
 import { useHorizontalResize } from '@/hooks/useHorizontalResize';
+import { useAppearanceBackground } from '@/hooks/useAppearanceBackground';
 
 import { useSchedules } from './hooks/useSchedules';
 import { useDeleteScheduleWithSessions } from './hooks/useDeleteScheduleWithSessions';
@@ -128,6 +129,7 @@ export function getFocusedScheduleStatusFilter(
 }
 
 export function SchedulerPage() {
+  const { backgroundImage } = useAppearanceBackground();
   const { t } = useTranslation();
   // useSchedules 内部还会在 'fired'/'completed' 事件下维护 runningById，
   // 但 master-detail 改版后 running 视觉表达全在 right-pane 的 history card 上
@@ -594,7 +596,12 @@ export function SchedulerPage() {
   const isEmpty = !loading && !error && schedules.length === 0;
 
   return (
-    <div className="flex h-full w-full flex-col bg-[hsl(var(--content-area))]">
+    <div
+      className={cn(
+        'appearance-background-page-surface flex h-full w-full flex-col',
+        backgroundImage ? 'bg-transparent' : 'bg-[hsl(var(--content-area))]',
+      )}
+    >
       {/* Header — 无 loading 守卫（CLAUDE.md §12：避免 loading→loaded 那一帧
           count / New 按钮突然出现导致整行抖动）。空数据时 New 按钮藏起来留给 EmptyState
           的主 CTA 接盘，避免双 CTA。 */}

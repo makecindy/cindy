@@ -52,6 +52,7 @@ import { BillingSettingsSection } from '@/features/billing/BillingPage';
 import { canAccessBillingSettings } from './billingVisibility';
 import { canAccessUsageSettings } from './usageVisibility';
 import { UsageHistorySection } from './usage/UsageHistorySection';
+import { useAppearanceBackground } from '@/hooks/useAppearanceBackground';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -60,6 +61,7 @@ interface SettingsOutletContext {
 }
 
 export function SettingsView() {
+  const { backgroundImage } = useAppearanceBackground();
   const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -212,7 +214,10 @@ export function SettingsView() {
 
   return (
     <div
-      className="h-full w-full overflow-hidden bg-[var(--settings-bg)]"
+      className={cn(
+        'appearance-background-page-surface h-full w-full overflow-hidden',
+        backgroundImage ? 'bg-transparent' : 'bg-[var(--settings-bg)]',
+      )}
       role="main"
       aria-label={t('settings.title')}
     >

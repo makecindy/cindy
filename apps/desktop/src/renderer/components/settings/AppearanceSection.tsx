@@ -10,6 +10,8 @@ import {
   FolderOpen,
   Import as ImportIcon,
   RefreshCw,
+  Image as ImageIcon,
+  Trash2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -43,6 +45,7 @@ import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
+import { useAppearanceBackground } from '@/hooks/useAppearanceBackground';
 
 const log = createLogger('settings/AppearanceSection');
 
@@ -324,6 +327,14 @@ export function AppearanceSection() {
   const { mode: ghostPanelRestoreMode, setMode: setGhostPanelRestoreMode } =
     useGhostPanelRestoreMode();
   const { t } = useTranslation();
+  const {
+    backgroundImage,
+    backgroundOverlay,
+    backgroundBlur,
+    setPatch: setBackgroundPatch,
+    importBackground,
+    removeBackground,
+  } = useAppearanceBackground();
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
   const [codeSizeInput, setCodeSizeInput] = useState(String(codeSize));
@@ -458,6 +469,18 @@ export function AppearanceSection() {
     if (isLocalThemeId(familyId)) setFamily(familyId);
     toast.success(t('settings.appearance.localThemes.refreshed'));
   }, [familyId, setFamily, t]);
+
+  const handleBackgroundImport = useCallback(async () => {
+    try {
+      const result = await importBackground();
+      if (!result.canceled) toast.success(t('settings.appearance.background.importSuccess'));
+    } catch (error) {
+      const ipcError = extractIpcError(error);
+      toast.error(
+        t('settings.appearance.background.importFailed', { error: ipcError?.code ?? 'UNKNOWN' }),
+      );
+    }
+  }, [importBackground, t]);
 
   const commitCodeSizeInput = useCallback(() => {
     const trimmed = codeSizeInput.trim();
@@ -627,6 +650,89 @@ export function AppearanceSection() {
           <p className="text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
             {t(noticeKey, { name: selectedFamily.name })}
           </p>
+        ) : null}
+      </div>
+
+      <div
+        className={cn(
+          'flex flex-col gap-[14px] rounded-xl p-5',
+          'bg-[var(--settings-theme-card-bg)]',
+          'border border-[var(--settings-theme-card-border)]',
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {t('settings.appearance.background.title')}
+            </p>
+            <p className="mt-1 text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.appearance.background.description')}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={() => void handleBackgroundImport()}
+              className="flex h-9 items-center gap-2 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 text-[var(--settings-input-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
+            >
+              <ImageIcon size={15} />
+              {t(
+                backgroundImage
+                  ? 'settings.appearance.background.replace'
+                  : 'settings.appearance.background.choose',
+              )}
+            </button>
+            {backgroundImage ? (
+              <Tip text={t('settings.appearance.background.remove')}>
+                <button
+                  type="button"
+                  aria-label={t('settings.appearance.background.remove')}
+                  onClick={() => void removeBackground()}
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </Tip>
+            ) : null}
+          </div>
+        </div>
+        {backgroundImage ? (
+          <>
+            <div
+              className="h-28 w-full rounded-xl border border-[var(--settings-input-border)] bg-cover bg-center"
+              style={{ backgroundImage: `url("${backgroundImage}")` }}
+              role="img"
+              aria-label={t('settings.appearance.background.preview')}
+            />
+            <label className="flex flex-col gap-2 text-12 text-[var(--settings-section-sublabel)]">
+              <span>
+                {t('settings.appearance.background.overlay', {
+                  value: Math.round(backgroundOverlay * 100),
+                })}
+              </span>
+              <Slider
+                min={0.2}
+                max={0.9}
+                step={0.05}
+                value={[backgroundOverlay]}
+                onValueChange={([value]) =>
+                  value !== undefined && void setBackgroundPatch({ backgroundOverlay: value })
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-2 text-12 text-[var(--settings-section-sublabel)]">
+              <span>{t('settings.appearance.background.blur', { value: backgroundBlur })}</span>
+              <Slider
+                min={0}
+                max={24}
+                step={1}
+                value={[backgroundBlur]}
+                onValueChange={([value]) =>
+                  value !== undefined && void setBackgroundPatch({ backgroundBlur: value })
+                }
+              />
+            </label>
+          </>
         ) : null}
       </div>
 

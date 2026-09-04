@@ -444,6 +444,18 @@
         "openDirFailed": "フォルダを開けませんでした: {{error}}",
         "refreshed": "ローカルテーマを更新しました"
       },
+      "background": {
+        "title": "カスタム背景",
+        "description": "ローカル画像をメイン画面の背景に設定します。Cindy が管理用のコピーを保存します。",
+        "choose": "画像を選択",
+        "replace": "画像を変更",
+        "remove": "背景を削除",
+        "preview": "背景画像のプレビュー",
+        "overlay": "読みやすさオーバーレイ：{{value}}%",
+        "blur": "ぼかし：{{value}} px",
+        "importSuccess": "背景画像を更新しました",
+        "importFailed": "背景画像を読み込めませんでした：{{error}}"
+      },
       "font": {
         "reset": "デフォルトに戻す",
         "defaultPreset": "デフォルト",

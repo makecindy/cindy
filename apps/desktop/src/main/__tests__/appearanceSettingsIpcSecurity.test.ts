@@ -12,10 +12,16 @@ const mocks = vi.hoisted(() => ({
   writeAppearanceSettingsPatch: vi.fn(),
   resetAppearanceSettings: vi.fn(),
   updateAppearanceSettingsAtomic: vi.fn(),
+  importAppearanceBackground: vi.fn(),
+  removeAppearanceBackgroundFile: vi.fn(),
+  removeAppearanceBackgroundFiles: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
-  BrowserWindow: { getAllWindows: () => mocks.allWindows },
+  BrowserWindow: {
+    getAllWindows: () => mocks.allWindows,
+    fromWebContents: vi.fn(() => null),
+  },
   ipcMain: { on: mocks.ipcOn, handle: mocks.ipcHandle },
 }));
 
@@ -36,6 +42,12 @@ vi.mock('../appearance-settings-store.js', () => ({
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
 }));
 
+vi.mock('../appearance-background.js', () => ({
+  importAppearanceBackground: mocks.importAppearanceBackground,
+  removeAppearanceBackgroundFile: mocks.removeAppearanceBackgroundFile,
+  removeAppearanceBackgroundFiles: mocks.removeAppearanceBackgroundFiles,
+}));
+
 import { registerAppearanceSettingsIpc } from '../appearance-settings-ipc.js';
 
 const persisted = {
@@ -44,6 +56,9 @@ const persisted = {
   uiSize: 15,
   codeSize: 14,
   windowZoom: 1.1,
+  backgroundImage: '',
+  backgroundOverlay: 0.58,
+  backgroundBlur: 0,
 };
 
 describe('appearance settings IPC authorization', () => {
@@ -57,6 +72,9 @@ describe('appearance settings IPC authorization', () => {
     mocks.trustedReadWindow.mockReset().mockReturnValue(false);
     mocks.assertTrustedAppRendererEvent.mockReset();
     mocks.readAppearanceSettings.mockReset().mockReturnValue(persisted);
+    mocks.importAppearanceBackground.mockReset();
+    mocks.removeAppearanceBackgroundFile.mockReset().mockResolvedValue(undefined);
+    mocks.removeAppearanceBackgroundFiles.mockReset().mockResolvedValue(undefined);
   });
 
   it('同步启动读取只向已授权的外观 reader 返回持久快照', () => {
@@ -123,5 +141,37 @@ describe('appearance settings IPC authorization', () => {
 
     expect(allowedSend).toHaveBeenCalledWith('appearance-settings:changed', persisted);
     expect(deniedSend).not.toHaveBeenCalled();
+  });
+
+  it('背景设置提交失败时只回收本次暂存文件，不清理当前背景', async () => {
+    const importHandler = mocks.ipcHandle.mock.calls.find(
+      ([channel]) => channel === 'appearance-settings:background-import',
+    )?.[1] as (event: { sender: unknown }) => Promise<unknown>;
+    const failure = new Error('settings locked');
+    const stagedUrl =
+      'cindy-background://current/background-123e4567-e89b-12d3-a456-426614174000.jpg';
+    mocks.importAppearanceBackground.mockResolvedValue({ canceled: false, url: stagedUrl });
+    mocks.writeAppearanceSettingsPatch.mockRejectedValueOnce(failure);
+
+    await expect(importHandler({ sender: {} })).rejects.toBe(failure);
+
+    expect(mocks.removeAppearanceBackgroundFile).toHaveBeenCalledWith(stagedUrl);
+    expect(mocks.removeAppearanceBackgroundFiles).not.toHaveBeenCalled();
+  });
+
+  it('背景设置提交成功后才清理旧文件，并保留新文件', async () => {
+    const importHandler = mocks.ipcHandle.mock.calls.find(
+      ([channel]) => channel === 'appearance-settings:background-import',
+    )?.[1] as (event: { sender: unknown }) => Promise<unknown>;
+    const stagedUrl =
+      'cindy-background://current/background-123e4567-e89b-12d3-a456-426614174001.png';
+    const next = { ...persisted, backgroundImage: stagedUrl };
+    mocks.importAppearanceBackground.mockResolvedValue({ canceled: false, url: stagedUrl });
+    mocks.writeAppearanceSettingsPatch.mockResolvedValueOnce(next);
+
+    await expect(importHandler({ sender: {} })).resolves.toMatchObject({ settings: next });
+
+    expect(mocks.removeAppearanceBackgroundFile).not.toHaveBeenCalled();
+    expect(mocks.removeAppearanceBackgroundFiles).toHaveBeenCalledWith(stagedUrl);
   });
 });
