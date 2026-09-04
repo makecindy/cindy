@@ -785,8 +785,8 @@ describe('session runtime control wiring', () => {
   it('retains runtime state across process closes and clears it at task lifecycle boundaries', () => {
     const closeBoundary = handlerBody(
       registerSource,
-      "if (status === 'closed') {",
-      'const closedDirectAbortBoundary',
+      'const sessionBindings = createSessionBindingLifecycle',
+      'export function wireSessionToIpc',
     );
     const terminalCleanup = handlerBody(
       registerSource,
@@ -922,21 +922,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('runtimePending: control.pending');
     expect(registerSource).toContain("effort: effective.effort ?? '',");
   });
+  // persists Pi runtime-verified windows without catalog replacement: covered by the executable sessionEventPipeline tests.
 
-  it('persists Pi runtime-verified windows without catalog replacement', () => {
-    const snapshotStart = registerSource.indexOf('if (pendingContextSnapshot) {');
-    const snapshotEnd = registerSource.indexOf(
-      'if (pendingCodexAccountUsageSnapshot)',
-      snapshotStart,
-    );
-    const snapshot = registerSource.slice(snapshotStart, snapshotEnd);
-
-    expect(snapshot).toContain("session.agentKind === 'pi'");
-    expect(snapshot).toContain('piRuntimeWindow ?? verifiedWindow');
-    expect(snapshot.indexOf('pendingContextSnapshot.contextWindow')).toBeLessThan(
-      snapshot.indexOf('lookupVerifiedContextWindow('),
-    );
-  });
 
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
     expect(registerSource).toContain(

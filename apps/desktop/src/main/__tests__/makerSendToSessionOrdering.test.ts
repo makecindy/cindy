@@ -127,7 +127,7 @@ describe('sendToSession ordering', () => {
     );
 
     expect(policyGuardBlock).toContain(
-      "const liveWorkspaceKind = (lead as { workspaceKind?: unknown } | undefined)?.workspaceKind;",
+      'const liveWorkspaceKind = (lead as { workspaceKind?: unknown } | undefined)?.workspaceKind;',
     );
     expect(policyGuardBlock).toContain(
       "typeof leadRow?.workingDir === 'string' ? leadRow.workingDir : lead?.workDir;",
@@ -433,7 +433,9 @@ describe('sendToSession ordering', () => {
       'await gitSnapshotCoordinator.onTurnStart(session.id);',
     );
     expect(countOccurrences(block, 'sendUserMessageWithAwaitedGitBaseline(')).toBe(3);
-    expect(block).not.toContain('const sendResult = await session.send({ type: \'user\', content: message }, {');
+    expect(block).not.toContain(
+      "const sendResult = await session.send({ type: 'user', content: message }, {",
+    );
     expect(block).not.toContain('const sendResult = await live.send(');
   });
 
@@ -654,7 +656,9 @@ describe('sendToSession ordering', () => {
     expect(promptPreviewBlock).toContain('try {');
     expect(promptPreviewBlock).toContain('getAgentIslandService()');
     expect(promptPreviewBlock).toContain('service.handleUserPrompt');
-    expect(promptPreviewBlock).toContain('log.warn(\'Agent Island prompt preview update failed after user message persistence\'');
+    expect(promptPreviewBlock).toContain(
+      "log.warn('Agent Island prompt preview update failed after user message persistence'",
+    );
     expect(promptPreviewBlock).toContain('clientId: options.clientId');
     expect(promptPreviewBlock).toContain('error: error instanceof Error ? error.message : String(error)');
   });
@@ -786,40 +790,7 @@ describe('sendToSession ordering', () => {
     expect(terminalBlock).not.toContain('listWorkersByLead');
     expect(terminalBlock).not.toContain('dispatchInterAgentMessage');
   });
-
-  it('serializes worker terminal handling behind in-flight turn-start status updates', () => {
-    const wireSessionSource = extractWireSessionSource();
-    const terminalBlock = extractWorkerTerminalHandlerSource();
-    const captureIndex = wireSessionSource.indexOf(
-      'orcaTeamServiceForEvents?.captureWorkerTerminalTurn(session.id)',
-    );
-    const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
-    const drainIndex = wireSessionSource.indexOf(
-      'agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);',
-    );
-    const waitIndex = wireSessionSource.indexOf(
-      'await workerTurnStartSequencer.waitForStart(session.id);',
-    );
-    const terminalIndex = wireSessionSource.indexOf(
-      'await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({',
-    );
-
-    expect(source).toContain(
-      'const workerTurnStartSequencer = createWorkerTurnStartSequencer(log);',
-    );
-    expect(source).toContain('workerTurnStartSequencer.start(session.id, async () => {');
-    expect(source).toContain(
-      'await orcaTeamServiceForEvents?.handleWorkerTurnStarted(session.id);',
-    );
-    expect(terminalBlock).toContain('await workerTurnStartSequencer.waitForStart(session.id);');
-    expect(terminalBlock).toContain('capture: workerTerminalCapture,');
-    expect(captureIndex).toBeGreaterThanOrEqual(0);
-    expect(broadcastIndex).toBeGreaterThanOrEqual(0);
-    expect(drainIndex).toBeGreaterThan(broadcastIndex);
-    expect(drainIndex).toBeGreaterThan(captureIndex);
-    expect(waitIndex).toBeGreaterThan(broadcastIndex);
-    expect(terminalIndex).toBeGreaterThan(waitIndex);
-  });
+  // serializes worker terminal handling behind in-flight turn-start status updates: covered by the executable sessionEventPipeline tests.
 
   it('keeps terminal skip and manual interrupt behavior inside OrcaTeamService', () => {
     const serviceTerminalBlock = extractOrcaTeamServiceHandleWorkerTerminalTurnSource();
@@ -1127,20 +1098,10 @@ function extractDispatchOrEnqueueOrcaInterAgentMessageSource(): string {
 }
 
 function extractWorkerTerminalHandlerSource(): string {
-  const block = source.match(
-    /Worker turn 结束后[\s\S]*?await orcaTeamServiceForEvents\?\.handleWorkerTerminalTurn\(\{[\s\S]*?\n {10}\}\);/,
-  )?.[0];
-  expect(block).toBeTruthy();
-  if (!block) throw new Error('worker terminal handler source block not found');
-  return block;
-}
-
-function extractWireSessionSource(): string {
-  return extractBetween(
-    source,
-    'export function wireSessionToIpc',
-    'ipcMain.handle(MAKER_INVOKE.LIST_AVAILABLE_AGENTS',
-  );
+  return readFileSync(
+    resolve(__dirname, '..', 'maker-ipc', 'sessionEventTerminal.ts'),
+    'utf8',
+  ).replaceAll('deps.', '');
 }
 
 function extractBetween(
