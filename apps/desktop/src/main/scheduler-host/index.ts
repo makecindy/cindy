@@ -107,7 +107,8 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     logger: deps.logger,
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
-    acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    acquirePendingAgentSwitch: (sessionId, signal) =>
+      acquirePendingAgentSwitchForDirectSend(sessionId, { signal }),
     onSessionCreated: broadcastSessionCreated,
     // 停用轴裁决:每次 fire 前判保存路由是否已被用户停用(见 runner deps 注释)。
     checkModelRoute: verdictForModelRoute,

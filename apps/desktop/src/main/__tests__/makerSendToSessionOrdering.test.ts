@@ -509,7 +509,7 @@ describe('sendToSession ordering', () => {
     );
     const directSendSwitchBlock = extractBetween(
       source,
-      'pendingAgentSwitchApplyHolder = async (sessionId, signal) =>',
+      'pendingAgentSwitchApplyHolder = async (sessionId, options) =>',
       'ipcMain.handle(MAKER_INVOKE.MARK_ORCA_ROLE',
     );
 
@@ -591,14 +591,19 @@ describe('sendToSession ordering', () => {
       'selection,',
     );
     expect(source).toContain('withSessionLock: withSendToSessionLock,');
+    // 非持锁路径:获取锁 → apply → 准备不健康会话 → 返回 release。
+    // (持锁路径 sessionRouteLockHeld 在锁外直接 apply 并返回 no-op,
+    //  见同文件 "lets a route-lock holder skip..." 测试。)
     expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId);');
-    expectOrder(
+    const nonLockedPath = extractBetween(
       directSendSwitchBlock,
       'const release = await acquireSendToSessionLock(sessionId);',
-      'applyPendingAgentSwitchIfIdle(',
+      '  };',
+      { allowMissingEnd: true },
     );
-    expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'prepareUnhealthySession');
-    expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', 'return release;');
+    expect(nonLockedPath).toContain('await applyPendingRoute();');
+    expect(nonLockedPath).toContain('return release;');
+    expectOrder(nonLockedPath, 'await applyPendingRoute();', 'return release;');
   });
 
   it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
@@ -1069,6 +1074,36 @@ describe('sendToSession ordering', () => {
     expect(useWorkersSource).not.toContain('isRunningWorkerStatus');
     expect(useWorkersSource).toContain('const activeWorkerCount = getActiveWorkerCount(workers);');
     expect(workerProjectionStoreSource).toContain('return workers.filter((w) => isActiveWorkerStatus(w.status)).length;');
+  });
+
+  it('lets a route-lock holder skip the nested pending-agent-switch lock', () => {
+    // Goal 的 lifecycle fence 在持有 withSendToSessionLock 时调用
+    // controller.setGoal/resumeGoal/fireTurn,后者经
+    // acquirePendingAgentSwitchForDirectSend → pendingAgentSwitchApplyHolder
+    // 又获取同一把非重入 send/route 锁,会自死锁(#3262 review P2)。
+    // holder 必须支持 sessionRouteLockHeld 选项:调用方已持锁时跳过
+    // acquireSendToSessionLock,只执行 apply 并返回 no-op release。
+    const holderBlock = extractBetween(
+      source,
+      'pendingAgentSwitchApplyHolder = async (sessionId, options) =>',
+      'ipcMain.handle(MAKER_INVOKE.MARK_ORCA_ROLE',
+    );
+    // 1. holder 读取 options.sessionRouteLockHeld。
+    expect(holderBlock).toContain('options?.sessionRouteLockHeld');
+    // 2. 持锁时直接执行 apply 并返回 no-op release,不调 acquireSendToSessionLock。
+    expect(holderBlock).toContain('await applyPendingRoute()');
+    expect(holderBlock).toContain('return () => {};');
+    // 3. 非持锁路径仍获取锁,保证串行语义不回退。
+    const nonLockedPath = extractBetween(
+      holderBlock,
+      'const release = await acquireSendToSessionLock(sessionId);',
+      '  };',
+      { allowMissingEnd: true },
+    );
+    expect(nonLockedPath).toContain('await applyPendingRoute();');
+    expect(nonLockedPath).toContain('return release;');
+    // 4. acquirePendingAgentSwitchForDirectSend 把 options 透传给 holder。
+    expect(source).toContain('pendingAgentSwitchApplyHolder?.(sessionId, options)');
   });
 });
 

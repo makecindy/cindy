@@ -11,6 +11,8 @@ import { X } from 'lucide-react';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import { createLogger } from '@/lib/logger';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { cn } from '@/lib/utils';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -29,6 +31,8 @@ import { mergeSessionSources } from './lib/mergeSessionSources';
 
 type TogglePane = 'lead' | 'worker';
 
+const log = createLogger('OrcaSplitView');
+
 export interface OrcaSplitViewProps {
   /** Lead session id. 调用方负责保证存在; 找不到时本组件渲染 "lead not found" 占位。 */
   leadSessionId: string;
@@ -39,20 +43,28 @@ export interface OrcaSplitViewProps {
   workerEmptyLabel?: string;
   /** 当前 OrcaSplitView 是否应代表屏幕可见内容上报给 Agent Island。 */
   reportAgentIslandVisibility?: boolean;
+  /** Lead 作为副窗口路由所有者自动关窗前的宿主预检。 */
+  onBeforeSecondaryWindowClose?: () => Promise<boolean>;
 }
 
 export function OrcaSplitView({
   leadSessionId,
   workerEmptyLabel,
   reportAgentIslandVisibility = true,
+  onBeforeSecondaryWindowClose,
 }: OrcaSplitViewProps) {
   const { t } = useTranslation();
   const [togglePane, setTogglePane] = useState<TogglePane>('lead');
   const { sessions: localSessions } = useCCSessions();
+  const { sessions: allLocalSessions } = useCCSessions({ includeArchived: 'all' });
   const remoteSessions = useRemoteProjectSessions();
   const sessions = useMemo(
     () => mergeSessionSources(localSessions, remoteSessions),
     [localSessions, remoteSessions],
+  );
+  const allSessions = useMemo(
+    () => mergeSessionSources(allLocalSessions, remoteSessions),
+    [allLocalSessions, remoteSessions],
   );
   const { requestStop: requestStopCollab } = useStopOrcaCollabWithoutNavigation({
     leadSessionId,
@@ -66,13 +78,39 @@ export function OrcaSplitView({
     viewVisible: togglePane === 'worker' && reportAgentIslandVisibility,
   });
   const leadSession = useMemo(
-    () => sessions.find((s) => s.id === leadSessionId) ?? null,
-    [leadSessionId, sessions],
+    () => allSessions.find((s) => s.id === leadSessionId) ?? null,
+    [allSessions, leadSessionId],
   );
   const workerSession = useMemo(
     () => (workerSessionId ? sessions.find((s) => s.id === workerSessionId) ?? null : null),
     [sessions, workerSessionId],
   );
+
+  // Orca 的 Lead view 会随当前 toggle pane 条件挂载，不能让它独占 route lifecycle：
+  // 用户停在 Worker、或 active-only 列表先移除 Lead 时，常驻宿主仍必须观察 Lead 归档，
+  // 先保护文件页未保存编辑，再关闭整个副窗口。
+  useEffect(() => {
+    if (leadSession?.status !== 'archived') return;
+    if (!isSecondaryWindow()) return;
+    let cancelled = false;
+    void (async () => {
+      let allowClose = true;
+      try {
+        allowClose = onBeforeSecondaryWindowClose ? await onBeforeSecondaryWindowClose() : true;
+      } catch (err) {
+        log.error('secondary-window close preflight failed for archived Orca lead', err);
+        return;
+      }
+      if (!allowClose || cancelled) return;
+      log.info('archived Orca lead in secondary window, closing window', {
+        leadSessionId,
+      });
+      window.electronAPI?.windowCloseSelf();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [leadSession?.status, leadSessionId, onBeforeSecondaryWindowClose]);
 
   const leadAgentKind = normalizeOrcaDisplayAgentKind(leadSession?.agentKind);
   const leadVendor = orcaVendorForAgentKind(leadAgentKind);
@@ -192,6 +230,9 @@ export function OrcaSplitView({
               orcaMode
               showRsbToggle
               viewVisible={reportAgentIslandVisibility}
+              navigationMode="route-owner"
+              onBeforeSecondaryWindowClose={onBeforeSecondaryWindowClose}
+              secondaryWindowArchiveOwner="host"
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
@@ -206,6 +247,7 @@ export function OrcaSplitView({
             orcaMode
             showRsbToggle
             viewVisible={reportAgentIslandVisibility}
+            navigationMode="sidebar-embedded"
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center px-6 text-center text-sm text-muted-foreground">

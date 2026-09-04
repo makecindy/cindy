@@ -610,7 +610,11 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 }
 
 function createHarness(opts?: {
-  getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
+  getRecoveryContextSnapshot?: (
+    sessionId: string,
+    userClientId: string,
+  ) => Promise<RecoveryContextSnapshot>;
+  isSessionActiveForManualDispatch?: (sessionId: string) => Promise<boolean>;
 }) {
   let running = false;
   let liveRunningOverride: boolean | null | 'unknown' = null;
@@ -779,6 +783,9 @@ function createHarness(opts?: {
         : Promise.resolve(false),
     ...(opts?.getRecoveryContextSnapshot
       ? { getRecoveryContextSnapshot: opts.getRecoveryContextSnapshot }
+      : {}),
+    ...(opts?.isSessionActiveForManualDispatch
+      ? { isSessionActiveForManualDispatch: opts.isSessionActiveForManualDispatch }
       : {}),
     beforeDispatchUserTurn,
     onUndispatchedUserTurn,
@@ -1903,6 +1910,53 @@ describe('AgentInputCoordinator send transaction', () => {
     }
   });
 
+  it('keeps an archived secondary-window queue paused when resume reaches main', async () => {
+    const isSessionActiveForManualDispatch = vi.fn(async () => false);
+    const h = createHarness({ isSessionActiveForManualDispatch });
+    const sid = 'resume-archived-secondary-window';
+    const first = makeItem('q-1', 'first');
+
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.setRunning(false);
+    await flush();
+
+    await h.coordinator.resume(sid, { requireActiveSession: true });
+    await flush();
+
+    expect(isSessionActiveForManualDispatch).toHaveBeenCalledOnce();
+    expect(isSessionActiveForManualDispatch).toHaveBeenCalledWith(sid);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections)).toMatchObject({
+      queuePaused: true,
+      pendingQueue: [first],
+    });
+  });
+
+  it('fences every queued item when a secondary window resumes a paused batch', async () => {
+    const h = createHarness({ isSessionActiveForManualDispatch: async () => true });
+    const sid = 'resume-secondary-window-batch-fence';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    h.coordinator.enqueue(sid, makeItem('q-2', 'second'));
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+
+    await h.coordinator.resume(sid, { requireActiveSession: true });
+    await flush();
+
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual([
+      expect.objectContaining({ clientId: 'q-1', requireActiveSession: true }),
+      expect.objectContaining({ clientId: 'q-2', requireActiveSession: true }),
+    ]);
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([
+      expect.not.objectContaining({ requireActiveSession: expect.anything() }),
+      expect.not.objectContaining({ requireActiveSession: expect.anything() }),
+    ]);
+  });
+
   it('retries an interaction-unlocked queue when an external live reservation clears without a terminal event', async () => {
     vi.useFakeTimers();
     try {
@@ -2916,6 +2970,106 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     // The retry was superseded — no second dispatch occurred.
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not enqueue a retry when the session is archived during the history read', async () => {
+    const progressRead = deferred<boolean>();
+    let sessionActive = true;
+    const isSessionActiveForRetry = vi.fn(async () => sessionActive);
+    const h = createHarness({ isSessionActiveForManualDispatch: isSessionActiveForRetry });
+    const sid = 'retry-archived-during-history-read';
+    h.setHasAssistantProgressAfter(async () => progressRead.promise);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    const retryPromise = h.coordinator.retryLastError(sid, { requireActiveSession: true });
+    await flush();
+    expect(isSessionActiveForRetry).not.toHaveBeenCalled();
+
+    sessionActive = false;
+    progressRead.resolve(false);
+    await retryPromise;
+    await flush();
+
+    expect(isSessionActiveForRetry).toHaveBeenCalledOnce();
+    expect(isSessionActiveForRetry).toHaveBeenCalledWith(sid);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+  });
+
+  it('keeps main-window retry compatible with archived tasks when no lifecycle fence is requested', async () => {
+    const isSessionActiveForRetry = vi.fn(async () => false);
+    const h = createHarness({ isSessionActiveForManualDispatch: isSessionActiveForRetry });
+    const sid = 'retry-archived-main-window';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(isSessionActiveForRetry).not.toHaveBeenCalled();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('carries a secondary-window retry fence into the replacement queue item', async () => {
+    const h = createHarness({ isSessionActiveForManualDispatch: async () => true });
+    const sid = 'retry-secondary-window-final-fence';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+
+    await h.coordinator.retryLastError(sid, { requireActiveSession: true });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[3]).toEqual(
+      expect.objectContaining({ requireActiveSession: true }),
+    );
+  });
+
+  it('restores a secondary-window retry recovery when the final lifecycle fence wins', async () => {
+    const h = createHarness({ isSessionActiveForManualDispatch: async () => true });
+    const sid = 'retry-secondary-window-fence-wins-after-retry';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'original retry failure');
+    await flush();
+    h.persistTerminalSendError.mockClear();
+    h.sendToAgent.mockRejectedValueOnce(
+      new Error('[SESSION_NOT_ACTIVE] Session was archived before dispatch'),
+    );
+
+    await h.coordinator.retryLastError(sid, { requireActiveSession: true });
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection).toMatchObject({
+      error: 'original retry failure',
+      recovery: { kind: 'active-turn' },
+    });
+    expect(h.persistTerminalSendError).toHaveBeenCalledWith(sid, 'original retry failure');
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ requireActiveSession: true }),
+    );
   });
 
   it('active-turn retry falls back to resending the original text when the turn produced nothing', async () => {
@@ -5686,6 +5840,108 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(h.sendToAgent).not.toHaveBeenCalled();
     expect(h.coordinator.getQueueInspection(sid)).toEqual([]);
     expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+  });
+
+  it('clears the steer marker without fallback when the final lifecycle fence sees an archived task', async () => {
+    const h = createHarness();
+    const sid = 'inspection-secondary-steer-archived-race';
+    const queued = makeItem('q-archived', 'still here');
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-running', 'running'));
+    h.coordinator.enqueue(sid, queued);
+    h.steerToAgent.mockRejectedValueOnce(
+      new Error('SESSION_NOT_ACTIVE: Session is no longer active'),
+    );
+
+    await expect(
+      h.coordinator.steer(sid, queued, {
+        removeFromQueue: true,
+        requireActiveSession: true,
+      }),
+    ).resolves.toBe(false);
+
+    expect(h.steerToAgent).toHaveBeenCalledWith(
+      sid,
+      { type: 'user', content: 'still here' },
+      expect.objectContaining({ requireActiveSession: true }),
+    );
+    const projection = latestProjection(h.projections);
+    expect(projection.pendingQueue.map((item) => item.clientId)).toContain('q-archived');
+    expect(projection.steeringQueueClientIds).toEqual([]);
+    expect(projection.error).toBeNull();
+  });
+
+  it('keeps the lifecycle fence when a secondary-window steer falls back to a queued turn', async () => {
+    const gate = deferred<{ action: 'allow' }>();
+    const h = createHarness();
+    const sid = 'secondary-window-steer-fallback-archived-race';
+    const queued = makeItem('q-fallback-archived', 'do not revive');
+    h.setScreenUserMessage(async () => gate.promise);
+    h.sendToAgent.mockRejectedValueOnce(
+      new Error('SESSION_NOT_ACTIVE: Session is no longer active'),
+    );
+
+    await expect(
+      h.coordinator.steer(sid, queued, { requireActiveSession: true }),
+    ).resolves.toBe(true);
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    gate.resolve({ action: 'allow' });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      sid,
+      { type: 'user', content: 'do not revive' },
+      queued.createOpts,
+      expect.objectContaining({ requireActiveSession: true }),
+    );
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({
+        clientId: queued.clientId,
+        requireActiveSession: true,
+      }),
+    );
+    expect(latestProjection(h.projections)).toMatchObject({
+      pendingQueue: [],
+      error: null,
+      recovery: null,
+    });
+  });
+
+  it('drops a queued secondary-window input when the final lifecycle fence sees an archived task', async () => {
+    const gate = deferred<{ action: 'allow' }>();
+    const h = createHarness();
+    const sid = 'secondary-window-queued-archived-race';
+    const queued = makeItem('q-archived', 'do not revive');
+    h.setScreenUserMessage(async () => gate.promise);
+    h.sendToAgent.mockRejectedValueOnce(
+      new Error('SESSION_NOT_ACTIVE: Session is no longer active'),
+    );
+
+    h.coordinator.enqueue(sid, queued, { requireActiveSession: true });
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    gate.resolve({ action: 'allow' });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      sid,
+      { type: 'user', content: 'do not revive' },
+      queued.createOpts,
+      expect.objectContaining({ requireActiveSession: true }),
+    );
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: queued.clientId, requireActiveSession: true }),
+    );
+    expect(latestProjection(h.projections)).toMatchObject({
+      pendingQueue: [],
+      error: null,
+      recovery: null,
+    });
   });
 
   it('does not report a policy-blocked control steer as delivered', async () => {
@@ -9015,6 +9271,26 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
       .toEqual(expect.objectContaining({ clientId: restored.clientId, text: command }));
   });
 
+  it('keeps a lifecycle fence in the crash snapshot but omits it from projections', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-secondary-window-lifecycle-fence';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+
+    h.coordinator.enqueue(sid, makeItem('q-1', 'queued'), { requireActiveSession: true });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).pendingQueue[0]?.requireActiveSession).toBeUndefined();
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]).toMatchObject({
+      clientId: 'q-1',
+      requireActiveSession: true,
+    });
+    expect(h.persistQueueSnapshot.mock.calls.at(-1)?.[1][0]).toMatchObject({
+      clientId: 'q-1',
+      requireActiveSession: true,
+    });
+  });
+
   it('persists the queue after restore and shrinks the snapshot once the head crosses the DB boundary', async () => {
     const h = createHarness();
     const sid = 'snapshot-persist';
@@ -10426,6 +10702,22 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
 });
 
 describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修改)', () => {
+  it('preserves a Main-owned lifecycle fence across full-row replacement', async () => {
+    const h = createHarness();
+    const sid = 'replace-secondary-window-lifecycle-fence';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'before'), { requireActiveSession: true });
+    await flush();
+
+    expect(h.coordinator.replaceQueuedMessage(sid, 'q-1', makeItem('q-1', 'after'))).toBe(true);
+
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]).toMatchObject({
+      clientId: 'q-1',
+      text: 'after',
+      requireActiveSession: true,
+    });
+  });
+
   it('原位整条替换 pending 条目:位置不变、投影与崩溃快照同步新内容', async () => {
     const h = createHarness();
     const sid = 'replace-pending';

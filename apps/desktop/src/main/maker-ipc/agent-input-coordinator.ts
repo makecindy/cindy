@@ -210,6 +210,8 @@ export interface AgentInputSendOpts {
   expectedClearBoundaryMs?: number | null;
   /** Main-owned input generation captured before async preparation. */
   expectedInputGeneration?: number;
+  /** Recheck the durable task lifecycle at the final manual dispatch boundary. */
+  requireActiveSession?: boolean;
   /** Main-owned Session identity for a control-plane same-turn steer. */
   expectedTurnSession?: object;
   /** Main-owned maker-core turn generation for a control-plane same-turn steer. */
@@ -323,6 +325,12 @@ export interface AgentInputCoordinatorDeps {
     sessionId: string,
     userClientId: string,
   ) => Promise<RecoveryContextSnapshot>;
+  /**
+   * Durable lifecycle fence for manual dispatch paths that can race an archive
+   * update before they mutate the queue. Production checks sessions.status;
+   * omitted test harnesses retain the historical behavior.
+   */
+  isSessionActiveForManualDispatch?: (sessionId: string) => Promise<boolean>;
   /**
    * Durable user-row writer shared with direct maker sends.  The fallback keeps
    * the coordinator usable in narrow unit harnesses, while the registered host
@@ -570,6 +578,9 @@ interface PendingCompactRequest {
   createOpts: AgentInputCreateOpts;
   userName?: string;
   waitForClientIds: string[];
+  // 副窗口归档后不得压缩:入队时由调用方置位,dispatchCompact 在最终
+  // sendToAgent 前复核会话仍 active,与归档串行(#3262 P2)。
+  requireActiveSession?: boolean;
 }
 
 type ActiveTurnDispatchLifecycle =
@@ -719,6 +730,21 @@ interface PendingAutoResumeRecovery {
   attemptToken: number;
 }
 
+/**
+ * Secondary-window Retry clears the visible recovery before its replacement
+ * reaches the final lifecycle fence. Keep that recovery just long enough to
+ * restore it if the task is archived in that last dispatch window.
+ */
+interface PendingManualRetryRecovery {
+  sessionId: string;
+  stateRef: SessionInputState;
+  recovery: NonNullable<AgentInputRecovery>;
+  error: string | null;
+  errorReason: string | null;
+  toolLoop: AgentInputToolLoopDetails | null;
+  stickyError: string | null;
+}
+
 function createInitialInputState(
   generation = 0,
   clearBoundaryMs: number | null = null,
@@ -798,6 +824,30 @@ function captureOriginalSyntheticTrigger(item: AgentInputQueuedMessage): AgentIn
 }
 
 /**
+ * First acceptance overwrites the untrusted wire value; later Main-owned queue
+ * transitions use `preserveActiveSessionDispatchFence` so edits, resume, retry,
+ * and crash recovery cannot weaken an already accepted lifecycle requirement.
+ */
+function stampActiveSessionDispatchFence(
+  item: AgentInputQueuedMessage,
+  requireActiveSession: boolean,
+): AgentInputQueuedMessage {
+  const stamped = { ...item };
+  if (requireActiveSession) stamped.requireActiveSession = true;
+  else delete stamped.requireActiveSession;
+  return stamped;
+}
+
+function preserveActiveSessionDispatchFence(
+  item: AgentInputQueuedMessage,
+  requireActiveSession: boolean,
+): AgentInputQueuedMessage {
+  return item.requireActiveSession || requireActiveSession
+    ? { ...item, requireActiveSession: true }
+    : item;
+}
+
+/**
  * Stamp the acceptance boundary with the controlled host's clock.  Remote
  * renderer timestamps are presentation data and may come from a device with a
  * different wall clock; they must never decide whether a crash-restored item
@@ -835,6 +885,11 @@ function isNoActiveTurnError(err: unknown): boolean {
 function isStaleTurnError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /\[STALE_TURN\]/i.test(msg);
+}
+
+function isSessionNotActiveError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\bSESSION_NOT_ACTIVE\b/i.test(msg);
 }
 
 /**
@@ -1014,6 +1069,8 @@ export class AgentInputCoordinator {
    * 并用 stateRef 防止 clearSession 后迟到的旧结果复活新上下文。
    */
   private readonly pendingAutoResumeRecoveries = new Map<string, PendingAutoResumeRecovery>();
+  /** Secondary-window retry checkpoints, keyed by the replacement queue item. */
+  private readonly pendingManualRetryRecoveries = new Map<string, PendingManualRetryRecovery>();
   /** transient busy 期间同一 auto item 已尝试过的派发次数。 */
   private readonly autoResumeDispatchAttempts = new Map<string, number>();
 
@@ -1491,11 +1548,15 @@ export class AgentInputCoordinator {
       wasFirst?: boolean;
       sendAtMs?: number;
       resumeRestorePausedQueue?: boolean;
+      requireActiveSession?: boolean;
       onDuplicate?: () => void;
     },
   ): AgentInputProjection {
     const state = this.getState(sessionId);
-    item = captureOriginalSyntheticTrigger(item);
+    item = stampActiveSessionDispatchFence(
+      captureOriginalSyntheticTrigger(item),
+      opts?.requireActiveSession === true,
+    );
     // 幂等去重(弱网重发防线,PR #881):同 clientId 重复投递说明是控制端(手机
     // 断连自动重试 / 用户对 ack 丢失的消息重发)在补发同一条消息,不是新消息。
     // 直接返回当前 projection、不再入队——否则同一条消息双入队、agent 跑两轮。
@@ -1725,7 +1786,7 @@ export class AgentInputCoordinator {
   async compact(
     sessionId: string,
     createOpts: AgentInputCreateOpts,
-    opts?: { userName?: string },
+    opts?: { userName?: string; requireActiveSession?: boolean },
   ): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
@@ -1751,6 +1812,7 @@ export class AgentInputCoordinator {
       createOpts,
       userName: opts?.userName,
       waitForClientIds: state.pendingQueue.map((item) => item.clientId),
+      requireActiveSession: opts?.requireActiveSession === true,
     };
 
     if (
@@ -1802,6 +1864,21 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
 
     try {
+      // 入队到派发之间会话可能被归档(request.requireActiveSession 仅副窗口置位)。
+      // 在最终 send 边界复核持久化 active 状态;非 active 则放弃压缩,不启动
+      // 新 turn(#3262 P2,与普通队列项的 requireActiveSession fence 对齐)。
+      if (
+        request.requireActiveSession &&
+        this.deps.isSessionActiveForManualDispatch &&
+        !(await this.deps.isSessionActiveForManualDispatch(sessionId))
+      ) {
+        if (!this.isActiveTurnCurrent(sessionId, active)) return this.getProjection(sessionId);
+        state.activeTurn = null;
+        this.emit(sessionId);
+        log.info('compact skipped: session no longer active', { sessionId, reason });
+        this.deps.onQueueEmptied?.(sessionId);
+        return this.getProjection(sessionId);
+      }
       active.sendStarted = true;
       active.dispatchLifecycle = 'sending';
       const result = await this.deps.sendToAgent(
@@ -1816,6 +1893,10 @@ export class AgentInputCoordinator {
           expectedInputGeneration: active.generation,
           onVendorTurnReserved: (generation) =>
             this.captureReservedVendorGeneration(sessionId, active, generation),
+          // 把 fence 传到最终 send 边界,让 sendToAgent 在持有的
+          // session route lock 内做最后一次 active 复核(与上面的 precheck
+          // 形成闭环,消除 precheck 与 send 之间的归档竞态,#3262 P1)。
+          ...(request.requireActiveSession ? { requireActiveSession: true } : {}),
         },
       );
       if (!this.isActiveTurnCurrent(sessionId, active)) return this.getProjection(sessionId);
@@ -1893,6 +1974,8 @@ export class AgentInputCoordinator {
       expectedTurnSession?: object;
       /** 控制面初检捕获的 maker-core turn generation。 */
       expectedTurnGeneration?: number;
+      /** 副窗口人工插话在最终 vendor 边界复核持久化任务仍为 active。 */
+      requireActiveSession?: boolean;
     },
   ): Promise<boolean> {
     const matchesExpectedTurn = () =>
@@ -1943,6 +2026,12 @@ export class AgentInputCoordinator {
           typeof item.hostAcceptedAtMs === 'number' && Number.isFinite(item.hostAcceptedAtMs);
       }
     }
+    // A same-turn steer can fall back to an ordinary queued turn both before
+    // vendor delivery and after a NO_ACTIVE_TURN race. Stamp the lifecycle
+    // requirement on the Main-owned item before either fallback can retain it;
+    // otherwise that later drain would lose the secondary-window fence even
+    // though direct steer delivery still rechecks it.
+    item = preserveActiveSessionDispatchFence(item, opts?.requireActiveSession === true);
     if (state.steeringQueueClientIds.includes(item.clientId)) {
       log.info('steer ignored: duplicate in-flight clientId (control-side resend)', {
         sessionId,
@@ -2121,6 +2210,7 @@ export class AgentInputCoordinator {
         signal: AbortSignal.any([inputBoundarySignal, steerAbort.signal]),
         expectedClearBoundaryMs: steerClearBoundaryMs,
         expectedInputGeneration: steerGeneration,
+        ...(opts?.requireActiveSession ? { requireActiveSession: true } : {}),
         ...(opts?.expectedTurnSession !== undefined
           ? { expectedTurnSession: opts.expectedTurnSession }
           : {}),
@@ -2151,6 +2241,14 @@ export class AgentInputCoordinator {
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
 
       if (isStaleTurnError(err)) {
+        if (markerStillPresent) {
+          this.clearDirectSteeringItem(latest, item.clientId);
+          this.emit(sessionId);
+        }
+        return finishSteerRequest(false);
+      }
+
+      if (isSessionNotActiveError(err)) {
         if (markerStillPresent) {
           this.clearDirectSteeringItem(latest, item.clientId);
           this.emit(sessionId);
@@ -2559,8 +2657,23 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
-  resume(sessionId: string): AgentInputProjection {
+  async resume(
+    sessionId: string,
+    opts?: { requireActiveSession?: boolean },
+  ): Promise<AgentInputProjection> {
+    if (
+      opts?.requireActiveSession &&
+      this.deps.isSessionActiveForManualDispatch &&
+      !(await this.deps.isSessionActiveForManualDispatch(sessionId))
+    ) {
+      return this.getProjection(sessionId);
+    }
     const state = this.getState(sessionId);
+    if (opts?.requireActiveSession) {
+      state.pendingQueue = state.pendingQueue.map((item) =>
+        preserveActiveSessionDispatchFence(item, true),
+      );
+    }
     const recovery = state.recovery;
     const pausedQueueHeadRecoveryClientId =
       state.queuePaused &&
@@ -2590,8 +2703,11 @@ export class AgentInputCoordinator {
   }
 
   /** 用户点「重试 / 继续任务」。行为见 performRetryLastError。 */
-  async retryLastError(sessionId: string): Promise<AgentInputProjection> {
-    const { projection } = await this.performRetryLastError(sessionId);
+  async retryLastError(
+    sessionId: string,
+    opts?: { requireActiveSession?: boolean },
+  ): Promise<AgentInputProjection> {
+    const { projection } = await this.performRetryLastError(sessionId, opts);
     return projection;
   }
 
@@ -2627,7 +2743,7 @@ export class AgentInputCoordinator {
    */
   private async performRetryLastError(
     sessionId: string,
-    opts?: { auto?: boolean; attemptToken?: number },
+    opts?: { auto?: boolean; attemptToken?: number; requireActiveSession?: boolean },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
     const state = this.getState(sessionId);
     const recovery = state.recovery;
@@ -2775,10 +2891,23 @@ export class AgentInputCoordinator {
       });
       return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
+    // Manual retry can spend multiple awaits reading durable history before it
+    // reaches the queue mutation below. A secondary window may learn that the
+    // task was archived during those awaits, so the renderer's click-time guard
+    // is not sufficient. Re-read the durable lifecycle state at the actual
+    // enqueue boundary; no await occurs between this check and the mutation.
+    if (
+      opts?.requireActiveSession &&
+      this.deps.isSessionActiveForManualDispatch &&
+      !(await this.deps.isSessionActiveForManualDispatch(sessionId))
+    ) {
+      return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+    }
     const previousError = state.error;
     const previousErrorReason = state.errorReason;
     const previousToolLoop = state.toolLoop;
     const previousStickyError = state.stickyError;
+    let manualRetryClientId: string | null = null;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
     if (
       !continueItem &&
@@ -2820,6 +2949,8 @@ export class AgentInputCoordinator {
           },
         };
       }
+      item = preserveActiveSessionDispatchFence(item, opts?.requireActiveSession === true);
+      if (!opts?.auto && opts?.requireActiveSession) manualRetryClientId = item.clientId;
       if (opts?.auto && attemptToken !== null) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
           sessionId,
@@ -2850,6 +2981,28 @@ export class AgentInputCoordinator {
         opts?.auto ? 'auto' : 'manual',
         attemptToken ?? undefined,
       );
+    } else if (opts?.requireActiveSession) {
+      const headIndex = state.pendingQueue.findIndex(
+        (item) => item.clientId === recovery.clientId,
+      );
+      const head = headIndex >= 0 ? state.pendingQueue[headIndex] : undefined;
+      if (head) {
+        const nextQueue = [...state.pendingQueue];
+        nextQueue[headIndex] = preserveActiveSessionDispatchFence(head, true);
+        state.pendingQueue = nextQueue;
+        manualRetryClientId = head.clientId;
+      }
+    }
+    if (manualRetryClientId) {
+      this.pendingManualRetryRecoveries.set(manualRetryClientId, {
+        sessionId,
+        stateRef: state,
+        recovery,
+        error: previousError,
+        errorReason: previousErrorReason,
+        toolLoop: previousToolLoop,
+        stickyError: previousStickyError,
+      });
     }
     if (!opts?.auto) this.touchUserSend(sessionId);
     this.emit(sessionId);
@@ -3032,6 +3185,8 @@ export class AgentInputCoordinator {
     const replacement = { ...next };
     if (current.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
     else replacement.hostAcceptedAtMs = current.hostAcceptedAtMs;
+    if (current.requireActiveSession === undefined) delete replacement.requireActiveSession;
+    else replacement.requireActiveSession = current.requireActiveSession;
     const nextQueue = [...state.pendingQueue];
     nextQueue[index] = replacement;
     state.pendingQueue = nextQueue;
@@ -3759,6 +3914,7 @@ export class AgentInputCoordinator {
   private toProjectedItem(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
     const projected = { ...item };
     delete projected.hostAcceptedAtMs;
+    delete projected.requireActiveSession;
     delete projected.trustedSessionReferenceContexts;
     delete projected.sessionReferencesRequireTrustedSnapshot;
     delete (projected as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
@@ -4322,6 +4478,7 @@ export class AgentInputCoordinator {
         signal: this.getInputAbortSignal(sessionId, active.generation),
         expectedClearBoundaryMs: active.clearBoundaryMs,
         expectedInputGeneration: active.generation,
+        ...(head.requireActiveSession ? { requireActiveSession: true } : {}),
         ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
         // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
@@ -4445,6 +4602,20 @@ export class AgentInputCoordinator {
       this.discardDeferredResumableCandidate(sessionId, active);
       const latest = this.getState(sessionId);
       if (!active.persisted) {
+        if (head.requireActiveSession && isSessionNotActiveError(err)) {
+          latest.activeTurn = null;
+          this.clearCredentialSwitchWait(latest);
+          this.deps.onDiscardedQueuedMessage?.(sessionId, head);
+          const restoredError = this.restoreManualRetryRecovery(sessionId, head.clientId);
+          if (restoredError) this.persistTerminalSendError(sessionId, restoredError);
+          log.info('discarded queued input after final lifecycle fence', {
+            sessionId,
+            clientId: head.clientId,
+          });
+          this.emit(sessionId);
+          this.scheduleDrain(sessionId, 'session-no-longer-active');
+          return;
+        }
         if (isSessionRunningError(err)) {
           this.deferQueueHeadAfterSessionRunning(
             sessionId,
@@ -4455,6 +4626,7 @@ export class AgentInputCoordinator {
           );
           return;
         }
+        this.pendingManualRetryRecoveries.delete(head.clientId);
         if (head.autoResume) {
           latest.activeTurn = null;
           this.discardAutoResumeBeforeDispatch(sessionId, head);
@@ -4479,6 +4651,7 @@ export class AgentInputCoordinator {
         this.emit(sessionId);
         return;
       }
+      this.pendingManualRetryRecoveries.delete(head.clientId);
       latest.error = errorMessage(err);
       clearErrorProjectionSignals(latest);
       latest.stickyError = null;
@@ -5063,6 +5236,7 @@ export class AgentInputCoordinator {
   /** 自动续跑项已真正进入 vendor，之后不再需要 pre-vendor 回滚信息。 */
   private commitAutoResumeDispatch(sessionId: string, item: AgentInputQueuedMessage): void {
     this.pendingAutoResumeRecoveries.delete(item.clientId);
+    this.pendingManualRetryRecoveries.delete(item.clientId);
     this.autoResumeDispatchAttempts.delete(item.clientId);
     const attemptToken = item.autoResumeInfo?.sessionTotal;
     const state = this.getState(sessionId);
@@ -5073,6 +5247,21 @@ export class AgentInputCoordinator {
     ) {
       state.autoResumeAttemptToken = null;
     }
+  }
+
+  /** Restore a secondary-window retry only while it still owns this state object. */
+  private restoreManualRetryRecovery(sessionId: string, clientId: string): string | null {
+    const pending = this.pendingManualRetryRecoveries.get(clientId);
+    if (!pending) return null;
+    this.pendingManualRetryRecoveries.delete(clientId);
+    const state = this.states.get(sessionId);
+    if (pending.sessionId !== sessionId || state !== pending.stateRef) return null;
+    state.error = pending.error;
+    state.errorReason = pending.errorReason;
+    state.toolLoop = pending.toolLoop;
+    state.stickyError = pending.stickyError;
+    state.recovery = pending.recovery;
+    return pending.error ?? pending.stickyError;
   }
 
   /**
@@ -5123,6 +5312,12 @@ export class AgentInputCoordinator {
       .filter((item) => item.autoResume)
       .map((item) => item.clientId);
     this.supersedePendingAutoResumeRecoveries(sessionId);
+    // A later user action supersedes the secondary-window retry intent as
+    // well. Session close deliberately does not call this helper: its final
+    // lifecycle fence may still need the checkpoint to restore the retry UI.
+    for (const [clientId, pending] of this.pendingManualRetryRecoveries) {
+      if (pending.sessionId === sessionId) this.pendingManualRetryRecoveries.delete(clientId);
+    }
     for (const clientId of queuedClientIds) this.remove(sessionId, clientId);
 
     const active = state.activeTurn;

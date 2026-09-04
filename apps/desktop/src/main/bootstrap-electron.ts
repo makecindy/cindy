@@ -621,6 +621,7 @@ import {
 } from './right-sidebar-window/settings-store.js';
 import {
   anySessionInTurn,
+  assertSessionActiveForManualDispatch,
   applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
@@ -636,6 +637,7 @@ import {
   setGoalAskAnswerObserver,
   withSendToSessionLock,
 } from './maker-ipc/register.js';
+import { isDeviceLinkInvoke } from './device-link/invoke-context.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -5805,10 +5807,18 @@ const registerIpcHandlers = () => {
       });
       // desktop-cmd:run —— /cmd 的被控端远程执行 handler(仅隧道 dispatch 消费,
       // 本机 /cmd 仍在 builtins 内联执行,不走 IPC 往返)。
-      registerRemoteCmdIpc();
+      registerRemoteCmdIpc({
+        isDeviceLinkInvoke,
+        withSessionLock: withSendToSessionLock,
+        assertSessionActive: assertSessionActiveForManualDispatch,
+      });
       // learn:* handler 提前一次性注册(eager,同 goal);handler 内部 getLearnController()
       // 取单例,invoke 时 controller 已由 startLearnHost 启动。
-      registerLearnIpc();
+      registerLearnIpc({
+        isDeviceLinkInvoke,
+        withSessionLock: withSendToSessionLock,
+        assertSessionActive: assertSessionActiveForManualDispatch,
+      });
       // maker:schedule:* handler 提前一次性注册;handler 内部 awaitReady 等真实
       // scheduler 实例(由后续 attemptStartScheduler 通过 attachSchedulerEventListeners
       // → setSchedulerReady 喂入)。这条修复 cold-start race:之前 handler 在
@@ -5825,7 +5835,21 @@ const registerIpcHandlers = () => {
       });
       // maker:goal:* handler 同样提前一次性注册(eager);handler 内部 getGoalController()
       // 取单例,invoke 时 controller 已由 attemptStartScheduler → startGoalController 启动。
-      registerGoalHandlers();
+      registerGoalHandlers({
+        isDeviceLinkInvoke,
+        withSessionLock: withSendToSessionLock,
+        assertSessionActive: assertSessionActiveForManualDispatch,
+        // 本地副窗口(GoalIndicator 所在的 secondary app window)按真实 sender 反查,
+        // 与 device-link 透传的 requireActiveSession 标记互补,统一走 active-session fence。
+        // device-link 合成事件的 sender 为 undefined(见 device-link/invoke-registry),
+        // 不能交给 fromWebContents;这类请求只靠显式 requireActiveSession 标记驱动,
+        // 窗口归属探测直接返回 false(#3262 review P1)。
+        isSecondaryWindowEvent: (event) => {
+          if (!event?.sender) return false;
+          const win = BrowserWindow.fromWebContents(event.sender);
+          return win ? isSecondaryAppWindow(win) : false;
+        },
+      });
       // clear-context 清目标 / turn 收尾 idle 兜底续跑(setter 注入,null-safe)。
       setGoalClearObserver((sid) => {
         void getGoalController()?.clearGoal(sid);

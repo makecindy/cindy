@@ -55,6 +55,7 @@ import {
 import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
@@ -125,6 +126,7 @@ import { useCCAgentChat } from '@/hooks/useCCAgentChat';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useConfirmCloseActiveFileIfDirty } from './workdir-browse/hooks/useConfirmSwitchAwayIfDirty';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
@@ -454,6 +456,10 @@ interface CCAgentSessionViewProps {
   sidebarTargetSessionId?: string;
   /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
   disableAutofocus?: boolean;
+  /** 副窗口因当前任务被归档而自动关闭前，由路由宿主保护尚未保存的界面状态。 */
+  onBeforeSecondaryWindowClose?: () => Promise<boolean>;
+  /** Orca 等常驻路由宿主接管归档关窗时，视图本身只负责收敛 pane 与禁用输入。 */
+  secondaryWindowArchiveOwner?: 'self' | 'host';
 }
 
 /**
@@ -699,6 +705,8 @@ export function CCAgentSessionView({
   onSessionNavigate,
   sidebarTargetSessionId,
   disableAutofocus = false,
+  onBeforeSecondaryWindowClose,
+  secondaryWindowArchiveOwner = 'self',
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
@@ -898,6 +906,27 @@ export function CCAgentSessionView({
       ? sessionSnapshotPatchBufferRef.current.merge(sessionId, sessionBase)
       : null;
   const isOrcaLeadSessionView = session?.orcaRole === 'lead';
+  const blocksArchivedSecondaryWindowInput =
+    isSecondaryWindow() && session?.status === 'archived';
+  const archivedSecondaryWindowInputBlockedRef = useRef({
+    sessionId: sessionId ?? null,
+    blocked: blocksArchivedSecondaryWindowInput,
+  });
+  useLayoutEffect(() => {
+    archivedSecondaryWindowInputBlockedRef.current = {
+      sessionId: sessionId ?? null,
+      blocked: blocksArchivedSecondaryWindowInput,
+    };
+  }, [blocksArchivedSecondaryWindowInput, sessionId]);
+  const isArchivedSecondaryWindowInputBlocked = useCallback(() => {
+    const current = archivedSecondaryWindowInputBlockedRef.current;
+    return current.sessionId === sessionId && current.blocked;
+  }, [sessionId]);
+  const allowArchivedSecondaryWindowEnqueue = useCallback(
+    async () => !isArchivedSecondaryWindowInputBlocked(),
+    [isArchivedSecondaryWindowInputBlocked],
+  );
+  const confirmCloseActiveFileIfDirty = useConfirmCloseActiveFileIfDirty();
 
   // worktree-parallel-sessions:订阅当前 session 的 worktree 创建态(creating/failed)。
   // 触发源:NewMakerDraftRoute 的 worktree 异步创建路径。
@@ -1177,6 +1206,12 @@ export function CCAgentSessionView({
     const unsub = sessionsPush.onPatched(({ sessionId: patchedId, patch }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       if (patchedId !== sessionId || !refreshSequence.isCurrentSession(patchedId)) return;
+      if (patch.status !== undefined) {
+        archivedSecondaryWindowInputBlockedRef.current = {
+          sessionId: patchedId,
+          blocked: isSecondaryWindow() && patch.status === 'archived',
+        };
+      }
       const patchBuffer = sessionSnapshotPatchBufferRef.current;
       patchBuffer.stage(patchedId, patch);
       const fullSnapshot = currentServerSessionRef.current;
@@ -1219,6 +1254,51 @@ export function CCAgentSessionView({
       navigate('/cc-agent', { replace: true });
     }
   }, [session?.status, sessionId, navigate, ownsWindowRoute]);
+
+  // 副窗口("在新窗口打开")里的会话被主窗口归档后,副窗不能继续停留在该会话上
+  // 发消息(那会把已归档会话自动恢复成 active,绕过归档语义)。主窗口里归档保持可
+  // 浏览 + 发消息自动恢复的既有行为;只有副窗归档后直接关窗,回到主窗口。
+  // 见 #3175。deleted 已在上方 effect 处理(导航回 /cc-agent),这里只管 archived。
+  useEffect(() => {
+    if (!sessionId) return;
+    if (session?.status !== 'archived') return;
+    if (!isSecondaryWindow()) return;
+    if (!ownsWindowRoute) {
+      splitGroupStore.removeSession(sessionId);
+      log.info('archived session removed from embedded secondary-window pane', { sessionId });
+      return;
+    }
+    if (secondaryWindowArchiveOwner === 'host') {
+      log.info('archived route-owning session delegated to secondary-window host', { sessionId });
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      let allowClose = true;
+      try {
+        allowClose = onBeforeSecondaryWindowClose
+          ? await onBeforeSecondaryWindowClose()
+          : await confirmCloseActiveFileIfDirty();
+      } catch (err) {
+        log.error('secondary-window close preflight failed', err);
+        return;
+      }
+      if (!allowClose || cancelled) return;
+      log.info('archived route-owning session in secondary window, closing window', { sessionId });
+      window.electronAPI?.windowCloseSelf();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    session?.status,
+    sessionId,
+    ownsWindowRoute,
+    onBeforeSecondaryWindowClose,
+    confirmCloseActiveFileIfDirty,
+    secondaryWindowArchiveOwner,
+  ]);
+
   const vendorAuthGate = useVendorAuthGate();
 
   useEffect(() => {
@@ -1710,6 +1790,17 @@ export function CCAgentSessionView({
     updateQueueItem,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  const handleArchivedSafeQueueResume = useCallback(() => {
+    if (isArchivedSecondaryWindowInputBlocked()) return;
+    resumeQueue({ requireActiveSession: isSecondaryWindow() });
+  }, [isArchivedSecondaryWindowInputBlocked, resumeQueue]);
+  const handleArchivedSafeQueueSteer = useCallback(
+    (clientId: string) => {
+      if (isArchivedSecondaryWindowInputBlocked()) return Promise.resolve(false);
+      return steerQueuedMessage(clientId, { requireActiveSession: isSecondaryWindow() });
+    },
+    [isArchivedSecondaryWindowInputBlocked, steerQueuedMessage],
+  );
   useEffect(() => {
     if (!sessionId || !isOrcaLeadSessionView || !historyLoaded) return;
     const recoveredAssignment = getRecoverableDeferredUiAssignment({
@@ -2014,7 +2105,7 @@ export function CCAgentSessionView({
     }
   }, [syntheticContinuationPending, errorTailBannerHiddenFor]);
   const handleErrorTailContinue = useCallback(async () => {
-    if (!sessionId || !errorTailMsg) return;
+    if (!sessionId || !errorTailMsg || isArchivedSecondaryWindowInputBlocked()) return;
     setErrorTailBannerHiddenFor(errorTailMsg.clientId);
     try {
       // 隐藏的英文续跑指令([UI_ACTION_TRIGGER] 前缀,消息流不渲染)——用户视角
@@ -2023,12 +2114,24 @@ export function CCAgentSessionView({
       await rebuildClaudeSubscriptionSessionBeforeRetry(
         errorTailKind === 'error' ? errorTailMsg.errorReason : null,
       );
-      await makerChatStore.sendUiTrigger(
+      if (isArchivedSecondaryWindowInputBlocked()) {
+        setErrorTailBannerHiddenFor(null);
+        return;
+      }
+      const accepted = await makerChatStore.sendUiTrigger(
         sessionId,
         errorTailKind === 'interrupted'
           ? CONTINUE_AFTER_APP_EXIT_PROMPT
           : CONTINUE_AFTER_ERROR_PROMPT,
+        {
+          beforeEnqueue: allowArchivedSecondaryWindowEnqueue,
+          requireActiveSession: isSecondaryWindow(),
+        },
       );
+      if (!accepted) {
+        setErrorTailBannerHiddenFor(null);
+        return;
+      }
       // sendUiTrigger 在 enqueue 成功后就 resolve,续跑消息**还没落库** —— 此刻重算
       // 仍会把原 error 行判为尾行并保留红点,而 syntheticContinuationPending 已经把
       // 横幅隐藏了(排队被暂停 / 阻塞时可能持续很久)。所以先临时清点让两者一致;
@@ -2044,8 +2147,10 @@ export function CCAgentSessionView({
       toast.error(err instanceof Error ? err.message : String(err));
     }
   }, [
+    allowArchivedSecondaryWindowEnqueue,
     errorTailKind,
     errorTailMsg,
+    isArchivedSecondaryWindowInputBlocked,
     markCurrentUnreadFailedScheduleRun,
     rebuildClaudeSubscriptionSessionBeforeRetry,
     sessionId,
@@ -2150,14 +2255,25 @@ export function CCAgentSessionView({
     void refreshPendingAlerts();
   }, [syntheticContinuationPending, remoteDeviceId, sessionId]);
   const handleSessionInterruptContinue = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId || isArchivedSecondaryWindowInputBlocked()) return;
     setSessionInterruptAcked(true);
     try {
       // main 侧把续跑项插到队首；durable ack 延后到 vendor dispatch 成功后，
       // 避免排队取消 / cancelled-before-dispatch 时旧中断提示被提前抹掉。
       // 续跑 turn 真正启动时会写更新的 started；若再次被 app 退出打断，仍会产生新提示。
       // 本视图先靠内存 acked 即时熄灭，peer 视图靠 dispatch 后的 ack 广播收敛。
-      await makerChatStore.sendUiTrigger(sessionId, CONTINUE_AFTER_APP_EXIT_PROMPT);
+      const accepted = await makerChatStore.sendUiTrigger(
+        sessionId,
+        CONTINUE_AFTER_APP_EXIT_PROMPT,
+        {
+          beforeEnqueue: allowArchivedSecondaryWindowEnqueue,
+          requireActiveSession: isSecondaryWindow(),
+        },
+      );
+      if (!accepted) {
+        setSessionInterruptAcked(false);
+        return;
+      }
       // 同 handleErrorTailContinue:enqueue 成功但续跑还没落库、durable ack 也要等
       // dispatch 成功,而横幅已隐藏 —— 先临时清点保持一致,排队被取消时由 pending
       // 落回 false 的 effect 重算恢复。远程会话同样延后(见那里的说明)。
@@ -2167,7 +2283,13 @@ export function CCAgentSessionView({
       setSessionInterruptAcked(false);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [markCurrentUnreadFailedScheduleRun, remoteDeviceId, sessionId]);
+  }, [
+    allowArchivedSecondaryWindowEnqueue,
+    isArchivedSecondaryWindowInputBlocked,
+    markCurrentUnreadFailedScheduleRun,
+    remoteDeviceId,
+    sessionId,
+  ]);
   const handleSessionInterruptDismiss = useCallback(() => {
     if (!sessionId) return;
     void markCurrentUnreadFailedScheduleRun().then((marked) => {
@@ -2337,12 +2459,15 @@ export function CCAgentSessionView({
   useEffect(() => {
     const unsub = window.electronAPI.maker.onDesktopCommandTriggered((payload) => {
       if (payload.sessionId && payload.sessionId !== sessionId) return;
+      if (isArchivedSecondaryWindowInputBlocked()) return;
       if (payload.command === 'help') {
         void insertHelpCard();
         return;
       }
       if (payload.command === 'clear') {
-        clearSession();
+        clearSession({
+          requireActiveSession: payload.requireActiveSession === true || isSecondaryWindow(),
+        });
         return;
       }
       if (payload.command === 'cmd') {
@@ -2399,7 +2524,14 @@ export function CCAgentSessionView({
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
     });
     return unsub;
-  }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t]);
+  }, [
+    insertHelpCard,
+    clearSession,
+    insertSystemCard,
+    isArchivedSecondaryWindowInputBlocked,
+    sessionId,
+    t,
+  ]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
@@ -2931,6 +3063,8 @@ export function CCAgentSessionView({
         piRuntimeRetryDelaysMs?: readonly number[];
         workingDirOverride?: string;
         preparePiRuntime?: () => Promise<void>;
+        /** Recheck the owning window's lifecycle immediately before side effects. */
+        beforeDesktopDispatch?: () => Promise<boolean>;
       },
     ): Promise<{ handled: boolean; accepted: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
@@ -2990,6 +3124,9 @@ export function CCAgentSessionView({
       // Desktop commands stay `^/` only. A whitespace-prefixed `/help` is not a dispatch.
       if (!slashMatch) return { handled: false, accepted: false, message };
       if (!allowDesktopDispatch) return { handled: false, accepted: false, message };
+      if (options?.beforeDesktopDispatch && !(await options.beforeDesktopDispatch())) {
+        return { handled: true, accepted: false, message };
+      }
       // Review is handed to Main immediately with this invocation's serialized
       // attachments. It must not depend on this React view remaining mounted,
       // nor share a mutable attachment ref with a later command.
@@ -3030,15 +3167,23 @@ export function CCAgentSessionView({
       // 经隧道路由到被控端执行(纯 UI 命令忽略该字段)。用视图的粘滞 remoteDeviceId
       // 而非现读快照:origin 注入 / 重连窗口内快照为 undefined,会误走本机路径
       // (/cmd 拿被控端路径本机 spawn、/goal /learn 在本机产生副作用;Codex review #548)。
-      void dispatchCommand(hit, {
+      const dispatchResult = await dispatchCommand(hit, {
         ...(sessionId ? { sessionId } : {}),
         ...(workingDir ? { workingDir } : {}),
         ...(args ? { args } : {}),
         ...(remoteDeviceId ? { deviceId: remoteDeviceId } : {}),
+        // 副窗口无论本机还是远程都要 fence:本机由 Main 按 sender 判定,远程则把此
+        // 显式标记经隧道传到被控端 Main(sender 为空,无法按窗口归属判定)。
+        ...(isSecondaryWindow() ? { requireActiveSession: true } : {}),
       });
+      if (dispatchResult === 'rejected') {
+        if (hit.name === 'issue') pendingIssueFilesRef.current = undefined;
+        return { handled: true, accepted: false, message };
+      }
       return { handled: true, accepted: true, message };
     },
     [
+      allowArchivedSecondaryWindowEnqueue,
       getHelpCommandsSnapshot,
       isRemoteSession,
       session?.agentKind,
@@ -3061,13 +3206,16 @@ export function CCAgentSessionView({
       const pending = pendingSendRef.current;
       if (!newDir || !pending) return;
       pendingSendRef.current = null;
+      if (isArchivedSecondaryWindowInputBlocked()) return;
       void (async () => {
         try {
+          if (isArchivedSecondaryWindowInputBlocked()) return;
           const slashDispatch = await maybeDispatchDesktopSlashCommand(
             pending.message,
             pending.files,
             {
               allowDesktopDispatch: pending.deliveryMode !== 'steer',
+              beforeDesktopDispatch: allowArchivedSecondaryWindowEnqueue,
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
               workingDirOverride: newDir,
               preparePiRuntime: async () => {
@@ -3098,6 +3246,7 @@ export function CCAgentSessionView({
               },
             },
           );
+          if (isArchivedSecondaryWindowInputBlocked()) return;
           if (slashDispatch.handled) {
             if (slashDispatch.accepted) {
               pending.onDeferredAccepted?.();
@@ -3140,6 +3289,7 @@ export function CCAgentSessionView({
                   slashDispatch.message,
                 )
               : undefined;
+          if (isArchivedSecondaryWindowInputBlocked()) return;
           const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
           const followStartGeneration = readSendFollowCancelGeneration(sessionId);
           requestFollowLatest(sessionId, followStartGeneration);
@@ -3157,8 +3307,16 @@ export function CCAgentSessionView({
               pendingPastedTextRanges?.length ||
               pendingSlashCommandRanges !== undefined ||
               pending.onRemoteOptimisticFailure !== undefined ||
-              pending.onDeferredAccepted !== undefined
+              pending.onDeferredAccepted !== undefined ||
+              isSecondaryWindow()
               ? {
+                  ...(isSecondaryWindow()
+                    ? {
+                        beforeEnqueue: allowArchivedSecondaryWindowEnqueue,
+                        beforeDispatch: allowArchivedSecondaryWindowEnqueue,
+                        requireActiveSession: true,
+                      }
+                    : {}),
                   ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
                   ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
                   ...(pendingAgentReferences?.length
@@ -3198,7 +3356,9 @@ export function CCAgentSessionView({
       })();
     },
     [
+      allowArchivedSecondaryWindowEnqueue,
       maybeDispatchDesktopSlashCommand,
+      isArchivedSecondaryWindowInputBlocked,
       refreshServerSession,
       remoteDeviceId,
       session?.agentKind,
@@ -3248,8 +3408,12 @@ export function CCAgentSessionView({
         : undefined;
       const cardClientId = insertSystemCard('context', { usage: undefined });
       if (!cardClientId) return true;
+      // 副窗口(含 device-link 远程)对已归档任务的 /context 必须 fence:本机副窗口
+      // Main 按 sender 判定,远程副窗口 sender 为空,靠此显式 requireActiveSession
+      // 经隧道传到被控端 Main 复核;主窗口不传,保留历史恢复语义。
+      const fenceOpts = isSecondaryWindow() ? { requireActiveSession: true } : undefined;
       void makerApiFor(sessionId)
-        .getContextUsage(sessionId, createOpts)
+        .getContextUsage(sessionId, createOpts, fenceOpts)
         .then((usage) => {
           updateSystemCardData(cardClientId, { usage });
         })
@@ -3283,6 +3447,7 @@ export function CCAgentSessionView({
         onDeferredAccepted?: () => void;
       },
     ) => {
+      if (isArchivedSecondaryWindowInputBlocked()) return false;
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const navigationRequestVersion =
         deliveryMode !== 'steer' && matchNavigationCommandName(message)
@@ -3303,10 +3468,12 @@ export function CCAgentSessionView({
       ) {
         return;
       }
+      if (isArchivedSecondaryWindowInputBlocked()) return false;
 
       if (deliveryMode !== 'steer' && (await maybeShowContextUsage(message))) {
         return;
       }
+      if (isArchivedSecondaryWindowInputBlocked()) return false;
 
       // ── Slash command dispatch (palette refactor) ──
       // 三源 palette 命中:
@@ -3320,11 +3487,14 @@ export function CCAgentSessionView({
         deliveryMode === 'steer'
           ? await maybeDispatchDesktopSlashCommand(message, files, {
               allowDesktopDispatch: false,
+              beforeDesktopDispatch: allowArchivedSecondaryWindowEnqueue,
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
             })
           : await maybeDispatchDesktopSlashCommand(message, files, {
+              beforeDesktopDispatch: allowArchivedSecondaryWindowEnqueue,
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
             });
+      if (isArchivedSecondaryWindowInputBlocked()) return false;
       if (slashDispatch.handled) {
         if (slashDispatch.accepted) {
           // Desktop commands can wait in Main long enough for draft hydration to
@@ -3389,6 +3559,7 @@ export function CCAgentSessionView({
           existingSessionRoute: true,
         });
         if (!proceed) return false;
+        if (isArchivedSecondaryWindowInputBlocked()) return false;
       }
 
       // Popover open → prevent re-entry
@@ -3396,6 +3567,7 @@ export function CCAgentSessionView({
       // 会话交接尚未完成(建 worktree / 远程开协同)时不放行:否则新输入会插到
       // 草稿提交的首条之前,顺序倒置。
       if (sessionHandoffPreparing) return false;
+      if (isArchivedSecondaryWindowInputBlocked()) return false;
 
       const orcaLeadVendorOptions =
         sessionId && session !== null && isOrcaLeadSession(session)
@@ -3454,6 +3626,13 @@ export function CCAgentSessionView({
       // ④ Execute send — effort + permissionMode came straight from ChatInput (fresh value)
       const sendOptions = {
         ...orcaLeadVendorOptions,
+        ...(isSecondaryWindow()
+          ? {
+              beforeEnqueue: allowArchivedSecondaryWindowEnqueue,
+              beforeDispatch: allowArchivedSecondaryWindowEnqueue,
+              requireActiveSession: true,
+            }
+          : {}),
         ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
         ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
         ...(opts?.pastedTextRanges?.length ? { pastedTextRanges: opts.pastedTextRanges } : {}),
@@ -3466,6 +3645,7 @@ export function CCAgentSessionView({
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
       };
       if (deliveryMode === 'steer') {
+        if (isArchivedSecondaryWindowInputBlocked()) return false;
         const followStartGeneration = readSendFollowCancelGeneration(sessionId);
         if (sessionId) requestFollowLatest(sessionId, followStartGeneration);
         const accepted = await steerMessage(
@@ -3486,6 +3666,7 @@ export function CCAgentSessionView({
         }
         return accepted;
       }
+      if (isArchivedSecondaryWindowInputBlocked()) return false;
       const followStartGeneration = readSendFollowCancelGeneration(sessionId);
       if (sessionId) requestFollowLatest(sessionId, followStartGeneration);
       const accepted = await sendMessage(
@@ -3525,6 +3706,8 @@ export function CCAgentSessionView({
       vendorAuthGate,
       remoteDeviceId,
       sessionHandoffPreparing,
+      allowArchivedSecondaryWindowEnqueue,
+      isArchivedSecondaryWindowInputBlocked,
     ],
   );
 
@@ -3548,6 +3731,7 @@ export function CCAgentSessionView({
     const unsub = window.electronAPI.maker.onDesktopCommandTriggered((payload) => {
       if (payload.command !== 'issue') return;
       if (!payload.sessionId || payload.sessionId !== sessionId || !session) return;
+      if (isArchivedSecondaryWindowInputBlocked()) return;
       const details = payload.args?.trim()
         ? t('issueAgent.command.detailsPrefix', { details: payload.args.trim() })
         : '';
@@ -3564,7 +3748,7 @@ export function CCAgentSessionView({
       );
     });
     return unsub;
-  }, [sessionId, session, handleSend, t]);
+  }, [sessionId, session, handleSend, isArchivedSecondaryWindowInputBlocked, t]);
 
   const { confirm: confirmDialog } = useConfirmDialog();
   // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
@@ -3708,15 +3892,30 @@ export function CCAgentSessionView({
   // useSessionRunningStatus 在 running 上升沿把 orphan 的 error 角标 explicit 清掉。
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
+    if (isArchivedSecondaryWindowInputBlocked()) return;
     void rebuildClaudeSubscriptionSessionBeforeRetry(errorReason)
-      .then(() => retryLastError())
+      .then(() => {
+        if (isArchivedSecondaryWindowInputBlocked()) return;
+        return retryLastError({ requireActiveSession: isSecondaryWindow() });
+      })
       .catch((error) => {
         log.warn('retryLastError failed', error);
       });
-  }, [errorReason, rebuildClaudeSubscriptionSessionBeforeRetry, retryLastError]);
+  }, [
+    errorReason,
+    isArchivedSecondaryWindowInputBlocked,
+    rebuildClaudeSubscriptionSessionBeforeRetry,
+    retryLastError,
+  ]);
 
   const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
-    if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
+    if (
+      !sessionId ||
+      !session ||
+      !canSwitchToClaudeSubscription ||
+      isArchivedSecondaryWindowInputBlocked()
+    )
+      return;
     const model = session.model;
     const previousProviderId = session.providerId ?? null;
     const retryEffort =
@@ -3776,15 +3975,31 @@ export function CCAgentSessionView({
     }
 
     await refreshServerSession();
-    await retryLastError();
+    if (isArchivedSecondaryWindowInputBlocked()) return;
+    await retryLastError({ requireActiveSession: isSecondaryWindow() });
   }, [
-    canSwitchToClaudeSubscription, confirmDialog, fastMode, refreshServerSession,
-    retryLastError, session, sessionId, t,
+    canSwitchToClaudeSubscription,
+    confirmDialog,
+    fastMode,
+    isArchivedSecondaryWindowInputBlocked,
+    refreshServerSession,
+    retryLastError,
+    session,
+    sessionId,
+    t,
   ]);
 
   const handleSilentStopContinue = useCallback(() => {
-    continueAfterSilentStop();
-  }, [continueAfterSilentStop]);
+    if (isArchivedSecondaryWindowInputBlocked()) return;
+    continueAfterSilentStop({
+      beforeEnqueue: allowArchivedSecondaryWindowEnqueue,
+      requireActiveSession: isSecondaryWindow(),
+    });
+  }, [
+    allowArchivedSecondaryWindowEnqueue,
+    continueAfterSilentStop,
+    isArchivedSecondaryWindowInputBlocked,
+  ]);
 
   const handleContinueAfterUsageReset = useCallback(() => {
     if (!sessionId || !usageLimitRecovery || remoteDeviceId) return;
@@ -3951,6 +4166,7 @@ export function CCAgentSessionView({
       const holdComposer = !!pending.remoteCollab;
       if (holdComposer) setRemoteHandoffPreparing(true);
       try {
+        if (isArchivedSecondaryWindowInputBlocked()) return;
         if (pending.remoteCollab) {
           const remoteCollab = await consumePendingRemoteCollab(pending.remoteCollab, {
             leadSessionId: sessionId,
@@ -3972,13 +4188,16 @@ export function CCAgentSessionView({
             });
           }
         }
+        if (isArchivedSecondaryWindowInputBlocked()) return;
         // 三处交接统一走 deliverRecoverableHandoff:交付成功才丢副本,
         // resolve false / 抛错都保留(见该函数注释)。
         let pendingText = pending.text;
         const slashDispatch = await maybeDispatchDesktopSlashCommand(pending.text, pending.files, {
+          beforeDesktopDispatch: allowArchivedSecondaryWindowEnqueue,
           piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
         });
         pendingText = slashDispatch.message;
+        if (isArchivedSecondaryWindowInputBlocked()) return;
         if (slashDispatch.handled) {
           if (!slashDispatch.accepted) {
             // NewMaker 已把源草稿移交并清空；Main 没受理 `/review` 时，把正文和附件
@@ -4032,6 +4251,7 @@ export function CCAgentSessionView({
             : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
+        if (isArchivedSecondaryWindowInputBlocked()) return;
         const followStartGeneration = readSendFollowCancelGeneration(sessionId);
         requestFollowLatest(sessionId, followStartGeneration);
         const delivered = await deliverRecoverableHandoff(sessionId, () =>
@@ -4047,8 +4267,16 @@ export function CCAgentSessionView({
               pending.quotesEncoded ||
               pendingAgentReferences?.length ||
               pendingPastedTextRanges?.length ||
-              pendingSlashCommandRanges !== undefined
+              pendingSlashCommandRanges !== undefined ||
+              isSecondaryWindow()
               ? {
+                  ...(isSecondaryWindow()
+                    ? {
+                        beforeEnqueue: allowArchivedSecondaryWindowEnqueue,
+                        beforeDispatch: allowArchivedSecondaryWindowEnqueue,
+                        requireActiveSession: true,
+                      }
+                    : {}),
                   ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
                   ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
                   ...(pendingAgentReferences?.length
@@ -4078,6 +4306,8 @@ export function CCAgentSessionView({
     })();
   }, [
     historyLoaded,
+    allowArchivedSecondaryWindowEnqueue,
+    isArchivedSecondaryWindowInputBlocked,
     maybeDispatchDesktopSlashCommand,
     restoreRecoverableHandoff,
     requestFollowLatest,
@@ -4991,15 +5221,27 @@ export function CCAgentSessionView({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
-                  disabled={remoteHandoffPreparing || session?.source === 'review'}
+                  disabled={
+                    remoteHandoffPreparing ||
+                    session?.source === 'review' ||
+                    blocksArchivedSecondaryWindowInput
+                  }
                   settingsLocked={session?.source === 'review'}
                   queuePaused={queuePaused}
                   queueExpanded={queueExpanded}
                   onQueueExpandedChange={setQueueExpanded}
-                  onQueueResume={resumeQueue}
+                  onQueueResume={
+                    blocksArchivedSecondaryWindowInput
+                      ? undefined
+                      : handleArchivedSafeQueueResume
+                  }
                   onQueueRemove={removeFromQueue}
                   onQueueEdit={updateQueueItem}
-                  onQueueSteer={steerQueuedMessage}
+                  onQueueSteer={
+                    blocksArchivedSecondaryWindowInput
+                      ? undefined
+                      : handleArchivedSafeQueueSteer
+                  }
                   onQueueReorder={moveQueueItem}
                   onQueueInteractionLock={setQueueInteractionLock}
                   onQueueEditLock={setQueueEditLock}

@@ -27,8 +27,9 @@ describe('Claude subscription model-window confirmation', () => {
       handler.indexOf('sessionService.update(sessionId'),
     );
     expect(handler.indexOf('sessionService.update(sessionId')).toBeLessThan(
-      handler.indexOf('retryLastError()'),
+      handler.indexOf('retryLastError({'),
     );
+    expect(handler).toContain('requireActiveSession: isSecondaryWindow()');
   });
 
   it('keeps the ordinary route when Main reports no destructive pressure', async () => {

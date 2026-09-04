@@ -109,6 +109,12 @@ export interface LearnStartRequest {
   hubSlug?: string;
   hubCatalogScope?: 'market' | 'team';
   originSessionId?: string;
+  /**
+   * Main-owned fence marker(仅 IPC dispatch 路径消费,controller 不读):device-link
+   * 合成 event sender 为空,副窗口经隧道发起 /learn 时由原始 renderer 显式置 true,
+   * 被控端据此在 route lock 内复核持久化 active 状态;primary remote task 不带。
+   */
+  requireActiveSession?: boolean;
 }
 
 /** learn:event push payload。 */

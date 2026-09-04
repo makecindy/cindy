@@ -2658,17 +2658,19 @@ describe('db worker tx handlers', () => {
         ['worker-1', 'team-1', 'worker', 'idle', 1, 1],
       );
 
-      const archivedSessionId = await client.tx<string | null>('orca.removeWorker', {
+      const removed = await client.tx('orca.removeWorker', {
         workerId: 'worker-1',
+        sessionId: 'worker',
         now: 999,
       });
-      const missingSessionId = await client.tx<string | null>('orca.removeWorker', {
+      const missing = await client.tx('orca.removeWorker', {
         workerId: 'missing',
+        sessionId: 'worker',
         now: 1000,
       });
 
-      expect(archivedSessionId).toBe('worker');
-      expect(missingSessionId).toBeNull();
+      expect(removed).toEqual({ removed: true, archivedSessionId: 'worker' });
+      expect(missing).toEqual({ removed: false, archivedSessionId: null });
       await expect(
         client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['worker-1']),
       ).resolves.toBeUndefined();
@@ -2682,6 +2684,35 @@ describe('db worker tx handlers', () => {
         updated_at: 999,
       });
     });
+  });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('orca.upsertWorker rejects an inactive team through the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(
+      async (client) => {
+        await seedSession(client, 'lead');
+        await seedSession(client, 'late-worker', { orcaRole: 'worker' });
+        await client.exec(
+          'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+          ['team-1', 'lead', 'completed', 1, 1],
+        );
+
+        await expect(
+          client.tx('orca.upsertWorker', {
+            id: 'worker-1',
+            teamId: 'team-1',
+            sessionId: 'late-worker',
+            status: 'idle',
+            label: 'late',
+            now: 100,
+          }),
+        ).rejects.toThrow('Orca team team-1 is not active');
+        await expect(client.query('SELECT id FROM orca_workers')).resolves.toEqual([]);
+      },
+      { useInlineWorker },
+    );
   });
 
   it.each([
@@ -2724,7 +2755,7 @@ describe('db worker tx handlers', () => {
         await expect(
           client.tx('orca.archiveWorkersByTeam', {
             teamId: 'active-team',
-            sessionIds: ['active-worker'],
+            sessionIds: ['active-worker', 'archived-worker', 'deleted-worker'],
             now: 100,
           }),
         ).resolves.toEqual(['active-worker']);

@@ -50,3 +50,31 @@ export function useConfirmSwitchAwayIfDirty() {
     [confirmThree, t],
   );
 }
+
+/**
+ * 副窗口宿主关闭前的统一 dirty 预检。
+ *
+ * 普通任务路由的可编辑文件位于右侧栏，路由宿主拿不到 selectedPath；从当前
+ * FileBodyView handle 读取路径，复用与关 tab 相同的保存／不保存／取消语义。
+ */
+export function useConfirmCloseActiveFileIfDirty() {
+  const { t } = useTranslation();
+  const { confirmThree } = useConfirmDialog();
+
+  return useCallback(async (): Promise<boolean> => {
+    const handle = getActiveFileBodyHandle();
+    if (!handle || !handle.isDirty()) return true;
+    const choice = await confirmThree({
+      title: t('ccAgent.workdirBrowse.confirmSwitchAway.title'),
+      description: t('ccAgent.workdirBrowse.confirmSwitchAway.descriptionCloseTab', {
+        path: handle.relPath ?? '',
+      }),
+      confirmText: t('ccAgent.workdirBrowse.confirmSwitchAway.save'),
+      tertiaryText: t('ccAgent.workdirBrowse.confirmSwitchAway.tertiary'),
+      cancelText: t('ccAgent.workdirBrowse.confirmSwitchAway.cancel'),
+    });
+    if (choice === 'cancel') return false;
+    if (choice === 'tertiary') return true;
+    return await handle.save();
+  }, [confirmThree, t]);
+}

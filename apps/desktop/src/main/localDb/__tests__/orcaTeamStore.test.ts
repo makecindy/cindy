@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
-import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock.js';
+import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 import * as schema from '../schema.js';
 
@@ -157,6 +157,130 @@ describe('orcaTeamStore', () => {
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects worker links that arrive after team shutdown begins', async () => {
+    const { archiveWorkersByTeam } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE orca_teams SET status = ? WHERE id = ?', ['completed', 'team-1']);
+
+    let releaseFirstLock!: () => void;
+    const firstLockGate = new Promise<void>((resolve) => {
+      releaseFirstLock = resolve;
+    });
+    const lockedSessionIds: string[] = [];
+    setSessionRouteLockImplementation(async (sessionId, task) => {
+      lockedSessionIds.push(sessionId);
+      if (sessionId === 'worker-session-1') await firstLockGate;
+      return task();
+    });
+
+    const archive = archiveWorkersByTeam('team-1');
+    await vi.waitFor(() => expect(lockedSessionIds).toEqual(['worker-session-1']));
+    await seedAdditionalWorkerSession(client, 'worker-session-3');
+    await expect(
+      client.tx('orca.upsertWorker', {
+        id: 'worker-3',
+        teamId: 'team-1',
+        sessionId: 'worker-session-3',
+        status: 'idle',
+        now: Date.now(),
+      }),
+    ).rejects.toThrow('Orca team team-1 is not active');
+
+    releaseFirstLock();
+    await expect(archive).resolves.toEqual(['worker-session-1', 'worker-session-2']);
+    expect(lockedSessionIds).toEqual(['worker-session-1', 'worker-session-2']);
+    await expect(
+      client.query<{ id: string; status: string }>(
+        'SELECT id, status FROM sessions WHERE id LIKE ? ORDER BY id',
+        ['worker-session-%'],
+      ),
+    ).resolves.toEqual([
+      { id: 'worker-session-1', status: 'archived' },
+      { id: 'worker-session-2', status: 'archived' },
+      { id: 'worker-session-3', status: 'active' },
+    ]);
+    await expect(
+      client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['worker-3']),
+    ).resolves.toBeUndefined();
+  });
+
+  it('serializes single-worker archival with the shared session route lock', async () => {
+    const { archiveSingleWorkerSession } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    let releaseLock!: () => void;
+    const lockGate = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const enteredLock = vi.fn();
+    setSessionRouteLockImplementation(async (sessionId, task) => {
+      enteredLock(sessionId);
+      await lockGate;
+      return task();
+    });
+
+    const archive = archiveSingleWorkerSession('worker-session-1');
+    await vi.waitFor(() => expect(enteredLock).toHaveBeenCalledWith('worker-session-1'));
+    await expect(
+      client.queryOne<{ status: string }>('SELECT status FROM sessions WHERE id = ?', [
+        'worker-session-1',
+      ]),
+    ).resolves.toEqual({ status: 'active' });
+
+    releaseLock();
+    await expect(archive).resolves.toBeUndefined();
+    await expect(
+      client.queryOne<{ status: string }>('SELECT status FROM sessions WHERE id = ?', [
+        'worker-session-1',
+      ]),
+    ).resolves.toEqual({ status: 'archived' });
+  });
+
+  it('keeps worker removal and session archival behind the worker route lock', async () => {
+    const { removeWorker } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    let releaseLock!: () => void;
+    const lockGate = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const enteredLock = vi.fn();
+    setSessionRouteLockImplementation(async (sessionId, task) => {
+      enteredLock(sessionId);
+      await lockGate;
+      return task();
+    });
+
+    const remove = removeWorker('worker-1');
+    await vi.waitFor(() => expect(enteredLock).toHaveBeenCalledWith('worker-session-1'));
+    await expect(
+      client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['worker-1']),
+    ).resolves.toEqual({ id: 'worker-1' });
+    await expect(
+      client.queryOne<{ status: string }>('SELECT status FROM sessions WHERE id = ?', [
+        'worker-session-1',
+      ]),
+    ).resolves.toEqual({ status: 'active' });
+
+    releaseLock();
+    await expect(remove).resolves.toBeUndefined();
+    await expect(
+      client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['worker-1']),
+    ).resolves.toBeUndefined();
+    await expect(
+      client.queryOne<{ status: string; orcaRole: string | null }>(
+        'SELECT status, orca_role AS orcaRole FROM sessions WHERE id = ?',
+        ['worker-session-1'],
+      ),
+    ).resolves.toEqual({ status: 'archived', orcaRole: null });
+  });
+
   it('reconciles only still-active workers from inactive teams', async () => {
     const { reconcileInactiveTeamWorkersForLead } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
@@ -257,6 +381,57 @@ describe('orcaTeamStore', () => {
       client,
       sessionId: 'worker-session-1',
     });
+  });
+
+  it('rejects worker links that arrive while inactive-team reconciliation is locked', async () => {
+    const { reconcileInactiveTeamWorkersForLead } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE orca_teams SET status = ? WHERE id = ?', ['completed', 'team-1']);
+
+    let releaseFirstLock!: () => void;
+    const firstLockGate = new Promise<void>((resolve) => {
+      releaseFirstLock = resolve;
+    });
+    const lockedSessionIds: string[] = [];
+    setSessionRouteLockImplementation(async (sessionId, task) => {
+      lockedSessionIds.push(sessionId);
+      if (sessionId === 'worker-session-1') await firstLockGate;
+      return task();
+    });
+
+    const reconcile = reconcileInactiveTeamWorkersForLead('lead-session-1');
+    await vi.waitFor(() => expect(lockedSessionIds).toEqual(['worker-session-1']));
+    await seedAdditionalWorkerSession(client, 'worker-session-3');
+    await expect(
+      client.tx('orca.upsertWorker', {
+        id: 'worker-3',
+        teamId: 'team-1',
+        sessionId: 'worker-session-3',
+        status: 'idle',
+        now: Date.now(),
+      }),
+    ).rejects.toThrow('Orca team team-1 is not active');
+
+    releaseFirstLock();
+    await expect(reconcile).resolves.toEqual(['worker-session-1', 'worker-session-2']);
+    expect(lockedSessionIds).toEqual(['worker-session-1', 'worker-session-2']);
+    await expect(
+      client.query<{ id: string; status: string }>(
+        'SELECT id, status FROM sessions WHERE id LIKE ? ORDER BY id',
+        ['worker-session-%'],
+      ),
+    ).resolves.toEqual([
+      { id: 'worker-session-1', status: 'archived' },
+      { id: 'worker-session-2', status: 'archived' },
+      { id: 'worker-session-3', status: 'active' },
+    ]);
+    await expect(
+      client.queryOne<{ status: string }>('SELECT status FROM orca_workers WHERE id = ?', [
+        'worker-3',
+      ]),
+    ).resolves.toBeUndefined();
   });
 
   it('preserves Pi worker identity in Orca projections', async () => {
@@ -498,5 +673,13 @@ async function seedOrcaWorkers(client: DbClient): Promise<void> {
   await client.exec(
     'INSERT INTO orca_workers (id, team_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
     ['worker-2', 'team-1', 'worker-session-2', now, now],
+  );
+}
+
+async function seedAdditionalWorkerSession(client: DbClient, sessionId: string): Promise<void> {
+  const now = Date.now();
+  await client.exec(
+    'INSERT INTO sessions (id, title, agent_kind, orca_role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [sessionId, sessionId, 'codex', 'worker', now, now],
   );
 }

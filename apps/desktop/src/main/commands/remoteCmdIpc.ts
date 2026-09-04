@@ -30,10 +30,19 @@ const log = createLogger('desktop-commands:remote-cmd');
 /** desktop-cmd:run channel 常量(allowlist / 控制端 builtins 同名字符串消费)。 */
 export const DESKTOP_CMD_RUN_CHANNEL = 'desktop-cmd:run';
 
+export interface RemoteCmdIpcDeps {
+  /** Trusted source marker from the device-link async context. */
+  isDeviceLinkInvoke(): boolean;
+  /** Serialize the remote command with archive/close for this session. */
+  withSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  /** Re-read the persisted session lifecycle while the lock is held. */
+  assertSessionActive(sessionId: string): Promise<void>;
+}
+
 /** 幂等保护:与 registerLearnIpc 同款 —— 可重试注册块内二次执行不 throw。 */
 let _registered = false;
 
-export function registerRemoteCmdIpc(): void {
+export function registerRemoteCmdIpc(deps: RemoteCmdIpcDeps): void {
   if (_registered) return;
   _registered = true;
   ipcMain.handle(
@@ -42,21 +51,37 @@ export function registerRemoteCmdIpc(): void {
       const obj = requireObject(input, 'input');
       const cmdLine = requireString(obj.cmdLine, 'cmdLine').trim();
       const cwd = requireString(obj.cwd, 'cwd');
+      const sessionId = typeof obj.sessionId === 'string' ? obj.sessionId.trim() : '';
+      // Main-owned fence marker:device-link 合成 event 的 sender 为空,无法用窗口归属
+      // 判定 secondary;只有原始 renderer(控制端副窗口)显式请求时才 fence。primary
+      // remote task(主窗口)不带此标记,保持"向已归档任务发 /cmd 可恢复任务"的历史语义。
+      const requireActiveSession = obj.requireActiveSession === true;
       if (!cmdLine) throwIpcError('INVALID_PARAMS', 'cmdLine must not be empty');
-      if (!(await isRemoteWorkingDirAllowed(cwd))) {
-        throwIpcError('INVALID_PARAMS', `working directory not allowed: ${cwd}`);
-      }
-      log.info('remote /cmd exec ▶', { cmdLine, cwd });
-      const result = await runShellCommand({ cmdLine, cwd });
-      log.info('remote /cmd exec ◀', {
-        cmdLine,
-        cwd,
-        exitCode: result.exitCode,
-        elapsedMs: result.elapsedMs,
-        timedOut: result.timedOut,
-        spawnError: result.spawnError ?? null,
+      const run = async (): Promise<CmdExecutionResult> => {
+        if (!(await isRemoteWorkingDirAllowed(cwd))) {
+          throwIpcError('INVALID_PARAMS', `working directory not allowed: ${cwd}`);
+        }
+        log.info('remote /cmd exec ▶', { cmdLine, cwd, sessionId: sessionId || undefined });
+        const result = await runShellCommand({ cmdLine, cwd });
+        log.info('remote /cmd exec ◀', {
+          cmdLine,
+          cwd,
+          sessionId: sessionId || undefined,
+          exitCode: result.exitCode,
+          elapsedMs: result.elapsedMs,
+          timedOut: result.timedOut,
+          spawnError: result.spawnError ?? null,
+        });
+        return result;
+      };
+      // 仅显式请求 active-session fence 的 device-link 调用走 route lock + 持久化复核;
+      // 本机 handler 调用(isDeviceLinkInvoke false)与未带标记的 primary remote 直通。
+      if (!deps.isDeviceLinkInvoke() || !requireActiveSession) return run();
+      if (!sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required for remote /cmd');
+      return deps.withSessionLock(sessionId, async () => {
+        await deps.assertSessionActive(sessionId);
+        return run();
       });
-      return result;
     },
   );
   log.info('remote cmd IPC handler registered');

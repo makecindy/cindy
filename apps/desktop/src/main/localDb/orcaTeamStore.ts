@@ -551,13 +551,27 @@ export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean
  */
 export async function removeWorker(workerId: string): Promise<void> {
   const client = getDbClient();
-  const removedSessionId = await client.tx('orca.removeWorker', {
-    workerId,
-    now: Date.now(),
-  });
-  if (removedSessionId) {
-    broadcastSessionPatch(removedSessionId, { status: 'archived', orcaRole: null });
-    void compactSessionToolResultsBestEffort({ client, sessionId: removedSessionId });
+  for (;;) {
+    const [worker] = await client.drizzle
+      .select({ sessionId: orcaWorkers.sessionId })
+      .from(orcaWorkers)
+      .where(eq(orcaWorkers.id, workerId))
+      .limit(1);
+    if (!worker) return;
+
+    const result = await withSessionRouteLock(worker.sessionId, () =>
+      client.tx('orca.removeWorker', {
+        workerId,
+        sessionId: worker.sessionId,
+        now: Date.now(),
+      }),
+    );
+    if (!result.removed) continue;
+    if (result.archivedSessionId) {
+      broadcastSessionPatch(result.archivedSessionId, { status: 'archived', orcaRole: null });
+      void compactSessionToolResultsBestEffort({ client, sessionId: result.archivedSessionId });
+    }
+    return;
   }
 }
 

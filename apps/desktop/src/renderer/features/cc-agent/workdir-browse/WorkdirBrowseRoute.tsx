@@ -203,6 +203,10 @@ export function WorkdirBrowseRoute() {
   }, [activeSessionIsOrcaLead, syncAgentIslandVisibleSession]);
 
   const confirmSwitchAway = useConfirmSwitchAwayIfDirty();
+  const confirmSecondaryWindowClose = useCallback(
+    () => confirmSwitchAway(selectedPath, null),
+    [confirmSwitchAway, selectedPath],
+  );
 
   // Tab 条点击/关闭后切换 active：写 URL ?file= + 同步 selectedFile / openTabs。
   // 与 Sidebar 的 handleSelectFile 逻辑保持等价，避免单击 tab 仅刷 URL 不写存储
@@ -598,10 +602,16 @@ export function WorkdirBrowseRoute() {
                 <OrcaSplitView
                   leadSessionId={activeSession.id}
                   reportAgentIslandVisibility={!railCollapse.collapsed}
+                  onBeforeSecondaryWindowClose={confirmSecondaryWindowClose}
                 />
               );
             }
-            return <CCAgentSessionView viewVisible={!railCollapse.collapsed} />;
+            return (
+              <CCAgentSessionView
+                viewVisible={!railCollapse.collapsed}
+                onBeforeSecondaryWindowClose={confirmSecondaryWindowClose}
+              />
+            );
           })()}
         </div>
       </div>

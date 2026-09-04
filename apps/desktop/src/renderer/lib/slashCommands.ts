@@ -466,6 +466,8 @@ export interface DispatchContext {
   /** device-link 远程会话的归属设备 id(本机会话缺省)。main 侧 /goal /learn /cmd
    *  据此把业务体经隧道路由到被控端执行。 */
   deviceId?: string;
+  /** Require Main to verify that a local session remains active before dispatch. */
+  requireActiveSession?: boolean;
 }
 
 /**
@@ -477,7 +479,7 @@ export interface DispatchContext {
  * 返回 'handled-locally' 表示已处理(调用方应阻止默认 send 行为);
  * 返回 'forward-to-agent' 表示让调用方继续走默认 send 路径。
  */
-export type DispatchResult = 'handled-locally' | 'forward-to-agent';
+export type DispatchResult = 'handled-locally' | 'forward-to-agent' | 'rejected';
 
 export async function dispatchCommand(
   cmd: UnifiedCommand,
@@ -490,11 +492,13 @@ export async function dispatchCommand(
         ...(ctx.workingDir ? { workingDir: ctx.workingDir } : {}),
         ...(ctx.args ? { args: ctx.args } : {}),
         ...(ctx.deviceId ? { deviceId: ctx.deviceId } : {}),
+        ...(ctx.requireActiveSession ? { requireActiveSession: true } : {}),
       });
     } catch (err) {
       log.warn(
         `executeDesktopCommand /${cmd.name} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return 'rejected';
     }
     return 'handled-locally';
   }

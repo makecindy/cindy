@@ -68,6 +68,7 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
   AgentInputRecovery,
+  AgentInputResumeOpts,
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
@@ -95,6 +96,7 @@ import type {
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
 import {
   makerApiFor,
@@ -930,6 +932,8 @@ interface RemoteOptimisticSendRecord {
   dispatching: boolean;
   attempt: number;
   beforeEnqueue?: () => Promise<boolean>;
+  beforeDispatch?: () => Promise<boolean>;
+  requireActiveSession?: boolean;
   preflightCompleted: boolean;
   /** 标注附件仍在本机烧录；完成前必须挡住本条及后续 FIFO 派发。 */
   materializationPending: boolean;
@@ -1519,6 +1523,8 @@ function registerRemoteOptimisticSend(
     dispatching: false,
     attempt: 0,
     beforeEnqueue: opts?.beforeEnqueue,
+    beforeDispatch: opts?.beforeDispatch,
+    requireActiveSession: opts?.requireActiveSession,
     preflightCompleted: opts?.beforeEnqueue === undefined,
     materializationPending,
     steerDispatchUncertain: false,
@@ -1949,7 +1955,52 @@ function clearRemoteOptimisticSend(sessionId: string, clientId: string): void {
   if (deleted) syncRemoteOptimisticAttachmentUrls();
 }
 
-function clearRemoteOptimisticSendsForSession(sessionId: string): void {
+function clearRemoteOptimisticSendsForSession(
+  sessionId: string,
+  preserveClientIds?: ReadonlySet<string>,
+): void {
+  if (preserveClientIds) {
+    const records = remoteOptimisticSends.get(sessionId);
+    let deleted = false;
+    if (records) {
+      for (const clientId of [...records.keys()]) {
+        if (preserveClientIds.has(clientId)) continue;
+        records.delete(clientId);
+        cancelRemoteOptimisticSettlingRetirement(sessionId, clientId);
+        deleted = true;
+      }
+      if (records.size === 0) remoteOptimisticSends.delete(sessionId);
+    }
+    remoteInputProjectionRequests.delete(sessionId);
+    remoteInputProjectionProbeStateBySession.delete(sessionId);
+    clearRemoteOptimisticRetryTimer(sessionId);
+    remoteOptimisticPumps.delete(sessionId);
+    const timers = remoteOptimisticSettlingTimers.get(sessionId);
+    if (timers) {
+      for (const clientId of [...timers.keys()]) {
+        if (preserveClientIds.has(clientId)) continue;
+        clearTimeout(timers.get(clientId));
+        timers.delete(clientId);
+      }
+      if (timers.size === 0) remoteOptimisticSettlingTimers.delete(sessionId);
+    }
+    for (const key of remoteOptimisticSettlingChecks) {
+      const prefix = `${sessionId}\u0000`;
+      if (key.startsWith(prefix) && !preserveClientIds.has(key.slice(prefix.length))) {
+        remoteOptimisticSettlingChecks.delete(key);
+      }
+    }
+    const removed = remoteOptimisticLocallyRemoved.get(sessionId);
+    if (removed) {
+      for (const clientId of [...removed]) {
+        if (!preserveClientIds.has(clientId)) removed.delete(clientId);
+      }
+      if (removed.size === 0) remoteOptimisticLocallyRemoved.delete(sessionId);
+    }
+    if (deleted) syncRemoteOptimisticAttachmentUrls();
+    return;
+  }
+
   const deleted = remoteOptimisticSends.delete(sessionId);
   remoteInputProjectionRequests.delete(sessionId);
   remoteInputProjectionProbeStateBySession.delete(sessionId);
@@ -9857,8 +9908,13 @@ async function dispatchRemoteOptimisticSend(
       if (record.steerDispatchUncertain) {
         return await reconcileUncertainRemoteSteer(sessionId, record, operation);
       }
+      if (record.beforeDispatch && !(await record.beforeDispatch())) {
+        return { kind: 'failed', error: undefined };
+      }
+      if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
       const accepted = await operation.api.input.steer(sessionId, record.queued, {
         touchUserSend: true,
+        ...(record.requireActiveSession ? { requireActiveSession: true } : {}),
         ...(record.expectedClearBoundaryMs !== undefined
           ? { expectedClearBoundaryMs: record.expectedClearBoundaryMs }
           : {}),
@@ -9869,8 +9925,13 @@ async function dispatchRemoteOptimisticSend(
       void requestInputProjection(sessionId);
       return { kind: 'accepted' };
     }
+    if (record.beforeDispatch && !(await record.beforeDispatch())) {
+      return { kind: 'failed', error: undefined };
+    }
+    if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
     const projection = await operation.api.input.enqueue(sessionId, record.queued, {
       sendAtMs: Date.now(),
+      ...(record.requireActiveSession ? { requireActiveSession: true } : {}),
       ...(record.expectedClearBoundaryMs !== undefined
         ? { expectedClearBoundaryMs: record.expectedClearBoundaryMs }
         : {}),
@@ -12218,7 +12279,7 @@ function setQueueExpanded(sessionId: string, expanded: boolean): void {
   ).catch((err) => log.warn('setQueueExpanded failed:', err));
 }
 
-function resumeQueue(sessionId: string): void {
+function resumeQueue(sessionId: string, opts?: AgentInputResumeOpts): void {
   if (!sessionId) return;
   // #2194 (Codex review P2): 暂停队列的「继续」是本端点击意图——恢复后 drain
   // 派发的队首项落库时会作为新尾部 user 行出现，不登记则门控误判为外部注入，
@@ -12237,8 +12298,14 @@ function resumeQueue(sessionId: string): void {
     markLocalSentUserMessage(sessionId, preResumeHeadClientId);
   }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  const resumeOpts: AgentInputResumeOpts = {
+    ...(boundaryOpts ?? {}),
+    ...(opts?.requireActiveSession ? { requireActiveSession: true } : {}),
+  };
   runAgentDispatchProjectionOperation(sessionId, (input) =>
-    boundaryOpts ? input.resume(sessionId, boundaryOpts) : input.resume(sessionId),
+    Object.keys(resumeOpts).length > 0
+      ? input.resume(sessionId, resumeOpts)
+      : input.resume(sessionId),
   )
     .then(({ projection }) => {
       if (
@@ -12533,6 +12600,10 @@ type SendMessageOpts = {
   bypassGhostHooks?: boolean;
   /** 远程预检在乐观投影建立后执行；false 时按 clientId 精确回滚。 */
   beforeEnqueue?: () => Promise<boolean>;
+  /** device-link 每次实际派发前重跑的生命周期门禁；重连重试不得复用旧结果。 */
+  beforeDispatch?: () => Promise<boolean>;
+  /** Main 在最终入队／插话边界复核持久化任务仍为 active。 */
+  requireActiveSession?: boolean;
   /** 远程乐观发送在稍后确认永久失败时恢复 composer。 */
   onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
 };
@@ -12876,7 +12947,10 @@ async function sendMessageCore(
 
   const operation = beginInputProjectionOperation(sessionId);
   return operation.api.input
-    .enqueue(sessionId, queued, { sendAtMs: Date.now() })
+    .enqueue(sessionId, queued, {
+      sendAtMs: Date.now(),
+      ...(opts?.requireActiveSession ? { requireActiveSession: true } : {}),
+    })
     .then((projection) => {
       if (opts?.authRetryPersistOnProjectionError) {
         setState(sessionId, (s) => ({
@@ -12946,11 +13020,15 @@ function compactSession(
   // 不进计划模式、不消耗用户的一次性勾选(false 语义见 SendOptions.planMode)。
   createOpts.planMode = false;
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  // 副窗口归档后不得压缩(压缩会启动新 turn,绕过 active-session fence,#3262 P2)。
+  // main 侧 INPUT_COMPACT handler 读取此标记并在持锁内复核会话仍 active。
+  const fenceOpts = isSecondaryWindow() ? { requireActiveSession: true } : {};
   return (
     runAgentDispatchProjectionOperation(sessionId, (input) =>
       input.compact(sessionId, createOpts, {
         userName: currentUserName,
         ...(boundaryOpts ?? {}),
+        ...fenceOpts,
       }),
     )
       // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
@@ -12985,6 +13063,8 @@ function steerMessage(
     pastedTextRanges?: PastedTextRange[];
     slashCommandRanges?: SlashCommandRange[];
     beforeEnqueue?: () => Promise<boolean>;
+    beforeDispatch?: () => Promise<boolean>;
+    requireActiveSession?: boolean;
     onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
   },
 ): Promise<boolean> {
@@ -13131,6 +13211,8 @@ async function steerMessageCore(
     pastedTextRanges?: PastedTextRange[];
     slashCommandRanges?: SlashCommandRange[];
     beforeEnqueue?: () => Promise<boolean>;
+    beforeDispatch?: () => Promise<boolean>;
+    requireActiveSession?: boolean;
     onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
   },
   clearGenerationAtStart = 0,
@@ -13232,7 +13314,10 @@ async function steerMessageCore(
 
   const steerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);
   return steerApi.input
-    .steer(sessionId, queued, { touchUserSend: true })
+    .steer(sessionId, queued, {
+      touchUserSend: true,
+      ...(opts?.requireActiveSession ? { requireActiveSession: true } : {}),
+    })
     .then(async (ok) => {
       if (ok) {
         commitAutoTitle();
@@ -13364,7 +13449,11 @@ async function resendBlockedMessage(
   }
 }
 
-function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolean> {
+function steerQueuedMessage(
+  sessionId: string,
+  clientId: string,
+  opts?: { requireActiveSession?: boolean },
+): Promise<boolean> {
   if (!sessionId || !clientId) return Promise.resolve(false);
   // Capture the target before entering the dispatch coordinator. A relay
   // reconnect may clear remoteProjectsStore while the coordinator is waiting;
@@ -13406,6 +13495,7 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
       return steerApi.input
         .steer(sessionId, queued, {
           removeFromQueue: true,
+          ...(opts?.requireActiveSession ? { requireActiveSession: true } : {}),
           ...getRemoteInputClearBoundaryOpts(sessionId),
         })
         .then((ok) => {
@@ -13639,7 +13729,10 @@ function clearError(sessionId: string): void {
   });
 }
 
-function retryLastError(sessionId: string): Promise<void> {
+function retryLastError(
+  sessionId: string,
+  opts?: { requireActiveSession?: boolean },
+): Promise<void> {
   if (!sessionId) return Promise.resolve();
   disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
@@ -13684,8 +13777,14 @@ function retryLastError(sessionId: string): Promise<void> {
     markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
   }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  const retryOpts = {
+    ...(boundaryOpts ?? {}),
+    ...(opts?.requireActiveSession ? { requireActiveSession: true } : {}),
+  };
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
-    boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
+    Object.keys(retryOpts).length > 0
+      ? input.retryLastError(sessionId, retryOpts)
+      : input.retryLastError(sessionId),
   ).then(
     ({ projection }) => {
       // 一次性意图的兜底清理：正常路径下 applyInputProjection 已凭意图认领
@@ -13757,11 +13856,17 @@ function retryLastError(sessionId: string): Promise<void> {
  * (点击是真实人类动作)。与 retryLastError 不同:耗尽横幅是 main 合成事件,
  * coordinator 无 recovery 状态,retryLastError 会 no-op,必须走本方法。
  */
-function continueAfterSilentStop(sessionId: string): void {
+interface SyntheticTriggerOptions {
+  beforeEnqueue?: () => Promise<boolean>;
+  requireActiveSession?: boolean;
+}
+
+function continueAfterSilentStop(sessionId: string, opts?: SyntheticTriggerOptions): void {
   if (!sessionId) return;
-  disposeLiveErrorPersist(sessionId);
-  void sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT).then(
-    () => {
+  void sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT, opts).then(
+    (accepted) => {
+      if (!accepted) return;
+      disposeLiveErrorPersist(sessionId);
       setState(sessionId, (s) => ({
         ...s,
         error: null,
@@ -13826,52 +13931,51 @@ function dismissErrorTailMessage(sessionId: string, clientId: string): Promise<b
  *   are permanently hidden and the next query starts a fresh conversation
  * - Stays on the same session (no navigation, no new session created)
  */
-function clearSession(sessionId: string): Promise<void> {
+function clearSession(sessionId: string, opts?: { requireActiveSession?: boolean }): Promise<void> {
   if (!sessionId) return Promise.resolve();
   const clearedAt = new Date().toISOString();
 
-  return clearSessionAfterGuard(sessionId, clearedAt);
+  return clearSessionAfterGuard(sessionId, clearedAt, opts);
 }
 
-async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Promise<void> {
+function isSessionNotActiveError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bSESSION_NOT_ACTIVE\b/i.test(message);
+}
+
+async function clearSessionAfterGuard(
+  sessionId: string,
+  clearedAt: string,
+  opts?: { requireActiveSession?: boolean },
+): Promise<void> {
   if (remoteClearInFlight.has(sessionId)) return;
   remoteClearInFlight.add(sessionId);
   try {
-    await clearSessionAfterGuardImpl(sessionId, clearedAt);
+    await clearSessionAfterGuardImpl(sessionId, clearedAt, opts);
   } finally {
     remoteClearInFlight.delete(sessionId);
   }
 }
 
-async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string): Promise<void> {
-  // /clear 清空会话：清掉该 session 的「正在识别图片中」toast，防残留。
-  dismissVisionBridgeToast(sessionId);
+async function clearSessionAfterGuardImpl(
+  sessionId: string,
+  clearedAt: string,
+  opts?: { requireActiveSession?: boolean },
+): Promise<void> {
+  const fencedClear = opts?.requireActiveSession === true;
   // Pin the clear lifecycle to the last known device before any await. The
   // mirror is intentionally cleared below, so live origin lookup is no longer
   // reliable for either clearSession or closeSession.
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
-  noteRendererClearBoundary(sessionId, clearedAt);
-  // Invalidate old history/projection operations before the first network await.
-  // The clear guard itself must be the new authority generation, otherwise an
-  // older projection can win the race and reinsert pre-clear queue state.
-  invalidateMessageHistoryWindow(sessionId);
-  bumpInteractionReconcileEpoch(sessionId);
-  supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+  const preGuardRemoteOptimisticClientIds = new Set(
+    remoteOptimisticSendRecords(sessionId)?.keys() ?? [],
+  );
   if (remoteDeviceId) {
     // Arm before the first remote await. New sends made while the invoke is
     // pending are accepted into the local optimistic ledger but cannot cross
     // the host's clear boundary.
     armRemoteClearFence(sessionId, remoteDeviceId, clearedAt);
   }
-  clearRemoteOptimisticMaterializationRecoveriesForSession(sessionId, {
-    preserveComposerTransitions: true,
-    markComposerTransitionsPurged: true,
-  });
-  clearRemoteOptimisticSendsForSession(sessionId);
-  // 远程会话:/clear 之后**不会**再有一次"最新页"拉取(唯一写缓存的那条路径),盘上那份
-  // 仍是清空前的正文 —— 此刻退出 app,下次离线冷启动就把已经被清掉的对话 hydrate 回来
-  // (review: codex P1)。放在守卫之前:无论守卫成功、失败还是超时,缓存都必须消失。
-  invalidateRemoteMessageCache(sessionId, remoteDeviceId);
   // Arm main-side clear guards before closing the CLI and clearing renderer state.
   let guardTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let guardResult:
@@ -13879,26 +13983,38 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
     | { kind: 'error'; err: unknown }
     | { kind: 'timeout' };
   const clearOperation = beginInputProjectionOperation(sessionId, remoteDeviceId);
+  const clearSessionRequest =
+    opts
+      ? clearOperation.api.input.clearSession(sessionId, clearedAt, opts)
+      : clearOperation.api.input.clearSession(sessionId, clearedAt);
+  const clearResult = clearSessionRequest.then(
+    (projection) => ({ kind: 'projection' as const, projection }),
+    (err) => ({ kind: 'error' as const, err }),
+  );
   try {
-    guardResult = await Promise.race([
-      clearOperation.api.input.clearSession(sessionId, clearedAt).then(
-        (projection) => ({ kind: 'projection' as const, projection }),
-        (err) => ({ kind: 'error' as const, err }),
-      ),
-      new Promise<{ kind: 'timeout' }>((resolve) => {
-        guardTimeoutId = setTimeout(
-          () => resolve({ kind: 'timeout' }),
-          CLEAR_SESSION_GUARD_TIMEOUT_MS,
-        );
-      }),
-    ]);
+    // A fenced clear must wait for the main-side lifecycle decision. Falling
+    // back to a local clear after the timeout would let a later
+    // SESSION_NOT_ACTIVE rejection arrive after the renderer has already
+    // destroyed the archived transcript.
+    guardResult = fencedClear
+      ? await clearResult
+      : await Promise.race([
+          clearResult,
+          new Promise<{ kind: 'timeout' }>((resolve) => {
+            guardTimeoutId = setTimeout(
+              () => resolve({ kind: 'timeout' }),
+              CLEAR_SESSION_GUARD_TIMEOUT_MS,
+            );
+          }),
+        ]);
   } catch (err) {
     guardResult = { kind: 'error', err };
   } finally {
     if (guardTimeoutId) clearTimeout(guardTimeoutId);
   }
+  let remoteClearResolved: boolean | undefined;
   if (guardResult.kind === 'projection') {
-    let remoteClearResolved = true;
+    remoteClearResolved = true;
     if (remoteDeviceId) {
       remoteClearResolved = resolveRemoteClearFenceFromProjection(
         sessionId,
@@ -13909,20 +14025,69 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       );
     }
     applyInputProjectionOperationResponse(sessionId, clearOperation, guardResult.projection);
-    if (remoteDeviceId) {
-      if (remoteClearResolved) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
-      else scheduleRemoteClearRetry(sessionId);
-    }
   } else if (guardResult.kind === 'error') {
     const err = guardResult.err;
     log.warn('maker.input.clearSession failed:', err);
+    if (opts?.requireActiveSession && isSessionNotActiveError(err)) {
+      // A fenced secondary-window clear must not turn an already archived
+      // session into a locally cleared session. The host rejected the
+      // lifecycle before its clear boundary was committed; preserve the
+      // transcript and stop any remote retry loop.
+      if (remoteDeviceId) clearRemoteClearFence(sessionId, { pump: false });
+      return;
+    }
     if (remoteDeviceId) {
       noteRemoteClearDispatchError(sessionId, remoteDeviceId, clearedAt, err);
-      scheduleRemoteClearRetry(sessionId);
     }
   } else {
     log.warn('maker.input.clearSession timed out; continuing local clear', { sessionId });
-    if (remoteDeviceId) scheduleRemoteClearRetry(sessionId);
+  }
+
+  // A fenced clear must not mutate renderer history, optimistic sends, or the
+  // offline mirror until the main-side lifecycle guard has accepted it. If
+  // the guard rejects with SESSION_NOT_ACTIVE, returning above leaves all of
+  // those structures untouched. Sends created while the guard was pending
+  // are post-clear work and are retained below for both local and remote
+  // clears.
+  const postGuardRemoteOptimisticClientIds = new Set(
+    [...(remoteOptimisticSendRecords(sessionId)?.keys() ?? [])].filter(
+      (clientId) => !preGuardRemoteOptimisticClientIds.has(clientId),
+    ),
+  );
+  dismissVisionBridgeToast(sessionId);
+  noteRendererClearBoundary(sessionId, clearedAt);
+  invalidateMessageHistoryWindow(sessionId);
+  bumpInteractionReconcileEpoch(sessionId);
+  supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+  clearRemoteOptimisticMaterializationRecoveriesForSession(sessionId, {
+    preserveComposerTransitions: true,
+    markComposerTransitionsPurged: true,
+  });
+  clearRemoteOptimisticSendsForSession(sessionId, postGuardRemoteOptimisticClientIds);
+  for (const clientId of postGuardRemoteOptimisticClientIds) {
+    const record = remoteOptimisticSendRecords(sessionId)?.get(clientId);
+    if (record) {
+      record.clearGeneration = rendererClearGenerationBySession.get(sessionId) ?? 0;
+    }
+  }
+  // 远程会话:/clear 之后**不会**再有一次"最新页"拉取(唯一写缓存的那条路径),盘上那份
+  // 仍是清空前的正文 —— 此刻退出 app,下次离线冷启动就把已经被清掉的对话 hydrate 回来。
+  invalidateRemoteMessageCache(sessionId, remoteDeviceId);
+  if (remoteDeviceId) {
+    // The remote fence was armed before the guard, so its generation predates
+    // the renderer clear boundary we just committed. Advance it only after a
+    // successful/non-terminal clear result; rejected fenced clears returned
+    // above and never reach this mutation.
+    const fence = remoteClearFences.get(sessionId);
+    if (fence) {
+      fence.clearGeneration = rendererClearGenerationBySession.get(sessionId) ?? 0;
+    }
+    if (guardResult.kind === 'projection') {
+      if (remoteClearResolved) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
+      else scheduleRemoteClearRetry(sessionId);
+    } else {
+      scheduleRemoteClearRetry(sessionId);
+    }
   }
 
   _lastViewedAt.delete(sessionId);
@@ -13937,13 +14102,15 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
   // The remote guard may have been waiting while the user composed another
   // message. Those records belong to the post-clear generation: clear the old
   // transcript, but keep their local optimistic rows until the host accepts
-  // them. Pre-clear records were already removed before the guard invoke.
+  // them. Records from before the guard are removed by the clear below.
   const postClearOptimisticClientIds = new Set(
     [...(remoteOptimisticSendRecords(sessionId)?.values() ?? [])]
       .filter(
         (record) =>
           isDataOwnerGenerationCurrent(record.dataOwner) &&
-          record.clearGeneration === (rendererClearGenerationBySession.get(sessionId) ?? 0),
+          (fencedClear
+            ? !preGuardRemoteOptimisticClientIds.has(record.queued.clientId)
+            : record.clearGeneration === (rendererClearGenerationBySession.get(sessionId) ?? 0)),
       )
       .map((record) => record.queued.clientId),
   );
@@ -14900,7 +15067,11 @@ export { UI_ACTION_TRIGGER_PREFIX };
  * error-tail banner) toasts or恢复红条。
  */
 
-function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
+function sendUiTriggerCore(
+  sessionId: string,
+  prompt: string,
+  opts?: SyntheticTriggerOptions,
+): Promise<boolean> {
   const state = getOrCreateState(sessionId);
   // UI triggers can be invoked from an error card while the mirror is being
   // reseeded. Pin every mutation in this attempt to the device that owned the
@@ -14924,7 +15095,8 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
       log.warn('sendUiTrigger: fetch session for createOpts failed', err);
       return null;
     })
-    .then((session) => {
+    .then(async (session) => {
+      if (opts?.beforeEnqueue && !(await opts.beforeEnqueue())) return false;
       if (!session?.workingDir) {
         // 行缺失兜底:direct send,行为与旧实现一致。
         // 无 pendingQueue 可取消，continue 在直发 accepted 后 durable ack；成功后再 dismiss
@@ -14933,6 +15105,7 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
           triggerApi
             .send(sessionId, { type: 'user', content: prompt }, undefined, {
               userName: currentUserName ?? undefined,
+              ...(opts?.requireActiveSession ? { requireActiveSession: true } : {}),
               ...(ackInterruptedTurnOnDispatch ? { ackInterruptedTurnOnDispatch: true } : {}),
             })
             .then((result) => {
@@ -14940,7 +15113,9 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
                 throw new Error(result.reason ?? 'Maker send was not accepted before dispatch');
               }
             });
-        if (syntheticTriggerKind(prompt) !== 'continue') return sendDirect();
+        if (syntheticTriggerKind(prompt) !== 'continue') {
+          return sendDirect().then(() => true);
+        }
         // 执行端 maker:send 在进入 vendor 前冻结自己的时钟，并仅在 accepted 后
         // durable ack；device-link 控制端不再跨设备传时间戳。老执行端忽略该选项
         // 时安全降级为“不确认旧中断”，不会因时钟偏差抹掉新的中断。
@@ -14948,6 +15123,7 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
           if (continuedErrorTailClientId) {
             dismissErrorTailMessage(sessionId, continuedErrorTailClientId);
           }
+          return true;
         });
       }
       const queued = buildQueuedMessage(
@@ -14981,9 +15157,13 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
       markLocalSentUserMessage(sessionId, queued.clientId);
       const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);
       return operation.api.input
-        .enqueue(sessionId, queued, { sendAtMs: Date.now() })
+        .enqueue(sessionId, queued, {
+          sendAtMs: Date.now(),
+          ...(opts?.requireActiveSession ? { requireActiveSession: true } : {}),
+        })
         .then((projection) => {
           applyInputProjectionOperationResponse(sessionId, operation, projection);
+          return true;
         });
     })
     .catch((err) => {
@@ -14992,12 +15172,16 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
     });
 }
 
-function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
+function sendUiTrigger(
+  sessionId: string,
+  prompt: string,
+  opts?: SyntheticTriggerOptions,
+): Promise<boolean> {
   if (!sessionId) return Promise.reject(new Error('sendUiTrigger: empty sessionId'));
   return withAgentSendDispatch(
     sessionId,
     () => Promise.reject(new Error('Agent switch is still in progress')),
-    () => sendUiTriggerCore(sessionId, prompt),
+    () => sendUiTriggerCore(sessionId, prompt, opts),
   );
 }
 

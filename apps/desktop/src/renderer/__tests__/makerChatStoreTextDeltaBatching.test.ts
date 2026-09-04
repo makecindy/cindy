@@ -113,6 +113,7 @@ import {
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../shared/interruptedTurn';
 
 const SESSION_ID = 'text-delta-batching';
+const SHARED_TARGET_PEER_SESSION_ID = `${SESSION_ID}-shared-target-peer`;
 const MODEL = 'gpt-5';
 const EFFORT = 'medium';
 const PERMISSION_MODE = 'default';
@@ -518,6 +519,7 @@ describe('makerChatStore text delta batching', () => {
     vi.clearAllMocks();
     makerChatStore.__teardownGlobalListeners();
     makerChatStore.purgeSession(SESSION_ID);
+    makerChatStore.purgeSession(SHARED_TARGET_PEER_SESSION_ID);
     makerChatStore.__resetRemoteTerminalTombstonesForTest();
     remoteProjectsStore.clear();
     remoteProjectsStore.__resetPinnedOriginsForTest();
@@ -533,6 +535,7 @@ describe('makerChatStore text delta batching', () => {
   afterEach(() => {
     makerChatStore.__teardownGlobalListeners();
     makerChatStore.purgeSession(SESSION_ID);
+    makerChatStore.purgeSession(SHARED_TARGET_PEER_SESSION_ID);
     makerChatStore.__resetRemoteTerminalTombstonesForTest();
     remoteProjectsStore.clear();
     remoteProjectsStore.__resetPinnedOriginsForTest();
@@ -2101,6 +2104,105 @@ describe('makerChatStore text delta batching', () => {
     await flushPromises();
 
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([]);
+  });
+
+  it('forwards the secondary-window active-session fence to the final local clear boundary', async () => {
+    await makerChatStore.clearSession(SESSION_ID, { requireActiveSession: true });
+
+    expect(input.clearSession).toHaveBeenCalledWith(SESSION_ID, expect.any(String), {
+      requireActiveSession: true,
+    });
+  });
+
+  it('does not clear local state when a fenced clear is rejected for an archived session', async () => {
+    input.clearSession.mockRejectedValueOnce(
+      new Error('SESSION_NOT_ACTIVE: session is archived'),
+    );
+
+    emitTextDelta('preserve me');
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(1);
+
+    await makerChatStore.clearSession(SESSION_ID, { requireActiveSession: true });
+
+    expect(input.clearSession).toHaveBeenCalledWith(SESSION_ID, expect.any(String), {
+      requireActiveSession: true,
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(1);
+    expect(window.electronAPI.maker.closeSession).not.toHaveBeenCalled();
+    expect(sessionService.update).not.toHaveBeenCalled();
+  });
+
+  it('preserves a remote optimistic send when a fenced clear is rejected', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    let rejectClear!: (error: Error) => void;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel) => {
+      if (channel === 'maker:input:clear-session') {
+        return new Promise<AgentInputProjection>((_resolve, reject) => {
+          rejectClear = reject;
+        });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    const clear = makerChatStore.clearSession(SESSION_ID, { requireActiveSession: true });
+    await flushPromises();
+    expect(rejectClear).toBeDefined();
+
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'preserve this remote optimistic send',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        content: 'preserve this remote optimistic send',
+        isPendingPersist: true,
+      }),
+    ]);
+
+    rejectClear(new Error('SESSION_NOT_ACTIVE: session is archived'));
+    await clear;
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        content: 'preserve this remote optimistic send',
+        isPendingPersist: true,
+      }),
+    ]);
+    expect(window.electronAPI.maker.closeSession).not.toHaveBeenCalled();
+  });
+
+  it('waits for a fenced clear guard instead of clearing after timeout', async () => {
+    let settleClear!: (error: Error) => void;
+    input.clearSession.mockReturnValueOnce(
+      new Promise<AgentInputProjection>((_resolve, reject) => {
+        settleClear = reject;
+      }),
+    );
+
+    emitTextDelta('preserve until the guard settles');
+    vi.advanceTimersByTime(32);
+    const clear = makerChatStore.clearSession(SESSION_ID, { requireActiveSession: true });
+    await flushPromises();
+
+    vi.advanceTimersByTime(500);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ content: 'preserve until the guard settles' }),
+    ]);
+    expect(sessionService.update).not.toHaveBeenCalled();
+
+    settleClear(new Error('SESSION_NOT_ACTIVE: session is archived'));
+    await clear;
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ content: 'preserve until the guard settles' }),
+    ]);
   });
 
   it('continues clearing local state when the clear guard hangs', async () => {
@@ -6189,6 +6291,129 @@ describe('makerChatStore text delta batching', () => {
     expect(sentTexts).toEqual(['wait for preflight']);
   });
 
+  it('reruns the lifecycle fence before a deferred remote dispatch after reconnect', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    let online = false;
+    let archived = false;
+    let enqueueCalls = 0;
+    const beforeEnqueue = vi.fn(async () => true);
+    const beforeDispatch = vi.fn(async () => !archived);
+    const restore = vi.fn();
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:get-projection') {
+        if (!online) throw new Error('[DEVICE_LINK_NOT_CONNECTED] relay offline');
+        return projection(SESSION_ID);
+      }
+      if (channel === 'maker:input:enqueue') {
+        enqueueCalls += 1;
+        return projection(SESSION_ID, { pendingQueue: [args[1] as AgentInputQueuedMessage] });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'wait for lifecycle fence',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+        undefined,
+        undefined,
+        { beforeEnqueue, beforeDispatch, onRemoteOptimisticFailure: restore },
+      ),
+    ).resolves.toBe(true);
+    expect(beforeEnqueue).toHaveBeenCalledOnce();
+    expect(beforeDispatch).not.toHaveBeenCalled();
+
+    archived = true;
+    online = true;
+    onPresenceChanged?.({ deviceId: 'device-1', online: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(beforeEnqueue).toHaveBeenCalledOnce();
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(enqueueCalls).toBe(0);
+    expect(restore).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+  });
+
+  it('keeps another in-flight request on the shared controlled endpoint isolated from a rejected lifecycle fence', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    remoteProjectsStore.pinSessionOrigin('device-1', SHARED_TARGET_PEER_SESSION_ID);
+    let online = false;
+    const dispatched: Array<{ sessionId: string; text: string }> = [];
+    const rejectedRestore = vi.fn();
+    const peerRestore = vi.fn();
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      const sessionId = args[0] as string;
+      if (channel === 'maker:input:get-projection') {
+        if (!online) throw new Error('[DEVICE_LINK_NOT_CONNECTED] relay offline');
+        return projection(sessionId);
+      }
+      if (channel === 'maker:input:enqueue') {
+        const item = args[1] as AgentInputQueuedMessage;
+        dispatched.push({ sessionId, text: item.text });
+        return projection(sessionId, { pendingQueue: [item] });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'archived peer request',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+        undefined,
+        undefined,
+        {
+          beforeEnqueue: async () => true,
+          beforeDispatch: async () => false,
+          onRemoteOptimisticFailure: rejectedRestore,
+        },
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      makerChatStore.sendMessage(
+        SHARED_TARGET_PEER_SESSION_ID,
+        'healthy peer request',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+        undefined,
+        undefined,
+        {
+          beforeEnqueue: async () => true,
+          beforeDispatch: async () => true,
+          onRemoteOptimisticFailure: peerRestore,
+        },
+      ),
+    ).resolves.toBe(true);
+    expect(dispatched).toEqual([]);
+
+    // Both controller intents share the same controlled endpoint and reconnect
+    // edge. Rejecting one record is request-scoped: it must not tear down the
+    // shared link or suppress the other in-flight record.
+    online = true;
+    onPresenceChanged?.({ deviceId: 'device-1', online: true });
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+
+    expect(rejectedRestore).toHaveBeenCalledOnce();
+    expect(peerRestore).not.toHaveBeenCalled();
+    expect(dispatched).toEqual([
+      { sessionId: SHARED_TARGET_PEER_SESSION_ID, text: 'healthy peer request' },
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+  });
+
   it('hydrates existing runtime messages with authoritative DB-created timestamps', () => {
     vi.setSystemTime(new Date('2026-06-15T00:00:30.000Z'));
     emitTextDelta('draft');
@@ -7098,6 +7323,92 @@ describe('makerChatStore text delta batching', () => {
     await expect(
       makerChatStore.sendUiTrigger(SESSION_ID, '[UI_ACTION_TRIGGER] retry'),
     ).rejects.toThrow(/workdir-missing/);
+  });
+
+  it('does not dispatch a UI trigger when its enqueue-time preflight rejects', async () => {
+    vi.mocked(sessionService.get).mockResolvedValueOnce({
+      agentKind: 'codex',
+      remoteHostId: null,
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    const beforeEnqueue = vi.fn(async () => false);
+
+    await expect(
+      makerChatStore.sendUiTrigger(SESSION_ID, CONTINUE_AFTER_APP_EXIT_PROMPT, {
+        beforeEnqueue,
+      }),
+    ).resolves.toBe(false);
+
+    expect(beforeEnqueue).toHaveBeenCalledTimes(1);
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.send).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a local send after attachment materialization before enqueueing it', async () => {
+    let resolveMaterialize!: (value: {
+      url: string;
+      name: string;
+      ext: string;
+      mimeType: string;
+      size: number;
+    }) => void;
+    vi.mocked(window.electronAPI.cacheMediaForSession).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMaterialize = resolve;
+        }),
+    );
+    const attachment: AttachedFile = {
+      id: 'archive-race-annotation',
+      name: 'archive-race.png',
+      path: '',
+      ext: '.png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'xdt-image://source/archive-race.png',
+      cacheUrlShared: true,
+    };
+    let archived = false;
+    const beforeEnqueue = vi.fn(async () => !archived);
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'annotated send',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+      [attachment],
+      undefined,
+      { beforeEnqueue },
+    );
+    await flushPromises();
+    expect(beforeEnqueue).not.toHaveBeenCalled();
+    expect(input.enqueue).not.toHaveBeenCalled();
+
+    archived = true;
+    resolveMaterialize({
+      url: 'xdt-image://text-delta-batching/archive-race-private.png',
+      name: 'archive-race-private.png',
+      ext: '.png',
+      mimeType: 'image/png',
+      size: 1,
+    });
+
+    await expect(send).resolves.toBe(false);
+    expect(beforeEnqueue).toHaveBeenCalledOnce();
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(0);
   });
 
   it('requests executor-side interrupted-turn ack for a direct-send continue fallback', async () => {

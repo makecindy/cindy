@@ -651,7 +651,10 @@ export class GoalController {
         this.attachListener(sessionId);
         this.emit(updated);
         if (this.turns.get(sessionId) === activeBoundary) {
-          await this.fireTurn(sessionId, { throwOnRestoreFailure: true });
+          await this.fireTurn(sessionId, {
+            throwOnRestoreFailure: true,
+            sessionRouteLockHeld: input.sessionRouteLockHeld,
+          });
         }
       } catch (error) {
         if (this.turns.get(sessionId) === editBoundary) {
@@ -731,7 +734,10 @@ export class GoalController {
       this.attachListener(sessionId);
       this.emit(state);
       if (this.turns.get(sessionId) === activeBoundary) {
-        await this.fireTurn(sessionId, { throwOnRestoreFailure: true });
+        await this.fireTurn(sessionId, {
+          throwOnRestoreFailure: true,
+          sessionRouteLockHeld: input.sessionRouteLockHeld,
+        });
       }
     } catch (error) {
       if (this.turns.get(sessionId) === createBoundary) this.turns.delete(sessionId);
@@ -742,7 +748,11 @@ export class GoalController {
     return (await this.deps.storage.get(sessionId)) ?? createdState;
   }
 
-  async updateGoal(sessionId: string, patch: GoalUpdatePatch): Promise<GoalState | null> {
+  async updateGoal(
+    sessionId: string,
+    patch: GoalUpdatePatch,
+    opts?: { sessionRouteLockHeld?: boolean },
+  ): Promise<GoalState | null> {
     if (this.disposed || this.disposing) return null;
     const normalized = normalizeGoalUpdatePatch(patch);
     const existingBoundary = this.turns.get(sessionId);
@@ -956,7 +966,11 @@ export class GoalController {
         objectiveChanged &&
         (changed.status === 'paused' || changed.status === 'blocked' || changed.status === 'usageLimited')
       ) {
-        await this.resumeGoal(sessionId);
+        // fence 已持有 route 锁时透传,避免 resumeGoal→fireTurn 二次加锁自死锁(#3262)。
+        await this.resumeGoal(
+          sessionId,
+          opts?.sessionRouteLockHeld ? { sessionRouteLockHeld: true } : undefined,
+        );
         return reconcileLifecycleChange();
       }
       this.emit(next);
@@ -1172,7 +1186,10 @@ export class GoalController {
    * (与 setGoal 全清零相反),重挂 listener,空闲则立即续一轮。终态(complete/budgetLimited)
    * /已 active 不处理。
    */
-  async resumeGoal(sessionId: string, opts?: { auto?: boolean }): Promise<void> {
+  async resumeGoal(
+    sessionId: string,
+    opts?: { auto?: boolean; sessionRouteLockHeld?: boolean },
+  ): Promise<void> {
     if (this.disposed || this.disposing) return;
     let existingBoundary = this.turns.get(sessionId);
     let state: GoalState | null | undefined;
@@ -1319,7 +1336,13 @@ export class GoalController {
     this.attachListener(sessionId);
     this.emit(updated);
     if (!this.isBusy(sessionId)) {
-      await this.fireTurn(sessionId, { throwOnRestoreFailure: !opts?.auto });
+      await this.fireTurn(sessionId, {
+        throwOnRestoreFailure: !opts?.auto,
+        // 调用方(goal fence)已持有 session route lock:让 fireTurn 内的
+        // pending-agent-switch 走 holder 的 sessionRouteLockHeld 分支,
+        // 不再二次获取同一把非重入锁,避免自死锁(#3262 P2)。
+        ...(opts?.sessionRouteLockHeld ? { sessionRouteLockHeld: true } : {}),
+      });
     }
   }
 
@@ -1394,7 +1417,7 @@ export class GoalController {
    */
   async resumeOnOpen(
     sessionId: string,
-    opts?: { waitForDispatch?: boolean },
+    opts?: { waitForDispatch?: boolean; sessionRouteLockHeld?: boolean },
   ): Promise<void> {
     if (this.disposed || this.disposing) return;
     const pendingFailure = this.unpersistedDispatchFailures.get(sessionId);
@@ -1434,7 +1457,11 @@ export class GoalController {
     let restoreError: unknown;
     try {
       releaseAgentSwitchLock =
-        (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+        (await this.deps.acquirePendingAgentSwitch?.(
+          sessionId,
+          // goal fence 已持有 route lock 时透传标记,让 holder 跳过二次加锁(#3262 P2)。
+          opts?.sessionRouteLockHeld ? { sessionRouteLockHeld: true } : undefined,
+        )) ?? (() => {});
       if (this.disposed) return;
       if (this.turns.get(sessionId) !== lifecycleBoundary) return;
       session = await this.deps.ensureSession(sessionId);
@@ -1487,8 +1514,13 @@ export class GoalController {
     if (!this.isBusy(sessionId)) {
       const dispatch = this.fireTurn(sessionId, {
         throwOnUnpersistedRestoreFailure: true,
+        ...(opts?.sessionRouteLockHeld ? { sessionRouteLockHeld: true } : {}),
       });
-      if (opts?.waitForDispatch === false) {
+      // A caller-held route lock protects the entire lifecycle boundary. Do
+      // not detach the dispatch while that lock is still owned by the caller,
+      // otherwise the lock can be released before Session.send reaches the
+      // accepted side effect.
+      if (opts?.waitForDispatch === false && !opts?.sessionRouteLockHeld) {
         void dispatch.catch((error) => {
           this.deps.logger.warn('[goal] detached resume-on-open fire failed', {
             sessionId,
@@ -2295,6 +2327,7 @@ export class GoalController {
     opts?: {
       throwOnRestoreFailure?: boolean;
       throwOnUnpersistedRestoreFailure?: boolean;
+      sessionRouteLockHeld?: boolean;
     },
   ): Promise<void> {
     if (this.disposed) return;
@@ -2401,7 +2434,11 @@ export class GoalController {
       // apply、重新读取 live session 和 Session.send；否则并发 SET_MODEL 能在 fresh
       // session 创建后、send 前再次换 route，让本轮落到 UI 未显示的来源。
       releaseAgentSwitchLock =
-        (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+        (await (opts?.sessionRouteLockHeld
+          ? this.deps.acquirePendingAgentSwitch?.(sessionId, {
+              sessionRouteLockHeld: true,
+            })
+          : this.deps.acquirePendingAgentSwitch?.(sessionId))) ?? (() => {});
       if (!isCurrentLifecycle()) return;
       const session = await this.deps.ensureSession(sessionId);
       if (!isCurrentLifecycle()) return;

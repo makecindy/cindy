@@ -84,6 +84,8 @@ export interface GoalState {
 export interface SetGoalInput {
   sessionId: string;
   objective: string;
+  /** Internal Main marker: the caller already owns this session's route lock. */
+  sessionRouteLockHeld?: boolean;
   /** 留空则由 controller 从活动会话(SessionLike.agentKind)解析。 */
   agentKind?: AgentKind;
   /** 新建时的上限(GUI 新建弹窗的高级设置)。留空 → 走系统默认(getDefaults)。仅新建路径用;编辑改 objective 不动上限。 */
@@ -183,7 +185,10 @@ export interface GoalControllerDeps {
    * 锁住本 session、落实 deferred agent switch 并 bootstrap 新 live session。
    * 调用方在重新读取 live session 且 Session.send 返回后执行 release。
    */
-  acquirePendingAgentSwitch?: (sessionId: string) => Promise<() => void>;
+  acquirePendingAgentSwitch?: (
+    sessionId: string,
+    options?: { sessionRouteLockHeld?: boolean },
+  ) => Promise<() => void>;
   /** ← maker-ipc/register.isSessionInTurn(main 侧 turn 活跃跟踪)。 */
   isSessionInTurn(sessionId: string): boolean;
   /**

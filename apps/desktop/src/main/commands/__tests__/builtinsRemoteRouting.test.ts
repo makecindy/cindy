@@ -55,6 +55,23 @@ beforeEach(() => {
   h.webContentsSend.mockClear();
 });
 
+describe('/clear lifecycle fence', () => {
+  it('keeps a secondary-window active-session guard for every broadcast consumer', async () => {
+    const { registry } = makeHarness();
+
+    await registry.execute('clear', {
+      sessionId: 'rs',
+      requireActiveSession: true,
+    });
+
+    expect(sentPayloads().at(-1)).toMatchObject({
+      command: 'clear',
+      sessionId: 'rs',
+      requireActiveSession: true,
+    });
+  });
+});
+
 describe('/goal 远程路由', () => {
   it('deviceId + objective → 隧道 maker:goal:set,不触本机 controller', async () => {
     const { registry, goalController, remoteInvoke } = makeHarness();
@@ -74,11 +91,40 @@ describe('/goal 远程路由', () => {
     expect(sentPayloads().at(-1)).toMatchObject({ command: 'goal', goalAction: 'cleared' });
   });
 
+  it('副窗口 clear:第一参保持裸 sessionId,仅追加尾部 fenceOpts', async () => {
+    const { registry, remoteInvoke } = makeHarness();
+    await registry.execute('goal', {
+      sessionId: 'rs',
+      deviceId: 'dev-1',
+      args: 'clear',
+      requireActiveSession: true,
+    });
+    // 旧被控端按 requireString 解析第一参裸字符串、忽略尾参;新被控端读第二参加锁。
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'maker:goal:clear', [
+      'rs',
+      { requireActiveSession: true },
+    ]);
+  });
+
   it('本机会话(无 deviceId)仍走本机 controller', async () => {
     const { registry, goalController, remoteInvoke } = makeHarness();
     await registry.execute('goal', { sessionId: 'ls', args: '目标 Y' });
     expect(goalController.setGoal).toHaveBeenCalledWith({ sessionId: 'ls', objective: '目标 Y' });
     expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+
+  it('Main 已持有 session route lock 时把所有权传给 Goal 首轮派发', async () => {
+    const { registry, goalController } = makeHarness();
+    await registry.execute('goal', {
+      sessionId: 'ls',
+      args: '目标 Z',
+      sessionRouteLockHeld: true,
+    });
+    expect(goalController.setGoal).toHaveBeenCalledWith({
+      sessionId: 'ls',
+      objective: '目标 Z',
+      sessionRouteLockHeld: true,
+    });
   });
 
   it('被控端版本过旧(CHANNEL_NOT_ALLOWED)→ remote-unsupported', async () => {
@@ -89,6 +135,19 @@ describe('/goal 远程路由', () => {
     });
     await registry.execute('goal', { sessionId: 'rs', deviceId: 'dev-1', args: '目标 X' });
     expect(sentPayloads().at(-1)).toMatchObject({ command: 'goal', error: 'remote-unsupported' });
+  });
+
+  it('副窗口 requireActiveSession 透传进 maker:goal:set args', async () => {
+    const { registry, remoteInvoke } = makeHarness();
+    await registry.execute('goal', {
+      sessionId: 'rs',
+      deviceId: 'dev-1',
+      args: '目标 X',
+      requireActiveSession: true,
+    });
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'maker:goal:set', [
+      { sessionId: 'rs', objective: '目标 X', requireActiveSession: true },
+    ]);
   });
 });
 
@@ -152,6 +211,28 @@ describe('/learn 远程路由', () => {
     expect(remoteInvoke).not.toHaveBeenCalled();
     expect(sentPayloads().at(-1)).toMatchObject({ command: 'learn', learnRunId: 'local-run' });
   });
+
+  it('副窗口 requireActiveSession 透传进 learn:start req(本机 startLearn 不带该字段)', async () => {
+    const { registry, learnController, remoteInvoke } = makeHarness({
+      remoteInvoke: async () => ({ runId: 'remote-run' }),
+    });
+    await registry.execute('learn', {
+      sessionId: 'rs',
+      deviceId: 'dev-1',
+      args: '学习 Z',
+      requireActiveSession: true,
+    });
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'learn:start', [
+      {
+        input: '学习 Z',
+        sourceKind: 'freetext',
+        originSessionId: 'rs',
+        requireActiveSession: true,
+      },
+    ]);
+    // 本机 controller 不被调用,且 req 不污染本机路径。
+    expect(learnController.startLearn).not.toHaveBeenCalled();
+  });
 });
 
 describe('/cmd 远程路由', () => {
@@ -173,7 +254,7 @@ describe('/cmd 远程路由', () => {
       args: 'ls',
     });
     expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'desktop-cmd:run', [
-      { cmdLine: 'ls', cwd: '/remote/dir' },
+      { sessionId: 'rs', cmdLine: 'ls', cwd: '/remote/dir' },
     ]);
     expect(sentPayloads().at(-1)).toMatchObject({ command: 'cmd', result: remoteResult });
   });
@@ -193,5 +274,51 @@ describe('/cmd 远程路由', () => {
     const last = sentPayloads().at(-1) as { result?: { exitCode: number; spawnError?: string } };
     expect(last?.result?.exitCode).toBe(-1);
     expect(last?.result?.spawnError).toContain('DEVICE_LINK_DEVICE_OFFLINE');
+  });
+
+  it('副窗口 requireActiveSession 透传进 desktop-cmd:run args(被控端据此 fence)', async () => {
+    const { registry, remoteInvoke } = makeHarness({
+      remoteInvoke: async () => ({
+        cmdLine: 'ls',
+        cwd: '/remote/dir',
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+        elapsedMs: 1,
+        timedOut: false,
+      }),
+    });
+    await registry.execute('cmd', {
+      sessionId: 'rs',
+      deviceId: 'dev-1',
+      workingDir: '/remote/dir',
+      args: 'ls',
+      requireActiveSession: true,
+    });
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'desktop-cmd:run', [
+      { sessionId: 'rs', cmdLine: 'ls', cwd: '/remote/dir', requireActiveSession: true },
+    ]);
+  });
+
+  it('无 requireActiveSession 时隧道 args 不带该字段(primary remote 历史语义)', async () => {
+    const { registry, remoteInvoke } = makeHarness({
+      remoteInvoke: async () => ({
+        cmdLine: 'ls',
+        cwd: '/remote/dir',
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+        elapsedMs: 1,
+        timedOut: false,
+      }),
+    });
+    await registry.execute('cmd', {
+      sessionId: 'rs',
+      deviceId: 'dev-1',
+      workingDir: '/remote/dir',
+      args: 'ls',
+    });
+    const args = (remoteInvoke.mock.calls.at(-1)?.[2] as unknown[])[0] as Record<string, unknown>;
+    expect(args).not.toHaveProperty('requireActiveSession');
   });
 });

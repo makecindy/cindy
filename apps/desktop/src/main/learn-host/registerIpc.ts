@@ -23,6 +23,18 @@ import { LearnError } from './controller';
 
 const log = createLogger('learn-host:ipc');
 
+export interface LearnIpcLifecycleDeps {
+  isDeviceLinkInvoke(): boolean;
+  withSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  assertSessionActive(sessionId: string): Promise<void>;
+}
+
+const NOOP_LEARN_LIFECYCLE_DEPS: LearnIpcLifecycleDeps = {
+  isDeviceLinkInvoke: () => false,
+  withSessionLock: async (_sessionId, task) => task(),
+  assertSessionActive: async (_sessionId) => undefined,
+};
+
 /** learn:* channel 常量 —— preload 与 renderer 按同名字符串消费。 */
 export const LEARN_CHANNELS = {
   START: 'learn:start',
@@ -70,12 +82,28 @@ export function broadcastLearnEvent(payload: LearnEventPayload): void {
  *  二次注册直接 throw,反而让重试永远无法恢复(Greptile review,含复现)。 */
 let _learnIpcRegistered = false;
 
-export function registerLearnIpc(): void {
+export function registerLearnIpc(
+  lifecycle: LearnIpcLifecycleDeps = NOOP_LEARN_LIFECYCLE_DEPS,
+): void {
   if (_learnIpcRegistered) return;
   _learnIpcRegistered = true;
   ipcMain.handle(LEARN_CHANNELS.START, async (_event, req: LearnStartRequest) => {
     try {
-      return await mustController().startLearn(req);
+      const sourceSessionId = req.originSessionId?.trim();
+      // device-link 合成 event sender 为空,不能按窗口归属判定 secondary;只在原始
+      // renderer(经隧道 req 透传)显式请求时 fence,primary remote task 保持历史语义。
+      const requireActiveSession = req.requireActiveSession === true;
+      // requireActiveSession 是 IPC dispatch-only 标记,不进入 LearnController:
+      // 剥离后再传,避免污染 controller 的 run 记录 / 证据打包。
+      const { requireActiveSession: _omit, ...controllerReq } = req;
+      void _omit;
+      const start = () => mustController().startLearn(controllerReq);
+      if (!lifecycle.isDeviceLinkInvoke() || !requireActiveSession || !sourceSessionId)
+        return await start();
+      return await lifecycle.withSessionLock(sourceSessionId, async () => {
+        await lifecycle.assertSessionActive(sourceSessionId);
+        return start();
+      });
     } catch (err) {
       rethrow(err);
     }

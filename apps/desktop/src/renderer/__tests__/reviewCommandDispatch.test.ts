@@ -22,10 +22,11 @@ describe('/review command dispatch', () => {
     expect(dispatchSource).toContain('await window.electronAPI.maker.startReview({');
     expect(dispatchSource).toContain('return { handled: true, accepted: true, message }');
     expect(dispatchSource).toContain('return { handled: true, accepted: false, message }');
+    expect(dispatchSource).toContain('const dispatchResult = await dispatchCommand(hit');
     expect(sessionViewSource).toContain('if (slashDispatch.handled) {');
     expect(sessionViewSource).toContain('waitForLeadHistory: false');
     expect(dispatchSource.indexOf('.startReview({')).toBeLessThan(
-      dispatchSource.indexOf('void dispatchCommand(hit'),
+      dispatchSource.indexOf('const dispatchResult = await dispatchCommand(hit'),
     );
   });
 

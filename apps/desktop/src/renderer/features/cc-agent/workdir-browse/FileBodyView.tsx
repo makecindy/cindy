@@ -178,6 +178,8 @@ export interface FileBodyViewProps {
  * 内部的 "保存修改?" 二次确认 —— 调用方已经在自己的关闭确认里收过用户意图)。
  */
 export interface FileBodyHandle {
+  /** 当前编辑器对应的 workdir-relative 路径；关闭宿主前的 dirty 预检用于说明目标。 */
+  relPath: string | null;
   /** true = 当前可编辑内容相对原始内容已变化(LF 归一后比对)。 */
   isDirty(): boolean;
   /** 写入磁盘。无 dirty 时直接 resolve(true) 不做任何 IO。返回 false = 写入失败。 */
@@ -506,10 +508,11 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useImperativeHandle(
     ref,
     () => ({
+      relPath,
       isDirty: () => allowEdit && editMode && dirty,
       save: () => (allowEdit ? writeToDisk() : Promise.resolve(true)),
     }),
-    [allowEdit, editMode, dirty, writeToDisk],
+    [allowEdit, editMode, dirty, relPath, writeToDisk],
   );
 
   // 同步把当前 FileBodyView 的 handle 注册到 module-level singleton,让
@@ -518,11 +521,12 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // editMode/dirty 变化时刷新 store 引用。unmount 时清空。
   useEffect(() => {
     setActiveFileBodyHandle({
+      relPath,
       isDirty: () => allowEdit && editMode && dirty,
       save: () => (allowEdit ? writeToDisk() : Promise.resolve(true)),
     });
     return () => setActiveFileBodyHandle(null);
-  }, [allowEdit, editMode, dirty, writeToDisk]);
+  }, [allowEdit, editMode, dirty, relPath, writeToDisk]);
 
   // ── find-in-page / search-in-project capture ───────────────────────────
   // 组合键定义在 shared/appShortcuts registry (默认 Ctrl/Cmd+F 与

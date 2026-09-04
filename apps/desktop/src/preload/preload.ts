@@ -5772,7 +5772,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     executeDesktopCommand: (
       name: string,
       // deviceId:device-link 远程会话的归属设备(main 侧 /goal /learn /cmd 据此隧道路由)。
-      ctx: { sessionId?: string; workingDir?: string; args?: string; deviceId?: string },
+      ctx: {
+        sessionId?: string;
+        workingDir?: string;
+        args?: string;
+        deviceId?: string;
+        requireActiveSession?: boolean;
+      },
     ): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('maker:execute-desktop-command', name, ctx),
 
@@ -5856,6 +5862,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         };
         error?: string;
         goalAction?: 'set' | 'cleared' | 'open-dialog';
+        requireActiveSession?: boolean;
       }) => void,
     ): (() => void) => {
       const channel = 'maker:desktop-command-triggered';
@@ -6123,8 +6130,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         remoteHostId?: string;
         resumeSessionId?: string;
       },
+      fenceOpts?: { requireActiveSession?: boolean },
     ): Promise<import('@cindy/maker-core').ContextUsageData> =>
-      ipcRenderer.invoke('maker:get-context-usage', sessionId, createOpts),
+      ipcRenderer.invoke('maker:get-context-usage', sessionId, createOpts, fenceOpts),
 
     abortSession: (sessionId: string): Promise<void> =>
       ipcRenderer.invoke('maker:abort-session', sessionId),
@@ -6665,7 +6673,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       enqueue: (
         sessionId: string,
         item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
-        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null },
+        opts?: import('../shared/agentInputQueue').AgentInputEnqueueOpts,
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:enqueue', sessionId, item, opts),
       compact: (
@@ -6677,11 +6685,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       steer: (
         sessionId: string,
         item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
-        opts?: {
-          removeFromQueue?: boolean;
-          touchUserSend?: boolean;
-          expectedClearBoundaryMs?: number | null;
-        },
+        opts?: import('../shared/agentInputQueue').AgentInputSteerOpts,
       ): Promise<boolean> => ipcRenderer.invoke('maker:input:steer', sessionId, item, opts),
       stop: (
         sessionId: string,
@@ -6694,12 +6698,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:input:stop', sessionId, opts),
       resume: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: import('../shared/agentInputQueue').AgentInputResumeOpts,
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:resume', sessionId, opts),
       retryLastError: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: import('../shared/agentInputQueue').AgentInputRetryOpts,
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:retry-last-error', sessionId, opts),
       clearError: (
@@ -6771,8 +6775,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       clearSession: (
         sessionId: string,
         clearedAt?: string,
+        opts?: import('../shared/agentInputQueue').AgentInputRequireActiveSessionOpts,
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
-        ipcRenderer.invoke('maker:input:clear-session', sessionId, clearedAt),
+        opts === undefined
+          ? ipcRenderer.invoke('maker:input:clear-session', sessionId, clearedAt)
+          : ipcRenderer.invoke('maker:input:clear-session', sessionId, clearedAt, opts),
     },
 
     // Stage 2 C1: chat utility (前身 cc-agent:generate-title / cc-agent:plan-file-write)

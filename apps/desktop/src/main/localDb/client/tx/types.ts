@@ -253,7 +253,13 @@ export interface OrcaSetWorkerFocusArgs {
 /** F-COLLAB: create_worker 派发失败时移除 worker link，并归档对应 session。 */
 export interface OrcaRemoveWorkerArgs {
   workerId: string;
+  sessionId: string;
   now: number;
+}
+
+export interface OrcaRemoveWorkerResult {
+  removed: boolean;
+  archivedSessionId: string | null;
 }
 
 /**
@@ -872,7 +878,7 @@ export type DbTxResultByName = {
   'orca.releaseWorkerCreationReservation': undefined;
   'orca.upsertWorker': undefined;
   'orca.setWorkerFocus': undefined;
-  'orca.removeWorker': string | null;
+  'orca.removeWorker': OrcaRemoveWorkerResult;
   'orca.cancelStaleTeams': undefined;
   'orca.archiveWorkersByTeam': string[];
   'orca.reconcileInactiveTeamWorkersForLead': string[];

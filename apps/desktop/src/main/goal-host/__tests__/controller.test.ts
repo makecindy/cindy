@@ -620,6 +620,22 @@ describe('GoalController', () => {
     expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
   });
 
+  it('reuses a caller-held session route lock for the first Goal dispatch', async () => {
+    const acquirePendingAgentSwitch = vi.fn(async () => () => {});
+    const local = makeController({ acquirePendingAgentSwitch });
+
+    await local.controller.setGoal({
+      sessionId: 's1',
+      objective: 'continue under the accepted route',
+      sessionRouteLockHeld: true,
+    });
+
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('s1', {
+      sessionRouteLockHeld: true,
+    });
+    expect(local.session.sends).toHaveLength(1);
+  });
+
   it('migrates the Goal listener to the switched session so the new engine turn can finalize (reviewer P1)', async () => {
     const oldSession = new FakeSession('s1', 'claude-code');
     const switchedSession = new FakeSession('s1', 'codex');
@@ -3042,6 +3058,50 @@ describe('GoalController', () => {
 
     releaseDispatch({ accepted: true });
     await Promise.resolve();
+  });
+
+  it('waits for a caller-held route lock before detaching resume-on-open dispatch', async () => {
+    let markDispatchStarted!: () => void;
+    let releaseDispatch!: (result: SessionSendResult) => void;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      markDispatchStarted = resolve;
+    });
+    const pendingDispatch = new Promise<SessionSendResult>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const acquirePendingAgentSwitch = vi.fn(async () => () => {});
+    const local = makeController({ acquirePendingAgentSwitch });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      markDispatchStarted();
+      return pendingDispatch;
+    });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'hold the route' }));
+
+    let settled = false;
+    const resumePromise = local.controller.resumeOnOpen('s1', {
+      waitForDispatch: false,
+      sessionRouteLockHeld: true,
+    });
+    resumePromise.then(() => {
+      settled = true;
+    });
+    await dispatchStarted;
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('s1', {
+      sessionRouteLockHeld: true,
+    });
+
+    releaseDispatch({ accepted: true });
+    await resumePromise;
+    expect(settled).toBe(true);
   });
 
   it('converges a detached resume-on-open dispatch failure to blocked', async () => {

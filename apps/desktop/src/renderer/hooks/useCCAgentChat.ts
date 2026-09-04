@@ -55,6 +55,7 @@ import type { ChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotC
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import type { AgentInputResumeOpts } from '../../shared/agentInputQueue';
 import { createLogger } from '@/lib/logger';
 import { isRemoteSessionSticky } from '@/lib/makerTransport';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
@@ -104,7 +105,7 @@ interface UseCCAgentChatReturn {
   /** F-QUEUE-DEFER: 切换队列面板的展开 / 折叠态，仅影响展示。 */
   setQueueExpanded: (expanded: boolean) => void;
   /** Resume a queue paused by Stop. */
-  resumeQueue: () => void;
+  resumeQueue: (opts?: AgentInputResumeOpts) => void;
   /** Reorder a queued row by moving it to the requested insertion index. */
   moveQueueItem: (clientId: string, targetIndex: number) => void;
   /** Protect the whole queue from auto-drain while row order is being changed. */
@@ -130,6 +131,8 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
+      beforeDispatch?: () => Promise<boolean>;
+      requireActiveSession?: boolean;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
     },
   ) => Promise<boolean>;
@@ -155,20 +158,28 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
+      beforeDispatch?: () => Promise<boolean>;
+      requireActiveSession?: boolean;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
     },
   ) => Promise<boolean>;
-  steerQueuedMessage: (clientId: string) => Promise<boolean>;
+  steerQueuedMessage: (
+    clientId: string,
+    opts?: { requireActiveSession?: boolean },
+  ) => Promise<boolean>;
   /** User-initiated stop: aborts the current SDK query and clears streaming state */
   stopSession: () => void;
   /** F-CLEAR-1: Clear conversation — hides old messages, resets SDK context, stays on same session */
-  clearSession: () => void;
+  clearSession: (opts?: { requireActiveSession?: boolean }) => void;
   /** Dismiss the error banner without retrying. */
   clearError: () => void;
   /** Retry the main-owned typed recovery target. */
-  retryLastError: () => Promise<void>;
+  retryLastError: (opts?: { requireActiveSession?: boolean }) => Promise<void>;
   /** silent-stop 耗尽横幅「继续」:清横幅并发隐藏续跑指令(充值守卫额度)。 */
-  continueAfterSilentStop: () => void;
+  continueAfterSilentStop: (opts?: {
+    beforeEnqueue?: () => Promise<boolean>;
+    requireActiveSession?: boolean;
+  }) => void;
   /** F-CMD: Insert a local-only system card */
   insertSystemCard: (
     cardType: 'help' | 'cost' | 'context' | 'pwd' | 'status' | 'cmd' | 'learn',
@@ -493,9 +504,9 @@ export function useCCAgentChat(
   );
 
   const steerQueuedMessage = useCallback(
-    (clientId: string) => {
+    (clientId: string, opts?: { requireActiveSession?: boolean }) => {
       if (!sessionId) return Promise.resolve(false);
-      return makerChatStore.steerQueuedMessage(sessionId, clientId);
+      return makerChatStore.steerQueuedMessage(sessionId, clientId, opts);
     },
     [sessionId],
   );
@@ -513,24 +524,30 @@ export function useCCAgentChat(
     makerChatStore.stopSession(sessionId);
   }, [sessionId]);
 
-  const clearSession = useCallback(() => {
-    if (!sessionId) return;
-    makerChatStore.clearSession(sessionId);
-  }, [sessionId]);
+  const clearSession = useCallback(
+    (opts?: { requireActiveSession?: boolean }) => {
+      if (!sessionId) return;
+      makerChatStore.clearSession(sessionId, opts);
+    },
+    [sessionId],
+  );
 
   const clearError = useCallback(() => {
     if (!sessionId) return;
     makerChatStore.clearError(sessionId);
   }, [sessionId]);
 
-  const continueAfterSilentStop = useCallback(() => {
-    if (!sessionId) return;
-    makerChatStore.continueAfterSilentStop(sessionId);
-  }, [sessionId]);
+  const continueAfterSilentStop = useCallback(
+    (opts?: { beforeEnqueue?: () => Promise<boolean>; requireActiveSession?: boolean }) => {
+      if (!sessionId) return;
+      makerChatStore.continueAfterSilentStop(sessionId, opts);
+    },
+    [sessionId],
+  );
 
-  const retryLastError = useCallback(() => {
+  const retryLastError = useCallback((opts?: { requireActiveSession?: boolean }) => {
     if (!sessionId) return Promise.resolve();
-    return makerChatStore.retryLastError(sessionId);
+    return makerChatStore.retryLastError(sessionId, opts);
   }, [sessionId]);
 
   const insertSystemCard = useCallback(
@@ -774,10 +791,13 @@ export function useCCAgentChat(
     [sessionId],
   );
 
-  const resumeQueue = useCallback(() => {
-    if (!sessionId) return;
-    makerChatStore.resumeQueue(sessionId);
-  }, [sessionId]);
+  const resumeQueue = useCallback(
+    (opts?: AgentInputResumeOpts) => {
+      if (!sessionId) return;
+      makerChatStore.resumeQueue(sessionId, opts);
+    },
+    [sessionId],
+  );
 
   const moveQueueItem = useCallback(
     (clientId: string, targetIndex: number) => {

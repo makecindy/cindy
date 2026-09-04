@@ -1089,16 +1089,21 @@ function orcaSetWorkerFocus(readyDb, args) {
 function orcaRemoveWorker(readyDb, args) {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = readyDb.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
-  const deleteWorker = readyDb.prepare('DELETE FROM orca_workers WHERE id = ?');
+  const selectWorker = readyDb.prepare('SELECT 1 FROM orca_workers WHERE id = ? AND session_id = ? LIMIT 1');
+  const deleteWorker = readyDb.prepare('DELETE FROM orca_workers WHERE id = ? AND session_id = ?');
   const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   return readyDb.transaction(() => {
-    const row = selectWorker.get(workerId);
-    if (!row) return null;
-    deleteWorker.run(workerId);
-    const archived = archiveSession.run(now, row.sessionId);
-    return archived.changes > 0 ? row.sessionId : null;
+    if (!selectWorker.get(workerId, sessionId)) {
+      return { removed: false, archivedSessionId: null };
+    }
+    deleteWorker.run(workerId, sessionId);
+    const archived = archiveSession.run(now, sessionId);
+    return {
+      removed: true,
+      archivedSessionId: archived.changes > 0 ? sessionId : null,
+    };
   })();
 }
 
@@ -1139,17 +1144,21 @@ function orcaReconcileInactiveTeamWorkersForLead(readyDb, args) {
     expectString(value, 'sessionIds[' + index + ']'),
   );
   const now = expectNumber(payload.now, 'now');
+  const selectCandidate = readyDb.prepare(
+    "SELECT 1 FROM orca_workers INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id WHERE orca_teams.lead_session_id = ? AND orca_teams.status != 'active' AND orca_workers.session_id = ? LIMIT 1",
+  );
   const finishWorkers = readyDb.prepare(
-    "UPDATE orca_workers SET status = 'done', updated_at = ? WHERE team_id IN (SELECT id FROM orca_teams WHERE lead_session_id = ? AND status != 'active')",
+    "UPDATE orca_workers SET status = 'done', updated_at = ? WHERE team_id IN (SELECT id FROM orca_teams WHERE lead_session_id = ? AND status != 'active') AND session_id = ?",
   );
   const archiveSession = readyDb.prepare(
     "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id WHERE orca_workers.session_id = sessions.id AND orca_teams.lead_session_id = ? AND orca_teams.status != 'active')",
   );
   return readyDb.transaction(() => {
-    finishWorkers.run(now, leadSessionId);
     const updatedIds = [];
-    for (const id of sessionIds) {
-      if (archiveSession.run(now, id, leadSessionId).changes > 0) updatedIds.push(id);
+    for (const sessionId of sessionIds) {
+      if (!selectCandidate.get(leadSessionId, sessionId)) continue;
+      finishWorkers.run(now, leadSessionId, sessionId);
+      if (archiveSession.run(now, sessionId, leadSessionId).changes > 0) updatedIds.push(sessionId);
     }
     return updatedIds;
   })();
@@ -1162,11 +1171,20 @@ function orcaUpsertWorker(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   readyDb.transaction(() => {
+    // Keep final persistence atomic with team shutdown. The no-op write obtains
+    // SQLite's writer lock before checking status, so a late worker cannot be
+    // linked to a team that has already entered a terminal state.
     const activeTeam = readyDb.prepare(
-      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
-    ).get(teamId);
-    if (!activeTeam) {
-      throw new Error('Orca team ' + teamId + ' is no longer active');
+      "UPDATE orca_teams SET updated_at = updated_at WHERE id = ? AND status = 'active'",
+    ).run(teamId);
+    if (activeTeam.changes !== 1) {
+      const team = readyDb.prepare(
+        'SELECT status, completed_at FROM orca_teams WHERE id = ? LIMIT 1',
+      ).get(teamId);
+      const ended = team && team.completed_at != null;
+      throw new Error(
+        'Orca team ' + teamId + ' is ' + (ended ? 'no longer active' : 'not active'),
+      );
     }
     if (payload.focused === true) {
       readyDb.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);

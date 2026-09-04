@@ -403,6 +403,37 @@ describe('maker SEND transaction', () => {
       .toBeUndefined();
   });
 
+  it('rechecks the durable active state before a guarded direct send', async () => {
+    const assertSessionActiveForManualDispatch = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('Session is archived'), { code: 'PRECONDITION_FAILED' }),
+      );
+    const applyPendingAgentSwitch = vi.fn();
+    const prepareUnhealthySession = vi.fn();
+    const { deps, session } = createDeps({
+      assertSessionActiveForManualDispatch,
+      applyPendingAgentSwitch,
+      prepareUnhealthySession,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted(
+        'session-1',
+        { type: 'user', content: '[UI_ACTION_TRIGGER]continue' },
+        undefined,
+        { requireActiveSession: true },
+      ),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+
+    expect(assertSessionActiveForManualDispatch).toHaveBeenCalledOnce();
+    expect(assertSessionActiveForManualDispatch).toHaveBeenCalledWith('session-1');
+    expect(applyPendingAgentSwitch).not.toHaveBeenCalled();
+    expect(prepareUnhealthySession).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
   it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {
     const { deps, session } = createDeps();
     session.agentKind = 'pi';

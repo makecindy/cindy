@@ -167,6 +167,41 @@ export interface AgentInputClearBoundaryOpts {
   expectedClearBoundaryMs?: number | null;
 }
 
+/** Optional Main-side lifecycle fence for manual dispatches from secondary windows. */
+export interface AgentInputRequireActiveSessionOpts {
+  requireActiveSession?: boolean;
+}
+
+export function requiresActiveSessionForDispatch(opts: unknown): boolean {
+  return Boolean(
+    opts &&
+    typeof opts === 'object' &&
+    !Array.isArray(opts) &&
+    (opts as AgentInputRequireActiveSessionOpts).requireActiveSession === true,
+  );
+}
+
+/** Queue enqueue options; secondary windows can require an active task at dispatch time. */
+export interface AgentInputEnqueueOpts
+  extends AgentInputClearBoundaryOpts, AgentInputRequireActiveSessionOpts {
+  sendAtMs?: number;
+}
+
+/** Same-turn steer options, including the secondary-window lifecycle fence. */
+export interface AgentInputSteerOpts
+  extends AgentInputClearBoundaryOpts, AgentInputRequireActiveSessionOpts {
+  removeFromQueue?: boolean;
+  touchUserSend?: boolean;
+}
+
+/** Queue resume options; secondary windows can require an active task at dispatch time. */
+export interface AgentInputResumeOpts
+  extends AgentInputClearBoundaryOpts, AgentInputRequireActiveSessionOpts {}
+
+/** Manual retry options; secondary windows can require an active task at dispatch time. */
+export interface AgentInputRetryOpts
+  extends AgentInputClearBoundaryOpts, AgentInputRequireActiveSessionOpts {}
+
 /**
  * 一次自动续跑（中断自愈）的展示信息，main 与 renderer 共用。
  *
@@ -223,6 +258,13 @@ export interface AgentInputQueuedMessage {
    * timestamps from the same host rather than a controller wall clock.
    */
   hostAcceptedAtMs?: number;
+  /**
+   * Main-owned lifecycle fence for an input accepted from a secondary window.
+   * It survives queueing and crash recovery so the final vendor boundary can
+   * reject the input if the durable task was archived in the meantime. It is
+   * never trusted from IPC payloads and is omitted from public projections.
+   */
+  requireActiveSession?: boolean;
   /**
    * Main 在首次入队时从原始 text 冻结的合成指令意图。Ghost rewrite、队列编辑
    * 与 dispatch 前的其它正文变换都不得改写它；执行端用它判断 Continue 的

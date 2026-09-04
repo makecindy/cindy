@@ -5197,7 +5197,13 @@ interface ElectronAPI {
 
     executeDesktopCommand: (
       name: string,
-      ctx: { sessionId?: string; workingDir?: string; args?: string; deviceId?: string },
+      ctx: {
+        sessionId?: string;
+        workingDir?: string;
+        args?: string;
+        deviceId?: string;
+        requireActiveSession?: boolean;
+      },
     ) => Promise<{ success: boolean; error?: string }>;
 
     startReview: (input: {
@@ -5265,6 +5271,7 @@ interface ElectronAPI {
         goalAction?: 'set' | 'cleared' | 'open-dialog';
         /** /learn 专用:启动成功时的 runId(关联 learn:event 状态流)。 */
         learnRunId?: string;
+        requireActiveSession?: boolean;
       }) => void,
     ) => () => void;
 
@@ -5486,6 +5493,7 @@ interface ElectronAPI {
         remoteHostId?: string;
         resumeSessionId?: string;
       },
+      fenceOpts?: { requireActiveSession?: boolean },
     ) => Promise<import('@cindy/maker-core').ContextUsageData>;
 
     abortSession: (sessionId: string) => Promise<void>;
@@ -5514,7 +5522,7 @@ interface ElectronAPI {
       enqueue: (
         sessionId: string,
         item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
-        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null },
+        opts?: import('../shared/agentInputQueue').AgentInputEnqueueOpts,
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       compact: (
         sessionId: string,
@@ -5524,11 +5532,7 @@ interface ElectronAPI {
       steer: (
         sessionId: string,
         item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
-        opts?: {
-          removeFromQueue?: boolean;
-          touchUserSend?: boolean;
-          expectedClearBoundaryMs?: number | null;
-        },
+        opts?: import('../shared/agentInputQueue').AgentInputSteerOpts,
       ) => Promise<boolean>;
       stop: (
         sessionId: string,
@@ -5540,11 +5544,11 @@ interface ElectronAPI {
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       resume: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: import('../shared/agentInputQueue').AgentInputResumeOpts,
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       retryLastError: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: import('../shared/agentInputQueue').AgentInputRetryOpts,
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       clearError: (
         sessionId: string,
@@ -5594,6 +5598,7 @@ interface ElectronAPI {
       clearSession: (
         sessionId: string,
         clearedAt?: string,
+        opts?: import('../shared/agentInputQueue').AgentInputRequireActiveSessionOpts,
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
     };
 

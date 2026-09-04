@@ -46,6 +46,8 @@ export interface DesktopCommandTriggeredPayload {
   goalAction?: 'set' | 'cleared' | 'open-dialog';
   /** /learn 专用 —— 启动成功时的 runId(renderer 据此关联 learn:event 状态流)。 */
   learnRunId?: string;
+  /** Main-owned lifecycle fence propagated to every renderer in a broadcast. */
+  requireActiveSession?: boolean;
 }
 
 export interface CmdExecutionResult {
@@ -100,6 +102,13 @@ function buildPayload(
     ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
     ...(ctx.workingDir ? { workingDir: ctx.workingDir } : {}),
     ...(ctx.args ? { args: ctx.args } : {}),
+    // Secondary-window dispatches carry an explicit lifecycle fence because
+    // their route lock lives on the source window.  Keep that fence when this
+    // command is broadcast to every window: otherwise a sibling primary
+    // window can replay /clear without the archived-session guard.
+    ...(ctx.sessionRouteLockHeld || ctx.requireActiveSession
+      ? { requireActiveSession: true }
+      : {}),
   };
 }
 
@@ -396,7 +405,14 @@ export function registerBuiltinDesktopCommands(
         let result: CmdExecutionResult;
         try {
           result = (await deps.remoteInvoke(ctx.deviceId, 'desktop-cmd:run', [
-            { cmdLine, cwd },
+            {
+              sessionId: ctx.sessionId,
+              cmdLine,
+              cwd,
+              // 控制端 Main 不持有被控端 route lock;把副窗口显式 fence 标记透传给
+              // 被控端,由其在 route lock 内复核持久化 active 状态。
+              ...(ctx.requireActiveSession ? { requireActiveSession: true } : {}),
+            },
           ])) as CmdExecutionResult;
         } catch (err) {
           log.warn('/cmd remote exec failed', err);
@@ -473,9 +489,23 @@ export function registerBuiltinDesktopCommands(
       // renderer 按会话来源路由)。本机路径与远程路径的动作语义一一对应。
       const remoteGoal = ctx.deviceId
         ? {
-            clearGoal: (id: string) => deps.remoteInvoke(ctx.deviceId!, 'maker:goal:clear', [id]),
+            // 第一参保持裸 sessionId(旧被控端按 requireString 解析、忽略尾参);
+            // 仅副窗口显式 fence 时追加第二参 { requireActiveSession },新被控端据此加锁。
+            clearGoal: (id: string) =>
+              deps.remoteInvoke(
+                ctx.deviceId!,
+                'maker:goal:clear',
+                ctx.requireActiveSession ? [id, { requireActiveSession: true }] : [id],
+              ),
             setGoal: (input: { sessionId: string; objective: string }) =>
-              deps.remoteInvoke(ctx.deviceId!, 'maker:goal:set', [input]),
+              deps.remoteInvoke(ctx.deviceId!, 'maker:goal:set', [
+                {
+                  ...input,
+                  // 副窗口显式 fence 标记透传给被控端 Main(append-only 字段,
+                  // 旧被控端忽略);被控端据此在 route lock 内复核持久化 active。
+                  ...(ctx.requireActiveSession ? { requireActiveSession: true } : {}),
+                },
+              ]),
           }
         : null;
       const controller = deps.getGoalController();
@@ -506,8 +536,15 @@ export function registerBuiltinDesktopCommands(
       }
       // /goal <objective> → 直接设/编辑目标并续跑。
       try {
-        if (remoteGoal) await remoteGoal.setGoal({ sessionId, objective: arg });
-        else await controller!.setGoal({ sessionId, objective: arg });
+        if (remoteGoal) {
+          await remoteGoal.setGoal({ sessionId, objective: arg });
+        } else {
+          await controller!.setGoal({
+            sessionId,
+            objective: arg,
+            ...(ctx.sessionRouteLockHeld ? { sessionRouteLockHeld: true } : {}),
+          });
+        }
         broadcastDesktopCommand({ ...buildPayload('goal', ctx), goalAction: 'set' });
       } catch (err) {
         log.warn('/goal setGoal failed', err);
@@ -556,8 +593,15 @@ export function registerBuiltinDesktopCommands(
             ...(ctx.sessionId ? { originSessionId: ctx.sessionId } : {}),
           };
       try {
+        // 远程副窗口:把显式 fence 标记经隧道透传给被控端 Main(append-only 字段,
+        // 旧被控端忽略);被控端据此在 route lock 内复核持久化 active 状态。
+        const remoteReq = ctx.deviceId
+          ? { ...req, ...(ctx.requireActiveSession ? { requireActiveSession: true } : {}) }
+          : req;
         const { runId } = ctx.deviceId
-          ? ((await deps.remoteInvoke(ctx.deviceId, 'learn:start', [req])) as { runId: string })
+          ? ((await deps.remoteInvoke(ctx.deviceId, 'learn:start', [remoteReq])) as {
+              runId: string;
+            })
           : await controller!.startLearn(req);
         sendDesktopCommandToSender(ctx, { ...buildPayload('learn', ctx), learnRunId: runId });
       } catch (err) {

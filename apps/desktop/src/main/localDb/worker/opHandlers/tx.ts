@@ -1811,21 +1811,33 @@ function orcaSetWorkerFocus(db: Database.Database, args: unknown): void {
   })();
 }
 
-function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
+function orcaRemoveWorker(
+  db: Database.Database,
+  args: unknown,
+): { removed: boolean; archivedSessionId: string | null } {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = db.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
-  const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ?');
-  const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
+  const selectWorker = db.prepare(
+    'SELECT 1 FROM orca_workers WHERE id = ? AND session_id = ? LIMIT 1',
+  );
+  const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ? AND session_id = ?');
+  const archiveSession = db.prepare(
+    "UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'",
+  );
   const transaction = db.transaction(() => {
-    const row = selectWorker.get(workerId) as { sessionId: string } | undefined;
-    if (!row) return null;
-    deleteWorker.run(workerId);
-    const archived = archiveSession.run(now, row.sessionId);
-    return archived.changes > 0 ? row.sessionId : null;
+    if (!selectWorker.get(workerId, sessionId)) {
+      return { removed: false, archivedSessionId: null };
+    }
+    deleteWorker.run(workerId, sessionId);
+    const archived = archiveSession.run(now, sessionId);
+    return {
+      removed: true,
+      archivedSessionId: archived.changes > 0 ? sessionId : null,
+    };
   });
-  return transaction() as string | null;
+  return transaction() as { removed: boolean; archivedSessionId: string | null };
 }
 
 function orcaCancelStaleTeams(db: Database.Database, args: unknown): void {
@@ -1876,13 +1888,22 @@ function orcaReconcileInactiveTeamWorkersForLead(
     expectString(value, `sessionIds[${index}]`),
   );
   const now = expectNumber(payload.now, 'now');
+  const selectCandidate = db.prepare(
+    `SELECT 1
+       FROM orca_workers
+       INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id
+      WHERE orca_teams.lead_session_id = ?
+        AND orca_teams.status != 'active'
+        AND orca_workers.session_id = ?
+      LIMIT 1`,
+  );
   const finishWorkers = db.prepare(
     `UPDATE orca_workers
         SET status = 'done', updated_at = ?
       WHERE team_id IN (
         SELECT id FROM orca_teams
          WHERE lead_session_id = ? AND status != 'active'
-      )`,
+      ) AND session_id = ?`,
   );
   const archiveSession = db.prepare(
     `UPDATE sessions
@@ -1898,10 +1919,11 @@ function orcaReconcileInactiveTeamWorkersForLead(
         )`,
   );
   const transaction = db.transaction(() => {
-    finishWorkers.run(now, leadSessionId);
     const updatedIds: string[] = [];
-    for (const id of sessionIds) {
-      if (archiveSession.run(now, id, leadSessionId).changes > 0) updatedIds.push(id);
+    for (const sessionId of sessionIds) {
+      if (!selectCandidate.get(leadSessionId, sessionId)) continue;
+      finishWorkers.run(now, leadSessionId, sessionId);
+      if (archiveSession.run(now, sessionId, leadSessionId).changes > 0) updatedIds.push(sessionId);
     }
     return updatedIds;
   });
@@ -1915,11 +1937,19 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   db.transaction(() => {
+    // A no-op write acquires SQLite's writer lock before the active-team check.
+    // This serializes final worker persistence with markTeamEnded: either the
+    // worker commits first and the subsequent archive snapshot includes it, or
+    // the team ends first and this upsert fails without creating an orphan link.
     const activeTeam = db.prepare(
-      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
-    ).get(teamId);
-    if (!activeTeam) {
-      throw new Error(`Orca team ${teamId} is no longer active`);
+      "UPDATE orca_teams SET updated_at = updated_at WHERE id = ? AND status = 'active'",
+    ).run(teamId);
+    if (activeTeam.changes !== 1) {
+      const team = db.prepare(
+        'SELECT status, completed_at FROM orca_teams WHERE id = ? LIMIT 1',
+      ).get(teamId) as { status?: unknown; completed_at?: unknown } | undefined;
+      const ended = team?.completed_at != null;
+      throw new Error(`Orca team ${teamId} is ${ended ? 'no longer active' : 'not active'}`);
     }
     if (payload.focused === true) {
       db.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
