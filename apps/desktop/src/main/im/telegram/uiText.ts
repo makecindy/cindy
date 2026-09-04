@@ -88,6 +88,12 @@ export const ui = {
       `其它部分收到啦，正在处理~`,
   },
 
+  error: {
+    agentUnsupported: '🤔 当前 Agent 无法在 Telegram 群里完成所需的权限确认，请换一个 Agent 再试。',
+    permissionModeUnsupported:
+      '🤔 当前权限设置无法用于这条 Telegram 群对话。发 /permission 换成「自动审批」后再试。',
+  },
+
   cards: {
     permission: {
       title: (toolName: string) => `🔧 工具调用：${toolName}`,

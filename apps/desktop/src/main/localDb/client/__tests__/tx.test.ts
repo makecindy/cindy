@@ -42,6 +42,8 @@ CREATE TABLE sessions (
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
   source TEXT NOT NULL DEFAULT 'desktop',
+  im_bot_context_id TEXT,
+  im_user_id TEXT,
   remote_host_id TEXT,
   active_turn_started_at INTEGER,
   last_turn_ended_at INTEGER,
@@ -2396,6 +2398,109 @@ describe('db worker tx handlers', () => {
           attached_via_card_message_id: 'feishu-card',
         },
       ]);
+    });
+  });
+
+  it('im.rotateSession atomically inserts the new route and retires the previous task', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'telegram-old');
+      await client.exec(
+        `UPDATE sessions
+         SET source = 'telegram', im_bot_context_id = 'bot', im_user_id = 'user'
+         WHERE id = 'telegram-old'`,
+      );
+      await client.exec(
+        `INSERT INTO im_bindings (
+           channel, bot_context_id, user_id, scope_key, target_session_id, attached_at
+         ) VALUES ('telegram', 'bot', 'user', '', 'telegram-old', 100)`,
+      );
+
+      const result = await client.tx('im.rotateSession', {
+        previousSessionId: 'telegram-old',
+        detachBinding: {
+          channel: 'telegram',
+          botContextId: 'bot',
+          userId: 'user',
+          scopeKey: '',
+          targetSessionId: 'telegram-old',
+        },
+        session: {
+          id: 'telegram-new',
+          title: 'TG · New',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          model: 'grok-4.6',
+          effort: 'high',
+          permissionMode: 'bypassPermissions',
+          fastMode: false,
+          agentKind: 'pi',
+          providerId: 'xai',
+          source: 'telegram',
+          imBotContextId: 'bot',
+          imUserId: 'user',
+        },
+        now: 500,
+      });
+
+      expect(result).toEqual({ previousStatus: 'active' });
+      await expect(
+        client.query(
+          `SELECT id, status, im_bot_context_id, im_user_id
+           FROM sessions WHERE id IN ('telegram-old', 'telegram-new') ORDER BY id`,
+        ),
+      ).resolves.toEqual([
+        {
+          id: 'telegram-new',
+          status: 'active',
+          im_bot_context_id: 'bot',
+          im_user_id: 'user',
+        },
+        {
+          id: 'telegram-old',
+          status: 'archived',
+          im_bot_context_id: null,
+          im_user_id: null,
+        },
+      ]);
+      await expect(client.query('SELECT * FROM im_bindings')).resolves.toEqual([]);
+    });
+  });
+
+  it('im.rotateSession never revives a concurrently deleted previous task', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'telegram-deleted');
+      await client.exec(
+        `UPDATE sessions
+         SET status = 'deleted', source = 'telegram',
+             im_bot_context_id = 'bot', im_user_id = 'user'
+         WHERE id = 'telegram-deleted'`,
+      );
+
+      const result = await client.tx('im.rotateSession', {
+        previousSessionId: 'telegram-deleted',
+        detachBinding: null,
+        session: {
+          id: 'telegram-after-delete',
+          title: 'TG · New',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          model: 'grok-4.6',
+          effort: 'high',
+          permissionMode: 'bypassPermissions',
+          fastMode: false,
+          agentKind: 'pi',
+          providerId: 'xai',
+          source: 'telegram',
+          imBotContextId: 'bot',
+          imUserId: 'user',
+        },
+        now: 600,
+      });
+
+      expect(result).toEqual({ previousStatus: 'deleted' });
+      await expect(
+        client.queryOne('SELECT status FROM sessions WHERE id = ?', ['telegram-deleted']),
+      ).resolves.toEqual({ status: 'deleted' });
     });
   });
 

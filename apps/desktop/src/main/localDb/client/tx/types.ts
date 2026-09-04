@@ -29,6 +29,7 @@ export type DbTxName =
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
+  | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
   | 'wechatLeaseNextTask'
@@ -806,6 +807,37 @@ export interface WechatUnbindCleanupResult {
   filePaths: string[];
 }
 
+export interface ImRotateSessionArgs {
+  previousSessionId: string | null;
+  detachBinding: {
+    channel: string;
+    botContextId: string;
+    userId: string;
+    scopeKey: string;
+    targetSessionId: string;
+  } | null;
+  session: {
+    id: string;
+    title: string;
+    workingDir: string;
+    workspaceKind: 'project' | 'dialogue';
+    model: string;
+    effort: string;
+    permissionMode: string;
+    fastMode: boolean;
+    agentKind: string;
+    providerId: string | null;
+    source: string;
+    imBotContextId: string;
+    imUserId: string;
+  };
+  now: number;
+}
+
+export interface ImRotateSessionResult {
+  previousStatus: 'active' | 'archived' | 'deleted' | null;
+}
+
 export type DbTxArgsByName = {
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
@@ -837,6 +869,7 @@ export type DbTxArgsByName = {
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
+  'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
   wechatLeaseNextTask: WechatLeaseNextTaskArgs;
@@ -888,6 +921,7 @@ export type DbTxResultByName = {
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;
+  'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;
   wechatLeaseNextTask: WechatLeasedTask | null;

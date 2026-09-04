@@ -1161,6 +1161,75 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     },
   );
 
+  it.each([
+    {
+      capabilities: {} as Capabilities,
+      mode: 'ask' as const,
+      expected: 'AGENT_UNSUPPORTED_COPY',
+    },
+    {
+      capabilities: {
+        turnPermissionPolicy: {
+          supported: { supported: true },
+          unsupportedPermissionModes: ['bypassPermissions'],
+        },
+      } as unknown as Capabilities,
+      mode: 'bypassPermissions' as const,
+      expected: 'MODE_UNSUPPORTED_COPY:bypassPermissions',
+    },
+  ])(
+    'maps policy rejection to the matching user guidance',
+    async ({ capabilities, mode, expected }) => {
+      const h = createSessionHarness(
+        async () => {
+          throw new TurnPermissionPolicyUnsupportedError('claude-code', mode);
+        },
+        'feishu-session',
+        { capabilities },
+      );
+      mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+      const localRunner = createTurnRunner(
+        {
+          ...fakeAdapter,
+          ui: {
+            ...fakeAdapter.ui,
+            error: {
+              ...fakeAdapter.ui.error,
+              agentUnsupported: 'AGENT_UNSUPPORTED_COPY',
+              permissionModeUnsupported: (permissionMode: string) =>
+                `MODE_UNSUPPORTED_COPY:${permissionMode}`,
+            },
+          },
+        },
+        fakeRepo,
+        fakeCards,
+      );
+
+      try {
+        await localRunner.runAgentTurn({
+          botContextId: 'cli_test_bot',
+          userId: 'ou_user',
+          userMessageId: `msg-policy-copy-${mode}`,
+          text: 'policy failure',
+          attachments: [],
+          turnPermissionPolicy: {
+            origin: { kind: 'im', channel: 'wechat' },
+            confirmationSurface: 'channel',
+            forceConfirmToolCall: () => false,
+          },
+        });
+
+        expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+          'ou_user',
+          expected,
+          expect.anything(),
+        );
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    },
+  );
+
   it('skips the turn policy when the channel declares the session mode optional (Full access guardrail removal)', async () => {
     // feishu 渠道设置显式放行「完全访问」后: 该档位的群轮次不再挂强确认
     // 策略, maker 不 fail-closed, 按用户选择直接执行。

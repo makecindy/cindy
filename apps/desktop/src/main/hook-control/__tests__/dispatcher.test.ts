@@ -207,6 +207,7 @@ function makeDispatcher(overrides?: {
   buildContextPrefix?: HookDispatcherDeps['buildContextPrefix'];
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
+  archiveSessionRow?: HookDispatcherDeps['archiveSessionRow'];
   subscribeUiContinuation?: HookDispatcherDeps['subscribeUiContinuation'];
   subscribeUiSessionIntervention?: HookDispatcherDeps['subscribeUiSessionIntervention'];
   subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
@@ -228,6 +229,7 @@ function makeDispatcher(overrides?: {
     buildContextPrefix: overrides?.buildContextPrefix,
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
+    archiveSessionRow: overrides?.archiveSessionRow,
     subscribeUiContinuation: overrides?.subscribeUiContinuation,
     subscribeUiSessionIntervention: overrides?.subscribeUiSessionIntervention,
     subscribeUiTurnDispatching: overrides?.subscribeUiTurnDispatching,
@@ -3235,6 +3237,51 @@ describe('options 透传(model/effort/agentKind/permissionMode)', () => {
 });
 
 describe('session.archive(/new 换代归档旧代会话)', () => {
+  it('creates and binds a blank new task before archiving the previous generation', async () => {
+    const previousId = 'old-session';
+    const previousKey = 'telegram:dm:bot:user:g1';
+    const nextKey = 'telegram:dm:bot:user:g2';
+    const bindings = memoryBindings();
+    bindings.set('conn-1', previousKey, previousId);
+    const calls: HookRunRequest[] = [];
+    const runner: HookSessionRunner = {
+      isBusy: () => false,
+      inspect: async (id) => (id === previousId ? { workingDir: WS_DIR, usable: true } : null),
+      run: async (req) => {
+        calls.push(req);
+        return { status: 'ok', finalText: '', errorMessage: null, durationMs: 1 };
+      },
+    };
+    const archived: string[] = [];
+    const { d } = makeDispatcher({
+      bindings,
+      runner,
+      archiveSessionRow: async (id) => void archived.push(id),
+    });
+
+    const result = await d.createSession('conn-1', {
+      previousExternalKey: previousKey,
+      externalKey: nextKey,
+      workspace: 'xdmaker',
+      options: { agentKind: 'pi', model: 'grok-4.6', permissionMode: 'bypassPermissions' },
+      source: { im: 'telegram', userText: '' },
+    });
+
+    expect(result.sessionId).not.toBe(previousId);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      sessionId: result.sessionId,
+      isNew: true,
+      createOnly: true,
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      permissionMode: 'bypassPermissions',
+    });
+    expect(bindings.get('conn-1', nextKey)).toBe(result.sessionId);
+    expect(bindings.get('conn-1', previousKey)).toBeNull();
+    expect(archived).toEqual([previousId]);
+  });
+
   it('安全接管旧 Slack 命名空间映射；跨白名单映射只清理不归档', async () => {
     const safeSession = 'legacy-safe';
     const unsafeSession = 'legacy-unsafe';

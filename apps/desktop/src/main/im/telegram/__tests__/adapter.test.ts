@@ -2,9 +2,47 @@ import { describe, expect, it } from 'vitest';
 import type { IMMessageEvent } from '@cindy/im';
 
 import { buildTelegramAdapter } from '../adapter';
+import { ui } from '../uiText';
 
 describe('Telegram group history access scope', () => {
   const adapter = buildTelegramAdapter({} as never, {} as never);
+
+  it('honors explicit Full access while keeping the group turn policy for stricter modes', () => {
+    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions')).toBe(true);
+    expect(adapter.turnPolicyOptionalForMode?.('auto')).toBe(false);
+    expect(adapter.turnPolicyOptionalForMode?.('ask')).toBe(false);
+  });
+
+  it('attaches the confirmation policy to guest and owner group turns, but not DMs', () => {
+    const groupEvent = {
+      messageId: 'm-policy',
+      speaker: { id: 'guest', name: 'Guest', isOwner: false },
+    } as unknown as IMMessageEvent;
+
+    expect(adapter.turnPermissionPolicyFor?.(groupEvent)).toMatchObject({
+      origin: { kind: 'im', channel: 'telegram', taskId: 'm-policy' },
+      confirmationSurface: 'channel',
+    });
+    expect(
+      adapter.turnPermissionPolicyFor?.({
+        ...groupEvent,
+        speaker: { id: 'owner', name: 'Owner', isOwner: true },
+      } as unknown as IMMessageEvent),
+    ).toBeDefined();
+    expect(
+      adapter.turnPermissionPolicyFor?.({
+        ...groupEvent,
+        speaker: undefined,
+      } as unknown as IMMessageEvent),
+    ).toBeUndefined();
+  });
+
+  it('explains an unsupported permission mode without exposing the internal error code', () => {
+    const message = ui.error.permissionModeUnsupported;
+    expect(message).toContain('自动审批');
+    expect(message).toContain('/permission');
+    expect(message).not.toContain('TURN_PERMISSION_POLICY_UNSUPPORTED');
+  });
 
   it('keeps every group turn lane-only — owner-triggered included (injection hardening)', () => {
     const base = {

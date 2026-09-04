@@ -338,6 +338,27 @@ export class SqliteBindingStore implements BindingStore<string> {
     });
   }
 
+  /**
+   * Mirror a detach that was committed by another localDb transaction. The
+   * expected target check preserves a newer concurrent takeover; this method
+   * intentionally performs no second database write.
+   */
+  applyPersistedDetach(identity: IdentityKey, expectedTargetSessionId: string): Promise<boolean> {
+    return this.enqueueMutation(async () => {
+      const k = keyOf(identity);
+      const oldSessionId = this.forward.get(k);
+      if (oldSessionId !== expectedTargetSessionId) return false;
+      this.forward.delete(k);
+      const reverseIdentity = this.reverse.get(oldSessionId);
+      if (reverseIdentity && keyOf(reverseIdentity) === k) {
+        this.reverse.delete(oldSessionId);
+      }
+      this.attachCardIds.delete(k);
+      this.emit({ identity, value: null, prevValue: oldSessionId });
+      return true;
+    });
+  }
+
   onChange(listener: BindingChangeListener<string>): () => void {
     this.listeners.add(listener);
     return () => {

@@ -68,6 +68,15 @@ export interface ImSessionNamespace {
    * (feishu)忽略 scopeKey, 同一 (botContextId, userId) 恒同一 id。
    */
   sessionIdFor(botContextId: string, userId: string, scopeKey?: string): string;
+  /**
+   * `/new` creates a separate Cindy task instead of clearing the SDK context on
+   * the deterministic legacy row. The active task is then resolved by the
+   * channel identity columns rather than by `sessionIdFor`.
+   *
+   * Telegram enables this. Other adapters keep their existing single-row
+   * semantics until their routing contracts are migrated deliberately.
+   */
+  createTaskOnNew?: boolean;
   /** 新建 session 行的初始 title。 */
   defaultTitle(userId: string): string;
   /**
@@ -221,8 +230,8 @@ export interface ImChannelAdapter {
   /**
    * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 返回 true 的档位在
    * dispatch 时不挂 turnPermissionPolicy(maker 不再 fail-closed, 按用户显式
-   * 选择直接执行)。飞书用它在用户于渠道设置中显式选择「完全访问」后取缔
-   * 群护栏; 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道
+   * 选择直接执行)。飞书与个人 Telegram 用它在用户显式选择「完全访问」后
+   * 取缔群护栏; 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道
    * 不实现即保持 fail-closed。
    */
   turnPolicyOptionalForMode?(permissionMode: PermissionMode): boolean;

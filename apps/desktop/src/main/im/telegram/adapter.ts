@@ -74,6 +74,7 @@ export function buildTelegramAdapter(
     sessions: {
       source: 'telegram',
       sessionIdFor: (botId, userId) => `telegram_${botId}_${sessionSafeUserId(userId)}`,
+      createTaskOnNew: true,
       defaultTitle: (userId) =>
         decodeTelegramLaneUserId(userId)
           ? `[TG·群] ${userId.slice(-6)}`
@@ -93,13 +94,18 @@ export function buildTelegramAdapter(
     // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
     projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
-    // 一群一会话的权限收紧(D1 + 2026-07-30 review 修订): **所有群轮次**都挂
-    // 破坏性操作强确认 — 不只成员触发的。群窗口/引用块把成员可控文本注入
+    // 一群一会话的权限收紧(D1 + 2026-07-30 review 修订): 除显式 Full access 外,
+    // 所有群轮次都挂破坏性操作强确认 — 不只成员触发的。群窗口/引用块把成员可控文本注入
     // owner 触发的轮次, 提示注入可借 owner 轮次的宽松档执行危险操作; 统一
     // 强确认后确认卡只认 owner 点击, owner 多一次点按换掉这条注入通路。
     // DM(无 speaker)不挂, owner 私聊保持全速。
     turnPermissionPolicyFor: (event) =>
       event.speaker ? createTelegramGuestTurnPermissionPolicy(event.messageId) : undefined,
+    // Full access 是用户对这条任务的明确授权。该档下各 Agent 的工具调用不会
+    // 冒泡到 host，逐轮强确认策略无法兑现；继续挂策略只会在 provider 启动前
+    // 把每条群消息拒掉。与飞书的显式 Full access 语义一致：仅这一档取缔
+    // 群护栏，其它权限档仍保留上面的逐轮策略，群上下文隔离也不受影响。
+    turnPolicyOptionalForMode: (mode) => mode === 'bypassPermissions',
     groupHistoryAccessFor: (event): GroupHistoryAccessScope => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const provider = `telegram-personal:${event.contextId}`;

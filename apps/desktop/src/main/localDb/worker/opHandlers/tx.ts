@@ -96,6 +96,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return imDeleteBindings(db, txArgs);
     case 'im.replaceBinding':
       return imReplaceBinding(db, txArgs);
+    case 'im.rotateSession':
+      return imRotateSession(db, txArgs);
     case 'wechatActivateBindingEpoch':
       return wechatActivateBindingEpoch(db, txArgs);
     case 'wechatCommitPollBatch':
@@ -849,6 +851,77 @@ function compactSessionToolResults(
       compactedRows,
       originalBytes: compactedRows > 0 ? summary.originalBytes : 0,
     };
+  })();
+}
+
+function imRotateSession(
+  db: Database.Database,
+  args: unknown,
+): { previousStatus: 'active' | 'archived' | 'deleted' | null } {
+  const payload = asRecord(args, 'im.rotateSession args');
+  const session = asRecord(payload.session, 'im.rotateSession session');
+  const previousSessionId = nullableString(payload.previousSessionId);
+  const detachBinding = payload.detachBinding === null
+    ? null
+    : asRecord(payload.detachBinding, 'im.rotateSession detachBinding');
+  const now = expectNumber(payload.now, 'now');
+  const readPrevious = db.prepare('SELECT status FROM sessions WHERE id = ? LIMIT 1');
+  const insertCurrent = db.prepare(
+    `INSERT INTO sessions (
+      id, title, working_dir, workspace_kind, model, effort, permission_mode,
+      fast_mode, status, agent_kind, provider_id, source, im_bot_context_id,
+      im_user_id, created_at, updated_at, user_send_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const retirePrevious = db.prepare(
+    `UPDATE sessions
+     SET status = CASE WHEN status = 'deleted' THEN 'deleted' ELSE 'archived' END,
+         im_bot_context_id = NULL,
+         im_user_id = NULL,
+         updated_at = ?
+     WHERE id = ?`,
+  );
+  const deleteBinding = db.prepare(
+    `DELETE FROM im_bindings
+     WHERE channel = ? AND bot_context_id = ? AND user_id = ? AND scope_key = ?
+       AND target_session_id = ?`,
+  );
+  return db.transaction(() => {
+    const previous = previousSessionId === null
+      ? undefined
+      : readPrevious.get(previousSessionId) as { status: string } | undefined;
+    insertCurrent.run(
+      expectString(session.id, 'session.id'),
+      expectString(session.title, 'session.title'),
+      expectString(session.workingDir, 'session.workingDir'),
+      expectString(session.workspaceKind, 'session.workspaceKind'),
+      expectString(session.model, 'session.model'),
+      expectString(session.effort, 'session.effort'),
+      expectString(session.permissionMode, 'session.permissionMode'),
+      session.fastMode === true ? 1 : 0,
+      expectString(session.agentKind, 'session.agentKind'),
+      nullableString(session.providerId),
+      expectString(session.source, 'session.source'),
+      expectString(session.imBotContextId, 'session.imBotContextId'),
+      expectString(session.imUserId, 'session.imUserId'),
+      now,
+      now,
+      now,
+    );
+    if (previousSessionId !== null) retirePrevious.run(now, previousSessionId);
+    if (detachBinding !== null) {
+      deleteBinding.run(
+        expectString(detachBinding.channel, 'detachBinding.channel'),
+        expectString(detachBinding.botContextId, 'detachBinding.botContextId'),
+        expectString(detachBinding.userId, 'detachBinding.userId'),
+        expectString(detachBinding.scopeKey, 'detachBinding.scopeKey'),
+        expectString(detachBinding.targetSessionId, 'detachBinding.targetSessionId'),
+      );
+    }
+    const status = previous?.status;
+    const previousStatus: 'active' | 'archived' | 'deleted' | null =
+      status === 'active' || status === 'archived' || status === 'deleted' ? status : null;
+    return { previousStatus };
   })();
 }
 
