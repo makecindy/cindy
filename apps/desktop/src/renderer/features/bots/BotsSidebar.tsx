@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bot, Copy, Eye, EyeOff, Pin, Search } from 'lucide-react';
+import {
+  AlertTriangle,
+  Bot,
+  Copy,
+  Eye,
+  EyeOff,
+  Pin,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -15,6 +24,7 @@ import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
+import { BotDeleteDialog } from './BotDeleteDialog';
 import {
   botListSubtitle,
   botListTimestampAt,
@@ -59,6 +69,7 @@ function BotsSidebarContent() {
   const [showHidden, setShowHidden] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [menuBotId, setMenuBotId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<BotProfile | null>(null);
   const contextMenuFrameRef = useRef<number | null>(null);
 
   useEffect(
@@ -362,14 +373,27 @@ function BotsSidebarContent() {
                       </span>
                     </span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(bot)}
+                    aria-label={t('bots.lifecycle.deleteTitle')}
+                    className={cn(
+                      'absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-danger)] opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100',
+                      selected
+                        ? 'bg-sidebar-item-active hover:bg-[var(--danger-bg-soft)]'
+                        : 'bg-[var(--sidebar-bg)] hover:bg-[var(--danger-bg-soft)]',
+                    )}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                   <DropdownMenu
                     open={menuBotId === bot.id}
                     onOpenChange={(open) => setMenuBotId(open ? bot.id : null)}
                   >
                     <DropdownMenuTrigger asChild>
                       {/*
-                        菜单只作为右键 / 长按 / Shift+F10 的锚点。它不占一列，也不
-                        覆盖未读；常用动作是打开聊天，管理动作留在上下文菜单。
+                        菜单继续服务右键 / 长按 / Shift+F10，不占消息行宽度；
+                        删除则在悬停行时直接露出，并仍需经过二次确认。
                       */}
                       <span className="pointer-events-none absolute right-2 top-2 h-px w-px" />
                     </DropdownMenuTrigger>
@@ -402,6 +426,14 @@ function BotsSidebarContent() {
                       >
                         <Copy size={14} className="mr-2" />
                         {t('bots.list.duplicate')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-[var(--text-danger)] focus:text-[var(--text-danger)]"
+                        onSelect={() => setDeleteTarget(bot)}
+                      >
+                        <Trash2 size={14} className="mr-2" />
+                        {t('bots.lifecycle.delete')}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -443,6 +475,14 @@ function BotsSidebarContent() {
                         >
                           <Eye size={14} />
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(bot)}
+                          className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-danger)] hover:bg-[var(--danger-bg-soft)]"
+                          aria-label={t('bots.lifecycle.deleteTitle')}
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                     ))
                   : null}
@@ -457,10 +497,8 @@ function BotsSidebarContent() {
                 {archivedBots.map((bot) => {
                   const selected = bot.id === botId;
                   return (
-                    <button
-                      type="button"
+                    <div
                       key={bot.id}
-                      onClick={() => navigate(`/bots/${bot.id}?settings=1`)}
                       className={cn(
                         'group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors',
                         selected
@@ -468,14 +506,28 @@ function BotsSidebarContent() {
                           : 'text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover',
                       )}
                     >
-                      <BotAvatar bot={bot} size="sm" className="opacity-70" />
-                      <span
-                        className="min-w-0 flex-1 truncate text-13 font-medium"
-                        title={bot.name}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/bots/${bot.id}?settings=1`)}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                       >
-                        {bot.name}
-                      </span>
-                    </button>
+                        <BotAvatar bot={bot} size="sm" className="opacity-70" />
+                        <span
+                          className="min-w-0 flex-1 truncate text-13 font-medium"
+                          title={bot.name}
+                        >
+                          {bot.name}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(bot)}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-danger)] opacity-0 hover:bg-[var(--danger-bg-soft)] group-hover:opacity-100 focus:opacity-100"
+                        aria-label={t('bots.lifecycle.deleteTitle')}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -483,6 +535,19 @@ function BotsSidebarContent() {
           </div>
         )}
       </div>
+      <BotDeleteDialog
+        bot={deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        onDeleted={(deletedBotId) => {
+          if (botId !== deletedBotId) return;
+          const fallback = bots.find(
+            (candidate) => candidate.id !== deletedBotId && candidate.status !== 'archived',
+          );
+          navigate(fallback ? `/bots/${fallback.id}` : '/bots', { replace: true });
+        }}
+      />
     </div>
   );
 }

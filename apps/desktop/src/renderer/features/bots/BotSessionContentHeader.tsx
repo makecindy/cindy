@@ -10,7 +10,7 @@
  */
 import { useMemo } from 'react';
 import { Settings2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -34,7 +34,12 @@ export function BotSessionContentHeader({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const openSettings = () => navigate(`/bots/${bot.id}?settings=1`);
+  const location = useLocation();
+  const openSettings = () => {
+    const search = new URLSearchParams(location.search);
+    search.set('settings', '1');
+    navigate(`${location.pathname}?${search.toString()}`);
+  };
 
   return (
     <div

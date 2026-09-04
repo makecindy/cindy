@@ -47,10 +47,7 @@ import {
   writeBotProfileFolder,
 } from '../../maker-ipc/botProfileFolder.js';
 import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
-import {
-  renewBotSessionIfDue,
-  type BotRenewalOutcome,
-} from '../../maker-ipc/botRenewalService.js';
+import { renewBotSessionIfDue, type BotRenewalOutcome } from '../../maker-ipc/botRenewalService.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import {
@@ -66,6 +63,9 @@ import {
   portableBotAvatarOrFallback,
 } from '../../../shared/botAvatarValue.js';
 import { MAKER_PUSH } from '../../maker-ipc/channels.js';
+import { writeBlob } from '../../cindy-media/blobStore.js';
+import { recordBlob } from '../../cindy-media/ledger.js';
+import { validateBotAvatarBuffer } from './botAvatarSelection.js';
 
 const log = createLogger('bots');
 
@@ -155,16 +155,21 @@ type CreateBotCanonicalSessionResult = {
 };
 
 type CanonicalLinkReconciliation = {
-  status: 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
+  status:
+    | 'unchanged'
+    | 'repaired-mirror'
+    | 'migrated'
+    | 'missing-pointer'
+    | 'missing-session'
+    | 'conflict';
   canonicalSessionId: string | null;
 };
 
 let createBotCanonicalSessionImpl:
-  | ((input: CreateBotCanonicalSessionInput) => Promise<CreateBotCanonicalSessionResult>)
-  | null = null;
-let renewBotCanonicalSessionIfDueImpl:
-  | ((botId: string) => Promise<BotRenewalOutcome>)
-  | null = null;
+  ((input: CreateBotCanonicalSessionInput) => Promise<CreateBotCanonicalSessionResult>) | null =
+  null;
+let renewBotCanonicalSessionIfDueImpl: ((botId: string) => Promise<BotRenewalOutcome>) | null =
+  null;
 const botRenewalFlights = new Map<string, Promise<BotRenewalOutcome>>();
 
 /** Main-side canonical creator shared by first creation, restore and missing-task repair. */
@@ -183,9 +188,7 @@ export async function createBotCanonicalSession(
  * singleflight so concurrent wakeups observe one CAS winner instead of creating
  * a second replacement or surfacing a harmless race to the user.
  */
-export async function resolveBotCanonicalSessionForUse(
-  botId: string,
-): Promise<BotRenewalOutcome> {
+export async function resolveBotCanonicalSessionForUse(botId: string): Promise<BotRenewalOutcome> {
   if (!renewBotCanonicalSessionIfDueImpl) {
     throwIpcError('PRECONDITION_FAILED', 'Bot 数据服务尚未初始化');
   }
@@ -492,11 +495,7 @@ async function readProfile(
     )
     .limit(1);
   const canonicalClearedAt = byId.get(canonicalSessionId ?? '')?.clearedAt ?? null;
-  const latestMessage = await readCanonicalChatPreview(
-    db,
-    canonicalSessionId,
-    canonicalClearedAt,
-  );
+  const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
   const unreadCount = await countCanonicalUnread(
     db,
     canonicalSessionId,
@@ -507,11 +506,12 @@ async function readProfile(
   const modelChain = readEffectiveBotModelChain(config);
   const primaryModelRoute = modelChain[0];
   const failureReason = BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason)
-    ? profile.attentionReason as BotFailureReason
+    ? (profile.attentionReason as BotFailureReason)
     : null;
-  const needsAttention = profile.attentionAt !== null
-    && failureReason !== null
-    && isBotFailureAttentionWorthy(failureReason);
+  const needsAttention =
+    profile.attentionAt !== null &&
+    failureReason !== null &&
+    isBotFailureAttentionWorthy(failureReason);
   return {
     id: profile.id,
     name: profile.displayName,
@@ -550,8 +550,9 @@ async function readProfile(
       ? config.skills.filter((item): item is string => typeof item === 'string')
       : [],
     capabilities: {
-      model: primaryModelRoute?.model
-        ?? (typeof config.model === 'string' ? config.model : 'claude-sonnet-4-6'),
+      model:
+        primaryModelRoute?.model ??
+        (typeof config.model === 'string' ? config.model : 'claude-sonnet-4-6'),
       // Renderer treats this as the source-of-truth marker: null means the
       // concrete model above is only a resolved cache and must follow the
       // current Gateway/Catalog default.
@@ -559,36 +560,32 @@ async function readProfile(
         config.modelOverride && typeof config.modelOverride === 'object'
           ? config.modelOverride
           : null,
-      providerId: primaryModelRoute?.providerId
-        ?? (typeof config.providerId === 'string'
+      providerId:
+        primaryModelRoute?.providerId ??
+        (typeof config.providerId === 'string'
           ? config.providerId
           : config.providerId === null
             ? null
             : undefined),
-      effort: primaryModelRoute?.effort
-        ?? (typeof config.effort === 'string' ? config.effort : ''),
+      effort: primaryModelRoute?.effort ?? (typeof config.effort === 'string' ? config.effort : ''),
       fastMode: primaryModelRoute?.fastMode ?? config.fastMode === true,
-      harness: primaryModelRoute?.harness
-        ?? (config.harness === 'codex' || config.harness === 'pi' ? config.harness : 'claude'),
+      harness:
+        primaryModelRoute?.harness ??
+        (config.harness === 'codex' || config.harness === 'pi' ? config.harness : 'claude'),
       modelChain,
       modelChainOverride: Array.isArray(config.modelChainOverride)
         ? normalizeBotModelChain(config.modelChainOverride)
         : null,
-      skillMode:
-        config.skillMode === 'allowlist'
-          ? 'allowlist'
-          : 'inherit',
+      skillMode: config.skillMode === 'allowlist' ? 'allowlist' : 'inherit',
       // 跟随全局时被单独关掉的那几项(见 botProfileRuntime 的 excludedSkills)。
       skillsExcluded: Array.isArray(config.skillsExcluded)
         ? config.skillsExcluded.filter((item): item is string => typeof item === 'string')
         : [],
-      toolsetMode:
-        'allowlist',
+      toolsetMode: 'allowlist',
       toolsets: Array.isArray(config.toolsets)
         ? config.toolsets.filter((item): item is string => typeof item === 'string')
         : [],
-      mcpMode:
-        'allowlist',
+      mcpMode: 'allowlist',
       mcpServers: Array.isArray(config.mcpServers)
         ? config.mcpServers.filter((item): item is string => typeof item === 'string')
         : [],
@@ -603,11 +600,7 @@ async function readProfile(
           id: row.id,
           title: row.title,
           kind:
-            link.role === 'canonical'
-              ? 'chat'
-              : link.role === 'delegation'
-                ? 'worker'
-                : 'history',
+            link.role === 'canonical' ? 'chat' : link.role === 'delegation' ? 'worker' : 'history',
           updatedAt: row.updatedAt,
           status: row.status,
           role: link.role,
@@ -640,10 +633,7 @@ async function readProfile(
  * open the canonical task. Keep this projection main-side so profile prompts,
  * channel credentials, project paths and runtime state never cross the wire.
  */
-async function readRemoteBotProfile(
-  db: ReturnType<typeof getDbClient>['drizzle'],
-  botId: string,
-) {
+async function readRemoteBotProfile(db: ReturnType<typeof getDbClient>['drizzle'], botId: string) {
   const [profile] = await db
     .select({
       id: botProfiles.id,
@@ -801,9 +791,8 @@ export function registerBotIpc(): void {
 
   ipcMain.handle('local-db:bots:model-chain-settings-set', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const body = raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? raw as Record<string, unknown>
-      : {};
+    const body =
+      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     const state = await writeBotModelChainSettings(body.modelChain);
     return { modelChain: state.value.modelChain, isCustomized: state.isCustomized };
   });
@@ -823,7 +812,9 @@ export function registerBotIpc(): void {
       .orderBy(desc(botProfiles.updatedAt));
     return Promise.all(
       profiles.map(({ id }) =>
-        remote ? readRemoteBotProfile(db, id) : readProfile(db, id, lastReadAtByBotId.get(id) ?? null),
+        remote
+          ? readRemoteBotProfile(db, id)
+          : readProfile(db, id, lastReadAtByBotId.get(id) ?? null),
       ),
     );
   });
@@ -834,6 +825,87 @@ export function registerBotIpc(): void {
     const db = getDbClient().drizzle;
     const botId = requireString(rawId, 'botId');
     return remote ? readRemoteBotProfile(db, botId) : readProfile(db, botId);
+  });
+
+  ipcMain.handle('local-db:bots:choose-avatar', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body =
+      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+    const botId = readText(body.botId, 'botId', 128, true);
+    const client = getDbClient();
+    const db = client.drizzle;
+    const [initial] = await db
+      .select({ status: botProfiles.status })
+      .from(botProfiles)
+      .where(eq(botProfiles.id, botId))
+      .limit(1);
+    if (!initial) throwIpcError('NOT_FOUND', 'Bot 不存在');
+    if (initial.status === 'archived') {
+      throwIpcError('PRECONDITION_FAILED', '已停止的 Bot 不能修改头像');
+    }
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options: OpenDialogOptions = {
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    };
+    const selection = owner
+      ? await dialog.showOpenDialog(owner, options)
+      : await dialog.showOpenDialog(options);
+    if (selection.canceled || !selection.filePaths[0]) return { canceled: true };
+
+    let buffer: Buffer;
+    try {
+      buffer = await fs.readFile(selection.filePaths[0]);
+    } catch {
+      throwIpcError('INVALID_PARAMS', '头像文件无法读取');
+    }
+    const mimeType = validateBotAvatarBuffer(buffer);
+
+    const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+    if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
+    if (current.status === 'archived') {
+      throwIpcError('PRECONDITION_FAILED', '已停止的 Bot 不能修改头像');
+    }
+    const [version] = await db
+      .select()
+      .from(botProfileVersions)
+      .where(
+        and(
+          eq(botProfileVersions.botId, botId),
+          eq(botProfileVersions.version, current.currentVersion),
+        ),
+      )
+      .limit(1);
+    if (!version) throwIpcError('PRECONDITION_FAILED', 'Bot Profile 版本不存在');
+
+    // The file bytes are published first, then the profile address and durable
+    // reference move together in one SQLite transaction. If the transaction
+    // loses a race, the unreferenced content-addressed blob is recycler-safe.
+    const written = await writeBlob({ buffer, mimeType });
+    await recordBlob(
+      {
+        hash: written.hash,
+        ext: written.ext,
+        mimeType: written.mimeType,
+        bytes: written.bytes,
+        isCache: false,
+      },
+      db,
+    );
+    const now = Date.now();
+    await client.tx('bots.updateProfile', {
+      id: botId,
+      avatar: written.url,
+      identitySource: version.identitySource,
+      capabilitiesJson: version.capabilitiesJson,
+      profileContentChanged: false,
+      expectedCurrentVersion: current.currentVersion,
+      botAvatarRef: { id: randomUUID(), hash: written.hash, createdAt: now },
+      now,
+    });
+    const profile = await readProfile(db, botId);
+    broadcastBotProfileChanged({ botId, change: 'updated' });
+    return { canceled: false, profile };
   });
 
   ipcMain.handle('local-db:bots:health', async (event, rawBotId: unknown) => {
@@ -871,14 +943,12 @@ export function registerBotIpc(): void {
 
     if (profile.status === 'error') issues.push({ code: 'profile-error' });
     if (profile.status === 'deleting') issues.push({ code: 'lifecycle-incomplete' });
-    if (profile.status === 'active' && !canonicalSessionId) issues.push({ code: 'missing-canonical' });
+    if (profile.status === 'active' && !canonicalSessionId)
+      issues.push({ code: 'missing-canonical' });
     if (canonicalSessionId && !sessionRow) issues.push({ code: 'canonical-session-missing' });
     if (sessionRow?.status === 'deleted') issues.push({ code: 'canonical-session-deleted' });
     if (canonicalSessionId && !linkRow) issues.push({ code: 'canonical-link-missing' });
-    if (
-      linkRow &&
-      (linkRow.botId !== botId || linkRow.role !== 'canonical')
-    ) {
+    if (linkRow && (linkRow.botId !== botId || linkRow.role !== 'canonical')) {
       issues.push({ code: 'canonical-link-mismatch' });
     }
     if (linkRow && linkRow.profileVersion < profile.currentVersion) {
@@ -887,11 +957,12 @@ export function registerBotIpc(): void {
     if (runtime?.status === 'degraded') issues.push({ code: 'runtime-degraded' });
     if (runtime?.status === 'failed') issues.push({ code: 'runtime-failed' });
     const failureReason = BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason)
-      ? profile.attentionReason as BotFailureReason
+      ? (profile.attentionReason as BotFailureReason)
       : null;
-    const needsAttention = profile.attentionAt !== null
-      && failureReason !== null
-      && isBotFailureAttentionWorthy(failureReason);
+    const needsAttention =
+      profile.attentionAt !== null &&
+      failureReason !== null &&
+      isBotFailureAttentionWorthy(failureReason);
     if (needsAttention) issues.push({ code: 'durable-attention' });
 
     const recoveringCodes = new Set([
@@ -915,9 +986,7 @@ export function registerBotIpc(): void {
       needsAttention,
       canonical: {
         sessionId: canonicalSessionId,
-        sessionStatus: canonicalSessionId
-          ? sessionRow?.status ?? 'missing'
-          : null,
+        sessionStatus: canonicalSessionId ? (sessionRow?.status ?? 'missing') : null,
         linked: !!linkRow && linkRow.botId === botId && linkRow.role === 'canonical',
         profileVersion: linkRow?.profileVersion ?? null,
         runtimeStatus: runtime?.status ?? 'not-started',
@@ -941,15 +1010,15 @@ export function registerBotIpc(): void {
 
   ipcMain.handle('local-db:bots:lifecycle-events', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const body = raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {};
+    const body =
+      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     const botId = readText(body.botId, 'botId', 128, true);
-    const limit = typeof body.limit === 'number' && Number.isFinite(body.limit)
-      ? Math.max(1, Math.min(200, Math.floor(body.limit)))
-      : 50;
-    const rows = await getDbClient().drizzle
-      .select()
+    const limit =
+      typeof body.limit === 'number' && Number.isFinite(body.limit)
+        ? Math.max(1, Math.min(200, Math.floor(body.limit)))
+        : 50;
+    const rows = await getDbClient()
+      .drizzle.select()
       .from(botLifecycleEvents)
       .where(eq(botLifecycleEvents.botId, botId))
       .orderBy(desc(botLifecycleEvents.createdAt))
@@ -966,14 +1035,14 @@ export function registerBotIpc(): void {
 
   ipcMain.handle('local-db:bots:search-history', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const body = raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {};
+    const body =
+      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     const botId = readText(body.botId, 'botId', 128, true);
     const query = readText(body.query, 'query', 500, true);
-    const limit = typeof body.limit === 'number' && Number.isFinite(body.limit)
-      ? Math.max(1, Math.min(50, Math.floor(body.limit)))
-      : 20;
+    const limit =
+      typeof body.limit === 'number' && Number.isFinite(body.limit)
+        ? Math.max(1, Math.min(50, Math.floor(body.limit)))
+        : 20;
     const db = getDbClient().drizzle;
     const [profile] = await db
       .select({ id: botProfiles.id })
@@ -1023,9 +1092,10 @@ export function registerBotIpc(): void {
     if (body.description !== undefined)
       patch.description = readText(body.description, 'description');
 
-    const expectedAvatar = body.avatar !== undefined && body.expectedAvatar !== undefined
-      ? readBotAvatar(body.expectedAvatar, true)
-      : current.avatar;
+    const expectedAvatar =
+      body.avatar !== undefined && body.expectedAvatar !== undefined
+        ? readBotAvatar(body.expectedAvatar, true)
+        : current.avatar;
     if (body.avatar !== undefined) {
       const nextAvatar = readBotAvatar(body.avatar, true);
       if (isManagedBotAvatarUrl(nextAvatar) && nextAvatar !== current.avatar) {
@@ -1044,20 +1114,22 @@ export function registerBotIpc(): void {
         throwIpcError('INVALID_PARAMS', 'enabled 必须是 boolean');
       patch.status = body.enabled ? 'active' : 'paused';
     }
-    const hiddenAt = body.hidden === undefined
-      ? undefined
-      : body.hidden === true
-        ? now
-        : body.hidden === false
-          ? null
-          : throwIpcError('INVALID_PARAMS', 'hidden 必须是 boolean');
-    const pinnedAt = body.pinned === undefined
-      ? undefined
-      : body.pinned === true
-        ? now
-        : body.pinned === false
-          ? null
-          : throwIpcError('INVALID_PARAMS', 'pinned 必须是 boolean');
+    const hiddenAt =
+      body.hidden === undefined
+        ? undefined
+        : body.hidden === true
+          ? now
+          : body.hidden === false
+            ? null
+            : throwIpcError('INVALID_PARAMS', 'hidden 必须是 boolean');
+    const pinnedAt =
+      body.pinned === undefined
+        ? undefined
+        : body.pinned === true
+          ? now
+          : body.pinned === false
+            ? null
+            : throwIpcError('INVALID_PARAMS', 'pinned 必须是 boolean');
     const [version] = await db
       .select()
       .from(botProfileVersions)
@@ -1116,9 +1188,9 @@ export function registerBotIpc(): void {
       profileContentChanged,
       expectedCurrentVersion: current.currentVersion,
       clearBotAvatarRefs:
-        patch.avatar !== undefined
-        && isManagedBotAvatarUrl(current.avatar)
-        && !isManagedBotAvatarUrl(patch.avatar),
+        patch.avatar !== undefined &&
+        isManagedBotAvatarUrl(current.avatar) &&
+        !isManagedBotAvatarUrl(patch.avatar),
       now,
     });
     await syncBotProfileFolder(id, nextIdentitySource, normalizedNextConfig);
@@ -1157,16 +1229,14 @@ export function registerBotIpc(): void {
     const canonicalResolution = await reconcileCanonicalLink(botId);
     const authoritativeCanonicalSessionId = canonicalResolution.canonicalSessionId;
     const recoverableCompatibilityMirror =
-      input.recoverMissingOnly === true
-      && canonicalResolution.status === 'missing-session'
-      && profile.canonicalSessionId === expectedCanonicalSessionId;
+      input.recoverMissingOnly === true &&
+      canonicalResolution.status === 'missing-session' &&
+      profile.canonicalSessionId === expectedCanonicalSessionId;
     if (input.recoverMissingOnly) {
       if (
-        !expectedCanonicalSessionId
-        || (
-          authoritativeCanonicalSessionId !== expectedCanonicalSessionId
-          && !recoverableCompatibilityMirror
-        )
+        !expectedCanonicalSessionId ||
+        (authoritativeCanonicalSessionId !== expectedCanonicalSessionId &&
+          !recoverableCompatibilityMirror)
       ) {
         throwIpcError('PRECONDITION_FAILED', 'Bot 主任务已变化，请刷新后重试');
       }
@@ -1210,13 +1280,13 @@ export function registerBotIpc(): void {
           workspaceKind,
           workingDir,
           model:
-            primaryRoute?.model
-              ?? (typeof config.model === 'string'
-                ? config.model.trim()
-                : defaultBotModelForConfig(config)),
+            primaryRoute?.model ??
+            (typeof config.model === 'string'
+              ? config.model.trim()
+              : defaultBotModelForConfig(config)),
           providerId:
-            primaryRoute?.providerId
-            ?? (typeof config.providerId === 'string' && config.providerId.trim()
+            primaryRoute?.providerId ??
+            (typeof config.providerId === 'string' && config.providerId.trim()
               ? config.providerId.trim()
               : config.providerId === null
                 ? null
@@ -1224,8 +1294,8 @@ export function registerBotIpc(): void {
                   ? NEW_BOT_DEFAULT_PI_PROVIDER
                   : undefined),
           effort:
-            primaryRoute?.effort
-            || (typeof config.effort === 'string' && config.effort.trim()
+            primaryRoute?.effort ||
+            (typeof config.effort === 'string' && config.effort.trim()
               ? config.effort.trim()
               : botSessionAgentKind(primaryRoute ?? config) === 'pi'
                 ? NEW_BOT_DEFAULT_PI_EFFORT
@@ -1259,33 +1329,34 @@ export function registerBotIpc(): void {
     let created = false;
     try {
       const result = await getDbClient().tx<BotsReplaceCanonicalSessionResult>(
-        'bots.replaceCanonicalSession', {
-        botId,
-        expectedCanonicalSessionId: recoverableCompatibilityMirror
-          ? null
-          : expectedCanonicalSessionId,
-        compatibilityMissingCanonicalSessionId: recoverableCompatibilityMirror
-          ? expectedCanonicalSessionId
-          : null,
-        allowRotation: input.allowRotation === true,
-        expectedProfileVersion,
-        session: {
-          id: insertRow.id,
-          title: insertRow.title,
-          workingDir: insertRow.workingDir ?? null,
-          workspaceKind: insertRow.workspaceKind,
-          model: insertRow.model,
-          effort: insertRow.effort,
-          fastMode: insertRow.fastMode,
-          permissionMode: insertRow.permissionMode,
-          agentKind: insertRow.agentKind,
-          remoteHostId: insertRow.remoteHostId ?? null,
-          providerId: insertRow.providerId ?? null,
-          extraDirs: insertRow.extraDirs,
-          source: insertRow.source,
-          createdAt: insertRow.createdAt,
-          updatedAt: insertRow.updatedAt,
-        },
+        'bots.replaceCanonicalSession',
+        {
+          botId,
+          expectedCanonicalSessionId: recoverableCompatibilityMirror
+            ? null
+            : expectedCanonicalSessionId,
+          compatibilityMissingCanonicalSessionId: recoverableCompatibilityMirror
+            ? expectedCanonicalSessionId
+            : null,
+          allowRotation: input.allowRotation === true,
+          expectedProfileVersion,
+          session: {
+            id: insertRow.id,
+            title: insertRow.title,
+            workingDir: insertRow.workingDir ?? null,
+            workspaceKind: insertRow.workspaceKind,
+            model: insertRow.model,
+            effort: insertRow.effort,
+            fastMode: insertRow.fastMode,
+            permissionMode: insertRow.permissionMode,
+            agentKind: insertRow.agentKind,
+            remoteHostId: insertRow.remoteHostId ?? null,
+            providerId: insertRow.providerId ?? null,
+            extraDirs: insertRow.extraDirs,
+            source: insertRow.source,
+            createdAt: insertRow.createdAt,
+            updatedAt: insertRow.updatedAt,
+          },
           now,
         },
       );
@@ -1341,9 +1412,8 @@ export function registerBotIpc(): void {
     await reconcileCanonicalLink(input.botId);
     const previousSessionId = input.expectedCanonicalSessionId;
     if (!previousSessionId) return createBotCanonicalSessionUnlocked(input);
-    return coordinateBotCanonicalReplacement(
-      previousSessionId,
-      () => createBotCanonicalSessionUnlocked(input),
+    return coordinateBotCanonicalReplacement(previousSessionId, () =>
+      createBotCanonicalSessionUnlocked(input),
     );
   };
 
@@ -1522,19 +1592,15 @@ export function registerBotIpc(): void {
             .from(botDelegations)
             .where(
               and(
-                or(
-                  eq(botDelegations.requestingBotId, id),
-                  eq(botDelegations.targetBotId, id),
-                ),
+                or(eq(botDelegations.requestingBotId, id), eq(botDelegations.targetBotId, id)),
                 inArray(botDelegations.status, ['queued', 'waiting', 'running']),
               ),
             )
             .limit(1),
         ]);
         const liveTurnActive = canonicalSessionId
-          ? getMakerIfReady()
-              ?.getSession(canonicalSessionId)
-              ?.getTurnControlSnapshot().active === true
+          ? getMakerIfReady()?.getSession(canonicalSessionId)?.getTurnControlSnapshot().active ===
+            true
           : false;
         return liveTurnActive || delegationRows.length > 0;
       },

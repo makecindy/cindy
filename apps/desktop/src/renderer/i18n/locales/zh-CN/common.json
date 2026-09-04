@@ -6987,14 +6987,10 @@
       "openFailed": "无法打开伙伴文件夹。"
     },
     "profile": {
-      "title": "基本信息",
-      "description": "这里只放需要你识别和称呼这位伙伴的信息，修改后会自动保存。",
-      "avatar": "头像",
-      "initial": "首字",
-      "useInitial": "使用名称首字作为头像",
-      "summary": "一句话简介",
-      "summaryPlaceholder": "例如：帮我持续跟进发布和交付",
-      "summaryHint": "用一句话说明它主要负责什么。更深的身份和做法由伙伴自己维护。"
+      "changeAvatar": "更换头像",
+      "avatarFailed": "无法更换头像，请选择小于 5 MB 的 PNG、JPEG 或 WebP 图片。",
+      "summary": "描述",
+      "summaryPlaceholder": "写下这个伙伴主要负责什么，以及你希望它怎样做事"
     },
     "portability": {
       "title": "导出",

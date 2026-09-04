@@ -11,21 +11,11 @@ import {
   NEW_BOT_DEFAULT_PI_MODEL,
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults';
-import {
-  getBotLastReadAtMap,
-  pruneBotReadState,
-  seedMissingBotReadState,
-} from './botReadState';
+import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from './botReadState';
 import type { BotGender } from '../../../shared/botGender';
 import type { BotHealthReport } from '../../../shared/botLifecycle';
-import {
-  BOT_FAILURE_REASONS,
-  type BotFailureReason,
-} from '../../../shared/botFailureReason';
-import {
-  NEW_BOT_DEFAULT_PERMISSIONS,
-  normalizeBotPermissions,
-} from './botCapabilityDefaults';
+import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
+import { NEW_BOT_DEFAULT_PERMISSIONS, normalizeBotPermissions } from './botCapabilityDefaults';
 import {
   BOT_MODEL_CHAIN_MAX,
   normalizeBotHarness,
@@ -120,9 +110,7 @@ function normalizeSkillMode(
   // `inherit` is retained only as a compatible stored value. Runtime treats
   // it as no external grants; it never means ambient Cindy Skill inheritance.
   if (value === 'inherit' || value === 'allowlist') return value;
-  return Array.isArray(configuredSkills) && configuredSkills.length > 0
-    ? 'allowlist'
-    : 'inherit';
+  return Array.isArray(configuredSkills) && configuredSkills.length > 0 ? 'allowlist' : 'inherit';
 }
 
 function normalizeCapabilityMode(_value: unknown, _configured: unknown): 'inherit' | 'allowlist' {
@@ -251,9 +239,7 @@ function defaultBotModelSettings(vendor: ReturnType<typeof vendorForHarness>): B
     );
     if (preferredProviderId) {
       const provider = providers.find((item) => item.id === preferredProviderId);
-      const preferred = provider
-        ? getModel(provider, NEW_BOT_DEFAULT_PI_MODEL, 'pi')
-        : undefined;
+      const preferred = provider ? getModel(provider, NEW_BOT_DEFAULT_PI_MODEL, 'pi') : undefined;
       return {
         model: NEW_BOT_DEFAULT_PI_MODEL,
         providerId: preferredProviderId,
@@ -377,13 +363,15 @@ export function getEffectiveBotModelChain(
 ): BotModelRoute[] {
   const stored = getBotGlobalModelChain();
   if (stored) return stored;
-  return [{
-    harness: NEW_BOT_DEFAULT_HARNESS,
-    model: NEW_BOT_DEFAULT_PI_MODEL,
-    providerId: NEW_BOT_DEFAULT_PI_PROVIDER,
-    effort: NEW_BOT_DEFAULT_PI_EFFORT,
-    fastMode: false,
-  }];
+  return [
+    {
+      harness: NEW_BOT_DEFAULT_HARNESS,
+      model: NEW_BOT_DEFAULT_PI_MODEL,
+      providerId: NEW_BOT_DEFAULT_PI_PROVIDER,
+      effort: NEW_BOT_DEFAULT_PI_EFFORT,
+      fastMode: false,
+    },
+  ];
 }
 
 export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<void> {
@@ -399,18 +387,20 @@ export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<vo
   globalModelChainCache = persisted;
   window.localStorage.removeItem(BOT_GLOBAL_MODEL_CHAIN_KEY);
   const primary = persisted[0]!;
-  profiles = profiles.map((bot) => bot.capabilities.modelChainOverride === null
-    ? {
-        ...bot,
-        capabilities: {
-          ...bot.capabilities,
-          ...primary,
-          modelOverride: null,
-          modelChain: persisted,
-          modelChainOverride: null,
-        },
-      }
-    : bot);
+  profiles = profiles.map((bot) =>
+    bot.capabilities.modelChainOverride === null
+      ? {
+          ...bot,
+          capabilities: {
+            ...bot.capabilities,
+            ...primary,
+            modelOverride: null,
+            modelChain: persisted,
+            modelChainOverride: null,
+          },
+        }
+      : bot,
+  );
   for (const listener of botModelListeners) listener();
   emit();
 }
@@ -431,7 +421,7 @@ function defaultCapabilities(
     // 模型没沿用 lastByVendor 时,来源也不能沿用 —— providerId 与 model 必须同源,
     // 否则会拿一个来源去解析另一个来源的模型 id。
     providerId: primary.providerId ?? (model === prefs.model ? (prefs.providerId ?? null) : null),
-    effort: model ? (primary.effort || prefs.effort) : '',
+    effort: model ? primary.effort || prefs.effort : '',
     fastMode: model ? primary.fastMode : false,
     harness: primary.harness,
     modelChain: globalChain,
@@ -494,18 +484,20 @@ function readProfiles(): BotProfile[] {
       const capabilities = value.capabilities ?? defaultCapabilities();
       const harness = normalizeBotHarness(capabilities.harness);
       const defaults = defaultCapabilities(harness);
-      const modelOverride = normalizeBotModelOverride(capabilities.modelOverride, capabilities, harness);
-      const resolvedModel = modelOverride ?? getEffectiveBotModelSettings(vendorForHarness(harness), null);
-      const inheritedChain = normalizeBotModelChain(
-        capabilities.modelChain,
-        {
-          harness,
-          model: resolvedModel.model || capabilities.model,
-          providerId: resolvedModel.providerId ?? capabilities.providerId,
-          effort: resolvedModel.effort || capabilities.effort,
-          fastMode: resolvedModel.fastMode || capabilities.fastMode === true,
-        },
+      const modelOverride = normalizeBotModelOverride(
+        capabilities.modelOverride,
+        capabilities,
+        harness,
       );
+      const resolvedModel =
+        modelOverride ?? getEffectiveBotModelSettings(vendorForHarness(harness), null);
+      const inheritedChain = normalizeBotModelChain(capabilities.modelChain, {
+        harness,
+        model: resolvedModel.model || capabilities.model,
+        providerId: resolvedModel.providerId ?? capabilities.providerId,
+        effort: resolvedModel.effort || capabilities.effort,
+        fastMode: resolvedModel.fastMode || capabilities.fastMode === true,
+      });
       const primaryRoute = inheritedChain[0];
       const legacyTools = normalizeStringList(
         (capabilities as unknown as { tools?: unknown }).tools,
@@ -535,37 +527,38 @@ function readProfiles(): BotProfile[] {
                 ? inheritedChain
                 : null,
             providerId:
-              primaryRoute?.providerId
-              ?? (capabilities.modelOverride === null
+              primaryRoute?.providerId ??
+              (capabilities.modelOverride === null
                 ? resolvedModel.providerId
                 : modelOverride
-                ? modelOverride.providerId
-                : typeof capabilities.providerId === 'string'
-                ? capabilities.providerId
-                  : capabilities.providerId === null
-                    ? null
-                    : resolvedModel.providerId),
+                  ? modelOverride.providerId
+                  : typeof capabilities.providerId === 'string'
+                    ? capabilities.providerId
+                    : capabilities.providerId === null
+                      ? null
+                      : resolvedModel.providerId),
             effort:
-              primaryRoute?.effort
-              || (capabilities.modelOverride === null
+              primaryRoute?.effort ||
+              (capabilities.modelOverride === null
                 ? resolvedModel.effort
                 : modelOverride?.effort
                   ? modelOverride.effort
-                : typeof capabilities.effort === 'string' && capabilities.effort
-                ? capabilities.effort
-                : defaults.effort),
-            fastMode: primaryRoute?.fastMode
-              ?? (capabilities.modelOverride === null
+                  : typeof capabilities.effort === 'string' && capabilities.effort
+                    ? capabilities.effort
+                    : defaults.effort),
+            fastMode:
+              primaryRoute?.fastMode ??
+              (capabilities.modelOverride === null
                 ? resolvedModel.fastMode
                 : modelOverride?.fastMode === true),
             permissions: normalizeBotPermissions(capabilities.permissions),
             skillMode: normalizeSkillMode(capabilities.skillMode, value.skills),
             skillsExcluded: normalizeStringList(capabilities.skillsExcluded),
-            model: primaryRoute?.model
-              || resolvedModel.model
-              || normalizeBotModel(capabilities.model, harness),
-            modelOverride:
-              capabilities.modelOverride === null ? null : modelOverride,
+            model:
+              primaryRoute?.model ||
+              resolvedModel.model ||
+              normalizeBotModel(capabilities.model, harness),
+            modelOverride: capabilities.modelOverride === null ? null : modelOverride,
             toolsetMode: normalizeCapabilityMode(capabilities.toolsetMode, toolsets),
             toolsets,
             mcpMode: normalizeCapabilityMode(capabilities.mcpMode, capabilities.mcpServers),
@@ -645,18 +638,20 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
   const harness = normalizeBotHarness(item.capabilities?.harness);
   const rawCapabilities = item.capabilities as (BotCapabilities & { tools?: unknown }) | undefined;
   const defaults = defaultCapabilities(harness);
-  const modelOverride = normalizeBotModelOverride(rawCapabilities?.modelOverride, rawCapabilities ?? {}, harness);
-  const resolvedModel = modelOverride ?? getEffectiveBotModelSettings(vendorForHarness(harness), null);
-  const modelChain = normalizeBotModelChain(
-    rawCapabilities?.modelChain,
-    {
-      harness,
-      model: resolvedModel.model || rawCapabilities?.model,
-      providerId: resolvedModel.providerId ?? rawCapabilities?.providerId,
-      effort: resolvedModel.effort || rawCapabilities?.effort,
-      fastMode: resolvedModel.fastMode || rawCapabilities?.fastMode === true,
-    },
+  const modelOverride = normalizeBotModelOverride(
+    rawCapabilities?.modelOverride,
+    rawCapabilities ?? {},
+    harness,
   );
+  const resolvedModel =
+    modelOverride ?? getEffectiveBotModelSettings(vendorForHarness(harness), null);
+  const modelChain = normalizeBotModelChain(rawCapabilities?.modelChain, {
+    harness,
+    model: resolvedModel.model || rawCapabilities?.model,
+    providerId: resolvedModel.providerId ?? rawCapabilities?.providerId,
+    effort: resolvedModel.effort || rawCapabilities?.effort,
+    fastMode: resolvedModel.fastMode || rawCapabilities?.fastMode === true,
+  });
   const primaryRoute = modelChain[0];
   const legacyTools = normalizeStringList(rawCapabilities?.tools);
   const toolsets =
@@ -682,7 +677,7 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
     pinnedAt:
       typeof item.pinnedAt === 'number' && Number.isFinite(item.pinnedAt) ? item.pinnedAt : null,
     failureReason: BOT_FAILURE_REASONS.includes(item.failureReason as BotFailureReason)
-      ? item.failureReason as BotFailureReason
+      ? (item.failureReason as BotFailureReason)
       : null,
     needsAttention: item.needsAttention === true,
     status:
@@ -710,33 +705,37 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
           ? modelChain
           : null,
       providerId:
-        primaryRoute?.providerId
-        ?? (rawCapabilities?.modelOverride === null
+        primaryRoute?.providerId ??
+        (rawCapabilities?.modelOverride === null
           ? resolvedModel.providerId
           : modelOverride
-          ? modelOverride.providerId
-          : typeof rawCapabilities?.providerId === 'string'
-          ? rawCapabilities.providerId
-            : rawCapabilities?.providerId === null
-              ? null
-              : resolvedModel.providerId),
+            ? modelOverride.providerId
+            : typeof rawCapabilities?.providerId === 'string'
+              ? rawCapabilities.providerId
+              : rawCapabilities?.providerId === null
+                ? null
+                : resolvedModel.providerId),
       effort:
-        primaryRoute?.effort
-        || (rawCapabilities?.modelOverride === null
+        primaryRoute?.effort ||
+        (rawCapabilities?.modelOverride === null
           ? resolvedModel.effort
           : modelOverride?.effort
             ? modelOverride.effort
-          : typeof rawCapabilities?.effort === 'string' && rawCapabilities.effort
-          ? rawCapabilities.effort
-          : defaults.effort),
-      fastMode: primaryRoute?.fastMode
-        ?? (rawCapabilities?.modelOverride === null
+            : typeof rawCapabilities?.effort === 'string' && rawCapabilities.effort
+              ? rawCapabilities.effort
+              : defaults.effort),
+      fastMode:
+        primaryRoute?.fastMode ??
+        (rawCapabilities?.modelOverride === null
           ? resolvedModel.fastMode
           : modelOverride?.fastMode === true),
       permissions: normalizeBotPermissions(rawCapabilities?.permissions),
       skillMode: normalizeSkillMode(item.capabilities?.skillMode, item.skills),
       skillsExcluded: normalizeStringList(rawCapabilities?.skillsExcluded),
-      model: primaryRoute?.model || resolvedModel.model || normalizeBotModel(item.capabilities?.model, harness),
+      model:
+        primaryRoute?.model ||
+        resolvedModel.model ||
+        normalizeBotModel(item.capabilities?.model, harness),
       modelOverride: rawCapabilities?.modelOverride === null ? null : modelOverride,
       toolsetMode: normalizeCapabilityMode(rawCapabilities?.toolsetMode, toolsets),
       toolsets,
@@ -853,6 +852,19 @@ export function refreshBotProfiles(): void {
   trackHydration();
 }
 
+/** Opens the host-owned image picker and replaces one teammate avatar. */
+export async function chooseBotAvatar(botId: string): Promise<BotProfile | null> {
+  const api = botsApi();
+  if (!api) throw new Error('Bot storage is not ready');
+  const result = await api.chooseAvatar({ botId });
+  if (result.canceled) return null;
+  const next = normalizeDbProfile(result.profile);
+  if (!next) throw new Error('Bot avatar update returned invalid data');
+  profiles = profiles.map((bot) => (bot.id === botId ? next : bot));
+  persist();
+  return next;
+}
+
 export async function getBotHealth(botId: string): Promise<BotHealthReport> {
   const api = botsApi();
   if (!api) throw new Error('Bot storage is not ready');
@@ -963,15 +975,9 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
 
 /** Create the local projection and wait until main/SQLite owns the profile. */
 export async function addBotProfileAndWait(input: CreateBotProfileInput): Promise<BotProfile> {
-  const harness = normalizeBotHarness(
-    input.capabilities?.harness ?? NEW_BOT_DEFAULT_HARNESS,
-  );
+  const harness = normalizeBotHarness(input.capabilities?.harness ?? NEW_BOT_DEFAULT_HARNESS);
   const needsPiDefault = harness === 'pi' && input.capabilities?.model === undefined;
-  if (
-    needsPiDefault
-    && getCachedProvidersSnapshot() === null
-    && typeof window !== 'undefined'
-  ) {
+  if (needsPiDefault && getCachedProvidersSnapshot() === null && typeof window !== 'undefined') {
     await refreshLocalCatalogSnapshot();
   }
   const bot = addBotProfile(input);
@@ -1008,21 +1014,21 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
 }
 
 export type BotProfileUpdatePatch = Partial<
-    Pick<
-      BotProfile,
-      | 'name'
-      | 'description'
-      | 'identitySource'
-      | 'userContextSource'
-      | 'avatar'
-      | 'avatarColor'
-      | 'enabled'
-      | 'skills'
-      | 'capabilities'
-      | 'canonicalSessionId'
-      | 'sessions'
-    >
-  > & { avatarUploadToken?: string };
+  Pick<
+    BotProfile,
+    | 'name'
+    | 'description'
+    | 'identitySource'
+    | 'userContextSource'
+    | 'avatar'
+    | 'avatarColor'
+    | 'enabled'
+    | 'skills'
+    | 'capabilities'
+    | 'canonicalSessionId'
+    | 'sessions'
+  >
+> & { avatarUploadToken?: string };
 
 export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Promise<BotProfile> {
   const before = profiles.find((bot) => bot.id === id);

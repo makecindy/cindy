@@ -6987,14 +6987,10 @@
       "openFailed": "동료 폴더를 열 수 없습니다."
     },
     "profile": {
-      "title": "기본 정보",
-      "description": "이 동료를 알아보고 부르는 데 필요한 정보만 둡니다. 변경 사항은 자동 저장됩니다.",
-      "avatar": "아바타",
-      "initial": "첫 글자",
-      "useInitial": "이름 첫 글자를 아바타로 사용",
-      "summary": "한 줄 소개",
-      "summaryPlaceholder": "예: 릴리스와 전달을 계속 추적",
-      "summaryHint": "주요 역할을 한 줄로 적으세요. 더 깊은 정체성과 작업 방식은 동료가 스스로 관리합니다."
+      "changeAvatar": "아바타 변경",
+      "avatarFailed": "아바타를 변경할 수 없습니다. 5MB 미만의 PNG, JPEG 또는 WebP 이미지를 선택하세요.",
+      "summary": "설명",
+      "summaryPlaceholder": "이 동료가 맡을 일과 원하는 작업 방식을 적으세요"
     },
     "portability": {
       "title": "내보내기",

@@ -36,7 +36,7 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     }
     expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
     expect(screen.getByLabelText('bots.profile.summary')).toBeTruthy();
-    expect(screen.getByText('bots.profile.avatar')).toBeTruthy();
+    expect(screen.queryByText('bots.profile.avatar')).toBeNull();
     expect(screen.queryByText('bots.background.title')).toBeNull();
     expect(screen.queryByText('bots.persona.title')).toBeNull();
   });
@@ -53,24 +53,20 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     );
   });
 
-  it('lets the user change name, summary, avatar, and hue before creation', async () => {
+  it('lets the user change name and description while the template supplies the initial avatar', async () => {
     render(<BotRosterView />);
     fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Ops buddy' } });
     fireEvent.change(screen.getByLabelText('bots.profile.summary'), {
       target: { value: 'Release partner' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'bots.chooseAvatar:{"avatar":"🤖"}' }));
-    fireEvent.click(
-      screen.getByRole('button', { name: 'bots.chooseAvatarColor:{"color":"teal"}' }),
-    );
     fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
 
     await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
     expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).toMatchObject({
       name: 'Ops buddy',
       description: 'Release partner',
-      avatar: '🤖',
-      avatarColor: 'teal',
+      avatar: '✦',
+      avatarColor: 'amber',
       identitySource: expect.stringContaining('persistent Cindy assistant'),
       userContextSource: '',
       skills: [],

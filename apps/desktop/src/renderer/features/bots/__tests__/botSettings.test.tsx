@@ -16,9 +16,11 @@ const mocks = vi.hoisted(() => ({
     currentVersion: 1,
     ...patch,
   })),
-  openPath: vi.fn(
-    async (): Promise<{ success: boolean; error?: string }> => ({ success: true }),
-  ),
+  chooseBotAvatar: vi.fn(async () => ({
+    avatar: `cindy-media://blobs/${'a'.repeat(64)}.png`,
+    avatarColor: 'violet',
+  })),
+  openPath: vi.fn(async (): Promise<{ success: boolean; error?: string }> => ({ success: true })),
 }));
 
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -45,6 +47,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 vi.mock('../botStore', () => ({
   updateBotProfile: mocks.updateBotProfile,
+  chooseBotAvatar: mocks.chooseBotAvatar,
   setCanonicalBotSession: vi.fn(),
   useBotProfiles: () => [],
   getEffectiveBotModelChain: () => [
@@ -146,6 +149,7 @@ beforeEach(() => {
     currentVersion: 1,
     ...patch,
   }));
+  mocks.chooseBotAvatar.mockClear();
   mocks.openPath.mockReset();
   mocks.openPath.mockResolvedValue({ success: true });
   mocks.initialSearch = '';
@@ -164,7 +168,7 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('tab')).toBeNull();
     expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
     expect(screen.getByLabelText('bots.profile.summary')).toBeTruthy();
-    expect(screen.getByText('bots.profile.avatar')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.profile.changeAvatar' })).toBeTruthy();
     expect(screen.getByText('bots.homeFolder.title')).toBeTruthy();
     expect(screen.getByTestId('model-selector')).toBeTruthy();
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
@@ -173,12 +177,12 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('keeps the summary column bounded even with long unbroken text', () => {
+  it('keeps a long description inside the single editable field', () => {
     const long = 'x'.repeat(500);
     renderSettings({ description: long });
-    const summary = screen.getAllByText(long).find((item) => item.tagName === 'P');
-    expect(summary?.className).toContain('[overflow-wrap:anywhere]');
-    expect(summary?.className).toContain('max-w-full');
+    const summary = screen.getByLabelText('bots.profile.summary') as HTMLTextAreaElement;
+    expect(summary.value).toBe(long);
+    expect(summary.tagName).toBe('TEXTAREA');
   });
 
   it('opens the managed advanced folder without exposing a second editor', async () => {
@@ -202,10 +206,9 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
   });
 
-  it('opens the canonical task from the Message action', () => {
-    const { onOpenSession } = renderSettings();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.actions.message' }));
-    expect(onOpenSession).toHaveBeenCalledWith('bot-1-chat');
+  it('does not duplicate the chat action inside the settings panel', () => {
+    renderSettings();
+    expect(screen.queryByRole('button', { name: 'bots.actions.message' })).toBeNull();
   });
 
   it('keeps archived teammates read-only', () => {
@@ -239,26 +242,17 @@ describe('Bot settings unified autosave', () => {
     });
   });
 
-  it('saves avatar and hue changes through the same profile channel', async () => {
+  it('changes the avatar through the host-owned image picker', async () => {
     vi.useFakeTimers();
     renderSettings();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.chooseAvatar:{"avatar":"🤖"}' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.runAllTimersAsync();
     });
-    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
-    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({ avatar: '🤖' });
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'bots.chooseAvatarColor:{"color":"teal"}' }),
+    expect(mocks.chooseBotAvatar).toHaveBeenCalledWith('bot-1');
+    expect(document.querySelector('img')?.getAttribute('src')).toBe(
+      `cindy-media://blobs/${'a'.repeat(64)}.png`,
     );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(mocks.updateBotProfile.mock.calls.at(-1)?.[1]).toMatchObject({
-      avatar: '🤖',
-      avatarColor: 'teal',
-    });
   });
 
   it('offers one recovery action only for a legacy profile with memory disabled', async () => {

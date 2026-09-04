@@ -3,14 +3,19 @@ import { Outlet, useOutletContext } from 'react-router-dom';
 
 import { useOwnTopNavScrollableRows } from '../feature-context';
 import { BotsSidebar } from './BotsSidebar';
+import { BotSettingsDrawer } from './BotSettingsDrawer';
 import { refreshBotProfiles } from './botStore';
 
 export function BotsFeatureLayout() {
   useOwnTopNavScrollableRows(false);
   useEffect(() => {
     refreshBotProfiles();
-    const unsubscribeProfile = window.electronAPI.maker.onBotProfileChanged(() => refreshBotProfiles());
-    const unsubscribeLifecycle = window.electronAPI.maker.onBotLifecycleChanged(() => refreshBotProfiles());
+    const unsubscribeProfile = window.electronAPI.maker.onBotProfileChanged(() =>
+      refreshBotProfiles(),
+    );
+    const unsubscribeLifecycle = window.electronAPI.maker.onBotLifecycleChanged(() =>
+      refreshBotProfiles(),
+    );
     return () => {
       unsubscribeProfile();
       unsubscribeLifecycle();
@@ -36,6 +41,7 @@ export function BotsFeatureLayout() {
     <>
       <BotsSidebar />
       <Outlet context={shellContext} />
+      <BotSettingsDrawer />
     </>
   );
 }

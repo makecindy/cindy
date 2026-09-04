@@ -53,6 +53,10 @@ vi.mock('../botStore', () => ({
   }) =>
     bot.sessions?.find((session) => session.role === 'canonical' || session.kind === 'chat')?.id,
 }));
+vi.mock('../BotDeleteDialog', () => ({
+  BotDeleteDialog: ({ bot }: { bot: { name: string } | null }) =>
+    bot ? <div data-testid="bot-delete-dialog">{bot.name}</div> : null,
+}));
 
 import { BotsSidebar } from '../BotsSidebar';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
@@ -311,7 +315,7 @@ describe('BotsSidebar rows', () => {
     expect(badge.className).not.toContain('accent-cta-bg');
   });
 
-  it('has no per-row gear and no section-header import: a row only opens the chat', async () => {
+  it('keeps settings and import out of each row while the row itself opens chat', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
 
     await renderSidebar();
@@ -342,13 +346,20 @@ describe('BotsSidebar rows', () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
 
     await renderSidebar();
-    fireEvent.contextMenu(screen.getByText('PR steward'));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.deleteTitle' }));
+    expect(screen.getByTestId('bot-delete-dialog').textContent).toBe('PR steward');
+
+    fireEvent.contextMenu(screen.getAllByText('PR steward')[0]);
 
     await waitFor(() => {
       expect(screen.getByRole('menuitem', { name: 'bots.list.pin' })).toBeTruthy();
       expect(screen.getByRole('menuitem', { name: 'bots.list.hide' })).toBeTruthy();
       expect(screen.getByRole('menuitem', { name: 'bots.list.duplicate' })).toBeTruthy();
+      expect(screen.getByRole('menuitem', { name: 'bots.lifecycle.delete' })).toBeTruthy();
     });
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'bots.lifecycle.delete' }));
+    expect(screen.getByTestId('bot-delete-dialog').textContent).toBe('PR steward');
   });
 
   it('shows an unread count only for Bots with unread replies, capped at 99+', async () => {

@@ -6987,14 +6987,10 @@
       "openFailed": "仲間のフォルダを開けませんでした。"
     },
     "profile": {
-      "title": "基本情報",
-      "description": "この仲間を見分けて呼ぶための情報だけを置きます。変更は自動保存されます。",
-      "avatar": "アバター",
-      "initial": "頭文字",
-      "useInitial": "名前の頭文字をアバターに使う",
-      "summary": "一行の紹介",
-      "summaryPlaceholder": "例：リリースとデリバリーを継続して追う",
-      "summaryHint": "主な担当を一行で説明します。より深い個性や手順は仲間自身が管理します。"
+      "changeAvatar": "アバターを変更",
+      "avatarFailed": "アバターを変更できませんでした。5 MB未満のPNG、JPEG、WebP画像を選択してください。",
+      "summary": "説明",
+      "summaryPlaceholder": "この仲間の担当と、どのように動いてほしいかを記入します"
     },
     "portability": {
       "title": "エクスポート",

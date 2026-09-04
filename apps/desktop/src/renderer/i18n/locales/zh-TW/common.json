@@ -6987,14 +6987,10 @@
       "openFailed": "無法開啟夥伴資料夾。"
     },
     "profile": {
-      "title": "基本資訊",
-      "description": "這裡只放讓你辨識與稱呼這位夥伴的資訊，修改後會自動儲存。",
-      "avatar": "頭像",
-      "initial": "首字",
-      "useInitial": "使用名稱首字作為頭像",
-      "summary": "一句話簡介",
-      "summaryPlaceholder": "例如：持續幫我跟進發布與交付",
-      "summaryHint": "用一句話說明它主要負責什麼。更深的身分與做法由夥伴自己維護。"
+      "changeAvatar": "更換頭像",
+      "avatarFailed": "無法更換頭像，請選擇小於 5 MB 的 PNG、JPEG 或 WebP 圖片。",
+      "summary": "描述",
+      "summaryPlaceholder": "寫下這個夥伴主要負責什麼，以及你希望它如何做事"
     },
     "portability": {
       "title": "匯出",

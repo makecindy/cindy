@@ -6989,14 +6989,10 @@
       "openFailed": "The teammate folder could not be opened."
     },
     "profile": {
-      "title": "Basic information",
-      "description": "Only the information you need to recognize and address this teammate lives here. Changes save automatically.",
-      "avatar": "Avatar",
-      "initial": "Initial",
-      "useInitial": "Use the name's initial as the avatar",
-      "summary": "One-line summary",
-      "summaryPlaceholder": "e.g. Keep releases and delivery moving",
-      "summaryHint": "Describe its main responsibility in one line. The teammate maintains deeper identity and working knowledge itself."
+      "changeAvatar": "Change avatar",
+      "avatarFailed": "Couldn’t change the avatar. Choose a PNG, JPEG, or WebP image under 5 MB.",
+      "summary": "Description",
+      "summaryPlaceholder": "Describe what this teammate is responsible for and how you want it to work"
     },
     "portability": {
       "title": "Export",

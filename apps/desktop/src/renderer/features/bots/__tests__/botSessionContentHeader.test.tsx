@@ -12,7 +12,10 @@ const navigate = vi.fn();
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
-vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => navigate,
+  useLocation: () => ({ pathname: '/bots/bot-1/session/sess-1', search: '' }),
+}));
 vi.mock('../feature-context', () => ({ useRegisterContentHeader: () => undefined }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="bot-avatar" /> }));
 
@@ -21,7 +24,9 @@ const { BotSessionContentHeader } = await import('../BotSessionContentHeader');
 const bot = { id: 'bot-1', name: '小可' };
 
 function appRegionOf(element: HTMLElement): string {
-  return (element.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion ?? '';
+  return (
+    (element.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion ?? ''
+  );
 }
 
 afterEach(() => {
@@ -42,7 +47,7 @@ describe('BotSessionContentHeader', () => {
     render(<BotSessionContentHeader bot={bot} sessionId="sess-1" />);
 
     fireEvent.click(screen.getByTitle('bots.settings'));
-    expect(navigate).toHaveBeenCalledWith('/bots/bot-1?settings=1');
+    expect(navigate).toHaveBeenCalledWith('/bots/bot-1/session/sess-1?settings=1');
 
     fireEvent.click(screen.getByLabelText('bots.settings'));
     expect(navigate).toHaveBeenCalledTimes(2);
