@@ -21,8 +21,10 @@ describe('SessionContentHeader window drag region', () => {
     expect(sessionHeaderSource).toMatch(
       /aria-label=\{t\('ccAgent\.sessionHeader\.moreActions'\)\}[\s\S]{0,120}style=\{WINDOW_NO_DRAG_STYLE\}/,
     );
+    // PR chip 的 onClick 按 gh 可用性二选一(打开 PR / 引导 Agent),但按钮本身
+    // 必须始终在 no-drag 区,否则两种点击都会被窗口拖拽区吞掉。
     expect(gitContextBadgeSource).toMatch(
-      /onClick=\{\(\) => void window\.electronAPI\.openExternal\(prRef\.url\)\}[\s\S]{0,180}style=\{WINDOW_NO_DRAG_STYLE\}/,
+      /onClick=\{handleClick\}[\s\S]{0,180}style=\{WINDOW_NO_DRAG_STYLE\}/,
     );
   });
 

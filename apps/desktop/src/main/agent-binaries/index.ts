@@ -156,12 +156,11 @@ import type {
 // createBinaryProvisioner 用的内部 enum, 历史叫 'claude' / 'codex' (factory 内部
 // 硬约定, 不改)。
 //
-// pi 与 cc/codex 的差异:
-//   - artifactKind 'tar-gz-dir': pi 是整目录分发(主二进制 + theme/ 等运行时资产,
-//     只装主二进制会在 RPC 启动期崩溃), CDN 资产是整包 tar.gz, 归档根即完整目录
-//     (与 apps/pi-bin/<platform>/ 同布局)。
-//   - optionalAsset: pi 是可选实验 agent。manifest 缺 pi 字段 / 下载失败都不阻塞
-//     启动 —— check-environment 的 pi 段静默降级，本次不注册 pi。
+// 目录分发运行时:
+//   - codex-package:完整目录包含 bin/codex、code-mode host、rg 与 resources；生产入口
+//     与 dev 一致指向 bin/codex，CDN 资产读取 manifest.codexPackage。
+//   - pi:完整目录包含主二进制与 theme/ 等运行时资产；同时它是可选实验 agent，
+//     manifest 缺 pi 字段 / 下载失败都不阻塞启动。
 
 export type AgentBinaryKind = 'claude-code' | 'codex' | 'pi';
 
@@ -191,13 +190,13 @@ const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
   },
   codex: {
     vendorKey: 'codex',
-    manifestField: 'codex',
-    installSubdir: 'codex',
-    binaryName: process.platform === 'win32' ? 'codex.exe' : 'codex',
+    manifestField: 'codexPackage',
+    installSubdir: 'codex-package',
+    binaryName: path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex'),
     devBinDir: 'codex-package-bin',
     devBinaryName: path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex'),
     vendorTag: 'codex',
-    artifactKind: 'gz',
+    artifactKind: 'tar-gz-dir',
     preserveLocalVersion: true,
   },
   pi: {

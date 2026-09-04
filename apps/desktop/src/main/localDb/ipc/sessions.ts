@@ -22,7 +22,7 @@ import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-sh
 import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
-import { sessions, messages } from '../schema';
+import { sessions } from '../schema';
 import {
   LIST_PREVIEW_EXTRACT_SQL,
   LATEST_VISIBLE_PREVIEW_FILTER_SQL,
@@ -36,6 +36,7 @@ import { resolveBusinessSessionId } from '../../sessionIds';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
   sessionToCamel,
+  sessionUsageToCamel,
   sessionCreateToRow,
   sessionPatchToRow,
   persistableSessionEffort,
@@ -1070,8 +1071,14 @@ export function registerSessionIpc(
   );
   ipcMain.handle(
     'local-db:sessions:list',
-    async (_e, limit: unknown, status: unknown, options: unknown) => {
+    async (event, limit: unknown, status: unknown, options: unknown) => {
       const startedAt = performance.now();
+      const usageHistory = shouldUseUsageHistoryQuery(options);
+      // The usage-history branch is an unbounded privileged read. Keep the
+      // legacy capped list available to device-link's synthetic event, but do
+      // not let an untrusted renderer turn the new branch into a full-table
+      // session disclosure.
+      if (usageHistory) assertTrustedAppRendererEvent(event);
       const snapshot = readCurrentDbClientSnapshot();
       const db = snapshot?.client.drizzle ?? getDbClient().drizzle;
       const userId = snapshot?.userId ?? readCurrentDbClientUserId();
@@ -1118,10 +1125,21 @@ export function registerSessionIpc(
           }),
         );
       };
+      const loadUsageHistoryRows = async () => {
+        // 用量历史的“最耗任务”必须覆盖整个会话表，再由 renderer 按所选日历范围
+        // 精确筛选；不能复用侧栏按 updatedAt 截断的 1000 行列表。这里刻意不算
+        // messageCount / preview，避免为统计页引入整库 messages 扫描。
+        const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
+        const statusWhere = () =>
+          statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
+        const rows = await selectSessionUsageRows(db, and(sourceFilter, statusWhere()));
+        return rows.map(sessionUsageToCamel);
+      };
       // key 用同一快照上的 userId + clientEpoch + 归一化参数。
       // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
-      const result =
-        userId && !fresh
+      const result = usageHistory
+        ? await loadUsageHistoryRows()
+        : userId && !fresh
           ? await runSessionListSingleFlight(
               buildSessionListFlightKey({
                 userId,
@@ -1139,7 +1157,8 @@ export function registerSessionIpc(
       const fields = JSON.stringify({
         event: 'localDb.sessions.list.done',
         filter,
-        cap,
+        cap: usageHistory ? 'all' : cap,
+        usageHistory,
         includePinned,
         rows: result.length,
         queryElapsedMs: elapsedMs,
@@ -1503,247 +1522,247 @@ export function registerSessionIpc(
     // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
     // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
     const update = async () => {
-    if (p.workspaceKind !== undefined) {
-      const value = p.workspaceKind;
-      if (value !== 'project' && value !== 'dialogue') {
-        throwIpcError('INVALID_PARAMS', `invalid workspaceKind: ${String(value)}`);
+      if (p.workspaceKind !== undefined) {
+        const value = p.workspaceKind;
+        if (value !== 'project' && value !== 'dialogue') {
+          throwIpcError('INVALID_PARAMS', `invalid workspaceKind: ${String(value)}`);
+        }
       }
-    }
-    const ALLOWED_UPDATE_ORCA_ROLES = new Set<string>(['lead', 'worker']);
-    if (
-      p.orcaRole !== undefined &&
-      p.orcaRole !== null &&
-      !ALLOWED_UPDATE_ORCA_ROLES.has(p.orcaRole as string)
-    ) {
-      throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(p.orcaRole)}`);
-    }
-    if (typeof p.workingDir === 'string') {
-      p.workingDir = normalizeWorkingDirForStorage(p.workingDir) ?? null;
-    }
-    const REVIEW_IMMUTABLE_FIELDS = new Set([
-      'workingDir',
-      'workspaceKind',
-      'model',
-      'providerId',
-      'effort',
-      'permissionMode',
-      'fastMode',
-      'planModeEnabled',
-      'orcaRole',
-      'extraDirs',
-      'writableDirs',
-    ]);
-    if (Object.keys(p).some((key) => REVIEW_IMMUTABLE_FIELDS.has(key))) {
-      const [target] = await db
-        .select({ source: sessions.source })
-        .from(sessions)
-        .where(eq(sessions.id, sid))
-        .limit(1);
-      if (target?.source === 'review') {
-        throwIpcError(
-          'UNSUPPORTED_CAPABILITY',
-          'Review task settings are fixed to the source task',
+      const ALLOWED_UPDATE_ORCA_ROLES = new Set<string>(['lead', 'worker']);
+      if (
+        p.orcaRole !== undefined &&
+        p.orcaRole !== null &&
+        !ALLOWED_UPDATE_ORCA_ROLES.has(p.orcaRole as string)
+      ) {
+        throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(p.orcaRole)}`);
+      }
+      if (typeof p.workingDir === 'string') {
+        p.workingDir = normalizeWorkingDirForStorage(p.workingDir) ?? null;
+      }
+      const REVIEW_IMMUTABLE_FIELDS = new Set([
+        'workingDir',
+        'workspaceKind',
+        'model',
+        'providerId',
+        'effort',
+        'permissionMode',
+        'fastMode',
+        'planModeEnabled',
+        'orcaRole',
+        'extraDirs',
+        'writableDirs',
+      ]);
+      if (Object.keys(p).some((key) => REVIEW_IMMUTABLE_FIELDS.has(key))) {
+        const [target] = await db
+          .select({ source: sessions.source })
+          .from(sessions)
+          .where(eq(sessions.id, sid))
+          .limit(1);
+        if (target?.source === 'review') {
+          throwIpcError(
+            'UNSUPPORTED_CAPABILITY',
+            'Review task settings are fixed to the source task',
+          );
+        }
+      }
+      // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,update 后对比实际变化。
+      // CLI 转录按 cwd 转码目录存放,workingDir 变了必须跟着搬,否则 resume 报
+      // "No conversation found with session ID"(见 claude-transcript-relocation.ts)。
+      const beforeMove =
+        p.workingDir !== undefined
+          ? (
+              await db
+                .select({
+                  workingDir: sessions.workingDir,
+                  agentKind: sessions.agentKind,
+                  remoteHostId: sessions.remoteHostId,
+                })
+                .from(sessions)
+                .where(eq(sessions.id, sid))
+            )[0]
+          : undefined;
+      const movingLocalNonClaudeSession =
+        beforeMove &&
+        beforeMove.agentKind !== 'cc' &&
+        !beforeMove.remoteHostId &&
+        beforeMove.workingDir &&
+        typeof p.workingDir === 'string' &&
+        p.workingDir &&
+        normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir;
+      // Pi/Codex keep a live Maker handle whose cwd is fixed at bootstrap. Close it
+      // before persisting the new directory so the next send lazily recreates the
+      // runtime with the moved session's cwd instead of continuing in the old one.
+      if (movingLocalNonClaudeSession) {
+        if (!opts.closeIdleSessionForMove) {
+          throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
+        }
+        const idle = await opts.closeIdleSessionForMove(sid);
+        if (idle === false) {
+          throwIpcError('PRECONDITION_FAILED', '运行中的任务不能移动');
+        }
+      }
+      // 只有纯设置字段(model/effort 等)才跳过 bump；凡带 activity 字段
+      // (clearedAt / sdkSessionId / status / token 用量等)仍需更新 updatedAt，
+      // 否则本地 /clear 后重启侧栏时间回退旧值。
+      const SETTINGS_ONLY_FIELDS = new Set([
+        'model',
+        'effort',
+        'permissionMode',
+        'fastMode',
+        'planModeEnabled',
+        'providerId',
+        'orcaRole',
+        'extraDirs',
+        'writableDirs',
+        'pinnedAt',
+        'workingDir',
+        'workspaceKind',
+        'title',
+      ]);
+      const isSettingsOnly = Object.keys(p).every((k) => SETTINGS_ONLY_FIELDS.has(k));
+      const setObj = sessionPatchToRow(p as Parameters<typeof sessionPatchToRow>[0], {
+        bumpUpdatedAt: !isSettingsOnly,
+      });
+      if (p.clearedAt !== undefined) {
+        setObj.summary = null;
+        setObj.listPreview = null;
+        setObj.listPreviewRole = null;
+      }
+      // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
+      // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
+      // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
+      // 有真实时间差,在那期间智能标题仍能满足 `WHERE title = 期望值` 把名字盖掉。
+      // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
+      // 按下过保存,这个方向的偏差是安全的。
+      if (typeof p.title === 'string') noteUserTitleWritten(sid);
+      await withStatusWriteLock(
+        sid,
+        p.status,
+        async () => {
+          await writeSessionPatch(db, sid, setObj, p.status);
+          cleanupSessionRuntimeForTerminalStatus(sid, p.status);
+        },
+        p.workingDir !== undefined,
+      );
+      // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
+      // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
+      if (p.clearedAt !== undefined) {
+        noteSessionClearBoundary(sid, p.clearedAt as string | null);
+        // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
+        // 已过时;置顶卡片优先用 summary 而非 preview,不清就会继续显示旧任务摘要。
+        // 与 clearedAt 同一句 UPDATE 置空，避免崩溃后非 NULL 缓存绕过 clear 边界。
+        if (isOwnerScopeCurrent(ownerScope)) {
+          broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
+        }
+        void recomputePrRefsForSession(sid).catch(() => undefined);
+      }
+      // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
+      // renderer 拿到更新结果时转录已就位(用户可立即续聊),且迁移中持久化的最新
+      // sdkSessionId 能进返回行与广播 patch——否则 renderer 留着旧 resume id,下一次
+      // lazy-create 仍会 resume 到 pre-fork 会话。内部 best-effort 不抛错。
+      // 动态 import 避免 localDb → maker-host 的静态模块环(同下方 sessionTaskSummary)。
+      if (
+        beforeMove &&
+        beforeMove.agentKind === 'cc' &&
+        !beforeMove.remoteHostId &&
+        beforeMove.workingDir &&
+        typeof p.workingDir === 'string' &&
+        p.workingDir &&
+        normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
+      ) {
+        const m = await import('../../maker-host/claude-transcript-relocation.js');
+        const reloc = await m.relocateClaudeTranscriptsForSessionMove(
+          sid,
+          beforeMove.workingDir,
+          p.workingDir,
+        );
+        if (reloc.persistedSdkSessionId) {
+          (p as Record<string, unknown>).sdkSessionId = reloc.persistedSdkSessionId;
+        }
+      }
+      const row = await selectSessionWithCount(db, sid);
+      if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+      // 取消置顶后摘要不再有展示面,立刻清掉,避免列表/再次置顶前继续吃旧句。
+      if (p.pinnedAt !== undefined && row.pinnedAt == null) {
+        await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sid));
+        row.summary = null;
+      }
+      const updated = sessionToCamel(row);
+      const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
+      const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
+      const titleChanged = p.title !== undefined;
+      // 归档/删除这类纯 status 变化也要广播:本机多窗口收敛靠 sessions:patched,
+      // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
+      const statusChanged = p.status !== undefined;
+      if (
+        projectTargetChanged &&
+        row.workspaceKind === 'project' &&
+        row.workingDir &&
+        !row.remoteHostId
+      ) {
+        await upsertRecentWorkdir(row.workingDir, Date.now());
+      }
+      // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
+      // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
+      // 之后、广播之前还有 await(摘要清理 / recent-workdir / 转录迁移),两个窗口
+      // 对同一任务并发操作时,本请求可能在此期间被另一窗口推进到更晚的终态(如
+      // 归档写入后被删除)。用过期值广播会把镜像回滚成旧 UI 状态(已删除任务在
+      // 副窗/控制端复活),且若本广播是最后一条,镜像不会自愈。
+      //
+      // 因此含 status 的 patch 在广播前(所有 await 之后)**重读一次**:重读与广播
+      // 之间无 await,同进程单事件循环下不可能再插入并发写;即便并发删除的广播
+      // 晚于本广播到达,镜像最终也收敛到 deleted。
+      let broadcastStatus = updated.status;
+      if (p.status !== undefined) {
+        const [currentRow] = await db
+          .select({ status: sessions.status })
+          .from(sessions)
+          .where(eq(sessions.id, sid))
+          .limit(1);
+        if (currentRow) broadcastStatus = currentRow.status;
+      }
+      const broadcastPatch =
+        p.pinnedAt === undefined && p.status === undefined
+          ? p
+          : {
+              ...p,
+              ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
+              ...(p.status !== undefined ? { status: broadcastStatus } : {}),
+              ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
+              ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
+                ? { status: broadcastStatus }
+                : {}),
+            };
+      if (
+        projectTargetChanged ||
+        settingsChanged ||
+        titleChanged ||
+        statusChanged ||
+        p.pinnedAt !== undefined
+      ) {
+        if (isOwnerScopeCurrent(ownerScope)) {
+          broadcastSessionPatched(sid, broadcastPatch, ownerScope);
+        }
+      }
+      // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
+      // "置顶后又跑过 turn"的会话)。动态 import 避免 localDb → maker-host 的静态
+      // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
+      if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
+        void import('../../sessionTaskSummary.js').then((m) =>
+          m.maybeGenerateSessionTaskSummary(sid, { force: true }),
         );
       }
-    }
-    // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,update 后对比实际变化。
-    // CLI 转录按 cwd 转码目录存放,workingDir 变了必须跟着搬,否则 resume 报
-    // "No conversation found with session ID"(见 claude-transcript-relocation.ts)。
-    const beforeMove =
-      p.workingDir !== undefined
-        ? (
-            await db
-              .select({
-                workingDir: sessions.workingDir,
-                agentKind: sessions.agentKind,
-                remoteHostId: sessions.remoteHostId,
-              })
-              .from(sessions)
-              .where(eq(sessions.id, sid))
-          )[0]
-        : undefined;
-    const movingLocalNonClaudeSession =
-      beforeMove &&
-      beforeMove.agentKind !== 'cc' &&
-      !beforeMove.remoteHostId &&
-      beforeMove.workingDir &&
-      typeof p.workingDir === 'string' &&
-      p.workingDir &&
-      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir;
-    // Pi/Codex keep a live Maker handle whose cwd is fixed at bootstrap. Close it
-    // before persisting the new directory so the next send lazily recreates the
-    // runtime with the moved session's cwd instead of continuing in the old one.
-    if (movingLocalNonClaudeSession) {
-      if (!opts.closeIdleSessionForMove) {
-        throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
-      }
-      const idle = await opts.closeIdleSessionForMove(sid);
-      if (idle === false) {
-        throwIpcError('PRECONDITION_FAILED', '运行中的任务不能移动');
-      }
-    }
-    // 只有纯设置字段(model/effort 等)才跳过 bump；凡带 activity 字段
-    // (clearedAt / sdkSessionId / status / token 用量等)仍需更新 updatedAt，
-    // 否则本地 /clear 后重启侧栏时间回退旧值。
-    const SETTINGS_ONLY_FIELDS = new Set([
-      'model',
-      'effort',
-      'permissionMode',
-      'fastMode',
-      'planModeEnabled',
-      'providerId',
-      'orcaRole',
-      'extraDirs',
-      'writableDirs',
-      'pinnedAt',
-      'workingDir',
-      'workspaceKind',
-      'title',
-    ]);
-    const isSettingsOnly = Object.keys(p).every((k) => SETTINGS_ONLY_FIELDS.has(k));
-    const setObj = sessionPatchToRow(p as Parameters<typeof sessionPatchToRow>[0], {
-      bumpUpdatedAt: !isSettingsOnly,
-    });
-    if (p.clearedAt !== undefined) {
-      setObj.summary = null;
-      setObj.listPreview = null;
-      setObj.listPreviewRole = null;
-    }
-    // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
-    // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
-    // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
-    // 有真实时间差,在那期间智能标题仍能满足 `WHERE title = 期望值` 把名字盖掉。
-    // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
-    // 按下过保存,这个方向的偏差是安全的。
-    if (typeof p.title === 'string') noteUserTitleWritten(sid);
-    await withStatusWriteLock(
-      sid,
-      p.status,
-      async () => {
-        await writeSessionPatch(db, sid, setObj, p.status);
-        cleanupSessionRuntimeForTerminalStatus(sid, p.status);
-      },
-      p.workingDir !== undefined,
-    );
-    // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
-    // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
-    if (p.clearedAt !== undefined) {
-      noteSessionClearBoundary(sid, p.clearedAt as string | null);
-      // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
-      // 已过时;置顶卡片优先用 summary 而非 preview,不清就会继续显示旧任务摘要。
-      // 与 clearedAt 同一句 UPDATE 置空，避免崩溃后非 NULL 缓存绕过 clear 边界。
-      if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
-      }
-      void recomputePrRefsForSession(sid).catch(() => undefined);
-    }
-    // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
-    // renderer 拿到更新结果时转录已就位(用户可立即续聊),且迁移中持久化的最新
-    // sdkSessionId 能进返回行与广播 patch——否则 renderer 留着旧 resume id,下一次
-    // lazy-create 仍会 resume 到 pre-fork 会话。内部 best-effort 不抛错。
-    // 动态 import 避免 localDb → maker-host 的静态模块环(同下方 sessionTaskSummary)。
-    if (
-      beforeMove &&
-      beforeMove.agentKind === 'cc' &&
-      !beforeMove.remoteHostId &&
-      beforeMove.workingDir &&
-      typeof p.workingDir === 'string' &&
-      p.workingDir &&
-      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
-    ) {
-      const m = await import('../../maker-host/claude-transcript-relocation.js');
-      const reloc = await m.relocateClaudeTranscriptsForSessionMove(
-        sid,
-        beforeMove.workingDir,
-        p.workingDir,
-      );
-      if (reloc.persistedSdkSessionId) {
-        (p as Record<string, unknown>).sdkSessionId = reloc.persistedSdkSessionId;
-      }
-    }
-    const row = await selectSessionWithCount(db, sid);
-    if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    // 取消置顶后摘要不再有展示面,立刻清掉,避免列表/再次置顶前继续吃旧句。
-    if (p.pinnedAt !== undefined && row.pinnedAt == null) {
-      await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sid));
-      row.summary = null;
-    }
-    const updated = sessionToCamel(row);
-    const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
-    const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
-    const titleChanged = p.title !== undefined;
-    // 归档/删除这类纯 status 变化也要广播:本机多窗口收敛靠 sessions:patched,
-    // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
-    const statusChanged = p.status !== undefined;
-    if (
-      projectTargetChanged &&
-      row.workspaceKind === 'project' &&
-      row.workingDir &&
-      !row.remoteHostId
-    ) {
-      await upsertRecentWorkdir(row.workingDir, Date.now());
-    }
-    // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
-    // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
-    // 之后、广播之前还有 await(摘要清理 / recent-workdir / 转录迁移),两个窗口
-    // 对同一任务并发操作时,本请求可能在此期间被另一窗口推进到更晚的终态(如
-    // 归档写入后被删除)。用过期值广播会把镜像回滚成旧 UI 状态(已删除任务在
-    // 副窗/控制端复活),且若本广播是最后一条,镜像不会自愈。
-    //
-    // 因此含 status 的 patch 在广播前(所有 await 之后)**重读一次**:重读与广播
-    // 之间无 await,同进程单事件循环下不可能再插入并发写;即便并发删除的广播
-    // 晚于本广播到达,镜像最终也收敛到 deleted。
-    let broadcastStatus = updated.status;
-    if (p.status !== undefined) {
-      const [currentRow] = await db
-        .select({ status: sessions.status })
-        .from(sessions)
-        .where(eq(sessions.id, sid))
-        .limit(1);
-      if (currentRow) broadcastStatus = currentRow.status;
-    }
-    const broadcastPatch =
-      p.pinnedAt === undefined && p.status === undefined
-        ? p
-        : {
-            ...p,
-            ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
-            ...(p.status !== undefined ? { status: broadcastStatus } : {}),
-            ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
-            ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
-              ? { status: broadcastStatus }
-              : {}),
-          };
-    if (
-      projectTargetChanged ||
-      settingsChanged ||
-      titleChanged ||
-      statusChanged ||
-      p.pinnedAt !== undefined
-    ) {
-      if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, broadcastPatch, ownerScope);
-      }
-    }
-    // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
-    // "置顶后又跑过 turn"的会话)。动态 import 避免 localDb → maker-host 的静态
-    // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
-    if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
-      void import('../../sessionTaskSummary.js').then((m) =>
-        m.maybeGenerateSessionTaskSummary(sid, { force: true }),
-      );
-    }
-    notifyAgentIslandSessionPatch(updated.id, {
-      status: updated.status,
-      title: updated.title,
-      workingDir: updated.workingDir,
-      workspaceKind: updated.workspaceKind,
-    });
-    scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
-    notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
-    cleanupSessionTerminalArtifacts(sid, p.status);
-    compactTerminalSessionToolResults(dbClient, sid, p.status);
-    return updated;
+      notifyAgentIslandSessionPatch(updated.id, {
+        status: updated.status,
+        title: updated.title,
+        workingDir: updated.workingDir,
+        workspaceKind: updated.workspaceKind,
+      });
+      scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
+      notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
+      cleanupSessionTerminalArtifacts(sid, p.status);
+      compactTerminalSessionToolResults(dbClient, sid, p.status);
+      return updated;
     };
     return p.workingDir === undefined ? update() : withSessionRouteLock(sid, update);
   });
@@ -2216,11 +2235,11 @@ export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
     .where(and(eq(sessions.status, 'deleted'), eq(sessions.agentKind, 'pi')));
 
   const diskDeleted = idsFromDisk.length === 0
-    ? []
-    : await db
-      .select({ id: sessions.id })
-      .from(sessions)
-      .where(and(inArray(sessions.id, idsFromDisk), eq(sessions.status, 'deleted')));
+      ? []
+      : await db
+          .select({ id: sessions.id })
+          .from(sessions)
+          .where(and(inArray(sessions.id, idsFromDisk), eq(sessions.status, 'deleted')));
 
   const ids = new Set<string>();
   for (const row of deletedPi) ids.add(row.id);
@@ -2317,6 +2336,44 @@ interface SessionListRow {
   latestMessageRole: string | null;
 }
 
+/** 用量历史专用行查询：全量读取 sessions，但跳过 sidebar 的消息预览子查询。 */
+function selectSessionUsageRows(
+  db: DbClient['drizzle'],
+  where: SQL | undefined,
+): Promise<
+  Array<
+    Pick<
+      typeof sessions.$inferSelect,
+      | 'id'
+      | 'title'
+      | 'model'
+      | 'providerId'
+      | 'totalTokenUsage'
+      | 'contextTokens'
+      | 'contextWindow'
+      | 'userSendAt'
+      | 'updatedAt'
+    >
+  >
+> {
+  return db
+    .select({
+      id: sessions.id,
+      title: sessions.title,
+      model: sessions.model,
+      providerId: sessions.providerId,
+      totalTokenUsage: sessions.totalTokenUsage,
+      contextTokens: sessions.contextTokens,
+      contextWindow: sessions.contextWindow,
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
+    })
+    .from(sessions)
+    .where(where)
+    .orderBy(desc(sessions.updatedAt))
+    .then((rows) => rows);
+}
+
 /**
  * sessions:list 的行查询——**两段式**：CTE 先按排序取够 `cap` 个 id，主查询只对这批行算
  * messageCount 与 preview。
@@ -2409,6 +2466,14 @@ function shouldBypassSessionListSingleFlight(options: unknown): boolean {
     options &&
     typeof options === 'object' &&
     (options as { fresh?: unknown }).fresh === true
+  );
+}
+
+function shouldUseUsageHistoryQuery(options: unknown): boolean {
+  return !!(
+    options &&
+    typeof options === 'object' &&
+    (options as { usageHistory?: unknown }).usageHistory === true
   );
 }
 

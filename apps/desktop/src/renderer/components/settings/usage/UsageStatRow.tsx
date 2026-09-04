@@ -38,24 +38,35 @@ function StatCell({
   return tip ? <Tip text={tip}>{cell}</Tip> : cell;
 }
 
-export function UsageStatRow({ summary }: { summary: UsageSummary }): React.JSX.Element {
+export function UsageStatRow({
+  summary,
+  rangeLabel,
+  todayLabel,
+  hideToday = false,
+}: {
+  summary: UsageSummary;
+  rangeLabel: string;
+  todayLabel?: string;
+  /** Exact-day drilldown already has the same value in the range card. */
+  hideToday?: boolean;
+}): React.JSX.Element {
   const { t } = useTranslation();
 
   return (
     <div className="flex gap-2">
-      <StatCell
-        value={
-          summary.todayTokens > 0 ? formatCompactTokens(summary.todayTokens) : UNKNOWN_VALUE
-        }
-        label={t('usageHistory.stats.todayTokens')}
-      />
+      {!hideToday ? (
+        <StatCell
+          value={summary.todayTokens > 0 ? formatCompactTokens(summary.todayTokens) : UNKNOWN_VALUE}
+          label={todayLabel ?? t('usageHistory.stats.todayTokens')}
+        />
+      ) : null}
       <StatCell
         value={
           summary.last30DaysTokens > 0
             ? formatCompactTokens(summary.last30DaysTokens)
             : UNKNOWN_VALUE
         }
-        label={t('usageHistory.stats.totalTokens')}
+        label={t('usageHistory.stats.totalTokensInRange', { range: rangeLabel })}
       />
       <StatCell
         value={t('usageDashboard.streakValue', {
@@ -66,17 +77,12 @@ export function UsageStatRow({ summary }: { summary: UsageSummary }): React.JSX.
       />
       <StatCell
         value={
-          summary.cacheHitRate === null
-            ? UNKNOWN_VALUE
-            : formatUsagePercent(summary.cacheHitRate)
+          summary.cacheHitRate === null ? UNKNOWN_VALUE : formatUsagePercent(summary.cacheHitRate)
         }
-        label={t('usageHistory.stats.cacheHitRate')}
+        label={t('usageHistory.stats.cacheHitRateInRange', { range: rangeLabel })}
         tip={t('usageHistory.cacheHitTooltip')}
       />
-      <StatCell
-        value={String(summary.modelCount)}
-        label={t('usageHistory.stats.models')}
-      />
+      <StatCell value={String(summary.modelCount)} label={t('usageHistory.stats.models')} />
     </div>
   );
 }

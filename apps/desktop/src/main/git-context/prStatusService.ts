@@ -8,12 +8,16 @@
  * 设计约束:
  *   - 状态是易变远端数据,**不落库**;60s TTL 内存缓存 + in-flight 去重,
  *     防止徽标重渲染打爆 API(PAT 限额 5000 req/h)。
- *   - 未配置 GitHub PAT 时优雅降级:返回 'no-token',renderer 只显示 PR 号
- *     不显示状态点(不要拿匿名额度 60 req/h 去碰运气,很快会 403 连号都查不了)。
+ *   - 拿不到 GitHub token 时优雅降级:按 gh CLI 的失败原因返回
+ *     'gh-missing' / 'gh-not-logged-in',renderer 据此把徽标点击变成引导动作;
+ *     只显示 PR 号不显示状态点(不要拿匿名额度 60 req/h 去碰运气,很快会 403
+ *     连号都查不了)。device-link 远端查询统一归为 'no-token':远端控制器不该
+ *     指导被控机装 gh 或登录。
  *   - 依赖(token 读取 / PR 查询)构造时注入,单测不碰网络与 Electron。
  */
 
 import { createLogger } from '../logger.js';
+import type { GhCliTokenReadResult } from './ghCliTokenSource.js';
 
 const log = createLogger('git-context/pr-status');
 
@@ -61,9 +65,19 @@ export type PrStatusResult =
       owner: string;
       repo: string;
       prNumber: number;
-      /** no-token = 未配 PAT;not-found = PR 不存在/无权限;fetch-failed = 网络等其它错误。 */
-      reason: 'no-token' | 'not-found' | 'fetch-failed';
+      reason: PrStatusFailureReason;
     };
+
+/**
+ * 查询失败原因:
+ *   gh-missing       = 本机没有 gh CLI(UI:点击引导 Agent 安装并登录)
+ *   gh-not-logged-in = gh 在但未登录 github.com(UI:点击引导 Agent 登录)
+ *   no-token         = 拿不到 token 但不告诉原因——device-link 远端查询、或 gh 子进程超时
+ *   not-found        = PR 不存在 / 无权限(404)
+ *   fetch-failed     = 网络等其它错误
+ */
+export type PrStatusFailureReason =
+  'gh-missing' | 'gh-not-logged-in' | 'no-token' | 'not-found' | 'fetch-failed';
 
 /** 单条 PR 的远端原始字段(github-client GithubPullRequest 的子集 + thread 统计)。 */
 export interface PrRemoteState {
@@ -80,8 +94,8 @@ export interface PrRemoteState {
 }
 
 export interface PrStatusServiceDeps {
-  /** 读当前 GitHub PAT;null = 未配置。 */
-  readToken: () => Promise<string | null>;
+  /** 读本机 gh 登录 token,拿不到时带原因(见 ghCliTokenSource.readTokenDetailed)。 */
+  readToken: () => Promise<GhCliTokenReadResult>;
   /** 查单条 PR。404 等错误直接抛(带 status 的错误对象)。 */
   fetchPr: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>;
   /** 缓存 TTL,默认 60s。测试可注小值。 */
@@ -120,10 +134,23 @@ export class PrStatusService {
     this.now = deps.now ?? Date.now;
   }
 
-  /** 批量查询(上限 MAX_BATCH,超出部分忽略)。永不抛错,失败映射为 reason。 */
-  async getStatuses(queries: PrStatusQuery[]): Promise<PrStatusResult[]> {
+  /**
+   * 批量查询(上限 MAX_BATCH,超出部分忽略)。永不抛错,失败映射为 reason。
+   * opts.remote = device-link 远端发起:gh 缺失 / 未登录一律归为 no-token,
+   * 不把被控机的本地环境细节交给远端 UI 去引导。
+   */
+  async getStatuses(
+    queries: PrStatusQuery[],
+    opts: { remote?: boolean } = {},
+  ): Promise<PrStatusResult[]> {
     const bounded = queries.slice(0, MAX_BATCH);
-    return Promise.all(bounded.map((q) => this.getOne(q)));
+    const results = await Promise.all(bounded.map((q) => this.getOne(q)));
+    if (!opts.remote) return results;
+    return results.map((r) =>
+      !r.ok && (r.reason === 'gh-missing' || r.reason === 'gh-not-logged-in')
+        ? { ...r, reason: 'no-token' }
+        : r,
+    );
   }
 
   private async getOne(q: PrStatusQuery): Promise<PrStatusResult> {
@@ -136,8 +163,9 @@ export class PrStatusService {
 
     const p = this.fetchOne(q)
       .then((result) => {
-        // 只缓存确定性结果(ok / not-found)。两类失败都不缓存:
-        //  - no-token:设置页配完 PAT 后下一次查询应立即生效;
+        // 只缓存确定性结果(ok / not-found)。其余失败都不缓存:
+        //  - gh-missing / gh-not-logged-in / no-token:用户装完 gh 或登录后,
+        //    下一次查询应立即生效(token source 自带 30s 负缓存兜底);
         //  - fetch-failed:瞬时网络抖动 / 临时 5xx 不该把失败钉死满 TTL,
         //    下次渲染触发查询时立即重试(review 反馈)。
         if (result.ok || result.reason === 'not-found') {
@@ -154,13 +182,25 @@ export class PrStatusService {
 
   private async fetchOne(q: PrStatusQuery): Promise<PrStatusResult> {
     const base = { owner: q.owner, repo: q.repo, prNumber: q.prNumber };
-    let token: string | null = null;
+    let read: GhCliTokenReadResult;
     try {
-      token = await this.deps.readToken();
+      read = await this.deps.readToken();
     } catch (err) {
-      log.warn('read github pat failed', { err: String(err) });
+      log.warn('read github token failed', { err: String(err) });
+      return { ok: false, ...base, reason: 'no-token' };
     }
-    if (!token) return { ok: false, ...base, reason: 'no-token' };
+    if (!read.ok) {
+      // 超时 / 执行故障用户做不了什么,不引导;缺失与未登录交给 UI 引导。
+      return {
+        ok: false,
+        ...base,
+        reason:
+          read.reason === 'gh-timeout' || read.reason === 'gh-exec-failed'
+            ? 'no-token'
+            : read.reason,
+      };
+    }
+    const token = read.token;
 
     try {
       const remote = await this.deps.fetchPr(token, q);

@@ -101,6 +101,7 @@ import {
   runManualUpdateCheck,
   type ManualUpdateCheckOutcome,
 } from '@/update/manualUpdateCheck';
+import { runSelfHostedOtaRequest } from '@/update/otaRequestCoordinator';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useUpdateChannelGate } from '@/update/useUpdateChannelGate';
 import { useBetaChannel } from '@/update/useBetaChannel';
@@ -344,10 +345,16 @@ export default function SettingsScreen() {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
-        // OTA 检查会携带 eas-client-id,须经隐私同意闸门(企业 SSO 豁免协议门,可能未
-        // 同意;且检查进行中登出会撤销同意)。整包 /latest 为匿名请求,不在此列。动态
-        // 判定而非调用瞬间快照,manifest 请求前与资源下载前各问一次。
-        isConsented: hasPrivacyConsent,
+        // 自建线由事务协调器覆盖共享 UUID，因此不再借用 analytics consent；EAS /
+        // TestFlight 仍保留原同意闸门，TapDB 的 consent 状态也完全不在这里修改。
+        ...(IS_OTA_SELFHOST
+          ? {
+              withOtaClient: (operation) => runSelfHostedOtaRequest(
+                updateChannel.channel,
+                operation,
+              ),
+            }
+          : { isConsented: hasPrivacyConsent }),
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
@@ -379,6 +386,7 @@ export default function SettingsScreen() {
     checkBundleUpdate,
     currentlyRunning.isEmergencyLaunch,
     t,
+    updateChannel.channel,
     updateCheckEnabled,
     updatesEnabled,
   ]);

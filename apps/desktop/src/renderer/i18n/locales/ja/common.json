@@ -565,12 +565,14 @@
         "hint": "初回に確認します。後からここで変更できます。",
         "aria": "メインウィンドウを閉じるときの動作を選択",
         "tray": "トレイに最小化",
+        "minimize": "ウィンドウを最小化",
         "quit": "Cindy を終了"
       },
       "closePrompt": {
         "title": "Cindy を閉じる",
         "message": "メインウィンドウを閉じるときの動作を選択してください。",
-        "detail": "システムトレイに最小化すると、タスクは実行を続けます。終了するにはトレイアイコンを右クリックします。後から設定で変更できます。"
+        "detail": "システムトレイに最小化すると、タスクは実行を続けます。終了するにはトレイアイコンを右クリックします。後から設定で変更できます。",
+        "linuxDetail": "ウィンドウを最小化しても、タスクは実行を続けます。タスクバーまたはウィンドウ一覧から Cindy を復元できます。後から設定で変更することもできます。"
       },
       "trayMenu": {
         "show": "Cindy を開く",
@@ -752,7 +754,7 @@
         "description": "Linux は現在 Ubuntu 22.04 / 24.04 向けの .deb として提供されます。新しいビルドがある場合、アプリがダウンロードし、インストール時にシステムパスワードを求めます。",
         "item1": "初回は sudo apt install ./cindy-<バージョン>-<アーキテクチャ>.deb でインストールします（x64 は amd64、arm64 は arm64）。",
         "item2": "アプリ内更新は .deb をダウンロードします。更新を選ぶと、システム権限の確認後に上書きインストールします。",
-        "item3": "インストールにパスワードが必要なため、Linux では Beta チャネルとアイドル時の自動インストールは提供しません。"
+        "item3": "Linux x64 では Beta チャネルを利用できますが、arm64 は現時点で利用できません。インストールにはシステム認証が必要なため、どちらもアイドル時の自動インストールには対応していません。"
       },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "overview に載っていない内容でも、やりたいことを聞けば次に開く場所や進め方を案内します。",
@@ -5791,20 +5793,32 @@
   "usageHistory": {
     "description": "このデバイスの Cindy 内で発生したトークン使用量です。記録は機能の提供開始時から蓄積され、それ以前の履歴は補完されません。",
     "empty": "まだ使用記録がありません。会話を実行すると蓄積が始まります。",
+    "loadFailed": "使用履歴を読み込めませんでした。設定を開き直して、もう一度お試しください。",
+    "range": {
+      "label": "期間",
+      "ariaLabel": "使用量の期間を絞り込む",
+      "all": "全期間",
+      "30d": "直近 30 日",
+      "7d": "直近 7 日",
+      "today": "今日"
+    },
     "cacheHitTooltip": "キャッシュ読取 ÷（入力 + キャッシュ読取 + キャッシュ書込）。メッセージカードと同じ基準です。",
     "summary": {
       "title": "概要"
     },
     "stats": {
       "todayTokens": "今日のトークン",
+      "todayTokensInRange": "{{range}}のトークン",
       "totalTokens": "直近 30 日のトークン",
+      "totalTokensInRange": "{{range}}のトークン",
       "streak": "連続稼働日数",
       "cacheHitRate": "キャッシュヒット率(30 日)",
+      "cacheHitRateInRange": "キャッシュヒット率（{{range}}）",
       "models": "使用モデル数"
     },
     "heatmap": {
       "title": "アクティビティヒートマップ",
-      "subtitle": "直近 20 週",
+      "subtitle": "直近 {{count}} 週",
       "emptyCell": "この日は使用記録なし"
     },
     "daily": {
@@ -5817,6 +5831,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "直近 30 日のトークン",
+        "totalInRange": "{{range}}のトークン",
         "share": "割合",
         "today": "今日",
         "hitRate": "キャッシュヒット率",
@@ -5829,6 +5844,7 @@
       "col": {
         "model": "モデル",
         "total": "合計トークン",
+        "totalInRange": "{{range}}のトークン",
         "share": "割合",
         "input": "入力",
         "output": "出力",
@@ -5839,7 +5855,7 @@
     },
     "tasks": {
       "title": "トークン消費の多いセッション",
-      "subtitle": "直近 30 日に稼働したセッションを累計トークン順に表示",
+      "subtitle": "{{range}}に稼働したセッションを累計トークン順に表示",
       "col": {
         "task": "セッション",
         "model": "モデル",
@@ -5849,7 +5865,7 @@
         "lastActive": "最終アクティブ"
       },
       "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
-      "tokensTooltip": "セッションの累計値であり、直近 30 日の増分ではありません。"
+      "tokensTooltip": "セッションの累計値です。{{range}}はアクティブなセッションの絞り込みにのみ使われ、期間内の増分ではありません。"
     }
   },
   "usageDashboard": {
@@ -6139,6 +6155,10 @@
       "rotateDevice": "デバイスを回転",
       "lockScreen": "画面をロック",
       "unlockScreen": "画面をロック解除",
+      "copyScreenshot": "スクリーンショットをコピー",
+      "screenshotCopied": "シミュレータのスクリーンショットをコピーしました",
+      "screenshotCopyFailed": "シミュレータのスクリーンショットをコピーできませんでした。もう一度お試しください。",
+      "moreControls": "その他のシミュレータ操作",
       "controlsUnavailable": "シミュレータの操作は一時的に使用できません",
       "enterTextBeforeSending": "送信するテキストを入力してください",
       "agentBusyTitle": "Agent がこのデバイスを使用中",
@@ -6174,7 +6194,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "Native アクセラレーションは現在利用できません。再試行中も WDA の画面と操作は利用できます。",
+        "available": "Native アクセラレーションは現在利用できません。フレームレートが低下し、操作の反応が遅くなる場合があります。",
         "action": "Native を復旧",
         "recovering": "Native アクセラレーションを復旧しています。現在の WDA の画面と操作は引き続き利用できます。",
         "recoveringAction": "Native を復旧中…",
@@ -6201,7 +6221,8 @@
         "stop": "デバイスを停止中…",
         "detach": "デバイスを切断中…",
         "grant": "Agent の操作権限を更新中…",
-        "control": "入力制御を更新中…"
+        "control": "入力制御を更新中…",
+        "screenshot": "シミュレータのスクリーンショットをコピー中…"
       },
       "setup": {
         "localMac": "Mac のローカル Cindy セッションでこのプロジェクトを開いてください。",
@@ -6825,7 +6846,6 @@
       "moreLabel": "その他、現在のユーザー：{{name}}",
       "menuSettings": "設定",
       "menuAddAccount": "別のアカウントでログイン",
-      "menuLogout": "ログアウト",
       "canaryBadge": "Canary ユーザー",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -6927,6 +6947,58 @@
     }
   },
   "newChat": {
+    "homeSuggestions": {
+      "shuffle": "別の提案",
+      "dismiss": "今後表示しない",
+      "downloadsDesktop": {
+        "label": "ダウンロードとデスクトップの溜まりを一覧にする",
+        "prompt": "ダウンロードフォルダとデスクトップを見て、何が溜まっているか整理して。容量が大きいもの、明らかな重複、半年以上触っていないもの、安全にアーカイブできそうなものをリストにして。各項目は場所・サイズ・理由を明記。このラウンドは閲覧のみ。動かす・削除するのは確認後。"
+      },
+      "whatCindyCanDo": {
+        "label": "このパソコンを見て、何を手伝えるか教えて",
+        "prompt": "このパソコンに入っているもの、普段扱っている種類から、私が何をしている人か見当をつけて。そのうえで、あなたの能力で具体的に手伝えることを数個、一文ずつ：いつ使うか、何が省けるか。機能一覧の読み上げはせず、このマシンに実際にあるものに即して。"
+      },
+      "recentDocs": {
+        "label": "最近の文書を見てリストにまとめて",
+        "prompt": "最近開いた・編集した文書をテーマごとにまとめ、いくつの仕事の山があるか、それぞれどこまで進んでいるか、放置されていないかを教えて。各ファイルの場所付きのリストを。読み取り専用。ファイルは動かさない。"
+      },
+      "listCodeProjects": {
+        "label": "このパソコンのコードプロジェクトを一覧して",
+        "prompt": "よく使うディレクトリからコードプロジェクトを見つけ、それぞれ何をするか・何で書いているか・最後の変更はいつか一文で。本線に見えるものと放棄済みに見えるものを分けて。一つもなければ、見つからなかったと言って。このラウンドは読み取り専用。ファイルは変更しない。"
+      },
+      "storageUsage": {
+        "label": "ディスクを何が圧迫しているか調べて",
+        "prompt": "このパソコンのストレージを大きい順に見て、キャッシュ、重複、忘れている古いものを区別して。占用ランキングと、どれを消せば一番空くかの一文結論を。集計のみ。削除しない。"
+      },
+      "unusedApps": {
+        "label": "入っているアプリで、長いこと使っていないものを",
+        "prompt": "インストール済みアプリを容量と最終使用で並べ、長く開いていないのに場所を取っているものを指摘。リストだけ。まだアンインストールしない。"
+      },
+      "uncommittedChanges": {
+        "label": "最近触ったプロジェクトの未コミットを見て",
+        "prompt": "最近触ったコードプロジェクトの未コミット変更を見て、何をしているか、明らかな問題や漏れがないか教えて。読み取り専用。ファイルは動かさず、コミットもしない。"
+      },
+      "devEnvironment": {
+        "label": "開発環境を一通り点検して",
+        "prompt": "このマシンの開発環境を点検：言語ランタイムとパッケージマネージャ、各バージョン、衝突や明らかな古さ、git 設定の問題。現状リストと、先に直すべき箇所の一文。点検のみ。インストールや設定変更はしない。"
+      },
+      "whySlow": {
+        "label": "パソコンが重い理由を調べて",
+        "prompt": "このパソコンが重い理由を調べて：負荷、メモリ、ディスク、起動時間、CPU/メモリを食っているプロセス。結論を短く根拠つきで。読み取り専用。何も変えず、プロセスを殺さず、何を開いているかも聞かない。"
+      },
+      "diagnoseNetwork": {
+        "label": "ネット速度を診断して",
+        "prompt": "このパソコンのネットワークを診断：ping、DNS、有線か Wi-Fi か。結論は一、二文。長時間のスピードテストはしない。回線業者も聞かない。"
+      },
+      "subscriptionSpend": {
+        "label": "サブスクの支出を洗い出して",
+        "prompt": "ダウンロード、領収書、ローカルの請求からサブスク課金を洗い出し、サービス名と金額を列挙。見つからなければ、見つからないと言って。サブスクは変更せず、カードも聞かない、メールにもログインしない。"
+      },
+      "expenseTracker": {
+        "label": "家計簿の小さなツールを作って",
+        "prompt": "この会話のワークスペースに、すぐ開けるローカルの家計簿を作って：日付、金額、分類、メモ。バックエンドなし。追加機能も聞かない。"
+      }
+    },
     "noProvider": {
       "title": "このモデルに利用可能なソースがありません",
       "description": "現在のモデルには接続済みのソースがありません。設定でソースを接続してから送信してください。",
@@ -7512,6 +7584,15 @@
     }
   },
   "onboarding": {
+    "homeZeroModel": {
+      "title": "Cindy にログインして続ける",
+      "desc": "モデルがまだありません。Cindy にログインすると、数十種類の最先端モデルを使えます。",
+      "cta": "Cindy にログイン",
+      "cloudTitle": "Cindy で続ける",
+      "cloudDesc": "モデルがまだありません。公式サービスを有効にすると、数十種類の最先端モデルを使えます。",
+      "cloudCta": "はじめる",
+      "ownApi": "自分のモデル API がある"
+    },
     "connectProvider": {
       "title": "モデルプロバイダーに接続して始めましょう",
       "desc": "利用可能なモデルがまだありません。プロバイダーを接続すると会話を始められます。",
@@ -9018,9 +9099,24 @@
           "merged": "マージ済み",
           "closed": "クローズ済み"
         },
-        "needsToken": "ローカルの gh CLI が未ログインです。Agent に gh auth login を一度実行させると PR の状態が表示されます",
+        "ghNotLoggedIn": "このマシンの gh は GitHub にログインしていないため、PR の状態を表示できません",
+        "ghMissing": "GitHub CLI（gh）が見つからないため、PR の状態を表示できません",
+        "notFound": "PR が存在しないか、現在のアカウントでは閲覧できません",
         "statusUnknown": "状態の取得に失敗しました",
         "openAria": "PR #{{number}} をブラウザで開く",
+        "clickToOpen": "クリックしてブラウザで PR を開く",
+        "guidance": {
+          "login": {
+            "hint": "クリックすると Agent がログインを手伝います",
+            "aria": "PR #{{number}} の状態を取得できません：Agent に GitHub へのログインを任せる",
+            "prompt": "GitHub CLI にログインしてください：`gh auth login -h github.com -w` を実行し、表示されたワンタイムのデバイスコードと URL を教えてください。ブラウザで認可したら、`gh auth status` でログイン成功を確認してください。"
+          },
+          "install": {
+            "hint": "クリックすると Agent がインストールとログインを手伝います",
+            "aria": "PR #{{number}} の状態を取得できません：Agent に GitHub CLI のインストールとログインを任せる",
+            "prompt": "GitHub CLI（gh）をインストールしてください（macOS は `brew install gh`、Windows は `winget install GitHub.cli`）。その後 `gh auth login -h github.com -w` を実行してログインし、表示されたワンタイムのデバイスコードと URL を教えてください。ブラウザで認可したら、`gh auth status` でログイン成功を確認してください。"
+          }
+        },
         "unresolved": "未解決のレビューコメント: {{count}} 件"
       }
     },
@@ -10118,6 +10214,11 @@
       "clearSearch": "スキル検索をクリア",
       "noSearchResults": "一致するスキルが見つかりません",
       "catalogFiltersAria": "SkillHub カテゴリ",
+      "categoryFiltersAria": "カテゴリでスキルを絞り込む",
+      "scrollCategoriesLeft": "左のカテゴリをさらに表示",
+      "scrollCategoriesRight": "右のカテゴリをさらに表示",
+      "categoryScrollAtStart": "最初のカテゴリです",
+      "categoryScrollAtEnd": "最後のカテゴリです",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",
@@ -10417,14 +10518,12 @@
       "visibilityPublicDesc": "すべてのユーザーに公開 · デフォルト",
       "versionLabel": "バージョン",
       "versionFormatHint": "形式：x.y.z（例：1.0.1）",
-      "categoryLabel": "カテゴリ",
-      "categoryAuto": "タグなし",
-      "categoryPlaceholder": "カテゴリを選択",
-      "categoryLoading": "カテゴリを読み込み中…",
-      "categoryLoadFailed": "カテゴリの読み込みに失敗しました。再試行してください",
-      "categoryEmpty": "利用可能なカテゴリがありません",
-      "categoryRequired": "公開前にカテゴリを選択してください",
-      "categoryInvalid": "このカテゴリは利用できません。選び直してください",
+      "categoryLabel": "タグ",
+      "categoryPlaceholder": "タグを選択（任意）",
+      "categoryLoading": "タグを読み込み中…",
+      "categoryLoadFailed": "タグの読み込みに失敗しました。再試行してください",
+      "categoryEmpty": "利用可能なプラットフォームタグがありません",
+      "categoryInvalid": "利用できないタグが含まれています。選び直してください",
       "retryLoadCategories": "再試行",
       "extraDeptGroup": "部門",
       "extraTeamGroup": "チーム",
@@ -10785,7 +10884,7 @@
     },
     "confirm": {
       "logoutTitle": "ログアウト",
-      "logoutDescription": "このデバイス上のすべてのアカウントからログアウトしますか？",
+      "logoutDescription": "現在のアカウントからログアウトしますか？",
       "logoutConfirm": "ログアウト",
       "cancel": "キャンセル",
       "sessionExpiredTitle": "ログインの有効期限が切れました",
@@ -11236,6 +11335,32 @@
         "action": "注文 ID {{id}} をコピー",
         "success": "注文 ID をコピーしました",
         "failed": "注文 ID をコピーできませんでした。もう一度お試しください。"
+      },
+      "invoice": {
+        "action": "請求書を申請",
+        "title": "請求書を申請",
+        "description": "請求書の発行を申請するには、以下の情報を {{email}} までメールでお送りください。",
+        "requiredInfo": "メールには以下の情報を記載してください：",
+        "emailSubject": "注文 {{orderId}} の請求書発行申請",
+        "emailBody": "こんにちは。\n\n以下の注文について請求書の発行を申請します。\n\n────────────────────\n注文 ID：{{orderId}}\nアプリケーション：{{application}}\n支払い方法：{{paymentMethod}}\n請求金額：{{amount}}\n請求書宛名：\n担当者名：\n電話番号：\nメールアドレス：\n────────────────────\n\nよろしくお願いいたします。",
+        "sendAction": "請求書の申請を送信",
+        "emailCopied": "サポートメールアドレスをコピーしました",
+        "emailCopyFailed": "サポートメールアドレスをコピーできませんでした。もう一度お試しください。",
+        "sendFailed": "メールアプリを開けませんでした。{{email}} まで手動でメールをお送りください。",
+        "gmailFallbackTitle": "Gmailを開きますか？",
+        "gmailFallbackDescription": "請求書の申請には注文情報が含まれます。Gmailを開くと、この情報がGoogleに共有されます。続行しますか？",
+        "gmailFallbackConfirm": "Gmailを開く",
+        "notAvailable": "情報なし",
+        "fields": {
+          "orderId": "注文 ID",
+          "application": "アプリケーション",
+          "paymentMethod": "支払い方法",
+          "amount": "請求金額",
+          "invoiceTitle": "請求書宛名",
+          "contact": "担当者名",
+          "phone": "電話番号",
+          "email": "メールアドレス"
+        }
       },
       "states": {
         "completed": "完了",

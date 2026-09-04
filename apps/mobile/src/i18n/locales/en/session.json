@@ -249,8 +249,9 @@
     "forkCancel": "Cancel"
   },
   "shareImage": {
-    "title": "Share conversation",
-    "selectedCount": "{{count}} selected",
+    "title": "Share Conversation",
+    "subtitle_one": "{{count}} message selected",
+    "subtitle_other": "{{count}} messages selected",
     "selectAll": "Select All",
     "clearAll": "Deselect All",
     "cancel": "Cancel sharing",

@@ -37,7 +37,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
-import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
+import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
 import { useApiKey } from '@/hooks/useApiKey';
 import { extractIpcError } from '@/utils/ipcError';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
@@ -587,11 +587,6 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     ? (state.credentialScope ?? 'unknown')
     : (reconnectCredentialScope ?? 'unknown');
   const oauthWritesBlocked = state.oauthWritesBlocked === true;
-  const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
-    onAuthenticated: () => onChanged(),
-    confirmBeforeLogin: false,
-  });
-
   const handleLogout = useCallback(async () => {
     const confirmed = await confirm({
       title: t('settings.connections.codex.logoutConfirm.title'),
@@ -629,18 +624,21 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       await refresh();
       return;
     }
-    if (reconnectRequired) promptCodexSessionExpired(state.reason);
-  }, [loggingIn, promptCodexSessionExpired, reconnectRequired, recoveryCheck, refresh, state]);
+    if (reconnectRequired && credentialScope === 'system-shared') {
+      try {
+        const opened = await window.electronAPI.openChatGPTApp();
+        if (!opened.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      } catch {
+        toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      }
+      return;
+    }
+    if (reconnectRequired) await handleLogin();
+  }, [credentialScope, handleLogin, loggingIn, reconnectRequired, recoveryCheck, refresh, t]);
 
   const recoveryDetail = reconnectRequired ? (
     <p className="text-12 leading-relaxed text-[var(--settings-integration-subtitle)]">
-      {t(
-        credentialScope === 'system-shared'
-          ? 'chatgptAuthRecovery.systemSharedInvalidated'
-          : credentialScope === 'instance-isolated'
-            ? 'chatgptAuthRecovery.instanceIsolatedInvalidated'
-            : 'chatgptAuthRecovery.unknownInvalidated',
-      )}
+      {t(codexRecoveryDescriptionKey(credentialScope))}
     </p>
   ) : null;
 
@@ -656,15 +654,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     <div className="flex shrink-0 items-center gap-2.5">
       <ReconnectRequiredPill />
       <PillButton
-        label={t(
-          recoveryCheck === 'checking' || loggingIn
-            ? 'chatgptAuthRecovery.checking'
-            : recoveryCheck === 'failed'
-              ? 'chatgptAuthRecovery.recheck'
-              : credentialScope === 'system-shared'
-                ? 'chatgptAuthRecovery.recheck'
-                : 'chatgptAuthRecovery.relogin',
-        )}
+        label={t(codexRecoveryActionKey(credentialScope, loggingIn ? 'checking' : recoveryCheck))}
         onClick={() => void handleRecovery()}
         disabled={
           recoveryCheck === 'checking' ||

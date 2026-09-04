@@ -102,8 +102,13 @@ import {
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
+  isDataOwnerIdCurrent,
 } from '@/contexts/dataOwnerGeneration';
-import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
+import {
+  insertPromptIntoEditor,
+  subscribePromptInsert,
+  subscribeSessionLinkInsert,
+} from '@/lib/composerActionsBus';
 import {
   ModelSelector,
   resolveRemoteModelListStatus,
@@ -2672,7 +2677,11 @@ export function ChatInput({
       // 跳过这次写入(旧会话的最终内容已由 saveCurrentEditorDraft 在切换前存妥)。
       draftSaveSchedulerRef.current?.schedule(() => {
         if (storageKeyForDraftRef.current !== sk) return;
-        if (!isDataOwnerGenerationCurrent(dataOwnerAtSchedule)) return;
+        // Owner id only: a same-owner generation bump (Ghost projection repair
+        // every access-token refresh) keeps this editor and its draft namespace
+        // valid, and nothing remounts to re-capture the generation. Gating on
+        // the exact generation silently dropped every keystroke save afterwards.
+        if (!isDataOwnerIdCurrent(dataOwnerAtSchedule)) return;
         const existing = getComposerDraft(sk);
         saveComposerDraft(
           sk,
@@ -2824,6 +2833,19 @@ export function ChatInput({
       appendMentionChip(editor, pastedSessionChipAttrs({ href, label: null }), { at });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       resolveSessionChipTitles(editor);
+    });
+  }, [editor, sessionId]);
+
+  // 徽标类引导动作(如 PR 徽标在 gh 未登录时点击):把一句现成提示词填进
+  // 输入框并聚焦,只填不发。发送中 / 语音占用时与键盘输入同锁,静默忽略。
+  useEffect(() => {
+    if (!editor || !sessionId) return;
+    return subscribePromptInsert(sessionId, ({ targetSessionId, text }) => {
+      if (targetSessionId !== sessionId || editor.isDestroyed) return false;
+      if (composerMutationLockedRef.current) return false;
+      insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text });
+      lastComposerSelectionFromRef.current = editor.state.selection.from;
+      return true;
     });
   }, [editor, sessionId]);
 
@@ -2996,7 +3018,9 @@ export function ChatInput({
     if (!editor) return;
     const dataOwnerAtEffect = editorDataOwnerRef.current;
     return () => {
-      if (!isDataOwnerGenerationCurrent(dataOwnerAtEffect)) {
+      // Owner id only (see the keystroke save above): only a real owner change
+      // must discard the editor's snapshot instead of persisting it.
+      if (!isDataOwnerIdCurrent(dataOwnerAtEffect)) {
         draftSaveSchedulerRef.current?.cancel();
         return;
       }
@@ -3770,7 +3794,11 @@ export function ChatInput({
     if (!editor || !storageKey) return;
     const dataOwnerAtSubscription = editorDataOwnerRef.current;
     return subscribeComposerDraft(storageKey, () => {
-      if (!isDataOwnerGenerationCurrent(dataOwnerAtSubscription)) return;
+      // Owner id only: this subscription lives as long as the editor, and the
+      // draft store is namespaced by owner id, not generation. Gating on the
+      // exact generation made "add selection to chat" / rewind pre-fill silently
+      // stop reaching the editor after the first same-owner token refresh.
+      if (!isDataOwnerIdCurrent(dataOwnerAtSubscription)) return;
       const draft = getComposerDraft(storageKey);
       if (!draft) return;
       const nextBrowserComments = [...(draft.browserComments ?? [])];

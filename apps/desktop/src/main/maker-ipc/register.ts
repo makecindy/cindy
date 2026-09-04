@@ -4927,7 +4927,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           if (!isSuccessfulDone) {
             void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
           } else if (!isPairedFailedTurnDone) {
-            void markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId);
+            const nativeForkAnchor = eventAgentMeta?.nativeForkAnchor;
+            void markAssistantTurnCompleted(
+              session.id,
+              turnBoundaryAssistantPersistId,
+              nativeForkAnchor ? { nativeForkAnchor } : undefined,
+            );
           }
         }
         // error 行在 flushOrphanToolResults 之后入队,保证 orphan tool_result 排在
@@ -9320,6 +9325,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           id: sessions.id,
           agentKind: sessions.agentKind,
           model: sessions.model,
+          providerId: sessions.providerId,
           status: sessions.status,
           remoteHostId: sessions.remoteHostId,
           orcaRole: sessions.orcaRole,

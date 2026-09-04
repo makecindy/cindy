@@ -462,6 +462,11 @@ import {
   shouldKeepOlderMessagesAffordance,
 } from '@/session/messagePaging';
 import {
+  fetchMobileToolInputDetail,
+  type MobileToolInputDetail,
+  type MobileToolInputProjection,
+} from '@/session/messageToolPayloadProjection';
+import {
   HISTORY_BACKFILL_MAX_GAPS_PER_VISIT,
   HISTORY_GAP_MAX_CONSIDERED_PER_VISIT,
   HISTORY_GAP_PROBE_LIMIT,
@@ -5002,6 +5007,16 @@ export default function SessionScreen() {
       setLoadingEarlier(false);
     }
   }, [abandonInFlightBackfill, deviceId, hasOlderMessages, isScheduleDetail, loadingEarlier, maker, oldestLoadedMessageCursor, sessionId]);
+
+  const loadToolInput = useCallback(async (
+    ref: MobileToolInputProjection,
+  ): Promise<MobileToolInputDetail> => {
+    if (!deviceId) throw new Error('tool input device is unavailable');
+    return fetchMobileToolInputDetail(
+      ref,
+      (messageId, options) => maker.aroundMessages(sessionId, messageId, options),
+    );
+  }, [deviceId, maker, sessionId]);
 
   /**
    * 历史窗口空洞的自动补齐(见 `historyWindowGap.ts` 的文件头)。
@@ -9544,6 +9559,7 @@ export default function SessionScreen() {
                     onDeleteMessage={collaborationReadOnlyReason ? undefined : deleteMessage}
                     onForkMessage={collaborationReadOnlyReason ? undefined : forkAtMessage}
                     onLoadEarlier={loadEarlierMessages}
+                    onLoadToolInput={loadToolInput}
                     onOpenForkOrigin={forkOrigin ? openForkOrigin : undefined}
                     onBlockingOverlayChange={handleMessageBlockingOverlayChange}
                     onOpenSessionLink={openSessionLink}

@@ -1625,7 +1625,11 @@ describe('db worker tx handlers', () => {
           'src',
           'assistant',
           'copy',
-          JSON.stringify({ uuid: 'old', parentUuid: 'parent', transcriptParentUuid: 'old-parent' }),
+          JSON.stringify({
+            uuid: 'old',
+            parentUuid: 'parent',
+            transcriptParentUuid: 'old-parent',
+          }),
           'cc',
           100,
           'm2',
@@ -1684,6 +1688,56 @@ describe('db worker tx handlers', () => {
         uuid: 'new',
         parentUuid: 'new-parent-tool',
         transcriptParentUuid: 'new-parent',
+      });
+    });
+  });
+
+  it('fork.session rebinds completed Codex turn anchors to the child thread', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          'm1',
+          'c1',
+          'src',
+          'assistant',
+          'copy',
+          JSON.stringify({
+            turnCompleted: true,
+            nativeForkAnchor: {
+              agentKind: 'codex',
+              sdkSessionId: 'source-thread',
+              kind: 'turn',
+              id: 'turn-1',
+            },
+          }),
+          'codex',
+          100,
+        ],
+      );
+
+      await client.tx('fork.session', {
+        sourceSessionId: 'src',
+        targetCreatedAt: 200,
+        newSession: sessionRow('forked'),
+        uuidMap: [],
+        nativeForkAnchorSessionMap: [['source-thread', 'child-thread']],
+        newMessageIds: [{ id: 'copy-id-1', clientId: 'copy-client-1' }],
+      });
+
+      const copied = await client.queryOne<{ agent_meta: string }>(
+        'SELECT agent_meta FROM messages WHERE session_id = ?',
+        ['forked'],
+      );
+      expect(JSON.parse(copied?.agent_meta ?? '{}')).toEqual({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'child-thread',
+          kind: 'turn',
+          id: 'turn-1',
+        },
       });
     });
   });

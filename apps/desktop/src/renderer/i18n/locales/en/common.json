@@ -565,12 +565,14 @@
         "hint": "You will be asked the first time. You can change the choice here later.",
         "aria": "Choose what happens when the main window closes",
         "tray": "Minimize to tray",
+        "minimize": "Minimize window",
         "quit": "Quit Cindy"
       },
       "closePrompt": {
         "title": "Close Cindy",
         "message": "What should happen when you close the main window?",
-        "detail": "Tasks keep running when Cindy is minimized to the system tray; right-click the tray icon to quit. You can change this later in Settings."
+        "detail": "Tasks keep running when Cindy is minimized to the system tray; right-click the tray icon to quit. You can change this later in Settings.",
+        "linuxDetail": "Tasks keep running while the window is minimized. Restore Cindy from the taskbar or window overview, or change this choice later in Settings."
       },
       "trayMenu": {
         "show": "Open Cindy",
@@ -752,7 +754,7 @@
         "description": "Linux currently ships as a .deb for Ubuntu 22.04 / 24.04. When a newer build is available, the app downloads it and asks for your system password to install.",
         "item1": "First install with sudo apt install ./cindy-<version>-<arch>.deb (amd64 on x64, arm64 on arm64).",
         "item2": "In-app updates download the .deb. After you choose Update, a system prompt installs it over the current package.",
-        "item3": "Linux does not offer the beta channel or idle auto-install, because installing requires your password."
+        "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Neither architecture supports idle auto-install because installation requires system authorization."
       },
       "qnaTitle": "Ask directly",
       "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
@@ -5793,20 +5795,32 @@
   "usageHistory": {
     "description": "Token usage produced inside Cindy on this device. Records start accumulating when the feature ships; earlier history is not backfilled.",
     "empty": "No usage recorded yet. This fills in once you start a chat.",
+    "loadFailed": "Unable to load usage history. Reopen Settings to try again.",
+    "range": {
+      "label": "Time range",
+      "ariaLabel": "Filter usage time range",
+      "all": "All time",
+      "30d": "Last 30 days",
+      "7d": "Last 7 days",
+      "today": "Today"
+    },
     "cacheHitTooltip": "Cache read / (input + cache read + cache write) — the same formula as the message card.",
     "summary": {
       "title": "Overview"
     },
     "stats": {
       "todayTokens": "Tokens today",
+      "todayTokensInRange": "Tokens ({{range}})",
       "totalTokens": "Tokens (30d)",
+      "totalTokensInRange": "Tokens ({{range}})",
       "streak": "Active streak",
       "cacheHitRate": "Cache hit rate (30d)",
+      "cacheHitRateInRange": "Cache hit rate ({{range}})",
       "models": "Models used"
     },
     "heatmap": {
       "title": "Activity heatmap",
-      "subtitle": "Last 20 weeks",
+      "subtitle": "Last {{count}} weeks",
       "emptyCell": "No usage recorded"
     },
     "daily": {
@@ -5819,6 +5833,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "Tokens (30d)",
+        "totalInRange": "Tokens ({{range}})",
         "share": "Share",
         "today": "Today",
         "hitRate": "Cache hit rate",
@@ -5831,6 +5846,7 @@
       "col": {
         "model": "Model",
         "total": "Total tokens",
+        "totalInRange": "Tokens ({{range}})",
         "share": "Share",
         "input": "Input",
         "output": "Output",
@@ -5841,7 +5857,7 @@
     },
     "tasks": {
       "title": "Top sessions by tokens",
-      "subtitle": "Sessions active in the last 30 days, ranked by lifetime tokens",
+      "subtitle": "Sessions active in {{range}}, ranked by lifetime tokens",
       "col": {
         "task": "Session",
         "model": "Model",
@@ -5851,7 +5867,7 @@
         "lastActive": "Last active"
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
-      "tokensTooltip": "The session's lifetime total, not the tokens spent within the last 30 days."
+      "tokensTooltip": "The session's lifetime total; {{range}} only filters active sessions and is not an incremental total."
     }
   },
   "usageDashboard": {
@@ -6141,6 +6157,10 @@
       "rotateDevice": "Rotate Device",
       "lockScreen": "Lock Screen",
       "unlockScreen": "Unlock Screen",
+      "copyScreenshot": "Copy Screenshot",
+      "screenshotCopied": "Simulator screenshot copied",
+      "screenshotCopyFailed": "Couldn't copy the simulator screenshot. Try again.",
+      "moreControls": "More Simulator Controls",
       "controlsUnavailable": "Simulator controls are temporarily unavailable",
       "enterTextBeforeSending": "Enter text before sending",
       "agentBusyTitle": "Agent Using This Device",
@@ -6176,7 +6196,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "Native acceleration is unavailable. WDA stays active while you try again.",
+        "available": "Native acceleration is unavailable. Frame rates may drop and controls may respond more slowly.",
         "action": "Restore Native",
         "recovering": "Restoring Native acceleration. The current WDA view and controls stay active.",
         "recoveringAction": "Restoring Native…",
@@ -6203,7 +6223,8 @@
         "stop": "Stopping device…",
         "detach": "Detaching device…",
         "grant": "Updating Agent control…",
-        "control": "Updating input control…"
+        "control": "Updating input control…",
+        "screenshot": "Copying simulator screenshot…"
       },
       "setup": {
         "localMac": "Open this project in a local Cindy session on a Mac.",
@@ -6827,7 +6848,6 @@
       "moreLabel": "More, current user: {{name}}",
       "menuSettings": "Settings",
       "menuAddAccount": "Sign in to another account",
-      "menuLogout": "Log out",
       "canaryBadge": "Canary user",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -6929,6 +6949,58 @@
     }
   },
   "newChat": {
+    "homeSuggestions": {
+      "shuffle": "Show more",
+      "dismiss": "Don't show again",
+      "downloadsDesktop": {
+        "label": "See what's piled up in Downloads and on the Desktop",
+        "prompt": "Look at my Downloads folder and Desktop. List what has piled up: the largest items, obvious duplicates, things untouched for six months or more, and anything safe to archive. For each item, say where it is, how big it is, and why you suggest dealing with it. This round is read-only; wait for me before moving or deleting anything."
+      },
+      "whatCindyCanDo": {
+        "label": "Look at this computer and tell me what you can help with",
+        "prompt": "Look at what is installed on this computer and the kinds of things I seem to work on. Then tell me the specific ways you can help, each in one sentence: when I would use it and what it would save me. Do not recite a feature list; ground it in what actually exists on this machine."
+      },
+      "recentDocs": {
+        "label": "Review my recent documents and make a list",
+        "prompt": "Look at documents I have opened or edited recently. Group them by topic, tell me how many piles of work I have, how far each has gotten, and whether anything looks abandoned. Give me a list with each file's location. Read-only; do not change my files."
+      },
+      "listCodeProjects": {
+        "label": "List the code projects on this computer",
+        "prompt": "Find code projects in the directories I commonly use. For each one, one sentence on what it is, what it is written in, and when it last changed. Then say which look like the main line of work and which look abandoned. If you find none, say so. This round is read-only; do not change any files."
+      },
+      "storageUsage": {
+        "label": "Show what's using up disk space",
+        "prompt": "Survey disk use on this computer. List directories and files from largest to smallest, and say which are caches, duplicates, or old things I probably forgot. Give a ranking plus one conclusion: which categories would free the most space. Count only; do not delete anything."
+      },
+      "unusedApps": {
+        "label": "List apps I installed but barely use",
+        "prompt": "Look at apps installed on this computer. Rank them by disk use and last-opened time, and point out which have not been opened in a long time but still take a lot of space. Give me a list; do not uninstall anything yet."
+      },
+      "uncommittedChanges": {
+        "label": "Find my latest project and check uncommitted work",
+        "prompt": "Find the code project I touched most recently. Review uncommitted changes, say what they are doing, and flag anything that looks wrong or missing. Read-only; do not change files or commit."
+      },
+      "devEnvironment": {
+        "label": "Check my development environment",
+        "prompt": "Check this machine's development environment: language runtimes and package managers, their versions, obvious conflicts or stale versions, and git config problems. Give a snapshot plus one conclusion: what to fix first. Inspect only; do not install or change config."
+      },
+      "whySlow": {
+        "label": "Find out why this computer is slow",
+        "prompt": "Find out why this computer feels slow: load, memory, disk, uptime, and the processes using the most CPU or memory. Give a short conclusion with evidence. Read-only; do not change anything, kill processes, or ask what I have open."
+      },
+      "diagnoseNetwork": {
+        "label": "Diagnose my network speed",
+        "prompt": "Diagnose this computer's network: ping, DNS, and whether it is wired or Wi-Fi. Give a one- or two-sentence conclusion. Do not run a long speed test or ask about my ISP."
+      },
+      "subscriptionSpend": {
+        "label": "Tally my subscription spending",
+        "prompt": "Scan Downloads, receipts, and local invoices for subscription charges. List service names and amounts. If you find nothing, say so. Do not change subscriptions, ask for a bank card, or sign in to email."
+      },
+      "expenseTracker": {
+        "label": "Make a simple expense tracker",
+        "prompt": "In this conversation's workspace, make a local expense tracker I can open: date, amount, category, notes. No backend, and do not ask which extra features I want."
+      }
+    },
     "noProvider": {
       "title": "No connected source for this model",
       "description": "The current model has no connected source. Connect one in Settings to start sending.",
@@ -7514,6 +7586,15 @@
     }
   },
   "onboarding": {
+    "homeZeroModel": {
+      "title": "Sign in to Cindy to continue",
+      "desc": "You don’t have any models yet. Sign in to Cindy to use dozens of top-tier models.",
+      "cta": "Sign in to Cindy",
+      "cloudTitle": "Continue with Cindy",
+      "cloudDesc": "You don’t have any models yet. Enable the official service to use dozens of top-tier models.",
+      "cloudCta": "Get started",
+      "ownApi": "I have my own model API"
+    },
     "connectProvider": {
       "title": "Connect a model provider to get started",
       "desc": "No models are available yet. Connect a provider to start chatting.",
@@ -9033,9 +9114,24 @@
           "merged": "Merged",
           "closed": "Closed"
         },
-        "needsToken": "gh CLI not logged in — ask the agent to run gh auth login once to show PR status",
+        "ghNotLoggedIn": "gh is not signed in to GitHub on this machine, so PR status is unavailable",
+        "ghMissing": "GitHub CLI (gh) not found on this machine, so PR status is unavailable",
+        "notFound": "PR not found, or the current account cannot view it",
         "statusUnknown": "Failed to fetch status",
         "openAria": "Open PR #{{number}} in browser",
+        "clickToOpen": "Click to open the PR in your browser",
+        "guidance": {
+          "login": {
+            "hint": "Click to have the agent sign you in",
+            "aria": "PR #{{number}} status unavailable: have the agent sign in to GitHub",
+            "prompt": "Please sign me in to the GitHub CLI: run `gh auth login -h github.com -w`, tell me the one-time device code and URL it shows, and after I authorize in the browser, confirm with `gh auth status` that the login succeeded."
+          },
+          "install": {
+            "hint": "Click to have the agent install it and sign you in",
+            "aria": "PR #{{number}} status unavailable: have the agent install and sign in to GitHub CLI",
+            "prompt": "Please install the GitHub CLI (gh; `brew install gh` on macOS, `winget install GitHub.cli` on Windows), then run `gh auth login -h github.com -w` to sign in, tell me the one-time device code and URL it shows, and after I authorize in the browser, confirm with `gh auth status` that the login succeeded."
+          }
+        },
         "unresolved": "Unresolved review threads: {{count}}"
       }
     },
@@ -10134,6 +10230,11 @@
       "clearSearch": "Clear skill search",
       "noSearchResults": "No matching skills found",
       "catalogFiltersAria": "SkillHub categories",
+      "categoryFiltersAria": "Filter skills by category",
+      "scrollCategoriesLeft": "View more categories to the left",
+      "scrollCategoriesRight": "View more categories to the right",
+      "categoryScrollAtStart": "Already at the first category",
+      "categoryScrollAtEnd": "Already at the last category",
       "catalogFilter": {
         "public": "Public",
         "organization": "Organization",
@@ -10433,14 +10534,12 @@
       "visibilityPublicDesc": "Visible to all users · Default",
       "versionLabel": "Version",
       "versionFormatHint": "Format: x.y.z (e.g. 1.0.1)",
-      "categoryLabel": "Category",
-      "categoryAuto": "No Tag",
-      "categoryPlaceholder": "Select a category",
-      "categoryLoading": "Loading categories…",
-      "categoryLoadFailed": "Failed to load categories. Please retry.",
-      "categoryEmpty": "No categories are available",
-      "categoryRequired": "Select a category before publishing",
-      "categoryInvalid": "This category is no longer available. Select another one.",
+      "categoryLabel": "Tags",
+      "categoryPlaceholder": "Select tags (optional)",
+      "categoryLoading": "Loading tags…",
+      "categoryLoadFailed": "Failed to load tags. Please retry.",
+      "categoryEmpty": "No Platform tags are available",
+      "categoryInvalid": "One or more tags are no longer available. Select again.",
       "retryLoadCategories": "Retry",
       "extraDeptGroup": "Departments",
       "extraTeamGroup": "Teams",
@@ -10801,7 +10900,7 @@
     },
     "confirm": {
       "logoutTitle": "Log out",
-      "logoutDescription": "Log out of all accounts on this device?",
+      "logoutDescription": "Log out of the current account?",
       "logoutConfirm": "Log out",
       "cancel": "Cancel",
       "sessionExpiredTitle": "Login expired",
@@ -11253,6 +11352,32 @@
         "action": "Copy Order ID {{id}}",
         "success": "Order ID copied",
         "failed": "Order ID wasn’t copied — try again"
+      },
+      "invoice": {
+        "action": "Request Invoice",
+        "title": "Request an Invoice",
+        "description": "Please email the following information to {{email}} to request an invoice.",
+        "requiredInfo": "Please include these details in your email:",
+        "emailSubject": "Invoice request for order {{orderId}}",
+        "emailBody": "Hello,\n\nI would like to request an invoice for the following order:\n\n────────────────────\nOrder ID: {{orderId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nInvoice amount: {{amount}}\nInvoice title: \nContact person: \nPhone number: \nEmail: \n────────────────────\n\nThank you.",
+        "sendAction": "Send Invoice Request",
+        "emailCopied": "Support email copied",
+        "emailCopyFailed": "Support email wasn’t copied — try again",
+        "sendFailed": "Couldn’t open your email app. Please email {{email}} manually.",
+        "gmailFallbackTitle": "Open Gmail instead?",
+        "gmailFallbackDescription": "Your invoice request includes order details. Opening Gmail will share this information with Google. Continue?",
+        "gmailFallbackConfirm": "Open Gmail",
+        "notAvailable": "Not available",
+        "fields": {
+          "orderId": "Order ID",
+          "application": "Application",
+          "paymentMethod": "Payment method",
+          "amount": "Invoice amount",
+          "invoiceTitle": "Invoice title",
+          "contact": "Contact person",
+          "phone": "Phone number",
+          "email": "Email"
+        }
       },
       "states": {
         "completed": "Completed",
