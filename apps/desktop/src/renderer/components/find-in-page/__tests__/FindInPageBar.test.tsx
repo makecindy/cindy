@@ -195,6 +195,27 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('i\u0307');
   });
 
+  it('matches canonically equivalent Unicode forms and maps the source range', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'e\u0301 x é';
+
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'é' } });
+
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.map((range) => range.toString())).toEqual([
+      'e\u0301',
+      'é',
+    ]);
+
+    fireEvent.change(input, { target: { value: 'e\u0301' } });
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.map((range) => range.toString())).toEqual([
+      'e\u0301',
+      'é',
+    ]);
+  });
+
   it('does not expand one visible character into duplicate navigation matches', async () => {
     const page = document.createElement('main');
     page.textContent = 'ß';

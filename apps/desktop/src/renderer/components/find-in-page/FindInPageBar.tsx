@@ -86,10 +86,12 @@ function findMatchOffsets(
   }
 
   const searchableQuery = collapseWhitespace ? query.replace(/\s+/g, ' ') : query;
-  const normalizedQuery = unicodeCaseFold(searchableQuery);
+  const normalizedQuery = unicodeCaseFold(searchableQuery.normalize('NFC'));
   const offsets: Array<[number, number]> = [];
 
-  const foldedValue = foldSearchValue(searchableValue, sourceStarts, sourceEnds);
+  const foldedValue = foldSearchValue(
+    normalizeSearchValue(searchableValue, sourceStarts, sourceEnds),
+  );
   let start = 0;
   while (start <= foldedValue.value.length - normalizedQuery.length) {
     const matchStart = foldedValue.value.indexOf(normalizedQuery, start);
@@ -108,20 +110,80 @@ function unicodeCaseFold(value: string): string {
   return value.toLowerCase().replace(/\u03c2/g, '\u03c3');
 }
 
-function foldSearchValue(
+function normalizeSearchValue(
   value: string,
   sourceStarts: readonly number[],
   sourceEnds: readonly number[],
 ): { value: string; starts: number[]; ends: number[] } {
+  const characters: Array<{ value: string; start: number; end: number }> = [];
+  for (let index = 0; index < value.length; ) {
+    const character = getCodePointAt(value, index);
+    const end = index + character.length;
+    characters.push({
+      value: character,
+      start: sourceStarts[index],
+      end: sourceEnds[end - 1],
+    });
+    index = end;
+  }
+
+  let normalizedValue = '';
+  const normalizedStarts: number[] = [];
+  const normalizedEnds: number[] = [];
+  for (let index = 0; index < characters.length; ) {
+    let end = index + 1;
+    while (
+      end < characters.length &&
+      (isCombiningMark(characters[end].value) ||
+        (isHangulJamo(characters[index].value) && isHangulJamo(characters[end].value)))
+    ) {
+      end += 1;
+    }
+
+    const normalizedChunk = characters
+      .slice(index, end)
+      .map((character) => character.value)
+      .join('')
+      .normalize('NFC');
+    const sourceStart = characters[index].start;
+    const sourceEnd = characters[end - 1].end;
+    normalizedValue += normalizedChunk;
+    for (let offset = 0; offset < normalizedChunk.length; offset += 1) {
+      normalizedStarts.push(sourceStart);
+      normalizedEnds.push(sourceEnd);
+    }
+    index = end;
+  }
+
+  return { value: normalizedValue, starts: normalizedStarts, ends: normalizedEnds };
+}
+
+function isCombiningMark(value: string): boolean {
+  return /^\p{M}$/u.test(value);
+}
+
+function isHangulJamo(value: string): boolean {
+  const codePoint = value.codePointAt(0);
+  if (codePoint === undefined) return false;
+  return (
+    (codePoint >= 0x1100 && codePoint <= 0x11ff) ||
+    (codePoint >= 0xa960 && codePoint <= 0xa97f) ||
+    (codePoint >= 0xd7b0 && codePoint <= 0xd7ff)
+  );
+}
+
+function foldSearchValue(
+  normalizedValue: { value: string; starts: number[]; ends: number[] },
+): { value: string; starts: number[]; ends: number[] } {
   let foldedValue = '';
   const starts: number[] = [];
   const ends: number[] = [];
-  for (let index = 0; index < value.length;) {
-    const character = getCodePointAt(value, index);
+  for (let index = 0; index < normalizedValue.value.length; ) {
+    const character = getCodePointAt(normalizedValue.value, index);
     const end = index + character.length;
     const foldedCharacter = unicodeCaseFold(character);
-    const sourceStart = sourceStarts[index];
-    const sourceEnd = sourceEnds[end - 1];
+    const sourceStart = normalizedValue.starts[index];
+    const sourceEnd = normalizedValue.ends[end - 1];
     foldedValue += foldedCharacter;
     for (let offset = 0; offset < foldedCharacter.length; offset += 1) {
       starts.push(sourceStart);
