@@ -84,6 +84,15 @@ export class WindowSnapshotTracker {
     return id;
   }
 
+  /** A failed observation invalidates earlier IDs and aliases without issuing a usable ID. */
+  invalidate(
+    sessionId: string | undefined,
+    pid: number,
+    windowId: number,
+  ): void {
+    this.latestByWindow.delete(this.windowKey(sessionId ?? '', pid, windowId));
+  }
+
   /** Register a host/driver snapshot id as an alias for the MCP-level guard id. */
   registerAlias(snapshotId: string, alias: string): void {
     const meta = this.metaById.get(snapshotId);
