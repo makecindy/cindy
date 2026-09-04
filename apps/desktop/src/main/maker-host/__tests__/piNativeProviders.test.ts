@@ -884,6 +884,38 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
+  it('preserves Pi native wire values when the catalog overlays OpenAI effort membership', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.pi = [
+      {
+        id: 'chatgpt/gpt-5.6-sol',
+        name: 'GPT-5.6 Sol',
+        contextWindow: 272_000,
+        efforts: ['minimal', 'xhigh', 'max'],
+        defaultEffort: 'xhigh',
+      },
+    ];
+    const bundled = piBundledModel('gpt-5.6-sol', 'openai-codex-responses', {
+      thinkingLevelMap: { minimal: 'low', xhigh: 'xhigh', max: 'max' },
+    });
+
+    const model = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([['openai-codex', new Map([[bundled.id, bundled]])]]),
+    ).providers.find((candidate) => candidate.id === 'openai-codex')?.models[0];
+
+    expect(model?.thinkingLevelMap).toEqual({
+      minimal: 'low',
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: 'xhigh',
+      max: 'max',
+    });
+  });
+
   it('keeps a retired OpenAI profile private to its native subscription resume', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const openai = catalog.providers.find((provider) => provider.id === 'openai')!;

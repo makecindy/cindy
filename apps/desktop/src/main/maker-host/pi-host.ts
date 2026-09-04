@@ -503,6 +503,23 @@ function catalogCostForPiNative(cost: {
 }
 
 /**
+ * CatalogModel 只保存 Cindy 可选择的 effort 档位，Pi 原生目录还可能把档位映射到
+ * 另一条 wire 值（例如 minimal -> low）。叠加服务端能力时保留同源 bundled 映射；
+ * 服务端新增的档位没有原生映射才按同名值发送。
+ */
+function catalogThinkingLevelMap(
+  efforts: readonly string[],
+  bundled: PiNativeModelSpec['thinkingLevelMap'] | undefined,
+): NonNullable<PiNativeModelSpec['thinkingLevelMap']> {
+  return Object.fromEntries(
+    PI_REASONING_EFFORTS.map((effort) => [
+      effort,
+      efforts.includes(effort) ? (bundled?.[effort] ?? effort) : null,
+    ]),
+  );
+}
+
+/**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
  * provider catalog. Registry metadata is authoritative for OpenAI subscription
  * models; the version-matched PI binary remains authoritative for native API and
@@ -656,11 +673,9 @@ export function buildPiSubscriptionNativeProviders(
             maxTokens: model.maxOutput ?? bundledModel.maxTokens,
             reasoning: model.efforts.length > 0,
             input,
-            thinkingLevelMap: Object.fromEntries(
-              PI_REASONING_EFFORTS.map((effort) => [
-                effort,
-                model.efforts.includes(effort) ? effort : null,
-              ]),
+            thinkingLevelMap: catalogThinkingLevelMap(
+              model.efforts,
+              bundledModel.thinkingLevelMap,
             ),
             ...(cost ? { cost: { ...cost } } : {}),
             ...(bundledModel.headers ? { headers: { ...bundledModel.headers } } : {}),
