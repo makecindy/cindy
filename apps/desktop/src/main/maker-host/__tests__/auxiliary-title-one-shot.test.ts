@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   oneShot: vi.fn(),
   chainSource: 'auto' as 'auto' | 'custom' | 'env',
   sessionBoundaryPending: false,
+  oneShotRouteDisabled: false,
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -18,7 +19,7 @@ vi.mock('../index.js', () => ({
 }));
 
 vi.mock('../model-route-guard-live.js', () => ({
-  isAgentOneShotRouteDisabled: vi.fn(async () => false),
+  isAgentOneShotRouteDisabled: vi.fn(async () => h.oneShotRouteDisabled),
 }));
 
 vi.mock('../../appSessionState.js', () => ({
@@ -61,6 +62,7 @@ beforeEach(() => {
   h.ownerScope = 'local:owner-a:1';
   h.chainSource = 'auto';
   h.sessionBoundaryPending = false;
+  h.oneShotRouteDisabled = false;
   h.oneShot.mockResolvedValue('会话 Agent 命名');
   h.requestText.mockImplementation(async (_prompt: string, options: Record<string, unknown>) => {
     const allowed = await (options.beforeDispatch as () => Promise<boolean>)();
@@ -110,6 +112,22 @@ describe('auxiliary task-title routing', () => {
         responseInstructions: expect.stringContaining('Output only the short conversation title'),
       }),
     );
+  });
+
+  it('rechecks the disabled route while the session-agent fallback is starting', async () => {
+    h.requestText.mockResolvedValue({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [],
+    });
+    h.oneShot.mockImplementation(async (_agentKind, _prompt, options) => {
+      h.oneShotRouteDisabled = true;
+      const allowed = await (options.beforeDispatch as () => Promise<boolean>)();
+      if (!allowed) throw new Error('disabled during startup');
+      return '不应采用';
+    });
+
+    await expect(generateTitleWithAuxiliaryModel(CODEX_REQUEST, {}, runtimeDeps())).resolves.toBeNull();
   });
 
   it('keeps an explicit custom chain fail-closed when it is exhausted', async () => {

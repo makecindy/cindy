@@ -74,6 +74,8 @@ async function generateAuxiliaryTitle(
       && getEffectiveAuxiliaryModelChainSnapshot() === auxiliaryChainSnapshot
       && currentModels === snapshot;
   };
+  const beforeSessionAgentDispatch = async () =>
+    !(await isAgentOneShotRouteDisabled(args.agentKind)) && await beforeDispatch();
   const result = await deps.requestText(args.prompt, {
     maxTokens: AUXILIARY_TITLE_MAX_TOKENS,
     timeoutMs: AUXILIARY_TITLE_TIMEOUT_MS,
@@ -93,8 +95,7 @@ async function generateAuxiliaryTitle(
     // chains are explicit routing decisions and must remain fail-closed.
     const canFallbackToSessionAgent = auxiliaryChain.source === 'auto'
       && agentSupportsOneShot(args.agentKind)
-      && !(await isAgentOneShotRouteDisabled(args.agentKind))
-      && await beforeDispatch();
+      && await beforeSessionAgentDispatch();
     if (canFallbackToSessionAgent) {
       try {
         const fallbackText = await getMaker().oneShot(args.agentKind, args.prompt, {
@@ -102,7 +103,7 @@ async function generateAuxiliaryTitle(
           timeoutMs: AUXILIARY_TITLE_TIMEOUT_MS,
           signal: args.signal,
           responseInstructions: AUXILIARY_TITLE_RESPONSE_INSTRUCTIONS,
-          beforeDispatch,
+          beforeDispatch: beforeSessionAgentDispatch,
         });
         const fallbackTitle = normalizeAuxiliaryTitle(fallbackText);
         if (fallbackTitle) return { status: 'ok', title: fallbackTitle };
