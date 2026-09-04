@@ -286,6 +286,83 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
+  it('同源本地 Pi 元数据补齐能力，但不覆盖下发文件的上下文', () => {
+    const bundled = new Map([
+      [
+        'bundled-provider',
+        new Map([
+          [
+            'server-model',
+            piBundledModel('server-model', 'openai-completions', {
+              baseUrl: 'https://api.example/v1',
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+              input: ['text', 'image'],
+            }),
+          ],
+        ]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'server-models',
+          name: 'Server Models',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://api.example/v1',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'server-model', name: 'Server Model', contextWindow: 64_000 }],
+            }),
+          },
+        },
+      ],
+      () => null,
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'server-model',
+      contextWindow: 64_000,
+      maxTokens: 128_000,
+      input: ['text', 'image'],
+      reasoning: true,
+    });
+  });
+
+  it('下发协议与本地 Pi 元数据冲突时不借用本地能力', () => {
+    const bundled = new Map([
+      [
+        'bundled-provider',
+        new Map([['server-model', piBundledModel('server-model', 'anthropic-messages')]]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'server-models',
+          name: 'Server Models',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              wireProtocol: 'openai-responses',
+              models: [{ id: 'server-model', name: 'Server Model' }],
+            }),
+          },
+        },
+      ],
+      () => null,
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]?.models[0]).toMatchObject({ id: 'server-model', name: 'Server Model' });
+    expect(providers[0]?.models[0]).not.toHaveProperty('reasoning');
+    expect(providers[0]?.models[0]).not.toHaveProperty('input');
+  });
+
   it('defaults unknown custom Chat Completions models to system role (#3832)', () => {
     const { providers } = buildPiNativeProvidersFromConfigs(
       [

@@ -1232,11 +1232,14 @@ export function buildPiNativeProvidersFromConfigs(
     // strictly same-origin PI bundled knowledge, then an explicitly matched official
     // PI catalog. Missing protocol is not Chat: one unresolved model makes the whole
     // provider unusable so PI cannot silently send it to a guessed endpoint shape.
-    const bundledModels = rt.models.map((model) =>
-      !model.piApi && !runtimeApi
-        ? resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl)
-        : undefined,
-    );
+    const bundledModels = rt.models.map((model) => {
+      // 显式 runtime 协议决定端点形状，但不应阻止同源 Pi 目录补齐图片、输出上限等能力。
+      // 只有 per-model piApi 明确改写协议时才不借用；协议冲突也必须隔离。
+      if (model.piApi) return undefined;
+      const bundled = resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl);
+      if (!bundled || !runtimeApi || bundled.api === runtimeApi) return bundled;
+      return undefined;
+    });
     const official =
       rt.piCatalogProviderId &&
       officialPiRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
@@ -1317,7 +1320,8 @@ export function buildPiNativeProvidersFromConfigs(
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
           name: bundledModel?.name ?? m.name,
-          contextWindow: bundledModel?.contextWindow ?? m.contextWindow,
+          // 下发文件明确写出的上下文优先；本地 Pi 目录只补缺失值。
+          contextWindow: m.contextWindow ?? bundledModel?.contextWindow,
           ...(bundledModel?.maxTokens ? { maxTokens: bundledModel.maxTokens } : {}),
           ...(bundledModel?.input
             ? { input: [...bundledModel.input] }

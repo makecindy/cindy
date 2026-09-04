@@ -364,11 +364,13 @@ function validateProvider(p: Provider): void {
   }
   // 约束：若声明了 titleModel（标题 oneShot 用的最经济模型），它必须存在于本供应商任一
   // agent 的模型清单里 —— 防把不存在 / 拼错的 id 配进去导致运行时静默起不出标题。
-  // 豁免:动态清单供应商(全部 models 数组为空,清单运行时注入——2026-07-19 统一重构后
-  // 的 anthropic/openai/xd)无静态清单可校验,titleModel 指向的是运行时会出现的 id。
+  // 豁免:Claude/Codex 动态清单供应商在这两个 harness 下都为空时无静态清单可校验；
+  // 独立的 Pi 原生名单不应把它误判为静态 root，也不要求沿用同一 model id 命名空间。
   if (p.titleModel !== undefined) {
     assert(typeof p.titleModel === 'string' && p.titleModel.length > 0, `provider '${p.id}' titleModel must be a non-empty string`);
-    const hasStaticModels = p.agents.some((agent) => (p.models[agent] ?? []).length > 0);
+    const hasStaticModels = p.agents.some(
+      (agent) => agent !== 'pi' && (p.models[agent] ?? []).length > 0,
+    );
     if (hasStaticModels) {
       const known = p.agents.some((agent) => (p.models[agent] ?? []).some((m) => m.id === p.titleModel));
       assert(known, `provider '${p.id}' titleModel '${p.titleModel}' not found in any agent's models`);
