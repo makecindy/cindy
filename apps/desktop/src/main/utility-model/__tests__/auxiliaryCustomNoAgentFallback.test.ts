@@ -29,6 +29,9 @@ describe('custom auxiliary chain does not hit the session agent', () => {
     expect(source).toContain('const beforeSessionAgentDispatch = async () =>');
     expect(source).toContain('beforeDispatch: beforeSessionAgentDispatch');
     expect(source).toContain('isAgentOneShotRouteDisabled(agentKind)');
+    const disabledCheck = source.indexOf('isAgentOneShotRouteDisabled(agentKind)');
+    const ownerRecheck = source.indexOf('return isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);', disabledCheck);
+    expect(ownerRecheck).toBeGreaterThan(disabledCheck);
   });
 
   it('voice refinement pins the effective auxiliary chain for the whole run', () => {

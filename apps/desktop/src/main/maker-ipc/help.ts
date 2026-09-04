@@ -100,8 +100,9 @@ async function isHelpSessionAgentDispatchAllowed(
   auxiliaryChainSnapshot: string,
 ): Promise<boolean> {
   if (!target.agentKind) return false;
-  return isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)
-    && !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model));
+  if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return false;
+  if (await isAgentOneShotRouteDisabled(target.agentKind, target.options.model)) return false;
+  return isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
 }
 
 function normalizeLocale(locale: unknown): HelpLocale {
