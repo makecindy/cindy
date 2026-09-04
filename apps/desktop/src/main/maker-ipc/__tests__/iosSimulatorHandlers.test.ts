@@ -42,6 +42,7 @@ describe('iOS Simulator IPC handlers', () => {
     MAKER_INVOKE.IOS_SIMULATOR_SET_VIEWER_VISIBILITY,
     MAKER_INVOKE.IOS_SIMULATOR_RETRY_NATIVE_ROUTE,
     MAKER_INVOKE.IOS_SIMULATOR_LATEST_FRAME,
+    MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT,
     MAKER_INVOKE.IOS_SIMULATOR_SET_STREAM_PROFILE,
     MAKER_INVOKE.IOS_SIMULATOR_LIVE_TOUCH,
   ])('checks the trusted sender before parsing %s', async (channel) => {
@@ -639,6 +640,18 @@ describe('iOS Simulator IPC handlers', () => {
       }),
     ).resolves.toMatchObject({ ok: true });
     expect(callTool).toHaveBeenCalledWith('attach_device', {}, 'session-a');
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_CALL, {
+        sessionId: 'session-a',
+        name: 'delete_instance',
+        args: { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(callTool).toHaveBeenCalledWith(
+      'delete_instance',
+      { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' },
+      'session-a',
+    );
     for (const name of ['build_app', 'open_url', 'push_notification', 'delete_everything']) {
       await expect(
         harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_CALL, {
@@ -648,7 +661,7 @@ describe('iOS Simulator IPC handlers', () => {
         }),
       ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     }
-    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(2);
   });
 
   it('folds tool-call internals behind the same safe Main-to-Renderer boundary', async () => {
@@ -967,6 +980,103 @@ describe('iOS Simulator IPC handlers', () => {
         viewerToken: '',
       }),
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+
+  it('captures an exact simulator route and writes the PNG to the clipboard', async () => {
+    const harness = new IpcHarness();
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const captureScreenshotBytes = vi.fn(async () => pngBytes);
+    const writePngToClipboard = vi.fn();
+    registerTrusted(harness, { captureScreenshotBytes, writePngToClipboard });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, {
+        sessionId: 'session-a',
+        instanceId: 'instance-a',
+        generation: 3,
+        leaseId: 'lease-a',
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(captureScreenshotBytes).toHaveBeenCalledWith('session-a', {
+      instanceId: 'instance-a',
+      generation: 3,
+      leaseId: 'lease-a',
+    });
+    expect(writePngToClipboard).toHaveBeenCalledWith(pngBytes);
+  });
+
+  it('does not write a screenshot after the exact task grant changes', async () => {
+    const harness = new IpcHarness();
+    let accessGeneration = 1;
+    let releaseCapture: ((png: Buffer) => void) | undefined;
+    const captureScreenshotBytes = vi.fn(
+      () =>
+        new Promise<Buffer>((resolve) => {
+          releaseCapture = resolve;
+        }),
+    );
+    const writePngToClipboard = vi.fn();
+    registerTrusted(harness, {
+      getSessionAccess: () => ({ sessionId: 'session-a', generation: accessGeneration }),
+      captureScreenshotBytes,
+      writePngToClipboard,
+    });
+
+    const request = harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, {
+      sessionId: 'session-a',
+      instanceId: 'instance-a',
+      generation: 3,
+      leaseId: 'lease-a',
+    });
+    await vi.waitFor(() => expect(captureScreenshotBytes).toHaveBeenCalledOnce());
+    accessGeneration = 2;
+    releaseCapture?.(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    await expect(request).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(writePngToClipboard).not.toHaveBeenCalled();
+  });
+
+  it('validates screenshot routes and reports capture failures without writing clipboard data', async () => {
+    const harness = new IpcHarness();
+    const captureScreenshotBytes = vi.fn(async () => {
+      throw new IOSSimulatorInstanceError(
+        'SCREENSHOT_CAPTURE_FAILED',
+        'private simulator capture detail',
+        true,
+      );
+    });
+    const writePngToClipboard = vi.fn();
+    const reportError = vi.fn();
+    registerTrusted(harness, {
+      captureScreenshotBytes,
+      writePngToClipboard,
+      reportError,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, {
+        sessionId: 'session-a',
+        instanceId: 'instance-a',
+        generation: 0,
+        leaseId: 'lease-a',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, {
+        sessionId: 'session-a',
+        instanceId: 'instance-a',
+        generation: 3,
+        leaseId: 'lease-a',
+      }),
+    ).rejects.toMatchObject({
+      code: 'SCREENSHOT_CAPTURE_FAILED',
+      message: expect.not.stringContaining('private simulator capture detail'),
+    });
+
+    expect(captureScreenshotBytes).toHaveBeenCalledOnce();
+    expect(writePngToClipboard).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith('copy-screenshot', expect.any(Error));
   });
 
   it('validates and routes bounded stream profiles', async () => {

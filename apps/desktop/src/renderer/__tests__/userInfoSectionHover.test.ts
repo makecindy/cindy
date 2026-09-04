@@ -88,7 +88,9 @@ describe('UserInfoSection — version label', () => {
   });
 
   it('shows the Beta label only after the persisted channel state has loaded', () => {
-    expect(source).toContain("import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';");
+    expect(source).toContain(
+      "import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';",
+    );
     expect(source).toContain(
       'const showBetaLabel = !betaChannelState.loading && betaChannelState.enableBeta;',
     );
@@ -100,10 +102,14 @@ describe('UserInfoSection — version label', () => {
 
 describe('UserInfoSection — Canary avatar badge', () => {
   it('shows only the shield decoration when isCanary is true', () => {
-    expect(source).toContain(
-      "import { Flame, LogOut, Settings, Shield, Smartphone, UserPlus, UserRound } from 'lucide-react';",
+    expect(source).toMatch(
+      /import \{[\s\S]*Building2[\s\S]*Check[\s\S]*Flame[\s\S]*UserRound[\s\S]*\} from 'lucide-react';/,
     );
-    expect(source).toContain('const { user, mode, isCanary, beginAddAccount } = useAuth();');
+    expect(source).toContain('dataOwnerId');
+    expect(source).toContain('isCanary, listAccounts, syncAccounts, switchAccount');
+    expect(source).toContain(
+      "if (mode !== 'cloud' || !accountsReadyForOwner || switchableAccounts.length === 0) return null;",
+    );
     expect(source).toContain('{isCanary && (');
     expect(source).toContain("aria-label={t('sidebar.user.canaryBadge')}");
     expect(source).not.toContain("isCanary && 'ring-[1.5px] ring-foreground'");
@@ -148,9 +154,7 @@ describe('UserInfoSection — 未登录态头像兜底', () => {
 
 describe('UserInfoSection — mobile download entry', () => {
   it('uses the local Lucide Smartphone icon in a matching 22x22 capsule action', () => {
-    expect(source).toContain(
-      "import { Flame, LogOut, Settings, Shield, Smartphone, UserPlus, UserRound } from 'lucide-react';",
-    );
+    expect(source).toContain('Smartphone');
     expect(source).toMatch(/'mobile-download-btn',\s*\n\s*'flex h-\[22px\] w-\[22px\]/);
     expect(source).toContain("!isCollapsed && 'mr-1'");
     expect(source).toContain('<Smartphone className="h-3 w-3" aria-hidden="true" />');
@@ -212,11 +216,33 @@ describe('UserInfoSection — inner main button no longer owns hover background'
     expect(locale.sidebar.user.moreLabel).toBe('更多，当前用户：{{name}}');
   });
 
-  it('offers settings, account switching, and logout from the More menu', () => {
+  it('keeps Settings at the bottom of the More menu and leaves logout in Settings', () => {
     expect(source).toContain("t('sidebar.user.menuSettings')");
-    expect(source).toContain("t('sidebar.user.menuAddAccount')");
-    expect(source).toContain("t('sidebar.user.menuLogout')");
-    expect(source).toContain('setAccountSwitcherOpen(true)');
+    expect(source).toContain('{renderSavedAccountItems()}');
+    expect(source).toContain('accountsReadyForOwner &&');
+    expect(source).toContain('savedAccounts.some((account) => !account.isCurrent)');
+    expect(source.indexOf('{renderSavedAccountItems()}')).toBeLessThan(
+      source.indexOf("t('sidebar.user.menuSettings')"),
+    );
+    expect(source).not.toContain("t('sidebar.user.menuLogout')");
+    expect(source).not.toContain('useLogout');
+    expect(source).not.toContain('<LogOut');
+    expect(source).toContain("mode === 'local'");
+    expect(source.indexOf("t('sidebar.user.menuAddAccount')")).toBeLessThan(
+      source.indexOf("t('sidebar.user.menuSettings')"),
+    );
+    expect(source).not.toContain('AccountSwitcherDialog');
+  });
+
+  it('shows saved accounts directly only when there is more than one', () => {
+    expect(source).toContain('dataOwnerId');
+    expect(source).toContain('isCanary, listAccounts, syncAccounts, switchAccount');
+    expect(source).toContain(
+      "if (mode !== 'cloud' || !accountsReadyForOwner || switchableAccounts.length === 0) return null;",
+    );
+    expect(source).toContain('onSelect={() => void switchSavedAccount(account)}');
+    expect(source).toContain('await switchAccount(account.accountKey);');
+    expect(source).toContain('onOpenChange={(open) => open && void refreshSavedAccounts()}');
   });
 });
 

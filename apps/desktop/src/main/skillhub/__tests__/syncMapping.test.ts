@@ -19,7 +19,7 @@ function makeHubSkill(slug: string, overrides: Partial<HubSkillInfoForDesktop> =
 describe('buildSkillhubSyncResponse', () => {
   it('preserves availableUninstalledCount for empty local syncs', () => {
     expect(buildSkillhubSyncResponse([], [
-      { items: [], availableCount: 7 },
+      { catalogScope: 'market', response: { items: [], availableCount: 7 } },
     ])).toEqual({
       success: true,
       results: [],
@@ -28,9 +28,12 @@ describe('buildSkillhubSyncResponse', () => {
   });
 
   it('keeps the first available count from chunked batch-detail responses', () => {
-    const response = buildSkillhubSyncResponse(['skill-a', 'skill-b'], [
-      { items: [makeHubSkill('skill-a')], availableCount: 2 },
-      { items: [makeHubSkill('skill-b')], availableCount: 3 },
+    const response = buildSkillhubSyncResponse([
+      { slug: 'skill-a', catalogScope: 'market' },
+      { slug: 'skill-b', catalogScope: 'team' },
+    ], [
+      { catalogScope: 'market', response: { items: [makeHubSkill('skill-a')], availableCount: 2 } },
+      { catalogScope: 'team', response: { items: [makeHubSkill('skill-b')], availableCount: 3 } },
     ]);
 
     expect(response.availableUninstalledCount).toBe(2);
@@ -38,6 +41,7 @@ describe('buildSkillhubSyncResponse', () => {
       {
         exists: true,
         name: 'skill-a',
+        catalogScope: 'market',
         displayName: 'skill-a display',
         authorId: 'owner-skill-a',
         latestVersion: '1.0.0',
@@ -45,6 +49,7 @@ describe('buildSkillhubSyncResponse', () => {
       {
         exists: true,
         name: 'skill-b',
+        catalogScope: 'team',
         displayName: 'skill-b display',
         authorId: 'owner-skill-b',
         latestVersion: '1.0.0',
@@ -53,11 +58,11 @@ describe('buildSkillhubSyncResponse', () => {
   });
 
   it('returns exists:false for local skills missing from Hub without inventing count metadata', () => {
-    expect(buildSkillhubSyncResponse(['missing-skill'], [
-      { items: [] },
+    expect(buildSkillhubSyncResponse([{ slug: 'missing-skill', catalogScope: 'team' }], [
+      { catalogScope: 'team', response: { items: [] } },
     ])).toEqual({
       success: true,
-      results: [{ name: 'missing-skill', exists: false }],
+      results: [{ name: 'missing-skill', catalogScope: 'team', exists: false }],
     });
   });
 });

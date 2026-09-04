@@ -487,9 +487,10 @@ describe('cindy-bridge extension source', () => {
       expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
         'isCindyShellTool(event.toolName) && (bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets))',
       );
-      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain(
         "if (credentialRead && permission.mode === 'bypassPermissions')",
       );
+      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("if (permission.mode === 'bypassPermissions') return;");
       expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('await ctx.ui.input(');
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -547,7 +548,7 @@ describe('cindy-bridge extension source', () => {
     () => {
       const source = CINDY_BRIDGE_EXTENSION_SOURCE;
       const helperStart = source.indexOf('const CREDENTIAL_PATH_PATTERNS');
-      const helperEnd = source.indexOf('// 从 bash 子进程读取任意进程的初始环境');
+      const helperEnd = source.indexOf('const PROC_ENVIRON_READ_RE');
       expect(helperStart).toBeGreaterThan(-1);
       expect(helperEnd).toBeGreaterThan(helperStart);
 
@@ -1544,10 +1545,12 @@ describe('cindy-bridge extension source', () => {
   it('hard-blocks writes only in read-only reference roots, not external writable roots', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     const readOnlyGate = source.indexOf('permission.readOnlyRoots.some((root) =>');
-    const credentialGate = source.indexOf('if (isCindyShellTool(event.toolName) && commandReadsProcessEnviron', readOnlyGate);
+    const credentialGate = source.indexOf('const environRead = isCindyShellTool(event.toolName)', readOnlyGate);
     expect(readOnlyGate).toBeGreaterThan(-1);
     expect(credentialGate).toBeGreaterThan(readOnlyGate);
     expect(source.slice(readOnlyGate, credentialGate)).not.toContain('permission.writableRoots');
+    expect(source).not.toContain('Cindy blocks reading credential or key paths, even with Full access.');
+    expect(source).not.toContain('Cindy blocks reading process environment (/proc/*/environ), even with Full access.');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
     expect(source).toContain(
       'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',

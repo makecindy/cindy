@@ -36,6 +36,109 @@ describe("Responses custom-tool function adapter", () => {
     vi.useRealTimers();
   });
 
+  it("flips dialect-coupled item id prefixes and drops ids in neither dialect", () => {
+    const adapter = createResponsesCustomToolFunctionAdapter(["exec"]);
+    const adapted = adapter.adaptRequest(
+      {
+        ...execRequest(),
+        input: [
+          // Both ids minted by Codex: the rollout was produced against a custom-tool upstream.
+          { type: "custom_tool_call", id: "ctc_01", call_id: "a", name: "exec", input: "1" },
+          { type: "custom_tool_call_output", id: "ctco_01", call_id: "a", output: "ok" },
+          // The steady state on a function-only upstream: it minted the call id, Codex the output id.
+          { type: "custom_tool_call", id: "fc_upstream", call_id: "b", name: "exec", input: "2" },
+          { type: "custom_tool_call_output", id: "ctco_02", call_id: "b", output: "ok" },
+          // Neither dialect: an upstream scheme we cannot vouch for, and a future Codex prefix.
+          { type: "custom_tool_call", id: "weird_xyz", call_id: "c", name: "exec", input: "3" },
+          { type: "custom_tool_call_output", id: "lsh_future", call_id: "c", output: "ok" },
+        ],
+      },
+      1,
+    ) as Record<string, unknown>;
+
+    const input = adapted.input as Array<Record<string, unknown>>;
+    expect(input.map((item) => [item.type, item.id])).toEqual([
+      ["function_call", "fc_01"],
+      ["function_call_output", "fco_01"],
+      ["function_call", "fc_upstream"],
+      ["function_call_output", "fco_02"],
+      ["function_call", undefined],
+      ["function_call_output", undefined],
+    ]);
+    expect(input[4]).not.toHaveProperty("id");
+    expect(input[5]).not.toHaveProperty("id");
+    expect(input[1]).toMatchObject({ call_id: "a", output: "ok" });
+  });
+
+  it("keeps Codex 0.145 replay items without ids compatible with the function dialect", () => {
+    const adapter = createResponsesCustomToolFunctionAdapter(["exec"]);
+    const adapted = adapter.adaptRequest(
+      {
+        ...execRequest(),
+        input: [
+          { type: "custom_tool_call", call_id: "legacy-call", name: "exec", input: "1" },
+          { type: "custom_tool_call_output", call_id: "legacy-call", output: "ok" },
+        ],
+      },
+      1,
+    ) as Record<string, unknown>;
+
+    expect(adapted.input).toEqual([
+      {
+        type: "function_call",
+        call_id: "legacy-call",
+        name: "exec",
+        arguments: JSON.stringify({ input: "1" }),
+      },
+      { type: "function_call_output", call_id: "legacy-call", output: "ok" },
+    ]);
+  });
+
+  it("rewrites only the id of a real Code Mode output payload", () => {
+    const adapter = createResponsesCustomToolFunctionAdapter(["exec"]);
+    // Captured verbatim from codex 0.152.1 with `[features.code_mode] enabled = true`. Code Mode
+    // outputs are content blocks rather than a string, so the exhaustive toEqual below is the
+    // assertion that the dialect flip forwards the payload untouched.
+    const output = [
+      { type: "input_text", text: "Script failed\nWall time 0.0 seconds\nOutput:\n" },
+      { type: "input_text", text: "Script error:\nSyntaxError: Unexpected identifier 'hi'" },
+    ];
+    const adapted = adapter.adaptRequest(
+      {
+        ...execRequest(),
+        input: [
+          {
+            type: "custom_tool_call",
+            id: "ctc_mockupstream1",
+            call_id: "call_mock1",
+            name: "exec",
+            input: "echo hi",
+          },
+          {
+            type: "custom_tool_call_output",
+            id: "ctco_01a05fbd-4e2a-7c93-9931-1591666b42bb",
+            call_id: "call_mock1",
+            output,
+          },
+        ],
+      },
+      1,
+    ) as Record<string, unknown>;
+
+    const input = adapted.input as Array<Record<string, unknown>>;
+    expect(input[1]).toEqual({
+      type: "function_call_output",
+      id: "fco_01a05fbd-4e2a-7c93-9931-1591666b42bb",
+      call_id: "call_mock1",
+      output,
+    });
+    expect(input[0]).toMatchObject({
+      type: "function_call",
+      id: "fc_mockupstream1",
+      call_id: "call_mock1",
+    });
+  });
+
   it("round-trips collision-safe names, tool choice, history, and parallel SSE calls", async () => {
     const adapter = createResponsesCustomToolFunctionAdapter(["exec"]);
     const adapted = adapter.adaptRequest(

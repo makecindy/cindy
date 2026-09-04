@@ -37,7 +37,10 @@ controller／进程内；重启后没有 live handle 时不凭估算换窗。Orc
 fail closed。compact 失败触发的换窗同样 fail closed，不得自动 replay 已有副作用的用户消息。
 PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
 timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host
-自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。手动压缩入口不受此规则影响，
+自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。Codex 订阅远端压缩若因
+`invalid_encrypted_content` 硬失败（`Error running remote compact task`），视为官方 compact
+确定性失败，走同一套 host-controlled rollover；单独的 `invalid_encrypted_content`（HTTP 静默剥
+推理密文范围）不得当成换窗。手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
 Cindy 保底压缩是**一套**流程，不是剥图 / 换窗两套功能。装得进当前约束就不动；
@@ -46,9 +49,15 @@ Cindy 保底压缩是**一套**流程，不是剥图 / 换窗两套功能。装�
 不另开一档：官方 compact 会先清旧工具结果；官方失败后交接不带 tool_result 正文。
 可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
 由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援路径不得依赖额外模型调用。
-切模型预检的数学仍在 `assessModelSwitchContext`；确认切小窗后动作端应以
-`tokens='violated'` 调用同一决定走 rebuild，不再走独立 handoff（本版尚未并入）。
-token 破了只认：终态超限、占用 ≥ 100%、官方 compact 确定性失败；普通 timeout 不算。
+切模型预检的数学仍在 `assessModelSwitchContext`。同引擎切到更小窗口时，main 必须在
+set-model 与 send 共用的 session 锁内按目标窗口评估；Claude Code／Codex／Pi 的强制换窗线
+统一固定为目标窗口 90%，与各 harness 的日常 auto-compaction 百分比解耦；Claude Code
+与 Pi 的日常默认值也设为 90%，对齐 Codex 口径，但用户已有显式 override 继续生效。命中
+`danger`／`overflow` 的本机会话先走同一套 `context_rebuild` bounded handoff，再落目标
+route，不能 resume 旧原生窗口。
+正在运行的 turn、SSH 远端缺少本地交接能力、或已有恢复动作在途时必须 fail closed，不能
+先热切再发送。三个 harness 的同模型自动压缩所有权保持不变。token 破了只认：终态超限、
+占用 ≥ 100%、官方 compact 确定性失败；普通 timeout 不算。
 
 Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
 不得用 `remote compaction v2` 文案驱动恢复动作。普通 timeout、纯文本大历史和网络失败

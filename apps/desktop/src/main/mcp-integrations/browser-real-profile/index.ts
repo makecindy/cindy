@@ -16,7 +16,13 @@ export {
   resolveSourceBrowserFromOs,
   userDataDirFor,
 } from './source.js';
-export { assertManagedBrowserStopped, managedConfigPatchBeforeStop } from './runtime-stop.js';
+export {
+  assertManagedBrowserStopped,
+  createBrowserProfileLifecycleQueue,
+  managedConfigPatchBeforeStop,
+  stopManagedBrowserForProfile,
+  wrapRuntimeWithProfileLifecycleQueue,
+} from './runtime-stop.js';
 export {
   cleanupCopiedLoginsThen,
   cleanupRealProfileSnapshots,
@@ -25,6 +31,7 @@ export {
   probeOsSourceProfileReadAccess,
   probeSourceProfileReadAccess,
   profileIsLocked,
+  profileUsesAppBoundEncryption,
   pruneExtraChromeProfiles,
   pruneNonAuthProfileState,
   readCopiedLoginsCdpPort,

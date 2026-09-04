@@ -37,6 +37,12 @@ interface ClaudeEnvBuildOptions {
    */
   modelContextWindows?: readonly ModelContextWindowSource[];
   /**
+   * The model selected for this spawn. Claude Code's auto-compact resolver does
+   * not read Maker's catalog-wide window map; it needs the selected model's
+   * window in CLAUDE_CODE_MAX_CONTEXT_TOKENS.
+   */
+  activeModel?: string;
+  /**
    * 'remote': 远端 cc-mgr daemon 跑 SDK 的 env —— 从空字典起,绝不继承 desktop
    * 进程 OS env(Windows HOME=C:\... 透到远端会让 cc CLI 落怪目录)。daemon 自身
    * process.env 的真实远端 HOME/PATH 由 SDK spawn merge 提供。
@@ -51,6 +57,16 @@ interface ClaudeEnvBuildOptions {
    * (options.subagentModel 省略、走 runtimeConfig 回落分支时消费)。
    */
   sessionProviderId?: string | null;
+  /**
+   * CC CLI 内部小模型调用(bash 命令前缀判定/标题/摘要等)的模型覆写
+   * (`ANTHROPIC_SMALL_FAST_MODEL`)。未设置时 CLI 用内置**裸名**默认值 ——
+   * 经网关路由的会话模型 id 带命名空间前缀(如 `anthropic/claude-opus-5`),
+   * 网关模型白名单按字面比对,CLI 的裸名默认值必被拒为 403
+   * user_model_access_denied(#3557)。调用方只在会话 wire 模型带命名空间时
+   * 传入(钉到会话自身的 wire 模型 —— 它是唯一确定已授权的 id);裸名会话
+   * (订阅直连 / 自定义中继)省略,保持 CLI 默认行为零变化。
+   */
+  smallFastModel?: string;
   /**
    * 调用方已解析好的 `CLAUDE_CODE_SUBAGENT_MODEL` 决定(见 subagent-model-default.ts)。
    *   - 字符串 → 设该值;
@@ -255,6 +271,119 @@ export function applySubagentModelEnv(
   else delete env.CLAUDE_CODE_SUBAGENT_MODEL;
 }
 
+export const EXPLORE_INHERIT_CAP_DISABLE_ENV = 'CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP';
+
+/**
+ * CC 判定「主模型是否在 Explore inherit cap 之内」用的家族词(2.1.259 反编译里的 `ven`,
+ * cap 值 `Cen = "opus"`,取 `ven.slice(0, indexOf(cap)+1)` = 整个数组)。CC 侧是**子串**
+ * 匹配、大小写不敏感,这里照抄它的口径,不要换成前缀或精确匹配。
+ */
+const EXPLORE_CAP_TIER_WORDS = ['haiku', 'sonnet', 'opus'] as const;
+
+/**
+ * cap 只对 Claude 家族才算「限高」。家族里不在上面三档中的成员(Fable)被 cap 收到 Opus
+ * 是上游有意的成本上限,必须保留 —— 所以这里额外识别家族标记。
+ *
+ * 与 `apps/desktop` 的 `ANTHROPIC_WIRE_MODEL_PREFIXES` 刻意不复用:那份在 main 进程,
+ * maker-core 反向 import 会破坏依赖方向(见 docs/dev-rules/architecture-invariants.md)。
+ * 两处都只是「前缀/子串兜底地板」,新增 Anthropic 家族名时同步加词即可。
+ */
+const CLAUDE_FAMILY_MARKERS = ['claude', 'fable'] as const;
+
+/**
+ * 内置 `Explore` 子代理的 inherit cap 是否该关掉。
+ *
+ * ## 上游行为(CC 2.1.198 起,CHANGELOG:「now inherits the main session's model (capped
+ * at opus) instead of running on haiku」;2.1.259 反编译)
+ *
+ * 内置 Explore 声明的是 `model: "inherit"`,但派发前先过一层 cap:
+ *
+ * ```js
+ * function FX(agent, mainLoopModel) {
+ *   if (agent.agentType !== "Explore" || agent.source !== "built-in") return agent.model;
+ *   if (env.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP) return "inherit";
+ *   return r7r(mainLoopModel) ? { inheritCap: "opus" } : "inherit";
+ * }
+ * function r7r(m) {
+ *   if (provider() !== "firstParty") return false;
+ *   return !containsAnyWord(m, ["haiku", "sonnet", "opus"]);   // 纯子串匹配
+ * }
+ * ```
+ *
+ * 而 `{ inheritCap: "opus" }` 到了 resolver 里会被拆成裸别名 `"opus"`,之后与「用户手写
+ * `model: opus`」完全同路 —— **它不是天花板,是直接替换**。
+ *
+ * ## 为什么要关
+ *
+ * 「在 cap 之内」是靠**模型名里有没有那三个词**判定的。Cindy 的 fp 路由在 CC 眼里是
+ * firstParty,而经它路由的非 Claude 模型(`gpt-5.6-sol[1m]` 等)名字里三个词都没有,于是
+ * 被判成「超过 opus」→ 静默改判成 Opus。实测:GPT 会话里 8 次 Explore 派发,3 次没带
+ * `model` 参数的全部打到 `claude-opus-5[1m]`,跨了供应商与计费(另 5 次调用时显式写了
+ * 模型,per-invocation 参数优先级更高,照旧生效)。
+ *
+ * 上游的意图对 Claude 家族是成立的(别比 Opus 更贵),对它认不出的模型则是把「未知」
+ * 当成了「更贵」。所以只在后者把开关打开,其余场景一律保持上游行为:
+ *
+ * | 主模型 | 结果 |
+ * |---|---|
+ * | Opus / Sonnet / Haiku | 不设 —— cap 本来就不触发,行为零变化 |
+ * | Fable | 不设 —— 保留上游的成本上限 |
+ * | 非 Claude(GPT / 网关模型…) | 设 —— Explore 跟随主模型 |
+ *
+ * 非 firstParty 路由本来就走不到 cap,那里设了也只是 no-op,不额外分支。
+ *
+ * ## 已知边界
+ *
+ * - **依赖一个未公开的 env**。上游哪天移除,这里静默退回现状(不会崩)。单测钉住的只是本
+ *   函数的判定表,**钉不住二进制行为** —— 上面那段反编译是 2.1.259
+ *   (`tools/claude/latest.json` 的 pin)的实测结论,升级 CC 后请回到二进制里重新核对
+ *   `FX` / `r7r` 与 `ven`／`Cen`,再决定这张表是否还成立。
+ * - 本机热切若跨过这张表,由 `applyExploreInheritCapEnv(..., 'replace')` 改字典,下一
+ *   次 send 重建 Query 让子进程吃到新 env。远端 daemon 烤死 spawn env,跨表则拒绝切模。
+ */
+export function shouldDisableExploreInheritCap(activeModel: string | undefined): boolean {
+  const model = activeModel?.trim().toLowerCase();
+  // 拿不到本次 spawn 的模型时不猜,保持上游行为。
+  if (!model) return false;
+  if (EXPLORE_CAP_TIER_WORDS.some((word) => model.includes(word))) return false;
+  if (CLAUDE_FAMILY_MARKERS.some((word) => model.includes(word))) return false;
+  return true;
+}
+
+/**
+ * 把 Explore inherit-cap 开关写进(或移出) env 字典。
+ *
+ * - `if-undefined`:spawn 用。behaviorFlags / 用户显式设的值优先,只在键缺失时注入 `'1'`。
+ * - `replace`:本机热切跨策略时用。只动 Cindy 注入的 `'1'` / 缺省,不碰显式覆盖(如 `'0'`)。
+ */
+export function applyExploreInheritCapEnv(
+  env: Record<string, string>,
+  activeModel: string | undefined,
+  mode: 'if-undefined' | 'replace',
+): void {
+  const disable = shouldDisableExploreInheritCap(activeModel);
+  if (mode === 'if-undefined') {
+    if (env[EXPLORE_INHERIT_CAP_DISABLE_ENV] === undefined && disable) {
+      env[EXPLORE_INHERIT_CAP_DISABLE_ENV] = '1';
+    }
+    return;
+  }
+  const current = env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
+  if (current !== undefined && current !== '1') return;
+  if (disable) env[EXPLORE_INHERIT_CAP_DISABLE_ENV] = '1';
+  else delete env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
+}
+
+/** Cindy 可改写的 cap 开关是否与目标模型失配。显式覆盖(非 `'1'`)视为用户钉死,不算失配。 */
+export function exploreInheritCapEnvNeedsSync(
+  env: Record<string, string>,
+  activeModel: string | undefined,
+): boolean {
+  const current = env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
+  if (current !== undefined && current !== '1') return false;
+  return shouldDisableExploreInheritCap(activeModel) !== (current === '1');
+}
+
 /**
  * 组装最终注入到 sdkQuery options.env 的字典。
  * 顺序：cleanEnv → behaviorFlags → endpoint → authEnv（鉴权最后，避免被 behaviorFlags 覆盖）
@@ -355,6 +484,16 @@ export async function buildClaudeEnv(
         )?.trim() || undefined),
   );
 
+  // #3557: 网关路由会话把 CLI 内部小模型调用钉到会话自身的 wire 模型。
+  // if-undefined 守卫:behaviorFlags / 用户显式覆盖优先。
+  if (options.smallFastModel && env.ANTHROPIC_SMALL_FAST_MODEL === undefined) {
+    env.ANTHROPIC_SMALL_FAST_MODEL = options.smallFastModel;
+  }
+
+  // 非 Claude 主模型的会话关掉内置 Explore 的 inherit cap ——
+  // 否则 CC 会把它静默改判成 Opus(判据与代价见 shouldDisableExploreInheritCap)。
+  applyExploreInheritCapEnv(env, options.activeModel, 'if-undefined');
+
   // 第三道防线: 告诉 CC CLI "provider 路由由 host 接管"。
   // CC 内部 filterSettingsEnv 看到此标记后,会从所有 settings-sourced env 中剥掉
   // ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 等 provider 相关字段,
@@ -380,6 +519,30 @@ export async function buildClaudeEnv(
     env[MAKER_MODEL_CONTEXT_WINDOWS_ENV] = modelContextWindows;
   } else {
     delete env[MAKER_MODEL_CONTEXT_WINDOWS_ENV];
+  }
+
+  const activeContextWindow = options.modelContextWindows?.find(
+    (model) => model.id === options.activeModel,
+  )?.contextWindow
+    ?? options.modelContextWindows?.find(
+      (model) => model.id.replace(/\[1m\]$/i, '')
+        === options.activeModel?.replace(/\[1m\]$/i, ''),
+    )?.contextWindow;
+  if (
+    activeContextWindow !== undefined
+    && Number.isFinite(activeContextWindow)
+    && activeContextWindow > 0
+  ) {
+    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(Math.floor(activeContextWindow));
+  } else {
+    delete env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+  }
+
+  const configuredCompactPct = Math.round(runtimeConfig.autoCompactThresholdPct ?? Number.NaN);
+  if (configuredCompactPct >= 50 && configuredCompactPct <= 95) {
+    env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(configuredCompactPct);
+  } else {
+    delete env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
   }
 
   // 关掉 CC SDK 内部的遥测 / 错误上报 / OTEL metrics export。

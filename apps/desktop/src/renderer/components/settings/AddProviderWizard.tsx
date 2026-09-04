@@ -1124,6 +1124,9 @@ export function AddProviderWizard({
           baseUrl: presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
           ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
           ...(rt.requestPath ? { requestPath: rt.requestPath } : {}),
+          ...(agent === 'codex' && rt.supportsImageGeneration === true
+            ? { supportsImageGeneration: true }
+            : {}),
           models: agentModels,
           ...(rt.headers ? { headers: rt.headers } : {}),
           ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),

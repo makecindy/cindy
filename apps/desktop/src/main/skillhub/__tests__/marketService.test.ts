@@ -78,6 +78,21 @@ describe('SkillhubMarketService', () => {
     });
   });
 
+  it('blocks management mutations before issuing a request for read-only identities', async () => {
+    const { fetch, calls } = makeFetch([]);
+    const service = new SkillhubMarketService({
+      fetch,
+      assertWriteAllowed: () => {
+        throw new ServerApiError('SKILL_HUB_READ_ONLY', 403, 'read-only');
+      },
+    });
+
+    await expect(service.deletePublished('demo')).rejects.toMatchObject({
+      code: 'SKILL_HUB_READ_ONLY',
+    });
+    expect(calls).toEqual([]);
+  });
+
   it('chunks sync requests at the broker batch limit', async () => {
     const slugs = Array.from({ length: 101 }, (_, i) => `skill-${i}`);
     const { fetch, calls: fetchCalls } = makeFetch([{ items: [] }, { items: [] }]);
@@ -88,6 +103,28 @@ describe('SkillhubMarketService', () => {
     expect(fetchCalls).toHaveLength(2);
     expect((fetchCalls[0]?.opts?.body as { slugs: string[] }).slugs).toHaveLength(100);
     expect((fetchCalls[1]?.opts?.body as { slugs: string[] }).slugs).toEqual(['skill-100']);
+  });
+
+  it('groups batch sync by catalog scope and keeps same-slug results distinct', async () => {
+    const { fetch, calls } = makeFetch([
+      { items: [makeHubSkill('same', { displayName: 'Market Same' })] },
+      { items: [makeHubSkill('same', { displayName: 'Team Same', visibility: 'shared' })] },
+    ]);
+    const service = new SkillhubMarketService({ fetch });
+
+    const result = await service.sync({ skills: [
+      { slug: 'same', catalogScope: 'market' },
+      { slug: 'same', catalogScope: 'team' },
+    ] });
+
+    expect(calls.map(({ path }) => path)).toEqual([
+      '/api/skills-hub/skills/batch-detail?scope=market',
+      '/api/skills-hub/skills/batch-detail?scope=team',
+    ]);
+    expect(result.results).toMatchObject([
+      { name: 'same', displayName: 'Market Same', catalogScope: 'market' },
+      { name: 'same', displayName: 'Team Same', catalogScope: 'team' },
+    ]);
   });
 
   it('lists my published skills through the user-published broker route', async () => {
@@ -143,6 +180,24 @@ describe('SkillhubMarketService', () => {
     });
   });
 
+  it('passes public and organization catalog scopes to the Hub', async () => {
+    const { fetch, calls } = makeFetch([
+      { items: [makeHubSkill('public-skill')], total: 1 },
+      { items: [makeHubSkill('organization-skill', { visibility: 'shared' })], total: 1 },
+    ]);
+    const service = new SkillhubMarketService({ fetch });
+
+    const publicResult = await service.listMarket({ scope: 'market', sort: 'trending' });
+    const organizationResult = await service.listMarket({ scope: 'team', sort: 'trending' });
+
+    expect(calls.map((call) => call.path)).toEqual([
+      '/api/skills-hub/skills?page=1&pageSize=24&sort=trending&order=desc&scope=market',
+      '/api/skills-hub/skills?page=1&pageSize=24&sort=trending&order=desc&scope=team',
+    ]);
+    expect(publicResult.items[0]?.catalogScope).toBe('market');
+    expect(organizationResult.items[0]?.catalogScope).toBe('team');
+  });
+
   it('builds detail, file preview, visibility, and scan routes', async () => {
     const { fetch, calls } = makeFetch([
       makeHubSkill('demo/skill'),
@@ -154,20 +209,20 @@ describe('SkillhubMarketService', () => {
     ]);
     const service = new SkillhubMarketService({ fetch });
 
-    await service.info('demo/skill');
-    await service.getPublishedFiles({ name: 'demo/skill', version: '1.0.0' });
-    await service.readPublishedFile({ name: 'demo/skill', path: 'docs/README.md', version: '1.0.0' });
-    await service.listPublishedVersions('demo/skill');
+    await service.info('demo/skill', 'market');
+    await service.getPublishedFiles({ name: 'demo/skill', version: '1.0.0', catalogScope: 'market' });
+    await service.readPublishedFile({ name: 'demo/skill', path: 'docs/README.md', version: '1.0.0', catalogScope: 'market' });
+    await service.listPublishedVersions('demo/skill', 'market');
     await service.getPublishedVisibility('demo/skill');
-    await service.getScanStatus({ slug: 'demo/skill', version: '1.0.0' });
+    await service.getScanStatus({ slug: 'demo/skill', version: '1.0.0', catalogScope: 'market' });
 
     expect(calls.map((call) => call.path)).toEqual([
-      '/api/skills-hub/skills/demo%2Fskill',
-      '/api/skills-hub/skills/demo%2Fskill/files?version=1.0.0',
-      '/api/skills-hub/skills/demo%2Fskill/file?path=docs%2FREADME.md&version=1.0.0',
-      '/api/skills-hub/skills/demo%2Fskill/versions',
+      '/api/skills-hub/skills/demo%2Fskill?scope=market',
+      '/api/skills-hub/skills/demo%2Fskill/files?version=1.0.0&scope=market',
+      '/api/skills-hub/skills/demo%2Fskill/file?path=docs%2FREADME.md&version=1.0.0&scope=market',
+      '/api/skills-hub/skills/demo%2Fskill/versions?scope=market',
       '/api/skills-hub/skills/demo%2Fskill/visibility',
-      '/api/skills-hub/skills/demo%2Fskill/scan?version=1.0.0',
+      '/api/skills-hub/skills/demo%2Fskill/scan?version=1.0.0&scope=market',
     ]);
     expect(calls[5]?.opts).toEqual({
       cache: 'no-store',
@@ -190,18 +245,27 @@ describe('SkillhubMarketService', () => {
       { updated: true },
       { deleted: true },
       { unpublished: true },
-      { visibility: 'shared' },
+      { slug: 'demo', visibility: 'private', requestedVisibility: 'public', reviewStatus: 'pending' },
     ]);
-    const service = new SkillhubMarketService({ fetch });
+    const service = new SkillhubMarketService({
+      fetch,
+      assertWriteAllowed: vi.fn(),
+      assertVisibilityAllowed: vi.fn(),
+    });
 
     await service.updatePublished('demo', { summary: 'new', teamSlug: null });
     await service.deletePublished('demo');
     await service.unpublishPublished('demo');
-    await service.setPublishedVisibility({
+    const visibilityResult = await service.setPublishedVisibility({
       name: 'demo',
-      visibility: 'shared',
+      visibility: 'public',
       teamSlug: 'team-a',
       visibleSlugs: ['team-a', 'od-1'],
+    });
+
+    expect(visibilityResult).toEqual({
+      success: true,
+      result: { slug: 'demo', visibility: 'private', requestedVisibility: 'public', reviewStatus: 'pending' },
     });
 
     expect(calls).toEqual([
@@ -221,10 +285,33 @@ describe('SkillhubMarketService', () => {
         path: '/api/skills-hub/skills/demo/set-visibility',
         opts: {
           method: 'POST',
-          body: { visibility: 'shared', teamSlug: 'team-a', visibleSlugs: ['team-a', 'od-1'] },
+          body: { visibility: 'public', teamSlug: 'team-a', visibleSlugs: ['team-a', 'od-1'] },
         },
       },
     ]);
+  });
+
+  it('updates installed scope for immediate moves and public-review transitions', async () => {
+    const updateRegistryCatalogScope = vi.fn(async () => undefined);
+    const { fetch } = makeFetch([
+      { slug: 'demo', visibility: 'shared' },
+      { slug: 'demo', visibility: 'private' },
+      { slug: 'demo', visibility: 'shared', requestedVisibility: 'public', reviewStatus: 'pending' },
+    ]);
+    const service = new SkillhubMarketService({
+      fetch,
+      assertWriteAllowed: vi.fn(),
+      assertVisibilityAllowed: vi.fn(),
+      updateRegistryCatalogScope,
+    });
+
+    await service.setPublishedVisibility({ name: 'demo', visibility: 'shared', previousCatalogScope: 'market' });
+    await service.setPublishedVisibility({ name: 'demo', visibility: 'private', previousCatalogScope: 'team' });
+    await service.setPublishedVisibility({ name: 'demo', visibility: 'public' });
+
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(1, 'demo', 'team', 'market');
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(2, 'demo', undefined, 'team');
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(3, 'demo', undefined, undefined);
   });
 
   it('maps categories and user departments into renderer result shapes', async () => {
@@ -233,6 +320,7 @@ describe('SkillhubMarketService', () => {
         {
           slug: 'devtools',
           name: 'DevTools',
+          source: 'platform',
           skillCount: 3,
           mySkillCount: 1,
           children: [
@@ -256,7 +344,7 @@ describe('SkillhubMarketService', () => {
     await expect(service.listCategories()).resolves.toEqual({
       success: true,
       categories: [
-        { slug: 'devtools', name: 'DevTools', count: 3, myCount: 1 },
+        { slug: 'devtools', name: 'DevTools', count: 3, myCount: 1, source: 'platform' },
         { slug: 'devtools/review', name: 'Review', count: 2, myCount: 1 },
         { slug: 'writing', name: 'Writing', count: 0, myCount: 0 },
       ],
@@ -276,6 +364,20 @@ describe('SkillhubMarketService', () => {
       success: true,
       teams: [{ slug: 'team-a', name: 'Team A', type: 'team' }],
     });
+  });
+
+  it('requests category lists from the selected catalog scope', async () => {
+    const { fetch, calls } = makeFetch([[]]);
+    const service = new SkillhubMarketService({ fetch });
+
+    await expect(service.listCategories('team')).resolves.toMatchObject({
+      success: true,
+      categories: [],
+    });
+    expect(calls).toEqual([{
+      path: '/api/skills-hub/categories?scope=team',
+      opts: undefined,
+    }]);
   });
 });
 

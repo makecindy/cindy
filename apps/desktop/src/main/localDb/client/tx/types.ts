@@ -145,6 +145,8 @@ export interface ForkSessionArgs {
     updatedAt: number;
   };
   uuidMap: Array<[string, string]> | Record<string, string>;
+  /** Rebind copied provider-native fork anchors to the child vendor session. */
+  nativeForkAnchorSessionMap?: Array<[string, string]> | Record<string, string>;
   /** Legacy Claude imports may have stored transcript parentage in parentUuid. */
   legacyTranscriptParentUuids?: string[];
   /** Imported Claude assistant rows may retain an external tool-use parent id. */
@@ -182,6 +184,8 @@ export interface EmbeddingRecordFailuresArgs {
   jobs: Array<{ rowid: number; attempts: number }>;
   errMsg: string;
   now: number;
+  /** #3416:确定性失败(INVALID_MODEL 等)整批直接进 'failed' 终态,不走退避。 */
+  terminal?: boolean;
 }
 
 export interface EmbeddingEnqueueArgs {

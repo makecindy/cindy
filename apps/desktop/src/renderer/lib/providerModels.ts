@@ -28,6 +28,18 @@ import {
 import type { AgentCapabilities, ModelDescriptor } from '@/hooks/useAgentCapabilities';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels';
 
+/** Resolve a context window by the complete runtime route, never a first-wins model id. */
+export function resolveProviderModelContextWindow(params: {
+  providers: ProviderView[];
+  providerId: string;
+  modelId: string;
+  agentKind: AgentKind;
+}): number | undefined {
+  const { providers, providerId, modelId, agentKind } = params;
+  const provider = providersForAgent(providers, agentKind).find((entry) => entry.id === providerId);
+  return findCatalogModel(provider, modelId, agentKind)?.contextWindow;
+}
+
 /**
  * 按目标 `(provider, agent, model)` 读取 effort 能力。
  *

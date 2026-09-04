@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
   createWorkLouderCodexDefaultSettings,
+  type WorkLouderAccessoriesState,
+  type WorkLouderCodexSettingsPatch,
   type WorkLouderCodexState,
+  type WorkLouderModel,
 } from '../../../shared/workLouderCodex';
 import { useWorkLouderCodex } from '../useWorkLouderCodex';
 
@@ -34,6 +37,16 @@ function state(
   };
 }
 
+function accessories(slice: WorkLouderCodexState): WorkLouderAccessoriesState {
+  return {
+    'codex-micro': slice,
+    'creator-micro-2': {
+      ...slice,
+      settings: createWorkLouderCodexDefaultSettings('creator-micro-2'),
+    },
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -45,11 +58,11 @@ function deferred<T>() {
 }
 
 function installApi(api: {
-  getState: () => Promise<WorkLouderCodexState>;
-  setSettings: (patch: unknown) => Promise<WorkLouderCodexState>;
-  resetSettings: () => Promise<WorkLouderCodexState>;
+  getState: () => Promise<WorkLouderAccessoriesState>;
+  setSettings: (model: WorkLouderModel, patch: WorkLouderCodexSettingsPatch) => Promise<WorkLouderAccessoriesState>;
+  resetSettings: (model: WorkLouderModel) => Promise<WorkLouderAccessoriesState>;
   openInputMonitoringSettings: () => Promise<void>;
-  onStateChanged: (callback: (next: WorkLouderCodexState) => void) => () => void;
+  onStateChanged: (callback: (next: WorkLouderAccessoriesState) => void) => () => void;
 }): void {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -64,8 +77,8 @@ afterEach(() => {
 
 describe('useWorkLouderCodex', () => {
   it('keeps a pushed state when the initial snapshot resolves late', async () => {
-    const initial = deferred<WorkLouderCodexState>();
-    let onStateChanged: ((next: WorkLouderCodexState) => void) | undefined;
+    const initial = deferred<WorkLouderAccessoriesState>();
+    let onStateChanged: ((next: WorkLouderAccessoriesState) => void) | undefined;
     installApi({
       getState: vi.fn(() => initial.promise),
       setSettings: vi.fn(),
@@ -78,9 +91,9 @@ describe('useWorkLouderCodex', () => {
     });
     const { result } = renderHook(() => useWorkLouderCodex());
 
-    act(() => onStateChanged?.(state('connected', 60)));
+    act(() => onStateChanged?.(accessories(state('connected', 60))));
     await act(async () => {
-      initial.resolve(state('connecting', 100));
+      initial.resolve(accessories(state('connecting', 100)));
       await initial.promise;
     });
 
@@ -88,10 +101,10 @@ describe('useWorkLouderCodex', () => {
   });
 
   it('preserves a newer connection status when a settings save fails', async () => {
-    const saving = deferred<WorkLouderCodexState>();
-    let onStateChanged: ((next: WorkLouderCodexState) => void) | undefined;
+    const saving = deferred<WorkLouderAccessoriesState>();
+    let onStateChanged: ((next: WorkLouderAccessoriesState) => void) | undefined;
     installApi({
-      getState: vi.fn(async () => state('connected')),
+      getState: vi.fn(async () => accessories(state('connected'))),
       setSettings: vi.fn(() => saving.promise),
       resetSettings: vi.fn(),
       openInputMonitoringSettings: vi.fn(),
@@ -109,7 +122,7 @@ describe('useWorkLouderCodex', () => {
       await Promise.resolve();
     });
     expect(result.current.state?.settings.lightingBrightness).toBe(40);
-    act(() => onStateChanged?.(state('not-detected')));
+    act(() => onStateChanged?.(accessories(state('not-detected'))));
     await act(async () => {
       saving.reject(new Error('write failed'));
       await mutation;
@@ -117,5 +130,50 @@ describe('useWorkLouderCodex', () => {
 
     expect(result.current.state).toEqual(state('not-detected'));
     expect(result.current.error).toBe('save');
+  });
+
+  it('does not revert an in-flight task-key layout when a stale device push arrives', async () => {
+    const saving = deferred<WorkLouderAccessoriesState>();
+    let onStateChanged: ((next: WorkLouderAccessoriesState) => void) | undefined;
+    installApi({
+      getState: vi.fn(async () => accessories(state('connected'))),
+      setSettings: vi.fn(() => saving.promise),
+      resetSettings: vi.fn(),
+      openInputMonitoringSettings: vi.fn(),
+      onStateChanged: vi.fn((callback) => {
+        onStateChanged = callback;
+        return vi.fn();
+      }),
+    });
+    const { result } = renderHook(() => useWorkLouderCodex());
+    await waitFor(() => expect(result.current.state?.connectionStatus).toBe('connected'));
+
+    const layout = {
+      ...createWorkLouderCodexDefaultSettings().layout,
+      taskKeys: ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT06'] as const,
+    };
+    const saved = state('connected');
+    saved.settings = { ...saved.settings, layout: { ...layout, taskKeys: [...layout.taskKeys] } };
+
+    await act(async () => {
+      void result.current.setSettings({ layout: saved.settings.layout });
+      await Promise.resolve();
+    });
+    expect(result.current.state?.settings.layout.taskKeys).toEqual(
+      expect.arrayContaining(['ACT06']),
+    );
+
+    act(() => onStateChanged?.(accessories(state('connected'))));
+    expect(result.current.state?.settings.layout.taskKeys).toEqual(
+      expect.arrayContaining(['ACT06']),
+    );
+
+    await act(async () => {
+      saving.resolve(accessories(saved));
+      await saving.promise;
+    });
+    expect(result.current.state?.settings.layout.taskKeys).toEqual(
+      expect.arrayContaining(['ACT06']),
+    );
   });
 });

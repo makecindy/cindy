@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef } from 'react';
+import { skillhubCatalogKey } from '../../../../shared/skillhubCatalog';
 
 /**
  * Store setter injected by useSkillhub at startup.
@@ -32,8 +33,17 @@ export function registerSyncStoreSetters(setters: SyncSetters): void {
   storeSetters = setters;
 }
 
-function uniqueSkillSlugs(skills: SkillhubSkill[]): string[] {
-  return [...new Set(skills.filter((s) => s.kind === 'skill').map((s) => s.name))];
+function uniqueSkillRefs(skills: SkillhubSkill[]): Array<{ slug: string; catalogScope?: 'market' | 'team' }> {
+  const byKey = new Map<string, { slug: string; catalogScope?: 'market' | 'team' }>();
+  for (const skill of skills) {
+    if (skill.kind !== 'skill') continue;
+    const catalogScope = skill.registryEntry?.catalogScope;
+    byKey.set(skillhubCatalogKey(skill.name, catalogScope), {
+      slug: skill.name,
+      ...(catalogScope ? { catalogScope } : {}),
+    });
+  }
+  return [...byKey.values()];
 }
 
 export function globalInstalledSkills(skills: SkillhubSkill[]): Array<{ slug: string; version: string }> {
@@ -54,7 +64,7 @@ async function doSync(skills: SkillhubSkill[]): Promise<void> {
   const requestId = ++fullSyncRequestId;
   try {
     const res = await window.electronAPI.skillhub.sync({
-      slugs: uniqueSkillSlugs(skills),
+      skills: uniqueSkillRefs(skills),
     });
     if (requestId !== fullSyncRequestId) return;
     if (res.success && res.results) {
@@ -91,7 +101,9 @@ export async function triggerIncrementalSync(
 ): Promise<void> {
   const requestId = ++incrementalSyncRequestId;
   try {
-    const res = await window.electronAPI.skillhub.sync({ slugs: [...new Set(slugs)] });
+    const res = await window.electronAPI.skillhub.sync({
+      skills: [...new Set(slugs)].map((slug) => ({ slug })),
+    });
     if (requestId !== incrementalSyncRequestId) return;
     if (res.success && res.results) {
       storeSetters?.mergeSyncResults(res.results);

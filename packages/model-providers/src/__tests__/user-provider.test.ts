@@ -223,6 +223,40 @@ describe("buildUserProvider (per-runtime)", () => {
     });
   });
 
+  it("inherits Registry Fast support only for an exact Codex route model id", () => {
+    const provider = buildUserProvider(
+      {
+        id: "fast-relay",
+        name: "Fast Relay",
+        runtimes: {
+          codex: {
+            baseUrl: "https://relay.example/v1",
+            models: [
+              { id: "gpt-5.6-sol", name: "GPT-5.6-Sol" },
+              { id: "openai/gpt-5.6-sol", name: "Prefixed GPT-5.6-Sol" },
+              { id: "unregistered-model", name: "Unregistered" },
+            ],
+          },
+          "claude-code": {
+            baseUrl: "https://relay.example/anthropic",
+            models: [{ id: "gpt-5.6-sol", name: "GPT-5.6-Sol" }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+
+    expect(provider.models.codex?.[0]).toMatchObject({
+      id: "gpt-5.6-sol",
+      supportsFastMode: true,
+    });
+    expect(provider.models.codex?.[1]?.supportsFastMode).toBeUndefined();
+    expect(provider.models.codex?.[2]?.supportsFastMode).toBeUndefined();
+    expect(
+      provider.models["claude-code"]?.[0]?.supportsFastMode,
+    ).toBeUndefined();
+  });
+
 it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)', () => {
     const p = buildUserProvider(
       {
@@ -728,6 +762,27 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect((p.models.pi ?? [])[0]?.group).toBe("custom:localollama");
     expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
     expect(p.routing.pi?.wireProtocol).toBe('openai-chat');
+  });
+
+  it('projects image generation independently from image input', () => {
+    const p = buildUserProvider({
+      id: 'images',
+      name: 'Images',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://images.example/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [
+            { id: 'generate', name: 'Generate' },
+            { id: 'input', name: 'Input', supportsImageInput: true },
+          ],
+        },
+      },
+    });
+    expect(p.routing.codex?.supportsImageGeneration).toBe(true);
+    expect(p.models.codex?.[0]?.supportsImageInput).toBeUndefined();
+    expect(p.models.codex?.[1]?.supportsImageInput).toBe(true);
   });
 
   it("does not export unverified CC/Codex efforts for managed Ollama", () => {

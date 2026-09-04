@@ -12,7 +12,7 @@
  * Phase 3 同步:Shell 顶层 import `./plugins`,触发各 plugin 的 import-side-effect
  * 注册(`registerTabKind`)。后续新 plugin 只需在 plugins/index.ts 加一行 import。
  *
- * Phase 2 简化保留:错误打日志、所有 IPC 失败本地回滚 + log(无 toast),Phase 7 收尾接 toast。
+ * Phase 2 简化保留:错误打日志、所有 IPC 失败本地回滚 + log;Phase 7 已收尾:添加失败按错误码 toast 统一暴露(见 handleAdd)。
  *
  * sessionId / workdir 由 host 透:
  *   - sessionId 为 null = 不在 cc-agent 路由,Shell 渲染空状态,store 不工作;
@@ -31,6 +31,8 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
+import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
@@ -442,11 +444,18 @@ export function RightSidebarShell({
         ? addOrFocusSingletonTab(sessionId, kind, initialState)
         : addTab(sessionId, kind, initialState);
       void action.catch((err) => {
-        // TODO(Phase 7): toast 暴露 RIGHT_SIDEBAR_TOO_MANY_TABS / STATE_TOO_LARGE 等错误码。
+        // 按错误码 toast:专属文案挂在全局 ipcError 命名空间(RIGHT_SIDEBAR_*),其余错误落通用 addFailed 兜底。
+        toast.error(
+          t(
+            mapIpcErrorToI18nKey(err, {
+              fallback: 'rightSidebar.tabs.addFailed',
+            }),
+          ),
+        );
         log.error('handleAdd failed', { sessionId, kind, err });
       });
     },
-    [iosSimulatorPluginAvailable, sessionId, subagentsEnabled],
+    [iosSimulatorPluginAvailable, sessionId, subagentsEnabled, t],
   );
 
   const handleClose = useCallback(

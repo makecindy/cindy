@@ -17,6 +17,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+  initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -33,6 +34,7 @@ vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
 }));
 
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { ErrorMessageCard } from '@/components/chat/ErrorMessageCard';
 import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
 
 const STREAM_RAW =
@@ -82,6 +84,34 @@ describe('ErrorBanner — LiteLLM 流中断', () => {
 
     expect(screen.getByText('chat.errorBanner.streamInterruptedNoRetry')).toBeTruthy();
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+  });
+});
+
+describe('runtime-selection-cancelled 本地化', () => {
+  const fallback =
+    'Deferred model switch was cancelled because safe context rebuild is unsupported. The previous model remains active.';
+  const reason = 'runtime-selection-cancelled';
+  const key = 'newChat.chatInput.switchFailed';
+
+  it('live ErrorBanner uses the stable localized reason instead of the English fallback', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: fallback,
+        errorReason: reason,
+        onRetry: vi.fn(),
+        agentKind: 'pi',
+      }),
+    );
+
+    expect(screen.getByText(key)).toBeTruthy();
+    expect(screen.queryByText(fallback)).toBeNull();
+  });
+
+  it('persisted ErrorMessageCard uses the same localized reason instead of the English fallback', () => {
+    render(createElement(ErrorMessageCard, { message: fallback, reason }));
+
+    expect(screen.getByText(key)).toBeTruthy();
+    expect(screen.queryByText(fallback)).toBeNull();
   });
 });
 

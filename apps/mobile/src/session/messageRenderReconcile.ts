@@ -23,23 +23,45 @@ type ReconciledRenderItem = MobileMessageRenderItem | MobileWorkChildItem;
 export function reconcileMobileMessageRenderItems(
   previous: readonly MobileMessageRenderItem[],
   next: readonly MobileMessageRenderItem[],
+  stablePrefixItemCount = 0,
 ): readonly MobileMessageRenderItem[] {
-  return reconcileRenderItemList(previous, next) as readonly MobileMessageRenderItem[];
+  return reconcileRenderItemList(
+    previous,
+    next,
+    stablePrefixItemCount,
+  ) as readonly MobileMessageRenderItem[];
 }
 
 function reconcileRenderItemList<T extends ReconciledRenderItem>(
   previous: readonly T[],
   next: readonly T[],
+  stablePrefixItemCount = 0,
 ): readonly T[] {
   if (next.length === 0) return previous.length === 0 ? previous : next;
-  const previousByKey = new Map(previous.map((item) => [item.key, item] as const));
-  const reconciled = next.map((item) => (
-    reconcileRenderItem(previousByKey.get(item.key), item) as T
-  ));
-  if (
-    previous.length === reconciled.length
-    && reconciled.every((item, index) => item === previous[index])
+  const trustedPrefixLength = Math.max(
+    0,
+    Math.min(stablePrefixItemCount, previous.length, next.length),
+  );
+  const previousByKey = new Map<string, T>();
+  for (let index = trustedPrefixLength; index < previous.length; index += 1) {
+    previousByKey.set(previous[index].key, previous[index]);
+  }
+  // Render-model builders hand this reconciler a fresh array. Reconcile its dirty tail in place so
+  // a token update does not allocate another full-history array merely to reuse prior row objects.
+  const reconciled = next as unknown as T[];
+  for (let index = trustedPrefixLength; index < reconciled.length; index += 1) {
+    const item = reconciled[index];
+    reconciled[index] = reconcileRenderItem(previousByKey.get(item.key), item) as T;
+  }
+  let allReconciledItemsUnchanged = previous.length === reconciled.length;
+  for (
+    let index = trustedPrefixLength;
+    allReconciledItemsUnchanged && index < reconciled.length;
+    index += 1
   ) {
+    if (reconciled[index] !== previous[index]) allReconciledItemsUnchanged = false;
+  }
+  if (allReconciledItemsUnchanged) {
     return previous;
   }
   return reconciled;
@@ -205,5 +227,6 @@ function remoteMessageEqual(previous: RemoteMessage, next: RemoteMessage): boole
     && previous.systemCardType === next.systemCardType
     && deepValueEqual(previous.content, next.content)
     && deepValueEqual(previous.agentMeta, next.agentMeta)
+    && deepValueEqual(previous.mobileToolInputProjection, next.mobileToolInputProjection)
     && deepValueEqual(previous.systemCardData, next.systemCardData);
 }

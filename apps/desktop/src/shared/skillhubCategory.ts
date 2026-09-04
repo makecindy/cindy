@@ -9,6 +9,7 @@ export interface MarketCategory {
   name: string;
   count: number;
   myCount: number;
+  source?: 'platform';
   children?: MarketCategory[];
 }
 

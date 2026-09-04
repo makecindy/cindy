@@ -1001,6 +1001,13 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   // Library 会话一并作废:关 db worker + 作废 handle——在途写入已在串行链上
   // 归属原 owner 完成或随 vault.invalidate 作废,新 owner 解析到全新根。
   await getGhostLibrarySlot().disposeAll();
+  if (libraryExtraDirSync) {
+    await libraryExtraDirSync(null).catch((error) => {
+      log.warn('library extraDirs owner-boundary sync failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
   await getGhostSetupCoordinator()?.waitForActionsIdle();
 }
 
@@ -2417,6 +2424,12 @@ export function noteGhostSessionFocused(sessionId: string | null): void {
   // 负责 Worker → Lead 归一、异步乱序和失败后的重试。
   ghostPrimarySessionFocusTracker.note(sessionId);
   ghostSessionFocusTracker.note(sessionId);
+  void refreshMivoLibraryExtraDirGrant().catch((error) => {
+    log.warn('library extraDirs focus sync failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 const ghostSessionFocusByWebContents = new Map<number, string | null>();
@@ -3149,6 +3162,49 @@ export function getGhostWorkspaceSlot(): GhostWorkspaceSlot {
 /** maker-ipc 完成初始化后注入判重/创建/聚焦服务;保持 cindy-brain 不反向依赖它。 */
 export function setGhostWorkspaceSessionService(service: WorkspaceSessionService | null): void {
   getGhostWorkspaceSlot().setSessionService(service);
+}
+
+const MIVO_LIBRARY_GHOST_IDS = new Set(['xd-mivo', 'cindy-mivo']);
+let libraryExtraDirSync: ((root: string | null) => Promise<void>) | null = null;
+
+/** maker-ipc 注入:把 library 根同步进当前 Mivo 会话 extraDirs。cindy-brain 不反向依赖 register。 */
+export function setGhostLibraryExtraDirSync(
+  sync: ((root: string | null) => Promise<void>) | null,
+): void {
+  libraryExtraDirSync = sync;
+}
+
+export function getFocusedGhostSessionId(): string | null {
+  return ghostSessionFocusTracker.current();
+}
+
+async function refreshMivoLibraryExtraDirGrant(): Promise<void> {
+  if (!libraryExtraDirSync) return;
+  const focused = ghostSessionFocusTracker.current();
+  if (!focused) {
+    await libraryExtraDirSync(null);
+    return;
+  }
+  const ghost = findAvailableGhost('xd-mivo') ?? findAvailableGhost('cindy-mivo');
+  if (!ghost || ghost.enabled === false || ghost.manifest.library !== true) {
+    await libraryExtraDirSync(null);
+    return;
+  }
+  const ghostId = ghost.manifest.id;
+  const resolution = await getGhostLibraryBindingStore().resolveLibraryRoot(ghostId);
+  if (resolution.kind === 'custom' && resolution.root === null) {
+    await libraryExtraDirSync(null);
+    return;
+  }
+  const root = resolution.kind === 'custom' && resolution.root !== null
+    ? resolution.root
+    : ownerScopedUserDataPath('libraries', ghostId);
+  await libraryExtraDirSync(root);
+}
+
+function syncMivoLibraryExtraDirFromSlot(ghostId: string, root: string | null): Promise<void> {
+  if (!MIVO_LIBRARY_GHOST_IDS.has(ghostId) || !libraryExtraDirSync) return Promise.resolve();
+  return libraryExtraDirSync(root);
 }
 
 let previewSlotSingleton: GhostPreviewSlot | null = null;
@@ -5142,6 +5198,7 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
       workerScriptPath: defaultLibraryDbWorkerPath,
       betterSqliteModulePath: () => resolveBetterSqliteModuleEntry() ?? 'better-sqlite3',
       log,
+      syncAgentReadonlyExtraDir: syncMivoLibraryExtraDirFromSlot,
       showItemInFolder: (absPath) => {
         shell.showItemInFolder(absPath);
       },
@@ -5218,6 +5275,7 @@ async function relocateGhostLibraryTo(
         allowInsideManagedRoot: opts?.allowInsideManagedRoot,
       });
       await slot.disposeGhost(id);
+      await refreshMivoLibraryExtraDirGrant();
       return set.ok ? { ok: true } : { ok: false, message: set.message };
     }
     const result = await migrateGhostLibrary({
@@ -5258,6 +5316,7 @@ async function relocateGhostLibraryTo(
       allowInsideManagedRoot: opts?.allowInsideManagedRoot,
     });
     await slot.disposeGhost(id);
+    await refreshMivoLibraryExtraDirGrant();
     return result.ok ? { ok: true } : { ok: false, message: result.message };
   } finally {
     slot.setRelocating(id, false);
@@ -5348,7 +5407,15 @@ export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise
     },
     log,
   });
-  if (result.ok) return { ok: true };
+  if (result.ok) {
+    await refreshMivoLibraryExtraDirGrant().catch((error) => {
+      log.warn('library extraDirs delete sync failed', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return { ok: true };
+  }
   return { ok: false, message: result.message };
 }
 
@@ -6071,6 +6138,7 @@ async function uninstallGhostAndCleanupLocked(
     // warn,不把卸载报成失败(与上面清账同纪律)。
     try {
       await getGhostLibrarySlot().disposeGhost(id);
+      await refreshMivoLibraryExtraDirGrant();
       const vault = new LibraryVault({
         rootDir: () => ownerScopedUserDataPath('libraries', id),
         ghostId: id,
@@ -7559,6 +7627,12 @@ export function registerGhostIpc(): void {
         const ghost = findAvailableGhost(id);
         if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
         resumeGhostUnreadProjection(id); // 沉睡期间保留的那颗点回来(#1421)
+        await refreshMivoLibraryExtraDirGrant().catch((error) => {
+          log.warn('library extraDirs enable sync failed', {
+            id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       } else {
         // 未读停止投影(记录保留):沉睡的意识没法把面板里的内容给你看,留一颗点
         // 只是噪声;但用户是"先别烦我"不是"这条我读过了",唤醒要能找回来。
@@ -7568,6 +7642,12 @@ export function registerGhostIpc(): void {
         // (要等插件再次上报或重启)。熄灯类操作(runtime/node/订阅)放在前面是既有
         // 行为且幂等,唯独这条会留下用户可见的错状态(copilot + codex review)。
         suspendGhostUnreadProjection(id);
+        await refreshMivoLibraryExtraDirGrant().catch((error) => {
+          log.warn('library extraDirs disable sync failed', {
+            id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       }
       return { ok: true };
     } finally {
@@ -7622,6 +7702,7 @@ export function registerGhostIpc(): void {
       const set = await getGhostLibraryBindingStore().setBinding(id, candidate, (root) => statfsFreeBytes(root));
       if (!set.ok) return { ok: false as const, message: set.message };
       await getGhostLibrarySlot().disposeGhost(id); // 作废会话,下一请求用新根
+      await refreshMivoLibraryExtraDirGrant();
       return { ok: true as const, warnings: set.warnings };
     } finally {
       releaseMutation();
@@ -7650,6 +7731,7 @@ export function registerGhostIpc(): void {
     if (!res.ok) return res;
     await getGhostLibraryBindingStore().removeBinding(id);
     await getGhostLibrarySlot().disposeGhost(id);
+    await refreshMivoLibraryExtraDirGrant();
     return { ok: true as const };
   });
   // 漂移恢复(位置失效):解除 binding 回默认(原自定义目录数据原样保留,
@@ -7661,6 +7743,7 @@ export function registerGhostIpc(): void {
     try {
       await getGhostLibraryBindingStore().removeBinding(id);
       await getGhostLibrarySlot().disposeGhost(id);
+      await refreshMivoLibraryExtraDirGrant();
       return { ok: true as const };
     } finally {
       releaseMutation();

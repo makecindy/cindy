@@ -48,6 +48,8 @@ import {
 } from './subagent-model-default.js';
 import {
   buildClaudeSubagentModelGuardHooks,
+  claudeSubagentModelWithContextWindow,
+  normalizeClaudeSubagentModel,
 } from './subagent-model-access.js';
 import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
@@ -106,9 +108,11 @@ import { formatManagedImageReferences } from '../shared/managed-image-reference.
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
 import {
+  applyExploreInheritCapEnv,
   applyOAuthSpawnEntrypointGate,
   applySubagentModelEnv,
   buildClaudeEnv,
+  exploreInheritCapEnvNeedsSync,
   REMOTE_ROUTE_OVERRIDE_ENV_KEYS,
 } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
@@ -209,6 +213,29 @@ export function toSdkModelString(model: string, contextWindow?: number | null): 
 
 /** 目录窗口未知时的兜底映射链(与窗口规则引入前一致;haiku 日期重写已移除,见函数头)。 */
 function legacyToSdkModelString(model: string): string {
+  // #3764:含命名空间前缀(provider/…)的 id 是自定义/网关 Provider 的路由键,不属于
+  // 本兜底链的官方裸 id 知识范围 —— 除下面显式列出的已知命名空间条目外一律逐字透传。
+  // 此前 includes('sonnet') 的含糊匹配会把 `cindy/claude-sonnet-5` 改写成 `…[1m]`,
+  // 而 `cindy/claude-opus-5` 透传:同一自定义 Provider 的两个模型 wire id 形态不
+  // 对称,被上游按白名单逐一 403(官方 Claude Code CLI 对同上游是逐字发送、两个
+  // 模型均可用)。窗口已知的路径不经过本函数,不受影响。
+  if (model.includes('/')) {
+    // 折扣GPT(codex/* 经折扣网关)真实上下文上限远低于 1M(catalog cc 侧 = 272k),
+    // 绝不能带 [1m]: cc-code 的 has1mContext 只要在 model 串里见到 [1m] 就把窗口判成
+    // 1M(getContextWindowForModel 直接 return 1_000_000), 撑大 auto-compact 阈值 →
+    // 对话冲过折扣网关真实上限(~24 万 token)后空转, 用户侧表现为会话"假死"。
+    // 路由不依赖 [1m]: isAnthropicWireModel 只按 claude-/sonnet/opus/haiku/fable 前缀
+    // 判定, codex/ 前缀始终走 provider 网关, 去掉 [1m] 不改变路由判定;
+    // 真实窗口由 catalog 经 translator 窗口口径注入(=272k)。
+    if (model === 'codex/gpt-5.5' || model === 'codex/gpt-5.4') return model;
+    if (model === 'codex/gpt-5.6-sol' || model === 'codex/gpt-5.6-terra') return model;
+    // DeepSeek / GLM 的 [1m] 是历史兼容路由后缀; 上下文大小另走 maker capabilities。
+    if (model === 'deepseek/deepseek-v4-pro' || model === 'deepseek/deepseek-v4-flash') {
+      return `${model}[1m]`;
+    }
+    if (model === 'z-ai/glm-5.2') return `${model}[1m]`;
+    return model;
+  }
   if (model === 'claude-opus-5') return 'claude-opus-5[1m]';
   if (model.includes('opus-4-8')) return 'claude-opus-4-8[1m]';
   if (model.includes('opus-4-7')) return 'claude-opus-4-7[1m]';
@@ -220,26 +247,12 @@ function legacyToSdkModelString(model: string): string {
   // 目录内 sonnet 系列均为 1M 窗口(catalog providers.json),统一走 [1m] beta 通道。
   if (model === 'claude-sonnet-5') return 'claude-sonnet-5[1m]';
   if (model === 'claude-sonnet-4-6') return 'claude-sonnet-4-6[1m]';
-  // 兜底:未来新增 sonnet 型号在此映射更新前,也透传显式 id 而非裸别名。
+  // 兜底:未来新增裸 sonnet 型号在此映射更新前,也透传显式 id 而非裸别名。
   if (model.includes('sonnet')) return `${model}[1m]`;
   // 官方 gpt-5.5 / gpt-5.4 真实支持 1M, 走 [1m] beta 通道。
   if (model === 'gpt-5.5' || model === 'gpt-5.4') return `${model}[1m]`;
-  // 折扣GPT(codex/* 经折扣网关)真实上下文上限远低于 1M(catalog cc 侧 = 272k),
-  // 绝不能带 [1m]: cc-code 的 has1mContext 只要在 model 串里见到 [1m] 就把窗口判成 1M
-  // (getContextWindowForModel 直接 return 1_000_000), 撑大 auto-compact 阈值 →
-  // 对话冲过折扣网关真实上限(~24 万 token)后空转, 用户侧表现为会话"假死"。
-  // 路由不依赖 [1m]: isAnthropicWireModel 只按 claude-/sonnet/opus/haiku/fable 前缀判定,
-  // codex/ 前缀始终走 provider 网关、不命中 Anthropic wire, 去掉 [1m] 不改变路由判定;
-  // 真实窗口由 catalog 经 translator 窗口口径注入(=272k)。
-  if (model === 'codex/gpt-5.5' || model === 'codex/gpt-5.4') return model;
-  if (model === 'codex/gpt-5.6-sol' || model === 'codex/gpt-5.6-terra') return model;
-  // DeepSeek 的 [1m] 是历史兼容路由后缀; 上下文大小另走 maker capabilities。
-  if (
-    model === 'deepseek/deepseek-v4-pro' ||
-    model === 'deepseek/deepseek-v4-flash' ||
-    model === 'deepseek-v4-flash'
-  ) return `${model}[1m]`;
-  if (model === 'z-ai/glm-5.2') return `${model}[1m]`;
+  // DeepSeek 裸 id 的 [1m] 同上为历史兼容路由后缀。
+  if (model === 'deepseek-v4-flash') return `${model}[1m]`;
   return model;
 }
 
@@ -859,8 +872,8 @@ const CAPABILITIES: Capabilities = {
       message: 'setMemory 影响下次 startSession; 当前 live session 需 close 重起才生效',
     },
   },
-  // SDK 原生 additionalDirectories 字段, buildQuery turn-by-turn 装配 → 改完下一 turn
-  // 立即生效, 真正的 hot-reload 体验。
+  // SDK additionalDirectories 在 Query 创建时冻结。setExtraDirs 只改 closure;
+  // 代际不一致时下一次 send 走 rewind 同款 resume+fork 重建,不用 fresh:true。
   extraDirs: { supported: true },
   writableDirs: { supported: true },
 };
@@ -1192,10 +1205,17 @@ export class ClaudeCodeAgent extends BaseAgent {
     const modelContextWindows = sessionRouteWindowEntry
       ? [...providerRoutedModels, sessionRouteWindowEntry]
       : providerRoutedModels;
+    // #3557:会话模型 id 带命名空间前缀(anthropic/... 等网关目录形态)时,CLI
+    // 内部小模型调用(bash 前缀判定/标题/摘要)不能用它内置的裸名默认值 ——
+    // 网关白名单字面比对,裸名必 403。钉到会话自身 wire 模型(唯一确定已授权);
+    // 裸名会话(订阅直连/自定义中继)不传,CLI 默认行为零变化。
+    const smallFastModel = opts.model.includes('/') ? sdkModel : undefined;
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
       sessionProviderId: opts.providerId ?? null,
+      activeModel: sdkModel,
       modelContextWindows,
+      smallFastModel,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
       // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
       subagentModel: null,
@@ -1259,8 +1279,6 @@ export class ClaudeCodeAgent extends BaseAgent {
         });
       }
     }
-    // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
-    applySubagentModelEnv(env, subagentDefault.envSubagentModel ?? null);
     // 每次 Agent/Task 调用都重新读取 host 的当前账号与路由事实。静态 capabilities
     // 只负责展示，不参与 deny；账号切换时 resolver 会立即看到新快照或 unknown。
     const resolveSubagentModelAccess = this.deps.resolveClaudeSubagentModelAccess
@@ -1271,6 +1289,37 @@ export class ClaudeCodeAgent extends BaseAgent {
           model,
         })
       : undefined;
+    const resolveSubagentModelContextWindow = (model: string): number | undefined => {
+      const normalized = normalizeClaudeSubagentModel(model);
+      const resolveVerified = this.deps.resolveVerifiedContextWindow;
+      if (resolveVerified) {
+        try {
+          const verified = resolveVerified(opts.providerId ?? null, normalized);
+          if (typeof verified === 'number' && Number.isFinite(verified) && verified > 0) {
+            return verified;
+          }
+        } catch {
+          // Fall back to catalog metadata when route verification is unavailable.
+        }
+      }
+      const descriptor = this.capabilities.availableModels.find(
+        (item) => normalizeClaudeSubagentModel(item.id) === normalized,
+      );
+      return descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
+        ? descriptor.contextWindow
+        : undefined;
+    };
+    // Claude Code only recognizes the 1M wire suffix for native context-window
+    // accounting. Normalize the process-level default too; explicit Agent/Task
+    // calls are normalized by the PreToolUse hook below.
+    const wireSubagentDefault = subagentDefault.envSubagentModel
+      ? claudeSubagentModelWithContextWindow(
+        subagentDefault.envSubagentModel,
+        resolveSubagentModelContextWindow(subagentDefault.envSubagentModel),
+      )
+      : null;
+    // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
+    applySubagentModelEnv(env, wireSubagentDefault);
     // 远端单独一份 env:用 'remote' 模式从空字典起(不继承 desktop OS env),否则
     // Windows HOME=C:\Users\Lizi 之类污染远端 cc CLI 的 ~ 展开(session/memory
     // 落怪路径)。详见 env-builder.ts buildClaudeEnv 文档。
@@ -1279,9 +1328,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           credentialMode,
           sessionProviderId: opts.providerId ?? null,
           mode: 'remote',
+          activeModel: sdkModel,
           modelContextWindows,
+          smallFastModel,
           // 远端不做本地扫描(见上),这里的值就是路由感知后的设置值 —— 保持 env 强制覆盖语义。
-          subagentModel: subagentDefault.envSubagentModel ?? null,
+          subagentModel: wireSubagentDefault,
         })
       : null;
     // 远端 route 覆盖(route 解析见上方 credentialMode 前的 remoteRoute):
@@ -1649,15 +1700,6 @@ export class ClaudeCodeAgent extends BaseAgent {
     const localClaudeHooks = reviewMode
       ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
       : mergeClaudeHookSets(
-          // 账号/模型准入是执行前提，不是用户工具权限。放在 PreToolUse，确保
-          // Full access 也无法绕过。
-          buildClaudeSubagentModelGuardHooks(
-            resolveSubagentModelAccess,
-            subagentDefault.envSubagentModel,
-            (model) => {
-              log.warn('subagent model denied by account access preflight', { model });
-            },
-          ),
           buildClaudeLocalToolGuardHooks(
             this.deps.capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -1678,6 +1720,16 @@ export class ClaudeCodeAgent extends BaseAgent {
           // Keep the existing local routing/capture hooks first: callers and tests
           // rely on their observable order. The exact-match Orca provenance guard
           // still runs for send_to_lead after those hooks and denies descendants.
+          // 账号/模型准入是执行前提，不是用户工具权限。仍放在 PreToolUse，确保
+          // Full access 也无法绕过；它排在既有捕获/路由 hook 后，不改变既有顺序。
+          buildClaudeSubagentModelGuardHooks(
+            resolveSubagentModelAccess,
+            wireSubagentDefault ?? undefined,
+            (model) => {
+              log.warn('subagent model denied by account access preflight', { model });
+            },
+            resolveSubagentModelContextWindow,
+          ),
           buildClaudeOrcaCallerProvenanceHooks(),
           buildClaudeAskUserQuestionCallerProvenanceHooks(),
           this.deps.claudeHooks,
@@ -2470,6 +2522,17 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
     let mutableWritableDirs: string[] = Array.isArray(opts.writableDirs) ? [...opts.writableDirs] : [];
     let autoReviewDirectoryGeneration = 0;
+    let activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
+    let extraDirsRebuildAttempted = false;
+    // 本机热切跨过 Explore inherit-cap 策略后,子进程 env 必须随 Query 重建。
+    // 代际与 extraDirs 同款:setModel 只加代,buildQuery 才把当前 Query 标成已吃进
+    // 该代。await buildQuery 期间再切一次不会被这次 spawn 误标成已同步。
+    let exploreInheritCapEnvGeneration = 0;
+    let activeQueryExploreInheritCapGeneration = exploreInheritCapEnvGeneration;
+    // 拷贝进工作目录只允许作 Claude resume 不吃新 additionalDirectories 时的临时缺口。
+    // 默认关闭;启用条件:extraDirsRebuildAttempted 且下一 Query 代际仍落后。落地后
+    // library extraDirs 重建成功即删副本,不得把拷贝写成架构。
+    const extraDirsCopyFallbackEnabled = false;
     let activeQueryHasDirectoryGrants = mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0;
 
     // ── Usage tracker (Stage 2 B') ──────────────────────────────────────────
@@ -3530,6 +3593,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 计划模式开启时 SDK 跑 plan; 读 mutable 值让 rewind/fork 重建拿到当前档而非创建时快照。
       const additionalDirectories = [...new Set([...mutableExtraDirs, ...mutableWritableDirs])];
       activeQueryHasDirectoryGrants = additionalDirectories.length > 0;
+      activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
+      extraDirsRebuildAttempted = false;
+      activeQueryExploreInheritCapGeneration = exploreInheritCapEnvGeneration;
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
       const query = sdkQuery({
@@ -5449,6 +5515,28 @@ export class ClaudeCodeAgent extends BaseAgent {
         while (idleResumeRebuildGate) {
           await idleResumeRebuildGate;
         }
+        if (
+          activeQueryDirectoryGeneration !== autoReviewDirectoryGeneration
+          && !pendingRewindTo
+          && !activeBridgeRewindResumeAt
+          && sdkSessionId
+        ) {
+          pendingRewindTo = sdkSessionId;
+          extraDirsRebuildAttempted = true;
+        } else if (
+          activeQueryExploreInheritCapGeneration !== exploreInheritCapEnvGeneration
+          && !pendingRewindTo
+          && !activeBridgeRewindResumeAt
+          && sdkSessionId
+        ) {
+          pendingRewindTo = sdkSessionId;
+        } else if (
+          extraDirsCopyFallbackEnabled
+          && extraDirsRebuildAttempted
+          && activeQueryDirectoryGeneration !== autoReviewDirectoryGeneration
+        ) {
+          log.warn('Claude extraDirs copy fallback is gated off; resume+fork rebuild remains the only path');
+        }
         if (sendOpts?.signal?.aborted) {
           throw new Error('Claude send cancelled before acceptance');
         }
@@ -5590,9 +5678,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (!resumeAt) {
             throw new Error('Claude rewind rebuild missing resume target');
           }
+          const directoryGrantRebuild = pendingRewindTo === sdkSessionId;
           log.debug('send ▶ pendingRewindTo detected — rebuilding sdkQuery with 三件套', {
-            resumeSessionAt: resumeAt,
+            resumeSessionAt: directoryGrantRebuild ? undefined : resumeAt,
             resumeSdkSid: sdkSessionId,
+            directoryGrantRebuild,
           });
           // 关键: 重建 abortController + inputQueue。老的两个在 q.close() 时已经污染
           // (controller 进 aborted 状态, queue 的 generator 还在等 waiter), 复用会让
@@ -5621,8 +5711,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 不能再读包含 arm 态的 effectiveSdkPermissionMode()。否则 rewind 窗口里用户 arm
           // 了下一 turn 的 plan,但当前排队行显式 planMode:false 时,新 Query 会先以 plan
           // 起跑且 replay 看不到 diff,导致普通 turn 误跑成 plan turn (Codex review 3535801840)。
+          // extraDirs 中途授权复用这条重建,但不把 session id 当 resumeSessionAt。
+          // rewind 已在 commitRewindFiles 关过旧 q;directory grant 这条补 close。
+          if (directoryGrantRebuild) {
+            rewindTransitionQueries.add(q);
+            try {
+              q.close();
+            } catch (e) {
+              log.warn('rewind rebuild: q.close threw', { error: String(e) });
+            }
+          }
           q = await buildQuery({
-            resumeSessionAt: resumeAt,
+            ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
             forkSession: true,
             permissionMode: snapSdkPermissionMode,
           });
@@ -6399,7 +6499,24 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         const sdkModel = sdkModelFor(newModel);
         const isControlBlocked = controlRequestsBlocked();
-        log.debug('setModel', { from: mutableModel, to: newModel, sdk: sdkModel, controlRequestsBlocked: isControlBlocked });
+        const liveEnv = opts.remoteHostId ? remoteEnv : env;
+        const exploreInheritCapNeedsRebuild = liveEnv
+          ? exploreInheritCapEnvNeedsSync(liveEnv, sdkModel)
+          : false;
+        if (exploreInheritCapNeedsRebuild && opts.remoteHostId) {
+          // 与远端路由变化同码:daemon 烤死 spawn env,热切改不了 Explore cap。
+          // host 已把 REMOTE_MODEL_SWITCH_ROUTE_CHANGE 映射成「关闭并重建远程任务」。
+          throw new Error(
+            `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" would desync the remote Explore inherit-cap env; close and recreate the remote session to apply it`,
+          );
+        }
+        log.debug('setModel', {
+          from: mutableModel,
+          to: newModel,
+          sdk: sdkModel,
+          controlRequestsBlocked: isControlBlocked,
+          exploreInheritCapNeedsRebuild,
+        });
         if (!isControlBlocked) {
           // flag settings 只在 Query 创建时写入。热切若只调 setModel,Claude Code
           // 仍按启动时的组织白名单校验,后加载的网关模型会报
@@ -6467,6 +6584,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         // 适用性在 getToolLoopGuard 里按已更新的 mutableModel 逐 scope 判,这里只清状态。
         resetToolLoopGuards();
+        if (exploreInheritCapNeedsRebuild && liveEnv && !opts.remoteHostId) {
+          applyExploreInheritCapEnv(liveEnv, sdkModel, 'replace');
+          // 子进程 env 在 spawn 时钉死,Query.setModel 改不了。只改字典并加代,
+          // 下一轮 send 再走 extraDirs 同款 resume+fork 重建。这里不碰
+          // pendingRewindTo:热切若落在 in-flight turn / rewind 接受窗,提前设标记
+          // 会让 forward loop 把当前 Query 当成过渡态静音。
+          exploreInheritCapEnvGeneration += 1;
+        }
       },
 
       async setEffort(newEffort: Effort) {
@@ -6625,6 +6750,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         log.debug('setExtraDirs', { from: mutableExtraDirs.length, to: newDirs.length });
         mutableExtraDirs = [...newDirs];
         autoReviewDirectoryGeneration++;
+        extraDirsRebuildAttempted = false;
       },
 
       async setWritableDirs(newDirs: string[]) {

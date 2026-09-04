@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { HostConfig } from '@cindy/maker-remote-ssh';
 
 import {
   disposeAllTunnels,
@@ -76,13 +77,14 @@ class FakeTunnelConn {
   }
 }
 
-const HOST_CFG = {
+const HOST_CFG: HostConfig = {
   id: 'test-host',
   hostname: '10.0.0.1',
   port: 22,
   user: 'deploy',
   authMethod: 'agent' as const,
   source: 'manual' as const,
+  managedByCindy: false,
 };
 
 const TUNNEL_PREF: SshHostAgentProxyPref = {
@@ -327,6 +329,34 @@ describe('agent-proxy tunnel keeper', () => {
     await vi.waitFor(() => {
       expect(h.conns[0]!.disconnectCount).toBe(1);
     });
+  });
+
+  it('rebuilds when effective SSH agent metadata changes', async () => {
+    const h = makeHarness();
+    h.mainHost.config = {
+      ...HOST_CFG,
+      sshAuthentication: {
+        identitiesOnly: false,
+        identityAgent: '/tmp/agent-a.sock',
+        configuredIdentityFiles: [],
+        identityFileDirectiveSeen: false,
+        identityFileNoneSeen: false,
+      },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensureTunnelUp(h.mainHost as any, 5_000);
+    h.mainHost.config = {
+      ...h.mainHost.config,
+      sshAuthentication: {
+        ...h.mainHost.config.sshAuthentication!,
+        identityAgent: '/tmp/agent-b.sock',
+      },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ensureTunnelForHost(h.mainHost as any, { allowRebuild: true });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensureTunnelUp(h.mainHost as any, 5_000);
+    expect(h.conns).toHaveLength(2);
   });
 
   it('late teardown of a replaced entry does not clobber the new active state (R3 review P2)', async () => {

@@ -205,6 +205,7 @@ async function startRewindableSession(
     idleTimeoutMs?: number;
     remoteHostId?: string;
     model?: string;
+    availableModels?: ModelDescriptor[];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
 ) {
@@ -235,7 +236,7 @@ async function startRewindableSession(
         infoCalls.push(message);
       },
     ),
-    capabilityAdditions: { availableModels: TEST_MODELS },
+    capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
@@ -268,6 +269,45 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('passes the selected custom-provider window and compact threshold to spawned Claude Code', async () => {
+    const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+    const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';
+
+    try {
+      const { handle } = await startRewindableSession({
+        model: 'xai/grok-4.6',
+        autoCompactThresholdPct: 80.4,
+        availableModels: [{
+          id: 'xai/grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 372_000.4,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        }],
+      });
+      await handle.close();
+
+      const env = sdkMock.query.mock.calls[0]?.[0]?.options?.env as
+        | Record<string, string>
+        | undefined;
+      expect(env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('372000');
+      expect(env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+    } finally {
+      if (originalMaxContextTokens === undefined) {
+        delete process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+      } else {
+        process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = originalMaxContextTokens;
+      }
+      if (originalCompactPctOverride === undefined) {
+        delete process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+      } else {
+        process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = originalCompactPctOverride;
+      }
+    }
+  });
+
   it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 
@@ -314,6 +354,193 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       firstQuery.setModel.mock.invocationCallOrder[0],
     );
     expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
+
+    await handle.close();
+  });
+
+  it('rebuilds the local Query env when a live switch crosses the Explore inherit-cap policy', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'gpt-5.6-sol',
+      availableModels: [
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap');
+    });
+
+    const startEnv = sdkMock.query.mock.calls[0]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(startEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBe('1');
+
+    await handle.setModel?.('claude-fable-5');
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-fable-5[1m]');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+    await handle.send({ type: 'user', content: 'after crossing to fable' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    expect(firstQuery.close).toHaveBeenCalled();
+    const rebuildEnv = sdkMock.query.mock.calls[1]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(rebuildEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBeUndefined();
+    expect(sdkMock.query.mock.calls[1]?.[0]?.options?.forkSession).toBe(true);
+    expect(sdkMock.query.mock.calls[1]?.[0]?.options?.resumeSessionAt).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('rebuilds the local Query env when a live switch from Fable to GPT re-enables the cap disable flag', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap-gpt' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap-gpt');
+    });
+
+    const startEnv = sdkMock.query.mock.calls[0]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(startEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBeUndefined();
+
+    await handle.setModel?.('gpt-5.6-sol');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+    await handle.send({ type: 'user', content: 'after crossing to gpt' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    const rebuildEnv = sdkMock.query.mock.calls[1]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(rebuildEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBe('1');
+
+    await handle.close();
+  });
+
+  it('does not rebuild the Query when a live switch stays on the same Explore inherit-cap policy', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap-same' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap-same');
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    await handle.send({ type: 'user', content: 'same-policy switch' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(1);
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+
+    await handle.close();
+  });
+
+  it('rejects a remote live switch that would desync the Explore inherit-cap env', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      remoteHostId: 'remote-1',
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-remote-explore-cap' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-remote-explore-cap');
+    });
+
+    await expect(handle.setModel?.('gpt-5.6-sol')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(firstQuery.setModel).not.toHaveBeenCalled();
+    expect(handle.model).toBe('claude-fable-5');
+
+    await handle.close();
+  });
+
+  it('rejects a remote Explore inherit-cap switch even while rewind rebuild is pending', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      remoteHostId: 'remote-1',
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-remote-explore-cap-rewind' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-remote-explore-cap-rewind');
+    });
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    await expect(handle.setModel?.('gpt-5.6-sol')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(handle.model).toBe('claude-fable-5');
 
     await handle.close();
   });

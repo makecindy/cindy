@@ -163,7 +163,7 @@ export interface LearnControllerDeps {
   /** 已装 skill 清单块("改 vs 加"决策依据;无 skill 返空串)。 */
   getInstalledSkillsIndex(): Promise<string>;
   /** hub 源:拉市场 skill 详情 + 全部已发布文件(PR3 注入;未注入时 hub 源报 INVALID_PARAMS)。 */
-  fetchHubSkill?: (slug: string) => Promise<{
+  fetchHubSkill?: (slug: string, catalogScope?: 'market' | 'team') => Promise<{
     name: string;
     description: string;
     content: string;
@@ -337,6 +337,9 @@ export class LearnController {
     if (req.sourceKind === 'hub' && req.hubSlug && !/^[a-z0-9][a-z0-9-]*$/.test(req.hubSlug)) {
       throw new LearnError('INVALID_PARAMS', `invalid hubSlug: ${req.hubSlug}`);
     }
+    if (req.sourceKind === 'hub' && req.hubCatalogScope && req.hubCatalogScope !== 'market' && req.hubCatalogScope !== 'team') {
+      throw new LearnError('INVALID_PARAMS', `invalid hubCatalogScope: ${String(req.hubCatalogScope)}`);
+    }
     if (req.sourceKind === 'hub' && !this.deps.fetchHubSkill) {
       throw new LearnError('INVALID_PARAMS', 'hub source is not available');
     }
@@ -361,6 +364,7 @@ export class LearnController {
       ...(dataOwnerId ? { dataOwnerId } : {}),
       input,
       ...(req.hubSlug ? { hubSlug: req.hubSlug } : {}),
+      ...(req.sourceKind === 'hub' ? { hubCatalogScope: req.hubCatalogScope ?? 'market' } : {}),
       ...(req.originSessionId ? { originSessionId: req.originSessionId } : {}),
       usedSessionEvidence: false,
       createdAt: this.now(),
@@ -393,7 +397,7 @@ export class LearnController {
     let referenceFilesOmissions: Array<{ path: string; reason: string }> | undefined;
     let evidenceQuery = run.input;
     if (run.sourceKind === 'hub' && run.hubSlug && this.deps.fetchHubSkill) {
-      const hub = await this.deps.fetchHubSkill(run.hubSlug);
+      const hub = await this.deps.fetchHubSkill(run.hubSlug, run.hubCatalogScope ?? 'market');
       if (!hub) throw new LearnError('NOT_FOUND', `hub skill ${run.hubSlug} not found`);
       // fetch 的网络 await 期间可能被 cancel(cleanup 已删 staging):此处不设门
       // 的话 writeReferenceFiles 会把 _reference/ 整个重建成孤儿目录(自查)。
@@ -516,7 +520,7 @@ export class LearnController {
 
     const cleanMessage =
       run.sourceKind === 'hub'
-        ? `/learn hub:${run.hubSlug}`
+        ? `/learn hub:${run.hubCatalogScope ?? 'market'}:${run.hubSlug}`
         : run.sourceKind === 'session'
           ? '/learn (distill current conversation)'
           : `/learn ${run.input}`;
@@ -960,7 +964,7 @@ export class LearnController {
       const provenance: LearnProvenance = {
         method: 'learn',
         sourceKind: run.sourceKind,
-        ...(run.hubSlug ? { sourceRef: run.hubSlug } : {}),
+        ...(run.hubSlug ? { sourceRef: `${run.hubCatalogScope ?? 'market'}:${run.hubSlug}` } : {}),
         usedSessionEvidence: run.usedSessionEvidence,
         personal: run.usedSessionEvidence, // 硬规则:含 session 证据 ⇒ personal,不可配置
         learnedAt: Math.floor(this.now() / 1000),

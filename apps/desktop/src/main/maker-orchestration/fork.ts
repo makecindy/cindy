@@ -18,6 +18,7 @@ import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
+import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
@@ -78,7 +79,7 @@ interface ForkNativeSource {
   nextSwitch: MessagePosition | null;
   /** false = 原生会话已因同引擎换窗失效，只复制可见历史，首次发送走交接。 */
   reuseVendorSession: boolean;
-  rebuildReason?: 'context-overflow' | 'pi-prompt-timeout';
+  rebuildReason?: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
 }
 
 interface ForkTimelineMessage {
@@ -97,6 +98,8 @@ interface ParsedAgentSwitchBoundary {
   fromAgentKind: DbAgentKind;
   toAgentKind?: DbAgentKind;
   fromModel: string | null;
+  fromProviderId?: string | null;
+  toProviderId?: string | null;
   fromSdkSessionId: string | null;
   handoff?: string;
 }
@@ -115,7 +118,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   agentKind: DbAgentKind;
   model: string;
   providerId: string | null;
-  reason: 'context-overflow' | 'pi-prompt-timeout';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
 }): Promise<void> {
   const handoffMessages: HandoffSourceMessage[] = opts.rows
     .filter(
@@ -159,7 +162,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
 }
 
 interface ParsedContextRebuildBoundary {
-  reason: 'context-overflow' | 'pi-prompt-timeout';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
   sourceAgentKind?: DbAgentKind;
   sourceModel?: string | null;
   sourceProviderId?: string | null;
@@ -168,7 +171,11 @@ interface ParsedContextRebuildBoundary {
 function parseContextRebuildBoundary(content: string): ParsedContextRebuildBoundary | null {
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
-    if (parsed.reason !== 'context-overflow' && parsed.reason !== 'pi-prompt-timeout') {
+    if (
+      parsed.reason !== 'context-overflow' &&
+      parsed.reason !== 'model-window-switch' &&
+      parsed.reason !== 'pi-prompt-timeout'
+    ) {
       return null;
     }
     return {
@@ -193,7 +200,7 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
 
 function parseContextRebuildReason(
   content: string,
-): 'context-overflow' | 'pi-prompt-timeout' | null {
+): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | null {
   return parseContextRebuildBoundary(content)?.reason ?? null;
 }
 
@@ -214,12 +221,50 @@ function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoundary | 
       fromAgentKind: parsed.fromAgentKind,
       toAgentKind,
       fromModel: typeof parsed.fromModel === 'string' ? parsed.fromModel : null,
+      ...(Object.hasOwn(parsed, 'fromProviderId')
+        ? {
+            fromProviderId:
+              typeof parsed.fromProviderId === 'string' ? parsed.fromProviderId : null,
+          }
+        : {}),
+      ...(Object.hasOwn(parsed, 'toProviderId')
+        ? {
+            toProviderId: typeof parsed.toProviderId === 'string' ? parsed.toProviderId : null,
+          }
+        : {}),
       fromSdkSessionId:
         typeof parsed.fromSdkSessionId === 'string' && parsed.fromSdkSessionId
           ? parsed.fromSdkSessionId
           : null,
       handoff: typeof parsed.handoff === 'string' && parsed.handoff ? parsed.handoff : undefined,
     };
+  } catch {
+    return null;
+  }
+}
+
+function parseCodexNativeForkAnchor(raw: string | null): {
+  sdkSessionId: string;
+  turnId: string;
+} | null {
+  if (!raw) return null;
+  try {
+    const meta = JSON.parse(raw) as Record<string, unknown>;
+    if (meta.turnCompleted !== true) return null;
+    const anchor = meta.nativeForkAnchor;
+    if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) return null;
+    const candidate = anchor as Record<string, unknown>;
+    if (
+      candidate.agentKind !== 'codex' ||
+      candidate.kind !== 'turn' ||
+      typeof candidate.sdkSessionId !== 'string' ||
+      !candidate.sdkSessionId ||
+      typeof candidate.id !== 'string' ||
+      !candidate.id
+    ) {
+      return null;
+    }
+    return { sdkSessionId: candidate.sdkSessionId, turnId: candidate.id };
   } catch {
     return null;
   }
@@ -301,11 +346,42 @@ async function resolveForkNativeSource(
     if (!parsed?.fromSdkSessionId) {
       throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话不可用');
     }
+    const model = parsed.fromModel ?? source.model;
+    let providerId: string | null;
+    if (Object.hasOwn(parsed, 'fromProviderId')) {
+      providerId = parsed.fromProviderId ?? null;
+    } else {
+      const previousSwitch = await client.queryOne<{ content: string }>(
+        `SELECT content FROM messages
+          WHERE session_id = ?
+            AND role = 'agent_switch'
+            AND rewind_at IS NULL
+            AND (created_at < ? OR (created_at = ? AND rowid < ?))
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT 1`,
+        positionParams,
+      );
+      const previousBoundary = previousSwitch
+        ? parseAgentSwitchBoundary(previousSwitch.content)
+        : null;
+      if (
+        previousBoundary?.toAgentKind === parsed.fromAgentKind &&
+        Object.hasOwn(previousBoundary, 'toProviderId')
+      ) {
+        providerId = previousBoundary.toProviderId ?? null;
+      } else if (parsed.fromAgentKind === normalizeDbAgentKind(source.agentKind)) {
+        providerId = source.providerId;
+      } else if (parsed.fromAgentKind === 'codex') {
+        providerId = inferProviderIdForModel(model, 'codex');
+      } else {
+        providerId = null;
+      }
+    }
     return {
       agentKind: parsed.fromAgentKind,
       sdkSessionId: parsed.fromSdkSessionId,
-      model: parsed.fromModel ?? source.model,
-      providerId: parsed.fromAgentKind === source.agentKind ? source.providerId : null,
+      model,
+      providerId,
       nextSwitch: { createdAt: nextSwitch.created_at, rowid: nextSwitch.rowid },
       reuseVendorSession: true,
     };
@@ -403,6 +479,34 @@ function resolveClaudeAssistantAnchor(
     if (row.role !== 'assistant' || timelineSdkSessionId !== sourceSdkSessionId) continue;
     const resolved = resolveClaudeForkAssistantAnchor(parseClaudeAgentMeta(row.agentMeta), index);
     if (resolved) return resolved;
+  }
+  return undefined;
+}
+
+function resolveCodexTurnAnchor(
+  rows: ForkTimelineMessage[],
+  sourceSdkSessionId: string,
+): string | undefined {
+  let timelineSdkSessionId: string | null = sourceSdkSessionId;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i];
+    if (row.role === 'context_rebuild') {
+      timelineSdkSessionId = null;
+      continue;
+    }
+    if (row.role === 'agent_switch') {
+      timelineSdkSessionId = parseAgentSwitchBoundary(row.content)?.fromSdkSessionId ?? null;
+      continue;
+    }
+    if (row.role === 'user' && timelineSdkSessionId === sourceSdkSessionId) {
+      return undefined;
+    }
+    if (row.role !== 'assistant' || timelineSdkSessionId !== sourceSdkSessionId) continue;
+    const anchor = parseCodexNativeForkAnchor(row.agentMeta);
+    // The newest assistant in this native segment is the requested boundary.
+    // If that row predates anchors, belongs to a failed turn, or is malformed,
+    // fall back for the whole fork instead of silently truncating at an older turn.
+    return anchor?.sdkSessionId === sourceSdkSessionId ? anchor.turnId : undefined;
   }
   return undefined;
 }
@@ -684,6 +788,7 @@ export async function forkSessionAtMessage(
   // 到目标 user 消息。只有 Claude(cc)走 message-uuid 锚点路径。
   const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi';
   let assistantUuid: string | undefined;
+  let lastTurnId: string | undefined;
   let tailTurnsToDrop: number | undefined;
   let claudeAnchorIndex: ClaudeTranscriptAnchorIndex | null = null;
   const resetHandoffBoundaryClientId = findFirstUserAfterSwitchBoundary(
@@ -707,6 +812,9 @@ export async function forkSessionAtMessage(
       throw forkError('NO_PRIOR_ASSISTANT', '请在 AI 回复之后的提问上 fork');
     }
   } else if (forkSource.reuseVendorSession && forkSource.sdkSessionId) {
+    if (isCodex) {
+      lastTurnId = resolveCodexTurnAnchor(sourceMessages, forkSource.sdkSessionId);
+    }
     tailTurnsToDrop = await countCodexTailTurns(
       sourceSessionId,
       source.sdkSessionId,
@@ -722,6 +830,7 @@ export async function forkSessionAtMessage(
   let newSdkSessionId: string | null = null;
   let uuidMap = new Map<string, string>();
   let initialContextTokens: number | undefined;
+  let usedNativeForkAnchor = false;
   if (
     forkSource.reuseVendorSession &&
     forkSource.sdkSessionId &&
@@ -733,6 +842,7 @@ export async function forkSessionAtMessage(
         sourceSdkSessionId: forkSource.sdkSessionId,
         ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
         upToMessageId: assistantUuid,
+        ...(lastTurnId ? { lastTurnId } : {}),
         ...(tailTurnsToDrop !== undefined ? { tailTurnsToDrop } : {}),
         title: newTitle,
         workingDir: source.workingDir ?? undefined,
@@ -748,7 +858,7 @@ export async function forkSessionAtMessage(
         const detail = codexForkFailureDetail(err);
         throw forkError('CODEX_FORK_STATE_UNAVAILABLE', detail);
       });
-    ({ newSdkSessionId, uuidMap, initialContextTokens } = forkResult);
+    ({ newSdkSessionId, uuidMap, initialContextTokens, usedNativeForkAnchor = false } = forkResult);
   }
   const forkContextTokens = normalizePositiveInt(initialContextTokens);
   const forkContextWindow = normalizePositiveInt(source.contextWindow);
@@ -807,6 +917,9 @@ export async function forkSessionAtMessage(
         updatedAt: now,
       },
       uuidMap: Array.from(txUuidMap.entries()),
+      ...(usedNativeForkAnchor && forkSource.sdkSessionId && newSdkSessionId
+        ? { nativeForkAnchorSessionMap: [[forkSource.sdkSessionId, newSdkSessionId]] }
+        : {}),
       ...(legacyTranscriptParentUuids.length > 0 ? { legacyTranscriptParentUuids } : {}),
       ...(toolParentUuids.length > 0 ? { toolParentUuids } : {}),
       detachAgentSwitchSessions: true,

@@ -15,7 +15,16 @@
     "REMOTE_PROVIDER_UNSUPPORTED": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "대상 장치가 응답하지 않습니다. 원격 장치를 확인한 후 다시 시도하세요.",
-    "INTERNAL": "작업에 실패했습니다. 잠시 후 다시 시도하세요."
+    "INTERNAL": "작업에 실패했습니다. 잠시 후 다시 시도하세요.",
+    "SSH_CONFIG_CONCURRENT_MODIFICATION": "디스크의 SSH 구성이 변경되었습니다. 다시 불러온 후 재시도하세요.",
+    "SSH_CONFIG_RELOAD_REQUIRED": "SSH 설정은 저장되었지만 Cindy에서 새로 고치지 못했습니다. SSH 설정을 다시 불러오세요.",
+    "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy가 이 SSH 구성을 안전하게 관리할 수 없습니다. 다시 불러온 후 Cindy 소유권 표시와 호스트 별칭의 고유성을 확인하세요.",
+    "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy가 이 호스트의 일부 SSH 설정 규칙을 안전하게 재현할 수 없습니다. 터미널 SSH는 계속 작동할 수 있으니 Match, 조건부 Include, IdentityAgent, IdentitiesOnly 및 공개 키 설정을 확인하세요.",
+    "SSH_AGENT_UNAVAILABLE": "SSH Agent를 사용할 수 없습니다. SSH Agent를 시작하고 ssh-add로 해당 개인 키를 불러온 뒤 다시 시도하세요.",
+    "SSH_HOST_PREFS_WRITE_FAILED": "호스트는 저장되었지만 표시 이름 또는 Agent Proxy 설정을 저장하지 못했습니다. 로컬 저장소 권한을 확인한 후 다시 시도하세요.",
+    "RIGHT_SIDEBAR_TOO_MANY_TABS": "이 작업의 탭 한도에 도달했습니다. 일부 탭을 닫아 주세요",
+    "RIGHT_SIDEBAR_STATE_TOO_LARGE": "탭 내용이 너무 커서 추가할 수 없습니다",
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "이 탭 유형은 현재 사용할 수 없습니다"
   },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",
@@ -165,6 +174,13 @@
       "title": "원격 머신",
       "footnote": "Phase A 는 SSH 연결 관리만 지원합니다. 원격에서 에이전트 실행은 다음 업데이트에서 제공됩니다.",
       "viaAuth": "{{label}} 로 인증",
+      "readOnlyFromSshConfig": "연결 정보는 SSH 설정에서 가져옵니다",
+      "configWarning": "Cindy에서 일부 SSH 설정 규칙을 해석할 수 없습니다. 호스트 목록이나 연결 정보가 터미널 SSH와 다를 수 있습니다.",
+      "configDiagnostic": {
+        "io": "Cindy에서 SSH 설정을 읽을 수 없습니다. 마지막으로 정상적으로 불러온 호스트를 계속 표시합니다. 파일 권한을 확인한 후 다시 불러오세요.",
+        "syntax": "Cindy에서 SSH 설정을 해석할 수 없습니다. 마지막으로 정상적으로 불러온 호스트를 계속 표시합니다. 설정을 수정한 후 다시 불러오세요.",
+        "limit": "SSH 설정이 너무 깊게 중첩되어 있거나 너무 커서 Cindy에서 안전하게 읽을 수 없습니다. 마지막으로 정상적으로 불러온 호스트를 계속 표시합니다."
+      },
       "empty": {
         "title": "아직 원격 머신이 없습니다.",
         "hint": "\"추가\"를 클릭해 등록하거나, 새로 고침 아이콘으로 ~/.ssh/config 에서 가져오세요."
@@ -196,7 +212,9 @@
       },
       "edit": {
         "title": "{{id}} 편집",
-        "submit": "변경 저장"
+        "submit": "변경 저장",
+        "connectionFieldsReadOnly": "SSH 설정에서 가져온 연결 정보는 여기서 읽기 전용입니다. 표시 이름, 자동 연결, Agent Proxy는 수정할 수 있습니다.",
+        "authenticationFromSshConfig": "인증 정보는 SSH 설정에서 가져옵니다."
       },
       "keys": {
         "title": "SSH 키 설정",
@@ -273,6 +291,8 @@
       "add": {
         "title": "원격 머신 추가",
         "alias": "별칭",
+        "displayName": "표시 이름",
+        "displayNamePlaceholder": "선택 사항, Cindy에서만 표시",
         "hostname": "호스트명",
         "user": "사용자",
         "port": "포트",
@@ -373,6 +393,7 @@
         "reloaded": "~/.ssh/config 를 다시 읽었습니다",
         "loadFailed": "원격 머신 로드 실패",
         "addFailed": "머신 추가 실패",
+        "addConflict": "머신을 추가하는 동안 SSH 설정이 변경되었습니다. 설정을 다시 불러온 뒤 호스트 항목을 확인하고 다시 시도하세요.",
         "connectFailed": "연결 실패",
         "disconnectFailed": "끊기 실패",
         "removeFailed": "제거 실패",
@@ -544,12 +565,14 @@
         "hint": "처음 닫을 때 묻습니다. 나중에 여기에서 변경할 수 있습니다.",
         "aria": "기본 창을 닫을 때 동작 선택",
         "tray": "트레이로 최소화",
+        "minimize": "창 최소화",
         "quit": "Cindy 종료"
       },
       "closePrompt": {
         "title": "Cindy 닫기",
         "message": "기본 창을 닫을 때 어떻게 할까요?",
-        "detail": "시스템 트레이로 최소화하면 작업이 계속 실행됩니다. 종료하려면 트레이 아이콘을 오른쪽 클릭하세요. 나중에 설정에서 변경할 수 있습니다."
+        "detail": "시스템 트레이로 최소화하면 작업이 계속 실행됩니다. 종료하려면 트레이 아이콘을 오른쪽 클릭하세요. 나중에 설정에서 변경할 수 있습니다.",
+        "linuxDetail": "창을 최소화해도 작업은 계속 실행됩니다. 작업 표시줄이나 창 개요에서 Cindy를 복원할 수 있으며, 나중에 설정에서 이 선택을 변경할 수도 있습니다."
       },
       "trayMenu": {
         "show": "Cindy 열기",
@@ -731,7 +754,7 @@
         "description": "Linux는 현재 Ubuntu 22.04 / 24.04용 .deb로 제공됩니다. 새 빌드가 있으면 앱이 다운로드하고, 설치할 때 시스템 비밀번호를 묻습니다.",
         "item1": "처음 설치할 때는 sudo apt install ./cindy-<버전>-<아키텍처>.deb 를 사용하세요(x64는 amd64, arm64는 arm64).",
         "item2": "앱 안 업데이트는 .deb를 다운로드합니다. 업데이트를 선택하면 시스템 권한 확인 후 덮어써 설치합니다.",
-        "item3": "설치에 비밀번호가 필요하므로 Linux에서는 Beta 채널과 유휴 상태 자동 설치를 제공하지 않습니다."
+        "item3": "Linux x64에서는 Beta 채널을 사용할 수 있지만 arm64는 아직 지원하지 않습니다. 설치에는 시스템 권한 승인이 필요하므로 두 아키텍처 모두 유휴 상태 자동 설치를 지원하지 않습니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
@@ -1474,6 +1497,13 @@
           "editTitle": "사용자 지정 제공자 편집",
           "desc": "OpenAI / Anthropic 호환 제공자를 구성합니다."
         },
+        "imageGenerationReload": {
+          "title": "Codex 다시 로드",
+          "description": "이 이미지 생성 설정을 저장하려면 Codex를 다시 로드해야 하며 현재 실행 중인 Codex 작업이 중단됩니다.",
+          "interrupt": "저장하고 중지",
+          "cancel": "취소",
+          "close": "닫기"
+        },
         "fields": {
           "name": "표시 이름",
           "namePlaceholder": "내 AI 제공자",
@@ -1495,6 +1525,15 @@
           "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
           "modelSupportsImageInput": "이미지 입력 지원",
           "modelSupportsImageInputHelp": "모델이 실제로 시각 입력을 지원할 때만 켜세요. 저장 후 새 Pi 작업부터 적용됩니다.",
+          "runtimeAdvanced": "고급",
+          "runtimeSupportsImageGeneration": "이미지 생성 및 편집 지원",
+          "runtimeSupportsImageGenerationHelpLabel": "이미지 생성 및 편집 지원 정보",
+          "runtimeSupportsImageGenerationConditionTitle": "적용 조건",
+          "runtimeSupportsImageGenerationCondition": "게이트웨이는 OpenAI Responses API와 호환되고 이미지 생성 및 편집을 지원해야 합니다.",
+          "runtimeSupportsImageGenerationEndpointsTitle": "엔드포인트 요구사항",
+          "runtimeSupportsImageGenerationEndpoints": "게이트웨이는 다음 요청을 처리해야 합니다.",
+          "runtimeSupportsImageGenerationPermissionsTitle": "권한 및 실패 처리",
+          "runtimeSupportsImageGenerationPermissions": "현재 API 키, 계정 또는 사용자 그룹에 이미지 모델 권한이 필요합니다. 이 설정은 게이트웨이 기능을 선언할 뿐이며 업스트림 권한을 자동으로 부여하지 않습니다. 호출이 실패하면 실제 업스트림 오류를 표시하며 다른 이미지 서비스로 전환하지 않습니다.",
           "modelSupportsReasoning": "추론 지원",
           "modelSupportsReasoningHelp": "모델이 추론 강도를 허용할 때만 켜고 실제로 지원하는 모든 단계를 선택하세요. 저장 후 다음 Pi Agent 세션부터 적용됩니다.",
           "modelReasoningEfforts": "지원되는 추론 강도",
@@ -1883,20 +1922,30 @@
           "qwen38-27b": {
             "blurb": "로컬에서 돌릴 수 있는 가장 강한 밀집 모델. 코딩과 긴 작업에 적합합니다."
           },
-          "gpt-oss-20b": { "blurb": "OpenAI 오픈 20B. 16GB급 기기에서 가장 무난한 선택." },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI 오픈 20B. 16GB급 기기에서 가장 무난한 선택."
+          },
           "gemma4-e2b": {
             "blurb": "Gemma 4 최소형. 가벼운 기기에서도 돌아가며 비전을 지원합니다."
           },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 소형. 가벼운 일상용이며 비전을 지원합니다." },
-          "gemma4-12b": { "blurb": "Gemma 4 중형. 일상 대화와 멀티모달에 더 안정적입니다." },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 소형. 가벼운 일상용이며 비전을 지원합니다."
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 중형. 일상 대화와 멀티모달에 더 안정적입니다."
+          },
           "gemma4-31b": {
             "blurb": "Gemma 4 대형. 대화와 멀티모달이 더 강하고, 메모리도 더 듭니다."
           },
           "gemma4-26b": {
             "blurb": "Gemma 4 중대형 MoE. 활성 파라미터가 적어 중고사양에 맞습니다."
           },
-          "ornith15-35b": { "blurb": "Ornith 1.5 중형 MoE. 로컬 코딩과 에이전트 대안." },
-          "glm-47-flash": { "blurb": "Zhipu의 최신 코딩 모델. 30B MoE로 코드와 에이전트에 맞음." }
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 중형 MoE. 로컬 코딩과 에이전트 대안."
+          },
+          "glm-47-flash": {
+            "blurb": "Zhipu의 최신 코딩 모델. 30B MoE로 코드와 에이전트에 맞음."
+          }
         },
         "onboardingTitle": "먼저 Ollama 런타임을 설치하세요",
         "onboardingBody": "Ollama를 설치하면 Ollama 앱을 열지 않고도 Cindy에서 로컬 모델을 다운로드하고 사용할 수 있습니다. Ollama는 무료 오픈소스 서드파티 런타임입니다.",
@@ -2976,7 +3025,14 @@
           "toggleFailed": "브라우저 자동화 전환 실패",
           "openedForLogin": "자동화 브라우저를 열었습니다. 필요한 사이트에 로그인하세요",
           "openForLoginFailed": "브라우저를 열지 못했습니다",
-          "foreignInstance": "다른 Cindy 창이 이미 Agent 전용 브라우저를 사용 중입니다. 그 창을 종료한 뒤 다시 시도하세요."
+          "foreignInstance": "다른 Cindy 창이 이미 Agent 전용 브라우저를 사용 중입니다. 그 창을 종료한 뒤 다시 시도하세요.",
+          "profileLocked": "트레이 프로세스를 포함하여 Chrome, Edge 또는 Brave를 완전히 종료한 뒤 다시 시도하세요.",
+          "noChromium": "이 컴퓨터에서 Chrome, Edge, Brave 또는 Chromium을 찾을 수 없습니다.",
+          "noAuthDb": "복사할 브라우저 로그인 데이터가 없습니다. 일반 브라우저에서 먼저 로그인하거나 ‘내 브라우저 로그인 사용’을 끈 뒤 Agent 전용 브라우저에서 로그인하세요.",
+          "copyFailed": "브라우저 로그인을 복사하지 못했습니다. 일반 브라우저를 완전히 종료한 뒤 다시 시도하거나 ‘내 브라우저 로그인 사용’을 끄세요.",
+          "headlessForbidden": "Agent 전용 브라우저가 헤드리스 모드로 실행 중일 때는 브라우저 로그인을 사용할 수 없습니다.",
+          "stopFailed": "Agent 전용 브라우저를 완전히 종료한 뒤 다시 시도하세요.",
+          "appBoundEncryptionUnsupported": "Windows 앱 바운드 암호화로 보호되어 Cindy가 이 브라우저 로그인을 복사할 수 없습니다. ‘내 브라우저 로그인 사용’을 끄고 Agent 전용 브라우저를 열어 한 번 로그인하세요."
         },
         "openForLogin": "Agent 전용 브라우저 열기",
         "openForLoginHint": "에이전트 전용 독립 브라우저입니다. 설치된 Chrome을 사용하지만 프로필이 완전히 분리되어 있어(오른쪽 위에 “Cindy”로 표시) 평소 Chrome의 탭·북마크·로그인 상태에 전혀 영향을 주지 않습니다. 에이전트가 이 브라우저에서 사용자를 대신해 페이지를 열고 읽고 클릭하고 스크린샷을 찍습니다. 로그인이 필요한 사이트는 위의 “Agent 전용 브라우저 열기”에서 한 번 로그인하면 로그인 상태가 유지되어, 이후 에이전트가 사용자 명의로 계속 작업할 수 있습니다."
@@ -3684,6 +3740,28 @@
       "recording": "새 단축키를 누르세요…",
       "editAria": "{{name}} 단축키 변경",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex 호환성",
+          "label": "Codex의 장치 점유 방지",
+          "aria": "Codex의 Codex Micro 점유 방지",
+          "recover": "환경 복원",
+          "status": {
+            "unsupported": "macOS 전용",
+            "disabled": "꺼짐",
+            "protecting": "Codex 재시작 필요",
+            "intercepted": "보호 중",
+            "recovery-required": "복원 필요",
+            "error": "사용 불가"
+          },
+          "descriptions": {
+            "unsupported": "이 보호 기능은 macOS에서만 사용할 수 있습니다.",
+            "disabled": "Cindy가 실행되는 동안 Codex가 Codex Micro에 연결하지 못하게 합니다. Cindy 자체는 제한하지 않습니다.",
+            "protecting": "보호 준비가 완료되었습니다. Codex를 완전히 종료한 뒤 다시 여세요. 이미 실행 중인 Codex에는 영향을 주지 않습니다.",
+            "intercepted": "Codex의 Work Louder 서비스를 차단했습니다. Cindy는 장치를 계속 사용할 수 있습니다.",
+            "recovery-required": "보호가 중지되었지만 NODE_OPTIONS가 안전하게 복원되지 않았습니다. 다시 켜기 전에 복원을 재시도하세요.",
+            "error": "Codex 보호를 업데이트하지 못했습니다. 기존 NODE_OPTIONS는 유지되었거나 복원 대기 중입니다."
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "이전 작업",
@@ -3898,12 +3976,12 @@
           "title": "Agent 키",
           "source": {
             "label": "작업 순서",
-            "description": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
+            "description": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
             "descriptions": {
-              "sidebar": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
-              "last-sent": "AG00~AG05는 마지막으로 메시지를 보낸 작업 순입니다.",
-              "priority": "AG00~AG05는 우선 작업 위쪽 6개입니다.",
-              "custom": "AG00~AG05는 각각 지정한 작업을 엽니다."
+              "sidebar": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
+              "last-sent": "작업 키는 보드 순서대로, 최근에 메시지를 보낸 작업에 대응합니다.",
+              "priority": "작업 키는 보드 순서대로 우선 작업에 대응합니다.",
+              "custom": "각 작업 키는 지정한 작업을 엽니다."
             },
             "value": "사이드바 순서",
             "options": {
@@ -3920,7 +3998,16 @@
           },
           "newTask": "새 작업",
           "slot": "최근 {{position}}번째",
-          "slotAria": "AG{{slot}}로 최근 {{position}}번째 작업 열기"
+          "slotAria": "AG{{slot}}로 최근 {{position}}번째 작업 열기",
+          "role": {
+            "label": "키 역할",
+            "description": "작업 키는 작업을 전환하고 조명으로 상태를 보여 줍니다. 동작 키는 단축 동작을 실행하며 키캡도 바꿀 수 있습니다.",
+            "task": "작업 키",
+            "action": "동작 키"
+          },
+          "lightingLimit": "펌웨어가 독립적으로 점등할 수 있는 것은 보드 순서상 앞 6개의 작업 키뿐입니다. 그 밖의 작업 키도 작업 전환은 됩니다.",
+          "unlitKey": "앞 6개 이후의 키라서 독립 상태 표시등이 없습니다.",
+          "taskHint": "투명 키캡을 권장합니다. 작업 상태는 서로 다른 색의 조명으로 표시됩니다."
         },
         "commandKeys": {
           "builtInDescription": "키캡 기본 동작을 유지하거나 다른 동작에 연결합니다.",
@@ -3931,7 +4018,7 @@
           "title": "마이크",
           "separate": {
             "label": "마이크 키 분리",
-            "description": "ACT10과 ACT11을 하나의 MIC 키로 합치지 않고 따로 사용합니다."
+            "description": "짧게 누르면 녹음이 시작되어 유지됩니다. 다시 누르면 멈추고, 길게 누른 뒤 손을 떼도 멈춥니다."
           }
         },
         "analog": {
@@ -3971,7 +4058,8 @@
           "tasks": "작업",
           "commands": "명령",
           "keycaps": "키캡",
-          "skills": "스킬"
+          "skills": "스킬",
+          "voice": "음성 입력"
         },
         "layout": {
           "editor": {
@@ -3983,7 +4071,10 @@
             "cancel": "취소",
             "save": "저장",
             "assignedShortcut": "할당된 동작",
-            "selectKeycap": "키캡 {{keycap}} 선택"
+            "selectKeycap": "키캡 {{keycap}} 선택",
+            "keyTitle": "키 편집",
+            "keyDescription": "작업 키는 작업을 열고 상태 표시등을 켭니다. 동작 키는 단축 동작을 실행하고 키캡을 고를 수 있습니다.",
+            "blank": "빈 키캡"
           },
           "keyboard": {
             "indicator": "상태 표시등",
@@ -3996,6 +4087,54 @@
             "title": "키 배치 초기화",
             "description": "작업 순서나 조명 설정은 유지하고 키캡, 조이스틱, 인코더, 마이크 할당을 초기 상태로 되돌립니다.",
             "button": "배치 초기화"
+          },
+          "merge": {
+            "right": "오른쪽 키와 가로로 합치기",
+            "down": "아래 키와 세로로 합치기",
+            "split": "키 두 개로 나누기",
+            "rightDescription": "가로로 긴 키캡이 오른쪽 키를 덮습니다. 덮인 작업 키는 동작 키가 됩니다.",
+            "downDescription": "세로로 긴 키캡이 아래 키를 덮습니다. 덮인 작업 키는 동작 키가 됩니다.",
+            "splitDescription": "나누면 덮였던 키는 빈 키로 돌아갑니다."
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "키로 작업을 열고 조명으로 상태를 맞춥니다.",
+            "openAria": "Work Louder Creator Micro 2 설정 열기",
+            "connection": {
+              "toggle": {
+                "aria": "이 Cindy에서 Creator Micro 2 사용"
+              },
+              "descriptions": {
+                "connecting": "Cindy가 Work Louder 장치 서비스를 시작하고 있습니다.",
+                "connected": "USB가 연결되었습니다. Cindy가 키 입력을 수신하고 작업 조명을 동기화합니다.",
+                "disabled": "켜면 Cindy가 현재 레이어를 다시 쓰고, 키 입력을 받으며, 조명으로 작업 상태를 표시합니다.",
+                "present": "켜면 Cindy가 현재 레이어를 다시 쓰고, 키 입력을 받으며, 조명으로 작업 상태를 표시합니다.",
+                "not-detected": "데이터 전송을 지원하는 USB 케이블로 연결하세요. ChatGPT가 장치를 사용 중이면 종료하세요.",
+                "error": "Cindy가 키보드와 통신하지 못해 자동으로 다시 시도하고 있습니다.",
+                "unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요.",
+                "connection-timeout": "Work Louder 서비스가 시간 내에 응답하지 않았습니다. Cindy가 자동으로 다시 시도합니다.",
+                "connection-failed": "Work Louder 서비스를 시작하지 못했습니다. Cindy가 자동으로 다시 시도합니다.",
+                "permission-required": "macOS가 키보드 접근을 거부했습니다. 입력 모니터링에서 Cindy를 허용한 뒤 다시 시도하세요.",
+                "sdk-unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요.",
+                "device-in-use": "다른 앱이 이 키보드를 사용 중입니다. ChatGPT 또는 Input을 닫은 뒤 다시 시도하세요."
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
+                  "last-sent": "작업 키는 보드 순서대로, 최근에 메시지를 보낸 작업에 대응합니다.",
+                  "priority": "작업 키는 보드 순서대로 우선 작업에 대응합니다.",
+                  "custom": "각 작업 키는 지정한 작업을 엽니다."
+                }
+              }
+            },
+            "errors": {
+              "load": "Creator Micro 2 설정을 불러오지 못했습니다",
+              "save": "Creator Micro 2 설정을 저장하지 못했습니다"
+            }
           }
         }
       },
@@ -4320,7 +4459,9 @@
         "openAria": "PlayStation 컨트롤러 설정 열기",
         "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
         "connection": {
-          "toggle": { "aria": "Cindy가 앞에 있을 때 PlayStation 컨트롤러를 사용합니다" },
+          "toggle": {
+            "aria": "Cindy가 앞에 있을 때 PlayStation 컨트롤러를 사용합니다"
+          },
           "descriptions": {
             "connecting": "Cindy가 PlayStation 컨트롤러를 찾고 있습니다.",
             "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
@@ -4337,7 +4478,9 @@
         "openAria": "Switch 컨트롤러 설정 열기",
         "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
         "connection": {
-          "toggle": { "aria": "Cindy가 앞에 있을 때 Switch 컨트롤러를 사용합니다" },
+          "toggle": {
+            "aria": "Cindy가 앞에 있을 때 Switch 컨트롤러를 사용합니다"
+          },
           "descriptions": {
             "connecting": "Cindy가 Switch 컨트롤러를 찾고 있습니다.",
             "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
@@ -4354,7 +4497,9 @@
         "openAria": "일반 컨트롤러 설정 열기",
         "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
         "connection": {
-          "toggle": { "aria": "Cindy가 앞에 있을 때 일반 컨트롤러를 사용합니다" },
+          "toggle": {
+            "aria": "Cindy가 앞에 있을 때 일반 컨트롤러를 사용합니다"
+          },
           "descriptions": {
             "connecting": "Cindy가 컨트롤러를 찾고 있습니다.",
             "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
@@ -5251,7 +5396,6 @@
     "expandControlledNotice": "원격 제어 알림 펼치기: {{label}}",
     "versionMismatch": "상대 기기 버전이 달라 일부 기능이 제한될 수 있습니다"
   },
-
   "accountDeletion": {
     "entryButton": "계정 삭제",
     "entryAria": "현재 계정 삭제",
@@ -5401,7 +5545,8 @@
     "browserWaiting": "브라우저에서 인증을 완료하세요",
     "browserCallback": {
       "successTitle": "로그인 완료",
-      "successBody": "이 페이지를 닫고 {{appName}}(으)로 돌아가세요.",
+      "successBody": "로그인이 완료되었습니다. 이제 이 페이지를 닫아도 됩니다.",
+      "closeCountdown": "{{count}}초 후 자동으로 닫힙니다",
       "errorTitle": "로그인이 완료되지 않았습니다",
       "errorBody": "{{appName}}(으)로 돌아가 다시 로그인해 주세요.",
       "returnButton": "{{appName}}(으)로 돌아가기"
@@ -5648,20 +5793,32 @@
   "usageHistory": {
     "description": "이 기기의 Cindy 내부에서 발생한 토큰 사용량입니다. 기능 출시 시점부터 기록이 쌓이며 이전 기록은 채워지지 않습니다.",
     "empty": "아직 사용 기록이 없습니다. 대화를 실행하면 쌓이기 시작합니다.",
+    "loadFailed": "사용량 기록을 불러오지 못했습니다. 설정을 다시 열어 재시도해 주세요.",
+    "range": {
+      "label": "기간",
+      "ariaLabel": "사용량 기간 필터",
+      "all": "전체 기간",
+      "30d": "최근 30일",
+      "7d": "최근 7일",
+      "today": "오늘"
+    },
     "cacheHitTooltip": "캐시 읽기 ÷ (입력 + 캐시 읽기 + 캐시 쓰기) — 메시지 카드와 동일한 기준입니다.",
     "summary": {
       "title": "개요"
     },
     "stats": {
       "todayTokens": "오늘 토큰",
+      "todayTokensInRange": "{{range}} 토큰",
       "totalTokens": "최근 30일 토큰",
+      "totalTokensInRange": "{{range}} 토큰",
       "streak": "연속 활동일",
       "cacheHitRate": "캐시 적중률(30일)",
+      "cacheHitRateInRange": "캐시 적중률({{range}})",
       "models": "사용한 모델"
     },
     "heatmap": {
       "title": "활동 히트맵",
-      "subtitle": "최근 20주",
+      "subtitle": "최근 {{count}}주",
       "emptyCell": "해당 날짜에 사용 기록 없음"
     },
     "daily": {
@@ -5674,6 +5831,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "최근 30일 토큰",
+        "totalInRange": "{{range}} 토큰",
         "share": "비중",
         "today": "오늘",
         "hitRate": "캐시 적중률",
@@ -5686,6 +5844,7 @@
       "col": {
         "model": "모델",
         "total": "총 토큰",
+        "totalInRange": "{{range}} 토큰",
         "share": "비중",
         "input": "입력",
         "output": "출력",
@@ -5696,7 +5855,7 @@
     },
     "tasks": {
       "title": "토큰 사용이 많은 세션",
-      "subtitle": "최근 30일 동안 활동한 세션을 누적 토큰 순으로 정렬",
+      "subtitle": "{{range}} 동안 활동한 세션을 누적 토큰 순으로 정렬",
       "col": {
         "task": "세션",
         "model": "모델",
@@ -5706,7 +5865,7 @@
         "lastActive": "마지막 활동"
       },
       "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
-      "tokensTooltip": "해당 세션의 누적 값이며 최근 30일 증가분이 아닙니다."
+      "tokensTooltip": "해당 세션의 누적 값입니다. {{range}}은(는) 활성 세션을 필터링하는 데만 사용되며 해당 기간의 증가분이 아닙니다."
     }
   },
   "usageDashboard": {
@@ -5952,6 +6111,10 @@
       "detachDevice": "기기 연결 해제",
       "startDevice": "기기 시작",
       "stopDevice": "기기 중지",
+      "deleteDevice": "기기 삭제",
+      "deleteDeviceConfirmTitle": "{{device}} 기기를 삭제할까요?",
+      "deleteDeviceConfirmDescription": "이 시뮬레이터와 그 안에 저장된 모든 앱, 계정 및 데이터를 영구적으로 삭제합니다. 이 작업은 취소할 수 없습니다.",
+      "deleteRunningDeviceConfirmDescription": "이 시뮬레이터는 실행 중입니다. 확인하면 Cindy가 관련 리소스를 정리하고 기기를 중지한 다음 저장된 모든 앱, 계정 및 데이터를 영구적으로 삭제합니다. 이 작업은 취소할 수 없습니다.",
       "attachedDescription": "이 기기는 현재 Cindy 세션에 연결되어 있습니다.",
       "agentControlTitle": "Agent 제어",
       "agentControlDescription": "허용한 경우에만 Agent가 이 기기를 시작, 중지 또는 조작할 수 있습니다.",
@@ -5992,6 +6155,10 @@
       "rotateDevice": "기기 회전",
       "lockScreen": "화면 잠금",
       "unlockScreen": "화면 잠금 해제",
+      "copyScreenshot": "스크린샷 복사",
+      "screenshotCopied": "시뮬레이터 스크린샷을 복사했습니다",
+      "screenshotCopyFailed": "시뮬레이터 스크린샷을 복사하지 못했습니다. 다시 시도하세요.",
+      "moreControls": "추가 시뮬레이터 제어",
       "controlsUnavailable": "시뮬레이터 제어를 일시적으로 사용할 수 없습니다",
       "enterTextBeforeSending": "보낼 텍스트를 먼저 입력하세요",
       "agentBusyTitle": "Agent가 이 기기를 사용 중",
@@ -6027,7 +6194,7 @@
         }
       },
       "nativeRecovery": {
-        "available": "현재 Native 가속을 사용할 수 없습니다. 다시 시도하는 동안에도 WDA 화면과 제어는 계속 사용할 수 있습니다.",
+        "available": "현재 Native 가속을 사용할 수 없습니다. 프레임 속도가 낮아지고 조작 반응이 느려질 수 있습니다.",
         "action": "Native 복구 시도",
         "recovering": "Native 가속을 복구하는 중입니다. 현재 WDA 화면과 제어는 계속 사용할 수 있습니다.",
         "recoveringAction": "Native 복구 중…",
@@ -6054,7 +6221,8 @@
         "stop": "기기 중지 중…",
         "detach": "기기 연결 해제 중…",
         "grant": "Agent 제어 권한 업데이트 중…",
-        "control": "입력 제어 업데이트 중…"
+        "control": "입력 제어 업데이트 중…",
+        "screenshot": "시뮬레이터 스크린샷 복사 중…"
       },
       "setup": {
         "localMac": "Mac의 로컬 Cindy 세션에서 이 프로젝트를 여세요.",
@@ -6643,6 +6811,13 @@
       "move": "지금 이동 (권장)",
       "download": "수동으로 다운로드"
     },
+    "windowsRuntimeMissing": {
+      "title": "Microsoft Visual C++ 런타임 필요",
+      "description": "이 PC에는 업데이터에 필요한 Microsoft Visual C++ 런타임이 없습니다. 다운로드한 업데이트는 유지됩니다. Microsoft 공식 x64 런타임을 설치한 후 다시 확인해 주세요.",
+      "download": "런타임 다운로드",
+      "retry": "다시 확인",
+      "later": "나중에 설치"
+    },
     "moveToApplications": {
       "title": "응용 프로그램 폴더로 이동",
       "message": "{{appName}}를 응용 프로그램 폴더로 이동하면 자동 업데이트를 포함한 더 나은 경험을 사용할 수 있습니다.",
@@ -6671,7 +6846,6 @@
       "moreLabel": "더 보기, 현재 사용자: {{name}}",
       "menuSettings": "설정",
       "menuAddAccount": "다른 계정으로 로그인",
-      "menuLogout": "로그아웃",
       "canaryBadge": "Canary 사용자",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -6773,6 +6947,58 @@
     }
   },
   "newChat": {
+    "homeSuggestions": {
+      "shuffle": "다른 제안",
+      "dismiss": "다시 보지 않기",
+      "downloadsDesktop": {
+        "label": "다운로드와 바탕화면에 쌓인 것을 정리 목록으로",
+        "prompt": "다운로드 폴더와 바탕화면을 보고 무엇이 쌓였는지 정리해 줘. 용량이 큰 것, 분명한 중복, 반년 이상 안 만진 것, 안전하게 보관할 수 있는 것을 목록으로. 각 항목은 위치, 크기, 이유를 밝혀. 이번 라운드는 읽기만. 옮기거나 지우기 전에 내가 확인할게."
+      },
+      "whatCindyCanDo": {
+        "label": "이 컴퓨터를 보고 뭘 도와줄 수 있는지 알려줘",
+        "prompt": "이 컴퓨터에 설치된 것과 평소 다루는 종류를 보고 내가 무엇을 하는 사람인지 가늠해. 그다음 네 능력으로 구체적으로 도와줄 일을 몇 가지, 한 문장씩: 언제 쓰는지, 무엇을 덜어 주는지. 기능 목록을 읽지 말고 이 머신에 실제로 있는 것에 맞춰."
+      },
+      "recentDocs": {
+        "label": "최근 문서를 보고 목록으로 정리해 줘",
+        "prompt": "최근에 열거나 고친 문서를 주제별로 묶고, 일이 몇 더미인지, 각각 어디까지 왔는지, 방치된 게 있는지 알려 줘. 각 파일 위치가 있는 목록. 읽기 전용. 파일은 건드리지 마."
+      },
+      "listCodeProjects": {
+        "label": "이 컴퓨터의 코드 프로젝트를 나열해 줘",
+        "prompt": "자주 쓰는 디렉터리에서 코드 프로젝트를 찾아, 각각 무엇을 하는지, 무엇으로 짰는지, 마지막 변경이 언제인지 한 문장으로. 본선처럼 보이는 것과 포기한 것처럼 보이는 것을 나눠. 하나도 없으면 없다고 말해. 이번 라운드는 읽기 전용. 파일은 바꾸지 마."
+      },
+      "storageUsage": {
+        "label": "디스크를 무엇이 차지하는지 살펴봐",
+        "prompt": "이 컴퓨터 저장 공간을 큰 것부터 보고, 캐시, 중복, 잊힌 오래된 것을 구분해. 점유 순위와 무엇을 지워야 공간이 가장 많이 남는지 한 줄 결론. 집계만. 지우지 마."
+      },
+      "unusedApps": {
+        "label": "설치해 두고 안 쓰는 앱을 찾아줘",
+        "prompt": "설치된 앱을 용량과 최근 사용으로 줄 세우고, 오래 안 열었는데 자리를 많이 차지하는 것을 짚어. 목록만. 아직 제거하지 마."
+      },
+      "uncommittedChanges": {
+        "label": "최근 프로젝트의 미커밋을 확인해 줘",
+        "prompt": "최근에 만진 코드 프로젝트의 커밋하지 않은 변경을 보고, 무엇을 하는지, 분명한 문제나 빠뜨린 게 있는지 알려 줘. 읽기 전용. 파일은 건드리지 말고 커밋도 하지 마."
+      },
+      "devEnvironment": {
+        "label": "개발 환경을 한 번 점검해 줘",
+        "prompt": "이 머신의 개발 환경을 점검: 언어 런타임과 패키지 매니저, 각 버전, 충돌이나 너무 오래된 것, git 설정 문제. 현황 목록과 먼저 고칠 곳 한 줄. 점검만. 설치하거나 설정을 바꾸지 마."
+      },
+      "whySlow": {
+        "label": "컴퓨터가 왜 느린지 알아봐",
+        "prompt": "이 컴퓨터가 왜 느린지 알아봐: 부하, 메모리, 디스크, 켜 둔 시간, CPU/메모리를 많이 쓰는 프로세스. 근거 있는 짧은 결론. 읽기 전용. 아무것도 바꾸지 말고, 프로세스를 죽이지 말고, 무엇을 열어 뒀는지도 묻지 마."
+      },
+      "diagnoseNetwork": {
+        "label": "네트워크 속도를 진단해 줘",
+        "prompt": "이 컴퓨터 네트워크를 진단: ping, DNS, 유선인지 Wi-Fi인지. 한두 문장 결론. 긴 속도 테스트는 하지 마. 통신사도 묻지 마."
+      },
+      "subscriptionSpend": {
+        "label": "구독 지출을 집계해 줘",
+        "prompt": "다운로드, 영수증, 로컬 청구서에서 구독 결제를 찾아 서비스 이름과 금액을 나열해. 없으면 없다고 말해. 구독은 바꾸지 말고, 카드도 묻지 말고, 메일에도 로그인하지 마."
+      },
+      "expenseTracker": {
+        "label": "간단한 가계부 도구를 만들어 줘",
+        "prompt": "이 대화 작업 공간에 바로 열 수 있는 로컬 가계부를 만들어: 날짜, 금액, 분류, 메모. 백엔드 없이. 추가 기능도 묻지 마."
+      }
+    },
     "noProvider": {
       "title": "이 모델에 연결된 소스가 없습니다",
       "description": "현재 모델에 연결된 소스가 없습니다. 설정에서 소스를 연결한 후 전송하세요.",
@@ -7272,7 +7498,7 @@
         "title": "이 모델에는 지금 대화를 다 넣을 수 없습니다",
         "warnToast": "이 대화는 이미 {{used}}를 사용 중입니다. 바꾸면 새 모델 용량({{total}})의 약 {{pct}}%가 됩니다",
         "overflowDescription": "이 대화는 이미 {{used}}를 사용 중이며, 새 모델이 담을 수 있는 {{total}}(약 {{pct}}%)를 넘습니다. 바꾸면 Cindy가 요약을 만든 뒤 이어서 진행합니다. 채팅 기록은 그대로 있고, 전체를 그대로 넘기지는 않습니다.",
-        "overflowDescriptionRemote": "이 대화는 이미 {{used}}를 사용 중이며, 새 모델이 담을 수 있는 {{total}}(약 {{pct}}%)를 넘습니다. 원격 작업에서는 자동으로 새 에이전트 문맥을 이어갈 수 없어 다음 요청이 실패할 수 있습니다. 그대로 바꾸거나 현재 모델을 유지하세요.",
+        "overflowDescriptionRemote": "이 원격 작업의 컨텍스트는 더 작은 모델의 {{total}} 중 {{used}}(약 {{pct}}%)를 사용 중이므로 안전하게 전환할 수 없습니다. 현재 모델을 유지하거나 새 작업을 만든 뒤 이 모델을 선택하세요.",
         "confirmSwitch": "바꾸고 계속하기",
         "cancelSwitch": "지금은 바꾸지 않기"
       },
@@ -7356,6 +7582,15 @@
     }
   },
   "onboarding": {
+    "homeZeroModel": {
+      "title": "Cindy에 로그인하고 계속하기",
+      "desc": "아직 모델이 없습니다. Cindy에 로그인하면 수십 종의 최상위 모델을 사용할 수 있습니다.",
+      "cta": "Cindy에 로그인",
+      "cloudTitle": "Cindy로 계속하기",
+      "cloudDesc": "아직 모델이 없습니다. 공식 서비스를 켜면 수십 종의 최상위 모델을 사용할 수 있습니다.",
+      "cloudCta": "시작하기",
+      "ownApi": "내 모델 API가 있습니다"
+    },
     "connectProvider": {
       "title": "모델 제공자를 연결하고 시작하세요",
       "desc": "아직 사용 가능한 모델이 없습니다. 제공자를 연결하면 대화를 시작할 수 있습니다.",
@@ -7453,7 +7688,7 @@
     "openApp": "ChatGPT App 열기",
     "relogin": "ChatGPT 다시 로그인",
     "reloginRiskTitle": "그래도 Cindy에서 다시 로그인할까요?",
-    "reloginRiskDescription": "새 OpenAI OAuth 인증이 생성되며 이 컴퓨터의 ChatGPT App과 Codex CLI가 즉시 로그아웃될 수 있습니다. 완료 후 해당 앱에서 다시 로그인해야 합니다.",
+    "reloginRiskDescription": "Cindy가 새 OpenAI OAuth 인증 정보를 만듭니다. 일반적으로 ChatGPT App에는 영향을 주지 않지만 시스템 Codex와 인증 정보를 공유하는 경우 관련 앱에서 다시 로그인해야 할 수 있습니다.",
     "reloginRiskConfirm": "위험을 감수하고 계속",
     "devWriteBlocked": "개발 환경은 기본적으로 이 컴퓨터의 ChatGPT 로그인을 읽기 전용으로 공유하므로 OAuth를 시작하거나 자격 증명을 변경할 수 없습니다. OAuth를 테스트하려면 격리된 샌드박스에서 XDT_ALLOW_DEV_OAUTH_WRITE=1을 명시적으로 설정하세요.",
     "devReadOnly": "개발 환경에서 읽기 전용",
@@ -7637,7 +7872,7 @@
       "switchClaudeSubscriptionTitle": "이 세션을 Claude.ai 구독으로 전환하고 다시 시도",
       "switchingClaudeSubscription": "Claude.ai로 전환하는 중…",
       "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
-      "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
+      "codexAppServerRetired": "Codex 서비스가 다시 시작되었거나 교체되었습니다. 현재 요청이 중단되었으므로 다시 실행해 주세요.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
       "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
@@ -8204,7 +8439,12 @@
       "showMore": "{{count}}개 더 보기",
       "showLess": "간략히 보기",
       "artifactLabel": "산출물",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}}페이지",
         "slides": "{{count}}개 슬라이드",
@@ -8479,9 +8719,6 @@
         "tasksLoadFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중…",
         "tasksPartiallyFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중이며 불러온 내용만 표시합니다",
         "devicesLoading": "원격 기기를 불러오는 중…",
-        "devicesLoadFailed": "원격 기기 목록을 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
-        "devicesPartiallyFailed": "원격 기기 목록을 새로 고치지 못했습니다. 불러온 내용만 표시합니다.",
-        "retryDevices": "기기 다시 불러오기",
         "remoteSettings": "원격 연결 설정",
         "multiSelect": "다중 선택",
         "deselect": "선택 해제",
@@ -8863,9 +9100,24 @@
           "merged": "병합됨",
           "closed": "닫힘"
         },
-        "needsToken": "로컬 gh CLI가 로그인되어 있지 않습니다. Agent에게 gh auth login을 한 번 실행하게 하면 PR 상태가 표시됩니다",
+        "ghNotLoggedIn": "이 컴퓨터의 gh가 GitHub에 로그인되어 있지 않아 PR 상태를 볼 수 없습니다",
+        "ghMissing": "GitHub CLI(gh)를 찾을 수 없어 PR 상태를 볼 수 없습니다",
+        "notFound": "PR이 없거나 현재 계정으로는 볼 수 없습니다",
         "statusUnknown": "상태를 가져오지 못했습니다",
         "openAria": "브라우저에서 PR #{{number}} 열기",
+        "clickToOpen": "클릭하여 브라우저에서 PR 열기",
+        "guidance": {
+          "login": {
+            "hint": "클릭하면 Agent가 로그인을 도와줍니다",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub 로그인 맡기기",
+            "prompt": "GitHub CLI에 로그인해 주세요: `gh auth login -h github.com -w`를 실행하고 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+          },
+          "install": {
+            "hint": "클릭하면 Agent가 설치와 로그인을 도와줍니다",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub CLI 설치와 로그인 맡기기",
+            "prompt": "GitHub CLI(gh)를 설치해 주세요(macOS는 `brew install gh`, Windows는 `winget install GitHub.cli`). 그다음 `gh auth login -h github.com -w`를 실행해 로그인하고, 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+          }
+        },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건"
       }
     },
@@ -9113,7 +9365,15 @@
           "5": "금요일",
           "6": "토요일"
         },
-        "short": { "0": "일", "1": "월", "2": "화", "3": "수", "4": "목", "5": "금", "6": "토" }
+        "short": {
+          "0": "일",
+          "1": "월",
+          "2": "화",
+          "3": "수",
+          "4": "목",
+          "5": "금",
+          "6": "토"
+        }
       },
       "time": {
         "last": "마지막 {{value}}",
@@ -9954,10 +10214,21 @@
       "search": "스킬 검색",
       "clearSearch": "스킬 검색 지우기",
       "noSearchResults": "일치하는 스킬을 찾을 수 없습니다",
-      "browseTitle": "Skill Hub 둘러보기",
-      "browseDesc": "더 많은 스킬을 찾아 설치하세요",
-      "recommended": "추천",
-      "recommendedEmpty": "현재 추천 항목이 없습니다",
+      "catalogFiltersAria": "SkillHub 카테고리",
+      "categoryFiltersAria": "카테고리로 스킬 필터링",
+      "scrollCategoriesLeft": "왼쪽 카테고리 더 보기",
+      "scrollCategoriesRight": "오른쪽 카테고리 더 보기",
+      "categoryScrollAtStart": "첫 번째 카테고리입니다",
+      "categoryScrollAtEnd": "마지막 카테고리입니다",
+      "catalogFilter": {
+        "public": "공개",
+        "organization": "조직",
+        "mine": "관리 대상"
+      },
+      "catalogMore": "더 보기",
+      "loadMore": "더 불러오기",
+      "loadingMore": "불러오는 중…",
+      "catalogEmpty": "이 카테고리에 스킬이 없습니다",
       "local": "로컬 스킬",
       "localEmpty": "아직 로컬 스킬이 없습니다",
       "installed": "설치됨",
@@ -10139,7 +10410,6 @@
       "sortDownloads": "다운로드 수",
       "sortLatest": "최근 업데이트",
       "sortCreated": "최신 게시",
-      "chipAvailable": "이용 가능",
       "chipAll": "전체",
       "chipMine": "관리 대상",
       "ownerGroupPersonal": "개인",
@@ -10153,7 +10423,7 @@
       "installError": "알 수 없는 오류"
     },
     "marketCard": {
-      "visibilityPublic": "XD.Inc",
+      "visibilityPublic": "공개",
       "visibilityDept": "팀",
       "visibilityPrivate": "개인",
       "timeLabel": "게시 시간",
@@ -10178,6 +10448,7 @@
       }
     },
     "publishedStatus": {
+      "waitingReview": "심사 대기",
       "machineReviewing": "기계 심사 중",
       "manualReviewing": "수동 검토 중",
       "rejected": "심사 미통과"
@@ -10189,7 +10460,7 @@
       "emptyHint": "이 클라우드 Skill 에서 미리 볼 수 있는 파일을 반환하지 않았습니다"
     },
     "marketDetail": {
-      "visibilityPublic": "XD.Inc 에 공개",
+      "visibilityPublic": "모든 사용자에게 공개",
       "visibilityPrivate": "개인 공개",
       "visibilityDept": "팀 공개",
       "files": "파일",
@@ -10200,6 +10471,7 @@
       "forbidden": "이 Skill 을 조작할 권한이 없습니다",
       "notFound": "이 Skill 은 더 이상 존재하지 않습니다. 목록으로 돌아가 새로고침하세요",
       "managementApiUnavailable": "Hub 관리 API 가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요",
+      "invalidVisibility": "이 조직에서는 해당 공개 범위를 지원하지 않습니다. 공개를 선택하세요",
       "default": "작업에 실패했습니다. 잠시 후 다시 시도하세요"
     },
     "installPicker": {
@@ -10244,17 +10516,15 @@
       "descriptionPlaceholder": "이 skill 의 용도를 간단히 설명",
       "visibilityLabel": "가시성",
       "visibilityPublicTitle": "공개",
-      "visibilityPublicDesc": "회사 전체 공개 · 기본값",
+      "visibilityPublicDesc": "모든 사용자에게 공개 · 기본값",
       "versionLabel": "버전",
       "versionFormatHint": "형식: x.y.z (예: 1.0.1)",
-      "categoryLabel": "분류",
-      "categoryAuto": "자동",
-      "categoryPlaceholder": "분류 선택",
-      "categoryLoading": "분류 불러오는 중…",
-      "categoryLoadFailed": "분류를 불러오지 못했습니다. 다시 시도하세요",
-      "categoryEmpty": "사용 가능한 분류가 없습니다",
-      "categoryRequired": "게시 전에 분류를 선택하세요",
-      "categoryInvalid": "이 분류는 더 이상 사용할 수 없습니다. 다시 선택하세요",
+      "categoryLabel": "태그",
+      "categoryPlaceholder": "태그 선택 (선택 사항)",
+      "categoryLoading": "태그 불러오는 중…",
+      "categoryLoadFailed": "태그를 불러오지 못했습니다. 다시 시도하세요",
+      "categoryEmpty": "사용 가능한 플랫폼 태그가 없습니다",
+      "categoryInvalid": "더 이상 사용할 수 없는 태그가 있습니다. 다시 선택하세요",
       "retryLoadCategories": "다시 시도",
       "extraDeptGroup": "부서",
       "extraTeamGroup": "팀",
@@ -10372,6 +10642,14 @@
         "title": "취소됨",
         "message": ""
       },
+      "SKILL_HUB_READ_ONLY": {
+        "title": "조직 카탈로그는 읽기 전용입니다",
+        "message": "이 조직 카탈로그에서는 게시 및 관리 기능을 사용할 수 없습니다"
+      },
+      "INVALID_VISIBILITY": {
+        "title": "공개 범위를 사용할 수 없습니다",
+        "message": "현재 게시자에게 허용된 공개 범위를 선택하세요"
+      },
       "INTERNAL": {
         "title": "서버 오류",
         "message": "게시 실패, 잠시 후 재시도하세요"
@@ -10385,8 +10663,12 @@
       "dismiss": "확인",
       "passedTitle": "보안 스캔 통과",
       "passedDesc": "이 버전은 모든 보안 검사를 통과하여 마켓에 게시되었습니다.",
+      "pendingTitle": "제출 완료, 플랫폼 심사 대기 중",
+      "pendingDesc": "보안 스캔이 완료되었습니다. 플랫폼 승인 후 공개 마켓에 자동으로 게시됩니다.",
       "failedTitle": "보안 스캔 실패",
       "failedDesc": "이 버전은 보안 스캔 문제로 인해 {{status}}으로 표시되어 다른 사용자가 설치할 수 없습니다. 아래 문제를 수정한 후 다시 게시하세요.",
+      "processingFailedTitle": "게시 처리 실패",
+      "processingFailedDesc": "이 버전은 업로드되었지만 서버가 게시 처리 중 내부 오류를 만났습니다. 보안 검사에서 거부된 것이 아니므로 잠시 후 다시 게시하세요.",
       "copyReviewResult": "심사 결과 복사",
       "copiedReviewResult": "복사됨",
       "copyReviewResultFailed": "복사 실패",
@@ -10399,12 +10681,14 @@
         "passed": "통과",
         "failed": "미통과",
         "warning": "확인 필요",
+        "waitingReview": "심사 대기",
         "reviewing": "심사 중",
         "unavailable": "사용 불가"
       },
       "gateLabel": {
         "llmReview": "LLM 심사",
-        "securityScan": "보안 스캔"
+        "securityScan": "보안 스캔",
+        "publicationProcessing": "게시 처리"
       }
     },
     "diffPanel": {
@@ -10456,7 +10740,7 @@
       "title": "공개 설정 관리",
       "tierLabel": "가시성",
       "tierPublic": "공개",
-      "tierPublicDesc": "회사 전체 공개",
+      "tierPublicDesc": "모든 사용자에게 공개",
       "tierTeam": "팀",
       "tierTeamDesc": "지정한 팀에 공개",
       "tierPrivate": "나만 사용",
@@ -10464,13 +10748,18 @@
       "save": "저장",
       "saving": "저장 중…",
       "saved": "공개 설정이 저장되었습니다",
+      "submitReview": "심사 제출",
+      "waitingReview": "심사 대기 중",
+      "publicReviewSubmitted": "현재 버전을 공개 심사에 제출했습니다",
+      "publicReviewPending": "현재 버전이 공개 심사를 기다리고 있으며 승인 후 공개 마켓에 표시됩니다.",
+      "publicReviewRejected": "공개 심사가 거부되었습니다: {{reason}}",
       "impactPrivate": "저장 후에는 본인만 이 Skill을 볼 수 있습니다.",
       "impactPrivateLeavingMarket": "저장하면 공개 마켓에서 내려가고 본인만 볼 수 있게 됩니다. 심사를 통과한 버전의 승인 상태는 유지됩니다.",
       "impactPrivateTeam": "저장 후 본인만 볼 수 있게 되며, 팀은 이 Skill을 보거나 관리할 수 없습니다.",
       "impactPrivateTeamLeavingMarket": "저장하면 공개 마켓에서 내려가고 본인만 볼 수 있게 됩니다. 팀은 이 Skill을 보거나 관리할 수 없습니다. 심사를 통과한 버전의 승인 상태는 유지됩니다.",
       "impactTeam": "저장 후 선택한 팀과 부서가 보고 다운로드할 수 있습니다.",
       "impactTeamLeavingMarket": "저장하면 공개 마켓에서 내려가고 선택한 팀과 부서만 보고 다운로드할 수 있습니다. 심사를 통과한 버전의 승인 상태는 유지됩니다.",
-      "impactPublic": "저장하면 공개 마켓에 공개됩니다. 이미 심사를 통과한 경우 즉시 공개되며 심사 상태는 유지됩니다."
+      "impactPublic": "현재 버전을 공개 심사에 제출합니다. 승인 후 공개 마켓에 표시되며 새 버전을 게시할 필요가 없습니다."
     },
     "marketEdit": {
       "saved": "마켓 표시 정보가 저장되었습니다",
@@ -10596,7 +10885,7 @@
     },
     "confirm": {
       "logoutTitle": "로그아웃",
-      "logoutDescription": "이 기기의 모든 계정에서 로그아웃하시겠습니까?",
+      "logoutDescription": "현재 계정에서 로그아웃하시겠습니까?",
       "logoutConfirm": "로그아웃",
       "cancel": "취소",
       "sessionExpiredTitle": "로그인이 만료됨",
@@ -11047,6 +11336,32 @@
         "action": "주문 ID {{id}} 복사",
         "success": "주문 ID를 복사했습니다",
         "failed": "주문 ID를 복사하지 못했습니다. 다시 시도해 주세요."
+      },
+      "invoice": {
+        "action": "세금계산서 신청",
+        "title": "세금계산서 신청",
+        "description": "세금계산서 발급을 신청하려면 다음 정보를 {{email}}로 보내 주세요.",
+        "requiredInfo": "이메일에 다음 정보를 포함해 주세요:",
+        "emailSubject": "주문 {{orderId}} 세금계산서 발급 신청",
+        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
+        "sendAction": "세금계산서 신청 보내기",
+        "emailCopied": "고객센터 이메일을 복사했습니다",
+        "emailCopyFailed": "고객센터 이메일을 복사하지 못했습니다. 다시 시도해 주세요.",
+        "sendFailed": "이메일 앱을 열 수 없습니다. {{email}}로 직접 이메일을 보내 주세요.",
+        "gmailFallbackTitle": "Gmail을 대신 열까요?",
+        "gmailFallbackDescription": "청구서 신청에 주문 정보가 포함되어 있습니다. Gmail을 열면 이 정보가 Google에 공유됩니다. 계속하시겠어요?",
+        "gmailFallbackConfirm": "Gmail 열기",
+        "notAvailable": "정보 없음",
+        "fields": {
+          "orderId": "주문 ID",
+          "application": "애플리케이션",
+          "paymentMethod": "결제 수단",
+          "amount": "발행 금액",
+          "invoiceTitle": "청구서 제목",
+          "contact": "담당자",
+          "phone": "전화번호",
+          "email": "이메일"
+        }
       },
       "states": {
         "completed": "완료",

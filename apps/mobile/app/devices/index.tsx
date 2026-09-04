@@ -1,9 +1,10 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useIsFocused } from 'expo-router';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   Easing,
   Modal,
   type NativeScrollEvent,
@@ -42,7 +43,7 @@ import {
   X,
 } from 'lucide-react-native';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
-import Reanimated, { runOnJS, useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
+import Reanimated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -134,6 +135,12 @@ import {
   type HomeStatusFilter,
 } from '@/session/homeListPriority';
 import {
+  buildHomeProjectChildOffsets,
+  resolveHomeProjectChildAnchor,
+  resolveHomeProjectChildWindow,
+  shouldWindowHomeProjectChildren,
+} from '@/session/homeProjectChildWindow';
+import {
   projectDropIndexFromY,
   reorderVisibleProjectByDropIndex,
   resolveVirtualizedDropIndex,
@@ -156,7 +163,14 @@ import {
   UNAVAILABLE_PROJECT_ORDER_SNAPSHOT,
   type SyncedProjectOrderSnapshot,
 } from '@cindy/maker-shared/project-order-sync';
-import { buildHomeSections, homeRowBefore, isFolderHomeRow, type HomeRow, type HomeSection } from '@/session/homeSections';
+import {
+  buildHomeSections,
+  homeRowsShareRenderData,
+  homeRowBefore,
+  isFolderHomeRow,
+  type HomeRow,
+  type HomeSection,
+} from '@/session/homeSections';
 import {
   readHomeViewPreferences,
   saveHomeViewPreferences,
@@ -186,10 +200,12 @@ import {
   type RemoteSessionStatusFilter,
 } from '@/session/sessionList';
 import {
+  RemoteSessionStoreSubscriptionGate,
   remoteSessionStore,
+  useRemoteHomeStatusVersion,
   useRemoteMessageVersion,
+  useRemoteSessionMessagePreview,
   useRemoteSessions,
-  useRemoteSessionStoreVersion,
   useSessionRunning,
 } from '@/session/remoteSessionStore';
 import { dataPropsEqual, mapContentEqual } from '@/utils/valueEquality';
@@ -220,8 +236,21 @@ import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScal
 const LIST_LIMIT = 200;
 const DEVICE_LIST_TIMEOUT_MS = 12_000;
 const HOME_LIST_SUBSCRIPTION_OWNER = 'device-list';
+// Keep the device-link channel responsive while All Sessions hydrates several
+// computers. This does not change the 200-row server limit; it only bounds the
+// number of device snapshots processed at once.
+const HOME_DEVICE_HYDRATE_CONCURRENCY = 2;
 // 项目组与自动化组展开后的子列表共用同一个预览限量(设备详情页也 import 复用,避免两处漂移)。
 export const PROJECT_PREVIEW_LIMIT = 5;
+const PROJECT_CHILD_WINDOW_THRESHOLD = 20;
+const PROJECT_CHILD_WINDOW_SIZE = 15;
+const PROJECT_CHILD_WINDOW_OVERSCAN = 4;
+const PROJECT_CHILD_WINDOW_SHIFT = 4;
+const HOME_LIST_INITIAL_RENDER_COUNT = 12;
+const HOME_LIST_RENDER_BATCH_SIZE = 12;
+const HOME_LIST_WINDOW_SIZE = 5;
+const HOME_PROJECT_HEADER_HEIGHT = 56;
+const HOME_AUTOMATION_VIEW_ALL_ROW_HEIGHT = 54;
 const HOME_SESSION_ROW_HEIGHT = 78;
 const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
 const CINDY_LIST_GUTTER = 20;
@@ -229,6 +258,37 @@ const CINDY_LIST_FAB_SIZE = 55;
 const CINDY_LIST_FAB_BOTTOM = 45;
 const HOME_HEADER_MIN_HEIGHT = 48;
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+function estimateHomeSessionRowHeight(item: RemoteSessionListItem): number {
+  const running = remoteSessionStore.isSessionRunning(item.session.id)
+    || item.scheduleInfo?.running === true
+    || item.liveActivity?.phase === 'running';
+  const hasPreview = item.automationGroup != null
+    || !!buildRemoteSessionCardPreview(item, { running })?.trim()
+    || !!item.scheduleInfo
+    || !!item.session.pinnedAt;
+  return hasPreview ? HOME_SESSION_ROW_HEIGHT : HOME_SESSION_SINGLE_LINE_ROW_HEIGHT;
+}
+
+function estimateHomeProjectChildHeight(
+  item: RemoteSessionListItem,
+  expandedAutomationGroups: ReadonlySet<string>,
+): number {
+  const rowHeight = estimateHomeSessionRowHeight(item);
+  const group = item.automationGroup;
+  if (!group || !expandedAutomationGroups.has(group.key)) return rowHeight;
+  const { visibleItems, hiddenCount } = getRemoteSessionPreviewCollapse(group.items, {
+    limit: PROJECT_PREVIEW_LIMIT,
+    isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
+  });
+  const childrenHeight = visibleItems.reduce(
+    (height, child) => height + estimateHomeSessionRowHeight(child),
+    0,
+  );
+  return rowHeight
+    + childrenHeight
+    + (hiddenCount > 0 ? HOME_AUTOMATION_VIEW_ALL_ROW_HEIGHT : 0);
+}
 
 type RemoteListStatusFilter = Extract<RemoteSessionStatusFilter, 'active' | 'archived' | 'all'>;
 type HomeDeviceConnectionState = 'idle' | 'syncing' | 'failed';
@@ -276,6 +336,15 @@ class HomeSyncScopeSupersededError extends Error {
 }
 
 export default function HomeScreen() {
+  const screenFocused = useIsFocused();
+  return (
+    <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
+      <HomeScreenContent />
+    </RemoteSessionStoreSubscriptionGate>
+  );
+}
+
+function HomeScreenContent() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -298,11 +367,12 @@ export default function HomeScreen() {
   } = useDeviceLink();
   const revokedDevices = useRevokedDevices();
   const sessions = useRemoteSessions();
-  const messageVersion = useRemoteMessageVersion();
-  const storeVersion = useRemoteSessionStoreVersion();
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
   const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
+  const homePreviewCacheRef = useRef(new Map<string, { messages: readonly unknown[]; preview?: string }>());
+  const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
+  const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
   // HomeScreen stays mounted while switching saved accounts. Keep an owner generation beside every
   // local projection so requests started by the previous account cannot repopulate the new screen.
@@ -412,6 +482,7 @@ export default function HomeScreen() {
   const projectDragEpochRef = useRef(0);
   const [projectDrag, setProjectDrag] = useState<ProjectDragSession | null>(null);
   const projectDragY = useSharedValue(0);
+  const homeScrollY = useSharedValue(0);
   const [dialogueShowAll, setDialogueShowAll] = useState(false);
   const [priorityHoldEpoch, setPriorityHoldEpoch] = useState(0);
   // deviceId of the revoked-access device whose explanation tip is open (null = closed).
@@ -690,18 +761,20 @@ export default function HomeScreen() {
         };
       }
       const nextSessions = Array.isArray(list) ? list : [];
-      remoteSessionStore.setDeviceSessions(
-        device.deviceId,
-        device.name,
-        nextSessions,
-      );
-      if (Array.isArray(activeSessions)) {
-        remoteSessionStore.setActiveSessionSnapshots(
+      remoteSessionStore.batch(() => {
+        remoteSessionStore.setDeviceSessions(
           device.deviceId,
-          activeSessions,
-          activeSessionSnapshotEpoch,
+          device.name,
+          nextSessions,
         );
-      }
+        if (Array.isArray(activeSessions)) {
+          remoteSessionStore.setActiveSessionSnapshots(
+            device.deviceId,
+            activeSessions,
+            activeSessionSnapshotEpoch,
+          );
+        }
+      });
       // schedule-index(1+N 个 listRuns)是次要徽标数据,延后发,避开"开 app→立刻点会话"时和会话关键读
       // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo
       // 兜底,徽标晚半拍出现即可。
@@ -919,7 +992,7 @@ export default function HomeScreen() {
       const hydrateResults = await runHomeDeviceSyncBatch(syncRows, async (item) => {
         const result = await hydrateDeviceSessions(item.device, accountGenerationAtStart);
         return { deviceId: item.device.deviceId, result };
-      });
+      }, HOME_DEVICE_HYDRATE_CONCURRENCY);
       for (const { deviceId, result } of hydrateResults) {
         if (result.superseded || homeAccountGenerationRef.current !== accountGenerationAtStart) continue;
         if (result.failure) failures.push(result.failure);
@@ -1187,10 +1260,27 @@ export default function HomeScreen() {
   // syncInFlight 去重,冷启动时与上线瞬间的两次触发只会实际执行一次。
   // 首次触发同时等首页列表缓存种入完成(homeListCacheHydrated,AsyncStorage 读一个小 key,毫秒级):
   // 保证缓存先画、fresh 后覆盖的顺序确定,避免 loadHome 清理下线设备后缓存又把 stale shard 种回去。
-  useEffect(() => {
+  const startSilentHomeSync = useCallback(() => {
     if (!deviceIdentityCacheReady || !homeListCacheHydrated || !homeViewPreferencesHydrated) return;
     void loadHome({ visible: false });
-  }, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);
+  }, [deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);
+
+  // Android can recreate the activity or resume the JS runtime without a fresh React
+  // mount. Foreground is therefore an authoritative trigger alongside the initial mount
+  // and reconnect; loadHome single-flights these overlapping cold-start calls.
+  useFocusEffect(
+    useCallback(() => {
+      startSilentHomeSync();
+    }, [startSilentHomeSync]),
+  );
+
+  useEffect(() => {
+    startSilentHomeSync();
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') startSilentHomeSync();
+    });
+    return () => subscription.remove();
+  }, [connectionEpoch, startSilentHomeSync]);
 
   // 把当前权威设备列表注入 remoteSessionStore,让 store 给所有 useRemoteSessions 消费者(首页项目卡、
   // 设备详情页)统一算展示用 canonicalDeviceId:re-link 后残留的 stale shard 会话按设备名唯一匹配认领回
@@ -1320,9 +1410,10 @@ export default function HomeScreen() {
   }, []);
 
   const onListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    homeScrollY.value = event.nativeEvent.contentOffset.y;
     const next = event.nativeEvent.contentOffset.y > 8;
     setHeaderFrosted((current) => (current === next ? current : next));
-  }, []);
+  }, [homeScrollY]);
 
   const closeRenameDevice = useCallback(() => {
     if (renameSaving) return;
@@ -1465,6 +1556,9 @@ export default function HomeScreen() {
     projects: searchProjects,
   });
   const searchQuery = indexedSearch.query;
+  const normalizedSearchQuery = searchQuery.trim();
+  const messageSearchVersion = useRemoteMessageVersion(normalizedSearchQuery.length > 0);
+  const homeStatusVersion = useRemoteHomeStatusVersion();
   const searchFilterA11y = t('devices.list.search.filterAria', {
     agent: t(`devices.list.search.filter.agent.${indexedSearch.agentFilter}`),
     lastActivity: t(`devices.list.search.filter.lastActivity.${indexedSearch.lastActivityFilter}`),
@@ -1564,32 +1658,68 @@ export default function HomeScreen() {
       : null,
     [deviceModels, revokedTipDeviceId, t],
   );
-  // 三个派生索引的依赖挂在全局 messageVersion / storeVersion 上,桌面端活跃期逐 emit
-  // 重建出内容相同的新 Map——若不做内容稳定化,home → sections → 全列表行整链每次
-  // emit 都重建(2026-07-18 重渲染风暴 trace 实锤)。useStableValue 在内容未变时保留
-  // 旧引用,下游 useMemo 依赖即可短路;内容真变(某会话预览/交互数/活动态变化)照常穿透。
-  const messagePreviewIndexRaw = useMemo(
-    () => buildSessionMessagePreviewIndex(
-      sessions.map((session) => session.id),
-      (sessionId) => remoteSessionStore.getMessages(sessionId),
-    ),
-    [messageVersion, sessions],
-  );
+  // 消息预览仅在搜索时构建全局索引；普通首页由行级 selector 消费。pending/live/running
+  // 共用低频 homeStatusVersion，普通文本 token 不再重建这些 Map 或 home → sections 链。
+  const messagePreviewIndexRaw = useMemo(() => {
+    // 普通首页的预览由可见行按 session 订阅。只有搜索需要跨全部任务建立消息索引。
+    if (!normalizedSearchQuery) return new Map<string, string>();
+    const next = new Map<string, string>();
+    const activeIds = new Set<string>();
+    for (const session of sessions) {
+      activeIds.add(session.id);
+      const messages = remoteSessionStore.getMessages(session.id);
+      const cached = homePreviewCacheRef.current.get(session.id);
+      if (cached?.messages === messages) {
+        if (cached.preview) next.set(session.id, cached.preview);
+        continue;
+      }
+      const preview = buildSessionMessagePreviewIndex([session.id], () => messages).get(session.id);
+      homePreviewCacheRef.current.set(session.id, { messages, preview });
+      if (preview) next.set(session.id, preview);
+    }
+    for (const sessionId of homePreviewCacheRef.current.keys()) {
+      if (!activeIds.has(sessionId)) homePreviewCacheRef.current.delete(sessionId);
+    }
+    return next;
+  }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
-  const pendingInteractionIndexRaw = useMemo(() => new Map(
-    sessions
-      .map((session) => [session.id, remoteSessionStore.getPendingInteractions(session.id).length] as const)
-      .filter(([, count]) => count > 0),
-  ), [sessions, storeVersion]);
+  const pendingInteractionIndexRaw = useMemo(() => {
+    const next = new Map<string, number>();
+    const activeIds = new Set<string>();
+    for (const session of sessions) {
+      activeIds.add(session.id);
+      const pending = remoteSessionStore.getPendingInteractions(session.id);
+      const cached = homePendingCacheRef.current.get(session.id);
+      const count = cached?.pending === pending ? cached.count : pending.length;
+      if (!cached || cached.pending !== pending) homePendingCacheRef.current.set(session.id, { pending, count });
+      if (count > 0) next.set(session.id, count);
+    }
+    for (const sessionId of homePendingCacheRef.current.keys()) {
+      if (!activeIds.has(sessionId)) homePendingCacheRef.current.delete(sessionId);
+    }
+    return next;
+  }, [homeStatusVersion, sessions]);
   const pendingInteractionIndex = useStableValue(pendingInteractionIndexRaw, mapContentEqual);
   const liveActivityIndexRaw = useMemo(() => {
-    const entries: Array<[string, RemoteSessionLiveActivity]> = [];
+    const next = new Map<string, RemoteSessionLiveActivity>();
     for (const session of sessions) {
       const liveActivity = remoteSessionStore.getSessionLiveActivity(session.id);
-      if (liveActivity) entries.push([session.id, liveActivity]);
+      if (liveActivity) next.set(session.id, liveActivity);
     }
-    return new Map(entries);
-  }, [sessions, storeVersion]);
+    const previous = homeLiveActivityIndexRef.current;
+    if (previous.size === next.size) {
+      let unchanged = true;
+      for (const [sessionId, value] of next) {
+        if (previous.get(sessionId) !== value) {
+          unchanged = false;
+          break;
+        }
+      }
+      if (unchanged) return previous;
+    }
+    homeLiveActivityIndexRef.current = next;
+    return next;
+  }, [homeStatusVersion, sessions]);
   const liveActivityIndex = useStableValue(liveActivityIndexRaw, mapContentEqual);
   // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
   const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions), [sessions]);
@@ -1617,7 +1747,7 @@ export default function HomeScreen() {
       if (scheduleIndex.get(session.id)?.running) ids.add(session.id);
     }
     return ids;
-  }, [homeSessions, liveActivityIndex, scheduleIndex, storeVersion]);
+  }, [homeSessions, homeStatusVersion, liveActivityIndex, scheduleIndex]);
   const homePriorityItems = useMemo(
     () => [...home.pinned, ...home.chats, ...home.projects.flatMap((project) => project.sessions)],
     [home],
@@ -2182,6 +2312,8 @@ export default function HomeScreen() {
       onToggleProject={toggleProject}
       projectDragging={projectDrag?.key === (item.kind === 'project' ? item.project.key : '')}
       projectHeaderRefs={projectHeaderRefs}
+      homeScrollY={homeScrollY}
+      viewportHeight={screenHeight}
       onTogglePin={toggleSessionPinned}
       prevIsBlock={isBlockHomeRow(homeRowBefore(sections, section.key, index))}
       projectCollapsed={isFolderHomeRow(item) && collapsedProjectKeys.includes(item.project.key)}
@@ -2212,6 +2344,8 @@ export default function HomeScreen() {
     toggleAutomationGroup,
     toggleProject,
     toggleSessionPinned,
+    homeScrollY,
+    screenHeight,
   ]);
 
   // 底部边到边:列表填满到物理屏底(内容滚到 home indicator 下方),用 inset 兜底而非靠 SafeAreaView 留白带。
@@ -2444,6 +2578,10 @@ export default function HomeScreen() {
         sections={sections}
         style={styles.homeList}
         keyExtractor={(item) => item.key}
+        initialNumToRender={HOME_LIST_INITIAL_RENDER_COUNT}
+        maxToRenderPerBatch={HOME_LIST_RENDER_BATCH_SIZE}
+        updateCellsBatchingPeriod={32}
+        windowSize={HOME_LIST_WINDOW_SIZE}
         refreshControl={
           <RefreshControl
             progressViewOffset={chromeHeight}
@@ -3203,6 +3341,44 @@ function ProjectDragOverlay({
   );
 }
 
+function HomeProjectWindowAnchorTracker({
+  childOffsets,
+  onAnchorChange,
+  projectHeaderHeight,
+  projectLayoutReady,
+  projectTop,
+  scrollY,
+  viewportHeight,
+}: {
+  childOffsets: readonly number[];
+  onAnchorChange(anchor: number): void;
+  projectHeaderHeight: SharedValue<number>;
+  projectLayoutReady: SharedValue<boolean>;
+  projectTop: SharedValue<number>;
+  scrollY: SharedValue<number>;
+  viewportHeight: number;
+}) {
+  useAnimatedReaction(
+    () => {
+      if (!projectLayoutReady.value) return -1;
+      return resolveHomeProjectChildAnchor({
+        childOffsets,
+        projectHeaderHeight: projectHeaderHeight.value,
+        projectTop: projectTop.value,
+        shift: PROJECT_CHILD_WINDOW_SHIFT,
+        viewportHeight,
+        viewportTop: scrollY.value,
+      });
+    },
+    (next, previous) => {
+      if (next === previous) return;
+      runOnJS(onAnchorChange)(next);
+    },
+    [childOffsets, onAnchorChange, projectHeaderHeight, projectLayoutReady, projectTop, scrollY, viewportHeight],
+  );
+  return null;
+}
+
 function ProjectRow({
   collapsed,
   dragging = false,
@@ -3218,6 +3394,8 @@ function ProjectRow({
   onToggle,
   onToggleAutomationGroup,
   project,
+  homeScrollY,
+  viewportHeight,
   showAll = false,
   suppressTopBorder = false,
   swipe,
@@ -3236,6 +3414,8 @@ function ProjectRow({
   onToggle(): void;
   onToggleAutomationGroup(key: string): void;
   project: MobileHomeProjectGroup;
+  homeScrollY?: SharedValue<number>;
+  viewportHeight: number;
   /** 对话组「查看全部」在原地展开,不跳设备详情。 */
   showAll?: boolean;
   /** 前一行也是块(项目组 / 自动化组)时不画顶线:前块底线已是这根分割线。 */
@@ -3247,9 +3427,9 @@ function ProjectRow({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读会话运行态,而派生链稳定化后本组件不再逐 emit 重渲染(cell 经
-  // PureComponent bail)——以 storeVersion 订阅兜底感知运行态变化,与 AutomationGroup-
+  // PureComponent bail)——以低频首页状态版本兜底感知运行态变化,与 AutomationGroup-
   // Children 同款(否则折叠线以下转入 running 的会话不会被豁免展开,review P1)。
-  useRemoteSessionStoreVersion();
+  const homeStatusVersion = useRemoteHomeStatusVersion();
   // 与桌面侧栏项目组同一套折叠策略:前 N 条之外豁免最近 24h 活动 / 需关注 / 运行中的条目
   // (豁免语义见共享层 getRemoteSessionPreviewCollapse 注释)。
   // 自动化折叠后 sessions 是"行"(组行代表多条会话):按钮显隐看隐藏行数(hiddenCount),
@@ -3261,6 +3441,57 @@ function ProjectRow({
       isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
     },
   );
+  const projectTop = useSharedValue(0);
+  const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
+  const projectRef = useRef<View>(null);
+  const [windowAnchor, setWindowAnchor] = useState(-1);
+  const projectLayoutReady = useSharedValue(false);
+  const estimatedChildHeights = useMemo(() => {
+    const expandedKeys = new Set(expandedAutomationGroups);
+    return visibleSessions.map((item) => estimateHomeProjectChildHeight(item, expandedKeys));
+  }, [expandedAutomationGroups, homeStatusVersion, visibleSessions]);
+  const estimatedChildOffsets = useMemo(
+    () => buildHomeProjectChildOffsets(estimatedChildHeights),
+    [estimatedChildHeights],
+  );
+  // Keep the common five-row preview unchanged. A large expanded group keeps
+  // its complete estimated height as a spacer until native layout establishes
+  // that its child area intersects the viewport. This avoids mounting an
+  // off-screen child window just because the folder header entered the outer
+  // SectionList render window.
+  const windowingEnabled = shouldWindowHomeProjectChildren({
+    collapsed,
+    itemCount: visibleSessions.length,
+    scrollTrackingAvailable: !!homeScrollY,
+    threshold: PROJECT_CHILD_WINDOW_THRESHOLD,
+  });
+  const scrollY = homeScrollY;
+  const childContentHeight = estimatedChildOffsets[estimatedChildOffsets.length - 1] ?? 0;
+  const childWindow = windowingEnabled
+    ? windowAnchor >= 0
+      ? resolveHomeProjectChildWindow({
+        anchor: windowAnchor,
+        childOffsets: estimatedChildOffsets,
+        overscan: PROJECT_CHILD_WINDOW_OVERSCAN,
+        windowSize: PROJECT_CHILD_WINDOW_SIZE,
+      })
+      : {
+          end: 0,
+          leadingSpacerHeight: 0,
+          start: 0,
+          trailingSpacerHeight: childContentHeight,
+        }
+    : {
+        end: visibleSessions.length,
+        leadingSpacerHeight: 0,
+        start: 0,
+        trailingSpacerHeight: 0,
+      };
+  const windowStart = childWindow.start;
+  const windowEnd = childWindow.end;
+  const renderedSessions = windowingEnabled ? visibleSessions.slice(windowStart, windowEnd) : visibleSessions;
+  const leadingSpacerHeight = childWindow.leadingSpacerHeight;
+  const trailingSpacerHeight = childWindow.trailingSpacerHeight;
   const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
   const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
   const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
@@ -3295,6 +3526,10 @@ function ProjectRow({
         : t('devices.list.a11y.project', { title: project.title })}
       accessibilityRole="button"
       accessibilityState={{ expanded: !collapsed }}
+      onLayout={(event) => {
+        const height = event.nativeEvent.layout.height;
+        if (Number.isFinite(height) && height > 0) projectHeaderHeight.value = height;
+      }}
       onPress={dragging ? undefined : onToggle}
       ref={(node) => {
         if (!headerRefs || kind !== 'project') return;
@@ -3326,14 +3561,57 @@ function ProjectRow({
   );
   return (
     <View
+      onLayout={(event) => {
+        if (!windowingEnabled) return;
+        projectLayoutReady.value = false;
+        const fallbackY = event.nativeEvent.layout.y;
+        projectRef.current?.measureInWindow((_x, screenY) => {
+          projectTop.value = screenY + (homeScrollY?.value ?? 0);
+          projectLayoutReady.value = true;
+        });
+        // A native measure can be unavailable in shallow/unit renderers. Keep
+        // the local layout as a safe fallback; the real device measurement
+        // above is used whenever the row is mounted in a ScrollView.
+        if (!projectRef.current) {
+          projectTop.value = fallbackY;
+          projectLayoutReady.value = true;
+        }
+      }}
+      ref={projectRef}
       style={[styles.projectGroup, suppressTopBorder && styles.projectGroupNoTop]}
       testID={groupTestID}
     >
+      {windowingEnabled && scrollY ? (
+        <HomeProjectWindowAnchorTracker
+          childOffsets={estimatedChildOffsets}
+          onAnchorChange={setWindowAnchor}
+          projectHeaderHeight={projectHeaderHeight}
+          projectLayoutReady={projectLayoutReady}
+          projectTop={projectTop}
+          scrollY={scrollY}
+          viewportHeight={viewportHeight}
+        />
+      ) : null}
       {dragGesture ? <GestureDetector gesture={dragGesture}>{header}</GestureDetector> : header}
 
       {collapsed ? null : (
         <View style={styles.projectChildren} testID="home.projectChildren">
-          {visibleSessions.map((item, index) => {
+          {leadingSpacerHeight > 0 ? <View pointerEvents="none" style={{ height: leadingSpacerHeight }} /> : null}
+          {renderedSessions.map((item, renderedIndex) => {
+            const index = windowStart + renderedIndex;
+            const itemKey = item.automationGroup?.key ?? item.session.id;
+            const swipeable = !!swipe
+              && !item.automationGroup
+              && conversationSearchAllowsLocalWrites(item);
+            // Window shifts used to key rows by session id, so crossing one
+            // four-row boundary destroyed and recreated four complete native
+            // swipe trees in the same frame. Keep a stable pool of render
+            // slots while windowing; the row receives new data without paying
+            // the native mount/unmount cost. Preserve identity keys outside the
+            // windowed path, and remount a slot when its outer shell changes.
+            const reactKey = windowingEnabled
+              ? `${project.key}:window:${renderedIndex}:${swipeable ? 'swipe' : 'plain'}`
+              : itemKey;
             const row = (
               <HomeSessionRow
                 expandedAutomationGroups={expandedAutomationGroups}
@@ -3350,12 +3628,12 @@ function ProjectRow({
             );
             // 与顶层同一条规则:普通会话子行挂滑动,自动化组行不挂(组行语义含混,
             // 其展开子行由 AutomationGroupChildren 内的透传包裹)。
-            if (!swipe || item.automationGroup || !conversationSearchAllowsLocalWrites(item)) {
-              return <Fragment key={item.automationGroup?.key ?? item.session.id}>{row}</Fragment>;
+            if (!swipeable) {
+              return <Fragment key={reactKey}>{row}</Fragment>;
             }
             return (
               <SwipeableSessionRow
-                key={item.session.id}
+                key={reactKey}
                 onArchive={swipe.onArchive}
                 onShowOptions={swipe.onShowOptions}
                 onTogglePin={swipe.onTogglePin}
@@ -3367,6 +3645,7 @@ function ProjectRow({
               </SwipeableSessionRow>
             );
           })}
+          {trailingSpacerHeight > 0 ? <View pointerEvents="none" style={{ height: trailingSpacerHeight }} /> : null}
           {hiddenRowCount > 0 ? (
             <Pressable
               accessibilityLabel={t('devices.list.viewAllConversations', { count: project.sessionCount })}
@@ -3403,7 +3682,22 @@ function ProjectRow({
  * useMemo 单例。给本组件新增函数 prop 时必须复审闭包稳定性。projectCollapsed /
  * prevIsBlock 等邻接派生位由 renderItem 计算成标量传入,天然参与比较。
  */
-const HomeListRow = memo(HomeListRowInner, dataPropsEqual);
+const HomeListRow = memo(HomeListRowInner, homeListRowPropsEqual);
+
+function homeListRowPropsEqual(
+  previous: Readonly<Record<string, unknown>>,
+  next: Readonly<Record<string, unknown>>,
+): boolean {
+  const previousItem = previous.item as HomeRow;
+  const nextItem = next.item as HomeRow;
+  if (!homeRowsShareRenderData(previousItem, nextItem)) {
+    return dataPropsEqual(previous, next);
+  }
+  // dataPropsEqual retains the existing semantics for every other prop. Point
+  // the previous row at the already-proven-equivalent next item so the
+  // generic comparator takes its Object.is path instead of JSON.stringify.
+  return dataPropsEqual({ ...previous, item: nextItem }, next);
+}
 
 function HomeListRowInner({
   expandedAutomationGroups,
@@ -3426,6 +3720,8 @@ function HomeListRowInner({
   projectCollapsed,
   projectDragging,
   projectHeaderRefs,
+  homeScrollY,
+  viewportHeight,
   registry,
   showAllDialogue,
   swipe,
@@ -3451,6 +3747,8 @@ function HomeListRowInner({
   projectCollapsed: boolean;
   projectDragging: boolean;
   projectHeaderRefs: MutableRefObject<Map<string, View>>;
+  homeScrollY?: SharedValue<number>;
+  viewportHeight: number;
   registry: ReturnType<typeof createSwipeRowRegistry>;
   showAllDialogue: boolean;
   swipe: SessionSwipeControls;
@@ -3472,6 +3770,8 @@ function HomeListRowInner({
         onToggle={() => onToggleProject(item.project.key)}
         onToggleAutomationGroup={onToggleAutomationGroup}
         project={item.project}
+        homeScrollY={homeScrollY}
+        viewportHeight={viewportHeight}
         showAll={item.kind === 'dialogue' && showAllDialogue}
         suppressTopBorder={prevIsBlock}
         swipe={swipe}
@@ -3592,6 +3892,9 @@ function HomeSessionRowInner({
   const { t } = useTranslation();
   // 运行态走订阅而非命令式读取:行已 memo 化,父层不再逐 emit 重渲染,命令式读取会 stale。
   const sessionIsRunning = useSessionRunning(item.session.id);
+  // 已加载消息的预览按 session 订阅。普通流式 token 只让对应的可见行更新，首页根层、
+  // sections 和其它任务行都保持原引用。
+  const loadedMessagePreview = useRemoteSessionMessagePreview(item.session.id);
   const running = sessionIsRunning || !!item.scheduleInfo?.running;
   // attention 合并 main 的 #368:liveActivity.attention 也点亮关注态(组行直开 primary 的判定沿用)。
   const attention = item.pendingInteractionCount > 0
@@ -3625,7 +3928,12 @@ function HomeSessionRowInner({
   // 组行的预览位改为任务态摘要(需关注数 / 执行中 / 共 N 次运行),对齐桌面版组头 meta。
   const preview = group
     ? automationGroupPreview(item, group.sessionCount, t)
-    : buildRemoteSessionCardPreview(item, { running });
+    : buildRemoteSessionCardPreview(
+        loadedMessagePreview === undefined || loadedMessagePreview === item.messagePreview
+          ? item
+          : { ...item, messagePreview: loadedMessagePreview },
+        { running },
+      );
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；但定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。
   const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;
@@ -3843,8 +4151,8 @@ function AutomationGroupChildren({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读子会话运行态,而父行(HomeSessionRow)已 memo 化、不再逐 emit
-  // 重渲染——这里以 storeVersion 订阅兜底感知运行态变化。仅组展开时挂载,量小成本可忽略。
-  useRemoteSessionStoreVersion();
+  // 重渲染——只订阅首页状态版本感知运行态变化,普通文本 token 不再惊动整组。
+  useRemoteHomeStatusVersion();
   // 与项目组同一套折叠豁免(24h 活动 / 需关注 / 运行中),见共享层注释。
   const { visibleItems, hiddenCount } = getRemoteSessionPreviewCollapse(group.items, {
     limit: PROJECT_PREVIEW_LIMIT,

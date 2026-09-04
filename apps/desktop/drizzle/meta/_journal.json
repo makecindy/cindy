@@ -701,6 +701,20 @@
       "when": 1787938177701,
       "tag": "0099_boring_champions",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "6",
+      "when": 1787992937440,
+      "tag": "0100_segment_messages_fts_cjk",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "6",
+      "when": 1788431426308,
+      "tag": "0101_repair_cjk_fts_missing_rows",
+      "breakpoints": true
     }
   ]
 }

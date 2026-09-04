@@ -152,9 +152,9 @@ describe('Projects sidebar section', () => {
   });
 
   it('renders pre-grouped automation entries as one flat-list row', () => {
-    expect(projectsSectionSource).toContain(
-      "entry.kind === 'session' || entry.kind === 'automation-group'",
-    );
+    expect(projectsSectionSource).toContain("entry.kind === 'session' ||");
+    expect(projectsSectionSource).toContain("entry.kind === 'automation-group' ||");
+    expect(projectsSectionSource).toContain("entry.kind === 'session-family'");
     expect(projectsSectionSource).toContain('<SessionEntryRows');
     expect(projectsSectionSource).toContain('entries={[entry]}');
     expect(projectsSectionSource).not.toContain('sessions={[entry.session]}');

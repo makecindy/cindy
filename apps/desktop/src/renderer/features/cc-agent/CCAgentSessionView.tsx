@@ -30,7 +30,11 @@ import {
   isCodexResumeNotReadyProjectionError,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
-import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
+import {
+  connectedProvidersForAgent,
+  EFFORT_VALUES,
+  providerOffersModel,
+} from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
@@ -60,6 +64,7 @@ import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
 import { useWorkerProjection, useWorkerProjectionOwner } from './hooks/workerProjectionStore';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
+import { setModelWithWindowConfirmation } from './lib/modelWindowConfirmation';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
 import { WorktreeCreatingOverlay } from '@/components/new-chat/WorktreeCreatingOverlay';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
@@ -3714,27 +3719,68 @@ export function CCAgentSessionView({
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
     const model = session.model;
     const previousProviderId = session.providerId ?? null;
+    const retryEffort =
+      typeof session.effort === 'string' &&
+      (EFFORT_VALUES as readonly string[]).includes(session.effort)
+        ? session.effort
+        : null;
+    const fmtTokens = (value: number): string =>
+      value >= 1_000_000
+        ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+        : `${Math.round(value / 1000)}K`;
 
-    await window.electronAPI.maker.setModel(sessionId, model, 'anthropic');
-    try {
-      await sessionService.update(sessionId, {
-        model,
-        providerId: 'anthropic',
-      });
-    } catch (error) {
-      // runtime route 已先切换；若持久化失败就回滚，避免当前进程与 DB 对同一会话
-      // 产生两个 provider 真源。
-      await window.electronAPI.maker
-        .setModel(sessionId, model, previousProviderId)
-        .catch((rollbackError) => {
-          log.warn('Claude subscription recovery rollback failed', rollbackError);
+    const switched = await setModelWithWindowConfirmation({
+      invoke: (confirmedContextWindow) =>
+        window.electronAPI.maker.setModel(
+          sessionId,
+          model,
+          'anthropic',
+          undefined,
+          confirmedContextWindow
+            ? ({
+                effort: retryEffort,
+                fastMode,
+                confirmedContextWindow,
+              } as { effort: string; fastMode: boolean })
+            : undefined,
+        ),
+      confirm: ({ contextWindow, contextTokens }) =>
+        confirmDialog({
+          title: t('newChat.chatInput.modelSwitchContextGuard.title'),
+          description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', {
+            used: fmtTokens(contextTokens),
+            total: fmtTokens(contextWindow),
+            pct: Math.round((contextTokens / contextWindow) * 100),
+          }),
+          confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
+          cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
+        }),
+    });
+    if (!switched) return;
+    if (switched === 'applied') {
+      try {
+        await sessionService.update(sessionId, {
+          model,
+          providerId: 'anthropic',
         });
-      throw error;
+      } catch (error) {
+        // runtime route 已先切换；若持久化失败就回滚，避免当前进程与 DB 对同一会话
+        // 产生两个 provider 真源。确认后的原子重试已由 Main 持久化，不走此分支。
+        await window.electronAPI.maker
+          .setModel(sessionId, model, previousProviderId)
+          .catch((rollbackError) => {
+            log.warn('Claude subscription recovery rollback failed', rollbackError);
+          });
+        throw error;
+      }
     }
 
     await refreshServerSession();
     await retryLastError();
-  }, [canSwitchToClaudeSubscription, refreshServerSession, retryLastError, session, sessionId]);
+  }, [
+    canSwitchToClaudeSubscription, confirmDialog, fastMode, refreshServerSession,
+    retryLastError, session, sessionId, t,
+  ]);
 
   const handleSilentStopContinue = useCallback(() => {
     continueAfterSilentStop();
@@ -5282,7 +5328,7 @@ function HandoffSourcePill({
     <div
       className={cn(
         'flex h-10 w-full items-center rounded-[12px] border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
-        'text-13 leading-none text-[#595959]',
+        'text-13 leading-none text-muted-foreground',
       )}
     >
       <button
@@ -5304,7 +5350,7 @@ function HandoffSourcePill({
         aria-label={t('ccAgent.handoff.pill.dismissAria')}
         className={cn(
           'mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px]',
-          'text-[#595959] transition-colors hover:bg-[var(--cmd-palette-bg)] hover:text-foreground',
+          'text-muted-foreground transition-colors hover:bg-[var(--cmd-palette-bg)] hover:text-foreground',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground',
         )}
       >
@@ -5706,7 +5752,7 @@ function ContextCapacityRing({
   const dashOffset = circumference - (circumference * pct) / 100;
 
   // Color thresholds per spec
-  const fillColor = pct > 90 ? '#EF4444' : pct > 70 ? '#F59E0B' : 'var(--msg-tool-card-chevron)';
+  const fillColor = pct > 90 ? 'var(--error-flat)' : pct > 70 ? 'var(--warning-fg)' : 'var(--msg-tool-card-chevron)';
 
   const usedTokens = Math.min(contextTokens, contextWindow || Infinity);
   const tooltipText =

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TEST_CDN_BASE_URL } from '../../test/vitest/clientEndpointsFixture';
 
+const originalPlatform = process.platform;
+const originalArch = process.arch;
 const netRequest = vi.hoisted(() => vi.fn());
 const canaryRead = vi.hoisted(() => vi.fn(() => false));
 const isBetaChannelEnabled = vi.hoisted(() => vi.fn(() => false));
@@ -59,6 +61,22 @@ const RELEASE_MANIFEST = JSON.stringify({
   app: { version: '0.0.65' },
 });
 
+const LINUX_BETA_MANIFEST = {
+  app: {
+    version: '0.0.66',
+    installer: {
+      file: 'app/linux-x64/cindy-0.0.66-amd64.deb',
+      sha256: 'a'.repeat(64),
+      size: 123,
+    },
+  },
+};
+
+function setRuntime(platform: NodeJS.Platform, arch: string): void {
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  Object.defineProperty(process, 'arch', { value: arch, configurable: true });
+}
+
 describe('manifestService cache channel identity', () => {
   beforeEach(() => {
     netRequest.mockReset();
@@ -112,19 +130,98 @@ describe('probeBetaManifest', () => {
   });
 
   afterEach(async () => {
+    setRuntime(originalPlatform, originalArch);
     const { clearCachedManifest } = await import('../manifestService');
     clearCachedManifest();
   });
 
   it('rejects an HTTP 200 body that is not a usable beta manifest', async () => {
+    setRuntime('win32', 'x64');
     mockManifestResponse('<html>error</html>');
     const service = await import('../manifestService');
     await expect(service.probeBetaManifest()).resolves.toBe(false);
   });
 
-  it('accepts a parseable beta manifest', async () => {
+  it('keeps accepting a parseable beta manifest outside Linux', async () => {
+    setRuntime('win32', 'x64');
     mockManifestResponse(RELEASE_MANIFEST);
     const service = await import('../manifestService');
     await expect(service.probeBetaManifest()).resolves.toBe(true);
+  });
+
+  it('rejects a beta manifest whose app version is not valid SemVer', async () => {
+    setRuntime('linux', 'x64');
+    mockManifestResponse(
+      JSON.stringify({
+        ...LINUX_BETA_MANIFEST,
+        app: { ...LINUX_BETA_MANIFEST.app, version: 'not-semver' },
+      }),
+    );
+    const service = await import('../manifestService');
+
+    await expect(service.probeBetaManifest()).resolves.toBe(false);
+  });
+
+  it('accepts a Linux x64 beta manifest with a complete .deb installer', async () => {
+    setRuntime('linux', 'x64');
+    mockManifestResponse(JSON.stringify(LINUX_BETA_MANIFEST));
+    const service = await import('../manifestService');
+
+    await expect(service.probeBetaManifest()).resolves.toBe(true);
+    expect(String(netRequest.mock.calls[0]?.[0])).toContain('manifest-linux-x64-beta.json');
+  });
+
+  it.each([
+    ['a missing installer', { app: { version: '0.0.66' } }],
+    [
+      'a non-deb installer',
+      {
+        app: {
+          ...LINUX_BETA_MANIFEST.app,
+          installer: { ...LINUX_BETA_MANIFEST.app.installer, file: 'cindy.rpm' },
+        },
+      },
+    ],
+    [
+      'a malformed SHA-256',
+      {
+        app: {
+          ...LINUX_BETA_MANIFEST.app,
+          installer: { ...LINUX_BETA_MANIFEST.app.installer, sha256: 'abc' },
+        },
+      },
+    ],
+    [
+      'a zero installer size',
+      {
+        app: {
+          ...LINUX_BETA_MANIFEST.app,
+          installer: { ...LINUX_BETA_MANIFEST.app.installer, size: 0 },
+        },
+      },
+    ],
+    [
+      'a non-numeric installer size',
+      {
+        app: {
+          ...LINUX_BETA_MANIFEST.app,
+          installer: { ...LINUX_BETA_MANIFEST.app.installer, size: '123' },
+        },
+      },
+    ],
+  ])('rejects a Linux x64 beta manifest with %s', async (_case, manifest) => {
+    setRuntime('linux', 'x64');
+    mockManifestResponse(JSON.stringify(manifest));
+    const service = await import('../manifestService');
+
+    await expect(service.probeBetaManifest()).resolves.toBe(false);
+  });
+
+  it('does not probe the beta channel on Linux arm64', async () => {
+    setRuntime('linux', 'arm64');
+    const service = await import('../manifestService');
+
+    await expect(service.probeBetaManifest()).resolves.toBe(false);
+    expect(netRequest).not.toHaveBeenCalled();
   });
 });

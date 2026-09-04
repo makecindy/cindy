@@ -1344,7 +1344,17 @@ export function buildPiNativeProvidersFromConfigs(
               : {}),
           ...(bundledModel?.cost ? { cost: { ...bundledModel.cost } } : {}),
           ...(bundledModel?.headers ? { headers: { ...bundledModel.headers } } : {}),
-          ...(bundledModel?.compat ? { compat: structuredClone(bundledModel.compat) } : {}),
+          ...(bundledModel?.compat
+            ? { compat: structuredClone(bundledModel.compat) }
+            : !bundledModel && modelApi === 'openai-completions'
+              ? // 未知自定义 Chat Completions 端点保守回落(#3832):火山引擎等
+                // OpenAI 兼容网关只接受 system/assistant/user/tool,而 Pi 的
+                // detectCompat 对陌生端点默认 supportsDeveloperRole=true,会把
+                // system 指令按 role=developer 发出 → 整个模型不可用。system
+                // role 在所有 OpenAI 兼容端点均可用,故无同源 bundled 元数据时
+                // 默认收敛为 system;有 bundled 元数据的端点维持 Pi 原生判定。
+                { compat: { supportsDeveloperRole: false } }
+              : {}),
           ...(bundledModel?.samplingParams
             ? { samplingParams: structuredClone(bundledModel.samplingParams) }
             : {}),

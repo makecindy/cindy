@@ -175,6 +175,7 @@ import {
 import {
   buildSessionRuntimeOptions,
   normalizeMobileAgentCapabilities,
+  reconcileRuntimeDraftWithCapabilities,
   type MobileAgentCapabilities,
   type MobileModelOption,
   type MobileSessionRuntimeOptions,
@@ -186,6 +187,7 @@ import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { getModel } from '@cindy/model-providers/registry';
+import { shouldBlockLegacyRemoteModelWindowSwitch } from '@cindy/maker-shared/agent-capabilities';
 import { clearSessionMirror, makeSessionMirrorAccessors } from '@/session/sessionModelMirror';
 import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import {
@@ -454,9 +456,16 @@ import {
   hasOlderMessagesByServerCount,
   listMessagesWithPayloadRetry,
   oldestMessageCursor,
+  projectLoadedMessageWindowIncrementally,
+  type LoadedMessageWindowProjection,
   shouldRefreshLatestMessageWindowOnReopen,
   shouldKeepOlderMessagesAffordance,
 } from '@/session/messagePaging';
+import {
+  fetchMobileToolInputDetail,
+  type MobileToolInputDetail,
+  type MobileToolInputProjection,
+} from '@/session/messageToolPayloadProjection';
 import {
   HISTORY_BACKFILL_MAX_GAPS_PER_VISIT,
   HISTORY_GAP_MAX_CONSIDERED_PER_VISIT,
@@ -466,11 +475,16 @@ import {
   historyWindowGapKey,
 } from '@/session/historyWindowGap';
 import {
-  buildMobileMessageRenderItems,
   insertMobileForkOriginItem,
   type MobileMessageRenderItem,
 } from '@/session/messageRenderModel';
 import { reconcileMobileMessageRenderItems } from '@/session/messageRenderReconcile';
+import {
+  buildMobileStreamingRenderWindow,
+  commitMobileStreamingPrefixItems,
+  committedMobileStreamingPrefixItemCount,
+  type MobileStreamingRenderPrefixCache,
+} from '@/session/messageRenderStreamingCache';
 import { shouldSuppressEmptyMessageState } from '@/session/sessionEmptyState';
 import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
@@ -979,6 +993,11 @@ export default function SessionScreen() {
   const maker = useMobileMakerTransport(deviceId);
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
+  const messageStructureToken = remoteSessionStore.getSessionMessageStructureToken(sessionId);
+  const messageStructureChangedIndexes = remoteSessionStore
+    .getSessionMessageStructureChangedIndexes(sessionId);
+  const latestMessagesRef = useRef(messages);
+  latestMessagesRef.current = messages;
   const sessionRetention = useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getSessionRetention(sessionId),
@@ -1677,8 +1696,9 @@ export default function SessionScreen() {
   }
   // 远程媒体取件队列:屏实例级缓存 + 同 url 去重 + 并发上限(每次取件都让桌面端
   // 真实上传一次 OSS,列表缩略图懒取件后必须收敛)。deps 经 ref 透传保持队列实例稳定;
-  // 队列生命周期 = 单个会话:切 sessionId / 退屏时 releaseAll + 补删 + 换新实例
-  // (见下方 sessionId 键控的清理 effect),上一会话的 OSS 对象不跨会话累积。
+  // 队列生命周期 = 单个会话:切 sessionId / 页面卸载时 releaseAll + 补删,
+  // 下个会话首次取件再懒建新实例(见下方 sessionId 键控的清理 effect),
+  // 上一会话的 OSS 对象不跨会话累积。
   const remoteMediaDepsRef = useRef({ auth, maker });
   // useLayoutEffect 而非 useEffect:子组件(MediaPreview)的取件是被动 effect,
   // 会晚于父层 layout effect、早于父层被动 effect——切会话首批取件必须已看到
@@ -1823,6 +1843,8 @@ export default function SessionScreen() {
       // 退屏后才完成的 in-flight 取件:缓存已被 releaseAll 清空接管不到,这里直接
       // 补 DELETE,避免「退出时正在取件」的对象漏出退屏统一清理悬到生命周期兜底。
       onOrphanResolved: (media) => deleteRemoteMediaObject(media),
+    }, {
+      maxCacheBytes: 16 * 1024 * 1024,
     }), [deleteRemoteMediaObject]);
   remoteMediaQueueRef.current ??= createRemoteMediaQueue();
   const voiceRecordingActiveRef = useRef(false);
@@ -2219,7 +2241,7 @@ export default function SessionScreen() {
   const showSyncingShell = sessionOperationLayout.composerSlot === 'missing-session'
     && !remoteUnavailableReason;
   // 同步/加载期消息区不显示「暂无消息」(会话其实在加载、不是空),改为渲染「正在同步」
-  // loading 占位(MessageRenderer 的 SyncingMessages,延迟显形防快速路径闪烁);看过的会话
+  // loading 占位(MessageRenderer 的 SyncingMessages);看过的会话
   // 此时已被本地缓存(②)填充正常渲染,不进 empty 分支。还包含冷开首帧:currentSession 立即
   // 就有但消息未到、loading 尚未翻 true 的窗口(本次打开未同步过)。只有同步完成过
   // (lastSyncedAt 有值)且确实 0 条时才显示「暂无消息」;离线/被撤销(remoteUnavailableReason)
@@ -2255,8 +2277,8 @@ export default function SessionScreen() {
     && !inputProjection.queuePaused
     && !inputProjection.queueAbortPending;
   const currentTurnStreaming = useMemo(
-    () => currentTurnHasStreamingAssistant(messages),
-    [messages],
+    () => currentTurnHasStreamingAssistant(latestMessagesRef.current),
+    [messageStructureToken],
   );
   const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)
     && !inputProjection.queueAbortPending;
@@ -4290,11 +4312,12 @@ export default function SessionScreen() {
   // shouldKeepOlderMessagesAffordance / hasOlderMessagesAfterReopen 校正(:806/:846)。_count 未知不凭空点亮。
   useEffect(() => {
     if (isScheduleDetail) return;
-    if (lastSyncedAt !== null || hasOlderMessages || messages.length === 0) return;
-    if (hasOlderMessagesByServerCount(currentSession?._count?.messages, messages)) {
+    const currentMessages = latestMessagesRef.current;
+    if (lastSyncedAt !== null || hasOlderMessages || currentMessages.length === 0) return;
+    if (hasOlderMessagesByServerCount(currentSession?._count?.messages, currentMessages)) {
       setHasOlderMessages(true);
     }
-  }, [currentSession?._count?.messages, hasOlderMessages, isScheduleDetail, lastSyncedAt, messages]);
+  }, [currentSession?._count?.messages, hasOlderMessages, isScheduleDetail, lastSyncedAt, messageStructureToken]);
 
   // 在线时按 connectionEpoch 去重:每个连接 epoch 只 resync 一次。首开同步由上面的 mount effect 负责
   // (此处 epoch == 初值 → skip);仅在 epoch 变化(真正重连 / 回前台 connectNow→online)时再 resync,
@@ -4453,11 +4476,11 @@ export default function SessionScreen() {
   // 同帧正式气泡已在流里,视觉上原位变实心,无跳变)。
   const queueHiddenClientIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const message of messages) {
+    for (const message of latestMessagesRef.current) {
       if (message.clientId) ids.add(message.clientId);
     }
     return ids;
-  }, [messages]);
+  }, [messageStructureToken]);
   // 落定中条目跟踪(见 settlingQueueItems 声明处注释):
   // 1) pendingQueue diff——只把「像被派发」的消失当作落定中:drain 恒从队首连续
   //    消费,steer 按 steeringQueueClientIds 标记;两者都不沾的中段消失是远端删除
@@ -4605,25 +4628,59 @@ export default function SessionScreen() {
   // (worker)会话不渲染 banner,错误卡必须留在消息流(同一 review P2)。
   const errorTailClientId = useMemo(() => {
     if (collaborationReadOnlyReason) return null;
-    const id = findErrorTailClientId(messages);
+    const id = findErrorTailClientId(latestMessagesRef.current);
     return id && !dismissedTailErrorClientIds.has(id) ? id : null;
-  }, [collaborationReadOnlyReason, messages, dismissedTailErrorClientIds]);
+  }, [collaborationReadOnlyReason, dismissedTailErrorClientIds, messageStructureToken]);
+  const projectedMessageWindowRef = useRef<{
+    projection: LoadedMessageWindowProjection;
+    sessionId: string;
+  } | null>(null);
+  const projectedMessageWindow = useMemo(() => {
+    const projection = projectLoadedMessageWindowIncrementally({
+      changedIndexes: messageStructureChangedIndexes,
+      messages,
+      previous: projectedMessageWindowRef.current?.sessionId === sessionId
+        ? projectedMessageWindowRef.current.projection
+        : null,
+      structureToken: messageStructureToken,
+    });
+    projectedMessageWindowRef.current = { projection, sessionId };
+    return projection;
+  }, [messageStructureChangedIndexes, messageStructureToken, messages, sessionId]);
+  const projectedMessages = projectedMessageWindow.projected;
+  const projectedMessageStructureChangedIndexes = projectedMessageWindow.changedIndexes;
+  const oldestLoadedMessageCursor = useMemo(
+    () => oldestMessageCursor(latestMessagesRef.current),
+    [messageStructureToken],
+  );
   const previousRenderItemsRef = useRef<{
     sessionId: string;
     items: readonly MobileMessageRenderItem[];
+    prefix: MobileStreamingRenderPrefixCache | null;
   } | null>(null);
-  const renderItems = useMemo(
+  const streamingRenderPrefixRef = useRef<MobileStreamingRenderPrefixCache | null>(null);
+  const renderWindow = useMemo(
     () => {
+      const builtWindow = buildMobileStreamingRenderWindow({
+        cacheKey: i18nInstance.language,
+        messages: projectedMessages,
+        messageStructureChangedIndexes: projectedMessageStructureChangedIndexes,
+        messageStructureToken,
+        options: {
+          autoResumePending: inputProjection.autoResumePending,
+          isSessionStreaming,
+          renderOrphanTaskUpdates: makerTurnRunning,
+          sessionId,
+        },
+        prefixCache: streamingRenderPrefixRef,
+        taskUpdates,
+      });
       let items = insertMobileForkOriginItem(
         // 孤儿 agent_task 兜底用 maker status 驱动的权威 turn 边界 gate,与 store 的
         // turn-start 清理同源闭环——渲染开启时 map 必已清过 stale。不用 isSessionStreaming
         // (含本地 sending / canStopQueue,发送→status 间隙会闪现残留),也不用
         // remoteSessionRunning(activity 推送 / 活跃快照会先置 true,重连场景渲染先于清理)。
-        buildMobileMessageRenderItems(
-          messages,
-          { autoResumePending: inputProjection.autoResumePending, isSessionStreaming, renderOrphanTaskUpdates: makerTurnRunning, sessionId },
-          taskUpdates,
-        ),
+        builtWindow.items,
         forkOrigin,
       );
       if (errorTailClientId) {
@@ -4631,29 +4688,65 @@ export default function SessionScreen() {
           (item) => !(item.type === 'message' && item.message.source.clientId === errorTailClientId),
         );
       }
-      const previous = previousRenderItemsRef.current?.sessionId === sessionId
-        ? previousRenderItemsRef.current.items
-        : [];
-      const reconciled = reconcileMobileMessageRenderItems(previous, items);
-      return reconciled;
+      const previousRenderState = previousRenderItemsRef.current?.sessionId === sessionId
+        ? previousRenderItemsRef.current
+        : null;
+      const previous = previousRenderState?.items ?? [];
+      const committedPrefix = forkOrigin || errorTailClientId
+        ? null
+        : builtWindow.prefix;
+      const stablePrefixItemCount = forkOrigin || errorTailClientId
+        ? 0
+        : committedMobileStreamingPrefixItemCount(
+            builtWindow,
+            previousRenderState?.prefix,
+          );
+      const reconciled = reconcileMobileMessageRenderItems(
+        previous,
+        items,
+        stablePrefixItemCount,
+      );
+      return {
+        diffCount: errorTailClientId
+          ? countMobileRenderItemDiffs(reconciled)
+          : builtWindow.diffCount,
+        items: reconciled,
+        prefix: committedPrefix,
+        stablePrefixItemCount,
+      };
     },
-    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
   );
-  // 只在本次 render 真正 commit 后更新 reconcile 基准。写入 useMemo/ref 会让
-  // Concurrent Mode 下被丢弃的 render 泄漏成下一轮的 previous,破坏尾行 memo 的稳定性。
+  const renderItems = renderWindow.items;
+  const renderItemsStructureKey = useMemo(
+    () => ({}),
+    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
+  );
+  // Reconciliation must only use committed rows. Unlike the prefix cache above, a speculative
+  // render-item baseline could leak rows from an abandoned render and destabilize tail memoization.
   useLayoutEffect(() => {
-    previousRenderItemsRef.current = { sessionId, items: renderItems };
-  }, [renderItems, sessionId]);
+    if (
+      renderWindow.prefix
+      && previousRenderItemsRef.current?.prefix !== renderWindow.prefix
+      && streamingRenderPrefixRef.current === renderWindow.prefix
+    ) {
+      commitMobileStreamingPrefixItems(renderWindow.prefix, renderItems);
+    }
+    previousRenderItemsRef.current = {
+      sessionId,
+      items: renderItems,
+      prefix: renderWindow.prefix,
+    };
+  }, [renderItems, renderWindow.prefix, sessionId]);
   // 后台静默刷新:仅在首次加载、还没有任何内容(messages 为空)时显示"正在同步";已有内容
   // (重开已看过的会话,messages 还在内存)时后台对账一律静默,不再弹同步提示打扰用户。
   const showSyncingIndicator = loading && messages.length === 0;
-  const diffCount = useMemo(
-    () => countMobileRenderItemDiffs(renderItems),
-    [renderItems],
-  );
+  const diffCount = renderWindow.diffCount;
   const searchHits = useMemo(
-    () => findMobileMessageSearchHits(renderItems, searchQuery),
-    [renderItems, searchQuery],
+    () => searchOpen && searchQuery.trim()
+      ? findMobileMessageSearchHits(renderItems, searchQuery)
+      : [],
+    [renderItems, searchOpen, searchQuery],
   );
   const activeSearchHit = activeSearchIndex >= 0 ? searchHits[activeSearchIndex] ?? null : null;
   const routeFocusedItemKey = useMemo(
@@ -4778,18 +4871,14 @@ export default function SessionScreen() {
     [createRemoteMediaQueue],
   );
 
-  // 仅 video/audio 仍走「查看器关闭即删」;image 缩略图常驻列表,缓存保留到退屏统一清理。
+  // 查看器关闭只逐出 JS cache。OSS 对象仍可能被同屏其它已挂载行持有,
+  // 统一延迟到换会话或页面卸载时删除。
   const releaseRemoteMedia = useCallback((
     sourceUrl: string,
-    media: MobileResolvedRemoteMedia,
+    _media: MobileResolvedRemoteMedia,
   ) => {
     remoteMediaQueueRef.current?.evict(sourceUrl);
-    void auth.apiFetch('/api/device-link/media', {
-      baseUrl: DEVICE_LINK_API_BASE_URL,
-      method: 'DELETE',
-      body: { key: media.ossKey },
-    }).catch(() => undefined);
-  }, [auth]);
+  }, []);
 
   // 全屏查看器的分享:确保拿到本地 file://(磁盘缓存命中或先落盘)再唤起系统分享单。
   // 分享失败静默提示——旧 dev client 未包含 expo-sharing 原生模块时也走这条兜底。
@@ -4840,20 +4929,24 @@ export default function SessionScreen() {
     }
   }, [diskCacheSourceOf, t]);
 
-  // 换会话与退屏共用一套清理:本屏切 sessionId 不重挂载,若只在 unmount 清理,
+  // 换会话与页面卸载共用一套最终清理:本屏切 sessionId 不重挂载,若只在 unmount 清理,
   // 连续浏览多个多图会话会让上一会话的 OSS 对象一路累积。cleanup 在 sessionId
   // 变化与 unmount 时都执行:releaseAll + 补删(fire-and-forget;App 被杀等不触发
-  // cleanup 的情况由 OSS 生命周期规则兜底),并换上全新队列实例(released 标志
-  // 一次性,释放过的队列不能复用;unmount 分支多建一个空队列无害)。
-  useEffect(() => () => {
+  // cleanup 的情况由 OSS 生命周期规则兜底)。队列实例带一次性 released 标志,
+  // 下个会话首次取件时由 resolveRemoteMedia 懒创建新实例。
+  const releaseRemoteMediaQueue = useCallback(() => {
     const released = remoteMediaQueueRef.current?.releaseAll() ?? [];
     for (const media of released) {
       // 仍在后台落盘的对象等落盘结束再删,避免 DELETE 抢先把落盘下载打成 404;
       // 磁盘缓存命中的空 ossKey 条目在 deleteRemoteMediaObject 内跳过。
       deleteRemoteMediaObject(media);
     }
-    remoteMediaQueueRef.current = createRemoteMediaQueue();
-  }, [sessionId, createRemoteMediaQueue, deleteRemoteMediaObject]);
+    remoteMediaQueueRef.current = null;
+  }, [deleteRemoteMediaObject]);
+
+  useEffect(() => () => {
+    releaseRemoteMediaQueue();
+  }, [releaseRemoteMediaQueue, sessionId]);
 
   /** 单调递增的补齐轮次计数器;`latest` 是本屏最新那一轮的序号(旧轮据此自我作废)。 */
   const backfillRunSeqRef = useRef(0);
@@ -4884,7 +4977,7 @@ export default function SessionScreen() {
     if (!deviceId || !sessionId || loadingEarlier || !hasOlderMessages) return;
     const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
     if (!remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) return;
-    const before = oldestMessageCursor(messages);
+    const before = oldestLoadedMessageCursor;
     if (!before) {
       setHasOlderMessages(false);
       return;
@@ -4913,7 +5006,17 @@ export default function SessionScreen() {
     } finally {
       setLoadingEarlier(false);
     }
-  }, [abandonInFlightBackfill, deviceId, hasOlderMessages, isScheduleDetail, loadingEarlier, maker, messages, sessionId]);
+  }, [abandonInFlightBackfill, deviceId, hasOlderMessages, isScheduleDetail, loadingEarlier, maker, oldestLoadedMessageCursor, sessionId]);
+
+  const loadToolInput = useCallback(async (
+    ref: MobileToolInputProjection,
+  ): Promise<MobileToolInputDetail> => {
+    if (!deviceId) throw new Error('tool input device is unavailable');
+    return fetchMobileToolInputDetail(
+      ref,
+      (messageId, options) => maker.aroundMessages(sessionId, messageId, options),
+    );
+  }, [deviceId, maker, sessionId]);
 
   /**
    * 历史窗口空洞的自动补齐(见 `historyWindowGap.ts` 的文件头)。
@@ -5005,7 +5108,7 @@ export default function SessionScreen() {
     //    发出上百次 limit=1 探测。
     if (gapState.backfilled.size >= HISTORY_BACKFILL_MAX_GAPS_PER_VISIT) return;
     if (consideredKeys.size >= HISTORY_GAP_MAX_CONSIDERED_PER_VISIT) return;
-    const gap = findHistoryWindowGap(messages, consideredKeys);
+    const gap = findHistoryWindowGap(latestMessagesRef.current, consideredKeys);
     if (!gap) return;
     const gapKey = historyWindowGapKey(gap);
     const sessionIdAtStart = sessionId;
@@ -5071,7 +5174,7 @@ export default function SessionScreen() {
     loading,
     loadingEarlier,
     maker,
-    messages,
+    messageStructureToken,
     readAckSyncedKey,
     sessionId,
   ]);
@@ -6084,6 +6187,10 @@ export default function SessionScreen() {
   const messageListItems = useMemo(
     () => (pendingSendItems.length === 0 ? renderItems : [...renderItems, ...pendingSendItems]),
     [pendingSendItems, renderItems],
+  );
+  const messageListStructureKey = useMemo(
+    () => ({}),
+    [pendingSendItems, renderItemsStructureKey],
   );
   const shareExpandableBlockIds = useMemo(
     () => (shareSelectionActive ? collectConversationShareBlockIds(messageListItems) : []),
@@ -7625,7 +7732,7 @@ export default function SessionScreen() {
    *    改为回读权威会话收敛乐观维度;回读也失败(多半同一网络故障)才退回本地回滚。
    */
   const runControlAction = useCallback(async (
-    action: () => Promise<void>,
+    action: () => Promise<void | boolean>,
     optimisticPatch?: Partial<RemoteSession>,
     opts?: { recover?: 'rollback' | 'refetch' },
   ) => {
@@ -7650,7 +7757,10 @@ export default function SessionScreen() {
       remoteSessionStore.applySessionPatch(deviceId, sessionId, optimisticPatch);
     }
     try {
-      await action();
+      const applied = await action();
+      if (applied === false && rollbackPatch && deviceId) {
+        remoteSessionStore.applySessionPatch(deviceId, sessionId, rollbackPatch);
+      }
     } catch (err) {
       if (rollbackPatch && optimisticPatch && deviceId) {
         let recovered = false;
@@ -8056,6 +8166,72 @@ export default function SessionScreen() {
     void runGoalAction(() => maker.goal.clear(sessionId), null);
   }, [maker, runGoalAction, sessionId]);
 
+  const showRemoteModelWindowUnsupported = useCallback((
+    targetContextWindow: number | undefined,
+    fallbackDescription?: string,
+  ): void => {
+    const contextTokens = currentSession?.contextTokens;
+    const description =
+      typeof contextTokens === 'number' &&
+      Number.isFinite(contextTokens) &&
+      contextTokens > 0 &&
+      typeof targetContextWindow === 'number' &&
+      Number.isFinite(targetContextWindow) &&
+      targetContextWindow > 0
+        ? t('models.contextWindowSwitch.remoteDescription', {
+            used: formatModelWindowTokens(contextTokens),
+            total: formatModelWindowTokens(targetContextWindow),
+            pct: Math.round((contextTokens / targetContextWindow) * 100),
+          })
+        : fallbackDescription;
+    Alert.alert(t('models.contextWindowSwitch.remoteTitle'), description, [
+      { text: t('models.contextWindowSwitch.cancel'), style: 'cancel' },
+    ]);
+  }, [currentSession?.contextTokens, t]);
+
+  const setComposerModel = useCallback(async (args: {
+    model: string;
+    providerId?: string;
+    targetContextWindow?: number;
+    selection?: { effort: string | null; fastMode: boolean };
+  }): Promise<boolean> => {
+    if (shouldBlockLegacyRemoteModelWindowSwitch({
+      hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
+      agentKind: sessionAgentKind,
+      contextTokens: currentSession?.contextTokens,
+      currentContextWindow: currentSession?.contextWindow,
+      targetContextWindow: args.targetContextWindow,
+    })) {
+      showRemoteModelWindowUnsupported(args.targetContextWindow);
+      return false;
+    }
+    try {
+      await maker.setModel(sessionId, args.model, args.providerId, args.selection);
+      return true;
+    } catch (err) {
+      const reason = formatRemoteError(err);
+      const isRemoteModelWindowUnsupported =
+        reason.includes('remote model-window rebuild is unsupported') ||
+        reason.includes('remote model-window confirmation is unsupported');
+      if (
+        !isPreconditionFailedRemoteError(err) ||
+        !isRemoteModelWindowUnsupported
+      ) {
+        throw err;
+      }
+      showRemoteModelWindowUnsupported(args.targetContextWindow, reason);
+      return false;
+    }
+  }, [
+    currentSession?.contextTokens,
+    currentSession?.contextWindow,
+    maker,
+    modelSheetCapabilities?.supportsModelWindowSwitchGuard,
+    sessionAgentKind,
+    sessionId,
+    showRemoteModelWindowUnsupported,
+  ]);
+
   // 选行 = 原子切「来源 + 模型 + effort + fast」(effort 优先级与桌面同源:该 (来源,模型) 的
   // 会话镜像记忆 → 沿用当前档 → 模型默认;同模型换来源不沿用;fast 按镜像恢复、fastEditable 门控)。
   const selectComposerModelRow = useCallback((row: ProviderModelRow) => {
@@ -8080,26 +8256,38 @@ export default function SessionScreen() {
       });
       return;
     }
-    void runControlAction(async () => {
-      await maker.setModel(sessionId, next.model, next.providerId);
-      if (next.effort && next.effort !== modelSheetSelection.effort) {
-        await maker.setEffort(sessionId, next.effort);
-      }
-      // 只按值变化写穿,不做 fastEditable 门控:切到不支持 fast 的模型时
-      // resolveRowSelection 已算出 fastMode=false,门控会跳过清零、让服务端残留 true。
-      if (next.fastMode !== modelSheetSelection.fastMode) {
-        await maker.setFastMode(sessionId, next.fastMode);
-      }
-    }, {
-      // 乐观 patch:原子切换的三个维度一次上屏。
-      model: next.model,
-      providerId: next.providerId,
-      ...(next.effort ? { effort: next.effort } : {}),
-      fastMode: next.fastMode,
-      ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
-      // 多步 RPC(setModel → setEffort → setFastMode)可能部分成功,失败时回读权威
-      // 会话收敛而非本地回滚,避免手机显示与远端已生效状态脱节(codex review R16)。
-    }, { recover: 'refetch' });
+    const atomicSelection = modelSheetCapabilities?.supportsModelWindowSwitchGuard === true
+      ? { effort: next.effort || null, fastMode: next.fastMode }
+      : undefined;
+    void (async () => {
+      await runControlAction(async () => {
+        const applied = await setComposerModel({
+          model: next.model,
+          providerId: next.providerId,
+          targetContextWindow: row.model.contextWindow,
+          selection: atomicSelection,
+        });
+        if (!applied) return false;
+        // 新 host 在 SET_MODEL 的 session lock 内落定全部轴，再唤醒重建后的输入队列。
+        // 旧 host 不懂 selection，保留原有低压/same/expand 兼容链；90% 缩窗已在上方拒绝。
+        if (!atomicSelection && next.effort && next.effort !== modelSheetSelection.effort) {
+          await maker.setEffort(sessionId, next.effort);
+        }
+        // 只按值变化写穿,不做 fastEditable 门控:切到不支持 fast 的模型时
+        // resolveRowSelection 已算出 fastMode=false,门控会跳过清零、让服务端残留 true。
+        if (!atomicSelection && next.fastMode !== modelSheetSelection.fastMode) {
+          await maker.setFastMode(sessionId, next.fastMode);
+        }
+      }, {
+        // 乐观 patch:原子切换的三个维度一次上屏。
+        model: next.model,
+        providerId: next.providerId,
+        ...(next.effort ? { effort: next.effort } : {}),
+        fastMode: next.fastMode,
+        ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
+        // 旧 host 的兼容 RPC 链可能部分成功；失败时回读权威会话收敛而非本地回滚。
+      }, { recover: 'refetch' });
+    })();
   }, [
     agentSwitchIntent,
     canUseRemoteSessionControls,
@@ -8112,16 +8300,37 @@ export default function SessionScreen() {
     sessionAgentKind,
     sessionId,
     sessionMirrorAccessors,
+    setComposerModel,
     writeSessionAgentSwitchIntent,
   ]);
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
     if (!canUseRemoteSessionControls || modelSheetAgentKind !== sessionAgentKind) return;
-    void runControlAction(() => maker.setModel(sessionId, option.id), {
+    const next = reconcileRuntimeDraftWithCapabilities({
       model: option.id,
-      ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
-    });
-  }, [agentSwitchIntent, canUseRemoteSessionControls, maker, modelSheetAgentKind, runControlAction, sessionAgentKind, sessionId]);
+      effort: modelSheetSelection?.effort ?? '',
+      permissionMode: currentSession?.permissionMode ?? 'default',
+      fastMode: modelSheetSelection?.fastMode ?? false,
+    }, modelSheetCapabilities);
+    const atomicSelection = modelSheetCapabilities?.supportsModelWindowSwitchGuard === true
+      ? { effort: next.effort || null, fastMode: next.fastMode }
+      : undefined;
+    void (async () => {
+      await runControlAction(
+        () => setComposerModel({
+          model: option.id,
+          targetContextWindow: option.contextWindow,
+          selection: atomicSelection,
+        }),
+        {
+          model: option.id,
+          ...(atomicSelection?.effort ? { effort: atomicSelection.effort } : {}),
+          ...(atomicSelection ? { fastMode: atomicSelection.fastMode } : {}),
+          ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
+        },
+      );
+    })();
+  }, [agentSwitchIntent, canUseRemoteSessionControls, currentSession?.permissionMode, modelSheetAgentKind, modelSheetCapabilities, modelSheetSelection?.effort, modelSheetSelection?.fastMode, runControlAction, sessionAgentKind, setComposerModel]);
   const browseComposerModelAgent = useCallback(async (next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
     if (next !== sessionAgentKind) {
@@ -9341,13 +9550,16 @@ export default function SessionScreen() {
                       inputProjection.continuationInFlightProjectionCapability
                     }
                     items={messageListItems}
+                    itemsStructureKey={messageListStructureKey}
                     pendingSend={pendingSendActions}
                     loadingEarlier={loadingEarlier}
+                    loadEarlierProgressKey={oldestLoadedMessageCursor}
                     onCopyMessageLink={copyMessageLink}
                     onAddMessageToComposer={canUseComposer ? addMessageToComposer : undefined}
                     onDeleteMessage={collaborationReadOnlyReason ? undefined : deleteMessage}
                     onForkMessage={collaborationReadOnlyReason ? undefined : forkAtMessage}
                     onLoadEarlier={loadEarlierMessages}
+                    onLoadToolInput={loadToolInput}
                     onOpenForkOrigin={forkOrigin ? openForkOrigin : undefined}
                     onBlockingOverlayChange={handleMessageBlockingOverlayChange}
                     onOpenSessionLink={openSessionLink}
@@ -10580,6 +10792,12 @@ function ComposerActivityStatus({
       </View>
     </View>
   );
+}
+
+function formatModelWindowTokens(value: number): string {
+  return value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+    : `${Math.round(value / 1_000)}K`;
 }
 
 function formatComposerActivityElapsed(seconds: number): string {

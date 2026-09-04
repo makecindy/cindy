@@ -43,6 +43,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static beforeSkillsListResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
+    static closeError: Error | null = null;
 
     readonly lines: string[] = [];
     closed = false;
@@ -218,6 +219,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
       for (const handler of this.closeHandlers) {
         handler({ reason });
       }
+      if (MockCodexTransport.closeError) throw MockCodexTransport.closeError;
     }
 
     emitMockLine(message: unknown): void {
@@ -279,6 +281,7 @@ beforeEach(() => {
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.beforeSkillsListResponse = null;
   MockCodexTransport.onCreate = null;
+  MockCodexTransport.closeError = null;
 });
 
 const tempRoots: string[] = [];
@@ -372,6 +375,88 @@ describe('CodexAgent spawn configuration', () => {
     await handle.close();
     await agent.dispose();
   });
+
+  it('rebuilds the lazy local Host from the latest custom Provider capability snapshot', async () => {
+    let imageGenerationEnabled = false;
+    const modelProviderId = 'cindy_custom_0123456789abcdefabcd';
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
+      extraArgs: imageGenerationEnabled
+        ? [
+            '-c',
+            `model_providers.${modelProviderId}.name="Cindy Custom Provider"`,
+            '-c',
+            `model_providers.${modelProviderId}.http_headers={ x-openai-actor-authorization = "local-image-extension" }`,
+          ]
+        : [],
+      extraEnv: {},
+      codexProxyActive: true,
+      ...(imageGenerationEnabled
+        ? {
+            codexCustomProviderRoutes: [
+              {
+                providerId: 'custom-provider-fixture',
+                modelProviderId,
+                capabilities: { imageGeneration: true },
+                responseModels: ['chat-model'],
+              },
+            ],
+          }
+        : {}),
+    }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+    const threadStartParams = (transport: InstanceType<typeof MockCodexTransport>) => {
+      const request = transport.lines
+        .map((line) => JSON.parse(line) as { method?: string; params?: Record<string, unknown> })
+        .find((entry) => entry.method === Method.ThreadStart);
+      return request?.params;
+    };
+
+    const ordinary = await agent.startSession({
+      sessionId: 'session-custom-provider-off',
+      providerId: 'custom-provider-fixture',
+      model: 'chat-model',
+      workingDir: '/repo',
+    });
+    expect(threadStartParams(createdTransports[0]!)?.modelProvider).toBeUndefined();
+    expect(createdStdioOptions[0]?.extraArgs?.join(' ')).not.toContain(modelProviderId);
+    const enableGuard = await agent.beginLocalHostCredentialChange('enable image generation');
+    await enableGuard.retireActiveHost();
+    imageGenerationEnabled = true;
+    await enableGuard.finalize();
+
+    const imageEnabled = await agent.startSession({
+      sessionId: 'session-custom-provider-on',
+      providerId: 'custom-provider-fixture',
+      model: 'chat-model',
+      workingDir: '/repo',
+    });
+    expect(createdTransports).toHaveLength(2);
+    expect(createdStdioOptions[1]?.extraArgs?.join(' ')).toContain(modelProviderId);
+    expect(createdStdioOptions[1]?.extraArgs?.join(' ')).toContain(
+      'x-openai-actor-authorization',
+    );
+    expect(threadStartParams(createdTransports[1]!)?.modelProvider).toBe(modelProviderId);
+    const disableGuard = await agent.beginLocalHostCredentialChange('disable image generation');
+    await disableGuard.retireActiveHost();
+    imageGenerationEnabled = false;
+    await disableGuard.finalize();
+
+    const ordinaryAgain = await agent.startSession({
+      sessionId: 'session-custom-provider-off-again',
+      providerId: 'custom-provider-fixture',
+      model: 'chat-model',
+      workingDir: '/repo',
+    });
+    expect(createdTransports).toHaveLength(3);
+    expect(createdStdioOptions[2]?.extraArgs?.join(' ')).not.toContain(modelProviderId);
+    expect(threadStartParams(createdTransports[2]!)?.modelProvider).toBeUndefined();
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledTimes(3);
+
+    await ordinary.close();
+    await imageEnabled.close();
+    await ordinaryAgain.close();
+    await agent.dispose();
+  });
 });
 
 function deferred<T>() {
@@ -440,6 +525,12 @@ function installFakeHost(
     codexBrowserMcpToolAvailable?: boolean;
     remoteCompactionProviderId?: string;
     cindyRemoteCompactionProviderId?: string;
+    codexCustomProviderRoutes?: Array<{
+      providerId: string;
+      modelProviderId: string;
+      capabilities: Readonly<Record<string, boolean | undefined>>;
+      responseModels: readonly string[];
+    }>;
     subagentModelFallback?: string;
     subagentRoute?: {
       providerId: string;
@@ -449,6 +540,7 @@ function installFakeHost(
     openAiWebSocketsEnabled?: boolean;
     userAgent?: string;
     codexHome?: string;
+    activeThreadIds?: string[];
     buildSessionMcpConfig?: (sessionInstanceId?: string) => Record<string, unknown>;
   } = {},
 ) {
@@ -503,6 +595,9 @@ function installFakeHost(
     return { release: vi.fn() };
   });
   const unsubscribeThread = vi.fn(async () => {});
+  const hasThreadSubscription = vi.fn((threadId: string) =>
+    opts.activeThreadIds?.includes(threadId) === true,
+  );
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const isCodexBrowserUseAvailable = vi.fn(
     () => opts.codexBrowserUseAvailable === true,
@@ -516,6 +611,35 @@ function installFakeHost(
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const getCindyRemoteCompactionProviderId = vi.fn(
     () => opts.cindyRemoteCompactionProviderId ?? null,
+  );
+  const getCustomProviderModelProviderId = vi.fn(
+    (providerId?: string | null, model?: string | null) => {
+      const route = opts.codexCustomProviderRoutes?.find(
+        (candidate) => candidate.providerId === providerId,
+      );
+      return model && route?.responseModels.includes(model) ? route.modelProviderId : null;
+    },
+  );
+  const getCustomProviderThreadPolicy = vi.fn(
+    (providerId?: string | null, model?: string | null) => {
+      const route = opts.codexCustomProviderRoutes?.find(
+        (candidate) =>
+          candidate.providerId === providerId &&
+          Boolean(model && candidate.responseModels.includes(model)),
+      );
+      if (!route) {
+        return { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false };
+      }
+      const child = opts.subagentRoute;
+      const compatible = !child || (
+        child.providerId === route.providerId && route.responseModels.includes(child.catalogModel)
+      );
+      return {
+        dynamicIdentity: true,
+        disableSubagents: !compatible,
+        disableModelOverrides: true,
+      };
+    },
   );
   const getSessionMcpConfig = vi.fn((sessionInstanceId?: string) =>
     opts.buildSessionMcpConfig?.(sessionInstanceId) ?? {},
@@ -531,12 +655,15 @@ function installFakeHost(
     request,
     subscribeThread,
     unsubscribeThread,
+    hasThreadSubscription,
     isCodexProxyActive,
     isCodexBrowserUseAvailable,
     getCodexBrowserUseVersion,
     waitForMcpTool,
     getRemoteCompactionProviderId,
     getCindyRemoteCompactionProviderId,
+    getCustomProviderModelProviderId,
+    getCustomProviderThreadPolicy,
     getSessionMcpConfig,
     getSubagentModelFallback,
     getSubagentRoute,
@@ -3610,6 +3737,20 @@ describe('CodexAgent reference directories', () => {
       extraDirs: ['/shared-old'],
     })).rejects.toThrow('require app-server 0.144.6 or newer');
   });
+
+  it('rejects mid-session extraDirs when the app-server is too old to apply them', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.143.0' });
+    const handle = await agent.startSession({
+      sessionId: 'session-extra-dirs-old-server-mid',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await expect(handle.setExtraDirs?.(['/shared-old'])).rejects.toThrow(
+      'require app-server 0.144.6 or newer',
+    );
+    await handle.close();
+  });
 });
 
 describe('CodexAgent.listCustomizations', () => {
@@ -4043,6 +4184,224 @@ describe('CodexAgent.startSession developerInstructions', () => {
     };
     expect(xaiParams.modelProvider).toBeUndefined();
     await xaiHandle.close();
+  });
+
+  it('selects one generic custom Provider identity for every eligible Responses model', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+      codexCustomProviderRoutes: [
+        {
+          providerId: 'custom-images',
+          modelProviderId: 'cindy_custom_0123456789abcdefabcd',
+          capabilities: { imageGeneration: true },
+          responseModels: ['chat-image', 'chat-image-alt'],
+        },
+      ],
+    });
+    (agent as unknown as { hostEffectiveCredentialModes: Map<string, string> })
+      .hostEffectiveCredentialModes.set('local', 'oauth-bearer');
+
+    const startHandle = await agent.startSession({
+      sessionId: 'session-custom-image-start',
+      model: 'chat-image',
+      providerId: 'custom-images',
+      workingDir: '/repo',
+    });
+    const startParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as {
+      modelProvider?: string;
+      config?: Record<string, unknown>;
+      developerInstructions?: string;
+    };
+    expect(startParams.modelProvider).toBe('cindy_custom_0123456789abcdefabcd');
+    expect(startParams.developerInstructions).toBeUndefined();
+    expect(registerCodexSystemPromptForThread).toHaveBeenCalledWith({
+      sessionId: 'session-custom-image-start',
+      threadId: 'start-thread-id',
+      text: expect.stringContaining('HOST PRODUCT PROMPT'),
+    });
+    expect(startHandle.codexProductPromptDelivery).toEqual({
+      threadId: 'start-thread-id',
+      historyHasProductPrompt: false,
+    });
+    expect(startParams.config).toMatchObject({
+      web_search: 'disabled',
+      'features.standalone_web_search': false,
+      'features.multi_agent_v2.expose_spawn_agent_model_overrides': false,
+    });
+    expect(startParams.config).not.toHaveProperty('agents.enabled');
+    await startHandle.close();
+
+    host.request.mock.calls.length = 0;
+    const resumeHandle = await agent.startSession({
+      sessionId: 'session-custom-image-resume',
+      model: 'chat-image',
+      providerId: 'custom-images',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+    const resumeParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    )?.[1] as { modelProvider?: string };
+    expect(resumeParams.modelProvider).toBe('cindy_custom_0123456789abcdefabcd');
+    await resumeHandle.close();
+
+    // env-key/gateway-key Host 上 dynamic identity 同样固定走 HTTP proxy，不因 Host 仍
+    // 广告 OpenAI WebSocket 能力而改成订阅 WS 通道。
+    (agent as unknown as { hostEffectiveCredentialModes: Map<string, string> })
+      .hostEffectiveCredentialModes.set('local', 'gateway-key');
+    host.request.mock.calls.length = 0;
+    registerCodexSystemPromptForThread.mockClear();
+    const envKeyHandle = await agent.startSession({
+      sessionId: 'session-custom-image-env-key',
+      model: 'chat-image',
+      providerId: 'custom-images',
+      workingDir: '/repo',
+    });
+    const envKeyParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { modelProvider?: string; developerInstructions?: string };
+    expect(envKeyParams.modelProvider).toBe('cindy_custom_0123456789abcdefabcd');
+    expect(envKeyParams.developerInstructions).toBeUndefined();
+    expect(registerCodexSystemPromptForThread).toHaveBeenCalledWith({
+      sessionId: 'session-custom-image-env-key',
+      threadId: 'start-thread-id',
+      text: expect.stringContaining('HOST PRODUCT PROMPT'),
+    });
+    expect(envKeyHandle.codexProductPromptDelivery).toEqual({
+      threadId: 'start-thread-id',
+      historyHasProductPrompt: false,
+    });
+    await envKeyHandle.close();
+
+    host.request.mock.calls.length = 0;
+    const alternateHandle = await agent.startSession({
+      sessionId: 'session-custom-image-alternate',
+      model: 'chat-image-alt',
+      providerId: 'custom-images',
+      workingDir: '/repo',
+    });
+    const alternateParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { modelProvider?: string };
+    expect(alternateParams.modelProvider).toBe('cindy_custom_0123456789abcdefabcd');
+    await alternateHandle.close();
+
+    host.request.mock.calls.length = 0;
+    const falseHandle = await agent.startSession({
+      sessionId: 'session-custom-image-false',
+      model: 'chat-text',
+      providerId: 'custom-images',
+      workingDir: '/repo',
+    });
+    const falseParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { modelProvider?: string; config?: Record<string, unknown> };
+    expect(falseParams.modelProvider).toBeUndefined();
+    expect(falseParams.config).not.toHaveProperty('web_search');
+    expect(falseParams.config).not.toHaveProperty('features.standalone_web_search');
+    await falseHandle.close();
+  });
+
+  it.each([
+    {
+      label: 'same Provider eligible child',
+      subagentRoute: {
+        providerId: 'custom-images-a',
+        catalogModel: 'image-a',
+        reasoningEffort: 'high' as const,
+      },
+      rootProviderId: 'custom-images-a',
+      rootModel: 'image-a',
+      disabled: false,
+    },
+    {
+      label: 'same Provider non-Responses child',
+      subagentRoute: {
+        providerId: 'custom-images-a',
+        catalogModel: 'text-a',
+        reasoningEffort: 'high' as const,
+      },
+      rootProviderId: 'custom-images-a',
+      rootModel: 'image-a',
+      disabled: true,
+    },
+    {
+      label: 'different dynamic Provider child',
+      subagentRoute: {
+        providerId: 'custom-images-b',
+        catalogModel: 'image-b',
+        reasoningEffort: 'high' as const,
+      },
+      rootProviderId: 'custom-images-a',
+      rootModel: 'image-a',
+      disabled: true,
+    },
+    {
+      label: 'second dynamic Provider with matching child',
+      subagentRoute: {
+        providerId: 'custom-images-b',
+        catalogModel: 'image-b',
+        reasoningEffort: 'high' as const,
+      },
+      rootProviderId: 'custom-images-b',
+      rootModel: 'image-b',
+      disabled: false,
+    },
+  ])('scopes generic custom Provider subagent protection: $label', async ({
+    subagentRoute,
+    rootProviderId,
+    rootModel,
+    disabled,
+  }) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      codexCustomProviderRoutes: [
+        {
+          providerId: 'custom-images-a',
+          modelProviderId: 'cindy_custom_aaaaaaaaaaaaaaaaaaaa',
+          capabilities: { imageGeneration: true },
+          responseModels: ['image-a', 'image-a-alt'],
+        },
+        {
+          providerId: 'custom-images-b',
+          modelProviderId: 'cindy_custom_bbbbbbbbbbbbbbbbbbbb',
+          capabilities: { imageGeneration: true },
+          responseModels: ['image-b'],
+        },
+      ],
+      subagentRoute,
+    });
+
+    const handle = await agent.startSession({
+      sessionId: `session-image-policy-${rootProviderId}`,
+      model: rootModel,
+      providerId: rootProviderId,
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(params.config).toMatchObject({
+      web_search: 'disabled',
+      'features.standalone_web_search': false,
+      ...(disabled
+        ? {
+            'features.multi_agent': false,
+            'features.multi_agent_v2': false,
+            'agents.enabled': false,
+          }
+        : { 'features.multi_agent_v2.expose_spawn_agent_model_overrides': false }),
+    });
+    await handle.close();
   });
 
   it('keeps Cindy codex root compaction local when an independent subagent uses another backend', async () => {
@@ -5738,6 +6097,90 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('force-retires one shared local Host under the credential guard and blocks its lazy replacement', async () => {
+    const getRemoteCodexTransport = vi.fn(() => {
+      const transport = new MockCodexTransport();
+      createdTransports.push(transport);
+      return transport;
+    });
+    const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport }));
+    const localHandles = await Promise.all(
+      Array.from({ length: 3 }, (_, index) =>
+        agent.startSession({
+          sessionId: `session-hard-cut-local-${index + 1}`,
+          model: 'gpt-5.4',
+          workingDir: `/repo-local-${index + 1}`,
+        }),
+      ),
+    );
+    const remoteHandle = await agent.startSession({
+      sessionId: 'session-hard-cut-remote',
+      model: 'gpt-5.4',
+      workingDir: '/repo-remote',
+      remoteHostId: 'remote-host-1',
+    });
+    expect(createdTransports).toHaveLength(2);
+
+    const localTransport = createdTransports[0];
+    localHandles.forEach((_handle, index) => {
+      localTransport.emitMockLine({
+        method: 'turn/started',
+        params: {
+          threadId: `thread-${index + 1}`,
+          turn: { id: `turn-hard-cut-${index + 1}` },
+        },
+      });
+    });
+    await waitForExpectation(() => {
+      expect(localHandles.every((handle) => handle.isTurnRunning?.())).toBe(true);
+    });
+
+    const guard = await agent.beginLocalHostCredentialChange('custom Provider hard cut');
+    await guard.retireActiveHost();
+
+    expect(localTransport.closed).toBe(true);
+    expect(createdTransports[1].closed).toBe(false);
+    expect(localHandles.every((handle) => handle.isTurnRunning?.() === false)).toBe(true);
+
+    const replacementStart = agent.startSession({
+      sessionId: 'session-hard-cut-replacement',
+      model: 'gpt-5.4',
+      workingDir: '/repo-replacement',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(createdTransports).toHaveLength(2);
+
+    await remoteHandle.send({ type: 'user', content: 'remote remains attached' });
+    await guard.finalize();
+    const replacementHandle = await replacementStart;
+    expect(createdTransports).toHaveLength(3);
+    expect(createdTransports[2].closed).toBe(false);
+
+    for (const handle of localHandles) await handle.close();
+    await replacementHandle.close();
+    await remoteHandle.close();
+    await agent.dispose();
+  });
+
+  it('propagates strict shared Host retirement failure from the credential guard', async () => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-hard-cut-close-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    MockCodexTransport.closeError = new Error('transport retirement failed');
+
+    const guard = await agent.beginLocalHostCredentialChange('custom Provider hard cut');
+    await expect(guard.retireActiveHost()).rejects.toThrow('transport retirement failed');
+    guard.release();
+
+    expect(createdTransports[0].closed).toBe(true);
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('collapses in-flight turn state with a terminal transport error when the local host is force-retired', async () => {
     // 回归 2026-07-19:auth 失效触发 retiring host with active sessions 时,原实现
     // 静默清 subscribers 再杀进程,session 收不到任何终态事件 → isTurnRunning 永久
@@ -7315,6 +7758,34 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('closes idle session event streams when the shared app-server transport crashes', async () => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-idle-transport-crash',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const transport = createdTransports[0];
+
+    await transport.close('simulated app-server crash');
+
+    const result = await Promise.race([
+      iterator.next(),
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => reject(new Error('idle session event stream did not close')), 200);
+        timer.unref?.();
+      }),
+    ]);
+    expect(result).toMatchObject({ done: true });
+    await expect(handle.send({ type: 'user', content: 'after crash' })).rejects.toThrow(
+      /Codex session expired because its app-server was replaced/,
+    );
+
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('fails closed when the credential mode switch coordinator leaves sessions attached', async () => {
     const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
       extraArgs: [],
@@ -7811,6 +8282,62 @@ describe('CodexAgent MCP thread context hooks', () => {
       await waitForExpectation(() => {
         expect(events.some((event) => event.type === 'done')).toBe(true);
       });
+      await handle.close();
+    });
+
+    it('does not arm HTTP fallback for remote compact encrypted-content 400', async () => {
+      const compactEncrypted =
+        'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }';
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-remote-compact-encrypted',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: compactEncrypted,
+          additionalDetails: compactEncrypted,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: compactEncrypted },
+        },
+      });
+
+      await waitForExpectation(() => {
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'error' &&
+              (event.data as { isTerminal?: boolean; reason?: string }).isTerminal === true &&
+              (event.data as { reason?: string }).reason === 'context-overflow',
+          ),
+        ).toBe(true);
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      expect(armCodexHttpRecovery).not.toHaveBeenCalled();
       await handle.close();
     });
 
@@ -18183,7 +18710,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18262,7 +18789,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18344,7 +18871,7 @@ describe('CodexAgent yield continuation', () => {
           cmd: 'pnpm --filter desktop run typecheck',
           yield_time_ms: 10_000,
         }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.turnCompleted({
@@ -18396,7 +18923,7 @@ describe('CodexAgent yield continuation', () => {
           cmd: 'pnpm --filter desktop run typecheck',
           yield_time_ms: 10_000,
         }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.itemCompleted({
@@ -18456,7 +18983,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'function_call',
         name: 'exec_command',
         arguments: JSON.stringify({ cmd: 'pnpm typecheck', yield_time_ms: 10_000 }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 226' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.itemCompleted({
@@ -18466,7 +18993,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'function_call',
         name: 'exec_command',
         arguments: JSON.stringify({ cmd: 'pnpm lint', yield_time_ms: 10_000 }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.itemCompleted({
@@ -18529,7 +19056,7 @@ describe('CodexAgent yield continuation', () => {
           cmd: 'pnpm --filter desktop run typecheck',
           yield_time_ms: 10_000,
         }),
-        content: [{ type: 'output_text', text: 'Script running with cell ID 229' }],
+        content: [{ type: 'output_text', text: 'Script running with cell ID 229\nWall time 1.0 seconds\nOutput:\n' }],
       },
     });
     handlers.itemCompleted({
@@ -18698,7 +19225,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18808,7 +19335,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -18863,7 +19390,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18937,7 +19464,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -18990,7 +19517,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnStarted?.({
@@ -19053,7 +19580,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19122,7 +19649,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19198,7 +19725,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19304,7 +19831,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'inProgress',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.itemCompleted({
@@ -19356,7 +19883,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'inProgress',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.itemCompleted({
@@ -19413,7 +19940,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19541,7 +20068,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19601,7 +20128,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19623,7 +20150,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19645,7 +20172,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19688,7 +20215,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19741,7 +20268,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19798,7 +20325,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -19889,7 +20416,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20000,7 +20527,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20070,7 +20597,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20154,7 +20681,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20231,7 +20758,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20319,7 +20846,7 @@ describe('CodexAgent yield continuation', () => {
         type: 'commandExecution',
         command: 'pnpm --filter desktop run typecheck',
         status: 'completed',
-        aggregatedOutput: 'Script running with cell ID 226',
+        aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
     });
     handlers.turnCompleted({
@@ -20699,7 +21226,149 @@ describe('CodexAgent resume preparation', () => {
   });
 });
 
+describe('CodexAgent native fork anchor events', () => {
+  it('attaches the source thread and completed turn to a successful done event', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-native-fork-anchor',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-native-anchor', status: 'completed' },
+    });
+
+    await expect(nextEvent(iterator)).resolves.toMatchObject({ type: 'status' });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'done',
+      agentMeta: {
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'start-thread-id',
+          kind: 'turn',
+          id: 'turn-native-anchor',
+        },
+      },
+    });
+    await handle.close();
+  });
+});
+
 describe('CodexAgent.forkSdkSession', () => {
+  it('reuses the shared host and forks directly at a native turn', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {});
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      activeThreadIds: ['source-thread-id'],
+    });
+    const retireHostKey = vi.spyOn(
+      agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+      'retireHostKey',
+    );
+
+    const result = await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+      tailTurnsToDrop: 2,
+      workingDir: '/repo',
+    });
+
+    expect(host.getHost).toHaveBeenCalledWith(undefined, undefined, {
+      ignoreBindingLeases: 1,
+    });
+    expect(prepareCodexResumeSession).not.toHaveBeenCalled();
+    expect(host.request).toHaveBeenCalledTimes(1);
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'source-thread-id',
+      lastTurnId: 'turn-at-boundary',
+      excludeTurns: true,
+      cwd: '/repo',
+    });
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+    expect(retireHostKey).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      newSdkSessionId: 'fork-thread-id',
+      usedNativeForkAnchor: true,
+    });
+  });
+
+  it('prepares an unloaded source thread before a native-turn fork', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {});
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'imported-source-thread',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+    });
+
+    expect(prepareCodexResumeSession).toHaveBeenCalledWith('imported-source-thread');
+    expect(prepareCodexResumeSession.mock.invocationCallOrder[0]).toBeLessThan(
+      host.request.mock.invocationCallOrder[0],
+    );
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'imported-source-thread',
+      lastTurnId: 'turn-at-boundary',
+      excludeTurns: true,
+    });
+  });
+
+  it('uses the isolated rollback fallback when bounded native-turn fork is unavailable', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.144.6' });
+
+    const result = await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+      tailTurnsToDrop: 1,
+    });
+
+    expect(host.request).toHaveBeenNthCalledWith(1, Method.ThreadFork, {
+      threadId: 'source-thread-id',
+      persistExtendedHistory: true,
+    });
+    expect(host.request).toHaveBeenNthCalledWith(2, Method.ThreadRollback, {
+      threadId: 'fork-thread-id',
+      numTurns: 1,
+    });
+    expect(result.usedNativeForkAnchor).toBeUndefined();
+  });
+
+  it('fails a precise fork without retiring the shared host when child unload fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      activeThreadIds: ['source-thread-id'],
+    });
+    host.unsubscribeThread.mockRejectedValueOnce(new Error('unsubscribe failed'));
+    const retireHostKey = vi.spyOn(
+      agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+      'retireHostKey',
+    );
+
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+    })).rejects.toThrow('unsubscribe failed');
+
+    expect(retireHostKey).not.toHaveBeenCalled();
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
+  });
+
   it('prepares an imported source thread before thread/fork', async () => {
     const order: string[] = [];
     const prepareCodexResumeSession = vi.fn(async () => {

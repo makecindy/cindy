@@ -1124,7 +1124,49 @@ describe('computer mcp integration', () => {
     expect(mcpConnectMock).toHaveBeenCalledTimes(1);
   });
 
-  it('retries unsupported cursor setup after the MCP session is recreated', async () => {
+  it('does not retry unsupported cursor setup after stale driver recovery', async () => {
+    mcpCallToolMock
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({
+        isError: true,
+        content: [{ type: 'text', text: "Permission denied: tool 'set_agent_cursor_style' has no reviewed risk classification" }],
+      })
+      .mockImplementationOnce((call: { name: string; arguments: Record<string, unknown> }) => ({
+        isError: true,
+        content: [{
+          type: 'text',
+          text: `session '${String(call.arguments.session)}' has ended; tool call '${call.name}' was rejected`,
+        }],
+      }))
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] });
+
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 10,
+      y: 20,
+    }, { sessionId: 'session-style-stale-recovery' })).resolves.toEqual({ ok: true, clicked: true });
+
+    expect(mcpCallToolMock.mock.calls.map((call) => call[0]?.name)).toEqual([
+      'set_agent_cursor_motion',
+      'set_agent_cursor_style',
+      'click',
+      'end_session',
+      'set_agent_cursor_motion',
+      'click',
+    ]);
+    expect(mcpConnectMock).toHaveBeenCalledTimes(2);
+    expect(mcpCloseMock).toHaveBeenCalledTimes(1);
+    const clickSessions = mcpCallToolMock.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call?.name === 'click')
+      .map((call) => (call?.arguments as { session: string }).session);
+    expectDriverSessionGenerations(clickSessions, 'session-style-stale-recovery', [0, 1]);
+  });
+
+  it('re-probes unsupported cursor setup after the logical MCP session is closed', async () => {
     mcpCallToolMock
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
       .mockResolvedValueOnce({

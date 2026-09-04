@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildClaudeSubagentModelGuardHooks,
+  claudeSubagentModelWithContextWindow,
   effectiveClaudeSubagentModel,
 } from '../subagent-model-access.js';
 
@@ -18,6 +19,76 @@ function agentInput(model?: string) {
 }
 
 describe('Claude subagent model access guard', () => {
+  it('normalizes the 1M suffix from the resolved model capability', () => {
+    expect(claudeSubagentModelWithContextWindow('z-ai/glm-5.3', 1_000_000))
+      .toBe('z-ai/glm-5.3[1m]');
+    expect(claudeSubagentModelWithContextWindow('z-ai/glm-5.3[1m]', 272_000))
+      .toBe('z-ai/glm-5.3');
+    expect(claudeSubagentModelWithContextWindow('unknown/model', undefined))
+      .toBe('unknown/model');
+  });
+
+  it('rewrites an explicit Agent model before Claude Code resolves its context window', async () => {
+    const hook = buildClaudeSubagentModelGuardHooks(
+      async () => ({ status: 'allowed' as const }),
+      undefined,
+      undefined,
+      (model) => model === 'z-ai/glm-5.3' ? 1_000_000 : undefined,
+    ).PreToolUse?.[0]?.hooks[0];
+    if (!hook) throw new Error('expected subagent model guard');
+
+    await expect(hook(
+      agentInput('z-ai/glm-5.3'),
+      undefined,
+      { signal: new AbortController().signal },
+    )).resolves.toMatchObject({
+      hookSpecificOutput: {
+        updatedInput: { model: 'z-ai/glm-5.3[1m]' },
+      },
+    });
+  });
+
+  it('does not rewrite unknown models or non-Agent tools', async () => {
+    const hook = buildClaudeSubagentModelGuardHooks(
+      async () => ({ status: 'allowed' as const }),
+      undefined,
+      undefined,
+      () => undefined,
+    ).PreToolUse?.[0]?.hooks[0];
+    if (!hook) throw new Error('expected subagent model guard');
+
+    await expect(hook(
+      agentInput('unknown/model'),
+      undefined,
+      { signal: new AbortController().signal },
+    )).resolves.toEqual({ continue: true });
+    await expect(hook(
+      { ...agentInput('z-ai/glm-5.3'), tool_name: 'Read' },
+      undefined,
+      { signal: new AbortController().signal },
+    )).resolves.toEqual({ continue: true });
+  });
+
+  it('can rewrite context metadata even when account access preflight is not installed', async () => {
+    const hook = buildClaudeSubagentModelGuardHooks(
+      undefined,
+      undefined,
+      undefined,
+      (model) => model === 'z-ai/glm-5.3' ? 1_000_000 : undefined,
+    ).PreToolUse?.[0]?.hooks[0];
+    if (!hook) throw new Error('expected context-only subagent guard');
+
+    await expect(hook(
+      agentInput('z-ai/glm-5.3'),
+      undefined,
+      { signal: new AbortController().signal },
+    )).resolves.toMatchObject({
+      hookSpecificOutput: {
+        updatedInput: { model: 'z-ai/glm-5.3[1m]' },
+      },
+    });
+  });
+
   it('denies only an authoritative denial before Full access can bypass canUseTool', async () => {
     const resolveAccess = vi.fn(async () => ({ status: 'denied' as const }));
     const hook = buildClaudeSubagentModelGuardHooks(resolveAccess)

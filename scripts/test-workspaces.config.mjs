@@ -255,5 +255,6 @@ export default {
     noCollectableWorkspace('@cindy/device-link-protocol', 'packages/device-link-protocol'),
     requiredUnitWorkspace('@cindy/plugin-protocol', 'packages/plugin-protocol'),
     requiredUnitWorkspace('@cindy/slack-hook-protocol', 'packages/slack-hook-protocol'),
+    requiredUnitWorkspace('@cindy/design-tokens', 'packages/design-tokens'),
   ],
 };

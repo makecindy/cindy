@@ -1625,7 +1625,11 @@ describe('db worker tx handlers', () => {
           'src',
           'assistant',
           'copy',
-          JSON.stringify({ uuid: 'old', parentUuid: 'parent', transcriptParentUuid: 'old-parent' }),
+          JSON.stringify({
+            uuid: 'old',
+            parentUuid: 'parent',
+            transcriptParentUuid: 'old-parent',
+          }),
           'cc',
           100,
           'm2',
@@ -1684,6 +1688,56 @@ describe('db worker tx handlers', () => {
         uuid: 'new',
         parentUuid: 'new-parent-tool',
         transcriptParentUuid: 'new-parent',
+      });
+    });
+  });
+
+  it('fork.session rebinds completed Codex turn anchors to the child thread', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          'm1',
+          'c1',
+          'src',
+          'assistant',
+          'copy',
+          JSON.stringify({
+            turnCompleted: true,
+            nativeForkAnchor: {
+              agentKind: 'codex',
+              sdkSessionId: 'source-thread',
+              kind: 'turn',
+              id: 'turn-1',
+            },
+          }),
+          'codex',
+          100,
+        ],
+      );
+
+      await client.tx('fork.session', {
+        sourceSessionId: 'src',
+        targetCreatedAt: 200,
+        newSession: sessionRow('forked'),
+        uuidMap: [],
+        nativeForkAnchorSessionMap: [['source-thread', 'child-thread']],
+        newMessageIds: [{ id: 'copy-id-1', clientId: 'copy-client-1' }],
+      });
+
+      const copied = await client.queryOne<{ agent_meta: string }>(
+        'SELECT agent_meta FROM messages WHERE session_id = ?',
+        ['forked'],
+      );
+      expect(JSON.parse(copied?.agent_meta ?? '{}')).toEqual({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'child-thread',
+          kind: 'turn',
+          id: 'turn-1',
+        },
       });
     });
   });
@@ -1897,9 +1951,9 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('context.rebuild appends markers instead of deleting earlier rebuild boundaries', async () => {
+  it.each([false, true])('context.rebuild resets usage and appends markers (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
-      await seedSession(client, 's1');
+      await seedSession(client, 's1', { contextTokens: 245_000, contextWindow: 500_000 });
       await client.exec(
         'UPDATE sessions SET sdk_session_id = ?, list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
         ['native-a', 'keep me', 'user', 9, 's1'],
@@ -1940,16 +1994,18 @@ describe('db worker tx handlers', () => {
       ]);
       await expect(
         client.queryOne(
-          'SELECT sdk_session_id, updated_at, list_preview, list_message_count FROM sessions WHERE id = ?',
+          'SELECT sdk_session_id, context_tokens, context_window, updated_at, list_preview, list_message_count FROM sessions WHERE id = ?',
           ['s1'],
         ),
       ).resolves.toEqual({
         sdk_session_id: null,
+        context_tokens: 0,
+        context_window: 500_000,
         updated_at: 2000,
         list_preview: 'keep me',
         list_message_count: null,
       });
-    });
+    }, { useInlineWorker });
   });
 
   it('session.agentSwitchFallback missing boundary rolls back sdk id clear', async () => {
@@ -2545,6 +2601,23 @@ describe('db worker tx handlers', () => {
         { rowid: retryRowid, status: 'pending', attempts: 1, scheduled_at: 11_000 },
         { rowid: failRowid, status: 'failed', attempts: 5, scheduled_at: 0 },
       ]);
+    });
+  });
+
+  it('embedding.recordFailures terminal=true 整批直接进 failed,不消耗退避尝试 (#3416)', async () => {
+    await withClient(async (client) => {
+      const freshRowid = await insertJob(client, { sourceId: 'fresh', attempts: 0 });
+      const result = await client.tx('embedding.recordFailures', {
+        jobs: [{ rowid: freshRowid, attempts: 0 }],
+        errMsg: '[INVALID_MODEL] Invalid model name',
+        now: 10_000,
+        terminal: true,
+      });
+
+      expect(result).toEqual({ failCount: 1 });
+      await expect(
+        client.query('SELECT rowid, status, attempts FROM embedding_jobs ORDER BY rowid'),
+      ).resolves.toEqual([{ rowid: freshRowid, status: 'failed', attempts: 1 }]);
     });
   });
 
