@@ -23,25 +23,3 @@ export const PR_STATUS_REFRESH_INTERVAL_MS = 90_000;
 export function prStatusKey(ref: { owner: string; repo: string; prNumber: number }): string {
   return `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}#${ref.prNumber}`;
 }
-
-/** 本机可操作的 gh 失败:徽标点击会引导安装/登录。 */
-const ACTIONABLE_PR_FAILURE = new Set(['gh-missing', 'gh-not-logged-in']);
-
-/**
- * PrRefsContext 按 PR 键共享状态,本机查询与 device-link 查询会写同一格。
- *   - 失败不得覆盖已有成功(徽标不能随两端轮询来回降级)
- *   - 不可操作失败(no-token / fetch-failed / not-found)不得覆盖可操作失败
- *     (远端归一后的 no-token 不能把本机 gh-missing 的安装引导抹掉)
- * 成功态与可操作失败都可以覆盖不可操作失败(本机轮询恢复引导)。
- */
-export function shouldApplyPrStatus(
-  prev: { ok: boolean; reason?: string } | undefined,
-  next: { ok: boolean; reason?: string },
-): boolean {
-  if (!prev) return true;
-  if (prev.ok && !next.ok) return false;
-  const prevActionable = !prev.ok && ACTIONABLE_PR_FAILURE.has(prev.reason ?? '');
-  const nextActionable = !next.ok && ACTIONABLE_PR_FAILURE.has(next.reason ?? '');
-  if (prevActionable && !next.ok && !nextActionable) return false;
-  return true;
-}

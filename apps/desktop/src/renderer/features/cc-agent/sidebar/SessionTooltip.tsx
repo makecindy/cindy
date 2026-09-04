@@ -103,7 +103,7 @@ function PrTooltip({
   controlledOpen?: boolean;
   children: ReactNode;
 }) {
-  const { statuses, fetchStatusesForSession } = usePrStatuses();
+  const { statuses, fetchStatusesForSession } = usePrStatuses(sessionId);
 
   useEffect(() => {
     if (controlledOpen) fetchStatusesForSession(sessionId);

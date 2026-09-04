@@ -31,7 +31,7 @@ import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import type { Session } from '@/lib/ccAgent.types';
 import type { PrStatusKind, PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
 import { useSessionGitContext } from '@/hooks/useSessionGitContext';
-import { insertPromptIntoComposer } from '@/lib/composerActionsBus';
+import { hasPromptInsertSubscriber, insertPromptIntoComposer } from '@/lib/composerActionsBus';
 import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import {
   PR_STATUS_COLOR,
@@ -148,6 +148,8 @@ function PrChip({
         text: t(`ccAgent.gitContext.pr.guidance.${guidance}.prompt`),
       });
       if (accepted) return;
+      // Composer 挂着但拒绝写入(发送中 / 语音占用):保持已广告的引导动作,不改打开 PR。
+      if (hasPromptInsertSubscriber(sessionId)) return;
     }
     void window.electronAPI.openExternal(prRef.url);
   };

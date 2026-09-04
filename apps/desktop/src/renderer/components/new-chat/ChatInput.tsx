@@ -2840,7 +2840,7 @@ export function ChatInput({
   // 输入框并聚焦,只填不发。发送中 / 语音占用时与键盘输入同锁,静默忽略。
   useEffect(() => {
     if (!editor || !sessionId) return;
-    return subscribePromptInsert(({ targetSessionId, text }) => {
+    return subscribePromptInsert(sessionId, ({ targetSessionId, text }) => {
       if (targetSessionId !== sessionId || editor.isDestroyed) return false;
       if (composerMutationLockedRef.current) return false;
       insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text });

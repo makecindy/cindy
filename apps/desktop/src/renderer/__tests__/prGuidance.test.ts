@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { prFailureCopyKey, prGuidanceFor } from '../features/cc-agent/gitContextPrVisuals';
 import {
+  hasPromptInsertSubscriber,
   insertPromptIntoComposer,
   insertPromptIntoEditor,
   subscribePromptInsert,
@@ -84,7 +85,7 @@ describe('prFailureCopyKey', () => {
 describe('composerActionsBus prompt insert', () => {
   it('订阅方收到 targetSessionId + text;取消订阅后不再收到', () => {
     const handler = vi.fn(() => true);
-    const unsubscribe = subscribePromptInsert(handler);
+    const unsubscribe = subscribePromptInsert('s1', handler);
     expect(insertPromptIntoComposer({ targetSessionId: 's1', text: 'gh auth login' })).toBe(true);
     expect(handler).toHaveBeenCalledWith({ targetSessionId: 's1', text: 'gh auth login' });
     unsubscribe();
@@ -92,12 +93,15 @@ describe('composerActionsBus prompt insert', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('没人接住或订阅方拒绝写入时返回 false(chip 必须退回打开 PR,不能空点)', () => {
+  it('没人接住才退回打开 PR;有订阅但拒绝写入则保持引导、不改动作', () => {
+    expect(hasPromptInsertSubscriber('s1')).toBe(false);
     expect(insertPromptIntoComposer({ targetSessionId: 's1', text: 'x' })).toBe(false);
-    const reject = subscribePromptInsert(() => false);
+    const reject = subscribePromptInsert('s1', () => false);
+    expect(hasPromptInsertSubscriber('s1')).toBe(true);
     expect(insertPromptIntoComposer({ targetSessionId: 's1', text: 'x' })).toBe(false);
     reject();
-    const accept = subscribePromptInsert(() => true);
+    expect(hasPromptInsertSubscriber('s1')).toBe(false);
+    const accept = subscribePromptInsert('s1', () => true);
     expect(insertPromptIntoComposer({ targetSessionId: 's1', text: 'x' })).toBe(true);
     accept();
   });
