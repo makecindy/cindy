@@ -1557,6 +1557,30 @@
       ]
     },
     {
+      "id": "z-ai/glm-5.3",
+      "name": "GLM-5.3",
+      "group": "china",
+      "description": "Zhipu GLM-5.3 agentic coding model; 1M context",
+      "contextWindow": 1000000,
+      "efforts": ["minimal", "low", "high", "max"],
+      "defaultEffort": "high",
+      "sortOrder": 43.5,
+      "supportsFastMode": false,
+      "perAgent": {
+        "claude-code": {
+          "efforts": ["low", "high", "max"],
+          "defaultEffort": "high"
+        }
+      },
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "z-ai/glm-5.3",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
       "id": "deepseek/deepseek-v4-pro",
       "name": "DeepSeek V4 Pro",
       "group": "china",
