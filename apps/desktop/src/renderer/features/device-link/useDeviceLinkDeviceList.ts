@@ -1,15 +1,16 @@
 /**
- * useDeviceLinkDeviceList —— 机器切换栏用的「全量同账号设备」共享只读列表(push 驱动,无轮询)。
+ * useDeviceLinkDeviceList —— 机器切换栏用的「全量同账号设备」共享只读列表(push 驱动,失败低频退避)。
  * ---------------------------------------------------------------------------
  * 切换栏要区分「已连接 / 连接中 / 被拒」三态,需要 remoteProjectsStore(只含已同步设备)之外的
- * 全量设备(含在线未同步、离线、被拒)。这里做最小读:listDevices 拉一次,之后靠 push 重拉 ——
- * presence 变化、relay 重连 'online'、关「我控制它」(control-target-changed,改 controlEnabled);
- * relay 'stopped'(登出 / 停服)则清空缓存设备,避免登出后残留上一账号的远程机器。
+ * 全量设备(含在线未同步、离线、被拒)。这里做最小读:listDevices 初始拉取,之后靠 push 重拉；
+ * 失败时按低频退避静默恢复 —— presence 变化、relay 重连 'online'、关「我控制它」
+ * (control-target-changed,改 controlEnabled);relay 'stopped'(登出 / 停服)则清空缓存设备,
+ * 避免登出后残留上一账号的远程机器。
  *
  * **模块级共享单例**:切换栏组件 + CCAgentSidebarUpper 的两个合并点都要读这份列表做归一化,若各挂
  * 一个 hook 就会有 3 次 listDevices + 3 套监听且可能短暂不一致。这里收成一份:首个订阅者触发启动,
  * 之后所有消费者共享同一快照(app 生命周期常驻,与 useDeviceLinkRemoteProjects 同口径:稳态靠 push,
- * 不轮询)。
+ * 失败时仅按低频退避静默重试)。
  *
  * 故意不复用 useDeviceLinkSettings:那是设置页数据层,带 30s 轮询 + 一堆写操作回调,常驻侧边栏太重。
  */
@@ -19,6 +20,8 @@ import { useSyncExternalStore } from 'react';
 let devices: DeviceLinkDeviceView[] | null = null;
 const subs = new Set<() => void>();
 let started = false;
+const DEVICE_LIST_RETRY_BASE_MS = 2_000;
+const DEVICE_LIST_RETRY_MAX_MS = 30_000;
 export type DeviceLinkDeviceListStatus = 'loading' | 'ready' | 'error';
 export interface DeviceLinkDeviceListRequestState {
   status: DeviceLinkDeviceListStatus;
@@ -124,9 +127,9 @@ export function shouldRefreshForPresence(
   requestStatus: DeviceLinkDeviceListStatus,
 ): boolean {
   // 上一次拉取失败(且此前已有快照 → `devices` 仍非空、状态停在 'error')时**一律放行**:
-  // 这条链路 push 驱动、没有轮询兜底,若此时还按「字段没变」把 presence 滤掉,一次瞬时 REST
-  // 失败就会把侧栏钉在错误 / 陈旧目录上,直到 status / control-target 事件或用户手动重试
-  // (review: codex P1)。presence 是这段时间里唯一稳定到达的信号,必须当成重试机会。
+  // 自动退避之外,这条 push 信号也是低延迟恢复机会;若此时还按「字段没变」把 presence 滤掉,
+  // 一次瞬时 REST 失败就会把侧栏钉在错误 / 陈旧目录上,直到下一次退避、status 或
+  // control-target 事件 (review: codex P1)。
   //
   // 'loading' 不放行:那说明已有一笔在飞,`loadGeneration` 会让后到的结果胜出,再叠一次
   // refresh 只是徒增请求;它若失败会落到 'error',下一条 presence 自然接管重试。
@@ -144,6 +147,14 @@ export function shouldRefreshForPresence(
     normalizePlatform(row.platform) !== normalizePlatform(snap.platform) ||
     row.name.trim() !== snap.deviceName.trim()
   );
+}
+
+/** 设备目录静默恢复的退避:持续恢复,但长期故障时不每 2 秒打一次 IPC。 */
+export function nextDeviceListRetryDelay(previousMs: number): number {
+  if (!Number.isFinite(previousMs) || previousMs < DEVICE_LIST_RETRY_BASE_MS) {
+    return DEVICE_LIST_RETRY_BASE_MS;
+  }
+  return Math.min(previousMs * 2, DEVICE_LIST_RETRY_MAX_MS);
 }
 
 /**
@@ -227,6 +238,24 @@ function ensureStarted(): void {
   started = true;
   let linkStatus: 'stopped' | 'connecting' | 'online' | null = null;
   let linkStatusRevision = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryDelayMs = 0;
+
+  const clearRetryTimer = (): void => {
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
+
+  const scheduleRetry = (): void => {
+    if (retryTimer !== null || linkStatus === 'stopped') return;
+    retryDelayMs = nextDeviceListRetryDelay(retryDelayMs);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      refresh();
+    }, retryDelayMs);
+  };
 
   const enterLoading = (): void => {
     // 上一轮在尚无设备快照时失败只代表「该次请求已结算」。新的有效拉取开始后要重新
@@ -273,6 +302,8 @@ function ensureStarted(): void {
       if (!Array.isArray(list) || !list.every(isDeviceLinkDeviceView)) {
         throw new Error('Invalid device list response');
       }
+      clearRetryTimer();
+      retryDelayMs = 0;
       setDevices(list);
     } catch (error) {
       // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
@@ -281,10 +312,12 @@ function ensureStarted(): void {
       // 瞬态拉取失败(relay 重连中等)保持当前快照;登出 / relay 停止由下面的 'stopped'
       // 状态事件显式清空,不靠这里的失败兜底(避免一次网络抖动就清掉、闪烁)。但把请求
       // 标成已结算，避免远端 sidebar bootstrap 因 devices 仍为 null 永久显示加载态。
+      scheduleRetry();
     }
   };
 
   const refresh = (probeState = false): void => {
+    clearRetryTimer();
     void runRefresh(probeState);
   };
   refreshImpl = () => refresh(true);
@@ -302,6 +335,8 @@ function ensureStarted(): void {
       // 登出 / relay 停止:清掉缓存设备。否则登出后(或同进程换账号)上一账号的远程机器会
       // 一直留在切换栏里被当成可选 / 连接中(listDevices 此时多半失败,catch 又保留旧快照)。
       // 重新登录 → relay 重连到 'online' 时下面重新拉取。
+      clearRetryTimer();
+      retryDelayMs = 0;
       clearDevices();
       return;
     }
@@ -339,7 +374,7 @@ function getInitialRequestSettledSnapshot(): boolean {
   return initialRequestSettled;
 }
 
-/** 首次设备清单请求是否已结算；失败也算结算，后续 push / online 事件仍会继续 refresh。 */
+/** 首次设备清单请求是否已结算；失败也算结算，后续退避 / push / online 事件仍会继续 refresh。 */
 export function useDeviceLinkDeviceListSettled(): boolean {
   return useSyncExternalStore(subscribe, getInitialRequestSettledSnapshot);
 }
@@ -353,7 +388,7 @@ export function useDeviceLinkDeviceListRequestState(): DeviceLinkDeviceListReque
   return useSyncExternalStore(subscribe, getRequestStateSnapshot);
 }
 
-/** 用户可见错误态的手动重试入口。 */
+/** 兼容现有调用方的显式重试入口；正常失败恢复由上面的静默退避自动完成。 */
 export function retryDeviceLinkDeviceList(): void {
   if (!started) {
     ensureStarted();

@@ -12,9 +12,108 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('useDeviceLinkDeviceList initial request', () => {
+  it('silently retries a failed directory request without a later push event', async () => {
+    const listDevices = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('relay unavailable'))
+      .mockResolvedValueOnce({ devices: [] });
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      useDeviceLinkDeviceListRequestState,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result } = renderHook(() => ({
+      devices: useDeviceLinkDeviceList(),
+      request: useDeviceLinkDeviceListRequestState(),
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.request.status).toBe('error');
+    expect(listDevices).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(nextDeviceListRetryDelay(0));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    expect(result.current).toEqual({
+      devices: [],
+      request: { status: 'ready', error: null },
+    });
+  });
+
+  it('cancels a pending silent retry when the relay stops', async () => {
+    let statusChanged:
+      ((payload: { status: 'stopped' | 'connecting' | 'online' }) => void) | undefined;
+    const listDevices = vi.fn().mockRejectedValueOnce(new Error('relay unavailable'));
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(
+          (callback: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void) => {
+            statusChanged = callback;
+          },
+        ),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      useDeviceLinkDeviceListRequestState,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result } = renderHook(() => ({
+      devices: useDeviceLinkDeviceList(),
+      request: useDeviceLinkDeviceListRequestState(),
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.request.status).toBe('error');
+
+    act(() => statusChanged?.({ status: 'stopped' }));
+    await act(async () => {
+      vi.advanceTimersByTime(nextDeviceListRetryDelay(0));
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(result.current.request).toEqual({ status: 'ready', error: null });
+  });
+
+  it('caps silent retry backoff while preserving recovery', async () => {
+    const { nextDeviceListRetryDelay } =
+      await import('@/features/device-link/useDeviceLinkDeviceList');
+    expect(nextDeviceListRetryDelay(0)).toBe(2_000);
+    expect(nextDeviceListRetryDelay(2_000)).toBe(4_000);
+    expect(nextDeviceListRetryDelay(16_000)).toBe(30_000);
+    expect(nextDeviceListRetryDelay(30_000)).toBe(30_000);
+  });
+
   it('re-enters loading when online retries a rejected request with no device snapshot', async () => {
     let resolveRetry: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     const retry = new Promise<{ devices: DeviceLinkDeviceView[] }>((resolve) => {
