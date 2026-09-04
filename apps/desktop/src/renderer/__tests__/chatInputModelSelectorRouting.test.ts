@@ -509,4 +509,17 @@ describe('ChatInput model source switching wiring', () => {
       'handleProviderChange(providerId, modelId, effort, undefined, fast)',
     );
   });
+
+  it('reopen snapshot keeps intent model/source together; idle falls back to runtime provider', () => {
+    expect(chatInputSource).toContain(
+      'const activeProviderId = agentSwitchIntent ? agentSwitchIntent.providerId : selectedProviderId;',
+    );
+    expect(chatInputSource).toContain('modelId={activeModel}');
+    expect(chatInputSource).toContain('currentProviderId={activeProviderId}');
+    expect(chatInputSource).not.toContain('currentProviderId={selectedProviderId}');
+    expect(chatInputSource).toContain('agentSwitchIntent?.target');
+    expect(chatInputSource).toContain(
+      'const currentAgent = runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey);',
+    );
+  });
 });

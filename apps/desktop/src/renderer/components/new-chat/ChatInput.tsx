@@ -8698,8 +8698,9 @@ export function ChatInput({
                     // Responses→Chat 桥只挂在本地 codex-proxy,SSH 远程走 daemon 不经它。
                     excludeChatBridgedCodex={!!remoteHostId}
                     dense={effectiveDenseToolbar}
-                    // 意图期显示用户在浏览态选中的来源(null = flat 退化行,跟随默认路由)。
-                    currentProviderId={selectedProviderId}
+                    // 意图期与 activeModel 同一份目标快照(null = 跟随目标引擎默认路由);
+                    // 无意图才回到会话 runtime 的 selectedProviderId。
+                    currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
                     // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
                     // 发出来源选择,把显示中的默认来源钉回会话的显式来源。
