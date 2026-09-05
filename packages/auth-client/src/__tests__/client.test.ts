@@ -130,6 +130,26 @@ describe("CindyAuthClient", () => {
     expect(legacy.captcha).toBeUndefined();
   });
 
+  it("keeps recognized discovery methods when the server appends an unknown type", async () => {
+    const fetch = vi.fn(async () =>
+      response(200, {
+        methods: [{ type: "email_code" }, { type: "passkey", id: "future-1" }],
+      }),
+    );
+    await expect(client(fetch).discover("user@example.com")).resolves.toEqual([
+      { type: "email_code" },
+    ]);
+  });
+
+  it("fails closed when discovery returns only unrecognized methods", async () => {
+    const fetch = vi.fn(async () =>
+      response(200, { methods: [{ type: "passkey", id: "future-1" }] }),
+    );
+    await expect(client(fetch).discover("user@example.com")).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
   it("carries captchaToken in the email request-code body only when provided", async () => {
     const fetch = vi.fn(async () => response(200, { status: "sent" }));
     await client(fetch).requestCode("email", "user@example.com");

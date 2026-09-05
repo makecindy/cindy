@@ -105,6 +105,32 @@ export const loginMethodSchema = z.discriminatedUnion("type", [
 export type LoginMethod = z.infer<typeof loginMethodSchema>;
 
 /**
+ * Discovery 允许服务端 append-only 增加未知登录方式。未知项丢弃，避免整份
+ * `methods` 校验失败变成 INVALID_RESPONSE，把已经认识的 email_code / sso
+ * 一起挡掉（移动端会落到「登录未完成」兜底，验证码发不出去）。
+ */
+const knownLoginMethodTypes = new Set(["email_code", "sso"]);
+
+export function recognizeLoginMethods(items: readonly unknown[]): LoginMethod[] {
+  return items.flatMap((item) => {
+    // 有 string type 且不在已知集 = 服务端新增方式,向前兼容丢弃。
+    if (
+      typeof item === "object" &&
+      item !== null &&
+      "type" in item &&
+      typeof item.type === "string" &&
+      item.type.length > 0 &&
+      !knownLoginMethodTypes.has(item.type)
+    ) {
+      return [];
+    }
+    // 其余(已知 type、缺 type、type 非字符串)一律严格 parse,
+    // 字段残缺抛错由调用方转为 INVALID_RESPONSE,不静默丢弃。
+    return [loginMethodSchema.parse(item)];
+  });
+}
+
+/**
  * 把企业 SSO discovery 结果映射成 LoginMethod 列表。
  * 多连接时复用 method-choice 让用户选 IdP；唯一连接由
  * `soleAutoStartSsoMethod` 判定后，UI 直接投影 browser-redirect
