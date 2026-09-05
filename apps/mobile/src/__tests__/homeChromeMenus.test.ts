@@ -71,6 +71,28 @@ describe("home chrome menus", () => {
     });
   });
 
+  it("places host-advertised collections beside All Sessions", () => {
+    const actions = buildHomeScopePullDownActions(
+      [filter({ id: "all", label: "全部任务", selected: true })],
+      "所有任务",
+      {
+        openLabel: "打开电脑",
+        renameLabel: "重命名电脑",
+        showTasksLabel: "显示任务",
+      },
+      [{ id: "teammates", title: "所有伙伴" }],
+    );
+
+    expect(actions.map((item) => item.id)).toEqual([
+      "all",
+      "scope.collection:teammates",
+    ]);
+    expect(parseHomeScopePullDownAction("scope.collection:teammates")).toEqual({
+      kind: "collection",
+      collectionId: "teammates",
+    });
+  });
+
   it("lists all-conversations and available devices, marking the selected one", () => {
     const items = buildHomeScopeMenuItems(
       [

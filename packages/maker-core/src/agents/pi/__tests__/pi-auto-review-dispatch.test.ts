@@ -44,6 +44,7 @@ const captured = vi.hoisted(() => ({
     scope: 'session' | 'subagent-route';
   }>,
   mcpVendorOptions: undefined as Record<string, unknown> | undefined,
+  mcpMemoryEnabled: undefined as boolean | undefined,
   failSetModel: false,
   rejectSetModel: false,
   failPrompt: false,
@@ -220,6 +221,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.runnerLaunches = [];
     captured.proxyRegistrations = [];
     captured.mcpVendorOptions = undefined;
+    captured.mcpMemoryEnabled = undefined;
     captured.failSetModel = false;
     captured.rejectSetModel = false;
     captured.failPrompt = false;
@@ -292,6 +294,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
             captured.mcpVendorOptions = context?.vendorOptions;
+            captured.mcpMemoryEnabled = context?.memoryEnabled;
             return {
               mcpBridge: {
                 token: 'bridge-token',
@@ -373,6 +376,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
       spawnPiSubagentRunner: (request) => {
         captured.runnerLaunches.push(request);
@@ -2567,6 +2572,70 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         cancelled: true,
       });
       expect(deps.mutatePiManagedPackage).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('keeps Bot tools and memory independent of global memory while honoring task permissions', async () => {
+    const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
+    deps.getGhostRosterPrompt = vi.fn(() => 'BOT ROSTER');
+    deps.runtimeConfig.memoryEnabled = false;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'bot-read-only-session',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'bypassPermissions',
+      botProfilePrompt: 'BOT SOUL: research without changing the project.',
+      makerMemoryScopeKey: 'bot:bot-read-only',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: '## Bot Memory\n- frozen memory',
+      botUserProfilePrompt: '## User Profile\nCall the user Chris.',
+      userPrompt: 'GLOBAL USER PROMPT',
+      botRuntimeProfile: {
+        botId: 'bot-read-only',
+        profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      },
+    });
+    try {
+      expect(captured.args).not.toContain('--tools');
+      expect(captured.mcpVendorOptions).toBeDefined();
+      expect(captured.mcpMemoryEnabled).toBe(true);
+      const extensionPaths = captured.args.flatMap((arg, index) =>
+        arg === '--extension' ? [captured.args[index + 1]] : []);
+      expect(extensionPaths).toEqual(expect.arrayContaining([
+        path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-bridge.ts'),
+      ]));
+      // Bot 会话是产品人格,不是 coding harness:pi 原生 subagent 面必须不可见,
+      // 项目/全局 AGENTS.md 也不得从 cwd 链被吸进上下文。
+      expect(extensionPaths).not.toEqual(expect.arrayContaining([
+        path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-subagent.ts'),
+      ]));
+      expect(captured.args).toContain('--no-context-files');
+      const promptIndex = captured.args.indexOf('--append-system-prompt');
+      expect(captured.args[promptIndex + 1]).toContain('BOT SOUL');
+      expect(captured.args[promptIndex + 1]).not.toContain('BOT ROSTER');
+      expect(captured.args[promptIndex + 1]).not.toContain('You are Cindy.');
+      expect(captured.args[promptIndex + 1]).not.toContain('GLOBAL USER PROMPT');
+      expect(captured.args[promptIndex + 1]).toContain('frozen memory');
+      expect(captured.args[promptIndex + 1]).toContain('Call the user Chris');
+      expect(captured.args[promptIndex + 1].indexOf('frozen memory')).toBeLessThan(
+        captured.args[promptIndex + 1].indexOf('Call the user Chris'),
+      );
+
+      const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
+      expect(permissionFile).toBeTruthy();
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'bypassPermissions',
+      });
+
+      await handle.setPermissionMode?.('ask');
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'ask',
+      });
     } finally {
       await handle.close();
     }

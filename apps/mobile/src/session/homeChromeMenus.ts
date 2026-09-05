@@ -194,13 +194,21 @@ function inlineGroup(
 
 export const HOME_SCOPE_OPEN_PREFIX = "scope.open:";
 export const HOME_SCOPE_RENAME_PREFIX = "scope.rename:";
+export const HOME_SCOPE_COLLECTION_PREFIX = "scope.collection:";
 
 export function parseHomeScopePullDownAction(
   id: string,
 ):
   | { kind: "select"; filterId: string }
   | { kind: "open"; deviceId: string }
-  | { kind: "rename"; deviceId: string } {
+  | { kind: "rename"; deviceId: string }
+  | { kind: "collection"; collectionId: string } {
+  if (id.startsWith(HOME_SCOPE_COLLECTION_PREFIX)) {
+    return {
+      kind: "collection",
+      collectionId: id.slice(HOME_SCOPE_COLLECTION_PREFIX.length),
+    };
+  }
   if (id.startsWith(HOME_SCOPE_OPEN_PREFIX)) {
     return { kind: "open", deviceId: id.slice(HOME_SCOPE_OPEN_PREFIX.length) };
   }
@@ -221,6 +229,7 @@ export function buildHomeScopePullDownActions(
     renameLabel: string;
     showTasksLabel: string;
   },
+  collections: readonly { id: string; title: string }[] = [],
 ): NativePullDownAction[] {
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
   const deviceFilters = filters.filter(
@@ -231,6 +240,12 @@ export function buildHomeScopePullDownActions(
     items.push(
       checkable(allFilter.id, allConversationsLabel, allFilter.selected),
     );
+  }
+  for (const collection of collections) {
+    items.push({
+      id: `${HOME_SCOPE_COLLECTION_PREFIX}${collection.id}`,
+      title: collection.title,
+    });
   }
   for (const item of deviceFilters) {
     if (!item.deviceId) continue;

@@ -175,7 +175,8 @@
       "remoteControl": "リモート接続",
       "windowBehavior": "アプリの動作",
       "shortcuts": "キーボードショートカット",
-      "mcpServers": "カスタム MCP"
+      "mcpServers": "カスタム MCP",
+      "bots": "パートナー"
     },
     "remote": {
       "title": "リモートマシン",
@@ -6842,7 +6843,8 @@
       "projects": "プロジェクト",
       "skillhub": "SkillHub",
       "plugins": "プラグイン",
-      "issues": "問題"
+      "issues": "問題",
+      "bots": "仲間"
     },
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",
@@ -6895,10 +6897,248 @@
       "close": "ダウンロード画面を閉じる"
     }
   },
+  "bots": {
+    "sidebar": {
+      "newTaskWith": "{{name}}と新しいタスクを始める"
+    },
+    "title": "仲間",
+    "add": "仲間を追加",
+    "createWizard": {
+      "createFailed": "仲間を作成できませんでした。もう一度お試しください。",
+      "templates": {
+        "cindy": {
+          "title": "Cindy アシスタント",
+          "defaultName": "Cindy",
+          "defaultDescription": "忙しい毎日を少し整えることと、新しいアイデアを聞くことが好きです。文章も調べものも、日々のちょっとしたことも一緒に考えましょう。"
+        },
+        "dash": {
+          "title": "Dash 会社 CEO",
+          "defaultName": "Dash",
+          "defaultDescription": "よい製品やビジネスに興味津々です。可能性をじっくり話し合って、一緒に決めていくのが好きです。"
+        },
+        "lizi": {
+          "title": "LiZi 技術責任者",
+          "defaultName": "LiZi",
+          "defaultDescription": "難しい問題を解きほぐし、アイデアを形にするのが好きです。困ったときは一緒に答えを探しましょう。"
+        },
+        "custom": {
+          "title": "カスタム"
+        }
+      },
+      "chooseTemplate": "誰を招待しますか"
+    },
+    "homeFolder": {
+      "title": "詳細設定",
+      "description": "仲間は記憶と身につけた手順を自分で管理します。修正が必要なときだけフォルダを直接開いてください。",
+      "contents": "SOUL.md、USER.md、system_prompt.md、skills/、memories/ が入っています。モデル、権限、接続は Cindy が管理します。",
+      "open": "フォルダを開く",
+      "openFailed": "仲間のフォルダを開けませんでした。"
+    },
+    "profile": {
+      "changeAvatar": "アバターを変更",
+      "avatarFailed": "アバターを変更できませんでした。5 MB未満のPNG、JPEG、WebP画像を選択してください。",
+      "summary": "自己紹介",
+      "summaryPlaceholder": "例：連載小説を書くのが大好きな小説家。少しユーモアがあり、登場人物の心の動きを考えるのが好き。",
+      "avatarSelectionFailed": "画像を読み込めませんでした。5 MB 以下の PNG、JPEG、WebP 画像を選んでください。",
+      "personality": "性格と話し方"
+    },
+    "nameLabel": "呼び名",
+    "close": "閉じる",
+    "list": {
+      "startChat": "会話を始める",
+      "typing": "入力中…",
+      "unread": "{{count}} 件の未読メッセージ",
+      "search": "仲間を検索",
+      "searchPlaceholder": "仲間を検索…",
+      "showHidden": "非表示の仲間を表示",
+      "hideHidden": "非表示の仲間を閉じる",
+      "hidden": "非表示（{{count}}）",
+      "hide": "非表示にする",
+      "unhideNamed": "{{name}} を再表示",
+      "pin": "上部に固定",
+      "unpin": "固定を解除",
+      "pinned": "固定済み",
+      "needsAttention": "対応が必要",
+      "duplicate": "仲間を複製",
+      "moreActions": "{{name}} のその他の操作"
+    },
+    "cancel": "キャンセル",
+    "save": "保存",
+    "autosave": {
+      "saving": "保存中…",
+      "saved": "保存しました",
+      "retry": "再保存"
+    },
+    "retry": "再試行",
+    "backToBot": "仲間に戻る",
+    "sessionLoadFailedTitle": "この仲間タスクを読み込めませんでした",
+    "sessionLoadFailedDescription": "タスクの関連付けは存在しますが、Cindy が仲間の状態を読み取れませんでした。再試行するか、仲間の概要に戻ってください。",
+    "sessionUnavailableTitle": "この仲間タスクは利用できません",
+    "sessionUnavailableDescription": "このタスクは消失、削除されたか、この相棒のものではない可能性があります。戻ると復旧されたメインタスクを開けます。",
+    "settings": "設定",
+    "settingsTabs": {
+      "model": "モデル"
+    },
+    "model": {
+      "description": "このパートナーが使用するモデルを選びます。",
+      "restoreDefault": "デフォルトのモデルに戻す"
+    },
+    "modelChain": {
+      "primary": "優先モデル",
+      "fallback": "予備 {{index}}",
+      "routeLabel": "モデル候補 {{index}}",
+      "add": "予備モデルを追加",
+      "remove": "この候補を削除",
+      "moveUp": "上へ移動",
+      "moveDown": "下へ移動",
+      "description": "モデルを最大5件設定できます。候補が利用できない場合、パートナーが順番に自動で切り替えるため、タスクの切り替えや手動再試行は不要です。",
+      "options": "予備のモデル（{{count}}）"
+    },
+    "actions": {
+      "message": "メッセージ",
+      "addToGroup": "グループに追加",
+      "export": "エクスポート"
+    },
+    "emptyTitle": "仲間はまだありません",
+    "emptyDescription": "役割を決めて仲間を作成し、必要なツールやメッセージ経路を接続できます。",
+    "sessions": "タスク",
+    "open": "開く",
+    "archived": "アーカイブ済み",
+    "historyTitle": "アーカイブ履歴",
+    "historyEmpty": "アーカイブされた仲間タスクはまだありません。",
+    "historySearch": {
+      "title": "仲間履歴を検索",
+      "description": "この仲間の過去のメッセージ、バックグラウンドタスク、アーカイブ記録を検索します。",
+      "placeholder": "何を話したか覚えていますか？",
+      "search": "検索",
+      "searching": "検索中…",
+      "failed": "仲間履歴を検索できませんでした。もう一度お試しください。",
+      "empty": "一致する仲間履歴はありません。"
+    },
+    "lifecycle": {
+      "stoppedBots": "対応が必要な仲間",
+      "title": "稼働状況と履歴",
+      "description": "仲間を一時停止・再開し、過去のメッセージや成果を探せます。",
+      "activeTitle": "仲間は稼働中です",
+      "activeDescription": "メッセージの受信、バックグラウンドタスクの実行、他の仲間への連絡ができます。",
+      "pausedTitle": "仲間は一時停止中です",
+      "pausedDescription": "新しい作業を受け付けません。ユーザーが停止した自動化は再開後も停止したままです。",
+      "stoppedTitle": "仲間は停止しています",
+      "stoppedDescription": "これは旧バージョンの停止状態です。完全に削除する際もタスク履歴は保持できます。",
+      "pause": "仲間を一時停止",
+      "resume": "仲間を再開",
+      "delete": "完全に削除",
+      "deleteTitle": "仲間を完全に削除",
+      "deleteDescription": "{{name}} を削除します。性格・つないだチャネル・予定した実行がすべてなくなり、元に戻せません。",
+      "working": "更新中…",
+      "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。"
+    },
+    "backToChat": "チャットに戻る",
+    "memoryRecovery": {
+      "action": "メモリをオンに戻す"
+    },
+    "profileSaveFailed": "仲間設定を保存できませんでした。変更は適用されていません。",
+    "modelLabel": "モデル",
+    "modelUnavailable": "{{model}}（現在利用できません）",
+    "codexAutomaticCompact": "Codex の相棒は自分で文脈を圧縮し、/new でも今のタスクは残ります。本当に仕切り直したいときだけ新しいタスクを始めてください。",
+    "image": "画像を追加",
+    "send": "メッセージを送信",
+    "roster": {
+      "create": "仲間を招待する",
+      "customNamePlaceholder": "仲間の呼び名を入力",
+      "customTitle": "新しい仲間と出会う"
+    },
+    "chat": {
+      "newMessagesBoundary": "NEW",
+      "composerPlaceholder": "{{name}}に話しかける…",
+      "composerPlaceholderLatin": "{{name}} に話しかける…"
+    },
+    "globalSettings": {
+      "title": "パートナー",
+      "description": "パートナー全体に共通する設定です。個々のパートナーの設定は、その子のページにあります。",
+      "rosterNote": "あらかじめ用意された顔ぶれは、バージョンごとに増えていきます。"
+    },
+    "collab": {
+      "backgroundTask": "バックグラウンドタスク",
+      "trackedTask": "独立して実行し、結果を自動で返します",
+      "stopTask": "タスクを停止",
+      "messageSent": "バックグラウンドタスクにメッセージを送信しました",
+      "watchWork": "作業の様子を見る",
+      "actionFailed": "送信できませんでした。もう一度お試しください。",
+      "retrying": "まだ開始できていません。再試行中…",
+      "status": {
+        "queued": "開始しています",
+        "waiting": "対応待ち",
+        "running": "作業中",
+        "completed": "完了",
+        "failed": "失敗",
+        "cancelled": "停止済み",
+        "timed-out": "タイムアウト",
+        "unknown": "タスクの状況を確認できません"
+      },
+      "duration": {
+        "seconds": "{{n}} 秒",
+        "minutes": "{{n}} 分",
+        "hoursMinutes": "{{h}} 時間 {{m}} 分"
+      }
+    },
+    "directMessage": {
+      "sentTo": "{{name}} にメッセージを送信",
+      "receivedFrom": "{{name}} からのメッセージ",
+      "exchangeCount": "{{name}} との {{count}} 件のやり取り",
+      "open": "仲間同士の会話を見る",
+      "readOnly": "この会話は閲覧専用です",
+      "close": "会話を閉じる",
+      "unavailable": "この仲間同士の会話は利用できません。",
+      "empty": "表示できるメッセージはまだありません。",
+      "limitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました"
+    },
+    "joined": {
+      "today": "今日加入",
+      "yesterday": "昨日加入",
+      "days": "{{n}} 日前に加入",
+      "months": "{{n}} か月前に加入",
+      "years": "{{n}} 年前に加入"
+    },
+    "background": {
+      "title": "責任",
+      "edit": "編集",
+      "done": "完了",
+      "placeholder": "担当すること、自主的に進めること、事前確認が必要な判断、望ましいコミュニケーション方法。",
+      "empty": "責任範囲と境界はまだ定義されていません。",
+      "footnote": "この内容は仲間のアイデンティティ文脈に入ります。クイック性格設定は別に保存され、ここを変更しても保持されます。"
+    },
+    "welcome": {
+      "generic": "こんにちは、{{name}} です。これから何かあれば遠慮なく言ってください。まずはこのあたりを把握しておきます。",
+      "withRole": "こんにちは、{{name}} です——{{description}}。何かあればそのまま言ってください。"
+    },
+    "invitation": {
+      "title": "出会いの準備",
+      "waiting": "もうすぐ会えます、{{name}}",
+      "background": "この画面を離れても、準備は続きます。",
+      "profile": "自分の物語を書いています",
+      "skills": "{{name}} のパソコンを準備しています",
+      "avatar": "{{name}} が新しいアバターを選んでいます",
+      "welcome": "最初の挨拶を準備しています",
+      "failed": "準備が一時停止しました。完了した内容は保存されています。もう一度試せます。",
+      "retryFailed": "再試行できませんでした。少し待ってお試しください。",
+      "leave": "いったん離れる",
+      "avatarSkipped": "今は初期アバターを使っています。いつでも変更できます。"
+    },
+    "permissionRequest": "{{name}} が確認をお願いしています",
+    "remote": {
+      "online": "オンライン",
+      "offline": "オフライン",
+      "thisDevice": "このコンピュータ",
+      "offlineDescription": "{{name}} はオフラインです。{{device}} が再接続すると続けられます。",
+      "preparing": "準備ができるのを待っています…"
+    }
+  },
   "common": {
     "dismiss": "閉じる"
   },
   "commonUi": {
+    "retry": "再試行",
     "crossAgentConvert": {
       "asking": {
         "title": "変換できるワークスペース設定を検出",
@@ -7538,6 +7778,7 @@
       "browserTab": "ブラウザタブ",
       "desktopWindow": "アプリウィンドウ",
       "task": "タスク",
+      "bot": "メッセージまたは委任",
       "pluginResources": "プラグインリソース",
       "pluginResource": "プラグインリソース",
       "backToAll": "すべての @ コンテンツに戻る",
@@ -7809,6 +8050,7 @@
     },
     "messageActionBar": {
       "copy": "メッセージをコピー",
+      "reply": "返信",
       "linkCopied": "リンクをコピーしました",
       "moreActions": "その他のメッセージ操作",
       "copyLink": "現在のメッセージリンクをコピー",
@@ -8448,6 +8690,9 @@
     },
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",
+      "botTitle": "今回の成果物",
+      "relatedFiles": "関連ファイル {{count}} 件",
+      "openWebPreview": "Webプレビューを開く",
       "showMore": "さらに {{count}} 件表示",
       "showLess": "折りたたむ",
       "artifactLabel": "成果物",
@@ -11115,7 +11360,7 @@
       "remoteUnsupported": "このバージョンではローカルタスクのみレビューできます"
     },
     "externalArtifactConfirm": {
-      "title": "ワークスペース外の成果物をレビューしますか？",
+      "title": "ワークスペース外の作品をレビューしますか？",
       "message": "このレビューでは、ワークスペース外またはメモリ内の {{count}} 件を設定済みモデルへ送信します。",
       "detail": "今回許可されるのは以下の項目だけです。続行前に確認してください。",
       "inline": "メモリ内の添付ファイル",
@@ -11148,7 +11393,7 @@
       "ariaLabel": "スキル提案レビューパネル",
       "title": "スキル提案：{{name}}",
       "errorTitle": "提案の読み込みに失敗しました",
-      "redactionWarning": "成果物に機密の可能性がある内容が検出されました（{{categories}}）。適用前に diff をよくご確認ください。",
+      "redactionWarning": "作品に機密の可能性がある内容が検出されました（{{categories}}）。適用前に diff をよくご確認ください。",
       "overwriteWarning": "同名のローカルスキルが既に存在します。適用すると既存バージョンが上書きされます（旧バージョンは自動でバックアップされます）。",
       "apply": "ローカルスキルに適用",
       "applying": "適用中…",

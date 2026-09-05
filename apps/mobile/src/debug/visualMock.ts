@@ -165,6 +165,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
     subscribe: async () => undefined,
     unsubscribe: async () => undefined,
     onAgentsChanged: () => () => undefined,
+    onRemoteResourceChanged: () => () => undefined,
   };
 }
 

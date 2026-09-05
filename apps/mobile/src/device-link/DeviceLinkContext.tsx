@@ -10,6 +10,8 @@ import {
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
   PROTOCOL_VERSION,
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
+  parseRemoteResourceChangedPayload,
   type DeviceLinkConnectionIssue,
   type DeviceLinkStatus,
   type Envelope,
@@ -17,6 +19,7 @@ import {
   type LinkAcceptPayload,
   type PresenceSnapshot,
   type PushPayload,
+  type RemoteResourceChangedPayload,
   type Topic,
 } from '@cindy/device-link';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -171,6 +174,10 @@ export interface DeviceLinkContextValue {
   unsubscribe(owner: string, deviceId: string, topics: string[]): Promise<void>;
   /** 被控端 runtime Agent roster 发生变化时通知当前控制端页面。 */
   onAgentsChanged: (listener: (deviceId: string) => void) => () => void;
+  /** 模块中立的远程资源失效事件；页面收到后按 collection/ref 重拉。 */
+  onRemoteResourceChanged: (
+    listener: (deviceId: string, payload: RemoteResourceChangedPayload) => void,
+  ) => () => void;
 }
 
 const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
@@ -191,6 +198,16 @@ const CONTROLLER_CAPABILITIES = [
 const remoteResponseEvidenceEpochs = createPresenceAvailabilityEpochs();
 const remoteResponseEvidenceListeners = new Set<(deviceId: string) => void>();
 const remoteAgentRosterListeners = new Set<(deviceId: string) => void>();
+const remoteBotChangedListeners = new Set<(deviceId: string, channel: string, payload: unknown) => void>();
+export function subscribeRemoteBotChanges(listener: (deviceId: string, channel: string, payload: unknown) => void): () => void {
+  remoteBotChangedListeners.add(listener);
+  return () => { remoteBotChangedListeners.delete(listener); };
+}
+
+const remoteResourceChangedListeners = new Set<(
+  deviceId: string,
+  payload: RemoteResourceChangedPayload,
+) => void>();
 
 // 永久 link-close 后被抑制后台重建的设备(见 updateRehydrateSuppressionOnLinkClose)。
 // 模块级(与 remoteResponseEvidenceEpochs 同模式):sendOpenLink 等模块级函数也需要
@@ -215,6 +232,13 @@ function subscribeRemoteAgentRoster(
 ): () => void {
   remoteAgentRosterListeners.add(listener);
   return () => remoteAgentRosterListeners.delete(listener);
+}
+
+function subscribeRemoteResourceChanged(
+  listener: (deviceId: string, payload: RemoteResourceChangedPayload) => void,
+): () => void {
+  remoteResourceChangedListeners.add(listener);
+  return () => remoteResourceChangedListeners.delete(listener);
 }
 
 /**
@@ -1273,6 +1297,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     subscribe,
     unsubscribe,
     onAgentsChanged: subscribeRemoteAgentRoster,
+    onRemoteResourceChanged: subscribeRemoteResourceChanged,
   }), [
     closeLink,
     connectionEpoch,
@@ -1287,6 +1312,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     subscribe,
     unsubscribe,
     subscribeRemoteAgentRoster,
+    subscribeRemoteResourceChanged,
     subscriptionVersion,
   ]);
 
@@ -1325,6 +1351,16 @@ export function routeFrame(env: Envelope, handlers: {
   }
   if (push.channel === 'maker:agents:changed') {
     handlers.onAgentsChanged?.(env.src);
+    return;
+  }
+  if (push.channel === 'maker:bot-delegation:changed' || push.channel === 'maker:bot-direct-message:changed') {
+    for (const listener of remoteBotChangedListeners) listener(env.src, push.channel, push.payload);
+    return;
+  }
+  if (push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL) {
+    const payload = parseRemoteResourceChangedPayload(push.payload);
+    if (!payload) return;
+    for (const listener of remoteResourceChangedListeners) listener(env.src, payload);
     return;
   }
   if (push.channel === 'maker:schedule:event') {

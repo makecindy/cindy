@@ -117,7 +117,11 @@ describe('desktop 会话标题投影出口', () => {
 
   it('系统通知 / 飞书 / 手机推送的标题过投影,且语言走 ref 不被钉在首次渲染', () => {
     expect(sidebarUpper).toContain(
-      'const title = projectDraftSessionTitle(session?.title, unnamedLabelRef.current);',
+      'const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);',
+    );
+    expect(sidebarUpper).toContain('void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {');
+    expect(sidebarUpper).toContain(
+      'sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);',
     );
     expect(sidebarUpper).toContain("unnamedLabelRef.current = t('ccAgent.common.unnamedSession');");
   });

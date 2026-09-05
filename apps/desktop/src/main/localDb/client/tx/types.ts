@@ -29,6 +29,21 @@ export type DbTxName =
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
+  | 'bots.createProfile'
+  | 'bots.updateProfile'
+  | 'bots.updateAttention'
+  | 'bots.reconcileCanonicalLink'
+  | 'bots.replaceCanonicalSession'
+  | 'bots.prepareRuntime'
+  | 'bots.finishRuntime'
+  | 'bots.finishDelegation'
+  | 'bots.reparentDelegations'
+  | 'bots.createDelegation'
+  | 'bots.reopenDelegation'
+  | 'bots.pauseLifecycle'
+  | 'bots.resumeLifecycle'
+  | 'bots.archiveLifecycle'
+  | 'bots.deleteProfile'
   | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
@@ -539,6 +554,185 @@ export interface ImDeleteBindingsArgs {
   }>;
 }
 
+export interface BotsCreateProfileArgs {
+  id: string;
+  displayName: string;
+  description: string;
+  avatar: string;
+  avatarColor: string;
+  identitySource: string;
+  capabilitiesJson: string;
+  eventSubscription?: {
+    id: string;
+    name: string;
+    status: 'active' | 'paused';
+    ruleJson: string;
+  };
+  now: number;
+}
+
+export interface BotsUpdateProfileArgs {
+  id: string;
+  displayName?: string;
+  description?: string;
+  avatar?: string;
+  avatarColor?: string;
+  status?: string;
+  hiddenAt?: number | null;
+  pinnedAt?: number | null;
+  identitySource: string;
+  capabilitiesJson: string;
+  profileContentChanged: boolean;
+  expectedCurrentVersion: number;
+  /** Inserted and made authoritative in the same tx as the avatar address. */
+  botAvatarRef?: { id: string; hash: string; createdAt: number };
+  clearBotAvatarRefs?: boolean;
+  now: number;
+}
+
+export interface BotsUpdateAttentionArgs {
+  botId: string;
+  /** Null means a successful observation is clearing prior attention. */
+  reason: string | null;
+  observedAt: number;
+}
+
+export interface BotsReplaceCanonicalSessionArgs {
+  botId: string;
+  expectedCanonicalSessionId: string | null;
+  /** One-time compatibility evidence already validated by reconcileCanonicalLink. */
+  compatibilityMissingCanonicalSessionId?: string | null;
+  expectedProfileVersion: number;
+  session: {
+    id: string;
+    title: string;
+    workingDir: string | null;
+    workspaceKind: string;
+    model: string;
+    effort: string;
+    permissionMode: string;
+    agentKind: string;
+    remoteHostId: string | null;
+    providerId: string | null;
+    parentSessionId?: string | null;
+    extraDirs: string;
+    fastMode?: boolean;
+    source: string;
+    createdAt: number;
+    updatedAt: number;
+  };
+  now: number;
+}
+
+export interface BotsReconcileCanonicalLinkArgs {
+  botId: string;
+  now: number;
+}
+
+export interface BotsReconcileCanonicalLinkResult {
+  status: 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
+  canonicalSessionId: string | null;
+}
+
+export interface BotsReplaceCanonicalSessionResult {
+  created: boolean;
+  canonicalSessionId: string | null;
+  archivedCanonicalSessionId: string | null;
+}
+
+export interface BotsPrepareRuntimeArgs {
+  snapshot: {
+    id: string; botId: string; sessionId: string; profileVersion: number; agentKind: string;
+    workingDir: string; memoryScopeKey: string | null; configuredJson: string; resolvedJson: string;
+    preparedAt: number;
+  };
+  eventId: string;
+  eventPayloadJson: string;
+}
+
+export interface BotsFinishRuntimeArgs {
+  snapshotId: string;
+  botId: string;
+  sessionId: string;
+  status: 'applied' | 'degraded' | 'failed';
+  finishedAt: number;
+  failureJson: string | null;
+  eventId: string;
+  eventType: 'runtime-applied' | 'runtime-failed';
+  eventPayloadJson: string;
+}
+export interface BotsFinishDelegationArgs {
+  delegationId: string;
+  status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
+  resultSummary: string | null;
+  outputArtifactsJson: string;
+  lastError: string | null;
+  tokensUsed?: number;
+  completedAt: number;
+}
+
+export interface BotsFinishDelegationResult {
+  id: string;
+  parentSessionId: string | null;
+  childSessionId: string | null;
+  status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
+}
+
+export interface BotsReparentDelegationsArgs {
+  botId: string;
+  previousParentSessionId: string;
+  nextParentSessionId: string;
+  now: number;
+}
+
+export interface BotsReparentDelegationsResult {
+  delegationIds: string[];
+}
+
+export interface BotsCreateDelegationArgs {
+  maxActiveChildren: number;
+  delegation: {
+    id: string; requestingBotId: string; targetBotId: string | null; parentSessionId: string;
+    childSessionId: string; objective: string; contextRefsJson: string;
+    permissionSnapshotJson: string; lineageJson: string; targetProfileVersion: number | null;
+    depth: number; createdAt: number;
+  };
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+export interface BotsReopenDelegationArgs {
+  maxActiveChildren: number;
+  delegationId: string;
+  requestingBotId: string;
+  expectedStatus: 'completed' | 'failed' | 'cancelled' | 'timed-out';
+  parentSessionId: string;
+  childSessionId: string;
+  objective: string;
+  permissionSnapshotJson: string;
+  targetBotId: string | null;
+  targetProfileVersion: number | null;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+  reopenedAt: number;
+}
+
+export interface BotsReopenDelegationResult {
+  reopened: boolean;
+  previousParentSessionId: string | null;
+}
+
+export interface BotsLifecycleTransitionArgs {
+  botId: string; canonicalSessionId: string | null; expectedProfileStatus: string;
+  at: number; eventId: string;
+}
+export interface BotsArchiveLifecycleArgs extends BotsLifecycleTransitionArgs {
+  expectedProfileStatus: string; worktreeDisposition: string;
+}
+export interface BotsDeleteProfileArgs {
+  botId: string;
+  sessionIds: string[];
+  keepTaskHistory: boolean;
+  at: number;
+}
 export interface ImRotateSessionArgs {
   previousSessionId: string | null;
   detachBinding: {
@@ -918,6 +1112,21 @@ export type DbTxArgsByName = {
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
+  'bots.createProfile': BotsCreateProfileArgs;
+  'bots.updateProfile': BotsUpdateProfileArgs;
+  'bots.updateAttention': BotsUpdateAttentionArgs;
+  'bots.reconcileCanonicalLink': BotsReconcileCanonicalLinkArgs;
+  'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionArgs;
+  'bots.prepareRuntime': BotsPrepareRuntimeArgs;
+  'bots.finishRuntime': BotsFinishRuntimeArgs;
+  'bots.finishDelegation': BotsFinishDelegationArgs;
+  'bots.reparentDelegations': BotsReparentDelegationsArgs;
+  'bots.createDelegation': BotsCreateDelegationArgs;
+  'bots.reopenDelegation': BotsReopenDelegationArgs;
+  'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
+  'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
+  'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
+  'bots.deleteProfile': BotsDeleteProfileArgs;
   'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
@@ -971,6 +1180,21 @@ export type DbTxResultByName = {
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;
+  'bots.createProfile': undefined;
+  'bots.updateProfile': { currentVersion: number };
+  'bots.updateAttention': { changed: boolean };
+  'bots.reconcileCanonicalLink': BotsReconcileCanonicalLinkResult;
+  'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionResult;
+  'bots.prepareRuntime': undefined;
+  'bots.finishRuntime': boolean;
+  'bots.finishDelegation': BotsFinishDelegationResult | null;
+  'bots.reparentDelegations': BotsReparentDelegationsResult;
+  'bots.createDelegation': undefined;
+  'bots.reopenDelegation': BotsReopenDelegationResult;
+  'bots.pauseLifecycle': undefined;
+  'bots.resumeLifecycle': undefined;
+  'bots.archiveLifecycle': { sessions: number };
+  'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;

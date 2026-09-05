@@ -15,6 +15,11 @@ import {
 } from '../topics.js';
 
 describe('topicForPush', () => {
+  it('delivers companion task state to the parent and private-thread changes to the account topic', () => {
+    expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: 'parent', childSessionId: 'child' })).toBe('session:parent');
+    expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: null })).toBeNull();
+    expect(topicForPush('maker:bot-direct-message:changed', { threadId: 'private' })).toBe('sessions');
+  });
   it('会话列表级 channel → sessions', () => {
     expect(topicForPush('local-db:sessions:created', { sessionId: 's1' })).toBe('sessions');
     expect(

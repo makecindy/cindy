@@ -7,6 +7,20 @@
     "deleting": "삭제 중",
     "create": "새로 만들기"
   },
+  "resources": {
+    "hostOffline": "오프라인",
+    "titleFallback": "리소스",
+    "loading": "불러오는 중…",
+    "emptyTitle": "아직 항목이 없습니다",
+    "emptyCopy": "이 컴퓨터에는 아직 여기에 표시할 항목이 없습니다.",
+    "loadFailed": "항목을 불러올 수 없습니다",
+    "noHosts": "사용 가능한 호환 컴퓨터가 없습니다.",
+    "noConversation": "이 항목에는 현재 열 수 있는 세션이 없습니다.",
+    "openFailed": "세션을 열 수 없습니다",
+    "resolving": "최신 세션을 여는 중…",
+    "retry": "다시 시도",
+    "hostCount": "컴퓨터 {{count}}대"
+  },
   "presentation": {
     "deviceList": {
       "headerAvailable": "제어 가능한 컴퓨터 {{count}}대",
@@ -665,6 +679,27 @@
         "hoursAgo": "{{count}}시간 전",
         "daysAgo": "{{count}}일 전"
       }
+    }
+  },
+  "companions": {
+    "messageSent": "추가 메시지를 보냈습니다",
+    "privateChat": "{{name}} 님과의 대화",
+    "backgroundTask": "백그라운드 작업",
+    "openTask": "작업 열기",
+    "stopTask": "작업 중지",
+    "actionFailed": "읽거나 작업을 완료할 수 없습니다",
+    "messages": "메시지",
+    "readOnly": "읽기 전용",
+    "unread": "새 답변",
+    "status": {
+      "queued": "시작 대기",
+      "running": "실행 중",
+      "waiting": "답변 대기",
+      "completed": "완료",
+      "failed": "실패",
+      "cancelled": "취소됨",
+      "timed-out": "시간 초과",
+      "unknown": "상태를 확인할 수 없습니다"
     }
   }
 }

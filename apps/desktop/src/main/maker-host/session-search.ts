@@ -25,6 +25,7 @@ import {
 } from '../localDb/chatHistorySearch.pure.js';
 import { buildSnippetFromContent, SNIPPET_SOURCE_MAX_CHARS } from '../localDb/cjkSeg.js';
 import { createLogger } from '../logger.js';
+import { resolveBotHistoryScope } from '../localDb/botHistoryScope.js';
 
 const log = createLogger('session-search');
 const TABLE = 'messages_fts';
@@ -48,6 +49,12 @@ export const searchSessionsFn: SessionSearchFn = async (
 
   // snippet 从原文 m.content 重建，不用索引侧文本（见 buildSnippetFromContent 注释）。
   const queryTokens = extractMessagesFtsTokens(query);
+
+  const callerScope = await resolveBotHistoryScope(
+    opts.callerSessionId,
+    opts.callerMemoryScopeKey,
+  );
+  if (callerScope.kind === 'denied') return [];
   let sql = `
     SELECT m.id AS messageId,
            m.session_id AS sessionId,
@@ -64,6 +71,17 @@ export const searchSessionsFn: SessionSearchFn = async (
   if (opts.sessionId) {
     sql += ` AND m.session_id = ?`;
     params.push(opts.sessionId);
+  }
+  if (callerScope.kind === 'bot') {
+    // Bot ownership is resolved from the current runtime Session. The model can
+    // optionally narrow within that set, but cannot widen it by supplying an
+    // arbitrary sessionId.
+    sql += ` AND m.session_id IN (
+      SELECT scoped.session_id
+        FROM bot_session_links scoped
+       WHERE scoped.bot_id = ?
+    )`;
+    params.push(callerScope.botId);
   }
   if (opts.role) {
     sql += ` AND m.role = ?`;

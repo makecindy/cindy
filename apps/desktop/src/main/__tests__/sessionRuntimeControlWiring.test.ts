@@ -936,7 +936,7 @@ describe('session runtime control wiring', () => {
       /effectiveProviderId === null\s*\? null\s*: \(normalizeSessionProviderId\(effectiveProviderId\) \?\? currentProviderId\)/,
     );
     expect(registerSource).toContain('effort: pending.profile.effort,');
-    expect(registerSource).toContain('effort: candidate.effort, fastMode: candidate.fastMode');
+    expect(registerSource).toContain('effort: selected.effort, fastMode: selected.fastMode');
     expect(registerSource).toContain('effort: next.effort, fastMode: next.fastMode');
   });
 

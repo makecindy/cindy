@@ -19,6 +19,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
+import { resolveHistoryScope } from './_history_scope.js';
 
 const ROLE_VALUES = [
   'user',
@@ -85,6 +86,7 @@ const DESCRIPTION = [
 
 export interface GetChatHistoryToolDeps {
   history: XdtHelperHistoryDeps;
+  getSessionContext?: () => import('../types.js').LiziMcpSessionContext | undefined;
 }
 
 export function registerGetChatHistoryTool(
@@ -157,6 +159,24 @@ export function registerGetChatHistoryTool(
       cursor,
       order,
     }) => {
+      const scope = await resolveHistoryScope(
+        deps.history,
+        deps.getSessionContext,
+        session_ids ?? null,
+      );
+      if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
+      if (
+        session_ids !== undefined
+        && session_ids.length > 0
+        && scope.sessionIds?.length === 0
+        && scope.deniedSessionIds.length > 0
+      ) {
+        return errorPayload(
+          'HISTORY_SCOPE_DENIED',
+          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或可追踪委派结果。',
+          { denied_session_ids: scope.deniedSessionIds },
+        );
+      }
       // 至少一个主过滤
       const hasMainFilter =
         (session_ids !== undefined && session_ids.length > 0) ||
@@ -200,7 +220,7 @@ export function registerGetChatHistoryTool(
         : fromMs;
 
       const result = await deps.history.getMessages({
-        sessionIds: session_ids ?? null,
+        sessionIds: scope.sessionIds,
         workdir: workdir ?? null,
         fromMs: effectiveFromMs,
         toMs,
@@ -271,6 +291,9 @@ export function registerGetChatHistoryTool(
             : null,
           limit,
           order,
+          ...(scope.deniedSessionIds.length > 0
+            ? { scope_filtered_session_ids: scope.deniedSessionIds }
+            : {}),
         },
         ...(cursor && !cursorObj ? { warning: 'INVALID_CURSOR_FALLBACK_TO_FIRST_PAGE' } : {}),
       });

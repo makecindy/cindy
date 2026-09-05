@@ -124,6 +124,8 @@ async function startPlanSession(
   depOverrides: Partial<AgentDeps> = {},
   permissionMode: PermissionMode = 'acceptEdits',
   reviewMode = false,
+  botProfile = false,
+  writableDirs: string[] = [],
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -139,7 +141,13 @@ async function startPlanSession(
     workingDir,
     permissionMode,
     planMode,
+    ...(writableDirs.length > 0 ? { writableDirs } : {}),
     ...(reviewMode ? { reviewMode: true as const } : {}),
+    ...(botProfile
+      ? {
+          botProfilePrompt: 'BOT SOUL: research without changing the project.',
+        }
+      : {}),
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
     | {
@@ -149,6 +157,7 @@ async function startPlanSession(
         settingSources?: string[];
         allowDangerouslySkipPermissions?: boolean;
         settings?: Record<string, unknown>;
+        systemPrompt?: { append?: string };
         hooks?: {
           PreToolUse?: Array<{
             hooks: Array<(input: Record<string, unknown>) => Promise<Record<string, unknown>>>;
@@ -499,6 +508,28 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.setPlanMode?.(true);
     expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
     expect(handle.getPlanMode?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('keeps Bot identity and native tools under ordinary task permissions', async () => {
+    const { handle, queryOptions, fakeQuery } = await startPlanSession(
+      false, {}, 'bypassPermissions', false, true,
+    );
+    expect(queryOptions.permissionMode).toBe('bypassPermissions');
+    expect(queryOptions.allowDangerouslySkipPermissions).toBe(true);
+    expect(queryOptions.systemPrompt?.append).toContain('BOT SOUL');
+    for (const toolName of ['Write', 'Bash']) {
+      for (const group of queryOptions.hooks?.PreToolUse ?? []) {
+        for (const hook of group.hooks) {
+          const decision = await hook({
+            hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: {},
+          });
+          expect(decision.hookSpecificOutput).not.toMatchObject({ permissionDecision: 'deny' });
+        }
+      }
+    }
+    await handle.setPermissionMode?.('ask');
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
     await handle.close();
   });
 

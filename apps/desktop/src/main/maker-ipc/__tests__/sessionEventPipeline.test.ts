@@ -234,6 +234,9 @@ function harness() {
   const activity = new SessionTurnActivityTracker();
   const deps = {
     log,
+    botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
+    attemptBotCompactRuntimeRefresh: vi.fn(),
+    botDelegationServiceHolder: { settleSession: vi.fn(async () => {}) },
     isFencedStaleSessionTerminal: vi.fn(() => false),
     redactEventForRenderer: vi.fn((value: AgentEvent) => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
@@ -282,6 +285,8 @@ function harness() {
     turnPiFastModeBySession: new Map<string, boolean>(),
     silentStopTurnLeaseGate: { turnLeaseIdForEvent: vi.fn(() => 'instance:1') },
     agentInputCoordinatorHolder: {
+      getActiveInputClientId: vi.fn((): string | null => null),
+      getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
       onTurnEvent: vi.fn(),
       noteSuppressedTerminalError: vi.fn(),
       onExternalTurnSettled: vi.fn(),
@@ -1005,5 +1010,38 @@ describe('usage through the production event pipeline', () => {
       expect.objectContaining({ money: expect.objectContaining({ amount: 2 }) }),
     );
     await h.dispose();
+  });
+});
+
+
+describe('Bot adapters in the shared event pipeline', () => {
+  it('preserves private input provenance in persistence and broadcast before done clears the active input', () => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
+    h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(null);
+    });
+    h.emit(event('text', { text: 'private reply' }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenLastCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({ botPrivateReply: true }) }),
+    }));
+    h.emit(event('done'));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ type: 'done', agentMeta: expect.objectContaining({ botPrivateReply: true }) }),
+    }));
+  });
+
+  it('carries a pending follow-up into task settlement and remembers compact boundaries without rebuilding early', async () => {
+    const h = harness();
+    h.emit(event('compact_boundary'));
+    expect(h.deps.botCompactRuntimeRefreshCoordinator.noteBoundary).toHaveBeenCalledWith(h.session);
+    expect(h.deps.attemptBotCompactRuntimeRefresh).not.toHaveBeenCalled();
+    h.deps.agentInputCoordinatorHolder.getQueueControlSnapshot.mockReturnValue({ pendingQueue: [{}] });
+    h.emit(event('done', { result: 'first result' }));
+    await microtasks();
+    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledWith(expect.objectContaining({
+      childSessionId: 'task', resultText: 'first result', hadPendingInputAtTerminal: true,
+    }));
+    expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
   });
 });

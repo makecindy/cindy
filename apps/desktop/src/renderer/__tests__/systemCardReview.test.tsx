@@ -12,6 +12,9 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+// These fixtures render other SystemCard variants; companion synchronization is tested separately.
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBots: () => [] }));
+
 vi.mock('@/features/learn/LearnStatusCard', () => ({
   LearnStatusCard: () => null,
 }));

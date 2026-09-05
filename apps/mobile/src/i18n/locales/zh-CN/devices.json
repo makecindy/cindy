@@ -7,6 +7,20 @@
     "deleting": "删除中",
     "create": "新建"
   },
+  "resources": {
+    "hostOffline": "离线",
+    "titleFallback": "资源",
+    "loading": "正在加载…",
+    "emptyTitle": "这里暂时没有内容",
+    "emptyCopy": "电脑目前还没有提供这里的内容。",
+    "loadFailed": "无法加载内容",
+    "noHosts": "当前没有可用的兼容电脑。",
+    "noConversation": "这个项目目前没有可打开的任务。",
+    "openFailed": "无法打开任务",
+    "resolving": "正在打开最新任务…",
+    "retry": "重试",
+    "hostCount": "{{count}} 台电脑"
+  },
   "presentation": {
     "deviceList": {
       "headerAvailable": "{{count}} 台电脑可控制",
@@ -664,6 +678,27 @@
         "hoursAgo": "{{count}} 小时前",
         "daysAgo": "{{count}} 天前"
       }
+    }
+  },
+  "companions": {
+    "messageSent": "已发送补充消息",
+    "privateChat": "与 {{name}} 的私聊",
+    "backgroundTask": "后台任务",
+    "openTask": "查看任务",
+    "stopTask": "停止任务",
+    "actionFailed": "暂时无法读取或完成操作",
+    "messages": "消息往来",
+    "readOnly": "仅供查看",
+    "unread": "有新回复",
+    "status": {
+      "queued": "等待开始",
+      "running": "运行中",
+      "waiting": "等待回复",
+      "completed": "已完成",
+      "failed": "失败",
+      "cancelled": "已取消",
+      "timed-out": "已超时",
+      "unknown": "暂时无法确认状态"
     }
   }
 }

@@ -7,6 +7,20 @@
     "deleting": "刪除中",
     "create": "新建"
   },
+  "resources": {
+    "hostOffline": "離線",
+    "titleFallback": "資源",
+    "loading": "正在載入…",
+    "emptyTitle": "這裡暫時沒有內容",
+    "emptyCopy": "電腦目前還沒有提供這裡的內容。",
+    "loadFailed": "無法載入內容",
+    "noHosts": "目前沒有可用的相容電腦。",
+    "noConversation": "這個項目目前沒有可開啟的任務。",
+    "openFailed": "無法開啟任務",
+    "resolving": "正在開啟最新任務…",
+    "retry": "重試",
+    "hostCount": "{{count}} 台電腦"
+  },
   "presentation": {
     "deviceList": {
       "headerAvailable": "{{count}} 臺電腦可控制",
@@ -664,6 +678,27 @@
         "hoursAgo": "{{count}} 小時前",
         "daysAgo": "{{count}} 天前"
       }
+    }
+  },
+  "companions": {
+    "messageSent": "已傳送補充訊息",
+    "privateChat": "與 {{name}} 的私聊",
+    "backgroundTask": "背景任務",
+    "openTask": "查看任務",
+    "stopTask": "停止任務",
+    "actionFailed": "暫時無法讀取或完成操作",
+    "messages": "訊息往來",
+    "readOnly": "僅供檢視",
+    "unread": "有新回覆",
+    "status": {
+      "queued": "等待開始",
+      "running": "執行中",
+      "waiting": "等待回覆",
+      "completed": "已完成",
+      "failed": "失敗",
+      "cancelled": "已取消",
+      "timed-out": "已逾時",
+      "unknown": "暫時無法確認狀態"
     }
   }
 }

@@ -23,6 +23,7 @@ import path from 'node:path';
 
 import {
   MakerMemoryManager,
+  parseBotMemoryScopeKey,
   type AgentKind,
   type BaseAgent,
   type SqliteFactory,
@@ -37,6 +38,7 @@ import {
   getActiveAppSession,
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
+import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
 
 const sqliteFactory: SqliteFactory = (filePath) => {
   // better-sqlite3 sync open. WAL 让多 session 并发读写更稳, busyTimeout 防小撞锁。
@@ -97,6 +99,14 @@ export function createDesktopMakerMemoryManager(): MakerMemoryManager {
     // 问题 (review #2388 Codex 4th P1)。
     reloadEnabled: () =>
       readMemorySettings({ rootPath: resolveBasePath() ?? undefined }).maker,
+    // Bot Memory belongs to the Bot Home. It reuses the battle-tested storage
+    // primitives, but not Maker Memory's physical directory, global toggle or
+    // global reset surface.
+    resolveStorageDir: (scopeKey, ownerRoot) => {
+      const botId = parseBotMemoryScopeKey(scopeKey);
+      return botId ? botProfileMemoryDir(ownerRoot, botId) : null;
+    },
+    isIndependentScope: (scopeKey) => parseBotMemoryScopeKey(scopeKey) !== null,
     sqliteFactory,
     agents: {}, // 占位, attachAgents 补上
     logger: desktopMakerLogger.child('maker-memory'),

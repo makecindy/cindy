@@ -7,6 +7,20 @@
     "deleting": "削除中",
     "create": "新規"
   },
+  "resources": {
+    "hostOffline": "オフライン",
+    "titleFallback": "リソース",
+    "loading": "読み込み中…",
+    "emptyTitle": "まだ項目がありません",
+    "emptyCopy": "このコンピュータには、ここに表示する項目がまだありません。",
+    "loadFailed": "項目を読み込めませんでした",
+    "noHosts": "対応するコンピュータを利用できません。",
+    "noConversation": "この項目には現在、開けるセッションがありません。",
+    "openFailed": "セッションを開けませんでした",
+    "resolving": "最新のセッションを開いています…",
+    "retry": "もう一度試す",
+    "hostCount": "{{count}} 台のコンピュータ"
+  },
   "presentation": {
     "deviceList": {
       "headerAvailable": "操作可能なコンピューター {{count}} 台",
@@ -664,6 +678,27 @@
         "hoursAgo": "{{count}} 時間前",
         "daysAgo": "{{count}} 日前"
       }
+    }
+  },
+  "companions": {
+    "messageSent": "追加メッセージを送信しました",
+    "privateChat": "{{name}} との会話",
+    "backgroundTask": "バックグラウンドタスク",
+    "openTask": "タスクを開く",
+    "stopTask": "タスクを停止",
+    "actionFailed": "読み込みまたは操作を完了できません",
+    "messages": "メッセージ",
+    "readOnly": "閲覧のみ",
+    "unread": "新しい返信",
+    "status": {
+      "queued": "開始待ち",
+      "running": "実行中",
+      "waiting": "返信待ち",
+      "completed": "完了",
+      "failed": "失敗",
+      "cancelled": "キャンセル済み",
+      "timed-out": "タイムアウト",
+      "unknown": "状態を確認できません"
     }
   }
 }

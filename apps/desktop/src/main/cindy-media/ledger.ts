@@ -58,6 +58,8 @@ function defaultDb(): LedgerDb {
  * 'profile-avatar':用户自定义头像(设置 → 用户卡片编辑),refId = 登录用户
  * id。跨会话持久(removeSessionRefs 不碰),同 refId 只保留最新指纹——换头像时
  * 由 profileEdit 用 removeRefsExceptHash 清旧引用,恢复默认头像时 removeRefs 清空。
+ * 'bot-avatar':伙伴自定义头像,refId = bot id。头像地址与这条引用由
+ * bots.updateProfile 在同一数据库事务里切换,删除伙伴时只清它名下的引用。
  */
 export type MediaRefKind =
   | 'message'
@@ -69,7 +71,8 @@ export type MediaRefKind =
   | 'ghost-deposit'
   | 'import'
   | 'integration-cache'
-  | 'profile-avatar';
+  | 'profile-avatar'
+  | 'bot-avatar';
 /** 出生来源类型。 */
 export type MediaOriginKind = 'ghost' | 'tool' | 'user' | 'integration';
 

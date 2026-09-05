@@ -13,6 +13,7 @@ import type { WorktreeMeta } from '../worktree/types';
 interface SessionRow {
   id: string;
   status: string | null | undefined;
+  source: string;
   workingDir: string | null;
   worktreePath: string | null;
 }
@@ -69,10 +70,12 @@ function addSession(
   id: string,
   status: string | null | undefined,
   paths: Partial<Pick<SessionRow, 'workingDir' | 'worktreePath'>> = {},
+  source = 'desktop',
 ): SessionRow {
   const row: SessionRow = {
     id,
     status,
+    source,
     workingDir: paths.workingDir ?? null,
     worktreePath: paths.worktreePath ?? null,
   };
@@ -81,10 +84,11 @@ function addSession(
 }
 
 function dbFor(rows: Array<{ id: string; status: string | null }>) {
+  const normalized = rows.map((row) => ({ ...row, source: 'desktop' }));
   return {
     select: () => ({
       from: () => ({
-        where: () => rows,
+        where: () => normalized,
       }),
     }),
   };
@@ -150,6 +154,21 @@ describe('sessionRemovalRecycle', () => {
       await mod.recycleWorktreeForRemovedSession('s1');
 
       expect(removeMock).not.toHaveBeenCalled();
+    });
+
+    it('never recycles or owner-scans a Bot-managed Session', async () => {
+      const botMeta = makeMeta('bot');
+      const ownerMeta = makeMeta('owner');
+      storeMap.set('bot', botMeta);
+      storeMap.set('owner', ownerMeta);
+      addSession('bot', 'archived', { workingDir: ownerMeta.path }, 'bot');
+      addSession('owner', 'archived', { worktreePath: ownerMeta.path });
+      const recycleOwner = vi.fn();
+
+      await mod.recycleWorktreeForRemovedSession('bot', { recycleOwner });
+
+      expect(removeMock).not.toHaveBeenCalled();
+      expect(recycleOwner).not.toHaveBeenCalled();
     });
 
     it('status lookup failure → preserves worktree', async () => {
@@ -359,7 +378,13 @@ describe('sessionRemovalRecycle', () => {
 
     it('uses the captured owner database and stops its live guard after owner switch', async () => {
       storeMap.set('shared-session-id', makeMeta('shared-session-id'));
-      sessionRows.push({ id: 'shared-session-id', status: 'active', workingDir: null, worktreePath: null });
+      sessionRows.push({
+        id: 'shared-session-id',
+        status: 'active',
+        source: 'desktop',
+        workingDir: null,
+        worktreePath: null,
+      });
       const capturedRows = [{ id: 'shared-session-id', status: 'deleted' as string | null }];
       let ownerCurrent = true;
       removeMock.mockImplementationOnce(
@@ -393,8 +418,20 @@ describe('sessionRemovalRecycle', () => {
       await expect(mod.isSessionStillRemovable('s1')).resolves.toBe(false);
     });
 
+    it('treats archived Bot Sessions as lease-owned and not removable', async () => {
+      addSession('bot', 'archived', {}, 'bot');
+
+      await expect(mod.isSessionStillRemovable('bot')).resolves.toBe(false);
+    });
+
     it('uses an explicitly captured database instead of the current global owner', async () => {
-      sessionRows.push({ id: 'shared-session-id', status: 'active', workingDir: null, worktreePath: null });
+      sessionRows.push({
+        id: 'shared-session-id',
+        status: 'active',
+        source: 'desktop',
+        workingDir: null,
+        worktreePath: null,
+      });
       const capturedDb = dbFor([{ id: 'shared-session-id', status: 'archived' }]);
 
       await expect(
@@ -409,10 +446,12 @@ describe('sessionRemovalRecycle', () => {
       storeMap.set('archived', makeMeta('archived'));
       storeMap.set('deleted', makeMeta('deleted'));
       storeMap.set('missing', makeMeta('missing'));
+      storeMap.set('bot-deleted', makeMeta('bot-deleted'));
       storeMap.set('eph', makeMeta('eph', true));
       addSession('active', 'active');
       addSession('archived', 'archived');
       addSession('deleted', 'deleted');
+      addSession('bot-deleted', 'deleted', {}, 'bot');
       // 'missing' 无行 → 视为孤儿; 'eph' 是 ephemeral 不进候选
 
       await mod.reconcileWorktreesForDeletedSessions();
