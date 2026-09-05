@@ -1,4 +1,10 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef } from "react";
+import {
+  forwardRef,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Image as NativeImage, StyleSheet, View } from "react-native";
 import Svg, {
   ClipPath,
@@ -67,9 +73,12 @@ export const ConversationShareSvg = forwardRef<
     [layout],
   );
   const logoAsset = colors.dark ? shareLogoDarkAsset : shareLogoLightAsset;
-  const footerAssetGate = useMemo(
-    () => createConversationShareFooterAssetGate(),
-    [logoAsset],
+  // The screen keys this component by prepared snapshot + theme. Retain the
+  // decoded-image latch through layout-only changes (e.g. rotating the phone).
+  const [footerAssetGate] = useState(() =>
+    createConversationShareFooterAssetGate(
+      layout.images.map((_, index) => `image-${index}`),
+    ),
   );
   const logoSource = NativeImage.resolveAssetSource(logoAsset);
   const logoWidth = (SHARE_LOGO_HEIGHT * logoSource.width) / logoSource.height;
@@ -149,6 +158,18 @@ export const ConversationShareSvg = forwardRef<
           <>
             {layout.bubbles.map((bubble, bubbleIndex) => (
               <SvgBubbleView bubble={bubble} key={`bubble-${bubbleIndex}`} />
+            ))}
+            {layout.images.map((image, index) => (
+              <SvgImage
+                key={`image-${index}`}
+                href={{ uri: image.uri }}
+                x={image.x}
+                y={image.y}
+                width={image.width}
+                height={image.height}
+                preserveAspectRatio="xMidYMid meet"
+                onLoad={() => footerAssetGate.markReady(`image-${index}`)}
+              />
             ))}
             {layout.gaps.map((gap, gapIndex) => (
               <SvgText
