@@ -898,6 +898,21 @@ function botsDeleteProfile(
       { code: 'PRECONDITION_FAILED' },
     );
 
+    // Profile foreign keys cascade into history shared with surviving Bots.
+    // Check both delegation roles and actual message references before any mutation.
+    const sharedHistory = db.prepare(`SELECT 1 WHERE
+      EXISTS (SELECT 1 FROM bot_delegations
+        WHERE target_bot_id = ? OR (requesting_bot_id = ? AND target_bot_id IS NOT NULL))
+      OR EXISTS (SELECT 1 FROM bot_direct_message_threads
+        WHERE bot_a_id = ? OR bot_b_id = ?)
+      OR EXISTS (SELECT 1 FROM bot_direct_messages
+        WHERE sender_bot_id = ? OR recipient_bot_id = ?)`)
+      .get(botId, botId, botId, botId, botId, botId);
+    if (sharedHistory) throw Object.assign(
+      new Error('Bot 有共享委派或私聊历史，不能永久删除；请保留归档'),
+      { code: 'BOT_SHARED_HISTORY_REFERENCED' },
+    );
+
     const allSessionIds = [...new Set(sessionIds)];
     if (sessionIds.length > 0) {
       const placeholders = sessionIds.map(() => '?').join(',');
