@@ -3059,6 +3059,55 @@ describe('统一面板 · 新会话选中直通', () => {
  * 每条都写清「原来错在哪」,避免以后有人把这些属性 / 类当装饰删掉。
  */
 describe('统一面板 · 实测回归', () => {
+  it.each(['click', 'contextmenu', 'keyboard'])('%s 打开的配置不会因经过其他行、离开浮层或焦点移动而关闭', async (entry) => {
+    renderPanel();
+    const row = rowFor('Opus 5');
+    if (entry === 'click') fireEvent.click(within(row).getByRole('button', { name: '自定义' }));
+    else if (entry === 'contextmenu') fireEvent.contextMenu(row);
+    else fireEvent.keyDown(row, { key: 'ArrowLeft' });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    const other = rowFor('GPT-5.5');
+    fireEvent.pointerLeave(row, { clientX: 0 });
+    fireEvent.pointerEnter(other);
+    fireEvent.pointerLeave(other);
+    fireEvent.pointerLeave(flyout.closest('[data-unified-flyout-wrapper]') as HTMLElement);
+    fireEvent.blur(row, { relatedTarget: other });
+    await act(async () => {
+      other.focus();
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    });
+    expect(screen.getByTestId('unified-model-config-flyout')).toBe(flyout);
+    expect(within(flyout).getByText('Opus 5')).toBeTruthy();
+    expect(screen.getByRole('listbox')).toBeTruthy();
+  });
+
+  it('滚动列表、后台滚动和窗口变化不打断配置，Esc 关闭后焦点回到原行', async () => {
+    renderPanel();
+    const row = rowFor('Opus 5');
+    const flyout = await openRowFlyout('Opus 5');
+    fireEvent.scroll(screen.getByRole('listbox'));
+    fireEvent.scroll(document);
+    fireEvent.resize(window);
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+    expect(screen.getByTestId('unified-model-config-flyout')).toBe(flyout);
+    fireEvent.keyDown(flyout, { key: 'Escape' });
+    expect(screen.queryByTestId('unified-model-config-flyout')).toBeNull();
+    expect(document.activeElement).toBe(row);
+    expect(screen.getByRole('listbox')).toBeTruthy();
+  });
+
+  it('主动打开另一模型切换配置，外部点击仍能关闭', async () => {
+    renderPanel();
+    await openRowFlyout('Opus 5');
+    const flyout = await openRowFlyout('GPT-5.5');
+    expect(within(flyout).getByText('GPT-5.5')).toBeTruthy();
+    // Radix installs the outside pointer listener on the next task.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    fireEvent.pointerDown(document.body, { pointerType: 'mouse', button: 0 });
+    expect(screen.queryByTestId('unified-model-config-flyout')).toBeNull();
+    expect(screen.getByRole('listbox')).toBeTruthy();
+  });
+
   it('浮层子树带 data-radix-popper-content-wrapper —— 外层收起判定认它是自己人', async () => {
     // 原 bug:浮层 portal 到 body 后,MorphPopover 的 document pointerdown 把浮层内的
     // 点击当 outside,点一下深度档整个选择器连浮层一起消失。morph-popover.tsx 的豁免
@@ -3321,8 +3370,6 @@ describe('统一面板 · 行内折扣徽标', () => {
       providers: [],
       onReveal: vi.fn(),
       onRevealForKeyboard: vi.fn(),
-      onLeave: vi.fn(),
-      onBlurAway: vi.fn(),
       onSelect: vi.fn(),
       onStar: vi.fn(),
     };
@@ -3471,8 +3518,6 @@ describe('统一面板 · 付费锁定行', () => {
         providers={[]}
         onReveal={onReveal}
         onRevealForKeyboard={vi.fn()}
-        onLeave={vi.fn()}
-        onBlurAway={vi.fn()}
         onSelect={onSelect}
         onStar={vi.fn()}
       />

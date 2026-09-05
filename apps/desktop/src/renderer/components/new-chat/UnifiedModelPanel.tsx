@@ -55,20 +55,9 @@ const FAVORITE_FEEDBACK_MS = 700;
  * 定宽 sizer 与全量视图共用。
  */
 const RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
-/**
- * 鼠标离开行到收起浮层之间的 grace period。
- *
- * 80ms 是行内 Radix 子面板的老值(那里行与面板几乎贴着);统一浮层是 portal + fixed,
- * 鼠标要横穿一段缝隙才够得到它,80ms 会在半路把浮层收掉(2026-08-13 实测)。缝隙本身
- * 已经并进浮层包装的 padding(见 UnifiedFlyoutHost),这里再给足时间兜住抬手 / 手抖。
- */
-const FLYOUT_CLOSE_GRACE_MS = 240;
-/** 鼠标是朝浮层那一侧离开行的 —— 明显的「我要去浮层」意图,给更长的窗口。 */
-const FLYOUT_CLOSE_GRACE_TOWARD_MS = 600;
-/** 定宽 sizer 的行不接任何交互(见 widthSizerSections)—— 模块级常量避免每帧新建闭包。 */
+/** 定宽 sizer 的行不接交互。 */
 const noop = (): void => {};
 
-/** 选中一行时回传的生效配置(见 `UnifiedModelPanelProps.onSelect`)。 */
 export interface UnifiedSelectedRow {
   /** 该行**生效**引擎(推荐 ⊕ override ⊕ 会话内 pinnedEngine ⊕ 收藏副本)。 */
   engine: UnifiedEngine;
@@ -246,7 +235,7 @@ export interface UnifiedModelPanelProps {
  *   - 行 = **(来源, 模型)**,横跨它能用的所有引擎;引擎由推荐映射自动配好,并在每行右侧
  *     以「引擎图标 + 推理强度 + ⚡」三元组**常驻显示** —— 引擎可见性靠一致的结构位,
  *     不靠出错才提示。
- *   - 高级调整(引擎 / 深度 / Fast / 收藏)全部收进 hover 浮层,主列表不因 hover 重排。
+ *   - 高级调整(引擎 / 深度 / Fast / 收藏)收进点击打开的浮层。
  *
  * 数据源:M1 的 `unifiedModelEntries`(纯逻辑,已按生效来源解析候选与能力)+ 调用方注入的
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
@@ -314,7 +303,6 @@ export function UnifiedModelPanel({
   const [justFavorited, setJustFavorited] = useState<string | null>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const favoriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不该收起浮层。
   const suppressScrollDismissRef = useRef(false);
@@ -702,61 +690,12 @@ export function UnifiedModelPanel({
     setFlyAnchor(null);
     setFlyAnchorEl(null);
   }, []);
-  const cancelClose = useCallback(() => {
-    if (closeTimerRef.current === null) return;
-    clearTimeout(closeTimerRef.current);
-    closeTimerRef.current = null;
-  }, []);
-  const scheduleClose = useCallback(
-    (delay: number = FLYOUT_CLOSE_GRACE_MS) => {
-      cancelClose();
-      closeTimerRef.current = setTimeout(() => {
-        closeTimerRef.current = null;
-        closeFlyout();
-      }, delay);
-    },
-    [cancelClose, closeFlyout],
-  );
-
-  /**
-   * 行的 pointerleave:判一下**往哪边走**。朝浮层那一侧离开 = 用户正在去浮层的路上,
-   * 给长窗口;朝反方向 / 上下离开 = 正常扫列表,走短窗口。
-   * 只用「离开点落在行的哪半边」这一个信号 —— 不做安全三角形那套几何,够用且不会误伤。
-   */
-  const scheduleCloseFromRow = useCallback(
-    (event: { clientX: number; currentTarget: HTMLElement }) => {
-      const rect = event.currentTarget.getBoundingClientRect();
-      const flyoutRect = flyoutRef.current?.getBoundingClientRect();
-      const towardFlyout = flyoutRect
-        ? flyoutRect.left < rect.left
-          ? event.clientX <= rect.left + 2
-          : event.clientX >= rect.right - 2
-        : false;
-      scheduleClose(towardFlyout ? FLYOUT_CLOSE_GRACE_TOWARD_MS : FLYOUT_CLOSE_GRACE_MS);
-    },
-    [scheduleClose],
-  );
-
   useEffect(
     () => () => {
-      if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current);
       if (favoriteTimerRef.current !== null) clearTimeout(favoriteTimerRef.current);
     },
     [],
   );
-
-  // 滚动即收起:浮层锚定行会跟着滚动漂移(桌面菜单惯例,与旧版行配置浮层同解)。
-  // 浮层自身的滚动除外。
-  useEffect(() => {
-    if (!flyAnchor) return;
-    const onAnyScroll = (event: Event) => {
-      if (flyoutRef.current?.contains(event.target as Node)) return;
-      cancelClose();
-      closeFlyout();
-    };
-    document.addEventListener('scroll', onAnyScroll, true);
-    return () => document.removeEventListener('scroll', onAnyScroll, true);
-  }, [cancelClose, closeFlyout, flyAnchor]);
 
   // 切换事务 in-flight 时面板会 interactionDisabled 置灰,但浮层不能收 —— 收了就是
   // 「改思维闪关菜单」(Chris 2026-08-20):改档走 performAgentSwitch → disabled → 浮层没了。
@@ -866,18 +805,8 @@ export function UnifiedModelPanel({
 
   const revealFlyout = (anchor: UnifiedAnchor, element: HTMLElement) => {
     if (!configurationEnabled || interactionDisabled) return;
-    cancelClose();
     setFlyAnchorEl((current) => (current === element ? current : element));
     setFlyAnchor((current) => (sameAnchor(current, anchor) ? current : anchor));
-  };
-
-  /** 焦点离开行:落进浮层就按住不收(← 键刚把焦点送进去的那一下),否则照常收。 */
-  const handleRowBlurAway = (related: EventTarget | null) => {
-    if (related && flyoutRef.current?.contains(related as Node)) {
-      cancelClose();
-      return;
-    }
-    scheduleClose();
   };
 
   /** ← 键:开浮层并把焦点送进去(浮层挂载 + 定位要一帧,故在 rAF 后再找可聚焦项)。 */
@@ -1024,15 +953,14 @@ export function UnifiedModelPanel({
           // 二者相加才既不过高、也不会在窄窗口里滚不到底。
           style={{ maxHeight: `${listMaxHeight ?? 428}px` }}
           onScroll={() => {
-            // 滚动不派发 pointerleave,浮层会跟着滚出视口的锚点行漂到菜单外 → 一滚就收起。
-            // 程序化的选中行对齐不算用户意图,由 suppressScrollDismissRef 放行一次。
+            // 点击打开的配置保持展开；浮层宿主在滚动时重新定位。
+            // 程序化对齐不取消在途的选中行定位。
             if (suppressScrollDismissRef.current) {
               suppressScrollDismissRef.current = false;
               return;
             }
             // 用户亲手滚动 → 放弃在途的「保证选中行可见」,不跟用户抢滚动条。
             needsEnsureVisibleRef.current = false;
-            if (flyAnchor) closeFlyout();
           }}
         >
           {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
@@ -1133,8 +1061,6 @@ export function UnifiedModelPanel({
                       providers={providers}
                       onReveal={revealFlyout}
                       onRevealForKeyboard={revealFlyoutForKeyboard}
-                      onLeave={scheduleCloseFromRow}
-                      onBlurAway={handleRowBlurAway}
                       onSelect={() => selectRow(row.anchor, config, row.favorite)}
                       onStar={() =>
                         row.favorite
@@ -1194,8 +1120,6 @@ export function UnifiedModelPanel({
                       providers={providers}
                       onReveal={noop}
                       onRevealForKeyboard={noop}
-                      onLeave={noop}
-                      onBlurAway={noop}
                       onSelect={noop}
                       onStar={noop}
                     />
@@ -1216,8 +1140,6 @@ export function UnifiedModelPanel({
           // 否则它停在旧坐标上脱锚。sections 的引用只在真正重建列表时才变。
           repositionKey={sections}
           {...(overlayClassName !== undefined ? { className: overlayClassName } : {})}
-          onPointerEnter={cancelClose}
-          onPointerLeave={() => scheduleClose()}
           onDismiss={closeFlyout}
         >
           {(() => {

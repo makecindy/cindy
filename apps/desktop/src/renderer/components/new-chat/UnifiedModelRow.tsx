@@ -1,10 +1,8 @@
 import { Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type {
-  FocusEvent as ReactFocusEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
-  PointerEvent as ReactPointerEvent,
 } from 'react';
 
 import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
@@ -134,8 +132,6 @@ export function UnifiedModelRow({
   effortLabelOf,
   providers,
   onReveal,
-  onLeave,
-  onBlurAway,
   onSelect,
   onStar,
   onRevealForKeyboard,
@@ -157,13 +153,9 @@ export function UnifiedModelRow({
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   providers: readonly ProviderView[];
   onReveal: (anchor: UnifiedAnchor, element: HTMLElement) => void;
-  /** pointerleave —— 带事件:调用方按「往哪边走」决定 grace 长短(去浮层的路上要更宽容)。 */
-  onLeave: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  /** 焦点离开本行:调用方按「新焦点是否落在浮层里」决定收不收(← 键进浮层不能被收掉)。 */
-  onBlurAway: (related: EventTarget | null) => void;
   onSelect: () => void;
   onStar: () => void;
-  /** ← 键:打开该行的配置浮层并把焦点送进去(键盘用户的浮层入口,与既有面板同键位)。 */
+  /** Keyboard opening also moves focus into the configuration. */
   onRevealForKeyboard: (anchor: UnifiedAnchor, element: HTMLElement) => void;
   /** 行内价格展示;不传 = 无报价。字段语义见 `UnifiedRowPriceDisplay`。 */
   priceDisplay?: UnifiedRowPriceDisplay;
@@ -207,8 +199,6 @@ export function UnifiedModelRow({
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
     'data-unified-anchor': anchorKey(anchor),
-    onPointerLeave: onLeave,
-    onBlur: (event: ReactFocusEvent<HTMLDivElement>) => onBlurAway(event.relatedTarget),
     onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => {
       if (interactionDisabled || paymentRequired) return;
       event.preventDefault();
