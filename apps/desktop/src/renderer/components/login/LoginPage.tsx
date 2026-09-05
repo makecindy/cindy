@@ -344,7 +344,8 @@ export function LoginPage({
   }, [reportLoginPanelMounted, reportLoginPanelUnmounted]);
   // 「跳过登录」常驻入口在面板内(identifier 视图 SKIP_ENTRY 文字链);footer 仅保留
   // error 步的逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
-  const showLocalModeFooter = !isAddAccount && loginState?.step === 'error';
+  const showLocalModeFooter =
+    !isAddAccount && loginState?.step === 'error' && errorCode !== 'CREDENTIAL_STORE_UNAVAILABLE';
   // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
   // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
   // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。

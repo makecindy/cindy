@@ -3064,6 +3064,7 @@ const authCredentialRecovery = createAuthCredentialRecovery({
     hasUpdateRelaunchBusyActivity({
       readSynchronousBusy: () =>
         isAppSessionBoundaryPending() ||
+        authManager.isAuthFlowBusy() ||
         getUpdateRelaunchControllers().length > 0 ||
         hasInFlightRemoteInvokes(),
       readScheduleBusy: async () =>

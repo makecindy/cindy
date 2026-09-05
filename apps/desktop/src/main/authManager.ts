@@ -548,6 +548,11 @@ export function needsCredentialProcessRecovery(): boolean {
   );
 }
 
+/** Prevent automatic process recovery from racing an explicit login action. */
+export function isAuthFlowBusy(): boolean {
+  return loginActionPromise !== null || loginFlowState?.step === 'browser-redirect';
+}
+
 function logSafeStorageIssueOnce(reason: string, key: string, err?: unknown): void {
   const issueKey = `${reason}:${key}`;
   if (safeStorageIssueLogged.has(issueKey)) return;
