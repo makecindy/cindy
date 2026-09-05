@@ -118,6 +118,9 @@ function mountDictation() {
     clear() {
       act(() => dispatch(state.tr.delete(1, state.doc.content.size - 1)));
     },
+    type(text: string) {
+      act(() => dispatch(state.tr.insertText(text)));
+    },
   };
 }
 
@@ -133,6 +136,24 @@ afterEach(() => {
 });
 
 describe('in-app dictionary learning after undo', () => {
+  describe.each(['unchanged', 'undone correction'] as const)('clearing %s dictation', (source) => {
+    it.each(['clear', 'unmount', 'timeout'] as const)(
+      'does not learn unrelated new input on %s',
+      (finish) => {
+        const dictation = mountDictation();
+        if (source === 'undone correction') dictation.correct()();
+        dictation.clear();
+        dictation.type('明天再讨论这个问题。');
+        if (finish === 'timeout') act(() => vi.advanceTimersByTime(15_000));
+        else dictation[finish]();
+        expect(mocks.advise).not.toHaveBeenCalled();
+        dictation.unmount();
+        act(() => vi.advanceTimersByTime(15_000));
+        expect(mocks.advise).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it.each(['clear', 'unmount'] as const)('discards an undone correction before %s', (finish) => {
     const dictation = mountDictation();
     const undo = dictation.correct();
