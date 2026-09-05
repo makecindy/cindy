@@ -1390,10 +1390,15 @@ pnpm --filter mobile test
 pnpm --filter mobile test:smoke
 pnpm --filter mobile test:web-smoke
 pnpm --filter @cindy/device-link test
-pnpm --filter server test -- deviceLinkClientRelayE2E
+pnpm test:device-link
 ```
 
 ### 12.2 本地三端集成测试
+
+> 拆仓后的现状：本仓可独立运行的连接恢复门禁为 `pnpm test:device-link`，
+> 使用正式客户端与 loopback WebSocket contract fixture。以下三端编排是历史方案与
+> 实机验收目标，依赖旧 server/mock login 的入口尚未适配独立服务端，不属于已验证的
+> 当前门禁。独立 relay 测试环境的要求见 [Device Link 测试说明](../../../packages/device-link/TESTING.md)。
 
 测试进程:
 
@@ -1442,7 +1447,7 @@ pnpm --filter server test -- deviceLinkClientRelayE2E
 - 已新增 `fork_rewind.yaml`,覆盖发送一条消息后执行 rewind preview/confirm,再 fork 会话并进入 forked session。
 - 已新增 `automations.yaml`,覆盖进入远程自动化页、Run now、pause/resume、打开自动化 run 对应会话。
 - 已新增 `automations_create_edit.yaml`,覆盖远程自动化页里的 template gallery 和 create/edit 基础表单锚点。
-- 已新增 `pnpm --filter mobile test:e2e:reconnect:local`,用真实本地 device-link relay 建立 mock host/controller 两条 WS,断开 controller 后让 host 发送离线 push,再重连并验证通过 host-authoritative message reload 补回丢失窗口。
+- `pnpm --filter mobile test:e2e:reconnect:local` 现与根 `pnpm test:device-link` 共用正式客户端的真实 WebSocket 集成套件，不再依赖拆仓前的 server/dev-login。默认使用本仓 contract fixture；独立测试 relay 的显式互操作入口与覆盖边界见 [Device Link 测试说明](../../../packages/device-link/TESTING.md)。
 
 优先用 Maestro 做第一版黑盒流程,原因是脚本短、可读、适合 AI 维护。Detox 留给后面需要深层 native assertion 时再引入。
 
