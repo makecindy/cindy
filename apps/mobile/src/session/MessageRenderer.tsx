@@ -816,7 +816,7 @@ export function MessageRenderer({
   const previousFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
   const previousItemKeysRef = useRef<readonly string[]>([]);
   // LegendList updates getState().scroll optimistically before an imperative native scroll lands.
-  // This sequence advances only from ScrollView onScroll and is the ack source for Android prepend.
+  // Only native ScrollView scroll/end-drag samples advance this ack source for Android prepend.
   const nativeScrollEventSequenceRef = useRef(0);
   const scrollMetricsRef = useRef<MessageScrollMetrics>({
     contentHeight: 0,
@@ -975,8 +975,6 @@ export function MessageRenderer({
   // 可能打断进行中的捏合/拖动手势(rule 7)。
   const closePayload = useCallback(() => setPayload(null), []);
   const markProgrammaticScroll = useCallback((animated: boolean) => {
-    // Native events from this command no longer belong to the preceding drag.
-    dragStartOffsetYRef.current = null;
     const generation = programmaticScrollGenerationRef.current + 1;
     const settleMs = animated
       ? MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS
@@ -1196,7 +1194,7 @@ export function MessageRenderer({
         // LegendList moves getState().scroll to an imperative target before the native ScrollView
         // receives it. Using that optimistic value here used to self-confirm the correction in two
         // frames, release MVCP, and leave Android briefly rendering the target cell window at the
-        // old physical offset. Only onScroll-backed metrics can prove the viewport actually moved.
+        // old physical offset. Only native scroll/end-drag metrics prove the viewport actually moved.
         const currentOffset = scrollMetricsRef.current.offsetY;
         const pendingCorrection = currentTransaction.pendingCorrection;
         const correctionStatus = pendingCorrection
@@ -1388,7 +1386,6 @@ export function MessageRenderer({
         waitRounds,
       });
       if (action === 'settled' || action === 'give-up') {
-        dragStartOffsetYRef.current = null;
         followVerifyFrameRef.current = null;
         return;
       }
@@ -2127,11 +2124,10 @@ export function MessageRenderer({
     }
     const wasNearBottom = nearBottomRef.current;
     const scrollDelta = metrics.offsetY - previousOffsetY;
-    const hasDragOrigin = dragStartOffsetYRef.current !== null;
     if (
       nearBottomRef.current
       && shouldUnpinMobileFollowOnDrag({
-        dragging: hasDragOrigin,
+        dragging: isDraggingRef.current,
         dragStartOffsetY: dragStartOffsetYRef.current,
         metrics,
       })
@@ -2147,13 +2143,10 @@ export function MessageRenderer({
           || isMomentumScrollingRef.current
           || historyTouchStartYRef.current !== null,
       });
-      // The same cumulative dead zone owns both dragging and its trailing native events.
-      // A queued verifier alone is not evidence of user intent. Keep the drag origin until
-      // verification finishes or a new gesture/programmatic command takes ownership.
-      const preserveFollowIntent = nearBottomRef.current && (
-        historyTouchStartYRef.current !== null
-        || (!isMomentumScrollingRef.current && hasDragOrigin)
-      );
+      // Dragging (including end-drag's final native metrics) owns the cumulative dead zone.
+      // Outside a drag, layout/MVCP corrections cannot prove user intent. Preserve follow;
+      // actual momentum retains the existing direction/distance fallback.
+      const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
       const nearBottom = preserveHistoryBrowseIntent
         ? false
         : preserveFollowIntent || resolveMobileNearBottomOnScroll({
@@ -2192,7 +2185,6 @@ export function MessageRenderer({
     // Android may omit momentum-end when a new finger stops a fling. The new touch owns the
     // ScrollView now, so the old momentum flag must not keep a queued history request suspended.
     isMomentumScrollingRef.current = false;
-    dragStartOffsetYRef.current = null;
     historyTouchStartYRef.current = event.nativeEvent.pageY;
     historyTouchTriggeredRef.current = false;
     clearProgrammaticScroll();
@@ -2268,16 +2260,19 @@ export function MessageRenderer({
     // 「失败后停在顶部再拖一下重试」的信号会整体丢失(review P2)。
   }, [attemptAutoLoadEarlier, clearProgrammaticScroll, handoffHistoryPrependToUser]);
 
-  // 手指离开后保留本次起点：最后一帧 onScroll 可能晚于 endDrag / momentumBegin。
-  // 由既有补滚校验收尾或下一次手势/程序化滚动接管时清理。
-  const handleScrollEndDrag = useCallback(() => {
+  // 原生 endDrag 自带最终位置，不依赖最后一帧 onScroll 的投递顺序。
+  // 先结算本次拖动再清理起点，避免把后续 MVCP 布局校正误判成用户上翻。
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    handleScroll(event);
     isDraggingRef.current = false;
+    dragStartOffsetYRef.current = null;
     refreshPreviousUserTarget();
     // Wait one frame so Android can report whether this drag transitioned into momentum.
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
     runStickToLatestVerify();
   }, [
+    handleScroll,
     refreshPreviousUserTarget,
     runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,

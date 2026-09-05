@@ -76,7 +76,12 @@ function harness() {
     contentSize: { height: state.scrollMetricsRef.current.contentHeight },
     contentOffset: { y: offsetY }, layoutMeasurement: { height: 800 },
   } });
-  return { ...callbacks, state, scrollToEnd, scrollEvent };
+  return {
+    ...callbacks, state, scrollToEnd, scrollEvent,
+    handleScrollEndDrag: (event = scrollEvent(state.scrollMetricsRef.current.offsetY)) => (
+      callbacks.handleScrollEndDrag(event)
+    ),
+  };
 }
 const touch = (pageY = 400) => ({ nativeEvent: { pageY } });
 const settle = () => vi.advanceTimersByTime(4000);
@@ -164,8 +169,8 @@ describe('streaming follow yields to the reader', () => {
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleScroll(h.scrollEvent(1196));
     h.handleContentSize(400, 2500);
-    h.handleScrollEndDrag();
-    // The trailing native event may arrive before the release verifier's first frame.
+    h.handleScrollEndDrag(h.scrollEvent(trailingOffset));
+    // End-drag carries the final offset even when the matching onScroll is delivered later.
     h.handleScroll(h.scrollEvent(trailingOffset));
     expect(h.state.nearBottomRef.current).toBe(trailingOffset >= 1192);
     settle();
@@ -186,7 +191,7 @@ describe('streaming follow yields to the reader', () => {
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleScroll(h.scrollEvent(1196));
     h.handleHistoryTouchEnd(touch());
-    h.handleScrollEndDrag();
+    h.handleScrollEndDrag(h.scrollEvent(1190));
     if (momentumFirst) h.handleMomentumScrollBegin();
     h.handleScroll(h.scrollEvent(1190));
     if (!momentumFirst) h.handleMomentumScrollBegin();
@@ -209,6 +214,20 @@ describe('streaming follow yields to the reader', () => {
     settle();
     expect(h.state.nearBottomRef.current).toBe(true);
     expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([1180, 900])('preserves a short drag through a post-release layout correction to %i', (offset) => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleContentSize(400, 2500);
+    h.handleScrollEndDrag(h.scrollEvent(1196));
+    // MVCP may correct the visible anchor before the release verifier runs.
+    h.handleScroll(h.scrollEvent(offset));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    settle();
+    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: false });
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(1700);
   });
 
   it('can unpin again after returning to the bottom within the same drag', () => {
