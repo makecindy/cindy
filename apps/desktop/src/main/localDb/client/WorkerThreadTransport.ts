@@ -1773,6 +1773,11 @@ function forkSession(readyDb, args) {
     'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
   );
   readyDb.transaction(() => {
+    if (payload.recoveryMarker != null && !readyDb.prepare(
+      'SELECT 1 FROM sessions WHERE id = ? AND cleared_at IS ?',
+    ).get(sourceSessionId, sourceClearedAt)) {
+      throw invalidArgs('Source history changed while preparing recovery fork');
+    }
     readyDb.prepare(
       'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     ).run(

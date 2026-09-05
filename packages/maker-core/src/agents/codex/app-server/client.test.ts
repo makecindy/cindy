@@ -341,6 +341,33 @@ describe('AppServerClient auth invalidation', () => {
   });
 });
 
+describe('AppServerClient close completion', () => {
+  it.each([false, true])('shares one close result without losing per-call error policy (failure=%s)', async (fails) => {
+    const transport = new FakeTransport();
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const completion = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; });
+    const close = vi.spyOn(transport, 'close').mockImplementation(() => completion);
+    const client = new AppServerClient({ createTransport: () => transport, logger });
+    client.start();
+    const requestFailure = expect(client.request('initialize')).rejects.toThrow('closed');
+    const settled = vi.fn();
+    const first = client.close().then(settled);
+    const strict = client.close({ throwOnTransportError: true });
+    const strictResult = fails
+      ? expect(strict).rejects.toThrow('exit not confirmed')
+      : expect(strict).resolves.toBeUndefined();
+    await requestFailure;
+    expect(settled).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    if (fails) fail(new Error('exit not confirmed'));
+    else finish();
+    await Promise.all([first, strictResult]);
+    if (fails) await expect(client.close({ throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+    expect(close).toHaveBeenCalledOnce();
+  });
+});
+
 describe('AppServerClient request timeout', () => {
   it('rejects and removes a pending request when the server stays connected without responding', async () => {
     vi.useFakeTimers();

@@ -650,6 +650,63 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
+  it.each(['user', 'assistant', 'first-user', 'recovered'] as const)(
+    'codex history recovery forks only the selected prefix atomically: %s', async (kind) => {
+      const futureTime = Date.now() + 60_000;
+      const source = makeSourceRow({ agentKind: 'codex', model: 'gpt-5.5', sdkSessionId: 'damaged-thread', clearedAt: 500 });
+      const target = makeMessageRow({ clientId: 'target', role: kind === 'assistant' || kind === 'recovered' ? 'assistant' : 'user', createdAt: futureTime, rowid: 20, content: '"target content"' });
+      const prior = makeMessageRow({ clientId: 'source-user', role: 'user', createdAt: futureTime - 1, content: '"keep prefix"' });
+      const rows = kind === 'first-user' ? [] : target.role === 'assistant' ? [prior, target] : [prior];
+      selectQueue.push([source], [target]);
+      if (target.role === 'assistant') selectQueue.push([makeMessageRow({ role: 'user', createdAt: futureTime, rowid: 30, content: '"future content"' })]);
+      selectQueue.push(rows, [makeSourceRow({ agentKind: 'codex', sdkSessionId: null })]);
+      if (kind === 'recovered') {
+        queryOneMock.mockResolvedValueOnce({ id: 'recovery', created_at: futureTime + 1, rowid: 40,
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: true, sourceAgentKind: 'codex', sourceModel: 'gpt-5.5', sourceProviderId: 'xd', handoff: 'old handoff with future content' }) });
+      } else {
+        forkSdkSessionMock.mockRejectedValueOnce(new Error('failed to prepare paginated fork: thread-store internal error: thread history projection for damaged-thread expected ordinal 259, got 258'));
+      }
+
+      const result = await forkSessionAtMessage('src-session', 'target');
+      expect(txCalls).toHaveLength(1);
+      const args = txCalls[0]!.args as {
+        sourceClearedAt: number; targetCreatedAt: number; targetRowid: number;
+        newSession: Record<string, unknown>; nativeForkAnchorSessionMap?: unknown;
+        newMessageIds: Array<{ clientId: string }>; recoveryMarker: { createdAt: number; content: string };
+      };
+      expect(args.sourceClearedAt).toBe(500);
+      expect(args.targetCreatedAt).toBe(futureTime);
+      expect(args.targetRowid).toBe(target.role === 'assistant' ? 30 : 20);
+      expect(args.newSession).toMatchObject({ sdkSessionId: null, contextTokens: 0, contextWindow: 0,
+        totalTokenUsage: 0, totalCostUsd: 0, parentSessionId: 'src-session', forkedAtMessageId: 'target' });
+      expect(args.nativeForkAnchorSessionMap).toBeUndefined();
+      const marker = JSON.parse(args.recoveryMarker.content);
+      expect(marker).toMatchObject({ reason: 'native-session-recovery', consumed: false,
+        sourceAgentKind: 'codex', sourceModel: 'gpt-5.5', sourceProviderId: 'xd',
+        sourceUserClientId: args.newMessageIds[0]?.clientId ?? null });
+      expect(args.recoveryMarker.createdAt).toBeGreaterThanOrEqual(rows.at(-1)?.createdAt ?? 0);
+      expect(marker.handoff).not.toContain('future content');
+      if (rows.length) expect(marker.handoff).toContain('keep prefix');
+      if (target.role === 'user') expect(marker.handoff).not.toContain('target content');
+      else expect(marker.handoff).toContain('target content');
+      expect(result._count?.messages).toBe(rows.length + 1);
+      expect(commitContextRebuildMock).not.toHaveBeenCalled();
+      expect(createMessageMock).not.toHaveBeenCalled();
+      if (kind === 'recovered') expect(forkSdkSessionMock).not.toHaveBeenCalled();
+      expect(source.sdkSessionId).toBe('damaged-thread');
+    },
+  );
+
+  it.each(['401 Unauthorized', 'thread/fork timed out after 30000ms', 'cancelled', 'ENOSPC: no space left on device'])(
+    'does not recover unrelated fork errors: %s', async (message) => {
+      selectQueue.push([makeSourceRow({ agentKind: 'codex' })], [makeMessageRow({ clientId: 'target' })],
+        [makeMessageRow({ role: 'assistant', content: '"history"' })]);
+      forkSdkSessionMock.mockRejectedValueOnce(new Error(message));
+      await expect(forkSessionAtMessage('src-session', 'target')).rejects.toMatchObject({ code: 'CODEX_FORK_STATE_UNAVAILABLE' });
+      expect(txCalls).toHaveLength(0);
+    },
+  );
+
   it('codex path: projects a blocked resume preparation without exposing diagnostics', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     selectQueue.push([
@@ -1186,7 +1243,7 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.providerId).toBeNull();
   });
 
-  it('restores the provider snapshot from a new historical switch boundary', async () => {
+  it.each([false, true])('restores the provider snapshot from a new historical switch boundary (recovery=%s)', async (recovery) => {
     const target = makeMessageRow({
       id: 'historical-codex-assistant',
       clientId: 'historical-codex-assistant-client',
@@ -1234,6 +1291,7 @@ describe('forkSessionAtMessage', () => {
       newSdkSessionId: 'forked-codex-session',
       uuidMap: new Map<string, string>(),
     });
+    if (recovery) forkSdkSessionMock.mockRejectedValueOnce(new Error('thread history projection for parked-codex-session expected ordinal 259, got 258'));
 
     await forkSessionAtMessage('src-session', 'historical-codex-assistant-client');
 
@@ -1246,6 +1304,13 @@ describe('forkSessionAtMessage', () => {
       }),
     );
     expect(inferProviderIdForModelMock).not.toHaveBeenCalled();
+    if (recovery) {
+      const args = txCalls[0]!.args as { recoveryMarker: { content: string }; newSession: Record<string, unknown> };
+      expect(JSON.parse(args.recoveryMarker.content)).toMatchObject({
+        sourceAgentKind: 'codex', sourceModel: 'google/gemini-3.7-flash', sourceProviderId: 'xd', sourceSdkSessionId: 'parked-codex-session',
+      });
+      expect(args.newSession).toMatchObject({ agentKind: 'codex', model: 'google/gemini-3.7-flash', providerId: 'xd', sdkSessionId: null });
+    }
   });
 
   it('restores provider from the nearest new entry boundary when the exit boundary is old', async () => {

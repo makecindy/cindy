@@ -1803,6 +1803,25 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it.each([false, true])('recovery fork rejects a concurrent clear without reviving history (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ['m1', 'c1', 'src', 'user', 'cleared content', 100]);
+      await client.exec('UPDATE sessions SET cleared_at = 500 WHERE id = ?', ['src']);
+      await expect(client.tx('fork.session', {
+        sourceSessionId: 'src', sourceClearedAt: null, targetCreatedAt: 200,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }],
+        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'cleared content' }) },
+      })).rejects.toThrow('Source history changed');
+      expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+      expect(await client.query('SELECT id FROM messages ORDER BY id')).toEqual([{ id: 'm1' }]);
+      expect(await client.queryOne('SELECT cleared_at FROM sessions WHERE id = ?', ['src'])).toEqual({ cleared_at: 500 });
+    }, { useInlineWorker });
+  });
+
   it('fork.session filters pre-clear/same-ms tail rows and detaches copied parked sessions', async () => {
     await withClient(async (client) => {
       await seedSession(client, 'src');

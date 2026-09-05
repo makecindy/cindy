@@ -6173,6 +6173,73 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('waits for the retiring local writer before session and utility reuse, without blocking remote work', async () => {
+    const getRemoteCodexTransport = vi.fn(() => {
+      const transport = new MockCodexTransport();
+      createdTransports.push(transport);
+      return transport;
+    });
+    const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport }));
+    const local = await agent.startSession({ sessionId: 'old-local', model: 'gpt-5.4', workingDir: '/repo' });
+    const remote = await agent.startSession({ sessionId: 'remote', model: 'gpt-5.4', workingDir: '/remote', remoteHostId: 'remote-1' });
+    const transport = createdTransports[0]!;
+    const originalClose = transport.close.bind(transport);
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const close = vi.spyOn(transport, 'close').mockImplementation(async (reason) => { await gate; await originalClose(reason); });
+    const retiring = agent.forceDisposeLocalHostForAuthChange('test retirement');
+    await waitForExpectation(() => expect(close).toHaveBeenCalledOnce());
+    const settled = vi.fn();
+    const next = agent.startSession({ sessionId: 'next-local', model: 'gpt-5.4', workingDir: '/repo' }).then((handle) => { settled(); return handle; });
+    const utility = agent.getMemoryStatus().then(settled);
+    await remote.send({ type: 'user', content: 'remote still works' });
+    expect(settled).not.toHaveBeenCalled();
+    expect(createdTransports).toHaveLength(2);
+    finish();
+    await retiring;
+    const newHandle = await next;
+    await utility;
+    expect(createdTransports).toHaveLength(3);
+    expect(close).toHaveBeenCalledOnce();
+    await Promise.all([local.close(), remote.close(), newHandle.close()]);
+    await agent.dispose();
+  });
+
+  it('does not replace a writer whose exit could not be confirmed', async () => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({ sessionId: 'failed-exit', model: 'gpt-5.4', workingDir: '/repo' });
+    MockCodexTransport.closeError = new Error('exit not confirmed');
+    await agent.forceDisposeLocalHostForAuthChange('failed retirement');
+    await expect(agent.startSession({ sessionId: 'replacement', model: 'gpt-5.4', workingDir: '/repo' })).rejects.toThrow('exit not confirmed');
+    await expect(agent.getMemoryStatus()).rejects.toThrow('exit not confirmed');
+    const guard = await agent.beginLocalHostCredentialChange('strict retry');
+    await expect(guard.retireActiveHost()).rejects.toThrow('exit not confirmed');
+    guard.release();
+    expect(createdTransports).toHaveLength(1);
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('concurrent dispose calls both wait for registered retirements', async () => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({ sessionId: 'dispose-twice', model: 'gpt-5.4', workingDir: '/repo' });
+    const transport = createdTransports[0]!;
+    const originalClose = transport.close.bind(transport);
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const close = vi.spyOn(transport, 'close').mockImplementation(async (reason) => { await gate; await originalClose(reason); });
+    const first = agent.dispose();
+    await waitForExpectation(() => expect(close).toHaveBeenCalledOnce());
+    const settled = vi.fn();
+    const second = agent.dispose().then(settled);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    finish();
+    await Promise.all([first, second]);
+    expect(close).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
   it('force-retires one shared local Host under the credential guard and blocks its lazy replacement', async () => {
     const getRemoteCodexTransport = vi.fn(() => {
       const transport = new MockCodexTransport();
