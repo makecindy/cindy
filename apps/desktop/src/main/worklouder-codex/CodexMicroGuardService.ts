@@ -58,8 +58,7 @@ export class CodexMicroGuardService {
   private disposed = false;
   private lastEmittedState: string | null = null;
   private readonly listProcesses: () => Promise<CodexMicroGuardProcess[]>;
-  private protectionStartedAt = 0;
-  private restartRequired = false;
+  private restartProcesses: CodexMicroGuardProcess[] = [];
 
   constructor(options: CodexMicroGuardServiceOptions = {}) {
     this.platform = options.platform ?? process.platform;
@@ -120,6 +119,7 @@ export class CodexMicroGuardService {
       this.settingsStore.writePatch({ enabled: false });
       this.stopHeartbeat();
       this.active = false;
+      this.restartProcesses = [];
       await this.manager.disable();
       this.failed = false;
       this.recoveryRequired = false;
@@ -139,6 +139,7 @@ export class CodexMicroGuardService {
       if (this.disposed) return;
       this.disposed = true;
       this.stopHeartbeat();
+      this.restartProcesses = [];
       if (this.platform !== 'darwin') return;
       try {
         if (this.active || this.hasRecoveryState()) await this.manager.disable();
@@ -159,12 +160,8 @@ export class CodexMicroGuardService {
     try {
       if (enabled) {
         await this.manager.enable(this.hookContents);
-        // Restoring a preference is not evidence that a running Codex needs
-        // restarting: legacy hooks had no process receipt, and graceful exits
-        // removed their receipt. Only an explicit enable establishes a known
-        // activation boundary; keep unknown startup state silent.
+        // Restart hints belong only to an explicit toggle, not startup recovery.
         this.active = true;
-        await this.refreshRestartRequired();
         this.startHeartbeat();
       } else if (this.hasRecoveryState()) {
         // A previous Cindy process stopped during restoration. The hook is
@@ -187,6 +184,12 @@ export class CodexMicroGuardService {
     if (this.active && this.store.isFresh()) return;
     this.failed = false;
     this.recoveryRequired = false;
+    let processes: CodexMicroGuardProcess[] = [];
+    try {
+      processes = await this.listProcesses();
+    } catch {
+      // Process detection is only a hint; it must not fail protection activation.
+    }
     await this.manager.enable(this.hookContents);
     try {
       this.settingsStore.writePatch({ enabled: true });
@@ -199,8 +202,7 @@ export class CodexMicroGuardService {
       throw error;
     }
     this.active = true;
-    this.protectionStartedAt = Date.now();
-    await this.refreshRestartRequired();
+    this.restartProcesses = processes;
     this.startHeartbeat();
     this.emitIfChanged();
   }
@@ -209,6 +211,7 @@ export class CodexMicroGuardService {
     if (options.persistSetting) this.settingsStore.writePatch({ enabled: false });
     this.stopHeartbeat();
     this.active = false;
+    this.restartProcesses = [];
     try {
       await this.manager.disable();
       this.failed = false;
@@ -263,25 +266,25 @@ export class CodexMicroGuardService {
   }
 
   private async refreshRestartRequired(): Promise<void> {
-    this.restartRequired = false;
-    if (!this.active || this.disposed) return;
+    if (!this.active || this.disposed) {
+      this.restartProcesses = [];
+      return;
+    }
+    if (this.restartProcesses.length === 0) return;
     try {
       const processes = await this.listProcesses();
-      this.restartRequired = processes.some(
-        (process) =>
-          // ps has one-second resolution; an ambiguous same-second launch does
-          // not justify asking the user to restart.
-          process.startedAt < Math.floor(this.protectionStartedAt / 1_000) * 1_000 &&
-          !this.store.hasProcessInterceptionReceipt(process),
+      // Only keep processes observed at activation. A later launch cannot
+      // bring the hint back, even if the OS reuses the same PID.
+      this.restartProcesses = this.restartProcesses.filter((previous) =>
+        processes.some(
+          (current) =>
+            current.pid === previous.pid &&
+            current.startedAt === previous.startedAt &&
+            current.executable === previous.executable,
+        ),
       );
-      try {
-        this.store.pruneProcessReceipts(processes);
-      } catch {
-        // Diagnostic cleanup must not change the observed restart requirement.
-      }
     } catch {
-      // Unknown process state is not evidence that the user needs to restart.
-      this.restartRequired = false;
+      this.restartProcesses = [];
     }
   }
 
@@ -300,7 +303,7 @@ export class CodexMicroGuardService {
       enabled,
       status,
       restartRequired:
-        (status === 'protecting' || status === 'intercepted') && this.restartRequired,
+        (status === 'protecting' || status === 'intercepted') && this.restartProcesses.length > 0,
     };
   }
 

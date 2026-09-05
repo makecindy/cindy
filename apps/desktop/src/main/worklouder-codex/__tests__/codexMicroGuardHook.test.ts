@@ -109,15 +109,10 @@ describe('Codex Micro preload guard', () => {
         battery: null,
       });
       const receiptPath = path.join(value.support, 'receipt.json');
-      expect(JSON.parse(fs.readFileSync(receiptPath, 'utf8')).service).toBe('service-fixture.js');
+      expect(JSON.parse(fs.readFileSync(receiptPath, 'utf8')).service).toBe(
+        'service-fixture.js',
+      );
       expect(fs.statSync(receiptPath).mode & 0o777).toBe(0o600);
-      const processReceipt = path.join(value.support, `receipt-${result.pid}.json`);
-      expect(JSON.parse(fs.readFileSync(processReceipt, 'utf8'))).toMatchObject({
-        pid: result.pid,
-        executable: process.execPath,
-        startedAt: expect.any(Number),
-      });
-      expect(fs.statSync(processReceipt).mode & 0o777).toBe(0o600);
     },
   );
 

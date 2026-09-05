@@ -121,29 +121,6 @@ describe('Codex Micro guard launchctl parsing', () => {
 });
 
 describe('Codex Micro guard store and manager', () => {
-  it('only prunes old receipts for exited processes, preserving live and newly written evidence', () => {
-    const store = temporaryStore();
-    store.prepare();
-    const process = {
-      pid: 101,
-      startedAt: 1000,
-      executable: '/Applications/Codex.app/Contents/MacOS/Codex',
-    };
-    const now = Date.now();
-    for (const pid of [101, 102, 103]) {
-      const filename = path.join(store.supportPath, `receipt-${pid}.json`);
-      fs.writeFileSync(filename, JSON.stringify({ ...process, pid }), { mode: 0o600 });
-      if (pid !== 103)
-        fs.utimesSync(filename, new Date(now - 90_000_000), new Date(now - 90_000_000));
-    }
-    store.pruneProcessReceipts([process], now);
-    expect(store.hasProcessInterceptionReceipt(process)).toBe(true);
-    expect(fs.existsSync(path.join(store.supportPath, 'receipt-102.json'))).toBe(false);
-    expect(fs.existsSync(path.join(store.supportPath, 'receipt-103.json'))).toBe(true);
-    expect(store.hasProcessInterceptionReceipt({ ...process, startedAt: 10_000 })).toBe(false);
-    expect(store.hasProcessInterceptionReceipt({ ...process, executable: '/other' })).toBe(false);
-  });
-
   it('writes private files and rejects a symlinked support directory', () => {
     const store = temporaryStore();
     store.writeState({ version: 1, originalNodeOptions: null, installedNodeOptions: 'x' });
@@ -168,12 +145,21 @@ describe('Codex Micro guard store and manager', () => {
   it('rejects an expired lease heartbeat and safely reclaims stale leases', async () => {
     const store = temporaryStore();
     const staleLease = '22222222-2222-4222-8222-222222222222';
-    const manager = new CodexMicroGuardManager(store, new FakeRunner([]), 'gui/501', staleLease);
+    const manager = new CodexMicroGuardManager(
+      store,
+      new FakeRunner([]),
+      'gui/501',
+      staleLease,
+    );
     store.registerLease(staleLease, 100_000);
 
-    await expect(manager.refreshHeartbeat(115_001)).rejects.toThrow('lease is no longer fresh');
+    await expect(manager.refreshHeartbeat(115_001)).rejects.toThrow(
+      'lease is no longer fresh',
+    );
     expect(store.releaseLease(LEASE_ID, 115_001)).toBe(false);
-    expect(fs.existsSync(path.join(store.supportPath, `lease-${staleLease}.json`))).toBe(false);
+    expect(
+      fs.existsSync(path.join(store.supportPath, `lease-${staleLease}.json`)),
+    ).toBe(false);
   });
 
   it('enables from a verified snapshot and restores the original value', async () => {
@@ -231,7 +217,9 @@ describe('Codex Micro guard store and manager', () => {
     const runner = new FakeRunner([result(printed()), result('', 9)]);
     const manager = new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID);
 
-    await expect(manager.enable('// hook\n')).rejects.toThrow('launchctl command failed');
+    await expect(manager.enable('// hook\n')).rejects.toThrow(
+      'launchctl command failed',
+    );
     expect(store.readState()).toBeNull();
     expect(store.isFresh()).toBe(false);
   });

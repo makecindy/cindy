@@ -111,70 +111,61 @@ describe('CodexMicroGuardService', () => {
     await instance.dispose();
   });
 
-  it('does not remind when Codex is absent, the launch is ambiguous, or detection fails', async () => {
+  it('only considers processes running when the switch is enabled', async () => {
     const list = vi.fn(async (): Promise<CodexMicroGuardProcess[]> => []);
     const instance = service(paths(), new EnvironmentRunner(null), list);
     expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: false });
-    list.mockResolvedValue([
-      { ...runningCodex(), startedAt: Math.floor(Date.now() / 1000) * 1000 },
-    ]);
+    list.mockResolvedValue([runningCodex()]);
     expect(await instance.getState()).toMatchObject({ restartRequired: false });
+    expect(list).toHaveBeenCalledTimes(1);
+    await instance.setEnabled(false);
+    expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
+    expect(await instance.setEnabled(false)).toMatchObject({ restartRequired: false });
+    await instance.dispose();
+  });
+
+  it('clears restarted processes even when their PIDs are reused', async () => {
+    const original = runningCodex();
+    let processes = [original, { ...original, pid: 102 }];
+    const instance = service(paths(), new EnvironmentRunner(null), async () => processes);
+    expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
+    processes = [{ ...original, startedAt: original.startedAt + 10_000 }, processes[1]];
+    expect(await instance.getState()).toMatchObject({ restartRequired: true });
+    processes = [processes[0]];
+    expect(await instance.getState()).toMatchObject({ restartRequired: false });
+    await instance.dispose();
+  });
+
+  it('keeps protection active when process detection fails', async () => {
+    const list = vi.fn(async (): Promise<CodexMicroGuardProcess[]> => {
+      throw new Error('ps unavailable');
+    });
+    const instance = service(paths(), new EnvironmentRunner(null), list);
+    expect(await instance.setEnabled(true)).toMatchObject({
+      enabled: true,
+      restartRequired: false,
+    });
+    await instance.setEnabled(false);
+    list.mockResolvedValue([runningCodex()]);
+    expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
     list.mockRejectedValue(new Error('ps unavailable'));
     expect(await instance.getState()).toMatchObject({ enabled: true, restartRequired: false });
     await instance.dispose();
   });
 
-  it('keeps applied protection evidence across toggles and Cindy restarts, but rejects reused PIDs', async () => {
+  it('does not carry restart hints across Cindy restarts', async () => {
     const locations = paths();
     const runner = new EnvironmentRunner(null);
-    let processes = [runningCodex()];
-    const list = async () => processes;
+    const list = vi.fn(async () => [runningCodex()]);
     const first = service(locations, runner, list);
-    await first.setEnabled(true);
-    const receiptPath = path.join(locations.supportPath, 'receipt-101.json');
-    fs.writeFileSync(receiptPath, JSON.stringify(processes[0]), { mode: 0o600 });
-    expect(await first.getState()).toMatchObject({ restartRequired: false });
-    await first.setEnabled(false);
-    expect(await first.setEnabled(true)).toMatchObject({ restartRequired: false });
+    expect(await first.setEnabled(true)).toMatchObject({ restartRequired: true });
     await first.dispose();
+    list.mockClear();
     const second = service(locations, runner, list);
-    expect(await second.getState()).toMatchObject({ restartRequired: false });
-    await second.setEnabled(false);
-    expect(await second.setEnabled(true)).toMatchObject({ restartRequired: false });
-    processes = [{ ...processes[0], startedAt: processes[0].startedAt + 10_000 }];
-    expect(await second.getState()).toMatchObject({ restartRequired: true });
-    fs.writeFileSync(receiptPath, '{broken');
-    expect(await second.getState()).toMatchObject({ enabled: true, restartRequired: true });
-    expect(await second.setEnabled(false)).toMatchObject({ restartRequired: false });
+    expect(await second.getState()).toMatchObject({ enabled: true, restartRequired: false });
+    expect(list).not.toHaveBeenCalled();
     await second.dispose();
   });
-
-  it.each([true, false])(
-    'does not infer a restart during upgrade from legacy receipt presence=%s',
-    async (hasLegacyReceipt) => {
-      const locations = paths();
-      fs.writeFileSync(locations.settingsPath, JSON.stringify({ enabled: true }));
-      if (hasLegacyReceipt) {
-        fs.mkdirSync(locations.supportPath, { mode: 0o700 });
-        fs.writeFileSync(
-          path.join(locations.supportPath, 'receipt.json'),
-          JSON.stringify({ interceptedAt: Date.now() / 1_000, service: 'service-old.js' }),
-          { mode: 0o600 },
-        );
-      }
-      // A previous graceful shutdown may already have removed the old receipt.
-      const processes = [runningCodex()];
-      const instance = service(locations, new EnvironmentRunner(null), async () => processes);
-      expect(await instance.getState()).toMatchObject({
-        enabled: true,
-        status: 'protecting',
-        restartRequired: false,
-      });
-      await instance.setEnabled(false);
-      expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
-      await instance.dispose();
-    },
-  );
 
   it('reports unsupported without touching launchctl on other platforms', async () => {
     const locations = paths();
