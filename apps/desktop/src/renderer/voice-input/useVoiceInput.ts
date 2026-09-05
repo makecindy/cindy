@@ -589,9 +589,11 @@ export function useVoiceInput(
     triggerReason: string,
   ): boolean => {
     const watch = dictionaryLearningWatchesRef.current.get(segmentId);
-    if (!watch?.pendingEvidence) return false;
+    if (!watch) return false;
+    // Clearing the tracked text ends its lifetime even without a correction.
     clearDictionaryLearningWatchTimer(watch);
     dictionaryLearningWatchesRef.current.delete(segmentId);
+    if (!watch.pendingEvidence) return false;
     publishDictionaryLearningEvidence(watch.pendingEvidence, triggerReason);
     return true;
   }, [clearDictionaryLearningWatchTimer, publishDictionaryLearningEvidence]);
@@ -718,6 +720,8 @@ export function useVoiceInput(
             start: range.from,
             end: range.to,
             pendingAdviceTimer: undefined,
+            // A later clear/unmount must not publish a correction the user undid.
+            pendingEvidence: undefined,
           });
           return [];
         }
