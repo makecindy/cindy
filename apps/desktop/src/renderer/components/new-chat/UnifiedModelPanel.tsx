@@ -125,6 +125,7 @@ export interface UnifiedModelPanelProps {
   onPaymentRequired?: () => void;
   /** false = 只选模型,不出配置浮层(设置类入口的 configurationEnabled)。 */
   configurationEnabled?: boolean;
+  isRouteDisabled?: (providerId: string, modelId: string, agent: AgentKind) => boolean;
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
    *   - rail 顶部多一格「同引擎」(图标 = 当前引擎),**默认选中**;该视图列
@@ -176,7 +177,7 @@ export interface UnifiedModelPanelProps {
    * 可选「跟随会话」行(opt-in,仅 scheduler 的 heartbeat 绑定会话任务)。
    * 语义与既有面板同名 prop 逐字一致:选中 = 模型留空、跟随绑定会话。
    */
-  followSession?: { active: boolean; label: string; onFollow: () => void };
+  followSession?: { active: boolean; label: string; onFollow: () => void | boolean | Promise<void | boolean> };
   /**
    * 行选中。第 4 个参数是该行**已经合成好的生效配置**(引擎 ⊕ 深度 ⊕ Fast ⊕ 收藏锚点)——
    * 调用方拿到它才能把「模型 + 引擎」当成一件事写下去(M5:草稿的 vendor 就按 `engine` 派生)。
@@ -191,6 +192,8 @@ export interface UnifiedModelPanelProps {
     effort: Effort | '',
     config: UnifiedSelectedRow,
   ) => void | boolean | Promise<void | boolean>;
+  /** 在没有独立模型记忆的入口应用配置，保持面板打开。 */
+  onConfigure?: UnifiedModelPanelProps['onSelect'];
   /**
    * live 选中行改深度 —— 走会话实时状态,不预写记忆(与既有语义一致)。
    * 返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;返回 void 视为落了)。
@@ -267,9 +270,11 @@ export function UnifiedModelPanel({
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   configurationEnabled = true,
+  isRouteDisabled,
   sessionEngineFilter,
   followSession,
   onSelect,
+  onConfigure,
   onSelectedFavoriteAnchorClear,
   onEffortChangeLive,
   onFastModeChangeLive,
@@ -736,6 +741,7 @@ export function UnifiedModelPanel({
     removeFavorite,
     selectRow,
     pending: actionPending,
+    runExternal,
   } = useUnifiedRowActions({
     interactionDisabled,
     isLiveRow,
@@ -747,6 +753,7 @@ export function UnifiedModelPanel({
     onEffortChangeLive,
     onFastModeChangeLive,
     onSelect,
+    onConfigure,
     onSelectedFavoriteAnchorClear,
     sessionEngineFilter,
     sessionAgent,
@@ -973,7 +980,7 @@ export function UnifiedModelPanel({
               <button
                 type="button"
                 disabled={interactionDisabled || actionPending}
-                onClick={() => followSession.onFollow()}
+                onClick={() => void runExternal(followSession.onFollow)}
                 role="option"
                 aria-selected={followSession.active}
                 data-follow-session-row
@@ -1056,7 +1063,8 @@ export function UnifiedModelPanel({
                       {...(subscriptionRow
                         ? { subscriptionLabel: t('settings.providers.models.subscription') }
                         : {})}
-                      interactionDisabled={interactionDisabled || actionPending}
+                      configurationEnabled={configurationEnabled}
+                      interactionDisabled={interactionDisabled || actionPending || !!isRouteDisabled?.(row.entry.providerId, config.wireModelId ?? row.entry.modelId, config.agent)}
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
                       {...(paymentRequiredUnlockLabel ? { paymentRequiredUnlockLabel } : {})}
@@ -1116,6 +1124,7 @@ export function UnifiedModelPanel({
                       {...(subscriptionRow
                         ? { subscriptionLabel: t('settings.providers.models.subscription') }
                         : {})}
+                      configurationEnabled={configurationEnabled}
                       interactionDisabled
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
@@ -1167,7 +1176,7 @@ export function UnifiedModelPanel({
                 )}
                 effortLabelOf={effortLabelOf}
                 justFavorited={justFavorited === anchorKey(target.anchor)}
-                disabled={interactionDisabled || actionPending}
+                disabled={interactionDisabled || actionPending || !!isRouteDisabled?.(target.entry.providerId, config.wireModelId ?? target.entry.modelId, config.agent)}
                 engineLocked={effectiveRail.kind === 'engine'}
                 onEngineChange={(engine) => {
                   if (effectiveRail.kind === 'engine') return;

@@ -201,9 +201,11 @@ export function CindyCapabilityPrefs({
       try {
         const result = await window.electronAPI.ghosts.setCindyPref(ghostId, capability, model);
         setOverrides(result.overrides);
+        return true;
       } catch {
         setOverrides(prev);
         toast.error(t('settings.ghosts.errors.generic'));
+        return false;
       }
     },
     [ghostId, overrides, t],
@@ -306,7 +308,7 @@ export function CindyCapabilityPrefs({
                   declaredLabel={declaredModel?.label ?? null}
                   legacyPinLabel={legacyPinLabel}
                   options={textOptions}
-                  onChange={(pin) => void handleChange(capability, pin ?? FOLLOW_DEFAULT_VALUE)}
+                  onChange={(pin) => handleChange(capability, pin ?? FOLLOW_DEFAULT_VALUE)}
                   ariaLabel={t(`settings.ghosts.detail.cindyPrefs.cap.${capability}`)}
                   dense={appearance !== 'plugin'}
                 />
@@ -357,7 +359,7 @@ export function CindyCapabilityPrefs({
                   value={selectValue === FOLLOW_DEFAULT_VALUE ? undefined : selectValue}
                   defaultModel={mediaDefault}
                   options={mediaOptions}
-                  onChange={(pin) => void handleChange(capability, pin ?? FOLLOW_DEFAULT_VALUE)}
+                  onChange={(pin) => handleChange(capability, pin ?? FOLLOW_DEFAULT_VALUE)}
                   ariaLabel={t(`settings.ghosts.detail.cindyPrefs.cap.${capability}`)}
                   dense={appearance !== 'plugin'}
                 />

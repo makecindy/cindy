@@ -82,6 +82,8 @@ export interface UnifiedRowActionsOptions {
     effort: Effort | '',
     config: UnifiedSelectedRow,
   ) => ActionResult;
+  /** 没有模型记忆表的设置入口，直接应用完整配置并保持配置菜单打开。 */
+  onConfigure?: UnifiedRowActionsOptions['onSelect'];
   /**
    * 清掉「当前选中的收藏」锚点 —— 用户在**同模型的普通模型行**上改了实时深度 / Fast 时用
    * (2026-08-17 review 第五轮 M2)。入参形状与 `onSelect` 逐字相同(同一份 `favoriteUid: null`
@@ -160,6 +162,7 @@ export interface UnifiedRowActionsOptions {
 
 export interface UnifiedRowActions {
   pending: boolean;
+  runExternal: (action: () => ActionResult) => ActionResult;
   applyEngine: (
     anchor: UnifiedAnchor,
     entry: UnifiedModelEntry,
@@ -240,6 +243,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     onEffortChangeLive,
     onFastModeChangeLive,
     onSelect,
+    onConfigure,
     onSelectedFavoriteAnchorClear,
     sessionEngineFilter,
     sessionAgent,
@@ -655,6 +659,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // ★ 记忆表(providerModelMemory)的既有消费方全部按 **wire id** 存取(会话恢复、
     // device-link 镜像、IM /model)。这里写归一化 id 会造出一份谁也读不到的影子记录,
     // 同时污染那张表。anchor.modelId 只是行身份,不是可以发出去的东西。
+    if (!modelMemory && onConfigure) {
+      return selectRow(anchor, { ...config, effort }, undefined, true);
+    }
     modelMemory?.setEffort(
       config.agent,
       anchor.providerId,
@@ -699,6 +706,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       return onFastModeChangeLive(enabled);
     }
     // 同上:Fast 槽也按 wire id 存取。
+    if (!modelMemory && onConfigure) {
+      return selectRow(anchor, { ...config, fast: enabled }, undefined, true);
+    }
     modelMemory?.setFast(
       config.agent,
       anchor.providerId,
@@ -918,7 +928,12 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     });
   };
 
-  const selectRow: UnifiedRowActions['selectRow'] = (anchor, config, favorite) => {
+  const selectRow = (
+    anchor: UnifiedAnchor,
+    config: UnifiedRowConfig,
+    favorite?: ModelFavoriteItem,
+    configuring = false,
+  ): ActionResult => {
     if (interactionDisabled) return;
     const effort = config.effort ?? '';
     // 跨引擎选择不走普通 onSelect(那条链路只换 model / provider):交给调用方的切换事务
@@ -945,7 +960,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     }
     // 生效引擎 / Fast / 收藏锚点随选中一起交出去:调用方(M5 新会话)要按它派生
     // newMakerDraft 的 vendor,再重推一遍必然与行上显示的三元组漂移。
-    return onSelect(anchor.providerId, wireModelId, effort, {
+    return (configuring && onConfigure ? onConfigure : onSelect)(anchor.providerId, wireModelId, effort, {
       engine: config.engine,
       fast: config.fast,
       favoriteUid: favorite ? favorite.uid : null,
@@ -955,6 +970,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
 
   return {
     pending,
+    runExternal: exclusive((action: () => ActionResult) => action()),
     applyEngine: exclusive(applyEngine),
     applyEffort: exclusive(applyEffort),
     applyFast: exclusive(applyFast),

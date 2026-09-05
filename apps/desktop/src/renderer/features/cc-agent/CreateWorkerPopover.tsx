@@ -183,7 +183,7 @@ export function CreateWorkerPopover({
   );
   const narrowProviderSource = useCallback(
     (candidate: string | null, modelId: string): string | null => {
-      if (!candidate || deviceId) return null;
+      if (!candidate || (deviceId && remoteProviders.unsupported)) return null;
       const provider = routableProviders.find((p) => p.id === candidate);
       if (!provider || !providerOffersModel(provider, modelId, agent)) return null;
       const catalogModel = getModel(provider, modelId, agent);
@@ -198,7 +198,7 @@ export function CreateWorkerPopover({
         ? candidate
         : null;
     },
-    [agent, deviceId, routableProviders],
+    [agent, deviceId, remoteProviders.unsupported, routableProviders],
   );
 
   // per-provider Fast 能力:同一 model id 在不同来源下 supportsFastMode 可不同(见
@@ -209,7 +209,7 @@ export function CreateWorkerPopover({
   // peer 无 provider 镜像,解析不出来源)才回落拍平并集(codex review)。
   const providerFastSupported = useCallback(
     (candidate: string | null, modelId: string): boolean => {
-      // device-link 面板无来源维度,candidate 恒 null,走默认来源解析。
+      // 本机和远程显式来源同一口径；只有未指定时解析默认来源。
       const sourceId =
         candidate ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       if (!sourceId) {
@@ -239,10 +239,8 @@ export function CreateWorkerPopover({
   const routeEffortMetaFor = useCallback(
     (modelId: string): { efforts: readonly string[]; defaultEffort: string | null } | undefined => {
       const flat = activeModels.find((m) => m.id === modelId);
-      const sourceId = deviceId
-        ? effectiveSourceIdForModel(providers, null, modelId, agent)
-        : narrowProviderSource(providerSource, modelId)
-          ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
+      const sourceId = narrowProviderSource(providerSource, modelId)
+        ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       const provider = sourceId
         ? (deviceId ? connectedProvidersForAgent(providers, agent) : routableProviders).find(
             (p) => p.id === sourceId,
@@ -396,24 +394,22 @@ export function CreateWorkerPopover({
   // 主动从模型级全局预设恢复(codex review:否则用户在非选中行 hover 配置的
   // effort/Fast 在选中该行后被丢弃);Fast 还要叠加该来源条目的 per-provider 能力。
   const handleProviderChange = useCallback(
-    (providerId: string | null, modelId?: string, reconciledEffort?: Effort) => {
+    (providerId: string | null, modelId?: string, reconciledEffort?: Effort, reconciledFast?: boolean) => {
       const nextModel = modelId ?? model;
       const narrowed = narrowProviderSource(providerId, nextModel);
       // 「钉/重选当前生效来源」与「切到恰好提供同一模型的另一来源」必须区分
       // (codex review):前者保留表单 live 值(仅把生效来源钉成显式);后者是真实
       // 来源切换,要恢复目标行显示的预设。判据 = 目标来源是否就是切换前的生效来源
       // (显式值,未显式时为解析出的默认来源),不能只看模型是否相同。
-      const effectiveBefore = deviceId
-        ? null
-        : providerSource ?? effectiveSourceIdForModel(routableProviders, null, model, agent);
+      const effectiveBefore = providerSource ?? effectiveSourceIdForModel(routableProviders, null, model, agent);
       setProviderSource(narrowed);
       if (!modelId) return;
-      if (modelId === model && narrowed !== null && narrowed === effectiveBefore) {
+      if (modelId === model && narrowed !== null && narrowed === effectiveBefore && reconciledEffort === undefined && reconciledFast === undefined) {
         // 钉当前生效来源也是一次真实选定:live effort/Fast 保留,但 (来源, 模型)
         // 要记入全局 choice —— 该来源槽的 lastModel 可能还指着别的模型,不记会让
         // 其它标准选择器切到该来源时恢复 stale 模型(codex review)。无档模型跳过,
         // 与下方真实切换路径同规则。
-        if (currentModel && currentModel.efforts.length > 0) {
+        if (!deviceId && currentModel && currentModel.efforts.length > 0) {
           setProviderModelChoice(agent, narrowed, modelId, effort);
         }
         return;
@@ -425,7 +421,7 @@ export function CreateWorkerPopover({
       // 同 id 模型的 efforts/defaultEffort 跨来源可分叉,按拍平条目校验会保留/赋予
       // 选中来源不支持的档位,提交后被 main 侧路由来源校验拒掉(codex review)。
       // 未收窄出显式来源时取生效默认来源的条目;来源条目缺失或无档位元数据时
-      // 回落拍平条目(device-link 无本地目录,handleProviderChange 本就不接线)。
+      // 回落拍平条目(仅旧被控端缺少完整来源目录)。
       const effortSourceId =
         narrowed ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       const effortSourceProvider = effortSourceId
@@ -440,7 +436,7 @@ export function CreateWorkerPopover({
       const validEfforts: readonly string[] = effortMeta.efforts;
       const remembered =
         reconciledEffort ??
-        (providerId ? getProviderModelEffort(agent, providerId, modelId) : undefined);
+        (!deviceId && providerId ? getProviderModelEffort(agent, providerId, modelId) : undefined);
       let nextEffort: Effort | null = null;
       if (remembered && validEfforts.includes(remembered)) {
         nextEffort = remembered;
@@ -458,7 +454,7 @@ export function CreateWorkerPopover({
       // 其它标准选择器的 resolveSourceSwitch 用它做切来源落点),否则本面板的显式
       // 选择不进全局记忆,别处切到该来源仍恢复旧模型(codex review)。无档模型
       // 跳过 —— store 的 lastModel 依附 effort 记录。
-      if (effortSourceId && nextEffort) {
+      if (!deviceId && effortSourceId && nextEffort) {
         setProviderModelChoice(agent, effortSourceId, modelId, nextEffort);
       }
       if (!providerFastSupported(narrowed, modelId)) {
@@ -466,10 +462,10 @@ export function CreateWorkerPopover({
       } else {
         // 面板行的 Fast 闪电按全局预设显示,无预设 = 关:选行后必须对齐显示,
         // 不能沿用上一个模型的 true(codex review)。
-        const rememberedFast = providerId
+        const rememberedFast = !deviceId && providerId
           ? getProviderModelFast(agent, providerId, modelId)
           : undefined;
-        setFast(rememberedFast === true);
+        setFast((reconciledFast ?? rememberedFast) === true);
       }
     },
     [
@@ -750,7 +746,7 @@ export function CreateWorkerPopover({
                 且面板行级 Fast 依赖来源分段(fastEditable 走 connected 目录),故远程仍用
                 外置 FastModeToggle,不能删。 */}
             <div className="flex min-w-0 items-center gap-2">
-              {deviceId && currentModelSupportsFast && (
+              {deviceId && remoteProviders.unsupported && currentModelSupportsFast && (
                 <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
               )}
               <ModelSelector
@@ -767,13 +763,9 @@ export function CreateWorkerPopover({
                 excludeChatBridgedCodex={sshRemote === true}
                 popoverSide="bottom"
                 currentProviderId={
-                  deviceId
-                    ? undefined
-                    : sshRemote === true
-                      ? narrowProviderSource(providerSource, model)
-                      : providerSource
+                  sshRemote === true ? narrowProviderSource(providerSource, model) : providerSource
                 }
-                onProviderChange={deviceId ? undefined : handleProviderChange}
+                onProviderChange={deviceId && remoteProviders.unsupported ? undefined : handleProviderChange}
                 // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
                 // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
                 // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
@@ -793,9 +785,9 @@ export function CreateWorkerPopover({
                 // worker 创建链的显式 Fast 派发支持 Codex 与 Pi(resolveWorkerConfig 对二者
                 // 消费 input.fast,并按模型 supportsFastMode 收口):cc 层面为 no-op,不接线,
                 // 面板就不显示 Fast 开关,避免「开关能开、提交被丢」的名不副实(codex review)。
-                fastMode={deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : fast}
+                fastMode={!(agent === 'codex' || agent === 'pi') ? undefined : fast}
                 onFastModeChange={
-                  deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
+                  !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
                 }
               />
             </div>

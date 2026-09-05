@@ -93,7 +93,7 @@ export function VisionBridgeSection() {
 
   const persistPatch = useCallback(
     async (patch: Record<string, unknown>) => {
-      if (pending) return;
+      if (pending) return false;
       interactedRef.current = true;
       // 记录 last-known（交互前真实值）：set 失败且回滚 GET 也失败时恢复。
       lastKnownRef.current = {
@@ -116,6 +116,7 @@ export function VisionBridgeSection() {
         setIsCustomized(next.isCustomized);
         setTargetModelsCustomized(next.customizedKeys.includes('targetModels'));
         toast.success(t('settings.visionBridge.toast.saved'));
+        return true;
       } catch (err) {
         log.warn('visionBridgeSettingsSet failed', err);
         toast.error(t('settings.visionBridge.toast.saveFailed'));
@@ -142,6 +143,7 @@ export function VisionBridgeSection() {
             setTargetModelsCustomized(last.targetModelsCustomized);
           }
         }
+        return false;
       } finally {
         setPending(false);
       }
@@ -216,10 +218,17 @@ export function VisionBridgeSection() {
     return rows;
   }, [providers]);
 
+  const visionProviders = useMemo(() => providers.filter((provider) => provider.auth.method !== 'oauth').map((provider) => ({
+    ...provider,
+    models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+      agent, models?.filter((model) => classifyVisionCapability(model.id) !== 'no-vision'),
+    ])),
+  })), [providers]);
+
   const setBackend = useCallback(
     (slot: 'primary' | 'fallback', value: VisionBackendRef | null) => {
       const patch = slot === 'primary' ? { primary: value } : { fallback: value };
-      void persistPatch(patch);
+      return persistPatch(patch);
     },
     [persistPatch],
   );
@@ -441,6 +450,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                providersOverride={visionProviders}
                 modelId={primary?.modelId ?? ''}
                 effort=""
                 // provider-first：同一模型被多个 provider 提供时（如 Claude 模型同时出现在
@@ -449,22 +459,20 @@ export function VisionBridgeSection() {
                 currentProviderId={primary?.providerId ?? null}
                 onProviderChange={(providerId, modelId) => {
                   if (!providerId || !modelId) {
-                    void setBackend('primary', null);
-                    return;
+                    return setBackend('primary', null);
                   }
                   // 已知无视觉模型不能作视觉后端（选中运行时必失败，表现为「视觉桥不可用」）。
-                  if (classifyVisionCapability(modelId) === 'no-vision') return;
-                  void setBackend('primary', { providerId, modelId });
+                  if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                  return setBackend('primary', { providerId, modelId });
                 }}
                 onModelChange={(modelId) => {
                   if (!modelId) {
-                    void setBackend('primary', null);
-                    return;
+                    return setBackend('primary', null);
                   }
                   // 降级路径（onProviderChange 未触发时）：跨面查找提供该模型的 provider
                   // （视觉后端可能只在 codex/pi 面配置），多 provider 场景由 onProviderChange 覆盖。
-                  if (classifyVisionCapability(modelId) === 'no-vision') return;
-                  void setBackend('primary', {
+                  if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                  return setBackend('primary', {
                     providerId: findProviderForModel(modelId) ?? '',
                     modelId,
                   });
@@ -482,7 +490,7 @@ export function VisionBridgeSection() {
                   active: primary === null,
                   label: t('settings.visionBridge.backends.unset'),
                   onSelect: () => {
-                    void setBackend('primary', null);
+                    return setBackend('primary', null);
                   },
                 }}
               />
@@ -496,6 +504,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                providersOverride={visionProviders}
                 modelId={fallback?.modelId ?? ''}
                 effort=""
                 // provider-first：与主后端一致，保存用户实际选行的 provider（防多 provider
@@ -503,19 +512,17 @@ export function VisionBridgeSection() {
                 currentProviderId={fallback?.providerId ?? null}
                 onProviderChange={(providerId, modelId) => {
                   if (!providerId || !modelId) {
-                    void setBackend('fallback', null);
-                    return;
+                    return setBackend('fallback', null);
                   }
-                  if (classifyVisionCapability(modelId) === 'no-vision') return;
-                  void setBackend('fallback', { providerId, modelId });
+                  if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                  return setBackend('fallback', { providerId, modelId });
                 }}
                 onModelChange={(modelId) => {
                   if (!modelId) {
-                    void setBackend('fallback', null);
-                    return;
+                    return setBackend('fallback', null);
                   }
-                  if (classifyVisionCapability(modelId) === 'no-vision') return;
-                  void setBackend('fallback', {
+                  if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                  return setBackend('fallback', {
                     providerId: findProviderForModel(modelId) ?? '',
                     modelId,
                   });
@@ -532,7 +539,7 @@ export function VisionBridgeSection() {
                   active: fallback === null,
                   label: t('settings.visionBridge.backends.noBackup'),
                   onSelect: () => {
-                    void setBackend('fallback', null);
+                    return setBackend('fallback', null);
                   },
                 }}
               />

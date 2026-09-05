@@ -422,7 +422,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/state/providerModelMemory', () => ({
+vi.mock('@/state/providerModelMemory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/state/providerModelMemory')>()),
   useProviderModelMemoryVersion: () => 0,
 }));
 
@@ -431,8 +432,8 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
 }));
 
 import {
-  ModelSelector,
-  ModelSelectorContent,
+  ModelSelector as SharedModelSelector,
+  ModelSelectorContent as SharedModelSelectorContent,
   modelCompactEffortLabel,
   modelEffortLabel,
   modelListMaxHeightForRows,
@@ -440,6 +441,12 @@ import {
   resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
 } from '@/components/new-chat/ModelSelector';
+// Retain coverage of the capabilities-only compatibility renderer and common trigger.
+// Default A interaction contracts live in unifiedModelPanelRendering.test.tsx.
+const ModelSelector = (props: React.ComponentProps<typeof SharedModelSelector>) =>
+  React.createElement(SharedModelSelector, { unifiedPanel: false, ...props });
+const ModelSelectorContent = (props: React.ComponentProps<typeof SharedModelSelectorContent>) =>
+  React.createElement(SharedModelSelectorContent, { unifiedPanel: false, ...props });
 import { makerChatStore } from '@/lib/makerChatStore';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));

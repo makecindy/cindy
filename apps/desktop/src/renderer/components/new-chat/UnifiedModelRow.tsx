@@ -137,6 +137,7 @@ export function UnifiedModelRow({
   onRevealForKeyboard,
   priceDisplay,
   subscriptionLabel,
+  configurationEnabled = true,
   paymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -164,6 +165,7 @@ export function UnifiedModelRow({
    * 那类模型走套餐额度,行内画 $ 档串会误导成按量计费。
    */
   subscriptionLabel?: string;
+  configurationEnabled?: boolean;
   /** 付费锁定行保留在原位置，可聚焦但不能选中、收藏或打开配置。 */
   paymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -178,8 +180,8 @@ export function UnifiedModelRow({
     if (!paymentRequired) onReveal(anchor, element, toggle);
   };
   const tripleTitle = `${engineOption.label}${
-    config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
-  }${config.fast ? ' · Fast' : ''}`;
+    configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
+  }${configurationEnabled && config.fast ? ' · Fast' : ''}`;
   const paymentRequiredActionLabel = paymentRequired
     ? [entry.displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
         .filter(Boolean)
@@ -363,7 +365,7 @@ export function UnifiedModelRow({
           />
         )}
         {starButton}
-        {customizeButton}
+        {configurationEnabled && customizeButton}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
             设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
         <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">
@@ -374,10 +376,10 @@ export function UnifiedModelRow({
             className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 text-[var(--text-tertiary)]"
           >
             <engineOption.Mark size={12} className="shrink-0" />
-            {config.effort && (
+            {configurationEnabled && config.effort && (
               <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>
             )}
-            {config.fast && (
+            {configurationEnabled && config.fast && (
               <Zap
                 size={11}
                 fill="currentColor"

@@ -14,6 +14,6 @@ export function resolveComposerModelSelection(input: {
   const next = input.intent
     ? { agentKind: input.intent.target, model: input.intent.model, providerId: input.intent.providerId,
         effort: input.intent.effort ?? null, fastMode: input.intent.fastMode ?? false }
-    : input.pending?.profile ?? (input.optimistic ? { ...input.optimistic, agentKind: current.agentKind } : null);
+    : input.optimistic ? { ...input.optimistic, agentKind: current.agentKind } : input.pending?.profile ?? null;
   return { current, display: next ?? current, pending: next !== null };
 }

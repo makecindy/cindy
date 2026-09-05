@@ -580,12 +580,14 @@ export function resolveModelSelectorAgentIdentity(
 }
 
 interface ModelSelectorProps {
+  /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
+  providersOverride?: ProviderView[];
   currentSelection?: SessionRuntimeProfileProjection;
   /** Open recovery for the selected source; generic Add model navigation stays separate. */
   onReconnectSource?: () => void;
   modelId: string;
   effort: Effort;
-  onModelChange: (modelId: string) => void;
+  onModelChange: (modelId: string) => void | boolean | Promise<void | boolean>;
   /**
    * 改深度。返回值(若有)= **这次写入真的落下去了没有**(`false` / 抛错 = 没落;返回 void 的
    * 调用方视为落了)。统一面板的三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 /
@@ -686,7 +688,7 @@ interface ModelSelectorProps {
   maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口与行内状态摘要；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
-  /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，opt-in）。 */
+  /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，默认开启）。 */
   unifiedPanel?: boolean;
   /** 语义同 ModelSelectorContentProps.sessionEngineFilter（统一面板的会话内形态）。 */
   sessionEngineFilter?: UnifiedModelPanelProps['sessionEngineFilter'];
@@ -715,7 +717,7 @@ interface ModelSelectorProps {
   /** 语义同 ModelSelectorContentProps.onUnifiedSelect（统一面板选中直通）。 */
   onUnifiedSelect?: ModelSelectorContentProps['onUnifiedSelect'];
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
-  fallbackOption?: { active: boolean; label: string; onSelect: () => void };
+  fallbackOption?: { active: boolean; label: string; onSelect: () => void | boolean | Promise<void | boolean> };
   /**
    * 点击**当前已选中**的行时照常回调 onModelChange / onProviderChange（默认 false = 收起了事）。
    * 供「当前值是解析出的继承值、点一下才落成显式值」的调用方（IM 工作目录偏好）使用；
@@ -766,9 +768,10 @@ interface ModelSelectorProps {
 }
 
 interface ModelSelectorContentProps {
+  providersOverride?: ProviderView[];
   modelId: string;
   effort: Effort;
-  onModelChange: (modelId: string) => void;
+  onModelChange: (modelId: string) => void | boolean | Promise<void | boolean>;
   /**
    * 改深度。返回值(若有)= **这次写入真的落下去了没有**(`false` / 抛错 = 没落;返回 void 的
    * 调用方视为落了)。统一面板的三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 /
@@ -816,27 +819,10 @@ interface ModelSelectorContentProps {
    * 可选「跟随会话」行(opt-in)。仅 scheduler 的 heartbeat(绑定会话)任务传入:
    * 在模型列表顶部加一行,选中 = model 留空(跟随绑定会话的模型 / 来源)。
    */
-  followSession?: { active: boolean; label: string; onFollow: () => void };
+  followSession?: { active: boolean; label: string; onFollow: () => void | boolean | Promise<void | boolean> };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
   configurationEnabled?: boolean;
-  /**
-   * **统一模型选择器面板**(模型优先,model-selector-unified M3 / M4)。opt-in:
-   * true = 列表换成跨引擎联合清单(行 = (来源, 模型),右侧常驻「引擎图标 · 推理强度 · ⚡」
-   * 三元组,收藏区置顶,hover 出行配置浮层);缺省 false = 既有「先选引擎再选模型」面板,
-   * 逐像素不变。
-   *
-   * 为什么做成开关而不是直接换掉:新会话入口撤 AgentSelect(M5)与会话内同引擎过滤(M6)
-   * 还没接线,而本组件有 9 个消费入口(会话 / 草稿 / scheduler / IM / Hook / Subagent /
-   * Worker / GhostErrand / 设置)。先让面板可用、再逐个入口切过去,任何一轮都不会出现
-   * 「某个入口的模型列表突然换了一套语义」。
-   *
-   * 已知边界(开这个开关前必须确认不适用):联合列表的数据源是**供应商目录**
-   * (unifiedModelEntries),device-link 老被控端的 capabilities-only 扁平兜底没有目录 →
-   * 该场景下开了会得到空列表。
-   *
-   * 会话内形态见 `sessionEngineFilter`;`followSession` 已在统一面板等价渲染;
-   * `agentSwitch` 的两步分段在统一面板下**刻意不渲染**(见该 prop 的说明)。
-   */
+  /** A is the default for every entry. False is reserved for capabilities-only remote compatibility. */
   unifiedPanel?: boolean;
   /**
    * 统一面板的**会话内形态**(model-selector-unified §1.6,M6 面板侧)。仅在
@@ -1027,6 +1013,7 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
 }
 
 function ModelSelectorContentView({
+  providersOverride,
   modelId,
   effort,
   onModelChange,
@@ -1049,9 +1036,9 @@ function ModelSelectorContentView({
   onNavigateToProviders,
   followSession,
   configurationEnabled = true,
-  unifiedPanel = false,
+  unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
-  unifiedAgents,
+  unifiedAgents: requestedUnifiedAgents,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
   onUnifiedSelect,
@@ -1127,6 +1114,9 @@ function ModelSelectorContentView({
   const agentKind = agentSwitch
     ? vendorKeyToAgentKind(browseVendor)
     : vendorKeyToAgentKind(vendorKey);
+  // A field that only persists a model must not offer another Harness.
+  const unifiedAgents = requestedUnifiedAgents ??
+    (vendorKey && agentKind && !onUnifiedSelect && !sessionEngineFilter ? [agentKind] : undefined);
   const browseTargetLabel =
     browseVendor === 'codex' ? 'Codex' : browseVendor === 'pi' ? 'Pi' : 'Claude Code';
   const enqueueAgentSwitch = (
@@ -1151,8 +1141,10 @@ function ModelSelectorContentView({
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
-  const providers = deviceId ? remoteProviders.providers : localProviders.providers;
-  const providersLoading = deviceId ? remoteProviders.loading : localProviders.loading;
+  const providers = deviceId ? remoteProviders.providers : providersOverride ?? localProviders.providers;
+  // Old device-link hosts expose capabilities only. Never substitute local routes.
+  const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
+  const providersLoading = deviceId ? remoteProviders.loading : !providersOverride && localProviders.loading;
   const remoteModelListStatus = resolveRemoteModelListStatus({
     deviceId,
     agentKind,
@@ -1288,11 +1280,11 @@ function ModelSelectorContentView({
       model: { id: string; defaultEnabled?: boolean },
       agent: AgentKind,
     ): boolean =>
-      deviceId
+      providersOverride ? true : deviceId
         ? isDeviceModelVisible(remoteProviders.modelVisibilityOverrides, agent, providerId, model)
         : isModelEnabled(agent, providerId, model),
     // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是本机可见性偏好的外部刷新信号(值本身不进判定)。
-    [deviceId, remoteProviders.modelVisibilityOverrides, visibilityVersion],
+    [providersOverride, deviceId, remoteProviders.modelVisibilityOverrides, visibilityVersion],
   );
   const unifiedExcludeProvider = useMemo(
     () =>
@@ -1318,7 +1310,7 @@ function ModelSelectorContentView({
   // seedDefaultFavorite 内部保证,这里重复跑只是 no-op。device-link 远程视图不投:
   // 标记来自被控端目录,控制端的本机收藏不该被它污染。
   useEffect(() => {
-    if (!unifiedPanel || deviceId) return;
+    if (!unifiedPanel || deviceId || providersOverride) return;
     const entries = unifiedModelEntries({
       providers,
       ...(unifiedAgents ? { agents: unifiedAgents } : {}),
@@ -1353,6 +1345,7 @@ function ModelSelectorContentView({
     // biome-ignore lint/correctness/useExhaustiveDependencies: unifiedAgents 以 unifiedAgentsKey 表达身份(数组每次 render 都是新引用)。
   }, [
     providers,
+    providersOverride,
     unifiedPanel,
     deviceId,
     unifiedIsVisible,
@@ -1837,7 +1830,7 @@ function ModelSelectorContentView({
         !!selectedModel &&
         (selectedModel.efforts.length > 0 || fastEditable(providerId, selectedModel));
       const opensConfiguration =
-        selectedRowClickOpensConfiguration && configurationEnabled && selectedModelHasConfiguration;
+        !unifiedPanel && selectedRowClickOpensConfiguration && configurationEnabled && selectedModelHasConfiguration;
       // A selected row can be the effective fallback for a stale explicit
       // provider.  Repair that route before opening its configuration, but do
       // not persist the row's derived/default effort just by opening the card.
@@ -1856,7 +1849,7 @@ function ModelSelectorContentView({
                   );
           }
         } else if (!opensConfiguration) {
-          onModelChange(id);
+          reselectApplied = onModelChange(id);
         }
       }
       if (opensConfiguration) {
@@ -1879,8 +1872,9 @@ function ModelSelectorContentView({
       dismissAfterSelection();
       return applied;
     }
-    onModelChange(id);
+    const applied = onModelChange(id);
     dismissAfterSelection();
+    return applied;
   };
 
   /**
@@ -1946,7 +1940,8 @@ function ModelSelectorContentView({
     wireModelId: string;
     effort: Effort | undefined;
     config: UnifiedSelectedRow;
-  }): Promise<void> => {
+    dismiss?: boolean;
+  }): Promise<boolean> => {
     const anchor = args.config.favoriteUid
       ? {
           uid: args.config.favoriteUid,
@@ -1965,19 +1960,28 @@ function ModelSelectorContentView({
       liveAgentKind !== null &&
       vendorKeyToAgentKind(args.config.engine) === liveAgentKind
     ) {
-      if (!(await applyLiveRowConfig(args.effort, args.config.fast))) return;
+      if (!(await applyLiveRowConfig(args.effort, args.config.fast))) return false;
       onSessionFavoriteAnchorChange?.(anchor);
+      if (args.dismiss !== false) {
+        closeOptionsPanel();
+        onDismiss?.();
+      }
+      return true;
+    }
+    const applied = await runLiveWrite(async () => {
+      if (onProviderChange) {
+        return onProviderChange(args.providerId, args.wireModelId, args.effort ?? '', args.config.fast);
+      }
+      if ((await onModelChange(args.wireModelId)) === false) return false;
+      return applyLiveRowConfig(args.effort, args.config.fast);
+    });
+    if (!applied) return false;
+    onSessionFavoriteAnchorChange?.(anchor);
+    if (args.dismiss !== false) {
       closeOptionsPanel();
       onDismiss?.();
-      return;
     }
-    const applied = await runLiveWrite(() =>
-      handleRowSelect(args.providerId, args.wireModelId, false, args.effort, args.config.fast),
-    );
-    if (!applied) return;
-    onSessionFavoriteAnchorChange?.(anchor);
-    closeOptionsPanel();
-    onDismiss?.();
+    return true;
   };
   // ── hover / focus 浮层目标 ───────────────────────────────────────────────
   const editingModel: RowModel | null = useMemo(() => {
@@ -2625,6 +2629,7 @@ function ModelSelectorContentView({
   // 0 个可连来源:整张引导卡取代列表(仅 providers 加载完成后判,避免拉取期闪空态)。
   // device-link 远程会话不显示该引导(控制端无法替被控端连来源)→ 退化为扁平兜底列表。
   const emptyState =
+    !unifiedPanel &&
     sourcesEnabled &&
     !deviceId &&
     currentAgentKind &&
@@ -2690,12 +2695,12 @@ function ModelSelectorContentView({
   );
   const unifiedAgentFastCapable = useCallback(
     (agent: AgentKind): boolean =>
-      agent === 'claude-code'
+      !!(onFastModeChange || onUnifiedSelect) && (agent === 'claude-code'
         ? !!cc.capabilities?.hasFastMode
         : agent === 'codex'
           ? !!codex.capabilities?.hasFastMode
-          : !!pi.capabilities?.hasFastMode,
-    [cc.capabilities, codex.capabilities, pi.capabilities],
+          : !!pi.capabilities?.hasFastMode),
+    [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect],
   );
 
   if (emptyState) return emptyState;
@@ -2847,8 +2852,17 @@ function ModelSelectorContentView({
             paymentRequiredUnlockLabel={t('newChat.modelSelector.paymentRequired.unlock')}
             onPaymentRequired={showPaymentRequired}
             configurationEnabled={configurationEnabled}
+            isRouteDisabled={(providerId, id) => providersOverride ? false : modelDisabledOf(providers.find((provider) => provider.id === providerId) ?? null, id)}
             {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
-            {...(followSession ? { followSession } : {})}
+            {...(followSession ? { followSession: {
+              ...followSession,
+              onFollow: async () => {
+                if (!(await runLiveWrite(followSession.onFollow))) return false;
+                closeOptionsPanel();
+                onDismiss?.();
+                return true;
+              },
+            } } : {})}
             onSelect={(providerId, id, rowEffort, rowConfig) => {
               const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
               // 草稿(M5):整行原样直通给调用方 —— 引擎跟着模型一起落，中途不再被单引擎
@@ -2883,6 +2897,26 @@ function ModelSelectorContentView({
                 wireModelId: id,
                 effort: rowEffortValue,
                 config: rowConfig,
+              });
+            }}
+            onConfigure={(providerId, id, rowEffort, rowConfig) => {
+              const nextEffort = rowEffort === '' ? undefined : rowEffort;
+              if (onUnifiedSelect) {
+                return onUnifiedSelect({
+                  providerId,
+                  modelId: id,
+                  ...(nextEffort ? { effort: nextEffort } : {}),
+                  engine: rowConfig.engine,
+                  fast: rowConfig.fast,
+                  favoriteUid: null,
+                });
+              }
+              return applyUnifiedSessionSelect({
+                providerId,
+                wireModelId: id,
+                effort: nextEffort,
+                config: rowConfig,
+                dismiss: false,
               });
             }}
             onSelectedFavoriteAnchorClear={(providerId, id, rowEffort, rowConfig) => {
@@ -3124,6 +3158,7 @@ function ModelSelectorContentView({
 }
 
 export function ModelSelector({
+  providersOverride,
   modelId,
   currentSelection,
   onReconnectSource,
@@ -3152,7 +3187,7 @@ export function ModelSelector({
   popoverSide = 'top',
   maxVisibleModelRows,
   configurationEnabled = true,
-  unifiedPanel = false,
+  unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
   unifiedAgents,
   engineMarkVendor = null,
@@ -3306,7 +3341,9 @@ export function ModelSelector({
   // 查不到被控端独有模型 → currentModel undefined → label 退成 "Select model")。
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
-  const providers = deviceId ? remoteProviders.providers : localProviders.providers;
+  const providers = deviceId ? remoteProviders.providers : providersOverride ?? localProviders.providers;
+  // Old device-link hosts expose capabilities only. Never substitute local routes.
+  const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
   const remoteModelListStatus = resolveRemoteModelListStatus({
     deviceId,
     agentKind,
@@ -3901,6 +3938,7 @@ export function ModelSelector({
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
+      providersOverride={providersOverride}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}

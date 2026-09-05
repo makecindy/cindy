@@ -115,7 +115,7 @@ export interface HookWorkspacePrefsState {
     workspace: string,
     patch: HookPrefsPatch,
     alsoProviderSource?: string | null,
-  ) => void;
+  ) => Promise<boolean>;
   /** (multi-team)可用绑定清单(未 displaced); 单绑定/老 server 时 ≤1 条。 */
   teams: Array<{ teamId: string; teamName: string | null }>;
   /** 当前偏好归属 team(teams 非空时必有值; 选中项失效自动回落首个)。 */
@@ -398,7 +398,7 @@ export function useHookWorkspacePrefs(
             patch,
             multiTeam ? selectedTeamId : undefined,
           );
-      void request
+      return request
         .then((res) => {
           // 来源落地在快照守卫**之前**(codex review): invoke 成功 = 远端已确认
           // 本次 (model, effort) 写入 —— 这一事实不因「更新的快照先到」而失效;
@@ -407,7 +407,7 @@ export function useHookWorkspacePrefs(
           if (alsoProviderSource !== undefined) {
             applyProviderSource(workspace, alsoProviderSource);
           }
-          if (revision !== fetchRevisionRef.current) return;
+          if (revision !== fetchRevisionRef.current) return true;
           const nextPrefs: HookPrefsView | ProviderPrefsView = res.prefs;
           if (
             isNeutralPrefsProvider(provider) &&
@@ -415,19 +415,21 @@ export function useHookWorkspacePrefs(
               nextPrefs.provider !== provider ||
               nextPrefs.bindingId !== neutralBindingIdRef.current)
           ) {
-            return;
+            return true;
           }
-          if (provider === 'slack' && isProviderPrefsView(nextPrefs)) return;
+          if (provider === 'slack' && isProviderPrefsView(nextPrefs)) return true;
           fetchRevisionRef.current += 1;
           setPrefsView(nextPrefs);
           setLoadError(null);
+          return true;
         })
         .catch((err: unknown) => {
-          if (revision !== fetchRevisionRef.current) return;
+          if (revision !== fetchRevisionRef.current) return false;
           const ipcErr = extractIpcError(err);
           if (ipcErr?.code === 'HOOK_PREFS_TIMEOUT') setLoadError('unavailable');
           toast.error(ipcErr?.message ?? t('settings.tina.prefs.toast.saveFailed'));
           void fetchPrefs();
+          return false;
         })
         .finally(() => {
           if (mutationRevision === mutationRevisionRef.current) setPendingWs(null);
@@ -544,7 +546,7 @@ export function WorkspacePrefsEditor({
   /** 落一个模型选择(分段行与 flat 行共用): 随手写入 (agent, model) 配对并校准 effort。 */
   const applyModel = (next: string) => {
     if (next === prefs.model || eff.agentKind.id === null) return;
-    state.applyPatch(
+    return state.applyPatch(
       alias,
       patchForModelChange(eff.agentKind.id, next, prefs, toPrefsCaps(effAgentCaps)),
     );
@@ -635,7 +637,7 @@ export function WorkspacePrefsEditor({
           // 见 applyPatch 的 alsoProviderSource 注释)。目标行的 provider-specific
           // effort 由共享 ModelSelector 回传;旧调用方未提供时才回落本地记忆。
           onProviderChange={(providerId, modelId, reconciledEffort) => {
-            if (eff.agentKind.id === null) return;
+            if (eff.agentKind.id === null) return false;
             const caps = toPrefsCaps(effAgentCaps);
             if (modelId) {
               const patch = patchForModelChange(eff.agentKind.id, modelId, prefs, caps);
@@ -653,14 +655,14 @@ export function WorkspacePrefsEditor({
                   patch.effort = remembered;
                 }
               }
-              state.applyPatch(alias, patch, providerId);
+              return state.applyPatch(alias, patch, providerId);
             } else {
               state.applyProviderSource(alias, providerId);
             }
           }}
           onModelChange={applyModel}
           onEffortChange={(next) => {
-            if (next !== prefs.effort) state.applyPatch(alias, { effort: next });
+            if (next !== prefs.effort) return state.applyPatch(alias, { effort: next });
           }}
         />
       </PrefsField>

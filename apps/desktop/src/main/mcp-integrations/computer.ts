@@ -21,6 +21,8 @@ import type {
 import { createLogger } from '../logger.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { resolveDesktopOutboundProxy } from '../maker-host/outbound-proxy-resolver.js';
+import { adaptComputerDriverArgs, type ComputerDriverToolSchema } from './computer-contract.js';
+import { computerResultOutcome, getComputerTool } from '@cindy/mcps/computer';
 
 const logger = createLogger('mcp/cindy_computer');
 const DRIVER_COMMAND = 'cua-driver';
@@ -83,6 +85,7 @@ const SCREENSHOT_OUTPUT_TOOL_NAMES = new Set<ComputerMcpToolName>(['get_window_s
 const DRIVER_SESSION_ARG_TOOL_NAMES = new Set<ComputerMcpToolName>([
   'list_windows',
   'get_window_state',
+  'verify_state',
   'click',
   'double_click',
   'right_click',
@@ -283,6 +286,7 @@ interface CuaMcpSessionEntry {
   transport: StdioClientTransport;
   ready: Promise<void>;
   driverSessionId: string;
+  toolSchemas: Map<string, ComputerDriverToolSchema>;
   cursorSetup: {
     motion: CursorSetupState;
     style: CursorSetupState;
@@ -394,21 +398,9 @@ interface ComputerDriverStatusOptions {
 }
 
 class ComputerDriverError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly code = 'COMPUTER_DRIVER_ERROR', readonly outcomeUnknown = false) {
     super(message);
     this.name = 'ComputerDriverError';
-  }
-}
-
-class ComputerDriverTypeTextRetryError extends ComputerDriverError {
-  constructor(
-    message: string,
-    readonly remainingText: string,
-    readonly completedChars: number,
-    readonly completedChunks: number,
-  ) {
-    super(message);
-    this.name = 'ComputerDriverTypeTextRetryError';
   }
 }
 
@@ -1889,7 +1881,7 @@ function normalizeToolArgsForDriver(
   if (!SCREENSHOT_OUTPUT_TOOL_NAMES.has(name) || typeof args.screenshot_out_file === 'string') {
     return args;
   }
-  if (args.capture_mode === 'ax') {
+  if (args.include_screenshot === false || (args.include_screenshot === undefined && args.capture_mode === 'ax')) {
     return args;
   }
   return {
@@ -1961,25 +1953,19 @@ function applyDriverSessionArgs(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
   driverSessionId: string,
+  schemas: ReadonlyMap<string, ComputerDriverToolSchema>,
 ): Record<string, unknown> {
   if (!DRIVER_SESSION_ARG_TOOL_NAMES.has(name)) return args;
-  if (name === 'get_agent_cursor_state') {
-    return {
-      ...args,
-      cursor_id: driverSessionId,
-    };
+  const result = { ...args };
+  const keys = name === 'get_agent_cursor_state' ? ['cursor_id']
+    : name === 'move_cursor' ? ['cursor_id', 'session'] : ['session'];
+  const schema = schemas.get(name);
+  for (const key of keys) {
+    // Host-owned routing metadata is injected only when the installed tool accepts it.
+    if (schema?.additionalProperties === false && !(key in (schema.properties ?? {}))) delete result[key];
+    else result[key] = driverSessionId;
   }
-  if (name === 'move_cursor') {
-    return {
-      ...args,
-      cursor_id: driverSessionId,
-      session: driverSessionId,
-    };
-  }
-  return {
-    ...args,
-    session: driverSessionId,
-  };
+  return result;
 }
 
 function splitTypeTextChunks(text: string): string[] {
@@ -2011,10 +1997,10 @@ function shouldCleanupCuaMcpSessionAfterError(err: unknown): boolean {
 
 function shouldRetryWithFreshCuaSession(name: ComputerMcpToolName, err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return (
+  return (getComputerTool(name)?.readOnly === true && (
     STALE_CUA_SESSION_MARKER_RE.test(message) ||
     (/timed out after/i.test(message) && LIGHTWEIGHT_TIMEOUT_RETRY_TOOL_NAMES.has(name))
-  );
+  ));
 }
 
 function getCuaMcpToolTimeoutMs(name: ComputerMcpToolName): number {
@@ -2130,16 +2116,27 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
     client,
     transport,
     driverSessionId: getDriverSessionId(sessionId),
+    toolSchemas: new Map(),
     cursorSetup: {
       motion: capabilities?.motion === 'unavailable' ? 'unavailable' : 'pending',
       style: capabilities?.style === 'unavailable' ? 'unavailable' : 'pending',
     },
     ready: withTimeout(
-      client.connect(transport),
+      client.connect(transport).then(async () => {
+        let cursor: string | undefined;
+        const seen = new Set<string>();
+        do {
+          const page = await client.listTools(cursor ? { cursor } : undefined);
+          for (const tool of page.tools) entry.toolSchemas.set(tool.name, tool.inputSchema as ComputerDriverToolSchema);
+          cursor = page.nextCursor;
+          if (cursor && (seen.has(cursor) || seen.size >= 20)) throw new ComputerDriverError('Driver tools/list pagination did not terminate.');
+          if (cursor) seen.add(cursor);
+        } while (cursor);
+      }),
       MCP_STARTUP_TIMEOUT_MS,
       `cua-driver mcp session ${sessionId} startup`,
     ).catch(async (err) => {
-      cuaMcpSessions.delete(sessionId);
+      if (cuaMcpSessions.get(sessionId) === entry) cuaMcpSessions.delete(sessionId);
       try {
         await client.close();
       } catch {
@@ -2156,24 +2153,43 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
   return entry;
 }
 
-async function getCuaMcpSession(sessionId: string): Promise<CuaMcpSessionEntry> {
+/** Cancel this caller's wait without cancelling shared startup or another caller. */
+async function waitForCuaSession<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(new ComputerDriverError('Computer Use cancelled while waiting for the driver.', 'REQUEST_CANCELLED'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    void pending.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      (error) => { signal.removeEventListener('abort', onAbort); reject(error); },
+    );
+  });
+}
+
+async function getCuaMcpSession(sessionId: string, signal?: AbortSignal): Promise<CuaMcpSessionEntry> {
+  signal?.throwIfAborted();
   assertComputerDriverToolDispatchAvailable();
   const existing = cuaMcpSessions.get(sessionId);
   if (existing) {
-    await existing.ready;
+    await waitForCuaSession(existing.ready, signal);
     return existing;
   }
   const cleanup = cuaMcpSessionCleanups.get(sessionId);
   if (cleanup) {
-    await cleanup.catch(() => undefined);
+    await waitForCuaSession(cleanup.catch(() => undefined), signal);
+    signal?.throwIfAborted();
     const next = cuaMcpSessions.get(sessionId);
     if (next) {
-      await next.ready;
+      await waitForCuaSession(next.ready, signal);
       return next;
     }
   }
   const entry = createCuaMcpSession(sessionId);
-  await entry.ready;
+  await waitForCuaSession(entry.ready, signal);
   return entry;
 }
 
@@ -2182,18 +2198,23 @@ async function callCuaMcpTool(
   name: string,
   args: Record<string, unknown>,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<unknown> {
+  signal?.throwIfAborted();
+  const driverArgs = adaptComputerDriverArgs(name, args, entry.toolSchemas);
   const result = await withTimeout(
     entry.client.callTool({
       name,
-      arguments: args,
-    }),
+      arguments: driverArgs,
+    }, undefined, { signal }),
     timeoutMs,
     `cua-driver mcp tool ${name}`,
   );
   if ((result as { isError?: unknown }).isError) {
     const text = firstTextFromMcpResult(result);
-    throw new ComputerDriverError(text ?? `cua-driver mcp tool ${name} returned an error`);
+    const details = objectValue(parseMcpToolResult(result));
+    throw new ComputerDriverError(text ?? `cua-driver mcp tool ${name} returned an error`,
+      typeof details?.code === 'string' ? details.code : 'COMPUTER_DRIVER_ERROR');
   }
   const parsed = parseMcpToolResult(result);
   if (typeof parsed === 'string' && STALE_CUA_SESSION_MARKER_RE.test(parsed)) {
@@ -2207,14 +2228,18 @@ async function callCuaMcpToolWithTypeTextChunks(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
   timeoutMs: number,
+  signal?: AbortSignal,
+  assertActive: () => void = () => {},
 ): Promise<unknown> {
+  signal?.throwIfAborted();
+  assertActive();
   if (name !== 'type_text' || typeof args.text !== 'string') {
-    return callCuaMcpTool(entry, name, args, timeoutMs);
+    return callCuaMcpTool(entry, name, args, timeoutMs, signal);
   }
 
   const chunks = splitTypeTextChunks(args.text);
   if (chunks.length === 1) {
-    return callCuaMcpTool(entry, name, args, timeoutMs);
+    return callCuaMcpTool(entry, name, args, timeoutMs, signal);
   }
 
   let lastResult: unknown = null;
@@ -2222,31 +2247,18 @@ async function callCuaMcpToolWithTypeTextChunks(
   let processedChunks = 0;
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    try {
-      lastResult = await callCuaMcpTool(
-        entry,
-        name,
-        {
-          ...args,
-          text: chunk,
-        },
-        timeoutMs,
-      );
-    } catch (err) {
-      if (shouldRetryWithFreshCuaSession(name, err)) {
-        throw new ComputerDriverTypeTextRetryError(
-          err instanceof Error ? err.message : String(err),
-          chunks.slice(index).join(''),
-          inserted,
-          index,
-        );
-      }
-      throw err;
-    }
+    signal?.throwIfAborted();
+    assertActive();
+    lastResult = await callCuaMcpTool(entry, name, { ...args, text: chunk }, timeoutMs, signal);
     const resultObject = objectValue(lastResult);
     processedChunks += 1;
-    if (resultObject?.ok === false) {
-      if (typeof resultObject.inserted === 'number') {
+    const outcome = computerResultOutcome(name, lastResult);
+    if (resultObject?.effect !== undefined && outcome.outcome?.status !== 'confirmed') {
+      return { ...resultObject, chunks: processedChunks, completed_chars: inserted,
+        attempted_chars: Array.from(chunk).length, remaining_chars: Array.from(chunks.slice(index + 1).join('')).length };
+    }
+    if (!outcome.ok) {
+      if (typeof resultObject?.inserted === 'number') {
         inserted += resultObject.inserted;
       }
       return {
@@ -2280,6 +2292,8 @@ async function initializeDefaultCursorStyle(
   entry: CuaMcpSessionEntry,
   session: string,
   sessionCloseVersion: number,
+  signal?: AbortSignal,
+  assertActive: () => void = () => {},
 ): Promise<void> {
   if (!CURSOR_STYLED_TOOL_NAMES.has(name)) return;
 
@@ -2308,6 +2322,8 @@ async function initializeDefaultCursorStyle(
   ];
 
   for (const call of calls) {
+    assertActive();
+    signal?.throwIfAborted();
     if (entry.cursorSetup[call.stateKey] !== 'pending') continue;
     try {
       await callCuaMcpTool(
@@ -2315,11 +2331,15 @@ async function initializeDefaultCursorStyle(
         call.tool,
         call.args,
         STATUS_TIMEOUT_MS,
+        signal,
       );
       entry.cursorSetup[call.stateKey] = 'applied';
     } catch (err) {
+      assertActive();
+      signal?.throwIfAborted();
       const message = err instanceof Error ? err.message : String(err);
-      if (isCursorSetupUnavailableError(message)) {
+      if (isCursorSetupUnavailableError(message)
+        || (err as { code?: string })?.code === 'COMPUTER_DRIVER_INCOMPATIBLE') {
         entry.cursorSetup[call.stateKey] = 'unavailable';
         if (getCuaMcpSessionCloseVersion(entry.logicalSessionId) === sessionCloseVersion) {
           const capabilities = cuaMcpSessionCursorCapabilities.get(entry.logicalSessionId) ?? {
@@ -3337,22 +3357,30 @@ export async function callComputerDriverTool(
   args: Record<string, unknown>,
   context?: ComputerMcpCallContext,
 ): Promise<unknown> {
+  const signal = context?.signal;
+  signal?.throwIfAborted();
   assertComputerDriverToolDispatchAvailable();
   const sessionId = readSessionIdFromContext(context);
   if (!sessionId) {
     throw new ComputerDriverError(`Computer Use tool calls require an active ${BRAND_NAME} session.`);
   }
   const sessionCloseVersion = getCuaMcpSessionCloseVersion(sessionId);
+  const assertActive = () => {
+    signal?.throwIfAborted();
+    assertComputerDriverToolDispatchAvailable();
+    if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
+      throw new ComputerDriverError('Computer Use session closed; no further action was dispatched.', 'REQUEST_CANCELLED');
+    }
+  };
   const rawArgs = args ?? {};
   const driverInputArgs = stripLocalListWindowsArgs(name, rawArgs);
   const normalizedArgs = normalizeToolArgsForDriver(name, driverInputArgs);
-  const entry = await getCuaMcpSession(sessionId);
-  assertComputerDriverToolDispatchAvailable();
-  const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId);
-  await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId, sessionCloseVersion);
+  const entry = await getCuaMcpSession(sessionId, signal);
+  const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId, entry.toolSchemas);
   const timeoutMs = getCuaMcpToolTimeoutMs(name);
   try {
-    const result = await callCuaMcpToolWithTypeTextChunks(entry, name, driverArgs, timeoutMs);
+    await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId, sessionCloseVersion, signal, assertActive);
+    const result = await callCuaMcpToolWithTypeTextChunks(entry, name, driverArgs, timeoutMs, signal, assertActive);
     return name === 'list_windows' ? enrichAndFilterListWindowsResult(result, rawArgs) : result;
   } catch (err) {
     logger.warn('cua-driver MCP tool call failed', {
@@ -3361,8 +3389,16 @@ export async function callComputerDriverTool(
       driverSessionId: entry.driverSessionId,
       error: err instanceof Error ? err.message : String(err),
     });
+    if (signal?.aborted) {
+      await cleanupCuaMcpSessionAfterError(sessionId, entry).catch(() => undefined);
+      throw new ComputerDriverError('Computer Use cancelled. An action already dispatched may have taken effect; observe before acting again.', 'REQUEST_CANCELLED', getComputerTool(name)?.readOnly !== true);
+    }
     if (shouldCleanupCuaMcpSessionAfterError(err)) {
       const cleanup = cleanupCuaMcpSessionAfterError(sessionId, entry);
+      if (getComputerTool(name)?.readOnly !== true) {
+        await cleanup.catch(() => undefined);
+        throw new ComputerDriverError('Driver connection failed during an action. Its outcome is unknown; the action was not replayed. Take fresh state before continuing.', 'ACTION_OUTCOME_UNKNOWN', true);
+      }
       if (shouldUseCliFallbackAfterError(name, err)) {
         try {
           return await callCuaCliTool(name);
@@ -3377,68 +3413,24 @@ export async function callComputerDriverTool(
       }
       if (shouldRetryWithFreshCuaSession(name, err)) {
         await cleanup.catch(() => undefined);
+        assertActive();
         if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
           throw err;
         }
-        const freshEntry = await getCuaMcpSession(sessionId);
-        assertComputerDriverToolDispatchAvailable();
-        if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
-          await cleanupComputerDriverSessionInternal(sessionId, {
-            resetGeneration: false,
-            expectedEntry: freshEntry,
-          }).catch(() => undefined);
-          throw err;
-        }
-        const retryArgs = err instanceof ComputerDriverTypeTextRetryError
-          ? {
-              ...normalizedArgs,
-              text: err.remainingText,
-            }
-          : normalizedArgs;
-        const freshArgs = applyDriverSessionArgs(name, retryArgs, freshEntry.driverSessionId);
-        await initializeDefaultCursorStyle(
-          name,
-          freshArgs,
-          freshEntry,
-          freshEntry.driverSessionId,
-          sessionCloseVersion,
-        );
-        if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
-          await cleanupComputerDriverSessionInternal(sessionId, {
-            resetGeneration: false,
-            expectedEntry: freshEntry,
-          }).catch(() => undefined);
-          throw err;
-        }
+        const freshEntry = await getCuaMcpSession(sessionId, signal);
         let retryResult: unknown;
         try {
-          retryResult = await callCuaMcpToolWithTypeTextChunks(freshEntry, name, freshArgs, timeoutMs);
+          assertActive();
+          const freshArgs = applyDriverSessionArgs(name, normalizedArgs, freshEntry.driverSessionId, freshEntry.toolSchemas);
+          await initializeDefaultCursorStyle(name, freshArgs, freshEntry, freshEntry.driverSessionId,
+            sessionCloseVersion, signal, assertActive);
+          retryResult = await callCuaMcpToolWithTypeTextChunks(freshEntry, name, freshArgs, timeoutMs, signal, assertActive);
         } catch (retryErr) {
-          if (shouldCleanupCuaMcpSessionAfterError(retryErr)) {
+          if (signal?.aborted || getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion
+            || shouldCleanupCuaMcpSessionAfterError(retryErr)) {
             await cleanupCuaMcpSessionAfterError(sessionId, freshEntry).catch(() => undefined);
           }
           return tryWindowsWin32Fallback(name, rawArgs, retryErr);
-        }
-        if (err instanceof ComputerDriverTypeTextRetryError) {
-          const retryResultObject = objectValue(retryResult);
-          const retryInserted = typeof retryResultObject?.inserted === 'number'
-            ? retryResultObject.inserted
-            : retryResultObject?.ok === false
-              ? 0
-              : Array.from(err.remainingText).length;
-          const retryChars = typeof retryResultObject?.chars === 'number'
-            ? retryResultObject.chars
-            : retryInserted;
-          return {
-            ...(retryResultObject ?? {}),
-            inserted: err.completedChars + retryInserted,
-            chunks: err.completedChunks + (
-              typeof retryResultObject?.chunks === 'number'
-                ? retryResultObject.chunks
-                : 1
-            ),
-            chars: err.completedChars + retryChars,
-          };
         }
         return name === 'list_windows' ? enrichAndFilterListWindowsResult(retryResult, rawArgs) : retryResult;
       }

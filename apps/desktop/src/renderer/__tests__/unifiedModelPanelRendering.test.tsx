@@ -220,7 +220,7 @@ function renderPanel(
       onEffortChange: vi.fn(),
       currentProviderId: 'anthropic',
       onProviderChange,
-      unifiedPanel: true,
+      onFastModeChange: vi.fn(),
       ...props,
     }),
   );
@@ -3909,5 +3909,52 @@ describe('统一面板 · 清收藏锚点也等待回执', () => {
     await act(async () => {
       reject(new Error('draft write failed'));
     });
+  });
+});
+
+
+describe('global default A contract', () => {
+  it('defaults to A and limits a model-only settings field to its writable Harness', async () => {
+    const change = vi.fn();
+    const { container } = renderPanel({ vendorKey: 'cc', onProviderChange: change,
+      onFastModeChange: undefined });
+    expect(container.querySelector('[data-unified-model-panel]')).not.toBeNull();
+    await act(async () => { fireEvent.click(rowFor('GPT-5.5')); });
+    // The same model also has Codex/high/Fast, but this field can only write cc.
+    expect(change).toHaveBeenLastCalledWith('xd', 'gpt-5.5', 'medium', false);
+  });
+
+  it('respects the authoritative allowlist and awaits automatic-route writes', async () => {
+    const dismiss = vi.fn();
+    const follow = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    renderPanel({ providersOverride: [], followSession: { active: false, label: 'Automatic', onFollow: follow }, onDismiss: dismiss });
+    expect(screen.queryByText('Opus 5')).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByText('Automatic')); });
+    expect(dismiss).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByText('Automatic')); });
+    expect(dismiss).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('settings configuration without shared memory', () => {
+  it('applies a non-selected model with its effort and Fast, keeping the menu open on success or failure', async () => {
+    const change = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    const dismiss = vi.fn();
+    renderPanel({ vendorKey: 'codex', modelId: 'gpt-5.6', currentProviderId: 'openai',
+      onProviderChange: change, onDismiss: dismiss, modelMemory: undefined });
+    const flyout = await openRowFlyout('GPT-5.5');
+    const slider = flyout.querySelector('[role="slider"]') as HTMLElement;
+    await act(async () => { fireEvent.keyDown(slider, { key: 'ArrowLeft' }); });
+    expect(change).toHaveBeenLastCalledWith('xd', 'gpt-5.5', 'low', false);
+    expect(screen.getByTestId('unified-model-config-flyout')).toBe(flyout);
+    await act(async () => { fireEvent.keyDown(slider, { key: 'ArrowLeft' }); });
+    expect(change).toHaveBeenCalledTimes(2);
+    expect(dismiss).not.toHaveBeenCalled();
+    expect(screen.getByTestId('unified-model-config-flyout')).toBe(flyout);
+    const fast = flyout.querySelector('[data-fast-toggle]') as HTMLElement;
+    await act(async () => { fireEvent.click(fast); });
+    expect(change).toHaveBeenLastCalledWith('xd', 'gpt-5.5', 'high', true);
+    expect(dismiss).not.toHaveBeenCalled();
   });
 });

@@ -528,7 +528,7 @@ describe('ChatInput model source switching wiring', () => {
 
   it('reopen snapshot keeps intent model/source together; idle falls back to runtime provider', () => {
     expect(chatInputSource).toContain(
-      'const activeProviderId = composerSelection.pending ? composerSelection.display.providerId : selectedProviderId;',
+      'const activeProviderId = runtimeEffective || composerSelection.pending ? composerSelection.display.providerId : selectedProviderId;',
     );
     expect(chatInputSource).toContain('modelId={activeModel}');
     expect(chatInputSource).toContain('currentProviderId={activeProviderId}');

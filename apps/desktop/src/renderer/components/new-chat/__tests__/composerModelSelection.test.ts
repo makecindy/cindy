@@ -17,6 +17,10 @@ describe('composer model selection projection', () => {
     expect(resolveComposerModelSelection({ current, pending: null })).toEqual({ current, display: current, pending: false });
     expect(resolveComposerModelSelection({ current, effective: next, pending: null })).toEqual({ current: next, display: next, pending: false });
   });
+  it('shows the newest remote choice ahead of an older pending echo', () => {
+    const latest = { ...next, model: 'newest', providerId: 'another', fastMode: true };
+    expect(resolveComposerModelSelection({ current, pending: { generation: 2, source: 'agent', profile: next }, optimistic: latest }).display).toEqual(latest);
+  });
   it('keeps remote Fast and provider in the same optimistic snapshot', () => {
     expect(resolveComposerModelSelection({ current, optimistic: next })).toEqual({ current, display: next, pending: true });
   });
