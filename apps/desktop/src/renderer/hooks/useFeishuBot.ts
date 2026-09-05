@@ -54,6 +54,8 @@ export interface UseFeishuBotReturn {
   isClearing: boolean;
   isReconnecting: boolean;
   saveSuccess: boolean;
+  channelSettings: FeishuChannelSettingsState | null;
+  isUpdatingWorkingDir: boolean;
 
   /** 上下线主动通知开关 */
   lifecycleAnnouncement: boolean;
@@ -62,6 +64,8 @@ export interface UseFeishuBotReturn {
   save: () => Promise<boolean>;
   reconnect: () => Promise<boolean>;
   clear: () => Promise<void>;
+  chooseWorkingDirectory: () => Promise<void>;
+  resetWorkingDirectory: () => Promise<void>;
 }
 
 const APP_ID_PATTERN = /^cli_[A-Za-z0-9]{10,30}$/;
@@ -104,6 +108,8 @@ export function useFeishuBot(): UseFeishuBotReturn {
   const [isClearing, setIsClearing] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [channelSettings, setChannelSettings] = useState<FeishuChannelSettingsState | null>(null);
+  const [isUpdatingWorkingDir, setIsUpdatingWorkingDir] = useState(false);
   const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadRequestVersionRef = useRef(0);
   const statusPushVersionRef = useRef(0);
@@ -112,6 +118,48 @@ export function useFeishuBot(): UseFeishuBotReturn {
     errorMessage: string | null;
     ownerOpenId: string | null;
   } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.feishuBot
+      .getChannelSettings()
+      .then((next) => {
+        if (cancelled) return;
+        setChannelSettings(next);
+      })
+      .catch(() => log.error('failed to load Feishu channel settings'));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const chooseWorkingDirectory = useCallback(async (): Promise<void> => {
+    if (isUpdatingWorkingDir) return;
+    setIsUpdatingWorkingDir(true);
+    try {
+      const result = await window.electronAPI.feishuBot.chooseWorkingDirectory();
+      setChannelSettings(result.state);
+    } catch {
+      log.error('failed to choose Feishu working directory');
+      toast.error(t('settings.feishuBot.toasts.workingDirFailed'));
+    } finally {
+      setIsUpdatingWorkingDir(false);
+    }
+  }, [isUpdatingWorkingDir, t]);
+
+  const resetWorkingDirectory = useCallback(async (): Promise<void> => {
+    if (isUpdatingWorkingDir) return;
+    setIsUpdatingWorkingDir(true);
+    try {
+      const next = await window.electronAPI.feishuBot.resetWorkingDirectory();
+      setChannelSettings(next);
+    } catch {
+      log.error('failed to reset Feishu working directory');
+      toast.error(t('settings.feishuBot.toasts.workingDirFailed'));
+    } finally {
+      setIsUpdatingWorkingDir(false);
+    }
+  }, [isUpdatingWorkingDir, t]);
 
   // 重新从 main 拉一次凭证 + 状态。挂载时和扫码注册成功后都要走一次,
   // 否则 device-code 流程在 main 写完凭证后, renderer 这边 appId/secret
@@ -407,8 +455,12 @@ export function useFeishuBot(): UseFeishuBotReturn {
     isClearing,
     isReconnecting,
     saveSuccess,
+    channelSettings,
+    isUpdatingWorkingDir,
     save,
     reconnect,
     clear,
+    chooseWorkingDirectory,
+    resetWorkingDirectory,
   };
 }
