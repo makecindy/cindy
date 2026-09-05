@@ -20,7 +20,7 @@ export interface MobileTailSnapshot {
 export interface MobileTailFollowerAdapter {
   read: () => MobileTailSnapshot;
   /** Initial / explicit seeking can materialize the last unmeasured virtualized rows. */
-  seekEnd: (animated: boolean) => void;
+  seekEnd: (animated: boolean) => void | Promise<void>;
   /** Correct using the same native coordinate system used to verify the result. */
   correctOffset: (offset: number) => void;
   onMeasurementOscillation?: () => void;
@@ -36,6 +36,9 @@ export function createMobileTailFollower(adapter: MobileTailFollowerAdapter) {
   let active = false;
   let frame: number | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let timerDeadline = 0;
+  let resumeTimer: (() => void) | null = null;
+  let pendingSeek: object | null = null;
   let pinState = createMobileFollowEndPinState();
 
   function cancel() {
@@ -45,15 +48,31 @@ export function createMobileTailFollower(adapter: MobileTailFollowerAdapter) {
     if (timer !== null) clearTimeout(timer);
     frame = null;
     timer = null;
+    resumeTimer = null;
   }
 
   function reset() {
     cancel();
+    pendingSeek = null;
     pinState = createMobileFollowEndPinState();
   }
 
   function reconcile() {
-    if (active) return;
+    if (pendingSeek) return;
+    if (active) {
+      const snapshot = adapter.read();
+      // A touch can cancel an animation before its old deadline. Wake the same run without
+      // renewing its retry budget; schedule still respects gesture/history and measurement guards.
+      if (timer !== null
+        && Math.max(snapshot.animatedScrollUntil, pinState.suppressedUntil) < timerDeadline) {
+        clearTimeout(timer);
+        const resume = resumeTimer;
+        timer = null;
+        resumeTimer = null;
+        resume?.();
+      }
+      return;
+    }
     active = true;
     const run = ++generation;
     const schedule = (attempts: number, waitRounds: number) => {
@@ -64,8 +83,13 @@ export function createMobileTailFollower(adapter: MobileTailFollowerAdapter) {
       }
       const delay = Math.max(snapshot.animatedScrollUntil, pinState.suppressedUntil) - Date.now();
       if (delay > 0) {
+        timerDeadline = Date.now() + delay;
+        resumeTimer = () => {
+          if (generation === run) schedule(attempts, waitRounds);
+        };
         timer = setTimeout(() => {
           timer = null;
+          resumeTimer = null;
           if (generation === run) schedule(attempts, waitRounds);
         }, delay);
         return;
@@ -112,11 +136,22 @@ export function createMobileTailFollower(adapter: MobileTailFollowerAdapter) {
     if (!snapshot.stickToLatest || snapshot.preservingHistory) return;
     if (!explicit && snapshot.userControllingScroll) return;
     reset();
-    adapter.seekEnd(animated);
-    reconcile();
+    const seek = {};
+    pendingSeek = seek;
+    const finish = () => {
+      if (pendingSeek !== seek) return;
+      pendingSeek = null;
+      reconcile();
+    };
+    // LegendList queues seeking by last index. Any offset command would cancel that seek.
+    // Its promise settles the command lifecycle, not the native position: verify afterwards.
+    const completion = adapter.seekEnd(animated);
+    if (completion) void completion.then(finish, finish);
+    else finish();
   }
 
   function contentChanged() {
+    if (pendingSeek) return;
     const snapshot = adapter.read();
     if (!snapshot.stickToLatest || snapshot.userControllingScroll || snapshot.preservingHistory) return;
     const { contentHeight, viewportHeight, offsetY } = snapshot.metrics;

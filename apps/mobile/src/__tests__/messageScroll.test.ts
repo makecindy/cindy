@@ -17,7 +17,6 @@ import {
   isNearMobileMessageListBottom,
   isNearMessageListTop,
   isMobileMvcpSettling,
-  mobileFollowVerifyStartDelayMs,
   mobileMessageListKeysSignature,
   mobileMvcpSettleDeadline,
   MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS,
@@ -812,33 +811,5 @@ describe('mobile mVCP settle quiet window', () => {
     expect(mobileMessageListKeysSignature(['u1', 'a1'])).not.toBe(
       mobileMessageListKeysSignature(['u1', 'a1', 'a2']),
     );
-  });
-});
-
-describe('mobileFollowVerifyStartDelayMs (动画贴底完成后再启动 verifier)', () => {
-  it('动画仍在 settle 窗口内时返回剩余等待时间', () => {
-    expect(mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: true,
-      now: 600,
-      settleAt: 1400,
-    })).toBe(800);
-  });
-
-  it('非动画、已结束或时钟已越过 settle 时立即校验', () => {
-    expect(mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: false,
-      now: 600,
-      settleAt: 1400,
-    })).toBe(0);
-    expect(mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: true,
-      now: 1400,
-      settleAt: 1400,
-    })).toBe(0);
-    expect(mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: true,
-      now: 1500,
-      settleAt: 1400,
-    })).toBe(0);
   });
 });

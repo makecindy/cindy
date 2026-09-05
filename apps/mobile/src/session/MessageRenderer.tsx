@@ -819,9 +819,8 @@ export function MessageRenderer({
     viewportHeight: 0,
   });
   const tailFollowerRef = useRef<MobileTailFollower | null>(null);
-  // 首次进入锚定：完整历史从挂载起就在列表中，命令式落底与测量校正只在短暂
-  // opacity 遮罩下运行；揭示动画启动后完全交给 UI 线程，首批复杂消息占满 JS 时也不会
-  // 把 300ms 窗口拖成长达数秒的白屏。
+  // 完整历史从挂载起就在列表中；首次揭示交给 UI 线程，首批复杂消息占满 JS 时也不会
+  // 把 300ms 窗口拖成长达数秒的白屏。位置校验由 tail follower 独立管理。
   const initialAnchorDoneRef = useRef(false);
   const initialRevealGenerationRef = useRef(0);
   const initialRevealAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -1001,7 +1000,7 @@ export function MessageRenderer({
         }),
         seekEnd: (animated) => {
           markProgrammaticScroll(animated);
-          void listRef.current?.scrollToEnd({ animated });
+          return listRef.current?.scrollToEnd({ animated });
         },
         correctOffset: (offset) => {
           markProgrammaticScroll(false);
@@ -1726,8 +1725,7 @@ export function MessageRenderer({
     setHasNewMessages(false);
     setPreviousUserTarget(null);
     scrollToEndProgrammatically(true, 'explicit');
-    runStickToLatestVerify();
-  }, [cancelHistoryPrependTransaction, runStickToLatestVerify, scrollToEndProgrammatically]);
+  }, [cancelHistoryPrependTransaction, scrollToEndProgrammatically]);
 
   const jumpToPreviousUserMessage = useCallback(() => {
     const target = previousUserMessageJumpTarget(
@@ -2115,6 +2113,10 @@ export function MessageRenderer({
   ]);
 
   const handleHistoryTouchCancel = useCallback(() => {
+    // An interrupted drag may never emit endDrag. Android's normal native takeover emits
+    // touchCancel before beginDrag, so that subsequent beginDrag establishes its own ownership.
+    isDraggingRef.current = false;
+    dragStartOffsetYRef.current = null;
     historyTouchStartYRef.current = null;
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
@@ -2301,7 +2303,6 @@ export function MessageRenderer({
   // 竞态误触发自动拉历史),此处不重复。
   useEffect(() => {
     lastAppliedFocusKeyRef.current = null;
-    // 上个会话遗留的断路清账 timer 作废(护栏状态本体已在渲染期同步块重建)。
     setIsAwayFromBottom(false);
     setPreviousUserTarget(null);
     setHasNewMessages(false);

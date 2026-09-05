@@ -338,24 +338,6 @@ export function mobileMessageListKeysSignature(keys: readonly string[]): string 
   return keys.join('\0');
 }
 
-export interface MobileFollowVerifyStartDelayInput {
-  animatedScrollInFlight: boolean;
-  now: number;
-  settleAt: number;
-}
-
-/**
- * Animated `scrollToEnd` must own the viewport until its bounded settle window closes.
- * Starting the verifier earlier would read an expected in-flight offset and replace the
- * smooth animation with an immediate non-animated retry.
- */
-export function mobileFollowVerifyStartDelayMs(
-  input: MobileFollowVerifyStartDelayInput,
-): number {
-  if (!input.animatedScrollInFlight) return 0;
-  return Math.max(0, input.settleAt - input.now);
-}
-
 export interface MobileAnchorVerifyInput {
   attempts: number;
   listVisible: boolean;

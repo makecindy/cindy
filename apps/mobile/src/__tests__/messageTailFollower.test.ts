@@ -11,7 +11,7 @@ function harness() {
     layoutSettleAt: 0,
     animatedScrollUntil: 0,
   };
-  const seekEnd = vi.fn((animated: boolean) => {
+  const seekEnd = vi.fn((animated: boolean): void | Promise<void> => {
     if (animated) snapshot.animatedScrollUntil = Date.now() + 800;
   });
   const correctOffset = vi.fn((offset: number) => { snapshot.metrics.offsetY = offset; });
@@ -20,6 +20,13 @@ function harness() {
     read: () => snapshot, seekEnd, correctOffset, onMeasurementOscillation,
   });
   return { snapshot, seekEnd, correctOffset, onMeasurementOscillation, follower };
+}
+
+function deferredSeek() {
+  let resolve!: () => void;
+  let reject!: () => void;
+  const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 describe('one mobile tail follower', () => {
@@ -47,6 +54,79 @@ describe('one mobile tail follower', () => {
     vi.advanceTimersByTime(200);
     expect(h.correctOffset).toHaveBeenLastCalledWith(1200);
     expect(h.seekEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a queued last-index seek to discover the tail before correcting native geometry', async () => {
+    const h = harness();
+    const seek = deferredSeek();
+    let pending = true;
+    let cancelled = false;
+    h.seekEnd.mockReturnValue(seek.promise);
+    // Like LegendList, an offset command cancels a queued last-index command.
+    h.correctOffset.mockImplementation((offset) => {
+      if (pending) cancelled = true;
+      h.snapshot.metrics.offsetY = offset;
+    });
+    h.follower.requestEnd(false);
+    h.snapshot.metrics.contentHeight = 2500;
+    h.follower.contentChanged();
+    h.follower.reconcile();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.correctOffset).not.toHaveBeenCalled();
+    expect(cancelled).toBe(false);
+    // Completing the seek exposes the real tail, but its estimated landing still overshoots.
+    pending = false;
+    h.snapshot.metrics = { contentHeight: 3000, viewportHeight: 800, offsetY: 2800 };
+    seek.resolve();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.correctOffset).toHaveBeenCalledExactlyOnceWith(2200);
+  });
+
+  it('reconciles native geometry after a failed seek without an unhandled rejection', async () => {
+    const h = harness();
+    const seek = deferredSeek();
+    h.seekEnd.mockReturnValue(seek.promise);
+    h.snapshot.metrics.offsetY = 1800;
+    h.follower.requestEnd(false);
+    seek.reject();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.correctOffset).toHaveBeenCalledExactlyOnceWith(1200);
+  });
+
+  it('discards old seek completions across reset and replacement requests', async () => {
+    const h = harness();
+    const oldSeek = deferredSeek();
+    const newSeek = deferredSeek();
+    h.seekEnd.mockReturnValueOnce(oldSeek.promise).mockReturnValueOnce(newSeek.promise);
+    h.snapshot.metrics.offsetY = 1800;
+    h.follower.requestEnd(false);
+    h.follower.reset();
+    h.follower.requestEnd(false);
+    oldSeek.resolve();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.correctOffset).not.toHaveBeenCalled();
+    h.follower.reset();
+    newSeek.resolve();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.correctOffset).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('yields to a gesture that takes ownership while a seek is pending', async () => {
+    const h = harness();
+    const seek = deferredSeek();
+    h.seekEnd.mockReturnValue(seek.promise);
+    h.snapshot.metrics.offsetY = 1800;
+    h.follower.requestEnd(false);
+    h.snapshot.userControllingScroll = true;
+    seek.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.correctOffset).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    h.snapshot.userControllingScroll = false;
+    h.follower.reconcile();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.correctOffset).toHaveBeenCalledExactlyOnceWith(1200);
   });
 
   it('recovers shrinkage below one screen after layout settles', () => {
@@ -142,6 +222,20 @@ describe('one mobile tail follower', () => {
     vi.advanceTimersByTime(300);
     expect(h.correctOffset).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('wakes promptly when touching cancels an explicit animation before its old deadline', () => {
+    const h = harness();
+    h.follower.requestEnd(true, true);
+    vi.advanceTimersByTime(100);
+    h.snapshot.userControllingScroll = true;
+    h.snapshot.animatedScrollUntil = 0;
+    h.snapshot.metrics.contentHeight = 2500;
+    vi.advanceTimersByTime(50);
+    h.snapshot.userControllingScroll = false;
+    h.follower.reconcile();
+    vi.advanceTimersByTime(32);
+    expect(h.correctOffset).toHaveBeenCalledExactlyOnceWith(1700);
   });
 
   it('bounds retries when native never acknowledges and discards work on task reset', () => {

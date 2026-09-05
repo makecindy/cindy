@@ -100,6 +100,70 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
+  it.each([1196, 1180].flatMap((offset) => [false, true].map((lateEnd) => ({ offset, lateEnd }))))(
+    'releases a cancelled drag at $offset with a late end event: $lateEnd', ({ offset, lateEnd }) => {
+      const h = harness();
+      h.handleHistoryTouchStart(touch());
+      h.handleScrollBeginDrag(h.scrollEvent(1200));
+      h.handleScroll(h.scrollEvent(offset));
+      h.handleContentSize(400, 2500);
+      h.handleHistoryTouchCancel();
+      h.handleHistoryTouchCancel();
+      if (lateEnd) h.handleScrollEndDrag(h.scrollEvent(offset));
+      settle();
+      expect(h.state.nearBottomRef.current).toBe(offset === 1196);
+      expect(h.tailScroll).toHaveBeenCalledTimes(offset === 1196 ? 1 : 0);
+      expect(h.state.isDraggingRef.current).toBe(false);
+      expect(h.state.dragStartOffsetYRef.current).toBeNull();
+    },
+  );
+
+  it('allows native scrolling to take ownership after Android cancels the JS touch', () => {
+    const h = harness();
+    h.handleHistoryTouchStart(touch());
+    h.handleHistoryTouchCancel();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.tailScroll).not.toHaveBeenCalled();
+    h.handleScroll(h.scrollEvent(1180));
+    h.handleScrollEndDrag();
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+
+  it('waits for independently reported momentum after cancelling a touch', () => {
+    const h = harness();
+    h.handleHistoryTouchStart(touch());
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleMomentumScrollBegin();
+    h.handleHistoryTouchCancel();
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.tailScroll).not.toHaveBeenCalled();
+    h.handleMomentumScrollEnd();
+    settle();
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an active drag when another finger touches the list', () => {
+    const h = harness();
+    h.handleHistoryTouchStart(touch());
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleHistoryTouchStart(touch());
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.tailScroll).not.toHaveBeenCalled();
+    h.handleScroll(h.scrollEvent(1180));
+    h.handleHistoryTouchEnd(touch());
+    h.handleScrollEndDrag();
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('preserves an explicit animated jump when touchEnd precedes onPress: %s', (releaseFirst) => {
     const h = harness();
     h.state.nearBottomRef.current = false;
