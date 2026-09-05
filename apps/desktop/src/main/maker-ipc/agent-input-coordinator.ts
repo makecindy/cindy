@@ -558,6 +558,8 @@ export interface AgentInputCoordinatorDeps {
 }
 
 interface ActiveTurn {
+  /** Retained after steering receipt cleanup until this turn ends. */
+  latestSteeringClientId?: string;
   item: AgentInputQueuedMessage | null;
   delivery: AgentInputDelivery;
   messageUuid: string;
@@ -1046,6 +1048,17 @@ export class AgentInputCoordinator {
       if (state.recovery) texts.push(JSON.stringify(state.recovery));
     }
     return texts;
+  }
+
+  /** O(1), main-owned input attribution before synchronous provider events settle the turn. */
+  getActiveInputClientId(sessionId: string, vendorGeneration?: number): string | null {
+    const state = this.states.get(sessionId);
+    const active = state?.activeTurn;
+    if (!active) return null;
+    if (vendorGeneration !== undefined && active.vendorTurnGeneration !== null
+      && vendorGeneration !== active.vendorTurnGeneration) return null;
+    // A human steering a private reply takes ownership of the resulting output.
+    return active.latestSteeringClientId ?? active.item?.clientId ?? null;
   }
 
   getProjection(sessionId: string): AgentInputProjection {
@@ -2013,6 +2026,7 @@ export class AgentInputCoordinator {
     // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
+    if (state.activeTurn) state.activeTurn.latestSteeringClientId = item.clientId;
     const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
     const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);

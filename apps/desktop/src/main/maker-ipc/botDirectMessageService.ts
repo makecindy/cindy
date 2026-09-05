@@ -89,6 +89,8 @@ export interface BotDirectMessageServiceDeps {
   ensureCanonicalSession?: (
     botId: string,
   ) => Promise<{ ok: true; sessionId: string } | { ok: false; errorCode: string; message: string }>;
+  /** True only when the durable input queue already owns this delivery. */
+  hasQueuedDelivery?: (sessionId: string, clientId: string) => Promise<boolean>;
   captureOwnerScope?: () => unknown;
   isOwnerScopeCurrent?: (scope: unknown) => boolean;
   onChanged?: (payload: BotDirectMessageChangedPayload, ownerScope?: unknown) => void;
@@ -101,22 +103,7 @@ async function activeRoster(): Promise<BotRosterEntry[]> {
   return db
     .select({ id: botProfiles.id, name: botProfiles.displayName })
     .from(botProfiles)
-    .innerJoin(
-      botSessionLinks,
-      and(
-        eq(botSessionLinks.botId, botProfiles.id),
-        eq(botSessionLinks.role, 'canonical'),
-        isNull(botSessionLinks.archivedAt),
-      ),
-    )
-    .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-    .where(
-      and(
-        eq(botProfiles.status, 'active'),
-        eq(sessions.source, 'bot'),
-        eq(sessions.status, 'active'),
-      ),
-    )
+    .where(eq(botProfiles.status, 'active'))
     .orderBy(desc(botProfiles.updatedAt));
 }
 
@@ -247,6 +234,95 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         } satisfies BotDirectMessageMeta,
       },
     });
+  };
+
+  const persistDeliveryAnchors = async (
+    row: typeof botDirectMessages.$inferSelect,
+    senderName: string,
+    recipientName: string,
+  ): Promise<void> => {
+    const anchors = await Promise.allSettled([
+      ...(row.senderSessionId ? [persistTimelineAnchor({
+        threadId: row.threadId, deliveryId: row.id, sequence: row.sequence,
+        sessionId: row.senderSessionId, viewerBotId: row.senderBotId,
+        peerBotId: row.recipientBotId, peerBotName: recipientName,
+        direction: 'sent', preview: row.content, createdAt: row.createdAt,
+      })] : []),
+      ...(row.recipientSessionId ? [persistTimelineAnchor({
+        threadId: row.threadId, deliveryId: row.id, sequence: row.sequence,
+        sessionId: row.recipientSessionId, viewerBotId: row.recipientBotId,
+        peerBotId: row.senderBotId, peerBotName: senderName,
+        direction: 'received', preview: row.content, createdAt: row.createdAt,
+      })] : []),
+    ]);
+    // Settle both writes before rollback so a late write cannot recreate an orphan.
+    const rejected = anchors.find((anchor) => anchor.status === 'rejected');
+    if (rejected?.status === 'rejected') throw rejected.reason;
+  };
+
+  /** Reconcile receipts after restart without replaying uncertain model/tool work. */
+  const restore = async (): Promise<void> => {
+    const owner = deps.captureOwnerScope?.();
+    const assertOwner = () => {
+      if (owner !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(owner)) {
+        throw new Error('owner changed during Bot message recovery');
+      }
+    };
+    const db = getDbClient().drizzle;
+    const pending = await db.select().from(botDirectMessages)
+      .where(eq(botDirectMessages.deliveryStatus, 'pending'));
+    for (const candidate of pending) {
+      assertOwner();
+      const pairKey = pairOf(candidate.senderBotId, candidate.recipientBotId).join('\u0000');
+      await withPairLock(pairKey, async () => {
+        assertOwner();
+        const [row] = await db.select().from(botDirectMessages)
+          .where(and(eq(botDirectMessages.id, candidate.id), eq(botDirectMessages.deliveryStatus, 'pending')))
+          .limit(1);
+        if (!row) return;
+        const clientId = `bot-dm:${row.threadId}:${row.id}`;
+        const [receipt] = row.recipientSessionId ? await db.select({ id: messages.id }).from(messages)
+          .where(and(eq(messages.sessionId, row.recipientSessionId), eq(messages.clientId, clientId), isNull(messages.rewindAt)))
+          .limit(1) : [];
+        const queued = !receipt && row.recipientSessionId && deps.hasQueuedDelivery
+          ? await deps.hasQueuedDelivery(row.recipientSessionId, clientId) : false;
+        assertOwner();
+        if (receipt || queued) {
+          const names = await db.select({ id: botProfiles.id, name: botProfiles.displayName }).from(botProfiles)
+            .where(inArray(botProfiles.id, [row.senderBotId, row.recipientBotId]));
+          assertOwner();
+          await persistDeliveryAnchors(row,
+            names.find((item) => item.id === row.senderBotId)?.name ?? row.senderBotId,
+            names.find((item) => item.id === row.recipientBotId)?.name ?? row.recipientBotId);
+        } else {
+          // Reservation alone is not proof of acceptance. Preserve the failed audit
+          // row, remove partial projections, and return its budget to the pair.
+          await db.delete(messages).where(inArray(messages.clientId,
+            [row.senderSessionId, row.recipientSessionId].filter((id): id is string => !!id)
+              .map((id) => BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, id))));
+        }
+        const [thread] = await db.select().from(botDirectMessageThreads)
+          .where(eq(botDirectMessageThreads.id, row.threadId)).limit(1);
+        if (thread) {
+          const live = await db.select({ id: botDirectMessages.id }).from(botDirectMessages)
+            .where(and(eq(botDirectMessages.threadId, row.threadId), ne(botDirectMessages.deliveryStatus, 'failed')));
+          const messageCount = live.filter((item) => receipt || queued || item.id !== row.id).length;
+          assertOwner();
+          await db.update(botDirectMessageThreads).set({
+            messageCount,
+            ...(thread.closeReason === 'message-limit' && messageCount < thread.maxMessages
+              ? { status: 'active' as const, closeReason: null, blockedUntil: null, closedAt: null } : {}),
+          }).where(eq(botDirectMessageThreads.id, row.threadId));
+        }
+        assertOwner();
+        // Finish last: a crash while repairing anchors/counts leaves a pending row
+        // that the next restore can reconcile again without replaying the delivery.
+        await db.update(botDirectMessages).set({ deliveryStatus: receipt || queued ? 'delivered' : 'failed' })
+          .where(eq(botDirectMessages.id, row.id));
+        assertOwner();
+        deps.onChanged?.({ threadId: row.threadId, participantBotIds: [row.senderBotId, row.recipientBotId] }, owner);
+      });
+    }
   };
 
   const getThread = async (
@@ -436,7 +512,10 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       // updating the thread counter. Re-derive the small bounded count so one
       // partial write can never wedge the pair forever or reopen extra budget.
       const reservations = await db
-        .select({ deliveryStatus: botDirectMessages.deliveryStatus })
+        .select({
+          deliveryStatus: botDirectMessages.deliveryStatus,
+          sequence: botDirectMessages.sequence,
+        })
         .from(botDirectMessages)
         .where(eq(botDirectMessages.threadId, thread.id));
       const reservedCount = reservations.filter((row) => row.deliveryStatus !== 'failed').length;
@@ -475,6 +554,9 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       ].join('\n\n');
       const deliveryId = createId();
       const nextCount = thread.messageCount + 1;
+      // Failed deliveries release budget but retain their audit row. Sequence
+      // is a durable ordering key, so it must never reuse a failed row's value.
+      const nextSequence = reservations.reduce((last, row) => Math.max(last, row.sequence), 0) + 1;
       const ended = nextCount >= thread.maxMessages;
 
       // Reserve budget before enqueueing. Pending rows count against the hard
@@ -482,7 +564,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       await db.insert(botDirectMessages).values({
         id: deliveryId,
         threadId: thread.id,
-        sequence: nextCount,
+        sequence: nextSequence,
         senderBotId: caller.botId,
         recipientBotId: input.targetBotId,
         senderSessionId: input.callerSessionId,
@@ -582,32 +664,12 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           clientId: `bot-dm:${thread.id}:${deliveryId}`,
           onAccepted: async () => {
             if (!ownerIsCurrent()) throw new Error('owner changed before Bot message acceptance');
-            await Promise.all([
-              persistTimelineAnchor({
-                threadId: thread.id,
-                deliveryId,
-                sequence: nextCount,
-                sessionId: input.callerSessionId,
-                viewerBotId: caller.botId,
-                peerBotId: input.targetBotId,
-                peerBotName: targetProfile.name,
-                direction: 'sent',
-                preview: message,
-                createdAt: sentAt,
-              }),
-              persistTimelineAnchor({
-                threadId: thread.id,
-                deliveryId,
-                sequence: nextCount,
-                sessionId: targetSessionId,
-                viewerBotId: input.targetBotId,
-                peerBotId: caller.botId,
-                peerBotName: caller.botName,
-                direction: 'received',
-                preview: message,
-                createdAt: sentAt,
-              }),
-            ]);
+            await persistDeliveryAnchors({
+              id: deliveryId, threadId: thread.id, sequence: nextSequence,
+              senderBotId: caller.botId, recipientBotId: input.targetBotId,
+              senderSessionId: input.callerSessionId, recipientSessionId: targetSessionId,
+              content: message, deliveryStatus: 'pending', createdAt: sentAt,
+            }, caller.botName, targetProfile.name);
             await db
               .update(botDirectMessages)
               .set({ deliveryStatus: 'delivered' })
@@ -647,7 +709,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     });
   };
 
-  return { messageAgent, getThread };
+  return { messageAgent, getThread, restore };
 }
 
 export type BotDirectMessageService = ReturnType<typeof createBotDirectMessageService>;

@@ -96,7 +96,7 @@ describe('伙伴成果卡', () => {
 
   afterEach(cleanup);
 
-  it('展示有名的网页成品，并默认收起 SVG、index 预览页和辅助文件', async () => {
+  it('展示 SVG 缩略图与网页成品，默认收起 index 预览页和辅助文件', async () => {
     renderCard([
       generated('/bot/workspace/logo-A.svg'),
       generated('/bot/workspace/index.html'),
@@ -106,8 +106,8 @@ describe('伙伴成果卡', () => {
     ]);
 
     await screen.findByTestId('bot-generated-artifacts');
-    expect(screen.queryByRole('img', { name: 'logo-A.svg' })).toBeNull();
-    expect(screen.queryByText('logo-A.svg')).toBeNull();
+    expect(screen.getByRole('img', { name: 'logo-A.svg' })).toBeTruthy();
+    expect(screen.getByText('logo-A.svg')).toBeTruthy();
     expect(screen.queryByText('index.html')).toBeNull();
     expect(screen.queryByText('C_full.png')).toBeNull();
     expect(screen.queryByText('styles.css')).toBeNull();
@@ -122,7 +122,7 @@ describe('伙伴成果卡', () => {
     });
     expect(screen.queryByTestId('text-lightbox')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: '相关文件 4' }));
+    fireEvent.click(screen.getByRole('button', { name: '相关文件 3' }));
     expect(screen.getByText('logo-A.svg')).toBeTruthy();
     expect(screen.getByText('index.html')).toBeTruthy();
     expect(screen.getByText('C_full.png')).toBeTruthy();

@@ -1761,26 +1761,12 @@ function currentPermissionState(): {
   writableRoots: string[];
   reviewReadPaths: string[];
   reviewOnly: boolean;
-  workspaceReadOnly: boolean;
-  workspaceWritePaths: string[];
 } {
   // 轮 40-w4-t12 HIGH-1:review-only 是会话创建时的启动语义(reviewMode), 由
   // PiAgent 以独立 env 标记注入 —— 权限文件损坏/缺失时**不得**降级成普通 ask
   // (否则 hard review-only 变成可交互确认的普通会话)。文件解析失败 → fail-closed:
   // 保留 reviewOnly(按启动标记), reviewReadPaths 保守清空(读不了就不放行额外路径)。
   const reviewOnlyByStart = process.env.CINDY_PI_REVIEW_ONLY === '1';
-  const workspaceReadOnlyByStart = process.env.CINDY_PI_WORKSPACE_READ_ONLY === '1';
-  const workspaceWritePathsByStart = (() => {
-    if (!process.env.CINDY_PI_WORKSPACE_WRITE_PATHS) return null;
-    try {
-      const parsed = JSON.parse(process.env.CINDY_PI_WORKSPACE_WRITE_PATHS);
-      return Array.isArray(parsed)
-        ? parsed.filter((value: unknown) => typeof value === 'string')
-        : [];
-    } catch {
-      return [];
-    }
-  })();
   const file = process.env.CINDY_PI_PERMISSION_FILE ?? '';
   if (!file) {
     return {
@@ -1789,8 +1775,6 @@ function currentPermissionState(): {
       writableRoots: [],
       reviewReadPaths: [],
       reviewOnly: reviewOnlyByStart,
-      workspaceReadOnly: workspaceReadOnlyByStart,
-      workspaceWritePaths: workspaceWritePathsByStart ?? [],
     };
   }
   try {
@@ -1807,12 +1791,6 @@ function currentPermissionState(): {
         ? parsed.reviewReadPaths.filter((root: unknown) => typeof root === 'string')
         : [],
       reviewOnly: parsed?.reviewOnly === true || reviewOnlyByStart,
-      workspaceReadOnly:
-        parsed?.workspaceReadOnly === true || workspaceReadOnlyByStart,
-      workspaceWritePaths: workspaceWritePathsByStart
-        ?? (Array.isArray(parsed?.workspaceWritePaths)
-          ? parsed.workspaceWritePaths.filter((value: unknown) => typeof value === 'string')
-          : []),
     };
   } catch {
     return {
@@ -1821,8 +1799,6 @@ function currentPermissionState(): {
       writableRoots: [],
       reviewReadPaths: [],
       reviewOnly: reviewOnlyByStart,
-      workspaceReadOnly: workspaceReadOnlyByStart,
-      workspaceWritePaths: workspaceWritePathsByStart ?? [],
     };
   }
 }
@@ -3415,7 +3391,58 @@ function rgGlob(
   });
 }
 
+/** Use Pi's existing UI RPC so a question becomes a real Host waiting interaction. */
+function registerCindyQuestionTool(pi: any): void {
+  pi.registerTool({
+    name: 'ask_user_question',
+    label: 'Ask a question',
+    description: 'Ask the user for missing information or a choice and wait for their answer. Use this instead of claiming in text that a task is waiting. The parent of a Session task can relay the answer. Do not infer an answer from cancellation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        questions: { type: 'array', minItems: 1, maxItems: 3, items: {
+          type: 'object', properties: {
+            question: { type: 'string', minLength: 1, maxLength: 512 },
+            options: { type: 'array', minItems: 2, maxItems: 6,
+              items: { type: 'string', minLength: 1, maxLength: 256 } },
+          }, required: ['question'], additionalProperties: false,
+        } },
+      }, required: ['questions'], additionalProperties: false,
+    },
+    execute: async (_id: string, params: any, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) => {
+      const questions = params?.questions;
+      if (!Array.isArray(questions) || questions.length < 1 || questions.length > 3
+        || questions.some((q: any) => !q || typeof q.question !== 'string'
+          || !q.question.trim() || q.question.length > 512
+          || (q.options !== undefined && (!Array.isArray(q.options)
+            || q.options.length < 2 || q.options.length > 6
+            || q.options.some((v: unknown) => typeof v !== 'string' || !v.trim() || v.length > 256)
+            || new Set(q.options).size !== q.options.length)))
+        || new Set(questions.map((q: any) => q.question)).size !== questions.length) {
+        throw new Error('Provide one to three distinct questions with optional distinct answer choices.');
+      }
+      if (ctx.hasUI === false || !ctx.ui) throw new Error('Question UI is unavailable in this runtime.');
+      const answers: Record<string, string> = {};
+      let cancelled = false;
+      for (const q of questions) {
+        if (signal?.aborted) { cancelled = true; break; }
+        const answer = q.options
+          ? await ctx.ui.select(q.question, q.options)
+          : await ctx.ui.input(q.question);
+        if (signal?.aborted || typeof answer !== 'string' || !answer.trim()) {
+          cancelled = true;
+          break;
+        }
+        answers[q.question] = answer;
+      }
+      const result = { answers, cancelled };
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
+    },
+  });
+}
+
 export default async function cindyBridge(pi: any) {
+  if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
   // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。
@@ -3734,20 +3761,7 @@ export default async function cindyBridge(pi: any) {
         reason: 'Cindy Review only permits read-only access to this task and its explicit artifacts.',
       };
     }
-    if (permission.workspaceReadOnly && event.toolName === 'bash') {
-      return {
-        block: true,
-        reason:
-          'This Cindy Bot project is mounted read-only. Choose a writable project policy to modify it.',
-      };
-    }
-    if (permission.workspaceWritePaths.length > 0 && event.toolName === 'bash') {
-      return {
-        block: true,
-        reason:
-          'This Cindy Bot has a restricted write scope. Shell commands are disabled because their write targets cannot be proven safe.',
-      };
-    }
+    if (event.toolName === 'ask_user_question') return;
     if (FILE_WRITE_BUILTINS.has(event.toolName)) {
       try {
         // Internal synchronization point: the host snapshots only the target file for
@@ -3800,22 +3814,6 @@ export default async function cindyBridge(pi: any) {
         isInsideRoot(targetPath, subagentRunDir)
         || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, subagentRunDir))
       );
-    const writeInsideWorkspaceControlDir = (() => {
-      if (!targetPath) return false;
-      const root = process.cwd();
-      const protectedDirs = new Set(['.git', '.agents', '.codex']);
-      const isProtected = (candidate: string) => {
-        const relative = path.relative(path.resolve(root), path.resolve(candidate));
-        if (relative === '' || relative === '..' || relative.startsWith('..' + path.sep)) return false;
-        return protectedDirs.has(relative.split(path.sep)[0] || '');
-      };
-      return isProtected(targetPath)
-        || (writeTargetResolved !== null && isProtected(writeTargetResolved));
-    })();
-    // A Bot project binding narrows project writes, but system-granted writable
-    // roots (notably this Bot's own Home) remain valid alongside that project.
-    // Otherwise mounting Home in writableRoots still gets vetoed by the project
-    // scope gate and the runtime returns to the same workaround loop.
     const writeInsideAnyGrantedRoot = (roots: readonly string[]) => targetPath
       && roots.some((root) => {
         let resolvedRoot: string | null = null;
@@ -3832,38 +3830,6 @@ export default async function cindyBridge(pi: any) {
         );
       });
     const writeInsideWritableRoot = writeInsideAnyGrantedRoot(permission.writableRoots);
-    const writeInsideGrantedScope = writeInsideAnyGrantedRoot([
-      ...permission.workspaceWritePaths,
-      ...permission.writableRoots,
-    ]);
-    if (
-      targetPath
-      && FILE_WRITE_BUILTINS.has(event.toolName)
-      && permission.workspaceReadOnly
-      && !writeInsideWritableRoot
-    ) {
-      return {
-        block: true,
-        reason:
-          'This Cindy Bot project is mounted read-only. Only the Bot\'s system-granted writable directories may be modified.',
-      };
-    }
-    if (
-      targetPath
-      && FILE_WRITE_BUILTINS.has(event.toolName)
-      && permission.workspaceWritePaths.length > 0
-      && writeInsideWorkspaceControlDir
-    ) {
-      return { block: true, reason: 'Cindy workspace control directories are read-only.' };
-    }
-    if (
-      targetPath
-      && FILE_WRITE_BUILTINS.has(event.toolName)
-      && permission.workspaceWritePaths.length > 0
-      && !writeInsideGrantedScope
-    ) {
-      return { block: true, reason: 'This path is outside the Cindy Bot project write allowlist.' };
-    }
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)

@@ -62,6 +62,7 @@ describe('Bot unread boundary', () => {
       createdAt: 6_500,
       systemCardType: 'bot-direct-message',
     },
+    { clientId: 'private-reply', role: 'assistant', createdAt: 6_700, botPrivateReply: true },
     { clientId: 'first-unread', role: 'assistant', createdAt: 7_000 },
     { clientId: 'later-unread', role: 'assistant', createdAt: 8_000 },
   ];

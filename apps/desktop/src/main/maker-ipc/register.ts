@@ -2131,6 +2131,7 @@ const botRuntimeRestoreCoordinator = createBotRuntimeRestoreCoordinator({
       : null;
   },
   readServices: () => ({
+    directMessages: botDirectMessageServiceHolder,
     delegation: botDelegationServiceHolder,
   }),
   log,
@@ -4412,7 +4413,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       if (typeof event.turnAttemptToken === 'number') {
         interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
       }
-      let attributedEvent = event;
+      const activeInputId = event.turnScope === 'background' ? null
+        : agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
+      // Explicit false clears private provenance when a user steers the same turn.
+      // The host's accepted input owns this marker, independently of all three SDKs.
+      let attributedEvent = activeInputId
+        ? { ...event, agentMeta: { ...event.agentMeta, botPrivateReply: activeInputId.startsWith('bot-dm:') } }
+        : event;
       if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
         const reason =
           !session.remoteHostId && session.agentKind === 'claude-code'
@@ -4423,7 +4430,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             event.data && typeof event.data === 'object' && !Array.isArray(event.data)
               ? (event.data as Record<string, unknown>)
               : {};
-          attributedEvent = { ...event, data: { ...eventData, reason } };
+          attributedEvent = { ...attributedEvent, data: { ...eventData, reason } };
           log.warn('Claude Opus plan error normalized for renderer', {
             sessionId: session.id,
             model: session.model,
@@ -4744,7 +4751,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 把 persistId 盖进广播 payload 让 renderer 在途气泡用同一 id;真正落库走模块内
       // 异步队列、不在此同步执行(规则19 热路径)。终止型 error 同样在广播前预留 persistId
       // (O(1) createId,不 flush、不写库),让 live 横幅与事后 error 行绑定同一 id。
-      const eventAgentMeta = (event as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
+      const eventAgentMeta = (attributedEvent as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
       // 跟踪会话最近一次非空 agentMeta(镜像 renderer state.lastAgentMeta),给 interaction
       // 边界 flush 当兜底锚点,保 agent_meta 不丢(rewind/fork)。
       if (eventAgentMeta && event.turnScope !== 'background')
@@ -10442,7 +10449,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 失败时 shouldQueueNewTurn 仍返回 true(未恢复即入队),消息不丢。
       lockStage = 'queue-restore';
       await inputCoordinator.ensureQueueRestored(targetSessionId).catch(() => undefined);
-      if (inputCoordinator.shouldQueueNewTurn(targetSessionId)) {
+      // Private messages always use the durable coordinator, including an idle
+      // recipient. This preserves input provenance and one recovery/dispatch path.
+      if (explicitClientId?.startsWith('bot-dm:') || inputCoordinator.shouldQueueNewTurn(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
         await enqueueSendToSessionMessage({
@@ -10856,6 +10865,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   botDirectMessageServiceHolder = createBotDirectMessageService({
+    hasQueuedDelivery: async (sessionId, clientId) => {
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      return inputCoordinator.hasKnownClientId(sessionId, clientId);
+    },
     dispatch: ({
       targetSessionId,
       message,

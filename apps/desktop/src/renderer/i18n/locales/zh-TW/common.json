@@ -7001,7 +7001,7 @@
     "historyEmpty": "還沒有封存的夥伴任務。",
     "historySearch": {
       "title": "搜尋夥伴歷史",
-      "description": "搜尋這個夥伴的主任務、通道任務、委派任務與封存記錄，不會把全部歷史放入提示詞。",
+      "description": "搜尋這個夥伴過去的訊息、背景任務與封存記錄。",
       "placeholder": "你記得討論過什麼？",
       "search": "搜尋",
       "searching": "正在搜尋…",
@@ -7010,10 +7010,10 @@
     },
     "lifecycle": {
       "stoppedBots": "需要處理的夥伴",
-      "title": "健康與歷史",
-      "description": "檢查主任務、Route、自動化、工作區、封存記錄與生命週期事件。",
+      "title": "執行與歷史",
+      "description": "暫停或恢復夥伴，尋找過去的訊息與成果。",
       "activeTitle": "夥伴正在執行",
-      "activeDescription": "通道 Route、自動化、投遞與夥伴間協作可以正常執行。",
+      "activeDescription": "可以接收訊息、執行背景任務並聯絡其他夥伴。",
       "pausedTitle": "夥伴已暫停",
       "pausedDescription": "不會接收新工作；使用者原本手動暫停的自動化在恢復夥伴後仍保持暫停。",
       "stoppedTitle": "夥伴已停止運行",
@@ -7024,7 +7024,7 @@
       "deleteTitle": "永久刪除夥伴",
       "deleteDescription": "這會刪掉 {{name}}：個性、已連的通道、排定的行程都會消失。刪了找不回來。",
       "working": "正在更新…",
-      "actionFailed": "夥伴生命週期操作未完整結束，請查看健康狀態後重試。"
+      "actionFailed": "操作未完成，請稍後重試。"
     },
     "backToChat": "返回對話",
     "memoryRecovery": {
@@ -7038,7 +7038,7 @@
     "send": "傳送訊息",
     "roster": {
       "create": "建立夥伴",
-      "customHint": "先定義身分、職責與協作方式；模型、技能與訊息通道可在建立後設定。",
+      "customHint": "先定義夥伴的身分與職責。建立後可以調整模型，夥伴會在使用中累積記憶與做法。",
       "customNamePlaceholder": "例如：阿橘",
       "customTitle": "建立夥伴"
     },

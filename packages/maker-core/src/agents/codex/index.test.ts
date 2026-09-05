@@ -1033,7 +1033,7 @@ describe('CodexAgent permissions', () => {
     await handle.close();
   });
 
-  it('keeps Bot identity and MCP config while enforcing an immutable read-only workspace', async () => {
+  it('keeps Bot identity and MCP config while honoring the selected task permission mode', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, undefined, {
       buildSessionMcpConfig: () => ({
@@ -1041,12 +1041,11 @@ describe('CodexAgent permissions', () => {
       }),
     });
     const handle = await agent.startSession({
-      sessionId: 'session-bot-read-only',
-      sessionInstanceId: 'instance-bot-read-only',
+      sessionId: 'session-bot-permissions',
+      sessionInstanceId: 'instance-bot-permissions',
       model: 'gpt-5.5',
       workingDir: '/repo',
       permissionMode: 'bypassPermissions',
-      workspaceAccess: 'read-only',
       botProfilePrompt: 'BOT SOUL: research without changing the project.',
     });
 
@@ -1055,7 +1054,7 @@ describe('CodexAgent permissions', () => {
     )?.[1] as Record<string, unknown>;
     expect(threadStart).toMatchObject({
       approvalPolicy: 'never',
-      sandbox: 'read-only',
+      sandbox: 'danger-full-access',
       config: {
         'mcp_servers.bot_helper.url': 'http://127.0.0.1:45831/mcp',
       },
@@ -1063,10 +1062,11 @@ describe('CodexAgent permissions', () => {
     expect(threadStart).not.toHaveProperty('permissions');
     expect(threadStart.developerInstructions).toContain('BOT SOUL');
 
-    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.setPermissionMode?.('ask');
+    await handle.send({ type: 'user', content: 'Inspect the project.' });
     expect(
-      host.request.mock.calls.filter(([method]) => method === Method.ThreadSettingsUpdate),
-    ).toHaveLength(0);
+      host.request.mock.calls.filter(([method]) => method === Method.TurnStart).at(-1)?.[1],
+    ).toMatchObject({ sandboxPolicy: { type: 'workspaceWrite' } });
     await handle.close();
   });
 
@@ -2717,127 +2717,6 @@ describe('CodexAgent capability routing', () => {
     pendingTurnStart.resolve({ turn: { id: 'race-root-turn' } });
     await sendPromise;
     await handle.close();
-  });
-});
-
-describe('CodexAgent Bot workspace write scope', () => {
-  const profileName = 'cindy-bot-write-scope';
-
-  it('keeps a read-only project read-only while allowing the Bot Home', async () => {
-    const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-bot-readonly-home',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      workspaceAccess: 'read-only',
-      writableDirs: ['/userdata/bots/bot-a'],
-    });
-
-    const [, startParams] = host.request.mock.calls.find(
-      ([method]) => method === Method.ThreadStart,
-    ) as [string, Record<string, unknown>];
-    const readOnlyProfileName = 'cindy-bot-readonly-workspace';
-    expect(startParams.permissions).toBe(readOnlyProfileName);
-    expect('sandbox' in startParams).toBe(false);
-    const profile = (
-      startParams.config as Record<string, { filesystem: Record<string, unknown> }>
-    )[`permissions.${readOnlyProfileName}`];
-    expect(profile.filesystem['/repo']).toEqual({
-      '.': 'read',
-      '.git': 'read',
-      '.agents': 'read',
-      '.codex': 'read',
-    });
-    expect(profile.filesystem['/userdata/bots/bot-a']).toBe('write');
-    await handle.close();
-  });
-
-  it('keeps the Bot write allowlist active even in Full Access mode', async () => {
-    const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: 'turn-bot-scope' } };
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-bot-write-scope',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      workspaceWritePaths: ['/repo/src', '/repo/package.json'],
-      permissionMode: 'bypassPermissions',
-    });
-
-    const [, startParams] = host.request.mock.calls.find(
-      ([method]) => method === Method.ThreadStart,
-    ) as [string, Record<string, unknown>];
-    expect(startParams.permissions).toBe(profileName);
-    expect('sandbox' in startParams).toBe(false);
-    const profile = (
-      startParams.config as Record<string, {
-        filesystem: Record<string, unknown>;
-        network: { enabled: boolean };
-      }>
-    )[`permissions.${profileName}`];
-    expect(profile.network).toEqual({ enabled: true });
-    expect(profile.filesystem['/repo']).toEqual({
-      '.': 'read',
-      src: 'write',
-      'package.json': 'write',
-      '.git': 'read',
-      '.agents': 'read',
-      '.codex': 'read',
-    });
-
-    await handle.send({ type: 'user', content: 'edit the allowed source file' });
-    const [, turnParams] = host.request.mock.calls.find(
-      ([method]) => method === Method.TurnStart,
-    ) as [string, Record<string, unknown>];
-    expect('permissions' in turnParams).toBe(false);
-    expect('sandboxPolicy' in turnParams).toBe(false);
-    await handle.close();
-  });
-
-  it('restores the Bot write profile on thread resume', async () => {
-    const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-bot-write-scope-resume',
-      resumeSessionId: '123e4567-e89b-12d3-a456-426614174001',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      workspaceWritePaths: ['/repo/generated'],
-    });
-
-    const [, resumeParams] = host.request.mock.calls.find(
-      ([method]) => method === Method.ThreadResume,
-    ) as [string, Record<string, unknown>];
-    expect(resumeParams.permissions).toBe(profileName);
-    expect(resumeParams.config).toHaveProperty(`permissions.${profileName}`);
-    await handle.close();
-  });
-
-  it('fails closed when the app-server cannot enforce Bot write scopes', async () => {
-    const agent = new CodexAgent(createDeps());
-    installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.143.0' });
-
-    await expect(agent.startSession({
-      sessionId: 'session-bot-write-scope-old-daemon',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      workspaceWritePaths: ['/repo/src'],
-    })).rejects.toThrow(/Bot write scopes require Codex permission profiles/i);
-  });
-
-  it('never grants protected control directories', async () => {
-    const agent = new CodexAgent(createDeps());
-    installFakeHost(agent);
-
-    await expect(agent.startSession({
-      sessionId: 'session-bot-write-scope-protected',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      workspaceWritePaths: ['/repo/.git/hooks'],
-    })).rejects.toThrow(/protected control directory/i);
   });
 });
 

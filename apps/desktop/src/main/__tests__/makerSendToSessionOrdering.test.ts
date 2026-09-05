@@ -45,6 +45,13 @@ const useOrcaWorkerSelectionSourcePath = resolve(__dirname, '..', '..', 'rendere
 const useOrcaWorkerSelectionSource = readFileSync(useOrcaWorkerSelectionSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('sendToSession ordering', () => {
+  it('routes even idle private Bot deliveries through the durable input coordinator', () => {
+    const block = extractSendToSessionSource();
+    const routing = block.indexOf("explicitClientId?.startsWith('bot-dm:') || inputCoordinator.shouldQueueNewTurn(targetSessionId)");
+    expect(routing).toBeGreaterThan(0);
+    expect(block.indexOf('await enqueueSendToSessionMessage({', routing)).toBeLessThan(block.indexOf('let live = maker.getSession(targetSessionId)'));
+  });
+
   it('uses the full queue inspection count for workspace worker summaries', () => {
     const diagnosticsBlock = extractBetween(
       source,

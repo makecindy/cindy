@@ -832,7 +832,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   if (!existing || existing.length === 0) return null;
 
   if (botArtifacts) {
-    const { primary, related } = partitionBotGeneratedFiles(existing);
+    const { primary, related } = partitionBotGeneratedFiles(existing, fileCtx.workingDir);
     const visiblePrimary = expanded ? primary : primary.slice(0, MAX_VISIBLE_BOT_ARTIFACTS);
     const hiddenPrimaryCount = primary.length - visiblePrimary.length;
 

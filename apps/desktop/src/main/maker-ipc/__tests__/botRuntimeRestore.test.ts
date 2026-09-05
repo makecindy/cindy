@@ -6,6 +6,7 @@ function harness() {
   let identity: { userId: string; clientEpoch: number } | null = null;
   const calls: string[] = [];
   const services = {
+    directMessages: { restore: vi.fn(async () => { calls.push('messages'); }) },
     delegation: { restore: vi.fn(async () => { calls.push('delegation'); }) },
   };
   const log = { warn: vi.fn() };
@@ -32,7 +33,7 @@ describe('botRuntimeRestore', () => {
 
     h.setIdentity({ userId: 'owner-a', clientEpoch: 1 });
     await expect(h.coordinator.restoreCurrentOwner()).resolves.toBe(true);
-    expect(h.calls).toEqual(['delegation']);
+    expect(h.calls).toEqual(['messages', 'delegation']);
   });
 
   it('runs once per DbClient generation and restores again after an owner switch', async () => {
@@ -43,11 +44,11 @@ describe('botRuntimeRestore', () => {
       h.coordinator.restoreCurrentOwner(),
       h.coordinator.restoreCurrentOwner(),
     ]);
-    expect(h.calls).toEqual(['delegation']);
+    expect(h.calls).toEqual(['messages', 'delegation']);
 
     h.setIdentity({ userId: 'owner-b', clientEpoch: 3 });
     await h.coordinator.restoreCurrentOwner();
-    expect(h.calls).toEqual(['delegation', 'delegation']);
+    expect(h.calls).toEqual(['messages', 'delegation', 'messages', 'delegation']);
   });
 
   it('does not mark a failed pass complete, so the same owner can retry', async () => {

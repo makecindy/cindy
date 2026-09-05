@@ -341,7 +341,45 @@ function loadBashTimeoutHelpers(): {
   return factory();
 }
 
+function loadQuestionTool(): { execute: (...args: any[]) => Promise<any> } {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function registerCindyQuestionTool');
+  const end = source.indexOf('export default async function cindyBridge');
+  const compiled = ts.transpileModule(source.slice(start, end), {
+    compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  let tool: any;
+  runInNewContext(compiled + '\nregisterCindyQuestionTool(pi);', {
+    pi: { registerTool(value: any) { tool = value; } },
+  });
+  return tool;
+}
+
 describe('cindy-bridge extension source', () => {
+  it('keeps the question tool pending until the UI returns a real answer', async () => {
+    const tool = loadQuestionTool();
+    let answer!: (value: string) => void;
+    let finished = false;
+    const run = tool.execute('q', { questions: [{ question: 'Continue?', options: ['Yes', 'No'] }] }, undefined, undefined, {
+      ui: { select: () => new Promise<string>((resolve) => { answer = resolve; }) },
+    }).then((result) => { finished = true; return result; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    answer('No');
+    expect((await run).details).toEqual({ answers: { 'Continue?': 'No' }, cancelled: false });
+  });
+
+  it('reports cancellation without fabricating a choice and validates all questions before showing UI', async () => {
+    const tool = loadQuestionTool();
+    const ctx = { ui: { input: async () => undefined } };
+    expect((await tool.execute('q', { questions: [{ question: 'Name?' }] }, undefined, undefined, ctx)).details)
+      .toEqual({ answers: {}, cancelled: true });
+    await expect(tool.execute('q', { questions: [{ question: 'Name?' }, { question: 'Name?' }] }, undefined, undefined, ctx))
+      .rejects.toThrow('distinct questions');
+    await expect(tool.execute('q', { questions: [{ question: 'Name?' }] }, undefined, undefined, { hasUI: false }))
+      .rejects.toThrow('unavailable');
+  });
+
   it('is valid standalone TypeScript for the Pi runtime to load', () => {
     const result = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE, {
       compilerOptions: {
@@ -1588,9 +1626,6 @@ describe('cindy-bridge extension source', () => {
     expect(source).not.toContain('Cindy blocks reading credential or key paths, even with Full access.');
     expect(source).not.toContain('Cindy blocks reading process environment (/proc/*/environ), even with Full access.');
     expect(source).toContain('const writeInsideAnyGrantedRoot = (roots: readonly string[])');
-    expect(source).toContain('...permission.workspaceWritePaths,');
-    expect(source).toContain('...permission.writableRoots,');
-    expect(source).toContain('&& !writeInsideGrantedScope');
     expect(source).toContain('&& !writeInsideWritableRoot');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
     expect(source).toContain(

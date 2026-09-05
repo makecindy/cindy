@@ -15,7 +15,7 @@ const file = (path: string): GeneratedFileRef => ({
 });
 
 describe('伙伴产物分组', () => {
-  it('不把 SVG 源文件和通用 index 预览页冒充成品', () => {
+  it('展示可预览的 SVG 成果，辅助预览仍然收起', () => {
     const files = [
       file('/bot/workspace/logo-concept-A-邮筒猫徽章.svg'),
       file('/bot/workspace/logo-concept-B-猫尾小岛横版.svg'),
@@ -26,11 +26,12 @@ describe('伙伴产物分组', () => {
 
     const grouped = partitionBotGeneratedFiles(files);
 
-    expect(grouped.primary.map((item) => item.name)).toEqual([]);
-    expect(grouped.related.map((item) => item.name)).toEqual([
+    expect(grouped.primary.map((item) => item.name)).toEqual([
       'logo-concept-A-邮筒猫徽章.svg',
       'logo-concept-B-猫尾小岛横版.svg',
       'logo-concept-C-纪念邮票版.svg',
+    ]);
+    expect(grouped.related.map((item) => item.name)).toEqual([
       'index.html',
       'C_full.png',
     ]);
@@ -39,7 +40,7 @@ describe('伙伴产物分组', () => {
   it('只把有内容名的网页当成品，配套源码收进相关文件', () => {
     expect(isBotPrimaryGeneratedFile(file('/bot/workspace/index.html'))).toBe(false);
     expect(isBotPrimaryGeneratedFile(file('/bot/workspace/猫岛邮局-logo-方案.html'))).toBe(true);
-    expect(isBotPrimaryGeneratedFile(file('/bot/workspace/logo.svg'))).toBe(false);
+    expect(isBotPrimaryGeneratedFile(file('/bot/workspace/logo.svg'))).toBe(true);
     expect(isBotPrimaryGeneratedFile(file('/bot/workspace/styles.css'))).toBe(false);
     expect(isBotPrimaryGeneratedFile(file('/bot/workspace/app.js'))).toBe(false);
     expect(isBotPrimaryGeneratedFile(file('/bot/workspace/data.json'))).toBe(false);
@@ -52,10 +53,15 @@ describe('伙伴产物分组', () => {
     expect(isBotPrimaryGeneratedFile(screenshot)).toBe(false);
   });
 
+  it('不因工作目录位于系统临时目录就隐藏真正成果', () => {
+    expect(partitionBotGeneratedFiles([file('/tmp/bot/report.html')], '/tmp/bot').primary).toHaveLength(1);
+    expect(partitionBotGeneratedFiles([file('/tmp/bot/_preview/shot.png')], '/tmp/bot').related).toHaveLength(1);
+  });
+
   it('结构化文档成果仍进入首层', () => {
     expect(
       isBotPrimaryGeneratedFile({
-        ...file('/bot/workspace/report.unknown'),
+        ...file('/tmp/bot/workspace/_preview/report.unknown'),
         artifact: { format: 'pdf', title: '季度报告' },
       }),
     ).toBe(true);

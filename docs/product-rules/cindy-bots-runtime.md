@@ -84,9 +84,9 @@ Cindy Session，以父任务关系回到发起伙伴，但不冒充该伙伴或�
 - Bot Memory 可以复用 Cindy 的存储原语，但物理数据、开关、索引、清空入口和提示词作用域都
   只属于该 Bot；关闭或清空全局 Maker Memory 不得关闭、列出或删除 Bot Memory。
 - 启动 Bot 时不得注入当前项目的 Memory、全局 Memory 摘要或其它 Bot 的记忆。
-- Agent 的原始文件工具只获得 `workspace/` 写权限。`memories/` 与 `skills/` 仍属于同一个
-  Bot Home，但只能经 Bot Memory / Skill 类型化接口写入；索引、SQLite 和 Home 根部宿主策略
-  都不可由 Agent 当普通文件修改。
+- 伙伴沿用普通任务的权限档，原生文件与 Shell 工具按用户选择的权限执行；`workspace/`
+  是默认工作目录，不是操作系统级隔离边界。记忆与 Skill 默认经类型化接口维护，以保持
+  索引、版本与运行期快照一致；不得把这种维护约定描述成对原始文件工具的强制隔离。
 - `workspace/` 是伙伴跨 Session 复用的唯一默认工作区。伙伴不直接绑定代码项目、不占用
   worktree——仓库级或长时间的重活通过 `start_session_task` 交给一条真正的 Cindy 任务完成
   （见第 6.1 节）。
@@ -229,5 +229,5 @@ Session 任务遵守同一套机制与呈现契约：
 - `send_to_agent` 的同一伙伴对最多 12 条、单方最多连续 2 条；达到上限和空闲超时都会结束本轮。
 - 伙伴私聊不进左栏；双方 canonical 时间线都能打开同一份只读记录，接收方正常 turn 的结果
   仍留在自己的主时间线。
-- Bot 的原始文件工具只能写 Home 的 `workspace/`，记忆与 Skill 只能走类型化接口。
+- 伙伴原生工具遵循普通任务权限，权限可正常切换；记忆与 Skill 通过专用接口保持一致。
 - 设置页不再要求用户手动压缩、切 Session 或开关自动 fallback。

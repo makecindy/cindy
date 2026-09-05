@@ -7001,7 +7001,7 @@
     "historyEmpty": "보관된 동료 작업이 아직 없습니다.",
     "historySearch": {
       "title": "동료 기록 검색",
-      "description": "전체 기록을 프롬프트에 넣지 않고 기본, 채널, 위임 및 보관된 작업을 검색합니다.",
+      "description": "이 동료의 이전 메시지, 백그라운드 작업 및 보관 기록을 검색합니다.",
       "placeholder": "무엇을 논의했는지 기억하시나요?",
       "search": "검색",
       "searching": "검색 중…",
@@ -7010,10 +7010,10 @@
     },
     "lifecycle": {
       "stoppedBots": "확인이 필요한 동료",
-      "title": "상태 및 기록",
-      "description": "기본 작업, Route, 자동화, worktree, 보관 기록과 수명 주기 이벤트를 확인합니다.",
+      "title": "실행 상태 및 기록",
+      "description": "동료를 일시 중지하거나 재개하고 이전 메시지와 결과를 찾습니다.",
       "activeTitle": "동료 실행 중",
-      "activeDescription": "채널 Route, 자동화, 전달 및 동료 간 협업을 실행할 수 있습니다.",
+      "activeDescription": "메시지를 받고 백그라운드 작업을 실행하며 다른 동료에게 연락할 수 있습니다.",
       "pausedTitle": "동료 일시 중지됨",
       "pausedDescription": "새 작업을 받지 않습니다. 사용자가 직접 중지한 자동화는 동료 재개 후에도 중지 상태를 유지합니다.",
       "stoppedTitle": "동료가 중지됨",
@@ -7024,7 +7024,7 @@
       "deleteTitle": "동료 영구 삭제",
       "deleteDescription": "{{name}}을(를) 삭제합니다. 성격, 연결한 채널, 예약한 실행이 모두 사라지며 되돌릴 수 없어요.",
       "working": "업데이트 중…",
-      "actionFailed": "동료 수명 주기 변경이 완료되지 않았습니다. 상태를 확인한 뒤 다시 시도하세요."
+      "actionFailed": "작업이 완료되지 않았습니다. 잠시 후 다시 시도하세요."
     },
     "backToChat": "채팅으로 돌아가기",
     "memoryRecovery": {
@@ -7038,7 +7038,7 @@
     "send": "메시지 보내기",
     "roster": {
       "create": "동료 만들기",
-      "customHint": "먼저 정체성, 책임, 협업 방식을 정의하세요. 모델, 스킬, 메시지 채널은 만든 뒤 설정할 수 있습니다.",
+      "customHint": "먼저 동료의 역할과 책임을 정하세요. 생성 후 모델을 바꿀 수 있으며, 사용하면서 기억과 작업 방식을 쌓아 갑니다.",
       "customNamePlaceholder": "예: 아주",
       "customTitle": "동료 만들기"
     },

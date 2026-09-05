@@ -1981,9 +1981,11 @@ export class PiAgent extends BaseAgent {
     }
     assertRemotePiContextProfileAvailable(opts.remoteHostId, opts.model, opts.providerId);
     const reviewMode = opts.reviewMode === true;
+    const botMemoryScope = opts.makerMemoryScopeKey?.startsWith('bot:') === true;
+    const sessionMemoryEnabled = !reviewMode
+      && (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true
+      && (botMemoryScope || (this.memoryOverride ?? true));
     const remote = Boolean(opts.remoteHostId);
-    const workspaceReadOnly = opts.workspaceAccess === 'read-only';
-    const workspaceWritePaths = [...(opts.workspaceWritePaths ?? [])];
     const sessionPiAutoCompactPct = this.deps.runtimeConfig.piAutoCompactThresholdPct;
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
@@ -1995,10 +1997,6 @@ export class PiAgent extends BaseAgent {
       try {
         const resolved = await this.deps.resolvePiNativeProviders({
           workingDir: opts.workingDir,
-          ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
-          ...((opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true
-            ? { memoryEnabled: true }
-            : {}),
           remoteHostId: opts.remoteHostId,
           providerId: opts.providerId,
           model: opts.model,
@@ -2643,7 +2641,7 @@ export class PiAgent extends BaseAgent {
     const normalizePermissionMode = (mode: string | undefined): 'ask' | 'auto' | 'bypassPermissions' =>
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
     let permissionMode =
-      reviewMode || workspaceReadOnly ? 'ask' : normalizePermissionMode(opts.permissionMode);
+      reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
     const reviewReadGrants = reviewMode ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []) : [];
@@ -2652,12 +2650,6 @@ export class PiAgent extends BaseAgent {
     // sessions. The Review-only marker is capability-like: absence means the
     // normal bridge, while `true` selects the restricted Review bridge.
     const reviewPathSnapshot = reviewMode ? { reviewReadPaths, reviewOnly: true as const } : {};
-    const workspaceAccessSnapshot = workspaceReadOnly
-      ? { workspaceReadOnly: true as const }
-      : {};
-    const workspaceWriteScopeSnapshot = workspaceWritePaths.length > 0
-      ? { workspaceWritePaths: [...workspaceWritePaths] }
-      : {};
     // 与 Claude / Codex 一致，运行期 Orca 身份更新必须原地落在同一个对象上。
     // Desktop Pi MCP bridge 在 startSession 时持有这个引用；start_team 成功后 host
     // 调 setVendorOptions，后续 create_worker 等工具才能立即读到最新 Lead 身份。
@@ -2670,8 +2662,6 @@ export class PiAgent extends BaseAgent {
       writableRoots: string[];
       reviewReadPaths?: string[];
       reviewOnly?: true;
-      workspaceReadOnly?: true;
-      workspaceWritePaths?: string[];
     };
     const permissionPrivilege = (mode: PermissionSnapshot['mode']): number => (mode === 'bypassPermissions' ? 2 : mode === 'auto' ? 1 : 0);
     let requestedPermissionSnapshot: PermissionSnapshot = {
@@ -2679,16 +2669,12 @@ export class PiAgent extends BaseAgent {
       readOnlyRoots: [...mutableExtraDirs],
       writableRoots: [...mutableWritableDirs],
       ...reviewPathSnapshot,
-      ...workspaceAccessSnapshot,
-      ...workspaceWriteScopeSnapshot,
     };
     let persistedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
       writableRoots: [...mutableWritableDirs],
       ...reviewPathSnapshot,
-      ...workspaceAccessSnapshot,
-      ...workspaceWriteScopeSnapshot,
     };
     const permissionSnapshotHash = createHash('sha256').update(JSON.stringify(requestedPermissionSnapshot)).digest('hex').slice(0, 16);
     const permissionFile = joinRemotePosixPath(
@@ -2740,8 +2726,6 @@ export class PiAgent extends BaseAgent {
         readOnlyRoots: [...next.readOnlyRoots],
         writableRoots: [...next.writableRoots],
         ...reviewPathSnapshot,
-        ...workspaceAccessSnapshot,
-        ...workspaceWriteScopeSnapshot,
       };
       // 收紧必须立刻约束 host 侧审批门；等待磁盘 I/O 才改闭包会留下一个 Full access
       // 的窗口。放宽反过来只能等对应快照成功落盘，避免 host 已放行而 bridge 仍是旧档。
@@ -2755,8 +2739,6 @@ export class PiAgent extends BaseAgent {
         readOnlyRoots: [...requestedPermissionSnapshot.readOnlyRoots],
         writableRoots: [...requestedPermissionSnapshot.writableRoots],
         ...reviewPathSnapshot,
-        ...workspaceAccessSnapshot,
-        ...workspaceWriteScopeSnapshot,
       };
       const run = permissionWriteChain.then(async () => {
         if (gen !== permissionWriteGen) return;
@@ -2793,8 +2775,6 @@ export class PiAgent extends BaseAgent {
               readOnlyRoots: [...persistedPermissionSnapshot.readOnlyRoots],
               writableRoots: [...persistedPermissionSnapshot.writableRoots],
               ...reviewPathSnapshot,
-              ...workspaceAccessSnapshot,
-              ...workspaceWriteScopeSnapshot,
             };
           }
           throw error;
@@ -2810,8 +2790,6 @@ export class PiAgent extends BaseAgent {
             readOnlyRoots: [...snapshot.readOnlyRoots],
             writableRoots: [...snapshot.writableRoots],
             ...reviewPathSnapshot,
-            ...workspaceAccessSnapshot,
-            ...workspaceWriteScopeSnapshot,
           };
         }
       });
@@ -2920,6 +2898,7 @@ export class PiAgent extends BaseAgent {
           // Bot 会话的 scope key 必须随 ctx 走 — prompt 注入用的是同一个 key
           // (见上方 memoryScopeKey), 丢掉会让 cindy_memory 工具写进 workdir 记忆。
           ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
+          memoryEnabled: sessionMemoryEnabled,
           ...(opts.botRuntimeProfile?.mcpPolicy
             ? { botMcpPolicy: opts.botRuntimeProfile.mcpPolicy }
             : {}),
@@ -2950,14 +2929,10 @@ export class PiAgent extends BaseAgent {
     // 记忆(进 FTS 可 memory_search 检索,但排除出 MEMORY.md / system prompt,不污染
     // curated 记忆)。gate 与 CC 同口径;best-effort,失败只 warn,绝不阻断会话。
     const compactionMemoryEnabled =
-      !reviewMode &&
-      (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true &&
-      (this.memoryOverride ?? true) === true &&
+      sessionMemoryEnabled &&
       !!this.deps.makerMemory;
     const makerMemoryPromptEnabled =
-      !reviewMode &&
-      (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true &&
-      (this.memoryOverride ?? true) === true &&
+      sessionMemoryEnabled &&
       (opts.makerMemoryIndexSnapshot !== undefined || !!this.deps.makerMemory);
     const memoryScopeKey =
       opts.makerMemoryScopeKey ?? buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
@@ -4469,10 +4444,6 @@ export class PiAgent extends BaseAgent {
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
         // cindy-bridge-source currentPermissionState fail-closed)。
         ...(reviewMode ? { CINDY_PI_REVIEW_ONLY: '1' } : {}),
-        ...(workspaceReadOnly ? { CINDY_PI_WORKSPACE_READ_ONLY: '1' } : {}),
-        ...(workspaceWritePaths.length > 0
-          ? { CINDY_PI_WORKSPACE_WRITE_PATHS: JSON.stringify(workspaceWritePaths) }
-          : {}),
         // 子代理能力与其全部控制面 env 一起注入。当前只支持本地 PI；远端会话不加载
         // 扩展，也不能看见一组指向 Desktop 本机文件的半残能力。
         ...(subagentRoutingEnabled ? {
@@ -6322,11 +6293,10 @@ export class PiAgent extends BaseAgent {
       },
 
       async setPermissionMode(mode): Promise<void> {
-        if (reviewMode || workspaceReadOnly) {
+        if (reviewMode) {
           deps.logger.debug('pi setPermissionMode ignored for host-owned hard read-only session', {
             requested: mode,
             reviewMode,
-            workspaceReadOnly,
           });
           return;
         }

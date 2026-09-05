@@ -7003,7 +7003,7 @@
     "historyEmpty": "No archived teammate tasks yet.",
     "historySearch": {
       "title": "Search teammate history",
-      "description": "Search this teammate's canonical, channel, delegated, and archived tasks without loading all history into its prompt.",
+      "description": "Search this teammate’s past messages, background tasks, and archived records.",
       "placeholder": "What do you remember discussing?",
       "search": "Search",
       "searching": "Searching…",
@@ -7012,10 +7012,10 @@
     },
     "lifecycle": {
       "stoppedBots": "Teammates needing attention",
-      "title": "Health and history",
-      "description": "Inspect the canonical task, routes, automation, workspaces, archived transcripts, and lifecycle events.",
+      "title": "Activity and history",
+      "description": "Pause or resume this teammate and find past messages and results.",
       "activeTitle": "Teammate is active",
-      "activeDescription": "Channel routes, automation, deliveries, and teammate-to-teammate work can run.",
+      "activeDescription": "Can receive messages, run background tasks, and contact other teammates.",
       "pausedTitle": "Teammate is paused",
       "pausedDescription": "New work is blocked. User-paused automations remain paused after the teammate resumes.",
       "stoppedTitle": "Teammate has stopped",
@@ -7026,7 +7026,7 @@
       "deleteTitle": "Permanently delete teammate",
       "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
       "working": "Updating…",
-      "actionFailed": "The teammate lifecycle change did not finish. Review health and try again."
+      "actionFailed": "The action did not finish. Try again shortly."
     },
     "backToChat": "Back to chat",
     "memoryRecovery": {
@@ -7040,7 +7040,7 @@
     "send": "Send message",
     "roster": {
       "create": "Create teammate",
-      "customHint": "Define identity, responsibilities, and working style first. Configure the model, skills, and messaging channels after creation.",
+      "customHint": "Define the teammate’s identity and responsibilities. You can change its model after creation; it will build memories and working methods as you use it.",
       "customNamePlaceholder": "e.g. Juju",
       "customTitle": "Create a teammate"
     },

@@ -1679,20 +1679,6 @@ export interface StartSessionOptions {
    */
   reviewMode?: true;
   /**
-   * Host-owned workspace access boundary. Unlike Review this keeps the normal
-   * Bot profile, Skills, MCPs, memory and remote capabilities available while
-   * preventing the harness from mutating the bound project workspace. A later
-   * permission-mode control request must never widen this boundary.
-   */
-  workspaceAccess?: 'read-write' | 'read-only';
-  /**
-   * Host-frozen writable subtrees for this workspace. Undefined/empty keeps
-   * the legacy whole-workspace write scope; a non-empty list narrows writes
-   * to these exact files or directory subtrees and must be enforced by the
-   * harness even when permissionMode is Full Access.
-   */
-  workspaceWritePaths?: string[];
-  /**
    * Exact local files or directories that a host-owned Review may inspect in
    * addition to workingDir. Adapters must treat files as exact grants and
    * directories as subtree grants; this is narrower than extraDirs, whose

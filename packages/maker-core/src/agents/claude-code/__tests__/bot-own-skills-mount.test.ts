@@ -65,7 +65,7 @@ function createDeps(): AgentDeps {
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     getGhostRosterPrompt: vi.fn(() => 'GLOBAL GHOST ROSTER'),
-    getContactsPromptState: vi.fn(() => 'enabled'),
+    getContactsPromptState: vi.fn(() => 'enabled' as const),
   };
 }
 
@@ -134,6 +134,7 @@ async function startBotSession(input: {
   const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
     | {
         plugins?: Array<{ type: string; path: string }>;
+        settingSources?: string[];
         systemPrompt?: { append?: string };
       }
     | undefined;

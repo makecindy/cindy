@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { effectiveSourceIdForModel, getModel } from '@cindy/model-providers';
 import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
@@ -203,8 +204,6 @@ export function canonicalBotSessionId(bot: BotProfile): string | undefined {
   return canonicalBotSession(bot)?.id;
 }
 
-const STORAGE_KEY = 'cindy.bots.v1';
-
 /**
  * 伙伴该用哪个模型:用户真正选过的优先,没选过就跟系统默认。
  *
@@ -338,6 +337,7 @@ export function subscribeBotGlobalModel(listener: () => void): () => void {
 }
 
 export function getBotGlobalModelChain(): BotModelRoute[] | null {
+  ensureProfileOwner();
   return globalModelChainCache;
 }
 
@@ -370,6 +370,8 @@ export function getEffectiveBotModelChain(
 }
 
 export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<void> {
+  ensureProfileOwner();
+  const owner = getDataOwnerGeneration();
   const api = botsApi();
   if (!api || typeof api.setModelChainSettings !== 'function') {
     throw new Error('Bot model settings are not ready');
@@ -377,6 +379,7 @@ export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<vo
   const normalized = normalizeBotModelChain(chain);
   if (normalized.length === 0) throw new Error('Choose at least one Bot model route');
   const state = await api.setModelChainSettings({ modelChain: normalized });
+  assertCurrentOwner(owner);
   const persisted = normalizeBotModelChain(state.modelChain);
   if (persisted.length === 0) throw new Error('Bot model settings were not saved');
   globalModelChainCache = persisted;
@@ -460,126 +463,32 @@ export interface CreateBotProfileInput {
   welcomeMessage?: string;
 }
 
-function readProfiles(): BotProfile[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item): BotProfile[] => {
-      if (!item || typeof item !== 'object') return [];
-      const value = item as Partial<BotProfile>;
-      if (!(
-        typeof value.id === 'string' &&
-        typeof value.name === 'string' &&
-        typeof value.enabled === 'boolean' &&
-        Array.isArray(value.sessions)
-      ))
-        return [];
-      const capabilities = value.capabilities ?? defaultCapabilities();
-      const harness = normalizeBotHarness(capabilities.harness);
-      const defaults = defaultCapabilities(harness);
-      const modelOverride = normalizeBotModelOverride(
-        capabilities.modelOverride,
-        capabilities,
-        harness,
-      );
-      const resolvedModel =
-        modelOverride ?? getEffectiveBotModelSettings(vendorForHarness(harness), null);
-      const inheritedChain = normalizeBotModelChain(capabilities.modelChain, {
-        harness,
-        model: resolvedModel.model || capabilities.model,
-        providerId: resolvedModel.providerId ?? capabilities.providerId,
-        effort: resolvedModel.effort || capabilities.effort,
-        fastMode: resolvedModel.fastMode || capabilities.fastMode === true,
-      });
-      const primaryRoute = inheritedChain[0];
-      const legacyTools = normalizeStringList(
-        (capabilities as unknown as { tools?: unknown }).tools,
-      );
-      const toolsets =
-        normalizeStringList(capabilities.toolsets).length > 0
-          ? normalizeStringList(capabilities.toolsets)
-          : legacyTools.every((item) => ['files', 'browser', 'mcp'].includes(item))
-            ? []
-            : legacyTools;
-      return [
-        {
-          ...(value as BotProfile),
-          avatar: typeof value.avatar === 'string' ? value.avatar : '🤖',
-          avatarColor: typeof value.avatarColor === 'string' ? value.avatarColor : 'violet',
-          skills: Array.isArray(value.skills) ? value.skills : [],
-          userContextSource:
-            typeof value.userContextSource === 'string' ? value.userContextSource : '',
-          capabilities: {
-            ...defaults,
-            ...capabilities,
-            harness: primaryRoute?.harness ?? harness,
-            modelChain: inheritedChain,
-            modelChainOverride: Array.isArray(capabilities.modelChainOverride)
-              ? normalizeBotModelChain(capabilities.modelChainOverride)
-              : capabilities.modelOverride && typeof capabilities.modelOverride === 'object'
-                ? inheritedChain
-                : null,
-            providerId:
-              primaryRoute?.providerId ??
-              (capabilities.modelOverride === null
-                ? resolvedModel.providerId
-                : modelOverride
-                  ? modelOverride.providerId
-                  : typeof capabilities.providerId === 'string'
-                    ? capabilities.providerId
-                    : capabilities.providerId === null
-                      ? null
-                      : resolvedModel.providerId),
-            effort:
-              primaryRoute?.effort ||
-              (capabilities.modelOverride === null
-                ? resolvedModel.effort
-                : modelOverride?.effort
-                  ? modelOverride.effort
-                  : typeof capabilities.effort === 'string' && capabilities.effort
-                    ? capabilities.effort
-                    : defaults.effort),
-            fastMode:
-              primaryRoute?.fastMode ??
-              (capabilities.modelOverride === null
-                ? resolvedModel.fastMode
-                : modelOverride?.fastMode === true),
-            permissions: normalizeBotPermissions(capabilities.permissions),
-            skillMode: normalizeSkillMode(capabilities.skillMode, value.skills),
-            skillsExcluded: normalizeStringList(capabilities.skillsExcluded),
-            model:
-              primaryRoute?.model ||
-              resolvedModel.model ||
-              normalizeBotModel(capabilities.model, harness),
-            modelOverride: capabilities.modelOverride === null ? null : modelOverride,
-            toolsetMode: normalizeCapabilityMode(capabilities.toolsetMode, toolsets),
-            toolsets,
-            mcpMode: normalizeCapabilityMode(capabilities.mcpMode, capabilities.mcpServers),
-            mcpServers: normalizeStringList(capabilities.mcpServers),
-          },
-          canonicalSessionId:
-            typeof value.canonicalSessionId === 'string' ? value.canonicalSessionId : undefined,
-          sessions: value.sessions.filter(
-            (session) => typeof session?.id === 'string' && !session.id.startsWith('bot-chat-'),
-          ),
-        },
-      ];
-    });
-  } catch {
-    return [];
-  }
-}
-
-let profiles = readProfiles();
+// SQLite owns profiles. Keep only a replaceable in-memory projection.
+let profiles: BotProfile[] = [];
 const listeners = new Set<() => void>();
 let hydrated = false;
+let profileOwner = getDataOwnerGeneration();
+let hydrationGeneration = 0;
 const hydrationPromises = new Set<Promise<void>>();
-const deletingBotIds = new Set<string>();
 /** 每个伙伴各自的写入代际 —— 见 updateBotProfile 里的 isLatestWrite。 */
 const profileWriteGenerations = new Map<string, number>();
+
+/** Clear account-scoped projections before a new owner can read or mutate them. */
+function ensureProfileOwner(): void {
+  if (isDataOwnerGenerationCurrent(profileOwner)) return;
+  profileOwner = getDataOwnerGeneration();
+  profiles = [];
+  unreadCounts = {};
+  globalModelChainCache = null;
+  profileWriteGenerations.clear();
+  hydrationPromises.clear();
+  hydrationGeneration += 1;
+  hydrated = false;
+}
+
+function assertCurrentOwner(owner: ReturnType<typeof getDataOwnerGeneration>): void {
+  if (!isDataOwnerGenerationCurrent(owner)) throw new Error('Bot data owner changed');
+}
 
 function trackHydration(): void {
   const promise = hydrateFromDatabase();
@@ -598,13 +507,6 @@ async function waitForHydration(): Promise<void> {
 
 function emit(): void {
   for (const listener of listeners) listener();
-}
-
-function persist(): void {
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));
-  }
-  emit();
 }
 
 function botsApi(): NonNullable<typeof window.electronAPI.localDb>['bots'] | null {
@@ -773,6 +675,7 @@ function applyUnreadCounts(rows: unknown[]): void {
 }
 
 export function getBotUnreadCounts(): Record<string, number> {
+  ensureProfileOwner();
   return unreadCounts;
 }
 
@@ -787,13 +690,18 @@ async function hydrateFromDatabase(): Promise<void> {
   // 列表 —— 有 `bots` 命名空间不等于有完整 API,按能力探测而不是按存在性判定。
   if (!api || typeof api.list !== 'function' || hydrated) return;
   hydrated = true;
+  const owner = getDataOwnerGeneration();
+  const generation = ++hydrationGeneration;
+  const isCurrent = () => isDataOwnerGenerationCurrent(owner) && generation === hydrationGeneration;
   try {
     if (typeof api.getModelChainSettings === 'function') {
       try {
         let state = await api.getModelChainSettings();
+        if (!isCurrent()) return;
         const legacy = readLegacyBotGlobalModelChain();
         if (!state.isCustomized && legacy && typeof api.setModelChainSettings === 'function') {
           state = await api.setModelChainSettings({ modelChain: legacy });
+          if (!isCurrent()) return;
         }
         const persisted = normalizeBotModelChain(state.modelChain);
         if (persisted.length > 0) {
@@ -806,7 +714,9 @@ async function hydrateFromDatabase(): Promise<void> {
         // unavailable. A later explicit refresh retries the Main-owned source.
       }
     }
+    if (!isCurrent()) return;
     const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap() });
+    if (!isCurrent()) return;
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     profiles = dbProfiles;
     applyUnreadCounts(rows);
@@ -821,13 +731,15 @@ async function hydrateFromDatabase(): Promise<void> {
     // DB readiness can race the first renderer render during account/bootstrap.
     // The Bots layout explicitly calls refreshBotProfiles when entered, so do
     // not keep polling a signed-out renderer in the background.
-    hydrated = false;
+    if (isCurrent()) hydrated = false;
   }
 }
 
 trackHydration();
 
 export function refreshBotProfiles(): void {
+  ensureProfileOwner();
+  emit();
   hydrated = false;
   trackHydration();
 }
@@ -836,48 +748,45 @@ export function refreshBotProfiles(): void {
 export async function chooseBotAvatar(botId: string): Promise<BotProfile | null> {
   const api = botsApi();
   if (!api) throw new Error('Bot storage is not ready');
+  const owner = getDataOwnerGeneration();
   const result = await api.chooseAvatar({ botId });
+  assertCurrentOwner(owner);
   if (result.canceled) return null;
   const next = normalizeDbProfile(result.profile);
   if (!next) throw new Error('Bot avatar update returned invalid data');
   profiles = profiles.map((bot) => (bot.id === botId ? next : bot));
-  persist();
+  emit();
   return next;
 }
 
 export async function runBotLifecycleAction(
   request: import('../../../shared/botLifecycle').BotLifecycleActionRequest,
 ): Promise<import('../../../shared/botLifecycle').BotLifecycleActionResult> {
-  const isDelete = request.action === 'delete';
-  if (isDelete) {
-    // Legacy migration can still be writing a profile when the first renderer
-    // opens. Let it finish before deleting, otherwise its stale snapshot can
-    // recreate the Bot immediately after the delete transaction commits.
-    await waitForHydration();
-    deletingBotIds.add(request.botId);
-  }
-  try {
-    const result = await window.electronAPI.maker.runBotLifecycleAction(request);
-    const api = botsApi();
-    if (result.status === 'deleted') {
-      profiles = profiles.filter((bot) => bot.id !== request.botId);
-      persist();
-      return result;
-    }
-    if (api) {
-      const refreshed = normalizeDbProfile(await api.get(request.botId));
-      if (refreshed) {
-        profiles = profiles.map((bot) => (bot.id === request.botId ? refreshed : bot));
-        persist();
-      }
-    }
+  const owner = getDataOwnerGeneration();
+  // Complete pending reads first so their snapshots cannot resurrect a deleted row.
+  if (request.action === 'delete') await waitForHydration();
+  assertCurrentOwner(owner);
+  const result = await window.electronAPI.maker.runBotLifecycleAction(request);
+  assertCurrentOwner(owner);
+  const api = botsApi();
+  if (result.status === 'deleted') {
+    profiles = profiles.filter((bot) => bot.id !== request.botId);
+    emit();
     return result;
-  } finally {
-    if (isDelete) deletingBotIds.delete(request.botId);
   }
+  if (api) {
+    const refreshed = normalizeDbProfile(await api.get(request.botId));
+    assertCurrentOwner(owner);
+    if (refreshed) {
+      profiles = profiles.map((bot) => (bot.id === request.botId ? refreshed : bot));
+      emit();
+    }
+  }
+  return result;
 }
 
 export function getBotProfiles(): BotProfile[] {
+  ensureProfileOwner();
   return profiles;
 }
 
@@ -891,6 +800,7 @@ export function useBotProfiles(): BotProfile[] {
 }
 
 export function addBotProfile(input: CreateBotProfileInput): BotProfile {
+  ensureProfileOwner();
   const now = Date.now();
   const requested = input.capabilities ?? {};
   const defaults = defaultCapabilities();
@@ -940,17 +850,19 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
     sessions: [],
   };
   profiles = [bot, ...profiles];
-  persist();
+  emit();
   return bot;
 }
 
 /** Create the local projection and wait until main/SQLite owns the profile. */
 export async function addBotProfileAndWait(input: CreateBotProfileInput): Promise<BotProfile> {
+  const owner = getDataOwnerGeneration();
   const harness = normalizeBotHarness(input.capabilities?.harness ?? NEW_BOT_DEFAULT_HARNESS);
   const needsPiDefault = harness === 'pi' && input.capabilities?.model === undefined;
   if (needsPiDefault && getCachedProvidersSnapshot() === null && typeof window !== 'undefined') {
     await refreshLocalCatalogSnapshot();
   }
+  assertCurrentOwner(owner);
   const bot = addBotProfile(input);
   const api = botsApi();
   if (!api) return bot;
@@ -973,14 +885,16 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         ...(input.welcomeMessage ? { welcomeMessage: input.welcomeMessage } : {}),
       }),
     );
+    assertCurrentOwner(owner);
     if (!created) throw new Error('Bot profile create returned an invalid profile');
     profiles = profiles.map((item) => (item.id === bot.id ? created : item));
-    persist();
+    emit();
   } catch (error) {
+    assertCurrentOwner(owner);
     // The renderer projection is optimistic, but a failed main/SQLite create
     // must not leave a ghost Bot that can never be opened or migrated.
     profiles = profiles.filter((item) => item.id !== bot.id);
-    persist();
+    emit();
     throw error;
   }
   return profiles.find((item) => item.id === bot.id) ?? bot;
@@ -1004,6 +918,7 @@ export type BotProfileUpdatePatch = Partial<
 > & { avatarUploadToken?: string };
 
 export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Promise<BotProfile> {
+  ensureProfileOwner();
   const before = profiles.find((bot) => bot.id === id);
   if (!before) return Promise.reject(new Error('Bot not found'));
   const { avatarUploadToken, ...profilePatch } = patch;
@@ -1011,9 +926,11 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
   // 落后的响应一律丢弃,不许覆盖更新的状态(见下面两处 isLatestWrite)。
   const generation = (profileWriteGenerations.get(id) ?? 0) + 1;
   profileWriteGenerations.set(id, generation);
-  const isLatestWrite = () => profileWriteGenerations.get(id) === generation;
+  const owner = getDataOwnerGeneration();
+  const isLatestWrite = () => isDataOwnerGenerationCurrent(owner)
+    && profileWriteGenerations.get(id) === generation;
   profiles = profiles.map((bot) => (bot.id === id ? { ...bot, ...profilePatch } : bot));
-  persist();
+  emit();
   const optimistic = profiles.find((bot) => bot.id === id) ?? { ...before, ...profilePatch };
   const api = botsApi();
   if (!api) return Promise.resolve(optimistic);
@@ -1028,13 +945,14 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
       identitySource: profilePatch.identitySource,
     })
     .then((value) => {
+      assertCurrentOwner(owner);
       const next = normalizeDbProfile(value);
       if (!next) throw new Error('Bot profile update returned invalid data');
       // 同一行已经有更新的写在飞:那次的乐观值更接近用户此刻的意图,
       // 让它赢。调用方仍然拿到自己这次的服务端结果。
       if (!isLatestWrite()) return next;
       profiles = profiles.map((bot) => (bot.id === id ? next : bot));
-      persist();
+      emit();
       return next;
     })
     .catch((error) => {
@@ -1052,7 +970,7 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
       */
       if (isLatestWrite()) {
         profiles = profiles.map((bot) => (bot.id === id ? before : bot));
-        persist();
+        emit();
       }
       throw error;
     });
@@ -1065,10 +983,12 @@ async function setBotRosterFlag(
 ): Promise<BotProfile> {
   const api = botsApi();
   if (!api) throw new Error('Bot storage is not ready');
+  const owner = getDataOwnerGeneration();
   const next = normalizeDbProfile(await api.update({ id, [flag]: value }));
+  assertCurrentOwner(owner);
   if (!next) throw new Error('Bot profile update returned invalid data');
   profiles = profiles.map((bot) => (bot.id === id ? next : bot));
-  persist();
+  emit();
   return next;
 }
 
@@ -1161,10 +1081,10 @@ export function setCanonicalBotSession(
       ],
     };
   });
-  persist();
+  emit();
 }
 
 export function removeBotProfile(id: string): void {
   profiles = profiles.filter((bot) => bot.id !== id);
-  persist();
+  emit();
 }

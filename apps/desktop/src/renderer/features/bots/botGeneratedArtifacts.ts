@@ -1,8 +1,7 @@
 import type { GeneratedFileRef } from '@/lib/generatedFiles';
 
 const PRIMARY_EXTENSIONS = new Set([
-  // 可直接打开的视觉成果。SVG 是源文件，而且当前本地协议不能
-  // 稳定给它出缩略图，所以留在「相关文件」，不冒充可见成品。
+  // 本地媒体协议支持直接预览的视觉成果。
   'avif',
   'bmp',
   'gif',
@@ -12,6 +11,7 @@ const PRIMARY_EXTENSIONS = new Set([
   'jpeg',
   'jpg',
   'png',
+  'svg',
   'tif',
   'tiff',
   'webp',
@@ -78,8 +78,14 @@ export function generatedFileExtension(file: GeneratedFileRef): string {
  * 伙伴工作目录里的预览截图与临时文件仍然可取，但不能和真正成果并列。
  * 这里只收敛有明确产品语义的辅助目录，不用文件名猜测用户意图。
  */
-export function isBotSupportingGeneratedFile(file: GeneratedFileRef): boolean {
-  return normalizedPathSegments(file.path).some((segment) =>
+export function isBotSupportingGeneratedFile(file: GeneratedFileRef, workingDir?: string): boolean {
+  const segments = normalizedPathSegments(file.path);
+  const root = workingDir ? normalizedPathSegments(workingDir) : [];
+  const isWithinRoot = root.length > 0 && root.every((part, index) => segments[index] === part);
+  // A workspace itself may be under the OS temp directory. Only its descendants
+  // describe supporting material; an explicit document artifact also wins below.
+  const relative = isWithinRoot ? segments.slice(root.length) : segments;
+  return relative.slice(0, -1).some((segment) =>
     SUPPORTING_DIRECTORY_NAMES.has(segment),
   );
 }
@@ -88,9 +94,9 @@ export function isBotSupportingGeneratedFile(file: GeneratedFileRef): boolean {
  * 没有结构化 artifact manifest 时的保守兜底：只把办公文件、媒体、网页等
  * 用户可直接消费的格式提到首层；CSS / JS / JSON / 源码等留在「相关文件」。
  */
-export function isBotPrimaryGeneratedFile(file: GeneratedFileRef): boolean {
-  if (isBotSupportingGeneratedFile(file)) return false;
+export function isBotPrimaryGeneratedFile(file: GeneratedFileRef, workingDir?: string): boolean {
   if (file.artifact) return true;
+  if (isBotSupportingGeneratedFile(file, workingDir)) return false;
   const extension = generatedFileExtension(file);
   if (HTML_EXTENSIONS.has(extension)) {
     // 「index.html」常常只是把多份方案拼起来的内部预览页。真正的网页
@@ -100,14 +106,14 @@ export function isBotPrimaryGeneratedFile(file: GeneratedFileRef): boolean {
   return PRIMARY_EXTENSIONS.has(extension);
 }
 
-export function partitionBotGeneratedFiles(files: readonly GeneratedFileRef[]): {
+export function partitionBotGeneratedFiles(files: readonly GeneratedFileRef[], workingDir?: string): {
   primary: GeneratedFileRef[];
   related: GeneratedFileRef[];
 } {
   const primary: GeneratedFileRef[] = [];
   const related: GeneratedFileRef[] = [];
   for (const file of files) {
-    (isBotPrimaryGeneratedFile(file) ? primary : related).push(file);
+    (isBotPrimaryGeneratedFile(file, workingDir) ? primary : related).push(file);
   }
   return { primary, related };
 }

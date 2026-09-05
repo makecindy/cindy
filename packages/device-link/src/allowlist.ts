@@ -418,6 +418,11 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // CHANNEL_NOT_ALLOWED → 控制端按 unknown 处理(不置灰)。
   'maker:api-key:present',
   // —— Memory 读(写全局设置不放行)——
+  // Teammate directory: handlers explicitly recognize the authorized device-link
+  // context and return only identity/status/canonical task, without local paths,
+  // memory, prompts, configuration, or native UI/file mutations.
+  'local-db:bots:list',
+  'local-db:bots:get',
   'maker:memory:get',
   'maker:memory:get-settings',
   // —— 命令 / 技能 / at 资源 列举(只读)——

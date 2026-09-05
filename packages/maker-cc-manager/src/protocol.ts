@@ -30,24 +30,16 @@
  * 之前执行 Agent/Task 实时模型准入预检。旧 daemon 没有该执行边界，
  * 会继续发起无权限请求，因此必须升级协议。
  *
- * v5: query/start 增加 host-owned Bot workspace policy。旧 daemon 会忽略
- * workspaceReadOnly/workspaceWritePaths，导致 Full Access 下静默退回整仓可写，
- * 因此必须升级协议而不能把它当普通 additive 字段。
- *
  * v5: root-only toolGuards now accept the native `AskUserQuestion` tool name.
  * Older daemons reject that exact guard as an invalid root-only tool and must
  * be upgraded before remote queries send it.
- *
- * v6: combines the v5 native root-only guard contract with host-owned Bot
- * workspaceReadOnly/workspaceWritePaths. Either earlier v5 daemon understands
- * only one side of that contract, so sharing its version would fail open.
  *
  * v1 (redesign): 删除 dead-session drain/archive 握手,对齐 codex 模式。
  * reattach 只接新 events (live-only subscription),不 replay 旧 ring buffer。
  * ring buffer 降级为纯内存 fast-path(同一 daemon 进程生命周期内的 mid-turn 续流)。
  * 断开期间跑完的输出暂不自动补回 chat(follow-up: jsonl recovery 统一 cc + codex)。
  */
-export const PROTOCOL_VERSION = 6 as const;
+export const PROTOCOL_VERSION = 5 as const;
 
 /**
  * cc-mgr bundle 版本号 — 手动 bump。
@@ -56,7 +48,7 @@ export const PROTOCOL_VERSION = 6 as const;
  * 无关依赖变化而变。desktop 用这个（而非 bundle sha256）判断远端 daemon
  * 是否需要 upgrade,避免无关的 pnpm install 触发全量远端重装。
  */
-export const CC_MGR_BUNDLE_VERSION = '0.0.11' as const;
+export const CC_MGR_BUNDLE_VERSION = '0.0.10' as const;
 
 export type RpcId = number;
 
@@ -223,10 +215,6 @@ export interface QueryStartParams {
    * host's capability-source choice.
    */
   toolGuards?: QueryToolGuard[];
-  /** Host-owned immutable Bot workspace boundary, enforced before SDK permissions. */
-  workspaceReadOnly?: boolean;
-  /** Absolute paths inside cwd that may be written; non-empty means shell is denied. */
-  workspaceWritePaths?: string[];
   /** Any extra SDK options we want to pass through verbatim. */
   extraOptions?: Record<string, unknown>;
 }

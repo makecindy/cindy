@@ -590,9 +590,7 @@ function supportsCodexNativeTurnFork(userAgent: string | undefined): boolean {
 }
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
-const BOT_READONLY_WORKSPACE_PERMISSION_PROFILE = 'cindy-bot-readonly-workspace';
 const REVIEW_PERMISSION_PROFILE = 'cindy-review-readonly';
-const BOT_WRITE_SCOPE_PERMISSION_PROFILE = 'cindy-bot-write-scope';
 const REVIEW_CREDENTIAL_GLOB_DENIES: Record<string, 'deny'> = Object.fromEntries(
   REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS.map((pattern) => [pattern, 'deny'] as const),
 );
@@ -3076,41 +3074,6 @@ export class CodexAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
     const reviewMode = opts.reviewMode === true;
-    const workspaceReadOnly = opts.workspaceAccess === 'read-only';
-    const workspaceWritePaths = [...(opts.workspaceWritePaths ?? [])];
-    const workspaceWriteRestricted = !workspaceReadOnly && workspaceWritePaths.length > 0;
-    const workspacePathApi = opts.remoteHostId ? path.posix : path;
-    const botWorkspaceFilesystemRule = (() => {
-      const root = workspacePathApi.resolve(opts.workingDir);
-      const rule: Record<string, unknown> = {
-        '.': 'read',
-        '.git': 'read',
-        '.agents': 'read',
-        '.codex': 'read',
-      };
-      for (const candidate of workspaceWritePaths) {
-        const resolved = workspacePathApi.resolve(candidate);
-        const relative = workspacePathApi.relative(root, resolved);
-        if (
-          relative === '..'
-          || relative.startsWith(`..${workspacePathApi.sep}`)
-          || workspacePathApi.isAbsolute(relative)
-        ) {
-          throw new Error(`Cindy Bot write scope escapes its workspace: ${candidate}`);
-        }
-        const firstSegment = relative.split(workspacePathApi.sep)[0];
-        if (firstSegment === '.git' || firstSegment === '.agents' || firstSegment === '.codex') {
-          throw new Error(`Cindy Bot write scope includes a protected control directory: ${candidate}`);
-        }
-        rule[relative || '.'] = 'write';
-      }
-      // A root grant may set `.` to write, but the more specific control
-      // directories remain read-only in the same workspace rule.
-      rule['.git'] = 'read';
-      rule['.agents'] = 'read';
-      rule['.codex'] = 'read';
-      return rule;
-    })();
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
     }
@@ -4268,7 +4231,7 @@ export class CodexAgent extends BaseAgent {
     let mutableCatalogModel: string | undefined = opts.model;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode =
-      reviewMode || workspaceReadOnly ? 'ask' : opts.permissionMode ?? 'ask';
+      reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
     let autoReviewDirectoryGeneration = 0;
@@ -4708,12 +4671,6 @@ export class CodexAgent extends BaseAgent {
         `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
       );
     }
-    if (workspaceWriteRestricted && !readonlyReferenceDirsSupported) {
-      releaseHostBindingLeaseIfNeeded();
-      throw new Error(
-        `Cindy Bot write scopes require Codex permission profiles from app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
-      );
-    }
     if (
       mutablePermissionMode === 'auto' &&
       !(approvalsReviewerProtocolSupported && approvalsReviewerRouteSupported)
@@ -4740,7 +4697,7 @@ export class CodexAgent extends BaseAgent {
       this.codexHome?.startsWith('/')
         ? `${this.codexHome.replace(/\/+$/, '')}/${sub}`
         : path.join(this.codexHome ?? '', sub);
-    const codexExtraWritableRoots = reviewMode || workspaceReadOnly || !this.codexHome
+    const codexExtraWritableRoots = reviewMode || !this.codexHome
       ? []
       : [joinCodexHome('memories')];
     const runtimeWorkspaceRoots = (): string[] =>
@@ -4807,38 +4764,6 @@ export class CodexAgent extends BaseAgent {
           ...(codexExtraWritableRoots[0] ? { [codexExtraWritableRoots[0]]: 'write' } : {}),
         },
         network: { enabled: false },
-      },
-    });
-    const botReadonlyWorkspaceConfig = (): Record<string, unknown> => ({
-      [`permissions.${BOT_READONLY_WORKSPACE_PERMISSION_PROFILE}`]: {
-        filesystem: {
-          ':root': 'read',
-          ':workspace_roots': 'read',
-          ':tmpdir': 'write',
-          ':slash_tmp': 'write',
-          [opts.workingDir]: {
-            '.': 'read',
-            '.git': 'read',
-            '.agents': 'read',
-            '.codex': 'read',
-          },
-          ...Object.fromEntries(mutableWritableDirs.map((dir) => [dir, 'write'])),
-        },
-        network: { enabled: false },
-      },
-    });
-    const botWriteScopeConfig = (): Record<string, unknown> => ({
-      [`permissions.${BOT_WRITE_SCOPE_PERMISSION_PROFILE}`]: {
-        filesystem: {
-          ':root': 'read',
-          ':workspace_roots': 'read',
-          ':tmpdir': 'write',
-          ':slash_tmp': 'write',
-          [opts.workingDir]: botWorkspaceFilesystemRule,
-          ...Object.fromEntries(mutableWritableDirs.map((dir) => [dir, 'write'])),
-          ...(codexExtraWritableRoots[0] ? { [codexExtraWritableRoots[0]]: 'write' } : {}),
-        },
-        network: { enabled: true },
       },
     });
     const reviewPermissionsConfig: Record<string, unknown> = {
@@ -5404,7 +5329,7 @@ export class CodexAgent extends BaseAgent {
     });
     const hasHostShellCommandPolicy = Boolean(this.deps.getShellCommandPolicy);
     function currentApprovalConfig(): CodexPermissionConfig {
-      if (reviewMode || workspaceReadOnly) {
+      if (reviewMode) {
         return { approvalPolicy: 'never', sandbox: 'read-only' };
       }
       const config = mapPermissionToCodex(
@@ -5423,12 +5348,6 @@ export class CodexAgent extends BaseAgent {
 
     function currentWorkspacePermissionProfile(): string | undefined {
       if (reviewMode) return REVIEW_PERMISSION_PROFILE;
-      if (workspaceReadOnly && mutableWritableDirs.length > 0) {
-        return BOT_READONLY_WORKSPACE_PERMISSION_PROFILE;
-      }
-      // A Bot binding's write scope is a host-enforced boundary. It must remain
-      // selected even when the user chooses Full Access.
-      if (workspaceWriteRestricted) return BOT_WRITE_SCOPE_PERMISSION_PROFILE;
       if (
         readonlyReferenceDirsSupported
         && (mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0)
@@ -5461,8 +5380,6 @@ export class CodexAgent extends BaseAgent {
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
-        ...(workspaceReadOnly ? botReadonlyWorkspaceConfig() : {}),
-        ...(workspaceWriteRestricted ? botWriteScopeConfig() : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
         ...(reviewMode
           ? {
@@ -12723,11 +12640,10 @@ export class CodexAgent extends BaseAgent {
       },
 
       async setPermissionMode(newMode: PermissionMode) {
-        if (reviewMode || workspaceReadOnly) {
+        if (reviewMode) {
           log.debug('setPermissionMode ignored for host-owned hard read-only session', {
             requested: newMode,
             reviewMode,
-            workspaceReadOnly,
           });
           return;
         }

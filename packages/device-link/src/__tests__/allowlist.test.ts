@@ -22,6 +22,18 @@ import {
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows the reduced teammate directory while keeping native configuration local', () => {
+    for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    for (const channel of [
+      'local-db:bots:choose-avatar', 'local-db:bots:create', 'local-db:bots:update',
+      'local-db:bots:model-chain-settings-set', 'maker:bot-lifecycle:action',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(false);
+    }
+  });
+
   it('keeps every Review external-input classification inside the remote allowlist', () => {
     for (const channel of REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);

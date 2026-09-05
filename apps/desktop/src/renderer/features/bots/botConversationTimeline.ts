@@ -8,6 +8,7 @@ export interface BotTimelineMessage {
 export interface BotReplyTimelineMessage extends BotTimelineMessage {
   role: string;
   systemCardType?: string;
+  botPrivateReply?: boolean;
 }
 
 function timestampOf(value: BotTimelineMessage['createdAt']): number | null {
@@ -50,7 +51,7 @@ export function findFirstUnreadBotReplyClientId(
     if (message.role !== 'assistant') continue;
     // Bot-to-Bot stamps are internal conversation traces. The unread divider
     // belongs on the Bot's next real reply/result, not on the message it received.
-    if (message.systemCardType === 'bot-direct-message') continue;
+    if (message.systemCardType === 'bot-direct-message' || message.botPrivateReply) continue;
     const timestamp = timestampOf(message.createdAt);
     if (timestamp !== null && timestamp > boundaryAt) return message.clientId;
   }

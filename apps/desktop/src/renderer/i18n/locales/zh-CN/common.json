@@ -7001,7 +7001,7 @@
     "historyEmpty": "还没有归档的伙伴任务。",
     "historySearch": {
       "title": "搜索伙伴历史",
-      "description": "搜索这个伙伴的主任务、通道任务、委派任务和归档记录，不会把全部历史塞进提示词。",
+      "description": "搜索这个伙伴过去的消息、后台任务和归档记录。",
       "placeholder": "你记得讨论过什么？",
       "search": "搜索",
       "searching": "正在搜索…",
@@ -7010,10 +7010,10 @@
     },
     "lifecycle": {
       "stoppedBots": "需要处理的伙伴",
-      "title": "健康与历史",
-      "description": "检查主任务、Route、自动化、工作区、归档记录和生命周期事件。",
+      "title": "运行与历史",
+      "description": "暂停或恢复伙伴，查找过去的消息和成果。",
       "activeTitle": "伙伴正在运行",
-      "activeDescription": "通道 Route、自动化、投递和伙伴间协作可以正常执行。",
+      "activeDescription": "可以接收消息、执行后台任务和联系其他伙伴。",
       "pausedTitle": "伙伴已暂停",
       "pausedDescription": "不会接收新工作；用户原本手动暂停的自动化在恢复伙伴后仍保持暂停。",
       "stoppedTitle": "伙伴已停止运行",
@@ -7024,7 +7024,7 @@
       "deleteTitle": "永久删除伙伴",
       "deleteDescription": "这会删掉 {{name}}：性格、已连的通道、定的日程都会没。删了找不回来。",
       "working": "正在更新…",
-      "actionFailed": "伙伴生命周期操作未完整结束，请查看健康状态后重试。"
+      "actionFailed": "操作未完成，请稍后重试。"
     },
     "backToChat": "返回对话",
     "memoryRecovery": {
@@ -7038,7 +7038,7 @@
     "send": "发送消息",
     "roster": {
       "create": "创建伙伴",
-      "customHint": "先定义身份、职责和协作方式；模型、技能和消息通道可在创建后配置。",
+      "customHint": "先定义伙伴的身份和职责。创建后可以调整模型，伙伴会在使用中积累记忆和做法。",
       "customNamePlaceholder": "比如：阿橘",
       "customTitle": "创建伙伴"
     },

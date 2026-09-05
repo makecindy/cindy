@@ -1272,6 +1272,24 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toBeNull();
   });
 
+  it('attributes synchronous provider output to its active input and clears after completion', async () => {
+    const h = createHarness();
+    const sid = 'private-reply-attribution';
+    expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
+    h.sendToAgent.mockImplementationOnce(async () => {
+      expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+      h.setRunning(true);
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('bot-dm:thread:delivery', 'private message'));
+    await flush();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
+  });
+
   it('silently keeps a queue head when host dispatch returns SESSION_RUNNING', async () => {
     const h = createHarness();
     const sid = 'send-session-running-host-result';

@@ -360,6 +360,8 @@ export interface AskUserQuestionItem {
 }
 
 export interface ChatMessage {
+  /** Private Bot reply provenance, projected from persisted/live agent metadata. */
+  botPrivateReply?: boolean;
   clientId: string;
   /** Server message id when this row came from history; used as a pagination cursor. */
   id?: string;
@@ -2614,6 +2616,8 @@ export interface SessionChatState {
    * review)。transition snapshot 与 hasSessionTerminalError 都按此豁免。
    */
   lastStopWasSideTask: boolean;
+  /** Successful automatic private replies remain in history without completion alerts. */
+  lastStopWasPrivateReply?: boolean;
   /**
    * 后台 subagent「唤醒桥接」标记(claude-code 专用)。
    *
@@ -2812,6 +2816,7 @@ function createInitialState(): SessionChatState {
     planModeEnabled: false,
     planModeRev: 0,
     lastStopWasSideTask: false,
+    lastStopWasPrivateReply: false,
     pendingTaskWake: 0,
     pendingTaskWakeDuringTurn: 0,
     pendingTaskWakeStarted: false,
@@ -5001,6 +5006,7 @@ export function handleStreamEvent(
   // - turnCompleted 由 main 在 done 边界盖到该 SDK turn 的最后一条 assistant 上,
   //   让后台任务自动续跑时前一轮正式总结不会被后续补充回复顶掉。
   const assistantMetaFields: {
+    botPrivateReply?: boolean;
     model?: string;
     parentToolUseId?: string;
     turnCompleted?: boolean;
@@ -5012,6 +5018,7 @@ export function handleStreamEvent(
       ? { parentToolUseId: incomingMeta.parentUuid }
       : {}),
     ...(incomingMeta?.turnCompleted === true ? { turnCompleted: true } : {}),
+    ...(typeof incomingMeta?.botPrivateReply === 'boolean' ? { botPrivateReply: incomingMeta.botPrivateReply } : {}),
   };
   switch (event.type) {
     case 'text': {
@@ -5077,7 +5084,8 @@ export function handleStreamEvent(
         const hasAssistantFields =
           assistantMetaFields.model !== undefined ||
           assistantMetaFields.parentToolUseId !== undefined ||
-          assistantMetaFields.turnCompleted === true;
+          assistantMetaFields.turnCompleted === true ||
+          assistantMetaFields.botPrivateReply !== undefined;
         const shouldCalibrateText = Boolean(
           isFullText === true &&
           text &&
@@ -5590,6 +5598,7 @@ export function handleStreamEvent(
         pendingGhostGrantConfirm: null,
         pendingRemoteDesktopConfirmation: null,
         pendingRemoteDesktopConfirmationQueue: [],
+        lastStopWasPrivateReply: (incomingMeta ?? state.lastAgentMeta)?.botPrivateReply === true,
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
@@ -6463,6 +6472,7 @@ function handleStatusUpdate(
     ...state,
     // 真实 turn 的起/止都把 side-task 标记复位(它只描述「最近一次 stop」)。
     lastStopWasSideTask: false,
+    lastStopWasPrivateReply: update.isRunning ? false : state.lastStopWasPrivateReply,
     // 唤醒桥接:仅在 wake turn 真正启动(isRunning:true)时消费一个计数,或 wake turn
     // 失败时消费——后者表现为 Done + !isRunning 且主 turn 已经结束
     // (state.agentStatus.isRunning 已为 false),此时 isTurnStart 永远不会
@@ -15326,6 +15336,8 @@ export const makerChatStore = {
   /** F-SB-7: Authoritative terminal-error read, immune to snapshot-generation races. */
   hasSessionTerminalError,
   wasLastStopSideTask,
+  wasLastStopPrivateReply: (sessionId: string): boolean =>
+    sessions.get(sessionId)?.lastStopWasPrivateReply === true,
   /** 输入框推荐后台完成配对用的 non-creating turn 起点。 */
   getPromptRecommendationRunStartedAt,
   /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
@@ -16555,6 +16567,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       clientId: m.clientId,
       role: m.role,
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
       // tool_result 消息也带 toolUseId(DB 列),让 MessageStream 能按 id 配对
       ...(m.role === 'tool_result' && typeof m.toolUseId === 'string' && m.toolUseId.length > 0
         ? { toolUseId: m.toolUseId }

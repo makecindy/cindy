@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -68,7 +68,8 @@ function createDatabase(): Database.Database {
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
-      client_id TEXT
+      client_id TEXT,
+      rewind_at INTEGER
     );
     INSERT INTO bot_profiles VALUES
       ('bot-a', '总控', 'active', 3),
@@ -111,6 +112,8 @@ describe('botDirectMessageService', () => {
       };
     });
   });
+
+  afterEach(() => sqlite.close());
 
   it('delivers a trusted Bot DM into the target canonical Cindy task', async () => {
     const service = createBotDirectMessageService({
@@ -442,4 +445,79 @@ describe('botDirectMessageService', () => {
       thread: { status: 'closed', closeReason: 'idle-timeout' },
     });
   });
+
+  it('retries after failed delivery without reusing its sequence or consuming its budget', async () => {
+    let id = 0;
+    const service = createBotDirectMessageService({ dispatch, createId: () => `retry-${++id}` });
+    dispatch.mockResolvedValueOnce({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'busy' });
+    const input = { callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'hello' };
+    await expect(service.messageAgent(input)).resolves.toMatchObject({ ok: false });
+    await expect(service.messageAgent(input)).resolves.toMatchObject({
+      ok: true, messageCount: 1, remainingMessages: 11,
+    });
+    expect(sqlite.prepare('SELECT sequence, delivery_status FROM bot_direct_messages ORDER BY sequence').all())
+      .toEqual([{ sequence: 1, delivery_status: 'failed' }, { sequence: 2, delivery_status: 'delivered' }]);
+    expect(h.createMessage).toHaveBeenCalledWith('a-main', expect.objectContaining({
+      agentMeta: expect.objectContaining({ botDirectMessage: expect.objectContaining({ sequence: 2 }) }),
+    }));
+  });
+
+  it('includes newly created teammates without a canonical session in the available roster', async () => {
+    const service = createBotDirectMessageService({ dispatch });
+    await expect(service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'unknown', message: 'hello' }))
+      .resolves.toMatchObject({ ok: false, availableBots: expect.arrayContaining([
+        { id: 'bot-missing', name: '缺主任务伙伴' },
+      ]) });
+  });
+
+  it('waits for a slow timeline write before rolling back its failed peer', async () => {
+    let release!: () => void;
+    const slowWrite = new Promise<void>((resolve) => { release = resolve; });
+    let started!: () => void;
+    const writing = new Promise<void>((resolve) => { started = resolve; });
+    h.createMessage.mockRejectedValueOnce(new Error('first anchor failed'));
+    h.createMessage.mockImplementationOnce(async () => {
+      started();
+      await slowWrite;
+      sqlite.prepare('INSERT INTO messages (id, session_id, client_id) VALUES (?, ?, ?)').run('late-anchor', 'b-main', 'bot-dm-thread:race-1:race-2:b-main');
+      return { id: 'late-anchor' };
+    });
+    let id = 0;
+    const service = createBotDirectMessageService({ dispatch, createId: () => `race-${++id}` });
+    const sending = service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'hello' });
+    await writing;
+    // Let a fail-fast Promise.all reach its rollback while the second write waits.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await expect(sending).resolves.toMatchObject({ ok: false, errorCode: 'DELIVERY_NOT_ACCEPTED' });
+    expect(sqlite.prepare('SELECT * FROM messages').all()).toEqual([]);
+  });
+  it.each(['persisted', 'queued', 'unaccepted'] as const)(
+    'reconciles a %s reservation after restart without dispatching work again',
+    async (receiptKind) => {
+      let id = 0;
+      const dispatchWithoutCallback = vi.fn(async () => ({
+        ok: true as const, targetSessionId: 'b-main', wakeKind: 'queued' as const,
+      }));
+      const before = createBotDirectMessageService({ dispatch: dispatchWithoutCallback, createId: () => `restart-${++id}` });
+      await before.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'hello' });
+      if (receiptKind === 'persisted') {
+        sqlite.prepare('INSERT INTO messages (id, session_id, client_id) VALUES (?, ?, ?)')
+          .run('receipt', 'b-main', 'bot-dm:restart-1:restart-2');
+      }
+      const hasQueuedDelivery = vi.fn(async () => receiptKind === 'queued');
+      const after = createBotDirectMessageService({ dispatch, hasQueuedDelivery });
+      await after.restore();
+      await after.restore();
+      expect(dispatch).not.toHaveBeenCalled();
+      const accepted = receiptKind !== 'unaccepted';
+      expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+        .toEqual({ delivery_status: accepted ? 'delivered' : 'failed' });
+      expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
+        .toEqual({ message_count: accepted ? 1 : 0 });
+      expect(h.createMessage).toHaveBeenCalledTimes(accepted ? 2 : 0);
+      if (receiptKind === 'queued') expect(hasQueuedDelivery).toHaveBeenCalledWith('b-main', 'bot-dm:restart-1:restart-2');
+    },
+  );
+
 });

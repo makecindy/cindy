@@ -3547,6 +3547,7 @@ export function MessageStream({
                 createdAt: item.message.createdAt,
                 role: item.message.role,
                 systemCardType: item.message.systemCardType,
+                botPrivateReply: item.message.botPrivateReply,
               },
             ]
           : [],

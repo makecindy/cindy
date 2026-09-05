@@ -7001,7 +7001,7 @@
     "historyEmpty": "アーカイブされた仲間タスクはまだありません。",
     "historySearch": {
       "title": "仲間履歴を検索",
-      "description": "すべての履歴をプロンプトへ追加せず、メイン、チャネル、委任、アーカイブ済みタスクを検索します。",
+      "description": "この仲間の過去のメッセージ、バックグラウンドタスク、アーカイブ記録を検索します。",
       "placeholder": "何を話したか覚えていますか？",
       "search": "検索",
       "searching": "検索中…",
@@ -7010,10 +7010,10 @@
     },
     "lifecycle": {
       "stoppedBots": "対応が必要な仲間",
-      "title": "ヘルスと履歴",
-      "description": "メインタスク、Route、自動化、worktree、アーカイブ記録、ライフサイクルイベントを確認します。",
+      "title": "稼働状況と履歴",
+      "description": "仲間を一時停止・再開し、過去のメッセージや成果を探せます。",
       "activeTitle": "仲間は稼働中です",
-      "activeDescription": "チャネル Route、自動化、配信、仲間同士の連携を実行できます。",
+      "activeDescription": "メッセージの受信、バックグラウンドタスクの実行、他の仲間への連絡ができます。",
       "pausedTitle": "仲間は一時停止中です",
       "pausedDescription": "新しい作業を受け付けません。ユーザーが停止した自動化は再開後も停止したままです。",
       "stoppedTitle": "仲間は停止しています",
@@ -7024,7 +7024,7 @@
       "deleteTitle": "仲間を完全に削除",
       "deleteDescription": "{{name}} を削除します。性格・つないだチャネル・予定した実行がすべてなくなり、元に戻せません。",
       "working": "更新中…",
-      "actionFailed": "仲間のライフサイクル変更が完了しませんでした。ヘルスを確認して再試行してください。"
+      "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。"
     },
     "backToChat": "チャットに戻る",
     "memoryRecovery": {
@@ -7038,7 +7038,7 @@
     "send": "メッセージを送信",
     "roster": {
       "create": "仲間を作成",
-      "customHint": "まず役割、責任、協働方法を定義します。モデル、スキル、メッセージ連携は作成後に設定できます。",
+      "customHint": "まず仲間の役割と責任を決めます。作成後にモデルを変更でき、使うにつれて記憶や仕事の進め方が蓄積されます。",
       "customNamePlaceholder": "例：アジュ",
       "customTitle": "仲間を作成"
     },

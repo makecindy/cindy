@@ -412,6 +412,7 @@ async function countCanonicalUnread(
         isNull(messages.rewindAt),
         sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
         sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.botPrivateReply') IS NOT 1)`,
         gt(messages.createdAt, boundary),
       ),
     )

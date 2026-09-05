@@ -195,6 +195,8 @@ export interface CcMeta {
    * The actual messages live in the dedicated Bot DM tables and never enter the
    * normal task transcript through this metadata field.
    */
+  /** Automatic reply to a private Bot message; retained without unread attention. */
+  botPrivateReply?: boolean;
   botDirectMessage?: import('../../shared/botDirectMessage').BotDirectMessageMeta;
 
   /**

@@ -1995,6 +1995,11 @@ describe('Bots list unread projection', () => {
       createdAt: 5_000,
     });
 
+    insertMessage(sessionId, {
+      id: 'private-reply', role: 'assistant', content: 'Acknowledged my teammate',
+      agentMeta: { botPrivateReply: true }, createdAt: 5_500,
+    });
+
     expect(await unreadFor('bot-1', { 'bot-1': 1_000 })).toBe(0);
 
     insertMessage(sessionId, {
