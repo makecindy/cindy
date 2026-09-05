@@ -105,7 +105,6 @@ export interface RemoteSyncRun {
   /** 请求发起后 sync identity / 权威替换发生变化时,旧结果不得再提交。 */
   isStale(): boolean;
   signal: AbortSignal;
-  cancel(): void;
   /** A successful snapshot may cover a notification queued while it was starting. */
   satisfy(reason: string): void;
 }
@@ -184,7 +183,6 @@ export function createRemoteSyncCoordinator(
           replaceMessages: next.replaceMessages,
           isStale: () => generation !== capturedGeneration || runController.signal.aborted,
           signal: runController.signal,
-          cancel: () => runController.abort(),
           satisfy(reason) {
             if (generation !== capturedGeneration || !pending) return;
             pending.reasons.delete(reason);
@@ -227,6 +225,9 @@ export function createRemoteSyncCoordinator(
       inFlight = drain().finally(() => {
         inFlight = null;
       });
+      // Passive refresh callers intentionally do not await. Observe the rejection
+      // without changing the promise returned to rewind/navigation callers.
+      void inFlight.catch(() => undefined);
       return inFlight;
     },
     isRunning(): boolean {

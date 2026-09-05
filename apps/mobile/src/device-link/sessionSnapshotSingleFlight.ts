@@ -64,6 +64,13 @@ interface SnapshotRead {
   promise: Promise<unknown>;
   cancel(): void;
 }
+/** Local invalidation, not a transport failure or a permanent missing resource. */
+export class SnapshotReadSupersededError extends Error {
+  constructor() {
+    super('Remote sync superseded');
+    this.name = 'SnapshotReadSupersededError';
+  }
+}
 const inFlightSessionSnapshotRequests = new Map<string, SnapshotRead>();
 
 function requestKey(identity: SessionSnapshotRequestIdentity): string {
@@ -85,7 +92,7 @@ export function runSessionSnapshotSingleFlight<T>(
   identity: SessionSnapshotRequestIdentity,
   read: () => Promise<T>,
 ): Promise<T> {
-  if (identity.signal?.aborted) return Promise.reject(new Error('Remote sync superseded'));
+  if (identity.signal?.aborted) return Promise.reject(new SnapshotReadSupersededError());
   const key = requestKey(identity);
   const current = inFlightSessionSnapshotRequests.get(key);
   if (current) {
@@ -101,7 +108,7 @@ export function runSessionSnapshotSingleFlight<T>(
   }
   let cancel!: () => void;
   const shared = new Promise<T>((resolve, reject) => {
-    cancel = () => reject(new Error('Remote sync superseded'));
+    cancel = () => reject(new SnapshotReadSupersededError());
     // Always observe the physical response, including rejection after cancellation.
     void request.then(resolve, reject);
   });
@@ -123,7 +130,8 @@ function invalidateOnCancellation(key: string, entry: SnapshotRead, signal?: Abo
   const invalidate = () => {
     if (inFlightSessionSnapshotRequests.get(key) === entry) inFlightSessionSnapshotRequests.delete(key);
     // All consumers of this exact stale response lose commit eligibility, including
-    // a rehydrate caller sharing it with the detail page. Other peers are untouched.
+    // a rehydrate caller sharing it with the detail page. Rehydrate classifies this
+    // local invalidation as needing a fresh snapshot. Other peers are untouched.
     entry.cancel();
   };
   signal.addEventListener('abort', invalidate, { once: true });

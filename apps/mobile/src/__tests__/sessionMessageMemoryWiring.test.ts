@@ -59,6 +59,15 @@ describe('任务消息内存治理页面接线', () => {
     expect(reset).toContain('readAckGateGenRef.current += 1');
   });
 
+  it('同步失败保留页面错误并交给协调器向权威重读调用方传播', () => {
+    const syncStart = screen.indexOf('const syncSession = useCallback');
+    const syncEnd = screen.indexOf('const remoteSyncContextKey', syncStart);
+    const sync = screen.slice(syncStart, syncEnd);
+    expect(sync).toMatch(/latchOutboxTransportHold\(formatted\);[\s\S]*?throw err;/);
+    expect(sync).not.toContain('syncRun.cancel()');
+    expect(screen).toContain("await requestSync({ reason: 'rewind-commit', replaceMessages: true })");
+  });
+
   it('详情读取在请求开始捕获 authority，并在所有消息写入口提交', () => {
     expect(screen).toContain('const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);');
     expect(screen).toContain('remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)');

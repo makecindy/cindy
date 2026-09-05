@@ -4,6 +4,7 @@ import { createRemoteSyncCoordinator, retryRemoteSyncRead } from '@/device-link/
 import { readProgressiveMessageWindow, settleProgressiveSnapshot, runSessionMessagesSnapshotSingleFlight } from '@/device-link/sessionSnapshotSingleFlight';
 import { notificationRecoveryRoute } from '@/notifications/pushRegistrationModel';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { classifySnapshotBatchFailure, rehydrateDeviceLinkPeer } from '@/device-link/rehydrate';
 import type { RemoteMessage } from '@/session/types';
 
 function deferred<T>() {
@@ -197,6 +198,51 @@ describe('progressive push snapshots', () => {
     expect(remoteSessionStore.getMessages('session-1')).toEqual([]);
   });
 
+  it('retries still-current rehydrate after a sharing detail is cancelled, fencing the late old reply', async () => {
+    const old = deferred<RemoteMessage[]>();
+    const scope = { deviceId: 'device-a', sessionId: 'session-1', connectionEpoch: 1 };
+    const fence = { kind: 'detail' as const, generation: 1 };
+    const read = vi.fn<() => Promise<RemoteMessage[]>>().mockImplementationOnce(() => old.promise).mockResolvedValue([message]);
+    const deps = {
+      createDeviceSendCohort: () => 1,
+      capturePresenceEpoch: () => 1,
+      captureResponseEvidenceEpoch: () => 1,
+      isPresenceEpochCurrent: () => true,
+      isResponseEvidenceEpochCurrent: () => true,
+      openLink: () => ({ capturedPresenceEpoch: 1, capturedResponseEvidenceEpoch: 1, request: Promise.resolve() }),
+      subscribe: async () => undefined,
+      requestSessionsReseed: () => undefined,
+      rebuildSessionSnapshot: async () => {
+        const settled = await settleProgressiveSnapshot(
+          runSessionMessagesSnapshotSingleFlight(scope, 20, fence, read),
+          (value) => remoteSessionStore.setMessages('session-1', value),
+        );
+        // Same batch boundary as Provider: local invalidation is retried by the
+        // existing peer recovery path, not treated as a permanent missing resource.
+        const failure = classifySnapshotBatchFailure([settled]);
+        if (failure.kind === 'partial-transient') throw Object.assign(new Error('partial snapshot needs retry'), { code: 'INVOKE_TIMEOUT' });
+        if (failure.kind === 'reject') throw failure.error;
+      },
+    };
+    const plan = { deviceId: 'device-a', openLink: false, topics: ['session:session-1' as const] };
+    const recovery = rehydrateDeviceLinkPeer(plan, deps);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    const controller = new AbortController();
+    const detail = runSessionMessagesSnapshotSingleFlight({ ...scope, signal: controller.signal }, 20, fence, read);
+    const cancelled = expect(detail).rejects.toThrow('superseded');
+    controller.abort();
+    await cancelled;
+    expect((await recovery).transientFailures).toBe(1);
+    expect(remoteSessionStore.getMessages('session-1')).toEqual([]);
+    expect((await rehydrateDeviceLinkPeer(plan, deps)).transientFailures).toBe(0);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(remoteSessionStore.getMessages('session-1')).toEqual([message]);
+    old.resolve([{ ...message, content: 'obsolete' }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(remoteSessionStore.getMessages('session-1')).toEqual([message]);
+  });
+
   it('preserves the device query and fragment while replacing an untrusted duplicate navigation hint', () => {
     const route = notificationRecoveryRoute('/sessions/a?deviceId=d&notificationResponse=old#tail', 'id:push&2');
     expect(route).toBe('/sessions/a?deviceId=d&notificationResponse=id%3Apush%262#tail');
@@ -271,5 +317,30 @@ describe('superseded recovery reads', () => {
     oldHistory.resolve();
     await late;
     expect(committed).toEqual(['new']);
+  });
+
+  it('rejects an awaited authoritative refresh with its real error while cancelling sibling reads', async () => {
+    const failed = deferred<void>();
+    const history = deferred<void>();
+    const error = new Error('projection failed');
+    const committed = vi.fn();
+    let signal!: AbortSignal;
+    const coordinator = createRemoteSyncCoordinator(async (run) => {
+      signal = run.signal;
+      await Promise.all([
+        failed.promise,
+        retryRemoteSyncRead(run, () => history.promise).then(() => { if (!run.isStale()) committed(); }),
+      ]);
+    });
+    // A passive caller may ignore the same promise; the awaited rewind caller
+    // still receives the original failure, not a successful cancellation result.
+    const refresh = coordinator.request({ reason: 'rewind-commit', replaceMessages: true });
+    const rejected = expect(refresh).rejects.toBe(error);
+    failed.reject(error);
+    await rejected;
+    expect(signal.aborted).toBe(true);
+    history.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(committed).not.toHaveBeenCalled();
   });
 });

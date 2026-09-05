@@ -3352,10 +3352,9 @@ export default function SessionScreen() {
         // 两类失败都写入 hold 且不能清门：瞬态错误继续自动重试，确定性错误保留
         // 手动同步入口；共享 UI error 被其它操作清掉时也不会变成不可见的永久自锁。
         latchOutboxTransportHold(formatted);
-        setLoading(false);
-        // Promise.all can fail while siblings are still in flight. Stop their
-        // local commits and prevent a retry from borrowing those stale reads.
-        syncRun.cancel();
+        // The coordinator owns sibling cancellation and preserves this failure
+        // for rewind/navigation callers. Supersession remains a separate outcome.
+        throw err;
       }
     } finally {
       if (!syncRun.isStale() && messageAuthorityCurrent()) setLoading(false);
