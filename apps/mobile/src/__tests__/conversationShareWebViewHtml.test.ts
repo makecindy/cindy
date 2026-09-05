@@ -241,7 +241,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
       'if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;',
     );
     expect(sessionSource).toContain(
-      'const messages = await shareImages.ready;',
+      'const messages = await shareImages.prepare();',
     );
     expect(sessionSource).toContain(
       'nativeConversationShareAvailable\n      && shareCharacterSrc',

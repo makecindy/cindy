@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 
 import { i18n } from "@/i18n";
 import { createConversationShareFooterAssetGate } from "@/session/conversationShareAssetGate";
@@ -29,6 +30,48 @@ const colors = {
 };
 
 describe("ConversationShareSvg", () => {
+  it.each([
+    ["password: ", "private-secret"],
+    ["pass", "word: private-secret"],
+    ["password: private-", "secret"],
+    ["Authorization: Basic ", "private-secret"],
+    ["sk-abcd", "12345678"],
+    ["password: ", "`private-secret`"],
+    ["password: ", "**private-secret**"],
+    ["password:\n\n", "private-secret"],
+    ["token: [REDACTED]\npassword: ", "private-secret"],
+  ])("redacts across an image between %s and %s", (before, after) => {
+    const url = "cindy-media://same";
+    const image = {
+      uri: "data:image/png;base64,aGVsbG8=",
+      width: 40,
+      height: 20,
+    };
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["m"],
+      colors,
+      width: 390,
+      messages: [
+        {
+          clientId: "m",
+          kind: "assistant",
+          body: `${before}![one](${url})![two](${url})${after}`,
+          images: new Map([[url, image]]),
+        },
+      ],
+    });
+    const text = layout.bubbles
+      .flatMap((bubble) => bubble.textBlocks.flatMap((block) => block.lines))
+      .join("");
+    const visible = (before + after).replace(/[`*]/g, "");
+    expect(text.replace(/\s/g, "")).toBe(
+      redactSensitiveText(visible).replace(/\s/g, ""),
+    );
+    expect(layout.images).toHaveLength(2);
+    expect(layout.images[0]!.y).toBeLessThan(layout.images[1]!.y);
+    expect(text).not.toContain("private-secret");
+  });
+
   it.each(["user", "assistant"] as const)(
     "preserves repeated image positions inside a %s bubble, including an attachment with the same source",
     (kind) => {
