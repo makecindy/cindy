@@ -159,7 +159,10 @@ export class CodexMicroGuardService {
     try {
       if (enabled) {
         await this.manager.enable(this.hookContents);
-        this.protectionStartedAt = Date.now();
+        // Restoring a preference is not evidence that a running Codex needs
+        // restarting: legacy hooks had no process receipt, and graceful exits
+        // removed their receipt. Only an explicit enable establishes a known
+        // activation boundary; keep unknown startup state silent.
         this.active = true;
         await this.refreshRestartRequired();
         this.startHeartbeat();

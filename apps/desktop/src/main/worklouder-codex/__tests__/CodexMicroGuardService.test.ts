@@ -139,6 +139,8 @@ describe('CodexMicroGuardService', () => {
     await first.dispose();
     const second = service(locations, runner, list);
     expect(await second.getState()).toMatchObject({ restartRequired: false });
+    await second.setEnabled(false);
+    expect(await second.setEnabled(true)).toMatchObject({ restartRequired: false });
     processes = [{ ...processes[0], startedAt: processes[0].startedAt + 10_000 }];
     expect(await second.getState()).toMatchObject({ restartRequired: true });
     fs.writeFileSync(receiptPath, '{broken');
@@ -146,6 +148,33 @@ describe('CodexMicroGuardService', () => {
     expect(await second.setEnabled(false)).toMatchObject({ restartRequired: false });
     await second.dispose();
   });
+
+  it.each([true, false])(
+    'does not infer a restart during upgrade from legacy receipt presence=%s',
+    async (hasLegacyReceipt) => {
+      const locations = paths();
+      fs.writeFileSync(locations.settingsPath, JSON.stringify({ enabled: true }));
+      if (hasLegacyReceipt) {
+        fs.mkdirSync(locations.supportPath, { mode: 0o700 });
+        fs.writeFileSync(
+          path.join(locations.supportPath, 'receipt.json'),
+          JSON.stringify({ interceptedAt: Date.now() / 1_000, service: 'service-old.js' }),
+          { mode: 0o600 },
+        );
+      }
+      // A previous graceful shutdown may already have removed the old receipt.
+      const processes = [runningCodex()];
+      const instance = service(locations, new EnvironmentRunner(null), async () => processes);
+      expect(await instance.getState()).toMatchObject({
+        enabled: true,
+        status: 'protecting',
+        restartRequired: false,
+      });
+      await instance.setEnabled(false);
+      expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
+      await instance.dispose();
+    },
+  );
 
   it('reports unsupported without touching launchctl on other platforms', async () => {
     const locations = paths();
