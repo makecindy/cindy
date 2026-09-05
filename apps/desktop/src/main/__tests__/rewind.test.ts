@@ -43,7 +43,7 @@ const writeWorktreeTreeForPathsMock = vi.fn();
 const gitExecMock = vi.fn();
 
 type FakeSession = {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   sdkSessionId: string;
   workDir: string;
   remoteHostId: string | null;
@@ -66,13 +66,13 @@ const getSessionMock = vi.fn(() => fakeSession);
 const getSessionMetaMock = vi.fn(async () =>
   fakeSession ? { sdkSessionId: fakeSession.sdkSessionId } : null,
 );
-function useFakeSession(agentKind: 'claude-code' | 'codex' | 'pi') {
+function useFakeSession(agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build') {
   fakeSession = {
     agentKind,
     sdkSessionId:
       agentKind === 'codex'
         ? 'codex-thread-old'
-        : agentKind === 'pi'
+        : agentKind === 'pi' || agentKind === 'grok-build'
           ? 'pi-session-old'
           : 'sdk-uuid-old',
     workDir: '/repo',
@@ -955,6 +955,30 @@ describe('commitRewindAtMessage', () => {
       sdkSessionId: 'pi-session-rewound',
     });
     expect(result.id).toBe('sess-1');
+  });
+
+  it('Grok Build hosted loop: rewind uses the Pi tail-turn path, not ACP fail-closed', async () => {
+    useFakeSession('grok-build');
+    commitRewindFilesMock.mockResolvedValueOnce({ sdkSessionId: 'grok-build-session-rewound' });
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
+    selectQueue.push([]);
+    selectQueue.push([
+      makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 }),
+      makeUserMessageRow({ clientId: 'later-user', createdAt: 5000 }),
+    ]);
+    selectQueue.push([
+      makeSessionRow({ agentKind: 'grok-build', sdkSessionId: 'grok-build-session-rewound' }),
+    ]);
+
+    const result = await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(result.id).toBe('sess-1');
+    expect(commitRewindFilesMock).toHaveBeenCalledOnce();
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 2 });
+    expect(txCalls.find((call) => call.name === 'rewind.commit')?.args).toMatchObject({
+      sessionId: 'sess-1',
+      sdkSessionId: 'grok-build-session-rewound',
+    });
   });
 
   it('Codex: previews file rewind savepoints before commit (legacy numstat 方向对调)', async () => {

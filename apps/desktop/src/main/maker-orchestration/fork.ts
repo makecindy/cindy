@@ -694,12 +694,6 @@ export async function forkSessionAtMessage(
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
   }
-  // 与 rewind 同一条边界:grok-build 声明 fork: supported: false,不拦的话下面
-  // 「非 codex / pi 即 Claude」的分叉会拿 message-uuid 锚点去 fork 一个没有
-  // Claude transcript 的会话。
-  if (source.agentKind === 'grok-build') {
-    throw forkError('UNSUPPORTED_HISTORY', 'Grok Build 会话不支持 fork');
-  }
 
   // 轮 26 发现 5 防御深度:远端会话 fork 由 SDK 层拒绝(pi forkSdkSession 抛
   // NotSupportedError remoteFork;cc/codex 由 daemon 远端执行)。host 层显式
@@ -796,10 +790,11 @@ export async function forkSessionAtMessage(
   // Codex: 从当前时间线倒扫 agent_switch，把 copy boundary 之后、确实写入所选
   // 原生 thread 的 user turn 计为 rollback 数；其它引擎片段不能混算。
   const isCodex = forkSource.agentKind === 'codex';
-  // pi 复用 codex 的粗粒度 tail-turn fork:countCodexTailTurns 只按 sdkSessionId
-  // 数边界后的 user turn(引擎无关),pi 的 forkSdkSession 按 tailTurnsToDrop rewind
-  // 到目标 user 消息。只有 Claude(cc)走 message-uuid 锚点路径。
-  const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi';
+  // pi / grok-build 复用 codex 的粗粒度 tail-turn fork:countCodexTailTurns 只按
+  // sdkSessionId 数边界后的 user turn(引擎无关),hosted loop 的 forkSdkSession 按
+  // tailTurnsToDrop rewind 到目标 user 消息。只有 Claude(cc)走 message-uuid 锚点。
+  const usesTailTurnFork =
+    isCodex || forkSource.agentKind === 'pi' || forkSource.agentKind === 'grok-build';
   let assistantUuid: string | undefined;
   let lastTurnId: string | undefined;
   let tailTurnsToDrop: number | undefined;
