@@ -434,33 +434,9 @@ html:lang(ko) {
 }
 /* The ideographic comma is a full-width glyph, unlike the period / closing
    parenthesis in the other ordered markers. Keep its extra width separate
-   from the digit budget so multi-digit ordinals still compose correctly. */
+   from the decoration-computed counter-text budget. */
 [data-chat-input-root] .ProseMirror ol[data-marker='、'] {
   --composer-list-marker-extra: 0.7em;
-}
-[data-chat-input-root] .ProseMirror ol[data-marker-digits='2'] {
-  --composer-list-padding: 2.2em;
-}
-[data-chat-input-root] .ProseMirror ol[data-marker-digits='3'] {
-  --composer-list-padding: 2.8em;
-}
-[data-chat-input-root] .ProseMirror ol[data-marker-digits='4'] {
-  --composer-list-padding: 3.4em;
-}
-[data-chat-input-root] .ProseMirror ol[data-marker-digits='5'] {
-  --composer-list-padding: 4em;
-}
-[data-chat-input-root] .ProseMirror ol[data-marker-digits='6'] {
-  --composer-list-padding: 4.6em;
-}
-[data-chat-input-root] .ProseMirror ol[data-marker-digits='7'] {
-  --composer-list-padding: 5.2em;
-}
-[data-chat-input-root] .ProseMirror ol[data-marker-digits='8'] {
-  --composer-list-padding: 5.8em;
-}
-[data-chat-input-root] .ProseMirror ol[data-marker-digits='9'] {
-  --composer-list-padding: 6.4em;
 }
 [data-chat-input-root] .ProseMirror ul {
   list-style-type: disc;
@@ -468,11 +444,41 @@ html:lang(ko) {
 [data-chat-input-root] .ProseMirror ol {
   list-style-type: decimal;
 }
+[data-chat-input-root] .ProseMirror ol[data-list-marker-style='lower-alpha'] {
+  list-style-type: lower-alpha;
+}
+[data-chat-input-root] .ProseMirror ol[data-list-marker-style='lower-roman'] {
+  list-style-type: lower-roman;
+}
 [data-chat-input-root] .ProseMirror ol[data-marker=')'] > li::marker {
   content: counter(list-item) ') ';
 }
 [data-chat-input-root] .ProseMirror ol[data-marker='、'] > li::marker {
   content: counter(list-item) '、';
+}
+[data-chat-input-root]
+  .ProseMirror
+  ol[data-list-marker-style='lower-alpha'][data-marker=')']
+  > li::marker {
+  content: counter(list-item, lower-alpha) ') ';
+}
+[data-chat-input-root]
+  .ProseMirror
+  ol[data-list-marker-style='lower-alpha'][data-marker='、']
+  > li::marker {
+  content: counter(list-item, lower-alpha) '、';
+}
+[data-chat-input-root]
+  .ProseMirror
+  ol[data-list-marker-style='lower-roman'][data-marker=')']
+  > li::marker {
+  content: counter(list-item, lower-roman) ') ';
+}
+[data-chat-input-root]
+  .ProseMirror
+  ol[data-list-marker-style='lower-roman'][data-marker='、']
+  > li::marker {
+  content: counter(list-item, lower-roman) '、';
 }
 [data-chat-input-root] .ProseMirror li {
   padding-inline-start: 0.15em;
