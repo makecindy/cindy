@@ -36,8 +36,17 @@ const TD_CLASS =
  * `w-full + max-w-0` 让它先塌到 0 (打破"按最长内容取列宽"的默认行为) 再领走
  * 其余列分完后剩下的空间, 内层的 truncate 由此生效 (见 #3393 的同一段分析)。
  * pl-3 是列间距, 否则相邻两列的数字会贴到一起; 首列自身取 pl-0。
+ *
+ * `overflow-hidden` 是最后一道单元格边界: 模型行还有不可收缩的色块与 agent 标签,
+ * 即使浏览器在边界宽度下给首列算出异常小的宽度, 它们也不能穿透到数字列 (#3546)。
+ * 表本身另有明确的最小宽度, 空间不足时由外层 overflow-x-auto 横向滚动, 而不是
+ * 继续把首列压到不可读。
  */
-const FIRST_COL_CLASS = 'w-full max-w-0 pl-0';
+const FIRST_COL_CLASS = 'w-full max-w-0 overflow-hidden pl-0';
+
+/** 数字列保持完整可读所需的最小表宽; 低于该宽度时交给 Card 的横向滚动容器。 */
+const AGENT_TABLE_CLASS = 'w-full min-w-[520px] border-collapse';
+const MODEL_TABLE_CLASS = 'w-full min-w-[720px] border-collapse';
 
 function Swatch({ rank }: { rank: number }): React.JSX.Element {
   return (
@@ -96,7 +105,7 @@ export function UsageAgentTable({
           />
         ))}
       </div>
-      <table className="w-full border-collapse">
+      <table className={AGENT_TABLE_CLASS}>
         <thead>
           <tr>
             <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
@@ -158,7 +167,7 @@ export function UsageModelTable({
   const { t } = useTranslation();
 
   return (
-    <table className="w-full border-collapse">
+    <table className={MODEL_TABLE_CLASS}>
       <thead>
         <tr>
           <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
