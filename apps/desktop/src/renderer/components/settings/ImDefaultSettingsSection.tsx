@@ -84,6 +84,7 @@ export function ImDefaultSettingsSection({
   const cc = useAgentCapabilities('claude-code');
   const codex = useAgentCapabilities('codex');
   const pi = useAgentCapabilities('pi');
+  const grokBuild = useAgentCapabilities('grok-build');
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -123,6 +124,7 @@ export function ImDefaultSettingsSection({
       }),
       codex: deriveModelsFromProviders(providers, 'codex', { admissionFiltered: true }),
       pi: deriveModelsFromProviders(providers, 'pi', { admissionFiltered: true }),
+      'grok-build': deriveModelsFromProviders(providers, 'grok-build', { admissionFiltered: true }),
     };
     return {
       'claude-code': fromProviders['claude-code'].length
@@ -134,8 +136,11 @@ export function ImDefaultSettingsSection({
       pi: fromProviders.pi.length
         ? fromProviders.pi
         : (pi.capabilities?.availableModels ?? []),
+      'grok-build': fromProviders['grok-build'].length
+        ? fromProviders['grok-build']
+        : (grokBuild.capabilities?.availableModels ?? []),
     };
-  }, [providers, cc.capabilities, codex.capabilities, pi.capabilities]);
+  }, [providers, cc.capabilities, codex.capabilities, pi.capabilities, grokBuild.capabilities]);
 
   const resolveProviderId = useCallback(
     (agentKind: ImDefaultAgentKind, modelId: string, providerId: string | null): string | null => {

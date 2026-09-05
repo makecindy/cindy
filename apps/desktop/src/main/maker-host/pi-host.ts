@@ -1796,7 +1796,7 @@ function isLoopbackUrl(baseUrl: string): boolean {
   }
 }
 
-function defaultPiAgentHome(remoteHostId?: string): string {
+function defaultPiAgentHome(remoteHostId?: string | null): string {
   if (remoteHostId) return '$HOME/.xdt-server/v1/pi-agent-home';
   return path.join(app.getPath('userData'), 'pi-agent-home');
 }

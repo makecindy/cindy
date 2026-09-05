@@ -117,7 +117,7 @@ import {
   bundledCodexCatalogHasModel,
   prepareCodexCustomContextCatalog,
 } from './codex-custom-context-catalog.js';
-import { buildPiAgent } from './pi-host.js';
+import { buildPiAgent, type BuildPiAgentOpts } from './pi-host.js';
 import {
   captureLocalPiPackageRuntimeInvalidationSnapshot,
   invalidateLocalPiPackageRuntimeSnapshot,
@@ -1911,7 +1911,7 @@ export function getMaker(): Maker {
     // Store mutations are serialized; each settled callback consumes the exact
     // latest-byte-edge runtime snapshot for its durable mutation.
     const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
-    const desktopHostedLoopOpts = {
+    const desktopHostedLoopOpts: BuildPiAgentOpts = {
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,

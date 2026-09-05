@@ -18,7 +18,7 @@ function createLogger(base: Logger): Logger {
   return base.child('grok-build-host');
 }
 
-export function resolveGrokBuildAgentHome(remoteHostId?: string): string {
+export function resolveGrokBuildAgentHome(remoteHostId?: string | null): string {
   if (remoteHostId) return '$HOME/.xdt-server/v1/grok-build-agent-home';
   return path.join(app.getPath('userData'), 'grok-build-agent-home');
 }
