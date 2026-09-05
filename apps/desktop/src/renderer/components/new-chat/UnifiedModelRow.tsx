@@ -152,7 +152,7 @@ export function UnifiedModelRow({
   interactionDisabled: boolean;
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   providers: readonly ProviderView[];
-  onReveal: (anchor: UnifiedAnchor, element: HTMLElement) => void;
+  onReveal: (anchor: UnifiedAnchor, element: HTMLElement, toggle?: boolean) => void;
   onSelect: () => void;
   onStar: () => void;
   /** Keyboard opening also moves focus into the configuration. */
@@ -174,8 +174,8 @@ export function UnifiedModelRow({
   const provider = providers.find((item) => item.id === entry.providerId);
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
-  const openConfig = (element: HTMLElement) => {
-    if (!paymentRequired) onReveal(anchor, element);
+  const openConfig = (element: HTMLElement, toggle = false) => {
+    if (!paymentRequired) onReveal(anchor, element, toggle);
   };
   const tripleTitle = `${engineOption.label}${
     config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
@@ -261,11 +261,13 @@ export function UnifiedModelRow({
     <button
       type="button"
       data-row-customize
+      aria-expanded={active}
+      aria-haspopup="dialog"
       disabled={interactionDisabled || paymentRequired}
       onClick={(event) => {
         event.stopPropagation();
         const row = event.currentTarget.closest('[data-unified-anchor]');
-        if (row instanceof HTMLElement) openConfig(row);
+        if (row instanceof HTMLElement) openConfig(row, true);
       }}
       title={t('newChat.modelSelector.unified.customize')}
       aria-label={t('newChat.modelSelector.unified.customize')}

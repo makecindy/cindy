@@ -3096,10 +3096,35 @@ describe('统一面板 · 实测回归', () => {
     expect(screen.getByRole('listbox')).toBeTruthy();
   });
 
+  it.each(['mouse', 'touch'])('%s 再点同一配置按钮只关浮层，不会在 pointerdown 后立即重开', async (pointerType) => {
+    const onSelect = vi.fn();
+    renderPanel({ onProviderChange: onSelect });
+    const button = within(rowFor('Opus 5')).getByRole('button', { name: '自定义' });
+    const flyout = await openRowFlyout('Opus 5');
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    fireEvent.pointerDown(button, { pointerType, button: 0 });
+    expect(screen.getByTestId('unified-model-config-flyout')).toBe(flyout);
+    fireEvent.pointerUp(button, { pointerType, button: 0 });
+    fireEvent.click(button);
+    expect(screen.queryByTestId('unified-model-config-flyout')).toBeNull();
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(await screen.findByTestId('unified-model-config-flyout')).toBeTruthy();
+  });
+
   it('主动打开另一模型切换配置，外部点击仍能关闭', async () => {
     renderPanel();
-    await openRowFlyout('Opus 5');
-    const flyout = await openRowFlyout('GPT-5.5');
+    const original = await openRowFlyout('Opus 5');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    const nextButton = within(rowFor('GPT-5.5')).getByRole('button', { name: '自定义' });
+    fireEvent.pointerDown(nextButton, { pointerType: 'mouse', button: 0 });
+    expect(screen.getByTestId('unified-model-config-flyout')).toBe(original);
+    fireEvent.pointerUp(nextButton, { pointerType: 'mouse', button: 0 });
+    fireEvent.click(nextButton);
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
     expect(within(flyout).getByText('GPT-5.5')).toBeTruthy();
     // Radix installs the outside pointer listener on the next task.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });

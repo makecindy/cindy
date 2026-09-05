@@ -166,6 +166,15 @@ export function UnifiedFlyoutHost({
           asChild
           disableOutsidePointerEvents={false}
           onDismiss={onDismiss}
+          onPointerDownOutside={(event) => {
+            const target = event.detail.originalEvent.target;
+            const owner = panelElement ?? anchorEl?.closest(`[${UNIFIED_PANEL_ATTR}]`);
+            // Let the button's click toggle/switch the current configuration. Closing on
+            // pointerdown first would make that same click reopen it immediately.
+            if (target instanceof Element && target.closest('[data-row-customize]') && owner?.contains(target)) {
+              event.preventDefault();
+            }
+          }}
           onFocusOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             event.preventDefault();

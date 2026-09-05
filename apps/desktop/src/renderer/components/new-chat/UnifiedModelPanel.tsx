@@ -803,8 +803,12 @@ export function UnifiedModelPanel({
     if (flyAnchor && !flyTarget) closeFlyout();
   }, [closeFlyout, flyAnchor, flyTarget]);
 
-  const revealFlyout = (anchor: UnifiedAnchor, element: HTMLElement) => {
+  const revealFlyout = (anchor: UnifiedAnchor, element: HTMLElement, toggle = false) => {
     if (!configurationEnabled || interactionDisabled) return;
+    if (toggle && sameAnchor(flyAnchor, anchor)) {
+      closeFlyout();
+      return;
+    }
     setFlyAnchorEl((current) => (current === element ? current : element));
     setFlyAnchor((current) => (sameAnchor(current, anchor) ? current : anchor));
   };
