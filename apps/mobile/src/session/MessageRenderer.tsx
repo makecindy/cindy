@@ -975,6 +975,8 @@ export function MessageRenderer({
   // 可能打断进行中的捏合/拖动手势(rule 7)。
   const closePayload = useCallback(() => setPayload(null), []);
   const markProgrammaticScroll = useCallback((animated: boolean) => {
+    // Native events from this command no longer belong to the preceding drag.
+    dragStartOffsetYRef.current = null;
     const generation = programmaticScrollGenerationRef.current + 1;
     const settleMs = animated
       ? MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS
@@ -1386,6 +1388,7 @@ export function MessageRenderer({
         waitRounds,
       });
       if (action === 'settled' || action === 'give-up') {
+        dragStartOffsetYRef.current = null;
         followVerifyFrameRef.current = null;
         return;
       }
@@ -2124,10 +2127,11 @@ export function MessageRenderer({
     }
     const wasNearBottom = nearBottomRef.current;
     const scrollDelta = metrics.offsetY - previousOffsetY;
+    const hasDragOrigin = dragStartOffsetYRef.current !== null;
     if (
       nearBottomRef.current
       && shouldUnpinMobileFollowOnDrag({
-        dragging: isDraggingRef.current,
+        dragging: hasDragOrigin,
         dragStartOffsetY: dragStartOffsetYRef.current,
         metrics,
       })
@@ -2143,16 +2147,12 @@ export function MessageRenderer({
           || isMomentumScrollingRef.current
           || historyTouchStartYRef.current !== null,
       });
-      // The explicit drag dead zone above owns unpinning while a finger is down. After release,
-      // keep that intent until the existing verifier catches up with growth during the gesture;
-      // a tiny trailing native delta must not become an unpin merely because the tail grew far
-      // away. Momentum still uses the direction/distance fallback to recognize a real fling.
+      // The same cumulative dead zone owns both dragging and its trailing native events.
+      // A queued verifier alone is not evidence of user intent. Keep the drag origin until
+      // verification finishes or a new gesture/programmatic command takes ownership.
       const preserveFollowIntent = nearBottomRef.current && (
-        isDraggingRef.current
-        || historyTouchStartYRef.current !== null
-        || (!isMomentumScrollingRef.current && (
-          followVerifyFrameRef.current !== null || followVerifyTimerRef.current !== null
-        ))
+        historyTouchStartYRef.current !== null
+        || (!isMomentumScrollingRef.current && hasDragOrigin)
       );
       const nearBottom = preserveHistoryBrowseIntent
         ? false
@@ -2192,6 +2192,7 @@ export function MessageRenderer({
     // Android may omit momentum-end when a new finger stops a fling. The new touch owns the
     // ScrollView now, so the old momentum flag must not keep a queued history request suspended.
     isMomentumScrollingRef.current = false;
+    dragStartOffsetYRef.current = null;
     historyTouchStartYRef.current = event.nativeEvent.pageY;
     historyTouchTriggeredRef.current = false;
     clearProgrammaticScroll();
@@ -2267,11 +2268,10 @@ export function MessageRenderer({
     // 「失败后停在顶部再拖一下重试」的信号会整体丢失(review P2)。
   }, [attemptAutoLoadEarlier, clearProgrammaticScroll, handoffHistoryPrependToUser]);
 
-  // 拖动结束(手指离开,可能进入惯性滚动)→ 关闭拖动追踪。惯性阶段的上滑不需要再判
-  // 解除:上滑手势的拖动段必然已越过死区完成解除;下滑回底的恢复由 scroll 方向判定接手。
+  // 手指离开后保留本次起点：最后一帧 onScroll 可能晚于 endDrag / momentumBegin。
+  // 由既有补滚校验收尾或下一次手势/程序化滚动接管时清理。
   const handleScrollEndDrag = useCallback(() => {
     isDraggingRef.current = false;
-    dragStartOffsetYRef.current = null;
     refreshPreviousUserTarget();
     // Wait one frame so Android can report whether this drag transitioned into momentum.
     scheduleHistoryPrependUserHandoffSettle();
