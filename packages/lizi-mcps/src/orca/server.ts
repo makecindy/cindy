@@ -291,6 +291,153 @@ export interface OrcaMcpSessionCtx {
   vendorOptions?: Record<string, unknown>;
 }
 
+const ACTIONABLE_VALIDATION_EXAMPLES = {
+  create_worker: { role: 'reviewer', agent: 'codex', label: 'worker_1' },
+  create_workers: {
+    workers: [
+      { role: 'reviewer', agent: 'codex', label: 'worker_1' },
+      { role: 'tester', agent: 'codex', label: 'worker_2' },
+    ],
+  },
+} as const;
+
+type ActionableValidationTool = keyof typeof ACTIONABLE_VALIDATION_EXAMPLES;
+
+function isActionableValidationTool(name: string): name is ActionableValidationTool {
+  return Object.hasOwn(ACTIONABLE_VALIDATION_EXAMPLES, name);
+}
+
+interface ValidationIssueSummary {
+  path: string;
+  code: string;
+  expected_type?: string;
+  received_type: string;
+  missing: boolean;
+}
+
+interface ZodIssueLike {
+  code: string;
+  path: PropertyKey[];
+  input?: unknown;
+  expected?: unknown;
+  keys?: string[];
+}
+
+interface ValidationTransportInternals {
+  def: {
+    shape?: ZodRawShape;
+  };
+  toJSONSchema?: () => unknown;
+}
+
+function valueType(value: unknown): string {
+  if (value === undefined) return 'missing';
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+function formatPath(parts: PropertyKey[]): string {
+  return parts.reduce<string>((path, part) => {
+    if (typeof part === 'number') return `${path}[${part}]`;
+    const key = String(part);
+    return path.length === 0 ? key : `${path}.${key}`;
+  }, '');
+}
+
+function valueAtPath(root: unknown, path: PropertyKey[]): unknown {
+  let value = root;
+  for (const part of path) {
+    if (value === null || typeof value !== 'object') return undefined;
+    value = (value as Record<PropertyKey, unknown>)[part];
+  }
+  return value;
+}
+
+function summarizeValidationIssues(
+  issues: ZodIssueLike[],
+  rawArgs: unknown,
+): ValidationIssueSummary[] {
+  const summaries: ValidationIssueSummary[] = [];
+  for (const issue of issues) {
+    if (issue.code === 'unrecognized_keys') {
+      const parent = valueAtPath(rawArgs, issue.path);
+      for (const key of issue.keys ?? []) {
+        const input = parent !== null && typeof parent === 'object'
+          ? (parent as Record<string, unknown>)[key]
+          : undefined;
+        summaries.push({
+          path: formatPath([...issue.path, key]),
+          code: 'unrecognized_key',
+          received_type: valueType(input),
+          missing: false,
+        });
+      }
+      continue;
+    }
+
+    // Zod reports a missing enum as invalid_value (rather than invalid_type),
+    // so absence is identified from the input consistently across field kinds.
+    const input = valueAtPath(rawArgs, issue.path);
+    const missing = input === undefined;
+    summaries.push({
+      path: formatPath(issue.path),
+      code: issue.code,
+      ...(issue.expected === undefined ? {} : { expected_type: String(issue.expected) }),
+      received_type: valueType(input),
+      missing,
+    });
+  }
+  return summaries;
+}
+
+function makeActionableValidationError(
+  name: string,
+  schema: z.ZodObject<ZodRawShape>,
+  rawArgs: unknown,
+  issues: ZodIssueLike[],
+  exampleCall: string,
+) {
+  const validationErrors = summarizeValidationIssues(issues, rawArgs);
+  const missingFields = validationErrors
+    .filter((issue) => issue.missing)
+    .map((issue) => issue.path);
+  const unexpectedFields = validationErrors
+    .filter((issue) => issue.code === 'unrecognized_key')
+    .map((issue) => issue.path);
+  const wrappedArgs = unexpectedFields.includes('args');
+  const hint = wrappedArgs
+    ? `Move the fields inside "args" to the top level without changing their values, remove the "args" wrapper and any other unexpected fields, fix every listed field, and retry ${name}. example_call only demonstrates the argument shape; do not copy its business values.`
+    : `Fix every listed field against schema while preserving valid user-provided values, then retry ${name}. example_call only demonstrates the argument shape; do not copy its business values.`;
+
+  return errorPayload('INVALID_ARGS', hint, {
+    tool: name,
+    validation_errors: validationErrors,
+    missing_fields: missingFields,
+    unexpected_fields: unexpectedFields,
+    example_call: exampleCall,
+    example_only: true,
+    example_note: 'Structure only. Preserve the user-requested worker count, roles, agents, labels, and tasks when retrying.',
+    schema: z.toJSONSchema(schema, { target: 'draft-7' }),
+  });
+}
+
+/**
+ * The MCP SDK validates registered schemas before invoking a handler. For these
+ * two high-mistake tools we need the raw object so one response can report every
+ * missing/unexpected field. The transport schema therefore accepts the raw value,
+ * while Zod's JSON-schema hook keeps ListTools byte-equivalent to the strict schema.
+ * `shape` is attached because the SDK only serializes schemas it recognizes as
+ * object-like; the behavior is covered by the real-client manifest test.
+ */
+function makeValidationTransportSchema(schema: z.ZodObject<ZodRawShape>): z.ZodType {
+  const transportSchema = z.custom<unknown>(() => true);
+  const internals = transportSchema._zod as unknown as ValidationTransportInternals;
+  internals.def.shape = schema.shape;
+  internals.toJSONSchema = () => z.toJSONSchema(schema, { target: 'draft-7' });
+  return transportSchema;
+}
+
 /**
  * DirectToolSink —— 把 team 工具直接 server.tool() 注册的适配器。
  *
@@ -311,6 +458,36 @@ class DirectToolSink extends XdtHelperToolRegistry {
     inputShape: T;
     handler: XdtHelperToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
   }): void {
+    if (isActionableValidationTool(def.name)) {
+      const schema = z.strictObject(def.inputShape);
+      // Curated examples stay concise, while parsing them against the live schema
+      // makes schema/example drift fail immediately during server construction.
+      const exampleCall = `${def.name}(${JSON.stringify(
+        schema.parse(ACTIONABLE_VALIDATION_EXAMPLES[def.name]),
+      )})`;
+      this.mcp.registerTool(
+        def.name,
+        {
+          description: def.description,
+          inputSchema: makeValidationTransportSchema(schema),
+        },
+        async (rawArgs) => {
+          const parsed = schema.safeParse(rawArgs);
+          if (!parsed.success) {
+            return makeActionableValidationError(
+              def.name,
+              schema,
+              rawArgs,
+              parsed.error.issues as unknown as ZodIssueLike[],
+              exampleCall,
+            );
+          }
+          return def.handler(parsed.data as { [K in keyof T]: z.infer<T[K]> });
+        },
+      );
+      return;
+    }
+
     // McpServer.tool 是多重载函数, 传入泛型 handler 时 TS 选不中
     // (name, description, paramsSchema, cb) 那条重载(且 SDK 的 zod-compat 类型
     // 与本包 zod 可能版本漂移)。bind 住 this 后收窄成单签名转发, 运行时行为与
