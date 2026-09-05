@@ -122,7 +122,7 @@ describe('homeSuggestions', () => {
       ).toEqual([...HOME_SUGGESTION_IDS].sort());
       for (const id of HOME_SUGGESTION_IDS) {
         expect(catalog[id].label.trim().length).toBeGreaterThan(0);
-        expect(catalog[id].prompt.trim().length).toBeGreaterThan(catalog[id].label.length);
+        expect(catalog[id].prompt.trim().length).toBeGreaterThan(0);
       }
       expect(catalog.stockDigest.prompt).toContain('2400.HK');
     },

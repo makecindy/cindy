@@ -6958,103 +6958,103 @@
       "dismiss": "Don't show again",
       "storageUsage": {
         "label": "Clean up my computer",
-        "prompt": "Help me find things worth cleaning up on my computer, starting with caches, old installers, and large files. Organize a list by how much space each could free and the impact of removing it, and explain your recommendations. List files whose purpose is unclear separately. Ask me about the scope if a choice is needed, and have me confirm the specific items before deleting anything."
+        "prompt": "Help me find things worth cleaning up on my computer and how much space I could free. Let me confirm before cleaning anything up."
       },
       "whySlow": {
         "label": "Find out why my computer is slow",
-        "prompt": "Help me find out why my computer is slow. Start by checking its current state, looking at load, memory, disk, and relevant processes as needed. Give me an evidence-based assessment and prioritized suggestions. If the available information is not enough to identify the cause, ask when it slows down and which activities trigger it. Diagnose only for now; do not change settings or stop processes."
+        "prompt": "Help me find out why my computer is slow and suggest ways to improve it."
       },
       "downloadsDesktop": {
         "label": "Organize my Downloads and Desktop",
-        "prompt": "Help me organize my Downloads folder and Desktop. First look at what has accumulated and identify large items, possible duplicates, and files suitable for archiving. Suggest how to group and organize them. Ask about my habits if you need to know which files I want close at hand or how I prefer to organize things. Show me the plan before moving or renaming files, keep a record of the changes, and ask me to confirm any deletions separately."
+        "prompt": "Help me organize my Downloads folder and desktop so things are easy to find. Show me the plan first."
       },
       "diagnoseNetwork": {
         "label": "Diagnose my network speed",
-        "prompt": "Help me diagnose slow internet speeds. Run the necessary connection and network checks to distinguish between a problem on this computer, the network connection, or a particular website or app. If important clues are still missing, ask which activities are slow and when it started. Explain the findings, the evidence behind your assessment, and the suggested next steps. Before a lengthy speed test or a settings change, explain its purpose and impact."
+        "prompt": "Help me find out why my internet is slow and suggest how to fix it."
       },
       "unusedApps": {
         "label": "Find apps I rarely use that still take up space",
-        "prompt": "List the apps installed on this computer and how much space they use. Use any available usage records to identify apps that may have been idle for a long time. If reliable usage records are unavailable, say that you cannot determine this; do not treat file modification times as last-used times. Give me a prioritized list to review, and ask which apps I want to keep if needed. Have me confirm the specific apps before uninstalling them."
+        "prompt": "Help me find apps that may have gone unused for a long time and take up space. Let me confirm before uninstalling anything."
       },
       "stockDigest": {
         "label": "Send me a daily stock briefing",
-        "prompt": "Help me set up a daily stock briefing. You can start with 2400.HK (XD Inc.) as an example, then ask which other stocks interest me and what I want to focus on. Based on the markets I choose, agree with me on the delivery time and time zone before setting up the automation. Suggested content can include prices, trading volume, and relevant news, with sources. Adjust the content and watchlist to my preferences."
+        "prompt": "Set up a daily stock briefing for me. We can start with 2400.HK (XD Inc.); ask which other stocks interest me and when I'd like to receive it."
       },
       "morningBrief": {
         "label": "Create my daily morning briefing",
-        "prompt": "Help me create a personalized daily morning briefing. First find out which topics interest me, how much detail I want, and when I would like to receive it. If I am unsure, suggest a few topic combinations to choose from. You can suggest 8 a.m., but let me adjust the time and ask about the time zone if it is unclear. Find suitable sources for the chosen topics, prepare summaries with links to the originals, and set up the automation for the agreed time."
+        "prompt": "Set up a daily morning briefing for me. Work with me to choose the topics and delivery time."
       },
       "watchWebpage": {
         "label": "Keep an eye on a webpage for me",
-        "prompt": "Help me monitor a webpage. First establish the URL and which changes matter to me, such as prices, availability, registration, or announcements. These are only examples; adapt to my actual goal. Suggest a checking frequency suited to those changes and set up the automation once we agree. Focus notifications on the changes I care about, including what changed and a link to the original page."
+        "prompt": "Watch a webpage for me and let me know when something I care about changes. Work with me to choose the URL, what to watch for, and how often to check."
       },
       "expenseTracker": {
         "label": "Make a simple expense tracker",
-        "prompt": "Help me make an expense tracker. First find out which income and expenses I want to track, how I currently record them, and which devices I plan to use. If I do not have a clear idea, suggest a few simple, practical options. Once we choose the features for the first version, build a working tracker that saves my records, then open it for me to try."
+        "prompt": "Help me build a personal expense tracker. We can talk through the features and how I'll use it, then let me try it out."
       },
       "kidsGame": {
         "label": "I want to make a game",
-        "prompt": "I want to make a game. If I already have an idea, help me develop the gameplay. If I do not have a direction yet, suggest 3–4 interesting, distinct game ideas. For each, explain the core gameplay, what makes it appealing, and what the first version could look like. Use my feedback to refine and choose a direction together, then start building once we have decided."
+        "prompt": "I want to make a game. Help me develop my idea or suggest some fun concepts, then let's choose a direction and build it together."
       },
       "habitTracker": {
         "label": "Make a habit tracker",
-        "prompt": "Help me make a habit tracker that suits me. First find out what I want to keep doing, how often, and how I want to record it. If I am unsure, offer a few simple, easy-to-use options. Streaks, a calendar, and progress views can be options; choose the first version's features around my actual habits. Open the finished version for me to try, and make sure it saves my check-ins."
+        "prompt": "Build a habit-tracking page that fits what I want to keep doing, and let me try it out."
       },
       "recentDocs": {
         "label": "Summarize these materials in one page",
-        "prompt": "Summarize the materials I provide in one page, drawing out the most important information, citing sources, and flagging contradictions or gaps. If there is not enough material, ask me to add files or specify a folder. Only ask about the purpose or audience if it would significantly affect the summary. Let the content determine the structure instead of using a fixed template, and do not modify the original files."
+        "prompt": "Turn the materials I provide into a one-page summary so I can quickly grasp the key points."
       },
       "subscriptionSpend": {
         "label": "Tally my subscription spending",
-        "prompt": "Help me review my subscription spending. Use bills, receipts, emails, or other sources I provide or select to list service names, charge amounts, billing cycles, and any renewal dates you can verify. Flag possible duplicates and items that need checking. If no source has been chosen, ask which materials I want to review; you can also use a connected email plugin I select. State when information is missing, do not change subscriptions, and do not ask for bank card details."
+        "prompt": "Help me review my subscription spending and find subscriptions worth canceling or changing. Give me suggestions first."
       },
       "organizeFolder": {
         "label": "Sort and organize this folder",
-        "prompt": "Help me organize a folder. If the target is not clear, first ask me to specify it. Suggest categories, archiving, and naming based on the actual files, then adapt the plan to how I use them. Let the content and purpose determine categories and filename formats, and list unclear files separately. Show me the before-and-after plan, then move or rename files once it is agreed. Keep a record of the changes and do not delete files."
+        "prompt": "Help me organize a folder so files are easier to find. Let's agree on the folder and plan first. Don't delete any files."
       },
       "photoTimeline": {
         "label": "Organize my photos into a timeline",
-        "prompt": "Help me organize my photos into a clear timeline. If no photos are available yet, ask me to provide them or specify a folder. Based on their date range and content, suggest ways to organize them, such as by year and month, trip, or event. Proceed once we have chosen an approach. Flag photos with uncertain dates separately, ask me to confirm possible duplicates, and preserve the originals."
+        "prompt": "Help me organize my photos into a clear timeline, keeping the originals."
       },
       "photoAlbumPage": {
         "label": "Turn these photos into an album webpage",
-        "prompt": "Make a beautiful photo album webpage using the photos I provide. If no photos are available yet, ask me to provide them or specify a folder. Once you have them, suggest a suitable style and organization based on their content, or follow my own ideas. Make the album easy to browse with a way to view large photos, then open it in the browser for me to see. Preserve the original photos."
+        "prompt": "Build a beautiful, easy-to-browse album website with my photos. Open it for me when it's ready, and keep the original photos."
       },
       "uncommittedChanges": {
         "label": "Review my uncommitted changes",
-        "prompt": "Review the uncommitted changes in the project I specify, including staged, unstaged, and untracked files. If the target project is not clear, ask me to specify it first. Explain what the changes do, identify problems or omissions, and suggest improvements. Keep this read-only: do not edit files or commit anything. If there are no changes, say so."
+        "prompt": "Review the uncommitted changes in my project for problems and omissions. Give me suggestions without modifying files."
       },
       "exploreRepo": {
         "label": "Show me around this project",
-        "prompt": "Show me around the project I specify. If the target project is not clear, ask me to specify it first. Start with its documentation, entry points, and key modules, explaining what it does, how to run it, and how the main parts work together. Focus on any areas I particularly want to understand. Otherwise, start with an overview and suggest useful areas to explore further."
+        "prompt": "Show me around this project: what it does, how to run it, and which parts are worth exploring further."
       },
       "initAgentDoc": {
         "label": "Generate an AGENTS.md",
-        "prompt": "Generate an AGENTS.md for the repository I specify, describing its structure, common commands, and development conventions. If the target repository is not clear, ask me to specify it first. Check for existing AGENTS.md and CLAUDE.md files. If either already exists, explain what you found and suggest additions instead of overwriting it. If there are no existing guidance files, generate one based on the actual code."
+        "prompt": "Help me create a suitable AGENTS.md for my project. If guidance files already exist, suggest additions without overwriting them."
       },
       "listCodeProjects": {
         "label": "List my code projects and explain what each does",
-        "prompt": "Help me take stock of the code projects on my computer. Start with already established common or recently used directories, and ask me if the search scope is unclear. List each project's purpose, main technologies, and most recent activity time you can verify. Explain which directories you searched and which remain uncovered. Do not infer whether a project is still in use from modification times; ask me for context when needed. Keep this round read-only and do not edit files."
+        "prompt": "Help me take stock of the code projects on my computer and explain what each one does."
       },
       "devEnvironment": {
         "label": "Check my development environment for problems",
-        "prompt": "Help me check my development environment. Use existing projects and available environment information to decide what to focus on, then inspect the relevant runtimes, package managers, version settings, and obvious conflicts. Ask what kind of development I mainly do if needed. Explain which issues are worth addressing and why, considering project compatibility when suggesting upgrades. Inspect only for now; do not install software or change settings."
+        "prompt": "Check my development environment for things worth fixing or improving. Give me suggestions first."
       },
       "makePlugin": {
         "label": "Make a plugin for Cindy",
-        "prompt": "I want to make a plugin for Cindy. If I already have a problem I want to solve, help me develop a solution around it. If I do not have an idea yet, discuss my needs with me or suggest 3–4 useful, interesting plugin ideas. Explain what each could help me do and what using it would be like. Use my feedback to choose a direction together, then build a plugin I can install and use."
+        "prompt": "I want to make a Cindy plugin. Help me develop my requirements or suggest useful, fun ideas, then build it once we've chosen a direction."
       },
       "sendFeedback": {
         "label": "Send feedback to Cindy's developers",
-        "prompt": "Help me give feedback to Cindy's developers. Based on the problem or idea I have already described, organize what currently happens, how I would like it to improve, and any necessary reproduction steps. Ask only if key details are missing. Prepare a clear feedback draft and let me review it before submitting it."
+        "prompt": "Help me turn my thoughts about Cindy into clear feedback. Let me review it before submitting."
       },
       "readOwnSource": {
         "label": "Explore Cindy's own source code",
-        "prompt": "Show me Cindy's own source code so I can understand how you are implemented. Prefer an existing copy of Cindy's source; if none is available, get it from github.com/makecindy/cindy. Start with the overall architecture and main entry points, then explore further based on my interests. You can also suggest a few modules worth learning about."
+        "prompt": "Show me Cindy's source code (github.com/makecindy/cindy), explain how you're built, and explore some interesting parts with me."
       },
       "whatCindyCanDo": {
         "label": "Find a few things you can help me with",
-        "prompt": "Using the recent task information you can access and the capabilities currently available, suggest three specific tasks you could help me with now. For each, explain what I would need to provide and what result I would get. If there is not enough recent information, suggest a few easy starting points for me to choose from, or ask one question that would help narrow the scope. Only make suggestions this round; do not carry them out or guess my occupation."
+        "prompt": "Based on my recent tasks and your current capabilities, suggest concrete things you could do to save me effort. Let me choose one to start."
       }
     },
     "noProvider": {
@@ -7653,15 +7653,15 @@
       "mail": {
         "today": {
           "label": "Organize today’s emails that need my attention",
-          "prompt": "Organize today’s emails that need my attention. List the action items, related emails, and deadlines explicitly stated in the original messages. Start directly if the account and scope are already clear; otherwise, ask me. Use the email exchanges to determine what still needs handling, and flag uncertain items separately. Give me a list first; do not send, delete, or move any emails."
+          "prompt": "Help me find today's emails that need my attention and turn them into a to-do list. Leave the emails unchanged for now."
         },
         "unanswered": {
           "label": "Find important emails I haven’t answered",
-          "prompt": "Find important emails I haven’t answered. You can start with emails received in the past seven days and adjust the scope to my needs. Review the complete exchanges to find explicit questions or requests with no visible reply from me, and explain your reasoning. Flag items separately if you cannot tell whether they have already been handled. Do not treat unread emails as unanswered. Only prepare a list in this turn."
+          "prompt": "Help me find unanswered emails worth my attention and see which ones need a follow-up."
         },
         "reply": {
           "label": "Draft a reply to this email",
-          "prompt": "Draft a reply to the email I specify, taking the complete exchange and my requirements into account and using an appropriate tone. If I haven’t specified an email, ask me to choose one first. Ask further questions only if key information that affects the reply is missing; otherwise, draft it directly. Let me review the draft when it is ready; do not send it."
+          "prompt": "Draft a reply to this email, taking the conversation and my thoughts into account. Don't send it yet."
         }
       }
     }
