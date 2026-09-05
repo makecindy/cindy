@@ -4772,6 +4772,10 @@ export default function SessionScreen() {
         return;
       }
       const startController = async () => {
+        const initialDraft = draftRef.current;
+        const input = composerInputRef.current;
+        const initialSelection = input?.getSelection(initialDraft)
+          ?? { start: initialDraft.length, end: initialDraft.length };
         const controller = createMobileVoiceControllerSession({
           credential,
           ...(prewarmedVoice ? { asr: prewarmedVoice.asr } : {}),
@@ -4780,11 +4784,15 @@ export default function SessionScreen() {
             voiceContext.createRefinerTarget(providerId, options),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string }) =>
             voiceContext.warmRefiner(input),
-          initialDraft: draftRef.current,
-          refinementContext: buildMobileVoiceSessionRefinementContext(draftRef.current, renderItems),
+          initialDraft,
+          initialSelection,
+          refinementContext: buildMobileVoiceSessionRefinementContext(initialDraft, renderItems, initialSelection),
           localVoiceInputHistory,
           readCurrentDraft: () => draftRef.current,
-          onDraftChanged: writeVoiceDraft,
+          onDraftChanged: (text, selection) => {
+            if (selection) input?.rememberSelection(text, selection);
+            writeVoiceDraft(text);
+          },
           onStateChanged: setVoiceState,
           onError: (message) => {
             setVoiceState('error');
@@ -4984,20 +4992,22 @@ export default function SessionScreen() {
       // stop() can deliver an empty final transcript through onDraftChanged before
       // resolving. Capture the rich document first so quote/reference atoms survive.
       const documentBeforeStop = composerDocumentRef.current;
+      const inputBeforeStop = composerInputRef.current;
       const latestDraft = await controller.stop();
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
       setVoiceState('done');
-      // 听写结束落焦(既有行为,显式 focus 承担弹键盘语义):focus 的 web 侧
-      // 实现即 placeCaretAtEnd,caret 落在转写文字末尾。听写**进行中**禁止任何
-      // 程序化 focus(见 voiceIsListening 滚动效应的注释)。
-      requestAnimationFrame(() => {
-        composerInputRef.current?.focus();
-      });
       // chat-text-quote:纯引用(无转写文字、无附件)也要发出去——发送按钮在
       // quote-only 时可见,漏了引用会变成「点发送只停了录音、消息没发」。
       const latestDocument = latestDraft.trim()
         ? reconcileComposerProjectedText(documentBeforeStop, latestDraft)
         : documentBeforeStop;
+      // Focus only after dictation ends, with the caret after the inserted text.
+      const insertionEnd = composerInputRef.current?.getSelection(latestDraft).end ?? latestDraft.length;
+      requestAnimationFrame(() => {
+        if (inputBeforeStop && composerInputRef.current === inputBeforeStop && draftRef.current === latestDraft) {
+          inputBeforeStop.applyDocumentAndFocusSelection(composerDocumentRef.current, insertionEnd);
+        }
+      });
       if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0)) {
         const sendLatest = sendLatestRef.current;
         if (!sendLatest) throw new Error(t('session.screen.voiceSenderNotReady'));
@@ -10740,11 +10750,14 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 function buildMobileVoiceSessionRefinementContext(
   draftText: string,
   items: readonly MobileMessageRenderItem[],
+  selection: { start: number; end: number },
 ) {
-  const selectionBefore = truncateMobileVoiceContext(draftText, 1200);
+  const selectionBefore = truncateMobileVoiceContext(draftText.slice(0, selection.start), 1200);
+  const selectionAfter = draftText.slice(selection.end, selection.end + 1200);
   const replyToMessage = findLastAssistantMessageText(items);
   return {
     selectionBefore: selectionBefore || undefined,
+    selectionAfter: selectionAfter || undefined,
     replyToMessage: replyToMessage || undefined,
   };
 }

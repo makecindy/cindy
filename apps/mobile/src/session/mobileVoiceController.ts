@@ -20,6 +20,8 @@ import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
 import { CINDY_MANAGED_REFINER_PROVIDER } from '@/session/mobileCindyVoiceSession';
 import {
   appendVoiceTranscriptDraftWithRange,
+  insertVoiceTranscriptDraftWithRange,
+  type MobileVoiceSelection,
   buildMobileVoiceRefinementContext,
   makeMobileRefinerPromptCacheKey,
   MobileLiteLlmTextModelClient,
@@ -55,6 +57,7 @@ export type MobileVoiceControllerSession = {
 type MobileVoiceControllerOptions = {
   credential: StoredMobileVoiceCredential;
   initialDraft: string;
+  initialSelection?: MobileVoiceSelection;
   refinementContext?: DictationRefinementContext;
   localVoiceInputHistory?: readonly string[];
   asr?: AsrProvider;
@@ -75,7 +78,7 @@ type MobileVoiceControllerOptions = {
   }) => Promise<void>;
   startAudio?: StartRealtimeAudio;
   readCurrentDraft?: () => string;
-  onDraftChanged: (draft: string) => void;
+  onDraftChanged: (draft: string, selection?: MobileVoiceSelection) => void;
   onStateChanged?: (state: VoiceInputState) => void;
   onError?: (message: string) => void;
   onReadyForStartCue?: () => void;
@@ -220,7 +223,9 @@ export function createMobileVoiceControllerSession(
     pendingDraftToPublish = null;
     if (lastPublishedDraft === draft) return;
     lastPublishedDraft = draft;
-    options.onDraftChanged(draft);
+    options.onDraftChanged(draft, voiceInsertion
+      ? { start: voiceInsertion.end, end: voiceInsertion.end }
+      : undefined);
   };
 
   const publishPendingDraftNow = (): void => {
@@ -316,7 +321,11 @@ export function createMobileVoiceControllerSession(
       return buildEditableRange(voiceInsertion, segmentIds, voiceInsertionTouched);
     }
 
-    const result = appendVoiceTranscriptDraftWithRange(currentDraft, normalized);
+    // A selection belongs to its captured draft. If typing changed that draft
+    // before the first ASR result, preserve the edit instead of replacing stale offsets.
+    const result = options.initialSelection && currentDraft === baseDraft
+      ? insertVoiceTranscriptDraftWithRange(currentDraft, normalized, options.initialSelection)
+      : appendVoiceTranscriptDraftWithRange(currentDraft, normalized);
     if (!result.insertion) return undefined;
     voiceInsertion = result.insertion;
     voiceInsertionSegmentIds = segmentIds;

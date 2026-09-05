@@ -120,6 +120,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   applyConfig(config);
 
   let applying = false;
+  let reportUserSelection = false;
   let composing = false;
   let lastSignature = '';
   let pasteRequestSequence = 0;
@@ -188,6 +189,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     // but never posted, so the send button stays disabled.
     composing = false;
     applying = true;
+    reportUserSelection = false;
     // Android WebView 85 lacks the modern child-replacement API; use legacy DOM primitives.
     const fragment = document.createDocumentFragment();
     flattenDomNodes(documentValue.nodes).forEach((node) => fragment.appendChild(node));
@@ -241,6 +243,35 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     walk(root, nodes);
     return { version: 1, nodes };
   };
+  // Serialize semantic prefixes, not visible labels: reference chips project to
+  // URLs/raw mentions (and quotes to zero characters) in the native draft.
+  const prefixAt = (container, offset) => {
+    const range = document.createRange();
+    range.setStart(root, 0);
+    range.setEnd(container, offset);
+    const fragment = range.cloneContents();
+    // A root boundary after a block includes its line break when siblings follow.
+    if (container === root && offset < root.childNodes.length) {
+      fragment.appendChild(document.createComment('selection-boundary'));
+    }
+    const nodes = [];
+    walk(fragment, nodes);
+    return { version: 1, nodes };
+  };
+  const reportSelection = () => {
+    if (applying || composing || !reportUserSelection) return;
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return;
+    post({ type: 'selection', document: readDocument(),
+      before: prefixAt(range.startContainer, range.startOffset),
+      through: prefixAt(range.endContainer, range.endOffset) });
+  };
+  document.addEventListener('selectionchange', reportSelection);
+  ['touchstart', 'mousedown', 'keydown', 'input'].forEach((name) => {
+    root.addEventListener(name, () => { reportUserSelection = true; });
+  });
   let lastReportedHeight = null;
   const reportHeight = () => {
     const height = Math.min(config.maxHeight, Math.max(${COMPOSER_SINGLE_LINE_HEIGHT}, root.scrollHeight));
@@ -258,6 +289,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
       post({ type: 'change', document: value });
     }
     reportHeight();
+    reportSelection();
   };
   const setCaretAfter = (node, selection) => {
     const range = document.createRange();
@@ -443,7 +475,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   root.addEventListener('compositionend', () => { composing = false; notify(); });
   root.addEventListener('compositioncancel', () => { composing = false; notify(); });
   root.addEventListener('focus', () => post({ type: 'focus' }));
-  root.addEventListener('blur', () => post({ type: 'blur' }));
+  root.addEventListener('blur', () => { reportSelection(); post({ type: 'blur' }); });
   root.addEventListener('keydown', (event) => {
     const backward = event.key === 'Backspace';
     if (!backward && event.key !== 'Delete') return;
@@ -511,8 +543,28 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   }, { passive: false });
 
   window.cindyComposer = {
-    applyDocument(value, focusAfter) { render(value, focusAfter === true); },
-    focus() { placeCaretAtEnd(); },
+    applyDocument(value, focusAfter, caret) {
+      render(value, focusAfter === true && !caret);
+      if (!focusAfter || !caret) return;
+      root.focus();
+      const nodes = Array.from(root.childNodes).filter((node) => !isEmptyCaretAnchor(node));
+      const node = nodes[caret.nodeIndex];
+      const selection = window.getSelection();
+      if (!node || !selection) { placeCaretAtEnd(); return; }
+      reportUserSelection = true;
+      if (node.nodeType !== Node.TEXT_NODE && !node.classList.contains('slash')) {
+        setCaretAfter(node, selection);
+      } else {
+        const textNode = node.nodeType === Node.TEXT_NODE ? node : node.firstChild;
+        const range = document.createRange();
+        range.setStart(textNode, Math.min(caret.offset, (textNode.nodeValue || '').length));
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      reportSelection();
+    },
+    focus() { reportUserSelection = true; placeCaretAtEnd(); },
     blur() { root.blur(); },
     insertNode(node) { insertAtSelection(node); },
     commitPaste(requestId, nodes) { commitPaste(requestId, nodes); },

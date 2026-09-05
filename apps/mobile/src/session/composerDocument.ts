@@ -182,6 +182,20 @@ export function composerDocumentsEqual(
   });
 }
 
+/** Locate a projected caret in the flat semantic nodes rendered by the editor. */
+export function composerCaretPosition(document: ComposerDocument, offset: number): { nodeIndex: number; offset: number } {
+  let remaining = Math.max(0, offset);
+  for (let nodeIndex = 0; nodeIndex < document.nodes.length; nodeIndex += 1) {
+    const node = document.nodes[nodeIndex];
+    const length = composerNodeProjectedText(node).length;
+    if (remaining < length || (node.type === 'text' && remaining === length)) {
+      return { nodeIndex, offset: remaining };
+    }
+    remaining -= length;
+  }
+  return { nodeIndex: document.nodes.length, offset: 0 };
+}
+
 /** Visible editable projection. Quote atoms intentionally contribute no text. */
 export function composerDocumentProjectedText(document: ComposerDocument): string {
   return document.nodes.map((node) => {

@@ -245,6 +245,7 @@ describe('mobile composer rich input HTML', () => {
       },
     };
     const documentStub = {
+      addEventListener() {},
       createComment(value: string) {
         return createNode(8, value);
       },
@@ -283,7 +284,7 @@ describe('mobile composer rich input HTML', () => {
     const windowStub: {
       ReactNativeWebView: { postMessage(payload: string): void };
       cindyComposer?: {
-        applyDocument(value: unknown, focusAfter?: boolean): void;
+        applyDocument(value: unknown, focusAfter?: boolean, caret?: { nodeIndex: number; offset: number }): void;
         commitPaste(requestId: string, nodes: unknown[]): void;
         setConfig(value: { maxHeight: number }): void;
       };
@@ -393,6 +394,15 @@ describe('mobile composer rich input HTML', () => {
       },
     });
     expect(legacyHtml).not.toContain('replaceChildren');
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [
+        { type: 'pasted-text', text: 'long raw text', display: 'chip' },
+        { type: 'text', text: 'dictated suffix' },
+      ],
+    }, true, { nodeIndex: 1, offset: 8 });
+    expect(selection.anchorNode).toBe(children[2]);
+    expect(selection.anchorOffset).toBe(8);
     expect(legacyHtml).not.toContain('.flatMap(');
   });
 
@@ -462,7 +472,7 @@ describe('mobile composer rich input HTML', () => {
     expect(inputSource).toContain('applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;');
     expect(inputSource).toContain('applyDocumentAndSetSelectionToEnd: (value) => {');
     expect(inputSource).toContain('applyDocument(value, true);');
-    expect(inputSource).toContain('if (pending) applyDocument(pending.document, pending.focusAfter);');
+    expect(inputSource).toContain('if (pending) applyDocument(pending.document, pending.focusAfter, pending.caret);');
     expect(inputSource).toContain('pendingNodeInsertionsRef.current.push(node);');
     expect(inputSource).toContain('for (const node of pendingNodeInsertions)');
     expect(selectSource).toContain('queueEditingRef.current ? { persist: false } : undefined');

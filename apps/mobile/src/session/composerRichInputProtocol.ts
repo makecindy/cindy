@@ -8,6 +8,7 @@ export type ComposerWebMessage =
   | { type: 'ready' | 'focus' | 'blur' }
   | { type: 'height'; height: number }
   | { type: 'change'; document: unknown }
+  | { type: 'selection'; document: unknown; before: unknown; through: unknown }
   | { type: 'paste-text-request'; requestId: string; text?: string }
   | { type: 'paste-images-start'; requestId: string; count: number }
   | { type: 'paste-image'; requestId: string; base64: string; mimeType: string; name: string; index: number }
@@ -48,6 +49,9 @@ export function parseComposerWebMessage(raw: string): ComposerWebMessage | null 
     }
     if (message.type === 'change') {
       return { type: 'change', document: message.document };
+    }
+    if (message.type === 'selection') {
+      return { type: 'selection', document: message.document, before: message.before, through: message.through };
     }
     if (message.type === 'paste-text-request') {
       if (

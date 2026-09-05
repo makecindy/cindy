@@ -131,6 +131,7 @@ export interface MobileComposerInputRowProps {
   multilineShape?: boolean;
   onBlur?: TextInputProps['onBlur'];
   onChangeText: (value: string) => void;
+  onSelectionChange?: TextInputProps['onSelectionChange'];
   onContentSizeChange?: TextInputProps['onContentSizeChange'];
   onFocus?: TextInputProps['onFocus'];
   /**
@@ -205,6 +206,7 @@ export function MobileComposerInputRow({
   multilineShape,
   onBlur,
   onChangeText,
+  onSelectionChange,
   onContentSizeChange,
   onFocus,
   onPasteImages,
@@ -262,6 +264,7 @@ export function MobileComposerInputRow({
       multiline={multiline}
       onBlur={onBlur}
       onChangeText={onChangeText}
+      onSelectionChange={onSelectionChange}
       onContentSizeChange={onContentSizeChange}
       onFocus={onFocus}
       onPressIn={onPressIn}

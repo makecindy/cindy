@@ -696,6 +696,7 @@ export default function NewRemoteSessionScreen() {
   const userTouchedDeviceRef = useRef(false);
   const userTouchedWorkspaceRef = useRef(false);
   const firstMessageRef = useRef(draft.firstMessage);
+  const firstMessageSelectionRef = useRef({ start: draft.firstMessage.length, end: draft.firstMessage.length });
   const firstMessageInputRef = useRef<NativeTextInput>(null);
   const voiceDraftScrollRef = useRef<ScrollView>(null);
   const voiceRecordingActiveRef = useRef(false);
@@ -3121,6 +3122,7 @@ export default function NewRemoteSessionScreen() {
       // used to add 0.6–4.4s before the mic could open.
       void openLink(selectedDeviceId).catch(() => undefined);
       const currentDraft = firstMessageRef.current;
+      const initialSelection = { ...firstMessageSelectionRef.current };
       // Claim the connection prewarmed at pressIn (if any): its credential is
       // already resolved and its ASR WebSocket already connecting, so the
       // handshake overlaps the press gesture instead of following it.
@@ -3161,7 +3163,8 @@ export default function NewRemoteSessionScreen() {
         }
         return;
       }
-      const selectionBefore = currentDraft.trim() ? currentDraft.slice(-1200) : undefined;
+      const selectionBefore = currentDraft.slice(0, initialSelection.start).slice(-1200);
+      const selectionAfter = currentDraft.slice(initialSelection.end, initialSelection.end + 1200);
       const controller = createMobileVoiceControllerSession({
         credential,
         ...(prewarmedVoice ? { asr: prewarmedVoice.asr } : {}),
@@ -3171,10 +3174,14 @@ export default function NewRemoteSessionScreen() {
         warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string }) =>
           voiceContext.warmRefiner(input),
         initialDraft: currentDraft,
-        refinementContext: selectionBefore ? { selectionBefore } : undefined,
+        initialSelection,
+        refinementContext: { selectionBefore: selectionBefore || undefined, selectionAfter: selectionAfter || undefined },
         localVoiceInputHistory,
         readCurrentDraft: () => firstMessageRef.current,
-        onDraftChanged: setFirstMessageDraft,
+        onDraftChanged: (text, selection) => {
+          if (selection) firstMessageSelectionRef.current = selection;
+          setFirstMessageDraft(text);
+        },
         onStateChanged: setVoiceState,
         onError: (message) => {
           setVoiceState('error');
@@ -3271,8 +3278,7 @@ export default function NewRemoteSessionScreen() {
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
       setVoiceState('done');
       requestAnimationFrame(() => {
-        const end = latestDraft.length;
-        firstMessageInputRef.current?.setNativeProps({ selection: { start: end, end } });
+        firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });
       });
       return latestDraft;
     } catch (err) {
@@ -3355,8 +3361,7 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     if (!voiceIsListening) return undefined;
     const frame = requestAnimationFrame(() => {
-      const end = firstMessageRef.current.length;
-      firstMessageInputRef.current?.setNativeProps({ selection: { start: end, end } });
+      firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });
       voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
     });
     return () => cancelAnimationFrame(frame);
@@ -5826,6 +5831,11 @@ export default function NewRemoteSessionScreen() {
                     setComposerVoiceHoldArmed(false);
                   }}
                   onChangeText={setFirstMessageDraft}
+                  onSelectionChange={(event) => {
+                    if (!voiceRecordingActiveRef.current && !voiceStopInFlightRef.current) {
+                      firstMessageSelectionRef.current = event.nativeEvent.selection;
+                    }
+                  }}
                   onContentSizeChange={handleFirstMessageInputContentSizeChange}
                   onFocus={() => setFirstMessageInputFocused(true)}
                   onPasteImages={(uris) => void addPastedImageAttachments(uris)}

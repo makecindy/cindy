@@ -5,6 +5,7 @@ import {
   composerDocumentFromEncodedMessage,
   composerDocumentFromSerializedMessage,
   composerDocumentProjectedText,
+  composerCaretPosition,
   hydrateComposerMessageReferenceBodies,
   isLongComposerPaste,
   mentionComposerNode,
@@ -22,6 +23,16 @@ import {
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
+  it('locates a dictated caret using projected chip lengths and skips zero-width quotes', () => {
+    const document = { version: 1 as const, nodes: [
+      { type: 'quote' as const, quote: { text: '引用' } },
+      { type: 'session-link' as const, href: 'https://example.com/task', label: '标题', titled: true },
+      { type: 'text' as const, text: '插入后文' },
+    ] };
+    const prefix = '[标题](https://example.com/task)';
+    expect(composerCaretPosition(document, prefix.length + 2)).toEqual({ nodeIndex: 2, offset: 2 });
+    expect(composerCaretPosition(textComposerDocument('甲🙂乙'), 3)).toEqual({ nodeIndex: 0, offset: 3 });
+  });
   it('roundtrips interleaved quote and text nodes without leaking private markers', () => {
     const quoteA = { text: 'alpha' };
     const quoteB = { text: 'beta', sourcePath: 'src/b.ts', startLine: 4, endLine: 5 };

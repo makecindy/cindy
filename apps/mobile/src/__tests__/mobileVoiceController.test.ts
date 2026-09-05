@@ -147,6 +147,60 @@ function credential(): StoredMobileVoiceCredential {
 }
 
 describe('mobileVoiceController', () => {
+  it.each([
+    ['甲乙', 0, 0, '', '甲乙'],
+    ['甲乙', 1, 1, '甲', '乙'],
+    ['甲乙', 2, 2, '甲乙', ''],
+    ['甲旧词乙', 1, 3, '甲', '乙'],
+    ['🙂\n乙', 3, 3, '🙂\n', '乙'],
+  ])('keeps streaming ASR and refinement at selection in %s [%s, %s]', async (initialDraft, start, end, prefix, suffix) => {
+    let draft = initialDraft;
+    const drafts: string[] = [];
+    const selections: Array<{ start: number; end: number } | undefined> = [];
+    const asr = new FakeAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft,
+      initialSelection: { start, end },
+      readCurrentDraft: () => draft,
+      asr,
+      refiner: {
+        async refine(input) {
+          input.onPartial?.('润色中');
+          return { accepted: true, sourceSegmentIds: input.segmentIds, basedOnText: input.text,
+            refinedText: '润色完成', elapsedMs: 1 };
+        },
+      },
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (text, selection) => {
+        draft = text;
+        drafts.push(text);
+        selections.push(selection);
+      },
+    });
+    await session.start();
+    asr.emit({ type: 'partial', text: '识别中', at: Date.now() });
+    expect(draft).toBe(prefix + '识别中' + suffix);
+    expect(await session.stop()).toBe(prefix + '润色完成' + suffix);
+    expect(drafts).toEqual(['识别中', 'raw final', '润色中', '润色完成'].map((text) => prefix + text + suffix));
+    expect(selections.at(-1)).toEqual({ start: prefix.length + 4, end: prefix.length + 4 });
+  });
+
+  it('preserves typing that changed the selected draft before the first ASR result', async () => {
+    let draft = '用户刚修改';
+    const asr = new FakeAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), initialDraft: '原选区', initialSelection: { start: 0, end: 3 },
+      readCurrentDraft: () => draft, asr, refiner: null,
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (text) => { draft = text; },
+    });
+    await session.start();
+    asr.emit({ type: 'partial', text: '转写', at: Date.now() });
+    expect(draft).toBe('用户刚修改\n转写');
+    expect(await session.stop()).toBe('用户刚修改\nraw final');
+  });
+
   it('propagates and localizes empty-transcript failures from stop()', async () => {
     const errors: string[] = [];
     const states: string[] = [];
