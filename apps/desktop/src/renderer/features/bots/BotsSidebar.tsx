@@ -59,7 +59,7 @@ const MESSAGE_REFRESH_DEBOUNCE_MS = 800;
  * 认得的颜色。这个 token 只服务伙伴列表的未读徽标与待办点，不外溢到别的地方。
  */
 const UNREAD_BADGE_CLASS =
-  'flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1.5 text-11 font-medium leading-none text-[var(--bot-unread-fg)]';
+  'flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 font-medium tabular-nums leading-none text-[var(--bot-unread-fg)]';
 
 function BotsSidebarContent() {
   const { t } = useTranslation();
@@ -73,27 +73,21 @@ function BotsSidebarContent() {
   const [query, setQuery] = useState('');
   const [showHidden, setShowHidden] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const [menuBotId, setMenuBotId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    botId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<BotProfile | null>(null);
-  const contextMenuFrameRef = useRef<number | null>(null);
+  const menuOriginRef = useRef<HTMLButtonElement | null>(null);
+  const menuPointerDownRef = useRef(false);
+  const menuRestoreFocusRef = useRef(true);
 
-  useEffect(
-    () => () => {
-      if (contextMenuFrameRef.current !== null) {
-        window.cancelAnimationFrame(contextMenuFrameRef.current);
-      }
-    },
-    [],
-  );
-
-  const openBotContextMenu = (id: string) => {
-    if (contextMenuFrameRef.current !== null) {
-      window.cancelAnimationFrame(contextMenuFrameRef.current);
-    }
-    contextMenuFrameRef.current = window.requestAnimationFrame(() => {
-      contextMenuFrameRef.current = null;
-      setMenuBotId(id);
-    });
+  const openBotContextMenu = (botId: string, origin: HTMLButtonElement, x: number, y: number) => {
+    menuOriginRef.current = origin;
+    menuPointerDownRef.current = false;
+    menuRestoreFocusRef.current = true;
+    setContextMenu({ botId, x, y });
   };
 
   /*
@@ -344,10 +338,6 @@ function BotsSidebarContent() {
               return (
                 <div
                   key={bot.id}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    openBotContextMenu(bot.id);
-                  }}
                   className={cn(
                     'group relative flex w-full items-center rounded-xl transition-colors',
                     selected
@@ -363,14 +353,21 @@ function BotsSidebarContent() {
                   <button
                     type="button"
                     onClick={() => navigate(`/bots/${bot.id}`)}
+                    aria-current={selected ? 'page' : undefined}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      openBotContextMenu(bot.id, event.currentTarget, event.clientX, event.clientY);
+                    }}
                     onKeyDown={(event) => {
                       if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) {
                         return;
                       }
                       event.preventDefault();
-                      setMenuBotId(bot.id);
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      openBotContextMenu(bot.id, event.currentTarget, rect.left + 10, rect.bottom);
                     }}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     {/* 40px。28px 会让两行式行高塌成一行的观感——头像撑不住两行文字,
                         整行读起来像一条被拉高的单行列表。 */}
@@ -404,19 +401,15 @@ function BotsSidebarContent() {
                         ) : null}
                       </span>
                       <span className="flex min-w-0 items-center gap-2">
-                        {/* 未读时不加 mutedClass:第二行跟着提到一级色,「有新消息」在
-                            一屏里靠亮度就能被扫到,不用先读数字。 */}
+                        {/* 未读只强调名字与数字，预览保持次级，避免整行同时争抢注意力。 */}
                         <span
                           className={cn(
                             'min-w-0 flex-1 truncate text-12 leading-4',
                             // 「正在输入…」是个过程说明,不是消息内容:斜体 + 三级色,
                             // 哪怕这一行有未读也不跟着提到一级——否则一个瞬时状态
                             // 会比真正的新消息还抢眼。
-                            typing
-                              ? cn('italic', mutedClass)
-                              : unread > 0
-                                ? 'font-medium'
-                                : mutedClass,
+                            mutedClass,
+                            typing && 'italic',
                           )}
                           title={subtitleText}
                         >
@@ -430,8 +423,8 @@ function BotsSidebarContent() {
                       有没有未读，所有数字都落在同一条垂直线上。
                     */}
                     <span className="flex w-10 shrink-0 self-stretch flex-col items-end justify-between py-0.5">
-                      <span className={cn('min-h-4 text-11', mutedClass)}>{timestamp}</span>
-                      <span className="flex min-h-[18px] items-center justify-end gap-1.5">
+                      <span className={cn('min-h-4 text-11 tabular-nums', mutedClass)}>{timestamp}</span>
+                      <span className="flex min-h-4 items-center justify-end">
                         {unread > 0 ? (
                           <span
                             className={UNREAD_BADGE_CLASS}
@@ -443,31 +436,43 @@ function BotsSidebarContent() {
                       </span>
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setDeleteTarget(bot)}
-                    aria-label={t('bots.lifecycle.deleteTitle')}
-                    className={cn(
-                      'absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-danger)] opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100',
-                      selected
-                        ? 'bg-sidebar-item-active hover:bg-[var(--danger-bg-soft)]'
-                        : 'bg-[var(--sidebar-bg)] hover:bg-[var(--danger-bg-soft)]',
-                    )}
-                  >
-                    <Trash2 size={14} />
-                  </button>
                   <DropdownMenu
-                    open={menuBotId === bot.id}
-                    onOpenChange={(open) => setMenuBotId(open ? bot.id : null)}
+                    open={contextMenu?.botId === bot.id}
+                    onOpenChange={(open) => { if (!open) setContextMenu(null); }}
                   >
                     <DropdownMenuTrigger asChild>
-                      {/*
-                        菜单继续服务右键 / 长按 / Shift+F10，不占消息行宽度；
-                        删除则在悬停行时直接露出，并仍需经过二次确认。
-                      */}
-                      <span className="pointer-events-none absolute right-2 top-2 h-px w-px" />
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none fixed h-0 w-0"
+                        style={{ left: contextMenu?.x ?? 0, top: contextMenu?.y ?? 0 }}
+                      />
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-40">
+                    <DropdownMenuContent
+                      align="start"
+                      className="min-w-40"
+                      onCloseAutoFocus={(event) => {
+                        event.preventDefault();
+                        if (menuRestoreFocusRef.current) menuOriginRef.current?.focus({ preventScroll: true });
+                      }}
+                      onInteractOutside={() => { menuRestoreFocusRef.current = false; }}
+                      onPointerDownCapture={(event) => {
+                        menuPointerDownRef.current = event.button === 0 && !event.ctrlKey;
+                      }}
+                      onPointerUpCapture={(event) => {
+                        // Radix synthesizes a click on release when the press happened
+                        // outside an item. Opening a context menu must never select it.
+                        if (!menuPointerDownRef.current || event.button !== 0 || event.ctrlKey) {
+                          event.preventDefault();
+                        }
+                        menuPointerDownRef.current = false;
+                      }}
+                      onClickCapture={(event) => {
+                        if (event.button !== 0 || event.ctrlKey) {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }
+                      }}
+                    >
                       <DropdownMenuItem onSelect={() => void setBotPinned(bot.id, !bot.pinnedAt)}>
                         <Pin size={14} className="mr-2" />
                         {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}

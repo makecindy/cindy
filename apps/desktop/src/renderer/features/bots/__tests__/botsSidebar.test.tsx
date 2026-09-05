@@ -353,8 +353,10 @@ describe('BotsSidebar rows', () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
 
     await renderSidebar();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.deleteTitle' }));
-    expect(screen.getByTestId('bot-delete-dialog').textContent).toBe('PR steward');
+    expect(screen.queryByRole('button', { name: 'bots.lifecycle.deleteTitle' })).toBeNull();
+    fireEvent.mouseOver(screen.getByText('PR steward'));
+    expect(screen.queryByRole('button', { name: 'bots.lifecycle.deleteTitle' })).toBeNull();
+    expect(screen.queryByTestId('bot-delete-dialog')).toBeNull();
 
     fireEvent.contextMenu(screen.getAllByText('PR steward')[0]);
 
@@ -384,9 +386,50 @@ describe('BotsSidebar rows', () => {
     // A read Bot carries no badge at all — zero must never render as "0".
     expect(screen.queryByLabelText('bots.list.unread:{"count":0}')).toBeNull();
     expect(screen.getByText('Nothing new').className).not.toContain('font-medium');
-    expect(screen.getByText('Fresh reply').className).toContain('font-medium');
+    expect(screen.getByText('Fresh reply').className).not.toContain('font-medium');
+    expect(screen.getByLabelText('bots.list.unread:{"count":3}').className).toContain('tabular-nums');
     expect(screen.getByText('Read').className).not.toContain('font-medium');
     expect(screen.getByText('Unread').className).toContain('font-medium');
+  });
+
+  it.each([
+    { button: 2, ctrlKey: false },
+    { button: 0, ctrlKey: true },
+    { button: 0, ctrlKey: false },
+  ])('does not select Pin on the opening release ($button / ctrl=$ctrlKey)', async (pointer) => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    await renderSidebar();
+    fireEvent.contextMenu(screen.getByText('PR steward'), { clientX: 120, clientY: 180 });
+    const pin = await screen.findByRole('menuitem', { name: 'bots.list.pin' });
+
+    // On macOS the context menu can open before the original button is released.
+    fireEvent(pin, new MouseEvent('pointerup', { bubbles: true, cancelable: true, ...pointer }));
+    if (pointer.button !== 0 || pointer.ctrlKey) fireEvent.click(pin, pointer);
+    expect(mocks.setBotPinned).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(screen.getByRole('menuitem', { name: 'bots.list.pin' })).toBeTruthy();
+
+    fireEvent(pin, new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    fireEvent(pin, new MouseEvent('pointerup', { bubbles: true, button: 0 }));
+    fireEvent.click(pin);
+    expect(mocks.setBotPinned).toHaveBeenCalledExactlyOnceWith('bot-1', true);
+  });
+
+  it('supports keyboard selection and restores row focus when dismissed', async () => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    await renderSidebar();
+    const row = screen.getByText('PR steward').closest('button')!;
+    row.focus();
+    fireEvent.keyDown(row, { key: 'F10', shiftKey: true });
+    const pin = await screen.findByRole('menuitem', { name: 'bots.list.pin' });
+    expect(mocks.setBotPinned).not.toHaveBeenCalled();
+    fireEvent.keyDown(pin, { key: 'Escape' });
+    await waitFor(() => expect(document.activeElement).toBe(row));
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    fireEvent.keyDown(row, { key: 'ContextMenu' });
+    fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'bots.list.pin' }), { key: 'Enter' });
+    expect(mocks.setBotPinned).toHaveBeenCalledExactlyOnceWith('bot-1', true);
   });
 
   it('re-reads the list when a Bot conversation is marked read', async () => {
