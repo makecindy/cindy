@@ -13,6 +13,7 @@ import {
   appendVoiceTranscriptDraft,
   appendVoiceTranscriptDraftWithRange,
   buildMobileVoiceRefinementContext,
+  buildStaleAnchorRefinementContext,
   canCancelMobileVoiceRecording,
   makeMobileRefinerPromptCacheKey,
   mobileVoiceMicPermissionError,
@@ -78,6 +79,59 @@ describe('mobileVoiceInput', () => {
     expect(replaceVoiceTranscriptDraftRange('user edited raw words', first.insertion, 'refined words')).toBe(
       'user edited raw words\nrefined words',
     );
+  });
+
+  it('inserts the transcript at the recording-start caret instead of appending to the end', () => {
+    // 光标在最前
+    expect(appendVoiceTranscriptDraftWithRange('世界', '你好', { start: 0, end: 0 })).toEqual({
+      draft: '你好世界',
+      insertion: { start: 0, end: 2, text: '你好' },
+    });
+    // 光标在中间
+    expect(appendVoiceTranscriptDraftWithRange('世界', '你好', { start: 1, end: 1 })).toEqual({
+      draft: '世你好界',
+      insertion: { start: 1, end: 3, text: '你好' },
+    });
+    // 光标在末尾:就地插入,不再自作主张加换行
+    expect(appendVoiceTranscriptDraftWithRange('世界', '你好', { start: 2, end: 2 })).toEqual({
+      draft: '世界你好',
+      insertion: { start: 2, end: 4, text: '你好' },
+    });
+  });
+
+  it('replaces the recording-start selection with the transcript', () => {
+    expect(appendVoiceTranscriptDraftWithRange('世界你好', '欢迎', { start: 0, end: 2 })).toEqual({
+      draft: '欢迎你好',
+      insertion: { start: 0, end: 2, text: '欢迎' },
+    });
+    expect(appendVoiceTranscriptDraftWithRange('世界你好', '欢迎', { start: 2, end: 4 })).toEqual({
+      draft: '世界欢迎',
+      insertion: { start: 2, end: 4, text: '欢迎' },
+    });
+  });
+
+  it('clamps out-of-range caret offsets instead of corrupting the draft', () => {
+    expect(appendVoiceTranscriptDraftWithRange('世界', '你好', { start: 99, end: 99 }).draft).toBe('世界你好');
+    expect(appendVoiceTranscriptDraftWithRange('世界', '你好', { start: 0, end: 99 }).draft).toBe('你好');
+    expect(appendVoiceTranscriptDraftWithRange('世界', '你好', { start: 3, end: 1 }).draft).toBe('世界你好');
+  });
+
+  it('keeps end-append behavior when no caret anchor is provided', () => {
+    expect(appendVoiceTranscriptDraftWithRange('世界', '你好').draft).toBe('世界\n你好');
+    expect(appendVoiceTranscriptDraftWithRange('世界', '你好', null).draft).toBe('世界\n你好');
+  });
+
+  it('switches the refinement context to end-append once the caret anchor goes stale', () => {
+    expect(buildStaleAnchorRefinementContext('已编辑的世界')).toEqual({
+      selectionBefore: '已编辑的世界',
+      selectedText: undefined,
+      selectionAfter: undefined,
+    });
+    // 只保留尾部 1200 字,与 refiner 的 selectionBefore 上限一致。
+    const long = 'x'.repeat(1300) + '尾巴';
+    const tail = buildStaleAnchorRefinementContext(long).selectionBefore ?? '';
+    expect(tail.length).toBe(1200);
+    expect(tail.endsWith('尾巴')).toBe(true);
   });
 
   it('uses compact Chinese labels for the voice button state', () => {
