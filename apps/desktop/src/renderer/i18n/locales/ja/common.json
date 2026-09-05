@@ -5476,6 +5476,7 @@
   "login": {
     "title": "Cindy へようこそ",
     "subtitle": "安全なログイン方法を選択してください",
+    "savedLoginPreserved": "保存済みのログイン情報はこの端末に残っています",
     "phonePlaceholder": "電話番号を入力",
     "emailPlaceholder": "メールアドレスを入力",
     "invalidEmail": "正しいメールアドレスを入力してください",
@@ -5570,6 +5571,9 @@
       "fallback": "ログインに失敗しました。再試行してください。",
       "AUTH_SERVICE_UNAVAILABLE": "ログインサービスは一時的に利用できません。",
       "AUTH_REQUEST_FAILED": "ログインリクエストに失敗しました。",
+      "CREDENTIAL_STORE_UNAVAILABLE": "Cindy を完全に終了して開き直すと、ログインを復元できます。",
+      "BROWSER_OPEN_FAILED": "ブラウザを開けませんでした。再試行してください。",
+      "BROWSER_OPEN_TIMEOUT": "ブラウザの起動がタイムアウトしました。再試行してください。",
       "NETWORK_ERROR": "ネットワーク接続を確認してください。",
       "REQUEST_TIMEOUT": "リクエストがタイムアウトしました。",
       "INVALID_PARAMS": "入力内容を確認してください。",

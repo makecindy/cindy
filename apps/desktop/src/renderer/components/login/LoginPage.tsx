@@ -1250,7 +1250,12 @@ export function LoginPage({
         ssoOrgGroupY: false,
         node: (
           <LoginPanel testId="login-panel-error">
-            <LoginTitleBlock title={t('login.unavailable')} subtitle={t('login.errors.fallback')} />
+            <LoginTitleBlock
+              title={t(loginState.code === 'CREDENTIAL_STORE_UNAVAILABLE'
+                ? 'credentialStore.dialog.title' : 'login.unavailable')}
+              subtitle={t(loginState.code === 'CREDENTIAL_STORE_UNAVAILABLE'
+                ? 'login.savedLoginPreserved' : 'login.errors.fallback')}
+            />
             <LoginPrimaryButton
               disabled={isLoading}
               loading={isLoading}

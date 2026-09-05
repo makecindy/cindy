@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import i18next from 'i18next';
 import { initReactI18next } from 'react-i18next';
@@ -126,6 +126,24 @@ function mountWithError(code: string) {
 }
 
 describe('error-copy 桌面 19 码表 + 兜底(现网 i18n verbatim,#D91F37 族)', () => {
+  it.each(['BROWSER_OPEN_FAILED', 'BROWSER_OPEN_TIMEOUT'])('shows actionable local error %s', (code) => {
+    mountWithError(code);
+    expect(screen.getByTestId('login-error-text').textContent).toBe(zhErrors[code]);
+    expect(zhErrors[code]).not.toBe(zhErrors.fallback);
+  });
+  it('explains preserved sign-in and offers recovery when the saved credentials cannot be read', () => {
+    loginHook.value.loginState = {
+      step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier',
+    };
+    render(<LoginPage />);
+    expect(screen.getByText(zhCN.login.savedLoginPreserved)).toBeTruthy();
+    expect(screen.getByText(zhCN.credentialStore.dialog.title)).toBeTruthy();
+    expect(screen.getByTestId('login-error-text').textContent)
+      .toBe(zhErrors.CREDENTIAL_STORE_UNAVAILABLE);
+    fireEvent.click(screen.getByTestId('login-error-retry'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({ type: 'reset' });
+  });
+
   for (const code of NAMED_CODES) {
     it(`error-copy ${code} 文案 verbatim`, async () => {
       expect(zhErrors[code], `zh-CN 缺 login.errors.${code}`).toBeTruthy();

@@ -13,7 +13,7 @@
  * exposed by this module and receives state updates via 'auth:state-change'.
  */
 
-import { BrowserWindow, net, safeStorage, app, shell } from 'electron';
+import { BrowserWindow, net, safeStorage, app, shell, powerMonitor } from 'electron';
 import crypto from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -78,6 +78,7 @@ import {
   type AuthLoopbackDevBridge,
 } from './authLoopbackCallback';
 import { createDesktopPollCredentials, runHostedCallbackPolling } from './authHostedCallback';
+import { launchAuthBrowser } from './authBrowserLaunch';
 import { reconcileSavedAccountMetadata, type StoredAccountMetadata } from './authAccountMetadata';
 import {
   isLoggedOutVaultAccount,
@@ -511,6 +512,42 @@ const SAFE_STORAGE_DIR = () => path.join(app.getPath('userData'), 'safe-storage'
 // 不可用」的区分,review 反馈)。错误只记 code/name,不记 message——fs 错误的
 // message 携带 userData 绝对路径,不该进保留 30 天的日志;密文/明文更不落。
 const safeStorageIssueLogged = new Set<string>();
+let credentialEncryptionUnavailable = false;
+let credentialEncryptionFailureLogged = false;
+
+function isCredentialEncryptionAvailable(): boolean {
+  const available = safeStorage.isEncryptionAvailable();
+  // Only consume a real credential operation after Electron is ready. Filesystem
+  // contention and an individual bad ciphertext do not require a process restart.
+  if (app.isReady()) credentialEncryptionUnavailable = !available;
+  if (!available && !credentialEncryptionFailureLogged) {
+    credentialEncryptionFailureLogged = true;
+    let screenState = 'unknown';
+    try {
+      if (app.isReady()) screenState = powerMonitor.getSystemIdleState(1);
+    } catch {
+      // Diagnostics must not change credential read behavior.
+    }
+    log.warn('credential encryption backend unavailable', {
+      appReady: app.isReady(),
+      screenState,
+      electronVersion: process.versions.electron,
+    });
+  }
+  return available;
+}
+
+/** Main-process recovery signal; never expose credentials or probe the keychain. */
+export function needsCredentialProcessRecovery(): boolean {
+  return (
+    credentialEncryptionUnavailable &&
+    credentialStoreHealth.unavailable &&
+    accessToken === null &&
+    getActiveAppSession().mode === 'signed-out' &&
+    !isPassiveSharedUserDataInstance()
+  );
+}
+
 function logSafeStorageIssueOnce(reason: string, key: string, err?: unknown): void {
   const issueKey = `${reason}:${key}`;
   if (safeStorageIssueLogged.has(issueKey)) return;
@@ -520,7 +557,7 @@ function logSafeStorageIssueOnce(reason: string, key: string, err?: unknown): vo
 
 function readSafe(key: string): string | null {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!isCredentialEncryptionAvailable()) {
       logSafeStorageIssueOnce('encryption unavailable (read)', key);
       return null;
     }
@@ -548,7 +585,7 @@ function readSafe(key: string): string | null {
  */
 function isPersistedSecretAbsent(key: string): boolean {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return false;
+    if (!isCredentialEncryptionAvailable()) return false;
     fs.accessSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`), fs.constants.F_OK);
     return false;
   } catch (err) {
@@ -558,7 +595,7 @@ function isPersistedSecretAbsent(key: string): boolean {
 
 function writeSafe(key: string, value: string): boolean {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!isCredentialEncryptionAvailable()) {
       logSafeStorageIssueOnce('encryption unavailable (write)', key);
       return false;
     }
@@ -584,7 +621,7 @@ function writeSafe(key: string, value: string): boolean {
  */
 function readAtomicSafe(key: string): string | null {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!isCredentialEncryptionAvailable()) {
       logSafeStorageIssueOnce('encryption unavailable (atomic read)', key);
       return null;
     }
@@ -611,7 +648,7 @@ function readAtomicSafe(key: string): string | null {
  */
 function readAtomicSafeCiphertext(key: string): string | null {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return null;
+    if (!isCredentialEncryptionAvailable()) return null;
     return readAtomicFileSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`));
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
@@ -631,7 +668,7 @@ function writeAtomicSafeCiphertext(key: string, ciphertext: string): boolean {
 }
 
 function isAtomicPersistedSecretAbsent(key: string): boolean {
-  if (!safeStorage.isEncryptionAvailable()) return false;
+  if (!isCredentialEncryptionAvailable()) return false;
   const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
   for (const candidate of [filepath, `${filepath}.bak`]) {
     try {
@@ -646,7 +683,7 @@ function isAtomicPersistedSecretAbsent(key: string): boolean {
 
 function writeAtomicSafe(key: string, value: string): boolean {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!isCredentialEncryptionAvailable()) {
       logSafeStorageIssueOnce('encryption unavailable (atomic write)', key);
       return false;
     }
@@ -2391,6 +2428,7 @@ async function withCloudOwnerCommit<T>(opts: {
 async function withAccountFreeOwnerCommit(opts: {
   reason: string;
   nextMode: Extract<AppSessionMode, 'signed-out' | 'local'>;
+  credentialStoreUnavailable?: boolean;
   preservePersistedRefreshToken?: boolean;
   notify?: boolean;
   clearOnFailure?: boolean;
@@ -2421,6 +2459,7 @@ async function withAccountFreeOwnerCommit(opts: {
         notify: false,
         nextMode: opts.nextMode,
         preservePersistedRefreshToken: true,
+        credentialStoreUnavailable: opts.credentialStoreUnavailable,
         deferSessionCommit: true,
       });
       authCleared = true;
@@ -2469,6 +2508,7 @@ async function withAccountFreeOwnerCommit(opts: {
             notify: false,
             nextMode: opts.nextMode,
             preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+            credentialStoreUnavailable: opts.credentialStoreUnavailable,
             deferSessionCommit: true,
           });
           authCleared = true;
@@ -2492,6 +2532,7 @@ async function withAccountFreeOwnerCommit(opts: {
           notify: false,
           nextMode: 'signed-out',
           preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+          credentialStoreUnavailable: opts.credentialStoreUnavailable,
           deferSessionCommit: true,
         });
         authCleared = true;
@@ -2522,9 +2563,11 @@ async function withAccountFreeOwnerCommit(opts: {
 async function recoverAccountFreeOwnerAtStartup(
   mode: Extract<AppSessionMode, 'signed-out' | 'local'>,
   reason: string,
+  credentialStoreUnavailable = false,
 ): Promise<void> {
   const ownerId = mode === 'local' ? LOCAL_DATA_OWNER_ID : null;
   if (isGhostSkillProjectionBoundaryStableForOwner(ownerId)) {
+    if (credentialStoreUnavailable) credentialStoreHealth.noteStartupFailure();
     if (getActiveAppSession().mode !== mode || getActiveAppSession().dataOwnerId !== ownerId) {
       if (isPassiveSharedUserDataInstance()) {
         commitVolatileAppSession(mode);
@@ -2538,6 +2581,7 @@ async function recoverAccountFreeOwnerAtStartup(
   await withAccountFreeOwnerCommit({
     reason,
     nextMode: mode,
+    credentialStoreUnavailable,
     notify: false,
     clearOnFailure: mode === 'signed-out',
     preservePersistedRefreshToken: true,
@@ -2743,8 +2787,11 @@ async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Pr
   }
 }
 
-async function finishColdStartSignedOut(reason: string): Promise<AuthState> {
-  await recoverAccountFreeOwnerAtStartup('signed-out', reason);
+async function finishColdStartSignedOut(
+  reason: string,
+  credentialStoreUnavailable = false,
+): Promise<AuthState> {
+  await recoverAccountFreeOwnerAtStartup('signed-out', reason, credentialStoreUnavailable);
   return snapshotLoggedOutAuthState();
 }
 
@@ -2855,24 +2902,10 @@ async function openHostedBrowserAuthorization(
   // 分支「先起 timer 再 openExternal」的语义对齐。
   const deadline = Date.now() + BROWSER_AUTH_TIMEOUT_MS;
 
-  // shell.openExternal 必须与取消/超时竞速。它在某些环境下会长时间不返回(系统
-  // 默认浏览器正在冷启动、handler 注册异常等),而这一步发生在轮询开始之前——
-  // 若只是 await 它,取消信号和五分钟预算都够不着,cancel-browser 会一直等在同一个
-  // 未 settle 的登录动作上。
-  const launchDeadline = AbortSignal.timeout(BROWSER_AUTH_TIMEOUT_MS);
-  const launched = await raceAuthBrowserCancellation(
-    shell.openExternal(authUrl).then(
-      () => ({ ok: true }) as const,
-      (error: unknown) => {
-        log.warn('open auth URL in system browser failed', error);
-        return { ok: false } as const;
-      },
-    ),
-    AbortSignal.any([signal, launchDeadline]),
-  );
-  // 取消与超时都收敛成 USER_CANCELLED(renderer 特意不展示它),与 loopback 一致。
-  if (launched.cancelled) return { error: 'USER_CANCELLED' };
-  if (!launched.value.ok) return { error: 'BROWSER_OPEN_FAILED' };
+  // Opening the OS handler gets its own short budget; it is not the time the
+  // user spends authorizing. Do not hide a stuck launch as USER_CANCELLED.
+  const launched = await launchAuthBrowser(() => shell.openExternal(authUrl), signal);
+  if (!launched.opened) return { error: launched.error };
 
   return runHostedCallbackPolling({
     poll: async () => {
@@ -2915,6 +2948,7 @@ async function openLoopbackBrowserAuthorization(
   return new Promise((resolve) => {
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
+    const launchCancellation = new AbortController();
     // 回调页语言跟随 app 当前 UI 语言(main 迷你 i18n 复用 renderer 五语文案,
     // {{appName}} 由 t() 注入品牌名);成功 / 失败分别渲染,失败附原始错误码。
     // 抽成局部渲染器供真实 HTTP 回调与 dev bridge 触发路径共用(同一 HTML)。
@@ -2959,6 +2993,7 @@ async function openLoopbackBrowserAuthorization(
     const finish = (result: { code: string } | { error: string }) => {
       if (settled) return;
       settled = true;
+      launchCancellation.abort();
       signal.removeEventListener('abort', cancel);
       if (timeout !== null) clearTimeout(timeout);
       if (server.listening) {
@@ -2981,6 +3016,7 @@ async function openLoopbackBrowserAuthorization(
       cancel();
       return;
     }
+    timeout = setTimeout(() => finish({ error: 'REQUEST_TIMEOUT' }), BROWSER_AUTH_TIMEOUT_MS);
     server.listen(0, '127.0.0.1', () => {
       if (settled) {
         server.close();
@@ -2991,11 +3027,12 @@ async function openLoopbackBrowserAuthorization(
       const authUrl = client.buildAuthorizeUrl({ ...input, redirectUri });
       // dev bridge 挂接(packaged no-op):fixture 触发与真实回调走同一渲染/finish。
       authLoopbackDevBridgeSlot.attach(finish, renderCallbackPage);
-      timeout = setTimeout(() => finish({ error: 'USER_CANCELLED' }), BROWSER_AUTH_TIMEOUT_MS);
-      void shell.openExternal(authUrl).catch((error) => {
-        log.warn('open auth URL in system browser failed', error);
-        finish({ error: 'BROWSER_OPEN_FAILED' });
-      });
+      if (settled) return;
+      void launchAuthBrowser(() => shell.openExternal(authUrl), launchCancellation.signal).then(
+        (launched) => {
+          if (!launched.opened) finish({ error: launched.error });
+        },
+      );
     });
   });
 }
@@ -3394,7 +3431,8 @@ function snapshotLoggedOutAuthState(): AuthState {
     deviceId,
     hasAccountDeletionReceipt: readPersistedAccountDeletionReceipt() !== null,
     accountDeletionRestored: false,
-    // 登出投影不携带升级态:登录页可见时用户已有明确的重新登录入口。
+    // Startup recovery errors are returned by getLoginState; this projection
+    // also serves stale/timeout paths and must not expose another owner's health.
     credentialStoreUnavailable: false,
   };
 }
@@ -3545,6 +3583,8 @@ function clearAuth(
   opts: {
     notify?: boolean;
     nextMode?: Extract<AppSessionMode, 'signed-out' | 'local'>;
+    /** Preserve the reason a saved login could not be restored through owner cleanup. */
+    credentialStoreUnavailable?: boolean;
     /**
      * 为 true 时不删除磁盘上的 refresh token 文件。仅用于「凭证已确认缺席」的
      * 过期路径(credential-lost):此刻磁盘上没有属于本进程的 token 可清,而共享
@@ -3564,9 +3604,10 @@ function clearAuth(
   const notify = opts.notify ?? true;
   authStateEpoch += 1; // 迟到的冷启动流程从此作废(见 authStateEpoch 注释)
   loginFlowEpoch += 1;
-  // #1687:登出 / 会话过期整体清态时复位凭证库升级态——升级提示只对「仍以为
-  // 自己登录着」的会话有意义,登录页自身就是恢复入口。
+  // Explicit logout clears health. Failed startup keeps its recovery reason
+  // in the same synchronous commit, so owner cleanup cannot erase the error.
   credentialStoreHealth.reset();
+  if (opts.credentialStoreUnavailable) credentialStoreHealth.noteStartupFailure();
   accessToken = null;
   pendingAccountToken = null;
   pendingAccountRefreshToken = null;
@@ -4492,12 +4533,16 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   let persistedSession: ReturnType<typeof readPersistedAuthSession>;
   try {
     persistedSession = await reconcileDesktopActiveAuthSession();
+    credentialStoreHealth.noteRecovered();
   } catch (error) {
     log.warn(
       'cold-start active credential reconciliation failed; preserving credentials for retry',
       error,
     );
-    return finishColdStartSignedOut('cold-start-credential-reconcile-unavailable');
+    return finishColdStartSignedOut(
+      'cold-start-credential-reconcile-unavailable',
+      error instanceof AuthApiError && error.code === 'CREDENTIAL_STORE_UNAVAILABLE',
+    );
   }
   if (!persistedSession) {
     // 旧版只保存裸 refresh token，没有 realm 可供校验。只有独占 userData 的
@@ -4792,6 +4837,7 @@ async function runColdStartRefreshFlow(
         }
         accessToken = refreshData.accessToken;
         currentUser = mapMembershipToAuthUser(refreshData.membership);
+        loginFlowState = { step: 'completed', membership: refreshData.membership };
         commitCloudAppSession(currentUser.id);
         persistedRefreshTokenNeedsIdentityCheck = false;
         clearReplacementIntegrationReloadTimers();
@@ -4904,6 +4950,13 @@ async function discoverOrganizationRealm(org: string, expectedLoginFlowEpoch = l
 export async function getLoginState(): Promise<DesktopLoginActionResult> {
   const expectedLoginFlowEpoch = loginFlowEpoch;
   try {
+    if (!accessToken && credentialStoreHealth.unavailable) {
+      return {
+        success: false,
+        code: 'CREDENTIAL_STORE_UNAVAILABLE',
+        state: { step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier' },
+      };
+    }
     if (loginFlowState) return { success: true, state: loginFlowState };
     return { success: true, state: await loadLoginProviders(expectedLoginFlowEpoch) };
   } catch (error) {
@@ -5021,6 +5074,7 @@ async function completeLogin(
                 passiveLocalSignOut = false;
                 foreignDeviceLocalSignOut = false;
                 currentUser = nextUser;
+                credentialStoreHealth.noteRecovered();
                 commitCloudAppSession(currentUser.id);
                 if (!isPassiveSharedUserDataInstance()) {
                   canaryFlagStore.clear();
@@ -5121,8 +5175,22 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Unexpected browser cancellation');
     }
     if (action.type === 'reset') {
+      // Retry restoration before offering a new login. A temporary credential
+      // failure must never make the user replace their still-saved session.
+      if (!accessToken && credentialStoreHealth.unavailable) {
+        await initialize();
+        // Startup may itself clear an obsolete owner generation. Its current
+        // recovery error is still safe to return, even when that cleared the
+        // original login flow; successful/newer auth keeps the epoch guard.
+        if (!accessToken && credentialStoreHealth.unavailable) return getLoginState();
+        assertLoginFlowCurrent(actionLoginFlowEpoch);
+        if (accessToken && loginFlowState?.step === 'completed') {
+          return { success: true, state: loginFlowState };
+        }
+      }
       return { success: true, state: await loadLoginProviders(actionLoginFlowEpoch) };
     }
+    if (!accessToken && credentialStoreHealth.unavailable) return getLoginState();
     if (action.type === 'confirm-sso-realm') {
       const confirmation = loginFlowState;
       if (
