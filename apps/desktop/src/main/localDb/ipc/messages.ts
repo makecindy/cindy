@@ -11,6 +11,7 @@ import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, or, sql, type SQ
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
+import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
 import { persistSessionListPreview } from '../sessionListProjection';
@@ -1003,12 +1004,13 @@ export async function commitContextRebuild(
   sessionId: string,
   handoff: string,
   meta: {
-    reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
+    reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
     sourceUserClientId: string | null;
     sourceAgentKind?: 'cc' | 'codex' | 'pi';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
+    replacementRoute?: ContextRebuildArgs['replacementRoute'];
   },
 ): Promise<{ updatedAt: number }> {
   const now = Date.now();
@@ -1021,6 +1023,7 @@ export async function commitContextRebuild(
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,
+      ...(meta.replacementRoute ? { sourceSdkSessionId: meta.replacementRoute.expectedSdkSessionId } : {}),
       ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
       ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
       ...(meta.sourceProviderId !== undefined ? { sourceProviderId: meta.sourceProviderId } : {}),
@@ -1028,6 +1031,7 @@ export async function commitContextRebuild(
     markerCreatedAt: now,
     updatedAt: now,
     expectedClearedAt: meta.expectedClearedAt ?? null,
+    ...(meta.replacementRoute ? { replacementRoute: meta.replacementRoute } : {}),
   });
   return { updatedAt: now };
 }

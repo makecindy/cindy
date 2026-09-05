@@ -333,6 +333,48 @@ describe('createContextOverflowRollover', () => {
     };
   }
 
+  it.each(['cc', 'codex', 'pi'] as const)('native recovery carries %s history and the full target route without replay', async (agentKind) => {
+    const deps = makeDeps([msg('user', 'KEEP_CONTEXT', 'u1', 1), msg('assistant', 'already finished', 'a1', 2)]);
+    const row = await deps.getSessionRow();
+    deps.getSessionRow.mockResolvedValue({ ...row, agentKind });
+    const target = { model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
+    const assertCurrent = vi.fn();
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', target, assertCurrent);
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.stringContaining('KEEP_CONTEXT'), expect.objectContaining({
+      reason: 'native-session-recovery', sourceAgentKind: agentKind,
+      replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId },
+    }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('already finished'), 3);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the original native binding when the recorded conversation cannot be loaded', async () => {
+    const deps = makeDeps([]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), contextTokens: 1200 });
+    await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', {
+      model: 'gpt-6-astra', providerId: 'openai', effort: null, fastMode: false,
+    }, vi.fn())).rejects.toThrow('Cindy history is unavailable');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
+  it.each(['commit', 'owner', 'busy'] as const)('native recovery failure at %s does not publish a handoff and remains retryable', async (failure) => {
+    const deps = makeDeps([msg('user', 'keep', 'u1', 1)]);
+    const assertCurrent = vi.fn();
+    if (failure === 'commit') deps.commitRebuild.mockRejectedValueOnce(new Error('disk full'));
+    if (failure === 'owner') assertCurrent.mockImplementationOnce(() => { throw new Error('owner changed'); });
+    if (failure === 'busy') deps.getLiveSession.mockReturnValueOnce({ isTurnRunning: () => true });
+    const recovery = createContextOverflowRollover(deps);
+    const target = { model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: true };
+    await expect(recovery.prepareNativeSessionRecovery('s1', target, assertCurrent)).rejects.toThrow();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    await recovery.prepareNativeSessionRecovery('s1', target, assertCurrent);
+    expect(deps.setPendingHandoff).toHaveBeenCalledOnce();
+  });
+
   it.each(['cc', 'codex', 'pi'] as const)(
     'rebuilds %s native context before a pressured 500K → 272K model switch',
     async (agentKind) => {

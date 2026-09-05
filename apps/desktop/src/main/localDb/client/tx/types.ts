@@ -167,6 +167,8 @@ export interface ForkSessionArgs {
    * 长度必须等于 source message 数。
    */
   newMessageIds: Array<{ id: string; clientId: string }>;
+  /** Persist a native-history recovery handoff atomically with the child and copied history. */
+  recoveryMarker?: { id: string; clientId: string; content: string; createdAt: number };
 }
 
 export interface EmbeddingMarkDoneArgs {
@@ -324,6 +326,14 @@ export interface ContextRebuildArgs {
   updatedAt: number;
   /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
   expectedClearedAt?: number | null;
+  /** Same transaction as the durable handoff; source SDK ownership must still match. */
+  replacementRoute?: {
+    expectedSdkSessionId: string;
+    model: string;
+    providerId: string | null;
+    effort: string | null;
+    fastMode: boolean;
+  };
 }
 
 export interface MessageInsertArgs {

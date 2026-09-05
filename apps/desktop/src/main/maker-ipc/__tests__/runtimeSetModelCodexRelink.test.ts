@@ -212,6 +212,9 @@ describe.each(routeCases)('Codex route: $sourceModel → $targetModel', (route) 
   it('keeps the source provider route when rebuilding the persisted thread fails', async () => {
     const sessionId = rememberSession('runtime-set-model-relink-failed');
     setSessionProvider(sessionId, sourceProvider);
+    const oldPending = { model: sourceModel, providerId: sourceProvider };
+    const registerPendingCredentialSwitch = vi.fn(async () => {});
+    const clearPendingCredentialSwitch = vi.fn();
     const closeSession = vi.fn(async () => {});
     const relinkCodexThread = vi.fn(async () => {
       throw new Error('fork child sanitization failed');
@@ -238,10 +241,15 @@ describe.each(routeCases)('Codex route: $sourceModel → $targetModel', (route) 
         providerId: targetProvider,
         requiresCodexThreadRelink: true,
         relinkCodexThread,
+        getPendingCredentialSwitch: () => oldPending,
+        registerPendingCredentialSwitch,
+        clearPendingCredentialSwitch,
         wakeSessionInputQueue,
       }),
     ).rejects.toThrow('fork child sanitization failed');
 
+    expect(clearPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, { wake: false });
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, oldPending);
     expect(closeSession).toHaveBeenCalledWith(sessionId);
     expect(relinkCodexThread).toHaveBeenCalledOnce();
     expect(getSessionProvider(sessionId)).toBe(sourceProvider);

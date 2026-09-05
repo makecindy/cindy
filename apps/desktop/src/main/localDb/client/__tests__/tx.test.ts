@@ -1694,6 +1694,30 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it.each([false, true])('fork.session recovery marker is atomic with the child (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)', ['m1', 'c1', 'src', 'user', 'keep my history', 100]);
+      const args = {
+        sourceSessionId: 'src', targetCreatedAt: 200,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }],
+        recoveryMarker: { id: 'm1', clientId: 'handoff', createdAt: 300, content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'keep my history' }) },
+      };
+      await expect(client.tx('fork.session', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+      expect(await client.queryOne('SELECT id FROM messages WHERE id = ?', ['copy1'])).toBeUndefined();
+      args.recoveryMarker.id = 'recovery';
+      await client.tx('fork.session', args);
+      expect(await client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['forked'])).toEqual({ sdk_session_id: null });
+      expect(await client.queryOne('SELECT role, rewind_at FROM messages WHERE id = ?', ['recovery'])).toEqual({ role: 'context_rebuild', rewind_at: 300 });
+      expect(await client.queryOne('SELECT content FROM messages WHERE id = ?', ['copy1'])).toEqual({ content: 'keep my history' });
+      const card = await client.queryOne<{ agent_meta: string }>('SELECT agent_meta FROM messages WHERE id = ?', ['recovery:card']);
+      expect(JSON.parse(card!.agent_meta)).toEqual({ contextRebuild: { reason: 'native-session-recovery', handoff: 'keep my history' } });
+      expect(await client.queryOne('SELECT content FROM messages WHERE id = ?', ['m1'])).toEqual({ content: 'keep my history' });
+    }, { useInlineWorker });
+  });
+
   it('fork.session rebinds completed Codex turn anchors to the child thread', async () => {
     await withClient(async (client) => {
       await seedSession(client, 'src');
@@ -1951,6 +1975,38 @@ describe('db worker tx handlers', () => {
         ]),
       ).resolves.toEqual({ content: '{"handoff":"full","resumed":false}' });
     });
+  });
+
+  it.each([false, true])('context recovery commits route and durable handoff atomically (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1', { contextTokens: 90_000, contextWindow: 272_000 });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ?, effort = ?, fast_mode = ? WHERE id = ?',
+        ['source-native', 'codex/gpt-5.6-sol', 'xd', 'high', 1, 's1']);
+      const args = {
+        sessionId: 's1', markerId: 'recovery', markerClientId: 'recovery',
+        markerContent: JSON.stringify({ reason: 'native-session-recovery', handoff: 'KEEP_CONTEXT', consumed: false }),
+        markerCreatedAt: 1000, updatedAt: 1000,
+        replacementRoute: { expectedSdkSessionId: 'source-native', model: 'gpt-6-astra', providerId: 'openai', effort: 'low', fastMode: false },
+      };
+      // A competing replacement must not be overwritten, and no marker may leak out.
+      await expect(client.tx('context.rebuild', { ...args, replacementRoute: { ...args.replacementRoute, expectedSdkSessionId: 'stale-native' } })).rejects.toThrow();
+      expect(await client.query('SELECT id FROM messages WHERE client_id = ?', ['recovery'])).toEqual([]);
+      expect(await client.queryOne('SELECT sdk_session_id, model FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'source-native', model: 'codex/gpt-5.6-sol' });
+      await client.tx('context.rebuild', args);
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id, effort, fast_mode, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({
+        sdk_session_id: null, model: 'gpt-6-astra', provider_id: 'openai', effort: 'low', fast_mode: 0, context_tokens: 0,
+      });
+      expect(await client.queryOne('SELECT content FROM messages WHERE client_id = ?', ['recovery'])).toEqual({ content: args.markerContent });
+      // If inserting the durable marker fails, the preceding route update must roll back too.
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ? WHERE id = ?', ['source-native', 'codex/gpt-5.6-sol', 'xd', 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'source-native', model: 'codex/gpt-5.6-sol', provider_id: 'xd' });
+      await client.tx('context.rebuild', {
+        ...args, markerId: 'fixed-effort', markerClientId: 'fixed-effort',
+        replacementRoute: { ...args.replacementRoute, effort: null },
+      });
+      expect(await client.queryOne('SELECT effort, sdk_session_id FROM sessions WHERE id = ?', ['s1'])).toEqual({ effort: 'low', sdk_session_id: null });
+    }, { useInlineWorker });
   });
 
   it.each([false, true])('context.rebuild resets usage and appends markers (inline=%s)', async (useInlineWorker) => {

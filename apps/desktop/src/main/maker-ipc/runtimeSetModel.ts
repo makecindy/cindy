@@ -324,7 +324,15 @@ export async function applyRuntimeSetModelChange(
       throw err;
     }
     if (requiresCodexThreadRelink) {
-      await input.relinkCodexThread?.();
+      try {
+        await input.relinkCodexThread?.();
+      } catch (error) {
+        // A failed history transfer must not discard an earlier accepted pending route.
+        if (clearedPending && input.registerPendingCredentialSwitch) {
+          await input.registerPendingCredentialSwitch(sessionId, clearedPending);
+        }
+        throw error;
+      }
     }
     if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
     // close + route 都落定后再唤醒队列:排队消息按新凭证形态 lazy-create 派发。

@@ -246,11 +246,18 @@ function contextRebuild(db: Database.Database, args: unknown): void {
       ? null
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   const transaction = db.transaction(() => {
-    const sessionResult = db
-      .prepare(
-        'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
-      )
-      .run(updatedAt, sessionId, expectedClearedAt);
+    const replacement = payload.replacementRoute === undefined
+      ? null : asRecord(payload.replacementRoute, 'replacementRoute');
+    const sessionResult = replacement
+      ? db.prepare(
+          'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL, model = ?, provider_id = ?, effort = COALESCE(?, effort), fast_mode = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
+        ).run(updatedAt, expectString(replacement.model, 'replacementRoute.model'),
+          nullableString(replacement.providerId), nullableString(replacement.effort),
+          replacement.fastMode === true ? 1 : 0, sessionId, expectedClearedAt,
+          expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
+      : db.prepare(
+          'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+        ).run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error(`Session missing or clear-boundary changed: ${sessionId}`), {
         code: 'PRECONDITION_FAILED',
@@ -1551,6 +1558,30 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
         ),
         message.agent_kind,
         message.created_at,
+      );
+    }
+    if (payload.recoveryMarker != null) {
+      const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      db.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?, ?)",
+      ).run(
+        expectString(marker.id, 'recoveryMarker.id'),
+        expectString(marker.clientId, 'recoveryMarker.clientId'),
+        expectString(newSession.id, 'newSession.id'),
+        expectString(marker.content, 'recoveryMarker.content'),
+        expectString(newSession.agentKind, 'newSession.agentKind'),
+        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
+        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
+      );
+      const content = asRecord(JSON.parse(expectString(marker.content, 'recoveryMarker.content')), 'recoveryMarker content');
+      insertMessage.run(
+        expectString(marker.id, 'recoveryMarker.id') + ':card',
+        expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
+        expectString(newSession.id, 'newSession.id'),
+        'assistant', '', null,
+        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        expectString(newSession.agentKind, 'newSession.agentKind'),
+        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
       );
     }
   });

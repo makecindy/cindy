@@ -200,7 +200,7 @@ describe('sanitizeCodexForkRollout', () => {
     }
   });
 
-  it('materializes and sanitizes lazy history_base while preserving the source bytes', async () => {
+  it('routes lazy indexed history to recovery without rewriting source or child', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-'));
     const source = path.join(dir, 'rollout-source-thread.jsonl');
     const child = path.join(dir, 'rollout-child-thread.jsonl');
@@ -230,17 +230,10 @@ describe('sanitizeCodexForkRollout', () => {
     await fs.writeFile(source, sourceText, 'utf8');
     await fs.writeFile(child, childText, 'utf8');
     try {
-      const stats = await sanitizeCodexForkRolloutFileInPlace(child, {
-        resolveHistoryBaseRollout: (threadId) => threadId === 'source-thread' ? source : null,
+      await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toMatchObject({
+        code: 'CODEX_HISTORY_RECOVERY_REQUIRED',
       });
-
-      const output = await fs.readFile(child, 'utf8');
-      expect(output).not.toContain('history_base');
-      expect(output).toContain('hello');
-      expect(output).toContain('world');
-      expect(output).not.toContain('encrypted_content');
-      expect(stats.unsafeLines).toBe(1);
-      expect(stats.bytesAfter).toBeGreaterThan(Buffer.byteLength(childText));
+      expect(await fs.readFile(child, 'utf8')).toBe(childText);
       expect(await fs.readFile(source, 'utf8')).toBe(sourceText);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
@@ -267,9 +260,7 @@ describe('sanitizeCodexForkRollout', () => {
     ].join('\n') + '\n';
     await fs.writeFile(child, childText, 'utf8');
     try {
-      await expect(sanitizeCodexForkRolloutFileInPlace(child, {
-        resolveHistoryBaseRollout: () => null,
-      })).rejects.toThrow('history_base source is unavailable');
+      await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toMatchObject({ code: 'CODEX_HISTORY_RECOVERY_REQUIRED' });
       expect(await fs.readFile(child, 'utf8')).toBe(childText);
       expect((await fs.readdir(dir)).some((name) => name.includes('.cindy-sanitize-'))).toBe(false);
     } finally {
@@ -277,7 +268,7 @@ describe('sanitizeCodexForkRollout', () => {
     }
   });
 
-  it('detaches a fully materialized fork lineage without leaving ordinal gaps', async () => {
+  it('protects materialized indexed history too, including its native offsets', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-fork-meta-'));
     const child = path.join(dir, 'rollout-child.jsonl');
     const childText = [
@@ -296,13 +287,23 @@ describe('sanitizeCodexForkRollout', () => {
     ].join('\n') + '\n';
     await fs.writeFile(child, childText, 'utf8');
     try {
-      await sanitizeCodexForkRolloutFileInPlace(child);
-      const lines = (await fs.readFile(child, 'utf8')).trimEnd().split('\n').map((line) => JSON.parse(line));
-      expect(lines.map((line) => line.ordinal)).toEqual([0, 1, 2, 3]);
-      expect(lines[0].payload).not.toHaveProperty('forked_from_id');
-      expect(lines[0].payload).not.toHaveProperty('forked_from_ordinal_exclusive');
-      expect(lines[2].payload).toMatchObject({ type: 'message' });
-      expect(JSON.stringify(lines[2])).not.toContain('encrypted_content');
+      await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toMatchObject({
+        code: 'CODEX_HISTORY_RECOVERY_REQUIRED',
+      });
+      expect(await fs.readFile(child, 'utf8')).toBe(childText);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('requests a handoff for corrupt JSON without modifying the source', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-corrupt-'));
+    const source = path.join(dir, 'source.jsonl');
+    const original = '{"type":"session_meta","payload":{"id":"source"}}\n{"unfinished":';
+    try {
+      await fs.writeFile(source, original);
+      await expect(sanitizeCodexForkRolloutFileInPlace(source)).rejects.toMatchObject({ code: 'CODEX_HISTORY_RECOVERY_REQUIRED' });
+      expect(await fs.readFile(source, 'utf8')).toBe(original);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -318,7 +319,7 @@ describe('sanitizeCodexForkRollout', () => {
     })}\n`;
     await fs.writeFile(child, childText, 'utf8');
     try {
-      await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toThrow('history_base fields are invalid');
+      await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toMatchObject({ code: 'CODEX_HISTORY_RECOVERY_REQUIRED' });
       expect(await fs.readFile(child, 'utf8')).toBe(childText);
       expect((await fs.readdir(dir)).some((name) => name.includes('.cindy-sanitize-'))).toBe(false);
     } finally {
@@ -348,9 +349,7 @@ describe('sanitizeCodexForkRollout', () => {
     await fs.writeFile(source, sourceText, 'utf8');
     await fs.writeFile(child, childText, 'utf8');
     try {
-      await expect(sanitizeCodexForkRolloutFileInPlace(child, {
-        resolveHistoryBaseRollout: () => source,
-      })).rejects.toThrow('offset is out of bounds');
+      await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toMatchObject({ code: 'CODEX_HISTORY_RECOVERY_REQUIRED' });
       expect(await fs.readFile(child, 'utf8')).toBe(childText);
       expect(await fs.readFile(source, 'utf8')).toBe(sourceText);
     } finally {
@@ -382,9 +381,7 @@ describe('sanitizeCodexForkRollout', () => {
     await fs.writeFile(first, firstText, 'utf8');
     await fs.writeFile(second, secondText, 'utf8');
     try {
-      await expect(sanitizeCodexForkRolloutFileInPlace(first, {
-        resolveHistoryBaseRollout: (threadId) => threadId === 'second' ? second : first,
-      })).rejects.toThrow('cycle detected');
+      await expect(sanitizeCodexForkRolloutFileInPlace(first)).rejects.toMatchObject({ code: 'CODEX_HISTORY_RECOVERY_REQUIRED' });
       expect(await fs.readFile(first, 'utf8')).toBe(firstText);
       expect(await fs.readFile(second, 'utf8')).toBe(secondText);
     } finally {

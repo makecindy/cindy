@@ -671,7 +671,7 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
-  it('strip encrypted fork: codex-only path forks with strip flag and copies all messages', async () => {
+  it.each([false, true])('strip encrypted fork copies history and recovers indexed history atomically: %s', async (recover) => {
     const source = makeSourceRow({
       agentKind: 'codex',
       model: 'gpt-5.5',
@@ -687,13 +687,14 @@ describe('forkSessionAtMessage', () => {
       makeSourceRow({
         agentKind: 'codex',
         title: '[Fork·已剥离] Project A',
-        sdkSessionId: 'codex-thread-new',
+        sdkSessionId: recover ? null : 'codex-thread-new',
         parentSessionId: 'src-session',
         forkedAtMessageId: null,
       }),
     ]);
 
-    forkSdkSessionMock.mockResolvedValue({
+    if (recover) forkSdkSessionMock.mockRejectedValue(Object.assign(new Error('indexed history'), { code: 'CODEX_HISTORY_RECOVERY_REQUIRED' }));
+    else forkSdkSessionMock.mockResolvedValue({
       newSdkSessionId: 'codex-thread-new',
       uuidMap: new Map<string, string>(),
     });
@@ -715,6 +716,7 @@ describe('forkSessionAtMessage', () => {
     const txCall = txCalls.find((c) => c.name === 'fork.session');
     expect(txCall).toBeDefined();
     const txArgs = txCall!.args as {
+      recoveryMarker?: { content: string };
       targetCreatedAt: number;
       newSession: Record<string, unknown>;
       newMessageIds: Array<{ id: string; clientId: string }>;
@@ -726,6 +728,13 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.forkedAtMessageId).toBeNull();
     expect(txArgs.newSession.providerId).toBe('xd');
     expect(txArgs.newMessageIds).toHaveLength(2);
+    expect(txArgs.newSession.sdkSessionId).toBe(recover ? null : 'codex-thread-new');
+    if (recover) {
+      expect(JSON.parse(txArgs.recoveryMarker!.content)).toMatchObject({
+        reason: 'native-session-recovery', consumed: false, sourceSdkSessionId: 'codex-thread-source',
+        handoff: expect.stringContaining('[User]\nhello'),
+      });
+    } else expect(txArgs.recoveryMarker).toBeUndefined();
     expect(result.parentSessionId).toBe('src-session');
   });
 
