@@ -945,6 +945,8 @@ function localKindFromAbsPath(absPath: string, fallback: MarkdownLocalKind): Mar
 function FileTargetChip({
   resolvedAbsPath,
   localKind,
+  line,
+  column,
   onOpen,
   title,
   children,
@@ -952,6 +954,8 @@ function FileTargetChip({
 }: {
   resolvedAbsPath: string;
   localKind: MarkdownLocalKind;
+  line?: number;
+  column?: number;
   onOpen: () => void | Promise<void>;
   title?: string;
   children: ReactNode;
@@ -986,6 +990,7 @@ function FileTargetChip({
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
     getAbsPath: async () => resolvedAbsPath,
+    location: { absPath: resolvedAbsPath, line, column },
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
     sidebarFileBrowserKind: localKind === 'directory' ? 'directory' : 'file',
     sidebarOpenSessionId: htmlWithSession,
@@ -1080,6 +1085,8 @@ function FileTargetChip({
 function ResolvedLocalLink({
   resolvedAbsPath,
   localKind,
+  line,
+  column,
   href,
   onOpen,
   anchorProps,
@@ -1088,6 +1095,8 @@ function ResolvedLocalLink({
 }: {
   resolvedAbsPath: string;
   localKind: MarkdownLocalKind;
+  line?: number;
+  column?: number;
   href: string;
   onOpen: () => void | Promise<void>;
   anchorProps: Record<string, unknown>;
@@ -1105,6 +1114,7 @@ function ResolvedLocalLink({
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
     getAbsPath: () => resolvedAbsPath,
+    location: { absPath: resolvedAbsPath, line, column },
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
     sidebarFileBrowserKind: localKind === 'directory' ? 'directory' : 'file',
     sidebarOpenSessionId: htmlWithSession,
@@ -1483,6 +1493,8 @@ function MarkdownTargetLink({
         <ResolvedLocalLink
           resolvedAbsPath={target.absPath}
           localKind={target.localKind}
+          line={target.line}
+          column={target.column}
           href={target.href}
           onOpen={openResolvedTarget}
           anchorProps={anchorProps}
@@ -1496,6 +1508,8 @@ function MarkdownTargetLink({
       <FileTargetChip
         resolvedAbsPath={target.absPath}
         localKind={target.localKind}
+        line={target.line}
+        column={target.column}
         title={target.href}
         onOpen={openResolvedTarget}
         sessionId={sessionId}
@@ -1615,6 +1629,8 @@ function InlineCodeWithTarget({
     <FileTargetChip
       resolvedAbsPath={target.absPath}
       localKind={target.localKind}
+      line={target.line}
+      column={target.column}
       title={target.absPath}
       onOpen={() =>
         activateResolvedLocalTarget(
