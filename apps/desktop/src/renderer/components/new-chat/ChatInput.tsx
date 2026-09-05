@@ -283,6 +283,11 @@ import {
 } from '@/hooks/useComposerSendShortcutPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import {
+  registerComposerCaptureLock,
+  requestRegionCapture,
+  useRegionCaptureAvailable,
+} from '@/hooks/useRegionCaptureShortcut';
+import {
   beginPromptRecommendationPrediction,
   dismissPromptRecommendation,
   resolvePromptRecommendationPrediction,
@@ -3078,6 +3083,13 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  // 把本 composer 的突变锁按 draftKey 发布给区域截图注册表: 快捷键与迟到
+  // 合并据此避开发送中/禁用态的草稿(菜单项另有 disabled, 这里管的是绕过
+  // 菜单的路径, review P1)。
+  useEffect(() => {
+    if (!storageKey || !composerMutationLocked) return;
+    return registerComposerCaptureLock(storageKey);
+  }, [storageKey, composerMutationLocked]);
   const composerTypingLocked =
     disabled || (sendDispatchInFlight && !allowTypeDuringSend) || voiceBusyOnCurrentComposer;
   composerMutationLockedRef.current = composerTypingLocked;
@@ -4330,6 +4342,7 @@ export function ChatInput({
     onNewGoal?.(draftText);
   }, [inSessionGoalEnabled, onNewGoal]);
 
+  const regionCaptureAvailable = useRegionCaptureAvailable();
   const composerSuggestionActions = useMemo<ComposerSuggestionAction[]>(() => {
     const actions: ComposerSuggestionAction[] = [];
     if (localAttachmentPickerEnabled) {
@@ -4338,6 +4351,23 @@ export function ChatInput({
         label: t('extraDirs.addFiles'),
         disabled: composerMutationLocked,
         run: () => suggestionFileInputRef.current?.click(),
+      });
+    }
+    // 区域截图的可发现入口(维护者 review 要求): 经注册表复用 MainLayout 的
+    // 同一捕获执行体与草稿附件管线, 但目标传本 composer 自己的归属 ——
+    // Orca Worker 面板/分屏内嵌实例的菜单点击写入自己的草稿, 不落到路由
+    // 所有者; 分离侧栏等无注册面的窗口不显示该项(review P2)。可用性走
+    // 响应式订阅, MainLayout 注册 trigger 后本 memo 会重算(review P1)。
+    if (storageKey && regionCaptureAvailable) {
+      const captureTarget = { sessionId: sessionId ?? null, draftKey: storageKey };
+      actions.push({
+        id: 'capture-region',
+        label: t('regionCapture.menuItem'),
+        searchText: 'region screenshot capture',
+        disabled: composerMutationLocked,
+        run: () => {
+          requestRegionCapture(captureTarget);
+        },
       });
     }
     if (inSessionGoalEnabled || onNewGoal) {
@@ -4462,8 +4492,11 @@ export function ChatInput({
     onWritableDirsChange,
     onNewGoal,
     planModeEntry,
+    regionCaptureAvailable,
     remoteHostId,
     runNewGoalAction,
+    sessionId,
+    storageKey,
     t,
     deviceLinkDeviceId,
     writableDirs,

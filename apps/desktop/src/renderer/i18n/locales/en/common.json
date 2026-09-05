@@ -33,6 +33,11 @@
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab content is too large to add",
     "RIGHT_SIDEBAR_UNKNOWN_KIND": "This tab type is unavailable"
   },
+  "regionCapture": {
+    "menuItem": "Region screenshot",
+    "hint": "Drag to select the region to capture, press Esc to cancel",
+    "failedToast": "Screenshot failed, please try again"
+  },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
     "AUTH_FORBIDDEN": "Key is valid but access is denied (403). Check plan or model permissions",
@@ -4224,6 +4229,10 @@
         "open-terminal": {
           "label": "Open terminal",
           "description": "Open a terminal in the right sidebar (focuses the existing one)"
+        },
+        "capture-region": {
+          "label": "Region screenshot",
+          "description": "Select a screen region, copy it to the clipboard, and attach it to the chat input (no default binding)"
         },
         "switch-session-1": {
           "label": "Go to session 1",

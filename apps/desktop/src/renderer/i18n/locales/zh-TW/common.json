@@ -33,6 +33,11 @@
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "標籤內容過大，無法新增",
     "RIGHT_SIDEBAR_UNKNOWN_KIND": "此標籤類型暫時無法使用"
   },
+  "regionCapture": {
+    "menuItem": "區域截圖",
+    "hint": "拖曳框選要擷取的區域，按 Esc 取消",
+    "failedToast": "截圖失敗，請重試"
+  },
   "providerError": {
     "AUTH_INVALID": "API 金鑰無效或已過期（401），請檢查金鑰後重試",
     "AUTH_FORBIDDEN": "金鑰有效但無權訪問（403），請檢查套餐或模型權限",
@@ -4223,6 +4228,10 @@
         "open-terminal": {
           "label": "開啟命令列",
           "description": "在右側欄開啟終端（已開啟則聚焦）"
+        },
+        "capture-region": {
+          "label": "區域截圖",
+          "description": "拉框擷取螢幕區域，複製到剪貼簿並加入對話輸入框（預設未設定快捷鍵）"
         },
         "switch-session-1": {
           "label": "切換到第 1 個任務",

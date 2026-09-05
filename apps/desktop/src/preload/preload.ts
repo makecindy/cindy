@@ -1127,6 +1127,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutAppShortcutsChanged,
   },
 
+  // 区域截图 (capture-region 快捷键, shared/screenCapture.ts 契约, 三平台)。
+  // overlayHint: win/linux 选区覆盖层提示条文案(i18n 在 renderer 侧)。
+  // 覆盖层窗口本体用专用最小 preload(regionCaptureOverlayPreload), 不经主桥。
+  screenCapture: {
+    captureRegion: (payload?: {
+      overlayHint?: string;
+      overlayPalette?: {
+        scrim: string;
+        selectionBorder: string;
+        pillBg: string;
+        pillFg: string;
+      };
+    }): Promise<{ ok: true; cancelled: boolean; data?: Uint8Array }> =>
+      ipcRenderer.invoke('screen-capture:region', payload),
+    // 当前路由是否存在截图目标 composer(webview guest 快捷键转发的拦截依据)。
+    setTargetAvailable: (available: boolean): void =>
+      ipcRenderer.send('screen-capture:target-available', available),
+  },
+
   // 主界面布局树 (shared/layoutTree.ts)。getStateSync 走 sendSync:布局必须
   // 首帧就位,禁止"先渲染默认再跳成用户布局"(设计规范规则 7);文件极小,
   // 同步读不卡启动,与 app-shortcuts:get 同模式。
@@ -3937,9 +3956,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ── Image local cache (image-local-cache M4) ──
   /**
-   * Copy a local image file into the cache directory for the given session.
-   * Used by drag-and-drop attachments. Returns an xdt-image:// URL the
-   * renderer can use directly as an <img src>.
+   * Copy a local image file into the cindy-media blob store (ledger'd,
+   * zero-ref = draft, recycled when unreferenced). Used by drag-and-drop
+   * attachments. Returns a cindy-media:// URL the renderer can use directly
+   * as an <img src>. (Legacy xdt-image:// URLs remain readable but are no
+   * longer produced.)
    */
   cacheImageFromPath: (params: {
     sessionId: string;
@@ -3949,8 +3970,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('image-cache:from-path', params),
 
   /**
-   * Write a clipboard image buffer into the cache directory for the session.
-   * Used by clipboard paste. Returns an xdt-image:// URL.
+   * Write a clipboard image buffer into the cindy-media blob store (same
+   * draft semantics as cacheImageFromPath). Used by clipboard paste and
+   * region capture. Returns a cindy-media:// URL.
    */
   cacheImageFromBuffer: (params: {
     sessionId: string;
