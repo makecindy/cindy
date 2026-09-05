@@ -491,19 +491,20 @@ function PrefsField({
 }
 
 /** hook prefs 的 agentKind → 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' | 'grok-build' {
+  if (agentKind === 'codex' || agentKind === 'pi' || agentKind === 'grok-build') return agentKind;
+  return 'cc';
 }
 
 /**
  * 选择器的 vendor key → hook prefs 的 agentKind。
- * MakerVendor 还含 'orca' 等本编辑器不支持的值 —— 分段只有 Claude/Codex 两项,该分支
- * 物理不可达;若未来有人把别的 vendor 接进来,fail-fast 好过静默写成 claude-code
- * 偏好(Copilot review)。
+ * MakerVendor 还含 'orca' 等本编辑器不支持的值 —— 若未来有人把别的 vendor 接进来,
+ * fail-fast 好过静默写成 claude-code 偏好。
  */
 function toAgentKind(vendor: MakerVendor): KnownAgent {
   if (vendor === 'codex') return 'codex';
   if (vendor === 'pi') return 'pi';
+  if (vendor === 'grok-build') return 'grok-build';
   if (vendor === 'cc') return 'claude-code';
   throw new Error(`WorkspacePrefsEditor: unsupported vendor '${vendor}' for hook prefs`);
 }
@@ -522,14 +523,16 @@ export function WorkspacePrefsEditor({
   const claudeCaps = useAgentCapabilities('claude-code');
   const codexCaps = useAgentCapabilities('codex');
   const piCaps = useAgentCapabilities('pi');
+  const grokBuildCaps = useAgentCapabilities('grok-build');
   const capsByAgent = useMemo(
     () =>
       ({
         'claude-code': claudeCaps.capabilities,
         codex: codexCaps.capabilities,
         pi: piCaps.capabilities,
+        'grok-build': grokBuildCaps.capabilities,
       }) as Record<KnownAgent, AgentCapabilities | null>,
-    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities],
+    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities, grokBuildCaps.capabilities],
   );
   const capsOf = useCallback(
     (agentKind: string): AgentCapabilities | null =>

@@ -617,7 +617,7 @@ function defaultModelFor(agentKind: RemoteScheduleAgentKind): string {
   if (agentKind === 'codex') return DEFAULT_CODEX_MODEL;
   // Pi 模型来自动态 BYOM 供应商目录,没有固定默认 id;留空 → 序列化时省略 → host 解析
   // 该 Pi agent 的当前默认模型(用户仍可在自由文本模型框里显式指定)。
-  if (agentKind === 'pi') return '';
+  if (agentKind === 'pi' || agentKind === 'grok-build') return '';
   return DEFAULT_CLAUDE_MODEL;
 }
 

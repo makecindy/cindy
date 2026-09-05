@@ -29,7 +29,7 @@ import { isProviderRequestPath } from './provider-url.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 
-const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'grok-build'];
 const EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses', 'openai-chat'] as const;
 

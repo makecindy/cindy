@@ -184,9 +184,11 @@ async function loadRewindContext(
   if (makerSession.isTurnRunning()) {
     throw rewindError('SESSION_RUNNING', '会话进行中，无法回滚');
   }
+  // grok-build 是 Cindy hosted Pi loop:rewind 走 tail-turn,不能落到 Claude
+  // checkpoint,也不能再按 ACP 时代 fail-closed。
   const agentKind = makerSession.agentKind === 'codex'
     ? 'codex'
-    : makerSession.agentKind === 'pi'
+    : makerSession.agentKind === 'pi' || makerSession.agentKind === 'grok-build'
       ? 'pi'
       : 'claude-code';
 

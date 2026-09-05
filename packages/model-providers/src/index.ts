@@ -118,6 +118,8 @@ export {
   getModel,
   sourcesForModel,
   chatEligibleSourcesForModel,
+  hasUsableConnectedSource,
+  isGrokBuildSourceReady,
   resolveRoute,
   modelSupportsFastMode,
   sessionModelSupportsFastMode,
@@ -195,6 +197,10 @@ export type { ModelCategory, DisplayModel, ModelBadges } from './classification.
 // 规格 docs/product-rules/model-selector-unified.md §2.1 / §2.2 / §4。
 export {
   UNIFIED_AGENT_PRIORITY,
+  GROK_BUILD_HARNESS_PROVIDER_ID,
+  GROK_BUILD_HARNESS_MODEL_ID,
+  grokBuildCliModelId,
+  attachGrokBuildHarnessToGrokEntries,
   unifiedModelKeyId,
   normalizeModelIdForClassification,
   catalogModelIdCandidates,

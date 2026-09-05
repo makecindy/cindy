@@ -77,6 +77,8 @@ export function isRegistryTombstoneForConsumer(
   if (!registry || !policy) return false;
 
   if (agent === 'pi') return false;
+  // Grok Build reuses the hosted loop; it is not a Registry consumer.
+  if (agent === 'grok-build') return false;
   const registryAgent =
     policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent) ? agent : null;
   if (!registryAgent) return false;

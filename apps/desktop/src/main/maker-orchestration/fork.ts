@@ -20,9 +20,17 @@ import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js'
 import { getMaker } from '../maker-host/index.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
-import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import {
+  dbToMakerAgentKind,
+  normalizeDbAgentKind,
+  type DbAgentKind,
+} from '../../shared/agentKindConversion.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
-import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
+import {
+  agentEngineLabel,
+  buildHandoffText,
+  type HandoffSourceMessage,
+} from '../maker-ipc/agentHandoff.js';
 import {
   type ClaudeTranscriptAnchorIndex,
   loadClaudeTranscriptAnchorIndex,
@@ -62,8 +70,6 @@ function normalizePositiveInt(value: unknown): number {
 }
 
 const messageRowid = sql<number>`rowid`;
-
-type DbAgentKind = 'cc' | 'codex' | 'pi';
 
 interface MessagePosition {
   createdAt: number;
@@ -132,8 +138,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
       toolUseId: row.toolUseId,
     }));
   const lastUser = [...opts.rows].reverse().find((row) => row.role === 'user');
-  const label =
-    opts.agentKind === 'codex' ? 'Codex' : opts.agentKind === 'pi' ? 'Pi' : 'Claude Code';
+  // 同引擎重建的交接 framing 用真实引擎名 —— 落到默认分支等于把会话写成 Claude Code。
+  const label = agentEngineLabel(opts.agentKind);
   const handoff = buildHandoffText(handoffMessages, {
     fromLabel: label,
     toLabel: label,
@@ -784,10 +790,11 @@ export async function forkSessionAtMessage(
   // Codex: 从当前时间线倒扫 agent_switch，把 copy boundary 之后、确实写入所选
   // 原生 thread 的 user turn 计为 rollback 数；其它引擎片段不能混算。
   const isCodex = forkSource.agentKind === 'codex';
-  // pi 复用 codex 的粗粒度 tail-turn fork:countCodexTailTurns 只按 sdkSessionId
-  // 数边界后的 user turn(引擎无关),pi 的 forkSdkSession 按 tailTurnsToDrop rewind
-  // 到目标 user 消息。只有 Claude(cc)走 message-uuid 锚点路径。
-  const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi';
+  // pi / grok-build 复用 codex 的粗粒度 tail-turn fork:countCodexTailTurns 只按
+  // sdkSessionId 数边界后的 user turn(引擎无关),hosted loop 的 forkSdkSession 按
+  // tailTurnsToDrop rewind 到目标 user 消息。只有 Claude(cc)走 message-uuid 锚点。
+  const usesTailTurnFork =
+    isCodex || forkSource.agentKind === 'pi' || forkSource.agentKind === 'grok-build';
   let assistantUuid: string | undefined;
   let lastTurnId: string | undefined;
   let tailTurnsToDrop: number | undefined;

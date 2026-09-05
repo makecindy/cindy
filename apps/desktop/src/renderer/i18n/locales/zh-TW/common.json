@@ -2641,6 +2641,10 @@
         "pi": {
           "label": "Pi",
           "description": "將長任務的壓縮摘要儲存到 Cindy 記憶，供後續 Pi 任務繼續使用"
+        },
+        "grok-build": {
+          "label": "Grok Build",
+          "description": "目前版本 Grok Build 不提供 Cindy 託管的自動記憶通道。"
         }
       },
       "agent": {
@@ -3725,7 +3729,8 @@
         "agents": {
           "claude-code": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "grok-build": "Grok Build"
         },
         "groupPermissionLabel": "群聊新建任務權限檔",
         "groupPermissionDescription": "群組裡新建任務時統一使用的權限檔（@bot 開話題、/new、/ctr 都算），預設「自動審批」；上面那個權限檔只管私聊。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。變更只影響之後新建的任務，已有任務在群組裡用 /permission 單獨切換。"
@@ -7197,6 +7202,7 @@
           "claudeCode": "Claude Code",
           "codex": "Codex",
           "pi": "Pi",
+          "grok-build": "Grok Build",
           "pending": "下條：{{agent}}"
         }
       },
@@ -7314,6 +7320,20 @@
           "bypassPermissions": {
             "label": "完全訪問",
             "description": "常規工具無需詢問直接執行；安裝、更新或解除安裝 Pi 擴展仍需確認。風險最高，只適合可信任務。"
+          }
+        },
+        "grok-build": {
+          "ask": {
+            "label": "預設權限",
+            "description": "只讀工具直接執行；寫檔案、跑命令和 MCP 工具每次都詢問。"
+          },
+          "auto": {
+            "label": "自動審批",
+            "description": "工作區內寫檔案與安全命令自動執行；越界寫、危險命令和 MCP 工具仍會詢問。"
+          },
+          "bypassPermissions": {
+            "label": "完全訪問",
+            "description": "常規工具無需詢問直接執行；Agent 發起的擴展變更仍需確認。風險最高，只適合可信任務。"
           }
         }
       }
@@ -8790,7 +8810,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "grok-build": "Grok Build"
       },
       "filterGroupBy": {
         "project": "按專案分組",
@@ -10915,14 +10936,22 @@
       "codexBinaryMissingDescription": "Codex 元件尚未準備好，暫時無法使用這個功能。請稍後重試，或前往「模型供應商」檢查 Codex 連線狀態。",
       "piBinaryMissingTitle": "Pi 元件未就緒",
       "piBinaryMissingDescription": "Pi 元件尚未準備好，暫時無法使用這個功能。請稍後重試，或前往「模型供應商」檢查 Pi 連線狀態。",
+      "grokBuildBinaryMissingTitle": "Grok Build 尚未就緒",
+      "grokBuildBinaryMissingDescription": "Cindy 託管循環還沒準備好，暫時無法使用 Grok Build。請稍後重試，或前往「設定 → 模型供應商」檢查。Claude Code / Codex / Pi 不受影響。",
+      "grokBuildUnauthenticatedTitle": "尚未連線 SuperGrok",
+      "grokBuildUnauthenticatedDescription": "Grok Build 走 Cindy 模型面的 SuperGrok（xAI）。請前往「設定 → 模型供應商」連線 SuperGrok。",
+      "grokBuildLogin": "前往設定",
       "goToSettings": "前往設定",
       "remoteCodexBinaryMissingTitle": "被控端 Codex 元件未就緒",
       "remotePiBinaryMissingTitle": "被控端 Pi 元件未就緒",
+      "remoteGrokBuildBinaryMissingTitle": "被控端 Grok Build 尚未就緒",
       "remoteAuthDescription": "需要在被控裝置「{{device}}」上完成配置後，才能在這裡新建並執行任務。請在該裝置上配置後重試。",
       "remoteCodexNoSourceTitle": "被控端 Codex 暫無可用來源",
       "remoteCodexNoSourceDescription": "被控裝置「{{device}}」尚未連線 Codex 可用的模型來源，無法在這裡新建並執行任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」登入 OpenAI 或連線其他來源後重試。",
       "remoteCcNoSourceTitle": "被控端 Claude 暫無可用來源",
       "remoteCcNoSourceDescription": "被控裝置「{{device}}」尚未連線可用的 Claude 模型來源，無法在這裡新建並執行任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」連線來源後重試。",
+      "remoteGrokBuildNoSourceTitle": "被控端尚未連線 SuperGrok",
+      "remoteGrokBuildNoSourceDescription": "被控裝置「{{device}}」尚未連線 SuperGrok（xAI），無法在這裡新建 Grok Build 任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」連線 SuperGrok 後重試。",
       "gotIt": "知道了"
     },
     "fileTypes": {

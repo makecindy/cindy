@@ -524,7 +524,10 @@ export function budgetModelRequiresApiKeyMessage(model: string): string {
 
 /** agent 的人类可读名,用于 preflight 失败信息。 */
 function agentDisplayName(agent: AgentKind): string {
-  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code';
+  if (agent === 'codex') return 'Codex';
+  if (agent === 'pi') return 'Pi';
+  if (agent === 'grok-build') return 'Grok Build';
+  return 'Claude Code';
 }
 
 /**
@@ -546,7 +549,7 @@ export function buildNoProviderMessage(
   availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>,
 ): string {
   const base = `${agentDisplayName(agent)} 当前没有可用的模型供应商(provider)。请在「设置 → 模型供应商」连接一个支持 ${agentDisplayName(agent)} 的供应商后重试`;
-  const others = (['claude-code', 'codex', 'pi'] as AgentKind[]).filter(
+  const others = (['claude-code', 'codex', 'pi', 'grok-build'] as AgentKind[]).filter(
     (a) => a !== agent && (availability[a]?.length ?? 0) > 0,
   );
   if (others.length === 0) return `${base}。`;

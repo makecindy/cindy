@@ -11,7 +11,7 @@ import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
  * 不包含桌面本机 SQLite、hybrid / 向量搜索、机器切换栏 origin 解析。
  */
 
-export type ConversationSearchAgentKind = 'cc' | 'codex' | 'pi';
+export type ConversationSearchAgentKind = 'cc' | 'codex' | 'pi' | 'grok-build';
 export type ConversationSearchWorkspaceKind = 'project' | 'dialogue';
 export type ConversationSearchSessionStatus = 'active' | 'archived' | 'deleted';
 export type ConversationSearchOrcaRole = 'lead' | 'worker';

@@ -1,4 +1,10 @@
-export type ImDefaultAgentKind = 'claude-code' | 'codex' | 'pi';
+export type ImDefaultAgentKind = 'claude-code' | 'codex' | 'pi' | 'grok-build';
+export const IM_DEFAULT_AGENT_KINDS = [
+  'claude-code',
+  'codex',
+  'pi',
+  'grok-build',
+] as const satisfies readonly ImDefaultAgentKind[];
 export type ImDefaultPermissionMode =
   'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
 export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -71,6 +77,11 @@ export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
       model: 'claude-sonnet-5',
       effort: 'high',
     },
+    'grok-build': {
+      providerId: null,
+      model: 'grok-4.6',
+      effort: 'high',
+    },
   },
 };
 
@@ -89,7 +100,7 @@ export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefa
   'codex/gpt-5.5': 'high',
 };
 
-const AGENT_KINDS = new Set<ImDefaultAgentKind>(['claude-code', 'codex', 'pi']);
+const AGENT_KINDS = new Set<ImDefaultAgentKind>(IM_DEFAULT_AGENT_KINDS);
 const EFFORTS = new Set<ImDefaultEffort>([
   'minimal',
   'low',

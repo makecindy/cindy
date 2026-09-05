@@ -88,6 +88,7 @@ function defaults(agentKind: ImDefaultSettingsState['agentKind']): ImDefaultSett
       'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
       codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
       pi: { providerId: null, model: 'claude-sonnet-5', effort: 'high' },
+      'grok-build': { providerId: null, model: 'grok-4.6', effort: 'high' },
     },
     isCustomized: false,
     customizedKeys: [],

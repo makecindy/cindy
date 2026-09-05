@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 520,
+  "count": 521,
   "colors": [
     {
       "id": "surface",
@@ -1236,6 +1236,11 @@
       "id": "engine-badge-pi",
       "light": "#a78bfa",
       "dark": "#a78bfa"
+    },
+    {
+      "id": "engine-badge-grok-build",
+      "light": "#6b7280",
+      "dark": "#6b7280"
     },
     {
       "id": "perm-item-selected-bg",

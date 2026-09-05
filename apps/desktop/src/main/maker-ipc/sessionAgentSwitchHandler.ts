@@ -31,6 +31,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import {
+  agentEngineLabel,
   buildHandoffText,
   type DbAgentKind,
   type HandoffSourceMessage,
@@ -61,12 +62,8 @@ export function toMakerAgentKind(dbKind: string): AgentKind {
   return dbToMakerAgentKind(dbKind);
 }
 
-/** 交接 framing 与边界卡展示用的引擎名。 */
-export function agentEngineLabel(dbKind: DbAgentKind): string {
-  if (dbKind === 'codex') return 'Codex';
-  if (dbKind === 'pi') return 'Pi';
-  return 'Claude Code';
-}
+/** 交接 framing 与边界卡展示用的引擎名(正本在 agentHandoff.ts)。 */
+export { agentEngineLabel };
 
 /** role='agent_switch' 边界行的 content 结构(与 renderer AgentSwitchContent 对齐)。 */
 export interface AgentSwitchBoundaryContent {

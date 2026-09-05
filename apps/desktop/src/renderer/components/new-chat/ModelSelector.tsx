@@ -49,7 +49,7 @@ import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { agentOptionOf } from './agentOptions';
-import type { SelectableVendor } from '@/lib/agentVendors';
+import { SELECTABLE_AGENT_KINDS, type SelectableVendor } from '@/lib/agentVendors';
 import { FastModeToggle } from './FastModeToggle';
 import {
   UnifiedModelPanel,
@@ -105,7 +105,9 @@ import {
   chatEligibleSourcesForModel,
   actualSourceIdForModel,
   effectiveSourceIdForModel,
+  exclusiveXaiCatalogModelId,
   getModel,
+  hasUsableConnectedSource,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -113,6 +115,7 @@ import {
   sourcesForModel,
   unifiedModelEntries,
   visibleModelUnion,
+  GROK_BUILD_HARNESS_PROVIDER_ID,
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
@@ -552,7 +555,7 @@ function RemoteModelLoadNotice({
 }
 
 export interface ModelSelectorAgentIdentity {
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: SelectableVendor;
   /**
    * current = 已由会话/runtime 元数据确认的当前 Agent；
    * pending = 已登记、将在下一条消息应用的切换目标。
@@ -564,8 +567,8 @@ export function resolveModelSelectorAgentIdentity(
   runtimeAgentKind: AgentKind | null | undefined,
   pendingTarget: AgentKind | null | undefined,
 ): ModelSelectorAgentIdentity | undefined {
-  const toVendorKey = (kind: AgentKind): 'cc' | 'codex' | 'pi' =>
-    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+  const toVendorKey = (kind: AgentKind): SelectableVendor =>
+    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : kind === 'grok-build' ? 'grok-build' : 'cc';
   if (pendingTarget) {
     return {
       vendorKey: toVendorKey(pendingTarget),
@@ -634,7 +637,7 @@ interface ModelSelectorProps {
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: SelectableVendor;
   /**
    * 已创建会话的 trigger 同时展示 Agent 与模型，避免 Claude Code 使用 OpenAI 模型时
    * 只看来源图标而误判成 Codex。必须由权威 session/runtime 身份或明确切换 intent 提供，
@@ -745,7 +748,7 @@ interface ModelSelectorProps {
    * device-link / SSH 远程不传(v1 不支持切换)。
    */
   agentSwitch?: {
-    currentVendor: 'cc' | 'codex' | 'pi';
+    currentVendor: SelectableVendor;
     /**
      * 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。
      *
@@ -753,14 +756,14 @@ interface ModelSelectorProps {
      * 判据是「会话上已有**指向该目标**的切换意图」。不传目标,它只能判「有没有意图」,
      * 于是先切 Codex 再选 Pi 时确认框永久静默(见 agentSwitchConfirmation.hasSwitchIntent)。
      */
-    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
+    confirmBrowseSwitch?: (targetVendor: SelectableVendor) => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
      * `onCrossEngineSelect`(后者按真实结果决定要不要做清理动作)。
      */
     onSwitch: (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: AgentKind,
       modelId: string,
       providerId: string | null,
     ) => void | boolean | Promise<void | boolean>;
@@ -784,7 +787,7 @@ interface ModelSelectorContentProps {
   thinkingEnabled?: boolean;
   onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: SelectableVendor;
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
   deviceId?: string;
   /** SSH 远程会话隐藏订阅直连模型(语义同 ModelSelectorProps 同名字段)。 */
@@ -870,7 +873,7 @@ interface ModelSelectorContentProps {
     anchor: {
       uid: string;
       wireModelId: string;
-      engine: 'cc' | 'codex' | 'pi';
+      engine: SelectableVendor;
       /** 选中时的显式来源。来源也是锚点身份的一部分:同 wire id 同引擎、仅来源不同的
        *  配置是两份配置,少了它,别的窗口把会话来源从 A 切到 B 后,面板仍在 A 的收藏上
        *  打勾(2026-08-17 review)。 */
@@ -895,7 +898,7 @@ interface ModelSelectorContentProps {
     modelId: string;
     /** 该行生效档位;该 (模型, 引擎) 不可调档时为 undefined。 */
     effort?: Effort;
-    engine: 'cc' | 'codex' | 'pi';
+    engine: SelectableVendor;
     fast: boolean;
     favoriteUid: string | null;
     /** 配置浮层「恢复推荐」的应用动作；调用方应删除 override，不得重新记忆推荐值。 */
@@ -916,16 +919,16 @@ interface ModelSelectorContentProps {
   fluidWidth?: boolean;
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
-    currentVendor: 'cc' | 'codex' | 'pi';
+    currentVendor: SelectableVendor;
     /** 语义同 ModelSelectorProps.agentSwitch.confirmBrowseSwitch(带本次目标引擎)。 */
-    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
+    confirmBrowseSwitch?: (targetVendor: SelectableVendor) => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
      * `onCrossEngineSelect`(后者按真实结果决定要不要做清理动作)。
      */
     onSwitch: (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: AgentKind,
       modelId: string,
       providerId: string | null,
     ) => void | boolean | Promise<void | boolean>;
@@ -946,10 +949,11 @@ interface ModelSelectorContentProps {
   interactionDisabled?: boolean;
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: SelectableVendor): AgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'grok-build') return 'grok-build';
   return null;
 }
 
@@ -1088,11 +1092,11 @@ function ModelSelectorContentView({
   const modelTagDensity = modelTagDensityForWidth(paneWidth ?? (fluidWidth ? null : 320));
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
-  const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex' | 'pi'>(
+  const [browseVendor, setBrowseVendor] = useState<SelectableVendor>(
     agentSwitch?.currentVendor ?? vendorKey ?? 'cc',
   );
   const browseSwitchPendingRef = useRef(false);
-  const handleBrowseVendorChange = async (next: 'cc' | 'codex' | 'pi') => {
+  const handleBrowseVendorChange = async (next: SelectableVendor) => {
     if (interactionDisabled || next === browseVendor || browseSwitchPendingRef.current) return;
     // 返回当前引擎（含已有意图时浏览原引擎准备撤销）不需要确认；只有从
     // currentVendor 进入另一 Agent 浏览态才调用上层风险确认。确认前绝不翻分段。
@@ -1117,10 +1121,9 @@ function ModelSelectorContentView({
   // A field that only persists a model must not offer another Harness.
   const unifiedAgents = requestedUnifiedAgents ??
     (vendorKey && agentKind && !onUnifiedSelect && !sessionEngineFilter ? [agentKind] : undefined);
-  const browseTargetLabel =
-    browseVendor === 'codex' ? 'Codex' : browseVendor === 'pi' ? 'Pi' : 'Claude Code';
+  const browseTargetLabel = agentOptionOf(browseVendor).label;
   const enqueueAgentSwitch = (
-    targetAgentKind: 'claude-code' | 'codex' | 'pi',
+    targetAgentKind: AgentKind,
     targetModelId: string,
     targetProviderId: string | null,
   ) => {
@@ -1382,7 +1385,13 @@ function ModelSelectorContentView({
     ],
   );
 
-  const currentModel = visibleModels.find((m) => m.id === modelId);
+  const currentModel =
+    visibleModels.find((m) => m.id === modelId) ??
+    visibleModels.find((m) => {
+      const selected = exclusiveXaiCatalogModelId(modelId);
+      const candidate = exclusiveXaiCatalogModelId(m.id);
+      return selected !== null && selected === candidate;
+    });
 
   // 显式 vendor / 浏览分段已给出 agentKind 时直接采用；浏览目标引擎期间 modelId 仍是
   // 旧引擎当前模型，通常不在目标 catalog，不能先因 currentModel 缺失判 null（否则目标
@@ -1672,7 +1681,7 @@ function ModelSelectorContentView({
       ? remoteProviders.modelVisibilityOverrides === undefined
         ? null
         : new Set(
-            (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi'] as const)).flatMap((agent) =>
+            (agentKind ? [agentKind] : SELECTABLE_AGENT_KINDS).flatMap((agent) =>
               visibleModelUnion(providers, agent, (providerId, model) =>
                 isDeviceModelVisible(
                   remoteProviders.modelVisibilityOverrides,
@@ -1684,7 +1693,7 @@ function ModelSelectorContentView({
             ),
           )
       : new Set(
-          (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi'] as const)).flatMap((agent) =>
+          (agentKind ? [agentKind] : SELECTABLE_AGENT_KINDS).flatMap((agent) =>
             visibleModelUnion(providers, agent, (providerId, model) =>
               isModelEnabled(agent, providerId, model),
             ).map((model) => model.id),
@@ -1807,7 +1816,7 @@ function ModelSelectorContentView({
     // trigger 来源 icon / 路由立即正确(null = flat 退化行,交给默认路由)。
     if (browsing && agentSwitch) {
       enqueueAgentSwitch(
-        browseVendor === 'codex' ? 'codex' : browseVendor === 'pi' ? 'pi' : 'claude-code',
+        vendorKeyToAgentKind(browseVendor) ?? 'claude-code',
         id,
         providerId,
       );
@@ -2628,13 +2637,15 @@ function ModelSelectorContentView({
 
   // 0 个可连来源:整张引导卡取代列表(仅 providers 加载完成后判,避免拉取期闪空态)。
   // device-link 远程会话不显示该引导(控制端无法替被控端连来源)→ 退化为扁平兜底列表。
+  // Grok Build 没有目录供应商声明 grok-build;SuperGrok / xAI 已连接时不能盖住统一列表。
   const emptyState =
     !unifiedPanel &&
     sourcesEnabled &&
     !deviceId &&
     currentAgentKind &&
     !providersLoading &&
-    connected.length === 0 ? (
+    connected.length === 0 &&
+    !hasUsableConnectedSource(providers, currentAgentKind, modelId) ? (
       <div className="flex flex-col gap-[14px] p-2">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-[var(--model-item-hover)]">
@@ -2674,6 +2685,7 @@ function ModelSelectorContentView({
   // 渲染直接 "Rendered more hooks" 崩溃)。
   const unifiedProviderLabel = useCallback(
     (providerId: string): string => {
+      if (providerId === GROK_BUILD_HARNESS_PROVIDER_ID) return 'Grok Build';
       const provider = providers.find((entry) => entry.id === providerId);
       return provider ? providerDisplayName(provider, t) : providerId;
     },
@@ -3278,7 +3290,7 @@ export function ModelSelector({
     if (!confirmBrowseSwitch) return agentSwitch;
     return {
       ...agentSwitch,
-      confirmBrowseSwitch: async (targetVendor: 'cc' | 'codex' | 'pi') => {
+      confirmBrowseSwitch: async (targetVendor: SelectableVendor) => {
         setKeepOpenForAgentConfirmation(true);
         try {
           return await confirmBrowseSwitch(targetVendor);
@@ -3382,7 +3394,12 @@ export function ModelSelector({
   const routeModel = routeProvider && agentKind ? getModel(routeProvider, modelId, agentKind) : undefined;
   const currentModel = routeModel
     ? { ...routeModel, displayName: routeModel.name, id: modelId }
-    : visibleModels.find((m) => m.id === modelId);
+    : visibleModels.find((m) => m.id === modelId)
+      ?? visibleModels.find((m) => {
+        const selected = exclusiveXaiCatalogModelId(modelId);
+        const candidate = exclusiveXaiCatalogModelId(m.id);
+        return selected !== null && selected === candidate;
+      });
   // 已保存模型即使隐藏、断开或下架，实际任务仍保留模型 ID；偏好字段可通过
   // unknownModelLabel 提供诊断文案。没有保存选择的入口才显示选择模型占位符。
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
@@ -3474,7 +3491,8 @@ export function ModelSelector({
     !deviceId &&
     !!currentAgentKind &&
     !providersLoading &&
-    !hasConnectedSource;
+    !hasConnectedSource &&
+    !hasUsableConnectedSource(providers, currentAgentKind, modelId);
   // trigger 上仍展示当前模型的 effort(模型支持时)。
   const triggerProvider = actualRoute && routeProvider
     ? routeProvider

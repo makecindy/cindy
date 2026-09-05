@@ -51,6 +51,7 @@ describe('im default settings logic', () => {
         effort: 'high',
       },
       pi: IM_DEFAULT_SETTINGS.agents.pi,
+      'grok-build': IM_DEFAULT_SETTINGS.agents['grok-build'],
     });
   });
 });

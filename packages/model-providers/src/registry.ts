@@ -14,7 +14,9 @@
 
 import type { Catalog, Provider, CatalogModel, AgentKind, RoutingDescriptor } from './types.js';
 import {
+  exclusiveXaiCatalogModelId,
   isAgentSelectableModel,
+  isExclusiveXaiModelId,
   isModelSelectableForNewRoute,
 } from './classification.js';
 import type { ProviderLogoKind } from './providerBranding.js';
@@ -286,6 +288,87 @@ export function chatEligibleSourcesForModel(
       isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
     );
   });
+}
+
+/**
+ * Grok Build 是 Cindy hosted harness,不是目录供应商。独占 Grok 走 SuperGrok
+ * (xAI);目录不会声明 `grok-build` runtime,所以不能用 connectedProvidersForAgent。
+ */
+export function isGrokBuildSourceReady(
+  views: readonly ProviderView[],
+  opts: { includeSuspended?: boolean } = {},
+): boolean {
+  return views.some(
+    (provider) =>
+      provider.id === 'xai' &&
+      provider.connected &&
+      (opts.includeSuspended === true || provider.suspended !== true),
+  );
+}
+
+function grokBuildModelCopy(
+  views: readonly ProviderView[],
+  modelId: string,
+  opts: { includeSuspended?: boolean } = {},
+): CatalogModel | undefined {
+  const xai = views.find(
+    (provider) =>
+      provider.id === 'xai' &&
+      provider.connected &&
+      (opts.includeSuspended === true || provider.suspended !== true),
+  );
+  if (!xai) return undefined;
+  const ids = [modelId, exclusiveXaiCatalogModelId(modelId)].filter(
+    (id, index, list): id is string => Boolean(id) && list.indexOf(id) === index,
+  );
+  for (const plane of ['pi', 'claude-code'] as const) {
+    for (const id of ids) {
+      const copy = getModel(xai, id, plane);
+      if (copy) return copy;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Picker trigger / Send 门禁的「有没有可用来源」。
+ *
+ * Grok Build 复用 Cindy hosted loop + SuperGrok / xAI,不要求目录供应商声明
+ * `grok-build`。Claude / Codex / Pi 仍走 chatEligibleSourcesForModel /
+ * connectedProvidersForAgent。
+ */
+export function hasUsableConnectedSource(
+  views: ProviderView[],
+  agent: AgentKind | null,
+  modelId?: string,
+  opts: { onlyConnected?: boolean; includeDisabled?: boolean; includeSuspended?: boolean } = {},
+): boolean {
+  if (!agent) return false;
+  if (agent === 'grok-build') {
+    const ready = isGrokBuildSourceReady(views, {
+      ...(opts.includeSuspended === true ? { includeSuspended: true } : {}),
+    });
+    if (!ready) return false;
+    if (!modelId) return true;
+    if (!isExclusiveXaiModelId(modelId)) return false;
+    const copy = grokBuildModelCopy(views, modelId, {
+      ...(opts.includeSuspended === true ? { includeSuspended: true } : {}),
+    });
+    return !!copy && isModelSelectableForNewRoute(copy, { userProvider: false });
+  }
+  if (modelId) {
+    return (
+      chatEligibleSourcesForModel(views, modelId, agent, {
+        onlyConnected: opts.onlyConnected ?? true,
+        ...(opts.includeDisabled === true ? { includeDisabled: true } : {}),
+      }).length > 0
+    );
+  }
+  return (
+    connectedProvidersForAgent(views, agent, {
+      ...(opts.includeSuspended === true ? { includeSuspended: true } : {}),
+    }).length > 0
+  );
 }
 
 /**

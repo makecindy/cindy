@@ -18,6 +18,7 @@ import {
   classifyModel,
   connectedProvidersForAgent,
   getModel,
+  hasUsableConnectedSource,
   groupModelsForDisplay,
   groupOf,
   isModelSelectableForNewRoute,
@@ -195,6 +196,14 @@ export function isSelectedSourceDisconnected(args: {
 }): boolean {
   const { providers, agent, modelId, selectedProviderId, providersLoading } = args;
   if (providersLoading || !agent || !selectedProviderId) return false;
+  // Grok Build is not a catalog provider; persist providerId=grok-build
+  // (or any leftover catalog id) must not look "disconnected" after SuperGrok is connected.
+  if (
+    agent === 'grok-build' &&
+    hasUsableConnectedSource(providers, agent, modelId, { includeDisabled: true })
+  ) {
+    return false;
+  }
   // chatEligibleSourcesForModel + includeDisabled:选中来源若还在但这个 id 在它上面
   // 已经不是聊天模型了(mode 变化),也要判"断连"——否则这里说"没断连"、
   // effectiveSourceIdForModel 却解析不出可用来源,界面显示能发、实际发不出去

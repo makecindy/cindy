@@ -402,7 +402,7 @@ export interface CodexAppServerProcessRegistration {
 
 export interface LocalAgentProcessRegistration {
   pid: number;
-  kind: 'claude' | 'pi';
+  kind: 'claude' | 'pi' | 'grok-build';
   role: 'task-host' | 'control-plane-service';
 }
 

@@ -91,3 +91,37 @@ describe('+ 菜单 embedded 宽度契约', () => {
     expect(morph).toContain("content.style.overflowX = 'hidden'");
   });
 });
+
+describe('Grok Build 出现在与 cc/codex/pi 相同的 harness 选择入口', () => {
+  it('统一选择器候选引擎表派生自 SELECTABLE_AGENT_KINDS,不再手抄三引擎', () => {
+    expect(chatInput).toContain(
+      "const UNIFIED_AGENT_KINDS: readonly AgentKind[] = SELECTABLE_AGENT_KINDS;",
+    );
+    expect(chatInput).not.toMatch(
+      /UNIFIED_AGENT_KINDS: readonly AgentKind\[\] = \['claude-code', 'codex', 'pi'\]/,
+    );
+    expect(modelSelector).toContain('SELECTABLE_AGENT_KINDS');
+    expect(chatInput).toContain("const OPT_IN_UNIFIED_AGENTS: ReadonlySet<AgentKind> = new Set(['grok-build'])");
+    expect(chatInput).toContain(
+      'const catalogKinds = UNIFIED_AGENT_KINDS.filter((kind) => !OPT_IN_UNIFIED_AGENTS.has(kind));',
+    );
+    expect(chatInput).toContain('if (!runtimeAgentsLoaded) return catalogKinds;');
+  });
+
+  it('Hook 工作目录偏好不再隐藏 grok-build,并认它为合法 agent', () => {
+    expect(workspacePrefs).not.toContain("HOOK_HIDDEN_VENDORS");
+    expect(workspacePrefs).toContain("if (vendor === 'grok-build') return 'grok-build'");
+    const hookLogic = read('components/settings/hookWorkspacePrefsLogic.ts');
+    expect(hookLogic).toContain("'grok-build'");
+    expect(hookLogic).toMatch(
+      /export const AGENT_KINDS = \['claude-code', 'codex', 'pi', 'grok-build'\]/,
+    );
+  });
+
+  it('IM 默认设置把 grok-build vendor 映射成 grok-build harness,不再误写成 Codex', () => {
+    expect(settingsModel).toContain("if (vendor === 'grok-build') return 'grok-build'");
+    expect(settingsModel).not.toMatch(
+      /function agentKindOfVendor\(vendor: string\): ImDefaultAgentKind \{\n  return vendor === 'cc' \? 'claude-code' : vendor === 'pi' \? 'pi' : 'codex';/,
+    );
+  });
+});

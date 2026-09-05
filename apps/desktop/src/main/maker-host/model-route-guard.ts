@@ -110,12 +110,15 @@ export function materializeExclusiveProviderRoute(
   providerId: string | null,
 ): ExclusiveProviderRoute {
   if (!isExclusiveXaiModelId(modelId)) return { kind: 'keep' };
+  // Grok Build is a Cindy hosted harness, not a catalog agent. Exclusive Grok
+  // still requires SuperGrok; look up the xAI copy on the Pi model plane.
+  const planeAgent: AgentKind = agent === 'grok-build' ? 'pi' : agent;
   const xai = views.find(
     (provider) =>
       provider.id === 'xai'
       && provider.connected
       && provider.suspended !== true
-      && provider.agents.includes(agent),
+      && provider.agents.includes(planeAgent),
   );
   if (!xai) {
     return providerId && !shouldApplyExclusiveProviderReroute(providerId, views) && providerId !== 'xai'
@@ -124,8 +127,13 @@ export function materializeExclusiveProviderRoute(
   }
   const catalogId = exclusiveXaiCatalogModelId(modelId);
   const copy =
-    (catalogId ? getModel(xai, catalogId, agent) : undefined)
-    ?? getModel(xai, modelId.replace(/\[1m\]$/i, ''), agent);
+    (catalogId ? getModel(xai, catalogId, planeAgent) : undefined)
+    ?? getModel(xai, modelId.replace(/\[1m\]$/i, ''), planeAgent)
+    ?? (agent === 'grok-build'
+      ? (catalogId ? getModel(xai, catalogId, 'claude-code') : undefined)
+        ?? getModel(xai, modelId.replace(/\[1m\]$/i, ''), 'claude-code')
+      : undefined);
+  if (agent === 'grok-build' && !copy) return { kind: 'reject' };
   if (copy && !isModelSelectableForNewRoute(copy, { userProvider: false })) {
     return { kind: 'reject' };
   }

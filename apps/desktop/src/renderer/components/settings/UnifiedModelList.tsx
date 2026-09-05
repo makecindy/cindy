@@ -63,6 +63,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  'grok-build': 'Grok Build',
 };
 
 /**

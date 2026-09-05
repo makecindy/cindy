@@ -631,6 +631,71 @@ describe('forkSessionAtMessage', () => {
     expect(result.parentSessionId).toBe('src-session');
   });
 
+  it('grok-build hosted loop: fork uses the Pi tail-turn path, not UNSUPPORTED_HISTORY', async () => {
+    const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+    const priorUser = makeMessageRow({
+      id: 'user-1',
+      role: 'user',
+      content: '"hi"',
+      createdAt: 2000,
+    });
+    const priorAssistant = makeMessageRow({
+      id: 'asst-1',
+      role: 'assistant',
+      content: '"hi back"',
+      createdAt: 2500,
+    });
+
+    selectQueue.push([makeSourceRow({
+      agentKind: 'grok-build',
+      model: 'grok-4.6',
+      providerId: 'xai',
+      sdkSessionId: 'grok-build-session-source',
+    })]);
+    selectQueue.push([target]);
+    selectQueue.push([priorUser, priorAssistant]);
+    selectQueue.push([makeSourceRow({
+      agentKind: 'grok-build',
+      model: 'grok-4.6',
+      providerId: 'xai',
+      sdkSessionId: 'grok-build-session-forked',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: 'target-user',
+    })]);
+    queryMock.mockResolvedValue([
+      { role: 'user', content: '"later"' },
+      { role: 'user', content: '"target"' },
+    ]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'grok-build-session-forked',
+      uuidMap: new Map<string, string>(),
+    });
+
+    const result = await forkSessionAtMessage('src-session', 'target-user');
+
+    expect(forkSdkSessionMock).toHaveBeenCalledOnce();
+    expect(forkSdkSessionMock).toHaveBeenCalledWith('grok-build', {
+      sourceSdkSessionId: 'grok-build-session-source',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 2,
+      title: '[Fork] Project A',
+      workingDir: '/work',
+      remoteHostId: null,
+    });
+    const txArgs = txCalls.find((call) => call.name === 'fork.session')?.args as {
+      newSession: Record<string, unknown>;
+    };
+    expect(txArgs.newSession).toMatchObject({
+      agentKind: 'grok-build',
+      model: 'grok-4.6',
+      providerId: 'xai',
+      sdkSessionId: 'grok-build-session-forked',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: 'target-user',
+    });
+    expect(result.parentSessionId).toBe('src-session');
+  });
+
   it('codex path: maps preparation or thread/fork failures to a diagnosable error', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     selectQueue.push([

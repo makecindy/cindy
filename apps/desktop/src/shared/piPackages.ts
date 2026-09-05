@@ -1,3 +1,5 @@
+import type { MakerAgentKindWire } from './agentKindConversion.js';
+
 export type PiPackageResourceKind = 'extension' | 'skill' | 'prompt' | 'theme';
 
 export type PiPackageCompatibility = 'supported' | 'partial' | 'unsupported' | 'unknown';
@@ -163,7 +165,7 @@ export type PiPackageCommandRuntimeStatus =
 
 /** Runtime-confirmed Pi package commands belong only to the Pi command palette. */
 export function mergePiPackageCommands(
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: MakerAgentKindWire,
   builtins: PiPackageSlashCommand[],
   packageCommands: Array<{ name: string; description: string }>,
 ): PiPackageSlashCommand[] {
@@ -181,7 +183,7 @@ export function mergePiPackageCommands(
 }
 
 export function shouldListPiPackageCommands(
-  requestedAgentKind: 'claude-code' | 'codex' | 'pi',
+  requestedAgentKind: MakerAgentKindWire,
   sessionIdProvided: boolean,
   session: {
     agentKind: 'claude-code' | 'codex' | 'pi';
