@@ -12,6 +12,7 @@
     "deleteFailed": "デバイスを削除できませんでした。",
     "deleteOnline": "デバイスがオンラインです。オフラインにしてから削除してください。",
     "currentlyOnline": "現在オンライン",
+    "nameTooLong": "デバイス名は {{limit}} 文字以内で入力してください。",
     "fields": {
       "name": "名前",
       "status": "状態",

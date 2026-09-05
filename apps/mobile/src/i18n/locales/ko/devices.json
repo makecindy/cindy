@@ -12,6 +12,7 @@
     "deleteFailed": "기기를 삭제하지 못했습니다.",
     "deleteOnline": "기기가 온라인입니다. 오프라인으로 전환한 후 삭제하세요.",
     "currentlyOnline": "현재 온라인",
+    "nameTooLong": "기기 이름은 {{limit}}자 이하여야 합니다.",
     "fields": {
       "name": "이름",
       "status": "상태",

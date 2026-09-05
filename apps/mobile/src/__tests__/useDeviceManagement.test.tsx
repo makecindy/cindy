@@ -4,11 +4,21 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DeviceView } from '@cindy/device-link';
 import { useDeviceManagement } from '@/device-link/useDeviceManagement';
+import {
+  setMobileAuthOwner,
+  __testing as authOwnerTesting,
+} from '@/auth/authOwnerGeneration';
 
 const mocks = vi.hoisted(() => ({
   renameDevice: vi.fn(),
   removeDevice: vi.fn(),
   clearRevoked: vi.fn(),
+  getDeviceIdentity: vi.fn(),
+  setDeviceIdentity: vi.fn(),
+}));
+vi.mock('@/auth/secureStorage', () => ({
+  getSecureItem: vi.fn(),
+  setSecureItem: vi.fn(),
 }));
 vi.mock('@/device-link/revokedDevicesStore', () => ({
   revokedDevicesStore: mocks,
@@ -56,6 +66,11 @@ beforeEach(() => {
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
+  authOwnerTesting.reset();
+  mocks.getDeviceIdentity.mockReturnValue([]);
+  mocks.setDeviceIdentity.mockImplementation((items) =>
+    mocks.getDeviceIdentity.mockReturnValue(items),
+  );
   apiFetch.mockReset().mockResolvedValue({ devices: [device] });
   root = createRoot(document.createElement('div'));
 });
@@ -122,7 +137,7 @@ it('keeps the rename editor and original name after a failed save', async () => 
   act(() => state.setRenameDraft('New name'));
   apiFetch.mockRejectedValueOnce(new Error('rename failed'));
   await act(async () => state.confirmRename());
-  expect(state.renameError).toBe('rename failed');
+  expect(state.renameError?.message).toBe('rename failed');
   expect(state.renameTarget).toEqual(device);
   expect(state.renameDraft).toBe('New name');
   expect(state.devices[0]?.name).toBe('MacBook');
@@ -263,3 +278,106 @@ it('does not reload after cancelling rename and immediately allows deleting the 
   act(() => state.openDelete(device));
   expect(state.deleteTarget).toEqual(device);
 });
+
+it('rejects repeated oversized names without a request, then saves a 64-character name', async () => {
+  await render();
+  act(() => state.openRename(device));
+  const oversized = 'x'.repeat(65);
+  await act(async () => state.confirmRename(oversized));
+  const firstError = state.renameError;
+  expect(firstError?.message).toContain('64');
+  expect(state.renameDraft).toBe(oversized);
+  expect(apiFetch).toHaveBeenCalledTimes(1);
+  await act(async () => state.confirmRename(oversized));
+  expect(state.renameError).not.toBe(firstError);
+  expect(apiFetch).toHaveBeenCalledTimes(1);
+  const valid = 'x'.repeat(64);
+  apiFetch.mockResolvedValueOnce({ deviceId: device.deviceId, name: valid });
+  await act(async () => state.confirmRename(valid));
+  expect(state.renameTarget).toBeNull();
+  expect(state.devices[0]?.name).toBe(valid);
+});
+
+it('reuses known names for placeholder snapshots and keeps a successful rename across refreshes', async () => {
+  mocks.getDeviceIdentity.mockReturnValue([
+    { deviceId: device.deviceId, name: 'Known Mac' },
+  ]);
+  apiFetch.mockResolvedValue({
+    devices: [{ ...device, online: false, name: 'unknown' }],
+  });
+  await render();
+  expect(state.devices[0]?.name).toBe('Known Mac');
+  act(() => state.openRename(state.devices[0]!));
+  apiFetch.mockResolvedValueOnce({
+    deviceId: device.deviceId,
+    name: 'Renamed Mac',
+  });
+  await act(async () => state.confirmRename('Renamed Mac'));
+  expect(mocks.getDeviceIdentity()).toEqual([
+    { deviceId: device.deviceId, name: 'Renamed Mac' },
+  ]);
+  apiFetch.mockResolvedValue({
+    devices: [{ ...device, online: false, name: 'no' }],
+  });
+  await act(async () => state.refresh());
+  expect(state.devices[0]?.name).toBe('Renamed Mac');
+  act(() => state.openDelete(state.devices[0]!));
+  apiFetch.mockResolvedValueOnce({ deviceId: device.deviceId, deleted: true });
+  await act(async () => state.confirmDelete());
+  expect(mocks.getDeviceIdentity()).toEqual([]);
+});
+
+it('ignores a rename response when the auth owner changes before React remounts', async () => {
+  setMobileAuthOwner('account-a');
+  await render();
+  act(() => state.openRename(device));
+  const save = deferred<{ deviceId: string; name: string }>();
+  apiFetch.mockReturnValueOnce(save.promise);
+  let request!: Promise<void>;
+  act(() => {
+    request = state.confirmRename('Old name');
+  });
+  setMobileAuthOwner('account-b');
+  await act(async () => {
+    save.resolve({ deviceId: device.deviceId, name: 'Old name' });
+    await request;
+  });
+  expect(mocks.renameDevice).not.toHaveBeenCalled();
+  expect(mocks.setDeviceIdentity).not.toHaveBeenCalled();
+  expect(state.devices[0]?.name).toBe('MacBook');
+});
+
+it('uses a newly learned shared name even when the current view still contains a placeholder', async () => {
+  apiFetch.mockResolvedValue({
+    devices: [{ ...device, online: false, name: 'unknown' }],
+  });
+  await render();
+  mocks.getDeviceIdentity.mockReturnValue([
+    { deviceId: device.deviceId, name: 'Known Mac' },
+  ]);
+  await act(async () => state.refresh());
+  expect(state.devices[0]?.name).toBe('Known Mac');
+  mocks.getDeviceIdentity.mockReturnValue([
+    { deviceId: device.deviceId, name: 'Latest Mac' },
+  ]);
+  await act(async () => state.refresh());
+  expect(state.devices[0]?.name).toBe('Latest Mac');
+});
+
+it.each(['rename', 'delete'] as const)(
+  'does not submit an old %s dialog after the auth owner changes',
+  async (action) => {
+    setMobileAuthOwner('account-a');
+    await render();
+    act(() =>
+      action === 'rename' ? state.openRename(device) : state.openDelete(device),
+    );
+    setMobileAuthOwner('account-b');
+    await act(async () => {
+      if (action === 'rename') await state.confirmRename('Old account name');
+      else expect(await state.confirmDelete()).toBe(false);
+    });
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(mocks.setDeviceIdentity).not.toHaveBeenCalled();
+  },
+);

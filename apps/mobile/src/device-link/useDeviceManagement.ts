@@ -6,6 +6,16 @@ import { formatRemoteError } from '@/device-link/remoteStatus';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import { i18n } from '@/i18n';
+import {
+  getMobileAuthOwner,
+  isMobileAuthOwnerCurrent,
+} from '@/auth/authOwnerGeneration';
+import {
+  hydrateDeviceIdentityCache,
+  normalizeDeviceDisplayName,
+  reconcileDeviceIdentities,
+} from './deviceIdentityStore';
+import { MAX_DEVICE_NAME_LENGTH } from './deviceName';
 
 type ApiFetch = <T>(path: string, options: ApiFetchOptions) => Promise<T>;
 const DEVICE_TIMEOUT_MS = 8_000;
@@ -19,16 +29,16 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
   const [renameTarget, setRenameTarget] = useState<DeviceView | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
-  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<Error | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeviceView | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const savingRef = useRef(false);
   const editingRef = useRef(false);
   editingRef.current = renameTarget !== null || deleteTarget !== null;
-  const lifetimeRef = useRef({ active: true });
+  const lifetimeRef = useRef({ active: true, owner: getMobileAuthOwner() });
   useEffect(() => {
-    const lifetime = { active: true };
+    const lifetime = { active: true, owner: lifetimeRef.current.owner };
     lifetimeRef.current = lifetime;
     return () => {
       lifetime.active = false;
@@ -40,6 +50,9 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
     // immediately available. Refresh only on focus or an explicit retry.
     if (!focused || editingRef.current) return;
     let cancelled = false;
+    const owner = lifetimeRef.current.owner;
+    const isCurrent = () => !cancelled && isMobileAuthOwnerCurrent(owner);
+    if (!isCurrent()) return;
     setLoading(true);
     setError(null);
     void apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
@@ -47,14 +60,31 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
       timeoutMs: DEVICE_TIMEOUT_MS,
     })
       .then((result) => {
-        if (!cancelled) setDevices(result.devices);
+        if (!isCurrent()) return;
+        setDevices((current) => {
+          if (!isCurrent()) return current;
+          // Prefer home's latest valid identities, falling back to this account's
+          // last successful view. No extra persistent cache is needed.
+          const known = [...current, ...remoteSessionStore.getDeviceIdentity()];
+          const cache = hydrateDeviceIdentityCache({
+            names: Object.fromEntries(
+              known
+                .filter((item) => normalizeDeviceDisplayName(item.name))
+                .map((item) => [item.deviceId, item.name]),
+            ),
+            order: Object.fromEntries(
+              known.map((item, index) => [item.deviceId, index]),
+            ),
+          });
+          return reconcileDeviceIdentities(result.devices, cache).devices;
+        });
       })
       .catch((cause) => {
         // Keep the last successful list on transient network errors.
-        if (!cancelled) setError(formatRemoteError(cause));
+        if (isCurrent()) setError(formatRemoteError(cause));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (isCurrent()) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -86,9 +116,24 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
       const target = renameTarget;
       const name = (draft ?? renameDraft).trim();
       const lifetime = lifetimeRef.current;
-      if (!lifetime.active || !target || !name || savingRef.current) return;
+      const owner = lifetime.owner;
+      const isCurrent = () =>
+        lifetime.active && isMobileAuthOwnerCurrent(owner);
+      if (!isCurrent() || !target || !name || savingRef.current) return;
       if (name === target.name.trim()) {
         setRenameTarget(null);
+        return;
+      }
+      if (name.length > MAX_DEVICE_NAME_LENGTH) {
+        setRenameDraft(name);
+        // A fresh error also reopens the native prompt after repeated invalid submissions.
+        setRenameError(
+          new Error(
+            i18n.t('devices.management.nameTooLong', {
+              limit: MAX_DEVICE_NAME_LENGTH,
+            }),
+          ),
+        );
         return;
       }
       savingRef.current = true;
@@ -104,7 +149,7 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
             timeoutMs: DEVICE_TIMEOUT_MS,
           },
         );
-        if (!lifetime.active) return;
+        if (!isCurrent()) return;
         setDevices((current) =>
           current.map((device) =>
             device.deviceId === target.deviceId
@@ -113,11 +158,20 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
           ),
         );
         remoteSessionStore.renameDevice(target.deviceId, result.name);
+        remoteSessionStore.setDeviceIdentity(
+          remoteSessionStore
+            .getDeviceIdentity()
+            .map((item) =>
+              item.deviceId === target.deviceId
+                ? { ...item, name: result.name }
+                : item,
+            ),
+        );
         setRenameTarget(null);
       } catch (cause) {
-        if (lifetime.active) setRenameError(formatRemoteError(cause));
+        if (isCurrent()) setRenameError(new Error(formatRemoteError(cause)));
       } finally {
-        if (lifetime.active) {
+        if (isCurrent()) {
           savingRef.current = false;
           setRenameSaving(false);
         }
@@ -142,7 +196,9 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
   const confirmDelete = useCallback(async () => {
     const target = deleteTarget;
     const lifetime = lifetimeRef.current;
-    if (!lifetime.active || !target || savingRef.current) return false;
+    const owner = lifetime.owner;
+    const isCurrent = () => lifetime.active && isMobileAuthOwnerCurrent(owner);
+    if (!isCurrent() || !target || savingRef.current) return false;
     savingRef.current = true;
     setDeleteSaving(true);
     setDeleteError(null);
@@ -155,18 +211,23 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
           timeoutMs: DEVICE_TIMEOUT_MS,
         },
       );
-      if (!lifetime.active) return false;
+      if (!isCurrent()) return false;
       if (!result.deleted)
         throw new Error(i18n.t('devices.management.deleteFailed'));
       setDevices((current) =>
         current.filter((device) => device.deviceId !== target.deviceId),
       );
       remoteSessionStore.removeDevice(target.deviceId);
+      remoteSessionStore.setDeviceIdentity(
+        remoteSessionStore
+          .getDeviceIdentity()
+          .filter((item) => item.deviceId !== target.deviceId),
+      );
       revokedDevicesStore.clearRevoked(target.deviceId);
       setDeleteTarget(null);
       return true;
     } catch (cause) {
-      if (lifetime.active)
+      if (isCurrent())
         setDeleteError(
           (cause as { code?: string })?.code === 'ALREADY_EXISTS'
             ? i18n.t('devices.management.deleteOnline')
@@ -174,7 +235,7 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
         );
       return false;
     } finally {
-      if (lifetime.active) {
+      if (isCurrent()) {
         savingRef.current = false;
         setDeleteSaving(false);
       }

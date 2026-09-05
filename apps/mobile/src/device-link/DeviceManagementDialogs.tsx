@@ -28,7 +28,7 @@ export function DeviceManagementDialogs({
     if (Platform.OS !== 'ios' || !renameTarget || renameSaving) return;
     Alert.prompt(
       t('devices.list.renameDevice.title'),
-      renameError ?? undefined,
+      renameError?.message,
       [
         {
           text: t('devices.common.cancel'),
@@ -88,7 +88,7 @@ export function DeviceManagementDialogs({
   return (
     <RenameDeviceModal
       draft={manager.renameDraft}
-      error={manager.renameError}
+      error={manager.renameError?.message ?? null}
       onCancel={manager.closeRename}
       onChangeDraft={manager.setRenameDraft}
       onConfirm={() => void manager.confirmRename()}

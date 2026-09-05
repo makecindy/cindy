@@ -2,6 +2,7 @@ import { Modal, Pressable, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
+import { MAX_DEVICE_NAME_LENGTH } from '@/device-link/deviceName';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
   fontWeight,
@@ -55,7 +56,7 @@ export function RenameDeviceModal({
           <TextInput
             autoFocus
             editable={!saving}
-            maxLength={64}
+            maxLength={MAX_DEVICE_NAME_LENGTH}
             onChangeText={onChangeDraft}
             onSubmitEditing={() => {
               if (canSave) onConfirm();

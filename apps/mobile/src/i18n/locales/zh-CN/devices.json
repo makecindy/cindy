@@ -12,6 +12,7 @@
     "deleteFailed": "删除设备失败。",
     "deleteOnline": "设备当前在线，请让设备离线后再删除。",
     "currentlyOnline": "当前在线",
+    "nameTooLong": "设备名称不能超过 {{limit}} 个字符。",
     "fields": {
       "name": "名称",
       "status": "状态",
