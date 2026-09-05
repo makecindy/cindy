@@ -45,6 +45,7 @@ import {
   promoteTrailingPlainListParagraph,
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
+import { SelectionPairing } from './SelectionPairing';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import {
   hasFocusMovedToInteractiveElement,
@@ -2100,6 +2101,7 @@ export function ChatInput({
       MentionChipNode,
       ComposerQuoteNode,
       PastedTextChipNode,
+      SelectionPairing,
       WindowsSelectionReplacement.configure({
         enabled: window.electronAPI.platform === 'win32',
       }),
