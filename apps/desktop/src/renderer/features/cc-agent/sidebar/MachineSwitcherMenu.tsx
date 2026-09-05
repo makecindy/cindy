@@ -48,6 +48,7 @@
 
 import { useRef, type ReactNode } from 'react';
 import {
+  Archive,
   Ban,
   Check,
   ChevronDown,
@@ -79,6 +80,7 @@ import {
   useMachineSwitcher,
   useRemoteSessionBootstrapLoading,
 } from '@/features/device-link/useMachineSwitcher';
+import type { FilterStatus } from '../hooks/useSidebarFilter';
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from './menuStyles';
 
 /** 段头标题共用样式:与原「全部任务」标题一致(淡灰、hover 加深)。 */
@@ -87,9 +89,19 @@ const SCOPE_TITLE_CLASS =
 
 export function MachineSwitcherMenu({
   onOpenDisplaySettings,
+  status,
 }: {
   /** 打开段头同一份「侧边栏显示设置」菜单;不传则不渲染该入口。 */
   onOpenDisplaySettings?: () => void;
+  /**
+   * 当前 Status 筛选(#3214)。仅用于段头状态表达:归档视图时段头显示
+   * 「⃞ 已归档」文字徽标,无障碍名称拼入当前状态(「任务范围:… · 已归档」),
+   * 不展开菜单也能看出当前在看什么。
+   * 2026-08-22 维护者裁决(review PR #3231):范围菜单只管设备/范围选择,
+   * 状态筛选留在筛选体系内,不在这里放状态切换项——这里只读,不可写。
+   * 状态真源仍是 useSidebarFilter 的 filter.status。
+   */
+  status?: FilterStatus;
 } = {}): ReactNode {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -172,12 +184,27 @@ export function MachineSwitcherMenu({
 
   // 点击展开(2026-08-13 定稿,推翻 2026-07-12 的 hover 展开——作为段头标题,
   // hover 扫过就弹菜单太吵)。modal={false}:侧栏是常驻面板,不锁列表滚动。
+  // 无障碍名称必须包含当前状态(review P1):内部图标的 aria-label 进不了父按钮
+  // 名称,读屏只听得到「任务范围:全部任务」不知道在看归档;状态文字直接拼进
+  // 按钮名称(「… · 已归档」),同时段头渲染可见的文字徽标(不只靠图标 + title)。
+  const statusText =
+    status === 'archived'
+      ? t('ccAgent.sidebar.filterStatus.archived')
+      : status === 'all'
+        ? t('ccAgent.sidebar.filterStatus.all')
+        : status === 'active'
+          ? t('ccAgent.sidebar.filterStatus.active')
+          : null;
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`${triggerLabel}: ${triggerText}`}
+          aria-label={
+            statusText
+              ? `${triggerLabel}: ${triggerText} · ${statusText}`
+              : `${triggerLabel}: ${triggerText}`
+          }
           aria-busy={remoteSessionBootstrapLoading}
           className={cn(
             'flex min-w-0 items-center gap-1 focus:outline-none',
@@ -188,6 +215,23 @@ export function MachineSwitcherMenu({
           )}
         >
           <span className="truncate leading-none">{triggerText}</span>
+          {/* 归档视图的常驻状态表达(#3214):图标 + 可见文字,不展开菜单也能看出当前
+              在看已归档列表。不用 Tip 组件——嵌在 DropdownMenuTrigger 按钮里再挂一层
+              Radix tooltip 容易抢指针事件,与右侧 ✓ 同口径用原生 title;状态语义已进
+              按钮名称,视觉块整体对读屏隐藏避免重复播报。 */}
+          {status === 'archived' && (
+            <span
+              aria-hidden="true"
+              title={t('ccAgent.sidebar.filterStatus.archived')}
+              // 颜色不单设——继承触发器文字色(淡灰、hover / 菜单展开随按钮一起加深)。
+              className="inline-flex shrink-0 items-center gap-0.5"
+            >
+              <Archive size={13} strokeWidth={2} />
+              <span className="text-xs leading-none">
+                {t('ccAgent.sidebar.filterStatus.archived')}
+              </span>
+            </span>
+          )}
           <ChevronDown size={13} strokeWidth={2} className="shrink-0" />
           {remoteSessionBootstrapLoading && (
             <span
