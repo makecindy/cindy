@@ -1067,9 +1067,15 @@ export function applyDesktopStartupConfigForPhase(options) {
   return applyDesktopDevStartupConfig(options);
 }
 
+export function clearInheritedIsolatedAuthAuthorization(env = process.env) {
+  delete env.XDT_ISOLATED_AUTH;
+  delete env.XDT_ALLOW_DEV_OAUTH_WRITE;
+  delete env.XDT_ISOLATED_AUTH_PROOF;
+}
+
 async function main() {
-  // Proofs are minted below only for this invocation's accepted --isolated-auth request.
-  delete process.env.XDT_ISOLATED_AUTH_PROOF;
+  // These capabilities are granted below only for this invocation's accepted --isolated-auth.
+  clearInheritedIsolatedAuthAuthorization();
   let argv = normalizeDesktopRestartArgv(process.argv.slice(2), process.env);
   const sharedArgvConflict = desktopRestartArgvConflictMessage(argv, process.env);
   if (sharedArgvConflict) throw new Error(sharedArgvConflict);

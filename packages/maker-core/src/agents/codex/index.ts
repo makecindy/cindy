@@ -169,7 +169,7 @@ import {
   CODEX_HISTORY_OVERSIZED_REASON,
   isOversizedLiveTailStats,
   measureRolloutLiveTailStats,
-  sanitizeCodexForkRolloutFile,
+  sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
@@ -13068,19 +13068,6 @@ export class CodexAgent extends BaseAgent {
     return bestPath;
   }
 
-  private async createSafeForkRolloutCopy(threadId: string, preferredPath?: string): Promise<string> {
-    const sourcePath = await this.findRolloutPath(threadId, preferredPath);
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-fork-'));
-    try {
-      const copyPath = path.join(tempDir, path.basename(sourcePath));
-      await sanitizeCodexForkRolloutFile(sourcePath, copyPath);
-      return copyPath;
-    } catch (error) {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
-    }
-  }
-
   private async tryForkSdkSessionAtNativeTurn(
     opts: ForkSdkSessionOptions,
     lastTurnId: string,
@@ -13181,7 +13168,6 @@ export class CodexAgent extends BaseAgent {
       if (nativeForkResult) return nativeForkResult;
     }
 
-    let stripCopyPath: string | undefined;
     // 故障半径隔离(2026-08-08 实排):thread/fork 的响应体与源 thread 历史成正比、
     // 无上界 —— 47MB rollout 实测产出 31MiB 单行 NDJSON,超过 client 16MiB
     // maxLineBytes 守卫后整条连接被熔断,当时共享 utility host 上挂着的 5 个活跃
@@ -13189,6 +13175,7 @@ export class CodexAgent extends BaseAgent {
     // 唯一 key 的一次性 app-server:超限只让 fork 自己失败,不波及活跃任务。
     const forkHostKey = localForkHostKey();
     let forkHost: AppServerHost | undefined;
+    let forkHostRetired = false;
     const createdThreadIds = new Set<string>();
     const cleanupCreatedThreads = async (): Promise<void> => {
       if (!forkHost || createdThreadIds.size === 0) return;
@@ -13211,6 +13198,19 @@ export class CodexAgent extends BaseAgent {
       }
       createdThreadIds.clear();
     };
+    const retireForkHost = async (throwOnShutdownFailure: boolean): Promise<void> => {
+      if (!forkHost || forkHostRetired) return;
+      // retireHostKey removes the unique host from the registry before closing
+      // its transport. Even when close reports an error, a second registry
+      // lookup cannot make that same process safer to reuse.
+      forkHostRetired = true;
+      await this.retireHostKey(forkHostKey, 'Codex fork host is single-use', {
+        failIfActive: false,
+        logPrefix: 'codex fork host cleanup',
+        expectedHost: forkHost,
+        throwOnShutdownFailure,
+      });
+    };
     log.info('forkSdkSession ▶', {
       sourceSdkSessionId: opts.sourceSdkSessionId,
       upToMessageId: opts.upToMessageId,
@@ -13227,24 +13227,14 @@ export class CodexAgent extends BaseAgent {
       });
       forkHost = host;
       const initResp = await host.ensureStarted();
-      // createSafeForkRolloutCopy 扫描 this.codexHome;之前由共享 host 启动时填充,
-      // 隔离后 fork 可能是本进程第一台 host,须自己补上。
+      // Child rollout discovery scans this.codexHome. The fork host may be
+      // the first host started by this process, so hydrate it here.
       if (initResp.codexHome) this.codexHome = initResp.codexHome;
       // Imported Codex threads may still live under another CODEX_HOME. Resume
       // already asks the desktop host to link/adopt their state and rollout;
       // fork must cross the same preparation boundary before thread/fork or the
       // fork app-server cannot resolve a freshly imported thread.
-      const preparedRolloutResult = await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
-      const preparedRolloutPath = typeof preparedRolloutResult === 'string'
-        ? preparedRolloutResult
-        : undefined;
-      // 选项名沿用历史语义;安全副本同时会丢弃会让 Responses fork/retry 失败的坏历史 payload。
-      if (opts.stripEncryptedReasoning) {
-        stripCopyPath = await this.createSafeForkRolloutCopy(
-          opts.sourceSdkSessionId,
-          preparedRolloutPath,
-        );
-      }
+      await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
       const params: ThreadForkParams = {
         threadId: opts.sourceSdkSessionId,
         persistExtendedHistory: true,
@@ -13252,7 +13242,6 @@ export class CodexAgent extends BaseAgent {
         // 回传只会撑爆单行上限。老 daemon 不认识该字段则保持 legacy 行为 —— 此时
         // 一次性 host 的隔离仍兜住故障半径。
         ...(supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
-        ...(stripCopyPath ? { path: stripCopyPath } : {}),
         ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
       };
       const resp = await host.request<ThreadForkResponse>(Method.ThreadFork, params);
@@ -13273,6 +13262,29 @@ export class CodexAgent extends BaseAgent {
         createdThreadIds.add(rollbackThreadId);
         newSdkSessionId = rollbackThreadId;
       }
+      if (opts.stripEncryptedReasoning) {
+        // Codex 0.153 resolves thread/fork.path only inside the active
+        // CODEX_HOME sessions namespace. A sanitized copy in os.tmpdir() is
+        // invisible; a second sessions copy instead trips the stale-path
+        // guard while the source thread is indexed. Fork the canonical source
+        // first, unload/flush only the new child, then retire the one-shot host
+        // before inspecting its rollout. Codex 0.153 persists thread/fork as a
+        // lazy history_base reference whose byte boundary is consumed by the
+        // next resume. The sanitizer preserves lazy children byte-for-byte and
+        // only rewrites fully materialized/legacy rollouts.
+        await cleanupCreatedThreads();
+        await retireForkHost(true);
+        const childRolloutPath = await this.findRolloutPath(newSdkSessionId);
+        const sanitizeStats = await sanitizeCodexForkRolloutFileInPlace(childRolloutPath, {
+          resolveHistoryBaseRollout: (threadId) => this.findRolloutPath(threadId),
+        });
+        log.info('fork child rollout sanitized', {
+          newSdkSessionId,
+          unsafeLines: sanitizeStats.unsafeLines,
+          rewrittenLines: sanitizeStats.rewrittenLines,
+          strippedBytes: sanitizeStats.strippedBytes,
+        });
+      }
       log.info('forkSdkSession ◀', { newSdkSessionId, tailTurnsToDrop });
       return { newSdkSessionId, uuidMap: new Map() };
     } finally {
@@ -13281,22 +13293,10 @@ export class CodexAgent extends BaseAgent {
       } finally {
         // 一次性 host 用完即收,无论成败。key 唯一、无 session 绑定,
         // retire 不会波及任何共享 host 或活跃会话。
-        if (forkHost) {
-          await this.retireHostKey(forkHostKey, 'Codex fork host is single-use', {
-            failIfActive: false,
-            logPrefix: 'codex fork host cleanup',
-            expectedHost: forkHost,
-          }).catch((err) => {
+        if (forkHost && !forkHostRetired) {
+          await retireForkHost(false).catch((err) => {
             log.warn('fork host retire failed', {
               forkHostKey,
-              err: err instanceof Error ? err.message : String(err),
-            });
-          });
-        }
-        if (stripCopyPath) {
-          await fs.rm(path.dirname(stripCopyPath), { recursive: true, force: true }).catch((err) => {
-            log.warn('strip encrypted rollout temp cleanup failed', {
-              path: stripCopyPath,
               err: err instanceof Error ? err.message : String(err),
             });
           });

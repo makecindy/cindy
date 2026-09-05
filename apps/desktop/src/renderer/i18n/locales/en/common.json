@@ -2,6 +2,13 @@
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
     "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
+    "MODEL_CONTEXT_USAGE_UNKNOWN": "Model not switched: Cindy can’t verify how much context this task uses. Keep the current model or start a new task.",
+    "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the current model’s context window. Check the window setting for a custom model. If it can’t be changed, keep the current model or start a new task.",
+    "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the target model’s context window. Check the window setting for a custom model. If it can’t be changed, choose another model or start a new task.",
+    "MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED": "Model not switched: this remote task can’t safely prepare its context for the smaller window. Keep the current model, or choose the target model in a new task.",
+    "MODEL_WINDOW_PROTECTION_UNAVAILABLE": "Model not switched: context protection is temporarily unavailable. Keep the current model or try again in a new task.",
+    "MODEL_SWITCH_TASK_RUNNING": "Model not switched: this task is still running. Wait for the current response to finish, then try again.",
+    "MODEL_WINDOW_PREPARATION_IN_PROGRESS": "Model not switched: Cindy is already preparing this task’s context. Wait for it to finish, then try again.",
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
@@ -7465,6 +7472,11 @@
       },
       "remoteSwitchFailed": "Remote setting change failed; not applied",
       "switchFailed": "Setting change failed; not applied",
+      "modelWindowUnknown": {
+        "custom": "Model not switched: the target model “{{model}}” has no context-window information. Add it under {{provider}} model settings, then retry.",
+        "builtin": "Model not switched: Cindy can’t verify the context window for “{{model}}”. Refresh the {{provider}} model list; if that still fails, reconnect the provider.",
+        "openSettings": "Open Settings"
+      },
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",

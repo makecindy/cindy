@@ -128,7 +128,7 @@ import {
   buildSessionNotifyPayload,
   type MobileSessionEventKind,
 } from './mobileNotify';
-import { createSubscriptionReplayScheduler } from './subscriptionReplayScheduler';
+import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
 import { getSessionNotificationBody } from '../sessionNotificationCopy';
 import { getClientEndpoint } from '../clientEndpointsService';
 import {
@@ -268,6 +268,7 @@ export function applyControllerPresenceListSnapshot(
     onPeerBecameOnline: (deviceId, platform) => {
       if (isMobilePlatform(platform)) handleMobilePeerOnline(deviceId);
       else handleDesktopPeerOnline(deviceId);
+      replayActiveSubscriptions('directory-online', deviceId);
     },
   });
 }
@@ -1259,41 +1260,15 @@ function replayActiveSubscriptions(reason: string, deviceId?: string): void {
   subscriptionReplayScheduler.replay(reason, deviceId);
 }
 
-/**
- * 订阅重放的永久失败判据:这些码代表「重试同一动作不可能改变结果」的终态
- * (协议不符 / 对端明确拒绝 / 授权被收回 / 本机 fail-closed 门),各自有独立的
- * 恢复事件,不归退避循环管。DeviceLinkError.code 优先,兜底解析 message 里的
- * [CODE] 编码(本机门禁抛的是普通 Error)。
- */
-const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
-  'VERSION_MISMATCH',
-  'REMOTE_DISABLED',
-  'ACCESS_REVOKED',
-  'CHANNEL_NOT_ALLOWED',
-  'DEVICE_LINK_CONTROL_DISABLED',
-  'DEVICE_LINK_STANDBY',
-  // DEVICE_OFFLINE 刻意不在列(MOBILE-PARITY-CHECKLIST §2 归瞬态):presence
-  // 滞后窗口内 subscribe 可能先吃到 DEVICE_OFFLINE,归永久会在「presence 仍
-  // available」期间放弃收敛;归瞬态则退避循环续跑,presence 补到 offline 时由
-  // 重试前置门(presenceAvailableByDevice !== true)自然终止,设备回归再由
-  // presence 翻转重放接棒——两个终止/恢复信号都已存在,无泄漏风险(review P2)。
-]);
-
-function isPermanentSubscriptionReplayError(err: unknown): boolean {
-  if (err instanceof DeviceLinkError) return PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(err.code);
-  const message = err instanceof Error ? err.message : String(err);
-  const code = /\[([A-Z_]+)\]/.exec(message)?.[1];
-  return code !== undefined && PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(code);
-}
-
 const subscriptionReplayScheduler = createSubscriptionReplayScheduler({
   snapshotSubscriptions,
   remoteSubscribe,
   isLinkTornDown: () => linkTornDown,
   isRelayOnline: () => client?.getStatus() === 'online',
   isDeviceUnresponsive: (deviceId) => responsivenessTracker?.isUnresponsive(deviceId) ?? false,
-  isPresenceAvailable: (deviceId) => presenceAvailableByDevice.get(deviceId) === true,
-  isPermanentError: isPermanentSubscriptionReplayError,
+  getPresenceAvailability: (deviceId) => presenceAvailableByDevice.get(deviceId)
+    ?? (presenceOnlineByDevice.get(deviceId) === false ? false : undefined),
+  isPermanentError: (error, deviceId) => isPermanentSubscriptionReplayError(error, presenceAvailableByDevice.get(deviceId)),
   log: {
     debug: (message) => log.debug(message),
     warn: (message) => log.warn(message),

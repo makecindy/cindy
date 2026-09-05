@@ -37,10 +37,12 @@ import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
 import {
+  copyCodexAuthSnapshot,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
   resolveWindowsAclPrincipal,
 } from './codex-auth-link.js';
+import { getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
 
 export { resolveWindowsAclPrincipal } from './codex-auth-link.js';
 import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
@@ -150,9 +152,9 @@ export function getCodexHome(): string {
   return path.join(app.getPath('userData'), 'codex-home');
 }
 
-/** 本机 codex CLI 默认的 auth.json 路径 (~/.codex/auth.json), 用于 reconcile 比对凭证。 */
+/** Dev 优先同区域 Release、再回退本机 Codex；packaged 保持本机 Codex 来源。 */
 function getSystemCodexAuthPath(): string {
-  return path.join(os.homedir(), '.codex', 'auth.json');
+  return getPreferredSharedCodexAuthPath(getActiveAppSession().dataOwnerId);
 }
 
 // 失效标记 (auth-invalidated-system.json) 的读写与决策拆在 codex-auth-invalidation.ts
@@ -306,7 +308,7 @@ export function isCodexAuthInheritedFromSystemCli(): boolean {
     const codexHome = getCodexHome();
     const localAuth = path.join(codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(codexHome, localAuth)) return false;
-    const systemAuth = getSystemCodexAuthPath();
+    const systemAuth = path.join(os.homedir(), '.codex', 'auth.json');
     if (!existsSync(localAuth) || !existsSync(systemAuth)) return false;
     return pathsReferToSameFileSync(localAuth, systemAuth);
   } catch {
@@ -980,6 +982,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     return !app.isPackaged && !this.trustedDevOAuthWriteOverride();
   }
 
+  /**
+   * An isolated Dev may consume the Release login, but its Codex child must not
+   * receive the Release auth inode: Codex can refresh auth.json in place.
+   */
+  private shouldSnapshotReleaseCodexAuth(systemAuth: string, myAuth: string): boolean {
+    if (!this.devOAuthWritesBlocked()) return false;
+    if (path.resolve(systemAuth) !== path.resolve(getReleaseCodexAuthPath())) return false;
+    return path.resolve(systemAuth) !== path.resolve(myAuth);
+  }
+
   private warnDevOAuthWriteOverride(action: string): void {
     if (!this.trustedDevOAuthWriteOverride()) return;
     if (this.devOAuthWriteOverrideWarned) return;
@@ -1093,6 +1105,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private claimDetectedCodexOAuthBinding(sessionAtStart: ActiveAppSession): void {
     if (this.pendingLogin || this.loginCancellationOpen) return;
+    const authPath = path.join(this.codexHome, 'auth.json');
+    if (
+      this.devOAuthWritesBlocked() &&
+      path.resolve(getSystemCodexAuthPath()) === path.resolve(authPath)
+    ) {
+      // Shared Dev may consume an existing Release binding, but must never
+      // create or repair that binding on the Release profile.
+      return;
+    }
     const session = getActiveAppSession();
     if (isAppSessionBoundaryPending()) return;
     if (
@@ -1102,7 +1123,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return;
     }
     if (this.oauthInvalidatedReason) return;
-    const authPath = path.join(this.codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) return;
     const recoveryMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
     const recoveryOwnerId =
@@ -1219,12 +1239,28 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const myAuth = path.join(this.codexHome, 'auth.json');
 
     if (!existsSync(systemAuth)) return;
+    if (path.resolve(systemAuth) === path.resolve(myAuth)) {
+      this.lastKnownCodexCredentialScope = 'system-shared';
+      return;
+    }
 
     const topology = await inspectCodexAuthLink(systemAuth, myAuth);
     if (topology.healthy && topology.linkType === 'hardlink') {
       markNativeProviderAuthSharedSystemCredential('openai');
     }
     if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
+      if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
+        const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+        if (snapshot.kind === 'copied') {
+          markNativeProviderAuthSharedSystemCredential('openai');
+          log.info('codex auth.json detached into a read-only Release snapshot');
+        } else {
+          credPathLog.warn('failed to detach Release auth snapshot; shared link left intact', {
+            error: snapshot.error?.message,
+          });
+          throw snapshot.error ?? new Error('Failed to detach Release auth snapshot');
+        }
+      }
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
     }
@@ -1282,6 +1318,23 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 建共享链接前幂等确保 codexHome 目录存在: 首启时 assets 预热可能尚未建好目录, ENOENT
     // 会让 relink 走 link-unsupported 回退, splash 后首次 auth 查询短暂误报未登录。
     await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
+    if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
+      const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+      if (hasLocalEntry && !topology.healthy) {
+        this.lastOrphanRepair = snapshot.kind === 'copied' ? 'relinked' : 'failed';
+      }
+      if (snapshot.kind === 'copied') {
+        markNativeProviderAuthSharedSystemCredential('openai');
+        this.lastKnownCodexCredentialScope = 'system-shared';
+        log.info('codex auth.json copied from Release login for read-only Dev use');
+      } else {
+        credPathLog.warn('Release auth snapshot failed, auth.json left intact', {
+          error: snapshot.error?.message,
+        });
+        throw snapshot.error ?? new Error('Failed to copy Release auth snapshot');
+      }
+      return;
+    }
     const { kind, error, linkType } = await relinkSharedCodexAuth(systemAuth, myAuth);
     if (hasLocalEntry && !topology.healthy) {
       this.lastOrphanRepair = kind === 'linked' ? 'relinked' : 'failed';
@@ -1289,11 +1342,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     switch (kind) {
       case 'linked':
         this.lastKnownCodexCredentialScope = 'system-shared';
-        log.info('codex auth.json linked with ~/.codex (shared)', { linkType });
+        log.info('codex auth.json linked with shared OpenAI login', { linkType });
         break;
       case 'link-unsupported':
         // 共享链接不支持时 myAuth 一字未动。
-        credPathLog.warn('shared link to ~/.codex failed, auth.json left intact', {
+        credPathLog.warn('shared OpenAI auth link failed, auth.json left intact', {
           error: error?.message,
         });
         break;
@@ -1303,7 +1356,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         break;
       case 'recovered':
         // 替换中途 myAuth 一度丢失但已从 ~/.codex 重建 —— 用户无感, 仅记一笔。
-        credPathLog.warn('reconcile swap failed but auth.json recovered from ~/.codex', {
+        credPathLog.warn('reconcile swap failed but auth.json recovered from shared source', {
           error: error?.message,
         });
         break;
@@ -2086,6 +2139,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     invalidationMarkerCommitted?: boolean;
   }): Promise<void> {
     const explicitRequested = !opts?.preserveInvalidatedReason;
+    if (explicitRequested && this.devOAuthWritesBlocked()) {
+      log.info('dev read-only Codex disconnect blocked; shared login remains connected');
+      return Promise.resolve();
+    }
     if (this.logoutOperation) {
       // 登录可能在第一次 logout 之后排队、等待同一个 barrier。后来的 logout 仍代表更新的
       // 用户意图，必须把这份 queued login 标成 cancelled，不能只复用旧 Promise 后让它启动。

@@ -2,6 +2,13 @@
   "ipcError": {
     "INVALID_PARAMS": "引數無效，請檢查後重試。",
     "PRECONDITION_FAILED": "目前狀態下無法執行此操作，請稍後再試。",
+    "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切換：無法確認目前任務已使用的上下文。請保留目前模型，或新增任務後再選擇",
+    "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未切換：無法確認目前模型的上下文視窗。請檢查自訂模型的視窗設定；若無法修改，請保留目前模型或新增任務",
+    "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "模型未切換：無法確認目標模型的上下文視窗。請檢查自訂模型的視窗設定；若無法修改，請選擇其他模型或新增任務",
+    "MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED": "模型未切換：遠端任務無法為較小的上下文視窗安全整理上下文。請保留目前模型，或新增任務後選擇目標模型",
+    "MODEL_WINDOW_PROTECTION_UNAVAILABLE": "模型未切換：上下文保護功能暫時無法使用。請保留目前模型，或新增任務後再選擇",
+    "MODEL_SWITCH_TASK_RUNNING": "模型未切換：目前任務仍在執行。請等待本次回覆結束後再試",
+    "MODEL_WINDOW_PREPARATION_IN_PROGRESS": "模型未切換：正在整理目前任務的上下文。請等待完成後再試",
     "SESSION_RUNNING": "當前任務正在執行，請稍後再試。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "當前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自定義模型，請在供應商設定中開啟“支援圖片輸入”，然後新建 Pi 任務。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任務中執行，本次來源切換未生效（本任務仍使用原來源）。等它結束後再試。",
@@ -7463,6 +7470,11 @@
       },
       "remoteSwitchFailed": "遠端設定切換失敗，未生效",
       "switchFailed": "設定切換失敗，未生效",
+      "modelWindowUnknown": {
+        "custom": "模型未切換：目標模型「{{model}}」缺少上下文視窗資訊。請在「{{provider}}」的模型設定中補充後重試。",
+        "builtin": "模型未切換：無法確認目標模型「{{model}}」的上下文視窗。請重新整理「{{provider}}」的模型列表；若仍失敗，請重新連接該供應商。",
+        "openSettings": "前往設定"
+      },
       "permissionSwitchFailed": "權限模式切換失敗，已保留原設定",
       "fullAccessConfirmation": {
         "title": "開啟 Full access？",

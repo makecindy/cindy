@@ -16,6 +16,11 @@ export interface UseContextSheetDragInput {
 
 const isStoreClient = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
+function hasDragMoved(start: number, current: number): boolean {
+  'worklet';
+  return Math.abs(current - start) >= 3;
+}
+
 /** Pointer updates and snap animations stay on UI; JS only receives the result. */
 export function useContextSheetDrag(input: UseContextSheetDragInput) {
   const latest = useRef(input);
@@ -90,7 +95,7 @@ export function useContextSheetDrag(input: UseContextSheetDragInput) {
       active.value = false;
       const current = geometry.value;
       const id = gestureId.value;
-      const target = successful
+      const target = successful && hasDragMoved(startHeight.value, height.value)
         ? settleContextSheetDrag({ draggedHeight: height.value, heights: current.heights })
         : settledSnap.value;
       if (target === 'dismiss') {
@@ -110,12 +115,18 @@ export function useContextSheetDrag(input: UseContextSheetDragInput) {
   // Preserve Expo Go's adapter fallback. Installed apps attach only the UI gesture.
   const panHandlers = useMemo(() => {
     if (!isStoreClient) return {};
-    let initial = 0;
-    const settle = () => {
+    const settle = (successful: boolean) => {
       active.value = false;
+      // A tap or cancellation resumes the release destination, even while its
+      // animation or React acknowledgement is still pending.
+      if (!successful || !hasDragMoved(startHeight.value, height.value)) {
+        height.value = withTiming(latest.current.heights[settledSnap.value], { duration: reduceMotion === false ? motionDuration.fast : 0 });
+        return;
+      }
       const target = settleContextSheetDrag({ draggedHeight: height.value, heights: latest.current.heights });
       if (target === 'dismiss') notify(target, gestureId.value);
       else {
+        settledSnap.value = target;
         height.value = withTiming(latest.current.heights[target], { duration: reduceMotion === false ? motionDuration.fast : 0 });
         notify(target, gestureId.value);
       }
@@ -125,20 +136,17 @@ export function useContextSheetDrag(input: UseContextSheetDragInput) {
       onPanResponderGrant: () => {
         cancelAnimation(height);
         gestureId.value += 1;
-        initial = height.value;
+        startHeight.value = height.value;
         active.value = true;
       },
       onPanResponderMove: (_event, event) => {
-        height.value = applyContextSheetDrag({ heights: latest.current.heights, startHeight: initial, translationY: event.dy });
+        height.value = applyContextSheetDrag({ heights: latest.current.heights, startHeight: startHeight.value, translationY: event.dy });
       },
-      onPanResponderRelease: settle,
-      onPanResponderTerminate: () => {
-        active.value = false;
-        height.value = latest.current.heights[latest.current.snap];
-      },
+      onPanResponderRelease: () => settle(true),
+      onPanResponderTerminate: () => settle(false),
       onPanResponderTerminationRequest: () => false,
     }).panHandlers;
-  }, [active, gestureId, height, notify, reduceMotion]);
+  }, [active, gestureId, height, notify, reduceMotion, settledSnap, startHeight]);
 
   const animatedStyle = useAnimatedStyle(() => ({ height: height.value }));
   return { animatedStyle, gesture, panHandlers };

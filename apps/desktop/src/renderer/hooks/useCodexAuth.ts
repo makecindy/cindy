@@ -838,6 +838,10 @@ export function useCodexAuth(options?: {
   }, [transition, verifyRecoveredState]);
 
   const logout = useCallback(async () => {
+    // Dev read-only means the shared OpenAI login remains usable but cannot be
+    // disconnected from this process. Avoid sending a no-op logout to Main and
+    // then incorrectly projecting the local UI as unauthenticated.
+    if (machineRef.current.ui.oauthWritesBlocked) return;
     invalidatePendingCodexLogin();
     try {
       await window.electronAPI.maker.auth.logout(AGENT_KIND);

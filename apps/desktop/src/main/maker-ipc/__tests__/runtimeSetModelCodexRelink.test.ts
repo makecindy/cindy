@@ -191,4 +191,43 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
     expect(wakeSessionInputQueue).toHaveBeenCalledWith(sessionId);
     expect(getSessionProvider(sessionId)).toBe('openai');
   });
+
+  it('keeps the source provider route when rebuilding the persisted thread fails', async () => {
+    const sessionId = rememberSession('runtime-set-model-relink-failed');
+    setSessionProvider(sessionId, 'openai');
+    const closeSession = vi.fn(async () => {});
+    const relinkCodexThread = vi.fn(async () => {
+      throw new Error('fork child sanitization failed');
+    });
+    const wakeSessionInputQueue = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.6-sol',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(
+      applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'codex/gpt-5.6-luna',
+        providerId: 'xd',
+        requiresCodexThreadRelink: true,
+        relinkCodexThread,
+        wakeSessionInputQueue,
+      }),
+    ).rejects.toThrow('fork child sanitization failed');
+
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(relinkCodexThread).toHaveBeenCalledOnce();
+    expect(getSessionProvider(sessionId)).toBe('openai');
+    expect(wakeSessionInputQueue).not.toHaveBeenCalled();
+  });
 });

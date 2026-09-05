@@ -5,10 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const normalizeSourceText = (source: string): string => source.replace(/\r\n?/g, '\n');
 const chatInputSource = normalizeSourceText(
-  readFileSync(
-    resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
-    'utf8',
-  ),
+  readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'), 'utf8'),
 );
 
 describe('ChatInput model source switching wiring', () => {
@@ -21,21 +18,24 @@ describe('ChatInput model source switching wiring', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);
     const guard = chatInputSource.slice(start, end);
-    expect(guard).toContain(
-      'autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT',
-    );
+    expect(guard).toContain('autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT');
     expect(guard).not.toContain('compactionGetState');
   });
 
   it('guards same-model provider route changes with the target provider window', () => {
-    const guardStart = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const guardStart = chatInputSource.indexOf(
+      'const confirmModelSwitchContextGuard = useCallback(',
+    );
     const guardEnd = chatInputSource.indexOf('// session-agent-switch', guardStart);
     const guard = chatInputSource.slice(guardStart, guardEnd);
     expect(guard).toContain('resolveProviderModelContextWindow({');
     expect(guard).toContain('providerId: targetRouteProviderId');
 
     const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
-    const providerEnd = chatInputSource.indexOf('const handleProviderChange = useCallback(', providerStart);
+    const providerEnd = chatInputSource.indexOf(
+      'const handleProviderChange = useCallback(',
+      providerStart,
+    );
     const providerChange = chatInputSource.slice(providerStart, providerEnd);
     expect(providerChange).toContain(
       '(reconciledModelId !== activeModel || newProviderId !== effectiveSourceId)',
@@ -59,9 +59,7 @@ describe('ChatInput model source switching wiring', () => {
     expect(modelChange).toMatch(
       /setModelWithFinalWindowConfirmation\(\s*newModelId,\s*effectiveSourceId,/,
     );
-    expect(modelChange).toMatch(
-      /maker\.setModel\(\s*sessionId,\s*newModelId,\s*undefined,/,
-    );
+    expect(modelChange).toMatch(/maker\.setModel\(\s*sessionId,\s*newModelId,\s*undefined,/);
   });
 
   it('keeps exact-window confirmation local and removes it from device-link calls', () => {
@@ -89,7 +87,9 @@ describe('ChatInput model source switching wiring', () => {
       const remoteRoute = route.slice(remoteSet, localSet);
       expect(remoteRoute).not.toContain('setModelWithFinalWindowConfirmation');
       expect(remoteRoute).not.toContain('confirmedContextWindow');
-      expect(route.slice(localSet)).toContain('confirmedFinalWindow ?? confirmedGuardContextWindow');
+      expect(route.slice(localSet)).toContain(
+        'confirmedFinalWindow ?? confirmedGuardContextWindow',
+      );
     }
     expect(chatInputSource).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
   });
@@ -105,11 +105,13 @@ describe('ChatInput model source switching wiring', () => {
     const providerChange = chatInputSource.slice(providerStart, providerEnd);
 
     for (const route of [modelChange, providerChange]) {
-      expect(route).toContain("if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;");
+      expect(route).toContain(
+        "if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;",
+      );
       expect(route).toMatch(
         /const confirmedContextWindow =\s*confirmedFinalWindow \?\? confirmedGuardContextWindow;\s*return window\.electronAPI\.maker\.setModel/,
       );
-      expect(route.indexOf("if (!proceed ||")).toBeLessThan(
+      expect(route.indexOf('if (!proceed ||')).toBeLessThan(
         route.indexOf('window.electronAPI.maker.setModel('),
       );
     }
@@ -160,8 +162,8 @@ describe('ChatInput model source switching wiring', () => {
     expect(guard.slice(0, sameOrExpand)).toContain(
       'requireDestructiveConfirmation && (!hasVerifiedTargetWindow || !hasVerifiedUsage)',
     );
-    expect(guard.slice(sameOrExpand, localVerdictShortcut)).toContain(
-      '!requireDestructiveConfirmation &&\n        (!trustedContextTokens || trustedContextTokens <= 0)',
+    expect(guard.slice(sameOrExpand, localVerdictShortcut)).toMatch(
+      /!requireDestructiveConfirmation\s*&&\s*\(!trustedContextTokens \|\| trustedContextTokens <= 0\)/,
     );
     expect(guard.slice(localVerdictShortcut - 40, confirmation)).toContain(
       '!requireDestructiveConfirmation && verdict.level',
@@ -184,7 +186,7 @@ describe('ChatInput model source switching wiring', () => {
       'if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;',
     );
     const zeroUsagePass = guard.indexOf(
-      '!requireDestructiveConfirmation &&\n        (!trustedContextTokens || trustedContextTokens <= 0)',
+      'if (!requireDestructiveConfirmation && (!trustedContextTokens || trustedContextTokens <= 0))',
     );
     const remoteBlock = guard.indexOf("verdict.level === 'danger' || verdict.level === 'overflow'");
     const warningPath = guard.indexOf("verdict.level === 'warn'");
@@ -207,9 +209,7 @@ describe('ChatInput model source switching wiring', () => {
     const shrinkGate = guard.slice(remoteGuard, remoteBlock);
     expect(shrinkGate).toContain('agentStatus.isRunning');
     expect(shrinkGate).toContain('targetContextWindow >= currentContextWindow');
-    expect(shrinkGate).toContain(
-      '!requireDestructiveConfirmation &&\n        hasVerifiedWindows',
-    );
+    expect(shrinkGate).toMatch(/!requireDestructiveConfirmation\s*&&\s*hasVerifiedWindows/);
     expect(shrinkGate).toContain(
       'requireDestructiveConfirmation && (!hasVerifiedTargetWindow || !hasVerifiedUsage)',
     );
@@ -248,6 +248,17 @@ describe('ChatInput model source switching wiring', () => {
 
     expect(selectorBlock).toContain('sourceDisconnected={selectedSourceDisconnected}');
     expect(selectorBlock).toContain('reselectEmitsChange={selectedSourceDisconnected}');
+  });
+
+  it('routes unknown target-window failures through the provider-aware settings action', () => {
+    expect(chatInputSource).toContain('buildModelWindowRecoveryToast({');
+    expect(chatInputSource).toContain('onClick: () => navigate(recovery.settingsPath)');
+    expect(chatInputSource).toContain(
+      'showModelSwitchFailure(err, effectiveSourceId, newModelId);',
+    );
+    expect(chatInputSource).toContain(
+      'showModelSwitchFailure(err, newProviderId, reconciledModelId ?? activeModel);',
+    );
   });
 
   /**
@@ -318,9 +329,7 @@ describe('ChatInput model source switching wiring', () => {
     expect(chatInputSource).not.toContain(
       'inSessionEngineLocked && agentKind ? [agentKind] : unifiedAgents',
     );
-    expect(chatInputSource).not.toContain(
-      '(!inSessionEngineLocked || agentKind !== null)',
-    );
+    expect(chatInputSource).not.toContain('(!inSessionEngineLocked || agentKind !== null)');
   });
 
   /**
@@ -445,7 +454,10 @@ describe('ChatInput model source switching wiring', () => {
     // 1. 跨引擎路径:modelId 原样进切换事务,中间不套任何 id 加工函数。
     const filterStart = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
     expect(filterStart).toBeGreaterThan(-1);
-    const filterBlock = chatInputSource.slice(filterStart, chatInputSource.indexOf('}, [', filterStart));
+    const filterBlock = chatInputSource.slice(
+      filterStart,
+      chatInputSource.indexOf('}, [', filterStart),
+    );
     expect(filterBlock).toContain('performAgentSwitchRef.current(');
     expect(filterBlock).toContain('modelId,');
     expect(filterBlock).not.toContain('rowModelId');
@@ -455,7 +467,10 @@ describe('ChatInput model source switching wiring', () => {
     expect(draftStart).toBeGreaterThan(-1);
     const draftBlock = chatInputSource.slice(
       draftStart,
-      chatInputSource.indexOf('[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]', draftStart),
+      chatInputSource.indexOf(
+        '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+        draftStart,
+      ),
     );
     expect(draftBlock).toContain('modelId: selection.modelId,');
     // rowModelId 只在类型声明与注释里出现,**不得**出现在任何写入实参上。

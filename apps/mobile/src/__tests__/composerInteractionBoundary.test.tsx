@@ -12,6 +12,7 @@ const runtime = vi.hoisted(() => ({
   reduceMotion: false,
   durations: [] as number[],
   deferAnimations: false,
+  animationHeight: undefined as number | undefined,
 }));
 vi.mock('react-native', () => ({ PanResponder: { create: vi.fn(() => ({ panHandlers: {} })) } }));
 vi.mock('expo-constants', () => ({
@@ -56,7 +57,7 @@ vi.mock('react-native-reanimated', async () => {
     withTiming: (value: number, config: { duration: number }, done?: (finished: boolean) => void) => {
       runtime.durations.push(config.duration);
       if (!runtime.deferAnimations) done?.(true);
-      return value;
+      return runtime.animationHeight ?? value;
     },
     cancelAnimation: vi.fn(),
     Easing: { bezier: vi.fn() },
@@ -76,6 +77,7 @@ beforeEach(() => {
   runtime.durations = [];
   runtime.reduceMotion = false;
   runtime.deferAnimations = false;
+  runtime.animationHeight = undefined;
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
@@ -257,6 +259,23 @@ function mountSheet() {
 }
 
 describe('sheet UI gesture lifecycle', () => {
+  it.each([0, 2])('retains the external snap when a drag returns to %ipx displacement', (distance) => {
+    const harness = mountSheet();
+    runtime.animationHeight = 450;
+    harness.input.snap = 'full';
+    harness.rerender();
+    runtime.animationHeight = undefined;
+    const gesture = gestureOf(harness.result.gesture);
+    gesture.begin({ translationY: 0 });
+    gesture.update({ translationY: -20 });
+    gesture.update({ translationY: distance });
+    gesture.finalize({ translationY: distance }, true);
+    flushJS();
+    expect(styleOf(harness.result.animatedStyle).height).toBe(700);
+    expect(harness.input.onSnapChange).toHaveBeenCalledExactlyOnceWith('full');
+    expect(harness.input.onDismiss).not.toHaveBeenCalled();
+  });
+
   it('moves without JS/React work and reports the full snap after release', () => {
     const harness = mountSheet();
     const gesture = gestureOf(harness.result.gesture);

@@ -71,6 +71,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { buildModelWindowRecoveryToast } from './modelWindowErrorToast';
 import { Tip } from '@/components/ui/tooltip';
 import type { AttachedFile, MentionedResource, ImageAnnotationStroke } from '@/lib/fileTypes';
 import {
@@ -2920,52 +2921,49 @@ export function ChatInput({
   );
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
   // Host 入口或未生效项保留展示但置灰(entry 级 disabled + 原因)。
-  const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(
-    () => {
-      // device-link 会话的插件运行在被控端；控制端清单既不代表远端已安装
-      // 状态，选择后也无法用本地 InstalledGhost 解析并插入命令。fail-closed：
-      // 仅 deviceLinkDeviceId === null（已确认本机）才展示；undefined（所有权
-      // 尚未解析）与 string（远程）一律隐藏，避免 bootstrap/重连窗口期把控制端
-      // 本地插件项泄漏进可能落为远程的会话。
-      if (deviceLinkDeviceId !== null) return [];
-      return pluginsForMenu.map((ghost) => {
-        const hasCommand = !!ghost.manifest.command;
-        const hostCapability = remoteHostId ? null : hostCapabilityForGhost(ghost);
-        const hasComposerEntry = hasCommand || hostCapability !== null;
-        const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
-        const entryKey = ghost.manifest.command ?? hostCapability ?? '';
-        return {
-          item: {
-            type: 'plugin-command' as const,
-            name: ghost.manifest.name,
-            relPath:
-              ghost.manifest.command ??
-              (hostCapability
-                ? `cindy://host-capability/${hostCapability}`
-                : `cindy://plugin/${ghost.manifest.id}`),
-            pluginId: ghost.manifest.id,
-            ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-            sourceLabel: entryKey,
-            _nameLower: `${ghost.manifest.name} ${entryKey}`.toLowerCase(),
-            _relPathLower: `${entryKey} ${ghost.manifest.id}`.toLowerCase(),
-          },
-          ...(selectable
-            ? {}
-            : {
-                disabled: true,
-                disabledReason: t(
-                  !pluginAvailableIds.has(ghost.manifest.id)
-                    ? 'extraDirs.pluginDisabled'
-                    : ghost.manifest.skill
-                      ? 'extraDirs.pluginAgentInvoked'
-                      : 'extraDirs.pluginNoCommand',
-                ),
-              }),
-        };
-      });
-    },
-    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, remoteHostId, t],
-  );
+  const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(() => {
+    // device-link 会话的插件运行在被控端；控制端清单既不代表远端已安装
+    // 状态，选择后也无法用本地 InstalledGhost 解析并插入命令。fail-closed：
+    // 仅 deviceLinkDeviceId === null（已确认本机）才展示；undefined（所有权
+    // 尚未解析）与 string（远程）一律隐藏，避免 bootstrap/重连窗口期把控制端
+    // 本地插件项泄漏进可能落为远程的会话。
+    if (deviceLinkDeviceId !== null) return [];
+    return pluginsForMenu.map((ghost) => {
+      const hasCommand = !!ghost.manifest.command;
+      const hostCapability = remoteHostId ? null : hostCapabilityForGhost(ghost);
+      const hasComposerEntry = hasCommand || hostCapability !== null;
+      const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
+      const entryKey = ghost.manifest.command ?? hostCapability ?? '';
+      return {
+        item: {
+          type: 'plugin-command' as const,
+          name: ghost.manifest.name,
+          relPath:
+            ghost.manifest.command ??
+            (hostCapability
+              ? `cindy://host-capability/${hostCapability}`
+              : `cindy://plugin/${ghost.manifest.id}`),
+          pluginId: ghost.manifest.id,
+          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+          sourceLabel: entryKey,
+          _nameLower: `${ghost.manifest.name} ${entryKey}`.toLowerCase(),
+          _relPathLower: `${entryKey} ${ghost.manifest.id}`.toLowerCase(),
+        },
+        ...(selectable
+          ? {}
+          : {
+              disabled: true,
+              disabledReason: t(
+                !pluginAvailableIds.has(ghost.manifest.id)
+                  ? 'extraDirs.pluginDisabled'
+                  : ghost.manifest.skill
+                    ? 'extraDirs.pluginAgentInvoked'
+                    : 'extraDirs.pluginNoCommand',
+              ),
+            }),
+      };
+    });
+  }, [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, remoteHostId, t]);
   useEffect(() => {
     setGhostCommandRoster(editor, ghostsForCommand);
   }, [editor, ghostsForCommand]);
@@ -3111,10 +3109,7 @@ export function ChatInput({
     voiceInput.draftText,
   ]);
 
-  const captureSendFocusForRestore = useComposerSendFocusRestore(
-    editor,
-    composerTypingLocked,
-  );
+  const captureSendFocusForRestore = useComposerSendFocusRestore(editor, composerTypingLocked);
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
     () => formatVoiceInputShortcut(voiceInputSettings.shortcut),
@@ -4391,7 +4386,8 @@ export function ChatInput({
     if (onExtraDirsChange) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
-      const totalDirs = countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
+      const totalDirs =
+        countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
       actions.push({
         id: 'add-extra-dir',
         label:
@@ -4420,14 +4416,15 @@ export function ChatInput({
     // 原生目录选择器，只能在已确认本机会话中提供，不能把本机绝对路径发给 SSH/
     // device-link 被控端。undefined 表示归属尚未解析，同样 fail closed。
     if (
-      onWritableDirsChange
-      && writableGrantScope
-      && !remoteHostId
-      && deviceLinkDeviceId === null
+      onWritableDirsChange &&
+      writableGrantScope &&
+      !remoteHostId &&
+      deviceLinkDeviceId === null
     ) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
-      const totalDirs = countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
+      const totalDirs =
+        countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
       actions.push({
         id: 'add-writable-dir',
         label:
@@ -6213,10 +6210,7 @@ export function ChatInput({
       }
       // SSH 不做远端 handoff。缩窗判据的任一事实未知时继续关闭。
       if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;
-      if (
-        !requireDestructiveConfirmation &&
-        (!trustedContextTokens || trustedContextTokens <= 0)
-      ) {
+      if (!requireDestructiveConfirmation && (!trustedContextTokens || trustedContextTokens <= 0)) {
         return true;
       }
       const contextTokensForAssessment = trustedContextTokens ?? 0;
@@ -6281,8 +6275,9 @@ export function ChatInput({
     async (
       modelId: string,
       providerId: string | null | undefined,
-      invoke: (confirmedContextWindow?: number) =>
-        Promise<{ deferred: boolean; superseded?: boolean } | undefined>,
+      invoke: (
+        confirmedContextWindow?: number,
+      ) => Promise<{ deferred: boolean; superseded?: boolean } | undefined>,
     ): Promise<{
       accepted: boolean;
       result?: { deferred: boolean; superseded?: boolean };
@@ -6311,7 +6306,8 @@ export function ChatInput({
       if (
         typeof (result as { contextWindowConfirmationRequired?: unknown } | null)
           ?.contextWindowConfirmationRequired === 'number'
-      ) return { accepted: false };
+      )
+        return { accepted: false };
       return { accepted: true, result };
     },
     [confirmModelSwitchContextGuard],
@@ -6878,6 +6874,30 @@ export function ChatInput({
     [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect],
   );
 
+  const showModelSwitchFailure = useCallback(
+    (error: unknown, providerId: string | null | undefined, modelId: string) => {
+      const recovery = buildModelWindowRecoveryToast({
+        error,
+        providerId,
+        modelId,
+        agent: currentModelAgentKind,
+        providers,
+        t,
+      });
+      if (recovery) {
+        toast.error(recovery.message, {
+          action: {
+            label: recovery.actionLabel,
+            onClick: () => navigate(recovery.settingsPath),
+          },
+        });
+        return;
+      }
+      toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'newChat.chatInput.switchFailed' })));
+    },
+    [currentModelAgentKind, navigate, providers, t],
+  );
+
   const performModelChange = useCallback(
     async (newModelId: string, expectedAgentSwitchRevision?: number) => {
       if (settingsLocked) return false;
@@ -7123,7 +7143,7 @@ export function ChatInput({
             });
         }
         log.warn('model change failed:', err);
-        toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.switchFailed' })));
+        showModelSwitchFailure(err, effectiveSourceId, newModelId);
         return false;
       }
     },
@@ -7153,6 +7173,7 @@ export function ChatInput({
       setModelWithFinalWindowConfirmation,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
+      showModelSwitchFailure,
       settingsLocked,
     ],
   );
@@ -7736,7 +7757,7 @@ export function ChatInput({
             });
         }
         log.warn('provider change failed:', err);
-        toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.switchFailed' })));
+        showModelSwitchFailure(err, newProviderId, reconciledModelId ?? activeModel);
         return false;
       }
     },
@@ -7766,6 +7787,7 @@ export function ChatInput({
       setModelWithFinalWindowConfirmation,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
+      showModelSwitchFailure,
       settingsLocked,
     ],
   );
@@ -8472,8 +8494,13 @@ export function ChatInput({
                 )}
                 {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
                 <ExtraDirsButton
-                  extraDirsCount={countUserExtraDirs(extraDirs ?? []) + countUserExtraDirs(writableDirs ?? [])}
-                  hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}
+                  extraDirsCount={
+                    countUserExtraDirs(extraDirs ?? []) + countUserExtraDirs(writableDirs ?? [])
+                  }
+                  hasReferenceDirs={
+                    !settingsLocked &&
+                    (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)
+                  }
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   autoFocusTarget={composerSuggestionFocusTarget}

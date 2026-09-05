@@ -9,7 +9,9 @@
 
 Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。restart
 命令默认使用固定的 `dev` 命名隔离沙箱（等价于自动附加 `--isolated=dev`），
-不再默认共享正式登录态：
+不再默认共享 Cindy 账号登录态与业务数据。OpenAI 模型登录态是刻意保留的例外：
+普通 Dev 可只读复用同区域 Release／本机 Codex 已有登录态，能够调用模型，但不能在
+Dev 内发起 OpenAI 登录或断开共享登录态：
 
 ```bash
 pnpm restart:desktop:remote --region=global
@@ -57,8 +59,9 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 - `--shared`：显式选择共享 userData（旧默认行为）：dev 与正式版共用当前区域的正式
   profile，数据库、登录态、会话完全共享。仅当用户明确要求「共享登录 / 复用现有数据」
   时使用；禁止与 `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。
-- `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、登录态、会话、定时
-  任务与设备身份都与正式版彻底隔离（首次需重新登录）；命名沙箱每个名字一条独立沙箱，
+- `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、Cindy 账号登录态、会话、定时
+  任务与设备身份都与正式版彻底隔离（首次需重新登录 Cindy 账号）；OpenAI 模型登录态按
+  上述只读例外复用。命名沙箱每个名字一条独立沙箱，
   名字限 `A-Za-z0-9_-`、≤32 字符。`@worktree` 是保留名，按当前 checkout 目录派生沙箱名。
   用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
   数据」时用；Agent 把「启动开发版」也落在这条路径。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**
