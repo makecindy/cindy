@@ -942,7 +942,6 @@ export function MessageRenderer({
   // 可能打断进行中的捏合/拖动手势(rule 7)。
   const closePayload = useCallback(() => setPayload(null), []);
   const markProgrammaticScroll = useCallback((animated: boolean) => {
-    dragStartOffsetYRef.current = null;
     const generation = programmaticScrollGenerationRef.current + 1;
     const settleMs = animated
       ? MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS
@@ -1019,6 +1018,8 @@ export function MessageRenderer({
     animated: boolean,
     intent: 'follow' | 'explicit' = 'follow',
   ) => {
+    // Only an explicit destination supersedes a pending final drag sample.
+    if (intent === 'explicit') dragStartOffsetYRef.current = null;
     getTailFollower().requestEnd(animated, intent === 'explicit');
   }, [getTailFollower]);
 
@@ -1028,6 +1029,7 @@ export function MessageRenderer({
   }, [markProgrammaticScroll]);
 
   const scrollToIndexProgrammatically = useCallback((index: number, viewPosition: number) => {
+    dragStartOffsetYRef.current = null;
     markProgrammaticScroll(true);
     void listRef.current?.scrollToIndex({ animated: true, index, viewPosition });
   }, [markProgrammaticScroll]);

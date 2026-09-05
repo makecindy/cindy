@@ -1,8 +1,10 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
+  nativeImage,
   safeStorage,
   shell,
   type WebContents,
@@ -5301,6 +5303,21 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
           defaultPath: opts.defaultPath,
         });
         return { canceled: picked.canceled, filePath: picked.filePath };
+      },
+      writeClipboardPng: async (pngBytes) => {
+        // 插件要的是外部应用能粘的图像位图,不是 Finder 文件列表。
+        // 禁止复用 media:copy-to-clipboard 的 Set-Clipboard / osascript POSIX file 通道。
+        const candidates = mainShellWindows().filter(
+          (window) => window.isVisible() && !window.isMinimized(),
+        );
+        if (candidates.length === 0) {
+          throw new Error('没有可挂靠的宿主窗口');
+        }
+        const image = nativeImage.createFromBuffer(pngBytes);
+        if (image.isEmpty()) {
+          throw new Error('无法把 PNG 字节写成剪贴板位图');
+        }
+        clipboard.writeImage(image);
       },
     });
     // 面板只读投影(cindy-ghost://<id>/library/<relPath>)的解析器:与电子脑
