@@ -3438,6 +3438,32 @@
           ],
           "isUnique": false
         },
+        "idx_skill_usage_exposures_skill_recent": {
+          "name": "idx_skill_usage_exposures_skill_recent",
+          "columns": [
+            "skill_name",
+            "analyzer_version",
+            "seen_at"
+          ],
+          "isUnique": false
+        },
+        "idx_skill_usage_exposures_skill_recent_any_version": {
+          "name": "idx_skill_usage_exposures_skill_recent_any_version",
+          "columns": [
+            "skill_name",
+            "seen_at"
+          ],
+          "isUnique": false
+        },
+        "idx_skill_usage_exposures_analyzer_recent_source": {
+          "name": "idx_skill_usage_exposures_analyzer_recent_source",
+          "columns": [
+            "analyzer_version",
+            "seen_at",
+            "raw_file_path"
+          ],
+          "isUnique": false
+        },
         "idx_skill_usage_exposures_session": {
           "name": "idx_skill_usage_exposures_session",
           "columns": [
