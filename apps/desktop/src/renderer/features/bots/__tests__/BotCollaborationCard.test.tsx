@@ -143,6 +143,27 @@ describe('BotSessionTaskCard', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('does not roll a completed card back when an older running snapshot arrives late', async () => {
+    let finishOldRead!: (value: unknown) => void;
+    listBotDelegations.mockImplementationOnce(() => new Promise((resolve) => {
+      finishOldRead = resolve;
+    }));
+    render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+    listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
+    await act(async () => {
+      for (const listener of listeners) listener({
+        delegationId: DELEGATION_ID, parentSessionId: SESSION_ID,
+        childSessionId: 'child-1', status: 'completed',
+      });
+    });
+    await screen.findByText(/bots\.collab\.status\.completed/);
+    await act(async () => {
+      finishOldRead({ ok: true, delegations: [delegation('running')] });
+    });
+    expect(screen.getByText(/bots\.collab\.status\.completed/)).toBeTruthy();
+    expect(screen.queryByText('bots.collab.stopTask')).toBeNull();
+  });
+
   it('stops the delegation through the existing cancel channel', async () => {
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('waiting')] });
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);

@@ -415,6 +415,8 @@ export interface CodexExtraSpawnConfig {
     capabilities: Readonly<Record<string, boolean | undefined>>;
     responseModels: readonly string[];
   }>;
+  /** One-shot cleanup for spawn-time resources when this Host is terminally retired. */
+  onHostRetired?: () => void | Promise<void>;
 }
 
 export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
@@ -843,6 +845,18 @@ export interface AgentDeps {
   ) => number | null;
 
   /**
+   * 自定义 Codex 供应商上用户显式填写的 contextWindow。会话启动时据此选择隔离
+   * app-server，并写入 thread/start|resume 的 `config.model_context_window` 与
+   * `config.model_auto_compact_token_limit`,让 app-server 按该窗口 auto-compact。
+   * 可异步核对 Codex 静态目录；返回 null / 缺省 = 不覆盖(官方订阅继续用 live
+   * catalog，目录外自定义 slug 继续走 Codex fallback metadata)。
+   */
+  resolveCodexThreadContextWindow?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null | Promise<number | null>;
+
+  /**
    * Agent 起 session 时追加到 system prompt 末尾的字符串（host 注入）。
    * **本轮一阶段不消费**，仅占位。后续接通后 desktop 可以传项目级 prompt。
    */
@@ -870,8 +884,14 @@ export interface AgentDeps {
       credentialMode?: AgentCredentialMode;
       /** Original session request when the shared host was upgraded to a credential superset. */
       requestedCredentialMode?: AgentCredentialMode;
-      /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
-      hostPurpose?: 'control-plane' | 'review';
+      /** Marks app-server work that must not share the normal local task host. */
+      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+      /** Exact real model slug whose static catalog entry must allow the custom window. */
+      customContextModel?: string;
+      /** Explicit custom-provider context window for a one-session custom-context host. */
+      customContextWindow?: number;
+      /** Unique app-server Host-generation identity used to scope custom-context resources. */
+      customContextHostKey?: string;
     },
   ) => Promise<CodexExtraSpawnConfig>;
 
@@ -880,7 +900,7 @@ export interface AgentDeps {
     providers: McpProvider[],
     ctx: {
       credentialMode?: AgentCredentialMode;
-      hostPurpose?: 'control-plane' | 'review';
+      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
     },
   ) => Promise<string>;
 
@@ -2051,6 +2071,16 @@ export interface AgentSessionHandle {
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
   setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void>;
+
+  /**
+   * 当前 provider handle 是否必须先关闭、再由同一业务任务 cold resume 才能应用目标模型。
+   * 缺省 false；用于 Codex 这类把部分模型配置冻结在 app-server spawn / thread resume
+   * 边界的 adapter。调用方必须在任何 route store 写入前完成该预检。
+   */
+  requiresModelSwitchRebuild?(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): boolean | Promise<boolean>;
 
   /** 运行时切换 effort */
   setEffort?(effort: Effort): Promise<void>;

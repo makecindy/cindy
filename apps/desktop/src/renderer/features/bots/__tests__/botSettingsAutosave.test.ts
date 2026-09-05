@@ -268,6 +268,25 @@ describe('createBotSettingsAutosave scheduling', () => {
 });
 
 describe('createBotSettingsAutosave flush & failure', () => {
+  it('serializes multiple flushes waiting on the same earlier save', async () => {
+    const h = harness();
+    const firstGate = h.gate();
+    h.edit({ name: 'First edit' });
+    const first = h.autosave.flush();
+    h.edit({ name: 'Latest edit' });
+    const second = h.autosave.flush();
+    const third = h.autosave.flush();
+    firstGate.release();
+    const secondGate = h.gate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.commits).toHaveLength(2);
+    secondGate.release();
+    await Promise.all([first, second, third]);
+    expect(h.commits).toHaveLength(2);
+    expect(h.baseline.name).toBe('Latest edit');
+    expect(h.autosave.isDirty()).toBe(false);
+  });
+
   it('flush() commits immediately instead of waiting out the debounce', async () => {
     const h = harness();
     h.edit({ identitySource: 'You are a delivery steward.' });

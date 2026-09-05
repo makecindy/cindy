@@ -544,16 +544,7 @@ interface ChatInputProps {
   onWorkingDirChange?: (dir: string | null) => void;
   /** When true, the input is disabled (e.g. during streaming). */
   disabled?: boolean;
-  /**
-   * Freeze model/provider/effort/permission controls for audit-only tasks.
-   *
-   * 这是**唯一**一个能改动运行时控件可用性的开关,而且只做「可看不可动」。
-   * 曾经还有一个 `hideRuntimeSelectors`,用来在伙伴对话里把权限 chip 与模型
-   * 选择器整个收掉;产品裁决 2026-08-19 撤销:①切伙伴时选择器区一闪一收,
-   * 露馅比"干净"更刺眼;②"这个伙伴用哪个模型"是刚需(查邮件用便宜的、
-   * 写代码用贵的)。「不暴露技术细节」改由**默认值**承载 —— 模板已经给了
-   * 合理的引擎/模型,用户不动它就永远看不见差别。
-   */
+  /** Freeze model/provider/effort/permission controls for audit-only tasks. */
   settingsLocked?: boolean;
   /** When true, shows Stop button instead of Send button. */
   isStreaming?: boolean;

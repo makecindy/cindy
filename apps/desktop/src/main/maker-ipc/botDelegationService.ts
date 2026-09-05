@@ -105,6 +105,11 @@ export interface BotDelegationServiceDeps {
   collectArtifacts?: (sessionId: string) => Promise<BotDelegationArtifact[]>;
   /** Pending follow-up input must run before this Session task can become terminal. */
   hasPendingInput?: (sessionId: string) => boolean;
+  /** The active Bot route may differ from its canonical row after a profile switch/fallback. */
+  readCallerRuntime?: (sessionId: string) => (Pick<
+    typeof sessions.$inferSelect,
+    'model' | 'agentKind' | 'providerId' | 'fastMode'
+  > & { effort?: (typeof sessions.$inferSelect)['effort'] }) | null;
   now?: () => number;
   createId?: () => string;
   maxActiveChildren?: number;
@@ -1682,6 +1687,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     if (!callerSession) {
       return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
     }
+    const callerRuntime = deps.readCallerRuntime?.(input.callerSessionId) ?? callerSession;
     let workingDir = input.workingDir?.trim() || '';
     if (workingDir) {
       const isDirectory = (() => {
@@ -1727,13 +1733,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       plan,
       session: {
         workingDir,
-        model: callerSession.model,
-        ...(callerSession.effort ? { effort: callerSession.effort } : {}),
-        ...(callerSession.fastMode !== null && callerSession.fastMode !== undefined
-          ? { fastMode: callerSession.fastMode }
+        model: callerRuntime.model,
+        ...(callerRuntime.effort ? { effort: callerRuntime.effort } : {}),
+        ...(callerRuntime.fastMode !== null && callerRuntime.fastMode !== undefined
+          ? { fastMode: callerRuntime.fastMode }
           : {}),
-        ...(callerSession.providerId ? { providerId: callerSession.providerId } : {}),
-        agentKind: callerSession.agentKind as 'cc' | 'codex' | 'pi',
+        ...(callerRuntime.providerId ? { providerId: callerRuntime.providerId } : {}),
+        agentKind: callerRuntime.agentKind as 'cc' | 'codex' | 'pi',
         permissionMode,
         title: input.title?.trim() || objective.split('\n')[0]!.slice(0, 60),
         source: 'desktop',

@@ -1,3 +1,5 @@
+import { groupWorkRuns } from './workRunGrouping.js';
+export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
@@ -1511,246 +1513,28 @@ function tryParseJsonRecord(text: string | undefined): Record<string, unknown> |
   }
 }
 
-function groupMessageWorkRuns<
-  TMessage extends MessageRenderNormalizedMessage,
->(
+function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
   items: readonly MessageRenderItem<TMessage>[],
   isSessionStreaming: boolean,
 ): MessageRenderItem<TMessage>[] {
-  const out: MessageRenderItem<TMessage>[] = [];
-  let currentTurn: MessageRenderItem<TMessage>[] = [];
-  // turn 开场边界（用户消息）的时间戳；窗口截断没见到用户消息时为 null，
-  // 各分组路径退回段内锚点。
-  let turnStartMs: number | null = null;
-
-  const flushTurn = (activeTail: boolean) => {
-    if (currentTurn.length === 0) return;
-    if (activeTail && isSessionStreaming) {
-      out.push(...groupActiveWorkRuns(currentTurn, turnStartMs));
-      currentTurn = [];
-      return;
-    }
-    const grouped = groupAnsweredTurnItems(currentTurn, turnStartMs);
-    out.push(
-      ...(grouped.handled
-        ? grouped.items
-        : groupLegacyWorkRuns(currentTurn, turnStartMs)),
-    );
-    currentTurn = [];
-  };
-
-  // 空洞判定的锚点:上一个 item 的**结束**时间(见 itemEndTimestamp)。用开始时间会让一个
-  // 正常的长时段工具组/thinking 把紧随其后的 item 误判成空洞。取已见过的最大值而非无条件
-  // 覆盖:并行的 Agent/Task 可能乱序完成,锚点回退会让后面的最终答复被误切、时长被低报。
-  // 无时间戳的 item 不重置锚点,让间隔判定跨过它继续比对上一个有时间的动作。
-  let prevEndMs: number | null = null;
-  const noteEnd = (item: MessageRenderItem<TMessage>) => {
-    const endMs = itemEndTimestamp(item);
-    if (endMs === null) return;
-    prevEndMs = prevEndMs === null ? endMs : Math.max(prevEndMs, endMs);
-  };
-
-  for (const item of items) {
-    if (item.type === 'message' && item.message.kind === 'user') {
-      flushTurn(false);
-      out.push(item);
-      noteEnd(item);
-      turnStartMs = itemTimestamp(item);
-      continue;
-    }
-    // 窗口空洞:user 行是唯一的 turn 边界,窗口里缺了它,两段不相干的历史就会被折进同一个
-    // 「已工作 Xs」并谎报时长(手机端实测一条组吞掉整场会话的 6 轮对话)。相邻动作间隔超过
-    // 阈值时同样切断 —— 见 HISTORY_GAP_SPLIT_MS 的完整理由。
-    const startMs = itemTimestamp(item);
-    if (
-      prevEndMs !== null
-      && startMs !== null
-      && startMs - prevEndMs > HISTORY_GAP_SPLIT_MS
-    ) {
-      flushTurn(false);
-      // 空洞切开的新段没有已知 turn 开场边界：旧 user 行在空洞另一侧（或未加载）。
-      // 清空后与窗口截断同义，各路径会退回首个活动时间，避免把空洞计入时长。
-      turnStartMs = null;
-    }
-    currentTurn.push(item);
-    noteEnd(item);
-  }
-  flushTurn(true);
-  return out;
-}
-
-function groupAnsweredTurnItems<
-  TMessage extends MessageRenderNormalizedMessage,
->(
-  items: readonly MessageRenderItem<TMessage>[],
-  turnStartMs: number | null = null,
-): {
-  items: MessageRenderItem<TMessage>[];
-  handled: boolean;
-} {
-  const sealedAnswers = new Set<number>();
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (isAssistantAnswerCandidate(item) && isCompletedAssistantMessage(item.message)) {
-      sealedAnswers.add(index);
-    }
-  }
-
-  let lastAnswerIndex = -1;
-  for (let index = items.length - 1; index >= 0; index--) {
-    if (isAssistantAnswerCandidate(items[index])) {
-      lastAnswerIndex = index;
-      break;
-    }
-  }
-  if (lastAnswerIndex < 0) return { items: [...items], handled: false };
-
-  // 新数据按 SDK done seal 分段；旧数据没有 seal 时保持原有 last-answer 兼容行为。
-  if (sealedAnswers.size > 0) {
-    let segmentStartIndex = 0;
-    for (const sealedIndex of [...sealedAnswers]) {
-      let lastWorkActivityIndex = -1;
-      for (let index = sealedIndex - 1; index >= segmentStartIndex; index--) {
-        if (isWorkActivityItem(items[index])) {
-          lastWorkActivityIndex = index;
-          break;
-        }
-      }
-      let answerStartIndex = sealedIndex;
-      while (
-        answerStartIndex > lastWorkActivityIndex + 1
-        && answerStartIndex > segmentStartIndex
-        && isAssistantAnswerCandidate(items[answerStartIndex - 1])
-      ) {
-        answerStartIndex--;
-      }
-      for (let index = answerStartIndex; index <= sealedIndex; index++) {
-        if (isAssistantAnswerCandidate(items[index])) sealedAnswers.add(index);
-      }
-      segmentStartIndex = sealedIndex + 1;
-    }
-  } else {
-    const hasWorkAfterLastAnswer = items.some(
-      (item, index) => index > lastAnswerIndex && isWorkActivityItem(item),
-    );
-    if (hasWorkAfterLastAnswer) return { items: [...items], handled: false };
-
-    let lastWorkActivityIndex = -1;
-    for (let index = lastAnswerIndex - 1; index >= 0; index--) {
-      if (isWorkActivityItem(items[index])) {
-        lastWorkActivityIndex = index;
-        break;
-      }
-    }
-    let finalAnswerStartIndex = lastAnswerIndex;
-    if (lastWorkActivityIndex >= 0) {
-      while (
-        finalAnswerStartIndex > lastWorkActivityIndex + 1
-        && isAssistantAnswerCandidate(items[finalAnswerStartIndex - 1])
-      ) {
-        finalAnswerStartIndex--;
-      }
-    }
-    for (let index = finalAnswerStartIndex; index <= lastAnswerIndex; index++) {
-      if (isAssistantAnswerCandidate(items[index])) sealedAnswers.add(index);
-    }
-  }
-
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  let previousBoundaryMs = turnStartMs;
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(createCompletedWorkGroup(run, nextItem, previousBoundaryMs));
-    run = [];
-  };
-
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (
-      !sealedAnswers.has(index)
-      && !isRunningAgentTaskItem(item)
-      && !isDeliveryProseItem(item)
-      && isWorkChild(item)
-    ) {
-      run.push(item);
-    } else {
-      flushRun(item);
-      out.push(item);
-      previousBoundaryMs = boundaryTimestamp(item);
-    }
-  }
-  flushRun();
-  return { items: out, handled: true };
-}
-
-function groupLegacyWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
-  items: readonly MessageRenderItem<TMessage>[],
-  turnStartMs: number | null = null,
-): MessageRenderItem<TMessage>[] {
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  let previousBoundaryMs = turnStartMs;
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem, false, previousBoundaryMs));
-    run = [];
-  };
-  for (const item of items) {
-    if (isWorkActivityItem(item)) run.push(item);
-    else {
-      flushRun(item);
-      out.push(item);
-      previousBoundaryMs = boundaryTimestamp(item);
-    }
-  }
-  flushRun();
-  return out;
-}
-
-/** Active turn: assistant text and compact cards close the previous activity run. */
-function groupActiveWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
-  items: readonly MessageRenderItem<TMessage>[],
-  turnStartMs: number | null = null,
-): MessageRenderItem<TMessage>[] {
-  let lastCompletedBoundaryIndex = -1;
-  for (let index = 0; index < items.length; index++) {
-    if (isAssistantAnswerCandidate(items[index]) || isCompactBoundaryItem(items[index])) {
-      lastCompletedBoundaryIndex = index;
-    }
-  }
-
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  let runLastIndex = -1;
-  let previousBoundaryMs = turnStartMs;
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(
-      createWorkGroup(
-        run,
-        nextItem,
-        runLastIndex > lastCompletedBoundaryIndex,
-        previousBoundaryMs,
-      ),
-    );
-    run = [];
-  };
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (isWorkActivityItem(item)) {
-      run.push(item);
-      runLastIndex = index;
-    } else {
-      flushRun(item);
-      out.push(item.type === 'todo'
-        ? { ...item, isStreaming: index > lastCompletedBoundaryIndex }
-        : item);
-      previousBoundaryMs = boundaryTimestamp(item);
-    }
-  }
-  flushRun();
-  return out;
+  return groupWorkRuns<MessageRenderItem<TMessage>, MessageRenderWorkChildItem<TMessage>>(
+    items, isSessionStreaming, {
+      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user',
+      isAnswer: isAssistantAnswerCandidate,
+      isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
+      isCompactBoundary: isCompactBoundaryItem,
+      isActivity: isWorkActivityItem,
+      isArchivable: (item): item is MessageRenderWorkChildItem<TMessage> =>
+        !isRunningAgentTaskItem(item) && !isDeliveryProseItem(item) && isWorkChild(item),
+      startTimestamp: itemTimestamp,
+      endTimestamp: itemEndTimestamp,
+      boundaryTimestamp,
+      userBoundaryEnd: (item, previousEnd) => maxTimestamp(previousEnd, itemEndTimestamp(item)),
+      createGroup: createWorkGroup,
+      createCompletedGroup: createCompletedWorkGroup,
+      activeStandalone: (item, isStreaming) => item.type === 'todo' ? { ...item, isStreaming } : item,
+    },
+  );
 }
 
 /**

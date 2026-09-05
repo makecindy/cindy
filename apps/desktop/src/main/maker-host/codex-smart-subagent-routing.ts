@@ -222,6 +222,7 @@ export function prepareCodexSmartSubagentConfig(args: {
   atomicWriteFileSync(catalogPath, `${JSON.stringify({ models: built.models }, null, 2)}\n`);
   return {
     catalogPath,
+    modelCatalog: { models: built.models },
     routes: built.routes,
     routingSignature: codexSmartSubagentRoutingSignature(candidates, args.catalogRevision)!,
   };

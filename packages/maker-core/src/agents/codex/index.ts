@@ -479,6 +479,17 @@ function isLocalReviewHostKey(key: string): boolean {
   return key.startsWith(LOCAL_REVIEW_HOST_PREFIX);
 }
 
+/** Explicit custom windows need a static catalog, so each such session gets its own app-server. */
+const LOCAL_CUSTOM_CONTEXT_HOST_PREFIX = 'local-custom-context:';
+
+function localCustomContextHostKey(sessionId: string): string {
+  return `${LOCAL_CUSTOM_CONTEXT_HOST_PREFIX}${sessionId || randomUUID()}`;
+}
+
+function isLocalCustomContextHostKey(key: string): boolean {
+  return key.startsWith(LOCAL_CUSTOM_CONTEXT_HOST_PREFIX);
+}
+
 /**
  * maker permissionMode → app-server { approvalPolicy, approvalsReviewer, sandbox }。
  *
@@ -2253,7 +2264,9 @@ export class CodexAgent extends BaseAgent {
     opts: {
       ignoreBindingLeases?: number;
       keyOverride?: string;
-      hostPurpose?: 'control-plane' | 'review';
+      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+      customContextModel?: string;
+      customContextWindow?: number;
     } = {},
   ): Promise<AppServerHost> {
     const key = opts.keyOverride ?? hostKey(remoteHostId);
@@ -2441,6 +2454,8 @@ export class CodexAgent extends BaseAgent {
           }
         },
         opts.hostPurpose,
+        opts.customContextModel,
+        opts.customContextWindow,
       ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
@@ -2601,7 +2616,9 @@ export class CodexAgent extends BaseAgent {
     credentialMode: AgentCredentialMode | undefined,
     generation: number,
     onSpawnCredentialModeResolved?: (mode: AgentCredentialMode | undefined) => void,
-    hostPurpose?: 'control-plane' | 'review',
+    hostPurpose?: 'control-plane' | 'review' | 'custom-context',
+    customContextModel?: string,
+    customContextWindow?: number,
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -2673,6 +2690,7 @@ export class CodexAgent extends BaseAgent {
     let codexSubagentRoutingSignature: string | undefined;
     let codexOpenAiWebSocketsEnabled = true;
     let codexSubagentRoutingProfile: CodexExtraSpawnConfig['codexSubagentRoutingProfile'] = 'default';
+    let hostRetirementCleanup: CodexExtraSpawnConfig['onHostRetired'];
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -2705,6 +2723,7 @@ export class CodexAgent extends BaseAgent {
       codexSubagentRoutingSignature = undefined;
       codexOpenAiWebSocketsEnabled = true;
       codexSubagentRoutingProfile = 'default';
+      hostRetirementCleanup = undefined;
       if (this.deps.prepareCodexExtraSpawnConfig) {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
@@ -2716,8 +2735,16 @@ export class CodexAgent extends BaseAgent {
                 ? { requestedCredentialMode: credentialMode }
                 : {}),
               ...(hostPurpose ? { hostPurpose } : {}),
+              ...(hostPurpose === 'custom-context'
+                ? {
+                    customContextModel,
+                    customContextWindow,
+                    customContextHostKey: `${key}:${generation}`,
+                  }
+                : {}),
             },
           );
+          hostRetirementCleanup = cfg.onHostRetired;
           assertCurrentGeneration('spawn config');
           if (
             cfg.requiredSpawnCredentialMode
@@ -2729,6 +2756,8 @@ export class CodexAgent extends BaseAgent {
               previousSpawnCredentialMode: spawnCredentialMode ?? 'fallback',
               requiredSpawnCredentialMode: cfg.requiredSpawnCredentialMode,
             });
+            await hostRetirementCleanup?.();
+            hostRetirementCleanup = undefined;
             spawnCredentialMode = cfg.requiredSpawnCredentialMode;
             continue;
           }
@@ -2765,6 +2794,8 @@ export class CodexAgent extends BaseAgent {
             codexProxyActive,
           });
         } catch (e) {
+          await hostRetirementCleanup?.();
+          hostRetirementCleanup = undefined;
           const isFatalSpawnConfigError =
             (typeof e === 'object' && e !== null &&
               (e as { codexSpawnConfigFatal?: unknown }).codexSpawnConfigFatal === true);
@@ -2787,6 +2818,8 @@ export class CodexAgent extends BaseAgent {
       }
       if (upgradedToSuperset && !codexProxyActive) {
         this.deps.logger.warn('codex createHost: superset spawn lacks loopback proxy; downgrading to gateway-key spawn', { key });
+        await hostRetirementCleanup?.();
+        hostRetirementCleanup = undefined;
         spawnCredentialMode = credentialMode;
         continue;
       }
@@ -2798,7 +2831,13 @@ export class CodexAgent extends BaseAgent {
         remotePlugin: false,
       });
     }
-    assertCurrentGeneration('transport');
+    try {
+      assertCurrentGeneration('transport');
+    } catch (error) {
+      await hostRetirementCleanup?.();
+      hostRetirementCleanup = undefined;
+      throw error;
+    }
 
     // 选 transport: 本地 → StdioTransport (spawn codex app-server)
     //               远端 → host 注入的 getRemoteCodexTransport (SSH+daemon+proxy+ws)
@@ -2857,6 +2896,7 @@ export class CodexAgent extends BaseAgent {
         this.deps.getCodexSubagentIdentity?.({ childThreadId }),
       codexOpenAiWebSocketsEnabled,
       codexSubagentRoutingProfile,
+      onRetired: hostRetirementCleanup,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
@@ -3069,6 +3109,21 @@ export class CodexAgent extends BaseAgent {
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    const startupCleanup: { customContext?: () => Promise<void> } = {};
+    try {
+      return await this.startSessionInternal(opts, (cleanup) => {
+        startupCleanup.customContext = cleanup ?? undefined;
+      });
+    } catch (error) {
+      await startupCleanup.customContext?.();
+      throw error;
+    }
+  }
+
+  private async startSessionInternal(
+    opts: StartSessionOptions,
+    registerFailedCustomContextStartupCleanup: (cleanup: (() => Promise<void>) | null) => void,
+  ): Promise<AgentSessionHandle> {
     // scope 带完整 s:<sessionId> 前缀 → host logger 落盘时提取 business sessionId,
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
@@ -4245,8 +4300,7 @@ export class CodexAgent extends BaseAgent {
     // Named profiles defined through thread/start.config are thread-local. Codex
     // 0.145.0 cannot resolve that thread-local definition when the selector is
     // repeated on turn/start, so remember whether the thread is already using
-    // the currently selected Cindy workspace profile (Review, Bot write scope,
-    // or read-only references).
+    // the currently selected Cindy workspace profile (Review or read-only references).
     let workspacePermissionProfileActive = false;
     let workspacePermissionProfileFingerprint: string | null = null;
     // A fresh thread/start has no rollout yet, so thread/resume fails until a
@@ -4316,7 +4370,45 @@ export class CodexAgent extends BaseAgent {
           providerId: opts.providerId,
           model: opts.model,
         });
-    const currentHostKey = reviewMode ? localReviewHostKey(sid) : hostKey(opts.remoteHostId);
+    const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
+    const initialCustomContextWindow = !reviewMode && !opts.remoteHostId
+      ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
+      : null;
+    const customContextCatalogIdentity = (
+      model: string,
+      contextWindow: number | null,
+    ): string | null =>
+      typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
+        ? `${model}\0${Math.floor(contextWindow)}`
+        : null;
+    const initialCustomContextCatalogIdentity = customContextCatalogIdentity(
+      opts.model,
+      initialCustomContextWindow,
+    );
+    const usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
+    const resolveModelSwitchCatalogIdentity = async (
+      newModel: string,
+      setOpts?: { providerId?: string | null },
+    ): Promise<string | null> => {
+      const providerId = setOpts && Object.hasOwn(setOpts, 'providerId')
+        ? setOpts.providerId
+        : mutableProviderId;
+      const contextWindow = reviewMode || opts.remoteHostId
+        ? null
+        : await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
+      return customContextCatalogIdentity(newModel, contextWindow);
+    };
+    const modelSwitchRequiresRebuild = async (
+      newModel: string,
+      setOpts?: { providerId?: string | null },
+    ): Promise<boolean> =>
+      (await resolveModelSwitchCatalogIdentity(newModel, setOpts)) !==
+        initialCustomContextCatalogIdentity;
+    const currentHostKey = reviewMode
+      ? localReviewHostKey(sid)
+      : usesCustomContextHost
+        ? localCustomContextHostKey(sid)
+        : hostKey(opts.remoteHostId);
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
       if (opts.remoteHostId || releaseHostBindingLease) return;
@@ -4337,7 +4429,14 @@ export class CodexAgent extends BaseAgent {
         ignoreBindingLeases: 1,
         ...(reviewMode
           ? { keyOverride: currentHostKey, hostPurpose: 'review' as const }
-          : {}),
+          : usesCustomContextHost
+            ? {
+                keyOverride: currentHostKey,
+                hostPurpose: 'custom-context' as const,
+                customContextModel: opts.model,
+                customContextWindow: initialCustomContextWindow ?? undefined,
+              }
+            : {}),
       });
     };
     const host = await getSessionHost().catch((error) => {
@@ -4346,6 +4445,27 @@ export class CodexAgent extends BaseAgent {
     });
     const hostGeneration = this.hostGenerations.get(currentHostKey) ?? 0;
     const capturedHostWasRegistered = this.hosts.get(currentHostKey) === host;
+    const retireSingleSessionHost = async (): Promise<void> => {
+      if (!reviewMode && !usesCustomContextHost) return;
+      const purpose = reviewMode ? 'Review' : 'custom context';
+      const reason = `Cindy ${purpose} host is single-session`;
+      await this.retireHostKey(currentHostKey, reason, {
+        failIfActive: false,
+        logPrefix: `codex ${purpose.toLowerCase()} host cleanup`,
+        ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
+        expectedGeneration: hostGeneration,
+      }).catch((error) => {
+        log.warn(`${purpose} host retire failed`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
+    if (usesCustomContextHost) {
+      registerFailedCustomContextStartupCleanup(async () => {
+        releaseHostBindingLeaseIfNeeded();
+        await retireSingleSessionHost();
+      });
+    }
     const connectionId = host.getConnectionId();
     const isCurrentHost = (): boolean => {
       if (sessionHostForceRetired) return false;
@@ -4627,6 +4747,29 @@ export class CodexAgent extends BaseAgent {
         );
       }
     }
+    let botMcpConfig: Record<string, unknown> = {};
+    if (!reviewMode && opts.botRuntimeProfile?.mcpPolicy) {
+      try {
+        const response = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead, { includeLayers: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        assertCurrentHost('Bot MCP configuration');
+        const transports = new Set(Object.entries(asRecord(asRecord(response.config).mcp_servers))
+          .filter(([, value]) => hasCodexMcpTransport(value)).map(([name]) => name));
+        for (const [key, value] of Object.entries(host.getSessionMcpConfig(opts.sessionInstanceId))) {
+          const match = /^mcp_servers\.([A-Za-z0-9_-]+)\.(?:url|command)$/.exec(key);
+          if (match && typeof value === 'string' && value.trim()) transports.add(match[1]);
+        }
+        botMcpConfig = buildCodexBotMcpConfigOverrides(opts.botRuntimeProfile.mcpPolicy, transports);
+        if (!makerMemoryEnabled && transports.has('cindy_memory')) {
+          botMcpConfig['mcp_servers.cindy_memory.enabled'] = false;
+        }
+      } catch (error) {
+        releaseHostBindingLeaseIfNeeded();
+        throw new Error(`Cannot prepare Codex Bot MCP configuration: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     capabilityRoutingConfig = mergeCodexSkillConfigOverrides(
       capabilityRoutingConfig,
       buildCodexBotSkillConfigOverrides(
@@ -4635,9 +4778,7 @@ export class CodexAgent extends BaseAgent {
     );
     capabilityRoutingConfig = {
       ...capabilityRoutingConfig,
-      ...buildCodexBotMcpConfigOverrides(
-        reviewMode ? undefined : opts.botRuntimeProfile?.mcpPolicy,
-      ),
+      ...botMcpConfig,
       // Bot sessions must not absorb project AGENTS.md from the cwd chain —
       // their context is the Bot profile, not the workspace.
       ...(!reviewMode && opts.botRuntimeProfile ? { project_doc_max_bytes: 0 } : {}),
@@ -5376,6 +5517,7 @@ export class CodexAgent extends BaseAgent {
       | 'config'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+      const threadContextWindow = initialCustomContextWindow;
       const config = {
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
@@ -5392,8 +5534,20 @@ export class CodexAgent extends BaseAgent {
             }
           : {}),
         ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),
-        ...(!makerMemoryEnabled
+        ...(!makerMemoryEnabled && !opts.botRuntimeProfile
           ? { 'mcp_servers.cindy_memory.enabled': false }
+          : {}),
+        // 自定义供应商显式窗口。隔离 app-server 的静态模型目录先放开
+        // `max_context_window`,这里再按 thread 设置实际窗口和 95% 自动压缩阈值。
+        // 官方会话继续走共享 app-server + live catalog,不受该静态目录影响。
+        ...(typeof threadContextWindow === 'number' && threadContextWindow > 0
+          ? {
+              model_context_window: Math.floor(threadContextWindow),
+              model_auto_compact_token_limit: Math.max(
+                1,
+                Math.floor(threadContextWindow * 0.95),
+              ),
+            }
           : {}),
       };
       const shared = {
@@ -11454,20 +11608,6 @@ export class CodexAgent extends BaseAgent {
       });
       try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
     }
-    const retireReviewHost = async (): Promise<void> => {
-      if (!reviewMode) return;
-      await this.retireHostKey(currentHostKey, 'Cindy Review host is single-session', {
-        failIfActive: false,
-        logPrefix: 'codex review host cleanup',
-        ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
-        expectedGeneration: hostGeneration,
-      }).catch((error) => {
-        log.warn('review host retire failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    };
-
     // ── AgentSessionHandle ──────────────────────────────────────────────────
     const handle: AgentSessionHandle = {
       get id() { return sdkSessionId ?? '<pending>'; },
@@ -12539,7 +12679,7 @@ export class CodexAgent extends BaseAgent {
 
       async close() {
         await closeSessionHandle();
-        await retireReviewHost();
+        await retireSingleSessionHost();
       },
 
       events(): AsyncIterable<AgentEvent> {
@@ -12563,9 +12703,19 @@ export class CodexAgent extends BaseAgent {
         interactionResolver = resolver;
       },
 
+      requiresModelSwitchRebuild: modelSwitchRequiresRebuild,
+
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
       async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
         if (reviewMode) return;
+        const catalogIdentity = await resolveModelSwitchCatalogIdentity(newModel, setOpts);
+        if (catalogIdentity !== initialCustomContextCatalogIdentity) {
+          const error = new Error(
+            'Codex model switch requires rebuilding the current session handle',
+          );
+          (error as { code?: string }).code = 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD';
+          throw error;
+        }
         // provider 可能在 model 不变时单独切换(同一 id 换路由), 所以先记 provider 再做 model 去重。
         // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。
         const prevProviderId = mutableProviderId;
@@ -13308,10 +13458,20 @@ export class CodexAgent extends BaseAgent {
   async forceDisposeLocalHostForAuthChange(reason = 'CodexAgent local auth changed'): Promise<void> {
     const keys = new Set<string>([hostKey()]);
     for (const key of this.hosts.keys()) {
-      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key) || isLocalReviewHostKey(key)) keys.add(key);
+      if (
+        isLocalControlPlaneHostKey(key) ||
+        isLocalForkHostKey(key) ||
+        isLocalReviewHostKey(key) ||
+        isLocalCustomContextHostKey(key)
+      ) keys.add(key);
     }
     for (const key of this.hostPromises.keys()) {
-      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key) || isLocalReviewHostKey(key)) keys.add(key);
+      if (
+        isLocalControlPlaneHostKey(key) ||
+        isLocalForkHostKey(key) ||
+        isLocalReviewHostKey(key) ||
+        isLocalCustomContextHostKey(key)
+      ) keys.add(key);
     }
     await Promise.all(Array.from(keys, (key) =>
       this.retireHostKey(key, reason, {

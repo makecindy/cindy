@@ -446,6 +446,48 @@ describe('Bot canonical Session lifecycle', () => {
     );
   });
 
+  it('stops profile saving before projecting or writing files under a newly selected owner', async () => {
+    const runTx = h.tx!;
+    h.tx = async (name, args) => {
+      const result = await runTx(name, args);
+      if (name === 'bots.updateProfile') h.ownerScopeKey = 'owner-b:2';
+      return result;
+    };
+    await expect(invoke('local-db:bots:update', {
+      id: 'bot-1', identitySource: 'Only belongs to owner A',
+    })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.requestRuntimeRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not create a canonical task after the account changes during workspace preparation', async () => {
+    h.ensureGit.mockImplementationOnce(async () => {
+      h.ownerScopeKey = 'owner-b:2';
+    });
+    await expect(invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.sqlite!.prepare('SELECT COUNT(*) AS count FROM sessions').get()).toEqual({ count: 0 });
+  });
+
+  it('projects the newest runtime snapshot without returning historical capability payloads', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const insert = h.sqlite!.prepare(`INSERT INTO bot_runtime_snapshots
+      (id, bot_id, session_id, profile_version, agent_kind, working_dir, status, prepared_at, configured_json)
+      VALUES (?, 'bot-1', ?, 1, 'pi', '/workspace', 'prepared', ?, ?)`);
+    for (let i = 1; i <= 100; i++) {
+      insert.run(`snapshot-${i}`, created.session.id, i, JSON.stringify({ generation: i }));
+    }
+    const profile = await invoke('local-db:bots:get', 'bot-1');
+    expect(profile.sessions).toHaveLength(1);
+    expect(profile.sessions[0].runtimeSnapshot).toMatchObject({
+      preparedAt: 100, configured: { generation: 100 },
+    });
+    expect(h.sqlite!.prepare('SELECT COUNT(*) AS count FROM bot_runtime_snapshots').get())
+      .toEqual({ count: 100 });
+  });
+
   it('persists a preset and retries its Skill install before the first task', async () => {
     h.seedTemplateSkills.mockRejectedValueOnce(new Error('disk busy'));
     await invoke('local-db:bots:create', {
@@ -946,16 +988,16 @@ describe('Bot canonical Session lifecycle', () => {
     });
 
     const engineOff = makeOpts();
+    engineOff.makerMemoryEnabled = false;
     await hydrateBotProfileRuntime(engineOff, {
-      isMemoryEngineEnabled: () => false,
       readMemoryIndex: async () => '# Bot facts\n- Durable fact',
     }, { persistSnapshot: false });
     expect(engineOff.makerMemoryEnabled).toBe(true);
     expect(engineOff.makerMemoryIndexSnapshot).toContain('Durable fact');
 
     const engineOn = makeOpts();
+    engineOn.makerMemoryEnabled = true;
     await hydrateBotProfileRuntime(engineOn, {
-      isMemoryEngineEnabled: () => true,
       readMemoryIndex: async () => '# Bot facts\n- Durable fact',
     }, { persistSnapshot: false });
     expect(engineOn.makerMemoryEnabled).toBe(true);
@@ -2179,6 +2221,7 @@ describe('Bot Session task end-to-end runtime', () => {
   }
 
   function createDelegationRuntime(options: {
+    readCallerRuntime?: Parameters<typeof createBotDelegationService>[0]['readCallerRuntime'];
     accountReady?: () => boolean;
     transientUnavailable?: () => boolean;
     replyFor?: (sessionId: string) => string;
@@ -2318,6 +2361,7 @@ describe('Bot Session task end-to-end runtime', () => {
 
     const abortSession = vi.fn(async () => undefined);
     const delegation = createBotDelegationService({
+      readCallerRuntime: options.readCallerRuntime,
       dispatch,
       abortSession,
       closeSession: vi.fn(async () => undefined),
@@ -2402,6 +2446,28 @@ describe('Bot Session task end-to-end runtime', () => {
       expectedProfileVersion: 1,
     });
   }
+
+  it.each(['cc', 'codex'])('starts a child on the actual %s route after its Bot changes engines', async (agentKind) => {
+    await seedPair();
+    const runtime = createDelegationRuntime({
+      readCallerRuntime: () => ({
+        agentKind, model: 'active-model', providerId: 'active-provider', effort: 'low', fastMode: false,
+      }),
+    });
+    try {
+      const result = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: 'Verify the selected runtime.',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.message);
+      expect(runtime.started).toContainEqual({
+        sessionId: result.childSessionId, agentKind, model: 'active-model',
+        providerId: 'active-provider', effort: 'low', fastMode: 0,
+      });
+    } finally {
+      runtime.delegation.dispose();
+    }
+  });
 
   it('starts the child task and lands the result back in the requesting conversation', async () => {
     await seedPair();

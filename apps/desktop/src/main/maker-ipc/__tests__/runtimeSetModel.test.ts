@@ -159,6 +159,10 @@ describe('applyRuntimeSetModelChange', () => {
     currentModel: string;
     nextProviderId: string;
     nextModel: string;
+    requiresModelSwitchRebuild?: (
+      model: string,
+      opts?: { providerId?: string | null },
+    ) => boolean | Promise<boolean>;
   }) {
     setCodexAppliedCustomProviderRoutes(imageGenerationRoutes);
     const sessionId = rememberSession(input.testId);
@@ -173,6 +177,9 @@ describe('applyRuntimeSetModelChange', () => {
         codexThreadModelProviderId: input.currentThreadModelProviderId,
         model: input.currentModel,
         setModel,
+        ...(input.requiresModelSwitchRebuild
+          ? { requiresModelSwitchRebuild: input.requiresModelSwitchRebuild }
+          : {}),
       }),
       listActiveSessions: () => [
         { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
@@ -202,6 +209,44 @@ describe('applyRuntimeSetModelChange', () => {
 
     expect(result.closeSession).not.toHaveBeenCalled();
     expect(result.setModel).toHaveBeenCalledWith('a-alt-model', { providerId: 'provider-a' });
+  });
+
+  it('prioritizes a dynamic Provider identity rebuild over context-host preflight', async () => {
+    const [routeA, routeB] = imageGenerationRoutes;
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const result = await applyImageGenerationRouteChange({
+      testId: 'imagegen-cross-before-context-host',
+      currentThreadModelProviderId: routeA!.modelProviderId,
+      currentProviderId: routeA!.providerId,
+      currentModel: 'shared-model',
+      nextProviderId: routeB!.providerId,
+      nextModel: 'shared-model',
+      requiresModelSwitchRebuild,
+    });
+
+    expect(requiresModelSwitchRebuild).not.toHaveBeenCalled();
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.setModel).not.toHaveBeenCalled();
+  });
+
+  it('still rebuilds a context Host inside one dynamic Provider identity', async () => {
+    const routeA = imageGenerationRoutes[0]!;
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const result = await applyImageGenerationRouteChange({
+      testId: 'imagegen-same-provider-context-host',
+      currentThreadModelProviderId: routeA.modelProviderId,
+      currentProviderId: routeA.providerId,
+      currentModel: 'shared-model',
+      nextProviderId: routeA.providerId,
+      nextModel: 'a-alt-model',
+      requiresModelSwitchRebuild,
+    });
+
+    expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('a-alt-model', {
+      providerId: routeA.providerId,
+    });
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.setModel).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1305,6 +1350,114 @@ describe('applyRuntimeSetModelChange', () => {
     })).resolves.toEqual({ status: 'applied' });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds an idle Codex Session when its handle reports a context-host boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-context-host-rebuild');
+    setSessionProvider(sessionId, 'mygpt');
+    const setModel = vi.fn(async () => {});
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.4',
+        setModel,
+        requiresModelSwitchRebuild,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      clearPendingCredentialSwitch: vi.fn(),
+    })).resolves.toEqual({ status: 'applied' });
+
+    expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('gpt-5.6-sol', {
+      providerId: 'mygpt',
+    });
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes a provider thread relink over context-host rebuild preflight', async () => {
+    const sessionId = rememberSession('runtime-set-model-relink-before-context-host');
+    setSessionProvider(sessionId, 'mygpt');
+    const order: string[] = [];
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const setModel = vi.fn(async () => {});
+    const relinkCodexThread = vi.fn(async () => {
+      order.push('relink');
+    });
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.6-sol',
+        setModel,
+        requiresModelSwitchRebuild,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession: vi.fn(async () => {
+        order.push('close');
+      }),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      requiresCodexThreadRelink: true,
+      relinkCodexThread,
+    })).resolves.toEqual({ status: 'applied', persistedRoute: true });
+
+    expect(order).toEqual(['close', 'relink']);
+    expect(requiresModelSwitchRebuild).not.toHaveBeenCalled();
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('defers a busy Codex context-host rebuild to the turn boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-context-host-defer');
+    setSessionProvider(sessionId, 'mygpt');
+    const registerPendingCredentialSwitch = vi.fn();
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.4',
+        setModel,
+        requiresModelSwitchRebuild: async () => true,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => true },
+      ],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      registerPendingCredentialSwitch,
+    })).resolves.toEqual({ status: 'deferred' });
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+    });
     expect(setModel).not.toHaveBeenCalled();
   });
 

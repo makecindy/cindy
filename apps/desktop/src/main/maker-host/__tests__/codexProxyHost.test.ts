@@ -3124,6 +3124,93 @@ describe('codex proxy host', () => {
     )).toBeNull();
   });
 
+  it('keeps custom-context Host generations isolated when the superseded proxy retires', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } =
+      await import('../codex-custom-provider-route.js');
+    const snapshotFor = (baseUrl: string) => {
+      const catalog = {
+        ...BUNDLED_CATALOG,
+        providers: [
+          ...BUNDLED_CATALOG.providers,
+          buildUserProvider({
+            id: 'scoped-custom-context-provider',
+            name: 'Scoped Custom Context Provider',
+            runtimes: {
+              codex: {
+                baseUrl,
+                wireProtocol: 'openai-responses',
+                supportsImageGeneration: true,
+                models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' }],
+              },
+            },
+          }),
+        ],
+      };
+      return { catalog, route: deriveCodexCustomProviderRoutes(catalog)[0]! };
+    };
+    const first = snapshotFor('https://first-context.example/v1');
+    const second = snapshotFor('https://second-context.example/v1');
+    const firstRoute = first.route;
+    const secondRoute = second.route;
+    const firstDispose = vi.fn(async () => undefined);
+    const secondDispose = vi.fn(async () => undefined);
+    mockState.createAnthropicCompatProxy
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:41001', dispose: firstDispose })
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:41002', dispose: secondDispose });
+    setCustomProviderKeyReader(() => 'scoped-provider-key');
+    setActiveCatalog(second.catalog);
+    host.setCodexAppliedCustomProviderRoutes([secondRoute]);
+
+    try {
+      await host.ensureCodexCustomContextProxyReady('context-host:1', 'provider-oauth', [firstRoute]);
+      await host.ensureCodexCustomContextProxyReady('context-host:2', 'provider-oauth', [secondRoute]);
+
+      expect(host.getCodexCustomContextProxyEndpoint('context-host:1')).toBe(
+        'http://127.0.0.1:41001',
+      );
+      expect(host.getCodexCustomContextProxyEndpoint('context-host:2')).toBe(
+        'http://127.0.0.1:41002',
+      );
+      const firstRoutingTransform = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]
+        ?.routingTransform;
+      const secondRoutingTransform = mockState.createAnthropicCompatProxy.mock.calls[1]?.[0]
+        ?.routingTransform;
+      if (!firstRoutingTransform || !secondRoutingTransform) {
+        throw new Error('expected scoped routing transforms');
+      }
+      const request = { model: 'gpt-5.6-sol', input: [] };
+      const requestContext = {
+        reqId: 1,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${firstRoute.routeId}/responses`,
+        headers: {},
+      };
+      await expect(Promise.resolve(firstRoutingTransform(request, requestContext))).resolves.toEqual(
+        expect.objectContaining({ upstreamOverride: 'https://first-context.example/v1' }),
+      );
+      await expect(Promise.resolve(secondRoutingTransform(request, requestContext))).resolves.toEqual(
+        expect.objectContaining({ upstreamOverride: 'https://second-context.example/v1' }),
+      );
+
+      await host.releaseCodexCustomContextProxy('context-host:1');
+      expect(firstDispose).toHaveBeenCalledOnce();
+      expect(host.isCodexCustomContextProxyHandleReady('context-host:1')).toBe(false);
+      expect(host.isCodexCustomContextProxyHandleReady('context-host:2')).toBe(true);
+    } finally {
+      await host.releaseCodexCustomContextProxy('context-host:1');
+      await host.releaseCodexCustomContextProxy('context-host:2');
+      await host.disposeCodexProxy();
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+    expect(secondDispose).toHaveBeenCalledOnce();
+  });
+
   it('keeps Gateway provider search tools out of Guardian review requests', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');

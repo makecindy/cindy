@@ -84,8 +84,10 @@
 
 ## 2. 运行时沙箱与进程隔离
 
-- 每个运行中的插件使用独立 Electron 沙箱进程与专属 session partition。沙箱禁止直接访问
-  Node、宿主文件系统和网络。
+- 每个运行中的插件使用独立 Electron 沙箱进程与按 owner × plugin 隔离的内存 session
+  partition。同插件的 `settingsHtml`、panel 与逻辑页继续共享该 partition，保留 browser
+  storage 与 `BroadcastChannel` 契约；沙箱禁止直接访问 Node、宿主文件系统和通用网络，
+  唯一例外是第 4 节明确限定的 HTTPS 图片资源。
 - 插件只允许读取自身安装目录内、经安全相对路径校验的静态资源，不得越权读取其它目录。
 - 逻辑页只能经最小 `contextBridge` 管子申请主机能力；面板 webview 保持零特权桥。
 - 主机按 `webContents` 绑定反查真实 ghostId，**不信任 sender 自报身份**。
@@ -316,6 +318,16 @@
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
   `args.attachments`，绝不把本地绝对路径暴露给插件。插件自行保存业务状态和更新 UI。
   Host 不自动回调插件，也不得新增画廊等插件业务语义。
+- 所有插件 HTML 页面（`settingsHtml`、panel、mainView 与逻辑页）都可以通过 `<img>` 或
+  CSS 图片直接加载任意 HTTPS 地址，这是唯一的页面网络直连例外。Host 统一生成包含
+  `img-src https:` 的 CSP，并由 owner × plugin session 请求闸把外部请求严格限定为
+  `protocol === "https:" && resourceType === "image"`。HTTP 图片、`fetch` / XHR、脚本、
+  样式表、字体、音视频、WebSocket 与其它协议一律不因此放行；同 ghost 的
+  `cindy-ghost://` 资源继续放行。该能力不新增 HTML sanitizer 或图片属性白名单；既有 CSP
+  继续阻止内联脚本和内联事件处理器，同包脚本行为不变。远程图片请求会向第三方暴露用户的
+  网络地址及完整 URL，作者不得把密钥、令牌或用户私密数据拼进图片 URL。session listener
+  按 owner × plugin 幂等注册；设置页与同插件其它页面继续共享 browser storage、IndexedDB
+  与 `BroadcastChannel`。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
 - `iosSimulator` 能力只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
   Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
@@ -493,8 +505,9 @@ topic 路由；产品层多端语义见
 
 ## Review 清单
 
-1. 沙箱是否保持进程隔离、专属 partition、无 Node／宿主 FS／网络直连？身份是否由主机
-   反查而非信任 sender 自报？
+1. 沙箱是否保持进程隔离、专属 partition、无 Node／宿主 FS／通用网络直连？HTTPS 图片
+   例外是否仍严格限定为 `protocol === "https:" && resourceType === "image"`？身份是否由
+   主机反查而非信任 sender 自报？
 2. 是否先按执行者分清边界：当前 Agent 在途的通用操作是否严格绑定同插件、同会话、
    未交卷的 `callId` 并复用 Agent 授权；插件自主 Host 能力是否以 manifest 直接字段声明、
    在详情如实展示并由 Host 守门？是否误把安装弹窗或前端展示当成授权事实？

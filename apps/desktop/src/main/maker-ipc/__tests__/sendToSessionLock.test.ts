@@ -152,4 +152,31 @@ describe('sendToSessionLock', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(hasSendToSessionLock('s6')).toBe(false);
   });
+
+  it('starts each watchdog after acquisition so a stalled holder cannot release all queued sends', async () => {
+    const first = await acquireSendToSessionLock('queued-watchdogs');
+    let secondRelease: (() => void) | undefined;
+    let thirdAcquired = false;
+    const second = acquireSendToSessionLock('queued-watchdogs').then((release) => {
+      secondRelease = release;
+    });
+    const third = acquireSendToSessionLock('queued-watchdogs').then((release) => {
+      thirdAcquired = true;
+      release();
+    });
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await second;
+    expect(secondRelease).toBeTypeOf('function');
+    expect(thirdAcquired).toBe(false);
+    expect(hasSendToSessionLock('queued-watchdogs')).toBe(true);
+
+    first();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(thirdAcquired).toBe(false);
+    secondRelease!();
+    await third;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasSendToSessionLock('queued-watchdogs')).toBe(false);
+  });
 });

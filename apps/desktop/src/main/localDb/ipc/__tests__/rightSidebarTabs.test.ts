@@ -319,21 +319,6 @@ describe('rightSidebarTabs IPC', () => {
       expect(listed.activeTabId).toBeNull();
     });
 
-    it('accepts the Bot deliverables tab as a singleton kind', async () => {
-      const created = await invoke<{ tab: ListResp['tabs'][number]; created: boolean }>(
-        'local-db:right-sidebar-tabs:ensure-singleton',
-        { sessionId: 's1', kind: 'bot-artifacts', state: { filter: 'all' } },
-      );
-      expect(created.created).toBe(true);
-      expect(created.tab).toMatchObject({ kind: 'bot-artifacts', isActive: false });
-      const again = await invoke<{ tab: ListResp['tabs'][number]; created: boolean }>(
-        'local-db:right-sidebar-tabs:ensure-singleton',
-        { sessionId: 's1', kind: 'bot-artifacts', state: { filter: 'image' } },
-      );
-      expect(again.created).toBe(false);
-      expect(again.tab.id).toBe(created.tab.id);
-    });
-
     it('fails closed for unknown sessions and non-singleton kinds', async () => {
       await expect(
         invoke('local-db:right-sidebar-tabs:ensure-singleton', {
@@ -350,7 +335,7 @@ describe('rightSidebarTabs IPC', () => {
       await expect(
         invoke('local-db:right-sidebar-tabs:ensure-singleton', {
           sessionId: 's1',
-          kind: 'bot-delegations',
+          kind: 'bot-artifacts',
         }),
       ).rejects.toThrow(/INVALID_PARAMS/);
     });

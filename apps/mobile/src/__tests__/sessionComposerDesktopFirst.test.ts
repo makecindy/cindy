@@ -7,6 +7,18 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile session composer desktop-first surface', () => {
+  it('keeps local send and queue activity out of message grouping', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    expect(source).toContain('const isMessageListStreaming = remoteSessionRunning || currentTurnStreaming;');
+    expect(source).toContain('isSessionStreaming: isMessageListStreaming,');
+    expect(source).toContain('() => sending || canStopQueue || remoteSessionRunning || currentTurnStreaming');
+    const renderStart = source.indexOf('const renderWindow = useMemo(');
+    const renderEnd = source.indexOf('// Reconciliation must only use committed rows.', renderStart);
+    const renderSource = source.slice(renderStart, renderEnd);
+    expect(renderSource).not.toContain(', isSessionStreaming,');
+    expect(renderSource).toContain(', isMessageListStreaming,');
+  });
+
   it('fences every active-session snapshot request against newer retry progress', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 

@@ -1137,8 +1137,8 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 
 **Reserved artwork namespace — Bot avatar sentinels (Desktop registered 2026-08-17).**
 
-- **Where**: the Bot identity mark only — `features/bots/BotAvatar.tsx`. A Bot's `avatar` field holds either one grapheme or a reserved `cindy://avatar/…` sentinel (`botAvatarIdentity.ts`). This build ships no bundled portraits; the mark renders the grapheme or the initial-letter fallback over the §10 `--bot-avatar-*-bg` hue.
-- **Forward compatibility**: a sentinel this build cannot resolve (artwork added by a newer client, or shipped by a future release) renders the neutral initial — never a broken `<img>` and never the raw `cindy://avatar/…` string as text. Contract test: `botAvatar.test.tsx`. Any future bundled portrait must come back through a fresh artwork-surface approval; this registration only reserves the namespace and the fallback contract.
+- **Where**: the Bot identity mark only — `features/bots/BotAvatar.tsx`. A Bot's `avatar` field holds either one grapheme or a reserved `cindy://avatar/…` sentinel (`botAvatarIdentity.ts`). The three user-selected Cindy, Dash and LiZi preset portraits share this component and its round crop. Custom graphemes and the initial-letter fallback render over the §10 `--bot-avatar-*-bg` hue.
+- **Forward compatibility**: a sentinel this build cannot resolve (artwork added by a newer client, or shipped by a future release) renders the neutral initial — never a broken `<img>` and never the raw `cindy://avatar/…` string as text. Contract test: `botAvatar.test.tsx`. Unknown sentinels retain this fallback contract; additional portrait sets require artwork-surface approval.
 
 **Sanctioned brand surface — session-switch deferred-loading overlay (Desktop approved 2026-08-10).**
 

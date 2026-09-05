@@ -106,6 +106,7 @@ import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import {
   CODEX_IMAGE_GENERATION_ACTOR_HEADER,
+  codexCustomProviderRoutesSignature,
   findCodexAppliedCustomProviderRoute,
   isCodexCustomProviderNamespacePath,
   parseCodexCustomProviderPath,
@@ -155,6 +156,18 @@ let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
 const _controlPlaneHandles = new Map<CodexProxyAuthInjection, ProxyHandle>();
 const _controlPlaneStartPromises = new Map<CodexProxyAuthInjection, Promise<void>>();
+interface CustomContextProxyEntry {
+  handle: ProxyHandle;
+  authInjection: CodexProxyAuthInjection;
+  routeSignature: string;
+  scopeGeneration: number;
+}
+const _customContextHandles = new Map<string, CustomContextProxyEntry>();
+const _customContextStartPromises = new Map<
+  string,
+  { authInjection: CodexProxyAuthInjection; routeSignature: string; promise: Promise<void> }
+>();
+const _customContextGenerations = new Map<string, number>();
 let _disposeGeneration = 0;
 let dumpSeq = 0;
 
@@ -2875,6 +2888,7 @@ function createCodexImageGenerationForwardLifecycleObserver(
 function resolveCodexCustomProviderRoutingDecision(
   body: unknown,
   ctx: RequestTransformCtx,
+  frozenRoutes?: readonly CodexCustomProviderRoute[],
 ): RoutingDecision | null | Promise<RoutingDecision | null> | undefined {
   const parsed = parseCodexCustomProviderPath(ctx.url);
   if (parsed.kind === 'not-custom-provider-route') return undefined;
@@ -2882,7 +2896,9 @@ function resolveCodexCustomProviderRoutingDecision(
     return codexCustomProviderRouteFailure(400, 'invalid_custom_provider_route');
   }
 
-  const route = findCodexAppliedCustomProviderRoute(parsed.routeId);
+  const route = frozenRoutes === undefined
+    ? findCodexAppliedCustomProviderRoute(parsed.routeId)
+    : frozenRoutes.find((candidate) => candidate.routeId === parsed.routeId);
   if (!route) return codexCustomProviderRouteFailure(403, 'custom_provider_route_unavailable');
 
   if (parsed.pathKind === 'images' && route.capabilities.imageGeneration !== true) {
@@ -2978,9 +2994,14 @@ function resolveCodexCustomProviderRoutingDecision(
 
 export function createModelRoutingTransform(
   frozenAuthInjection?: CodexProxyAuthInjection,
+  frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
 ): RoutingTransform {
   return (body, ctx) => {
-    const customProviderRoute = resolveCodexCustomProviderRoutingDecision(body, ctx);
+    const customProviderRoute = resolveCodexCustomProviderRoutingDecision(
+      body,
+      ctx,
+      frozenCustomProviderRoutes,
+    );
     if (customProviderRoute !== undefined) return customProviderRoute;
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
@@ -3322,6 +3343,7 @@ export function withCodexUpstreamRecording(
 
 function createCodexProxyHandle(
   frozenAuthInjection?: CodexProxyAuthInjection,
+  frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
 ): Promise<ProxyHandle> {
   const execAdapter = createResponsesCustomToolFunctionAdapter(['exec']);
   return createAnthropicCompatProxy({
@@ -3337,7 +3359,7 @@ function createCodexProxyHandle(
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
-      createModelRoutingTransform(frozenAuthInjection),
+      createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes),
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(
@@ -3512,6 +3534,123 @@ export function getCodexControlPlaneProxyEndpoint(
     fallbackEndpoint,
   });
   return fallbackEndpoint;
+}
+
+/**
+ * Start a one-session proxy whose auth shape and custom Provider routes are frozen together.
+ * The scope key belongs to the matching custom-context AppServerHost and must be released when
+ * that Host is retired; ordinary transport recovery keeps the lease alive.
+ */
+export async function ensureCodexCustomContextProxyReady(
+  scopeKey: string,
+  authInjection: CodexProxyAuthInjection,
+  routes: readonly CodexCustomProviderRoute[],
+): Promise<void> {
+  const key = scopeKey.trim();
+  if (!key) throw new Error('custom-context Codex proxy requires a scope key');
+  const routeSignature = codexCustomProviderRoutesSignature(routes);
+  const current = _customContextHandles.get(key);
+  if (
+    current?.authInjection === authInjection
+    && current.routeSignature === routeSignature
+  ) return;
+  const starting = _customContextStartPromises.get(key);
+  if (
+    starting?.authInjection === authInjection
+    && starting.routeSignature === routeSignature
+  ) return starting.promise;
+  if (current || starting) await releaseCodexCustomContextProxy(key);
+
+  const scopeGeneration = _customContextGenerations.get(key) ?? 0;
+  const disposeGeneration = _disposeGeneration;
+  let promise!: Promise<void>;
+  promise = (async () => {
+    try {
+      const handle = await createCodexProxyHandle(authInjection, [...routes]);
+      if (
+        disposeGeneration !== _disposeGeneration
+        || scopeGeneration !== (_customContextGenerations.get(key) ?? 0)
+      ) {
+        await handle.dispose().catch((err) => {
+          log.warn('codex custom-context proxy start raced with release', {
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+        return;
+      }
+      _customContextHandles.set(key, {
+        handle,
+        authInjection,
+        routeSignature,
+        scopeGeneration,
+      });
+      log.info('codex custom-context proxy ready', {
+        url: handle.url,
+        routeCount: routes.length,
+      });
+    } catch (err) {
+      _customContextHandles.delete(key);
+      log.error('codex custom-context proxy failed to start', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      if (_customContextStartPromises.get(key)?.promise === promise) {
+        _customContextStartPromises.delete(key);
+      }
+    }
+  })();
+  _customContextStartPromises.set(key, { authInjection, routeSignature, promise });
+  return promise;
+}
+
+export function isCodexCustomContextProxyHandleReady(scopeKey: string): boolean {
+  return _customContextHandles.has(scopeKey);
+}
+
+export function getCodexCustomContextProxyEndpoint(scopeKey: string): string {
+  const handle = _customContextHandles.get(scopeKey)?.handle;
+  if (handle) return handle.url;
+  const fallbackEndpoint = buildCodexGatewayBaseUrl();
+  log.warn('codex custom-context proxy not ready, falling back to direct gateway', {
+    fallbackEndpoint,
+  });
+  return fallbackEndpoint;
+}
+
+export async function releaseCodexCustomContextProxy(scopeKey: string): Promise<void> {
+  const key = scopeKey.trim();
+  if (!key) return;
+  const releaseGeneration = (_customContextGenerations.get(key) ?? 0) + 1;
+  _customContextGenerations.set(key, releaseGeneration);
+  const starting = _customContextStartPromises.get(key)?.promise;
+  if (starting) await starting.catch(() => undefined);
+  const entry = _customContextHandles.get(key);
+  if (!entry || entry.scopeGeneration >= releaseGeneration) {
+    if (
+      !entry
+      && !_customContextStartPromises.has(key)
+      && _customContextGenerations.get(key) === releaseGeneration
+    ) {
+      _customContextGenerations.delete(key);
+    }
+    return;
+  }
+  _customContextHandles.delete(key);
+  try {
+    await entry.handle.dispose();
+  } catch (err) {
+    log.warn('codex custom-context proxy dispose failed', {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    if (
+      !_customContextHandles.has(key)
+      && !_customContextStartPromises.has(key)
+      && _customContextGenerations.get(key) === releaseGeneration
+    ) {
+      _customContextGenerations.delete(key);
+    }
+  }
 }
 
 /**
@@ -3751,6 +3890,19 @@ export async function disposeCodexProxy(): Promise<void> {
   const controlPlaneHandles = Array.from(_controlPlaneHandles.values());
   _controlPlaneHandles.clear();
 
+  if (_customContextStartPromises.size > 0) {
+    await Promise.allSettled(
+      Array.from(_customContextStartPromises.values(), (entry) => entry.promise),
+    );
+    _customContextStartPromises.clear();
+  }
+  const customContextHandles = Array.from(
+    _customContextHandles.values(),
+    (entry) => entry.handle,
+  );
+  _customContextHandles.clear();
+  _customContextGenerations.clear();
+
   if (h) {
     try {
       await h.dispose();
@@ -3763,6 +3915,15 @@ export async function disposeCodexProxy(): Promise<void> {
       await handle.dispose();
     } catch (err) {
       log.warn('codex control-plane proxy dispose failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }));
+  await Promise.all(customContextHandles.map(async (handle) => {
+    try {
+      await handle.dispose();
+    } catch (err) {
+      log.warn('codex custom-context proxy dispose failed', {
         err: err instanceof Error ? err.message : String(err),
       });
     }

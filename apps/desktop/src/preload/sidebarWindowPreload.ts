@@ -51,7 +51,7 @@ function readPreferredSystemLocale(): ApplicationMenuLocale {
   try {
     const value = ipcRenderer.sendSync('app-locale:get-preferred-system-locale-sync');
     return typeof value === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(value)
-      ? (value as ApplicationMenuLocale)
+      ? value as ApplicationMenuLocale
       : DEFAULT_LOCALE;
   } catch {
     return DEFAULT_LOCALE;

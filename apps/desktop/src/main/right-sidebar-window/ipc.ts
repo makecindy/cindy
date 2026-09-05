@@ -156,8 +156,8 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       throwIpcError('INVALID_PARAMS', 'command.focusRunId must be string | null');
     }
     const focusProvider = r.focusProvider === null || !hasFocusProvider
-      ? (r.focusProvider as null | undefined)
-        : requireEnum(r.focusProvider, SUBAGENT_PROVIDERS, 'command.focusProvider');
+      ? r.focusProvider as null | undefined
+      : requireEnum(r.focusProvider, SUBAGENT_PROVIDERS, 'command.focusProvider');
     const hasRunFocus = typeof r.focusRunId === 'string' && r.focusRunId.length > 0;
     const hasProviderFocus = typeof focusProvider === 'string';
     if (hasRunFocus !== hasProviderFocus) {

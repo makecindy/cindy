@@ -824,10 +824,16 @@ export function translatePiEvent(
       const progress = parsePiSubagentProgress(event.partialResult);
       if (progress) {
         const previousUpdate = ctx.subagentToolCalls.get(progress.update.taskId);
+        // Legacy progress frames name the role (e.g. scout). Keep the task
+        // title chosen at spawn across progress and terminal events.
+        const update = {
+          ...progress.update,
+          ...(previousUpdate?.title ? { title: previousUpdate.title } : {}),
+        };
         if (previousUpdate) {
           ctx.subagentToolCalls.set(progress.update.taskId, {
             ...previousUpdate,
-            ...progress.update,
+            ...update,
           });
         }
         // 委派用量并进本 turn 的记账。子代理是独立 pi 进程,它的请求不走父进程的 usage 流,
@@ -839,7 +845,7 @@ export function translatePiEvent(
           progress.delegatedUsage,
           progress.delegatedUsageSegments,
         );
-        queue.push({ type: 'agent_task_update', data: progress.update, source: 'pi' });
+        queue.push({ type: 'agent_task_update', data: update, source: 'pi' });
       }
       return;
     }

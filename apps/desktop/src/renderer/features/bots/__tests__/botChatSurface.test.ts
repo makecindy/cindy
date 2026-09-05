@@ -134,25 +134,3 @@ describe('伙伴消息流收起内部工作过程', () => {
     expect(messageStream).toContain('botArtifacts={simplifiedBotConversation}');
   });
 });
-
-/**
- * 恢复选择器带来的**必须**配套:伙伴运行时会在需要时从 Profile 重启,
- * 输入框只写会话行的话,用户选的模型会回跳。
- */
-describe('伙伴对话的运行时选择回写 Profile', () => {
-  it('模型 / effort / 权限 / 供应商 / fast 五个入口都接上了回写', () => {
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ model: newModelId })');
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ effort: newEffort })');
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ permissionMode: newMode })');
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ providerId: newProviderId })');
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ fastMode: next })');
-    expect(sessionView).toContain('onProviderDidChange={handleProviderDidChange}');
-    expect(sessionView).toContain('onFastModeChange={handleFastModeChange}');
-  });
-
-  it('普通任务一行都不写:没有伙伴身份就直接返回', () => {
-    expect(sessionView).toContain(
-      'const botId = botChatIdentityRef.current?.id;\n      if (!botId) return;',
-    );
-  });
-});

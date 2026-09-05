@@ -26,7 +26,7 @@ interface SessionEntry {
   resolved: boolean;
   listeners: Set<() => void>;
   unsubscribe: (() => void) | null;
-  loading: Promise<void> | null;
+  reloadGeneration: number;
 }
 
 /**
@@ -48,7 +48,7 @@ function ensureEntry(sessionId: string): SessionEntry {
     resolved: false,
     listeners: new Set(),
     unsubscribe: null,
-    loading: null,
+    reloadGeneration: 0,
   };
   sessions.set(sessionId, entry);
   return entry;
@@ -62,10 +62,11 @@ async function reload(sessionId: string): Promise<void> {
   const entry = sessions.get(sessionId);
   if (!entry) return;
   const owner = getDataOwnerGeneration();
+  const generation = ++entry.reloadGeneration;
   try {
     const result = await window.electronAPI.maker.listBotDelegations(sessionId);
     if (!isDataOwnerGenerationCurrent(owner)) return;
-    if (sessions.get(sessionId) !== entry) return;
+    if (sessions.get(sessionId) !== entry || entry.reloadGeneration !== generation) return;
     // 短暂读取失败不能把已经显示的持久任务卡抹掉。成功时才替换快照；失败时
     // 保留上一次可核实的状态，并让卡片继续可见。
     if (result.ok) entry.rows = result.delegations;
@@ -73,7 +74,7 @@ async function reload(sessionId: string): Promise<void> {
     emit(entry);
   } catch {
     if (!isDataOwnerGenerationCurrent(owner)) return;
-    if (sessions.get(sessionId) !== entry) return;
+    if (sessions.get(sessionId) !== entry || entry.reloadGeneration !== generation) return;
     entry.resolved = true;
     emit(entry);
   }

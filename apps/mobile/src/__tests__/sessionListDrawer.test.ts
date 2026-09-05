@@ -7,7 +7,7 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
 
 /**
  * 宽屏任务列表抽屉的设计与行为门(与 sessionHeaderDesktopFirst 同款源码字符串门):
- * 本仓 mobile 测试体系是纯函数 + 源码门,没有组件渲染设施,关键交互约定用字符串锁住。
+ * 此处锁住视觉与手势约定；订阅更新另由 sessionListDrawerUpdates.test.tsx 验证。
  */
 describe('mobile session list drawer', () => {
   const source = () =>
@@ -61,7 +61,8 @@ describe('mobile session list drawer', () => {
     // 关闭动画期间 overlay 恒拦截,不放行点击穿透半透明 scrim(review #1328)。
     expect(text).toContain('pointerEvents="auto"');
     // 抽屉 presentation 必须带权威设备身份,防 canonicalDeviceId 被弱推断覆盖(review #1328)。
-    expect(text).toContain('devices: remoteSessionStore.getDeviceIdentity(),');
+    expect(text).toContain('const devices = useRemoteDeviceIdentity();');
+    expect(text).toMatch(/buildMobileHomePresentation\(\{(?:(?!\}\);)[\s\S])*?\n\s*devices,/);
     // 行内状态与标题兜底与首页同口径:pending/liveActivity 索引 + 已解析 unnamedLabel(review #1328)。
     expect(text).toContain('remoteSessionStore.getPendingInteractions(session.id).length');
     expect(text).toContain('remoteSessionStore.getSessionLiveActivity(session.id)');
@@ -77,11 +78,11 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('buildMobileHomePresentation({');
     expect(text).toContain('buildHomeSections(home, false, false)');
     expect(text).toContain('resolveMobileSessionRightStatus({');
-    expect(text).toContain('buildRemoteSessionCardPreview(item, { running })');
+    expect(text).toMatch(/buildRemoteSessionCardPreview\((?:(?!\);)[\s\S])*?\{ running \},?\s*\)/);
     expect(text).toContain('formatRemoteSessionSidebarTime(lastActivityAt)');
     expect(text).toContain('conversationSearchOriginsFromDeviceModels');
-    expect(text).toContain('remoteSessionStore.getConversationSearchDeviceModels()');
-    expect(text).toContain('remoteSessionStore.getDeviceIdentity()');
+    expect(text).toContain('useRemoteConversationSearchDeviceModels()');
+    expect(text).toContain('useRemoteDeviceIdentity()');
   });
 
   it('exposes stable testIDs and modal accessibility semantics', () => {

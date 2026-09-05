@@ -196,8 +196,9 @@ export function createBotSettingsAutosave(
 
   const runNow = async (): Promise<void> => {
     clearTimer();
-    if (inFlight) {
+    while (inFlight) {
       // 撞上在途提交:等它结束再重判脏(trailing save),不丢这一批修改。
+      // 多个 blur/flush 同时等待时，先醒来的调用可能已开始下一次保存。
       await inFlight.catch(() => undefined);
     }
     if (detached) return;

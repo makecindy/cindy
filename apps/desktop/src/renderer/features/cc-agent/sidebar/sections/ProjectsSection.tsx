@@ -535,6 +535,7 @@ export function ProjectsSection({
     [
       projects,
       dialogues,
+      bots,
       unclassified,
       unclassifiedHidden,
       deviceGroupingActive,

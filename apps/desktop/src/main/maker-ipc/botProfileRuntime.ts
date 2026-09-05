@@ -113,8 +113,6 @@ export interface BotProfileRuntimeDeps {
   listTeammates?: (input: { excludeBotId: string }) => Promise<
     { id: string; name: string; description?: string | null }[]
   >;
-  /** @deprecated Bot Home Memory no longer follows the global Maker Memory switch. */
-  isMemoryEngineEnabled?: () => boolean;
   /**
    * 这个伙伴自己沉淀的技能(Cindy 自有 per-bot 存储,不是 harness 发现目录)。
    *

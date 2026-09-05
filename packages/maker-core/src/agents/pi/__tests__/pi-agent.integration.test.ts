@@ -2344,6 +2344,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         mkdirSync(path.dirname(secretPath), { recursive: true });
         mkdirSync(subDir);
         mkdirSync(stackOtherDir);
+        mkdirSync(path.dirname(path.join(workingDir, escapedLinkName)), { recursive: true });
         writeFileSync(secretPath, 'FAKE_REDIRECT_DOTENV_SECRET=must-not-leak');
         writeFileSync(ordinaryPath, 'ordinary-content');
         writeFileSync(path.join(workingDir, 'change-dir.sh'), 'cd sub\n');
@@ -2921,7 +2922,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(cardUpdates.every((u) => u.provider === 'pi')).toBe(true);
         expect(cardUpdates.at(0)?.status).toBe('running');
         expect(cardUpdates.at(-1)?.status).toBe('completed');
-        expect(cardUpdates.at(-1)?.title).toBe('scout');
+        expect(cardUpdates.at(-1)?.title).toBe('find the auth entry point');
         const finalUsage = cardUpdates.at(-1)?.usage as Record<string, number> | undefined;
         // 真实用量来自子进程的 message_end.usage(fake gateway 上报 42 input tokens)。
         expect(finalUsage?.totalTokens).toBeGreaterThan(0);

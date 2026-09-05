@@ -159,8 +159,26 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
   工具，不建第二套）；
 - 同时改动 Desktop 与 Mobile 的 PR：两个平台的 Light/Dark 均需采集，不得只交一侧；
 - 提交只覆盖未受影响平台的截图（如 Mobile-only 改动附 Desktop 截图）不算满足本条；
-- 记录 commit SHA、平台、主题、日期；材料外置到 `docs/design-evidence/YYYY-MM-DD/` 或 PR
-  artifact，台账与文档只保存稳定链接与最近结论；
+- 记录 commit SHA、平台、主题、日期；
+- **栅格证据（截图 / 录屏）一律走 PR 附件或 artifact，不入仓**（2026-09-05 收口，起因见下）。
+  `docs/design-evidence/YYYY-MM-DD/` 只放**纯文本索引**：commit SHA、平台、主题、日期、
+  逐格实测值（computed style 取到的色号即可复核）、有意差异清单、缺口登记、以及指向 PR
+  评论的链接。台账与文档同样只保存稳定链接与最近结论；
+  - **为什么改**：本条原文给了「入仓 `docs/design-evidence/` 或 PR artifact」两个选项，
+    DS-4（#3920）是第一张真正跑证据流程的 PR，选了入仓那条，实测代价 = 12 张 PNG / 944KB
+    永久进 Git 历史。栅格证据的效用是**一次性的**（供设计师 review 时看一眼），而 Git 历史
+    是永久的、每次 clone 都要下；后续 DS-5 / DS-6 / DS-9 三张同为「有意可见」，照此累积
+    将达数 MB 量级。真正需要长期留存的是**数值与结论**，它们是文本、放 `design-evidence`
+    的 README 与 `design-decision-log.md` 里即可；
+  - **既有入仓证据不追溯删除**（Git 历史重写代价大于收益）；本条只约束新增。DS-4（#3920）
+    的 12 张 PNG 在本条落地前已随合并进入 `main` 历史，本 PR 只把它们从 tip 移除、不重写
+    历史——`docs/design-previews/**/evidence/` 下另有 19 张同类历史资产，同样按「不追溯」
+    处理；要不要连带收口是独立议题；
+  - 图片放 PR 时的操作说明：GitHub 的图片附件上传端点依赖网页会话，`gh` CLI 与 REST API
+    都传不了图（GraphQL 亦无公开 mutation），需由人在 PR 评论框里拖拽上传。Agent 应把图
+    落到工作区（gitignore 覆盖的临时目录）并在报告里给出路径，由人完成上传；上传后若图片
+    出现在 PR 内某条评论里，把**该评论的链接**回写进 `design-evidence` 的文本索引，
+    即成为稳定入口（issue comment URL 长期有效，附件 URL 随 CDN 变动）；
 - 本合同与 `DESIGN.md §10` 双模式交付门槛的关系：实现双模式是硬性要求；实机目检按该门槛
   执行 best-effort 并如实申报，不得把「复用了 themed 样式」上报为「双模式已验证」。
 

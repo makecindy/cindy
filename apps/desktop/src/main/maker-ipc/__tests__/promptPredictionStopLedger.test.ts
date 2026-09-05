@@ -10,6 +10,10 @@ import {
 } from '../promptPredictionStopLedger.js';
 
 const REGISTER_SOURCE = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+const PREPARATION_SOURCE = readFileSync(
+  new URL('../sessionEventPreparation.ts', import.meta.url),
+  'utf8',
+);
 
 beforeEach(() => {
   resetPromptPredictionStopLedgerForTests();
@@ -26,10 +30,13 @@ describe('prompt prediction explicit Stop ledger', () => {
 
   it('INPUT_STOP 在 abort 前记账，中央 turn-start 边界负责清除', () => {
     const stopHandlerAt = REGISTER_SOURCE.indexOf('ipcMain.handle(MAKER_INVOKE.INPUT_STOP');
-    const noteAt = REGISTER_SOURCE.indexOf('notePromptPredictionSessionStopped(sid);', stopHandlerAt);
+    const noteAt = REGISTER_SOURCE.indexOf(
+      'notePromptPredictionSessionStopped(sid);',
+      stopHandlerAt,
+    );
     const abortAt = REGISTER_SOURCE.indexOf('inputCoordinator.stop(', stopHandlerAt);
-    const clearAt = REGISTER_SOURCE.indexOf('clearPromptPredictionSessionStopped(session.id);');
-    const turnStartAt = REGISTER_SOURCE.indexOf('markSessionTurnStarted(session.id);', clearAt);
+    const clearAt = PREPARATION_SOURCE.indexOf('clearPromptPredictionSessionStopped(session.id);');
+    const turnStartAt = PREPARATION_SOURCE.indexOf('markSessionTurnStarted(session.id);', clearAt);
 
     expect(stopHandlerAt).toBeGreaterThanOrEqual(0);
     expect(noteAt).toBeGreaterThan(stopHandlerAt);

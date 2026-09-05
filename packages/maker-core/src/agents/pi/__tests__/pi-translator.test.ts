@@ -76,6 +76,31 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('keeps the task title when a progress frame reports only the role name', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({
+      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'subagent',
+      args: { agent: 'scout', task: 'find the auth entry point' },
+    }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'tool_execution_update', toolCallId: 'sa-title',
+      partialResult: { details: {
+        __cindySubagent: 1, taskId: 'sa-title', status: 'completed', agentName: 'scout',
+      } },
+    }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'tool_execution_end', toolCallId: 'sa-title', result: 'done', isError: false,
+    }), queue, ctx);
+    const updates = events.filter((event) => event.type === 'agent_task_update');
+    expect(updates).toHaveLength(3);
+    expect(updates.map((event) => event.data)).toEqual([
+      expect.objectContaining({ title: 'find the auth entry point' }),
+      expect.objectContaining({ title: 'find the auth entry point' }),
+      expect.objectContaining({ title: 'find the auth entry point', status: 'completed' }),
+    ]);
+  });
+
   it('does not project management commands as Subagent runs', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

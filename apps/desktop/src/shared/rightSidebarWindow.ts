@@ -110,7 +110,8 @@ export interface RsbWindowCommandRouteRequest {
 }
 
 /** main-owned 宿主裁决；renderer 只有 attached 可以写本地 store。 */
-export type RsbWindowCommandRouteResult = 'attached'
+export type RsbWindowCommandRouteResult =
+  | 'attached'
   | 'routed'
   | 'queued'
   | 'stale-context';

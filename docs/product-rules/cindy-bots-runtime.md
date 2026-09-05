@@ -114,6 +114,8 @@ harness + provider + model + effort + fastMode
 该伙伴保存自己的链。全局链由主进程按当前数据 owner 持久化，并由所有 Session 创建与 fallback
 入口直接读取；不得只存在 renderer localStorage。
 
+发送前按持久 Profile 协调长期主任务的路由，复用普通任务的模型控制与跨引擎交接。配置未变时保留运行期 fallback；用户改变候选链后按新选择执行。后台任务继承发起时的实际路由，不读取可能过时的主任务创建模型。
+
 ## 6. Skill、工具与 MCP
 
 轻量不等于没有 Skill。伙伴启动时按以下优先级构造能力：

@@ -15,6 +15,7 @@ import { collectMobileMarkdownImages } from '@/session/messageMarkdown';
 import { countMobileRenderItemDiffs } from '@/session/messagePresentation';
 import type { RemoteMessage } from '@/session/types';
 import { contentToPreview } from '@/utils/contentPreview';
+import { remoteMessageCompletesTurn } from '@/session/messageNormalize';
 
 export interface MobileStreamingRenderPrefixCache {
   boundaryMessage?: RemoteMessage;
@@ -545,6 +546,9 @@ function stableAssistantBoundaryCanSplit(
 
   for (let index = boundaryIndex + 1; index < messages.length; index += 1) {
     const message = messages[index];
+    // A done seal folds the work before this split as well. Reusing an active prefix would
+    // keep those old rows expanded until a later idle update happened to rebuild the list.
+    if (remoteMessageCompletesTurn(message)) return false;
     if (message.role === 'user') return false;
     if (typeof message.agentMeta?.parentUuid === 'string' && message.agentMeta.parentUuid) {
       return false;

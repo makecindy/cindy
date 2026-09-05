@@ -31,6 +31,7 @@ async function makeHarness(deps: ComputerMcpDeps, options?: Parameters<typeof cr
     textPayload(await client.callTool({ name: 'call_tool', arguments: { name, args } }));
   return {
     call,
+    client,
     cleanup: async () => {
       await client.close();
       await server.close();
@@ -298,8 +299,182 @@ describe('computer snapshot guard', () => {
     const h = await makeHarness(deps, { sessionId: 'sess-1' });
 
     const observed = await h.call('get_window_state', { pid: 100, window_id: 1 });
-    expect(observed.ok).toBe(true);
+    expect(observed.ok).toBe(false);
+    expect(observed.errorCode).toBe('CUA_UNAVAILABLE');
     expect(observed).not.toHaveProperty('snapshot_id');
     await h.cleanup();
   });
+  const failedCapture = {
+    degraded: true,
+    degraded_reason: 'ax_window_unresolved',
+    elements: [],
+    tree_markdown: '',
+    screenshot_frame_valid: false,
+    screenshot_error: {
+      code: 'px_capture_unavailable',
+      reason: 'ScreenCaptureKit and shell capture failed',
+    },
+    background_input: {
+      routes: [{ route: 'accessibility', status: 'refused' }],
+    },
+  };
+
+  it.each(['returned failure', 'thrown failure'])(
+    'invalidates only the failed window and recovers after a fresh observation: %s',
+    async (failure) => {
+      let fail = false;
+      const callTool = vi.fn(async (name: string) => {
+        if (name === 'get_window_state') {
+          if (fail) {
+            if (failure === 'thrown failure') throw new Error('window gone');
+            return failedCapture;
+          }
+          return { elements: [{ element_token: 'driver-first:0' }] };
+        }
+        return { ok: true };
+      });
+      let sessionId = 's1';
+      const h = await makeHarness(
+        { getStatus: vi.fn(), callTool },
+        {
+          getSessionContext: () => ({
+            sessionId,
+            workingDir: '',
+            agentKind: 'codex',
+          }),
+        },
+      );
+      try {
+        const first = await h.call('get_window_state', {
+          pid: 100,
+          window_id: 1,
+        });
+        const otherWindow = await h.call('get_window_state', {
+          pid: 100,
+          window_id: 2,
+        });
+        sessionId = 's2';
+        const otherSession = await h.call('get_window_state', {
+          pid: 100,
+          window_id: 1,
+        });
+        sessionId = 's1';
+        fail = true;
+        const result = await h.client.callTool({
+          name: 'call_tool',
+          arguments: {
+            name: 'get_window_state',
+            args: { pid: 100, window_id: 1, capture_mode: 'vision' },
+          },
+        });
+        expect(result.isError).toBe(true);
+        const payload = textPayload(result);
+        expect(payload.ok).toBe(false);
+        expect(payload).not.toHaveProperty('snapshot_id');
+        if (failure === 'returned failure')
+          expect(payload.data).toEqual(failedCapture);
+        const dispatchCount = callTool.mock.calls.length;
+        for (const snapshot_id of [first.snapshot_id, 'driver-first']) {
+          expect(
+            await h.call('click', {
+              pid: 100,
+              window_id: 1,
+              element_index: 0,
+              snapshot_id,
+            }),
+          ).toMatchObject({ ok: false, errorCode: 'STALE_SNAPSHOT' });
+        }
+        expect(callTool).toHaveBeenCalledTimes(dispatchCount);
+        expect(
+          await h.call('click', {
+            pid: 100,
+            window_id: 2,
+            element_index: 0,
+            snapshot_id: otherWindow.snapshot_id,
+          }),
+        ).toMatchObject({ ok: true });
+        sessionId = 's2';
+        expect(
+          await h.call('click', {
+            pid: 100,
+            window_id: 1,
+            element_index: 0,
+            snapshot_id: otherSession.snapshot_id,
+          }),
+        ).toMatchObject({ ok: true });
+        sessionId = 's1';
+        fail = false;
+        const recovered = await h.call('get_window_state', {
+          pid: 100,
+          window_id: 1,
+        });
+        expect(
+          await h.call('click', {
+            pid: 100,
+            window_id: 1,
+            element_index: 0,
+            snapshot_id: recovered.snapshot_id,
+          }),
+        ).toMatchObject({ ok: true });
+      } finally {
+        await h.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { mode: undefined, state: failedCapture, ok: false },
+    {
+      mode: 'vision',
+      state: { ...failedCapture, elements: [{ index: 0 }] },
+      ok: false,
+    },
+    { mode: 'som', state: failedCapture, ok: false },
+    {
+      mode: 'ax',
+      state: { degraded: true, elements: [], tree_markdown: '' },
+      ok: false,
+    },
+    {
+      mode: 'ax',
+      state: { ...failedCapture, elements: [{ index: 0 }] },
+      ok: true,
+    },
+    {
+      mode: undefined,
+      state: { ...failedCapture, tree_markdown: 'Button: Save' },
+      ok: true,
+    },
+    {
+      mode: 'vision',
+      state: {
+        degraded: true,
+        elements: [],
+        screenshot_frame_valid: true,
+        screenshot_file_path: 'state.png',
+      },
+      ok: true,
+    },
+    { mode: undefined, state: { elements: [] }, ok: true },
+  ])(
+    'respects requested observation mode: $mode / ok=$ok',
+    async ({ mode, state, ok }) => {
+      const callTool = vi.fn(async () => state);
+      const h = await makeHarness({ getStatus: vi.fn(), callTool });
+      try {
+        const observed = await h.call('get_window_state', {
+          pid: 100,
+          window_id: 1,
+          capture_mode: mode,
+        });
+        expect(observed.ok).toBe(ok);
+        expect(Boolean(observed.snapshot_id)).toBe(ok);
+        expect(observed.data).toEqual(state);
+        // A failed observation is reported once; the wrapper never replays it or restarts the driver.
+        expect(callTool).toHaveBeenCalledTimes(1);
+      } finally {
+        await h.cleanup();
+      }
+    },
+  );
 });

@@ -39,6 +39,52 @@ function toolUse(id: string, toolName: string, input: unknown, seconds: number):
 }
 
 describe('messageRenderModel', () => {
+  it('keeps completed work folded when the next remote run starts before its user row arrives', () => {
+    const messages = [
+      message({ id: 'u1', role: 'user', content: 'start', createdAt: at(1) }),
+      toolUse('read1', 'Read', { file_path: '/repo/a.ts' }, 2),
+      message({ id: 'progress1', role: 'assistant', content: 'Checking the result.', createdAt: at(3) }),
+      toolUse('read2', 'Read', { file_path: '/repo/b.ts' }, 4),
+      message({ id: 'final1', role: 'assistant', content: 'Done.', agentMeta: { turnCompleted: true }, createdAt: at(5) }),
+      message({ id: 'pwd', role: 'system', content: '', systemCardType: 'pwd', createdAt: at(6) }),
+    ];
+    const before = buildMobileMessageRenderItems(messages, { isSessionStreaming: false });
+    expect(before.map((item) => item.key)).toEqual([
+      'message-u1', 'work-summary-read1', 'message-final1', 'message-pwd',
+    ]);
+    const waitingForEcho = buildMobileMessageRenderItems(messages, { isSessionStreaming: true });
+    expect(waitingForEcho).toEqual(before);
+    const afterEcho = buildMobileMessageRenderItems([
+      ...messages,
+      message({ id: 'u2', role: 'user', content: 'Continue', createdAt: at(7) }),
+    ], { isSessionStreaming: true });
+    expect(afterEcho.slice(0, before.length)).toEqual(before);
+  });
+
+  it('does not mistake a pause between progress messages for a completed turn', () => {
+    const messages = [
+      message({ id: 'u1', role: 'user', content: 'start', createdAt: at(1) }),
+      toolUse('read1', 'Read', { file_path: '/repo/a.ts' }, 2),
+      message({ id: 'progress1', role: 'assistant', content: 'Checking more.', createdAt: at(3) }),
+      toolUse('read2', 'Read', { file_path: '/repo/b.ts' }, 4),
+      message({ id: 'progress2', role: 'assistant', content: 'Still checking.', createdAt: at(5) }),
+    ];
+    expect(buildMobileMessageRenderItems(messages, { isSessionStreaming: true }).map((item) => item.key))
+      .toEqual(['message-u1', 'work-read1', 'message-progress1', 'work-read2', 'message-progress2']);
+  });
+
+  it('keeps a background subagent running after the parent reply is sealed', () => {
+    const items = buildMobileMessageRenderItems([
+      message({ id: 'u1', role: 'user', content: 'start', createdAt: at(1) }),
+      toolUse('agent1', 'Agent', { description: 'Background work' }, 2),
+      message({ id: 'final', role: 'assistant', content: 'Main work done.', agentMeta: { turnCompleted: true }, createdAt: at(3) }),
+      message({ id: 'child', role: 'assistant', content: 'Still working.', agentMeta: { parentUuid: 'agent1', isStreaming: true }, createdAt: at(4) }),
+    ], { isSessionStreaming: true });
+    const subagent = items.find((item) => item.type === 'subagent_group');
+    expect(subagent?.status).toBe('running');
+    expect(subagent?.childItems.some((item) => item.type === 'message' && item.message.isStreaming)).toBe(true);
+  });
+
   it('appends live auto-resume state while folding an earlier retry from the same interruption', () => {
     const priorRetry = message({ id: 'retry-1', role: 'user', content: '', agentMeta: { autoResume: true } });
     const items = buildMobileMessageRenderItems([message({ id: 'a', role: 'assistant', content: 'partial', agentMeta: { isStreaming: true } }), priorRetry], {

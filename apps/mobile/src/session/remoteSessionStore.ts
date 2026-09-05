@@ -1310,6 +1310,7 @@ function userMessageCanConsumePendingLiveReply(
 // 当前权威设备列表(由首页从设备列表 API reconcile 后注入)。每次重算会话时基于它 + 当前 shards(stale 侧)
 // 重建身份索引,用于给会话算展示用 canonicalDeviceId(把 re-link 后残留 stale shard 认领回当前设备);
 // 为 null 时不归一,安全退化。
+const EMPTY_DEVICE_IDENTITY: readonly { deviceId: string; name: string }[] = [];
 let deviceList: readonly { deviceId: string; name: string }[] | null = null;
 let conversationSearchDeviceModels: readonly {
   canOpen: boolean;
@@ -2925,7 +2926,7 @@ export const remoteSessionStore = {
    * store 已算好的规范 id 覆盖成仅凭会话内嵌名字推出的弱结果(re-link 后路由错设备)。
    */
   getDeviceIdentity(): readonly { deviceId: string; name: string }[] {
-    return deviceList ?? [];
+    return deviceList ?? EMPTY_DEVICE_IDENTITY;
   },
 
   getConversationSearchDeviceModels(): readonly {
@@ -5492,6 +5493,19 @@ function usePausableRemoteSessionStoreSnapshot<T>(
 
 export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getSessions);
+}
+
+/** Device identity can change without changing any session's reconciled reference. */
+export function useRemoteDeviceIdentity() {
+  return usePausableRemoteSessionStoreSnapshot('device-identity', remoteSessionStore.getDeviceIdentity);
+}
+
+/** Search reachability changes independently of message and home-status updates. */
+export function useRemoteConversationSearchDeviceModels() {
+  return usePausableRemoteSessionStoreSnapshot(
+    'conversation-search-devices',
+    remoteSessionStore.getConversationSearchDeviceModels,
+  );
 }
 
 /** Subscribe to one session's message mirror without triggering cache hydration side effects. */
