@@ -1,3 +1,27 @@
+import { DeviceLinkError } from '@cindy/device-link';
+
+const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
+  'VERSION_MISMATCH',
+  'REMOTE_DISABLED',
+  'ACCESS_REVOKED',
+  'CHANNEL_NOT_ALLOWED',
+  'DEVICE_LINK_CONTROL_DISABLED',
+  'DEVICE_LINK_STANDBY',
+]);
+
+/** Terminal for this replay; later online/reconnect triggers can start another. */
+export function isPermanentSubscriptionReplayError(err: unknown, available: boolean | undefined): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const code = err instanceof DeviceLinkError ? err.code : /\[([A-Z_]+)\]/.exec(message)?.[1];
+  // An offline response ends unknown-state recovery. Preserve the existing
+  // transient handling when a newer online presence contradicts the response.
+  // Never persist a route error into presence: late errors must not overwrite it.
+  return code !== undefined && (
+    PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(code)
+    || (code === 'DEVICE_OFFLINE' && available !== true)
+  );
+}
+
 export type SubscriptionReplayRef = {
   deviceId: string;
   topics: string[];
@@ -19,7 +43,7 @@ type SubscriptionReplaySchedulerOptions = {
   isDeviceUnresponsive: (deviceId: string) => boolean;
   /** undefined means this relay generation has not observed the peer yet. */
   getPresenceAvailability: (deviceId: string) => boolean | undefined;
-  isPermanentError: (error: unknown) => boolean;
+  isPermanentError: (error: unknown, deviceId: string) => boolean;
   log: {
     debug(message: string): void;
     warn(message: string): void;
@@ -74,7 +98,7 @@ export function createSubscriptionReplayScheduler(
     inFlight.set(deviceId, requestToken);
     void options.remoteSubscribe(deviceId, topics).catch((error: unknown) => {
       if (currentGeneration(deviceId) !== gen) return;
-      if (options.isPermanentError(error)) {
+      if (options.isPermanentError(error, deviceId)) {
         options.log.warn(
           `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, permanent, giving up: ${String(error)}`,
         );

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSubscriptionReplayScheduler } from '../subscriptionReplayScheduler';
+import { DeviceLinkError } from '@cindy/device-link';
+
+import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from '../subscriptionReplayScheduler';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -16,6 +18,7 @@ describe('subscription replay scheduler', () => {
   describe('recovery before presence arrives', () => {
     const deviceId = 'device-a';
     let presence: Map<string, boolean>;
+    let directoryOnline: Map<string, boolean>;
     let relayOnline: boolean;
     let unresponsive: boolean;
     let tornDown: boolean;
@@ -26,6 +29,7 @@ describe('subscription replay scheduler', () => {
     beforeEach(() => {
       vi.useFakeTimers();
       presence = new Map();
+      directoryOnline = new Map();
       relayOnline = true;
       unresponsive = false;
       tornDown = false;
@@ -38,8 +42,9 @@ describe('subscription replay scheduler', () => {
         isLinkTornDown: () => tornDown,
         isRelayOnline: () => relayOnline,
         isDeviceUnresponsive: () => unresponsive,
-        getPresenceAvailability: (id) => presence.get(id),
-        isPermanentError: (error) => String(error).includes('ACCESS_REVOKED'),
+        getPresenceAvailability: (id) => presence.get(id)
+          ?? (directoryOnline.get(id) === false ? false : undefined),
+        isPermanentError: (error, id) => isPermanentSubscriptionReplayError(error, presence.get(id)),
         log: { debug: vi.fn(), warn: vi.fn() },
       });
     });
@@ -119,6 +124,61 @@ describe('subscription replay scheduler', () => {
       scheduler.replay('ws-online');
       await vi.advanceTimersByTimeAsync(60_000);
       expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      new Error('[DEVICE_OFFLINE] offline'),
+      new DeviceLinkError('DEVICE_OFFLINE', 'offline'),
+    ])('stops unknown recovery on explicit offline response %s and resumes on directory online', async (error) => {
+      remoteSubscribe.mockRejectedValue(error);
+      scheduler.replay('ws-online');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(presence.has(deviceId)).toBe(false);
+
+      directoryOnline.set(deviceId, true);
+      remoteSubscribe.mockResolvedValue(undefined);
+      scheduler.replay('directory-online', deviceId);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops on directory offline and retries again after the directory reports online', async () => {
+      scheduler.replay('ws-online');
+      await vi.advanceTimersByTimeAsync(0);
+      directoryOnline.set(deviceId, false);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(1);
+
+      directoryOnline.set(deviceId, true);
+      scheduler.replay('directory-online', deviceId);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(3);
+      expect(presence.has(deviceId)).toBe(false);
+    });
+
+    it('preserves online presence when an earlier subscribe rejects offline', async () => {
+      const first = deferred<unknown>();
+      remoteSubscribe.mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+      scheduler.replay('ws-online');
+      presence.set(deviceId, true);
+      first.reject(new DeviceLinkError('DEVICE_OFFLINE', 'late response'));
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+      expect(presence.get(deviceId)).toBe(true);
+    });
+
+    it('does not lose an online trigger queued before the offline response settles', async () => {
+      const first = deferred<unknown>();
+      remoteSubscribe.mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+      scheduler.replay('ws-online');
+      directoryOnline.set(deviceId, true);
+      scheduler.replay('directory-online', deviceId);
+      first.reject(new DeviceLinkError('DEVICE_OFFLINE', 'late response'));
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
