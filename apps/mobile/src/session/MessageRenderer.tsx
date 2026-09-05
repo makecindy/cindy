@@ -301,6 +301,7 @@ import type {
   MobileMediaPlayerStatus,
 } from '@/session/mediaPlayerWebViewHtml';
 import { formatMobileSystemCard } from '@/session/systemCard';
+import { MobileBoundaryNotice } from '@/session/MobileBoundaryNotice';
 import {
   getMobileAutoResumePresentation,
   isMobileAutoResumeRowInFlight,
@@ -4755,6 +4756,9 @@ function MobileSystemCard({
   type: NonNullable<NormalizedRemoteMessage['systemCardType']>;
 }) {
   const styles = useThemedStyles(makeStyles);
+  if (type === 'compact' || type === 'goal-complete' || type === 'goal-resumed' || type === 'context-rebuild') {
+    return <MobileBoundaryNotice type={type} data={data} />;
+  }
   // agent-switch 走专用「分隔线 + 药丸」渲染(对齐桌面),不落通用盒子卡片。
   if (type === 'agent-switch') return <MobileAgentSwitchCard data={data} />;
   // auto-resume 复用桌面 AgentActionRow 的单行状态布局:默认只显示当前状态和压缩后的
