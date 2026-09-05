@@ -5476,6 +5476,7 @@
   "login": {
     "title": "欢迎使用 Cindy",
     "subtitle": "选择一种方式安全登录",
+    "savedLoginPreserved": "已保存的登录信息仍在本机",
     "phonePlaceholder": "请输入手机号",
     "emailPlaceholder": "请输入邮箱",
     "invalidEmail": "请输入正确邮箱",
@@ -5570,6 +5571,9 @@
       "fallback": "登录失败，请稍后重试",
       "AUTH_SERVICE_UNAVAILABLE": "登录服务暂不可用",
       "AUTH_REQUEST_FAILED": "登录请求失败，请重试",
+      "CREDENTIAL_STORE_UNAVAILABLE": "请完全退出 Cindy 后重新打开，以恢复登录",
+      "BROWSER_OPEN_FAILED": "无法打开浏览器，请重试",
+      "BROWSER_OPEN_TIMEOUT": "浏览器未及时启动，请重试",
       "NETWORK_ERROR": "网络连接失败，请检查网络",
       "REQUEST_TIMEOUT": "请求超时，请重试",
       "INVALID_PARAMS": "输入格式不正确",

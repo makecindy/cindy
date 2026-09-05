@@ -5476,6 +5476,7 @@
   "login": {
     "title": "Cindy에 오신 것을 환영합니다",
     "subtitle": "안전한 로그인 방법을 선택하세요",
+    "savedLoginPreserved": "저장된 로그인 정보는 이 기기에 남아 있습니다",
     "phonePlaceholder": "휴대폰 번호 입력",
     "emailPlaceholder": "이메일 입력",
     "invalidEmail": "올바른 이메일 주소를 입력하세요",
@@ -5570,6 +5571,9 @@
       "fallback": "로그인에 실패했습니다. 다시 시도하세요.",
       "AUTH_SERVICE_UNAVAILABLE": "로그인 서비스를 일시적으로 사용할 수 없습니다.",
       "AUTH_REQUEST_FAILED": "로그인 요청에 실패했습니다.",
+      "CREDENTIAL_STORE_UNAVAILABLE": "Cindy를 완전히 종료한 뒤 다시 열어 로그인을 복구하세요.",
+      "BROWSER_OPEN_FAILED": "브라우저를 열 수 없습니다. 다시 시도하세요.",
+      "BROWSER_OPEN_TIMEOUT": "브라우저 시작 시간이 초과되었습니다. 다시 시도하세요.",
       "NETWORK_ERROR": "네트워크 연결을 확인하세요.",
       "REQUEST_TIMEOUT": "요청 시간이 초과되었습니다.",
       "INVALID_PARAMS": "입력한 값을 확인하세요.",
