@@ -69,6 +69,7 @@ export function ConnectionBanner({
   density = 'default',
   deviceUnresponsive = false,
   error,
+  requestErrorAutoRecovering,
   issue = null,
   lastSyncedAt,
   onSync,
@@ -81,6 +82,8 @@ export function ConnectionBanner({
   /** 当前关联设备熔断 open(电脑端未响应);relay 可能仍 online,单独入参 */
   deviceUnresponsive?: boolean;
   error: string | null;
+  /** Request owners with local retry (e.g. history pagination) can opt out of connection recovery. */
+  requestErrorAutoRecovering?: boolean;
   /** 连接层失败原因(useDeviceLink().connectionIssue);比请求级 error 更根因,优先展示 */
   issue?: DeviceLinkConnectionIssue | null;
   lastSyncedAt: number | null;
@@ -105,7 +108,7 @@ export function ConnectionBanner({
     hasActiveIssue: activeIssue !== null,
     deviceUnresponsive: showUnresponsive,
     hasRequestError: friendlyError !== null,
-    requestErrorAutoRecovering: isAutoRecoveringRemoteError(effectiveError),
+    requestErrorAutoRecovering: requestErrorAutoRecovering ?? isAutoRecoveringRemoteError(effectiveError),
   });
   const tone = activeIssue
     ? 'off'
