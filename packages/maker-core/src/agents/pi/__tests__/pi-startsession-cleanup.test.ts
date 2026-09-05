@@ -32,7 +32,9 @@ const knobs = vi.hoisted(() => ({
   ctorThrows: false,
   getStateRejects: false,
   abortRejects: false,
+  abortThrows: false,
   getStateGate: null as Promise<void> | null,
+  promptGate: null as Promise<void> | null,
   closeRejects: false,
   closeFailuresRemaining: 0,
   closeGate: null as Promise<void> | null,
@@ -92,8 +94,15 @@ vi.mock('../rpc-client.js', () => ({
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
+      if (cmd.type === 'prompt') {
+        const gate = knobs.promptGate;
+        if (gate) await gate;
+      }
       if (cmd.type === 'abort' && knobs.abortRejects) {
         return { success: false, error: 'abort rejected (mock)' };
+      }
+      if (cmd.type === 'abort' && knobs.abortThrows) {
+        throw new Error('abort transport failed (mock)');
       }
       // switch_session / set_thinking_level / set_auto_compaction / get_entries 等一律成功。
       return { success: true, data: { entries: [] } };
@@ -142,7 +151,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.ctorThrows = false;
     knobs.getStateRejects = false;
     knobs.abortRejects = false;
+    knobs.abortThrows = false;
     knobs.getStateGate = null;
+    knobs.promptGate = null;
     knobs.closeRejects = false;
     knobs.closeFailuresRemaining = 0;
     knobs.closeGate = null;
@@ -289,6 +300,40 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     workingDir: cwd,
     model: 'm',
   });
+
+  function emitConfirmedDegenerateOutput(): void {
+    knobs.onEvent?.({ type: 'agent_start' });
+    emitConfirmedDegenerateMessage();
+  }
+
+  function emitConfirmedDegenerateMessage(): void {
+    knobs.onEvent?.({ type: 'message_start' });
+    const repeated = 'let me write the file now; 现在执行；落地。'.repeat(1_100);
+    knobs.onEvent?.({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta: repeated.slice(0, 16_384),
+      },
+    });
+    knobs.onEvent?.({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta: repeated.slice(16_384, 20_480),
+      },
+    });
+    knobs.onEvent?.({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta: repeated.slice(20_480),
+      },
+    });
+  }
 
   /**
    * Owner ids are `<host pid>:<session-instance scope>`; the pid half is what
@@ -1899,6 +1944,192 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
   });
 
+  it('aborts one DeepSeek response after the bounded low-entropy guard confirms degeneration', async () => {
+    const deepSeekModel = 'DeepSeek-V4-Flash-0731';
+    const handle = await new PiAgent(buildDeps({
+      capabilityAdditions: {
+        availableModels: [{
+          id: deepSeekModel,
+          displayName: deepSeekModel,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+    })).startSession({ ...opts(), model: deepSeekModel });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    knobs.requests = [];
+    const repeated = 'let me write the file now; 现在执行；落地。'.repeat(1_100);
+    emitConfirmedDegenerateOutput();
+    await vi.waitFor(() => expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(1));
+
+    knobs.onEvent?.({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: repeated.slice(0, 20_480) }],
+        model: deepSeekModel,
+        stopReason: 'aborted',
+        usage: { output: 8_000 },
+      },
+    });
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    const events = [];
+    for (let index = 0; index < 10; index += 1) {
+      const next = await iterator.next();
+      if (next.done) break;
+      events.push(next.value);
+      if (
+        next.value.type === 'status'
+        && (next.value.data as { isRunning?: unknown }).isRunning === false
+      ) {
+        break;
+      }
+    }
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'error',
+      source: 'pi',
+      data: expect.objectContaining({
+        reason: 'output-degeneration',
+        isTerminal: true,
+      }),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'done',
+      source: 'pi',
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+
+    await handle.close();
+  });
+
+  it('does not let a queued degeneration abort cross into the next Pi turn', async () => {
+    const deepSeekModel = 'DeepSeek-V4-Flash-0731';
+    const handle = await new PiAgent(buildDeps({
+      capabilityAdditions: {
+        availableModels: [{
+          id: deepSeekModel,
+          displayName: deepSeekModel,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+    })).startSession({ ...opts(), model: deepSeekModel });
+    knobs.onEvent?.({ type: 'agent_start' });
+
+    let releasePrompt!: () => void;
+    knobs.promptGate = new Promise<void>((resolve) => { releasePrompt = resolve; });
+    const sending = handle.send({
+      type: 'user',
+      content: '/allow-repetitive-output\nQueue the next turn.',
+    });
+    await vi.waitFor(() => expect(knobs.requests.filter((type) => type === 'prompt')).toHaveLength(1));
+
+    knobs.requests = [];
+    emitConfirmedDegenerateMessage();
+    await Promise.resolve();
+    expect(knobs.requests).not.toContain('abort');
+
+    // Pi may publish the next boundary while the previous RPC acknowledgement is late.
+    // The queued session-global abort must then become a no-op rather than kill this turn.
+    knobs.onEvent?.({ type: 'agent_settled' });
+    knobs.onEvent?.({ type: 'agent_start' });
+    releasePrompt();
+    await sending;
+    emitConfirmedDegenerateMessage();
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    expect(knobs.requests).not.toContain('abort');
+
+    await handle.close();
+  });
+
+  it.each(['abort', 'graceful-stop'] as const)(
+    'clears queued output-degeneration bypasses on %s',
+    async (stopMethod) => {
+      const deepSeekModel = 'DeepSeek-V4-Flash-0731';
+      const handle = await new PiAgent(buildDeps({
+        capabilityAdditions: {
+          availableModels: [{
+            id: deepSeekModel,
+            displayName: deepSeekModel,
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          }],
+        },
+      })).startSession({ ...opts(), model: deepSeekModel });
+
+      knobs.onEvent?.({ type: 'agent_start' });
+      await handle.send({
+        type: 'user',
+        content: '/allow-repetitive-output\nQueue a bypassed follow-up.',
+      });
+      if (stopMethod === 'abort') {
+        await handle.abort();
+      } else {
+        await handle.requestGracefulStop?.();
+      }
+      knobs.onEvent?.({ type: 'agent_settled' });
+
+      knobs.requests = [];
+      knobs.onEvent?.({ type: 'agent_start' });
+      emitConfirmedDegenerateMessage();
+      await vi.waitFor(() => expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(1));
+
+      await handle.close();
+    },
+  );
+
+  it.each([
+    ['abort', 'is rejected'],
+    ['abort', 'throws'],
+    ['graceful-stop', 'is rejected'],
+    ['graceful-stop', 'throws'],
+  ] as const)(
+    'keeps queued output-degeneration bypasses when %s %s',
+    async (stopMethod, failureMode) => {
+      const deepSeekModel = 'DeepSeek-V4-Flash-0731';
+      const handle = await new PiAgent(buildDeps({
+        capabilityAdditions: {
+          availableModels: [{
+            id: deepSeekModel,
+            displayName: deepSeekModel,
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          }],
+        },
+      })).startSession({ ...opts(), model: deepSeekModel });
+
+      knobs.onEvent?.({ type: 'agent_start' });
+      await handle.send({
+        type: 'user',
+        content: '/allow-repetitive-output\nQueue a bypassed follow-up.',
+      });
+      knobs.abortRejects = failureMode === 'is rejected';
+      knobs.abortThrows = failureMode === 'throws';
+
+      if (stopMethod === 'abort') {
+        await expect(handle.abort()).resolves.toBeUndefined();
+      } else {
+        await expect(handle.requestGracefulStop?.()).rejects.toThrow();
+      }
+
+      knobs.abortRejects = false;
+      knobs.abortThrows = false;
+      knobs.onEvent?.({ type: 'agent_settled' });
+      knobs.requests = [];
+      knobs.onEvent?.({ type: 'agent_start' });
+      emitConfirmedDegenerateMessage();
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(knobs.requests).not.toContain('abort');
+
+      await handle.close();
+    },
+  );
+
   it('does not surface an aborted gateway error when Host stop beats agent_start', async () => {
     const handle = await new PiAgent(buildDeps()).startSession(opts());
     const events: Array<{ type: string; data?: unknown }> = [];
@@ -1923,6 +2154,194 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
     await vi.waitFor(() => expect(events.some((event) => event.type === 'done')).toBe(true));
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+
+    await handle.close();
+  });
+
+  it('enables DeepSeek output protection from the resolved wire model', async () => {
+    const publicModel = 'legacy-model';
+    const providerId = 'native-alias';
+    const handle = await new PiAgent(buildDeps({
+      capabilityAdditions: {
+        availableModels: [{
+          id: publicModel,
+          displayName: publicModel,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: providerId,
+          name: 'Native Alias',
+          baseUrl: 'https://native.example.test/v1',
+          api: 'openai-responses',
+          modelIdAliases: { [publicModel]: 'deepseek-native' },
+          models: [{ id: 'deepseek-native', wireId: 'deepseek/deepseek-v4-pro' }],
+        }],
+        env: {},
+      }),
+    })).startSession({ ...opts(), model: publicModel, providerId });
+    knobs.requests = [];
+
+    emitConfirmedDegenerateOutput();
+
+    await vi.waitFor(() => expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(1));
+    await handle.close();
+  });
+
+  it('does not enable DeepSeek output protection when the wire model is not DeepSeek', async () => {
+    const publicModel = 'deepseek-public';
+    const providerId = 'native-alias';
+    const handle = await new PiAgent(buildDeps({
+      capabilityAdditions: {
+        availableModels: [{
+          id: publicModel,
+          displayName: publicModel,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: providerId,
+          name: 'Native Alias',
+          baseUrl: 'https://native.example.test/v1',
+          api: 'openai-responses',
+          modelIdAliases: { [publicModel]: 'deepseek-native' },
+          models: [{ id: 'deepseek-native', wireId: 'neutral/model-v1' }],
+        }],
+        env: {},
+      }),
+    })).startSession({ ...opts(), model: publicModel, providerId });
+    knobs.requests = [];
+
+    emitConfirmedDegenerateOutput();
+
+    expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('allows an explicitly requested repetitive Pi turn without weakening the next turn', async () => {
+    const deepSeekModel = 'DeepSeek-V4-Flash-0731';
+    const handle = await new PiAgent(buildDeps({
+      capabilityAdditions: {
+        availableModels: [{
+          id: deepSeekModel,
+          displayName: deepSeekModel,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+    })).startSession({ ...opts(), model: deepSeekModel });
+    const repeated = 'intentional repeated fixture; '.repeat(1_100);
+
+    await handle.send({
+      type: 'user',
+      content: '/allow-repetitive-output\nRepeat the fixture exactly as requested.',
+    });
+    knobs.requests = [];
+    knobs.onEvent?.({ type: 'agent_start' });
+    knobs.onEvent?.({ type: 'message_start' });
+    knobs.onEvent?.({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: repeated },
+    });
+    expect(knobs.requests).not.toContain('abort');
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    await handle.send({ type: 'user', content: 'Normal protected turn.' });
+    knobs.requests = [];
+    knobs.onEvent?.({ type: 'agent_start' });
+    knobs.onEvent?.({ type: 'message_start' });
+    knobs.onEvent?.({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: repeated },
+    });
+    knobs.onEvent?.({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta: 'intentional repeated fixture; '.repeat(100),
+      },
+    });
+    await vi.waitFor(() => expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(1));
+
+    await handle.close();
+  });
+
+  it('keeps a bypassed follow-up ahead of a queued protected turn', async () => {
+    const deepSeekModel = 'DeepSeek-V4-Flash-0731';
+    const handle = await new PiAgent(buildDeps({
+      capabilityAdditions: {
+        availableModels: [{
+          id: deepSeekModel,
+          displayName: deepSeekModel,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+    })).startSession({ ...opts(), model: deepSeekModel });
+
+    knobs.onEvent?.({ type: 'agent_start' });
+    await handle.send({
+      type: 'user',
+      content: '/allow-repetitive-output\nRepeat the fixture exactly as requested.',
+    });
+    await handle.send({ type: 'user', content: 'Normal protected follow-up.' });
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    knobs.requests = [];
+    knobs.onEvent?.({ type: 'agent_start' });
+    emitConfirmedDegenerateMessage();
+    expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(0);
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    knobs.requests = [];
+    knobs.onEvent?.({ type: 'agent_start' });
+    emitConfirmedDegenerateMessage();
+    await vi.waitFor(() => expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(1));
+
+    await handle.close();
+  });
+
+  it('keeps a protected follow-up ahead of a queued bypassed turn', async () => {
+    const deepSeekModel = 'DeepSeek-V4-Flash-0731';
+    const handle = await new PiAgent(buildDeps({
+      capabilityAdditions: {
+        availableModels: [{
+          id: deepSeekModel,
+          displayName: deepSeekModel,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+    })).startSession({ ...opts(), model: deepSeekModel });
+
+    knobs.onEvent?.({ type: 'agent_start' });
+    await handle.send({ type: 'user', content: 'Normal protected follow-up.' });
+    await handle.send({
+      type: 'user',
+      content: '/allow-repetitive-output\nRepeat the fixture exactly as requested.',
+    });
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    knobs.requests = [];
+    knobs.onEvent?.({ type: 'agent_start' });
+    emitConfirmedDegenerateMessage();
+    await vi.waitFor(() => expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(1));
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    knobs.requests = [];
+    knobs.onEvent?.({ type: 'agent_start' });
+    emitConfirmedDegenerateMessage();
+    expect(knobs.requests.filter((type) => type === 'abort')).toHaveLength(0);
 
     await handle.close();
   });

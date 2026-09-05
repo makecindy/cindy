@@ -83,6 +83,12 @@ interface PiPendingAssistantError {
   reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON;
 }
 
+interface PiPendingSafetyError {
+  message: string;
+  sdkError: string;
+  reason: 'output-degeneration' | 'output-limit';
+}
+
 interface PiThinkingBlock {
   blockId: string;
   startedAt: number;
@@ -144,6 +150,11 @@ export interface PiTranslateContext {
    * 暂存到 agent_settled 再终态上报，避免一次可恢复错误提前收口整个 turn。
    */
   pendingAssistantError: PiPendingAssistantError | null;
+  /**
+   * Cindy 自己确认的 turn 级安全收口。与 provider retry 错误分开保存：后续普通
+   * message_end 可以证明 provider retry 已恢复，却不能抹掉已经触发的本地止损。
+   */
+  pendingSafetyError: PiPendingSafetyError | null;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
@@ -221,6 +232,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     subagentToolCalls: new Map(),
     toolNamesByCallId: new Map(),
     pendingAssistantError: null,
+    pendingSafetyError: null,
     compactTurnScope: null,
   };
 }
@@ -303,6 +315,7 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   ctx.pendingHostTurnStartToken = null;
   clearPiHostAbortRequests(ctx);
   ctx.pendingAssistantError = null;
+  ctx.pendingSafetyError = null;
   ctx.compactTurnScope = null;
   ctx.subagentToolCalls.clear();
   ctx.toolNamesByCallId.clear();
@@ -344,6 +357,15 @@ export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
       reliable: ctx.generationTimingReliable && ctx.generationHeartbeatReliable,
     },
   );
+}
+
+/** 由 Pi 事件层在高置信低熵保护命中时登记，终态统一等 agent_settled 发出。 */
+export function markPiOutputDegeneration(ctx: PiTranslateContext): void {
+  ctx.pendingSafetyError ??= {
+    message: 'Pi stopped this response after detecting highly repetitive output with almost no new information. If the repetition is intentional, resend the request starting with /allow-repetitive-output.',
+    sdkError: 'Pi output degeneration guard stopped the current response',
+    reason: 'output-degeneration',
+  };
 }
 
 function pushStatus(
@@ -649,6 +671,7 @@ export function translatePiEvent(
       ctx.finalAssistantText = '';
       ctx.finalAssistantStopReason = null;
       ctx.pendingAssistantError = null;
+      ctx.pendingSafetyError = null;
       ctx.turnWallClockStartedAt = Date.now();
       ctx.generationDurationMs = 0;
       ctx.generationTimingReliable = true;
@@ -732,6 +755,13 @@ export function translatePiEvent(
       } else {
         // A normal assistant message proves an earlier provider failure recovered.
         ctx.pendingAssistantError = null;
+      }
+      if (message.stopReason === 'length' && ctx.pendingSafetyError === null) {
+        ctx.pendingSafetyError = {
+          message: 'Pi reached the model output limit. The response may be incomplete.',
+          sdkError: 'Pi response stopped at the model output limit',
+          reason: 'output-limit',
+        };
       }
       if (!transientAssistantFailure && fullText.length > 0) {
         // 覆盖为本 turn 最新一条有文本的 assistant 回复,agent_settled 作 done.result 上报。
@@ -907,18 +937,21 @@ export function translatePiEvent(
       stopPiGenerationHeartbeat(ctx);
       const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
       const pendingAssistantError = hostAbortRequested ? null : ctx.pendingAssistantError;
-      const outcome = pendingAssistantError
+      ctx.pendingAssistantError = null;
+      const pendingSafetyError = ctx.pendingSafetyError;
+      ctx.pendingSafetyError = null;
+      const terminalError = pendingSafetyError ?? pendingAssistantError;
+      const outcome = terminalError
         ? 'failed'
         : hostAbortRequested || ctx.finalAssistantStopReason === 'aborted'
           ? 'cancelled'
           : 'completed';
-      ctx.pendingAssistantError = null;
       clearPiHostAbortRequests(ctx);
-      if (pendingAssistantError) {
+      if (terminalError) {
         queue.push({
           type: 'error',
           data: {
-            ...pendingAssistantError,
+            ...terminalError,
             isTerminal: true,
           },
           source: 'pi',
@@ -931,7 +964,9 @@ export function translatePiEvent(
           // 本 turn 最终 assistant 回复文本。与 CC/Codex 的 done.data.result 对齐:
           // register.ts 的 will-assistant-message 出口钩子与 Orca worker 终态 finalText
           // 都读 done.data.result,不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
-          result: outcome === 'completed' ? ctx.finalAssistantText : '',
+          // 本地安全止损也必须保留已经产生的正文，便于用户确认中断点；普通
+          // provider 失败／用户取消仍保持空 result，避免把半截失败响应当成功答案。
+          result: pendingSafetyError || outcome === 'completed' ? ctx.finalAssistantText : '',
           status: outcome,
           // ghost 订阅 did-turn-end 的 usage 上报(subscriptionGateway.normalizeTurnUsage
           // 认 camelCase);与 CC/Codex 的 done.usage 对齐,让插件能显示 pi turn 的用量。

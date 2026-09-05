@@ -184,12 +184,18 @@ import {
   isFailedOrAbortedPiCompaction,
   markPiHostAbortRequested,
   markPiHostTurnStartPending,
+  markPiOutputDegeneration,
   rollbackPiHostAbortRequest,
   rollbackPiHostTurnStart,
   translatePiEvent,
   usageSnapshotOf,
   type PiTranslateContext,
 } from './translator.js';
+import {
+  consumePiOutputDegenerationDirective,
+  PiOutputDegenerationProtection,
+  shouldProtectPiOutput,
+} from './output-degeneration-protection.js';
 import {
   activePiHistoryFromTree,
   findPiTreeEntry,
@@ -3121,6 +3127,20 @@ export class PiAgent extends BaseAgent {
     // follow-up send)同口径。清空只认 turn 终态,由 send 预检覆盖为最新值。
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
     let mutableModel = opts.model;
+    // 用户显式放行只对对应的 Pi agent turn 生效。每个已发起的 prompt 独立排队，避免
+    // streaming 中连续 followUp 互相覆盖；对象身份让明确拒绝的 prompt 只撤销自己。
+    type OutputDegenerationBypassReservation = { allowRepetitiveOutput: boolean };
+    const pendingOutputDegenerationBypasses: OutputDegenerationBypassReservation[] = [];
+    const discardOutputDegenerationBypass = (
+      reservation: OutputDegenerationBypassReservation,
+    ): void => {
+      const index = pendingOutputDegenerationBypasses.indexOf(reservation);
+      if (index >= 0) pendingOutputDegenerationBypasses.splice(index, 1);
+    };
+    const clearPendingOutputDegenerationBypasses = (): void => {
+      pendingOutputDegenerationBypasses.length = 0;
+    };
+    let activeOutputDegenerationBypass = false;
     let mutableWireModel = initialWireModel;
     // Pi RPC 实际选中的 provider。与用于宿主鉴权/审阅元数据的 mutableProviderId 分开：
     // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
@@ -4019,6 +4039,50 @@ export class PiAgent extends BaseAgent {
     };
     const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
       runExclusivePiRpc(() => requestPiCompact(instructions));
+    const outputDegenerationProtection = new PiOutputDegenerationProtection({
+      logger: this.deps.logger.child('output-degeneration'),
+      // 读取实际下发给 Pi 的 mutableWireModel：既遵守 provider alias / wireId，
+      // 也让会话内 setModel 后的下一条消息立即按新模型生效。
+      isEnabled: () =>
+        shouldProtectPiOutput(mutableWireModel) && !activeOutputDegenerationBypass,
+      abort: () => {
+        // abort 是 session-global RPC。检测时先钉住 turn generation，再进入与
+        // prompt/compact/model 控制共用的串行链；排队期间 turn 已推进就直接忽略，
+        // 防止迟到的止损误杀下一轮合法输出。
+        const detectedTurnGeneration = ctx.turnGeneration;
+        return runExclusivePiRpc(async () => {
+          if (
+            proc.isClosed
+            || !ctx.isStreaming
+            || ctx.turnGeneration !== detectedTurnGeneration
+          ) {
+            return { success: true, ignored: true };
+          }
+          const hostAbortToken = markPiHostAbortRequested(ctx);
+          let response: Awaited<ReturnType<typeof proc.request>>;
+          try {
+            response = await proc.request({ type: 'abort' });
+          } catch (error) {
+            if (ctx.turnGeneration === detectedTurnGeneration) {
+              rollbackPiHostAbortRequest(ctx, hostAbortToken);
+            }
+            throw error;
+          }
+          if (ctx.turnGeneration !== detectedTurnGeneration) {
+            return { success: true, ignored: true };
+          }
+          if (response.success) {
+            // 仅在 Pi 确认仍由原 turn 接受 abort 后丢弃随该 turn 一并取消的 follow-up
+            // reservations。排队期间若下一轮已开始，generation fence 会保留它自己的放行。
+            clearPendingOutputDegenerationBypasses();
+          } else {
+            rollbackPiHostAbortRequest(ctx, hostAbortToken);
+          }
+          return response;
+        });
+      },
+      onDetected: () => markPiOutputDegeneration(ctx),
+    });
     let sessionTransport: PiTransport | undefined;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
@@ -4458,6 +4522,11 @@ export class PiAgent extends BaseAgent {
         transport,
         logger: this.deps.logger,
         onEvent: (event: PiRpcEvent) => {
+          if (event.type === 'agent_start') {
+            activeOutputDegenerationBypass =
+              pendingOutputDegenerationBypasses.shift()?.allowRepetitiveOutput ?? false;
+          }
+          outputDegenerationProtection.onEvent(event);
           if (event.type === 'agent_start' || event.type === 'agent_settled') {
             piAgentLifecycleSequence += 1;
           }
@@ -5737,7 +5806,11 @@ export class PiAgent extends BaseAgent {
           if (reviewMode) {
             await assertReviewMessageContentPaths(message.content, opts.workingDir, reviewReadGrants);
           }
-          let { text, images } = await buildPiPrompt(message, { remote });
+          const builtPrompt = await buildPiPrompt(message, { remote });
+          let text = builtPrompt.text;
+          const { images } = builtPrompt;
+          const outputDegenerationDirective = consumePiOutputDegenerationDirective(text);
+          text = outputDegenerationDirective.prompt;
           rejectIfCancelled(sendOpts, 'send');
           assertImageInputSupported(images);
           setAutoReviewIntent(message.content);
@@ -5783,6 +5856,10 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
+          const outputDegenerationBypassReservation = {
+            allowRepetitiveOutput: outputDegenerationDirective.allowRepetitiveOutput,
+          };
+          pendingOutputDegenerationBypasses.push(outputDegenerationBypassReservation);
           const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
           promptRequestStarted = true;
           try {
@@ -5798,6 +5875,7 @@ export class PiAgent extends BaseAgent {
             if (!resp.success) {
               rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
               if (managedPackageRoute.accepted) {
+                discardOutputDegenerationBypass(outputDegenerationBypassReservation);
                 // The host-owned package mutation and its deterministic visible
                 // receipt already crossed the dispatch boundary. The follow-up
                 // prompt only lets Pi/model restate that receipt; rejecting it
@@ -5866,6 +5944,7 @@ export class PiAgent extends BaseAgent {
                   data.isCompacting !== true &&
                   (typeof data.pendingMessageCount !== 'number' || data.pendingMessageCount === 0);
                 if (runtimeIdle && piAgentLifecycleSequence === lifecycleSequenceBeforePrompt) {
+                  discardOutputDegenerationBypass(outputDegenerationBypassReservation);
                   rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
                   const result = capturedExtensionNotifications?.join('\n\n') ?? '';
                   // prompt success is only the RPC acceptance boundary. Let
@@ -5922,6 +6001,9 @@ export class PiAgent extends BaseAgent {
           } finally {
             if (activeExtensionCommandNotifications === capturedExtensionNotifications) {
               activeExtensionCommandNotifications = null;
+            }
+            if (!providerAccepted) {
+              discardOutputDegenerationBypass(outputDegenerationBypassReservation);
             }
             doctorCommandActivity.leave(isDoctorCommand);
           }
@@ -6083,6 +6165,7 @@ export class PiAgent extends BaseAgent {
           rollbackPiHostAbortRequest(ctx, hostAbortToken);
           throw new Error(`Pi graceful stop rejected: ${resp.error ?? 'unknown'}`);
         }
+        clearPendingOutputDegenerationBypasses();
         clearActiveTurnPermissionPolicy('turn_aborted');
       },
 
@@ -6096,6 +6179,7 @@ export class PiAgent extends BaseAgent {
         try {
           const resp = await proc.request({ type: 'abort' });
           if (resp.success) {
+            clearPendingOutputDegenerationBypasses();
             clearActiveTurnPermissionPolicy('turn_aborted');
           } else {
             rollbackPiHostAbortRequest(ctx, hostAbortToken);
@@ -6113,6 +6197,7 @@ export class PiAgent extends BaseAgent {
 
       async close(closeOpts?: AgentSessionTeardownOptions): Promise<void> {
         closed = true;
+        clearPendingOutputDegenerationBypasses();
         // No reason means the caller could not identify its boundary; fail
         // closed to the account boundary rather than leaving a detached child
         // running against credentials that may already belong to someone else.
