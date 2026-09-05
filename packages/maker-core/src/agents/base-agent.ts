@@ -598,7 +598,11 @@ export interface AgentDeps {
    * may inspect or snapshot known resources, but its result is never the launch
    * allowlist; resolvePiNativePackagePaths preserves Pi-native discovery.
    */
-  resolvePiManagedPackageResources?: (options?: { snapshotRoot: string }) => Promise<{
+  resolvePiManagedPackageResources?: (options?: {
+    snapshotRoot?: string;
+    /** Redacted per-start correlation id for structured startup timing logs. */
+    startupTraceId?: string;
+  }) => Promise<{
     extensions: string[];
     skills: Array<{ path: string; name: string; description?: string }>;
     promptTemplates: string[];

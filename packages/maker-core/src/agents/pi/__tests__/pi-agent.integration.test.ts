@@ -2381,6 +2381,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         symlinkSync('../secrets/.env', postCdLink);
         symlinkSync(ordinaryPath, path.join(workingDir, 'link'));
         symlinkSync(ordinaryPath, path.join(stackOtherDir, 'link'));
+        mkdirSync(path.dirname(path.join(workingDir, escapedLinkName)), { recursive: true });
         symlinkSync(secretPath, path.join(workingDir, escapedLinkName));
         symlinkSync(secretPath, path.join(workingDir, cdRedirectLinkName));
         symlinkSync(ordinaryPath, path.join(subDir, cdRedirectLinkName));

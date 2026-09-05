@@ -19,6 +19,7 @@ import {
   piSubagentDeletedTombstonePath,
   writePiSubagentDeletedTombstone,
   clearPiSubagentDeletedTombstone,
+  isPiHostProcessInstanceAliveAsync,
   isPiSubagentRunStale,
   piSubagentControlOwnership,
   piSubagentLaunchFencePath,
@@ -991,6 +992,44 @@ describe('PI durable subagent run store', () => {
       expect(control.action).toBe('stop');
       await expect(readdir(path.join(root, foreign))).resolves.toEqual(['status.json']);
     });
+  });
+
+  it('keeps the event loop responsive while probing several host process incarnations', async () => {
+    const pids = [410_001, 410_002, 410_003, 410_004, 410_005, 410_006];
+    const startTimeSec = 123_456;
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const realKill = process.kill.bind(process);
+    Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(
+      ((pid: number, signal?: NodeJS.Signals | number) => {
+        if (pids.includes(pid) && signal === 0) return true;
+        return realKill(pid, signal);
+      }) as typeof process.kill,
+    );
+    childProcess.probeDelayMs = 50;
+    childProcess.spawnSync.mockReset();
+    childProcess.spawnSync.mockImplementation(() => ({
+      status: 0,
+      stdout: String(startTimeSec),
+    }));
+    let settled = 0;
+    try {
+      const probes = pids.map((pid) => isPiHostProcessInstanceAliveAsync({
+        pid,
+        startTimeSec,
+      }).finally(() => { settled += 1; }));
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(settled).toBe(0);
+      await expect(Promise.all(probes)).resolves.toEqual(pids.map(() => true));
+      expect(childProcess.spawnSync).toHaveBeenCalledTimes(pids.length);
+    } finally {
+      childProcess.probeDelayMs = 0;
+      childProcess.spawnSync.mockReset();
+      childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: '' }));
+      killSpy.mockRestore();
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
   });
 
   /**

@@ -1027,6 +1027,11 @@ function ownProcessStartTimeSec(): number {
   return OWN_PROCESS_START_TIME_SEC;
 }
 
+/** Process-incarnation stamp shared by other host-owned Pi runtime records. */
+export function piHostProcessStartTimeSec(): number {
+  return ownProcessStartTimeSec();
+}
+
 export interface PiSubagentOwnerIdentity {
   pid: number;
   /** Absent on ids written before the start time was recorded. */
@@ -1213,6 +1218,43 @@ function probeProcessStartTimeSec(pid: number, now: number): number | null {
 }
 
 /**
+ * Reclaim probes must never block Electron Main while Windows starts PowerShell.
+ * An unreadable or timed-out probe remains conservative: the owner is treated
+ * as alive and the directory is left for a later sweep.
+ */
+const PROCESS_START_TIME_PROBE_TIMEOUT_MS = 1_000;
+
+async function probeProcessStartTimeSecAsync(pid: number, now: number): Promise<number | null> {
+  try {
+    if (process.platform === 'win32') {
+      const { stdout } = await execFileAsync(
+        'powershell.exe',
+        [
+          '-NoProfile', '-NonInteractive', '-Command',
+          `[int64]((Get-Process -Id ${pid}).StartTime.ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds`,
+        ],
+        {
+          encoding: 'utf8',
+          timeout: PROCESS_START_TIME_PROBE_TIMEOUT_MS,
+          windowsHide: true,
+        },
+      );
+      const match = (typeof stdout === 'string' ? stdout : '').match(/-?\d+/);
+      const seconds = match ? Number(match[0]) : NaN;
+      return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null;
+    }
+    const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'etime='], {
+      encoding: 'utf8',
+      timeout: PROCESS_START_TIME_PROBE_TIMEOUT_MS,
+    });
+    const elapsed = parseElapsedSeconds(typeof stdout === 'string' ? stdout : '');
+    return elapsed === null ? null : Math.round(now / 1_000 - elapsed);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Per-sweep memo for the start-time probe, passed down rather than held.
  *
  * The reason for memoising at all is that one sweep asks the same question once
@@ -1224,12 +1266,22 @@ function probeProcessStartTimeSec(pid: number, now: number): number | null {
  * cannot detect reuse; only a fresh probe can, and a sweep-scoped memo is the
  * largest window in which reuse is not observable anyway.
  */
-type ProcessStartTimeMemo = Map<number, number | null>;
+export type ProcessStartTimeMemo = Map<number, number | null>;
 
 function readProcessStartTimeSec(pid: number, memo?: ProcessStartTimeMemo): number | null {
   const cached = memo?.get(pid);
   if (cached !== undefined) return cached;
   const startTimeSec = probeProcessStartTimeSec(pid, Date.now());
+  memo?.set(pid, startTimeSec);
+  return startTimeSec;
+}
+
+async function readProcessStartTimeSecAsync(
+  pid: number,
+  memo?: ProcessStartTimeMemo,
+): Promise<number | null> {
+  if (memo?.has(pid)) return memo.get(pid) ?? null;
+  const startTimeSec = await probeProcessStartTimeSecAsync(pid, Date.now());
   memo?.set(pid, startTimeSec);
   return startTimeSec;
 }
@@ -1260,6 +1312,28 @@ function isOwnerInstanceAlive(
   const startTimeSec = identity.pid === process.pid
     ? ownProcessStartTimeSec()
     : readProcessStartTimeSec(identity.pid, memo);
+  if (startTimeSec === null) return true;
+  return Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
+}
+
+/** Conservative liveness check for a Pi host process incarnation. */
+export function isPiHostProcessInstanceAlive(
+  identity: PiSubagentOwnerIdentity,
+  startTimeMemo?: ProcessStartTimeMemo,
+): boolean {
+  return isOwnerInstanceAlive(identity, startTimeMemo);
+}
+
+/** Non-blocking incarnation check for background config-home reclamation. */
+export async function isPiHostProcessInstanceAliveAsync(
+  identity: PiSubagentOwnerIdentity,
+  startTimeMemo?: ProcessStartTimeMemo,
+): Promise<boolean> {
+  if (isProcessAlive(identity.pid) === false) return false;
+  if (identity.startTimeSec === undefined) return true;
+  const startTimeSec = identity.pid === process.pid
+    ? ownProcessStartTimeSec()
+    : await readProcessStartTimeSecAsync(identity.pid, startTimeMemo);
   if (startTimeSec === null) return true;
   return Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
 }

@@ -1140,26 +1140,39 @@ describe('DeviceLinkClient', () => {
 
     // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
     const sentBefore = firstSocket.sent.length;
-    await establishInboundReliableLink(h, 'inbound-timeout-stream');
-    // 模拟真实接收端:重放帧已写入 socket FIFO 后立即回 ACK(见 client.ts
-    // sendTransportAck 的交付即确认语义)。不 ACK 的话,重放后 retryTimer
-    // 会在 Windows 低精度计时器(≈12ms>配置 5ms)下把同一帧再发一遍,慢 CI
-    // runner 上断言窗口跨过该周期时会把「重试重发」误判成「重放两次」。
-    const justReplayed = firstSocket.sent.slice(sentBefore).filter((env) => (
-      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
-    ));
-    if (justReplayed.length > 0) {
-      const meta = parseTransportPayload(justReplayed[0].payload)!.meta;
-      h.current().push({
-        v: PROTOCOL_VERSION,
-        kind: 'push',
-        src: 'dev-b',
-        payload: {
-          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
-          payload: { streamId: meta.streamId, ackSeq: meta.seq },
-        },
+    // 模拟真实接收端:首个重放帧写入 socket FIFO 后立即排 ACK(见 client.ts
+    // sendTransportAck 的交付即确认语义)。监听必须在重开 link 前安装；等 helper
+    // 返回后再 ACK 会把 Linux 慢 runner 上的正常 retry 误判成第二次 replay。
+    const originalSend = firstSocket.send.bind(firstSocket);
+    let replayAckSent = false;
+    const sendSpy = vi.spyOn(firstSocket, 'send').mockImplementation((data) => {
+      originalSend(data);
+      if (replayAckSent) return;
+      const replay = firstSocket.sent.at(-1);
+      if (replay?.kind !== 'invoke-result') return;
+      const transport = parseTransportPayload(replay.payload);
+      if (!transport) return;
+      replayAckSent = true;
+      queueMicrotask(() => {
+        firstSocket.push({
+          v: PROTOCOL_VERSION,
+          kind: 'push',
+          src: 'dev-b',
+          payload: {
+            channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+            payload: { streamId: transport.meta.streamId, ackSeq: transport.meta.seq },
+          },
+        });
       });
+    });
+    try {
+      await establishInboundReliableLink(h, 'inbound-timeout-stream');
+      // 跨过多个 retry 周期，证明 ACK 已取消定时重发而不是抢在断言前暂时通过。
+      await tick(20);
+    } finally {
+      sendSpy.mockRestore();
     }
+    expect(replayAckSent).toBe(true);
     const replayed = firstSocket.sent.slice(sentBefore);
     const replays = replayed.filter((env) => (
       env.kind === 'invoke-result' && parseTransportPayload(env.payload)
