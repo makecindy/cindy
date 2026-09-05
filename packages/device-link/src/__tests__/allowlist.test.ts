@@ -147,6 +147,18 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limit-reset')).toBe(true);
   });
 
+  it('放行 Claude 订阅余量快照只读(远程订阅会话 chip 镜像被控端窗口剩余)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:claude-subscription')).toBe(true);
+  });
+
+  it('放行 xAI 订阅周用量只读(被控端 dispatch 拦截执行,不进挂 assert 的 ipcMain)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:xai-subscription')).toBe(true);
+  });
+
+  it('放行 cc 默认路由观察值只读(路由真值在被控端 proxy registry,远程形态判定用)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:claude-session-route:get')).toBe(true);
+  });
+
   it('放行被控端项目顺序读写(显示偏好,真相在被控端)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-order')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:apply-project-order')).toBe(true);
@@ -352,6 +364,12 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'usage:message-turn-cost',
       'usage:session-spend-changed',
       'usage:session-tokens-changed',
+      'usage:claude-subscription-changed',
+      'usage:codex-account-changed',
+      'usage:claude-account-changed',
+      'usage:xai-subscription-changed',
+      'usage:xai-rate-limit-changed',
+      'maker:claude-session-route-changed',
       'local-db:messages:created',
       'local-db:messages:deleted',
       'local-db:session:error-persisted',

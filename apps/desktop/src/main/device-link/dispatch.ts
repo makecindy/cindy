@@ -235,6 +235,22 @@ export function setRemoteReviewInputGuard(guard: RemoteReviewInputGuard | null):
   remoteReviewInputGuard = guard;
 }
 
+/**
+ * xAI 订阅余量读取器(register.ts 在 usage 面就绪后注入)。该 channel 的 ipcMain
+ * handler 挂了 assertTrustedSender(合成 event 必然不可信,那道闸不为远程放宽),
+ * 与 telegram:* 同先例由 dispatch 拦截直读;走注入而非静态 import —— dispatch 的
+ * 模块图保持纯净(usage 面会拖进 runtime-configs 等 app 依赖,纯 dispatch 单测只
+ * mock 极小 Electron 面)。
+ */
+type RemoteXaiSubscriptionUsageReader = () => Promise<unknown | null>;
+let remoteXaiSubscriptionUsageReader: RemoteXaiSubscriptionUsageReader | null = null;
+
+export function setRemoteXaiSubscriptionUsageReader(
+  reader: RemoteXaiSubscriptionUsageReader | null,
+): void {
+  remoteXaiSubscriptionUsageReader = reader;
+}
+
 /** 从 args[0] 里取待收敛的路径字段(见 PATH_GUARDED_CHANNELS);取不到返回 null。 */
 function extractGuardedPath(args: unknown[], field: 'workingDir' | 'baseRepo'): string | null {
   const o = args[0];
@@ -2913,6 +2929,25 @@ export async function runInvoke(
   // assertTrustedAppRendererEvent, 合成 event 必然不可信 —— 那道闸不该为远程下线
   // 放宽), 故在此拦截。已过三道 gate, 等同受信本地访问。只切轮询、不碰凭证:
   // 远程能让它停收消息, 但拿不走也删不掉绑定(解绑仍只能本机操作)。
+  // maker:usage:xai-subscription 的 ipcMain handler 挂了 assertTrustedSender(合成
+  // event 必然不可信,那道闸不为远程下线放宽)—— 与 telegram:* 同先例在此拦截,
+  // 直读注入的 usage reader(cached-first,只读快照,无副作用)。已过三道 gate。
+  if (payload.channel === 'maker:usage:xai-subscription') {
+    if (!remoteXaiSubscriptionUsageReader) {
+      // usage 面尚未注入(启动窗口):非 CHANNEL_NOT_ALLOWED —— 控制端不得据此
+      // 进入「老被控端」负缓存,保留现值稍后重试即可。
+      return { ok: false, error: { code: 'IPC_ERROR', message: 'xai usage reader not ready' } };
+    }
+    try {
+      const result = await remoteXaiSubscriptionUsageReader();
+      return { ok: true, result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`usage:xai-subscription read failed from ${shortId(src)}: ${message}`);
+      return { ok: false, error: { code: 'IPC_ERROR', message } };
+    }
+  }
+
   if (payload.channel === DL_TELEGRAM_STATUS_CHANNEL) {
     return { ok: true, result: readTelegramRemoteStatus() };
   }
@@ -3145,6 +3180,7 @@ export const __testing = {
     setBroadcastTapListener(null);
     presenceOfflineCheck = null;
     remoteReviewInputGuard = null;
+    remoteXaiSubscriptionUsageReader = null;
   },
   getActiveControllers,
   getUpdateRelaunchControllers,

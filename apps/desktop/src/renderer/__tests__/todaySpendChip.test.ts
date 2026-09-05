@@ -113,12 +113,25 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain(
       "vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null",
     );
-    // 订阅形态分类整体排除 device-link(专属分支接管渲染)
+    // 订阅形态分类的本机启发式整体排除 device-link;显式 anthropic 的远程会话走
+    // 被控端镜像快照(useRemoteClaudeSubscriptionUsage),不读任何本机账号状态。
     expect(source).toContain(
       "|| (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')",
     );
-    // 渲染走专属分支:估算价值 / 累计 cost 有哪个显哪个,不显示本机限额窗口
-    expect(source).toContain('if (isDeviceLinkRemote) {');
+    expect(source).toContain('const isDeviceLinkRemoteClaudeSubscription =');
+    expect(source).toContain(
+      'isDeviceLinkRemoteClaudeSubscription ? deviceLinkDeviceId ?? null : null,',
+    );
+    // 本机订阅快照 hook 对 device-link 关闭(两个 hook 的 enabled 互斥)
+    expect(source).toContain(
+      'isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,',
+    );
+    // 形态未解析(默认路由无观察值 / 老被控端)的远程会话仍走占位分支:估算价值 /
+    // 累计 cost 有哪个显哪个,不显示本机限额窗口;形态已解析的走对应形态分支(镜像数据)。
+    expect(source).toContain('const deviceLinkRemoteFormResolved =');
+    expect(source).toContain('if (isDeviceLinkRemote && !deviceLinkRemoteFormResolved) {');
+    // cc 默认路由的远程形态判定只认被控端路由观察镜像,不做本机启发式。
+    expect(source).toContain('const remoteClaudeRoute = useRemoteClaudeSessionRoute(');
     // 看板链接对 device-link 落 null(额度属于被控端账号,本机浏览器打开的是控制端账号)
     expect(source).toMatch(/usageDashboardUrl: string \| null = isDeviceLinkRemote\s*\?\s*null/);
   });
@@ -395,13 +408,18 @@ describe('TodaySpendChip dashboard routing', () => {
     // 形态显示 app-server 槽, WHAM 刷新帮不上它(靠 turn 事件 / 悬念超时兜底),
     // 不得催 —— WHAM 桶与 CLI 配额可能不同(账号多限额桶, 2026-07-24 实报 bug)
     expect(source).toContain(
-      'if (isChatgptBridge) {\n' +
-        '      requestCodexAccountRefresh();\n' +
-        '    } else if (usesXaiQuotaForm) {\n' +
-        '      requestXaiSubscriptionRefresh();\n' +
-        '    } else if (isClaudeSubscription && !usesCodexQuotaForm) {\n' +
-        '      requestClaudeSubscriptionRefresh();\n' +
-        '    }',
+      'if (isChatgptBridge || (isDeviceLinkRemote && usesCodexQuotaForm)) {',
+    );
+    expect(source).toContain('requestCodexAccountRefresh();');
+    expect(source).toContain('requestXaiSubscriptionRefresh();');
+    // 悬念期催刷按会话来源分路:远程订阅会话催被控端(隧道,被控端节流兜底),
+    // 本机订阅会话催本机;不得拿本机通道替远程会话催刷(账号不同)。
+    expect(source).toContain(
+      'if (isDeviceLinkRemoteClaudeSubscription && deviceLinkDeviceId) {\n' +
+        '        requestRemoteClaudeSubscriptionRefresh(deviceLinkDeviceId);\n' +
+        '      } else if (!isDeviceLinkRemote) {\n' +
+        '        requestClaudeSubscriptionRefresh();\n' +
+        '      }',
     );
     expect(source).toContain(
       'const hasPendingResetWindow = chipWindows.some((window) => window.resetPending);',

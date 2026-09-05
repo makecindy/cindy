@@ -407,6 +407,25 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 人工 reset。mutation 不接收 creditId,不能泛化成任意账号/凭证控制入口。
   'maker:usage:codex-rate-limits',
   'maker:usage:codex-rate-limit-reset',
+  // Claude 订阅账号余量快照(只读,cached-first):控制端远程会话状态栏 chip 显示
+  // 被控端订阅的 5h/周/分模型窗口剩余(数据真相在被控端 —— turn 在被控端消耗其
+  // 订阅额度)。快照只含利用率百分比、reset 时间与账号归属指纹(单向 scrypt 哈希,
+  // 与本机 renderer 收到的广播 payload 同形),不含凭证材料。无 sender 依赖、无副
+  // 作用;老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端降级为原「仅会话
+  // 金额」占位显示。
+  'maker:usage:claude-subscription',
+  // xAI(SuperGrok)订阅周用量快照(只读):与 claude-subscription 同定位。该 channel
+  // 的 ipcMain handler 挂了 assertTrustedSender(合成 event 必然不可信,那道闸不为
+  // 远程放宽)—— 与 device-link:telegram:* 同先例,由被控端 dispatch 在通用 dispatch
+  // 前拦截、直读 usage reader,不进 ipcMain。列入 allowlist 作契约登记 + 老被控端
+  // CHANNEL_NOT_ALLOWED 供控制端探测降级。
+  'maker:usage:xai-subscription',
+  // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):
+  // 控制端远程会话据此判定订阅 / 网关显示形态 —— 路由真值在被控端 proxy 的按请求
+  // 观察 registry 里,控制端拿本机凭证状态重算必然张冠李戴。入参 sessionId,无
+  // sender 依赖、无副作用;老被控端 CHANNEL_NOT_ALLOWED → 控制端对默认路由远程
+  // 会话维持「仅会话金额」占位(与旧行为一致)。
+  'maker:claude-session-route:get',
   // 模型单价表(只读,main 侧 Model Access model-groups 投影缓存):控制端模型选择器展示
   // 被控端视角的单价(与被控端桌面 tooltip 同源)。无 sender 依赖、无副作用;老被控端无此 channel
   // → CHANNEL_NOT_ALLOWED → 控制端隐藏价格(与桌面「无价不显示」口径一致)。
@@ -579,6 +598,26 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // sessions:patched,控制端远程会话底部 $ chip 依赖这两条把累计值镜像成被控端真相。
   'usage:session-spend-changed',
   'usage:session-tokens-changed',
+  // Claude 订阅账号余量变化(账号级,无 sessionId → topics.ts 归入 sessions topic):
+  // 控制端远程会话 chip 据此实时镜像被控端订阅窗口剩余。推送频率有上限:被控端
+  // headers 观察器按 (5h,7d,status) 签名去抖、端点刷新 180s 节流,只有数值变化才
+  // 广播,不随 turn 内逐请求刷帧。
+  'usage:claude-subscription-changed',
+  // Codex 账号订阅用量变化(账号级组合 payload:app-server 桶表 + WHAM web 槽):
+  // 控制端远程 codex / chatgpt-bridge 会话 chip 镜像被控端限额窗口。频率上限:
+  // app-server 每 turn 记录一次、WHAM 后台刷新 10s 节流。
+  'usage:codex-account-changed',
+  // Claude 网关配额变化(LiteLLM 月度/今日,账号级):控制端远程网关形态会话 chip
+  // 镜像被控端 daily/monthly。被控端刷新自带 10s 节流 + turn-done 触发。
+  'usage:claude-account-changed',
+  // xAI 订阅周用量变化(账号级):同上定位;被控端周用量刷新低频。
+  'usage:xai-subscription-changed',
+  // xAI 限流头快照(账号级,纯内存瞬时值):tooltip 尽力显示;bridge 每成功请求
+  // 至多一帧,xai/ 会话低频。
+  'usage:xai-rate-limit-changed',
+  // cc 默认路由会话路由观察值变化(payload 顶层 sessionId → session:<id> topic,
+  // 打开该会话的控制端可见;每会话生命周期通常仅一次)。
+  'maker:claude-session-route-changed',
   // local-db 推送(读模型增量)
   'local-db:sessions:created',
   'local-db:sessions:patched',

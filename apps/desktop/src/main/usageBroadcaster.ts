@@ -43,6 +43,7 @@ import {
 } from '@cindy/maker-shared/codex-usage-buckets';
 
 import { createLogger } from './logger';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import type { RegionalMoney } from '../shared/regionalMoney.js';
 
 const log = createLogger('usageBroadcaster');
@@ -746,6 +747,8 @@ export function recordXaiRateLimitSnapshot(info: Omit<XaiRateLimitSnapshot, 'upd
       win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, snapshot);
     }
   }
+  // device-link:tooltip 尽力显示被控端限流头(bridge 每成功请求至多一帧,低频)。
+  tapWindowBroadcast(USAGE_XAI_RATE_LIMIT_CHANGED, snapshot);
 }
 
 /**
@@ -758,6 +761,8 @@ export function clearXaiRateLimitSnapshot(): void {
       win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, null);
     }
   }
+  // device-link:登出 / 换号清除同步给控制端(远程 tooltip 不得挂旧账号余量)。
+  tapWindowBroadcast(USAGE_XAI_RATE_LIMIT_CHANGED, null);
 }
 
 
@@ -1099,6 +1104,9 @@ function broadcastCodexAccountUsage(payload: RateLimitSnapshot | null): void {
       win.webContents.send(USAGE_CODEX_ACCOUNT_CHANGED, payload);
     }
   }
+  // device-link:控制端远程 codex / chatgpt-bridge 会话 chip 镜像被控端限额窗口。
+  // 频率上限:app-server 每 turn 记录一次、WHAM 刷新 10s 节流;无链路时 O(1) no-op。
+  tapWindowBroadcast(USAGE_CODEX_ACCOUNT_CHANGED, payload);
 }
 
 function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapshot | null): void {
@@ -1107,6 +1115,9 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
       win.webContents.send(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
     }
   }
+  // device-link:控制端远程订阅会话的 chip 镜像被控端余量。频率上限由上游保证
+  // (headers 观察器签名去抖 + 端点 180s 节流),无 active 链路时 tap 是 O(1) no-op。
+  tapWindowBroadcast(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
 }
 
 function broadcastXaiSubscriptionUsage(payload: XaiSubscriptionUsageSnapshot | null): void {
@@ -1114,4 +1125,6 @@ function broadcastXaiSubscriptionUsage(payload: XaiSubscriptionUsageSnapshot | n
     if (!isTrustedAppRendererWindow(win)) continue;
     win.webContents.send(USAGE_XAI_SUBSCRIPTION_CHANGED, payload);
   }
+  // device-link:控制端远程 xai 形态会话 chip 镜像被控端周用量(账号级,低频)。
+  tapWindowBroadcast(USAGE_XAI_SUBSCRIPTION_CHANGED, payload);
 }

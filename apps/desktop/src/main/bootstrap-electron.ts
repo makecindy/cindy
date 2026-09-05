@@ -63,6 +63,7 @@ import {
 } from './mainWindowMaximizeRecovery';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import {
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
@@ -4699,6 +4700,9 @@ const registerIpcHandlers = () => {
         /* no-op */
       }
     }
+    // device-link:payload 顶层 sessionId → session:<id> topic,打开该远程会话的
+    // 控制端据此实时切换订阅 / 网关显示形态(每会话生命周期通常仅一次,极低频)。
+    tapWindowBroadcast(MAKER_PUSH.CLAUDE_SESSION_ROUTE_CHANGED, { sessionId, route });
   });
 
   // ── Claude.ai 订阅 OAuth 登录(浏览器流程,凭证落系统 ~/.claude) ────────────────

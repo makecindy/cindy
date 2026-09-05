@@ -213,6 +213,17 @@ export function triggerXaiSubscriptionUsageRefresh(): void {
   xaiSubscriptionUsageReader.triggerRefresh();
 }
 
+/**
+ * device-link dispatch 专用的 xAI 订阅余量读取出口。ipcMain 面的
+ * USAGE_XAI_SUBSCRIPTION 挂了 assertTrustedSender(合成 event 必然不可信,那道闸
+ * 不为远程放宽)—— 与 device-link:telegram:* 同先例,被控端 dispatch 过三道 gate
+ * (被控开关 + 撤销黑名单 + allowlist)后直读本函数,不进 ipcMain。cached-first,
+ * 与本机 renderer 读到的快照同形。
+ */
+export function readXaiSubscriptionUsageSnapshotForDeviceLink(): Promise<unknown | null> {
+  return xaiSubscriptionUsageReader.read();
+}
+
 /** SuperGrok 登录 / 登出 / 换号后强制同步(先清再拉)。调用方应 await 后再广播连接态。 */
 export function syncXaiSubscriptionUsageForAuthChange(): Promise<void> {
   return xaiSubscriptionUsageReader.syncForCredentialChange().catch(() => {

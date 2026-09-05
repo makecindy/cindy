@@ -164,6 +164,17 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   'learn:event',
   // 被控端项目手动顺序变化:无 sessionId,并入 sessions topic 随设备列表订阅到达。
   'sidebar-settings:project-order-changed',
+  // Claude 订阅账号余量快照(账号级,无 sessionId):控制端打开远程订阅会话时 chip
+  // 据此实时刷新;并入 sessions topic 随设备列表订阅到达,低频(签名去抖 + 节流)。
+  'usage:claude-subscription-changed',
+  // Codex 账号订阅用量 / Claude 网关配额 / xAI 订阅与限流头:同上定位,账号级
+  // 无 sessionId,并入 sessions topic。频率上限见 allowlist.ts 对应条目注释。
+  // (maker:claude-session-route-changed 不在此表 —— payload 带 sessionId,走
+  // topicForPush 的 session-scoped 兜底路由到 session:<id>。)
+  'usage:codex-account-changed',
+  'usage:claude-account-changed',
+  'usage:xai-subscription-changed',
+  'usage:xai-rate-limit-changed',
 ]);
 
 /** 从 unknown payload 安全读一个字符串字段。 */
