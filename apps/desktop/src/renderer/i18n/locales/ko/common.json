@@ -795,6 +795,7 @@
       "appVersionLabel": "앱 버전",
       "claudeCodeVersionLabel": "Claude Code 버전",
       "codexVersionLabel": "Codex 버전",
+      "piVersionLabel": "Pi 버전",
       "logsDirLabel": "로그 디렉터리",
       "openLogsDir": "열기",
       "openLogsDirTooltip": "시스템 파일 관리자에서 로그 디렉터리 열기",

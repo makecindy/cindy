@@ -37,6 +37,8 @@ const gatewayModelIdsByApi: Record<PiModelApi, ReadonlySet<string>> = {
     'anthropic/claude-opus-5',
   ]),
   'openai-responses': new Set([
+    'gpt-6-astra',
+    'codex/gpt-6-astra',
     'gpt-5.4',
     'gpt-5.4-mini',
     'gpt-5.4-nano',
@@ -195,6 +197,7 @@ const gatewayCatalogIdentityOverrides = new Map<string, { provider: string; mode
     'gpt-5.6-luna',
     'gpt-5.6-sol',
     'gpt-5.6-terra',
+    'gpt-6-astra',
   ].flatMap((id) => [
     [id, { provider: 'openai', modelId: id }] as const,
     [`codex/${id}`, { provider: 'openai', modelId: id }] as const,

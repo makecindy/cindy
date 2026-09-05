@@ -17,7 +17,6 @@ import {
   ActivityIndicator,
   AppState,
   FlatList,
-  KeyboardAvoidingView,
   Linking,
   Platform,
   Pressable,
@@ -224,6 +223,7 @@ import {
 } from '@/session/MobileComposerInputRow';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
+import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import {
@@ -1487,7 +1487,7 @@ export default function NewRemoteSessionScreen() {
     || permissionSheetOpen
     || voiceIsBusy
     || composerVoiceHoldActive;
-  useComposerCardTransition(composerCardActive);
+  useComposerCardTransition(composerCardActive, keyboardState);
   // 下拉收起 = 退出聚焦激活态(模型浮窗已是独立 Modal,拖拽手势够不到它,无需在此关闭)。
   // 语音结束 hold 态未聚焦,blur 是 no-op,需显式解除 hold 才能收回简洁态。
   const handleComposerSnapToAuto = useCallback(() => {
@@ -5297,7 +5297,9 @@ export default function NewRemoteSessionScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} testID="newSession.screen">
-      <KeyboardAvoidingView
+      <ComposerKeyboardAvoidingView
+        keyboard={keyboardState}
+        bottomInset={safeAreaInsets.bottom}
         behavior={keyboardAvoidingBehaviorForPlatform(
           Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
         )}
@@ -5825,7 +5827,7 @@ export default function NewRemoteSessionScreen() {
             </View>
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </ComposerKeyboardAvoidingView>
       <ContextSheet
         footer={contextSheetView !== 'goal' && pendingMediaAssets.length > 0 ? (
           <ContextSheetFooterButton

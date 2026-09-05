@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-17T00:00:00.000Z",
+  "updatedAt": "2026-09-04T21:38:48.000Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -1728,6 +1728,90 @@
           "providerId": "xd",
           "modelId": "codex/gpt-5.5:auto",
           "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "status": "active",
+      "group": "gpt",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "sortOrder": 22,
+      "supportsFastMode": true,
+      "perAgent": {
+        "claude-code": {
+          "contextWindow": 272000,
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        "codex": {
+          "contextWindow": 272000,
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        }
+      },
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6-astra",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 10,
+              "outputPerMtok": 50,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 12.5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-04",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-04"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "cacheReadPerMtok": 2,
+              "cacheWritePerMtok": 25,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-04",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-04"
+              }
+            }
+          ]
         }
       ]
     }

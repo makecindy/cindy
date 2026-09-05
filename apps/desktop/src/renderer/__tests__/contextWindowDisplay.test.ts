@@ -4,6 +4,28 @@ import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { makerChatStore } from '@/lib/makerChatStore';
 
 describe('resolveDisplayContextWindow', () => {
+  it('replaces a restored large window only with verified route metadata', () => {
+    expect(resolveDisplayContextWindow({
+      sdkContextWindow: 1_050_000,
+      modelContextWindow: 272_000,
+      verifiedContextWindow: 272_000,
+    })).toBe(272_000);
+    expect(resolveDisplayContextWindow({
+      sdkContextWindow: 1_050_000,
+      modelContextWindow: 272_000,
+    })).toBe(1_050_000);
+  });
+
+  it('follows an explicit long window and ignores invalid verified values', () => {
+    expect(resolveDisplayContextWindow({
+      sdkContextWindow: 272_000,
+      verifiedContextWindow: 872_000,
+    })).toBe(872_000);
+    for (const verifiedContextWindow of [null, 0, -1, NaN, Infinity]) {
+      expect(resolveDisplayContextWindow({ sdkContextWindow: 872_000, verifiedContextWindow }))
+        .toBe(872_000);
+    }
+  });
   it('prefers maker capability when SDK reports the unknown-model 200K default', () => {
     expect(resolveDisplayContextWindow({
       modelContextWindow: 992_000,

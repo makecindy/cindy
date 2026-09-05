@@ -176,7 +176,7 @@ export function computeGatewayTurnCost(
   const cacheCreatePrice =
     band?.cacheCreatePerMtok ??
     tariff.cacheCreatePerMtok ??
-    (priority ? price.cacheCreatePerMtok : undefined);
+    (priority && price.source === 'gateway' ? price.cacheCreatePerMtok : undefined);
   if (
     (tokens.inputTokens > 0 && inputPrice === undefined) ||
     (tokens.outputTokens > 0 && outputPrice === undefined) ||

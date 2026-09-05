@@ -347,7 +347,7 @@ describe('active-catalog discovered augment', () => {
     expect(xai?.videoModels).toEqual([]);
   });
 
-  it('bridge 投影剔除 max/ultra:codex 侧保留、claude-code 侧封顶 xhigh(issue #352)', () => {
+  it('bridge 投影保留上游声明的 max/ultra,由实际通道能力控制传参', () => {
     setActiveCatalog(bundledWithoutRegistry());
     setDiscoveredCodexModels([
       {
@@ -364,9 +364,9 @@ describe('active-catalog discovered augment', () => {
     // codex 侧完整保留(该模型确实支持 max/ultra)。
     expect(codex?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
     expect(codex?.defaultEffort).toBe('ultra');
-    // claude-code bridge 侧剔除 max/ultra，默认值随之回落到剩余最高档 xhigh。
-    expect(bridge?.efforts).toEqual(['low', 'medium', 'high', 'xhigh']);
-    expect(bridge?.defaultEffort).toBe('xhigh');
+    // bridge 已支持按模型能力传参，无需在目录层丢弃高档。
+    expect(bridge?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+    expect(bridge?.defaultEffort).toBe('ultra');
   });
 
   it('动态清单契约:注册表快照即清单本身(bundled 零静态,快照全量呈现)', () => {

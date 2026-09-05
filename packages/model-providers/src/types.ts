@@ -333,6 +333,10 @@ export interface CatalogModel {
   maxOutput?: number;
   /** 支持的 effort 档；空数组 = 不支持切换（如 Haiku / 部分 provider-managed 模型）。 */
   efforts: Effort[];
+  /** 独立 Pi 远端目录的显式能力；缺席时保留旧目录兼容行为。 */
+  reasoning?: boolean;
+  reasoningEfforts?: PiReasoningEffort[];
+  reasoningDefaultEffort?: PiReasoningEffort;
   /**
    * Model-specific effort 显示名覆盖（= maker-core ModelDescriptor.effortDisplayNames）。
    * 缺省时回退统一档名词表(桌面 i18n `effortLevels.*` / 手机 MOBILE_EFFORT_LABELS)→

@@ -795,6 +795,7 @@
       "appVersionLabel": "應用版本號",
       "claudeCodeVersionLabel": "Claude Code 版本號",
       "codexVersionLabel": "Codex 版本號",
+      "piVersionLabel": "Pi 版本號",
       "logsDirLabel": "日誌目錄",
       "openLogsDir": "開啟",
       "openLogsDirTooltip": "在系統檔案管理器中開啟日誌目錄",

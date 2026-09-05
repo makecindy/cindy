@@ -92,6 +92,21 @@ afterEach(() => {
 });
 
 describe('createResponsesHandler', () => {
+  it.each(['max', 'ultra'])('honors declared %s capability without changing legacy providers', async (effort) => {
+    const seen: Array<{ reasoning: { effort: string } }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push(JSON.parse(String(init.body)));
+      return new Response(sse(OK_SSE), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const capabilities = vi.fn((model: string) => model === 'gpt-6-astra'
+      ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : ['low', 'high', 'xhigh']);
+    const handler = createResponsesHandler({ providers: [providerConfig({ supportedReasoningEfforts: capabilities })] });
+    await invoke(handler, { model: 'chatgpt/gpt-6-astra', messages: [] }, { prefs: { reasoningEffort: effort } });
+    await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [] }, { prefs: { reasoningEffort: effort } });
+    expect(capabilities).toHaveBeenCalledWith('gpt-6-astra');
+    expect(seen.map((body) => body.reasoning.effort)).toEqual([effort, 'xhigh']);
+  });
+
   it('prefs.fast + effort → 上游请求体 service_tier / reasoning.effort;SSE 翻译写回', async () => {
     const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {

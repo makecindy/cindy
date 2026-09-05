@@ -139,7 +139,8 @@ export function buildCodexSmartModelCatalog(
   );
   const template =
     models.find((model) => model.slug === 'gpt-5.6-terra') ??
-    models.find((model) => model.slug === 'gpt-5.6-sol');
+    models.find((model) => model.slug === 'gpt-5.6-sol') ??
+    models.find((model) => model.multi_agent_version === 'v2');
   if (!template) return null;
 
   const bySlug = new Map(models.map((model) => [model.slug, model]));
@@ -147,6 +148,9 @@ export function buildCodexSmartModelCatalog(
   const nextModels = models.map((record) => {
     const candidate = candidateBySlug.get(record.slug);
     if (!candidate) return record;
+    // Native subscription models already carry their own multi-agent contract.
+    // In particular, max_context_window can exceed the default context_window.
+    if (candidate.providerId === 'openai' && record.multi_agent_version === 'v2') return record;
     return {
       ...record,
       display_name: candidate.model.name,

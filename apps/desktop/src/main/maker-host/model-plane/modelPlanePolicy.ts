@@ -114,26 +114,11 @@ type Effort = CatalogModel['efforts'][number];
 /** Claude 的 OpenAI bridge 默认收起的旧型号;与既有目录行为保持一致。 */
 const BRIDGE_DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4', 'gpt-5.4-mini']);
 
-/** anthropic-responses bridge 不会兑现的 GPT 思考档,投影时必须在客户端硬封顶。 */
-const CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS: ReadonlySet<Effort> = new Set(['max', 'ultra']);
-
 /** OpenAI Codex root → Claude bridge。 */
 export function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
-  const bridgeEfforts = model.efforts.filter(
-    (effort) => !CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(effort),
-  );
-  const cappedDefault: Effort | null =
-    model.defaultEffort && CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(model.defaultEffort)
-      ? bridgeEfforts.includes('xhigh')
-        ? 'xhigh'
-        : (bridgeEfforts[bridgeEfforts.length - 1] ?? null)
-      : model.defaultEffort;
   return {
     ...model,
     id: `${CHATGPT_MODEL_PREFIX}${model.id}`,
-    ...(bridgeEfforts.length !== model.efforts.length
-      ? { efforts: bridgeEfforts, defaultEffort: cappedDefault }
-      : {}),
     ...(BRIDGE_DEFAULT_HIDDEN_SLUGS.has(model.id) ? { defaultEnabled: false } : {}),
   };
 }

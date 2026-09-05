@@ -45,7 +45,6 @@ import {
   AppState,
   BackHandler,
   Keyboard,
-  KeyboardAvoidingView,
   Linking,
   Platform,
   Pressable,
@@ -349,6 +348,7 @@ import {
 } from '@/session/MobileComposerInputRow';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
+import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';
@@ -2709,7 +2709,7 @@ export default function SessionScreen() {
     || permissionSheetOpen
     || voiceIsBusy
     || composerVoiceHoldActive;
-  useComposerCardTransition(composerCardActive);
+  useComposerCardTransition(composerCardActive, keyboardState);
   const composerChromeHeight = useMemo(() => {
     const statusReserve = voiceStatusVisible
       ? COMPOSER_STATUS_ROW_RESERVED_HEIGHT + COMPOSER_STACK_GAP_HEIGHT
@@ -3017,7 +3017,7 @@ export default function SessionScreen() {
     return active;
   }, [isPointInsideSendButton]);
   // Bottom padding the message list needs to clear the composer = the composer's own height only.
-  // The keyboard lift is already applied once by the KeyboardAvoidingView (iOS behavior="padding"),
+  // The keyboard lift is already applied once by ComposerKeyboardAvoidingView,
   // so ALSO adding keyboardBottomInset here double-counted the keyboard and shoved the conversation
   // up (badly visible once the list bottom-anchors its content). Keyboard-closed is unchanged —
   // keyboardBottomInset is 0 then, so this matches the previous value.
@@ -9135,7 +9135,8 @@ export default function SessionScreen() {
 
   return (
     <View style={styles.safeArea} testID="session.screen">
-      <KeyboardAvoidingView
+      <ComposerKeyboardAvoidingView
+        keyboard={keyboardState}
         // 抽屉开着时把背后内容从读屏树里摘掉:iOS 用 accessibilityElementsHidden
         // (与抽屉侧 accessibilityViewIsModal 配对),Android 用 importantForAccessibility
         // ——后者才对 TalkBack 生效(与 ComposerRichInput 的双平台配对惯例一致)。
@@ -10014,7 +10015,7 @@ export default function SessionScreen() {
           ) : null}
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </ComposerKeyboardAvoidingView>
       {shareSelectionActive && selectedShareMessages.length > 0 ? (
         <ConversationShareSvg
           allShareableIds={allShareableIds}

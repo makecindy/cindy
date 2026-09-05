@@ -139,7 +139,7 @@ describe('registry presence 实体化', () => {
     expect('newSessionDefault' in claude!).toBe(false);
   });
 
-  it('bridge 在投影后应用目标端 perAgent,随后再执行 effort 硬约束', () => {
+  it('bridge 在投影后应用目标端 perAgent 的 effort 能力', () => {
     setActiveCatalog(
       baseCatalog([
         gpt6Entry({
@@ -176,6 +176,17 @@ describe('registry presence 实体化', () => {
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')).toBeUndefined();
   });
 
+  it('bridge preserves max and ultra when declared by the target consumer', () => {
+    setActiveCatalog(baseCatalog([gpt6Entry({
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultEffort: 'ultra',
+    })]));
+    expect(models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultEffort: 'ultra',
+    });
+  });
+
   it('同一 OpenAI modelId 的长上下文 Registry entry 只生成 Claude 独立选择', () => {
     setActiveCatalog(
       baseCatalog([
@@ -204,7 +215,7 @@ describe('registry presence 实体化', () => {
         contextWindow: 1_000_000,
       },
     ]);
-    expect(models('openai', 'pi').some((m) => m.id.startsWith('chatgpt/gpt-6'))).toBe(false);
+    expect(models('openai', 'pi').some((m) => ['chatgpt/gpt-6', 'chatgpt/gpt-6[1m]'].includes(m.id))).toBe(false);
     setLocalCatalogOverrides(
       overridesOf({
         patches: { 'openai:gpt-6[1m]': { base: { contextWindow: 900_000 } } },
