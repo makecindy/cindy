@@ -18,6 +18,10 @@ import type {
 } from '../../shared/agentInputQueue';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { __resetStickySessionOriginForTest, getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import {
+  __testing as dataOwnerGenerationTesting,
+  setDataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => ({ items: [], hasMore: false, oldestId: null })),
@@ -207,6 +211,8 @@ const flushPromises = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  dataOwnerGenerationTesting.reset();
+  setDataOwnerGeneration('owner-a', 1);
   remoteProjectsStore.clear();
   __resetStickySessionOriginForTest();
   makerChatStore.__teardownGlobalListeners();
@@ -215,6 +221,7 @@ beforeEach(() => {
 
 afterEach(() => {
   makerChatStore.__teardownGlobalListeners();
+  dataOwnerGenerationTesting.reset();
   remoteProjectsStore.clear();
   __resetStickySessionOriginForTest();
 });
@@ -453,6 +460,139 @@ describe('renderer input queue facade', () => {
     await flushPromises();
 
     expect(ok).toBe(true);
+  });
+
+  it('settles a materialized composer steer after stop advances the projection epoch', async () => {
+    const sid = `steer-materialized-stop-${Math.random().toString(36).slice(2, 8)}`;
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.steer.mockResolvedValueOnce(false);
+    input.getProjection.mockImplementationOnce(
+      () =>
+        new Promise<AgentInputProjection>((resolve) => {
+          resolveProjection = resolve;
+        }),
+    );
+
+    const steer = makerChatStore.steerMessage(sid, 'uncertain text', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    const steered = (input.steer.mock.calls.at(-1) as unknown as [
+      string,
+      AgentInputQueuedMessage,
+      unknown,
+    ])[1];
+
+    makerChatStore.stopSession(sid, { keepQueue: true, pauseQueue: true });
+    resolveProjection(
+      projection(sid, {
+        pendingQueue: [steered],
+        queuePaused: true,
+        error: 'Codex turn/steer did not acknowledge within 10000ms',
+      }),
+    );
+
+    await expect(steer).resolves.toBe(true);
+  });
+
+  it('rejects a pre-stop materialized steer when plain stop drops the queue', async () => {
+    const sid = `steer-materialized-drop-stop-${Math.random().toString(36).slice(2, 8)}`;
+    let resolveSteer!: (value: boolean) => void;
+    input.steer.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveSteer = resolve;
+        }),
+    );
+
+    const steer = makerChatStore.steerMessage(sid, 'pre-stop text', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    const steered = (
+      input.steer.mock.calls.at(-1) as unknown as [string, AgentInputQueuedMessage, unknown]
+    )[1];
+
+    makerChatStore.stopSession(sid);
+    input.getProjection.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [steered], queuePaused: true }),
+    );
+    resolveSteer(false);
+
+    await expect(steer).resolves.toBe(false);
+  });
+
+  it('rejects a pre-clear materialized steer after the clear generation advances', async () => {
+    const sid = `steer-materialized-clear-${Math.random().toString(36).slice(2, 8)}`;
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.steer.mockResolvedValueOnce(false);
+    input.getProjection.mockImplementationOnce(
+      () =>
+        new Promise<AgentInputProjection>((resolve) => {
+          resolveProjection = resolve;
+        }),
+    );
+
+    const steer = makerChatStore.steerMessage(sid, 'pre-clear text', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    const steered = (input.steer.mock.calls.at(-1) as unknown as [
+      string,
+      AgentInputQueuedMessage,
+      unknown,
+    ])[1];
+
+    const clear = makerChatStore.clearSession(sid);
+    resolveProjection(projection(sid, { pendingQueue: [steered], queuePaused: true }));
+
+    await expect(steer).resolves.toBe(false);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it('rejects a materialized composer steer from the previous data owner', async () => {
+    const sid = `steer-materialized-owner-${Math.random().toString(36).slice(2, 8)}`;
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.steer.mockResolvedValueOnce(false);
+    input.getProjection.mockImplementationOnce(
+      () =>
+        new Promise<AgentInputProjection>((resolve) => {
+          resolveProjection = resolve;
+        }),
+    );
+
+    const steer = makerChatStore.steerMessage(sid, 'old owner text', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    const steered = (input.steer.mock.calls.at(-1) as unknown as [
+      string,
+      AgentInputQueuedMessage,
+      unknown,
+    ])[1];
+
+    setDataOwnerGeneration('owner-b', 2);
+    resolveProjection(projection(sid, { pendingQueue: [steered], queuePaused: true }));
+
+    await expect(steer).resolves.toBe(false);
+  });
+
+  it('rejects a materialized local steer after the session origin moves remote', async () => {
+    const sid = `steer-materialized-origin-${Math.random().toString(36).slice(2, 8)}`;
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.steer.mockResolvedValueOnce(false);
+    input.getProjection.mockImplementationOnce(
+      () =>
+        new Promise<AgentInputProjection>((resolve) => {
+          resolveProjection = resolve;
+        }),
+    );
+
+    const steer = makerChatStore.steerMessage(sid, 'old origin text', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    const steered = (input.steer.mock.calls.at(-1) as unknown as [
+      string,
+      AgentInputQueuedMessage,
+      unknown,
+    ])[1];
+
+    remoteProjectsStore.setDeviceSessions('new-device', 'Remote Mac', [{ id: sid } as never]);
+    expect(getStickySessionDeviceId(sid)).toBe('new-device');
+    resolveProjection(projection(sid, { pendingQueue: [steered], queuePaused: true }));
+
+    await expect(steer).resolves.toBe(false);
   });
 
   it('keeps a plainly failed composer steer as unhandled so the draft is preserved', async () => {
