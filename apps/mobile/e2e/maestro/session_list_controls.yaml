@@ -2,13 +2,25 @@ appId: ${APP_ID}
 ---
 - runFlow: login_mock.yaml
 - tapOn:
-    id: "devices.title"
+    id: "home.chromeMenu"
+- tapOn:
+    id: "home.chromeDrawer.devices"
 - extendedWaitUntil:
     visible:
-      id: "${XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID}"
-    timeout: 10000
-- longPressOn:
-    id: "${XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID}"
+      id: "deviceManagement.open.${XDT_MOBILE_E2E_HOST_DEVICE_ID}"
+    timeout: 15000
+- tapOn:
+    id: "deviceManagement.open.${XDT_MOBILE_E2E_HOST_DEVICE_ID}"
+- extendedWaitUntil:
+    visible:
+      id: "deviceInformation.screen"
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      id: "deviceInformation.tasks"
+    direction: DOWN
+- tapOn:
+    id: "deviceInformation.tasks"
 - extendedWaitUntil:
     visible:
       id: "deviceDetail.screen"

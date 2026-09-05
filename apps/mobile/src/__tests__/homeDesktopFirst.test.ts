@@ -360,23 +360,21 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain("const testID = item.deviceId ? 'home.deviceChip' : 'home.deviceChip.all';");
     expect(localSmokeSource).toContain('process.env.XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID = mockHostDeviceChipId;');
     expect(maestroSource).toContain('XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID=${hostDeviceChipId}');
-    expect(deviceDetailFlow).toContain('id: "${XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID}"');
+    expect(deviceDetailFlow).toContain('id: "deviceManagement.open.${XDT_MOBILE_E2E_HOST_DEVICE_ID}"');
   });
 
-  it('lets mobile rename account devices through the authoritative device-link API', () => {
-    const source = readSource('app/devices/index.tsx');
+  it('keeps device management in the drawer and scope selection direct', () => {
+    const home = readSource('app/devices/index.tsx');
+    const drawer = readSource('src/session/HomeChromeDrawer.tsx');
+    const management = readSource('app/devices/manage.tsx');
 
-    expect(source).toContain('const [renameTarget, setRenameTarget]');
-    expect(source).toContain('function RenameDeviceModal');
-    expect(source).toContain('onRenameDevice={openRenameDevice}');
-    expect(source).toContain('testID={testID ? `${testID}.rename` : undefined}');
-    expect(source).toContain('testID="home.renameDevice.input"');
-    expect(source).toContain("testID: 'home.renameDevice.save'");
-    expect(source).toContain('`/api/device-link/devices/${encodeURIComponent(target.deviceId)}`');
-    expect(source).toContain("method: 'PATCH'");
-    expect(source).toContain('body: { name }');
-    expect(source).toContain('remoteSessionStore.renameDevice(target.deviceId, nextName)');
-    expect(source).not.toContain('clearManualName');
+    expect(drawer).toContain('testID="home.chromeDrawer.devices"');
+    expect(home).toContain("guardedPush('/devices/manage')");
+    expect(home).not.toContain('onRenameDevice=');
+    expect(home).not.toContain('onOpenDevice=');
+    expect(management).toContain('key={accountGeneration}');
+    expect(management).toContain("pathname: '/devices/manage/[deviceId]'");
+    expect(management).toContain('onRename={manager.openRename}');
   });
 
   it('scopes multi-device connection feedback to the affected device chip', () => {

@@ -20,7 +20,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
-import { Text, TextInput } from '@/components/AppText';
+import { Text } from '@/components/AppText';
 import { DeviceLinkError, type DeviceView, type PresenceSnapshot } from '@cindy/device-link';
 import {
   Archive,
@@ -75,7 +75,6 @@ import {
   buildHomeDisplayPullDownActions,
   buildHomeScopePullDownActions,
   homeDisplayMenuPatch,
-  parseHomeScopePullDownAction,
   type HomeDisplayMenuKey,
 } from '@/session/homeChromeMenus';
 import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
@@ -443,12 +442,9 @@ function HomeScreenContent() {
   const [loggingOut, setLoggingOut] = useState(false);
   // 菜单关闭动画完成(Modal 卸载)后要执行的动作。iOS 上两个兄弟 Modal 重叠时,第二个 Modal
   // 是叠在菜单 Modal 的 VC 上 present 的,菜单淡出后卸载会把它连带 dismiss 掉——所以从菜单里
-  // 打开重命名 / 撤销授权弹窗必须等菜单完全卸载(onClosed)后再挂载,不能同一帧直接 set。
+  // 打开账号切换 / 撤销授权弹窗必须等菜单完全卸载(onClosed)后再挂载,不能同一帧直接 set。
   const pendingMenuActionRef = useRef<(() => void) | null>(null);
   const pendingAccountSwitcherActionRef = useRef<(() => void) | null>(null);
-  const [renameTarget, setRenameTarget] = useState<MobileHomeDeviceFilterItem | null>(null);
-  const [renameDraft, setRenameDraft] = useState('');
-  const [renameSaving, setRenameSaving] = useState(false);
   const {
     actionSheetSession,
     archiveSession,
@@ -542,9 +538,6 @@ function HomeScreenContent() {
     setHostProjectOrders(new Map());
     setRevokedTipDeviceId(null);
     setRetryingDeviceIds(new Set());
-    setRenameTarget(null);
-    setRenameDraft('');
-    setRenameSaving(false);
     setProjectDrag(null);
   }, [accountGeneration]);
 
@@ -1354,23 +1347,6 @@ function HomeScreenContent() {
     // probe invoke clears the revoked mark on success; the tip-close effect handles dismissal.
   }, [accountGeneration, probeRevokedDeviceAccess]);
 
-  const openRenameDevice = useCallback((item: MobileHomeDeviceFilterItem) => {
-    if (!item.deviceId) return;
-    const begin = () => {
-      setRenameTarget(item);
-      setRenameDraft(item.label);
-      setError(null);
-    };
-    // 自定义范围菜单还没卸掉时不能直接挂重命名 Modal。
-    // 原生 UIMenu 没有这层 Modal,可以立刻打开。
-    if (deviceMenuOpen) {
-      pendingMenuActionRef.current = begin;
-      setDeviceMenuOpen(false);
-      return;
-    }
-    begin();
-  }, [deviceMenuOpen]);
-
   // 菜单 Modal 完全关闭(淡出结束 + 卸载)后,执行延后的弹窗动作。
   const handleDeviceMenuClosed = useCallback(() => {
     const action = pendingMenuActionRef.current;
@@ -1414,55 +1390,6 @@ function HomeScreenContent() {
     const next = event.nativeEvent.contentOffset.y > 8;
     setHeaderFrosted((current) => (current === next ? current : next));
   }, [homeScrollY]);
-
-  const closeRenameDevice = useCallback(() => {
-    if (renameSaving) return;
-    setRenameTarget(null);
-    setRenameDraft('');
-  }, [renameSaving]);
-
-  const confirmRenameDevice = useCallback(async () => {
-    const expectedAccountGeneration = accountGeneration;
-    const target = renameTarget;
-    const name = renameDraft.trim();
-    if (!target?.deviceId || !name || renameSaving) return;
-    if (name === target.label.trim()) {
-      setRenameTarget(null);
-      setRenameDraft('');
-      return;
-    }
-
-    setRenameSaving(true);
-    try {
-      const res = await apiFetch<{ deviceId: string; name: string }>(
-        `/api/device-link/devices/${encodeURIComponent(target.deviceId)}`,
-        {
-          baseUrl: DEVICE_LINK_API_BASE_URL,
-          body: { name },
-          method: 'PATCH',
-          timeoutMs: DEVICE_LIST_TIMEOUT_MS,
-        },
-      );
-      if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
-      const nextName = res.name;
-      setDevices((current) => {
-        const nextRaw = current.map((device) =>
-          device.deviceId === target.deviceId ? { ...device, name: nextName } : device);
-        const next = reconcileDeviceViews(nextRaw).devices;
-        devicesRef.current = next;
-        return next;
-      });
-      remoteSessionStore.renameDevice(target.deviceId, nextName);
-      setRenameTarget(null);
-      setRenameDraft('');
-      void loadHome({ visible: false });
-    } catch (err) {
-      if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
-      setError(formatRemoteError(err));
-    } finally {
-      if (homeAccountGenerationRef.current === expectedAccountGeneration) setRenameSaving(false);
-    }
-  }, [accountGeneration, apiFetch, loadHome, reconcileDeviceViews, renameDraft, renameSaving, renameTarget]);
 
   const deviceRows = useMemo(
     () => toDeviceListItems(devices, Date.now(), revokedDevices),
@@ -2384,33 +2311,13 @@ function HomeScreenContent() {
     () => buildHomeScopePullDownActions(
       home.deviceFilters,
       t('devices.list.allConversations'),
-      {
-        openLabel: t('devices.list.menu.openDevice'),
-        renameLabel: t('devices.list.menu.renameDevice'),
-        showTasksLabel: t('devices.list.menu.showDeviceTasks'),
-      },
     ),
     [home.deviceFilters, t],
   );
   const handleHomeScopeAction = useCallback((id: string) => {
-    const parsed = parseHomeScopePullDownAction(id);
-    if (parsed.kind === 'open') {
-      const item = home.deviceFilters.find((filter) => filter.deviceId === parsed.deviceId);
-      if (!item?.deviceId) return;
-      guardedPush({
-        pathname: '/devices/[deviceId]',
-        params: { deviceId: item.deviceId, name: item.label },
-      });
-      return;
-    }
-    if (parsed.kind === 'rename') {
-      const item = home.deviceFilters.find((filter) => filter.deviceId === parsed.deviceId);
-      if (item) openRenameDevice(item);
-      return;
-    }
-    const item = home.deviceFilters.find((filter) => filter.id === parsed.filterId);
+    const item = home.deviceFilters.find((filter) => filter.id === id);
     if (item) selectHomeScope(item);
-  }, [guardedPush, home.deviceFilters, openRenameDevice, selectHomeScope]);
+  }, [home.deviceFilters, selectHomeScope]);
   const homeDisplayPullDownActions = useMemo(
     () => buildHomeDisplayPullDownActions({
       groupByProject,
@@ -2729,15 +2636,6 @@ function HomeScreenContent() {
         filters={home.deviceFilters}
         onClose={() => setDeviceMenuOpen(false)}
         onClosed={handleDeviceMenuClosed}
-        onOpenDevice={(item) => {
-          if (!item.deviceId) return;
-          setDeviceMenuOpen(false);
-          guardedPush({
-            pathname: '/devices/[deviceId]',
-            params: { deviceId: item.deviceId, name: item.label },
-          });
-        }}
-        onRenameDevice={openRenameDevice}
         onSelect={(item) => {
           if (item.deviceId && item.state === 'access_revoked') {
             // 撤销授权提示同样是兄弟 Modal,必须等菜单卸载后再挂(见 pendingMenuActionRef 注释)。
@@ -2777,6 +2675,12 @@ function HomeScreenContent() {
         onOpenAccounts={() => {
           pendingMenuActionRef.current = () => setAccountSwitcherOpen(true);
           setChromeMenuCloseInstant(false);
+          setChromeMenuOpen(false);
+        }}
+        onOpenDevices={() => {
+          pendingMenuActionRef.current = null;
+          guardedPush('/devices/manage');
+          setChromeMenuCloseInstant(true);
           setChromeMenuOpen(false);
         }}
         onOpenSettings={() => {
@@ -2836,14 +2740,6 @@ function HomeScreenContent() {
         topOffset={chromeHeight}
         visible={displaySettingsOpen}
       />
-      <RenameDeviceModal
-        draft={renameDraft}
-        onCancel={closeRenameDevice}
-        onChangeDraft={setRenameDraft}
-        onConfirm={confirmRenameDevice}
-        saving={renameSaving}
-        visible={renameTarget !== null}
-      />
       <SessionOptionsPresenter
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
@@ -2882,8 +2778,6 @@ function DeviceMenuModal({
   filters,
   onClose,
   onClosed,
-  onOpenDevice,
-  onRenameDevice,
   onSelect,
   topOffset,
   visible,
@@ -2893,8 +2787,6 @@ function DeviceMenuModal({
   onClose(): void;
   /** 淡出动画完成、Modal 真正卸载后触发;父级用它把「打开第二个 Modal」延后到菜单卸载之后。 */
   onClosed?(): void;
-  onOpenDevice(item: MobileHomeDeviceFilterItem): void;
-  onRenameDevice(item: MobileHomeDeviceFilterItem): void;
   onSelect(item: MobileHomeDeviceFilterItem): void;
   topOffset: number;
   visible: boolean;
@@ -2945,9 +2837,7 @@ function DeviceMenuModal({
                 dimmed={!item.available && item.state !== 'access_revoked'}
                 key={item.id}
                 label={item.label}
-                onLongPress={item.deviceId ? () => onOpenDevice(item) : undefined}
                 onPress={() => onSelect(item)}
-                onRename={item.deviceId ? () => onRenameDevice(item) : undefined}
                 selected={item.selected}
                 status={deviceMenuStatus(item)}
                 testID={item.deviceId ? `home.deviceChip.${sanitizeDeviceChipTestId(item.deviceId)}` : undefined}
@@ -3091,9 +2981,7 @@ function DeviceMenuItem({
   dimmed = false,
   icon,
   label,
-  onLongPress,
   onPress,
-  onRename,
   selected,
   status,
   testID,
@@ -3103,24 +2991,20 @@ function DeviceMenuItem({
   dimmed?: boolean;
   icon?: ReactNode;
   label: string;
-  onLongPress?: () => void;
   onPress(): void;
-  onRename?: () => void;
   selected: boolean;
   status?: 'online' | 'offline';
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
   const rowDisabled = dimmed;
   return (
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
       accessibilityState={{ checked: checked || undefined, disabled: rowDisabled, selected: selected || undefined }}
-      disabled={rowDisabled && !onRename}
-      onLongPress={rowDisabled ? undefined : onLongPress}
+      disabled={rowDisabled}
       onPress={() => {
         if (rowDisabled) return;
         onPress();
@@ -3145,88 +3029,7 @@ function DeviceMenuItem({
           {connectionState === 'failed' ? <View style={styles.deviceConnectionFailedRing} /> : null}
         </View>
       ) : null}
-      {onRename ? (
-        <Pressable
-          accessibilityLabel={t('devices.list.a11y.renameDevice', { label })}
-          accessibilityRole="button"
-          hitSlop={8}
-          onPress={(event) => {
-            event.stopPropagation();
-            onRename();
-          }}
-          style={({ pressed }) => [styles.deviceMenuRenameButton, pressed && styles.pressed]}
-          testID={testID ? `${testID}.rename` : undefined}
-        >
-          <Pencil color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
-        </Pressable>
-      ) : null}
     </Pressable>
-  );
-}
-
-function RenameDeviceModal({
-  draft,
-  onCancel,
-  onChangeDraft,
-  onConfirm,
-  saving,
-  visible,
-}: {
-  draft: string;
-  onCancel(): void;
-  onChangeDraft(value: string): void;
-  onConfirm(): void;
-  saving: boolean;
-  visible: boolean;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
-  const { t } = useTranslation();
-  const canSave = draft.trim().length > 0 && !saving;
-  return (
-    <Modal animationType="fade" transparent visible={visible} onRequestClose={onCancel}>
-      <Pressable style={styles.renameDeviceBackdrop} onPress={onCancel} testID="home.renameDevice.backdrop">
-        <Pressable style={styles.renameDeviceCard} onPress={() => undefined} testID="home.renameDevice.modal">
-          <Text style={styles.renameDeviceTitle}>{t('devices.list.renameDevice.title')}</Text>
-          <TextInput
-            autoFocus
-            editable={!saving}
-            maxLength={64}
-            onChangeText={onChangeDraft}
-            onSubmitEditing={() => {
-              if (canSave) onConfirm();
-            }}
-            placeholder={t('devices.list.renameDevice.placeholder')}
-            placeholderTextColor={colors.textTertiary}
-            returnKeyType="done"
-            selectTextOnFocus
-            style={styles.renameDeviceInput}
-            testID="home.renameDevice.input"
-            value={draft}
-          />
-          {/* 确认对统一规则:共享满宽纵排组(保存在上/取消居底),置于卡片底部。 */}
-          <MainWindowActionGroup
-            primaryActions={[{
-              accessibilityLabel: saving ? t('devices.list.renameDevice.savingA11y') : t('devices.list.renameDevice.saveA11y'),
-              busy: saving,
-              disabled: !canSave,
-              label: saving ? t('devices.common.saving') : t('devices.common.save'),
-              onPress: onConfirm,
-              testID: 'home.renameDevice.save',
-              tone: 'primary',
-            }]}
-            cancelAction={{
-              accessibilityLabel: t('devices.list.a11y.cancelRename'),
-              disabled: saving,
-              label: t('devices.common.cancel'),
-              onPress: onCancel,
-              testID: 'home.renameDevice.cancel',
-            }}
-            testID="home.renameDevice.actions"
-          />
-        </Pressable>
-      </Pressable>
-    </Modal>
   );
 }
 
@@ -4606,52 +4409,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     position: 'relative',
     width: 20,
   },
-  deviceMenuRenameButton: {
-    alignItems: 'center',
-    borderRadius: radius.pill,
-    height: 34,
-    justifyContent: 'center',
-    width: 34,
-  },
   deviceMenuDivider: {
     backgroundColor: colors.border,
     height: StyleSheet.hairlineWidth,
     marginHorizontal: spacing.sm,
     marginVertical: spacing.sm,
-  },
-  renameDeviceBackdrop: {
-    alignItems: 'center',
-    backgroundColor: colors.overlay,
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xl,
-  },
-  renameDeviceCard: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.md,
-    maxWidth: 360,
-    padding: spacing.lg,
-    width: '100%',
-  },
-  renameDeviceTitle: {
-    color: colors.textPrimary,
-    fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.subtitle,
-  },
-  renameDeviceInput: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    fontSize: typeScale.body,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
   },
   revokedTipBackdrop: {
     alignItems: 'center',
