@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG, resolveModelNativeApi } from '@cindy/model-providers';
 import type {
   Catalog,
   PiModelApi,
@@ -22,69 +23,6 @@ const catalog = piModelCatalogJson as unknown as {
   providers: Record<string, PiCatalogRow[]>;
 };
 const rows = Object.values(catalog.providers).flat();
-
-const gatewayModelIdsByApi: Record<PiModelApi, ReadonlySet<string>> = {
-  'anthropic-messages': new Set([
-    'claude-fable-5',
-    'claude-haiku-4-5',
-    'claude-haiku-4-5-20251001',
-    'claude-opus-4-6',
-    'claude-opus-4-7',
-    'claude-opus-4-8',
-    'claude-opus-5',
-    'claude-sonnet-4-6',
-    'claude-sonnet-5',
-    'anthropic/claude-opus-5',
-  ]),
-  'openai-responses': new Set([
-    'gpt-6-astra',
-    'codex/gpt-6-astra',
-    'gpt-5.4',
-    'gpt-5.4-mini',
-    'gpt-5.4-nano',
-    'gpt-5.5',
-    'gpt-5.6-luna',
-    'gpt-5.6-sol',
-    'gpt-5.6-terra',
-    'codex/gpt-5.4',
-    'codex/gpt-5.4-mini',
-    'codex/gpt-5.5',
-    'codex/gpt-5.5:auto',
-    'codex/gpt-5.6-luna',
-    'codex/gpt-5.6-sol',
-    'codex/gpt-5.6-terra',
-    'meta/muse-spark-1.2',
-    'x-ai-grok/grok-4.6',
-    'x-ai/grok-4.5',
-    'x-ai/grok-4.6',
-  ]),
-  'openai-completions': new Set([
-    'deepseek/deepseek-v4-flash',
-    'deepseek/deepseek-v4-flash-vision-exp',
-    'deepseek/deepseek-v4-pro',
-    'moonshot/kimi-k3',
-    'moonshotai/kimi-k2.6',
-    'moonshotai/kimi-k3',
-    'qwen/qwen3.7-max',
-    'qwen/qwen3.8-27b',
-    'qwen/qwen3.8-flash',
-    'qwen/qwen3.8-max',
-    'tencent/hy3',
-    'z-ai/glm-5.1',
-    'z-ai/glm-5.2',
-    'z-ai/glm-5.3',
-    'z-ai/glm-5.3-flash',
-    'z-ai/glm-5.3-highspeed',
-  ]),
-  'google-generative-ai': new Set([
-    'gemini-3-flash-preview',
-    'gemini-3.1-pro-preview',
-    'gemini-3.5-flash',
-    'gemini-3.6-flash',
-    'google/gemini-3.6-flash',
-    'google/gemini-3.7-flash',
-  ]),
-};
 
 function normalizeModelId(modelId: string): string {
   return modelId.replace(/\[1m\]$/, '');
@@ -116,11 +54,7 @@ function collapseCatalogApis(apis: readonly PiModelApi[]): PiModelApi | null | u
   return distinct.length === 1 ? distinct[0] : null;
 }
 
-function routedCatalogApis(
-  catalog: Catalog,
-  providerId: string,
-  modelId: string,
-): PiModelApi[] {
+function routedCatalogApis(catalog: Catalog, providerId: string, modelId: string): PiModelApi[] {
   if (providerId === 'xd') return [];
   const apis: PiModelApi[] = [];
   const provider = catalog.providers.find((entry) => entry.id === providerId);
@@ -203,14 +137,6 @@ const gatewayCatalogIdentityOverrides = new Map<string, { provider: string; mode
     [`codex/${id}`, { provider: 'openai', modelId: id }] as const,
   ]),
   ['codex/gpt-5.5:auto', { provider: 'openai', modelId: 'gpt-5.5' }],
-  ...[
-    'gemini-3-flash-preview',
-    'gemini-3.1-pro-preview',
-    'gemini-3.5-flash',
-    'gemini-3.6-flash',
-  ].map((id) => [id, { provider: 'google', modelId: id }] as const),
-  ['google/gemini-3.6-flash', { provider: 'google', modelId: 'gemini-3.6-flash' }],
-  ['google/gemini-3.7-flash', { provider: 'google', modelId: 'gemini-3.7-flash' }],
   ...['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-v4-pro'].map(
     (id) => [`deepseek/${id}`, { provider: 'deepseek', modelId: id }] as const,
   ),
@@ -229,21 +155,17 @@ const gatewayCatalogIdentityOverrides = new Map<string, { provider: string; mode
   ]),
 ]);
 
-function authoritativeGatewayApi(modelId: string): PiModelApi | undefined {
-  const normalized = normalizeModelId(modelId);
-  for (const [api, ids] of Object.entries(gatewayModelIdsByApi) as Array<
-    [PiModelApi, ReadonlySet<string>]
-  >) {
-    if (ids.has(normalized)) return api;
-  }
-  return undefined;
-}
-
 /** Preferred exact provider/model identity in Pi's complete bundled catalog. */
 export function resolveBundledPiGatewayCatalogIdentity(
   modelId: string,
 ): { provider: string; modelId: string } | undefined {
   const normalized = normalizeModelId(modelId);
+  if (
+    resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, 'xd', normalized) ===
+    'google-generative-ai'
+  ) {
+    return { provider: 'google', modelId: normalized.replace(/^google\//, '') };
+  }
   const explicit = gatewayCatalogIdentityOverrides.get(normalized);
   if (explicit) return explicit;
   const direct = rows.find((row) => `${row.provider}/${row.id}` === normalized);
@@ -254,7 +176,7 @@ export function resolveBundledPiGatewayCatalogIdentity(
  * Resolve the current Gateway model through Cindy's version-matched Pi table.
  *
  * Cindy Server's downloaded Catalog is checked before this function. This local table is the
- * second authority and may only resolve exact, allowlisted identities. Cindy AI Gateway metadata
+ * second authority: canonical APIs and route rules in model-registry.json. Gateway metadata
  * is a last-resort hint after both higher-priority sources are absent. Unknown identities fail
  * closed instead of guessing a provider or protocol.
  */
@@ -265,15 +187,21 @@ export function resolveBundledPiGatewayModelProfile(
   const matched = identity
     ? rows.find((row) => row.provider === identity.provider && row.id === identity.modelId)
     : undefined;
-  const api = matched?.api ?? authoritativeGatewayApi(modelId);
+  const canonical = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, 'xd', modelId);
+  const api = canonical !== undefined ? canonical : matched?.api;
   if (!api) return undefined;
+  const compatible = matched?.api === api ? matched : undefined;
   // Never borrow compat by bare ID across providers. An allowlisted Gateway identity may still
   // use its locally selected API, but provider-specific serialization metadata requires an exact
   // canonical provider/model row (or the exact binary probe in pi-host).
   return {
     api,
-    ...(matched?.compat ? { compat: structuredClone(matched.compat) } : {}),
-    ...(matched?.samplingParams ? { samplingParams: structuredClone(matched.samplingParams) } : {}),
-    ...(matched?.thinkingLevelMap ? { thinkingLevelMap: { ...matched.thinkingLevelMap } } : {}),
+    ...(compatible?.compat ? { compat: structuredClone(compatible.compat) } : {}),
+    ...(compatible?.samplingParams
+      ? { samplingParams: structuredClone(compatible.samplingParams) }
+      : {}),
+    ...(compatible?.thinkingLevelMap
+      ? { thinkingLevelMap: { ...compatible.thinkingLevelMap } }
+      : {}),
   };
 }

@@ -1488,8 +1488,14 @@
           "viewUsage": "檢視用量",
           "buyPlan": "購買套餐",
           "upgradePlan": "升級套餐",
-          "syncFailed": "憑據同步失敗，暫時無法獲取餘額。已儲存的模型配置不受影響。"
-        }
+          "syncFailed": "憑據同步失敗，暫時無法獲取餘額。已儲存的模型配置不受影響。",
+          "quotaTitle": "本期剩餘額度",
+          "quotaUsed": "已用 {{used}} / 本期額度 {{total}}",
+          "loading": "正在取得…",
+          "unavailable": "暫時無法取得，請重新整理。",
+          "refresh": "重新整理額度"
+        },
+        "simpleSubtitle": "多種模型，統一帳戶結算。"
       },
       "custom": {
         "tag": "自定義",
@@ -1719,17 +1725,11 @@
       },
       "models": {
         "search": "搜尋模型",
-        "available": "在模型選擇中顯示",
         "modelCount_other": "{{count}} 個模型",
-        "enableAll": "全部顯示",
-        "disableAll": "全部隱藏",
         "subscription": "訂閱",
         "subscriptionProduct": "{{product}} 訂閱",
         "noResults": "無匹配模型",
-        "splitAdjust": "分別調整",
-        "splitDone": "完成",
         "capabilityNote": "不支援 {{agent}}",
-        "divergedChip": "已在 {{agent}} 隱藏",
         "refreshAria": "重新整理模型列表(僅新增，不改動現有)",
         "refreshBuiltinAria": "重新整理模型列表",
         "refreshingAria": "正在重新整理模型列表…",
@@ -1768,6 +1768,114 @@
           "invalid": "請輸入有效且不小於 0 的輸入、輸出價格",
           "loadFailed": "API 估價載入失敗，請重試",
           "saveFailed": "API 估價儲存失敗，請重試"
+        },
+        "advanced": {
+          "open": "進階設定",
+          "openAria": "{{name}} 的進階設定",
+          "noDescription": "目錄未提供說明",
+          "identity": "模型資訊",
+          "modelId": "模型 ID",
+          "providerLabel": "供應商",
+          "group": "分組",
+          "status": "狀態",
+          "statusUnset": "未標註",
+          "spec": "規格",
+          "contextWindow": "上游最大上下文",
+          "tokensApprox": "tokens（約 {{approx}}）",
+          "catalogMissing": "目錄未提供",
+          "capability": "能力",
+          "capabilityHint": "優先使用目前供應商宣告的能力；未宣告時，圖片能力參考模型名稱。",
+          "imageInput": "圖片輸入",
+          "supported": "支援",
+          "unsupported": "不支援",
+          "undeclared": "未宣告",
+          "pricing": "報價",
+          "pricingLabel": "報價",
+          "noPricing": "此路由沒有報價資料",
+          "perMtok": "/ 百萬 tokens",
+          "discount": "折扣",
+          "defaultEffort": "預設推理強度",
+          "defaultEffortHint": "新任務選中該模型時的初始檔位，任務內仍可臨時調整。",
+          "contextLimit": "上下文上限",
+          "contextLimitHint": "以整數 K 編輯，顯示時向下取整；未編輯時保留精確設定。儲存後用於新建或重新開啟的任務。",
+          "contextLimitAria": "上下文上限（千 tokens）",
+          "contextLimitRoute": "目前 {{tokens}} tokens · 1 K = 1,000 tokens",
+          "contextLimitOverWindow": "已超過上游宣告的長度，可能導致請求失敗。",
+          "restoreDefault": "恢復預設",
+          "engines": "引擎支援",
+          "enginesHint": "相容模式需要轉換請求，預設關閉，可依需要開啟。",
+          "engineUnsupported": "不支援",
+          "engineNoFast": "無 Fast",
+          "vision": {
+            "vision": "支援",
+            "no-vision": "不支援",
+            "unknown": "未知"
+          },
+          "visionSource": {
+            "vision": "判準：本機前綴名單判定為支援看圖",
+            "no-vision": "判準：本機前綴名單判定為不支援看圖",
+            "unknown": "名單未涵蓋 —— 目錄沒有模態欄位，只能判未知"
+          },
+          "price": {
+            "input": "輸入",
+            "output": "輸出",
+            "cacheRead": "快取讀取",
+            "cacheCreate": "快取寫入"
+          },
+          "close": "關閉",
+          "maxOutput": "最大輸出",
+          "catalogCapabilities": "目錄宣告的能力",
+          "contextInvalid": "請輸入 1–100,000 K 的整數。",
+          "contextWriteFailed": "未儲存，請重試。",
+          "contextMixed": "現有引擎設定不同；修改或恢復預設將套用至所有引擎。",
+          "inputModalities": "輸入類型",
+          "outputModalities": "輸出類型",
+          "modalities": {
+            "text": "文字",
+            "image": "圖片",
+            "audio": "音訊",
+            "video": "影片",
+            "file": "檔案"
+          },
+          "effortMixed": "各引擎的檔位不同；選擇後套用至支援該檔位的引擎。",
+          "protocol": {
+            "reference": "原生協定",
+            "compatibility": "相容模式",
+            "compatibilityHint": "相容模式可能出現執行不穩定或功能異常，建議有經驗的使用者使用。",
+            "matching": "原生支援",
+            "unknown": "協定待確認"
+          },
+          "codexContextDefault": "Codex 預設 272K 上下文",
+          "codexContextHint": "Codex 預設使用 272K 上下文，並提前自動壓縮。這裡的調整僅用於其他引擎；更大視窗需另行調整 Codex 設定，不建議日常使用。",
+          "codexContextAdvanced": "更大視窗需另行調整 Codex 設定，不建議日常使用。",
+          "lifecycle": {
+            "alpha": "試用版",
+            "deprecated": "不再推薦",
+            "retired": "已下架"
+          }
+        },
+        "kindFilter": {
+          "all": "全部",
+          "aria": "依模型類型篩選",
+          "chat": "對話"
+        },
+        "hiddenGroup": "未啟用",
+        "management": {
+          "brand": "廠商"
+        },
+        "manage": {
+          "title": "模型",
+          "selected": "已選 {{count}} 個",
+          "hint": "用開關選擇常用的對話模型。",
+          "menu": "管理",
+          "arrange": "列表排列",
+          "byBrand": "依廠商分組",
+          "byName": "依模型名稱排列",
+          "selection": "常用模型",
+          "showAll": "選用全部模型",
+          "hideAll": "取消全部選擇",
+          "reset": "恢復預設選擇",
+          "connectionRequired": "連線後可用，已選模型會保留。"
         }
       },
       "genericOAuth": {
@@ -2071,6 +2179,17 @@
           "cleared": "已清除影像生成 API key",
           "clearFailed": "清除影像生成 API key 失敗"
         }
+      },
+      "usage": {
+        "percentUsed": "{{percent}}% 已使用",
+        "resetsAt": "{{at}} 重設",
+        "claudePlanFallback": "Claude 訂閱",
+        "claudeWeekly": "7 天視窗 {{percent}}%",
+        "scopedModel": "{{model}} {{percent}}%",
+        "openClaudeUsage": "開啟用量頁面",
+        "codexPlanFallback": "ChatGPT 訂閱",
+        "codexSecondary": "次級視窗 {{percent}}%",
+        "codexResetCredits": "限額重設券 {{count}} 張"
       }
     },
     "experimental": {
@@ -11529,5 +11648,51 @@
         "downloads": "下載"
       }
     }
+  },
+  "modelNames": {
+    "manufacturers": {
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "google": "谷歌",
+      "deepseek": "深度求索",
+      "qwen": "阿里巴巴",
+      "moonshot": "月之暗面",
+      "zai": "智譜",
+      "tencent": "騰訊",
+      "meta": "Meta",
+      "xai": "xAI",
+      "minimax": "MiniMax",
+      "bytedance": "字節跳動",
+      "alibaba": "阿里巴巴",
+      "elevenlabs": "ElevenLabs",
+      "voyage": "Voyage"
+    },
+    "families": {
+      "qwen": "千問",
+      "doubao": "豆包",
+      "hunyuan": "混元"
+    }
+  },
+  "modelDescriptions": {
+    "longContext": "可選的長上下文版本，長輸入可能產生更高費用。",
+    "security": "用於安全分析與程式碼審查。",
+    "research": "用於資料研究、複雜問題、程式開發與文件創作。",
+    "quickCoding": "適合程式碼修改與小型開發任務。",
+    "reasoning": "用於問題推理、分析與程式開發。",
+    "coding": "用於撰寫程式碼、排查錯誤與改進程式。",
+    "sustainedWork": "適合持續的開發任務與深入研究。",
+    "complexWork": "適合複雜分析、程式開發與細緻寫作。",
+    "everydayWork": "適合日常問答、寫作與程式開發。",
+    "quickAnswers": "適合簡短問答、摘要與短文寫作。",
+    "shortTasks": "適合簡短問答、文字整理與重複的小任務。",
+    "writingAndCoding": "用於內容寫作、程式開發與問題分析。",
+    "readingAndWriting": "用於閱讀資料、整理資訊與寫作。",
+    "image": "用於產生圖片。",
+    "video": "用於產生影片。",
+    "speech": "將文字轉換為語音。",
+    "transcription": "將語音轉換為文字。",
+    "realtime": "用於即時語音交流。",
+    "embedding": "依語意尋找相關內容。",
+    "compression": "用於精簡冗長內容。"
   }
 }

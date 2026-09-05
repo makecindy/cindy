@@ -112,6 +112,7 @@ import {
   resolveVerifiedContextWindow,
   resolveExplicitCustomContextWindow,
 } from './catalog-to-descriptors.js';
+import { readModelContextLimit } from './model-context-limit-store.js';
 import {
   bundledCodexCatalogHasModel,
   prepareCodexCustomContextCatalog,
@@ -267,7 +268,7 @@ import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
 } from './rehydrateCloseSuppression.js';
-import { hydrateSessionProvider } from './session-provider-store.js';
+import { getSessionProvider, hydrateSessionProvider } from './session-provider-store.js';
 import { prepareLocalCodexCredentialModeSwitch } from './codex-credential-switch.js';
 import { createDesktopOrcaTeamStoreAdapter } from './orcaTeamStoreAdapter.js';
 import { broadcastOrcaWorkerChanged } from './orcaWorkerBroadcast.js';
@@ -992,6 +993,8 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
+      resolveModelContextLimit: (providerId, modelId) =>
+        providerId ? readModelContextLimit('claude-code', providerId, modelId) : null,
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
@@ -1326,6 +1329,8 @@ export function getMaker(): Maker {
       // 把 app-server 上报的上下文窗口收敛到该**路由**真实上限。每次调用读 live 目录:
       // 模型发现 / 切账号 / 自定义 provider 增删改都要即时反映。按 providerId 定夺而不是
       // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
+      resolveModelContextLimit: (providerId, modelId) =>
+        providerId ? readModelContextLimit('codex', providerId, modelId) : null,
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
       resolveCodexThreadContextWindow: async (providerId, modelId) => {
@@ -2184,6 +2189,13 @@ export function getMaker(): Maker {
     _visionBridgeInstance = createVisionBridge({
       getProviderById: (providerId) =>
         getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
+      resolveTargetModel: (modelId, sessionId) => {
+        const session = _maker?.getSession(sessionId);
+        const providerId = getSessionProvider(sessionId);
+        if (!session || !providerId) return null;
+        const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
+        return provider?.models[session.agentKind]?.find((model) => model.id === modelId) ?? null;
+      },
       readCustomProviderKey,
       readGatewayKey: readClaudeApiKey,
       resolveGatewayEndpoint: () => effectiveXdGatewayBaseUrl() || null,

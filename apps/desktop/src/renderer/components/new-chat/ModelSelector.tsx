@@ -1,3 +1,5 @@
+import { localizedModelDescription } from '@/lib/modelDescriptions';
+import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
 import {
   useCallback,
   useState,
@@ -76,11 +78,8 @@ import {
   prefetchDeviceProviders,
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
-import {
-  modelPriceDiscountLabelValues,
-  modelPriceDetailRows,
-  modelPricePresentation,
-} from '@/lib/modelPriceFormat';
+import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
+import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
   filterChatBridgedCodexProviders,
   isChatBridgedCodexProvider,
@@ -117,7 +116,6 @@ import {
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilities';
-import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
 import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
@@ -1493,8 +1491,9 @@ function ModelSelectorContentView({
   };
 
   // ── 模型单价 ─────────────────────────────────────────────────────────────
-  // XD 实际报价与非 XD Catalog 参考价是两份独立快照。这里只按行来源选择快照，
-  // 相同 modelId 不跨 Provider 复用或兜底。
+  // 快照选择与折扣叠加的规则在 `lib/modelPricePresentation.ts`,与设置页 → 模型列表共用
+  // 同一份实现(那三条判断复制一份就会漂,见该文件头注)。这里只做选择器特有的两件事:
+  // 远程会话不展示价格,以及「行来源未知时回溯解析」。
   // agentOverride:统一面板的行各自有自己的生效引擎(不共用面板级 currentAgentKind),
   // 报价必须按**该行的引擎**查(同一 id 跨引擎可以是两条不同的路由 / 两份不同的价)。
   const pricePresentationOf = (
@@ -1511,20 +1510,14 @@ function ModelSelectorContentView({
       (priceAgentKind
         ? resolveCurrentSourceId(providers, currentProviderId, id, priceAgentKind)
         : null);
-    const pricing = effectiveProviderId === 'xd' ? gatewayPricing : referencePricing;
-    const quote = getModelPriceQuote(pricing, effectiveProviderId, id, priceAgentKind ?? undefined);
-    if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
-      if (!quote && gatewayPricing == null) return null;
-      const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
-      const effectiveCost =
-        effectiveProvider && priceAgentKind
-          ? getModel(effectiveProvider, id, priceAgentKind)?.cost
-          : undefined;
-      return modelPricePresentation(quote ?? null, effectiveCost);
-    }
-    if (!quote) return null;
-    const displayQuote = quote.approximate ? { ...quote, approximate: false } : quote;
-    return modelPricePresentation(displayQuote, undefined);
+    return resolveModelPricePresentation({
+      providerId: effectiveProviderId,
+      modelId: id,
+      agent: priceAgentKind,
+      providers,
+      gatewayPricing,
+      referencePricing,
+    });
   };
   // SSH 远程会话里订阅直连模型(chatgpt/ / xai/)不可路由:远端 cc 不经本地
   // compat-proxy 的 responses-bridge,选了必失败。保留在列表但置灰 + 原因提示,
@@ -1636,9 +1629,11 @@ function ModelSelectorContentView({
               defaultEnabled: cat?.defaultEnabled,
             });
           },
-      query,
       includePaymentRequired: true,
-    });
+    }).map((section) => ({
+      ...section,
+      models: section.models.filter((model) => matchesModelName(model, query, t)),
+    })).filter((section) => section.models.length > 0);
     // visibilityVersion 仅作刷新触发器(设置页改显示开关后强制重算);deviceId 切换需重算分段。
   }, [
     sourcesEnabled,
@@ -1648,6 +1643,7 @@ function ModelSelectorContentView({
     currentAgentKind,
     modelId,
     activeSourceId,
+    t,
     query,
     visibilityVersion,
     deviceId,
@@ -1699,11 +1695,12 @@ function ModelSelectorContentView({
       : base;
     if (!q) return selectable;
     return selectable.filter(
-      (m) => m.displayName.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
+      (m) => matchesModelName(m, q, t),
     );
   }, [
     sections,
     visibleModels,
+    t,
     query,
     browsing,
     agentKind,
@@ -2122,20 +2119,21 @@ function ModelSelectorContentView({
 
   // 每个模型行的信息 / 配置内容由一个独立的 portaled Popover 承载,而不是拼进主菜单宽度。
   // 这样浮层会像 Hermes 的 Radix submenu 一样贴着当前行移动,切行不触发主菜单重排。
+  const editingDescription = editingModel ? localizedModelDescription(editingModel, t) : undefined;
   const configPanel = editingModel ? (
     <div
       role="group"
-      aria-label={`${editingModel.displayName} ${t('newChat.modelSelector.options')}`}
+      aria-label={`${localizedModelName(editingModel.displayName, t)} ${t('newChat.modelSelector.options')}`}
       className="flex flex-col gap-0.5"
     >
       {/* 名字 / 简介先帮助确认模型；面板整体居中后，操作区仍贴近当前 hover 行。 */}
       <div className="flex flex-col gap-1 px-2 py-1.5">
         <span className="min-w-0 text-14 font-medium text-[var(--model-item-text)]">
-          {editingModel.displayName}
+          {localizedModelName(editingModel.displayName, t)}
         </span>
-        {editingModel.description && (
+        {editingDescription && (
           <span className="line-clamp-2 text-12 font-normal leading-[1.4] text-[var(--text-secondary)]">
-            {editingModel.description}
+            {editingDescription}
           </span>
         )}
       </div>
@@ -2453,7 +2451,7 @@ function ModelSelectorContentView({
             aria-disabled={disabled ? true : undefined}
             aria-label={
               paymentRequired
-                ? `${model.displayName} · ${t('newChat.modelSelector.paymentRequired.unlock')}`
+                ? `${localizedModelName(model.displayName, t)} · ${t('newChat.modelSelector.paymentRequired.unlock')}`
                 : undefined
             }
             title={disabledReason ?? undefined}
@@ -2523,7 +2521,7 @@ function ModelSelectorContentView({
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
                   <span className="truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
-                    {model.displayName}
+                    {localizedModelName(model.displayName, t)}
                   </span>
                   {rowEffort && (
                     <span
@@ -3389,7 +3387,7 @@ export function ModelSelector({
   const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
-    : (currentModel?.displayName ??
+    : ((currentModel ? localizedModelName(currentModel.displayName, t) : undefined) ??
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
@@ -3748,7 +3746,7 @@ export function ModelSelector({
           >
             {/* 断开来源可能是该模型的唯一提供方 → visibleModels 查不到,回落显示原始 id,
                     比 "Select model" 占位更能说明「哪个模型的来源断了」。 */}
-            {currentModel?.displayName ?? modelId}
+            {currentModel ? localizedModelName(currentModel.displayName, t) : modelId}
           </span>
           {/* 来源断开是**来源**的事,引擎身份位照常保留(规格 §1.2:引擎可见性靠一致的
               结构位,不靠出错才显示)。 */}

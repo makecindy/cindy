@@ -108,6 +108,29 @@ describe('parseModelsSyncPayload', () => {
     },
   );
 
+  it('accepts a new vendor and icon within v5 but rejects unversioned new fields', () => {
+    const futureModel = {
+      ...baseModel,
+      id: 'new-labs/new-family-9',
+      name: 'New Family 9',
+      icon: 'future-brand',
+      availability: 'available',
+      perAgent: {
+        'claude-code': { wireProtocol: 'anthropic-messages' },
+        codex: { wireProtocol: 'openai-responses' },
+      },
+    };
+    const envelope = { schemaVersion: 5, accountTier: 'paid', models: [futureModel] };
+    expect(parseModelsSyncPayload(envelope)).toMatchObject({ ok: true, models: [futureModel] });
+    const changedContract = parseModelsSyncPayload({
+      ...envelope,
+      models: [{ ...futureModel, createdAt: '2026-09-05T00:00:00Z' }],
+    });
+    expect(changedContract.ok).toBe(false);
+    if (!changedContract.ok) expect(changedContract.error).toContain('createdAt');
+    expect(envelope.models).toEqual([futureModel]);
+  });
+
   it('leaves the caller-owned last-known-good snapshot untouched on rejection', () => {
     const lastKnownGood = [{ id: 'last-known-model' }];
     const parsed = parseModelsSyncPayload({ schemaVersion: 99, models: [] });

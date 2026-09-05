@@ -3628,3 +3628,42 @@ describe('provider:oauth mutation ordering', () => {
     expect(rollbackCredentials).toHaveBeenCalledOnce();
   });
 });
+
+
+describe('model context limit IPC', () => {
+  const primary = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-6' };
+  const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
+  const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+
+  it('validates every alias then writes one atomic edit with the current owner', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'], 'claude-code': ['chatgpt/gpt-6'] })],
+      readModelContextLimit: () => ({ limit: 500_000, isCustomized: true }),
+      writeModelContextLimit: vi.fn(),
+    });
+    registerProviderHandlers(harness, deps);
+    const target = { ...primary, relatedTargets: [related] };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 500_000, stamp)).resolves.toMatchObject({ limit: 500_000, isCustomized: true, mixed: false });
+    expect(deps.writeModelContextLimit).toHaveBeenCalledExactlyOnceWith([primary, related], 500_000);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 400_000, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [primary] }, 400_000, stamp)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [{ ...related, providerId: 'other' }] }, 400_000, stamp)).rejects.toThrow();
+    expect(deps.writeModelContextLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an owner change during asynchronous catalog validation without writing', async () => {
+    const harness = new IpcHarness();
+    let generation = 1;
+    const deps = makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation }),
+      listProviders: async () => { generation = 2; return [catalogView('openai', { codex: ['gpt-6'] })]; },
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      writeModelContextLimit: vi.fn(),
+    });
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, primary, 500_000, stamp)).rejects.toThrow();
+    expect(deps.writeModelContextLimit).not.toHaveBeenCalled();
+  });
+});

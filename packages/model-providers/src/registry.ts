@@ -95,6 +95,8 @@ export type ModelDiscoveryFailureState = Partial<
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
   connected: boolean;
+  /** Ready media execution channels, independent of chat authorization. Absent on older hosts. */
+  availableMediaModelIds?: string[];
   /** Non-secret presentation metadata resolved before routing details cross device-link. */
   logoKind?: ProviderLogoKind;
   /** 动态清单发现的最近一次失败（已剥掉 detail）；成功或从未失败时缺席。 */

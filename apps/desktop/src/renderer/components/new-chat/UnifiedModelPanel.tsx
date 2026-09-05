@@ -1,3 +1,4 @@
+import { matchesModelName } from '@/lib/modelDisplayNames';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -177,7 +178,11 @@ export interface UnifiedModelPanelProps {
    * 可选「跟随会话」行(opt-in,仅 scheduler 的 heartbeat 绑定会话任务)。
    * 语义与既有面板同名 prop 逐字一致:选中 = 模型留空、跟随绑定会话。
    */
-  followSession?: { active: boolean; label: string; onFollow: () => void | boolean | Promise<void | boolean> };
+  followSession?: {
+    active: boolean;
+    label: string;
+    onFollow: () => void | boolean | Promise<void | boolean>;
+  };
   /**
    * 行选中。第 4 个参数是该行**已经合成好的生效配置**(引擎 ⊕ 深度 ⊕ Fast ⊕ 收藏锚点)——
    * 调用方拿到它才能把「模型 + 引擎」当成一件事写下去(M5:草稿的 vendor 就按 `engine` 派生)。
@@ -569,11 +574,14 @@ export function UnifiedModelPanel({
         entries,
         favorites,
         query,
+        matchesQuery: (entry, q) => matchesModelName({
+          id: entry.modelId, displayName: entry.displayName, description: entry.description,
+        }, q, t),
         rail: effectiveRail,
         effectiveEngineOf,
         providerOrder,
       }),
-    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder],
+    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder, t],
   );
 
   // 列表变化时把选中行对齐到**可视区中部**(Chris 2026-08-19 实测反馈,详见
@@ -847,7 +855,7 @@ export function UnifiedModelPanel({
   const hasRows = rows.length > 0;
 
   /**
-   * 行内价格 / 订阅签的派生(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
+   * 行内价格的派生(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
    * 折后价比例填充并尾随 ↓X%;限免显示淡染小徽标;无报价不渲染节点。
    * 价格按**该行生效引擎的 wire id**查(同一逻辑模型换引擎可能换一条报价)。
    *
@@ -858,45 +866,37 @@ export function UnifiedModelPanel({
     (
       entry: UnifiedModelEntry,
       config: UnifiedRowConfig,
-    ): {
-      priceDisplay: NonNullable<Parameters<typeof UnifiedModelRow>[0]['priceDisplay']> | null;
-      subscriptionRow: boolean;
-    } => {
+    ): NonNullable<Parameters<typeof UnifiedModelRow>[0]['priceDisplay']> | null => {
       const price = priceOf(entry.providerId, config.wireModelId ?? entry.modelId, config.agent);
-      // 订阅接入且拿不到按量报价的行:画「订阅」小签,不画 $ 档串(那类模型走套餐额度,
-      // 画钱会被读成按量计费)。判定用 provider.access.kind + 报价来源
-      // (subscription-reference = 只是价值估算,不是账单价)。
+      // 接入方式由来源区域说明,行内不重复标注。订阅价值估算不作为按量报价展示。
       const rowProvider = providers.find((item) => item.id === entry.providerId);
       const subscriptionRow =
         rowProvider?.access?.kind === 'subscription' &&
         (price === null ||
           price.kind !== 'priced' ||
           price.current.source === 'subscription-reference');
-      if (subscriptionRow) return { priceDisplay: null, subscriptionRow: true };
-      if (price?.kind === 'free') return { priceDisplay: { kind: 'free' }, subscriptionRow: false };
-      if (price?.kind !== 'priced') return { priceDisplay: null, subscriptionRow: false };
+      if (subscriptionRow) return null;
+      if (price?.kind === 'free') return { kind: 'free' };
+      if (price?.kind !== 'priced') return null;
       // 符号个数按**标准价**判(original;折扣不改变模型的价格档),点亮几格按折扣比例
       // 取整;颜色只由点亮格数决定(见 UnifiedModelRow priceDisplay 头注)。
       const basis = price.original ?? price.current;
       const discountPct = price.discount !== undefined ? Math.round(price.discount * 100) : 0;
       return {
-        subscriptionRow: false,
-        priceDisplay: {
-          kind: 'tier',
-          tier: priceTierOf(basis.outputPerMtok, basis.currency),
-          // 档串符号跟**报价币种**走(设计稿:中文报价是 ¥¥¥)。
-          symbol: basis.currency === 'CNY' ? '¥' : '$',
-          ...(discountPct > 0 && discountPct < 100
-            ? {
-                discountPct,
-                paidPct: 100 - discountPct,
-                title: t(
-                  'newChat.modelSelector.pricing.discount',
-                  modelPriceDiscountLabelValues(price.discount ?? 0),
-                ),
-              }
-            : {}),
-        },
+        kind: 'tier',
+        tier: priceTierOf(basis.outputPerMtok, basis.currency),
+        // 档串符号跟**报价币种**走(设计稿:中文报价是 ¥¥¥)。
+        symbol: basis.currency === 'CNY' ? '¥' : '$',
+        ...(discountPct > 0 && discountPct < 100
+          ? {
+              discountPct,
+              paidPct: 100 - discountPct,
+              title: t(
+                'newChat.modelSelector.pricing.discount',
+                modelPriceDiscountLabelValues(price.discount ?? 0),
+              ),
+            }
+          : {}),
       };
     },
     [priceOf, providers, t],
@@ -1048,7 +1048,7 @@ export function UnifiedModelPanel({
                 {section.rows.map((row) => {
                   const config = configOf(row.entry, row.favorite);
                   const key = anchorKey(row.anchor);
-                  const { priceDisplay, subscriptionRow } = priceDisplayOf(row.entry, config);
+                  const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
                     <UnifiedModelRow
                       key={key}
@@ -1060,11 +1060,17 @@ export function UnifiedModelPanel({
                       isFavoriteRow={!!row.favorite}
                       justFavorited={justFavorited === key}
                       {...(priceDisplay ? { priceDisplay } : {})}
-                      {...(subscriptionRow
-                        ? { subscriptionLabel: t('settings.providers.models.subscription') }
-                        : {})}
+
                       configurationEnabled={configurationEnabled}
-                      interactionDisabled={interactionDisabled || actionPending || !!isRouteDisabled?.(row.entry.providerId, config.wireModelId ?? row.entry.modelId, config.agent)}
+                      interactionDisabled={
+                        interactionDisabled ||
+                        actionPending ||
+                        !!isRouteDisabled?.(
+                          row.entry.providerId,
+                          config.wireModelId ?? row.entry.modelId,
+                          config.agent,
+                        )
+                      }
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
                       {...(paymentRequiredUnlockLabel ? { paymentRequiredUnlockLabel } : {})}
@@ -1109,7 +1115,7 @@ export function UnifiedModelPanel({
                 </div>
                 {section.rows.map((row) => {
                   const config = configOf(row.entry, row.favorite, RAIL_ALL);
-                  const { priceDisplay, subscriptionRow } = priceDisplayOf(row.entry, config);
+                  const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
                     <UnifiedModelRow
                       key={anchorKey(row.anchor)}
@@ -1121,9 +1127,7 @@ export function UnifiedModelPanel({
                       isFavoriteRow={!!row.favorite}
                       justFavorited={false}
                       {...(priceDisplay ? { priceDisplay } : {})}
-                      {...(subscriptionRow
-                        ? { subscriptionLabel: t('settings.providers.models.subscription') }
-                        : {})}
+
                       configurationEnabled={configurationEnabled}
                       interactionDisabled
                       paymentRequired={row.entry.availability === 'requires_payment'}
@@ -1176,7 +1180,15 @@ export function UnifiedModelPanel({
                 )}
                 effortLabelOf={effortLabelOf}
                 justFavorited={justFavorited === anchorKey(target.anchor)}
-                disabled={interactionDisabled || actionPending || !!isRouteDisabled?.(target.entry.providerId, config.wireModelId ?? target.entry.modelId, config.agent)}
+                disabled={
+                  interactionDisabled ||
+                  actionPending ||
+                  !!isRouteDisabled?.(
+                    target.entry.providerId,
+                    config.wireModelId ?? target.entry.modelId,
+                    config.agent,
+                  )
+                }
                 engineLocked={effectiveRail.kind === 'engine'}
                 onEngineChange={(engine) => {
                   if (effectiveRail.kind === 'engine') return;

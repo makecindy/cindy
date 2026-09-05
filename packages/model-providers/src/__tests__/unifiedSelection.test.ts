@@ -602,6 +602,9 @@ describe('resolveAgentCapability', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')).toEqual({
       agent: 'claude-code',
       wireModelId: 'claude-opus-5',
+      protocolMode: 'matching',
+      nativeApi: 'anthropic-messages',
+      outboundApi: 'anthropic-messages',
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',

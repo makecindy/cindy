@@ -62,9 +62,27 @@ export function normalizeVisionModelId(model: string): string {
   return id;
 }
 
+/**
+ * 型号名里的**显式视觉标记**：独立的 `vision` / `vl`（含 `vl2` 这类带代号的）段。
+ *
+ * 为什么需要它：上面两份名单是**家族级前缀**（`deepseek-`、`glm-5.2`），而厂商常在同一
+ * 家族里放一个视觉变体 —— `deepseek/deepseek-vl2`、`deepseek/deepseek-v4-flash-vision-exp`、
+ * `glm-5.2-vision`。这些 id 都以家族前缀开头，只按前缀匹配会被家族的 no-vision 结论吃掉，
+ * 判成「不能看图」（2026-09-04 实测四个型号全部误判）。后果不只是设置页标错：
+ * `isKnownNoVisionModel` 是视觉桥「未自定义时默认勾选」的依据，误判会让本可以直接吃图的
+ * 模型被迫走桥 —— 图片先转成文字描述再喂进去，真实图像信息就丢了。
+ *
+ * 判据是厂商命名惯例（`-vl` / `-vision` 后缀专指多模态变体），与本模块「靠 id 判定」的
+ * 前提一致；比逐个登记型号更能覆盖以后新出的变体。段边界（`^` / `-` / `/` 起，`-` / `.`
+ * / 结尾止）用来避免误伤把这两个词当普通词素的名字。
+ */
+const EXPLICIT_VISION_MARKER = /(?:^|[-/])(?:vision|vl\d*)(?:[-.]|$)/i;
+
 /** 判定一个模型 id 的视觉能力（三态）。 */
 export function classifyVisionCapability(model: string): VisionCapability {
   const id = normalizeVisionModelId(model);
+  // 显式标记优先于家族级结论 —— 家族说「纯文本」，型号名说「我是视觉变体」时，后者更具体。
+  if (EXPLICIT_VISION_MARKER.test(id)) return 'vision';
   if (NO_VISION_ID_PREFIXES.some((p) => id.startsWith(p))) return 'no-vision';
   if (VISION_ID_PREFIXES.some((p) => id.startsWith(p))) return 'vision';
   return 'unknown';

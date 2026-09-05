@@ -74,6 +74,7 @@ import {
 } from '@/hooks/useClaudeAccountUsage';
 import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
 import { resolveCreditTotals, type CreditTotals } from '@/lib/creditPoolTotals';
+import { formatCodexPlanLabel } from '@/lib/subscriptionPlanLabel';
 import {
   requestClaudeSubscriptionRefresh,
   useClaudeSubscriptionUsage,
@@ -147,21 +148,6 @@ const QUOTA_POPOVER_OPEN_DELAY_MS = 300;
 const QUOTA_POPOVER_CLOSE_GRACE_MS = 200;
 const DEFAULT_MONEY_SYMBOL = DEFAULT_USAGE_CURRENCY === 'CNY' ? '¥' : '$';
 const DEFAULT_MONEY_PLACEHOLDER = `${DEFAULT_MONEY_SYMBOL}—`;
-
-const PLAN_TYPE_LABELS: Record<string, string> = {
-  free: 'Free',
-  go: 'Go',
-  plus: 'Plus',
-  pro: 'Pro',
-  prolite: 'Pro Lite',
-  team: 'Team',
-  self_serve_business_usage_based: 'Self Serve Business Usage Based',
-  business: 'Business',
-  enterprise_cbp_usage_based: 'Enterprise CBP Usage Based',
-  enterprise: 'Enterprise',
-  edu: 'Edu',
-  unknown: 'Unknown',
-};
 
 // 软日限额系数 + 紧凑金额格式化已抽到 lib/usageFormat.ts (与首页仪表盘共用同口径)。
 
@@ -260,16 +246,6 @@ function parseCreditBalance(balance: string | null | undefined): {
     maximumFractionDigits: 2,
   });
   return { formatted };
-}
-
-function formatPlanType(planType: string | null | undefined): string | null {
-  const trimmed = planType?.trim();
-  if (!trimmed) return null;
-  const knownLabel = PLAN_TYPE_LABELS[trimmed];
-  if (knownLabel) return knownLabel;
-  return trimmed
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function clampPercent(value: number): number {
@@ -561,7 +537,7 @@ function buildCodexTooltipNode(
     return buildTooltipNode(lines);
   }
 
-  const planLabel = formatPlanType(snapshot.planType);
+  const planLabel = formatCodexPlanLabel(snapshot.planType);
   const credits = snapshot.credits;
   const parsedCredits = parseCreditBalance(credits?.balance);
 

@@ -96,6 +96,24 @@ function xdProviderWithFullRouting() {
 }
 
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  it('preserves live availability and native model metadata without exposing execution credentials', () => {
+    const provider = {
+      ...xdProviderWithFullRouting(),
+      connected: false,
+      availableMediaModelIds: [],
+      models: { pi: [{
+        id: 'google/gemini-new', name: 'Gemini New', contextWindow: 1_048_576,
+        nativeApi: 'google-generative-ai', piApi: 'google-generative-ai',
+        efforts: ['medium'], defaultEffort: 'medium', defaultEnabled: true,
+      }] },
+    };
+    const result = project({ providers: [provider] }).providers[0];
+    expect(result).toMatchObject({ connected: false, availableMediaModelIds: [], models: provider.models });
+    expect(JSON.stringify(result)).not.toContain('leak-me');
+    expect(JSON.stringify(result)).not.toContain(XD_GATEWAY_BASE_URL);
+    expect(connectedProvidersForAgent([result] as unknown as ProviderView[], 'claude-code')).toEqual([]);
+  });
+
   it('剥掉全部执行细节字段（安全边界 D3:upstream / 密钥 / endpoint 不出被控端）', () => {
     const { providers } = project({ providers: [xdProviderWithFullRouting()] });
     const cc = (providers[0].routing as Record<string, Record<string, unknown>>)['claude-code'];

@@ -5739,6 +5739,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
       target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
     ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
       ipcRenderer.invoke('maker:model-price-override:reset', target),
+    /**
+     * 单模型上下文上限 override(设置 → 模型 → 高级设置)。窗口是自动压缩比例的分母,
+     * 调小它让压缩按用户设的长度提前触发。target 与价格 override 同形。
+     * set 传 null = 恢复默认(删 override);返回落盘后的有效值与是否自定义。
+     */
+    getModelContextLimit: (
+      target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+    ): Promise<import('../shared/modelContextLimit').ModelContextLimitView> =>
+      ipcRenderer.invoke('maker:model-context-limit:get', target),
+    setModelContextLimit: (
+      target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+      limit: number | null,
+      owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
+    ): Promise<import('../shared/modelContextLimit').ModelContextLimitView> =>
+      ipcRenderer.invoke('maker:model-context-limit:set', target, limit, owner),
+    resetModelContextLimit: (
+      target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+      owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
+    ): Promise<import('../shared/modelContextLimit').ModelContextLimitView> =>
+      ipcRenderer.invoke('maker:model-context-limit:reset', target, owner),
 
     // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session。
     openSessionInNewWindow: (sessionId: string, deviceId?: string | null): Promise<void> =>

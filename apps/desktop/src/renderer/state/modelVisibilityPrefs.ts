@@ -396,6 +396,23 @@ export function setModelVisibilities(
   });
 }
 
+/** Remove explicit choices so subsequent local/online defaults apply again. */
+export function resetModelVisibilities(
+  providerId: string,
+  targets: readonly { agent: AgentKind; modelId: string }[],
+): boolean {
+  if (!ensureActiveOwnerReadyForWrites()) return false;
+  const map = load();
+  const next = { ...map };
+  for (const target of targets) delete next[keyOf(target.agent, providerId, target.modelId)];
+  if (Object.keys(next).length === Object.keys(map).length) return true;
+  return persist(next, { operation: 'bulk', providerId, enabled: false, modelCount: targets.length });
+}
+
+export function isModelVisibilityCustomized(agent: AgentKind, providerId: string, modelId: string): boolean {
+  return Object.hasOwn(load(), keyOf(agent, providerId, modelId));
+}
+
 /**
  * useSyncExternalStore 包装 —— 返回递增 version。组件把它作为 useMemo 依赖,
  * 开关变更后自动重算(计数 / 过滤后的模型列表)。

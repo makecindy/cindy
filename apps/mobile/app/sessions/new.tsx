@@ -6032,6 +6032,7 @@ export default function NewRemoteSessionScreen() {
         disabled={creating}
         emptyHint={selectedDeviceId ? t('session.new.noModelsAvailable') : t('session.new.selectDeviceFirst')}
         flatOptions={runtimeOptions.modelOptions}
+        providersReady={deviceProviders.ready}
         modelVisibilityOverrides={deviceProviders.modelVisibilityOverrides}
         keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         loading={deviceProviders.loading || capabilitiesLoading}

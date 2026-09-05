@@ -61,9 +61,15 @@ import {
   type ProviderView,
 } from './registry.js';
 import { deriveModelList } from './modelList.js';
+import { modelProtocolComparison } from './modelProtocol.js';
 import { effortRank } from './effortResolution.js';
-import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, groupOf, isBudgetModel } from './classification.js';
-import type { AgentKind, CatalogModel, Effort, Provider } from './types.js';
+import {
+  CHATGPT_MODEL_PREFIX,
+  XAI_MODEL_PREFIX,
+  groupOf,
+  isBudgetModel,
+} from './classification.js';
+import type { AgentKind, CatalogModel, Effort, PiModelApi, Provider } from './types.js';
 
 /**
  * 引擎优先序 —— 联合列表的行合并序、以及推荐回落序的**唯一定义**。
@@ -75,11 +81,10 @@ import type { AgentKind, CatalogModel, Effort, Provider } from './types.js';
 export const UNIFIED_AGENT_PRIORITY: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
 /**
- * 推荐引擎**永不**主动落在 pi 上:pi 是"什么都能跑"的通用兜底(客户端投影,wire enum
- * 里根本没有 pi,见 modelPlanePolicy.ts 头注),不是任何模型的最佳去处。唯一例外是
- * 它是**唯一候选** —— 那时推荐它不是选择,是事实。
+ * 未声明专用原生协议时保留 cc / codex 的历史回落序。Google 原生 API 的 Pi
+ * 路由在 pickRecommendedAgent 中优先处理，不能再把 Pi 一律当成最后兜底。
  */
-const NEVER_RECOMMENDED_UNLESS_SOLE: AgentKind = 'pi';
+const FALLBACK_LAST_AGENT: AgentKind = 'pi';
 
 /**
  * **bridge 命名空间前缀** —— 同一个逻辑模型被投影进非 root 引擎时套的壳。
@@ -260,7 +265,13 @@ export function candidateAgentsForModel(
     if (allowed && !allowed.includes(agent)) return false;
     // providerId 缺席时没有单一 provider 可查 wire id,逐个可能来源试。
     const wireIds = providerId
-      ? [resolveWireModelId(providers.find((p) => p.id === providerId), modelId, agent)]
+      ? [
+          resolveWireModelId(
+            providers.find((p) => p.id === providerId),
+            modelId,
+            agent,
+          ),
+        ]
       : providers.map((provider) => resolveWireModelId(provider, modelId, agent));
     for (const wireId of wireIds) {
       if (!wireId) continue;
@@ -336,10 +347,11 @@ export function nativeAgentForProviderModel(
  *
  * 1. 无候选 → null(没有可推荐的东西,不编);
  * 2. 单候选 → 即它(pi 唯一候选时也推荐 pi);
- * 3. 原生底座命中候选 → 用它;
- * 4. 回落:候选里按 cc > codex 取第一个;都没有则 pi。
+ * 3. 目录声明原生协议且实际路由匹配 → 取该协议首选引擎，其次原生 Pi;
+ * 4. 旧目录缺声明时，保留 Google API Pi 与已有底座的回落规则;
+ * 5. 回落:候选里按 cc > codex 取第一个;都没有则 pi。
  *
- * 约束 2(推荐必是候选)由 3、4 共同保证:原生底座不是候选就一定回落。
+ * 推荐必须是候选:原生底座不是候选就一定回落。
  */
 export function pickRecommendedAgent(
   provider: Provider | ProviderView | undefined,
@@ -348,12 +360,38 @@ export function pickRecommendedAgent(
 ): AgentKind | null {
   if (candidates.length === 0) return null;
   if (candidates.length === 1) return candidates[0];
+  const models: Partial<Record<AgentKind, CatalogModel>> = {};
+  for (const agent of candidates) {
+    const model = findCatalogModel(provider, modelId, agent, { exact: true });
+    if (model) models[agent] = model;
+  }
+  const comparison = provider ? modelProtocolComparison(provider, models) : null;
+  const canonical = comparison?.reference;
+  if (canonical) {
+    const preferred =
+      canonical === 'anthropic-messages'
+        ? 'claude-code'
+        : canonical === 'openai-responses'
+          ? 'codex'
+          : 'pi';
+    if (comparison?.forAgent(preferred)?.mode === 'matching') return preferred;
+    if (comparison?.forAgent('pi')?.mode === 'matching') return 'pi';
+  }
+  // This is an actual per-model route declaration, not a Google brand/name heuristic.
+  // New models inherit it as soon as the catalog arrives; a Gemini served over Responses
+  // does not get a fabricated native Google route or a Pi recommendation.
+  if (
+    candidates.includes('pi') &&
+    findCatalogModel(provider, modelId, 'pi', { exact: true })?.piApi === 'google-generative-ai'
+  ) {
+    return 'pi';
+  }
   const native = nativeAgentForProviderModel(provider, modelId);
   if (native && candidates.includes(native)) return native;
   const fallback = UNIFIED_AGENT_PRIORITY.find(
-    (agent) => agent !== NEVER_RECOMMENDED_UNLESS_SOLE && candidates.includes(agent),
+    (agent) => agent !== FALLBACK_LAST_AGENT && candidates.includes(agent),
   );
-  return fallback ?? (candidates.includes(NEVER_RECOMMENDED_UNLESS_SOLE) ? 'pi' : null);
+  return fallback ?? (candidates.includes(FALLBACK_LAST_AGENT) ? 'pi' : null);
 }
 
 /**
@@ -414,6 +452,10 @@ export interface UnifiedAgentCapability {
   contextWindow: number;
   /** 该窗口是否为显式声明的真实上限(`CatalogModel.contextWindowVerified`)。 */
   contextWindowVerified: boolean;
+  /** Derived from this source's native API and effective route; absent on older projections. */
+  protocolMode?: 'matching' | 'compatibility' | 'unknown';
+  nativeApi?: PiModelApi | null;
+  outboundApi?: PiModelApi | null;
 }
 
 /** 默认档缺省回落:目录没给(或给了 null / 非法值)时,efforts 含 medium 就落 medium。 */
@@ -438,9 +480,19 @@ function capabilityOf(
 ): UnifiedAgentCapability | null {
   const model = findCatalogModel(provider, modelId, agent);
   if (!model) return null;
+  const models: Partial<Record<AgentKind, CatalogModel>> = {};
+  for (const candidate of UNIFIED_AGENT_PRIORITY) {
+    const sibling = findCatalogModel(provider, model.id, candidate, { exact: true });
+    if (sibling) models[candidate] = sibling;
+  }
+  const comparison = modelProtocolComparison(provider, models);
+  const protocol = comparison.forAgent(agent);
   return {
     agent,
     wireModelId: model.id,
+    protocolMode: protocol?.mode ?? 'unknown',
+    nativeApi: comparison.reference,
+    outboundApi: protocol?.outbound ?? null,
     // 防御性规范升序(Chris 2026-08-19 实测:xAI discovery 下发降序,只有 Grok 4.6 被
     // 特判归一,4.5 的滑杆整条轴反向)。efforts 是外部输入(服务端目录 / 三家 discovery /
     // 用户 local override),而滑杆与行三元组按数组下标画轴 —— 数据侧已在 xAI 链路归一,
@@ -635,8 +687,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     // 再并回一家停用来源只会多出一条点了会改道的影子行。runtime 级 disabled(目录 routing
     // 声明该引擎不可路由)不并回:那不是「暂时不可用」而是「从来路由不到」,并回也发不出去。
     let keptRail: readonly ProviderView[] | null = null;
-    let restrictRejoined: ((model: CatalogModel, provider: ProviderView) => boolean) | null =
-      null;
+    let restrictRejoined: ((model: CatalogModel, provider: ProviderView) => boolean) | null = null;
     if (keepModel !== undefined && keepModel.agent === agent) {
       const connectedIds = new Set(
         connectedProvidersForAgent([...providers], agent).map((p) => p.id),

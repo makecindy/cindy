@@ -8961,6 +8961,7 @@ export default function SessionScreen() {
             disabled={controlBusy || !canUseRemoteSessionControls}
             emptyHint={modelSheetCapabilitiesError ?? undefined}
             flatOptions={modelSheetRuntimeOptions.modelOptions}
+            providersReady={composerDeviceProviders.ready}
             modelVisibilityOverrides={composerDeviceProviders.modelVisibilityOverrides}
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
             loading={composerDeviceProviders.loading || modelSheetCapabilitiesLoading}

@@ -228,9 +228,9 @@ describe("buildUserProvider (per-runtime)", () => {
       id: "meta/llama-4-405b",
       name: "Llama 4 405B",
       contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
-      // codex runtime：参考内置默认 effort 档位（low/medium/high/xhigh/max，默认 high）。
+      // codex runtime：参考内置默认 effort 档位（low/medium/high/xhigh/max，默认 medium）。
       efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "high",
+      defaultEffort: "medium",
       group: "custom:openrouter",
       defaultEnabled: true,
     });
@@ -303,13 +303,13 @@ describe("buildUserProvider (per-runtime)", () => {
       expect.objectContaining({
         id: "unregistered-model",
         efforts: ["low", "medium", "high", "xhigh", "max"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       }),
     ]);
     expect(provider.models["claude-code"]?.[0]).toMatchObject({
       id: "gpt-5.6-sol",
       efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "high",
+      defaultEffort: "medium",
     });
   });
 
@@ -435,7 +435,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect(p.models.codex?.[0]).toMatchObject({
       id: 'custom/my-model',
       efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -549,7 +549,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
 
     expect(provider.models.codex?.[0]).toMatchObject({
       efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "high",
+      defaultEffort: "medium",
     });
   });
 
@@ -589,7 +589,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     );
     expect(ambiguous.models.codex?.[0]).toMatchObject({
       efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "high",
+      defaultEffort: "medium",
     });
 
     registry.models.pop();
@@ -608,7 +608,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     );
     expect(invalidDefault.models.codex?.[0]).toMatchObject({
       efforts: ["minimal", "max"],
-      defaultEffort: "max",
+      defaultEffort: "minimal",
     });
 
     const noTargetRoute = buildUserProvider(
@@ -628,7 +628,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     );
     expect(noTargetRoute.models.codex?.[0]).toMatchObject({
       efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "high",
+      defaultEffort: "medium",
     });
   });
 
@@ -1220,5 +1220,34 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
       },
     });
     expect(p.agents).toEqual(["claude-code", "codex", "pi"]);
+  });
+});
+
+
+describe('custom model defaults with partial registry metadata', () => {
+  it.each([
+    [undefined, 'medium'],
+    [null, null],
+    ['max', 'high'],
+  ] as const)('keeps the route usable with declared default %s', (declared, expected) => {
+    const modelRegistry: ModelRegistry = {
+      schemaVersion: 2,
+      updatedAt: '2026-09-05T00:00:00Z',
+      models: [{
+        id: 'sparse-model', name: 'Sparse model',
+        efforts: ['low', 'medium', 'high'],
+        ...(declared !== undefined ? { defaultEffort: declared } : {}),
+        routes: [{ providerId: 'relay', modelId: 'sparse-model', agents: ['codex'] }],
+      }],
+    };
+    const provider = buildUserProvider({
+      id: 'relay', name: 'Custom relay',
+      runtimes: { codex: { baseUrl: 'https://relay.example/v1', models: [{ id: 'sparse-model', name: 'My model' }] } },
+    }, { modelRegistry });
+    expect(provider.models.codex).toHaveLength(1);
+    expect(provider.models.codex?.[0]).toMatchObject({
+      id: 'sparse-model', name: 'My model', efforts: ['low', 'medium', 'high'], defaultEffort: expected,
+    });
+    expect(provider.routing.codex?.upstream).toBe('https://relay.example/v1');
   });
 });

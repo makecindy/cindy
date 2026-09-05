@@ -9,6 +9,7 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 import { i18n } from '@/i18n';
 import type { ProviderModelRow } from '@/session/providerModelSections';
 import {
+  canUseFlatModelFallback,
   filterFlatModelOptions,
   findOptionsTarget,
   modelPickerSheetTitle,
@@ -40,6 +41,36 @@ const flat = (id: string, label: string): MobileModelOption => ({
   effortDisplayNames: {},
   defaultEffort: 'medium',
   supportsFastMode: false,
+});
+
+describe('provider availability changes', () => {
+  it.each([
+    ['disconnected', { connected: false }],
+    ['suspended', { connected: true, suspended: true }],
+    ['no models', { connected: true, models: {} }],
+  ])('does not revive flat models when the last source is %s', (_label, state) => {
+    expect(canUseFlatModelFallback({
+      providers: [{ ...provider, ...state } as ProviderView],
+      providersReady: true,
+      browsingOtherAgent: false,
+    })).toBe(false);
+  });
+
+  it('closes legacy model options when an authoritative empty catalog arrives', () => {
+    const view = { kind: 'options', providerId: null, modelId: 'legacy' } as const;
+    const options = [flat('legacy', 'Legacy')];
+    const permitted = (providersReady: boolean) => canUseFlatModelFallback({
+      providers: [], providersReady, browsingOtherAgent: false,
+    }) ? options : [];
+    expect(findOptionsTarget(view, [], permitted(false))).not.toBeNull();
+    expect(findOptionsTarget(view, [], permitted(true))).toBeNull();
+  });
+
+  it('keeps legacy-host fallback and forbids using it to cross harnesses', () => {
+    expect(canUseFlatModelFallback({ providers: [], providersReady: false, browsingOtherAgent: false })).toBe(true);
+    expect(canUseFlatModelFallback({ providers: [], providersReady: false, browsingOtherAgent: true })).toBe(false);
+    expect(canUseFlatModelFallback({ providers: [], providersReady: false, browsingOtherAgent: false, loading: true })).toBe(false);
+  });
 });
 
 describe('settleModelPickerSheetBack —— 返回两段式(二级先回一级)', () => {

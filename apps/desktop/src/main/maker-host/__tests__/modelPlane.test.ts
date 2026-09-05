@@ -11,6 +11,7 @@ import {
   BUNDLED_CATALOG,
   buildRegistry,
   deriveModelList,
+  resolveModelNativeApi,
   type Catalog,
   type CatalogModel,
 } from '@cindy/model-providers';
@@ -81,6 +82,25 @@ function models(providerId: string, agent: 'claude-code' | 'codex' | 'pi'): Cata
   return p?.models[agent] ?? [];
 }
 
+function withNativeMetadataAndDefaults(
+  providerId: string,
+  models: readonly CatalogModel[] = [],
+): CatalogModel[] {
+  const defaults: Record<string, readonly string[]> = {
+    xai: ['grok-4.6'],
+    anthropic: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
+    openai: ['chatgpt/gpt-6-astra', 'chatgpt/gpt-5.6-sol', 'chatgpt/gpt-5.6-terra', 'chatgpt/gpt-5.6-luna'],
+  };
+  return models.map((model) => {
+    const nativeApi = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id);
+    return {
+      ...model,
+      ...(nativeApi === undefined ? {} : { nativeApi }),
+      ...(defaults[providerId]?.includes(model.id) ? {} : { defaultEnabled: false }),
+    };
+  });
+}
+
 function overridesOf(raw: unknown): ModelCatalogOverrides {
   return sanitizeModelCatalogOverrides(raw).overrides;
 }
@@ -95,6 +115,24 @@ afterEach(() => {
 });
 
 describe('registry presence 实体化', () => {
+  it('uses one model default across Codex, Claude and native Pi, including catalog refresh', () => {
+    for (const effort of ['medium', 'high'] as const) {
+      const catalog = structuredClone(BUNDLED_CATALOG);
+      const terra = catalog.modelRegistry!.models.find((entry) => entry.id === 'openai/gpt-5.6-terra')!;
+      terra.defaultEffort = effort;
+      terra.perAgent = {
+        ...terra.perAgent,
+        codex: { ...terra.perAgent?.codex, defaultEffort: 'xhigh' },
+        'claude-code': { ...terra.perAgent?.['claude-code'], defaultEffort: 'low' },
+      };
+      setActiveCatalog(catalog);
+      for (const agent of ['codex', 'claude-code', 'pi'] as const) {
+        const id = agent === 'codex' ? 'gpt-5.6-terra' : 'chatgpt/gpt-5.6-terra';
+        expect(models('openai', agent).find((m) => m.id === id)?.defaultEffort).toBe(effort);
+      }
+    }
+  });
+
   it('a loaded legacy Catalog cannot replace the local Pi membership baseline', () => {
     const expected = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!expected) throw new Error('bundled catalog missing xai');
@@ -111,7 +149,7 @@ describe('registry presence 实体化', () => {
         expect.objectContaining({ id: 'xai/grok-test', contextWindow: 500_000 }),
       ]);
     }
-    expect(models('xai', 'pi')).toEqual(expected.models.pi);
+    expect(models('xai', 'pi')).toEqual(withNativeMetadataAndDefaults('xai', expected.models.pi));
   });
 
   it('远端 Registry 宣告 GPT-6 只进入 Codex/Claude，不会自动加入 Pi', () => {
@@ -186,61 +224,80 @@ describe('registry presence 实体化', () => {
       supportsFastMode: true,
       defaultEffort: 'medium',
     });
-    expect(models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-5.4-mini')).toMatchObject({
+    expect(
+      models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-5.4-mini'),
+    ).toMatchObject({
       supportsFastMode: false,
       efforts: ['low', 'medium', 'high', 'xhigh'],
       defaultEffort: 'medium',
     });
-    expect(getModelPlaneWarnings().filter((warning) => warning.modelId === 'gpt-5.4-mini')).toEqual([]);
+    expect(getModelPlaneWarnings().filter((warning) => warning.modelId === 'gpt-5.4-mini')).toEqual(
+      [],
+    );
   });
 
   it.each([
     { efforts: ['low', 'medium'], expectedDefault: 'medium' },
-    { efforts: ['low', 'high'], expectedDefault: 'high' },
+    { efforts: ['low', 'high'], expectedDefault: 'low' },
     { efforts: ['low'], expectedDefault: 'low' },
     { efforts: [], expectedDefault: null },
-  ])('bridge overlays independent fields and reconciles omitted defaults: $efforts', ({ efforts, expectedDefault }) => {
-    setActiveCatalog(baseCatalog([gpt6Entry({
-      defaultEffort: undefined,
-      supportsFastMode: true,
-      perAgent: {
-        codex: { defaultEffort: 'medium' },
-        'claude-code': { efforts, contextWindow: 123_000, supportsFastMode: false },
-      },
-    })]));
-    expect(models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6')).toMatchObject({
-      contextWindow: 123_000,
-      supportsFastMode: false,
-      efforts,
-      defaultEffort: expectedDefault,
-    });
-    expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')).toMatchObject({
-      contextWindow: 400_000,
-      supportsFastMode: true,
-      defaultEffort: 'medium',
-    });
-  });
+  ])(
+    'bridge overlays independent fields and reconciles omitted defaults: $efforts',
+    ({ efforts, expectedDefault }) => {
+      setActiveCatalog(
+        baseCatalog([
+          gpt6Entry({
+            defaultEffort: undefined,
+            supportsFastMode: true,
+            perAgent: {
+              codex: { defaultEffort: 'medium' },
+              'claude-code': { efforts, contextWindow: 123_000, supportsFastMode: false },
+            },
+          }),
+        ]),
+      );
+      expect(models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6')).toMatchObject({
+        contextWindow: 123_000,
+        supportsFastMode: false,
+        efforts,
+        defaultEffort: expectedDefault,
+      });
+      expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')).toMatchObject({
+        contextWindow: 400_000,
+        supportsFastMode: true,
+        defaultEffort: 'medium',
+      });
+    },
+  );
 
-  it('missing defaults still cannot materialize new roots or standalone consumer aliases', () => {
-    setActiveCatalog(baseCatalog([
-      gpt6Entry({ defaultEffort: undefined }),
-      gpt6Entry({
-        id: 'openai/gpt-6[1m]',
-        defaultEffort: undefined,
-        routes: [{ providerId: 'openai', modelId: 'gpt-6', agents: ['claude-code'] }],
-      }),
-    ]));
-    expect(models('openai', 'codex')).toEqual([]);
-    expect(models('openai', 'claude-code')).toEqual([]);
-    expect(getModelPlaneWarnings()).toHaveLength(2);
-    expect(getModelPlaneWarnings().every((warning) => warning.reason.includes('defaultEffort'))).toBe(true);
+  it('missing defaults retain declared roots and aliases using supported medium intent', () => {
+    setActiveCatalog(
+      baseCatalog([
+        gpt6Entry({ defaultEffort: undefined }),
+        gpt6Entry({
+          id: 'openai/gpt-6[1m]',
+          defaultEffort: undefined,
+          routes: [{ providerId: 'openai', modelId: 'gpt-6', agents: ['claude-code'] }],
+        }),
+      ]),
+    );
+    expect(models('openai', 'codex')).toMatchObject([{ id: 'gpt-6', defaultEffort: 'medium' }]);
+    expect(models('openai', 'claude-code')).toMatchObject([
+      { id: 'chatgpt/gpt-6', defaultEffort: 'medium' },
+      { id: 'chatgpt/gpt-6[1m]', defaultEffort: 'medium' },
+    ]);
+    expect(getModelPlaneWarnings()).toEqual([]);
   });
 
   it('bridge preserves max and ultra when declared by the target consumer', () => {
-    setActiveCatalog(baseCatalog([gpt6Entry({
-      efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-      defaultEffort: 'ultra',
-    })]));
+    setActiveCatalog(
+      baseCatalog([
+        gpt6Entry({
+          efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+          defaultEffort: 'ultra',
+        }),
+      ]),
+    );
     expect(models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6')).toMatchObject({
       efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       defaultEffort: 'ultra',
@@ -275,7 +332,9 @@ describe('registry presence 实体化', () => {
         contextWindow: 1_000_000,
       },
     ]);
-    expect(models('openai', 'pi').some((m) => ['chatgpt/gpt-6', 'chatgpt/gpt-6[1m]'].includes(m.id))).toBe(false);
+    expect(
+      models('openai', 'pi').some((m) => ['chatgpt/gpt-6', 'chatgpt/gpt-6[1m]'].includes(m.id)),
+    ).toBe(false);
     setLocalCatalogOverrides(
       overridesOf({
         patches: { 'openai:gpt-6[1m]': { base: { contextWindow: 900_000 } } },
@@ -450,7 +509,10 @@ describe('registry presence 实体化', () => {
     expect(models('anthropic', 'claude-code').map((m) => m.id)).toEqual(['claude-next']);
     expect(models('anthropic', 'codex')).toEqual([]);
     expect(models('anthropic', 'pi')).toEqual(
-      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')?.models.pi,
+      withNativeMetadataAndDefaults(
+        'anthropic',
+        BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')?.models.pi,
+      ),
     );
   });
 
@@ -901,5 +963,42 @@ describe('本地 override(local 永远最高)', () => {
         },
       }).invalid,
     ).toEqual(['patches:openai:gpt-6']);
+  });
+});
+
+describe('cross-harness defaults', () => {
+  it('keeps curated native/Pi defaults and makes the Claude Code bridge opt-in', () => {
+    setActiveCatalog(baseCatalog([gpt6Entry({ defaultEnabled: true })]));
+    expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')?.defaultEnabled).toBe(true);
+    expect(
+      models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6')?.defaultEnabled,
+    ).toBe(false);
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')).toBeUndefined();
+    expect(models('openai', 'pi')).toEqual(
+      withNativeMetadataAndDefaults(
+        'openai',
+        BUNDLED_CATALOG.providers.find((p) => p.id === 'openai')?.models.pi,
+      ),
+    );
+    setActiveCatalog(
+      baseCatalog([
+        gpt6Entry({ defaultEnabled: true, perAgent: { 'claude-code': { defaultEnabled: true } } }),
+      ]),
+    );
+    expect(
+      models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6')?.defaultEnabled,
+    ).toBe(true);
+  });
+});
+
+it('preserves the upstream maximum separately from per-harness recommended windows', () => {
+  setActiveCatalog(
+    baseCatalog([
+      gpt6Entry({ contextWindow: 1_050_000, perAgent: { codex: { contextWindow: 272_000 } } }),
+    ]),
+  );
+  expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')).toMatchObject({
+    contextWindow: 272_000,
+    contextWindowMax: 1_050_000,
   });
 });

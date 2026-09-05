@@ -1488,8 +1488,14 @@
           "viewUsage": "View usage",
           "buyPlan": "Buy a plan",
           "upgradePlan": "Upgrade plan",
-          "syncFailed": "Credential sync failed, so the balance is unavailable right now. Your saved model settings are unaffected."
-        }
+          "syncFailed": "Credential sync failed, so the balance is unavailable right now. Your saved model settings are unaffected.",
+          "quotaTitle": "Remaining this period",
+          "quotaUsed": "Used {{used}} / Period allowance {{total}}",
+          "loading": "Loading…",
+          "unavailable": "Temporarily unavailable. Refresh to retry.",
+          "refresh": "Refresh allowance"
+        },
+        "simpleSubtitle": "Multiple models, billed through one account."
       },
       "custom": {
         "tag": "Custom",
@@ -1719,18 +1725,12 @@
       },
       "models": {
         "search": "Search models",
-        "available": "Shown in Model Picker",
         "modelCount_one": "{{count}} model",
         "modelCount_other": "{{count}} models",
-        "enableAll": "Show All",
-        "disableAll": "Hide All",
         "subscription": "Subscription",
         "subscriptionProduct": "{{product}} Subscription",
         "noResults": "No matching models",
-        "splitAdjust": "Adjust per CLI",
-        "splitDone": "Done",
         "capabilityNote": "Not available in {{agent}}",
-        "divergedChip": "Hidden in {{agent}}",
         "refreshAria": "Refresh model list (additions only)",
         "refreshBuiltinAria": "Refresh Model List",
         "refreshingAria": "Refreshing model list…",
@@ -1769,6 +1769,114 @@
           "invalid": "Enter valid non-negative input and output prices",
           "loadFailed": "Couldn’t load the price estimate. Please try again.",
           "saveFailed": "Couldn’t save the price estimate. Please try again."
+        },
+        "advanced": {
+          "open": "Advanced settings",
+          "openAria": "Advanced settings for {{name}}",
+          "noDescription": "No description in the catalog",
+          "identity": "Model details",
+          "modelId": "Model ID",
+          "providerLabel": "Provider",
+          "group": "Group",
+          "status": "Status",
+          "statusUnset": "Not labeled",
+          "spec": "Specs",
+          "contextWindow": "Provider context maximum",
+          "tokensApprox": "tokens (~{{approx}})",
+          "catalogMissing": "Not in the catalog",
+          "capability": "Capabilities",
+          "capabilityHint": "Uses capabilities declared by this provider. Image support falls back to model naming when undeclared.",
+          "imageInput": "Image input",
+          "supported": "Supported",
+          "unsupported": "Not supported",
+          "undeclared": "Not declared",
+          "pricing": "Pricing",
+          "pricingLabel": "Pricing",
+          "noPricing": "No pricing data for this route",
+          "perMtok": "/ million tokens",
+          "discount": "Discount",
+          "defaultEffort": "Default reasoning effort",
+          "defaultEffortHint": "The initial effort for new tasks. You can still adjust it within a task.",
+          "contextLimit": "Context limit",
+          "contextLimitHint": "Edit in whole K, rounded down for display. Exact configuration is preserved until edited. Saved changes apply to new or reopened tasks.",
+          "contextLimitAria": "Context limit (thousands of tokens)",
+          "contextLimitRoute": "Current {{tokens}} tokens · 1 K = 1,000 tokens",
+          "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
+          "restoreDefault": "Restore default",
+          "engines": "Engine support",
+          "enginesHint": "Compatibility mode converts requests. It is off by default and can be enabled when needed.",
+          "engineUnsupported": "Not supported",
+          "engineNoFast": "No Fast",
+          "vision": {
+            "vision": "Supported",
+            "no-vision": "Not supported",
+            "unknown": "Unknown"
+          },
+          "visionSource": {
+            "vision": "Evidence: the local prefix list marks this model as vision-capable",
+            "no-vision": "Evidence: the local prefix list marks this model as not vision-capable",
+            "unknown": "Not on the list — the catalog has no modality field, so this stays unknown"
+          },
+          "price": {
+            "input": "Input",
+            "output": "Output",
+            "cacheRead": "Cache read",
+            "cacheCreate": "Cache write"
+          },
+          "close": "Close",
+          "maxOutput": "Maximum output",
+          "catalogCapabilities": "Capabilities declared in the catalog",
+          "contextInvalid": "Enter a whole number from 1 to 100,000 K.",
+          "contextWriteFailed": "Not saved. Please retry.",
+          "contextMixed": "Existing harness settings differ. Editing or resetting applies to all harnesses.",
+          "inputModalities": "Input types",
+          "outputModalities": "Output types",
+          "modalities": {
+            "text": "Text",
+            "image": "Image",
+            "audio": "Audio",
+            "video": "Video",
+            "file": "File"
+          },
+          "effortMixed": "Effort differs by engine. A selection applies to engines that support that level.",
+          "protocol": {
+            "reference": "Native API",
+            "compatibility": "Compatibility mode",
+            "compatibilityHint": "Compatibility mode may be unstable or behave unexpectedly. Recommended for experienced users.",
+            "matching": "Native support",
+            "unknown": "Protocol unconfirmed"
+          },
+          "codexContextDefault": "Codex defaults to 272K context",
+          "codexContextHint": "Codex defaults to 272K context and compacts before reaching that limit. Changes here apply only to other engines. Larger windows require separate Codex configuration and are not recommended for everyday use.",
+          "codexContextAdvanced": "Larger windows require separate Codex configuration and are not recommended for everyday use.",
+          "lifecycle": {
+            "alpha": "Early access",
+            "deprecated": "No longer recommended",
+            "retired": "Retired"
+          }
+        },
+        "kindFilter": {
+          "all": "All",
+          "aria": "Filter by model type",
+          "chat": "Chat"
+        },
+        "hiddenGroup": "Not shown",
+        "management": {
+          "brand": "Manufacturer"
+        },
+        "manage": {
+          "title": "Models",
+          "selected": "{{count}} selected",
+          "hint": "Use the switches to choose your chat models.",
+          "menu": "Manage",
+          "arrange": "Arrange list",
+          "byBrand": "Group by maker",
+          "byName": "Order by model name",
+          "selection": "Model selection",
+          "showAll": "Select all models",
+          "hideAll": "Clear selection",
+          "reset": "Restore default selection",
+          "connectionRequired": "Connect to use these models. Your selections are saved."
         }
       },
       "genericOAuth": {
@@ -2072,6 +2180,17 @@
           "cleared": "Image generation API key cleared",
           "clearFailed": "Failed to clear image generation API key"
         }
+      },
+      "usage": {
+        "percentUsed": "{{percent}}% used",
+        "resetsAt": "Resets {{at}}",
+        "claudePlanFallback": "Claude subscription",
+        "claudeWeekly": "7-day window {{percent}}%",
+        "scopedModel": "{{model}} {{percent}}%",
+        "openClaudeUsage": "Open usage page",
+        "codexPlanFallback": "ChatGPT subscription",
+        "codexSecondary": "Secondary window {{percent}}%",
+        "codexResetCredits": "{{count}} limit reset credits"
       }
     },
     "experimental": {
@@ -11546,5 +11665,51 @@
         "downloads": "Downloads"
       }
     }
+  },
+  "modelNames": {
+    "manufacturers": {
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "google": "Google",
+      "deepseek": "DeepSeek",
+      "qwen": "Alibaba",
+      "moonshot": "Moonshot",
+      "zai": "Z.ai",
+      "tencent": "Tencent",
+      "meta": "Meta",
+      "xai": "xAI",
+      "minimax": "MiniMax",
+      "bytedance": "ByteDance",
+      "alibaba": "Alibaba",
+      "elevenlabs": "ElevenLabs",
+      "voyage": "Voyage"
+    },
+    "families": {
+      "qwen": "Qwen",
+      "doubao": "Doubao",
+      "hunyuan": "Hunyuan"
+    }
+  },
+  "modelDescriptions": {
+    "longContext": "Optional long-context version; longer inputs may cost more.",
+    "security": "For security analysis and code review.",
+    "research": "For research, complex questions, coding and document creation.",
+    "quickCoding": "For quick code edits and small programming tasks.",
+    "reasoning": "For problem solving, analysis and coding.",
+    "coding": "For writing, debugging and improving code.",
+    "sustainedWork": "For extended coding tasks and in-depth research.",
+    "complexWork": "For complex analysis, coding and detailed writing.",
+    "everydayWork": "For everyday questions, writing and coding.",
+    "quickAnswers": "For quick questions, summaries and short writing tasks.",
+    "shortTasks": "For short questions, text cleanup and repeated small tasks.",
+    "writingAndCoding": "For writing, coding and working through questions.",
+    "readingAndWriting": "For reading materials, organizing information and writing.",
+    "image": "For generating images.",
+    "video": "For generating videos.",
+    "speech": "For turning text into speech.",
+    "transcription": "For turning speech into text.",
+    "realtime": "For real-time voice conversations.",
+    "embedding": "For finding related content by meaning.",
+    "compression": "For condensing lengthy content."
   }
 }

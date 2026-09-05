@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 
 /**
  * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
@@ -494,7 +495,6 @@ function effortToPiThinkingLevel(effort: Effort): string {
   return effort === 'ultra' ? 'max' : effort;
 }
 
-const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 const PI_THINKING_LEVEL_MAP_KEYS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 /**
@@ -540,17 +540,7 @@ function piMaxTokensFallback(contextWindow: number | undefined): number {
 /** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
 function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
   if (!model) return undefined;
-  if (model.thinkingLevelMap) {
-    const efforts: Effort[] = [];
-    for (const effort of PI_NATIVE_THINKING_LEVELS) {
-      if (effort === 'off') continue;
-      if (model.thinkingLevelMap?.[effort] != null) efforts.push(effort);
-    }
-    return efforts;
-  }
-  // writeModelsJson 对缺省 reasoning 同样序列化为 false；因此缺省与显式 false
-  // 都必须冻结为空能力，不能把 renderer 后续热刷出的 effort 放行给旧进程。
-  return model.reasoning === true ? undefined : [];
+  return piSupportedEfforts(model);
 }
 
 /**
@@ -1824,7 +1814,7 @@ export class PiAgent extends BaseAgent {
         reasoning: m.efforts.length > 0,
         input: supportsImageInput ? ['text', 'image'] : ['text'],
         // Model Access v3 requires this value; never replace the server limit with a client guess.
-        contextWindow: m.contextWindow,
+        contextWindow: this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', m.id) ?? m.contextWindow,
         maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : piMaxTokensFallback(m.contextWindow),
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
         cost: {
@@ -1862,9 +1852,10 @@ export class PiAgent extends BaseAgent {
         continue;
       }
       const nativeModels = (
-        np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true) : np.models
+        np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true || this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, model.id) != null) : np.models
       ).map((m) => {
-        const contextWindow = m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000;
+        const contextWindow = this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, m.id)
+          ?? (m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000);
         return {
           id: m.wireId ?? m.id,
           name: m.name ?? m.id,
@@ -2162,6 +2153,7 @@ export class PiAgent extends BaseAgent {
       }
     }
     const startupContextWindow =
+      this.deps.resolveModelContextLimit?.(authProviderId, opts.model) ??
       selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000;
 
     // 普通远端会话直连网关(remoteEndpoint),不生成本地 proxy token。只有显式声明

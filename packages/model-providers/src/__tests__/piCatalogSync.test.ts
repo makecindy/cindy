@@ -29,6 +29,10 @@ describe("Pi catalog sync upstream precedence", () => {
           "packages/model-providers/catalog",
         );
         mkdirSync(catalogDirectory, { recursive: true });
+        const sharedDirectory = path.join(temporary, 'packages/model-providers/src');
+        mkdirSync(sharedDirectory, { recursive: true });
+        cpSync(path.join(root, 'packages/model-providers/src/piThinkingLevels.mjs'),
+          path.join(sharedDirectory, 'piThinkingLevels.mjs'));
         const scriptsDirectory = path.join(temporary, "tools/pi");
         mkdirSync(scriptsDirectory, { recursive: true });
         for (const script of [

@@ -56,6 +56,23 @@ beforeEach(() => {
 });
 
 describe('createVisionBridge hook', () => {
+  it('uses the current route metadata before family-name heuristics while preserving explicit choices', async () => {
+    mockedSettings.mockReturnValue({ ...baseSettings(), targetModels: [] });
+    const resolveTargetModel = vi.fn(() => ({
+      id: 'deepseek-v4', name: 'DeepSeek', contextWindow: 200_000,
+      efforts: [], defaultEffort: null, modalities: { input: ['text', 'image'], output: ['text'] },
+    } as import('@cindy/model-providers').CatalogModel));
+    const { hook } = createVisionBridge({ getProviderById: () => null, resolveTargetModel });
+    const msg = userMsg('hi', '/tmp/a.png');
+    expect((await hook(msg, { model: 'deepseek-v4', sessionId: 's' })).message).toBe(msg);
+    expect(mockedDescribe).not.toHaveBeenCalled();
+    expect(resolveTargetModel).toHaveBeenCalledWith('deepseek-v4', 's');
+    mockedSettings.mockReturnValue(baseSettings());
+    mockedTargetsCustomized.mockReturnValue(true);
+    mockedDescribe.mockResolvedValue('explicit bridge');
+    expect((await hook(msg, { model: 'deepseek-v4', sessionId: 's' })).applied).toBe(true);
+  });
+
   it('passes through when disabled', async () => {
     mockedSettings.mockReturnValue({ ...baseSettings(), enabled: false });
     const { hook } = createVisionBridge({ getProviderById: () => null });

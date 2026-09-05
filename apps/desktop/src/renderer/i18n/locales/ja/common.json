@@ -1488,8 +1488,14 @@
           "viewUsage": "使用量を見る",
           "buyPlan": "プランを購入",
           "upgradePlan": "プランをアップグレード",
-          "syncFailed": "認証情報の同期に失敗したため、残高を取得できません。保存済みのモデル設定には影響しません。"
-        }
+          "syncFailed": "認証情報の同期に失敗したため、残高を取得できません。保存済みのモデル設定には影響しません。",
+          "quotaTitle": "今期の残り利用枠",
+          "quotaUsed": "利用済み {{used}} / 今期の利用枠 {{total}}",
+          "loading": "取得中…",
+          "unavailable": "現在取得できません。更新して再試行してください。",
+          "refresh": "利用枠を更新"
+        },
+        "simpleSubtitle": "複数のモデルをひとつのアカウントで精算。"
       },
       "custom": {
         "tag": "カスタム",
@@ -1719,17 +1725,11 @@
       },
       "models": {
         "search": "モデルを検索",
-        "available": "モデル選択に表示",
         "modelCount_other": "{{count}} モデル",
-        "enableAll": "すべて表示",
-        "disableAll": "すべて非表示",
         "subscription": "サブスク",
         "subscriptionProduct": "{{product}} サブスク",
         "noResults": "一致するモデルがありません",
-        "splitAdjust": "CLI ごとに調整",
-        "splitDone": "完了",
         "capabilityNote": "{{agent}} では利用不可",
-        "divergedChip": "{{agent}} で非表示",
         "refreshAria": "モデル一覧を更新(追加のみ)",
         "refreshBuiltinAria": "モデル一覧を更新",
         "refreshingAria": "モデル一覧を更新中…",
@@ -1768,6 +1768,114 @@
           "invalid": "0 以上の有効な入力・出力料金を入力してください",
           "loadFailed": "料金見積もりを読み込めませんでした。もう一度お試しください。",
           "saveFailed": "料金見積もりを保存できませんでした。もう一度お試しください。"
+        },
+        "advanced": {
+          "open": "詳細設定",
+          "openAria": "{{name}} の詳細設定",
+          "noDescription": "カタログに説明がありません",
+          "identity": "モデル情報",
+          "modelId": "モデル ID",
+          "providerLabel": "プロバイダー",
+          "group": "グループ",
+          "status": "ステータス",
+          "statusUnset": "未設定",
+          "spec": "仕様",
+          "contextWindow": "プロバイダーの最大コンテキスト",
+          "tokensApprox": "tokens（約 {{approx}}）",
+          "catalogMissing": "カタログに情報なし",
+          "capability": "機能",
+          "capabilityHint": "このプロバイダーが宣言した機能を優先します。画像対応が未宣言の場合はモデル名から推定します。",
+          "imageInput": "画像入力",
+          "supported": "対応",
+          "unsupported": "非対応",
+          "undeclared": "宣言なし",
+          "pricing": "料金",
+          "pricingLabel": "料金",
+          "noPricing": "このルートの料金データがありません",
+          "perMtok": "/ 100万 tokens",
+          "discount": "割引",
+          "defaultEffort": "既定の推論強度",
+          "defaultEffortHint": "新しいタスクの初期推論強度です。タスク内でも変更できます。",
+          "contextLimit": "コンテキスト上限",
+          "contextLimitHint": "整数 K で編集し、表示時は切り捨てます。編集するまで正確な設定を保持します。保存後は新規または再度開いたタスクに適用されます。",
+          "contextLimitAria": "コンテキスト上限（千 tokens）",
+          "contextLimitRoute": "現在 {{tokens}} tokens · 1 K = 1,000 tokens",
+          "contextLimitOverWindow": "プロバイダーが宣言した上限を超えています。リクエストが失敗する可能性があります。",
+          "restoreDefault": "既定に戻す",
+          "engines": "エンジン対応",
+          "enginesHint": "互換モードはリクエストを変換します。初期状態ではオフですが、必要に応じて有効にできます。",
+          "engineUnsupported": "非対応",
+          "engineNoFast": "Fast なし",
+          "vision": {
+            "vision": "対応",
+            "no-vision": "非対応",
+            "unknown": "不明"
+          },
+          "visionSource": {
+            "vision": "根拠: ローカルの接頭辞リストで画像入力対応と判定",
+            "no-vision": "根拠: ローカルの接頭辞リストで画像入力非対応と判定",
+            "unknown": "リストに未収録 —— カタログにモダリティ項目がないため不明のまま"
+          },
+          "price": {
+            "input": "入力",
+            "output": "出力",
+            "cacheRead": "キャッシュ読み取り",
+            "cacheCreate": "キャッシュ書き込み"
+          },
+          "close": "閉じる",
+          "maxOutput": "最大出力",
+          "catalogCapabilities": "カタログに記載された機能",
+          "contextInvalid": "1～100,000 K の整数を入力してください。",
+          "contextWriteFailed": "保存できませんでした。再試行してください。",
+          "contextMixed": "実行環境ごとに設定が異なります。変更やリセットはすべてに適用されます。",
+          "inputModalities": "入力形式",
+          "outputModalities": "出力形式",
+          "modalities": {
+            "text": "テキスト",
+            "image": "画像",
+            "audio": "音声",
+            "video": "動画",
+            "file": "ファイル"
+          },
+          "effortMixed": "推論強度はエンジンごとに異なります。選択した強度に対応するエンジンに適用します。",
+          "protocol": {
+            "reference": "ネイティブAPI",
+            "compatibility": "互換モード",
+            "compatibilityHint": "互換モードでは動作が不安定になったり、一部の機能が正常に動作しない場合があります。経験のあるユーザー向けです。",
+            "matching": "ネイティブ対応",
+            "unknown": "プロトコル未確認"
+          },
+          "codexContextDefault": "Codex の既定コンテキストは 272K",
+          "codexContextHint": "Codex の既定コンテキストは 272K で、上限に達する前に自動圧縮します。ここでの変更は他のエンジンにのみ適用されます。拡張には Codex の個別設定が必要で、通常の利用には推奨しません。",
+          "codexContextAdvanced": "拡張には Codex の個別設定が必要で、通常の利用には推奨しません。",
+          "lifecycle": {
+            "alpha": "試用版",
+            "deprecated": "非推奨",
+            "retired": "提供終了"
+          }
+        },
+        "kindFilter": {
+          "all": "すべて",
+          "aria": "モデル種別で絞り込み",
+          "chat": "チャット"
+        },
+        "hiddenGroup": "非表示",
+        "management": {
+          "brand": "メーカー"
+        },
+        "manage": {
+          "title": "モデル",
+          "selected": "{{count}} 件選択",
+          "hint": "スイッチで使う対話モデルを選びます。",
+          "menu": "管理",
+          "arrange": "リストの並べ方",
+          "byBrand": "メーカー別に分類",
+          "byName": "モデル名で並べる",
+          "selection": "モデルの選択",
+          "showAll": "すべてのモデルを選択",
+          "hideAll": "選択をすべて解除",
+          "reset": "既定の選択に戻す",
+          "connectionRequired": "接続すると利用できます。モデルの選択は保持されます。"
         }
       },
       "genericOAuth": {
@@ -2071,6 +2179,17 @@
           "cleared": "画像生成 API key をクリアしました",
           "clearFailed": "画像生成 API key のクリアに失敗しました"
         }
+      },
+      "usage": {
+        "percentUsed": "{{percent}}% 使用済み",
+        "resetsAt": "{{at}} にリセット",
+        "claudePlanFallback": "Claude サブスクリプション",
+        "claudeWeekly": "7 日ウィンドウ {{percent}}%",
+        "scopedModel": "{{model}} {{percent}}%",
+        "openClaudeUsage": "使用量ページを開く",
+        "codexPlanFallback": "ChatGPT サブスクリプション",
+        "codexSecondary": "副ウィンドウ {{percent}}%",
+        "codexResetCredits": "上限リセット券 {{count}} 枚"
       }
     },
     "experimental": {
@@ -11529,5 +11648,51 @@
         "downloads": "ダウンロード"
       }
     }
+  },
+  "modelNames": {
+    "manufacturers": {
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "google": "Google",
+      "deepseek": "DeepSeek",
+      "qwen": "Alibaba",
+      "moonshot": "Moonshot",
+      "zai": "Z.ai",
+      "tencent": "Tencent",
+      "meta": "Meta",
+      "xai": "xAI",
+      "minimax": "MiniMax",
+      "bytedance": "ByteDance",
+      "alibaba": "Alibaba",
+      "elevenlabs": "ElevenLabs",
+      "voyage": "Voyage"
+    },
+    "families": {
+      "qwen": "Qwen",
+      "doubao": "Doubao",
+      "hunyuan": "Hunyuan"
+    }
+  },
+  "modelDescriptions": {
+    "longContext": "長い文脈を扱う追加の選択肢。入力が長いと料金が上がる場合があります。",
+    "security": "セキュリティ分析やコードレビューに。",
+    "research": "調査、複雑な問題、プログラミング、文書作成に。",
+    "quickCoding": "ちょっとしたコード修正や小規模な開発に。",
+    "reasoning": "問題の検討、分析、プログラミングに。",
+    "coding": "コードの作成、不具合の調査、プログラムの改善に。",
+    "sustainedWork": "継続的な開発作業や詳しい調査に。",
+    "complexWork": "複雑な分析、プログラミング、丁寧な文章作成に。",
+    "everydayWork": "日々の質問、文章作成、プログラミングに。",
+    "quickAnswers": "短い質問への回答、要約、短文の作成に。",
+    "shortTasks": "短い質問、文章の整理、繰り返しの小さな作業に。",
+    "writingAndCoding": "文章作成、プログラミング、問題の分析に。",
+    "readingAndWriting": "資料の読解、情報の整理、文章作成に。",
+    "image": "画像の生成に。",
+    "video": "動画の生成に。",
+    "speech": "テキストを音声に変換します。",
+    "transcription": "音声をテキストに変換します。",
+    "realtime": "リアルタイムの音声でのやり取りに。",
+    "embedding": "意味の近い内容を探すために。",
+    "compression": "長い内容を短くまとめるために。"
   }
 }

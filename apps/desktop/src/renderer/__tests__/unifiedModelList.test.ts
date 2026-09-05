@@ -9,20 +9,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildUnionRows,
-  countModelsByAgent,
-  getHiddenAgents,
   hasPaymentRequiredDisabledRow,
   isCapabilityRow,
   isRowDisabled,
-  isRowDiverged,
   isRowPaymentRequired,
   loadCollapsedMap,
+  modelVisibilityTargets,
 } from '@/components/settings/UnifiedModelList';
-import {
-  __resetForTest,
-  setModelVisibility,
-  setModelVisibilityOwner,
-} from '@/state/modelVisibilityPrefs';
+import { __resetForTest, setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
@@ -91,16 +85,14 @@ describe('buildUnionRows', () => {
       },
     } as ProviderView;
     const rows = buildUnionRows(threeAgent);
-    expect(rows.find((row) => row.id === 'shared')?.avail).toEqual([
-      'claude-code',
-      'codex',
-      'pi',
-    ]);
-    expect(countModelsByAgent(threeAgent)).toEqual([
-      { agent: 'claude-code', on: 2, total: 2 },
-      { agent: 'codex', on: 2, total: 2 },
-      { agent: 'pi', on: 2, total: 2 },
-    ]);
+    expect(rows.find((row) => row.id === 'shared')?.avail).toEqual(['claude-code', 'codex', 'pi']);
+    expect(
+      modelVisibilityTargets(
+        threeAgent,
+        rows.find((row) => row.id === 'shared')!,
+        false,
+      ).map((target) => target.agent),
+    ).toEqual(['claude-code', 'codex', 'pi']);
   });
 });
 
@@ -127,133 +119,6 @@ describe('buildUnionRows — 桥接命名空间归一', () => {
     // 写开关必须用各端真实 id:cc 端仍是带前缀的目录 id。
     expect(rows[0].byAgent['claude-code']?.id).toBe('chatgpt/gpt-5.5');
     expect(rows[0].byAgent.codex?.id).toBe('gpt-5.5');
-  });
-});
-
-describe('isRowDiverged', () => {
-  it('默认(无 override)不分歧;单端隐藏后分歧;两端同值不分歧', () => {
-    const rows = buildUnionRows(provider);
-    const shared = rows[0];
-    expect(isRowDiverged('p1', shared)).toBe(false);
-
-    setModelVisibility('codex', 'p1', 'shared', false);
-    expect(isRowDiverged('p1', shared)).toBe(true);
-
-    setModelVisibility('claude-code', 'p1', 'shared', false);
-    expect(isRowDiverged('p1', shared)).toBe(false);
-  });
-
-  it('单端可用的模型永不分歧', () => {
-    const rows = buildUnionRows(provider);
-    const ccOnly = rows[1];
-    setModelVisibility('claude-code', 'p1', 'cc-only', false);
-    expect(isRowDiverged('p1', ccOnly)).toBe(false);
-  });
-
-  it('三 Agent 中两端隐藏时保留全部隐藏 Agent', () => {
-    const threeAgent = {
-      ...provider,
-      agents: ['claude-code', 'codex', 'pi'],
-      models: {
-        ...provider.models,
-        pi: [model('shared', 500_000)],
-      },
-    } as ProviderView;
-    const shared = buildUnionRows(threeAgent)[0];
-
-    setModelVisibility('claude-code', 'p1', 'shared', false);
-    setModelVisibility('codex', 'p1', 'shared', false);
-
-    expect(isRowDiverged('p1', shared)).toBe(true);
-    expect(getHiddenAgents('p1', shared)).toEqual(['claude-code', 'codex']);
-  });
-});
-
-describe('countModelsByAgent', () => {
-  it('分别保留每个 Agent 的计数，不汇总成容易误解的模型总数', () => {
-    expect(countModelsByAgent(provider)).toEqual([
-      { agent: 'claude-code', on: 2, total: 2 },
-      { agent: 'codex', on: 2, total: 2 },
-    ]);
-
-    setModelVisibility('codex', 'p1', 'shared', false);
-    expect(countModelsByAgent(provider)).toEqual([
-      { agent: 'claude-code', on: 2, total: 2 },
-      { agent: 'codex', on: 1, total: 2 },
-    ]);
-  });
-
-  it('does not count a newly discovered model with defaultEnabled=false as enabled', () => {
-    const withDiscovered = {
-      ...provider,
-      models: {
-        ...provider.models,
-        codex: [...(provider.models.codex ?? []), { ...model('discovered'), defaultEnabled: false }],
-      },
-    } as ProviderView;
-    expect(countModelsByAgent(withDiscovered)).toEqual([
-      { agent: 'claude-code', on: 2, total: 2 },
-      { agent: 'codex', on: 2, total: 3 },
-    ]);
-  });
-
-  it('付费锁定行不进批量显示分母，其历史隐藏偏好不会卡住 allOn', () => {
-    const withPaymentRequired = {
-      ...provider,
-      models: {
-        ...provider.models,
-        codex: [
-          ...(provider.models.codex ?? []),
-          { ...model('paid-model'), availability: 'requires_payment' },
-        ],
-      },
-    } as ProviderView;
-    setModelVisibility('codex', 'p1', 'paid-model', false);
-
-    expect(countModelsByAgent(withPaymentRequired)).toEqual([
-      { agent: 'claude-code', on: 2, total: 2 },
-      { agent: 'codex', on: 2, total: 2 },
-    ]);
-  });
-
-  it('停用模型与能力模型(image 等)不进「显示 x/y」计数', () => {
-    const withExtras = {
-      ...provider,
-      models: {
-        ...provider.models,
-        // gpt-image-2 按 id 归入 image 能力分组;disabled 是 buildRegistry 烘焙的视图层标志。
-        codex: [
-          ...(provider.models.codex ?? []),
-          model('gpt-image-2'),
-          { ...model('banned'), disabled: true },
-        ],
-      },
-    } as ProviderView;
-    expect(countModelsByAgent(withExtras)).toEqual([
-      { agent: 'claude-code', on: 2, total: 2 },
-      { agent: 'codex', on: 2, total: 2 },
-    ]);
-  });
-
-  it('注入停用判定(乐观覆盖口径)时以之为准,而非快照的 disabled 标志', () => {
-    // 组件把 pendingDisabled 叠加进判定:刚点「停用」快照未回来时计数即时收缩,
-    // 刚点「启用」时快照仍带 disabled 标志的行也立刻回到分母(PR #744 review 第四轮)。
-    const withDisabled = {
-      ...provider,
-      models: {
-        ...provider.models,
-        codex: [...(provider.models.codex ?? []), { ...model('banned'), disabled: true }],
-      },
-    } as ProviderView;
-    const pending: Record<string, boolean> = { shared: true, banned: false };
-    const counts = countModelsByAgent(
-      withDisabled,
-      (_agent, m) => pending[m.id] ?? m.disabled === true,
-    );
-    expect(counts).toEqual([
-      { agent: 'claude-code', on: 1, total: 1 },
-      { agent: 'codex', on: 2, total: 2 },
-    ]);
   });
 });
 
@@ -286,9 +151,8 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
 
     expect(hasPaymentRequiredDisabledRow(rows)).toBe(true);
     expect(
-      hasPaymentRequiredDisabledRow(
-        rows,
-        (row) => row.id === 'paid-disabled' ? false : isRowDisabled(row),
+      hasPaymentRequiredDisabledRow(rows, (row) =>
+        row.id === 'paid-disabled' ? false : isRowDisabled(row),
       ),
     ).toBe(false);
   });
@@ -300,6 +164,7 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
         {
           id: 'gpt-image-2',
           name: 'GPT Image 2',
+          modalities: { input: ['text', 'image'], output: ['image'] },
           disabled: true,
           availability: 'requires_payment',
         },
@@ -310,12 +175,22 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     const rows = buildUnionRows(withMedia);
     const image = rows.find((r) => r.id === 'gpt-image-2')!;
     expect(isCapabilityRow(image, false)).toBe(true);
+    expect(image.byAgent['claude-code']?.mode).toBe('image_generation');
+    expect(image.byAgent['claude-code']?.modalities).toEqual({
+      input: ['text', 'image'],
+      output: ['image'],
+    });
     expect(isRowDisabled(image)).toBe(true);
     expect(isRowPaymentRequired(image)).toBe(true);
     expect(rows.find((r) => r.id === 'seedance-fast')).toBeTruthy();
     // 同 id 去重:'shared' 只保留 agent 清单那行(可见性开关照常)。
     expect(rows.filter((r) => r.id === 'shared')).toHaveLength(1);
-    expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
+    expect(
+      isCapabilityRow(
+        rows.find((r) => r.id === 'shared')!,
+        false,
+      ),
+    ).toBe(false);
   });
 
   it('向量清单也合成能力行,可停用(否则停用轴有实现无入口)', () => {
@@ -346,8 +221,18 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
       },
     } as ProviderView;
     const rows = buildUnionRows(withImage);
-    expect(isCapabilityRow(rows.find((r) => r.id === 'gpt-image-2')!, false)).toBe(true);
-    expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
+    expect(
+      isCapabilityRow(
+        rows.find((r) => r.id === 'gpt-image-2')!,
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      isCapabilityRow(
+        rows.find((r) => r.id === 'shared')!,
+        false,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -396,4 +281,24 @@ describe('折叠态 v1/v2 → v3 迁移(other 恢复旧语义,新增 ungrouped)'
   it('三代都没有 → 空表(全部跟随默认)', () => {
     expect(loadCollapsedMap()).toEqual({});
   });
+});
+
+it('ordinary toggles preserve opt-in compatibility and can still enable hidden native models', () => {
+  const native = { ...model('gpt-6'), defaultEnabled: true };
+  const bridge = { ...model('chatgpt/gpt-6'), defaultEnabled: false };
+  const row = {
+    id: 'gpt-6',
+    name: 'GPT-6',
+    avail: ['codex', 'claude-code'] as const,
+    byAgent: { codex: native, 'claude-code': bridge },
+  };
+  const mutableRow = { ...row, avail: [...row.avail] };
+  expect(modelVisibilityTargets({ ...provider, id: 'openai' }, mutableRow, true)).toEqual([
+    { agent: 'codex', modelId: 'gpt-6' },
+  ]);
+  expect(modelVisibilityTargets({ ...provider, id: 'openai' }, mutableRow, false)).toHaveLength(2);
+  native.defaultEnabled = false;
+  expect(modelVisibilityTargets({ ...provider, id: 'openai' }, mutableRow, true)).toEqual([
+    { agent: 'codex', modelId: 'gpt-6' },
+  ]);
 });

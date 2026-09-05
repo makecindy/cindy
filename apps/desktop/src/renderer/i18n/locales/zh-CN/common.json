@@ -1488,8 +1488,14 @@
           "viewUsage": "查看用量",
           "buyPlan": "购买套餐",
           "upgradePlan": "升级套餐",
-          "syncFailed": "凭据同步失败，暂时无法获取余额。已保存的模型配置不受影响。"
-        }
+          "syncFailed": "凭据同步失败，暂时无法获取余额。已保存的模型配置不受影响。",
+          "quotaTitle": "本期剩余额度",
+          "quotaUsed": "已用 {{used}} / 本期额度 {{total}}",
+          "loading": "正在获取…",
+          "unavailable": "暂时无法获取，请刷新重试。",
+          "refresh": "刷新额度"
+        },
+        "simpleSubtitle": "多种模型，统一账户结算。"
       },
       "custom": {
         "tag": "自定义",
@@ -1719,17 +1725,11 @@
       },
       "models": {
         "search": "搜索模型",
-        "available": "在模型选择中显示",
         "modelCount_other": "{{count}} 个模型",
-        "enableAll": "全部显示",
-        "disableAll": "全部隐藏",
         "subscription": "订阅",
         "subscriptionProduct": "{{product}} 订阅",
         "noResults": "无匹配模型",
-        "splitAdjust": "分别调整",
-        "splitDone": "完成",
         "capabilityNote": "不支持 {{agent}}",
-        "divergedChip": "已在 {{agent}} 隐藏",
         "refreshAria": "刷新模型列表(仅新增，不改动现有)",
         "refreshBuiltinAria": "刷新模型列表",
         "refreshingAria": "正在刷新模型列表…",
@@ -1768,6 +1768,114 @@
           "invalid": "请输入有效且不小于 0 的输入、输出价格",
           "loadFailed": "API 估价加载失败，请重试",
           "saveFailed": "API 估价保存失败，请重试"
+        },
+        "advanced": {
+          "open": "高级设置",
+          "openAria": "{{name}} 的高级设置",
+          "noDescription": "目录未提供说明",
+          "identity": "模型信息",
+          "modelId": "模型 ID",
+          "providerLabel": "供应商",
+          "group": "分组",
+          "status": "状态",
+          "statusUnset": "未标注",
+          "spec": "规格",
+          "contextWindow": "上游最大上下文",
+          "tokensApprox": "tokens（约 {{approx}}）",
+          "catalogMissing": "目录未提供",
+          "capability": "能力",
+          "capabilityHint": "优先使用当前供应商声明的能力；未声明时，图片能力参考模型名称。",
+          "imageInput": "图片输入",
+          "supported": "支持",
+          "unsupported": "不支持",
+          "undeclared": "未声明",
+          "pricing": "报价",
+          "pricingLabel": "报价",
+          "noPricing": "该路由没有报价数据",
+          "perMtok": "/ 百万 tokens",
+          "discount": "折扣",
+          "defaultEffort": "默认推理强度",
+          "defaultEffortHint": "新任务选中该模型时的初始档位，任务内仍可临时调整。",
+          "contextLimit": "上下文上限",
+          "contextLimitHint": "以整数 K 编辑，显示时向下取整；未编辑时保留精确配置。保存后用于新建或重新打开的任务。",
+          "contextLimitAria": "上下文上限（千 tokens）",
+          "contextLimitRoute": "当前 {{tokens}} tokens · 1 K = 1,000 tokens",
+          "contextLimitOverWindow": "已超过上游声明的长度，可能导致请求失败。",
+          "restoreDefault": "恢复默认",
+          "engines": "引擎支持",
+          "enginesHint": "兼容模式需要转换请求，默认关闭，可按需开启。",
+          "engineUnsupported": "不支持",
+          "engineNoFast": "无 Fast",
+          "vision": {
+            "vision": "支持",
+            "no-vision": "不支持",
+            "unknown": "未知"
+          },
+          "visionSource": {
+            "vision": "判据：本地前缀名单判定为支持看图",
+            "no-vision": "判据：本地前缀名单判定为不支持看图",
+            "unknown": "名单未覆盖 —— 目录没有模态字段，只能判未知"
+          },
+          "price": {
+            "input": "输入",
+            "output": "输出",
+            "cacheRead": "缓存读取",
+            "cacheCreate": "缓存写入"
+          },
+          "close": "关闭",
+          "maxOutput": "最大输出",
+          "catalogCapabilities": "目录声明的能力",
+          "contextInvalid": "请输入 1–100,000 K 的整数。",
+          "contextWriteFailed": "未保存，请重试。",
+          "contextMixed": "已有引擎配置不同；修改或恢复默认将应用到全部引擎。",
+          "inputModalities": "输入类型",
+          "outputModalities": "输出类型",
+          "modalities": {
+            "text": "文字",
+            "image": "图片",
+            "audio": "音频",
+            "video": "视频",
+            "file": "文件"
+          },
+          "effortMixed": "各引擎的档位不同；选择后应用于支持该档位的引擎。",
+          "protocol": {
+            "reference": "原生协议",
+            "compatibility": "兼容模式",
+            "compatibilityHint": "兼容模式可能出现运行不稳定或功能异常，建议有经验的用户使用。",
+            "matching": "原生支持",
+            "unknown": "协议待确认"
+          },
+          "codexContextDefault": "Codex 默认 272K 上下文",
+          "codexContextHint": "Codex 默认使用 272K 上下文，并提前自动压缩。这里的调整仅用于其他引擎；更大窗口需单独调整 Codex 配置，不建议日常使用。",
+          "codexContextAdvanced": "更大窗口需单独调整 Codex 配置，不建议日常使用。",
+          "lifecycle": {
+            "alpha": "试用版",
+            "deprecated": "不再推荐",
+            "retired": "已下架"
+          }
+        },
+        "kindFilter": {
+          "all": "全部",
+          "aria": "按模型类型筛选",
+          "chat": "对话"
+        },
+        "hiddenGroup": "未启用",
+        "management": {
+          "brand": "厂商"
+        },
+        "manage": {
+          "title": "模型",
+          "selected": "已选 {{count}} 个",
+          "hint": "用开关选择常用的对话模型。",
+          "menu": "管理",
+          "arrange": "列表排列",
+          "byBrand": "按厂商分组",
+          "byName": "按模型名称排列",
+          "selection": "常用模型",
+          "showAll": "选用全部模型",
+          "hideAll": "取消全部选择",
+          "reset": "恢复默认选择",
+          "connectionRequired": "连接后可用，已选模型会保留。"
         }
       },
       "genericOAuth": {
@@ -2071,6 +2179,17 @@
           "cleared": "已清除图像生成 API key",
           "clearFailed": "清除图像生成 API key 失败"
         }
+      },
+      "usage": {
+        "percentUsed": "{{percent}}% 已使用",
+        "resetsAt": "{{at}} 重置",
+        "claudePlanFallback": "Claude 订阅",
+        "claudeWeekly": "7 天窗口 {{percent}}%",
+        "scopedModel": "{{model}} {{percent}}%",
+        "openClaudeUsage": "打开用量页面",
+        "codexPlanFallback": "ChatGPT 订阅",
+        "codexSecondary": "次级窗口 {{percent}}%",
+        "codexResetCredits": "限额重置券 {{count}} 张"
       }
     },
     "experimental": {
@@ -11529,5 +11648,51 @@
         "downloads": "下载"
       }
     }
+  },
+  "modelNames": {
+    "manufacturers": {
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "google": "谷歌",
+      "deepseek": "深度求索",
+      "qwen": "阿里巴巴",
+      "moonshot": "月之暗面",
+      "zai": "智谱",
+      "tencent": "腾讯",
+      "meta": "Meta",
+      "xai": "xAI",
+      "minimax": "MiniMax",
+      "bytedance": "字节跳动",
+      "alibaba": "阿里巴巴",
+      "elevenlabs": "ElevenLabs",
+      "voyage": "Voyage"
+    },
+    "families": {
+      "qwen": "千问",
+      "doubao": "豆包",
+      "hunyuan": "混元"
+    }
+  },
+  "modelDescriptions": {
+    "longContext": "可选的长上下文版本，长输入可能产生更高费用。",
+    "security": "用于安全分析与代码审查。",
+    "research": "用于资料研究、复杂问题、编程与文档创作。",
+    "quickCoding": "适合代码修改与小型编程任务。",
+    "reasoning": "用于问题推理、分析与编程。",
+    "coding": "用于编写代码、排查错误与改进程序。",
+    "sustainedWork": "适合持续的编程任务与深入研究。",
+    "complexWork": "适合复杂分析、编程与细致写作。",
+    "everydayWork": "适合日常问答、写作与编程。",
+    "quickAnswers": "适合简短问答、摘要与短文写作。",
+    "shortTasks": "适合简短问答、文本整理与重复的小任务。",
+    "writingAndCoding": "用于内容写作、编程与问题分析。",
+    "readingAndWriting": "用于阅读资料、整理信息与写作。",
+    "image": "用于生成图片。",
+    "video": "用于生成视频。",
+    "speech": "将文字转换为语音。",
+    "transcription": "将语音转换为文字。",
+    "realtime": "用于实时语音交流。",
+    "embedding": "按语义查找相关内容。",
+    "compression": "用于精简冗长内容。"
   }
 }

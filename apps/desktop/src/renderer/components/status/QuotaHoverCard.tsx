@@ -9,6 +9,7 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
+import { formatClaudeSubscriptionPlanLabel } from '@/lib/subscriptionPlanLabel';
 import { cn } from '@/lib/utils';
 import type {
   ClaudeSubscriptionUsageSnapshot,
@@ -102,23 +103,6 @@ function effectiveQuotaSeverity(window: ClaudeUsageWindow): QuotaSeverity {
   return QUOTA_SEVERITY_RANK[serverSeverity] > QUOTA_SEVERITY_RANK[localSeverity]
     ? serverSeverity
     : localSeverity;
-}
-
-/** 未知套餐保留原始拼写，只补齐首字母大写；非字符串脏值按缺失处理。 */
-function formatPlanType(subscriptionType: unknown): string | null {
-  if (typeof subscriptionType !== 'string') return null;
-  const trimmed = subscriptionType.trim();
-  if (!trimmed) return null;
-
-  const knownPlans: Record<string, string> = {
-    max: 'Max',
-    pro: 'Pro',
-    team: 'Team',
-    enterprise: 'Enterprise',
-  };
-  return (
-    knownPlans[trimmed.toLowerCase()] ?? `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`
-  );
 }
 
 /** reset 时间按本地时区展示：当天仅时分，跨天补月日。 */
@@ -415,7 +399,7 @@ export function QuotaHoverCard({
   const { t, i18n } = useTranslation();
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
-  const planLabel = formatPlanType(snapshot?.subscriptionType);
+  const planLabel = formatClaudeSubscriptionPlanLabel(snapshot?.subscriptionType);
   // utilization 是 updatedAt 时刻的观测值，用观测时刻算节奏，避免旧快照随渲染时间自漂移；
   // 缺有效观测时刻则不算节奏——回退渲染时刻会让趋势随倒计时重渲染无新数据自跳档。
   const paceNowMs = snapshot

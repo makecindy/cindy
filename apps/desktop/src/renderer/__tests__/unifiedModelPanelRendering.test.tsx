@@ -22,6 +22,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, string>) => {
       const table: Record<string, string> = {
+        'modelDescriptions.coding': '用于编写代码、排查错误与改进程序。',
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.openai.title': 'OpenAI',
         'settings.providers.xd.title': 'Cindy AI',
@@ -3322,10 +3323,12 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('长描述单行截断并挂 title,长模型名同理', () => {
+  it('本地简介单行截断并挂 title，不透出上游英文描述，模型名同理', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
-    const desc = row.querySelector('[title^="A very long English"]') as HTMLElement;
+    expect(row.textContent).not.toContain('A very long English');
+    const desc = within(row).getByText('用于编写代码、排查错误与改进程序。');
+    expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');

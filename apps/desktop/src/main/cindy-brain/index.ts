@@ -4316,6 +4316,7 @@ function listLocalProviderVideoModels() {
 
 configureProviderMediaRuntime({
   listModels: listLocalProviderMediaModels,
+  listVideoModels: listLocalProviderVideoModels,
   invoke: async (request) => {
     if (request.capability !== 'image.generate' && request.capability !== 'image.edit') {
       throw new Error('当前第三方 Provider 执行通道不支持该媒体能力');

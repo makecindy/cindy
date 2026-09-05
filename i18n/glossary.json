@@ -1842,6 +1842,78 @@
         "ko": "데이터베이스 정리"
       },
       "note": "设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。"
+    },
+    {
+      "id": "openai-responses-api",
+      "status": "proposed",
+      "en": "Responses",
+      "translations": {
+        "zh-CN": "Responses",
+        "zh-TW": "Responses",
+        "ja": "Responses",
+        "ko": "Responses"
+      },
+      "note": "模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。"
+    },
+    {
+      "id": "openai-chat-completions-api",
+      "status": "proposed",
+      "en": "Chat Completions",
+      "translations": {
+        "zh-CN": "Chat Completions",
+        "zh-TW": "Chat Completions",
+        "ja": "Chat Completions",
+        "ko": "Chat Completions"
+      },
+      "note": "模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。"
+    },
+    {
+      "id": "model-native-api",
+      "status": "proposed",
+      "en": "Native API",
+      "translations": {
+        "zh-CN": "原生协议",
+        "zh-TW": "原生協定",
+        "ja": "ネイティブAPI",
+        "ko": "기본 API"
+      },
+      "note": "模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。"
+    },
+    {
+      "id": "qwen-model-brand",
+      "status": "proposed",
+      "en": "Qwen",
+      "translations": {
+        "zh-CN": "千问",
+        "zh-TW": "千問",
+        "ja": "Qwen",
+        "ko": "Qwen"
+      },
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+    },
+    {
+      "id": "hunyuan-model-brand",
+      "status": "proposed",
+      "en": "Hunyuan",
+      "translations": {
+        "zh-CN": "混元",
+        "zh-TW": "混元",
+        "ja": "Hunyuan",
+        "ko": "Hunyuan"
+      },
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+    },
+    {
+      "id": "doubao-model-brand",
+      "status": "proposed",
+      "en": "Doubao",
+      "translations": {
+        "zh-CN": "豆包",
+        "zh-TW": "豆包",
+        "ja": "Doubao",
+        "ko": "Doubao"
+      },
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
     }
   ]
 }

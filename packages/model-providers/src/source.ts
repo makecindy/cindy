@@ -21,7 +21,7 @@ import {
 import type { AgentKind, Catalog, Provider, ProviderPreset } from './types.js';
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
-export const CATALOG_API_PATH = '/api/model-catalog/catalog';
+export const CATALOG_API_PATH = '/api/model-catalog/catalog?registrySchemaVersion=3';
 /** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
 export const CATALOG_CFG_PATH = '/cfg/providers.json';
 
@@ -112,7 +112,19 @@ function trimTrailingSlashes(s: string): string {
 
 /** 解析主 catalog URL：显式 url 优先，否则 `${baseUrl}${CATALOG_API_PATH}`。 */
 export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
-  if (cfg.url && cfg.url.trim()) return cfg.url.trim();
+  if (cfg.url && cfg.url.trim()) {
+    const explicit = cfg.url.trim();
+    try {
+      const url = new URL(explicit);
+      if (url.pathname.endsWith('/api/model-catalog/catalog')) {
+        url.searchParams.set('registrySchemaVersion', '3');
+        return url.toString();
+      }
+    } catch {
+      /* Existing fetch/error path reports malformed custom URLs. */
+    }
+    return explicit;
+  }
   if (cfg.baseUrl && cfg.baseUrl.trim()) {
     return trimTrailingSlashes(cfg.baseUrl.trim()) + CATALOG_API_PATH;
   }

@@ -785,7 +785,7 @@ describe('public model registry contract', () => {
   });
 
   it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {
-    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 3 }, 'modelRegistry.schemaVersion');
+    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 4 }, 'modelRegistry.schemaVersion');
     expectRegistryReject(
       {
         ...VALID_REGISTRY,

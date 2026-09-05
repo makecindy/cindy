@@ -1488,8 +1488,14 @@
           "viewUsage": "사용량 보기",
           "buyPlan": "요금제 구매",
           "upgradePlan": "요금제 업그레이드",
-          "syncFailed": "자격 증명 동기화에 실패해 잔액을 가져올 수 없습니다. 저장된 모델 설정은 영향을 받지 않습니다."
-        }
+          "syncFailed": "자격 증명 동기화에 실패해 잔액을 가져올 수 없습니다. 저장된 모델 설정은 영향을 받지 않습니다.",
+          "quotaTitle": "이번 기간 남은 한도",
+          "quotaUsed": "사용 {{used}} / 이번 기간 한도 {{total}}",
+          "loading": "불러오는 중…",
+          "unavailable": "일시적으로 불러올 수 없습니다. 새로고침하세요.",
+          "refresh": "한도 새로고침"
+        },
+        "simpleSubtitle": "여러 모델을 하나의 계정으로 결제합니다."
       },
       "custom": {
         "tag": "사용자 지정",
@@ -1719,17 +1725,11 @@
       },
       "models": {
         "search": "모델 검색",
-        "available": "모델 선택에 표시",
         "modelCount_other": "모델 {{count}}개",
-        "enableAll": "모두 표시",
-        "disableAll": "모두 숨기기",
         "subscription": "구독",
         "subscriptionProduct": "{{product}} 구독",
         "noResults": "일치하는 모델 없음",
-        "splitAdjust": "CLI별 조정",
-        "splitDone": "완료",
         "capabilityNote": "{{agent}}에서는 사용 불가",
-        "divergedChip": "{{agent}}에서 숨김",
         "refreshAria": "모델 목록 새로고침(추가만)",
         "refreshBuiltinAria": "모델 목록 새로고침",
         "refreshingAria": "모델 목록 새로고침 중…",
@@ -1768,6 +1768,114 @@
           "invalid": "0 이상의 올바른 입력 및 출력 가격을 입력하세요",
           "loadFailed": "가격 추정치를 불러오지 못했습니다. 다시 시도하세요.",
           "saveFailed": "가격 추정치를 저장하지 못했습니다. 다시 시도하세요."
+        },
+        "advanced": {
+          "open": "고급 설정",
+          "openAria": "{{name}} 고급 설정",
+          "noDescription": "카탈로그에 설명이 없습니다",
+          "identity": "모델 정보",
+          "modelId": "모델 ID",
+          "providerLabel": "제공자",
+          "group": "그룹",
+          "status": "상태",
+          "statusUnset": "표시되지 않음",
+          "spec": "사양",
+          "contextWindow": "공급업체 최대 컨텍스트",
+          "tokensApprox": "tokens (약 {{approx}})",
+          "catalogMissing": "카탈로그에 없음",
+          "capability": "기능",
+          "capabilityHint": "이 공급업체가 명시한 기능을 우선합니다. 이미지 지원 정보가 없으면 모델 이름으로 추정합니다.",
+          "imageInput": "이미지 입력",
+          "supported": "지원",
+          "unsupported": "지원 안 함",
+          "undeclared": "선언되지 않음",
+          "pricing": "가격",
+          "pricingLabel": "가격",
+          "noPricing": "이 경로의 가격 데이터가 없습니다",
+          "perMtok": "/ 100만 tokens",
+          "discount": "할인",
+          "defaultEffort": "기본 추론 강도",
+          "defaultEffortHint": "새 작업의 초기 추론 강도입니다. 작업 안에서도 변경할 수 있습니다.",
+          "contextLimit": "컨텍스트 상한",
+          "contextLimitHint": "정수 K로 편집하며 표시는 내림합니다. 편집 전까지 정확한 설정을 유지합니다. 저장하면 새 작업이나 다시 연 작업에 적용됩니다.",
+          "contextLimitAria": "컨텍스트 상한(천 tokens)",
+          "contextLimitRoute": "현재 {{tokens}} tokens · 1 K = 1,000 tokens",
+          "contextLimitOverWindow": "공급업체가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
+          "restoreDefault": "기본값 복원",
+          "engines": "엔진 지원",
+          "enginesHint": "호환 모드는 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
+          "engineUnsupported": "지원 안 함",
+          "engineNoFast": "Fast 없음",
+          "vision": {
+            "vision": "지원",
+            "no-vision": "지원 안 함",
+            "unknown": "알 수 없음"
+          },
+          "visionSource": {
+            "vision": "근거: 로컬 접두어 목록에서 이미지 입력 지원으로 판정",
+            "no-vision": "근거: 로컬 접두어 목록에서 이미지 입력 미지원으로 판정",
+            "unknown": "목록에 없음 —— 카탈로그에 모달리티 항목이 없어 알 수 없음으로 둡니다"
+          },
+          "price": {
+            "input": "입력",
+            "output": "출력",
+            "cacheRead": "캐시 읽기",
+            "cacheCreate": "캐시 쓰기"
+          },
+          "close": "닫기",
+          "maxOutput": "최대 출력",
+          "catalogCapabilities": "카탈로그에 명시된 기능",
+          "contextInvalid": "1–100,000 K 범위의 정수를 입력하세요.",
+          "contextWriteFailed": "저장되지 않았습니다. 다시 시도하세요.",
+          "contextMixed": "실행 환경별 설정이 다릅니다. 변경하거나 초기화하면 모두에 적용됩니다.",
+          "inputModalities": "입력 형식",
+          "outputModalities": "출력 형식",
+          "modalities": {
+            "text": "텍스트",
+            "image": "이미지",
+            "audio": "오디오",
+            "video": "동영상",
+            "file": "파일"
+          },
+          "effortMixed": "엔진마다 추론 강도가 다릅니다. 선택한 단계를 지원하는 엔진에 적용합니다.",
+          "protocol": {
+            "reference": "기본 API",
+            "compatibility": "호환 모드",
+            "compatibilityHint": "호환 모드에서는 작동이 불안정하거나 일부 기능에 문제가 생길 수 있습니다. 숙련된 사용자에게 권장합니다.",
+            "matching": "기본 지원",
+            "unknown": "프로토콜 미확인"
+          },
+          "codexContextDefault": "Codex 기본 컨텍스트 272K",
+          "codexContextHint": "Codex는 기본적으로 272K 컨텍스트를 사용하며 한도에 도달하기 전에 자동 압축합니다. 여기서 변경한 값은 다른 엔진에만 적용됩니다. 더 큰 창은 Codex를 별도로 설정해야 하며 일상적인 사용에는 권장하지 않습니다.",
+          "codexContextAdvanced": "더 큰 창은 Codex를 별도로 설정해야 하며 일상적인 사용에는 권장하지 않습니다.",
+          "lifecycle": {
+            "alpha": "체험판",
+            "deprecated": "더 이상 권장하지 않음",
+            "retired": "제공 종료"
+          }
+        },
+        "kindFilter": {
+          "all": "전체",
+          "aria": "모델 유형으로 필터",
+          "chat": "대화"
+        },
+        "hiddenGroup": "표시 안 함",
+        "management": {
+          "brand": "제조사"
+        },
+        "manage": {
+          "title": "모델",
+          "selected": "{{count}}개 선택됨",
+          "hint": "스위치로 사용할 대화 모델을 선택하세요.",
+          "menu": "관리",
+          "arrange": "목록 정렬",
+          "byBrand": "제조사별로 묶기",
+          "byName": "모델 이름순 정렬",
+          "selection": "모델 선택",
+          "showAll": "모든 모델 선택",
+          "hideAll": "모든 선택 해제",
+          "reset": "기본 선택 복원",
+          "connectionRequired": "연결하면 사용할 수 있습니다. 모델 선택은 유지됩니다."
         }
       },
       "genericOAuth": {
@@ -2071,6 +2179,17 @@
           "cleared": "이미지 생성 API key를 지웠습니다",
           "clearFailed": "이미지 생성 API key 지우기에 실패했습니다"
         }
+      },
+      "usage": {
+        "percentUsed": "{{percent}}% 사용",
+        "resetsAt": "{{at}} 초기화",
+        "claudePlanFallback": "Claude 구독",
+        "claudeWeekly": "7일 창 {{percent}}%",
+        "scopedModel": "{{model}} {{percent}}%",
+        "openClaudeUsage": "사용량 페이지 열기",
+        "codexPlanFallback": "ChatGPT 구독",
+        "codexSecondary": "보조 창 {{percent}}%",
+        "codexResetCredits": "한도 초기화 크레딧 {{count}}장"
       }
     },
     "experimental": {
@@ -11529,5 +11648,51 @@
         "downloads": "다운로드"
       }
     }
+  },
+  "modelNames": {
+    "manufacturers": {
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "google": "Google",
+      "deepseek": "DeepSeek",
+      "qwen": "Alibaba",
+      "moonshot": "Moonshot",
+      "zai": "Z.ai",
+      "tencent": "Tencent",
+      "meta": "Meta",
+      "xai": "xAI",
+      "minimax": "MiniMax",
+      "bytedance": "ByteDance",
+      "alibaba": "Alibaba",
+      "elevenlabs": "ElevenLabs",
+      "voyage": "Voyage"
+    },
+    "families": {
+      "qwen": "Qwen",
+      "doubao": "Doubao",
+      "hunyuan": "Hunyuan"
+    }
+  },
+  "modelDescriptions": {
+    "longContext": "긴 문맥을 위한 선택 옵션입니다. 입력이 길면 비용이 늘어날 수 있습니다.",
+    "security": "보안 분석과 코드 검토에 적합합니다.",
+    "research": "자료 조사, 복잡한 문제, 코딩과 문서 작성에 적합합니다.",
+    "quickCoding": "간단한 코드 수정과 소규모 개발 작업에 적합합니다.",
+    "reasoning": "문제 추론, 분석과 코딩에 적합합니다.",
+    "coding": "코드 작성, 오류 분석과 프로그램 개선에 적합합니다.",
+    "sustainedWork": "장기적인 개발 작업과 심층 조사에 적합합니다.",
+    "complexWork": "복잡한 분석, 코딩과 세심한 글쓰기에 적합합니다.",
+    "everydayWork": "일상적인 질문, 글쓰기와 코딩에 적합합니다.",
+    "quickAnswers": "간단한 질문, 요약과 짧은 글 작성에 적합합니다.",
+    "shortTasks": "간단한 질문, 텍스트 정리와 반복적인 작은 작업에 적합합니다.",
+    "writingAndCoding": "콘텐츠 작성, 코딩과 문제 분석에 적합합니다.",
+    "readingAndWriting": "자료 읽기, 정보 정리와 글쓰기에 적합합니다.",
+    "image": "이미지를 생성합니다.",
+    "video": "동영상을 생성합니다.",
+    "speech": "텍스트를 음성으로 변환합니다.",
+    "transcription": "음성을 텍스트로 변환합니다.",
+    "realtime": "실시간 음성 대화에 적합합니다.",
+    "embedding": "의미가 비슷한 콘텐츠를 찾습니다.",
+    "compression": "긴 내용을 간결하게 줄입니다."
   }
 }

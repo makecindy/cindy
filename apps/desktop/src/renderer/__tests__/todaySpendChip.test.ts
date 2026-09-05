@@ -13,9 +13,14 @@ const sourcePath = resolve(__dirname, '..', 'components', 'status', 'TodaySpendC
 const quotaHoverCardPath = resolve(__dirname, '..', 'components', 'status', 'QuotaHoverCard.tsx');
 const preloadPath = resolve(__dirname, '..', '..', 'preload', 'preload.ts');
 const rendererTypesPath = resolve(__dirname, '..', 'vite-env.d.ts');
+// 套餐名的查表与格式化已从这两个组件抽到共享模块(设置页的供应商用量模块是第三个
+// 消费方,再抄一份就成三份必漂)。断言随实现搬家:查表内容断在共享模块上,组件侧只断
+// 「确实调了共享函数」。
+const planLabelPath = resolve(__dirname, '..', 'lib', 'subscriptionPlanLabel.ts');
 // Windows CRLF 检出下 \n 字面量断言会失配,统一归一化成 LF 再断言。
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 const quotaHoverCardSource = readFileSync(quotaHoverCardPath, 'utf8').replace(/\r\n/g, '\n');
+const planLabelSource = readFileSync(planLabelPath, 'utf8').replace(/\r\n/g, '\n');
 const preloadSource = readFileSync(preloadPath, 'utf8').replace(/\r\n/g, '\n');
 const rendererTypesSource = readFileSync(rendererTypesPath, 'utf8').replace(/\r\n/g, '\n');
 const localeSources = ['en', 'zh-CN', 'zh-TW', 'ja', 'ko'].map((locale) =>
@@ -264,7 +269,7 @@ describe('TodaySpendChip dashboard routing', () => {
     );
     expect(source).toContain('if (sessionSegment) chipSegments.push(sessionSegment);');
     expect(quotaHoverCardSource).toContain(
-      'const planLabel = formatPlanType(snapshot?.subscriptionType);',
+      'const planLabel = formatClaudeSubscriptionPlanLabel(snapshot?.subscriptionType);',
     );
     expect(quotaHoverCardSource).toContain('data-testid="quota-plan-badge"');
     // 告警判定是纯数据判定, 统一收在 shared/claudeSubscriptionUsage.ts (有直接单测:
@@ -420,8 +425,12 @@ describe('TodaySpendChip dashboard routing', () => {
   });
 
   it('formats Codex plan labels for display', () => {
-    expect(source).toContain("business: 'Business'");
-    expect(source).toContain('formatPlanType(snapshot.planType)');
+    // 查表在共享模块里；两家取值域不同，必须是两张分开的表(合成一张会让任一家的
+    // 未知值悄悄命中另一家的条目)。
+    expect(planLabelSource).toContain("business: 'Business'");
+    expect(planLabelSource).toContain('export function formatCodexPlanLabel');
+    expect(planLabelSource).toContain('export function formatClaudeSubscriptionPlanLabel');
+    expect(source).toContain('formatCodexPlanLabel(snapshot.planType)');
   });
 
   it('drops the internal usage-dashboard domain pre-OSS: gateway / XD accounts get no link and stay non-clickable, other metrics unchanged', () => {

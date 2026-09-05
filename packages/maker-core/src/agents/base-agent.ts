@@ -813,6 +813,12 @@ export interface AgentDeps {
    *
    * 返回 null / 缺省不注入 = 不收敛，直接采信上报值（改动前行为）。
    */
+  /** Explicit user context budget for this route. Missing means native/catalog defaults. */
+  resolveModelContextLimit?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
+
   resolveVerifiedContextWindow?: (
     providerId: string | null | undefined,
     modelId: string,

@@ -1273,6 +1273,29 @@ describe('maker usage IPC handlers', () => {
     expect(triggerClaudeAccountUsageRefresh).toHaveBeenCalledWith(true);
   });
 
+  it('refreshes a cached Gateway quota through the throttled fetcher and returns the updated value', async () => {
+    const harness = new IpcHarness();
+    const previous = {
+      spend: 1,
+      maxBudget: 100,
+      currency: 'USD',
+      todaySpend: 1,
+      fetchedAt: 1,
+    } as const;
+    const next = { ...previous, spend: 2, fetchedAt: 2 };
+    const readClaudeAccountUsageSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(previous)
+      .mockReturnValue(next);
+    const triggerClaudeAccountUsageRefresh = vi.fn().mockResolvedValue(undefined);
+    registerMakerUsageHandlers(
+      harness,
+      makeUsageDeps({ readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh }),
+    );
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_ACCOUNT, 'claude-code')).resolves.toEqual(next);
+    expect(triggerClaudeAccountUsageRefresh).toHaveBeenCalledWith(false);
+  });
+
   it('keeps the legacy device-link pricing channel flat and USD-only', async () => {
     const harness = new IpcHarness();
     const pricing = {
