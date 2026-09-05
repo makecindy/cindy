@@ -333,6 +333,8 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import { getActiveCatalog } from './maker-host/active-catalog';
+import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import {
   getSessionRowSnapshot,
   resumeDeletedPiSubagentCleanup,
@@ -8233,6 +8235,7 @@ app.on('ready', async () => {
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
   registerLocalDbIpc({
+    resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
     cancelSessionOperations: cancelIOSSimulatorSessionOperations,
     cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
     closeIdleSessionForMove: async (sessionId) => {

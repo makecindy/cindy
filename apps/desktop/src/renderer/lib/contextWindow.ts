@@ -3,6 +3,7 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000;
 interface ResolveDisplayContextWindowOptions {
   sdkContextWindow: number;
   modelContextWindow?: number;
+  verifiedContextWindow?: number | null;
 }
 
 /**
@@ -15,7 +16,13 @@ interface ResolveDisplayContextWindowOptions {
 export function resolveDisplayContextWindow({
   sdkContextWindow,
   modelContextWindow,
+  verifiedContextWindow,
 }: ResolveDisplayContextWindowOptions): number {
+  // Restored snapshots and SDK values share this slot. Only route-verified
+  // metadata may supersede it, matching the host's runtime normalization.
+  if (Number.isFinite(verifiedContextWindow) && (verifiedContextWindow ?? 0) > 0) {
+    return Math.floor(verifiedContextWindow!);
+  }
   const configured =
     Number.isFinite(modelContextWindow) && (modelContextWindow ?? 0) > 0
       ? Math.floor(modelContextWindow!)

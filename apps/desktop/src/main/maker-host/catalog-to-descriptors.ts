@@ -234,25 +234,7 @@ export function resolvePiGatewayDescriptorProviderId(
  *
  * 返回 null 一律意味着「不收敛」，也就是改动前的行为（fail-safe）。
  */
-export function resolveVerifiedContextWindow(
-  catalog: Catalog,
-  agent: AgentKind,
-  providerId: string | null | undefined,
-  modelId: string,
-): number | null {
-  const candidates: CatalogModel[] = [];
-  for (const provider of catalog.providers) {
-    if (provider.routing[agent]?.disabled === true) continue;
-    if (providerId && provider.id !== providerId) continue;
-    for (const m of provider.models[agent] ?? []) {
-      if (m.id === modelId) candidates.push(m);
-    }
-  }
-  if (candidates.length !== 1) return null;
-  const only = candidates[0];
-  if (only.contextWindowVerified !== true) return null;
-  return only.contextWindow > 0 ? only.contextWindow : null;
-}
+export { resolveVerifiedContextWindow } from '../../shared/sessionContextWindow';
 
 /**
  * 自定义供应商上用户显式填写的 contextWindow。

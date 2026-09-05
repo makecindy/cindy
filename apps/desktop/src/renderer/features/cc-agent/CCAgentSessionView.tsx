@@ -219,6 +219,7 @@ import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions'
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
+import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
 import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
@@ -3604,6 +3605,7 @@ export function CCAgentSessionView({
     try {
       const contextWindow = resolveDisplayContextWindow({
         sdkContextWindow: agentStatus.contextWindow,
+        verifiedContextWindow: resolveSessionContextWindow({ providers }, sourceSession),
         modelContextWindow: getModelContextWindow(
           sourceSession.model,
           sourceSession.agentKind ?? 'cc',
@@ -3685,6 +3687,7 @@ export function CCAgentSessionView({
     compactRequestGuard,
     compactSession,
     confirmDialog,
+    providers,
     remoteDeviceId,
     session,
     t,
@@ -5209,6 +5212,16 @@ export function CCAgentSessionView({
                     model={agentSwitchIntent?.model ?? session?.model ?? ''}
                     vendorKey={normalizeDbAgentKind(displayAgentKind)}
                     sdkContextWindow={agentStatus.contextWindow}
+                    verifiedContextWindow={resolveSessionContextWindow(
+                      { providers },
+                      {
+                        agentKind: normalizeDbAgentKind(displayAgentKind),
+                        model: agentSwitchIntent?.model ?? session?.model,
+                        providerId: agentSwitchIntent
+                          ? agentSwitchIntent.providerId
+                          : session?.providerId,
+                      },
+                    )}
                     deviceId={remoteDeviceId}
                     onCompact={
                       // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
@@ -5721,6 +5734,7 @@ function ContextCapacityRing({
   model,
   vendorKey,
   sdkContextWindow,
+  verifiedContextWindow,
   deviceId,
   onCompact,
 }: {
@@ -5729,6 +5743,7 @@ function ContextCapacityRing({
   vendorKey: 'cc' | 'codex' | 'pi';
   /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
   sdkContextWindow: number;
+  verifiedContextWindow?: number | null;
   /** device-link 远程会话所属被控端 id;按被控端能力查 contextWindow(本机会话 undefined,行为不变)。 */
   deviceId?: string;
   /** 提供时圆环可点击 — 点击后(经用户确认)向 agent 发送 /compact 压缩上下文。 */
@@ -5737,6 +5752,7 @@ function ContextCapacityRing({
   const { t } = useTranslation();
   const contextWindow = resolveDisplayContextWindow({
     sdkContextWindow,
+    verifiedContextWindow,
     modelContextWindow: getModelContextWindow(model, vendorKey, deviceId),
   });
   const pct =

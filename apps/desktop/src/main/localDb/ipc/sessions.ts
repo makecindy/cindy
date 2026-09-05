@@ -35,6 +35,10 @@ import { bindDeletedPiSubagentCleanupCancel } from './piSubagentDeletion';
 import { resolveBusinessSessionId } from '../../sessionIds';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
+  projectSessionContextWindow,
+  type ContextWindowSession,
+} from '../../../shared/sessionContextWindow';
+import {
   sessionToCamel,
   sessionUsageToCamel,
   sessionCreateToRow,
@@ -125,6 +129,8 @@ export interface SessionRecycleScope {
 }
 
 export interface RegisterSessionIpcOpts {
+  /** Use the same live catalog as runtime usage, without writing during reads. */
+  resolveContextWindow?: (session: ContextWindowSession) => number | null;
   /** Close a local Pi/Codex runtime only if its current turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
 }
@@ -1117,12 +1123,15 @@ export function registerSessionIpc(
 
         scheduleSessionListProjectionBackfill(mergedRows);
         return mergedRows.map((r) =>
-          sessionToCamel({
-            ...r.session,
-            messageCount: r.messageCount,
-            latestMessageExtract: r.latestMessageExtract,
-            latestMessageRole: r.latestMessageRole,
-          }),
+          projectSessionContextWindow(
+            sessionToCamel({
+              ...r.session,
+              messageCount: r.messageCount,
+              latestMessageExtract: r.latestMessageExtract,
+              latestMessageRole: r.latestMessageRole,
+            }),
+            opts.resolveContextWindow,
+          ),
         );
       };
       const loadUsageHistoryRows = async () => {
@@ -1133,7 +1142,9 @@ export function registerSessionIpc(
         const statusWhere = () =>
           statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
         const rows = await selectSessionUsageRows(db, and(sourceFilter, statusWhere()));
-        return rows.map(sessionUsageToCamel);
+        return rows.map((row) =>
+          sessionUsageToCamel(projectSessionContextWindow(row, opts.resolveContextWindow)),
+        );
       };
       // key 用同一快照上的 userId + clientEpoch + 归一化参数。
       // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
@@ -1389,7 +1400,7 @@ export function registerSessionIpc(
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return sessionToCamel(row);
+    return projectSessionContextWindow(sessionToCamel(row), opts.resolveContextWindow);
   });
 
   /**
@@ -2351,6 +2362,7 @@ function selectSessionUsageRows(
       | 'totalTokenUsage'
       | 'contextTokens'
       | 'contextWindow'
+      | 'agentKind'
       | 'userSendAt'
       | 'updatedAt'
     >
@@ -2365,6 +2377,7 @@ function selectSessionUsageRows(
       totalTokenUsage: sessions.totalTokenUsage,
       contextTokens: sessions.contextTokens,
       contextWindow: sessions.contextWindow,
+      agentKind: sessions.agentKind,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
     })

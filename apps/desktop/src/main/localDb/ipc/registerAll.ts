@@ -13,6 +13,7 @@ import { closeDb, ensureReady, getCurrentUserId } from '../index';
 import { getCurrentDbClientUserId, tryGetDbClient } from '../client/current';
 import {
   registerSessionIpc,
+  type RegisterSessionIpcOpts,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
 } from './sessions';
@@ -71,6 +72,7 @@ function startMediaRefCompensationReconcile(
 }
 
 export interface RegisterLocalDbIpcOpts {
+  resolveContextWindow?: RegisterSessionIpcOpts['resolveContextWindow'];
   /** Current stable app-session owner. False makes queued/in-flight work stale. */
   isOwnerCurrent?: (userId: string) => boolean;
   /** Dispose any secondary DB client committed by a stale onReady callback. */
@@ -237,6 +239,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   });
 
   registerSessionIpc(getCurrentDbClientUserId, {
+    resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
   });
   registerMessageIpc();
