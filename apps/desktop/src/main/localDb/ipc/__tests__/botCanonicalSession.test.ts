@@ -665,6 +665,30 @@ describe('Bot canonical Session lifecycle', () => {
     });
   });
 
+  it.each([
+    [undefined, 'ask'],
+    ['ask', 'ask'],
+    ['trusted', 'bypassPermissions'],
+  ])('creates a canonical task with permission %s mapped to %s', async (permissions, permissionMode) => {
+    const profile = await invoke('local-db:bots:create', {
+      id: 'bot-permission', name: 'Permission Bot',
+      capabilities: permissions ? { permissions } : {},
+    });
+    expect(profile.capabilities.permissions).toBe(permissions ?? 'ask');
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: profile.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    expect(created.session.permissionMode).toBe(permissionMode);
+    // The permission chip persists the canonical task's choice. Reopening it must
+    // retain that choice rather than reapplying the profile's creation default.
+    h.sqlite!.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?')
+      .run('ask', created.session.id);
+    const reopened = await invoke('local-db:bots:create-canonical-session', {
+      botId: profile.id, expectedCanonicalSessionId: created.session.id, expectedProfileVersion: 1,
+    });
+    expect(reopened.session.permissionMode).toBe('ask');
+  });
+
   it('preserves an explicitly empty model when a Pi Bot has no selectable model', async () => {
     await invoke('local-db:bots:create', {
       id: 'bot-pi-default',

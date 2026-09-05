@@ -186,12 +186,11 @@ describe('bot profile store', () => {
     });
   });
 
-  it('creates new Bots hands-on by default, and never with memory turned off', () => {
+  it('creates new Bots requiring confirmation, with memory enabled', () => {
     const bot = addBotProfile({ name: 'Fresh teammate', description: '' });
     createdIds.push(bot.id);
 
-    // 产品裁决 2026-08-18:默认放手做;记忆恒开。
-    expect(bot.capabilities.permissions).toBe('trusted');
+    expect(bot.capabilities.permissions).toBe('ask');
     expect(bot.capabilities.memory).toBe(true);
   });
 

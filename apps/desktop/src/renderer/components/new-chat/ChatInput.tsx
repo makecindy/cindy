@@ -748,8 +748,8 @@ interface ChatInputProps {
   /** 强制使用紧凑单行工具栏；容器测宽也会自动进入同一状态。 */
   narrowToolbar?: boolean;
   /**
-   * 隐藏权限与模型运行时控件。伙伴对话的模型链、权限和故障接力由伙伴设置与
-   * 宿主托管，composer 只保留附件、语音和发送这些对话动作。
+   * 隐藏模型运行时控件。伙伴模型链与故障接力由伙伴设置和宿主管理；
+   * 权限仍使用标准 chip，允许用户随时调整当前任务的执行权限。
    */
   hideRuntimeControls?: boolean;
   /**
@@ -1824,12 +1824,11 @@ export function ChatInput({
 
   // cycle-permission-mode 快捷键 (默认 Shift+Tab) 的轮切候选 —— 与
   // PermissionSelector 用同一份 capabilities.permissionModes 列表, 键盘轮切
-  // 与下拉菜单看到的顺序一致。伙伴对话隐藏整组运行时控件时,键盘入口也必须
-  // 一并失效,不能留下一个看不见却仍会改权限的暗门。
+  // 与下拉菜单看到的顺序一致。伙伴保留这两个入口；任务设置锁定时一起禁用。
   const permissionCycleOptions = useMemo(
     () =>
-      settingsLocked || hideRuntimeControls ? [] : (activeAgentCapabilities?.permissionModes ?? []),
-    [activeAgentCapabilities, hideRuntimeControls, settingsLocked],
+      settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? []),
+    [activeAgentCapabilities, settingsLocked],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -8579,7 +8578,6 @@ export function ChatInput({
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
-                {!hideRuntimeControls ? (
                 <PermissionSelector
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
@@ -8590,7 +8588,6 @@ export function ChatInput({
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
-                ) : null}
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               <div

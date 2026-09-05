@@ -722,7 +722,7 @@ function defaultNewBotCapabilities(): Record<string, unknown> {
     mcpMode: 'allowlist',
     mcpServers: [],
     memory: true,
-    permissions: 'trusted',
+    permissions: 'ask',
   };
 }
 

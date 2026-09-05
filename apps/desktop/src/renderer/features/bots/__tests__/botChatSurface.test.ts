@@ -62,14 +62,16 @@ describe('消息流的头像挂载', () => {
 });
 
 describe('伙伴输入框只保留对话动作', () => {
-  it('权限 chip 与模型选择器共用同一隐藏门', () => {
-    expect(chatInput.match(/!hideRuntimeControls \? \(/g)?.length).toBe(2);
+  it('伙伴保留标准权限 chip，仅隐藏模型选择器', () => {
+    expect(chatInput.match(/!hideRuntimeControls \? \(/g)?.length).toBe(1);
+    expect(chatInput.indexOf('<PermissionSelector')).toBeLessThan(chatInput.indexOf('!hideRuntimeControls ? ('));
     expect(chatInput).toContain('<PermissionSelector');
     expect(chatInput).toContain('<ModelSelector');
   });
 
-  it('隐藏控件时也禁用权限快捷键', () => {
-    expect(chatInput).toContain('settingsLocked || hideRuntimeControls');
+  it('伙伴仍可使用权限快捷键，锁定任务不能切换', () => {
+    expect(chatInput).toContain('settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
+    expect(chatInput).not.toContain('settingsLocked || hideRuntimeControls');
   });
 
   it('伙伴不渲染任务目录、费用或压缩状态行', () => {
