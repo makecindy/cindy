@@ -82,6 +82,7 @@ function sourceRevision(source: BotRemoteResourceSource): string {
     source.currentVersion,
     source.updatedAt,
     source.lastMessageAt ?? 0,
+    source.lastReplyAt ?? 0,
     source.hiddenAt ?? 0,
     source.pinnedAt ?? 0,
     source.activityAt,
@@ -101,6 +102,7 @@ export function botRemoteCollectionItemFromSource(
     ref: resourceRef(source.id),
     display: {
       title: source.name,
+      lastReplyAt: source.lastReplyAt ?? 0,
       ...(source.description ? { subtitle: source.description } : {}),
       ...(source.lastMessagePreview ? { preview: source.lastMessagePreview } : {}),
       ...(source.activityAt ? { timestamp: source.activityAt } : {}),

@@ -1,3 +1,4 @@
+import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
 import { useFocusEffect, useIsFocused } from 'expo-router';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
@@ -431,6 +432,7 @@ function HomeScreenContent() {
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [remoteHomeCollections, setRemoteHomeCollections] = useState<RemoteHomeCollection[]>([]);
+  const [resourceCacheAccount, setResourceCacheAccount] = useState<number | null>(null);
   const remoteHomeCollectionsRef = useRef<RemoteHomeCollection[]>([]);
   remoteHomeCollectionsRef.current = remoteHomeCollections;
   const selectedDeviceIdRef = useRef<string | null>(selectedDeviceId);
@@ -1538,10 +1540,20 @@ function HomeScreenContent() {
     statusLabel: item.statusLabel,
   })), [deviceRows]);
   useEffect(() => {
+    let cancelled = false;
     remoteHomeCollectionsRef.current = [];
     setRemoteHomeCollections([]);
-  }, [accountGeneration]);
+    setResourceCacheAccount(null);
+    void readRemoteResourceSnapshot(homeCacheUserId).then((snapshot) => {
+      if (cancelled) return;
+      remoteHomeCollectionsRef.current = snapshot.home;
+      setRemoteHomeCollections(snapshot.home);
+      setResourceCacheAccount(accountGeneration);
+    });
+    return () => { cancelled = true; };
+  }, [accountGeneration, homeCacheUserId]);
   useEffect(() => {
+    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
     let cancelled = false;
     const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
     if (targets.length === 0) {
@@ -1559,6 +1571,7 @@ function HomeScreenContent() {
         if (!cancelled && homeAccountGenerationRef.current === accountGeneration) {
           remoteHomeCollectionsRef.current = collections;
           setRemoteHomeCollections(collections);
+          void cacheRemoteResourceHome(homeCacheUserId, collections);
         }
       })
       .catch(() => {
@@ -1569,6 +1582,10 @@ function HomeScreenContent() {
   }, [
     accountGeneration,
     connectionEpoch,
+    resourceCacheAccount,
+    lastSyncedAt,
+    homeListCacheHydrated,
+    homeCacheUserId,
     deviceModels,
     i18nInstance.language,
     invoke,

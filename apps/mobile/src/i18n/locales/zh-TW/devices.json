@@ -679,5 +679,26 @@
         "daysAgo": "{{count}} 天前"
       }
     }
+  },
+  "companions": {
+    "messageSent": "已傳送補充訊息",
+    "privateChat": "與 {{name}} 的私聊",
+    "backgroundTask": "背景任務",
+    "openTask": "查看任務",
+    "stopTask": "停止任務",
+    "actionFailed": "暫時無法讀取或完成操作",
+    "messages": "訊息往來",
+    "readOnly": "僅供檢視",
+    "unread": "有新回覆",
+    "status": {
+      "queued": "等待開始",
+      "running": "執行中",
+      "waiting": "等待回覆",
+      "completed": "已完成",
+      "failed": "失敗",
+      "cancelled": "已取消",
+      "timed-out": "已逾時",
+      "unknown": "暫時無法確認狀態"
+    }
   }
 }

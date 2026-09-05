@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 
 import type { ControlResult, LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
@@ -14,22 +15,23 @@ export interface CreateTeammateCallbacks {
 }
 
 export function registerCreateTeammateTool(
-  server: { tool: (...args: any[]) => void },
+  registry: XdtHelperToolRegistry,
   deps: {
     getSessionContext: () => LiziMcpSessionContext;
     callbacks: CreateTeammateCallbacks;
   },
 ): void {
-  server.tool(
-    'create_teammate',
-    "Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Use the official default model and an empty capability grant; the user can customize the profile later. Include a short natural first greeting in the user's language. The returned bot id is immediately usable as send_to_agent target_id; creation alone does not start hidden work.",
-    {
+  registry.register({
+    name: 'create_teammate',
+    category: 'bots',
+    description: "Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Use the official default model and an empty capability grant; the user can customize the profile later. Include a short natural first greeting in the user's language. The returned bot id is immediately usable as send_to_agent target_id; creation alone does not start hidden work.",
+    inputShape: {
       name: z.string().min(1).max(200).describe('Display name for the new teammate.'),
       description: z.string().min(1).max(4000).describe('Short role and purpose.'),
       identity_source: z.string().min(1).max(12000).describe('Concise identity instructions for the teammate.'),
       welcome_message: z.string().min(1).max(4000).describe('Short first greeting in the user\'s language.'),
     },
-    async ({ name, description, identity_source, welcome_message }: {
+    handler: async ({ name, description, identity_source, welcome_message }: {
       name: string;
       description: string;
       identity_source: string;
@@ -50,5 +52,5 @@ export function registerCreateTeammateTool(
         ? okPayload({ action: 'created', bot: result.bot })
         : errorPayload(result.errorCode, result.message);
     },
-  );
+  });
 }

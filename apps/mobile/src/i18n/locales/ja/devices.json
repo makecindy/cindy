@@ -679,5 +679,26 @@
         "daysAgo": "{{count}} 日前"
       }
     }
+  },
+  "companions": {
+    "messageSent": "追加メッセージを送信しました",
+    "privateChat": "{{name}} との会話",
+    "backgroundTask": "バックグラウンドタスク",
+    "openTask": "タスクを開く",
+    "stopTask": "タスクを停止",
+    "actionFailed": "読み込みまたは操作を完了できません",
+    "messages": "メッセージ",
+    "readOnly": "閲覧のみ",
+    "unread": "新しい返信",
+    "status": {
+      "queued": "開始待ち",
+      "running": "実行中",
+      "waiting": "返信待ち",
+      "completed": "完了",
+      "failed": "失敗",
+      "cancelled": "キャンセル済み",
+      "timed-out": "タイムアウト",
+      "unknown": "状態を確認できません"
+    }
   }
 }

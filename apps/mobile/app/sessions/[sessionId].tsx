@@ -1,3 +1,4 @@
+import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
 import {
   ArrowDown,
@@ -921,6 +922,7 @@ export default function SessionScreen() {
   // 新发起的请求作废旧请求。
   const rewindRequestSeqRef = useRef(0);
   const deviceName = readRouteParam(params.deviceName) ?? deviceId;
+  useRemoteResourceSession(deviceId, deviceName, sessionId);
   const routeDraft = readRouteParam(params.draft);
   const routeFocusClientId = readRouteParam(params.focusClientId);
   const routeFocusComposerRequestKey = readRouteParam(params.focusComposerRequestKey);
@@ -6548,9 +6550,9 @@ export default function SessionScreen() {
             testID="session.planModeChip"
           />
         ) : null}
-        {!sessionManagedByHost && composerRuntimeSummary ? (
+        {composerRuntimeSummary ? (
           <ComposerRuntimePill
-            disabled={controlBusy || !canUseRemoteSessionControls}
+            disabled={sessionManagedByHost || controlBusy || !canUseRemoteSessionControls}
             fastOn={composerPillFastOn}
             label={composerRuntimeLabel}
             leading={agentSwitchIntent ? (
@@ -7900,7 +7902,7 @@ export default function SessionScreen() {
     }
   }, [agentSwitchIntent, maker, modelSheetAgentKind, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
   const toggleComposerModelPicker = useCallback(() => {
-    if (!canUseRemoteSessionControls) {
+    if (sessionManagedByHost || !canUseRemoteSessionControls) {
       setModelSheetOpen(false);
       return;
     }
@@ -7910,7 +7912,7 @@ export default function SessionScreen() {
     }
     setModelSheetAgentKind(agentSwitchIntent?.targetAgentKind ?? sessionAgentKind);
     setModelSheetOpen(true);
-  }, [agentSwitchIntent, canUseRemoteSessionControls, modelSheetOpen, sessionAgentKind]);
+  }, [agentSwitchIntent, canUseRemoteSessionControls, modelSheetOpen, sessionAgentKind, sessionManagedByHost]);
 
   const refreshContextUsage = useCallback(async () => {
     if (!currentSession || contextLoading) return;
@@ -9525,7 +9527,7 @@ function SessionHeaderBar({
   const headerActions = (actionProjection?.primaryActions ?? [])
     .filter((action) => action.id !== 'settings'
       && action.id !== 'queue'
-      && (!messageOnly || action.id === 'search'));
+      && (!messageOnly || action.id === 'search' || action.id === 'files'));
   const actionHandlers = {
     files: onOpenFiles,
     queue: () => undefined,

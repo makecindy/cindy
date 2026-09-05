@@ -680,5 +680,26 @@
         "daysAgo": "{{count}}일 전"
       }
     }
+  },
+  "companions": {
+    "messageSent": "추가 메시지를 보냈습니다",
+    "privateChat": "{{name}} 님과의 대화",
+    "backgroundTask": "백그라운드 작업",
+    "openTask": "작업 열기",
+    "stopTask": "작업 중지",
+    "actionFailed": "읽거나 작업을 완료할 수 없습니다",
+    "messages": "메시지",
+    "readOnly": "읽기 전용",
+    "unread": "새 답변",
+    "status": {
+      "queued": "시작 대기",
+      "running": "실행 중",
+      "waiting": "답변 대기",
+      "completed": "완료",
+      "failed": "실패",
+      "cancelled": "취소됨",
+      "timed-out": "시간 초과",
+      "unknown": "상태를 확인할 수 없습니다"
+    }
   }
 }

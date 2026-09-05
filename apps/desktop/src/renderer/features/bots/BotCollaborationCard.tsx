@@ -4,6 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import type { BotCollaborationMeta } from '../../../shared/botCollaboration';
+import { makerApiForSticky } from '@/lib/makerTransport';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { useRemoteBots } from './useRemoteBots';
 import { cn } from '@/lib/utils';
 import { readBotCollaborationMeta } from '../../../shared/botCollaboration';
 import { isActiveDelegationStatus, useBotDelegation } from './botDelegationLive';
@@ -79,7 +82,10 @@ function SessionTaskCardBody({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const parentSessionId = meta.parentSessionId ?? sessionId ?? null;
+  const parentSessionId = sessionId ?? meta.parentSessionId ?? null;
+  const [sourceDeviceId] = useState(() => parentSessionId ? remoteProjectsStore.getSessionDeviceId(parentSessionId) : undefined);
+  const remoteBots = useRemoteBots();
+  const online = !sourceDeviceId || remoteBots.some((bot) => bot.deviceId === sourceDeviceId && bot.online);
   const { row, resolved } = useBotDelegation(parentSessionId, meta.delegationId);
   const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -98,6 +104,13 @@ function SessionTaskCardBody({
 
   const openChildTask = (): void => {
     if (!childSessionId) return;
+    const deviceId = sourceDeviceId;
+    const existingOrigin = remoteProjectsStore.getSessionDeviceId(childSessionId);
+    if (deviceId && existingOrigin && existingOrigin !== deviceId) {
+      setActionError(t('bots.collab.actionFailed'));
+      return;
+    }
+    if (deviceId) remoteProjectsStore.pinSessionOrigin(deviceId, childSessionId);
     navigate(`/cc-agent/${encodeURIComponent(childSessionId)}`);
   };
 
@@ -216,11 +229,11 @@ function SessionTaskCardBody({
           {active ? (
             <button
               type="button"
-              disabled={pending || !parentSessionId}
+              disabled={pending || !parentSessionId || !online}
               onClick={() => {
-                if (!parentSessionId) return;
+                if (!parentSessionId || !online || pending) return;
                 void runAction(async () =>
-                  window.electronAPI.maker.cancelBotDelegation(parentSessionId, meta.delegationId),
+                  makerApiForSticky(parentSessionId).cancelBotDelegation(parentSessionId, meta.delegationId),
                 );
               }}
               className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"

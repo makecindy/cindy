@@ -1,3 +1,4 @@
+import { useAuth } from '@/auth/AuthContext';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
@@ -26,7 +27,10 @@ export default function RemoteResourceResolverScreen() {
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();
   const router = useRouter();
-  const { invoke } = useDeviceLink();
+  const { invoke, connectionEpoch } = useDeviceLink();
+  const { accountGeneration } = useAuth();
+  const binding = `${accountGeneration}:${connectionEpoch}`;
+  const currentBinding = useRef(binding); currentBinding.current = binding;
   const params = useLocalSearchParams<{
     collectionId?: string;
     resourceId?: string;
@@ -64,7 +68,7 @@ export default function RemoteResourceResolverScreen() {
         id: resourceId,
         kind: resourceKind,
       }, i18n.language);
-      if (resolveGenerationRef.current !== generation) return;
+      if (resolveGenerationRef.current !== generation || currentBinding.current !== binding) return;
       const link = response.links.find((item) => item.rel === 'conversation');
       const target = link?.target as RemoteSessionLinkTarget | undefined;
       if (!target || target.kind !== 'session' || typeof target.sessionId !== 'string') {
@@ -72,7 +76,10 @@ export default function RemoteResourceResolverScreen() {
         return;
       }
       const session = await invoke<RemoteSession>(deviceId, 'local-db:sessions:get', [target.sessionId]);
-      if (resolveGenerationRef.current !== generation) return;
+      if (resolveGenerationRef.current !== generation || currentBinding.current !== binding) return;
+      if (!session || session.id !== target.sessionId || (resourceKind === 'bot' && session.source !== 'bot')) throw new Error(t('devices.resources.noConversation'));
+      const existingOrigin = remoteSessionStore.getSessionDeviceId(session.id);
+      if (existingOrigin && existingOrigin !== deviceId) throw new Error(t('devices.resources.noConversation'));
       remoteSessionStore.upsertDeviceSession(deviceId, deviceName, session);
       router.replace({
         pathname: '/sessions/[sessionId]',
@@ -88,7 +95,7 @@ export default function RemoteResourceResolverScreen() {
     } catch (cause) {
       if (resolveGenerationRef.current === generation) setError(formatRemoteError(cause));
     }
-  }, [collectionId, deviceId, deviceName, host, i18n.language, invoke, resourceId, resourceKind, router, t]);
+  }, [binding, collectionId, deviceId, deviceName, host, i18n.language, invoke, resourceId, resourceKind, router, t]);
 
   useEffect(() => {
     void resolveConversation();

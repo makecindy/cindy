@@ -1,3 +1,5 @@
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -12,7 +14,7 @@ import type {
 } from '../../../../shared/botDelegation';
 import type { BotCollaborationMeta } from '../../../../shared/botCollaboration';
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ navigate: vi.fn(), remoteBots: [] as any[] }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -21,6 +23,8 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'en' },
   }),
 }));
+vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 const SESSION_ID = 'parent-session-1';
@@ -79,6 +83,7 @@ let cancelBotDelegation: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   listeners = [];
+  mocks.remoteBots = [];
   mocks.navigate.mockClear();
   __resetBotDelegationLiveForTest();
   listBotDelegations = vi.fn(async () => ({ ok: true as const, delegations: [] }));
@@ -109,6 +114,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  remoteProjectsStore.clear();
+  __resetStickySessionOriginForTest();
   __resetBotDelegationLiveForTest();
 });
 
@@ -330,4 +337,35 @@ describe('BotSessionTaskCard', () => {
     await waitFor(() => expect(screen.getByText(/bots\.collab\.status\.timed-out/)).toBeTruthy());
     expect(screen.queryByText(/bots\.collab\.status\.failed/)).toBeNull();
   });
+});
+
+
+it('routes remote task reads, stop, child navigation and push refresh to the same Mac', async () => {
+  mocks.remoteBots = [{ deviceId: 'home', online: true }];
+  remoteProjectsStore.pinSessionOrigin('home', SESSION_ID);
+  let push!: (value: any, stamp?: any) => void;
+  let status!: (value: any) => void;
+  const invoke = vi.fn(async (_device: string, channel: string) => channel === 'maker:bot-delegations:list'
+    ? { ok: true, delegations: [delegation('running')] } : { ok: true });
+  window.electronAPI.deviceLink = {
+    invoke, onRemotePush: (fn: any) => { push = fn; return () => {}; },
+    onStatusChanged: (fn: any) => { status = fn; return () => {}; },
+  } as any;
+  render(<BotSessionTaskCard sessionId={SESSION_ID} data={meta() as any} />);
+  const stop = await screen.findByRole('button', { name: 'bots.collab.stopTask' });
+  expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-delegations:list', [SESSION_ID]);
+  expect(listBotDelegations).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.collab.watchWork' }));
+  expect(remoteProjectsStore.getSessionDeviceId('child-1')).toBe('home');
+  // Even when reconnect clears the transient registry, stop must never hit the local maker.
+  remoteProjectsStore.clear();
+  fireEvent.click(stop);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-delegation:cancel', [SESSION_ID, DELEGATION_ID]));
+  expect(cancelBotDelegation).not.toHaveBeenCalled();
+  const reads = invoke.mock.calls.length;
+  act(() => push({ deviceId: 'office', channel: 'maker:bot-delegation:changed', payload: { parentSessionId: SESSION_ID } }));
+  expect(invoke).toHaveBeenCalledTimes(reads);
+  invoke.mockResolvedValue({ ok: true, delegations: [delegation('completed', { resultSummary: 'Remote done' })] });
+  act(() => status({ status: 'online' }));
+  await screen.findByText('Remote done');
 });

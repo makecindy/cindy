@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
 vi.mock('react-router-dom', () => ({ useParams: () => ({ deviceId: 'home', botId: 'writer' }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({
+  markRemoteBotRead: vi.fn(),
   useRemoteBots: () => [
     {
       id: 'writer',

@@ -157,6 +157,7 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // 模块中立的资源集合失效通知；控制端已有 sessions 常驻订阅可直接接收，
   // 不为每个新模块扩张一档 topic。
   REMOTE_RESOURCE_CHANGED_CHANNEL,
+  'maker:bot-direct-message:changed',
   'maker:schedule:event',
   'maker:project-automation:event',
   // 被控端「当前 New Maker 草稿」全量变更:账号 / 全局级(无 sessionId),并入 `sessions` topic
@@ -199,6 +200,10 @@ export function topicForPush(channel: string, payload: unknown): Topic | null {
     // 文件树变更是 workdir 域(payload 无 sessionId),路由到 fs-watch:<workdir>。
     const workdir = readStringField(payload, 'workdir');
     return workdir ? fsWatchTopic(workdir) : null;
+  }
+  if (channel === 'maker:bot-delegation:changed') {
+    const parent = readStringField(payload, 'parentSessionId');
+    return parent ? `session:${parent}` : null;
   }
   if (channel === 'maker:orca:worker-changed') {
     const lead = readStringField(payload, 'leadSessionId');

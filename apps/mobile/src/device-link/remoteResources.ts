@@ -146,6 +146,7 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
     ...(subtitle ? { subtitle } : {}),
     ...(preview ? { preview } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
+    ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
     ...(avatar ? { avatar } : {}),
     ...(status ? { status } : {}),
   };

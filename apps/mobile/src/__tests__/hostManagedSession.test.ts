@@ -19,7 +19,8 @@ describe('host-managed Session presentation', () => {
     expect(source).toContain('{renderSessionPermissionButton()}');
     expect(source).toContain('currentSession && runtimeOptions ? (');
     expect(source).not.toContain('!sessionManagedByHost ? renderSessionPermissionButton() : null');
-    expect(source).toContain('!sessionManagedByHost && composerRuntimeSummary ? (');
+    expect(source).toContain('{composerRuntimeSummary ? (');
+    expect(source).toContain('if (sessionManagedByHost || !canUseRemoteSessionControls)');
     expect(source).toContain('{renderComposerAttachmentButton()}');
     expect(source).toContain('{renderComposerInlineStop()}');
   });

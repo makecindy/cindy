@@ -1,5 +1,6 @@
+import { cacheRemoteResourceItems, readRemoteResourceSnapshot, isRemoteResourceUnread, markRemoteResourceRead, subscribeRemoteResourceCache, remoteResourceCacheRevision } from '@/device-link/remoteResourceCache';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -17,6 +18,7 @@ import {
 } from '@cindy/device-link';
 
 import { Text } from '@/components/AppText';
+import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { MainWindowEmptyState, StatusDot } from '@/components/MobilePrimitives';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
 import { useAuth } from '@/auth/AuthContext';
@@ -75,6 +77,8 @@ export default function RemoteCollectionScreen() {
     unsubscribe,
   } = useDeviceLink();
   const { accountGeneration, user } = useAuth();
+  useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
+  const [hydratedOwner, setHydratedOwner] = useState('');
   const cacheOwner = `${user?.id ?? ''}:${accountGeneration}`;
   const accountRef = useRef(accountGeneration);
   accountRef.current = accountGeneration;
@@ -90,6 +94,7 @@ export default function RemoteCollectionScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (visible: boolean) => {
+    if (hydratedOwner !== cacheOwner) return;
     const generation = ++loadGenerationRef.current;
     const expectedAccount = accountGeneration;
     if (!collectionId || targets.length === 0) {
@@ -127,21 +132,29 @@ export default function RemoteCollectionScreen() {
     const allHostsFailed = failures.length === targets.length;
     setItemsAccount(expectedAccount);
     setItems((current) => {
-      const merged = allHostsFailed ? current : mergeRemoteCollectionHostShards(current, next, successfulDeviceIds, targets);
+      const merged = mergeRemoteCollectionHostShards(current, next, successfulDeviceIds, targets);
       writeRemoteCollectionCache(cacheOwner, collectionId, merged);
+      void cacheRemoteResourceItems(user?.id ?? '', collectionId, merged);
       return merged;
     });
     setError(allHostsFailed ? failures.slice(0, 2).join('\n') : null);
     setLoading(false);
     setRefreshing(false);
-  }, [accountGeneration, cacheOwner, collectionId, connectionEpoch, getPresenceAvailability, i18n.language, invoke, relayStatus, t, targets, presenceKey]);
+  }, [accountGeneration, cacheOwner, collectionId, connectionEpoch, getPresenceAvailability, hydratedOwner, i18n.language, invoke, relayStatus, t, targets, presenceKey, user?.id]);
 
   useEffect(() => {
     loadGenerationRef.current += 1;
     setItems(readRemoteCollectionCache(cacheOwner, collectionId));
     setItemsAccount(accountGeneration);
     setReplyEpochs({});
-  }, [accountGeneration, cacheOwner, collectionId]);
+    let cancelled = false;
+    void readRemoteResourceSnapshot(user?.id ?? '').then((snapshot) => {
+      if (cancelled) return;
+      setItems((current) => current.length ? current : snapshot.items[collectionId] ?? []);
+      setHydratedOwner(cacheOwner);
+    });
+    return () => { cancelled = true; };
+  }, [accountGeneration, cacheOwner, collectionId, user?.id]);
 
   useFocusEffect(useCallback(() => {
     void load(false);
@@ -177,6 +190,7 @@ export default function RemoteCollectionScreen() {
 
   const openItem = useCallback((hosted: HostedResourceItem) => {
     if (!isRemoteResourceHostOnline(relayStatus, getPresenceAvailability(hosted.host.deviceId), replyEpochs[hosted.host.deviceId], connectionEpoch)) return;
+    if (hosted.item.ref.kind === 'bot') void markRemoteResourceRead(user?.id ?? '', hosted.host.deviceId, hosted.item.ref.id, hosted.item.display.lastReplyAt ?? 0);
     guardedPush({
       pathname: '/resources/[collectionId]/[resourceId]',
       params: {
@@ -188,7 +202,7 @@ export default function RemoteCollectionScreen() {
         title: resolveRemoteText(hosted.item.display.title, i18n.language),
       },
     });
-  }, [collectionId, connectionEpoch, getPresenceAvailability, guardedPush, i18n.language, relayStatus, replyEpochs]);
+  }, [collectionId, connectionEpoch, getPresenceAvailability, guardedPush, i18n.language, relayStatus, replyEpochs, user?.id]);
 
   return (
     <SafeAreaView
@@ -226,9 +240,7 @@ export default function RemoteCollectionScreen() {
             const status = !online ? t('devices.resources.hostOffline') : display.status
               ? resolveRemoteText(display.status.label, i18n.language)
               : '';
-            const avatar = display.avatar?.kind === 'emoji' && display.avatar.value
-              ? display.avatar.value
-              : display.avatar?.fallbackText || titleText.slice(0, 1);
+            const unread = hosted.item.ref.kind === 'bot' && isRemoteResourceUnread(user?.id ?? '', hosted.host.deviceId, hosted.item.ref.id, display.lastReplyAt);
             const time = timestampLabel(display.timestamp, i18n.language);
             return (
               <Pressable
@@ -241,12 +253,13 @@ export default function RemoteCollectionScreen() {
                 testID={`remoteResources.item.${hosted.item.ref.id}`}
               >
                 <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{avatar}</Text>
+                  <RemoteCompanionAvatar avatar={display.avatar} deviceId={hosted.host.deviceId} name={titleText} online={online} />
                   <View style={styles.connectionDot}><StatusDot tone={online ? 'ready' : 'off'} /></View>
                 </View>
                 <View style={styles.body}>
                   <View style={styles.titleRow}>
                     <Text numberOfLines={1} style={styles.title}>{titleText}</Text>
+                    {unread ? <View accessibilityLabel={t('devices.companions.unread')} style={styles.unread} /> : null}
                     {time ? <Text numberOfLines={1} style={styles.time}>{time}</Text> : null}
                   </View>
                   {subtitle ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : null}
@@ -290,6 +303,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   pressed: { opacity: 0.72 },
+  unread: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.statusAwaiting },
   connectionDot: { position: 'absolute', bottom: 0, right: 0 },
   avatar: {
     alignItems: 'center',
@@ -299,7 +313,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
-  avatarText: { color: colors.textPrimary, fontSize: typeScale.listTitle, fontWeight: fontWeight.semibold },
   body: { flex: 1, gap: spacing.xs, minWidth: 0 },
   titleRow: { alignItems: 'baseline', flexDirection: 'row', gap: spacing.sm },
   title: { color: colors.textPrimary, flex: 1, fontSize: typeScale.listTitle, fontWeight: fontWeight.semibold },

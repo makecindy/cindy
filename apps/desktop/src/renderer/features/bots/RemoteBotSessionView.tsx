@@ -8,7 +8,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { Spinner } from '@/components/ui/spinner';
 import { BotAvatar } from './BotAvatar';
 import { parseRemoteBots, type RemoteBot } from './remoteBotRoster';
-import { useRemoteBots } from './useRemoteBots';
+import { markRemoteBotRead, useRemoteBots } from './useRemoteBots';
 
 /** The session id comes from the host's collection, never from an arbitrary URL. */
 export function RemoteBotSessionView() {
@@ -17,6 +17,7 @@ export function RemoteBotSessionView() {
   const bots = useRemoteBots();
   const bot = bots.find((row) => row.id === botId && row.deviceId === deviceId);
   const [ready, setReady] = useState<RemoteBot | null>(null);
+  const [validatedSessionId, setValidatedSessionId] = useState<string | null | undefined>(null);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const sessionId = bot?.sessionId;
@@ -56,6 +57,7 @@ export function RemoteBotSessionView() {
         throw new Error('Invalid remote companion session');
       remoteProjectsStore.mergeDeviceSessions(deviceId, bot.deviceName, [session]);
       setReady(resolved);
+      setValidatedSessionId(sessionId);
     })().catch(() => {
       if (!disposed) setFailed(true);
     });
@@ -64,14 +66,23 @@ export function RemoteBotSessionView() {
     };
   }, [deviceId, botId, sessionId, bot?.online, bot?.deviceName, retry]);
 
-  if (bot && ready?.sessionId && ready.id === botId && ready.deviceId === deviceId) {
+  useEffect(() => {
+    const read = () => {
+      if (document.visibilityState === 'visible' && bot && ready?.id === bot.id && ready.deviceId === bot.deviceId && validatedSessionId === bot.sessionId) markRemoteBotRead(bot.deviceId, bot.id, bot.lastReplyAt ?? 0);
+    };
+    read();
+    document.addEventListener('visibilitychange', read);
+    return () => document.removeEventListener('visibilitychange', read);
+  }, [bot?.deviceId, bot?.id, bot?.lastReplyAt, bot?.sessionId, ready?.sessionId, validatedSessionId]);
+
+  if (bot && !failed && ready?.sessionId && ready.id === botId && ready.deviceId === deviceId) {
     return (
       <CCAgentSessionView
         key={`${deviceId}:${ready.sessionId}`}
         sessionIdProp={ready.sessionId}
         routeOwner
         botIdentity={ready}
-        readOnly={!bot.online}
+        readOnly={!bot.online || validatedSessionId !== bot.sessionId || failed}
       />
     );
   }

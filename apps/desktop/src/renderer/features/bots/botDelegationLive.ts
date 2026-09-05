@@ -5,6 +5,9 @@ import {
   isDataOwnerGenerationCurrent,
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
+import { makerApiForSticky } from '@/lib/makerTransport';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import type { BotDelegationStatus, BotDelegationView } from '../../../shared/botDelegation';
 
 /** 未落终态的后台任务：任务卡按这个集合决定是否仍在执行。 */
@@ -64,7 +67,7 @@ async function reload(sessionId: string): Promise<void> {
   const owner = getDataOwnerGeneration();
   const generation = ++entry.reloadGeneration;
   try {
-    const result = await window.electronAPI.maker.listBotDelegations(sessionId);
+    const result = await makerApiForSticky(sessionId).listBotDelegations(sessionId);
     if (!isDataOwnerGenerationCurrent(owner)) return;
     if (sessions.get(sessionId) !== entry || entry.reloadGeneration !== generation) return;
     // 短暂读取失败不能把已经显示的持久任务卡抹掉。成功时才替换快照；失败时
@@ -84,10 +87,23 @@ function subscribe(sessionId: string, listener: () => void): () => void {
   const entry = ensureEntry(sessionId);
   entry.listeners.add(listener);
   if (!entry.unsubscribe) {
-    entry.unsubscribe = window.electronAPI.maker.onBotDelegationChanged((payload, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp) || payload.parentSessionId !== sessionId) return;
-      void reload(sessionId);
-    });
+    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+    const offPush = deviceId
+      ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
+          if (push.deviceId !== deviceId || push.channel !== 'maker:bot-delegation:changed'
+            || !isDeviceLinkRemotePushCurrent(push, stamp)) return;
+          const payload = push.payload as { parentSessionId?: string };
+          if (payload?.parentSessionId === sessionId) void reload(sessionId);
+        })
+      : window.electronAPI.maker.onBotDelegationChanged((payload, ownerStamp) => {
+          if (!isDataOwnerPushCurrent(ownerStamp) || payload.parentSessionId !== sessionId) return;
+          void reload(sessionId);
+        });
+    const offStatus = deviceId ? window.electronAPI.deviceLink.onStatusChanged((state) => {
+      if (state.status === 'online') void reload(sessionId);
+      else entry.reloadGeneration += 1;
+    }) : () => {};
+    entry.unsubscribe = () => { offPush(); offStatus(); };
     void reload(sessionId);
   }
   return () => {

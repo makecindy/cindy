@@ -1,24 +1,27 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ArrowLeftRight, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { cn } from '@/lib/utils';
 import { readBotDirectMessageMeta, type BotDirectMessageMeta } from '../../../shared/botDirectMessage';
 import { BotAvatar } from './BotAvatar';
 import { useBotProfiles } from './botStore';
 
-export function BotDirectMessageCard({ data }: { data?: Record<string, unknown> }) {
+export function BotDirectMessageCard({ data, sessionId }: { data?: Record<string, unknown>; sessionId?: string }) {
   const meta = readBotDirectMessageMeta(data);
   if (!meta) return null;
-  return <BotDirectMessageCardBody meta={meta} />;
+  return <BotDirectMessageCardBody meta={meta} sessionId={sessionId} />;
 }
 
-function BotDirectMessageCardBody({ meta }: { meta: BotDirectMessageMeta }) {
+function BotDirectMessageCardBody({ meta, sessionId }: { meta: BotDirectMessageMeta; sessionId?: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const profiles = useBotProfiles();
+  const allProfiles = useBotProfiles();
+  const [deviceId] = useState(() => sessionId ? remoteProjectsStore.getSessionDeviceId(sessionId) : null);
+  const profiles = deviceId ? [] : allProfiles;
 
   const peer = useMemo(() => {
     const profile = profiles.find((item) => item.id === meta.peerBotId);
@@ -42,7 +45,7 @@ function BotDirectMessageCardBody({ meta }: { meta: BotDirectMessageMeta }) {
         type="button"
         onClick={() =>
           navigate(
-            `/bots/${encodeURIComponent(meta.viewerBotId)}/direct/${encodeURIComponent(meta.threadId)}`,
+            `/bots/${encodeURIComponent(meta.viewerBotId)}/direct/${encodeURIComponent(meta.threadId)}${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''}`,
             {
               state: {
                 botDirectMessageReturnTo: `${location.pathname}${location.search}`,

@@ -2034,6 +2034,20 @@ describe('Bots list unread projection', () => {
     return rows.find((row) => row.id === botId)!.unreadCount;
   }
 
+  it('remote reply watermark ignores user activity and private timeline traces', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'reply', role: 'assistant', content: 'Visible result', createdAt: 1000 });
+    insertMessage(sessionId, { id: 'user', role: 'user', content: 'Another question', createdAt: 2000 });
+    insertMessage(sessionId, { id: 'private', role: 'assistant', content: 'Private result', createdAt: 3000, agentMeta: { botPrivateReply: true } });
+    insertMessage(sessionId, { id: 'trace', role: 'assistant', content: 'Private trace', createdAt: 4000, agentMeta: { botDirectMessage: { v: 1 } } });
+    insertMessage(sessionId, { id: 'rewound', role: 'assistant', content: 'Rewound', createdAt: 5000, rewindAt: 6000 });
+    const remote = await getBotRemoteResourceSource('bot-1');
+    expect(remote.lastReplyAt).toBe(1000);
+    expect(remote.lastMessagePreview).toBe('Another question');
+    h.sqlite!.prepare('UPDATE sessions SET cleared_at = 6000 WHERE id = ?').run(sessionId);
+    expect((await getBotRemoteResourceSource('bot-1')).lastReplyAt).toBe(0);
+  });
+
   it('counts only replies that landed after the read position', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, {

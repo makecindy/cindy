@@ -679,5 +679,26 @@
         "daysAgo": "{{count}} days ago"
       }
     }
+  },
+  "companions": {
+    "messageSent": "Message sent",
+    "privateChat": "Private chat with {{name}}",
+    "backgroundTask": "Background task",
+    "openTask": "Open task",
+    "stopTask": "Stop task",
+    "actionFailed": "Unable to load or complete this action",
+    "messages": "Messages",
+    "readOnly": "Read only",
+    "unread": "New reply",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "waiting": "Waiting for reply",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "timed-out": "Timed out",
+      "unknown": "Status unavailable"
+    }
   }
 }

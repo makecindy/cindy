@@ -1,3 +1,4 @@
+import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
  *
@@ -8972,17 +8973,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(
     MAKER_INVOKE.BOT_DELEGATIONS_LIST,
     async (event, parentSessionId: unknown) => {
-      assertTrustedAppRendererEvent(event);
-      if (typeof parentSessionId !== 'string' || parentSessionId.length === 0) {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+      if (typeof parentSessionId !== 'string' || (parentSessionId.length === 0 || parentSessionId.length > 128)) {
         throwIpcError('INVALID_PARAMS', 'parentSessionId required');
       }
-      return delegationForRestore.listDelegations(parentSessionId);
+      const result = await delegationForRestore.listDelegations(parentSessionId);
+      return isDeviceLinkInvoke() ? projectRemoteBotDelegations(result) : result;
     },
   );
   ipcMain.handle(
     MAKER_INVOKE.BOT_DIRECT_MESSAGE_THREAD_GET,
     async (event, threadId: unknown, viewerBotId: unknown) => {
-      assertTrustedAppRendererEvent(event);
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       if (typeof threadId !== 'string' || !threadId || threadId.length > 128) {
         throwIpcError('INVALID_PARAMS', 'threadId required');
       }
@@ -8998,12 +9000,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(
     MAKER_INVOKE.BOT_DELEGATION_CANCEL,
     async (event, parentSessionId: unknown, delegationId: unknown) => {
-      assertTrustedAppRendererEvent(event);
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       if (
         typeof parentSessionId !== 'string'
-        || parentSessionId.length === 0
+        || (parentSessionId.length === 0 || parentSessionId.length > 128)
         || typeof delegationId !== 'string'
-        || delegationId.length === 0
+        || (delegationId.length === 0 || delegationId.length > 128)
       ) {
         throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
       }

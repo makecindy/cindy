@@ -10,6 +10,8 @@ export interface RemoteBot {
   activityAt: number;
   sessionId: string | null;
   online: boolean;
+  lastReplyAt?: number;
+  readAt?: number;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -63,6 +65,7 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
       preview: text(display.preview),
       activityAt: typeof display.timestamp === 'number' ? display.timestamp : 0,
       sessionId: typeof sessionId === 'string' && sessionId ? sessionId : null,
+      lastReplyAt: typeof display.lastReplyAt === 'number' && Number.isFinite(display.lastReplyAt) && display.lastReplyAt >= 0 ? display.lastReplyAt : undefined,
       online: true,
     };
   });
@@ -70,4 +73,8 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
 
 export function remoteBotKey(bot: Pick<RemoteBot, 'deviceId' | 'id'>): string {
   return `${bot.deviceId}:${bot.id}`;
+}
+
+export function isRemoteBotUnread(bot: RemoteBot): boolean {
+  return bot.lastReplyAt !== undefined && bot.readAt !== undefined && bot.lastReplyAt > bot.readAt;
 }
