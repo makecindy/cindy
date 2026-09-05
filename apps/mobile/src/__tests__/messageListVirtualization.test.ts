@@ -207,7 +207,7 @@ describe('mobile message list container', () => {
     )).toContain('return;');
     expect(scrollSource).toContain('shouldPreserveMobileHistoryBrowseIntent({');
     expect(scrollSource).toContain('historyBrowseIntent: userScrollForOlderRef.current');
-    expect(scrollSource).toContain('userControllingScroll: isDraggingRef.current');
+    expect(scrollSource).toContain('userControllingScroll: isDragSample');
     // 深链 / 搜索定位本身就是明确的历史浏览意图,后续近顶自动补页无需再拖一下。
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');
     const focusEffectEnd = source.indexOf('// 新消息红点', focusEffectStart);
