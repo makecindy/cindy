@@ -21,6 +21,7 @@
  */
 
 import {
+  PI_REASONING_EFFORTS,
   isAgentSelectableModel,
   isModelSelectableForNewRoute,
   type Catalog,
@@ -48,18 +49,29 @@ interface SeenModelProjection {
   includesUserProvider: boolean;
 }
 
+function hasValidPiReasoningCapabilities(m: CatalogModel): boolean {
+  const efforts = m.reasoningEfforts;
+  return (
+    Array.isArray(efforts) &&
+    efforts.length > 0 &&
+    efforts.every((effort) => PI_REASONING_EFFORTS.includes(effort)) &&
+    typeof m.reasoningDefaultEffort === 'string' &&
+    efforts.includes(m.reasoningDefaultEffort)
+  );
+}
+
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
 function toDescriptor(
   m: CatalogModel,
   agent: AgentKind,
   options: DescriptorProjectionOptions = {},
 ): ModelDescriptor {
-  // 仅为缺少明确 Pi 能力字段的旧目录保留 minimal 兼容补档。独立 Pi 目录的
+  // 缺少或格式错误的 Pi 能力字段继续走旧目录 minimal 兼容补档。合法独立 Pi 目录的
   // reasoningEfforts 与 BYOM 声明都是协议能力，不能额外公布 models.json 禁用的档位。
   const efforts =
     agent === 'pi' &&
     options.preserveExplicitPiEfforts !== true &&
-    m.reasoningEfforts === undefined &&
+    !hasValidPiReasoningCapabilities(m) &&
     m.efforts.length > 0 &&
     !m.efforts.includes('minimal')
       ? (['minimal', ...m.efforts] as const)

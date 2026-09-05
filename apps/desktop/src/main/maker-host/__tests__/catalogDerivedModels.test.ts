@@ -132,6 +132,30 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       .toMatchObject(expected);
   });
 
+  it.each([
+    ['missing fields', {}],
+    ['null efforts', { reasoningEfforts: null, reasoningDefaultEffort: 'medium' }],
+    ['string efforts', { reasoningEfforts: 'medium', reasoningDefaultEffort: 'medium' }],
+    ['empty efforts', { reasoningEfforts: [], reasoningDefaultEffort: 'medium' }],
+    ['invalid effort', { reasoningEfforts: ['medium', 'ultra'], reasoningDefaultEffort: 'medium' }],
+    ['non-string effort', { reasoningEfforts: ['medium', null], reasoningDefaultEffort: 'medium' }],
+    ['missing default', { reasoningEfforts: ['medium'] }],
+    ['null default', { reasoningEfforts: ['medium'], reasoningDefaultEffort: null }],
+    ['default outside efforts', { reasoningEfforts: ['low'], reasoningDefaultEffort: 'medium' }],
+  ])('keeps legacy Pi minimal compatibility for %s in both descriptors', (_label, fields) => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    // Remote JSON can violate the static CatalogModel type at runtime.
+    const entry = {
+      ...model('legacy-reasoner', { efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }),
+      ...fields,
+    } as unknown as CatalogModel;
+    catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [entry];
+    const expected = { efforts: ['minimal', 'low', 'medium', 'high'], defaultEffort: 'medium' };
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === entry.id))
+      .toMatchObject(expected);
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', entry.id)).toMatchObject(expected);
+  });
+
   it('publishes Pi effort controls only when the official catalog has an explicit thinking map', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
     expect(pi.find((m) => m.id === 'grok-4.3')?.efforts).toEqual([
