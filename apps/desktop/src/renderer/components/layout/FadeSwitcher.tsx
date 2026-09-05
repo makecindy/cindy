@@ -24,6 +24,10 @@ interface FadeSwitcherProps {
   children: ReactNode;
 }
 
+// requestAnimationFrame can be indefinitely throttled for an Electron window
+// that has not painted yet. Never leave an already-mounted route invisible.
+const REVEAL_FALLBACK_MS = 500;
+
 export function FadeSwitcher({ children }: FadeSwitcherProps) {
   const [opacity, setOpacity] = useState(0);
   const [willChange, setWillChange] = useState<'opacity' | 'auto'>('opacity');
@@ -50,10 +54,18 @@ export function FadeSwitcher({ children }: FadeSwitcherProps) {
     setWillChange('opacity');
     // 必须等下一帧再切 1，否则 React 会把两次 setState 批处理为一次 commit，
     // 浏览器看不到 0→1 的变化，transition 不触发。
-    const id = requestAnimationFrame(() => {
+    let frameId: number | null = null;
+    const reveal = () => {
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      clearTimeout(fallbackId);
       setOpacity(1);
-    });
-    return () => cancelAnimationFrame(id);
+    };
+    const fallbackId = window.setTimeout(reveal, REVEAL_FALLBACK_MS);
+    frameId = requestAnimationFrame(reveal);
+    return () => {
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      clearTimeout(fallbackId);
+    };
   }, [reduceMotion]);
 
   const handleTransitionEnd = (e: TransitionEvent<HTMLDivElement>) => {
