@@ -43,7 +43,7 @@ import { useTranslation } from 'react-i18next';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
-import type { RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
+import type { MobileMakerTransport, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
@@ -60,6 +60,7 @@ import {
   summarizeContextUsage,
 } from '@/session/sessionControls';
 import { useSessionMenuUsage, type SessionMenuUsageReader } from '@/session/useSessionMenuUsage';
+import { useSessionMenuContextUsage } from '@/session/useSessionMenuContextUsage';
 import { SessionUsageSummary } from '@/session/SessionUsageSummary';
 import {
   addSessionExtraDir,
@@ -95,16 +96,14 @@ export interface SessionExtraDirBrowserState {
 }
 
 export interface SessionMenuSheetProps {
-  usageReader: SessionMenuUsageReader;
+  usageReader: SessionMenuUsageReader & Pick<MobileMakerTransport, 'getContextUsage'>;
   visible: boolean;
   /** 打开时落在哪个视图(header 用量入口可直达 info)。 */
   initialView: SessionMenuView;
   session: RemoteSession;
   busy: boolean;
   readOnlyReason?: string | null;
-  contextUsage: unknown;
-  contextLoading: boolean;
-  onRefreshContextUsage(): void;
+  onContextError(error: string | null): void;
   /**
    * 账号级限额快照(被控端 `maker:usage:account` 原始返回,unknown 防御解析)。
    * 父级只对 Codex 会话传数据;null = 不显示「账号限额」区(通道不支持 / 拉取失败 /
@@ -143,9 +142,7 @@ export function SessionMenuSheet({
   session,
   busy,
   readOnlyReason,
-  contextUsage,
-  contextLoading,
-  onRefreshContextUsage,
+  onContextError,
   accountUsage,
   codexRateLimits,
   codexResetBusy,
@@ -174,7 +171,16 @@ export function SessionMenuSheet({
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
-  const [view, setView] = useState<SessionMenuView>('menu');
+  const [view, setView] = useState<SessionMenuView>(initialView);
+  const [opening, setOpening] = useState({ visible, initialView });
+  // Reset before effects: reopening the primary menu must not inspect the old info view.
+  if (opening.visible !== visible || opening.initialView !== initialView) {
+    setOpening({ visible, initialView });
+    if (visible) setView(initialView);
+  }
+  const { contextUsage, contextLoading, refresh: onRefreshContextUsage } = useSessionMenuContextUsage(
+    session, usageReader, visible && view === 'info', onContextError,
+  );
   const [primarySnap, setPrimarySnap] = useState<ContextSheetSnap>('half');
   const [secondarySnap, setSecondarySnap] = useState<ContextSheetSnap>('half');
   const [renaming, setRenaming] = useState(false);
@@ -215,7 +221,6 @@ export function SessionMenuSheet({
   // 不触发重置,见上方 windowHeightRef 注释。
   useEffect(() => {
     if (!visible) return;
-    setView(initialView);
     setPrimarySnap('half');
     setSecondarySnap('half');
     renameSeqRef.current += 1;
@@ -240,15 +245,6 @@ export function SessionMenuSheet({
   useEffect(() => () => {
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
   }, []);
-
-  // Detailed context inspection can bootstrap an engine; keep it behind the info view.
-  // The primary summary uses the session's live/persisted counters.
-  // 依赖刻意只挂 visible/view:contextUsage 到货或 loading 翻转不应重复触发拉取。
-  useEffect(() => {
-    if (!visible || view !== 'info') return;
-    if (contextUsage || contextLoading) return;
-    onRefreshContextUsage();
-  }, [visible, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 账号限额拉取:每次进入 info 视图都拉(被控端通道 cached-first,重复拉便宜且
   // 能带回后台刷新的新快照,不做「有数据就短路」——否则打开期间数据永不更新);

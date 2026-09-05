@@ -31,6 +31,20 @@ const EMPTY: UsageState = {
   loading: true,
 };
 
+/** Identity shared by menu snapshots; live counters do not change their owner. */
+export function sessionMenuUsageScope(session: RemoteSession): string {
+  return [
+    session.deviceLinkDeviceId,
+    session.id,
+    session.model,
+    session.providerId,
+    session.agentKind,
+    session.remoteHostId,
+    session.clearedAt,
+    session.runtimeGeneration,
+  ].join("\0");
+}
+
 /** Only fetch while the sheet is visible. An effect owns both requests and their late results. */
 export function useSessionMenuUsage(
   session: RemoteSession,
@@ -43,16 +57,7 @@ export function useSessionMenuUsage(
     session.id,
     session.clearedAt,
   ].join("\0");
-  const scope = [
-    session.deviceLinkDeviceId,
-    session.id,
-    session.model,
-    session.providerId,
-    session.agentKind,
-    session.remoteHostId,
-    session.clearedAt,
-    session.runtimeGeneration,
-  ].join("\0");
+  const scope = sessionMenuUsageScope(session);
   const [stored, setStored] = useState<{
     scope: string;
     taskScope: string;
