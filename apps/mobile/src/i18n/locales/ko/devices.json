@@ -1,4 +1,31 @@
 {
+  "management": {
+    "title": "기기 관리",
+    "openDevice": "{{name}} 기기 상세 정보 보기",
+    "details": "기기 상세 정보",
+    "retry": "다시 시도",
+    "unknown": "정보 없음",
+    "notFound": "이 기기는 더 이상 계정에 없습니다.",
+    "deleteDevice": "기기 삭제",
+    "deleteTitle": "{{name}} 기기를 삭제할까요?",
+    "deleteMessage": "기기 목록에서 이 기기를 삭제합니다. 컴퓨터의 파일은 삭제되지 않습니다.",
+    "deleteFailed": "기기를 삭제하지 못했습니다.",
+    "deleteOnline": "기기가 온라인입니다. 오프라인으로 전환한 후 삭제하세요.",
+    "currentlyOnline": "현재 온라인",
+    "nameTooLong": "기기 이름은 {{limit}}자 이하여야 합니다.",
+    "fields": {
+      "name": "이름",
+      "status": "상태",
+      "platform": "플랫폼",
+      "model": "모델",
+      "systemVersion": "시스템 버전",
+      "appVersion": "Cindy 버전",
+      "cpu": "프로세서",
+      "memory": "메모리",
+      "lastSeen": "최근 접속",
+      "deviceId": "기기 ID"
+    }
+  },
   "common": {
     "cancel": "취소",
     "save": "저장",

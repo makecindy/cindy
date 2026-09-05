@@ -1,4 +1,31 @@
 {
+  "management": {
+    "title": "裝置管理",
+    "openDevice": "查看 {{name}} 的裝置詳細資訊",
+    "details": "裝置詳細資訊",
+    "retry": "重試",
+    "unknown": "暫無資訊",
+    "notFound": "此裝置已不在你的帳號中。",
+    "deleteDevice": "刪除裝置",
+    "deleteTitle": "刪除「{{name}}」？",
+    "deleteMessage": "將此裝置從裝置列表中移除，不會刪除電腦上的檔案。",
+    "deleteFailed": "刪除裝置失敗。",
+    "deleteOnline": "裝置目前在線，請讓裝置離線後再刪除。",
+    "currentlyOnline": "目前在線",
+    "nameTooLong": "裝置名稱不能超過 {{limit}} 個字元。",
+    "fields": {
+      "name": "名稱",
+      "status": "狀態",
+      "platform": "平台",
+      "model": "機型",
+      "systemVersion": "系統版本",
+      "appVersion": "Cindy 版本",
+      "cpu": "處理器",
+      "memory": "記憶體",
+      "lastSeen": "最近上線",
+      "deviceId": "裝置 ID"
+    }
+  },
   "common": {
     "cancel": "取消",
     "save": "儲存",

@@ -1,4 +1,31 @@
 {
+  "management": {
+    "title": "设备管理",
+    "openDevice": "查看 {{name}} 的设备详情",
+    "details": "设备详情",
+    "retry": "重试",
+    "unknown": "暂无信息",
+    "notFound": "该设备已不在你的账号中。",
+    "deleteDevice": "删除设备",
+    "deleteTitle": "删除“{{name}}”？",
+    "deleteMessage": "将此设备从设备列表中移除，不会删除电脑上的文件。",
+    "deleteFailed": "删除设备失败。",
+    "deleteOnline": "设备当前在线，请让设备离线后再删除。",
+    "currentlyOnline": "当前在线",
+    "nameTooLong": "设备名称不能超过 {{limit}} 个字符。",
+    "fields": {
+      "name": "名称",
+      "status": "状态",
+      "platform": "平台",
+      "model": "机型",
+      "systemVersion": "系统版本",
+      "appVersion": "Cindy 版本",
+      "cpu": "处理器",
+      "memory": "内存",
+      "lastSeen": "最近在线",
+      "deviceId": "设备 ID"
+    }
+  },
   "common": {
     "cancel": "取消",
     "save": "保存",
