@@ -414,6 +414,7 @@
       "taskCost": "Task cost",
       "actualCost": "Actual cost",
       "estimatedValue": "Estimated value",
+      "totalTokens": "Total tokens",
       "seeDetails": "View breakdown",
       "valueUnavailable": "Some task value is unavailable",
       "valueExplanation": "Value is estimated from usage and reference prices. It is not an actual charge.",

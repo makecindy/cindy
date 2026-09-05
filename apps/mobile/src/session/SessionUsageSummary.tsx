@@ -181,7 +181,9 @@ export function SessionUsageSummary({
           ) : null}
           {typeof session.totalTokenUsage === "number" ? (
             <View style={styles.row}>
-              <Text style={styles.label}>Tokens</Text>
+              <Text style={styles.label}>
+                {t("session.menu.usage.totalTokens")}
+              </Text>
               <Text style={styles.value}>
                 {session.totalTokenUsage.toLocaleString(i18n.language)}
               </Text>

@@ -414,6 +414,7 @@
       "taskCost": "本任务费用",
       "actualCost": "实际费用",
       "estimatedValue": "估算价值",
+      "totalTokens": "累计 Token",
       "seeDetails": "查看拆分",
       "valueUnavailable": "部分任务价值暂未获取",
       "valueExplanation": "价值按用量和参考单价估算，不代表实际扣款。",

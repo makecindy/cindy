@@ -414,6 +414,7 @@
       "taskCost": "작업 비용",
       "actualCost": "실제 비용",
       "estimatedValue": "추정 가치",
+      "totalTokens": "누적 토큰",
       "seeDetails": "내역 보기",
       "valueUnavailable": "일부 작업 가치를 가져오지 못했습니다",
       "valueExplanation": "가치는 사용량과 참고 단가로 추정하며 실제 청구액이 아닙니다.",
