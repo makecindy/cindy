@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlDispatchOutcome, ControlResult, ControlWorkerAgent } from '../lizi_xdtHelperMcpServer.js';
+import { CODE_MODE_FREE_TEXT_GUIDANCE } from './_code_mode.js';
 import { okPayload, errorPayload } from './_payload.js';
 
 const WORKER_LABEL_PATTERN = /^[a-z0-9_-]+$/i;
@@ -101,7 +102,7 @@ export const createWorkerSpecSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe('可选, 创建后立即派给 worker 的第一条消息'),
+    .describe(`可选, 创建后立即派给 worker 的第一条消息。${CODE_MODE_FREE_TEXT_GUIDANCE}`),
 }).strict();
 
 export type CreateWorkerSpec = z.infer<typeof createWorkerSpecSchema>;
