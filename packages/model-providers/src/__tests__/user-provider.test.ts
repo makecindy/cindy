@@ -293,12 +293,12 @@ describe("buildUserProvider (per-runtime)", () => {
       expect.objectContaining({
         id: "gpt-5.6-sol",
         efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       }),
       expect.objectContaining({
         id: "chatgpt/gpt-5.6-sol",
         efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       }),
       expect.objectContaining({
         id: "unregistered-model",
@@ -368,7 +368,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect(p.models.codex?.[0]).toMatchObject({
       id: 'xd/codex/gpt-5.6-sol',
       efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -390,7 +390,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect(p.models.codex?.[0]).toMatchObject({
       id: 'xd/gpt-5.6-sol',
       efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -413,7 +413,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect(p.models.codex?.[0]).toMatchObject({
       id: 'openai/gpt-5.6-sol',
       efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -469,7 +469,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
 
       expect(provider.models.codex?.[0]).toMatchObject({
         efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       });
     },
   );
@@ -508,7 +508,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
 
       expect(provider.models.codex?.[0]).toMatchObject({
         efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       });
     },
   );
@@ -560,6 +560,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
       (entry) => entry.id === "openai/gpt-5.6-sol",
     );
     if (!baseEntry) throw new Error("missing gpt-5.6-sol registry entry");
+    registry.models = [baseEntry];
     baseEntry.perAgent = {
       ...baseEntry.perAgent,
       codex: { efforts: ["minimal", "max"], defaultEffort: "high" },

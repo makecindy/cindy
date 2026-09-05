@@ -403,20 +403,8 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
           });
           continue;
         }
-        if (
-          fields.efforts !== undefined &&
-          fields.efforts.length > 0 &&
-          (fields.defaultEffort == null || !fields.efforts.includes(fields.defaultEffort))
-        ) {
-          plan.warnings.push({
-            source: 'registry',
-            providerId: route.providerId,
-            agent: bridgeAgent,
-            modelId: route.modelId,
-            reason: 'bridge consumer has efforts but no self-consistent defaultEffort',
-          });
-          continue;
-        }
+        // 已存在的 root 投影允许缺省默认档；合并时按 root overlay 的同一规则收敛。
+        // 不可套用新实体的完整性门禁，连带丢掉 Fast 等独立的显式字段。
         const key = consumerPlanKey(route.providerId, bridgeAgent);
         let overlays = plan.consumers.get(key);
         if (!overlays) {
@@ -457,7 +445,27 @@ export function applyRegistryConsumerOverlay(
 ): CatalogModel {
   const overlay = plan.consumers.get(consumerPlanKey(providerId, consumer))?.get(rootModelId);
   if (!overlay) return model;
-  return { ...model, ...overlay };
+  return applyExistingRegistryOverlay(model, overlay);
+}
+
+/** 已存在实体的字段覆盖：保留有效默认档，能力变化时复用既有确定性回退。 */
+function applyExistingRegistryOverlay(
+  model: CatalogModel,
+  overlay: Partial<CatalogModel>,
+): CatalogModel {
+  const overlaid = { ...model, ...overlay };
+  // 新实体仍由 toMaterializedModel 要求显式自洽；这里只处理已有 root/bridge。
+  if (overlay.efforts !== undefined) {
+    const { efforts, defaultEffort } = overlaid;
+    if (efforts.length === 0) return { ...overlaid, defaultEffort: null };
+    if (defaultEffort === null || !efforts.includes(defaultEffort)) {
+      return {
+        ...overlaid,
+        defaultEffort: efforts.includes('high') ? 'high' : efforts[efforts.length - 1]!,
+      };
+    }
+  }
+  return overlaid;
 }
 
 /** registry 显式字段 → 已存在条目的 overlay(在场即胜出,不在场不触碰)。 */
@@ -542,20 +550,7 @@ export function applyRootRegistryPlan(
   const existingIds = new Set(models.map((m) => m.id));
   const out = models.map((m) => {
     const overlay = rootPlan.overlays.get(m.id);
-    let overlaid = overlay ? { ...m, ...overlay } : m;
-    // 只有已有 discovery/静态证据的条目允许确定性修复缺失默认档。纯远端新实体
-    // 仍由 toMaterializedModel 严格要求显式自洽，不在这里猜。
-    if (overlay?.efforts !== undefined) {
-      const efforts = overlaid.efforts;
-      const defaultEffort = overlaid.defaultEffort;
-      if (efforts.length === 0) overlaid = { ...overlaid, defaultEffort: null };
-      else if (defaultEffort === null || !efforts.includes(defaultEffort)) {
-        overlaid = {
-          ...overlaid,
-          defaultEffort: efforts.includes('high') ? 'high' : efforts[efforts.length - 1]!,
-        };
-      }
-    }
+    const overlaid = overlay ? applyExistingRegistryOverlay(m, overlay) : m;
     return rootPlan.retired.has(m.id) ? { ...overlaid, status: 'retired' as const } : overlaid;
   });
   for (const addition of rootPlan.additions) {

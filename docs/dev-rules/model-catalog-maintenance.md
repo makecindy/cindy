@@ -9,13 +9,13 @@
 
 ## 1. 先找数据归属
 
-| 内容 | 应维护的位置 | 客户端职责 |
-| --- | --- | --- |
+| 内容                                                             | 应维护的位置                                                                                                               | 客户端职责                                                                                   |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | 统一模型目录中的名称、窗口、最大输出、推理档位、参考价及默认标记 | `cindy-server` 的 `model-access-server/catalog/providers.json`；若部署配置了 `MODEL_CATALOG_URL`，还需核对那份远程完整快照 | 同步 `packages/model-providers/catalog/model-registry.json` 作为内置兜底，正确消费实际下发值 |
-| Gateway 的实际可用性、路由能力与实价 | Gateway／Server 对应控制面 | 保留实际路由与价格来源，不用 registry 参考价覆盖 Gateway 实价 |
-| 请求协议、SDK 字段兼容、能力透传与 token 计量 | 本仓对应 harness／bridge／host | 根据具体通道能力适配，测试最终请求与用量 |
-| Pi 原生模型元数据 | Pi 上游与本仓 `tools/pi/sync-model-catalog.mjs`、`catalog/pi-model-catalog.json` | 保留上游原生字段，区分公共 API 与订阅协议，遵守 `pi-harness.md` |
-| 旧任务的上下文占比 | 客户端历史读取与展示路径 | 正确区分历史快照、当前目录与运行数据；不能用显示特判掩盖源目录错误 |
+| Gateway 的实际可用性、路由能力与实价                             | Gateway／Server 对应控制面                                                                                                 | 保留实际路由与价格来源，不用 registry 参考价覆盖 Gateway 实价                                |
+| 请求协议、SDK 字段兼容、能力透传与 token 计量                    | 本仓对应 harness／bridge／host                                                                                             | 根据具体通道能力适配，测试最终请求与用量                                                     |
+| Pi 原生模型元数据                                                | Pi 上游与本仓 `tools/pi/sync-model-catalog.mjs`、`catalog/pi-model-catalog.json`                                           | 保留上游原生字段，区分公共 API 与订阅协议，遵守 `pi-harness.md`                              |
+| 旧任务的上下文占比                                               | 客户端历史读取与展示路径                                                                                                   | 正确区分历史快照、当前目录与运行数据；不能用显示特判掩盖源目录错误                           |
 
 同一模型在公共 API、订阅、Gateway，以及不同 Agent 下的能力可能不同。先列出实际
 `provider + agent + model` 路由，再判断哪些字段共用、哪些需要 `perAgent` 或独立条目。
@@ -55,6 +55,38 @@
 5. **按运行结果验收**：确认部署后公共接口已返回目标条目，客户端实际接受目标 revision，
    再验证选择模型、请求参数和新旧任务显示。只跑本地 fixture、只成功启动登录页、或
    只通过 CI 时，明确记录尚未完成的运行验收，不宣称线上支持已闭环。
+
+### 同步内置兜底时的具体操作
+
+先完成 Server 的目录修正，再把其 `modelRegistry` 整体同步到
+`packages/model-providers/catalog/model-registry.json`，保留相同的 `updatedAt` 和内容。
+在客户端仓执行以下命令，参数指向已经审阅的 Server worktree 快照：
+
+```sh
+node --input-type=module - /path/to/cindy-server/model-access-server/catalog/providers.json <<'JS'
+import { readFileSync, writeFileSync } from 'node:fs';
+const { modelRegistry } = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+if (!modelRegistry?.updatedAt || !Array.isArray(modelRegistry.models)) {
+  throw new Error('Server snapshot has no modelRegistry');
+}
+writeFileSync('packages/model-providers/catalog/model-registry.json',
+  JSON.stringify(modelRegistry, null, 2) + '\n');
+JS
+```
+
+不要把 Server 的整份 `providers.json` 覆盖到客户端：其中 providers、presets 与 Pi
+运行时配置各有消费契约。同步后核对两份 registry 的解析结果完全相等，并检查原有
+直连 route 和历史价区间是否丢失。默认模型选择器及用户显式设置不随同步迁移；若离线
+兜底中的默认档与当前 Server 已发布值不同，应在交付说明中逐项披露对齐结果。
+
+2026-09-05 对齐发现的典型差异包括：OpenAI 订阅与 XD 路由窗口混用、Sonnet 5 已取消
+的涨价仍留在旧兜底、Opus Fast 缓存价缺项、Grok 长输入分档过时，以及 DeepSeek
+直连参考价 route 缺失。此类修正先落 Server，再同步兜底，不能再维护两份独立数字。
+既有 GPT-5.x 公共 API 长输入参考价仍用于历史／显式长窗口估值，不表示订阅默认窗口
+应扩大；Astra 当前订阅参考价只覆盖 272K，超出仍返回未知。未核实的历史价格不补猜。
+
+Pi 的原生目录和请求兼容仍留在客户端。删除临时补项前，必须验证随包 Pi 已原生支持
+相同模型、协议及参数；仅 Server 新增了该模型，不足以证明可以删除兼容代码。
 
 ## 4. 上下文显示错误的排查顺序
 
