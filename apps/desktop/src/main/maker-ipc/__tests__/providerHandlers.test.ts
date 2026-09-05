@@ -3233,6 +3233,23 @@ describe('provider:models-fetch handler', () => {
     expect(deps.fetchModels).not.toHaveBeenCalled();
   });
 
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+    ),
+  )('rejects credentials in model discovery $field at IPC ingress: $userinfo', async ({ field, userinfo }) => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex',
+      authMethod: 'apiKey',
+      baseUrl: 'https://x.example/v1',
+      [field]: `https://${userinfo}x.example/v1/models`,
+    })).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed input with INVALID_PARAMS (bad agent / bad url / bad modelsUrl / bad headers)', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps();
