@@ -57,6 +57,13 @@ jobs:
       - name: Run test runner self-tests
         run: pnpm test:runner
 
+      # No private service checkout or secrets: exercise production clients over real
+      # loopback WebSockets with bounded fault injection. Failure blocks verify.
+      - name: Run Device Link connection integration tests
+        run: |
+          pnpm --filter desktop exec tsc --project ../../scripts/device-link/tsconfig.json
+          pnpm test:device-link
+
       - name: Check endpoint literals
         run: pnpm check:endpoints
 

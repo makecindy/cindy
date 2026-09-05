@@ -129,6 +129,7 @@
     "test:git-integration": "pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
     "test:db": "pnpm test:runner && node scripts/test-workspaces.mjs --tier db",
     "test:guard": "node scripts/test-workspaces.mjs --tier guard",
+    "test:device-link": "node apps/mobile/scripts/device-link-reconnect-smoke.mjs",
     "ci:scheduler-guard": "node scripts/scheduler-ci-guard.mjs",
     "pctx": "node packages/project-context/dist/cli.js",
     "pctx:build": "pnpm --filter project-context build"
@@ -137,6 +138,9 @@
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
-    "spdx-expression-parse": "3.0.1"
+    "spdx-expression-parse": "3.0.1",
+    "@types/ws": "^8.18.1",
+    "vitest": "^3.2.4",
+    "ws": "^8.18.3"
   }
 }
