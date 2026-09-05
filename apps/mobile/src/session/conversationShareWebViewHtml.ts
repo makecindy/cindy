@@ -7,6 +7,7 @@ import {
   type SelectableMarkdownHtmlOptions,
 } from "@/session/selectableMarkdownHtml";
 import { buildMessageContentLayout } from "@/session/messageContentLayout";
+import { collectMobileMarkdownImages } from "@/session/messageMarkdown";
 import { lineHeight, typeScale } from "@/theme/tokens";
 
 export interface ConversationShareMessage {
@@ -134,13 +135,18 @@ function buildMessageHtml(
   markdownOptions: SelectableMarkdownHtmlOptions,
 ): string {
   markdownOptions = { ...markdownOptions, imageSources: message.images ?? new Map() };
-  // Raw-text redaction can consume signed URLs and Markdown delimiters. Use
-  // the existing SVG fallback (which looks up images before redacting text)
-  // rather than weakening redaction across inline code/emphasis boundaries.
-  for (const source of message.images?.keys() ?? []) {
-    if (redactSensitiveText(source) !== source) {
-      throw new Error('conversation-share-image-requires-svg');
-    }
+  const texts = message.bodyParts
+    ? message.bodyParts.flatMap((part) => part.kind === "text" ? [part.text] : [])
+    : [message.body];
+  if (message.secondaryBody) texts.push(message.secondaryBody);
+  // Redaction can consume image delimiters as well as URLs. Let the existing
+  // SVG path own all image-bearing text that needs redaction, even when image
+  // preparation failed; never parse damaged Markdown or expose its source URL.
+  if (
+    texts.some((text) => redactSensitiveText(text) !== text) &&
+    texts.some((text) => collectMobileMarkdownImages(text).length > 0)
+  ) {
+    throw new Error('conversation-share-image-requires-svg');
   }
   const body = redactSensitiveText(message.body).trim();
   const secondaryBody = message.secondaryBody

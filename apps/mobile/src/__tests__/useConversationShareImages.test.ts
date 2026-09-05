@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useConversationShareImages } from "@/session/useConversationShareImages";
 import type { ConversationShareMessage } from "@/session/conversationShareWebViewHtml";
 import type { ResolveRemoteMediaFn } from "@/session/remoteMedia";
+import { downloadRemoteMediaAsDataUri } from "@/session/remoteMediaDiskCacheExpo";
 
 vi.mock("react-native", () => ({
   Image: { getSize: vi.fn(async () => ({ width: 40, height: 20 })) },
@@ -69,10 +70,55 @@ afterEach(async () => {
   vi.useRealTimers();
   thumbs.entries.clear();
   thumbs.reads.mockClear();
+  vi.mocked(downloadRemoteMediaAsDataUri).mockReset();
   root = createRoot(container);
 });
 
 describe("share image readiness", () => {
+  it("keeps direct HTTP images as placeholders without starting a download", async () => {
+    const resolve = vi.fn<ResolveRemoteMediaFn>();
+    const url = "https://example.com/unbounded.png";
+    await act(async () =>
+      root.render(
+        createElement(Probe, {
+          messages: [
+            {
+              ...source,
+              body: `![preview](${url})`,
+              attachments: [{ kind: "image", name: "remote", uri: url }],
+            },
+          ],
+          resolve,
+        }),
+      ),
+    );
+    await startShare();
+    expect((await ready)[0]?.images?.size).toBe(0);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
+  });
+
+  it.each([5, 0, -1, NaN, Infinity, 8 * 1024 * 1024 + 1])(
+    "downloads controlled images only with a valid known size (%s)",
+    async (size) => {
+      const url = "https://example.com/controlled.png";
+      const resolve = vi.fn<ResolveRemoteMediaFn>(async () => ({
+        ...media,
+        size,
+        url,
+      }));
+      vi.mocked(downloadRemoteMediaAsDataUri).mockResolvedValue(media.url);
+      await act(async () =>
+        root.render(createElement(Probe, { messages: [source], resolve })),
+      );
+      await startShare();
+      expect((await ready)[0]?.images?.size).toBe(size === 5 ? 1 : 0);
+      expect(downloadRemoteMediaAsDataUri).toHaveBeenCalledTimes(
+        size === 5 ? 1 : 0,
+      );
+    },
+  );
+
   it.each([
     "cindy-oss-attach://upload/paste",
     "xdt-oss-attach://upload/paste",
@@ -189,10 +235,11 @@ describe("share image readiness", () => {
     expect(result[0]?.attachments?.[1]?.name).toBe("slow image");
     expect(resolve).toHaveBeenCalledTimes(2);
     await act(async () =>
-      finish({ ...media, url: "data:image/png;base64,bGF0ZQ==" }),
+      finish({ ...media, url: "https://example.com/late.png" }),
     );
     expect(current.messages).toBe(result);
     expect(result[0]?.images?.size).toBe(1);
+    expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
   });
 
   it("survives StrictMode and unrelated rerenders while a remote image loads", async () => {
@@ -247,7 +294,8 @@ describe("share image readiness", () => {
       ),
     );
     expect(await oldReady).toEqual([]);
-    await act(async () => finish(media));
+    await act(async () => finish({ ...media, url: "https://example.com/cancelled.png" }));
+    expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
     await startShare();
     expect((await ready).map((message) => message.clientId)).toEqual(["next"]);
     expect(current.messages[0]?.images?.size).toBe(0);

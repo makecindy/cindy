@@ -88,6 +88,27 @@ describe('buildConversationShareHtml 富内容导出', () => {
     },
   );
 
+  it.each(['body', 'bodyParts', 'secondaryBody'] as const)(
+    '%s 中图片语法受到脱敏影响时由 SVG 保留图片或替代文字',
+    (field) => {
+      const url = 'https://example.com/p.png';
+      const body = `password: private![preview](${url})`;
+      for (const prepared of [false, true]) {
+        const message = {
+          clientId: 'm', kind: 'assistant' as const, body: '',
+          ...(field === 'bodyParts' ? { bodyParts: [{ kind: 'text' as const, text: body }] } : { [field]: body }),
+          images: new Map(prepared ? [[url, { uri: 'data:image/png;base64,aGVsbG8=', width: 40, height: 20 }]] : []),
+        };
+        const options = { allShareableIds: ['m'], colors, contentWidth: 390, selectedMessages: [message] };
+        expect(() => buildConversationShareHtml(options)).toThrow('conversation-share-image-requires-svg');
+        const svg = buildConversationShareSvgLayout({ ...options, width: 390, messages: [message] });
+        expect(svg.images).toHaveLength(prepared ? 1 : 0);
+        expect(JSON.stringify(svg)).not.toContain('private');
+        expect(JSON.stringify(svg)).not.toContain(url);
+      }
+    },
+  );
+
   it('只按选中内容嵌入对应的富内容运行时', () => {
     const plainHtml = buildConversationShareHtml({
       allShareableIds: ['plain'],
