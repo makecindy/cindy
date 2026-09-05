@@ -133,7 +133,9 @@ describe('mobileVoiceHistoryStore', () => {
     const prefix = formatVoiceInputHistoryContext(first.map((text) => ({ text })));
     expect(prefix.length).toBeLessThanOrEqual(8000);
     expect(first.slice(0, 4)).toEqual(legacy.map((entry) => entry.text));
-    expect(JSON.parse(secureItems.get(__testing.storageKeyForHostDevice('host-a'))!).entries[0].id).toBe('local-0');
+    const persisted = JSON.parse(secureItems.get(__testing.storageKeyForHostDevice('host-a'))!);
+    expect(Array.isArray(persisted)).toBe(true);
+    expect(persisted[0].id).toBe('local-0');
     await recordMobileVoiceInputHistoryForHost('host-a', '新手机语音');
     vi.resetModules();
     const reloaded = await import('@/session/mobileVoiceHistoryStore');
@@ -143,6 +145,57 @@ describe('mobileVoiceHistoryStore', () => {
     expect(changed).toContain('新的桌面术语');
     await reloaded.clearAllMobileVoiceInputHistories();
     expect(secureItems.has(__testing.storageKeyForHostDevice('host-a'))).toBe(false);
+    expect(secureItems.has(__testing.snapshotKeyForHostDevice('host-a'))).toBe(false);
+  });
+
+  it('retains imported history when an older bundle reads and appends to the v1 array', async () => {
+    const { __testing, getMobileVoiceInputHistoryForHost } = await import('@/session/mobileVoiceHistoryStore');
+    await getMobileVoiceInputHistoryForHost('host-a', ['desktop phrase']);
+    const key = __testing.storageKeyForHostDevice('host-a');
+    const parsed = JSON.parse(secureItems.get(key)!);
+    // Previous bundles reject any non-array value and overwrite it on recording.
+    const legacyEntries = Array.isArray(parsed) ? parsed : [];
+    expect(legacyEntries.map((entry) => entry.text)).toEqual(['desktop phrase']);
+    secureItems.set(key, JSON.stringify([
+      { id: 'voice-older-bundle', text: 'recorded after rollback', createdAt: 2 },
+      ...legacyEntries,
+    ]));
+    await expect(getMobileVoiceInputHistoryForHost('host-a', ['desktop phrase'])).resolves.toEqual([
+      'recorded after rollback', 'desktop phrase',
+    ]);
+  });
+
+  it('recovers the development object format into a rollback-readable array on write', async () => {
+    const { __testing, getMobileVoiceInputHistoryForHost, recordMobileVoiceInputHistoryForHost } = await import('@/session/mobileVoiceHistoryStore');
+    const key = __testing.storageKeyForHostDevice('host-a');
+    const desktopSnapshot = JSON.stringify(['desktop phrase']);
+    secureItems.set(key, JSON.stringify({
+      entries: [{ id: 'desktop-0', text: 'desktop phrase', createdAt: 1 }], desktopSnapshot,
+    }));
+    await recordMobileVoiceInputHistoryForHost('host-a', 'new phrase');
+    expect(Array.isArray(JSON.parse(secureItems.get(key)!))).toBe(true);
+    expect(secureItems.get(__testing.snapshotKeyForHostDevice('host-a'))).toBe(desktopSnapshot);
+    await expect(getMobileVoiceInputHistoryForHost('host-a', ['desktop phrase'])).resolves.toEqual(['new phrase', 'desktop phrase']);
+  });
+
+  it('preserves history when the snapshot marker write fails and retries the import safely', async () => {
+    const { __testing, getMobileVoiceInputHistoryForHost } = await import('@/session/mobileVoiceHistoryStore');
+    vi.mocked(setSecureItem)
+      .mockImplementationOnce(async (key, value) => { secureItems.set(key, value); })
+      .mockImplementationOnce(async (key, value) => { secureItems.set(key, value); })
+      .mockRejectedValueOnce(new Error('marker write failed'));
+    await expect(getMobileVoiceInputHistoryForHost('host-a', ['desktop phrase'])).resolves.toEqual(['desktop phrase']);
+    expect(JSON.parse(secureItems.get(__testing.storageKeyForHostDevice('host-a'))!)[0].text).toBe('desktop phrase');
+    expect(secureItems.has(__testing.snapshotKeyForHostDevice('host-a'))).toBe(false);
+    await expect(getMobileVoiceInputHistoryForHost('host-a', ['desktop phrase'])).resolves.toEqual(['desktop phrase']);
+    expect(secureItems.get(__testing.snapshotKeyForHostDevice('host-a'))).toBe(JSON.stringify(['desktop phrase']));
+  });
+
+  it('ignores a stale or corrupt snapshot marker when importing history', async () => {
+    const { __testing, getMobileVoiceInputHistoryForHost, recordMobileVoiceInputHistoryForHost } = await import('@/session/mobileVoiceHistoryStore');
+    await recordMobileVoiceInputHistoryForHost('host-a', 'local phrase');
+    secureItems.set(__testing.snapshotKeyForHostDevice('host-a'), 'corrupt');
+    await expect(getMobileVoiceInputHistoryForHost('host-a', ['desktop phrase'])).resolves.toEqual(['local phrase', 'desktop phrase']);
   });
 
   it('keeps newly synced desktop phrases ahead of old ones when the merged history compacts', async () => {

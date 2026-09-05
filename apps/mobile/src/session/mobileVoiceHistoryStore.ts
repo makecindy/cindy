@@ -26,7 +26,7 @@ export async function getMobileVoiceInputHistoryForHost(
       text, id: `desktop-${index}-${fnv1a(text)}`, createdAt: 1,
     })));
     const snapshot = JSON.stringify(desktopEntries.map((entry) => entry.text));
-    // Remember the imported snapshot in the existing host history record.
+    // Remember the imported snapshot separately from the legacy history array.
     // Otherwise each dictation reimports entries removed by the last compaction.
     if (state.desktopSnapshot !== snapshot) {
       const localEntries = state.entries.filter((entry) => !entry.id.startsWith('desktop-'));
@@ -88,9 +88,10 @@ export async function updateMobileVoiceInputHistoryEntryForHost(
 export async function clearAllMobileVoiceInputHistories(): Promise<void> {
   const hosts = await readHistoryHostIndex();
   await Promise.all(
-    hosts.map((hostDeviceId) =>
+    hosts.flatMap((hostDeviceId) => [
       deleteSecureItem(storageKeyForHostDevice(hostDeviceId)).catch(() => undefined),
-    ),
+      deleteSecureItem(snapshotKeyForHostDevice(hostDeviceId)).catch(() => undefined),
+    ]),
   );
   await deleteSecureItem(STORAGE_INDEX_KEY).catch(() => undefined);
 }
@@ -100,12 +101,20 @@ async function readMobileVoiceHistoryEntries(hostDeviceId: string): Promise<Stor
 }
 
 async function readMobileVoiceHistory(hostDeviceId: string): Promise<StoredMobileVoiceHistory> {
-  const raw = await getSecureItem(storageKeyForHostDevice(normalizeHostDeviceId(hostDeviceId))).catch(() => null);
+  const normalizedHost = normalizeHostDeviceId(hostDeviceId);
+  const [raw, snapshot] = await Promise.all([
+    getSecureItem(storageKeyForHostDevice(normalizedHost)).catch(() => null),
+    getSecureItem(snapshotKeyForHostDevice(normalizedHost)).catch(() => null),
+  ]);
   if (!raw) return { entries: [] };
   try {
     const parsed = JSON.parse(raw) as unknown;
-    // Existing installations stored a bare array. Preserve its entries on upgrade.
-    if (Array.isArray(parsed)) return { entries: normalizeHistoryEntries(parsed) };
+    if (Array.isArray(parsed)) return {
+      entries: normalizeHistoryEntries(parsed),
+      desktopSnapshot: snapshot ?? undefined,
+    };
+    // Recover development builds that wrote an object; the next write restores
+    // the array understood by installed bundles and OTA rollback versions.
     if (!parsed || typeof parsed !== 'object') return { entries: [] };
     const state = parsed as Partial<StoredMobileVoiceHistory>;
     return {
@@ -129,10 +138,12 @@ async function writeMobileVoiceHistory(hostDeviceId: string, state: StoredMobile
   const normalizedHost = normalizeHostDeviceId(hostDeviceId);
   const entries = normalizeHistoryEntries(state.entries);
   await addHostToHistoryIndex(normalizedHost);
-  // Keep the legacy array shape when no desktop snapshot needs tracking.
-  await setSecureItem(storageKeyForHostDevice(normalizedHost), JSON.stringify(
-    state.desktopSnapshot ? { entries, desktopSnapshot: state.desktopSnapshot } : entries,
-  ));
+  // Always keep this v1 value readable by older bundles. Commit history before
+  // its advisory marker so a failed history write cannot suppress a later import.
+  await setSecureItem(storageKeyForHostDevice(normalizedHost), JSON.stringify(entries));
+  if (state.desktopSnapshot) {
+    await setSecureItem(snapshotKeyForHostDevice(normalizedHost), state.desktopSnapshot);
+  }
 }
 
 function normalizeHistoryEntries(input: unknown[]): StoredMobileVoiceHistoryEntry[] {
@@ -174,6 +185,10 @@ function storageKeyForHostDevice(hostDeviceId: string): string {
 
 function createMobileVoiceHistoryId(text: string, timestamp: number): string {
   return `voice-${timestamp.toString(36)}-${fnv1a(`${timestamp}:${text}`)}`;
+}
+
+function snapshotKeyForHostDevice(hostDeviceId: string): string {
+  return `${storageKeyForHostDevice(hostDeviceId)}.desktopSnapshot`;
 }
 
 async function addHostToHistoryIndex(hostDeviceId: string): Promise<void> {
@@ -234,4 +249,5 @@ export const __testing = {
   readHistoryHostIndex,
   storageIndexKey: STORAGE_INDEX_KEY,
   storageKeyForHostDevice,
+  snapshotKeyForHostDevice,
 };
