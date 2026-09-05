@@ -2441,7 +2441,9 @@ function applyRemoteTextEvent(
   const data = isRecord(event.data) ? event.data : null;
   const text = typeof data?.text === 'string' ? data.text : '';
   const isFinal = data?.isFinal === true;
-  const isFullText = data?.isFullText === true;
+  // Legacy hosts already send isFullText on final events. Keep their existing
+  // reconciliation semantics; only the new in-flight snapshot replaces text.
+  const isFullText = data?.isFullText === true && !isFinal;
   const snapshotCreatedAt = isFullText && !isFinal && typeof data?.createdAt === 'string'
     && Number.isFinite(Date.parse(data.createdAt))
     ? new Date(data.createdAt).toISOString()

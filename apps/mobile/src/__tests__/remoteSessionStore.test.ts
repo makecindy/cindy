@@ -704,6 +704,21 @@ describe('remoteSessionStore', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('still accepts a legacy final full-text event after its partial row was persisted', () => {
+    remoteSessionStore.setMessages('s1', [{
+      ...message('host-id', 's1'), clientId: 'legacy-id', content: 'partial',
+    }]);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', persistId: 'legacy-id', event: {
+        type: 'text', data: { text: 'partial completed', isFinal: true, isFullText: true },
+      },
+    });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      id: 'host-id', content: 'partial completed',
+    });
+  });
+
   it.each([false, true])('orders the live snapshot by host time when history arrives later (existing=%s)', (existing) => {
     vi.useFakeTimers();
     try {
