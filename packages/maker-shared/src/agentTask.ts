@@ -174,13 +174,48 @@ export function deriveAgentTaskStatus(
   options?: {
     resultIsLaunchReceipt?: boolean;
     persistedStatus?: AgentTaskTerminalStatus;
+    resultIsError?: boolean;
   },
 ): AgentTaskStatus {
   const persistedStatus = normalizeAgentTaskTerminalStatus(options?.persistedStatus);
   if (persistedStatus) return persistedStatus;
   const hasResult = typeof result === 'string' && result.trim().length > 0;
+  if (options?.resultIsError && hasResult) return 'failed';
   if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
   return updateStatus ?? (hasResult ? 'completed' : 'running');
+}
+
+/**
+ * 判断子任务工具结果是否以协议级错误收尾(历史回放恢复 failed 的依据)。
+ *
+ * 仅识别 Claude SDK 协议标记 `<tool_use_error>` — 这是 SDK 在 tool call 失败时
+ * 发出的结构化错误格式。不解析任意 JSON 字段或自然语言错误短语,因为子任务结果
+ * 内容是用户工作产物,其中 "errors"/"status"/"stderr" 等字段是数据而非执行信号。
+ *
+ * 调用方约束:此函数仅应在已确认为子任务上下文的调用点使用
+ * (AgentTaskCard / listSessionTasks)。普通工具结果包含 `<tool_use_error>` 时
+ * 不应传入此函数,否则会将非子任务结果误判为失败。
+ *
+ * Authority: Claude protocol `<tool_use_error>` — SDK 在 tool call 失败时发出。
+ */
+export function isSubagentResultError(result: string | undefined): boolean {
+  const text = typeof result === 'string' ? result.trim() : '';
+  if (text.length === 0) return false;
+  // Only trust protocol-level error markers. Subagent result content is arbitrary
+  // user work product -- fields like "errors", "status", "stderr" in JSON output
+  // are data, not execution failure signals. Parsing arbitrary body for
+  // error-looking fields creates false positives that mark successful tasks as
+  // failed after Desktop reload / Mobile reconnect.
+  //
+  // Authority sources:
+  // 1. Claude protocol <tool_use_error> -- emitted by the SDK when a tool call fails
+  // 2. Persisted structured terminal status (agentTaskStatus) -- written by
+  //    messagePersistBroadcaster on terminal observations
+  //
+  // Note: <error> prefix removed -- too generic. A subagent returning
+  // `<error>校验报告</error>` as work output would be misclassified as failure.
+  // Only <tool_use_error> is a reliable protocol-owned error marker.
+  return text.startsWith('<tool_use_error>');
 }
 
 /**
@@ -442,10 +477,10 @@ export function buildAgentTaskCardModel(input: {
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result, persistedStatus } = input;
   const status = deriveAgentTaskStatus(update?.status, result, {
-    persistedStatus,
-    resultIsLaunchReceipt:
+    persistedStatus,      resultIsLaunchReceipt:
       subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
       || subagentSpawnResultIndicatesRunning(toolName, result),
+    resultIsError: isSubagentResultError(result),
   });
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider

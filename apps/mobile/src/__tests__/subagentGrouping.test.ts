@@ -182,6 +182,53 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
     },
   );
 
+  it('restores failed for a replayed protocol error result (<tool_use_error>)', () => {
+    // 回归(#3024):Mobile 重连/历史回放只有配对的 `<tool_use_error>` 结果、无 agentTaskStatus 时,
+    // subagent_group 曾只凭"存在 result"判 completed,同一启动失败在 Desktop 显示 failed、Mobile 显示
+    // completed(跨端终态不一致)。现与 Desktop deriveAgentTaskStatus 同口径恢复 failed。
+    const items = buildMobileMessageRenderItems([
+      agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
+      agentResult('A1', '<tool_use_error>Agent launch failed: model unavailable</tool_use_error>', '2026-01-01T00:00:02.000Z'),
+    ]);
+    const group = subagentGroups(items)[0];
+    expect(group.status).toBe('failed');
+  });
+
+  it('keeps completed when only a nested block array result mentions tool_use_error mid-text (prefix match only)', () => {
+    // 防误报:只有以 `<tool_use_error>` 开头才是协议错误;正文中段出现不算(block 数组形态)。
+    const items = buildMobileMessageRenderItems([
+      agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
+      msg({
+        role: 'tool_result',
+        toolUseId: 'A1',
+        createdAt: '2026-01-01T00:00:02.000Z',
+        content: [{ type: 'text', text: '总结:<tool_use_error> 是 SDK 的错误标记格式,本次任务已完整解析并修复它。' }],
+      }),
+    ]);
+    expect(subagentGroups(items)[0].status).toBe('completed');
+  });
+
+  it('still prefers the persisted terminal status over the protocol error fallback', () => {
+    // persisted agentTaskStatus 优先级不变:即使结果以 <tool_use_error> 开头,
+    // 已持久化的终态(如 failed→重试后 succeeded 场景的 stopped)不被覆盖。
+    const items = buildMobileMessageRenderItems([
+      msg({
+        id: 'agent',
+        role: 'tool_use',
+        toolUseId: 'toolu-agent',
+        content: { toolUseId: 'toolu-agent', toolName: 'Agent', input: { description: 'Retry' } },
+        agentMeta: { agentTaskStatus: 'stopped' },
+      }),
+      msg({
+        id: 'result',
+        role: 'tool_result',
+        toolUseId: 'toolu-agent',
+        content: '<tool_use_error>stale error from earlier attempt</tool_use_error>',
+      }),
+    ]);
+    expect(subagentGroups(items)[0].status).toBe('stopped');
+  });
+
   it('leaves an ordinary session (no Agent / no parentUuid) byte-identical to the shared builder', () => {
     const messages = [
       msg({ id: 'u', role: 'user', content: { text: 'hi' }, createdAt: '2026-01-01T00:00:01.000Z' }),

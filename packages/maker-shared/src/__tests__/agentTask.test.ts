@@ -5,6 +5,7 @@ import {
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  isSubagentResultError,
   isSubagentSpawnToolName,
   mergeAgentTaskUpdate,
   PI_SUBAGENT_TOOL_NAME,
@@ -112,6 +113,38 @@ describe('deriveAgentTaskStatus', () => {
     expect(deriveAgentTaskStatus(undefined, 'done', {
       persistedStatus: 'cancelled' as never,
     })).toBe('completed');
+  });
+
+  it('returns failed when resultIsError is true and result is non-empty', () => {
+    expect(deriveAgentTaskStatus(undefined, '<tool_use_error>Auth failed</tool_use_error>', {
+      resultIsError: true,
+    })).toBe('failed');
+  });
+
+  it('returns failed even when updateStatus is running when resultIsError is true', () => {
+    expect(deriveAgentTaskStatus('running', '<tool_use_error>timeout</tool_use_error>', {
+      resultIsError: true,
+    })).toBe('failed');
+  });
+
+  it('shared card model projects protocol error results as failed', () => {
+    expect(buildAgentTaskCardModel({
+      toolName: 'Task',
+      result: '<tool_use_error>launch failed</tool_use_error>',
+    }).status).toBe('failed');
+  });
+
+  it('persisted status wins over resultIsError', () => {
+    expect(deriveAgentTaskStatus(undefined, '<tool_use_error>fail</tool_use_error>', {
+      resultIsError: true,
+      persistedStatus: 'completed',
+    })).toBe('completed');
+  });
+
+  it('resultIsError is ignored when result is empty', () => {
+    expect(deriveAgentTaskStatus(undefined, '', {
+      resultIsError: true,
+    })).toBe('running');
   });
 });
 
@@ -523,5 +556,41 @@ describe('buildAgentTaskCardModel', () => {
     });
     expect(model.spawnedAgentName).toBeUndefined();
     expect(model.summary).toBe('thread-2: done');
+  });
+});
+
+describe('isSubagentResultError', () => {
+  it('returns false for empty/undefined/null', () => {
+    expect(isSubagentResultError(undefined)).toBe(false);
+    expect(isSubagentResultError('')).toBe(false);
+    expect(isSubagentResultError('   ')).toBe(false);
+  });
+
+  it('returns true for Claude protocol <tool_use_error>', () => {
+    expect(isSubagentResultError('<tool_use_error>Authentication failed</tool_use_error>')).toBe(true);
+  });
+
+  it('returns false for generic <error> prefix (too generic for work product)', () => {
+    // A subagent returning <error>校验报告</error> as valid output must not be
+    // misclassified as failure. Only <tool_use_error> is a reliable protocol marker.
+    expect(isSubagentResultError('<error>Transport failure</error>')).toBe(false);
+    expect(isSubagentResultError('<error>校验报告</error>')).toBe(false);
+  });
+
+  it('returns false for JSON with error-looking fields (authority boundary)', () => {
+    // Subagent result content is arbitrary user work product.
+    // Fields like "errors", "status", "stderr" are data, not execution signals.
+    expect(isSubagentResultError('{"errors":["not found"]}')).toBe(false);
+    expect(isSubagentResultError('{"status":"failed"}')).toBe(false);
+    expect(isSubagentResultError('{"stderr":"something went wrong"}')).toBe(false);
+    expect(isSubagentResultError('{"error":"custom message"}')).toBe(false);
+    expect(isSubagentResultError('{"success":false}')).toBe(false);
+    expect(isSubagentResultError('{"ok":false}')).toBe(false);
+  });
+
+  it('returns false for natural language error phrases', () => {
+    expect(isSubagentResultError('failed to launch')).toBe(false);
+    expect(isSubagentResultError('unable to start the service')).toBe(false);
+    expect(isSubagentResultError('Error: something happened')).toBe(false);
   });
 });

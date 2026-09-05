@@ -12,6 +12,7 @@ import {
   buildMessageRenderItems,
   type MessageRenderOptions,
 } from '@cindy/maker-shared/message-render';
+import { isSubagentResultError } from '@cindy/maker-shared/agent-task';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
 import type { MobileMessageRenderItem, MobileSubagentGroupItem } from '@/session/messageRenderModel';
@@ -23,6 +24,25 @@ export const MAX_SUBAGENT_NEST_DEPTH = 5;
 
 export interface SubagentResultMeta {
   createdAtMs: number;
+  /** 配对 tool_result 是否为 Claude 协议级错误(`<tool_use_error>` 开头,与共享 deriveAgentTaskStatus 同口径)。 */
+  isError?: boolean;
+}
+
+/** 从原始 tool_result 行抽文本(与共享 messageContentToPreview 同形态:字符串 / block 数组 / {text} 对象)。 */
+function resultTextOf(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const joined = content
+      .map((block) => {
+        const record = readRecord(block);
+        return typeof record?.text === 'string' ? record.text : '';
+      })
+      .filter(Boolean)
+      .join('\n');
+    return joined || undefined;
+  }
+  const record = readRecord(content);
+  return typeof record?.text === 'string' ? record.text : undefined;
 }
 
 /** 从原始消息建 `toolUseId → tool_result.createdAt(ms)` 映射(归一化层会丢弃 tool_result,故从 raw 取)。 */
@@ -33,7 +53,11 @@ export function buildSubagentResultMeta(messages: readonly RemoteMessage[]): Map
     const id = rawToolUseId(message);
     if (!id) continue;
     const ms = Date.parse(message.createdAt);
-    if (Number.isFinite(ms)) map.set(id, { createdAtMs: ms });
+    if (!Number.isFinite(ms)) continue;
+    // 同一 toolUseId 多行时保留首条(与历史行为一致),协议错误判定与共享 deriveAgentTaskStatus 同口径。
+    if (!map.has(id)) {
+      map.set(id, { createdAtMs: ms, isError: isSubagentResultError(resultTextOf(message.content)) });
+    }
   }
   return map;
 }
@@ -146,6 +170,7 @@ function buildSubagentGroup(
     agent.agentTaskStatus,
     !!result,
     options.isSessionStreaming === true,
+    result?.isError === true,
   );
   const startMs = Date.parse(agent.createdAt);
   const durationMs = result && Number.isFinite(startMs) && result.createdAtMs >= startMs
@@ -162,13 +187,16 @@ function buildSubagentGroup(
   };
 }
 
-// 精确结构化终态优先；存量历史缺字段时保留原有 result/streaming 兼容兜底。
+// 精确结构化终态优先；协议错误结果(`<tool_use_error>`)恢复 failed;存量历史缺字段时
+// 保留原有 result/streaming 兼容兜底(普通结果不误判,与 Desktop deriveAgentTaskStatus 同口径)。
 function computeStatus(
   persistedStatus: MobileSubagentGroupItem['status'] | undefined,
   hasResult: boolean,
   streaming: boolean,
+  resultIsError: boolean,
 ): MobileSubagentGroupItem['status'] {
   if (persistedStatus) return persistedStatus;
+  if (resultIsError && hasResult) return 'failed';
   if (hasResult) return 'completed';
   return streaming ? 'running' : 'completed';
 }
