@@ -207,7 +207,7 @@ describe('mobile message list container', () => {
     )).toContain('return;');
     expect(scrollSource).toContain('shouldPreserveMobileHistoryBrowseIntent({');
     expect(scrollSource).toContain('historyBrowseIntent: userScrollForOlderRef.current');
-    expect(scrollSource).toContain('userControllingScroll: isDraggingRef.current');
+    expect(scrollSource).toContain('userControllingScroll: isDragSample');
     // 深链 / 搜索定位本身就是明确的历史浏览意图,后续近顶自动补页无需再拖一下。
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');
     const focusEffectEnd = source.indexOf('// 新消息红点', focusEffectStart);
@@ -295,6 +295,7 @@ describe('mobile message list container', () => {
     expect(effectEnd).toBeGreaterThan(effectStart);
     expect(clearHistoryIntentAt).toBeGreaterThan(-1);
     expect(verifyAt).toBeGreaterThan(clearHistoryIntentAt);
+    expect(effectSource).toContain("scrollToEndProgrammatically(true, 'explicit');");
   });
 
   it('verifies a manual jump-to-latest after issuing the animated scroll', () => {
@@ -302,7 +303,7 @@ describe('mobile message list container', () => {
     const callbackStart = source.indexOf('const scrollToBottom = useCallback');
     const callbackEnd = source.indexOf('const jumpToPreviousUserMessage', callbackStart);
     const callbackSource = source.slice(callbackStart, callbackEnd);
-    const scrollAt = callbackSource.indexOf('scrollToEndProgrammatically(true);');
+    const scrollAt = callbackSource.indexOf("scrollToEndProgrammatically(true, 'explicit');");
     const verifyAt = callbackSource.indexOf('runStickToLatestVerify();');
 
     expect(callbackStart).toBeGreaterThan(-1);

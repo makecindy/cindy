@@ -816,7 +816,7 @@ export function MessageRenderer({
   const previousFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
   const previousItemKeysRef = useRef<readonly string[]>([]);
   // LegendList updates getState().scroll optimistically before an imperative native scroll lands.
-  // This sequence advances only from ScrollView onScroll and is the ack source for Android prepend.
+  // Only native ScrollView scroll/end-drag samples advance this ack source for Android prepend.
   const nativeScrollEventSequenceRef = useRef(0);
   const scrollMetricsRef = useRef<MessageScrollMetrics>({
     contentHeight: 0,
@@ -1013,10 +1013,25 @@ export function MessageRenderer({
     );
   }, []);
 
-  const scrollToEndProgrammatically = useCallback((animated: boolean) => {
+  const isUserControllingScroll = useCallback(() => (
+    historyTouchStartYRef.current !== null
+    || isDraggingRef.current
+    || isMomentumScrollingRef.current
+  ), []);
+
+  const scrollToEndProgrammatically = useCallback((
+    animated: boolean,
+    intent: 'follow' | 'explicit' = 'follow',
+  ) => {
+    // Automatic growth/recovery/anchor retries yield to gestures. Explicit jump/send actions
+    // own their scroll even if onPress arrives before the ancestor's touchEnd clears the finger.
+    if (intent === 'follow' && isUserControllingScroll()) return;
+    // Only a new explicit destination supersedes a pending final drag sample. Automatic
+    // follow and offset compensation must leave that sample available to endDrag.
+    if (intent === 'explicit') dragStartOffsetYRef.current = null;
     markProgrammaticScroll(animated);
     void listRef.current?.scrollToEnd({ animated });
-  }, [markProgrammaticScroll]);
+  }, [isUserControllingScroll, markProgrammaticScroll]);
 
   const scrollToOffsetProgrammatically = useCallback((offset: number, animated: boolean) => {
     markProgrammaticScroll(animated);
@@ -1024,6 +1039,7 @@ export function MessageRenderer({
   }, [markProgrammaticScroll]);
 
   const scrollToIndexProgrammatically = useCallback((index: number, viewPosition: number) => {
+    dragStartOffsetYRef.current = null;
     markProgrammaticScroll(true);
     void listRef.current?.scrollToIndex({ animated: true, index, viewPosition });
   }, [markProgrammaticScroll]);
@@ -1182,7 +1198,7 @@ export function MessageRenderer({
         // LegendList moves getState().scroll to an imperative target before the native ScrollView
         // receives it. Using that optimistic value here used to self-confirm the correction in two
         // frames, release MVCP, and leave Android briefly rendering the target cell window at the
-        // old physical offset. Only onScroll-backed metrics can prove the viewport actually moved.
+        // old physical offset. Only native scroll/end-drag metrics prove the viewport actually moved.
         const currentOffset = scrollMetricsRef.current.offsetY;
         const pendingCorrection = currentTransaction.pendingCorrection;
         const correctionStatus = pendingCorrection
@@ -1354,6 +1370,12 @@ export function MessageRenderer({
     }
     const step = (attempts: number, waitRounds: number) => {
       if (followVerifyGenerationRef.current !== generation) return;
+      // Release handlers restart this bounded verifier, including when the stream ends while
+      // a finger is held still. Do not poll or issue corrections during a gesture.
+      if (isUserControllingScroll()) {
+        followVerifyFrameRef.current = null;
+        return;
+      }
       // 贴底跟随意图只认 nearBottomRef:死区内轻触 / 小幅拖动并没有真实解除贴底,
       // 不能让 userScrollForOlderRef 这根“允许加载历史”的手势记录把校验永久关掉。
       // 真正上移超过死区时 shouldUnpinMobileFollowOnDrag 会把 nearBottomRef 翻 false,
@@ -1407,7 +1429,7 @@ export function MessageRenderer({
     } else {
       start();
     }
-  }, [scrollToEndProgrammatically]);
+  }, [isUserControllingScroll, scrollToEndProgrammatically]);
 
   // DEV-only:把列表控制器 + 滚动 metrics 暴露给性能 harness(临时,profiling/回归测量用)。
   useEffect(() => {
@@ -1797,7 +1819,7 @@ export function MessageRenderer({
     setIsAwayFromBottom(false);
     setHasNewMessages(false);
     setPreviousUserTarget(null);
-    scrollToEndProgrammatically(true);
+    scrollToEndProgrammatically(true, 'explicit');
     runStickToLatestVerify();
   }, [cancelHistoryPrependTransaction, runStickToLatestVerify, scrollToEndProgrammatically]);
 
@@ -1839,7 +1861,7 @@ export function MessageRenderer({
     }
     setHasNewMessages(false);
     setIsAwayFromBottom(false);
-    scrollToEndProgrammatically(true);
+    scrollToEndProgrammatically(true, 'explicit');
     runStickToLatestVerify();
   }, [
     cancelHistoryPrependTransaction,
@@ -2080,7 +2102,14 @@ export function MessageRenderer({
   // 「恢复跟随」走 resolveMobileNearBottomOnScroll:距离 + 明确向下方向。读历史
   // (readingOlderRef)期间禁止方向性恢复——load-earlier prepend 的 mVCP 补偿会产生
   // 程序化向下增量,短会话里会被误判成「用户滑回底部」。
-  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const handleScroll = useCallback((
+    event: NativeSyntheticEvent<NativeScrollEvent>,
+    isFinalDragSample = false,
+  ) => {
+    // Cancellation releases ownership immediately. Only endDrag may still consume its final
+    // sample; an ordinary layout/MVCP scroll cannot use the retained origin as user intent.
+    const isDragSample = isDraggingRef.current
+      || (isFinalDragSample && dragStartOffsetYRef.current !== null);
     nativeScrollEventSequenceRef.current += 1;
     const metrics = {
       contentHeight: event.nativeEvent.contentSize.height,
@@ -2091,7 +2120,7 @@ export function MessageRenderer({
     scrollMetricsRef.current = metrics;
     if (readingOlderRef.current) {
       if (
-        isDraggingRef.current
+        isDragSample
         || isMomentumScrollingRef.current
         || historyTouchTriggeredRef.current
       ) {
@@ -2109,7 +2138,7 @@ export function MessageRenderer({
     if (
       nearBottomRef.current
       && shouldUnpinMobileFollowOnDrag({
-        dragging: isDraggingRef.current,
+        dragging: isDragSample,
         dragStartOffsetY: dragStartOffsetYRef.current,
         metrics,
       })
@@ -2118,14 +2147,20 @@ export function MessageRenderer({
       setIsAwayFromBottom(true);
     } else {
       const preserveHistoryBrowseIntent = shouldPreserveMobileHistoryBrowseIntent({
-        historyBrowseIntent: userScrollForOlderRef.current,
-        userControllingScroll: isDraggingRef.current
+        // Only preserve an actual unpin. A dead-zone drag also enables pagination, but its
+        // final native event must not turn a temporary follow suspension into an unpin.
+        historyBrowseIntent: userScrollForOlderRef.current && !nearBottomRef.current,
+        userControllingScroll: isDragSample
           || isMomentumScrollingRef.current
           || historyTouchStartYRef.current !== null,
       });
+      // Dragging (including end-drag's final native metrics) owns the cumulative dead zone.
+      // Outside a drag, layout/MVCP corrections cannot prove user intent. Preserve follow;
+      // actual momentum retains the existing direction/distance fallback.
+      const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
       const nearBottom = preserveHistoryBrowseIntent
         ? false
-        : resolveMobileNearBottomOnScroll({
+        : preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
           metrics,
           programmaticScrollInFlight: programmaticScrollInFlightRef.current,
@@ -2163,10 +2198,11 @@ export function MessageRenderer({
     isMomentumScrollingRef.current = false;
     historyTouchStartYRef.current = event.nativeEvent.pageY;
     historyTouchTriggeredRef.current = false;
+    clearProgrammaticScroll();
     // Touch-start only means the finger holds the ScrollView; it is not a viewport takeover yet.
     // maybeTriggerHistoryTouch / onScrollBeginDrag report the real move once it clears the dead zone.
     handoffHistoryPrependToUser(false);
-  }, [handoffHistoryPrependToUser]);
+  }, [clearProgrammaticScroll, handoffHistoryPrependToUser]);
 
   const maybeTriggerHistoryTouch = useCallback((pageY: number) => {
     const startY = historyTouchStartYRef.current;
@@ -2194,18 +2230,24 @@ export function MessageRenderer({
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    runStickToLatestVerify();
   }, [
     maybeTriggerHistoryTouch,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
 
   const handleHistoryTouchCancel = useCallback(() => {
+    // An interrupted drag may never emit endDrag. Android's normal native takeover emits
+    // touchCancel before beginDrag, so that subsequent beginDrag establishes its own ownership.
+    isDraggingRef.current = false;
     historyTouchStartYRef.current = null;
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
-  }, [scheduleHistoryPrependUserHandoffSettle, scheduleQueuedLoadEarlierFlush]);
+    runStickToLatestVerify();
+  }, [runStickToLatestVerify, scheduleHistoryPrependUserHandoffSettle, scheduleQueuedLoadEarlierFlush]);
 
   // 用户开始拖动 → 标记「上翻意图」,放行自动加载更早(onScrollBeginDrag 仅用户手势触发,
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
@@ -2230,19 +2272,23 @@ export function MessageRenderer({
     // 翻完 refs 立即补一次电平评估:列表已顶死时(Android 无 bounce 尤甚)这次拖动不产生
     // offset 变化,不会有 onScroll / onStartReached,ref 写入也不驱动 effect——没有这一刀,
     // 「失败后停在顶部再拖一下重试」的信号会整体丢失(review P2)。
-  }, [attemptAutoLoadEarlier, handoffHistoryPrependToUser]);
+  }, [attemptAutoLoadEarlier, clearProgrammaticScroll, handoffHistoryPrependToUser]);
 
-  // 拖动结束(手指离开,可能进入惯性滚动)→ 关闭拖动追踪。惯性阶段的上滑不需要再判
-  // 解除:上滑手势的拖动段必然已越过死区完成解除;下滑回底的恢复由 scroll 方向判定接手。
-  const handleScrollEndDrag = useCallback(() => {
+  // 原生 endDrag 自带最终位置，不依赖最后一帧 onScroll 的投递顺序。
+  // 先结算本次拖动再清理起点，避免把后续 MVCP 布局校正误判成用户上翻。
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    handleScroll(event, true);
     isDraggingRef.current = false;
     dragStartOffsetYRef.current = null;
     refreshPreviousUserTarget();
     // Wait one frame so Android can report whether this drag transitioned into momentum.
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    runStickToLatestVerify();
   }, [
+    handleScroll,
     refreshPreviousUserTarget,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
@@ -2256,8 +2302,10 @@ export function MessageRenderer({
     refreshPreviousUserTarget();
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    runStickToLatestVerify();
   }, [
     refreshPreviousUserTarget,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
@@ -2322,6 +2370,7 @@ export function MessageRenderer({
       }
       return;
     }
+    if (isUserControllingScroll()) return;
     if (nearBottomRef.current && viewportHeight > 0 && height > viewportHeight) {
       // Animated jump/send follow owns the viewport until its settle window closes. Content
       // growth during that animation only reschedules the verifier; a false-animated pin here
@@ -2366,6 +2415,7 @@ export function MessageRenderer({
       }
     }
   }, [
+    isUserControllingScroll,
     markMobileMvcpSettle,
     restoreHistoryAnchorOnce,
     runStickToLatestVerify,
