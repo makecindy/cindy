@@ -63,6 +63,7 @@
       "react-native@0.85.3": "dependency-patches/react-native@0.85.3.patch",
       "react-native-uitextview@2.2.0": "dependency-patches/react-native-uitextview@2.2.0.patch",
       "react-native-webview@13.16.1": "dependency-patches/react-native-webview@13.16.1.patch",
+      "expo-image-manipulator@57.0.14": "dependency-patches/expo-image-manipulator@57.0.14.patch",
       "expo-paste-input@0.2.2": "dependency-patches/expo-paste-input@0.2.2.patch"
     },
     "allowUnusedPatches": true
