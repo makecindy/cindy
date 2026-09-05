@@ -20,14 +20,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(
-  fileURLToPath(new URL('../styles/globals.css', import.meta.url)),
-  'utf8',
-);
+const css = readFileSync(fileURLToPath(new URL('../styles/globals.css', import.meta.url)), 'utf8');
 const sessionViewSource = readFileSync(
-  fileURLToPath(
-    new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
-  ),
+  fileURLToPath(new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url)),
   'utf8',
 );
 
@@ -78,9 +73,7 @@ describe('prefers-reduced-motion 覆盖面(globals.css)', () => {
       '--motion-exit',
       '--motion-spinner-cycle',
     ]) {
-      expect(reduceCss, `reduce 块缺少 ${token} 归零`).toMatch(
-        new RegExp(`${token}:\\s*0ms`),
-      );
+      expect(reduceCss, `reduce 块缺少 ${token} 归零`).toMatch(new RegExp(`${token}:\\s*0ms`));
     }
   });
 
@@ -95,13 +88,15 @@ describe('prefers-reduced-motion 覆盖面(globals.css)', () => {
 
 describe('RunningStatusBar cadenced shimmer 的运行期 reduced-motion 切换', () => {
   it('动画被摘时清空 playing/pending，并把 reducedMotion 纳入 effect 依赖', () => {
-    expect(sessionViewSource).toContain("import { useReducedMotion } from '@/hooks/useReducedMotion'");
+    expect(sessionViewSource).toContain(
+      "import { useReducedMotion } from '@/hooks/useReducedMotion'",
+    );
     expect(sessionViewSource).toContain('const reducedMotion = useReducedMotion();');
     expect(sessionViewSource).toContain('if (!visible || suppressContent || reducedMotion) {');
     expect(sessionViewSource).toContain('shimmerPlayingRef.current = false;');
     expect(sessionViewSource).toContain('shimmerPendingRef.current = false;');
-    expect(sessionViewSource).toContain(
-      '}, [visible, suppressContent, reducedMotion, status, tokenUsage, outputTokens, generationDurationMs]);',
+    expect(sessionViewSource).toMatch(
+      /\},\s*\[\s*visible,\s*suppressContent,\s*reducedMotion,\s*status,\s*tokenUsage,\s*outputTokens,\s*generationDurationMs,?\s*\]\);/,
     );
   });
 });

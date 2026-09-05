@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect, useReducer } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedScheduleBanner';
+import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
 import { subscribeScheduleRunReadSync } from '@/features/scheduler/lib/scheduleRunReadSync';
 
 vi.mock('react-i18next', () => ({
@@ -19,25 +20,25 @@ let focused = true;
 let visibility: DocumentVisibilityState = 'visible';
 
 // 模拟已读 IPC 的权威存储和侧栏 read-sync 重查，使用真实组件与批量标记链路。
-function View({ runIds, visible = true }: { runIds: string[]; visible?: boolean }) {
+function View({
+  runIds,
+  visible = true,
+  showBanner = true,
+}: {
+  runIds: string[];
+  visible?: boolean;
+  showBanner?: boolean;
+}) {
   const [, refresh] = useReducer((revision: number) => revision + 1, 0);
   useEffect(() => subscribeScheduleRunReadSync(refresh), []);
-  return (
-    <UnreadFailedScheduleBanner
-      runIds={runIds.filter((id) => !readIds.has(id))}
-      viewVisible={visible}
-    />
+  useReadFailedScheduleRuns(
+    runIds.filter((id) => !readIds.has(id)),
+    visible,
   );
-}
-
-async function dwell(ms: number) {
-  await act(async () => {
-    vi.advanceTimersByTime(ms);
-  });
+  return showBanner ? <UnreadFailedScheduleBanner /> : null;
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
   focused = true;
   visibility = 'visible';
   readIds.clear();
@@ -55,82 +56,65 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  vi.useRealTimers();
   delete (window as unknown as { electronAPI?: unknown }).electronAPI;
 });
 
 describe('historical failed schedule notice', () => {
-  it('marks the visible batch read after dwelling, without a close button', async () => {
+  it('reads on opening even when running or specific errors replace the generic banner', async () => {
+    render(<View runIds={['old']} showBanner={false} />);
+    await waitFor(() => expect(readIds.has('old')).toBe(true));
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+  });
+
+  it('marks the batch read on opening and keeps the notice after reopening, without a button', async () => {
     const view = render(<View runIds={['old-1', 'old-2']} />);
     expect(screen.queryByRole('button')).toBeNull();
-    await dwell(1_000);
-    // 同内容的数组重建或排序不会阻止“看过”确认。
+    await waitFor(() => expect(readIds).toEqual(new Set(['old-1', 'old-2'])));
     view.rerender(<View runIds={['old-2', 'old-1']} />);
-    await dwell(499);
-    expect(markRunRead).not.toHaveBeenCalled();
-    await dwell(1);
     expect(markRunRead.mock.calls.map(([id]) => id)).toEqual(['old-1', 'old-2']);
-    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+    view.unmount();
+    render(<View runIds={['old-1', 'old-2']} />);
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+    expect(markRunRead).toHaveBeenCalledTimes(2);
   });
 
   it('does not read a mounted background window until it gains focus', async () => {
     focused = false;
     render(<View runIds={['old']} />);
-    await dwell(5_000);
     expect(markRunRead).not.toHaveBeenCalled();
     focused = true;
     fireEvent(window, new Event('focus'));
-    await dwell(1_500);
-    expect(readIds.has('old')).toBe(true);
+    await waitFor(() => expect(readIds.has('old')).toBe(true));
   });
 
-  it.each(['blur', 'hidden-document', 'hidden-pane'] as const)(
-    'restarts the dwell after %s instead of counting time out of view',
+  it.each(['hidden-document', 'hidden-pane'] as const)(
+    'waits for actual viewing when mounted in a %s',
     async (kind) => {
-      const view = render(<View runIds={['old']} />);
-      await dwell(1_000);
-      if (kind === 'blur') {
-        focused = false;
-        fireEvent(window, new Event('blur'));
-      } else if (kind === 'hidden-document') {
-        visibility = 'hidden';
-        fireEvent(document, new Event('visibilitychange'));
-      } else {
-        view.rerender(<View runIds={['old']} visible={false} />);
-      }
-      await dwell(5_000);
+      if (kind === 'hidden-document') visibility = 'hidden';
+      const view = render(<View runIds={['old']} visible={kind !== 'hidden-pane'} />);
       expect(markRunRead).not.toHaveBeenCalled();
-      focused = true;
       visibility = 'visible';
       fireEvent(window, new Event('focus'));
       fireEvent(document, new Event('visibilitychange'));
       view.rerender(<View runIds={['old']} />);
-      await dwell(1_499);
-      expect(markRunRead).not.toHaveBeenCalled();
-      await dwell(1);
-      expect(readIds.has('old')).toBe(true);
+      await waitFor(() => expect(readIds.has('old')).toBe(true));
     },
   );
 
-  it('cancels on unmount and starts a fresh dwell for another task', async () => {
+  it('counts a quick opening as read without waiting for a dwell', async () => {
     const view = render(<View runIds={['task-a']} />);
-    await dwell(1_000);
+    expect(markRunRead).toHaveBeenCalledWith('task-a');
     view.unmount();
     render(<View runIds={['task-b']} />);
-    await dwell(500);
-    expect(markRunRead).not.toHaveBeenCalled();
-    await dwell(1_000);
-    expect(markRunRead.mock.calls).toEqual([['task-b']]);
+    await waitFor(() => expect(readIds).toEqual(new Set(['task-a', 'task-b'])));
   });
 
-  it('gives a newly arrived failure its own dwell before acknowledging it', async () => {
+  it('marks a new failure read when it arrives in the open task', async () => {
     const view = render(<View runIds={['old']} />);
-    await dwell(1_000);
+    await waitFor(() => expect(readIds.has('old')).toBe(true));
     view.rerender(<View runIds={['old', 'new']} />);
-    await dwell(500);
-    expect(markRunRead).not.toHaveBeenCalled();
-    await dwell(1_000);
-    expect(readIds).toEqual(new Set(['old', 'new']));
+    await waitFor(() => expect(readIds).toEqual(new Set(['old', 'new'])));
   });
 
   it('keeps partial failures and later arrivals unread when an older write settles', async () => {
@@ -147,21 +131,21 @@ describe('historical failed schedule notice', () => {
       return Promise.reject(new Error('IPC unavailable'));
     });
     const view = render(<View runIds={['old-ok', 'old-failed']} />);
-    await dwell(1_500);
+    focused = false;
+    fireEvent(window, new Event('blur'));
     view.rerender(<View runIds={['old-ok', 'old-failed', 'new']} />);
     await act(async () => finishOld());
     expect(markRunRead.mock.calls.map(([id]) => id)).toEqual(['old-failed', 'old-ok']);
     expect(readIds).toEqual(new Set(['old-ok']));
     expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
-    // 新批次有自己的计时；旧请求完成不会顺带标记 new。
-    await dwell(1_499);
+    // 旧请求完成不会顺带标记后台到达的 new。
     expect(markRunRead).not.toHaveBeenCalledWith('new');
-    await dwell(1);
-    expect(markRunRead).toHaveBeenCalledWith('new');
+    focused = true;
+    fireEvent(window, new Event('focus'));
+    await act(async () => {});
     const attempts = markRunRead.mock.calls.length;
-    await dwell(10_000);
+    view.rerender(<View runIds={['new', 'old-failed', 'old-ok']} />);
     expect(markRunRead).toHaveBeenCalledTimes(attempts);
-    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
     // 不对持续 IPC 失败循环重试；再次查看时可重新确认。
     markRunRead.mockImplementation(async (id) => {
       readIds.add(id);
@@ -170,7 +154,7 @@ describe('historical failed schedule notice', () => {
     fireEvent(window, new Event('blur'));
     focused = true;
     fireEvent(window, new Event('focus'));
-    await dwell(1_500);
-    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+    await waitFor(() => expect(readIds).toEqual(new Set(['old-ok', 'old-failed', 'new'])));
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
   });
 });

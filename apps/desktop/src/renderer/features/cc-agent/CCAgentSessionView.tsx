@@ -97,6 +97,7 @@ import {
   InterruptedTurnBanner,
 } from '@/components/chat/InterruptedTurnBanner';
 import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedScheduleBanner';
+import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
 import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
@@ -1919,6 +1920,7 @@ export function CCAgentSessionView({
   const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
   const unreadFailedScheduleRunIds =
     scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
+  useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded);
   const currentUnreadFailedRunId =
     scheduleSessionInfo?.latestUnreadFailedRunId ?? unreadFailedScheduleRunIds[0];
   const markCurrentUnreadFailedScheduleRun = useCallback(async (): Promise<boolean> => {
@@ -4761,7 +4763,7 @@ export function CCAgentSessionView({
 
             {!errorTailMsg &&
               !interruptedFromSession &&
-              unreadFailedScheduleRunIds.length > 0 &&
+              scheduleSessionInfo?.hasFailedRun &&
               !syntheticContinuationPending &&
               !error &&
               !credentialSwitchWait &&
@@ -4770,8 +4772,6 @@ export function CCAgentSessionView({
               sessionId && (
                 <UnreadFailedScheduleBanner
                   key={sessionId}
-                  runIds={unreadFailedScheduleRunIds}
-                  viewVisible={viewVisible && historyLoaded}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />

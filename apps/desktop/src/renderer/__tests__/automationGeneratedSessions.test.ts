@@ -523,13 +523,14 @@ describe('automation-generated sessions', () => {
     );
 
     expect(sessionViewSource).toContain('<UnreadFailedScheduleBanner');
-    expect(sessionViewSource).toContain('unreadFailedScheduleRunIds.length > 0');
+    expect(sessionViewSource).toContain('scheduleSessionInfo?.hasFailedRun');
     expect(sessionViewSource).toContain('useAutomationScheduleSessionInfo(sessionId)');
     expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
     expect(sessionViewSource).toContain('latestUnreadFailedRunId');
     expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId])');
-    expect(sessionViewSource).toContain('runIds={unreadFailedScheduleRunIds}');
-    expect(sessionViewSource).toContain('viewVisible={viewVisible && historyLoaded}');
+    expect(sessionViewSource).toContain(
+      'useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded)',
+    );
     expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
     expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有定时任务未完成，可查看运行记录。');
     expect(bannerSource).not.toContain('<button');
