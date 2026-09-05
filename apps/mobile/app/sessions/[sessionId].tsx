@@ -8728,6 +8728,7 @@ export default function SessionScreen() {
         </View>
         {currentSession ? (
           <SessionMenuSheet
+            usageReader={maker}
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
             busy={controlBusy}
             codexRateLimits={localCodexRateLimitControl ? codexRateLimits : null}
