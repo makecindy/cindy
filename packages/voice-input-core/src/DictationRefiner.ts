@@ -1,4 +1,5 @@
 import type { DictationRefinementContext, RefinementResult } from './types';
+import { takeRefinementContextHead, takeRefinementContextTail, truncateRefinementReply } from './refinementContext';
 
 export type TextModelClient = {
   requestJson<T>(input: {
@@ -304,13 +305,10 @@ export class DictationRefiner {
       ),
       userDictionary: normalizeBoundedOptionalMultilineText(base.userDictionary, MAX_USER_DICTIONARY_CHARS),
       voiceInputHistory,
-      selectionBefore: normalizeBoundedOptionalTailText(base.selectionBefore, MAX_SELECTION_CONTEXT_CHARS),
-      selectedText: normalizeBoundedOptionalText(base.selectedText, MAX_SELECTION_CONTEXT_CHARS),
-      selectionAfter: normalizeBoundedOptionalText(base.selectionAfter, MAX_SELECTION_CONTEXT_CHARS),
-      replyToMessage: normalizeBoundedOptionalText(
-        base.replyToMessage,
-        MAX_REPLY_TO_MESSAGE_CHARS,
-      ),
+      selectionBefore: takeRefinementContextTail(base.selectionBefore ?? '', MAX_SELECTION_CONTEXT_CHARS) || undefined,
+      selectedText: takeRefinementContextHead(base.selectedText ?? '', MAX_SELECTION_CONTEXT_CHARS) || undefined,
+      selectionAfter: takeRefinementContextHead(base.selectionAfter ?? '', MAX_SELECTION_CONTEXT_CHARS) || undefined,
+      replyToMessage: truncateRefinementReply(base.replyToMessage ?? '', MAX_REPLY_TO_MESSAGE_CHARS) || undefined,
       userDictionaryMatches: buildUserDictionaryMatches(dictationText, base.dictionaryAliasHints),
     };
   }
@@ -357,12 +355,6 @@ function normalizeBoundedOptionalText(text: unknown, maxChars: number): string |
   const normalized = normalizeOptionalText(text);
   if (!normalized) return undefined;
   return normalized.length > maxChars ? normalized.slice(0, maxChars).trim() : normalized;
-}
-
-function normalizeBoundedOptionalTailText(text: unknown, maxChars: number): string | undefined {
-  const normalized = normalizeOptionalText(text);
-  if (!normalized) return undefined;
-  return normalized.length > maxChars ? normalized.slice(-maxChars).trim() : normalized;
 }
 
 function normalizeBoundedOptionalMultilineText(text: unknown, maxChars: number): string | undefined {
