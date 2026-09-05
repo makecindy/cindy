@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { DingTalkIM, IMMessageEvent } from '@cindy/im';
 import {
@@ -96,5 +96,36 @@ describe('dingtalk turn permission boundary', () => {
       taskId: 'message-1',
     });
     expect(policy?.forceConfirmToolCall('file_change', {})).toBe(true);
+  });
+});
+
+describe('dingtalk text interaction timeout', () => {
+  it('forwards the remaining timeout through the adapter', async () => {
+    const requestTextReply = vi.fn(
+      async (
+        _userId: string,
+        _prompt: string,
+        _parse: (text: string) => unknown,
+        _timeoutMs?: number,
+      ) => ({
+        kind: 'permission' as const,
+        behavior: 'allow' as const,
+      }),
+    );
+    const adapter = buildDingTalkAdapter(
+      { requestTextReply } as unknown as DingTalkIM,
+      CONFIG,
+    );
+    const request = {
+      kind: 'permission' as const,
+      requestId: 'permission-timeout',
+      toolName: 'bash',
+      input: {},
+    };
+
+    await adapter.handleTextInteraction?.('owner-user', request, { timeoutMs: 2_000 });
+
+    expect(requestTextReply.mock.calls[0]?.[3]).toBeLessThanOrEqual(2_000);
+    expect(requestTextReply.mock.calls[0]?.[3]).toBeGreaterThan(0);
   });
 });

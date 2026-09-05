@@ -135,6 +135,7 @@ describe('feishu ImChannelAdapter characterization', () => {
   it('channel / source 恒为 feishu', () => {
     expect(adapter.channel).toBe('feishu');
     expect(adapter.sessions.source).toBe('feishu');
+    expect(adapter.interactionExpiredNotice).toBe('卡片已过期');
   });
 
   it('权限模式不兼容提示在发送时跟随当前语言', () => {

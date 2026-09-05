@@ -50,6 +50,18 @@ interface PendingEntry {
    * 删除(resolve / cancel)即自动回收, 无需单独清理。
    */
   askSelections?: Map<number, Set<number>>;
+  timeoutId?: ReturnType<typeof setTimeout>;
+}
+
+interface PendingRegistrationExtras {
+  toolName?: string;
+  permissionCard?: { title: string; body: string };
+  askQuestions?: AskUserQuestionItem[];
+  askSelections?: Map<number, Set<number>>;
+  /** Remaining lifetime when a Desktop interaction is migrated to this card. */
+  timeoutMs?: number;
+  /** Lets the channel replace expired buttons with its resolved-card UI. */
+  onTimeout?: (messageId: string) => void;
 }
 
 const pending = new Map<string, PendingEntry>();
@@ -58,12 +70,7 @@ export function registerPending(
   requestId: string,
   kind: InteractionDecision['kind'],
   messageId: string,
-  extras?: {
-    toolName?: string;
-    permissionCard?: { title: string; body: string };
-    askQuestions?: AskUserQuestionItem[];
-    askSelections?: Map<number, Set<number>>;
-  },
+  extras?: PendingRegistrationExtras,
 ): Promise<InteractionDecision> {
   return new Promise<InteractionDecision>((resolve, reject) => {
     try {
@@ -88,17 +95,12 @@ export function registerPendingExternal(
   messageId: string,
   resolve: (decision: InteractionDecision) => void,
   reject: (err: Error) => void,
-  extras?: {
-    toolName?: string;
-    permissionCard?: { title: string; body: string };
-    askQuestions?: AskUserQuestionItem[];
-    askSelections?: Map<number, Set<number>>;
-  },
+  extras?: PendingRegistrationExtras,
 ): void {
   if (pending.has(requestId)) {
     throw new Error(`pending interaction already exists for requestId=${requestId}`);
   }
-  pending.set(requestId, {
+  const entry: PendingEntry = {
     resolve,
     reject,
     messageId,
@@ -107,7 +109,16 @@ export function registerPendingExternal(
     permissionCard: extras?.permissionCard,
     askQuestions: extras?.askQuestions,
     askSelections: extras?.askSelections,
-  });
+  };
+  pending.set(requestId, entry);
+  const timeoutMs = extras?.timeoutMs;
+  if (timeoutMs && timeoutMs > 0 && timeoutMs < Number.POSITIVE_INFINITY) {
+    entry.timeoutId = setTimeout(() => {
+      const cancelled = cancelPending(requestId, 'interaction_timeout');
+      if (!cancelled) return;
+      extras.onTimeout?.(cancelled.messageId);
+    }, timeoutMs);
+  }
 }
 
 export function lookupPending(requestId: string): PendingEntry | null {
@@ -121,6 +132,7 @@ export function resolvePending(
   const entry = pending.get(requestId);
   if (!entry) return null;
   pending.delete(requestId);
+  if (entry.timeoutId) clearTimeout(entry.timeoutId);
   entry.resolve(decision);
   return { messageId: entry.messageId, permissionCard: entry.permissionCard };
 }
@@ -138,6 +150,7 @@ export function cancelPending(requestId: string, reason: string): { messageId: s
   const entry = pending.get(requestId);
   if (!entry) return null;
   pending.delete(requestId);
+  if (entry.timeoutId) clearTimeout(entry.timeoutId);
   if (entry.kind === 'ask_user_question') {
     entry.resolve(buildAskNoAnswerDecision());
   } else if (entry.kind === 'plan_review') {
@@ -151,6 +164,7 @@ export function cancelPending(requestId: string, reason: string): { messageId: s
 /** Reject all pending interactions (used on session close / error). */
 export function rejectAllPending(reason: string): void {
   for (const [, entry] of pending) {
+    if (entry.timeoutId) clearTimeout(entry.timeoutId);
     entry.reject(new Error(reason));
   }
   pending.clear();

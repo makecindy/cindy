@@ -82,4 +82,54 @@ describe('dingtalk text interactions', () => {
     });
     expect(requestTextReply).toHaveBeenCalledTimes(2);
   });
+
+  it('uses the migrated interaction remaining timeout', async () => {
+    const requestTextReply = vi.fn(
+      async (
+        _userId: string,
+        _prompt: string,
+        _parse: (text: string) => unknown,
+        _timeoutMs?: number,
+      ) => ({
+        kind: 'permission' as const,
+        behavior: 'allow' as const,
+      }),
+    );
+    const im = { requestTextReply } as unknown as DingTalkIM;
+    const request = {
+      kind: 'permission' as const,
+      requestId: 'request-timeout',
+      toolName: 'shell_command',
+      input: {},
+    };
+
+    await handleDingTalkTextInteraction(im, 'owner-1', request, { timeoutMs: 1_234 });
+
+    expect(requestTextReply).toHaveBeenCalledWith(
+      'owner-1',
+      expect.any(String),
+      expect.any(Function),
+      expect.any(Number),
+      'request-timeout',
+    );
+    expect(requestTextReply.mock.calls[0]?.[3]).toBeLessThanOrEqual(1_234);
+    expect(requestTextReply.mock.calls[0]?.[3]).toBeGreaterThan(0);
+  });
+
+  it('returns the router cancellation decision instead of an interaction handler failure', async () => {
+    const cancellation = Object.assign(new Error('DINGTALK_INTERACTION_CANCELLED'), {
+      decision: { kind: 'permission' as const, behavior: 'deny' as const, reason: 'session_cleanup' },
+    });
+    const im = {
+      requestTextReply: vi.fn(async () => Promise.reject(cancellation)),
+    } as unknown as DingTalkIM;
+    await expect(
+      handleDingTalkTextInteraction(im, 'owner-1', {
+        kind: 'permission',
+        requestId: 'request-cancel',
+        toolName: 'shell_command',
+        input: {},
+      }),
+    ).resolves.toEqual(cancellation.decision);
+  });
 });

@@ -93,6 +93,7 @@ interface PendingReply<T = unknown> {
   resolve(value: T): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
+  requestId?: string;
 }
 
 export class DingTalkIM extends BaseIM implements ChannelIM {
@@ -353,6 +354,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     prompt: string,
     parse: (text: string) => T | null,
     timeoutMs = INTERACTION_TIMEOUT_MS,
+    requestId?: string,
   ): Promise<T> {
     if (this.pendingReplies.has(userId)) {
       throw new Error("DINGTALK_INTERACTION_ALREADY_PENDING");
@@ -372,10 +374,15 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       resolve: resolveReply,
       reject: rejectReply,
       timer,
+      requestId,
     };
     this.pendingReplies.set(userId, pending as PendingReply);
     try {
-      await this.sendText(userId, prompt);
+      const [, value] = await Promise.all([
+        this.sendText(userId, prompt),
+        reply,
+      ]);
+      return value;
     } catch (error) {
       if (this.pendingReplies.get(userId) === pending) {
         this.pendingReplies.delete(userId);
@@ -383,7 +390,20 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       clearTimeout(pending.timer);
       throw error;
     }
-    return reply;
+  }
+
+  /**
+   * Release the one pending text interaction for a lane so a slash command
+   * can stop a migrated authorization instead of waiting for its timeout.
+   */
+  cancelTextReply(userId: string, requestId?: string, decision?: unknown): boolean {
+    const pending = this.pendingReplies.get(userId);
+    if (!pending || (requestId !== undefined && pending.requestId !== requestId)) return false;
+    this.pendingReplies.delete(userId);
+    clearTimeout(pending.timer);
+    const error = Object.assign(new Error('DINGTALK_INTERACTION_CANCELLED'), { decision });
+    pending.reject(error);
+    return true;
   }
 
   private async saveAndConnect(
@@ -677,6 +697,10 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     senderId: string,
     text: string,
   ): boolean {
+    // Slash commands belong to the normal command router. In particular,
+    // /stop must be able to cancel a pending migrated permission instead of
+    // being swallowed as an unparseable text reply.
+    if (/^\/stop(?:\s|$)/i.test(text.trim())) return false;
     const pending = this.pendingReplies.get(userId);
     if (!pending) return false;
     const lane = decodeLaneUserId(userId);

@@ -3,23 +3,39 @@ import type { DingTalkIM } from '@cindy/im';
 
 import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
 
-export function handleDingTalkTextInteraction(
+export async function handleDingTalkTextInteraction(
   im: DingTalkIM,
   userId: string,
   request: InteractionRequest,
+  options?: { timeoutMs?: number },
 ): Promise<InteractionDecision> {
-  if (request.kind === 'ask_user_question') {
-    return answerQuestions(im, userId, request);
+  const deadline =
+    options?.timeoutMs !== undefined
+      ? Date.now() + Math.max(1, options.timeoutMs)
+      : undefined;
+  try {
+    if (request.kind === 'ask_user_question') {
+      return await answerQuestions(im, userId, request, deadline);
+    }
+    return await im.requestTextReply(
+      userId,
+      formatInteractionPrompt(request),
+      (text) => parseInteractionReply(request, text),
+      remainingTimeoutMs(deadline),
+      request.requestId,
+    );
+  } catch (error) {
+    const decision = (error as { decision?: unknown }).decision;
+    if (isInteractionDecision(decision)) return decision;
+    throw error;
   }
-  return im.requestTextReply(userId, formatInteractionPrompt(request), (text) =>
-    parseInteractionReply(request, text),
-  );
 }
 
 async function answerQuestions(
   im: DingTalkIM,
   userId: string,
   request: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
+  deadline?: number,
 ): Promise<InteractionDecision> {
   const answers: Record<string, string> = {};
   for (const [index, question] of request.questions.entries()) {
@@ -27,9 +43,23 @@ async function answerQuestions(
       userId,
       formatQuestionPrompt(question, index, request.questions.length),
       (text) => parseQuestionAnswer(question, text),
+      remainingTimeoutMs(deadline),
+      request.requestId,
     );
   }
   return { kind: 'ask_user_question', answers };
+}
+
+function isInteractionDecision(value: unknown): value is InteractionDecision {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { kind?: unknown }).kind === 'string'
+  );
+}
+
+function remainingTimeoutMs(deadline: number | undefined): number | undefined {
+  return deadline === undefined ? undefined : Math.max(1, deadline - Date.now());
 }
 
 function formatInteractionPrompt(request: InteractionRequest): string {

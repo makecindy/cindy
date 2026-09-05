@@ -94,6 +94,7 @@ import { bindingStore } from '../binding';
 import { buildImUserMessage } from './inboundMessage';
 import {
   beginTurnChangeSetAtDispatch,
+  completePermissionQueueTakeoverForSession,
   wireSessionToIpcExternal,
   takePendingInteractionsForSession,
   noteSilentStopUserSend,
@@ -107,7 +108,10 @@ import {
 } from '../../maker-ipc/interactionRouter';
 import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHistoryAccess';
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
-import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
+import {
+  prependHandoffToUserMessage,
+  prependNoteToWireUserMessage,
+} from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
@@ -159,7 +163,16 @@ import {
   type PermissionModeChangeResult,
 } from './permissionModeControl';
 import { enqueueAskCardPatch } from './askCardPatchQueue';
-import { needsAskMultiCard } from './interactionCardModel';
+import {
+  buildAskNoAnswerDecision,
+  buildPermissionDenyDecision,
+  buildPlanDenyDecision,
+  needsAskMultiCard,
+} from './interactionCardModel';
+import {
+  registerMigratedInteractionSettler,
+  settleMigratedInteractionsForSessionExternal,
+} from './migratedInteractionSettleRegistry';
 
 /**
  * ask 多题/多选打勾卡的登记附加项: 原始问题 + 空勾选态。cardActionHandler 的
@@ -573,6 +586,130 @@ export function createTurnRunner(
   const log = createLogger(`im:${channel}:turn`);
 
   const sessionStates = new Map<string /* localSessionId */, SessionState>();
+  /**
+   * Ownership record for interactions migrated from desktop to this channel,
+   * keyed by sessionId and then requestId. Lives outside `sessionStates` on
+   * purpose: a `/exctr` detach deletes the SessionState (event-listener teardown)
+   * but a migrated rich card stays live and clickable, so its ownership must
+   * survive detach and remain settleable by a later abort/close/stop on the same
+   * session. Entries are removed by their own `settle` closure on every normal
+   * resolution path (user click, timeout, text reply) and by
+   * `settleMigratedInteractionsForSession` on teardown.
+   */
+  const migratedInteractionsBySession = new Map<string, Map<string, MigratedInteractionRecord>>();
+  /**
+   * Unregister handle for the per-session external (Desktop ABORT_SESSION)
+   * settle bridge. Registered on the first migrated ownership for a session and
+   * fired once its last migrated record settles, so the leaf registry does not
+   * retain a closure over a session that no longer has migrated interactions.
+   */
+  const migratedSettlerUnregister = new Map<string, () => void>();
+
+  /**
+   * 一条从 desktop 搬过来的迁移交互的所有权记录。
+   *
+   * `resolve` 是幂等收口:任意路径(看门狗超时、destructive guard、卡片发送失败、
+   * 用户点击、text 回复、session abort/close/stop)走到这里都只收口一次,并清理
+   * 所有权记录与看门狗定时器。`cancelled()` 报告该交互是否已被外部收口 —— 串行
+   * 发布循环里的后续 await 据此拒绝再次发卡片/注册 waiter,避免重新 orphan。
+   */
+  interface MigratedInteractionRecord {
+    surface: 'rich' | 'text';
+    kind: InteractionDecision['kind'];
+    userId: string;
+    resolve: (decision: InteractionDecision) => void;
+    cancelled: () => boolean;
+    /** messageId once the rich card send resolves; null before/after. */
+    messageId: string | null;
+    /** Absolute-deadline watchdog; cleared once the backend owns the timeout. */
+    timeoutId?: ReturnType<typeof setTimeout>;
+  }
+
+  /**
+   * 登记(或复用)一条迁移交互的会话级所有权,武装 permission 的**绝对截止看门狗**,
+   * 并在首次登记时挂上 Desktop ABORT_SESSION 的外部 settle 桥接。
+   *
+   * 幂等:同一 (sessionId, requestId) 已登记时直接返回既有记录。这样 text-only
+   * 渠道可以在串行发布循环**之前**为整条 cohort 预登记所有权 + 看门狗,轮到某条时
+   * `publishMigratedInteraction` 再调一次也只是取回同一条记录,不会重复登记。
+   *
+   * 看门狗解决的问题:text-only 渠道串行发布迁移交互,前序 ask/plan(无超时)未回答
+   * 时,后续 permission 的绝对截止时间原本要等到轮到它才武装,可能整段被前序阻塞;
+   * 预登记后,即使前序一直挂起,后续 permission 也会在自己的原始 deadline 到达时
+   * 被 deny,SDK Promise 不会无限等待。交互一旦真正交给底层 waiter/卡片(text
+   * handleTextInteraction / rich registerPendingExternal),底层自己的 timeout 接管
+   * 剩余窗口;两个定时器都收口到同一个幂等 resolve,重复触发无害。
+   */
+  function registerMigratedOwnership(
+    localSessionId: string,
+    entry: {
+      requestId: string;
+      request: InteractionRequest;
+      resolve: (decision: InteractionDecision) => void;
+      expiresAt?: number;
+    },
+    surface: 'rich' | 'text',
+    userId: string,
+  ): MigratedInteractionRecord {
+    let sessionRecords = migratedInteractionsBySession.get(localSessionId);
+    if (!sessionRecords) {
+      sessionRecords = new Map();
+      migratedInteractionsBySession.set(localSessionId, sessionRecords);
+    }
+    const existing = sessionRecords.get(entry.requestId);
+    if (existing) return existing;
+
+    const record: MigratedInteractionRecord = {
+      surface,
+      kind: entry.request.kind as InteractionDecision['kind'],
+      userId,
+      resolve: () => undefined,
+      cancelled: () => false,
+      messageId: null,
+    };
+    let settled = false;
+    const resolve = (decision: InteractionDecision): void => {
+      if (settled) return;
+      settled = true;
+      if (record.timeoutId) clearTimeout(record.timeoutId);
+      const records = migratedInteractionsBySession.get(localSessionId);
+      records?.delete(entry.requestId);
+      // 该 session 最后一条迁移记录收口后,注销外部桥接,避免无界持有闭包。
+      if (!records || records.size === 0) {
+        migratedInteractionsBySession.delete(localSessionId);
+        migratedSettlerUnregister.get(localSessionId)?.();
+        migratedSettlerUnregister.delete(localSessionId);
+      }
+      entry.resolve(decision);
+    };
+    record.resolve = resolve;
+    record.cancelled = () => settled;
+    sessionRecords.set(entry.requestId, record);
+
+    // 挂上 Desktop ABORT_SESSION → 迁移所有权 settle 桥接(每 session 一次,同步注册,
+    // 不会有 ABORT 在当前同步代码段中间插入)。
+    if (!migratedSettlerUnregister.has(localSessionId)) {
+      migratedSettlerUnregister.set(
+        localSessionId,
+        registerMigratedInteractionSettler(localSessionId, (reason) =>
+          settleMigratedInteractionsForSession(localSessionId, reason),
+        ),
+      );
+    }
+
+    // 武装 permission 的绝对截止看门狗(含队列等待时间)。
+    if (entry.request.kind === 'permission' && entry.expiresAt !== undefined) {
+      const delay = entry.expiresAt - Date.now();
+      if (delay <= 0) {
+        resolve({ kind: 'permission', behavior: 'deny', reason: 'interaction_timeout' });
+      } else {
+        record.timeoutId = setTimeout(() => {
+          resolve({ kind: 'permission', behavior: 'deny', reason: 'interaction_timeout' });
+        }, delay);
+      }
+    }
+    return record;
+  }
   /** In-flight `ensureSessionWired` promises (keyed by sessionId). Prevents the
    *  classic race where two concurrent first-time runAgentTurn calls both miss
    *  the cache, both spawn a maker session, and the second clobbers the first
@@ -828,7 +965,9 @@ export function createTurnRunner(
     } catch (err) {
       if (isCredentialModeSwitchBusyError(err)) {
         if (args.queueMode === 'internal') {
-          const consumed = (await args.onEarlyReject?.('credential_mode_switch', ui.agent.credentialBusy)) ?? false;
+          const consumed =
+            (await args.onEarlyReject?.('credential_mode_switch', ui.agent.credentialBusy)) ??
+            false;
           if (!consumed) {
             await handleSessionWiringBusy(userId, turn);
           } else {
@@ -1147,11 +1286,11 @@ export function createTurnRunner(
                   // 文本渠道自己认领掉的不动卡片(它本来就没有卡);其余走
                   // dropInteractionCard —— 作废 pending 的同时把那张卡收口。
                   onCancel: (requestId, decision) =>
-                    adapter.cancelTextInteraction?.(userId, requestId, decision) === true
-                    || dropInteractionCard(
+                    adapter.cancelTextInteraction?.(userId, requestId, decision) === true ||
+                    dropInteractionCard(
                       requestId,
                       'reason' in decision
-                        ? decision.reason ?? 'interaction_route_released'
+                        ? (decision.reason ?? 'interaction_route_released')
                         : 'interaction_route_released',
                     ),
                 });
@@ -1175,9 +1314,7 @@ export function createTurnRunner(
           // 复用那条记录, 不再写第二条。sessionId 必须相符 —— 拼装期间路由若换到
           // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
           const prePersisted =
-            item.prePersistedUserMessage?.sessionId === rowId
-              ? item.prePersistedUserMessage
-              : null;
+            item.prePersistedUserMessage?.sessionId === rowId ? item.prePersistedUserMessage : null;
           // 受保护群的触发消息不进会话存档 —— 正文与附件都不落。turn 照常跑,
           // agent 拿得到内容; 只是这一轮的输入不留在长期记录里。
           const persisted = item.protectedContent
@@ -1636,14 +1773,73 @@ export function createTurnRunner(
     // No-op 的常见情况: 没有 in-flight pending(idle session 接管), takePending
     // 返回空数组直接跳过。
     if (attached) {
-      const taken = takePendingInteractionsForSession(row.id);
-      for (const entry of taken) {
-        void publishMigratedInteraction(entry, userId, row.id, target.scopeKey);
-      }
-      if (taken.length > 0) {
-        log.info(
-          `migrated ${taken.length} pending interaction(s) from desktop → ${channel} for session=${row.id.slice(-8)}`,
-        );
+      try {
+        const taken = takePendingInteractionsForSession(row.id);
+        let migrationPromise: Promise<void> | null = null;
+        if (richIm) {
+          migrationPromise = Promise.all(
+            taken.map((entry) =>
+              publishMigratedInteraction(entry, userId, row.id, target.scopeKey),
+            ),
+          ).then(() => undefined);
+        } else {
+          // Text-only adapters have a single waiter per user. Preserve the
+          // Desktop permission queue's ordering after takeover instead of
+          // publishing the whole migrated cohort concurrently and replacing or
+          // rejecting every waiter after the first one.
+          //
+          // Pre-register ownership + absolute-deadline watchdog for the ENTIRE
+          // cohort BEFORE the serial await loop. A text channel publishes
+          // migrated interactions one at a time, so without this a permission
+          // queued behind an unanswered ask/plan (which has no timeout) would not
+          // arm its deadline until it reached the front, and the SDK Promise
+          // could hang for the whole serial wait past the permission's original
+          // deadline. Pre-registering arms every permission's watchdog up front
+          // and also makes the whole cohort settleable by Desktop ABORT_SESSION
+          // (via the external settle bridge) while they are still queued.
+          for (const entry of taken) {
+            registerMigratedOwnership(row.id, entry, 'text', userId);
+          }
+          migrationPromise = (async () => {
+            for (const entry of taken) {
+              // Skip entries the pre-registered watchdog/ABORT already settled
+              // while a predecessor was still in flight (their record is gone
+              // from the ownership map).
+              if (!migratedInteractionsBySession.get(row.id)?.has(entry.requestId)) {
+                continue;
+              }
+              await publishMigratedInteraction(entry, userId, row.id, target.scopeKey);
+            }
+          })();
+        }
+        if (taken.length > 0) {
+          log.info(
+            `migrated ${taken.length} pending interaction(s) from desktop → ${channel} for session=${row.id.slice(-8)}`,
+          );
+        }
+        // Keep the Desktop queue fenced until the channel has accepted the
+        // migrated cohort, preventing a new Desktop permission from racing the
+        // handoff and overwriting the renderer's singleton permission slot.
+        if (migrationPromise) {
+          void migrationPromise.then(
+            () => completePermissionQueueTakeoverForSession(row.id),
+            (err) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              log.error(`publish migrated interaction queue failed: ${msg}`);
+              completePermissionQueueTakeoverForSession(row.id);
+            },
+          );
+        } else {
+          completePermissionQueueTakeoverForSession(row.id);
+        }
+      } catch (err) {
+        // Keep the Desktop queue fenced until the channel has accepted the
+        // migrated cohort, preventing a new Desktop permission from racing the
+        // handoff and overwriting the renderer's singleton permission slot.
+        // If takeover extraction itself fails there is no migration promise to
+        // release the barrier, so release it before propagating the error.
+        completePermissionQueueTakeoverForSession(row.id);
+        throw err;
       }
     }
 
@@ -1677,23 +1873,80 @@ export function createTurnRunner(
       requestId: string;
       request: InteractionRequest;
       resolve: (decision: InteractionDecision) => void;
+      arrivalSequence: number;
+      expiresAt?: number;
     },
     userId: string,
     localSessionId: string,
     scopeKey?: string,
   ): Promise<void> {
-    const { request: req, resolve } = entry;
+    const { request: req } = entry;
     log.info(
       `publishMigrated kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
     );
 
+    const safeCleanupDecision = (): InteractionDecision => {
+      if (req.kind === 'ask_user_question') return buildAskNoAnswerDecision();
+      if (req.kind === 'plan_review') return buildPlanDenyDecision('session_cleanup');
+      return buildPermissionDenyDecision('session_cleanup');
+    };
+    // Reuse the ownership pre-registered by the text cohort loop (or register
+    // it now for the rich-card path, which publishes concurrently). The
+    // returned record carries an idempotent `resolve` and, for migrated
+    // permissions, an absolute-deadline watchdog armed from `entry.expiresAt`
+    // — so a permission queued behind an unanswered ask/plan on a text channel
+    // is still denied at its original deadline instead of hanging for the whole
+    // serial wait. `cancelled()` is the per-publish flag: once an external
+    // settle (watchdog / cleanup / !stop / ABORT_SESSION) has fired mid-flight,
+    // every subsequent await refuses to publish/register so it cannot re-orphan
+    // the card. The watchdog stays armed as a backstop even after the
+    // interaction is handed to the text waiter / rich card — both timers route
+    // through the same idempotent resolve, so a double fire is harmless.
+    const owned = registerMigratedOwnership(
+      localSessionId,
+      entry,
+      richIm ? 'rich' : 'text',
+      userId,
+    );
+    const settle = owned.resolve;
+    const cancelled = owned.cancelled;
+    if (cancelled()) return;
+
+    // Takeover is another channel confirmation surface, not a way around the
+    // channel hard-deny policy. Keep destructive commands out of every
+    // migrated route before either a text waiter or a rich card is published.
+    if (req.kind === 'permission') {
+      const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
+      if (guard.destructive) {
+        log.warn(`destructive migrated tool blocked: ${req.toolName} (${guard.reason})`);
+        settle({
+          kind: 'permission',
+          behavior: 'deny',
+          reason: `[destructiveGuard] ${guard.reason}`,
+        });
+        return;
+      }
+    }
+
     if (!richIm) {
+      if (cancelled()) {
+        settle(safeCleanupDecision());
+        return;
+      }
       try {
         if (adapter.handleTextInteraction) {
-          resolve(await adapter.handleTextInteraction(userId, req));
+          const remainingTimeoutMs =
+            req.kind === 'permission' && entry.expiresAt !== undefined
+              ? Math.max(1, entry.expiresAt - Date.now())
+              : undefined;
+          settle(
+            await adapter.handleTextInteraction(userId, req, {
+              ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}),
+            }),
+          );
         } else {
           const kind = req.kind as InteractionDecision['kind'];
-          resolve(
+          settle(
             kind === 'ask_user_question'
               ? { kind, answers: {} }
               : { kind, behavior: 'deny', reason: 'rich_output_not_supported' },
@@ -1702,7 +1955,7 @@ export function createTurnRunner(
       } catch (err) {
         const kind = req.kind as InteractionDecision['kind'];
         const msg = err instanceof Error ? err.message : String(err);
-        resolve(
+        settle(
           kind === 'ask_user_question'
             ? { kind, answers: {} }
             : { kind, behavior: 'deny', reason: `text interaction failed: ${msg}` },
@@ -1732,7 +1985,7 @@ export function createTurnRunner(
     if (!spec) {
       // ask_user_question 没问题项 — 自动空答即可
       const kind = req.kind as InteractionDecision['kind'];
-      resolve(
+      settle(
         kind === 'ask_user_question'
           ? { kind, answers: {} }
           : { kind, behavior: 'deny', reason: 'no_card' },
@@ -1740,9 +1993,16 @@ export function createTurnRunner(
       return;
     }
 
+    if (cancelled()) {
+      settle(safeCleanupDecision());
+      return;
+    }
+    // Stash the published messageId so a racing cleanup can patch the card
+    // even if it fires while sendInteractiveCard is still in flight. Updated
+    // as soon as the send resolves.
+    let messageId: string | null = null;
     const migratedSourceMessageId =
       sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
-    let messageId: string;
     try {
       const result = await richIm.sendInteractiveCard(userId, spec, {
         threadTs: scopeKey,
@@ -1761,15 +2021,32 @@ export function createTurnRunner(
           : {}),
       });
       messageId = result.messageId;
+      owned.messageId = messageId;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`publishMigrated sendInteractiveCard failed: ${msg}`);
       const kind = req.kind as InteractionDecision['kind'];
-      resolve(
+      settle(
         kind === 'ask_user_question'
           ? { kind, answers: {} }
           : { kind, behavior: 'deny', reason: `card send failed: ${msg}` },
       );
+      return;
+    }
+
+    if (cancelled()) {
+      if (messageId) patchExpiredInteractionCard(req.requestId, messageId);
+      settle(safeCleanupDecision());
+      return;
+    }
+
+    let remainingTimeoutMs =
+      req.kind === 'permission' && entry.expiresAt !== undefined
+        ? entry.expiresAt - Date.now()
+        : undefined;
+    if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
+      settle({ kind: 'permission', behavior: 'deny', reason: 'interaction_timeout' });
+      patchExpiredInteractionCard(req.requestId, messageId);
       return;
     }
 
@@ -1792,16 +2069,32 @@ export function createTurnRunner(
           log.warn(`dm routed notice send failed (non-fatal): ${msg}`);
         }
       }
+      // The group notice is an awaited network send. Re-evaluate the absolute
+      // expiry afterwards so an already-expired permission is not registered
+      // with a stale positive timeout.
+      if (req.kind === 'permission' && entry.expiresAt !== undefined) {
+        remainingTimeoutMs = entry.expiresAt - Date.now();
+        if (remainingTimeoutMs <= 0) {
+          settle({ kind: 'permission', behavior: 'deny', reason: 'interaction_timeout' });
+          patchExpiredInteractionCard(req.requestId, messageId);
+          return;
+        }
+      }
+      if (cancelled()) {
+        if (messageId) patchExpiredInteractionCard(req.requestId, messageId);
+        settle(safeCleanupDecision());
+        return;
+      }
       registerPendingExternal(
         req.requestId,
         req.kind as InteractionDecision['kind'],
         messageId,
-        resolve,
+        settle,
         (err) => {
           // reject 兜底 — registerPendingExternal 自己只在 duplicate requestId 时
           // 抛, 触发不到这条; 但留着保持类型对称。
           const kind = req.kind as InteractionDecision['kind'];
-          resolve(
+          settle(
             kind === 'ask_user_question'
               ? { kind, answers: {} }
               : { kind, behavior: 'deny', reason: err.message },
@@ -1811,6 +2104,9 @@ export function createTurnRunner(
           ? {
               toolName: req.toolName,
               permissionCard: { title: spec.title ?? '', body: spec.body },
+              ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}),
+              onTimeout: (expiredMessageId: string) =>
+                patchExpiredInteractionCard(req.requestId, expiredMessageId),
             }
           : askMultiExtras(req),
       );
@@ -1818,7 +2114,7 @@ export function createTurnRunner(
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`publishMigrated registerPendingExternal failed: ${msg}`);
       const kind = req.kind as InteractionDecision['kind'];
-      resolve(
+      settle(
         kind === 'ask_user_question'
           ? { kind, answers: {} }
           : { kind, behavior: 'deny', reason: `register failed: ${msg}` },
@@ -1946,11 +2242,7 @@ export function createTurnRunner(
     const threadUiPack = adapter.ui.thread;
     const configuredPrefix = adapter.sessions.generatedTitlePrefix;
     const composeTitle = adapter.sessions.composeGeneratedTitle;
-    if (
-      configuredPrefix === undefined &&
-      !composeTitle &&
-      !(adapter.threadScoped && threadUiPack)
-    )
+    if (configuredPrefix === undefined && !composeTitle && !(adapter.threadScoped && threadUiPack))
       return;
     const prefix = typeof configuredPrefix === 'function' ? configuredPrefix() : configuredPrefix;
     try {
@@ -2482,6 +2774,20 @@ export function createTurnRunner(
     releaseHostLease?.();
   }
 
+  function patchExpiredInteractionCard(requestId: string, messageId: string): void {
+    const notice = adapter.interactionExpiredNotice;
+    if (!notice || !richIm) return;
+    const im = richIm;
+    void enqueueAskCardPatch(requestId, async () => {
+      try {
+        await im.updateInteractiveCard(messageId, cards.buildResolvedCard(notice));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`dropped interaction card cleanup failed (non-fatal): ${msg}`);
+      }
+    });
+  }
+
   /**
    * 交互被作废(turn 收口 / session 清理 / 抢跑)时把它的卡片一起收口。
    *
@@ -2494,18 +2800,7 @@ export function createTurnRunner(
     // 返回值是 router 的契约: true = 渠道侧已收口这次交互, router 不再自行 cancel。
     // 丢掉它会让同一个 requestId 被取消两次(第二次落到 SDK 的默认拒绝路径)。
     if (!cancelled) return false;
-    const notice = adapter.interactionExpiredNotice;
-    if (!notice || !richIm) return true;
-    const messageId = cancelled.messageId;
-    const im = richIm;
-    void enqueueAskCardPatch(requestId, async () => {
-      try {
-        await im.updateInteractiveCard(messageId, cards.buildResolvedCard(notice));
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`dropped interaction card cleanup failed (non-fatal): ${msg}`);
-      }
-    });
+    patchExpiredInteractionCard(requestId, cancelled.messageId);
     return true;
   }
 
@@ -2617,13 +2912,9 @@ export function createTurnRunner(
             : `❌ 启动 agent 失败：${failure.reason}`;
         // 早期拒绝终态交调用方消费(群主流 @ 开话题时 patch 开场白卡),
         // 消费了就不再另发。
-        const consumed =
-          (await failure.onEarlyReject?.(failure.reason, message)) ?? false;
+        const consumed = (await failure.onEarlyReject?.(failure.reason, message)) ?? false;
         if (!consumed) {
-          if (
-            output.kind === 'chunked-text' &&
-            failure.turn.chunkedReplyBegun
-          ) {
+          if (output.kind === 'chunked-text' && failure.turn.chunkedReplyBegun) {
             await output.commitFinal({
               userId,
               text: message,
@@ -2926,11 +3217,9 @@ export function createTurnRunner(
           // (避免消费上一轮遗留的 opener 造成归属错乱)。
           const triggerId = output.im.getPendingOpenerTrigger?.(userId);
           const isMyOpener = triggerId === turn.userMessageId;
-          const consumed =
-            isMyOpener
-              ? ((await output.im.consumePendingOpenerCard?.(userId, '✅ (本轮无文本输出)')) ??
-                false)
-              : false;
+          const consumed = isMyOpener
+            ? ((await output.im.consumePendingOpenerCard?.(userId, '✅ (本轮无文本输出)')) ?? false)
+            : false;
           if (!consumed) {
             await sendTextClaimingOpener(userId, '✅ (本轮无文本输出)', state.scopeKey);
           }
@@ -2956,7 +3245,9 @@ export function createTurnRunner(
         } else {
           await output.im.sendText(userId, fallbackText, { threadTs: state.scopeKey });
         }
-        log.info(`[${channel}/turn] streaming surface unavailable — final text delivered via plain send`);
+        log.info(
+          `[${channel}/turn] streaming surface unavailable — final text delivered via plain send`,
+        );
       } catch (err) {
         log.warn(
           `[${channel}/turn] plain-text fallback send failed (non-fatal): ${
@@ -3036,10 +3327,9 @@ export function createTurnRunner(
           const errorText = `❌ 错误：${msg}`;
           const triggerId = output.im.getPendingOpenerTrigger?.(userId);
           const isMyOpener = triggerId === turn?.userMessageId;
-          const consumed =
-            isMyOpener
-              ? ((await output.im.consumePendingOpenerCard?.(userId, errorText)) ?? false)
-              : false;
+          const consumed = isMyOpener
+            ? ((await output.im.consumePendingOpenerCard?.(userId, errorText)) ?? false)
+            : false;
           if (!consumed) {
             await sendTextClaimingOpener(userId, errorText, state.scopeKey);
           }
@@ -3376,7 +3666,10 @@ export function createTurnRunner(
 
   function detachSessionStateNow(sessionId: string, state: SessionState): void {
     sessionStates.delete(sessionId);
-    cleanupSessionState(state);
+    // Detach only rewires event listeners: a migrated rich card already sent
+    // to the channel stays live and clickable (cardActionHandler resolves it
+    // through the global pending table), so it must NOT be denied here.
+    cleanupSessionState(state, /* settleMigrated */ false);
     settleDetachDrain(state, 'rewire');
     log.info(`detached ${channel} hook from session=${sessionId.slice(-8)}`);
   }
@@ -3407,6 +3700,13 @@ export function createTurnRunner(
       }
     }
     sessionStates.clear();
+    // A detached session no longer appears in sessionStates, but its migrated
+    // interaction ownership intentionally survives detach until later teardown.
+    // Sweep those orphaned records during global dispose so their SDK waiters
+    // cannot remain live for the channel timeout.
+    for (const sessionId of migratedInteractionsBySession.keys()) {
+      settleMigratedInteractionsForSession(sessionId, 'session_disposed');
+    }
     unsubscribeMakerEvents?.();
     unsubscribeMakerEvents = null;
     subscribedMaker = null;
@@ -3492,6 +3792,11 @@ export function createTurnRunner(
     // 重置后守卫判 superseded → settle('skip') → 挂起 turn 经现有订阅按 done 收口。
     noteSilentStopSessionReset(state.makerSession.id);
     if (state.queue[0]) state.queue[0].terminalKind = 'aborted';
+    // A migrated permission is part of the turn the user is stopping: deny it
+    // now instead of leaving the desktop SDK Promise awaiting its timeout. The
+    // per-publish `cancelled()` guard stops any still-in-flight publish from
+    // re-registering the card after we settle it here.
+    settleMigratedInteractionsForSession(state.makerSession.id, 'session_cleanup');
     await state.makerSession.abort();
     log.info(
       `!stop aborted turn for session=...${state.makerSession.id.slice(-8)} droppedQueued=${droppedQueued}`,
@@ -3520,14 +3825,21 @@ export function createTurnRunner(
 
   function forgetClosedSession(sessionId: string, reason: string): void {
     const state = sessionStates.get(sessionId);
-    if (!state) return;
-    sessionStates.delete(sessionId);
-    cleanupSessionState(state);
-    settleDetachDrain(state, 'cancelled');
+    if (state) {
+      sessionStates.delete(sessionId);
+      cleanupSessionState(state);
+      settleDetachDrain(state, 'cancelled');
+    } else {
+      // No live SessionState — typical after a `/exctr` detach deleted it while
+      // a migrated rich card was still outstanding. Settle any migrated
+      // interactions whose ownership survived detach in the outer map so the
+      // desktop SDK Promise is not left hanging.
+      settleMigratedInteractionsForSession(sessionId, 'session_cleanup');
+    }
     log.info(`forgot cached ${channel} session=${sessionId.slice(-8)} after ${reason}`);
   }
 
-  function cleanupSessionState(state: SessionState): void {
+  function cleanupSessionState(state: SessionState, settleMigrated = true): void {
     clearPendingSends(state);
     clearQueuedTurnTimers(state);
     for (const u of state.unsubscribers) {
@@ -3542,6 +3854,69 @@ export function createTurnRunner(
       turn.terminalKind = 'aborted';
       turn.terminalErrorCode ??= 'session_cleanup';
       settleTurnTerminal(turn);
+    }
+    if (settleMigrated) settleMigratedInteractionsForSession(state.makerSession.id);
+  }
+
+  /**
+   * Settle every interaction that was migrated from desktop to this channel and
+   * is still outstanding for `sessionId`. Called from:
+   *   - session/channel teardown (logout / account switch / shutdown /
+   *     maker-session closed / /new) — via cleanupSessionState,
+   *   - `!stop` — so a user-issued stop also denies the migrated authorization
+   *     the turn was waiting on instead of letting it hang until its timeout.
+   *
+   * Ownership lives in the session-indexed `migratedInteractionsBySession` map
+   * (not on SessionState), so a `/exctr` detach does not drop it: the record
+   * survives the event-listener teardown and a later abort/close/stop on the
+   * same session still settles it. Plain detach does NOT call this — a migrated
+   * rich card stays live and clickable through cardActionHandler after detach,
+   * so denying it there would reject an authorization the user is still looking
+   * at.
+   */
+  function settleMigratedInteractionsForSession(
+    sessionId: string,
+    reason = 'session_cleanup',
+  ): void {
+    const records = migratedInteractionsBySession.get(sessionId);
+    if (!records || records.size === 0) return;
+    const entries = Array.from(records.entries());
+    records.clear();
+    migratedInteractionsBySession.delete(sessionId);
+    for (const [requestId, record] of entries) {
+      const decision =
+        record.kind === 'ask_user_question'
+          ? buildAskNoAnswerDecision()
+          : record.kind === 'plan_review'
+            ? buildPlanDenyDecision(reason)
+            : buildPermissionDenyDecision(reason);
+      if (record.surface === 'rich') {
+        // cancelPending resolves with the kind-safe default and returns the
+        // card messageId so we can patch its buttons off. When it returns null
+        // the card was either already settled (user click / timeout — the
+        // settle closure's idempotency guard makes this a no-op) or the
+        // register call had not run yet when settle fired (send still in
+        // flight) — resolve the desktop SDK Promise here and retire the card
+        // if the send later lands.
+        const cancelResult = cancelPending(requestId, reason);
+        if (cancelResult) {
+          patchExpiredInteractionCard(requestId, cancelResult.messageId);
+        } else {
+          record.resolve(decision);
+          if (record.messageId) {
+            patchExpiredInteractionCard(requestId, record.messageId);
+          }
+        }
+      } else {
+        // Text-only surface: retire the adapter waiter when possible, but do
+        // not treat that as proof that its async prompt send has returned.
+        // The handler registers its waiter before awaiting the network send,
+        // so cancellation can settle the waiter while the send is still
+        // blocked. Resolve the migrated SDK request immediately; the later
+        // handler result is harmless because record.resolve is idempotent.
+        adapter.cancelTextInteraction?.(record.userId, requestId, decision);
+        record.resolve(decision);
+      }
     }
   }
 

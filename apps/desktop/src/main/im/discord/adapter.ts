@@ -11,7 +11,7 @@ import type { DiscordIM } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from '../ownerScopedStorage';
-import { ui, PROCESSING_EMOJI } from './uiText';
+import { discordUiText, ui, PROCESSING_EMOJI } from './uiText';
 
 function ensureWorkingDir(appId: string): string {
   const leaf = `discord-${appId}`;
@@ -47,6 +47,7 @@ export function buildDiscordAdapter(
       }),
     },
     processingEmoji: PROCESSING_EMOJI,
+    interactionExpiredNotice: discordUiText.expiredCardNotice,
     buildVendorOptions: (userId) => ({ discordChatId: userId, source: 'discord' }),
   };
 }

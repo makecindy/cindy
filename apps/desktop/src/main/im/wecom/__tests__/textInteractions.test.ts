@@ -3,6 +3,7 @@ import type { IMMessageEvent, IMStatus, WecomIM } from '@cindy/im';
 import { describe, expect, it, vi } from 'vitest';
 
 import { formatWecomInteractionPrompt, WecomTextInteractions } from '../textInteractions';
+import { buildWecomAdapter } from '../adapter';
 
 function permissionRequest(
   input: Record<string, unknown>,
@@ -162,5 +163,123 @@ describe('formatWecomInteractionPrompt', () => {
         behavior: 'deny',
         reason: 'wecom_interaction_send_failed',
       });
+  });
+
+  it('按迁移后的剩余时间收口待审批请求', async () => {
+    vi.useFakeTimers();
+    try {
+      const im = {
+        onTextMessageIntercept: vi.fn(() => () => undefined),
+        onStatusChange: vi.fn(() => () => undefined),
+        sendMarkdownText: vi.fn(async () => ({ messageId: 'message-timeout' })),
+        sendText: vi.fn(),
+      } as unknown as WecomIM;
+      const interactions = new WecomTextInteractions(im);
+
+      const result = interactions.handle(
+        'owner',
+        permissionRequest({ command: 'pnpm test' }),
+        { timeoutMs: 1_234 },
+      );
+      await vi.advanceTimersByTimeAsync(1_233);
+      let settled = false;
+      void result.finally(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toEqual({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'wecom_interaction_timeout',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('wecom text interaction timeout', () => {
+  it('forwards the remaining timeout through the adapter', async () => {
+    const handle = vi.fn(async () => ({
+      kind: 'permission' as const,
+      behavior: 'allow' as const,
+    }));
+    const adapter = buildWecomAdapter(
+      {} as WecomIM,
+      { handle } as unknown as WecomTextInteractions,
+      {
+        agentKind: 'claude-code',
+        defaultModel: 'claude-opus-4-7',
+        defaultPermissionMode: 'auto',
+      },
+    );
+    const request = permissionRequest({ command: 'pnpm test' });
+
+    await adapter.handleTextInteraction?.('owner', request, { timeoutMs: 2_000 });
+
+    expect(handle).toHaveBeenCalledWith('owner', request, { timeoutMs: 2_000 });
+  });
+});
+
+describe('WecomTextInteractions.cancel (migrated cleanup)', () => {
+  function makeInteractions() {
+    const sendMarkdownText = vi.fn(async () => ({ messageId: 'message-1' }));
+    const im = {
+      onTextMessageIntercept: vi.fn(() => () => undefined),
+      onStatusChange: vi.fn(() => () => undefined),
+      sendMarkdownText,
+      sendText: vi.fn(),
+    } as unknown as WecomIM;
+    return { interactions: new WecomTextInteractions(im), sendMarkdownText };
+  }
+
+  it('resolves only the matching requestId and reports ownership', async () => {
+    const { interactions, sendMarkdownText } = makeInteractions();
+    const result = interactions.handle(
+      'owner',
+      permissionRequest({ command: 'pnpm test' }, { requestId: 'req-1' }),
+    );
+    await vi.waitFor(() => expect(sendMarkdownText).toHaveBeenCalledOnce());
+
+    // Wrong requestId / user → not handled, promise stays pending.
+    expect(
+      interactions.cancel('owner', 'req-other', {
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_cleanup',
+      }),
+    ).toBe(false);
+
+    expect(
+      interactions.cancel('owner', 'req-1', {
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_cleanup',
+      }),
+    ).toBe(true);
+    await expect(result).resolves.toEqual({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'session_cleanup',
+    });
+  });
+
+  it('adapter forwards cancelTextInteraction to interactions.cancel', async () => {
+    const cancel = vi.fn(() => true);
+    const adapter = buildWecomAdapter(
+      {} as WecomIM,
+      { handle: vi.fn(), cancel } as unknown as WecomTextInteractions,
+      {
+        agentKind: 'claude-code',
+        defaultModel: 'claude-opus-4-7',
+        defaultPermissionMode: 'auto',
+      },
+    );
+    const decision = { kind: 'permission' as const, behavior: 'deny' as const, reason: 'x' };
+    expect(adapter.cancelTextInteraction?.('owner', 'req-1', decision)).toBe(true);
+    expect(cancel).toHaveBeenCalledWith('owner', 'req-1', decision);
   });
 });

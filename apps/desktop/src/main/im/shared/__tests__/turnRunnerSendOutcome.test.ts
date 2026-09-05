@@ -5,10 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  MAIN_OWNED_SEND_CONTEXT,
-  TurnPermissionPolicyUnsupportedError,
-} from '@cindy/maker-core';
+import { MAIN_OWNED_SEND_CONTEXT, TurnPermissionPolicyUnsupportedError } from '@cindy/maker-core';
 import type {
   AgentEvent,
   Capabilities,
@@ -62,6 +59,7 @@ const mocks = vi.hoisted(() => ({
   onSilentStopSettled: vi.fn(() => vi.fn()),
   installDesktopInteractionListener: vi.fn(),
   takePendingInteractionsForSession: vi.fn(),
+  completePermissionQueueTakeoverForSession: vi.fn(),
   // 取消不到时返回 null(取消到了返回 { messageId }, 调用方据此收口卡片)。
   cancelPending: vi.fn(() => null),
   rejectAllPending: vi.fn(),
@@ -143,6 +141,7 @@ vi.mock('../../../maker-ipc/register', () => ({
   wireSessionToIpcExternal: mocks.wireSessionToIpcExternal,
   installDesktopInteractionListener: mocks.installDesktopInteractionListener,
   takePendingInteractionsForSession: mocks.takePendingInteractionsForSession,
+  completePermissionQueueTakeoverForSession: mocks.completePermissionQueueTakeoverForSession,
   noteSilentStopUserSend: mocks.noteSilentStopUserSend,
   noteSilentStopSessionReset: mocks.noteSilentStopSessionReset,
   onSilentStopSettled: mocks.onSilentStopSettled,
@@ -185,6 +184,7 @@ import type { ImChannelAdapter } from '../types';
 import { ui } from '../../feishu/uiText';
 import { CredentialModeSwitchBusyError } from '../../../maker-host/codex-credential-switch';
 import { isHeadlessGhostSetupTurn } from '../../../mcp-integrations/ghostSetupInteractionSurface';
+import { settleMigratedInteractionsForSessionExternal } from '../migratedInteractionSettleRegistry';
 
 /** harness send 的完整签名 — 第二参透传 onAccepted(对齐 maker-core 语义)。 */
 type HarnessSend = (
@@ -742,6 +742,724 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  it('publishes migrated text-only interactions sequentially', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const firstDecision = deferred<InteractionDecision>();
+    const secondDecision = deferred<InteractionDecision>();
+    const handleTextInteraction = vi
+      .fn<NonNullable<ImChannelAdapter['handleTextInteraction']>>()
+      .mockImplementationOnce(async () => firstDecision.promise)
+      .mockImplementationOnce(async () => secondDecision.promise);
+    const resolveFirst = vi.fn();
+    const resolveSecond = vi.fn();
+    const expiresAt = Date.now() + 30_000;
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-1',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-1',
+          toolName: 'bash',
+          input: { command: 'first' },
+        },
+        resolve: resolveFirst,
+        expiresAt,
+      },
+      {
+        requestId: 'migrated-2',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-2',
+          toolName: 'bash',
+          input: { command: 'second' },
+        },
+        resolve: resolveSecond,
+        expiresAt,
+      },
+    ]);
+    const textAdapter: ImChannelAdapter = {
+      ...fakeAdapter,
+      channel: 'wecom',
+      output: {
+        kind: 'chunked-text',
+        im: mocks.feishuIm as unknown as ChannelIM,
+        commitFinal: vi.fn(async () => undefined),
+      },
+      handleTextInteraction,
+    };
+    const localRunner = createTurnRunner(textAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-queue',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(handleTextInteraction).toHaveBeenCalledOnce());
+      expect(handleTextInteraction.mock.calls[0]?.[1].requestId).toBe('migrated-1');
+
+      firstDecision.resolve({ kind: 'permission', behavior: 'allow' });
+      await waitForAssertion(() => expect(handleTextInteraction).toHaveBeenCalledTimes(2));
+      expect(resolveFirst).toHaveBeenCalledWith({ kind: 'permission', behavior: 'allow' });
+      expect(handleTextInteraction.mock.calls[1]?.[1].requestId).toBe('migrated-2');
+
+      secondDecision.resolve({ kind: 'permission', behavior: 'deny', reason: 'user_denied' });
+      await waitForAssertion(() => expect(resolveSecond).toHaveBeenCalledOnce());
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('keeps the Desktop permission queue fenced until migrated cards are accepted', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const card = deferred<{ messageId: string }>();
+    const resolve = vi.fn();
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-card-fence',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-card-fence',
+          toolName: 'bash',
+          input: { command: 'pnpm test' },
+        },
+        resolve,
+      },
+    ]);
+    mocks.buildPermissionCard.mockReturnValue({
+      title: 'Permission',
+      body: 'Allow?',
+      buttons: [],
+    });
+    mocks.feishuIm.sendInteractiveCard.mockReturnValueOnce(card.promise);
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-card-fence',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledOnce());
+      expect(mocks.completePermissionQueueTakeoverForSession).not.toHaveBeenCalled();
+
+      card.resolve({ messageId: 'migrated-card-fence' });
+      await waitForAssertion(() =>
+        expect(mocks.completePermissionQueueTakeoverForSession).toHaveBeenCalledOnce(),
+      );
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('settles a migrated text request while the adapter prompt send is still blocked', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const promptDecision = deferred<InteractionDecision>();
+    const resolve = vi.fn();
+    const handleTextInteraction = vi.fn<NonNullable<ImChannelAdapter['handleTextInteraction']>>(
+      async () => promptDecision.promise,
+    );
+    const cancelTextInteraction = vi.fn(() => true);
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-blocked-send',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-blocked-send',
+          toolName: 'bash',
+          input: { command: 'pnpm test' },
+        },
+        resolve,
+        expiresAt: Date.now() + 30_000,
+      },
+    ]);
+    const textAdapter: ImChannelAdapter = {
+      ...fakeAdapter,
+      channel: 'wecom',
+      output: {
+        kind: 'chunked-text',
+        im: mocks.feishuIm as unknown as ChannelIM,
+        commitFinal: vi.fn(async () => undefined),
+      },
+      handleTextInteraction,
+      cancelTextInteraction,
+    };
+    const localRunner = createTurnRunner(textAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-blocked-send',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(handleTextInteraction).toHaveBeenCalledOnce());
+
+      settleMigratedInteractionsForSessionExternal('desktop-attached-session', 'session_aborted');
+
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_aborted',
+      });
+      expect(cancelTextInteraction).toHaveBeenCalledWith(
+        'ou_user',
+        'migrated-blocked-send',
+        expect.objectContaining({ behavior: 'deny', reason: 'session_aborted' }),
+      );
+
+      promptDecision.resolve({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_aborted',
+      });
+      await flushMicrotasks();
+      expect(resolve).toHaveBeenCalledOnce();
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('hard-denies destructive permissions before publishing a migrated text interaction', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const resolve = vi.fn();
+    const handleTextInteraction = vi.fn<NonNullable<ImChannelAdapter['handleTextInteraction']>>();
+    mocks.checkDestructiveToolCall.mockReturnValue({
+      destructive: true,
+      reason: 'shell command contains `rm`',
+    });
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-destructive',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-destructive',
+          toolName: 'bash',
+          input: { command: 'rm -rf generated' },
+        },
+        resolve,
+      },
+    ]);
+    const textAdapter: ImChannelAdapter = {
+      ...fakeAdapter,
+      channel: 'wecom',
+      output: {
+        kind: 'chunked-text',
+        im: mocks.feishuIm as unknown as ChannelIM,
+        commitFinal: vi.fn(async () => undefined),
+      },
+      handleTextInteraction,
+    };
+    const localRunner = createTurnRunner(textAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-destructive',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: '[destructiveGuard] shell command contains `rm`',
+      });
+      expect(handleTextInteraction).not.toHaveBeenCalled();
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('does not register a migrated group permission after its DM notice crosses the deadline', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const resolve = vi.fn();
+    let now = 1_000;
+    const expiresAt = 1_010;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-expired-notice',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-expired-notice',
+          toolName: 'bash',
+          input: { command: 'after notice' },
+        },
+        resolve,
+        expiresAt,
+      },
+    ]);
+    mocks.buildPermissionCard.mockReturnValue({ title: 'Permission', body: 'Allow?', buttons: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'migrated-card' });
+    mocks.feishuIm.sendText.mockImplementation(async () => {
+      now = expiresAt;
+    });
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'g/oc_group1/omt_t1',
+        userMessageId: 'msg-migrated-expired',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'interaction_timeout',
+      });
+      expect(mocks.registerPendingExternal).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('settles a migrated rich card with a safe deny when the session is disposed', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const resolve = vi.fn();
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-rich-cleanup',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-rich-cleanup',
+          toolName: 'bash',
+          input: { command: 'pnpm build' },
+        },
+        resolve,
+      },
+    ]);
+    mocks.buildPermissionCard.mockReturnValue({
+      title: 'Permission',
+      body: 'Allow?',
+      buttons: [],
+    });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'migrated-rich-card' });
+    // Mirror the real pendingInteractions table: capture the resolve fn handed
+    // to registerPendingExternal and have cancelPending invoke it with a deny.
+    let registeredResolve: ((decision: InteractionDecision) => void) | null = null;
+    mocks.registerPendingExternal.mockImplementation(
+      (_requestId, _kind, _messageId, resolveFn: (decision: InteractionDecision) => void) => {
+        registeredResolve = resolveFn;
+      },
+    );
+    (mocks.cancelPending as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (requestId: string, reason: string) => {
+        if (requestId !== 'migrated-rich-cleanup' || !registeredResolve) return null;
+        registeredResolve({ kind: 'permission', behavior: 'deny', reason });
+        return { messageId: 'migrated-rich-card' };
+      },
+    );
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-rich-cleanup',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(mocks.registerPendingExternal).toHaveBeenCalledOnce());
+      expect(resolve).not.toHaveBeenCalled();
+
+      await localRunner.disposeAllSessions();
+
+      await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_cleanup',
+      });
+      expect(mocks.cancelPending).toHaveBeenCalledWith('migrated-rich-cleanup', 'session_cleanup');
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('settles a migrated rich card with a safe deny when the active turn is stopped', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const resolve = vi.fn();
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-rich-stop',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-rich-stop',
+          toolName: 'bash',
+          input: { command: 'pnpm build' },
+        },
+        resolve,
+      },
+    ]);
+    mocks.buildPermissionCard.mockReturnValue({
+      title: 'Permission',
+      body: 'Allow?',
+      buttons: [],
+    });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'migrated-stop-card' });
+    mocks.registerPendingExternal.mockImplementation(
+      (_requestId, _kind, _messageId, resolveFn: (decision: InteractionDecision) => void) => {
+        (mocks.cancelPending as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+          (requestId: string, reason: string) => {
+            if (requestId !== 'migrated-rich-stop') return null;
+            resolveFn({ kind: 'permission', behavior: 'deny', reason });
+            return { messageId: 'migrated-stop-card' };
+          },
+        );
+      },
+    );
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-rich-stop',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(mocks.registerPendingExternal).toHaveBeenCalledOnce());
+      expect(resolve).not.toHaveBeenCalled();
+
+      // The desktop turn is still awaiting the migrated permission, so !stop
+      // must deny it instead of waiting for its 10-minute timeout.
+      h.isTurnRunning.mockReturnValue(true);
+      const result = await localRunner.stopActiveTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+      });
+      expect(result.stopped).toBe(true);
+
+      await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_cleanup',
+      });
+      expect(mocks.cancelPending).toHaveBeenCalledWith('migrated-rich-stop', 'session_cleanup');
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('keeps migrated card ownership across detach and settles it on later session close', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const resolve = vi.fn();
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-rich-detach',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-rich-detach',
+          toolName: 'bash',
+          input: { command: 'pnpm build' },
+        },
+        resolve,
+      },
+    ]);
+    mocks.buildPermissionCard.mockReturnValue({
+      title: 'Permission',
+      body: 'Allow?',
+      buttons: [],
+    });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'migrated-detach-card' });
+    let registeredResolve: ((decision: InteractionDecision) => void) | null = null;
+    mocks.registerPendingExternal.mockImplementation(
+      (_requestId, _kind, _messageId, resolveFn: (decision: InteractionDecision) => void) => {
+        registeredResolve = resolveFn;
+      },
+    );
+    (mocks.cancelPending as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (requestId: string, reason: string) => {
+        if (requestId !== 'migrated-rich-detach' || !registeredResolve) return null;
+        registeredResolve({ kind: 'permission', behavior: 'deny', reason });
+        return { messageId: 'migrated-detach-card' };
+      },
+    );
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-rich-detach',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(mocks.registerPendingExternal).toHaveBeenCalledOnce());
+
+      // Detach rewires listeners but must NOT deny a card the user can still
+      // click through cardActionHandler.
+      localRunner.detachFromSession('desktop-attached-session');
+      await flushMicrotasks();
+      expect(mocks.cancelPending).not.toHaveBeenCalledWith(
+        'migrated-rich-detach',
+        'session_cleanup',
+      );
+      expect(resolve).not.toHaveBeenCalled();
+
+      // Later, the maker session closes (app quit / agent switch). Ownership
+      // survived detach, so the forgotten-session path still settles it.
+      emitMakerEvent({
+        type: 'session:closed',
+        sessionId: 'desktop-attached-session',
+        session: h.session,
+        reason: 'user-requested',
+      } as unknown as MakerEvent);
+      await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_cleanup',
+      });
+      expect(mocks.cancelPending).toHaveBeenCalledWith('migrated-rich-detach', 'session_cleanup');
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('settles detached migrated ownership during global dispose', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const resolve = vi.fn();
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-rich-dispose',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-rich-dispose',
+          toolName: 'bash',
+          input: { command: 'pnpm build' },
+        },
+        resolve,
+      },
+    ]);
+    mocks.buildPermissionCard.mockReturnValue({
+      title: 'Permission',
+      body: 'Allow?',
+      buttons: [],
+    });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'migrated-dispose-card' });
+    let registeredResolve: ((decision: InteractionDecision) => void) | null = null;
+    mocks.registerPendingExternal.mockImplementation(
+      (_requestId, _kind, _messageId, resolveFn: (decision: InteractionDecision) => void) => {
+        registeredResolve = resolveFn;
+      },
+    );
+    (mocks.cancelPending as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (requestId: string, reason: string) => {
+        if (requestId !== 'migrated-rich-dispose' || !registeredResolve) return null;
+        registeredResolve({ kind: 'permission', behavior: 'deny', reason });
+        return { messageId: 'migrated-dispose-card' };
+      },
+    );
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-rich-dispose',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(mocks.registerPendingExternal).toHaveBeenCalledOnce());
+      localRunner.detachFromSession('desktop-attached-session');
+      await flushMicrotasks();
+      expect(resolve).not.toHaveBeenCalled();
+
+      // The detach is deferred while this IM turn remains in the runner's
+      // queue. Finish the turn so the SessionState is actually removed; the
+      // migrated ownership must still survive outside that map.
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+      expect(resolve).not.toHaveBeenCalled();
+
+      await localRunner.disposeAllSessions();
+
+      await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_disposed',
+      });
+      expect(mocks.cancelPending).toHaveBeenCalledWith('migrated-rich-dispose', 'session_disposed');
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('denies a migrated permission queued behind an unanswered ask at its absolute deadline (text)', async () => {
+    // Regression: text-only channels publish migrated interactions serially.
+    // The permission's absolute deadline used to be armed only when it reached
+    // the front of the queue, so an unanswered ask/plan ahead of it could block
+    // the SDK Promise past the permission's original deadline indefinitely.
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const resolveAsk = vi.fn();
+    const resolvePermission = vi.fn();
+    // First interaction (ask) never resolves — simulates a user who walks away.
+    const askDecision = deferred<InteractionDecision>();
+    const handleTextInteraction = vi
+      .fn<NonNullable<ImChannelAdapter['handleTextInteraction']>>()
+      .mockImplementationOnce(async () => askDecision.promise);
+    // Permission deadline is 50ms out, armed by the cohort pre-registration
+    // BEFORE the serial loop awaits the preceding ask.
+    const permissionExpiresAt = Date.now() + 50;
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-queued-ask',
+        request: {
+          kind: 'ask_user_question',
+          requestId: 'migrated-queued-ask',
+          questions: [{ question: 'Q1', header: 'q1' }],
+        } as InteractionRequest,
+        resolve: resolveAsk,
+      },
+      {
+        requestId: 'migrated-queued-permission',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-queued-permission',
+          toolName: 'bash',
+          input: { command: 'second' },
+        },
+        resolve: resolvePermission,
+        expiresAt: permissionExpiresAt,
+      },
+    ]);
+    const textAdapter: ImChannelAdapter = {
+      ...fakeAdapter,
+      channel: 'wecom',
+      output: {
+        kind: 'chunked-text',
+        im: mocks.feishuIm as unknown as ChannelIM,
+        commitFinal: vi.fn(async () => undefined),
+      },
+      handleTextInteraction,
+    };
+    const localRunner = createTurnRunner(textAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-queued-deadline',
+        text: 'take over',
+        attachments: [],
+      });
+      // The ask reached the text waiter and is still pending.
+      await waitForAssertion(() => expect(handleTextInteraction).toHaveBeenCalledOnce());
+
+      // Wait past the permission's absolute deadline. Its watchdog was armed at
+      // pre-registration time, not when it reached the front of the queue.
+      await vi.waitFor(() => expect(resolvePermission).toHaveBeenCalledOnce(), {
+        timeout: 1000,
+      });
+      expect(resolvePermission).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'interaction_timeout',
+      });
+      // The preceding ask is unaffected and is still awaiting its waiter.
+      expect(resolveAsk).not.toHaveBeenCalled();
+      expect(handleTextInteraction).toHaveBeenCalledOnce();
+    } finally {
+      askDecision.resolve({ kind: 'ask_user_question', answers: {} });
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('settles a migrated card through the external ABORT_SESSION bridge after detach', async () => {
+    // Regression: Desktop Stop (ABORT_SESSION) does not close the maker session
+    // (no session:closed event), and after a channel detach the turnRunner's
+    // event listeners are torn down — so the migrated card's SDK Promise used to
+    // stay alive until its own timeout. The leaf registry bridges ABORT_SESSION
+    // to the migrated-ownership settle-all even with no live SessionState.
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const resolve = vi.fn();
+    mocks.takePendingInteractionsForSession.mockReturnValue([
+      {
+        requestId: 'migrated-abort-bridge',
+        request: {
+          kind: 'permission',
+          requestId: 'migrated-abort-bridge',
+          toolName: 'bash',
+          input: { command: 'pnpm build' },
+        },
+        resolve,
+      },
+    ]);
+    mocks.buildPermissionCard.mockReturnValue({
+      title: 'Permission',
+      body: 'Allow?',
+      buttons: [],
+    });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'migrated-abort-card' });
+    mocks.registerPendingExternal.mockImplementation(
+      (_requestId, _kind, _messageId, resolveFn: (decision: InteractionDecision) => void) => {
+        (mocks.cancelPending as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+          (requestId: string, reason: string) => {
+            if (requestId !== 'migrated-abort-bridge') return null;
+            resolveFn({ kind: 'permission', behavior: 'deny', reason });
+            return { messageId: 'migrated-abort-card' };
+          },
+        );
+      },
+    );
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-migrated-abort-bridge',
+        text: 'take over',
+        attachments: [],
+      });
+      await waitForAssertion(() => expect(mocks.registerPendingExternal).toHaveBeenCalledOnce());
+      expect(resolve).not.toHaveBeenCalled();
+
+      // Detach rewires listeners; migrated ownership survives in the outer map.
+      localRunner.detachFromSession('desktop-attached-session');
+      await flushMicrotasks();
+
+      // Simulate Desktop ABORT_SESSION reaching the leaf registry (this is what
+      // register.ts calls in the ABORT_SESSION / input_stop finally blocks).
+      settleMigratedInteractionsForSessionExternal('desktop-attached-session', 'session_aborted');
+
+      await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_aborted',
+      });
+      expect(mocks.cancelPending).toHaveBeenCalledWith('migrated-abort-bridge', 'session_aborted');
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
   it('keeps channel-native IM turns on their existing non-marker path', async () => {
     const h = setupSession(async () => ({ accepted: true }));
 
@@ -1233,9 +1951,12 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   it('skips the turn policy when the channel declares the session mode optional (Full access guardrail removal)', async () => {
     // feishu 渠道设置显式放行「完全访问」后: 该档位的群轮次不再挂强确认
     // 策略, maker 不 fail-closed, 按用户选择直接执行。
-    mocks.peekSessionById.mockImplementationOnce(async () => ({
-      permissionMode: 'bypassPermissions',
-    } as unknown as ImSessionRow));
+    mocks.peekSessionById.mockImplementationOnce(
+      async () =>
+        ({
+          permissionMode: 'bypassPermissions',
+        }) as unknown as ImSessionRow,
+    );
     const h = createSessionHarness(async () => ({ accepted: true }));
     mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
     const localAdapter = {
@@ -1326,7 +2047,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   it('keeps the turn policy for other modes even with the optional-mode hook', async () => {
     mocks.peekSessionById.mockImplementationOnce(
-      async () => ({ permissionMode: 'auto' } as unknown as ImSessionRow),
+      async () => ({ permissionMode: 'auto' }) as unknown as ImSessionRow,
     );
     const h = createSessionHarness(
       async () => {
@@ -1557,10 +2278,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
     await flushMicrotasks();
 
-    expect(mocks.feishuIm.takeNotedFallbackOpenerId).toHaveBeenCalledWith(
-      'ou_user',
-      'markdown',
-    );
+    expect(mocks.feishuIm.takeNotedFallbackOpenerId).toHaveBeenCalledWith('ou_user', 'markdown');
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
       'ou_user',
       expect.stringContaining('启动 agent 失败'),
@@ -3177,189 +3895,201 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
-describe('初始流式输出面创建失败的收口降级(#2164)', () => {
-  it('startStreamingText 拒绝 + 短文本:正文经 sendText 一次性送达,turn 正常完成', async () => {
-    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
-    const h = setupSession(async () => ({ accepted: true }));
-    const onTurnComplete = vi.fn();
-    await runDefaultTurn(onTurnComplete);
-    h.emit({ type: 'text', data: { text: 'recovered answer', isFinal: true }, source: 'claude-code' });
-    await flushMicrotasks();
-    h.emit({ type: 'done', data: {}, source: 'claude-code' });
-    await waitForAssertion(() => {
-      expect(onTurnComplete).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+  describe('初始流式输出面创建失败的收口降级(#2164)', () => {
+    it('startStreamingText 拒绝 + 短文本:正文经 sendText 一次性送达,turn 正常完成', async () => {
+      mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnComplete = vi.fn();
+      await runDefaultTurn(onTurnComplete);
+      h.emit({
+        type: 'text',
+        data: { text: 'recovered answer', isFinal: true },
+        source: 'claude-code',
+      });
+      await flushMicrotasks();
+      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await waitForAssertion(() => {
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+          'ou_user',
+          'recovered answer',
+          expect.anything(),
+        );
+      });
+      const fallbackSends = mocks.feishuIm.sendText.mock.calls.filter(
+        (call) => call[1] === 'recovered answer',
+      );
+      expect(fallbackSends).toHaveLength(1);
+    });
+
+    it('拒绝后多个连续 text delta:不重复调用 startStreamingText,降级仍只发一次', async () => {
+      mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnComplete = vi.fn();
+      await runDefaultTurn(onTurnComplete);
+      h.emit({ type: 'text', data: { text: 'part-1 ' }, source: 'claude-code' });
+      await flushMicrotasks();
+      h.emit({ type: 'text', data: { text: 'part-2 ' }, source: 'claude-code' });
+      await flushMicrotasks();
+      h.emit({ type: 'text', data: { text: 'part-3' }, source: 'claude-code' });
+      await flushMicrotasks();
+      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await waitForAssertion(() => {
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        // onTurnComplete 在收口开头触发,降级发送在其后 —— 断言必须一起等。
+        expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+          'ou_user',
+          'part-1 part-2 part-3',
+          expect.anything(),
+        );
+      });
+      // 失败标记抑制重试:密集 delta 不造成 API 风暴 / 孤儿卡。
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+      const fallbackSends = mocks.feishuIm.sendText.mock.calls.filter(
+        (call) => call[1] === 'part-1 part-2 part-3',
+      );
+      expect(fallbackSends).toHaveLength(1);
+    });
+
+    it('拒绝 + 降级发送也失败:completion / 收口仍各执行一次,不阻塞', async () => {
+      mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+      mocks.feishuIm.sendText.mockRejectedValue(new Error('plain send down'));
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnComplete = vi.fn();
+      await runDefaultTurn(onTurnComplete);
+      h.emit({
+        type: 'text',
+        data: { text: 'never delivered', isFinal: true },
+        source: 'claude-code',
+      });
+      await flushMicrotasks();
+      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await waitForAssertion(() => {
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('正常建卡成功:finalize 收口,不触发纯文本降级', async () => {
+      const streamingHandle = {
+        messageId: 'stream-ok',
+        append: vi.fn(),
+        replace: vi.fn(),
+        finalize: vi.fn(),
+        close: vi.fn(),
+      };
+      mocks.feishuIm.startStreamingText.mockResolvedValue(streamingHandle);
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnComplete = vi.fn();
+      await runDefaultTurn(onTurnComplete);
+      h.emit({
+        type: 'text',
+        data: { text: 'streamed fine', isFinal: true },
+        source: 'claude-code',
+      });
+      await flushMicrotasks();
+      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await waitForAssertion(() => {
+        expect(streamingHandle.finalize).toHaveBeenCalledTimes(1);
+      });
+      expect(mocks.feishuIm.sendText).not.toHaveBeenCalledWith(
         'ou_user',
-        'recovered answer',
+        'streamed fine',
         expect.anything(),
       );
     });
-    const fallbackSends = mocks.feishuIm.sendText.mock.calls.filter(
-      (call) => call[1] === 'recovered answer',
-    );
-    expect(fallbackSends).toHaveLength(1);
-  });
 
-  it('拒绝后多个连续 text delta:不重复调用 startStreamingText,降级仍只发一次', async () => {
-    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
-    const h = setupSession(async () => ({ accepted: true }));
-    const onTurnComplete = vi.fn();
-    await runDefaultTurn(onTurnComplete);
-    h.emit({ type: 'text', data: { text: 'part-1 ' }, source: 'claude-code' });
-    await flushMicrotasks();
-    h.emit({ type: 'text', data: { text: 'part-2 ' }, source: 'claude-code' });
-    await flushMicrotasks();
-    h.emit({ type: 'text', data: { text: 'part-3' }, source: 'claude-code' });
-    await flushMicrotasks();
-    h.emit({ type: 'done', data: {}, source: 'claude-code' });
-    await waitForAssertion(() => {
-      expect(onTurnComplete).toHaveBeenCalledTimes(1);
-      // onTurnComplete 在收口开头触发,降级发送在其后 —— 断言必须一起等。
-      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
-        'ou_user',
-        'part-1 part-2 part-3',
-        expect.anything(),
-      );
+    it('空正文 + 建卡失败:保留「本轮无文本输出」提示', async () => {
+      mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnComplete = vi.fn();
+      await runDefaultTurn(onTurnComplete);
+      // 只有 tool_use 会惰性触发建卡,不产生正文。
+      h.emit({
+        type: 'tool_use',
+        data: { name: 'Bash', input: { command: 'ls' } },
+        source: 'claude-code',
+      });
+      await flushMicrotasks();
+      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await waitForAssertion(() => {
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+          'ou_user',
+          expect.stringContaining('本轮无文本输出'),
+          expect.anything(),
+        );
+      });
     });
-    // 失败标记抑制重试:密集 delta 不造成 API 风暴 / 孤儿卡。
-    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
-    const fallbackSends = mocks.feishuIm.sendText.mock.calls.filter(
-      (call) => call[1] === 'part-1 part-2 part-3',
-    );
-    expect(fallbackSends).toHaveLength(1);
-  });
 
-  it('拒绝 + 降级发送也失败:completion / 收口仍各执行一次,不阻塞', async () => {
-    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
-    mocks.feishuIm.sendText.mockRejectedValue(new Error('plain send down'));
-    const h = setupSession(async () => ({ accepted: true }));
-    const onTurnComplete = vi.fn();
-    await runDefaultTurn(onTurnComplete);
-    h.emit({ type: 'text', data: { text: 'never delivered', isFinal: true }, source: 'claude-code' });
-    await flushMicrotasks();
-    h.emit({ type: 'done', data: {}, source: 'claude-code' });
-    await waitForAssertion(() => {
-      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    it('无文本输出兜底发送认领暂存 opener', async () => {
+      mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+      mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('msg-user');
+      mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
+      mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('om_deferred');
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnComplete = vi.fn();
+      await runDefaultTurn(onTurnComplete);
+      h.emit({
+        type: 'tool_use',
+        data: { name: 'Bash', input: { command: 'ls' } },
+        source: 'claude-code',
+      });
+      await flushMicrotasks();
+      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await waitForAssertion(() => {
+        expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+          'ou_user',
+          expect.stringContaining('本轮无文本输出'),
+          expect.objectContaining({ fallbackOpenerId: 'om_deferred' }),
+        );
+      });
     });
-  });
 
-  it('正常建卡成功:finalize 收口,不触发纯文本降级', async () => {
-    const streamingHandle = {
-      messageId: 'stream-ok',
-      append: vi.fn(),
-      replace: vi.fn(),
-      finalize: vi.fn(),
-      close: vi.fn(),
-    };
-    mocks.feishuIm.startStreamingText.mockResolvedValue(streamingHandle);
-    const h = setupSession(async () => ({ accepted: true }));
-    const onTurnComplete = vi.fn();
-    await runDefaultTurn(onTurnComplete);
-    h.emit({ type: 'text', data: { text: 'streamed fine', isFinal: true }, source: 'claude-code' });
-    await flushMicrotasks();
-    h.emit({ type: 'done', data: {}, source: 'claude-code' });
-    await waitForAssertion(() => {
-      expect(streamingHandle.finalize).toHaveBeenCalledTimes(1);
+    it('错误收口兜底发送认领暂存 opener', async () => {
+      mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('msg-user');
+      mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
+      mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('om_deferred');
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn();
+      h.emit({ type: 'error', data: { message: 'boom', isTerminal: true } });
+      await waitForAssertion(() => {
+        expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+          'ou_user',
+          expect.stringMatching(/❌ 错误：.*boom/),
+          expect.objectContaining({ fallbackOpenerId: 'om_deferred' }),
+        );
+      });
     });
-    expect(mocks.feishuIm.sendText).not.toHaveBeenCalledWith(
-      'ou_user',
-      'streamed fine',
-      expect.anything(),
-    );
-  });
 
-  it('空正文 + 建卡失败:保留「本轮无文本输出」提示', async () => {
-    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
-    const h = setupSession(async () => ({ accepted: true }));
-    const onTurnComplete = vi.fn();
-    await runDefaultTurn(onTurnComplete);
-    // 只有 tool_use 会惰性触发建卡,不产生正文。
-    h.emit({
-      type: 'tool_use',
-      data: { name: 'Bash', input: { command: 'ls' } },
-      source: 'claude-code',
-    });
-    await flushMicrotasks();
-    h.emit({ type: 'done', data: {}, source: 'claude-code' });
-    await waitForAssertion(() => {
-      expect(onTurnComplete).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
-        'ou_user',
-        expect.stringContaining('本轮无文本输出'),
-        expect.anything(),
-      );
-    });
-  });
+    it('首个文本前 error 就地消费 pending opener, 同话题下一轮无文本不会误认领', async () => {
+      mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('msg-user');
+      mocks.feishuIm.consumePendingOpenerCard.mockResolvedValueOnce(true);
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnA = vi.fn();
+      await runDefaultTurn(onTurnA);
+      h.emit({ type: 'error', data: { message: 'boom', isTerminal: true } });
+      await waitForAssertion(() => {
+        expect(onTurnA).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.consumePendingOpenerCard).toHaveBeenCalledWith(
+          'ou_user',
+          expect.stringMatching(/❌ 错误：.*boom/),
+        );
+      });
+      expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
 
-  it('无文本输出兜底发送认领暂存 opener', async () => {
-    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
-    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('msg-user');
-    mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
-    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('om_deferred');
-    const h = setupSession(async () => ({ accepted: true }));
-    const onTurnComplete = vi.fn();
-    await runDefaultTurn(onTurnComplete);
-    h.emit({
-      type: 'tool_use',
-      data: { name: 'Bash', input: { command: 'ls' } },
-      source: 'claude-code',
-    });
-    await flushMicrotasks();
-    h.emit({ type: 'done', data: {}, source: 'claude-code' });
-    await waitForAssertion(() => {
-      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
-        'ou_user',
-        expect.stringContaining('本轮无文本输出'),
-        expect.objectContaining({ fallbackOpenerId: 'om_deferred' }),
-      );
+      mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue(undefined);
+      const onTurnB = vi.fn();
+      await runDefaultTurn(onTurnB, { userMessageId: 'msg-user-2', text: 'followup' });
+      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await waitForAssertion(() => {
+        expect(onTurnB).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.consumePendingOpenerCard).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+          'ou_user',
+          expect.stringContaining('本轮无文本输出'),
+          expect.anything(),
+        );
+      });
     });
   });
-
-  it('错误收口兜底发送认领暂存 opener', async () => {
-    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('msg-user');
-    mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
-    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('om_deferred');
-    const h = setupSession(async () => ({ accepted: true }));
-    await runDefaultTurn();
-    h.emit({ type: 'error', data: { message: 'boom', isTerminal: true } });
-    await waitForAssertion(() => {
-      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
-        'ou_user',
-        expect.stringMatching(/❌ 错误：.*boom/),
-        expect.objectContaining({ fallbackOpenerId: 'om_deferred' }),
-      );
-    });
-  });
-
-  it('首个文本前 error 就地消费 pending opener, 同话题下一轮无文本不会误认领', async () => {
-    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('msg-user');
-    mocks.feishuIm.consumePendingOpenerCard.mockResolvedValueOnce(true);
-    const h = setupSession(async () => ({ accepted: true }));
-    const onTurnA = vi.fn();
-    await runDefaultTurn(onTurnA);
-    h.emit({ type: 'error', data: { message: 'boom', isTerminal: true } });
-    await waitForAssertion(() => {
-      expect(onTurnA).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.consumePendingOpenerCard).toHaveBeenCalledWith(
-        'ou_user',
-        expect.stringMatching(/❌ 错误：.*boom/),
-      );
-    });
-    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
-
-    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue(undefined);
-    const onTurnB = vi.fn();
-    await runDefaultTurn(onTurnB, { userMessageId: 'msg-user-2', text: 'followup' });
-    h.emit({ type: 'done', data: {}, source: 'claude-code' });
-    await waitForAssertion(() => {
-      expect(onTurnB).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.consumePendingOpenerCard).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
-        'ou_user',
-        expect.stringContaining('本轮无文本输出'),
-        expect.anything(),
-      );
-    });
-  });
-});
 });

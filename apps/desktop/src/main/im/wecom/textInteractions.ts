@@ -25,7 +25,11 @@ export class WecomTextInteractions {
     });
   }
 
-  async handle(userId: string, request: InteractionRequest): Promise<InteractionDecision> {
+  async handle(
+    userId: string,
+    request: InteractionRequest,
+    options?: { timeoutMs?: number },
+  ): Promise<InteractionDecision> {
     const previous = this.pending.get(userId);
     if (previous) {
       clearTimeout(previous.timer);
@@ -36,10 +40,11 @@ export class WecomTextInteractions {
     const result = new Promise<InteractionDecision>((resolve) => {
       resolvePending = resolve;
     });
+    const timeoutMs = Math.max(1, options?.timeoutMs ?? INTERACTION_TIMEOUT_MS);
     const timer = setTimeout(() => {
       this.pending.delete(userId);
       resolvePending(defaultDecision(request, 'wecom_interaction_timeout'));
-    }, INTERACTION_TIMEOUT_MS);
+    }, timeoutMs);
     timer.unref?.();
     this.pending.set(userId, { request, resolve: resolvePending, timer });
 
@@ -64,6 +69,25 @@ export class WecomTextInteractions {
       pending.resolve(defaultDecision(pending.request, reason));
     }
     this.pending.clear();
+  }
+
+  /**
+   * Resolve only the exact pending request owned by the central interaction
+   * route (session cleanup / !stop). Request-id matching prevents a late
+   * cancellation from settling a newer one-shot confirmation for the same peer.
+   * Returns true when this class owned and settled the waiter.
+   */
+  cancel(
+    userId: string,
+    requestId: string,
+    decision: InteractionDecision,
+  ): boolean {
+    const pending = this.pending.get(userId);
+    if (!pending || pending.request.requestId !== requestId) return false;
+    clearTimeout(pending.timer);
+    this.pending.delete(userId);
+    pending.resolve(decision);
+    return true;
   }
 
   private consume(event: IMMessageEvent): boolean {

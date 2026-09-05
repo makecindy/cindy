@@ -30,7 +30,7 @@ function register(
 
 beforeEach(() => {
   // 表是模块级单例 — 逐个清掉上一条用例的残留, 否则 requestId 会撞 already exists。
-  for (const id of ['req-perm', 'req-plan', 'req-ask', 'req-gone']) {
+  for (const id of ['req-perm', 'req-plan', 'req-ask', 'req-gone', 'req-timeout']) {
     cancelPending(id, 'test_cleanup');
   }
 });
@@ -56,7 +56,10 @@ describe('cancelPending 交还卡片地址', () => {
     const resolve2 = vi.fn();
     registerPendingExternal('req-perm2', 'permission', 'chat|666', resolve2, vi.fn(), {
       toolName: 'Bash',
-      permissionCard: { title: '🔧 工具调用：Bash', body: '**参数预览**\n```json\n{"cmd": "ls"}\n```' },
+      permissionCard: {
+        title: '🔧 工具调用：Bash',
+        body: '**参数预览**\n```json\n{"cmd": "ls"}\n```',
+      },
     });
 
     const resolved = resolvePending('req-perm2', { kind: 'permission', behavior: 'allow' });
@@ -117,5 +120,56 @@ describe('rejectAllPending', () => {
     expect(isSystemPermissionDenialReason('session_disposed')).toBe(true);
     expect(isSystemPermissionDenialReason('session disposed')).toBe(true);
     expect(getPendingCount()).toBe(0);
+  });
+});
+
+describe('migrated interaction timeout', () => {
+  it('denies once, removes the pending entry, and asks the channel to expire the card', async () => {
+    vi.useFakeTimers();
+    try {
+      const resolve = vi.fn();
+      const onTimeout = vi.fn();
+      registerPendingExternal('req-timeout', 'permission', 'chat|timeout', resolve, vi.fn(), {
+        timeoutMs: 600,
+        onTimeout,
+      });
+
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(resolve).toHaveBeenCalledWith({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'interaction_timeout',
+      });
+      expect(onTimeout).toHaveBeenCalledWith('chat|timeout');
+      expect(getPendingCount()).toBe(0);
+
+      expect(resolvePending('req-timeout', { kind: 'permission', behavior: 'allow' })).toBeNull();
+      expect(resolve).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the migrated timeout when the user answers in time', async () => {
+    vi.useFakeTimers();
+    try {
+      const resolve = vi.fn();
+      const onTimeout = vi.fn();
+      registerPendingExternal('req-timeout', 'permission', 'chat|answered', resolve, vi.fn(), {
+        timeoutMs: 600,
+        onTimeout,
+      });
+
+      resolvePending('req-timeout', { kind: 'permission', behavior: 'allow' });
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(resolve).toHaveBeenCalledWith({ kind: 'permission', behavior: 'allow' });
+      expect(onTimeout).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

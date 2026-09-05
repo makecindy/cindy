@@ -46,6 +46,7 @@ describe('discord ImChannelAdapter characterization', () => {
     expect(adapter.channel).toBe('discord');
     expect(adapter.sessions.source).toBe('discord');
     expect(adapter.sessions.workspaceKind).toBe('dialogue');
+    expect(adapter.interactionExpiredNotice).toBe('卡片已过期');
     expect(adapter.threadScoped).toBeUndefined();
   });
 

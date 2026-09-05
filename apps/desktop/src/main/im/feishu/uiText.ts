@@ -16,6 +16,10 @@ import type { IMUnsupportedEntry } from '@cindy/im';
 import { t } from '../../i18n';
 import type { ImUiTextPack } from '../shared/types';
 
+export const feishuUiText = {
+  expiredCardNotice: '卡片已过期',
+} as const;
+
 export const ui = {
   // ── slash command replies ──────────────────────────────────────────────────
   slash: {

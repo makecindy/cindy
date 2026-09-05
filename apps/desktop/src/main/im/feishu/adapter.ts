@@ -40,7 +40,7 @@ import {
   looksLikePromptInjection,
 } from './groupContextInjection';
 import { createFeishuGroupTurnPermissionPolicy } from './permissionPolicy';
-import { ui, REACTION_PROCESSING } from './uiText';
+import { feishuUiText, ui, REACTION_PROCESSING } from './uiText';
 
 const log = createLogger('im:feishu-adapter');
 
@@ -330,6 +330,7 @@ export function buildFeishuAdapter(
       },
     },
     processingEmoji: REACTION_PROCESSING,
+    interactionExpiredNotice: feishuUiText.expiredCardNotice,
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
 
     // 群轮次(speaker 存在)统一挂强确认策略 — 群历史前缀携带成员可控文本,
