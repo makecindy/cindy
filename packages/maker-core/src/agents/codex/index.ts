@@ -172,6 +172,7 @@ import {
   assertCodexRolloutRewriteSupported,
   sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
+import { CodexHistoryRecoveryRequiredError } from './history-recovery.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -13224,9 +13225,25 @@ export class CodexAgent extends BaseAgent {
       note: 'Codex 精确 fork: 独立一次性 host 上 thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
     });
     try {
+      // Source history inspection must not depend on the credentials we are leaving.
+      let preparedSourcePath = opts.stripEncryptedReasoning
+        ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId)
+        : undefined;
+      let historyChecked = false;
+      if (opts.stripEncryptedReasoning && (preparedSourcePath || this.codexHome)) {
+        await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+        historyChecked = true;
+      }
       const host = await this.getHost(undefined, forkCredentialMode, {
         keyOverride: forkHostKey,
         hostPurpose: 'control-plane',
+      }).catch((error) => {
+        // This is the outgoing source's offline fork host, not a target send.
+        // Missing old credentials must not trap a task on the provider it is leaving.
+        if (opts.stripEncryptedReasoning && error instanceof AgentNotAuthenticatedError) {
+          throw new CodexHistoryRecoveryRequiredError();
+        }
+        throw error;
       });
       forkHost = host;
       const initResp = await host.ensureStarted();
@@ -13237,8 +13254,9 @@ export class CodexAgent extends BaseAgent {
       // already asks the desktop host to link/adopt their state and rollout;
       // fork must cross the same preparation boundary before thread/fork or the
       // fork app-server cannot resolve a freshly imported thread.
-      const preparedSourcePath = await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
-      if (opts.stripEncryptedReasoning) {
+      // A first host may have just created the managed state DB needed for imports.
+      preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
+      if (opts.stripEncryptedReasoning && !historyChecked) {
         // Check before allocating a child: indexed native history must go through
         // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.
         await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));

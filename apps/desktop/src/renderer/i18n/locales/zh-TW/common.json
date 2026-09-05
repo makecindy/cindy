@@ -7187,6 +7187,7 @@
         "discountedVsStandard": "折扣中，較標準價省 {{percent}}%"
       },
       "trigger": {
+        "currentAndNext": "目前：{{current}}\n下一則訊息：{{next}}",
         "placeholder": "選擇模型",
         "aria": "選擇模型。當前：{{model}}",
         "ariaWithEffort": "選擇模型。當前：{{model}}，推理強度：{{effort}}",
@@ -7229,6 +7230,9 @@
         "fastBadge": "快速"
       },
       "source": {
+        "unavailable": "模型無法使用",
+        "reconnect": "重新連線",
+        "manage": "管理來源",
         "railLabel": "來源",
         "connect": "新增模型",
         "connectCta": "連線來源 →",

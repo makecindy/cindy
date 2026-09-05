@@ -7188,6 +7188,7 @@
         "discountedVsStandard": "할인 중 · 표준가 대비 {{percent}}% 절약"
       },
       "trigger": {
+        "currentAndNext": "현재: {{current}}\n다음 메시지: {{next}}",
         "placeholder": "모델 선택",
         "aria": "모델 선택. 현재: {{model}}",
         "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}",
@@ -7230,6 +7231,9 @@
         "fastBadge": "고속"
       },
       "source": {
+        "unavailable": "모델 사용 불가",
+        "reconnect": "다시 연결",
+        "manage": "제공자 관리",
         "railLabel": "소스",
         "connect": "모델 추가",
         "connectCta": "소스 연결 →",

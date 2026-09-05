@@ -26,6 +26,7 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
+  Clock3,
   Loader2,
   PlugZap,
   Plus,
@@ -89,6 +90,7 @@ import {
   selectVisibleModels,
 } from '@/lib/providerModels';
 import type { Effort } from '@/lib/userPreferences.types';
+import type { SessionRuntimeProfileProjection } from '@/lib/ccAgent.types';
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
@@ -100,6 +102,7 @@ import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useDeviceLinkModelMirrorVersion } from '@/state/deviceLinkModelMirror';
 import {
   connectedProvidersForAgent,
+  chatEligibleSourcesForModel,
   actualSourceIdForModel,
   effectiveSourceIdForModel,
   getModel,
@@ -577,6 +580,9 @@ export function resolveModelSelectorAgentIdentity(
 }
 
 interface ModelSelectorProps {
+  currentSelection?: SessionRuntimeProfileProjection;
+  /** Open recovery for the selected source; generic Add model navigation stays separate. */
+  onReconnectSource?: () => void;
   modelId: string;
   effort: Effort;
   onModelChange: (modelId: string) => void;
@@ -3119,6 +3125,8 @@ function ModelSelectorContentView({
 
 export function ModelSelector({
   modelId,
+  currentSelection,
+  onReconnectSource,
   effort,
   onModelChange,
   onEffortChange,
@@ -3287,7 +3295,7 @@ export function ModelSelector({
     };
   }, [sessionEngineFilter, setOpenWithoutAutoRefresh]);
 
-  const agentKind = vendorKeyToAgentKind(vendorKey);
+  const agentKind = vendorKeyToAgentKind(agentIdentity?.vendorKey ?? vendorKey);
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
   const pi = useAgentCapabilities('pi', deviceId);
@@ -3333,11 +3341,13 @@ export function ModelSelector({
     ],
   );
 
-  const currentModel = visibleModels.find((m) => m.id === modelId);
-  // 已保存的模型不在可见清单里(被隐藏 / 供应商断开 / 目录下架)时,默认落到「选择模型」
-  // 占位符 —— 对会话是对的(没选过),但对「展示一条已持久化偏好」的调用方是信息丢失:
-  // 用户既看不到自己存的是什么,也看不到实际会跑什么。unknownModelLabel 让这类调用方
-  // 给出诊断性文案(通常是裸 id),行为与本组件接管前一致。
+  const routeProvider = currentProviderId ? providers.find((p) => p.id === currentProviderId) : undefined;
+  const routeModel = routeProvider && agentKind ? getModel(routeProvider, modelId, agentKind) : undefined;
+  const currentModel = routeModel
+    ? { ...routeModel, displayName: routeModel.name, id: modelId }
+    : visibleModels.find((m) => m.id === modelId);
+  // 已保存模型即使隐藏、断开或下架，实际任务仍保留模型 ID；偏好字段可通过
+  // unknownModelLabel 提供诊断文案。没有保存选择的入口才显示选择模型占位符。
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
   const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
@@ -3346,6 +3356,7 @@ export function ModelSelector({
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
+      (actualRoute && modelId ? modelId : null) ??
       t('newChat.modelSelector.trigger.placeholder'));
   const agentName =
     agentIdentity && !fallbackOption?.active
@@ -3417,9 +3428,10 @@ export function ModelSelector({
         : null,
     [providers, currentAgentKind, currentProviderId, modelId, actualRoute],
   );
-  // 空態:当前模型一个已连接来源都没有 → trigger 改「连接来源」CTA。
+  // 草稿没有已连接来源时显示连接 CTA；已建任务保留保存的模型和恢复入口。
   // device-link 远程会话不走此 CTA(控制端无法替被控端连来源;hasConnectedSource 是本机口径)。
   const noSource =
+    !actualRoute &&
     !!onProviderChange &&
     !!onNavigateToProviders &&
     !deviceId &&
@@ -3427,7 +3439,9 @@ export function ModelSelector({
     !providersLoading &&
     !hasConnectedSource;
   // trigger 上仍展示当前模型的 effort(模型支持时)。
-  const triggerProvider = providers.find((provider) => provider.id === activeSourceId);
+  const triggerProvider = actualRoute && routeProvider
+    ? routeProvider
+    : providers.find((provider) => provider.id === activeSourceId);
   const activeThinkingToggle =
     currentAgentKind === 'pi' &&
     !!triggerProvider &&
@@ -3454,9 +3468,7 @@ export function ModelSelector({
   // Fast 工具栏按钮已移除 → trigger 上用闪电标出当前是否 Fast(模型支持 + 已开启时)。
   // 支持性按「当前生效来源」现查 per-provider 条目;无法解析来源(flat / device-link 退化)时
   // 回退拍平值,避免误隐藏闪电。
-  const triggerActiveProvider = activeSourceId
-    ? providers.find((p) => p.id === activeSourceId)
-    : undefined;
+  const triggerActiveProvider = triggerProvider;
   // trigger 图标的统一规则:当前 (来源, 模型) 条目的 icon(AI Gateway / 目录设定)优先,
   // 缺省回落来源供应商标 —— 与列表行、手机版同一套口径(ModelIconMark)。
   const triggerModelIcon =
@@ -3475,13 +3487,18 @@ export function ModelSelector({
       ? modelSupportsFastMode(triggerActiveProvider, modelId, currentAgentKind)
       : !!currentModel?.supportsFastMode;
   const triggerFastOn = fastMode === true && triggerFastSupported;
-  // 断开态仅在「非 noSource」时生效:全部来源都断开时 noSource CTA 优先(下拉已无可选行,
-  // 跳设置才是正确恢复路径);还有别的已连接来源时,下拉换源就是恢复路径,trigger 保持可点。
+  // 已建任务的断开态保留模型身份；菜单同时提供重新连接与改选其他来源。
   const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId;
+  // A connected provider lacking this model is unavailable, not signed out.
+  const selectedSourceUnavailable = showSourceDisconnected && disconnectedProvider?.connected === true &&
+    !!currentAgentKind && chatEligibleSourcesForModel([disconnectedProvider], modelId, currentAgentKind, { includeDisabled: true }).length === 0;
+  const sourceIssueLabel = t(selectedSourceUnavailable
+    ? 'newChat.modelSelector.source.unavailable'
+    : 'newChat.modelSelector.source.disconnected');
   const baseAriaLabel = noSource
     ? t('newChat.modelSelector.source.connect')
     : showSourceDisconnected
-      ? `${t('newChat.modelSelector.source.disconnected')}: ${displayIdentityLabel}`
+      ? `${sourceIssueLabel}: ${displayIdentityLabel}`
       : agentIdentity?.state === 'pending' && agentName
         ? fullEffortLabel
           ? t('newChat.modelSelector.trigger.pendingAriaWithEffort', {
@@ -3501,9 +3518,27 @@ export function ModelSelector({
           : t('newChat.modelSelector.trigger.aria', { model: displayIdentityLabel });
   // compact 会隐藏断连状态文字；原生 title 仍需保留同一状态，避免鼠标用户悬停
   // 错误图标时只看到模型名、无法判断发送为何被阻断。
-  const triggerTitle = showSourceDisconnected ? baseAriaLabel : displayIdentityLabel;
+  const describeSelection = (selection: SessionRuntimeProfileProjection): string => {
+    const pid = actualSourceIdForModel(providers, selection.providerId, selection.model, selection.agentKind);
+    const provider = providers.find((p) => p.id === (selection.providerId ?? pid));
+    const model = provider ? getModel(provider, selection.model, selection.agentKind) : undefined;
+    const vendor = selection.agentKind === 'claude-code' ? 'Claude Code' : selection.agentKind === 'pi' ? 'Pi' : 'Codex';
+    return [vendor, model?.name ?? selection.model, provider ? providerDisplayName(provider, t) : selection.providerId,
+      selection.effort ? modelEffortLabel(t, model, selection.effort) : null,
+      selection.fastMode ? t('newChat.modelSelector.meta.fastBadge') : null].filter(Boolean).join(' · ');
+  };
+  const pendingSelectionTitle = currentSelection && agentIdentity?.state === 'pending' && currentAgentKind
+    ? t('newChat.modelSelector.trigger.currentAndNext', {
+        current: describeSelection(currentSelection),
+        next: describeSelection({ agentKind: currentAgentKind, model: modelId, providerId: currentProviderId ?? null, effort: showEffort ? effort : null, fastMode: triggerFastOn }),
+      })
+    : null;
+  const triggerTitle = pendingSelectionTitle
+    ? `${pendingSelectionTitle}${showSourceDisconnected ? ` · ${sourceIssueLabel}` : ''}`
+    : showSourceDisconnected ? baseAriaLabel : displayIdentityLabel;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
-  const ariaLabel = ariaContext ? `${ariaContext}:${baseAriaLabel}` : baseAriaLabel;
+  const accessibleLabel = pendingSelectionTitle ? triggerTitle : baseAriaLabel;
+  const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
   const isBudget = modelId.startsWith('codex/');
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';
@@ -3612,6 +3647,9 @@ export function ModelSelector({
       )}
       aria-label={ariaLabel}
     >
+      {agentIdentity?.state === 'pending' && (
+        <Clock3 size={dense ? 11 : 12} data-model-selection-pending aria-hidden className="shrink-0 text-[var(--model-trigger-meta)]" />
+      )}
       {noSource ? (
         <>
           <PlugZap
@@ -3678,11 +3716,11 @@ export function ModelSelector({
           {/* 来源断开是**来源**的事,引擎身份位照常保留(规格 §1.2:引擎可见性靠一致的
               结构位,不靠出错才显示)。 */}
           {showTriggerTail && engineMarkNode}
-          <Unplug
+          {selectedSourceUnavailable ? <CircleAlert size={dense ? 11 : 12} className="ml-0.5 shrink-0 text-[var(--error-fg)]" aria-hidden /> : <Unplug
             size={dense ? 11 : 12}
             className="ml-0.5 shrink-0 text-[var(--error-fg)]"
             aria-hidden
-          />
+          />}
           {!isCompactToolbar && (
             <span
               className={cn(
@@ -3690,7 +3728,7 @@ export function ModelSelector({
                 dense ? 'text-11' : 'text-12',
               )}
             >
-              {t('newChat.modelSelector.source.disconnected')}
+              {sourceIssueLabel}
             </span>
           )}
         </>
@@ -3831,6 +3869,17 @@ export function ModelSelector({
   );
 
   const content = (
+    <>
+      {showSourceDisconnected && onReconnectSource && !deviceId && (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-default)] px-3 py-2" role="status">
+          <span className="min-w-0 truncate text-12 text-[var(--text-secondary)]">
+            {disconnectedProvider ? providerDisplayName(disconnectedProvider, t) : currentProviderId} · {sourceIssueLabel}
+          </span>
+          <button type="button" className="shrink-0 text-12 text-[var(--text-primary)] hover:underline" onClick={() => { setOpenWithoutAutoRefresh(false); onReconnectSource(); }}>
+            {t(selectedSourceUnavailable ? 'newChat.modelSelector.source.manage' : 'newChat.modelSelector.source.reconnect')}
+          </button>
+        </div>
+      )}
     <ModelSelectorContentView
       modelId={modelId}
       effort={effort}
@@ -3879,6 +3928,7 @@ export function ModelSelector({
           : undefined
       }
     />
+    </>
   );
 
   if (morphEnabled) {

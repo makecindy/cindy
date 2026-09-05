@@ -7190,6 +7190,7 @@
         "discountedVsStandard": "Discounted · {{percent}}% off standard"
       },
       "trigger": {
+        "currentAndNext": "Current: {{current}}\nNext message: {{next}}",
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",
         "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}",
@@ -7232,6 +7233,9 @@
         "fastBadge": "Fast"
       },
       "source": {
+        "unavailable": "Model unavailable",
+        "reconnect": "Reconnect",
+        "manage": "Manage source",
         "railLabel": "Source",
         "connect": "Add a model",
         "connectCta": "Connect a source →",

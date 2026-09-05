@@ -9,6 +9,7 @@ import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
   CodexResumePreparationBlockedError,
+  AgentNotAuthenticatedError,
   type AgentDeps,
   type AgentSessionHandle,
   type TurnPermissionPolicy,
@@ -21872,6 +21873,27 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
       threadId: 'source-thread-id',
     }));
+  });
+
+  it('inspects indexed source history without requiring the outgoing provider credentials', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-source-auth-recovery-'));
+    try {
+      const source = path.join(dir, 'source.jsonl');
+      await fs.writeFile(source, JSON.stringify({ ordinal: 0, type: 'session_meta', payload: { id: 'old-thread' } }) + '\n');
+      const prepareCodexResumeSession = vi.fn(async () => source);
+      const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+      const getHost = vi.spyOn(agent as any, 'getHost').mockRejectedValue(new AgentNotAuthenticatedError('codex', 'old gateway credentials unavailable'));
+      await expect(agent.forkSdkSession({ sourceSdkSessionId: 'old-thread', upToMessageId: undefined, stripEncryptedReasoning: true })).rejects.toMatchObject({ code: 'CODEX_HISTORY_RECOVERY_REQUIRED' });
+      expect(getHost).not.toHaveBeenCalled();
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it.each([false, true])('only an outgoing sanitizing fork can recover missing source auth (strip=%s)', async (strip) => {
+    const agent = new CodexAgent(createDeps());
+    vi.spyOn(agent as any, 'getHost').mockRejectedValue(new AgentNotAuthenticatedError('codex', 'old credentials unavailable'));
+    const result = agent.forkSdkSession({ sourceSdkSessionId: 'old-thread', upToMessageId: undefined, stripEncryptedReasoning: strip });
+    if (strip) await expect(result).rejects.toMatchObject({ code: 'CODEX_HISTORY_RECOVERY_REQUIRED' });
+    else await expect(result).rejects.toBeInstanceOf(AgentNotAuthenticatedError);
   });
 
   it.each([false, true])('requests Cindy recovery before forking indexed history (lazy=%s)', async (lazy) => {

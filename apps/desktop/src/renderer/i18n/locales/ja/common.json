@@ -7188,6 +7188,7 @@
         "discountedVsStandard": "割引中 · 標準価格から {{percent}}% お得"
       },
       "trigger": {
+        "currentAndNext": "現在：{{current}}\n次のメッセージ：{{next}}",
         "placeholder": "モデルを選択",
         "aria": "モデルを選択。現在：{{model}}",
         "ariaWithEffort": "モデルを選択。現在：{{model}}、推論強度：{{effort}}",
@@ -7230,6 +7231,9 @@
         "fastBadge": "高速"
       },
       "source": {
+        "unavailable": "モデルを利用できません",
+        "reconnect": "再接続",
+        "manage": "接続先を管理",
         "railLabel": "ソース",
         "connect": "モデルを追加",
         "connectCta": "ソースを接続 →",

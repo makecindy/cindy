@@ -10,7 +10,7 @@ export class CodexHistoryRecoveryRequiredError extends Error {
   }
 }
 
-/** Only confirmed history incompatibility qualifies; auth, transport and cancellation do not. */
+/** Explicit native handoff requests and broken history qualify; raw auth, transport and cancellation do not. */
 export function isCodexHistoryRecoveryRequired(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   if ('code' in error && error.code === 'CODEX_HISTORY_RECOVERY_REQUIRED')

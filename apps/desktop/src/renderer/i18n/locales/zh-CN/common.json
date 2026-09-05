@@ -7188,6 +7188,7 @@
         "discountedVsStandard": "折扣中，较标准价省 {{percent}}%"
       },
       "trigger": {
+        "currentAndNext": "当前：{{current}}\n下条消息：{{next}}",
         "placeholder": "选择模型",
         "aria": "选择模型。当前：{{model}}",
         "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}",
@@ -7230,6 +7231,9 @@
         "fastBadge": "快速"
       },
       "source": {
+        "unavailable": "模型不可用",
+        "reconnect": "重新连接",
+        "manage": "管理来源",
         "railLabel": "来源",
         "connect": "添加模型",
         "connectCta": "连接来源 →",
