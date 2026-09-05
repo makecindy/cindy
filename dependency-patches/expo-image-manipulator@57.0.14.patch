@@ -68,7 +68,7 @@ index c3e3b66eb6b5b0ef75431c96bf292d4fae004606..9e9e6503a09771896936c4d823dd28e9
 +    if image.imageOrientation == .up {
 +      return image
      }
-
+ 
 -    guard let newCGImage = context.makeImage() else {
 -      throw ImageDrawingFailedException()
 +    return drawInNewContext(size: image.size) { _ in
