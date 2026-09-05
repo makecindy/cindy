@@ -15,6 +15,7 @@ const renderer = source.statements.find((node): node is ts.FunctionDeclaration =
 const callbackNames = [
   'markProgrammaticScroll', 'clearProgrammaticScroll', 'markMobileMvcpSettle',
   'isUserControllingScroll', 'scrollToEndProgrammatically', 'runStickToLatestVerify',
+  'scrollToOffsetProgrammatically', 'scrollToIndexProgrammatically',
   'scrollToBottom', 'handleScroll', 'handleHistoryTouchStart', 'maybeTriggerHistoryTouch',
   'handleHistoryTouchMove', 'handleHistoryTouchEnd', 'handleHistoryTouchCancel',
   'handleScrollBeginDrag', 'handleScrollEndDrag', 'handleMomentumScrollBegin',
@@ -60,7 +61,9 @@ function harness() {
     metrics.offsetY = metrics.contentHeight - metrics.viewportHeight;
   });
   const environment = {
-    ...scrollModel, ...state, listRef: ref({ scrollToEnd }), bottomOverlayHeight: undefined,
+    ...scrollModel, ...state,
+    listRef: ref({ scrollToEnd, scrollToOffset: vi.fn(), scrollToIndex: vi.fn() }),
+    bottomOverlayHeight: undefined,
     useCallback: (callback: unknown) => callback,
     attemptAutoLoadEarlier: vi.fn(), handoffHistoryPrependToUser: vi.fn(),
     scheduleHistoryPrependUserHandoffSettle: vi.fn(), scheduleQueuedLoadEarlierFlush: vi.fn(),
@@ -94,21 +97,26 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
-  it.each([1196, 1180].flatMap((offset) => [false, true].map((lateEnd) => ({ offset, lateEnd }))))(
-    'releases a cancelled drag at $offset with a late end event: $lateEnd', ({ offset, lateEnd }) => {
+  it.each([1196, 1180].flatMap((offset) => ['missing', 'before-verify', 'after-verify'].map((end) => ({ offset, end }))))(
+    'releases a cancelled drag at $offset with end event $end', ({ offset, end }) => {
       const h = harness();
       h.handleHistoryTouchStart(touch());
       h.handleScrollBeginDrag(h.scrollEvent(1200));
-      h.handleScroll(h.scrollEvent(lateEnd ? 1196 : offset));
+      h.handleScroll(h.scrollEvent(end === 'missing' ? offset : 1196));
       h.handleContentSize(400, 2500);
       h.handleHistoryTouchCancel();
       h.handleHistoryTouchCancel();
-      if (lateEnd) h.handleScrollEndDrag(h.scrollEvent(offset));
+      if (end === 'after-verify') {
+        settle();
+        expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+        h.scrollToEnd.mockClear();
+      }
+      if (end !== 'missing') h.handleScrollEndDrag(h.scrollEvent(offset));
       settle();
       expect(h.state.nearBottomRef.current).toBe(offset === 1196);
       expect(h.scrollToEnd).toHaveBeenCalledTimes(offset === 1196 ? 1 : 0);
       expect(h.state.isDraggingRef.current).toBe(false);
-      if (lateEnd) expect(h.state.dragStartOffsetYRef.current).toBeNull();
+      if (end !== 'missing') expect(h.state.dragStartOffsetYRef.current).toBeNull();
     },
   );
 
@@ -139,15 +147,27 @@ describe('streaming follow yields to the reader', () => {
     expect(h.scrollToEnd).not.toHaveBeenCalled();
   });
 
-  it('discards the cancelled drag sample when an explicit scroll takes over', () => {
+  it.each(['end', 'index'])('discards the cancelled drag sample when explicit %s takes over', (target) => {
     const h = harness();
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleScroll(h.scrollEvent(1196));
     h.handleHistoryTouchCancel();
-    h.scrollToBottom();
+    if (target === 'end') h.scrollToBottom();
+    else h.scrollToIndexProgrammatically(10, 0.45);
     h.handleScrollEndDrag(h.scrollEvent(1180));
     expect(h.state.nearBottomRef.current).toBe(true);
-    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    if (target === 'end') expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+  });
+
+  it('keeps the cancelled drag sample through automatic offset compensation', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleHistoryTouchCancel();
+    h.scrollToOffsetProgrammatically(900, false);
+    h.handleScroll(h.scrollEvent(900));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    h.handleScrollEndDrag(h.scrollEvent(1180));
+    expect(h.state.nearBottomRef.current).toBe(false);
   });
 
   it('can return to the bottom in the final drag sample after cancellation', () => {

@@ -975,7 +975,6 @@ export function MessageRenderer({
   // 可能打断进行中的捏合/拖动手势(rule 7)。
   const closePayload = useCallback(() => setPayload(null), []);
   const markProgrammaticScroll = useCallback((animated: boolean) => {
-    dragStartOffsetYRef.current = null;
     const generation = programmaticScrollGenerationRef.current + 1;
     const settleMs = animated
       ? MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS
@@ -1027,6 +1026,9 @@ export function MessageRenderer({
     // Automatic growth/recovery/anchor retries yield to gestures. Explicit jump/send actions
     // own their scroll even if onPress arrives before the ancestor's touchEnd clears the finger.
     if (intent === 'follow' && isUserControllingScroll()) return;
+    // Only a new explicit destination supersedes a pending final drag sample. Automatic
+    // follow and offset compensation must leave that sample available to endDrag.
+    if (intent === 'explicit') dragStartOffsetYRef.current = null;
     markProgrammaticScroll(animated);
     void listRef.current?.scrollToEnd({ animated });
   }, [isUserControllingScroll, markProgrammaticScroll]);
@@ -1037,6 +1039,7 @@ export function MessageRenderer({
   }, [markProgrammaticScroll]);
 
   const scrollToIndexProgrammatically = useCallback((index: number, viewPosition: number) => {
+    dragStartOffsetYRef.current = null;
     markProgrammaticScroll(true);
     void listRef.current?.scrollToIndex({ animated: true, index, viewPosition });
   }, [markProgrammaticScroll]);
