@@ -758,10 +758,10 @@
       },
       "linuxUpdates": {
         "title": "Linux 설치와 업데이트",
-        "description": "Linux는 현재 Ubuntu 22.04 / 24.04용 .deb로 제공됩니다. 새 빌드가 있으면 앱이 다운로드하고, 설치할 때 시스템 비밀번호를 묻습니다.",
-        "item1": "처음 설치할 때는 sudo apt install ./cindy-<버전>-<아키텍처>.deb 를 사용하세요(x64는 amd64, arm64는 arm64).",
-        "item2": "앱 안 업데이트는 .deb를 다운로드합니다. 업데이트를 선택하면 시스템 권한 확인 후 덮어써 설치합니다.",
-        "item3": "Linux x64에서는 Beta 채널을 사용할 수 있지만 arm64는 아직 지원하지 않습니다. 설치에는 시스템 권한 승인이 필요하므로 두 아키텍처 모두 유휴 상태 자동 설치를 지원하지 않습니다."
+        "description": "Ubuntu는 시스템 .deb 패키지를 사용합니다. Arch Linux와 Omarchy는 같은 검증된 .deb 콘텐츠를 관리되는 사용자 디렉터리에 설치합니다. Debian 패키지 관리자는 필요하지 않습니다.",
+        "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb를 실행하세요. Arch/Omarchy: docs/linux.md의 사용자 설치 안내를 따르세요.",
+        "item2": "업데이트 시 시스템 .deb 설치는 인증을 요청하고, 사용자 설치는 시스템 비밀번호 없이 버전을 전환합니다. 다른 패키지 관리자로 설치한 경우 해당 관리자로 업데이트하세요.",
+        "item3": "Linux x64는 Beta 채널을 지원하며 arm64는 아직 지원하지 않습니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
@@ -822,7 +822,7 @@
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",
       "autoUpdateDescription": "업데이트 다운로드가 완료된 뒤, 이 컴퓨터가 10분 동안 조작되지 않았고 실행 중인 작업이 없으면 앱을 자동으로 다시 시작해 설치합니다.",
-      "linuxUpdateDescription": "새 빌드가 있으면 앱에서 .deb를 다운로드합니다. 설치할 때 시스템 비밀번호가 필요하므로 유휴 상태에서는 자동 설치하지 않습니다.",
+      "linuxUpdateDescription": "재시작을 선택하면 업데이트가 적용됩니다. 시스템 .deb 설치에는 시스템 비밀번호가 필요하지만 사용자 설치에는 필요하지 않습니다. 다른 설치 방식은 패키지 관리자를 사용하세요.",
       "autoUpdateEnabledToast": "유휴 상태 자동 업데이트 설치가 켜졌습니다",
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
@@ -5918,7 +5918,7 @@
       "ready": "새 버전 준비 완료 — 사이드바를 클릭해 업데이트 완료",
       "manifestFailed": "업데이트 확인 실패, 네트워크를 확인하세요",
       "downloadFailed": "새 버전 다운로드 실패, 나중에 다시 시도하세요",
-      "manualDownload": "앱에서 업데이트를 다운로드하세요. 설치하려면 시스템 비밀번호가 필요합니다."
+      "manualDownload": "앱에서 다운로드한 뒤 재시작할 때를 선택하세요. 시스템 .deb 설치에만 시스템 비밀번호가 필요합니다."
     },
     "closeConfirm": {
       "title": "정말 나가시겠습니까?",
@@ -6814,6 +6814,13 @@
       "description": "자동 업데이트를 사용하려면 {{appName}}를 응용 프로그램 폴더로 이동해 주세요.",
       "move": "지금 이동 (권장)",
       "download": "수동으로 다운로드"
+    },
+    "linuxInstallation": {
+      "title": "이 설치는 자체 업데이트할 수 없습니다",
+      "description": "패키지 관리자를 사용하거나 Linux 사용자 설치 안내를 확인하세요. 관리되는 설치에는 누락된 도구를 설치하거나 쓰기 권한을 복원해야 할 수 있습니다. Cindy와 다운로드한 업데이트는 유지됩니다.",
+      "guide": "Linux 안내 열기",
+      "retry": "다시 확인",
+      "later": "나중에"
     },
     "windowsRuntimeMissing": {
       "title": "Microsoft Visual C++ 런타임 필요",

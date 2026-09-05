@@ -758,10 +758,10 @@
       },
       "linuxUpdates": {
         "title": "Linux 安裝與更新",
-        "description": "Linux 目前提供 Ubuntu 22.04 / 24.04 的 .deb 套件。有新版本時，應用程式會下載安裝包，安裝時需要系統密碼。",
-        "item1": "首次安裝用 sudo apt install ./cindy-<版本>-<架構>.deb（x64 為 amd64，arm64 為 arm64）。",
-        "item2": "應用程式內更新會下載 .deb，點更新後透過系統權限提示覆蓋安裝。",
-        "item3": "Linux x64 支援 Beta 渠道，arm64 暫不支援。兩種架構都不支援閒置時自動安裝，因為安裝需要系統授權。"
+        "description": "Ubuntu 使用系統 .deb 安裝套件。Arch Linux 和 Omarchy 使用受管理的使用者目錄安裝程式，採用同一份經過驗證的 .deb 內容，無需 Debian 套件管理器。",
+        "item1": "Ubuntu：使用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：請依照 docs/linux.md 中的使用者目錄安裝指南操作。",
+        "item2": "點擊更新後，系統 .deb 安裝需要授權；使用者目錄安裝無需系統密碼即可切換版本。其他套件管理器安裝的版本請透過對應套件管理器更新。",
+        "item3": "Linux x64 支援 Beta 渠道，arm64 暫不支援。Linux 僅在你選擇重新啟動時套用更新，不會在閒置時自動安裝。"
       },
       "qnaTitle": "直接提問",
       "qnaDescription": "如果 overview 裡沒有覆蓋到你的問題，可以直接問我該怎麼做。",
@@ -822,7 +822,7 @@
       "openLogsDirError": "開啟日誌目錄失敗",
       "autoUpdateLabel": "空閒時自動安裝更新",
       "autoUpdateDescription": "更新下載完成後，當這臺電腦 10 分鐘無操作且沒有任務執行時，自動重啟應用完成安裝。",
-      "linuxUpdateDescription": "有新版本時會在應用程式內下載 .deb。點更新後需要輸入系統密碼完成安裝，因此不會在空閒時自動安裝。",
+      "linuxUpdateDescription": "更新在你選擇重新啟動時生效。系統 .deb 安裝需要系統密碼，使用者目錄安裝不需要。其他安裝方式請透過對應套件管理器更新。",
       "autoUpdateEnabledToast": "已開啟空閒時自動安裝更新",
       "autoUpdateDisabledToast": "已關閉空閒時自動安裝更新",
       "autoUpdateSaveFailed": "儲存自動更新設定失敗",
@@ -5918,7 +5918,7 @@
       "ready": "新版本已就緒，點選側邊欄完成更新",
       "manifestFailed": "檢查更新失敗，請檢查網路",
       "downloadFailed": "新版本下載失敗，稍後再試",
-      "manualDownload": "請在應用程式內下載更新，安裝時需要系統密碼。"
+      "manualDownload": "在應用程式內下載，再選擇重新啟動時間。只有系統 .deb 安裝需要系統密碼。"
     },
     "closeConfirm": {
       "title": "確認要離開嗎？",
@@ -6814,6 +6814,13 @@
       "description": "請先將 {{appName}} 移動到「應用程式」資料夾，才能使用自動更新功能。",
       "move": "立即移動（推薦）",
       "download": "手動下載新版本"
+    },
+    "linuxInstallation": {
+      "title": "目前的安裝無法自行更新",
+      "description": "請使用對應的套件管理器，或參考 Linux 使用者目錄安裝指南。受管理的安裝可能需要補齊工具或恢復寫入權限。Cindy 和已下載的更新均已保留。",
+      "guide": "開啟 Linux 指南",
+      "retry": "重新檢查",
+      "later": "稍後"
     },
     "windowsRuntimeMissing": {
       "title": "需要安裝 Microsoft Visual C++ 執行階段",

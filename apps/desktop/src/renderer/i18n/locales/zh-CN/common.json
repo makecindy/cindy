@@ -758,10 +758,10 @@
       },
       "linuxUpdates": {
         "title": "Linux 安装与更新",
-        "description": "Linux 目前提供 Ubuntu 22.04 / 24.04 的 .deb 包。有新版本时，应用会下载安装包，安装时需要系统密码。",
-        "item1": "首次安装用 sudo apt install ./cindy-<版本>-<架构>.deb（x64 为 amd64，arm64 为 arm64）。",
-        "item2": "应用内更新会下载 .deb，点更新后通过系统权限提示覆盖安装。",
-        "item3": "Linux x64 支持 Beta 渠道，arm64 暂不支持。两种架构都不支持空闲时自动安装，因为安装需要系统授权。"
+        "description": "Ubuntu 使用系统 .deb 安装包。Arch Linux 和 Omarchy 使用受管理的用户目录安装器，复用同一份经过校验的 .deb 内容，无需 Debian 包管理器。",
+        "item1": "Ubuntu：使用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：请按 docs/linux.md 中的用户目录安装指南操作。",
+        "item2": "点击更新后，系统 .deb 安装需要授权；用户目录安装无需系统密码即可切换版本。其他包管理器安装的版本请通过对应包管理器更新。",
+        "item3": "Linux x64 支持 Beta 渠道，arm64 暂不支持。Linux 仅在你选择重启时应用更新，不会在空闲时自动安装。"
       },
       "qnaTitle": "直接提问",
       "qnaDescription": "如果 overview 里没有覆盖到你的问题，可以直接问我该怎么做。",
@@ -822,7 +822,7 @@
       "openLogsDirError": "打开日志目录失败",
       "autoUpdateLabel": "空闲时自动安装更新",
       "autoUpdateDescription": "更新下载完成后，当这台电脑 10 分钟无操作且没有任务运行时，自动重启应用完成安装。",
-      "linuxUpdateDescription": "有新版本时会在应用内下载 .deb。点更新后需要输入系统密码完成安装，因此不会在空闲时自动安装。",
+      "linuxUpdateDescription": "更新在你选择重启时生效。系统 .deb 安装需要系统密码，用户目录安装不需要。其他安装方式请通过对应包管理器更新。",
       "autoUpdateEnabledToast": "已开启空闲时自动安装更新",
       "autoUpdateDisabledToast": "已关闭空闲时自动安装更新",
       "autoUpdateSaveFailed": "保存自动更新设置失败",
@@ -5918,7 +5918,7 @@
       "ready": "新版本已就绪，点击侧边栏完成更新",
       "manifestFailed": "检查更新失败，请检查网络",
       "downloadFailed": "新版本下载失败，稍后再试",
-      "manualDownload": "请在应用内下载更新，安装时需要系统密码。"
+      "manualDownload": "在应用内下载，再选择重启时间。只有系统 .deb 安装需要系统密码。"
     },
     "closeConfirm": {
       "title": "确认要离开吗？",
@@ -6814,6 +6814,13 @@
       "description": "请先将 {{appName}} 移动到「应用程序」文件夹，才能使用自动更新功能。",
       "move": "立即移动（推荐）",
       "download": "手动下载新版本"
+    },
+    "linuxInstallation": {
+      "title": "当前安装无法自行更新",
+      "description": "请使用对应的包管理器，或参考 Linux 用户目录安装指南。受管理的安装可能需要补齐工具或恢复写入权限。Cindy 和已下载的更新均已保留。",
+      "guide": "打开 Linux 指南",
+      "retry": "重新检查",
+      "later": "稍后"
     },
     "windowsRuntimeMissing": {
       "title": "需要安装 Microsoft Visual C++ 运行库",
