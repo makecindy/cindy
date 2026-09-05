@@ -211,7 +211,7 @@ interface UseCCAgentChatReturn {
   /** F-PERM-2: Currently pending permission request */
   pendingPermission: PendingPermission | null;
   /** F-PERM-2: Respond to a pending permission request */
-  respondToPermission: (result: CCAgentPermissionResult) => void;
+  respondToPermission: (result: CCAgentPermissionResult) => Promise<boolean>;
   /** F7.2: Currently pending ask-user-question */
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot. */
@@ -567,8 +567,8 @@ export function useCCAgentChat(
 
   const respondToPermission = useCallback(
     (result: CCAgentPermissionResult) => {
-      if (!sessionId) return;
-      makerChatStore.respondToPermission(sessionId, result);
+      if (!sessionId) return Promise.resolve(false);
+      return makerChatStore.respondToPermission(sessionId, result);
     },
     [sessionId],
   );

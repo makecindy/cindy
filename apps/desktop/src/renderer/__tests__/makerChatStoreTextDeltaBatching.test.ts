@@ -1341,6 +1341,37 @@ describe('makerChatStore text delta batching', () => {
     expect(after.pluginSetupViewerState).toBe('minimized');
   });
 
+  it('subtractively reconciles permission cards and promotes a surviving request', async () => {
+    emitInteractionRequest({
+      kind: 'permission',
+      requestId: 'permission-a',
+      toolName: 'Read',
+      input: { file_path: 'a.ts' },
+    });
+    emitInteractionRequest({
+      kind: 'permission',
+      requestId: 'permission-b',
+      toolName: 'Bash',
+      input: { command: 'pnpm test' },
+    });
+
+    getPendingInteractions.mockResolvedValueOnce([
+      {
+        request: {
+          kind: 'permission',
+          requestId: 'permission-a',
+          toolName: 'Read',
+          input: { file_path: 'a.ts' },
+        },
+      },
+    ]);
+    await makerChatStore.reconcilePendingInteractions(SESSION_ID);
+
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPermission?.requestId).toBe('permission-a');
+    expect(snapshot.pendingPermissionRequestIds).toEqual(['permission-a']);
+  });
+
   it('pins interaction snapshots to the last known remote device while the origin map is rebuilding', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     expect(getStickySessionDeviceId(SESSION_ID)).toBe('device-1');

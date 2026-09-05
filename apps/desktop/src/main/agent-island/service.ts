@@ -158,6 +158,11 @@ interface AgentIslandPermissionAction {
   action: 'allow' | 'allowForSession' | 'deny';
 }
 
+export interface AgentIslandInteractionHandlingOptions {
+  /** False for reminders that must focus the trusted in-app prompt to resolve. */
+  allowPermissionActions?: boolean;
+}
+
 interface AgentIslandUserPromptDebugMeta {
   source?: string;
   clientId?: string;
@@ -343,6 +348,7 @@ export class AgentIslandService {
   private readonly permissionRequests = new Map<string, {
     sessionId: string;
     request: Extract<InteractionRequest, { kind: 'permission' }>;
+    allowPermissionActions: boolean;
   }>();
   private readonly sessionActivityRelay = new SessionActivityRelay((payload) => {
     tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
@@ -444,6 +450,13 @@ export class AgentIslandService {
     const entry = this.permissionRequests.get(requestId);
     if (!entry) {
       log.warn('Agent Island permission action ignored: request not found', { requestId, action: action.action });
+      return;
+    }
+    if (!entry.allowPermissionActions) {
+      log.warn('Agent Island permission action ignored: request is focus-only', {
+        requestId,
+        action: action.action,
+      });
       return;
     }
     if (!this.permissionResolver) {
@@ -986,14 +999,22 @@ export class AgentIslandService {
     meta: AgentIslandSessionMeta,
     request: InteractionRequest,
     interactionEpoch: number,
+    options: AgentIslandInteractionHandlingOptions = {},
   ): void {
     const hydrated = this.hydrateMeta(meta);
     if (!this.isInteractionCurrent(hydrated.sessionId, interactionEpoch)) return;
+    const allowPermissionActions = options.allowPermissionActions !== false;
     if (request.kind === 'permission') {
-      this.permissionRequests.set(request.requestId, { sessionId: hydrated.sessionId, request });
+      this.permissionRequests.set(request.requestId, {
+        sessionId: hydrated.sessionId,
+        request,
+        allowPermissionActions,
+      });
     }
     setAgentIslandStrings(this.state, buildAgentIslandStrings());
-    applyAgentIslandInteractionRequest(this.state, hydrated, request, Date.now());
+    applyAgentIslandInteractionRequest(this.state, hydrated, request, Date.now(), {
+      allowPermissionActions,
+    });
     this.ensureMetadata(hydrated.sessionId);
     this.syncSessionAttention(hydrated.sessionId);
     this.publish();
@@ -1033,23 +1054,37 @@ export class AgentIslandService {
     this.publish();
   }
 
-  handleInteractionDismissedByRequestId(requestId: string): boolean {
+  handleInteractionDismissedByRequestId(requestId: string, expectedSessionId?: string): boolean {
     const entry = this.permissionRequests.get(requestId);
-    if (!entry) return false;
+    if (!entry || (expectedSessionId !== undefined && entry.sessionId !== expectedSessionId)) {
+      return false;
+    }
     this.handleInteractionDismissed(entry.sessionId, requestId);
     return true;
   }
 
+  hasPendingPermissionRequestForSession(sessionId: string): boolean {
+    for (const entry of this.permissionRequests.values()) {
+      if (entry.sessionId === sessionId) return true;
+    }
+    return false;
+  }
+
   private restorePendingPermissionRequest(sessionId: string, now: number): void {
-    let pending: Extract<InteractionRequest, { kind: 'permission' }> | null = null;
+    let pending: {
+      request: Extract<InteractionRequest, { kind: 'permission' }>;
+      allowPermissionActions: boolean;
+    } | null = null;
     for (const entry of this.permissionRequests.values()) {
       if (entry.sessionId === sessionId) {
-        pending = entry.request;
+        pending = entry;
         break;
       }
     }
     if (!pending) return;
-    applyAgentIslandInteractionRequest(this.state, { sessionId }, pending, now);
+    applyAgentIslandInteractionRequest(this.state, { sessionId }, pending.request, now, {
+      allowPermissionActions: pending.allowPermissionActions,
+    });
   }
 
   private prunePermissionRequestsForAgentEvent(sessionId: string, event: AgentEvent): void {

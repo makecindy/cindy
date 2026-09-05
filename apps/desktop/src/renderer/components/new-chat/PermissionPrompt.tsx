@@ -13,7 +13,7 @@
  *   Esc         → Deny
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -27,7 +27,7 @@ import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope'
 
 interface PermissionPromptProps {
   permission: PendingPermission;
-  onRespond: (result: CCAgentPermissionResult) => void;
+  onRespond: (result: CCAgentPermissionResult) => void | boolean | Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,34 +98,69 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
     [sessionSuggestions],
   );
   const allowScope = scopeLabels?.join(t('newChat.permissionPrompt.ruleSeparator')) ?? null;
+  const [submitted, setSubmitted] = useState(false);
+  const submittedRef = useRef(false);
+  const submissionTokenRef = useRef<symbol | null>(null);
+
+  useEffect(() => {
+    submissionTokenRef.current = null;
+    submittedRef.current = false;
+    setSubmitted(false);
+  }, [permission.requestId]);
+
+  const beginSubmission = useCallback(
+    (result: CCAgentPermissionResult) => {
+      if (submittedRef.current) return;
+      const token = Symbol(permission.requestId);
+      submissionTokenRef.current = token;
+      submittedRef.current = true;
+      setSubmitted(true);
+      const release = () => {
+        if (submissionTokenRef.current !== token) return;
+        submissionTokenRef.current = null;
+        submittedRef.current = false;
+        setSubmitted(false);
+      };
+      try {
+        void Promise.resolve(onRespond(result))
+          .then((accepted) => {
+            if (accepted === false) release();
+          })
+          .catch(release);
+      } catch {
+        release();
+      }
+    },
+    [onRespond, permission.requestId],
+  );
 
   // ── Action handlers ──
 
   const handleAllowOnce = useCallback(() => {
-    onRespond({
+    beginSubmission({
       behavior: 'allow',
     });
-  }, [onRespond]);
+  }, [beginSubmission]);
 
   const handleAlwaysAllow = useCallback(() => {
     if (!canAlwaysAllowForSession) {
       handleAllowOnce();
       return;
     }
-    onRespond({
+    beginSubmission({
       behavior: 'allow',
       updatedPermissions: sessionSuggestions,
       decisionClassification: 'user_permanent',
     });
-  }, [canAlwaysAllowForSession, handleAllowOnce, onRespond, sessionSuggestions]);
+  }, [beginSubmission, canAlwaysAllowForSession, handleAllowOnce, sessionSuggestions]);
 
   const handleDeny = useCallback(() => {
-    onRespond({
+    beginSubmission({
       behavior: 'deny',
       message: 'User denied',
       decisionClassification: 'user_reject',
     });
-  }, [onRespond]);
+  }, [beginSubmission]);
 
   // ── Keyboard shortcuts ──
 
@@ -133,7 +168,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
     const handler = (e: KeyboardEvent) => {
       // IME 组合期间的 Enter(确认候选词)不算快捷键;焦点在可编辑元素上时
       // (侧栏重命名/查找栏等)也不劫持按键,避免把输入操作误判成授权决定。
-      if (e.isComposing) return;
+      if (e.isComposing || submittedRef.current) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
@@ -157,6 +192,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
 
   return (
     <div
+      aria-busy={submitted}
       className={cn(
         'w-full max-w-[914px] rounded-[12px] border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
@@ -192,6 +228,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
         {/* Deny */}
         <button
           type="button"
+          disabled={submitted}
           onClick={handleDeny}
           className={cn(
             'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
@@ -223,6 +260,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
           >
             <button
               type="button"
+              disabled={submitted}
               onClick={handleAlwaysAllow}
               className={cn(
                 // max-w:规则可能很长(完整命令串),截断后完整内容看 tooltip。
@@ -250,6 +288,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
         {/* Allow once (primary) */}
         <button
           type="button"
+          disabled={submitted}
           onClick={handleAllowOnce}
           className={cn(
             'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',

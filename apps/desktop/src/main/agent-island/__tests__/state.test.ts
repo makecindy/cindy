@@ -697,6 +697,44 @@ describe('Agent Island display state', () => {
     });
   });
 
+  it('keeps focus-only permissions waiting while omitting native approval actions', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandInteractionRequest(
+      state,
+      { sessionId: 'worker', title: 'Worker' },
+      {
+        kind: 'permission',
+        requestId: 'worker-permission',
+        toolName: 'Bash',
+        input: {},
+      },
+      1_000,
+      { allowPermissionActions: false },
+    );
+
+    const waiting = buildAgentIslandDisplayState(state, 1_100);
+    expect(waiting).toMatchObject({
+      mode: 'expanded',
+      displayPolicy: 'blocking',
+      currentSessionId: 'worker',
+      smartSuppressed: false,
+    });
+    expect(waiting.sessions[0]).toMatchObject({
+      phase: 'needs-interaction',
+      interactionKind: 'permission',
+      permissionAction: null,
+    });
+
+    setAgentIslandVisibleSession(state, 'worker', 1_200);
+    setAgentIslandAppFocused(state, true, 1_200);
+    expect(buildAgentIslandDisplayState(state, 1_250)).toMatchObject({
+      mode: 'compact',
+      displayPolicy: 'blocking',
+      currentSessionId: 'worker',
+      smartSuppressed: true,
+    });
+  });
+
   it('omits session approval action when permission suggestions are not session scoped', () => {
     const state = createAgentIslandState();
     applyAgentIslandInteractionRequest(

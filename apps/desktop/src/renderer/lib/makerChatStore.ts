@@ -2473,6 +2473,17 @@ export interface SessionChatState {
   sdkSessionId: string | null;
   /** F-PERM-2: Currently pending permission request; null when none. */
   pendingPermission: PendingPermission | null;
+  /** Full projections for every unresolved permission, oldest to newest. */
+  pendingPermissions: readonly PendingPermission[];
+  /**
+   * All unresolved permission request identities for this session.
+   *
+   * `pendingPermission` remains the single prompt rendered in the composer, but
+   * Worker attention must retain every concurrent request until main dismisses
+   * that exact request. Otherwise request B replacing request A would
+   * incorrectly clear A's unread attention.
+   */
+  pendingPermissionRequestIds: readonly string[];
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
@@ -2772,6 +2783,8 @@ function createInitialState(): SessionChatState {
     streamingClientId: null,
     streamingText: '',
     pendingPermission: null,
+    pendingPermissions: [],
+    pendingPermissionRequestIds: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -2853,6 +2866,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   historyLoaded: true,
   sdkSessionId: null,
   pendingPermission: null,
+  pendingPermissions: [],
+  pendingPermissionRequestIds: [],
   pendingAskUser: null,
   pendingPluginSetup: null,
   pendingPluginSetupQueue: [],
@@ -2895,6 +2910,10 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 const sessions = new Map<string, SessionChatState>();
 const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
+const permissionResponsesInFlight = new Map<
+  string,
+  { requestId: string; promise: Promise<boolean> }
+>();
 
 /**
  * #2194: clientIds of user messages sent from THIS renderer's composer.
@@ -3379,6 +3398,7 @@ function _purgeSession(sessionId: string): void {
   clearWakeBridgeReconcileTimer(sessionId);
   cancelIdlePlanDiscovery(sessionId);
   sessions.delete(sessionId);
+  permissionResponsesInFlight.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
   pendingLocalRetryIntents.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
@@ -4950,6 +4970,80 @@ function isLegacyRedactedThinkingPlaceholder(m: Message, text: string): boolean 
   return m.agentKind === 'pi' && text.trim() === '[Reasoning redacted]';
 }
 
+function removePendingPermissionRequest(
+  state: SessionChatState,
+  requestId: string,
+): SessionChatState {
+  const pendingPermissions = state.pendingPermissions.filter(
+    (permission) => permission.requestId !== requestId,
+  );
+  const removed = pendingPermissions.length !== state.pendingPermissions.length;
+  const currentRemoved = state.pendingPermission?.requestId === requestId;
+  if (!removed && !currentRemoved) return state;
+
+  const currentStillPending = state.pendingPermission
+    ? pendingPermissions.find(
+        (permission) => permission.requestId === state.pendingPermission?.requestId,
+      )
+    : undefined;
+  return {
+    ...state,
+    pendingPermission:
+      currentStillPending ?? pendingPermissions[pendingPermissions.length - 1] ?? null,
+    pendingPermissions,
+    pendingPermissionRequestIds: pendingPermissions.map((permission) => permission.requestId),
+  };
+}
+
+function reconcilePendingPermissionSnapshot(
+  state: SessionChatState,
+  authoritativeRequestIds: ReadonlySet<string>,
+): SessionChatState {
+  let pendingPermissions = state.pendingPermissions.filter((permission) =>
+    authoritativeRequestIds.has(permission.requestId),
+  );
+  const currentPermission =
+    state.pendingPermission && authoritativeRequestIds.has(state.pendingPermission.requestId)
+      ? state.pendingPermission
+      : null;
+  if (
+    currentPermission &&
+    !pendingPermissions.some(
+      (permission) => permission.requestId === currentPermission.requestId,
+    )
+  ) {
+    pendingPermissions = [...pendingPermissions, currentPermission];
+  }
+  const pendingPermission =
+    currentPermission ?? pendingPermissions[pendingPermissions.length - 1] ?? null;
+  const pendingPermissionRequestIds = pendingPermissions.map(
+    (permission) => permission.requestId,
+  );
+  const projectionsUnchanged =
+    pendingPermissions.length === state.pendingPermissions.length &&
+    pendingPermissions.every(
+      (permission, index) => permission === state.pendingPermissions[index],
+    );
+  const identitiesUnchanged =
+    pendingPermissionRequestIds.length === state.pendingPermissionRequestIds.length &&
+    pendingPermissionRequestIds.every(
+      (requestId, index) => requestId === state.pendingPermissionRequestIds[index],
+    );
+  if (
+    projectionsUnchanged &&
+    identitiesUnchanged &&
+    pendingPermission === state.pendingPermission
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    pendingPermission,
+    pendingPermissions,
+    pendingPermissionRequestIds,
+  };
+}
+
 // F1-a: 所有 agent 消息(assistant/tool_use/tool_result/thinking/ask_user/plan_review)
 // 的落库已收口 main(messagePersistBroadcaster),handleStreamEvent 退化为纯 UI reducer、
 // 不再写库 → 不再需要 sessionId 形参(已从签名移除,各调用点同步去掉第三个实参)。
@@ -5569,6 +5663,8 @@ export function handleStreamEvent(
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
+        pendingPermissions: [],
+        pendingPermissionRequestIds: [],
         pendingAskUser: keepAskUserAcrossDone ? state.pendingAskUser : null,
         continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
@@ -5799,6 +5895,8 @@ export function handleStreamEvent(
         // the 'done' path to consume — reset it explicitly on error so the
         // accumulated delta text doesn't linger in memory.
         pendingPermission: null,
+        pendingPermissions: [],
+        pendingPermissionRequestIds: [],
         pendingAskUser: null,
         // F-AUQ-MIN-5: same reset as the 'done' path.
         askUserViewerState: 'expanded',
@@ -5833,18 +5931,29 @@ export function handleStreamEvent(
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
       };
+      const pendingPermission: PendingPermission = {
+        requestId: data.requestId,
+        toolName: data.toolName,
+        input: data.input,
+        title: data.title,
+        displayName: data.displayName,
+        description: data.description,
+        suggestions: data.suggestions,
+        autoReviewUnavailable: data.autoReviewUnavailable === true,
+      };
+      const pendingPermissions = [
+        ...state.pendingPermissions.filter(
+          (permission) => permission.requestId !== data.requestId,
+        ),
+        pendingPermission,
+      ];
       return {
         ...state,
-        pendingPermission: {
-          requestId: data.requestId,
-          toolName: data.toolName,
-          input: data.input,
-          title: data.title,
-          displayName: data.displayName,
-          description: data.description,
-          suggestions: data.suggestions,
-          autoReviewUnavailable: data.autoReviewUnavailable === true,
-        },
+        pendingPermission,
+        pendingPermissions,
+        pendingPermissionRequestIds: pendingPermissions.map(
+          (permission) => permission.requestId,
+        ),
       };
     }
 
@@ -5854,16 +5963,15 @@ export function handleStreamEvent(
       // closed). Drop the matching pending prompt so the input is no longer
       // gated and the UI cannot keep showing a stale interaction.
       const data = event.data as { requestId: string; reason?: string; decision?: unknown };
-      // reason==='resolved' 且带 decision:交互被某一端答了(本端乐观清 / 对端经此广播收敛)。
+      // reason==='resolved' 且带 decision:交互被某一端答了(本端成功清 / 对端经此广播收敛)。
       // 据此把被点中的 ask/plan 卡片翻成「已回答」(与答题端、reload 后一致);其它 reason
       // (timeout / mode_changed / session_closed 等真·放弃)resolved 为 null,仍标 expired。
       const resolved =
         data.reason === 'resolved' && data.decision && typeof data.decision === 'object'
           ? (data.decision as Record<string, unknown>)
           : null;
-      if (state.pendingPermission?.requestId === data.requestId) {
-        return { ...state, pendingPermission: null };
-      }
+      const withoutDismissedPermission = removePendingPermissionRequest(state, data.requestId);
+      if (withoutDismissedPermission !== state) return withoutDismissedPermission;
       if (state.pendingPluginSetup?.requestId === data.requestId) {
         const [nextSetup = null, ...remainingSetups] = state.pendingPluginSetupQueue;
         return {
@@ -6259,6 +6367,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     errorRetryText: null,
     errorPersistId: null,
     pendingPermission: null,
+    pendingPermissions: [],
+    pendingPermissionRequestIds: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -8934,6 +9044,8 @@ function subscribeAll(cb: () => void): () => void {
  * `hasError`             — session ended with an error (used to suppress done notification).
  * `hasPendingAskUser`    — session is waiting for user to answer a question.
  * `hasPendingPermission` — session is waiting for user to grant permission.
+ * `pendingPermissionRequestId` — safe identity for exact attention cleanup.
+ * `pendingPermissionRequestIds` — all unresolved permission identities.
  * `hasPendingPlanReview` — session is waiting for user to review a plan (FP-3).
  * `hasPendingPluginSetup` — session is waiting for local plugin setup.
  */
@@ -8944,6 +9056,8 @@ export interface SessionStatusInfo {
   sideTask?: boolean;
   hasPendingAskUser: boolean;
   hasPendingPermission: boolean;
+  pendingPermissionRequestId: string | null;
+  pendingPermissionRequestIds: readonly string[];
   hasPendingPlanReview: boolean;
   hasPendingPluginSetup: boolean;
 }
@@ -9002,7 +9116,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
   const next = new Map<string, SessionStatusInfo>();
   for (const [id, state] of sessions) {
     const hasPendingAskUser = state.pendingAskUser !== null;
-    const hasPendingPermission = state.pendingPermission !== null;
+    const pendingPermissionRequestIds = state.pendingPermissionRequestIds;
+    const hasPendingPermission = pendingPermissionRequestIds.length > 0;
+    const pendingPermissionRequestId = state.pendingPermission?.requestId ?? null;
     const hasPendingPlanReview = state.pendingPlanReview !== null;
     const hasPendingPluginSetup = hasPendingPluginSetupInteraction(
       state.pendingPluginSetup,
@@ -9024,6 +9140,8 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasError: false,
         hasPendingAskUser,
         hasPendingPermission,
+        pendingPermissionRequestId,
+        pendingPermissionRequestIds,
         hasPendingPlanReview,
         hasPendingPluginSetup,
       });
@@ -9040,6 +9158,8 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasError: false,
         hasPendingAskUser,
         hasPendingPermission,
+        pendingPermissionRequestId,
+        pendingPermissionRequestIds,
         hasPendingPlanReview,
         hasPendingPluginSetup,
       });
@@ -9059,7 +9179,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       hasError: !!state.error && !state.lastStopWasSideTask,
       sideTask: state.lastStopWasSideTask,
       hasPendingAskUser: state.pendingAskUser !== null,
-      hasPendingPermission: state.pendingPermission !== null,
+      hasPendingPermission: state.pendingPermissionRequestIds.length > 0,
+      pendingPermissionRequestId: state.pendingPermission?.requestId ?? null,
+      pendingPermissionRequestIds: state.pendingPermissionRequestIds,
       hasPendingPlanReview: state.pendingPlanReview !== null,
       hasPendingPluginSetup: hasPendingPluginSetupInteraction(
         state.pendingPluginSetup,
@@ -9101,6 +9223,8 @@ function getRunningSnapshot(): ReadonlyMap<string, SessionStatusInfo> {
         prev.sideTask !== info.sideTask ||
         prev.hasPendingAskUser !== info.hasPendingAskUser ||
         prev.hasPendingPermission !== info.hasPendingPermission ||
+        prev.pendingPermissionRequestId !== info.pendingPermissionRequestId ||
+        prev.pendingPermissionRequestIds !== info.pendingPermissionRequestIds ||
         prev.hasPendingPlanReview !== info.hasPendingPlanReview ||
         prev.hasPendingPluginSetup !== info.hasPendingPluginSetup
       ) {
@@ -9267,14 +9391,21 @@ function reconcilePendingInteractions(
     const run = interactionApi.getPendingInteractions(sessionId).then((list) => {
       if (!isCurrentInteractionReconcile()) return 0;
       if (!Array.isArray(list)) return 0;
-      // A successful list response is the Host-authoritative snapshot for Setup
-      // interactions. Reconcile it subtractively before replaying the snapshot so
-      // a Device Link reconnect cannot leave cards that the Host already closed.
-      // Other interaction kinds keep their existing replay semantics.
+      // A successful list response is the Host-authoritative snapshot. Reconcile
+      // ephemeral interactions subtractively before replaying it so a Device Link
+      // reconnect cannot leave cards that the Host already closed.
+      const authoritativePermissionIds = new Set<string>();
       const authoritativePluginSetupIds = new Set<string>();
       const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
+        if (
+          request?.kind === 'permission' &&
+          typeof request.requestId === 'string' &&
+          request.requestId.length > 0
+        ) {
+          authoritativePermissionIds.add(request.requestId);
+        }
         if (
           request?.kind === 'plugin_setup' &&
           typeof request.requestId === 'string' &&
@@ -9294,6 +9425,10 @@ function reconcilePendingInteractions(
       }
       if (!isCurrentInteractionReconcile()) return 0;
       setState(sessionId, (state) => {
+        const permissionState = reconcilePendingPermissionSnapshot(
+          state,
+          authoritativePermissionIds,
+        );
         const currentSurvives =
           state.pendingPluginSetup !== null &&
           authoritativePluginSetupIds.has(state.pendingPluginSetup.requestId);
@@ -9342,6 +9477,7 @@ function reconcilePendingInteractions(
           );
 
         if (
+          permissionState === state &&
           !currentChanged &&
           !queueChanged &&
           nextCommand === state.pluginSetupCommandInFlight &&
@@ -9351,7 +9487,7 @@ function reconcilePendingInteractions(
           return state;
         }
         return {
-          ...state,
+          ...permissionState,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
@@ -13506,6 +13642,8 @@ function stopSession(
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingPermissions: [],
+      pendingPermissionRequestIds: [],
       continuationTurnClientId: null,
       pendingAskUser: null,
       // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
@@ -13984,6 +14122,8 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingPermissions: [],
+      pendingPermissionRequestIds: [],
       pendingAskUser: null,
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
@@ -14268,21 +14408,25 @@ function respondToPluginSetup(
 }
 
 /**
- * F-PERM-2: Send a permission decision to the main process and clear pendingPermission.
+ * F-PERM-2: Send one exact permission decision. The live card and attention stay
+ * projected until main accepts the decision (or broadcasts an exact dismissal);
+ * rejection leaves the request available for retry.
  */
-function respondToPermission(sessionId: string, result: CCAgentPermissionResult): void {
-  if (!sessionId) return;
+function respondToPermission(
+  sessionId: string,
+  result: CCAgentPermissionResult,
+): Promise<boolean> {
+  if (!sessionId) return Promise.resolve(false);
   const state = getOrCreateState(sessionId);
-  if (!state.pendingPermission) return;
+  if (!state.pendingPermission) return Promise.resolve(false);
 
   const { requestId } = state.pendingPermission;
+  const existing = permissionResponsesInFlight.get(sessionId);
+  if (existing?.requestId === requestId) return existing.promise;
   bumpInteractionReconcileEpoch(sessionId);
 
-  // Clear the pending permission immediately so the UI updates
-  setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
-
   // Send to maker (InteractionDecision kind: 'permission')
-  makerApiFor(sessionId)
+  const promise = makerApiFor(sessionId)
     .resolveInteraction(requestId, {
       kind: 'permission',
       behavior: result.behavior,
@@ -14292,7 +14436,28 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
         ? result.updatedPermissions
         : undefined,
     })
-    .catch((err) => log.error('Failed to respond to permission:', err));
+    .then(() => {
+      if (sessions.has(sessionId)) {
+        setState(sessionId, (current) => removePendingPermissionRequest(current, requestId));
+      }
+      return true;
+    })
+    .catch(async (err) => {
+      log.error('Failed to respond to permission:', err);
+      try {
+        await reconcilePendingInteractions(sessionId);
+      } catch {
+        return false;
+      }
+      return !(sessions.get(sessionId)?.pendingPermissionRequestIds.includes(requestId) ?? false);
+    })
+    .finally(() => {
+      if (permissionResponsesInFlight.get(sessionId)?.promise === promise) {
+        permissionResponsesInFlight.delete(sessionId);
+      }
+    });
+  permissionResponsesInFlight.set(sessionId, { requestId, promise });
+  return promise;
 }
 
 /**

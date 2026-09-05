@@ -7,7 +7,7 @@
  * 描述不出来时退回原文案(而不是编一个范围),以及按钮的授权载荷一字不改地转发 agent
  * 建议 —— 文案怎么写都不该动实际授权内容。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingPermission } from '@/lib/makerChatStore';
@@ -146,6 +146,29 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     // 另两个出口照常。
     expect(screen.getByText('agentIsland.native.allowOnce')).toBeTruthy();
     expect(screen.getByText('agentIsland.native.deny')).toBeTruthy();
+  });
+
+  it('决策在途时去重提交，并在 main 拒绝后重新启用', async () => {
+    let settle!: (accepted: boolean) => void;
+    const onRespond = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    render(<PermissionPrompt permission={permission()} onRespond={onRespond} />);
+    const allow = screen.getByText('agentIsland.native.allowOnce').closest('button')!;
+
+    fireEvent.click(allow);
+    fireEvent.click(allow);
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(allow.disabled).toBe(true);
+
+    await act(async () => {
+      settle(false);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(allow.disabled).toBe(false));
   });
 
   // 文案是展示层的事,授权载荷必须原样转发 agent 的建议 —— 改文案不许改语义。
