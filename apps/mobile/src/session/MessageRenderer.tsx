@@ -1019,10 +1019,13 @@ export function MessageRenderer({
     || isMomentumScrollingRef.current
   ), []);
 
-  const scrollToEndProgrammatically = useCallback((animated: boolean) => {
-    // Guard the command itself: content growth, delayed recovery and anchor retries must all
-    // yield before the first upward scroll event has had a chance to unpin follow.
-    if (isUserControllingScroll()) return;
+  const scrollToEndProgrammatically = useCallback((
+    animated: boolean,
+    intent: 'follow' | 'explicit' = 'follow',
+  ) => {
+    // Automatic growth/recovery/anchor retries yield to gestures. Explicit jump/send actions
+    // own their scroll even if onPress arrives before the ancestor's touchEnd clears the finger.
+    if (intent === 'follow' && isUserControllingScroll()) return;
     markProgrammaticScroll(animated);
     void listRef.current?.scrollToEnd({ animated });
   }, [isUserControllingScroll, markProgrammaticScroll]);
@@ -1812,7 +1815,7 @@ export function MessageRenderer({
     setIsAwayFromBottom(false);
     setHasNewMessages(false);
     setPreviousUserTarget(null);
-    scrollToEndProgrammatically(true);
+    scrollToEndProgrammatically(true, 'explicit');
     runStickToLatestVerify();
   }, [cancelHistoryPrependTransaction, runStickToLatestVerify, scrollToEndProgrammatically]);
 
@@ -1854,7 +1857,7 @@ export function MessageRenderer({
     }
     setHasNewMessages(false);
     setIsAwayFromBottom(false);
-    scrollToEndProgrammatically(true);
+    scrollToEndProgrammatically(true, 'explicit');
     runStickToLatestVerify();
   }, [
     cancelHistoryPrependTransaction,

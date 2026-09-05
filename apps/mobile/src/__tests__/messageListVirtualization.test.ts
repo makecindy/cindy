@@ -295,6 +295,7 @@ describe('mobile message list container', () => {
     expect(effectEnd).toBeGreaterThan(effectStart);
     expect(clearHistoryIntentAt).toBeGreaterThan(-1);
     expect(verifyAt).toBeGreaterThan(clearHistoryIntentAt);
+    expect(effectSource).toContain("scrollToEndProgrammatically(true, 'explicit');");
   });
 
   it('verifies a manual jump-to-latest after issuing the animated scroll', () => {
@@ -302,7 +303,7 @@ describe('mobile message list container', () => {
     const callbackStart = source.indexOf('const scrollToBottom = useCallback');
     const callbackEnd = source.indexOf('const jumpToPreviousUserMessage', callbackStart);
     const callbackSource = source.slice(callbackStart, callbackEnd);
-    const scrollAt = callbackSource.indexOf('scrollToEndProgrammatically(true);');
+    const scrollAt = callbackSource.indexOf("scrollToEndProgrammatically(true, 'explicit');");
     const verifyAt = callbackSource.indexOf('runStickToLatestVerify();');
 
     expect(callbackStart).toBeGreaterThan(-1);
