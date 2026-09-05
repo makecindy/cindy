@@ -975,6 +975,7 @@ export function MessageRenderer({
   // 可能打断进行中的捏合/拖动手势(rule 7)。
   const closePayload = useCallback(() => setPayload(null), []);
   const markProgrammaticScroll = useCallback((animated: boolean) => {
+    dragStartOffsetYRef.current = null;
     const generation = programmaticScrollGenerationRef.current + 1;
     const settleMs = animated
       ? MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS
@@ -2098,7 +2099,14 @@ export function MessageRenderer({
   // 「恢复跟随」走 resolveMobileNearBottomOnScroll:距离 + 明确向下方向。读历史
   // (readingOlderRef)期间禁止方向性恢复——load-earlier prepend 的 mVCP 补偿会产生
   // 程序化向下增量,短会话里会被误判成「用户滑回底部」。
-  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const handleScroll = useCallback((
+    event: NativeSyntheticEvent<NativeScrollEvent>,
+    isFinalDragSample = false,
+  ) => {
+    // Cancellation releases ownership immediately. Only endDrag may still consume its final
+    // sample; an ordinary layout/MVCP scroll cannot use the retained origin as user intent.
+    const isDragSample = isDraggingRef.current
+      || (isFinalDragSample && dragStartOffsetYRef.current !== null);
     nativeScrollEventSequenceRef.current += 1;
     const metrics = {
       contentHeight: event.nativeEvent.contentSize.height,
@@ -2109,7 +2117,7 @@ export function MessageRenderer({
     scrollMetricsRef.current = metrics;
     if (readingOlderRef.current) {
       if (
-        isDraggingRef.current
+        isDragSample
         || isMomentumScrollingRef.current
         || historyTouchTriggeredRef.current
       ) {
@@ -2127,7 +2135,7 @@ export function MessageRenderer({
     if (
       nearBottomRef.current
       && shouldUnpinMobileFollowOnDrag({
-        dragging: isDraggingRef.current,
+        dragging: isDragSample,
         dragStartOffsetY: dragStartOffsetYRef.current,
         metrics,
       })
@@ -2139,7 +2147,7 @@ export function MessageRenderer({
         // Only preserve an actual unpin. A dead-zone drag also enables pagination, but its
         // final native event must not turn a temporary follow suspension into an unpin.
         historyBrowseIntent: userScrollForOlderRef.current && !nearBottomRef.current,
-        userControllingScroll: isDraggingRef.current
+        userControllingScroll: isDragSample
           || isMomentumScrollingRef.current
           || historyTouchStartYRef.current !== null,
       });
@@ -2231,7 +2239,6 @@ export function MessageRenderer({
     // An interrupted drag may never emit endDrag. Android's normal native takeover emits
     // touchCancel before beginDrag, so that subsequent beginDrag establishes its own ownership.
     isDraggingRef.current = false;
-    dragStartOffsetYRef.current = null;
     historyTouchStartYRef.current = null;
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
@@ -2267,7 +2274,7 @@ export function MessageRenderer({
   // 原生 endDrag 自带最终位置，不依赖最后一帧 onScroll 的投递顺序。
   // 先结算本次拖动再清理起点，避免把后续 MVCP 布局校正误判成用户上翻。
   const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    handleScroll(event);
+    handleScroll(event, true);
     isDraggingRef.current = false;
     dragStartOffsetYRef.current = null;
     refreshPreviousUserTarget();
