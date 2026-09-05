@@ -26,9 +26,11 @@ import {
 import {
   useSidebarCardMode,
   useSidebarMainViewMode,
+  usePinnedSourceLabelPreference,
   type SidebarMainViewMode,
   type SidebarViewMode,
 } from '@/hooks/useSidebarCardMode';
+import { Switch } from '@/components/ui/switch';
 import {
   useGhostPanelRestoreMode,
   type GhostPanelRestoreMode,
@@ -321,6 +323,12 @@ export function AppearanceSection() {
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
+  const {
+    visible: pinnedSourceLabelVisible,
+    isOverridden: pinnedSourceLabelIsOverridden,
+    setVisible: setPinnedSourceLabelVisible,
+    resetToDefault: resetPinnedSourceLabel,
+  } = usePinnedSourceLabelPreference();
   const { mode: ghostPanelRestoreMode, setMode: setGhostPanelRestoreMode } =
     useGhostPanelRestoreMode();
   const { t } = useTranslation();
@@ -855,6 +863,52 @@ export function AppearanceSection() {
                 {t(opt.labelKey)}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {t('settings.appearance.pinnedSourceLabel.label')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.appearance.pinnedSourceLabel.hint')}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Tip
+              text={
+                pinnedSourceLabelIsOverridden
+                  ? t('settings.appearance.pinnedSourceLabel.reset')
+                  : t('settings.appearance.pinnedSourceLabel.resetUnavailable')
+              }
+            >
+              <button
+                type="button"
+                aria-label={t('settings.appearance.pinnedSourceLabel.reset')}
+                aria-disabled={!pinnedSourceLabelIsOverridden}
+                onClick={() => {
+                  if (pinnedSourceLabelIsOverridden) {
+                    resetPinnedSourceLabel();
+                  }
+                }}
+                className={cn(
+                  'flex h-8 w-8 items-center justify-center rounded-xl',
+                  'border border-[var(--settings-input-border)]',
+                  'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                  'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+                  !pinnedSourceLabelIsOverridden &&
+                    'cursor-default opacity-40 hover:bg-[var(--settings-input-bg)]',
+                )}
+              >
+                <RefreshCw size={14} aria-hidden />
+              </button>
+            </Tip>
+            <Switch
+              checked={pinnedSourceLabelVisible}
+              onCheckedChange={setPinnedSourceLabelVisible}
+              aria-label={t('settings.appearance.pinnedSourceLabel.aria')}
+            />
           </div>
         </div>
 

@@ -26,8 +26,10 @@ export type SidebarMainViewMode = 'text' | 'list';
 
 const STORAGE_KEY = 'sidebar.cardMode';
 const MAIN_STORAGE_KEY = 'sidebar.mainListMode';
+const PINNED_SOURCE_LABEL_STORAGE_KEY = 'sidebar.pinnedSourceLabelVisible';
 const DEFAULT_MODE: SidebarViewMode = 'text';
 const DEFAULT_MAIN_MODE: SidebarMainViewMode = 'list';
+const DEFAULT_PINNED_SOURCE_LABEL_VISIBLE = true;
 
 /** 解析存储值;兼容旧 boolean 字符串。无法识别返回 null(由调用方落默认)。 */
 function parseMode(raw: string | null): SidebarViewMode | null {
@@ -49,6 +51,8 @@ function parseMainMode(raw: string | null): SidebarMainViewMode | null {
  */
 let memoryValue: SidebarViewMode | null = null;
 let mainMemoryValue: SidebarMainViewMode | null = null;
+// undefined = 尚未读取；null = 没有用户 override，跟随当前默认值。
+let pinnedSourceLabelOverride: boolean | null | undefined;
 
 /** 同步读(置顶段)——给非 hook 路径用。 */
 export function getSidebarViewMode(): SidebarViewMode {
@@ -197,4 +201,80 @@ export function useSidebarMainViewMode(): {
   }, []);
 
   return { mode, setMode };
+}
+
+/** 置顶平铺任务的项目来源标签；默认保留既有展示，用户可显式覆盖或恢复默认。 */
+const pinnedSourceLabelListeners = new Set<() => void>();
+
+function parsePinnedSourceLabelOverride(raw: string | null): boolean | null {
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return null;
+}
+
+function getPinnedSourceLabelOverride(): boolean | null {
+  if (pinnedSourceLabelOverride !== undefined) return pinnedSourceLabelOverride;
+  try {
+    return (pinnedSourceLabelOverride = parsePinnedSourceLabelOverride(
+      localStorage.getItem(PINNED_SOURCE_LABEL_STORAGE_KEY),
+    ));
+  } catch {
+    return (pinnedSourceLabelOverride = null);
+  }
+}
+
+function getPinnedSourceLabelVisible(): boolean {
+  return getPinnedSourceLabelOverride() ?? DEFAULT_PINNED_SOURCE_LABEL_VISIBLE;
+}
+
+function applyPinnedSourceLabelOverride(next: boolean | null): void {
+  pinnedSourceLabelOverride = next;
+  pinnedSourceLabelListeners.forEach((listener) => listener());
+}
+
+export function usePinnedSourceLabelPreference(): {
+  visible: boolean;
+  isOverridden: boolean;
+  setVisible: (next: boolean) => void;
+  resetToDefault: () => void;
+} {
+  const [visible, setVisibleState] = useState(getPinnedSourceLabelVisible);
+  const [isOverridden, setIsOverridden] = useState(() => getPinnedSourceLabelOverride() !== null);
+
+  const sync = useCallback(() => {
+    setVisibleState(getPinnedSourceLabelVisible());
+    setIsOverridden(getPinnedSourceLabelOverride() !== null);
+  }, []);
+
+  const setVisible = useCallback((next: boolean) => {
+    applyPinnedSourceLabelOverride(next);
+    try {
+      localStorage.setItem(PINNED_SOURCE_LABEL_STORAGE_KEY, String(next));
+    } catch {
+      /* memory stays authoritative */
+    }
+  }, []);
+
+  const resetToDefault = useCallback(() => {
+    applyPinnedSourceLabelOverride(null);
+    try {
+      localStorage.removeItem(PINNED_SOURCE_LABEL_STORAGE_KEY);
+    } catch {
+      /* memory stays authoritative */
+    }
+  }, []);
+
+  useEffect(() => {
+    pinnedSourceLabelListeners.add(sync);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== PINNED_SOURCE_LABEL_STORAGE_KEY) return;
+      applyPinnedSourceLabelOverride(parsePinnedSourceLabelOverride(event.newValue));
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      pinnedSourceLabelListeners.delete(sync);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [sync]);
+  return { visible, isOverridden, setVisible, resetToDefault };
 }

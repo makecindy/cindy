@@ -42,6 +42,12 @@ vi.mock('@/hooks/useFontSettings', async (importOriginal) => ({
 vi.mock('@/hooks/useSidebarCardMode', () => ({
   useSidebarCardMode: () => ({ mode: 'text', setMode: vi.fn() }),
   useSidebarMainViewMode: () => ({ mode: 'list', setMode: vi.fn() }),
+  usePinnedSourceLabelPreference: () => ({
+    visible: true,
+    isOverridden: false,
+    setVisible: vi.fn(),
+    resetToDefault: vi.fn(),
+  }),
 }));
 
 vi.mock('@/themes/local-themes', () => ({
@@ -64,12 +70,15 @@ vi.mock('@/components/ui/tooltip', () => ({
 vi.mock('@/components/ui/slider', () => ({
   Slider: ({
     value,
-    onValueChange: _onValueChange,
+    onValueChange,
     ...props
   }: React.InputHTMLAttributes<HTMLInputElement> & {
     value?: number[];
     onValueChange?: (value: number[]) => void;
-  }) => <input type="range" value={value?.[0]} readOnly {...props} />,
+  }) => {
+    void onValueChange;
+    return <input type="range" value={value?.[0]} readOnly {...props} />;
+  },
 }));
 
 vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));
@@ -85,5 +94,17 @@ describe('AppearanceSection accessibility', () => {
     expect(
       screen.getByRole('spinbutton', { name: 'settings.appearance.font.codeSize.label' }),
     ).toBeTruthy();
+  });
+
+  it('labels the pinned project-source reset control', () => {
+    render(<AppearanceSection />);
+
+    const reset = screen.getByRole('button', {
+      name: 'settings.appearance.pinnedSourceLabel.reset',
+    });
+
+    expect(reset).toBeTruthy();
+    expect(reset.getAttribute('aria-disabled')).toBe('true');
+    expect(reset.hasAttribute('disabled')).toBe(false);
   });
 });

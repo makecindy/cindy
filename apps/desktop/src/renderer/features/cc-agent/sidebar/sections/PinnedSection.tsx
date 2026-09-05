@@ -43,7 +43,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
-import { useSidebarCardMode, type SidebarViewMode } from '@/hooks/useSidebarCardMode';
+import {
+  usePinnedSourceLabelPreference,
+  useSidebarCardMode,
+  type SidebarViewMode,
+} from '@/hooks/useSidebarCardMode';
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '../menuStyles';
 import { SectionCollapse } from '../SectionCollapse';
 import { CardMasonry } from '../CardMasonry';
@@ -192,6 +196,7 @@ export function PinnedSection({
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const { mode, setMode } = useSidebarCardMode();
+  const { visible: showSourceLabels } = usePinnedSourceLabelPreference();
   // 段头 trigger 的图标 = 当前选中的显示模式(用户一眼看出现在是哪种)。
   const ViewStyleTriggerIcon = viewStyleIcon(mode);
   // 卡片视觉(card 瀑布流 / list 单列满宽)统称"卡片态";text 为紧凑行。
@@ -266,7 +271,7 @@ export function PinnedSection({
           onTogglePin={onTogglePin}
           onMoveSession={onMoveSession}
           projectOptions={projectOptions}
-          sourceLabel={sourceLabelMap.get(session.id)}
+          sourceLabel={showSourceLabels ? sourceLabelMap.get(session.id) : undefined}
         />
       );
     },
@@ -287,6 +292,7 @@ export function PinnedSection({
       onMoveSession,
       projectOptions,
       sourceLabelMap,
+      showSourceLabels,
     ],
   );
 
@@ -419,7 +425,9 @@ export function PinnedSection({
                     onTogglePin={onTogglePin}
                     onMoveSession={onMoveSession}
                     projectOptions={projectOptions}
-                    sourceLabel={sourceLabelMap.get(entry.session.id)}
+                    sourceLabel={
+                      showSourceLabels ? sourceLabelMap.get(entry.session.id) : undefined
+                    }
                   />
                 )
               }
