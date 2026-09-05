@@ -1865,7 +1865,12 @@ export default function SessionScreen() {
   }) => Promise<void>) | null>(null);
   const sendButtonRef = useRef<View>(null);
   const composerSendTargetEnabledRef = useRef(false);
-  const slashCommandsRef = useRef<MobileSlashCommand[]>([]);
+  // Match the keyed palette lifetime. Old requests/cleanup retain their old
+  // reference and cannot affect command dispatch in the next draft scope.
+  const slashCommandsRef = useMemo<RefObject<MobileSlashCommand[]>>(
+    () => ({ current: [] }),
+    [activeComposerDraftScopeKey],
+  );
   const sendButtonFrameRef = useRef<{ height: number; width: number; x: number; y: number } | null>(null);
   const capabilitiesLoadSeqRef = useRef(0);
   const alternateCapabilitiesLoadSeqRef = useRef(0);

@@ -123,9 +123,38 @@ describe('composer resize interaction boundary', () => {
     gesture.begin({ translationY: 0 });
     gesture.update({ translationY: 100 });
     gesture.finalize({ translationY: 100 }, false);
+    expect(harness.result.active.value).toBe(false);
+    expect(harness.result.contentHeight.value).toBe(60);
     flushJS();
     expect(harness.result.contentHeight.value).toBe(60);
     expect(harness.result.mode).toBe('auto');
+    expect(input.onSnapToAuto).not.toHaveBeenCalled();
+  });
+
+  it('starts a new drag from the settled manual height before canceled JS callbacks arrive', () => {
+    const input = composerInput();
+    const harness = mountComposer(input);
+    const gesture = gestureOf(harness.result.gesture);
+    gesture.begin({ translationY: 0 });
+    gesture.update({ translationY: -100 });
+    gesture.finalize({ translationY: -100 }, true);
+    flushJS();
+    expect(harness.result.visibleContentHeight).toBe(160);
+
+    gesture.begin({ translationY: 0 });
+    gesture.update({ translationY: 100 });
+    gesture.finalize({ translationY: 100 }, false);
+    expect(harness.result.active.value).toBe(false);
+    expect(harness.result.contentHeight.value).toBe(160);
+    gesture.begin({ translationY: 0 });
+    gesture.update({ translationY: -20 });
+    expect(harness.result.contentHeight.value).toBe(180);
+    flushJS();
+    expect(harness.result.active.value).toBe(true);
+    expect(harness.result.contentHeight.value).toBe(180);
+    gesture.finalize({ translationY: -20 }, true);
+    flushJS();
+    expect(harness.result.visibleContentHeight).toBe(180);
     expect(input.onSnapToAuto).not.toHaveBeenCalled();
   });
 

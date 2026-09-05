@@ -99,6 +99,12 @@ export function useComposerResize(input: UseComposerResizeInput) {
     })
     .onFinalize((event, successful) => {
       'worklet';
+      if (!successful) {
+        // Cancellation must restore the settled frame even while JS is busy,
+        // so a new gesture cannot inherit the canceled temporary height.
+        dragHeight.value = geometry.value.visibleHeight;
+        active.value = false;
+      }
       runOnJS(finish)(dragHeight.value, startHeight.value, event.translationY, successful, gestureId.value);
     }), [active, begin, dragHeight, finish, geometry, gestureId, scrollGesture, startHeight]);
 
@@ -132,7 +138,11 @@ export function useComposerResize(input: UseComposerResizeInput) {
       },
       onEnd: (translationY) => finish(height, initial, translationY, true, id),
     }));
-    responder.panHandlers.onResponderTerminate = () => finish(height, initial, 0, false, id);
+    responder.panHandlers.onResponderTerminate = () => {
+      dragHeight.value = geometry.value.visibleHeight;
+      active.value = false;
+      finish(height, initial, 0, false, id);
+    };
     return { ...responder.panHandlers, ...buildComposerResizeTouchHandlers((value) => latest.current.onGrabberTouchActiveChange?.(value)) };
   }, [active, begin, dragHeight, finish, geometry, gestureId]);
 

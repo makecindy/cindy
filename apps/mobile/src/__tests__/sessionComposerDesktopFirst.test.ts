@@ -25,6 +25,16 @@ describe('mobile session composer desktop-first surface', () => {
     expect(input).toContain('useMobileVoiceRecordingTimer(');
     expect(task).toContain('const commandsAtSend = slashCommandsRef.current;');
     expect(task).toContain('remoteCommands: commandsAtSend,');
+    // Dispatch and the keyed palette must receive a fresh ref synchronously;
+    // passive unmount cleanup leaves a window for the old command list to leak.
+    expect(task).toContain('const slashCommandsRef = useMemo<RefObject<MobileSlashCommand[]>>(\n'
+      + '    () => ({ current: [] }),\n'
+      + '    [activeComposerDraftScopeKey],\n'
+      + '  );');
+    expect(task).toContain('<SessionComposerPalette\n'
+      + '            key={activeComposerDraftScopeKey}\n'
+      + '            source={composerDraftSource}\n'
+      + '            commandsRef={slashCommandsRef}');
   });
 
   it('fences every active-session snapshot request against newer retry progress', () => {
