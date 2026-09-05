@@ -718,6 +718,8 @@ export function useVoiceInput(
             start: range.from,
             end: range.to,
             pendingAdviceTimer: undefined,
+            // A later clear/unmount must not publish a correction the user undid.
+            pendingEvidence: undefined,
           });
           return [];
         }
