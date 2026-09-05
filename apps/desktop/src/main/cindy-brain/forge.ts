@@ -4289,11 +4289,13 @@ const opened = await cindy.iosSimulator.request({
 
 ## 4.21 为插件添加推荐任务（可选内容）
 
-在 ghost.json 顶层添加 \`recommendations\` 数组，每条包含稳定 \`id\`、短标题
+在 v3 ghost.json 顶层添加 \`recommendations\` 数组，每条包含稳定 \`id\`、短标题
 \`label\` 和完整 \`prompt\`。最多 24 条，id 为 1–64 位小写字母、数字或连字符，
 label 为 1–120 字符，prompt 为 1–8000 字符；整份列表 UTF-8 不超过 64 KiB。
 可选 \`locales\` 按 en / zh-CN / zh-TW / ja / ko 提供 \`{label,prompt}\`，
 缺当前语言时使用 en，再回退条目自身。不要放秘密或其它账号的内容。
+宿主在生成首页候选时校验此列表，不合格的列表不展示，但不影响插件安装、批准和运行。
+v2 清单继续忽略此扩展字段；运行时更新始终严格校验，不合格的更新不会替换原列表。
 
 \`\`\`json
 {"recommendations":[{"id":"daily-mail","label":"整理今天需要处理的邮件","prompt":"整理今天需要我处理的邮件，列出待办和原文中的截止时间。先给清单，不发送或删除邮件。"}]}

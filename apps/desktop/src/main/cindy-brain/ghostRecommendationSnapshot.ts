@@ -1,6 +1,6 @@
 import type { InstalledGhost } from '../../shared/ghost.js';
 import type { HomePluginRecommendationsSnapshot } from '../../shared/homePluginRecommendations.js';
-import type { GhostRecommendation } from '@cindy/plugin-protocol';
+import { validateGhostRecommendations, type GhostRecommendation } from '@cindy/plugin-protocol';
 
 export function buildGhostRecommendationSnapshot(
   ownerId: string | null,
@@ -9,7 +9,12 @@ export function buildGhostRecommendationSnapshot(
   recentIds: string[],
 ): HomePluginRecommendationsSnapshot {
   const sources = ghosts.map((g) => {
-    const items = entries.find((e) => e.id === g.manifest.id)?.items ?? g.manifest.recommendations;
+    // Keep legacy manifest/receipt content intact; invalid optional metadata must not disable a plugin.
+    const candidates =
+      entries.find((e) => e.id === g.manifest.id)?.items ?? g.manifest.recommendations;
+    const validated =
+      candidates === undefined ? undefined : validateGhostRecommendations(candidates);
+    const items = validated?.ok ? validated.items : undefined;
     return {
       ghostId: g.manifest.id,
       name: g.manifest.name,

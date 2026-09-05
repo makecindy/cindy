@@ -85,6 +85,36 @@ describe('plugin recommendation state', () => {
     };
     expect(validateGhostManifest(old).ok).toBe(true);
     const result = validateGhostManifest({ ...old, recommendations: [item] });
-    expect(result.ok && result.manifest.recommendations).toEqual([item]);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.manifest).not.toHaveProperty('recommendations');
   });
+  it.each(['legacy metadata', { custom: true }, [{ ...item, priority: 99 }]])(
+    'preserves opaque v3 metadata without publishing invalid recommendations: %j',
+    (recommendations) => {
+      const parsed = validateGhostManifest({
+        schemaVersion: 3,
+        minCindyVersion: '0.1.61',
+        id: 'example',
+        name: 'Example',
+        version: '1',
+        entry: 'main.js',
+        recommendations,
+      });
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new Error(parsed.reason);
+      expect(parsed.manifest.recommendations).toEqual(recommendations);
+      const installed = { ...ghost, manifest: parsed.manifest };
+      expect(
+        buildGhostRecommendationSnapshot('a', [installed], [], []).sources[0].items,
+      ).toBeUndefined();
+      expect(
+        buildGhostRecommendationSnapshot('a', [installed], [{ id: 'example', items: [item] }], [])
+          .sources[0].items,
+      ).toEqual([item]);
+      expect(
+        buildGhostRecommendationSnapshot('a', [installed], [{ id: 'example', items: [] }], [])
+          .sources[0].items,
+      ).toEqual([]);
+    },
+  );
 });

@@ -39,10 +39,29 @@ describe("optional recommendation contract", () => {
     ].map((value) => ({ value })),
   )("rejects invalid or quota-controlling author content", ({ value }) => {
     expect(validateGhostRecommendations(value).ok).toBe(false);
-    expect(
-      validateGhostManifest({ ...manifest, recommendations: value }).ok,
-    ).toBe(false);
+    // This was historically an opaque extension. Invalid recommendations must not reject
+    // an otherwise valid installed plugin or change its approved manifest contents.
+    const parsed = validateGhostManifest({
+      ...manifest,
+      recommendations: value,
+    });
+    expect(parsed.ok && parsed.manifest.recommendations).toEqual(value);
   });
+  it.each(["legacy metadata", { custom: true }, [item]])(
+    "ignores v2 extension metadata: %j",
+    (recommendations) => {
+      const parsed = validateGhostManifest({
+        ...manifest,
+        schemaVersion: 2,
+        slots: [],
+        recommendations,
+      });
+      expect(parsed.ok).toBe(true);
+      expect(parsed.ok && parsed.manifest).not.toHaveProperty(
+        "recommendations",
+      );
+    },
+  );
   it("bounds total bytes and rejects cyclic data without throwing", () => {
     expect(
       validateGhostRecommendations(

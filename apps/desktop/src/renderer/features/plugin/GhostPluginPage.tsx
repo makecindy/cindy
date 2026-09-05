@@ -574,11 +574,6 @@ export function GhostPluginPage({
   const [scopeDir, setScopeDir] = useState<string | null>(null);
   const scopeDirRef = useRef<string | null>(scopeDir);
   scopeDirRef.current = scopeDir;
-  useEffect(() => {
-    if (!recommendation) return;
-    const target = ghosts.find((g) => g.manifest.id === recommendation.suggestion.pluginId);
-    setScopeDir(target?.enabled ? recommendation.workingDir : null);
-  }, [recommendation?.nonce]);
   const [projectDisabled, setProjectDisabled] = useState<Set<string>>(() => new Set());
   const handlePickScope = useCallback((dir: string | null) => {
     setScopeDir(dir);
@@ -592,6 +587,11 @@ export function GhostPluginPage({
       setProjectDisabled(new Set());
     }
   }, []);
+  useEffect(() => {
+    if (!recommendation) return;
+    const target = ghosts.find((g) => g.manifest.id === recommendation.suggestion.pluginId);
+    handlePickScope(target?.enabled ? recommendation.workingDir : null);
+  }, [recommendation?.nonce, handlePickScope]);
   const effectiveEnabled = useCallback(
     (id: string, globallyEnabled: boolean) =>
       scopeDir === null ? globallyEnabled : globallyEnabled && !projectDisabled.has(id),

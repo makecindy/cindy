@@ -5153,9 +5153,13 @@ export function NewMakerDraftRoute() {
           navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
           return;
         }
-        const prompt = ghost.manifest.command
-          ? expandGhostCommand(`$${ghost.manifest.command} ${suggestion.prompt}`, [ghost])
+        const recoveryPrompt = ghost.manifest.command
+          ? `$${ghost.manifest.command} ${suggestion.prompt}`
           : `${suggestion.prompt}\n\n${t('newChat.pluginSuggestions.usePlugin', { name: ghost.manifest.name, id: ghost.manifest.id })}`;
+        // Retry goes through ChatInput, which expands $commands itself.
+        const prompt = ghost.manifest.command
+          ? expandGhostCommand(recoveryPrompt, [ghost])
+          : recoveryPrompt;
         await handleSend(
           prompt,
           request.model,
@@ -5165,7 +5169,7 @@ export function NewMakerDraftRoute() {
           undefined,
           {
             providerId: request.providerId,
-            recoveryDraftDoc: plainTextToTiptapDoc(suggestion.prompt),
+            recoveryDraftDoc: plainTextToTiptapDoc(recoveryPrompt),
             onAccepted: () => {
               void window.electronAPI.ghosts.markUsed(ghost.manifest.id).catch(() => undefined);
             },
