@@ -4,8 +4,9 @@
  */
 import fsp from 'node:fs/promises';
 import type { CodexModelListItem } from '@cindy/maker-core';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // codex-model-discovery 顶层 import electron(readCodexDiscoveredModels 用 app.getPath);
 // 本套件只测纯 mapper,但按 main 侧测试惯例显式 mock,避免依赖 Node 下 electron 包的
@@ -19,6 +20,8 @@ import {
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
 } from '../codex-model-discovery.js';
+import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels } from '../active-catalog.js';
+import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 // 取自本机 ~/.codex/models_cache.json 的真实结构(裁剪到关键字段)。
 const SAMPLE = {
@@ -35,6 +38,25 @@ const SAMPLE = {
 const OAUTH_AUTH = JSON.stringify({ tokens: { access_token: 'oauth-token' } });
 
 describe('mapCodexModelsToCatalog', () => {
+  it.each([
+    { name: '明确包含 image', inputModalities: ['text', 'image'], expected: true },
+    { name: '明确只有 text', inputModalities: ['text'], expected: false },
+    { name: '包含未知 modality', inputModalities: ['text', 'video'], expected: undefined },
+  ])('cache input_modalities $name 时保留显式图片能力', ({ inputModalities, expected }) => {
+    const out = mapCodexModelsToCatalog({
+      models: [{
+        slug: 'future-chatgpt-model',
+        display_name: 'Future ChatGPT Model',
+        visibility: 'list',
+        supported_in_api: true,
+        supported_reasoning_levels: [],
+        input_modalities: inputModalities,
+      }],
+    });
+
+    expect(out[0]?.supportsImageInput).toBe(expected);
+  });
+
   it('只留 visibility:list && supported_in_api:true,保留规范 slug', () => {
     const out = mapCodexModelsToCatalog(SAMPLE);
     expect(out.map((m) => m.id)).toEqual(['gpt-5.5', 'gpt-5.4', 'gpt-5.6']);
@@ -163,6 +185,28 @@ describe('mapCodexModelsToCatalog', () => {
 });
 
 describe('mapCodexAppServerModelsToCatalog', () => {
+  it.each([
+    { name: '明确包含 image', inputModalities: ['text', 'image'], expected: true },
+    { name: '明确只有 text', inputModalities: ['text'], expected: false },
+    { name: '包含未知 modality', inputModalities: ['text', 'video'], expected: undefined },
+  ])('live inputModalities $name 时保留显式图片能力', ({ inputModalities, expected }) => {
+    const out = mapCodexAppServerModelsToCatalog([{
+      id: 'future-chatgpt-model',
+      model: 'future-chatgpt-model',
+      displayName: 'Future ChatGPT Model',
+      description: '',
+      hidden: false,
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: 'medium',
+      inputModalities,
+      additionalSpeedTiers: [],
+      serviceTiers: [],
+      isDefault: false,
+    }] as CodexModelListItem[]);
+
+    expect(out[0]?.supportsImageInput).toBe(expected);
+  });
+
   it('live 即使把内部 ID 标成 hidden:false 也过滤 codex-auto-review', () => {
     const out = mapCodexAppServerModelsToCatalog([
       {
@@ -229,6 +273,34 @@ describe('mapCodexAppServerModelsToCatalog', () => {
     // live 协议不给 context_window,这 272k 是统一兜底 → 一律不得标记为已核实。
     // 标了它就会被拿去收敛运行期上报的窗口,把真实更大的窗口压成 272k。
     expect(out.every((model) => model.contextWindowVerified === undefined)).toBe(true);
+  });
+});
+
+describe('Codex discovery 到 Pi descriptor 的图片能力投影', () => {
+  afterEach(() => {
+    setDiscoveredCodexModels([]);
+    setActiveCatalog(BUNDLED_CATALOG);
+  });
+
+  it('把 live 模型声明的 image modality 投影到 chatgpt/*', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog([{
+      id: 'future-chatgpt-vision-model',
+      model: 'future-chatgpt-vision-model',
+      displayName: 'Future ChatGPT Vision Model',
+      description: '',
+      hidden: false,
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: 'medium',
+      inputModalities: ['text', 'image'],
+      additionalSpeedTiers: [],
+      serviceTiers: [],
+      isDefault: false,
+    }] as CodexModelListItem[]));
+
+    const descriptor = deriveAvailableModels(getActiveCatalog(), 'pi')
+      .find((model) => model.id === 'chatgpt/future-chatgpt-vision-model');
+    expect(descriptor?.supportsImageInput).toBe(true);
   });
 });
 

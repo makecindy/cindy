@@ -129,6 +129,7 @@ export interface CodexModelListItem {
   defaultReasoningEffort: ReasoningEffort;
   additionalSpeedTiers: string[];
   serviceTiers: Array<{ id: string; name: string; description: string }>;
+  inputModalities?: Array<'text' | 'image' | 'audio'>;
   isDefault: boolean;
   [k: string]: unknown;
 }
