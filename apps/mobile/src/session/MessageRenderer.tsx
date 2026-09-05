@@ -186,12 +186,14 @@ import {
   parseMobileMarkdownIncremental,
   parseMobileMarkdownInlines,
   type MobileMarkdownParseResult,
+  type MobileMarkdownBlock,
   type MobileMarkdownBlockGroup,
   type MobileMarkdownInline,
   type MobileMarkdownTextRunGroupingOptions,
 } from '@/session/messageMarkdown';
+import { MarkdownBlockContent } from '@/session/MarkdownBlockContent';
+import { useMarkdownSessionLinkTitles } from '@/session/useMarkdownSessionLinkTitles';
 import {
-  extractSessionLinkIds,
   isCindyDeepLinkUrl,
   parseProjectDeepLinkUrl,
   parseSessionDeepLinkUrl,
@@ -310,6 +312,7 @@ import type { ContinuationInFlightProjectionCapability } from '@/session/types';
 import {
   projectMobileWorkActivities,
   type MobileProjectedToolActivity,
+  sameMobileWorkToolActivity,
 } from '@/session/workActivityProjection';
 import { logUnhandledRenderItem } from '@/session/assertNever';
 import type { OrcaCollabCard as OrcaCollabCardModel } from '@/session/orcaCollab';
@@ -3807,6 +3810,8 @@ function ToolGroupCard({
  * 媒体条 / 结果预览,再点收起。展开态走共享进程内记忆(blockId 前缀 `toolrow-`,
  * 与组级 `tools-` key 空间天然隔离)。无详情可展的行不显示 chevron、不可点击。
  */
+type ToolDetailActions = Pick<MessageActions, 'onLoadToolInput' | 'onOpenPayload'>;
+
 function ToolActionRow({
   actions,
   contentLayout,
@@ -3814,7 +3819,7 @@ function ToolActionRow({
   rowKey,
   tool,
 }: {
-  actions: MessageActions & { firstUserMessageClientId?: string };
+  actions: ToolDetailActions;
   contentLayout: MessageContentLayout;
   row: ToolRowPresentation;
   rowKey?: string;
@@ -3876,7 +3881,7 @@ function ProjectedToolInputButton({
   actions,
   projection,
 }: {
-  actions: MessageActions;
+  actions: ToolDetailActions;
   projection: MobileToolInputProjection;
 }) {
   const { colors } = useTheme();
@@ -4253,10 +4258,16 @@ function WorkGroupCard({
       : null),
     [expanded, isStreaming, item.children],
   );
+  // Tool detail rows do not consume message action/queue/share busy state.
+  // Keep their callbacks and streaming flag stable across those unrelated updates.
+  const toolActions = useMemo(() => ({
+    onLoadToolInput: actions.onLoadToolInput,
+    onOpenPayload: actions.onOpenPayload,
+    isSessionStreaming: actions.isSessionStreaming,
+  }), [actions.onLoadToolInput, actions.onOpenPayload, actions.isSessionStreaming]);
   const startedAtIso = isStreaming && item.startedAtMs !== undefined
     ? new Date(item.startedAtMs).toISOString()
     : undefined;
-  const elapsedMs = useLiveElapsedMs(isStreaming, startedAtIso);
   const explorationSummary = activityProjection?.isPureExploration
     ? [
         activityProjection.explorationCounts.read > 0
@@ -4283,8 +4294,8 @@ function WorkGroupCard({
       onControlledToggle={onToggle}
       title={title}
       subtitle={header.subtitle ?? undefined}
-      trailingMeta={isStreaming && elapsedMs !== null
-        ? <Text style={styles.workGroupElapsed}>{formatDuration(elapsedMs)}</Text>
+      trailingMeta={isStreaming
+        ? <WorkGroupElapsed sinceIso={startedAtIso} />
         : undefined}
       leadingIcon={isStreaming
         ? <CompactActivityIndicator color={colors.textTertiary} size={header.iconSize} />
@@ -4306,7 +4317,7 @@ function WorkGroupCard({
                     {(activityProjection?.toolActivitiesByChildKey.get(child.key) ?? []).map((activity) => (
                       <WorkToolActivityRow
                         key={activity.key}
-                        actions={actions}
+                        actions={toolActions}
                         activity={activity}
                         contentLayout={contentLayout!}
                       />
@@ -4323,12 +4334,21 @@ function WorkGroupCard({
   );
 }
 
-function WorkToolActivityRow({
+/** The clock must not re-render an expanded group's entire activity tree. */
+function WorkGroupElapsed({ sinceIso }: { sinceIso: string | undefined }) {
+  const styles = useThemedStyles(makeStyles);
+  const elapsedMs = useLiveElapsedMs(true, sinceIso);
+  return elapsedMs === null
+    ? null
+    : <Text style={styles.workGroupElapsed}>{formatDuration(elapsedMs)}</Text>;
+}
+
+const WorkToolActivityRow = memo(function WorkToolActivityRow({
   actions,
   activity,
   contentLayout,
 }: {
-  actions: MessageActions & { firstUserMessageClientId?: string };
+  actions: ToolDetailActions & Pick<MessageActions, 'isSessionStreaming'>;
   activity: MobileProjectedToolActivity;
   contentLayout: MessageContentLayout;
 }) {
@@ -4349,9 +4369,13 @@ function WorkToolActivityRow({
       tool={tool}
     />
   );
-}
+}, (previous, next) => (
+  previous.actions === next.actions
+  && previous.contentLayout === next.contentLayout
+  && sameMobileWorkToolActivity(previous.activity, next.activity)
+));
 
-function ExpandedWorkThinkingRow({
+const ExpandedWorkThinkingRow = memo(function ExpandedWorkThinkingRow({
   item,
 }: {
   item: MobileThinkingItem;
@@ -4412,7 +4436,7 @@ function ExpandedWorkThinkingRow({
         : null}
     </Pressable>
   );
-}
+});
 
 // 真·子 agent 嵌套卡片(手机端净新能力):复用 FoldablePanel(与 ToolGroupCard/WorkGroupCard 同款折叠
 // 路径,滚动安全已验证)、默认折叠;展开递归渲染内层 childItems(经 RenderItemView)+ 子 agent 终稿。
@@ -5021,9 +5045,9 @@ function MarkdownBody({
     setContentWidth((current) => nextSettledContentWidth(current, nextWidth));
   }, [pinContentWidth]);
   const pinSettledWidth = pinContentWidth && contentWidth > 0;
-  const settledTextStyle = pinSettledWidth
+  const settledTextStyle = useMemo(() => pinSettledWidth
     ? [styles.messageText, { width: contentWidth }]
-    : styles.messageText;
+    : styles.messageText, [contentWidth, pinSettledWidth, styles.messageText]);
   const markdownParseRef = useRef<MobileMarkdownParseResult | null>(null);
   const markdownParse = useMemo(() => {
     const startedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -5072,19 +5096,10 @@ function MarkdownBody({
     markdownImageCacheKey,
     onOpenPayload,
   ]);
-  // 会话深链 chip 标题:渲染期同步从会话镜像查(WebView 静态 HTML 无法事后
-  // patch)。不含深链的消息恒为 undefined,不影响 html memo 稳定性。
-  const sessionLinkIds = useMemo(() => extractSessionLinkIds(text), [text]);
+  // Preserve the inline renderer while streaming or unrelated task metadata
+  // changes; referenced task title changes still refresh every affected chip.
   const remoteSessions = useRemoteSessions();
-  const sessionLinkTitles = useMemo(() => {
-    if (sessionLinkIds.length === 0) return undefined;
-    const map: Record<string, string> = {};
-    for (const id of sessionLinkIds) {
-      const title = remoteSessions.find((s) => s.id === id)?.title?.trim();
-      if (title) map[id] = title;
-    }
-    return Object.keys(map).length > 0 ? map : undefined;
-  }, [sessionLinkIds, remoteSessions]);
+  const sessionLinkTitles = useMarkdownSessionLinkTitles(text, remoteSessions);
   const sessionReferenceDetails = useMemo(() => {
     if (!sessionReferences?.length) return undefined;
     const details: Record<string, string> = {};
@@ -5112,7 +5127,9 @@ function MarkdownBody({
         streaming,
       }))
     ),
-    [onOpenSessionLink, openMarkdownImage, sessionLinkTitles, sessionReferenceDetails, streaming, styles],
+    // renderInline also reads translated fallback labels. Invalidate completed
+    // memoized text blocks when useTranslation refreshes its bound translator.
+    [onOpenSessionLink, openMarkdownImage, sessionLinkTitles, sessionReferenceDetails, streaming, styles, t],
   );
   const textRunGroupingOptions = Platform.OS === 'android'
     ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS
@@ -5136,9 +5153,34 @@ function MarkdownBody({
   // 一个高度恰为 gap 的空行在视觉上与原块间距一致。由单块切出的 continuation 不插间距。
   // 列表项在树内表达为「marker 前缀 span + 正文」
   // (无悬挂缩进;任务项以 ☑/☐ 字符替代原边框小方块)。
-  const renderTextRun = (group: Extract<MobileMarkdownBlockGroup, { type: 'text_run' }>): ReactNode => {
+  const renderTextRunBlock = useCallback((block: MobileMarkdownBlock, leadingGap: boolean): ReactNode => {
+    if (block.type !== 'paragraph' && block.type !== 'heading' && block.type !== 'list_item') return null;
     const runSelectable = selectable === true;
     const RunSpan = spanFor(runSelectable) ?? Text;
+    const spans: ReactNode[] = [];
+    if (leadingGap) {
+      spans.push(
+        <RunSpan key={`${block.key}:gap`} style={{ lineHeight: layout.markdownBodyGap }}>
+          {'\n\n'}
+        </RunSpan>,
+      );
+    }
+    const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
+      ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
+      : styles.messageText;
+    if (block.type === 'list_item' && !('textRunContinuation' in block && block.textRunContinuation)) {
+      const task = typeof block.checked === 'boolean';
+      spans.push(
+        <RunSpan key={`${block.key}:marker`} style={[styles.messageText, styles.markdownListMarkerInline]}>
+          {task ? (block.checked ? '☑ ' : '☐ ') : block.ordered ? `${block.marker} ` : '• '}
+        </RunSpan>,
+      );
+    }
+    spans.push(...renderInlines(block.inlines, spanFor(runSelectable), baseStyle, block.key));
+    return spans;
+  }, [layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
+  const renderTextRun = (group: Extract<MobileMarkdownBlockGroup, { type: 'text_run' }>): ReactNode => {
+    const runSelectable = selectable === true;
     return (
       <MarkdownSelectableText
         allowIosUITextView={allowIosUITextView}
@@ -5147,35 +5189,196 @@ function MarkdownBody({
         style={settledTextStyle}
         testID="message.markdownTextRun"
       >
-        {group.blocks.flatMap((block, index) => {
-          const spans: ReactNode[] = [];
-          if (index > 0 && !block.textRunContinuation) {
-            spans.push(
-              <RunSpan key={`${block.key}:gap`} style={{ lineHeight: layout.markdownBodyGap }}>
-                {'\n\n'}
-              </RunSpan>,
-            );
-          }
-          const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
-            ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
-            : styles.messageText;
-          if (block.type === 'list_item' && !block.textRunContinuation) {
-            const task = typeof block.checked === 'boolean';
-            spans.push(
-              <RunSpan
-                key={`${block.key}:marker`}
-                style={[styles.messageText, styles.markdownListMarkerInline]}
-              >
-                {task ? (block.checked ? '☑ ' : '☐ ') : block.ordered ? `${block.marker} ` : '• '}
-              </RunSpan>,
-            );
-          }
-          spans.push(...renderInlines(block.inlines, spanFor(runSelectable), baseStyle, block.key));
-          return spans;
-        })}
+        {group.blocks.map((block, index) => (
+          <MarkdownBlockContent
+            key={block.key}
+            block={block}
+            leadingGap={index > 0 && !block.textRunContinuation}
+            renderBlock={renderTextRunBlock}
+          />
+        ))}
       </MarkdownSelectableText>
     );
   };
+  const renderSingleBlock = useCallback((block: MobileMarkdownBlock): ReactNode => {
+    if (block.type === 'mermaid') {
+      // 内联图表按「图片」形态呈现:无卡片 chrome、无标签文字、无按钮,
+      // 就是一块圆角图表;点击任意位置打开沉浸式全屏详情(透明 Pressable
+      // 盖住整块——WebView 会吞掉触摸事件,不盖层拿不到点击)。
+      return (
+        <View key={block.key} testID="message.mermaidPreviewButton">
+          <ViewabilityGatedMermaidDiagram source={block.text} testID="message.mermaidDiagram" />
+          {onOpenPayload ? (
+            <Pressable
+              accessibilityLabel={t('message.renderer.openDiagramDetail')}
+              accessibilityRole="button"
+              onPress={() => onOpenPayload(buildMermaidPayload(block.text))}
+              style={StyleSheet.absoluteFill}
+              testID="message.mermaidPreviewTap"
+            />
+          ) : null}
+        </View>
+      );
+    }
+    if (block.type === 'math') {
+      // display 公式:WebView + KaTeX(形态对齐 mermaid 块,无 chip 卡壳——
+      // 公式在视觉上是正文的一部分,背景与气泡底色一致)。
+      return (
+        <ViewabilityGatedMathFormula
+          key={block.key}
+          source={block.text}
+          testID="message.mathFormula"
+        />
+      );
+    }
+    if (block.type === 'code') {
+      // 围栏代码在气泡内换行,不用横向 ScrollView:后者在展开长用户消息时
+      // 会按未折行内容报出超高,气泡巨幅空白并把每行裁在右侧圆角外。
+      return (
+        <View key={block.key} style={styles.markdownCodeFrame}>
+          <View
+            style={[
+              styles.markdownCodeContent,
+              {
+                paddingHorizontal: layout.codePaddingHorizontal,
+                paddingVertical: layout.codePaddingVertical,
+              },
+            ]}
+          >
+            <HighlightedCodeText
+              SpanComponent={spanFor(selectable === true) ?? Text}
+              allowIosUITextView={allowIosUITextView}
+              language={block.language}
+              selectable={selectable === true}
+              styles={styles}
+              text={block.text}
+            />
+          </View>
+        </View>
+      );
+    }
+    if (block.type === 'heading') {
+      const headingStyle = [
+        styles.markdownHeading,
+        headingSizeStyle(styles, block.level),
+      ];
+      const headingSelectable = inlinesSelectable(block.inlines);
+      return (
+        <MarkdownSelectableText
+          allowIosUITextView={allowIosUITextView}
+          key={block.key}
+          selectable={headingSelectable}
+          style={headingStyle}
+          testID="message.markdownHeading"
+        >
+          {renderInlines(block.inlines, spanFor(headingSelectable))}
+        </MarkdownSelectableText>
+      );
+    }
+    if (block.type === 'blockquote') {
+      return (
+        <View key={block.key} style={styles.markdownQuote} testID="message.markdownQuote">
+          <MarkdownSelectableText
+            allowIosUITextView={allowIosUITextView}
+            selectable={inlinesSelectable(block.inlines)}
+            style={[styles.messageText, styles.markdownQuoteText]}
+          >
+            {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
+          </MarkdownSelectableText>
+        </View>
+      );
+    }
+    if (block.type === 'list_item') {
+      const task = typeof block.checked === 'boolean';
+      return (
+        <View
+          key={block.key}
+          style={[styles.markdownListRow, { gap: layout.markdownListGap }]}
+          testID={task ? 'message.markdownTaskItem' : undefined}
+        >
+          <Text style={[
+            styles.markdownListMarker,
+            { width: layout.markdownListMarkerWidth },
+            task && styles.markdownTaskMarker,
+          ]}>
+            {task ? (block.checked ? '✓' : '') : block.ordered ? block.marker : '•'}
+          </Text>
+          <MarkdownSelectableText
+            allowIosUITextView={allowIosUITextView}
+            selectable={inlinesSelectable(block.inlines)}
+            style={[styles.messageText, styles.markdownListText]}
+          >
+            {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
+          </MarkdownSelectableText>
+        </View>
+      );
+    }
+    if (block.type === 'table') {
+      const columnWidths = buildMobileMarkdownTableColumnWidths({
+        header: block.header,
+        rows: block.rows,
+        availableWidth: layout.markdownTableAvailableWidth,
+        minWidth: layout.markdownTableCellMinWidth,
+      });
+      return (
+        <ScrollView
+          horizontal
+          key={block.key}
+          style={styles.markdownTableScroll}
+          testID="message.markdownTable"
+        >
+          <View style={styles.markdownTable}>
+            <View style={[styles.markdownTableRow, styles.markdownTableHeaderRow]}>
+              {columnWidths.map((columnWidth, index) => {
+                const cell = block.header[index] ?? [];
+                return (
+                  <MarkdownSelectableText
+                    allowIosUITextView={allowIosUITextView}
+                    key={`${block.key}:th:${index}`}
+                    selectable={inlinesSelectable(cell)}
+                    style={[
+                      styles.markdownTableCell,
+                      { width: columnWidth },
+                      styles.markdownTableHeaderCell,
+                    ]}
+                  >
+                    {renderInlines(cell, spanFor(inlinesSelectable(cell)))}
+                  </MarkdownSelectableText>
+                );
+              })}
+            </View>
+            {block.rows.map((row) => (
+              <View key={row.key} style={styles.markdownTableRow}>
+                {columnWidths.map((columnWidth, index) => {
+                  const cell = row.cells[index] ?? [];
+                  return (
+                    <MarkdownSelectableText
+                      allowIosUITextView={allowIosUITextView}
+                      key={`${row.key}:td:${index}`}
+                      selectable={inlinesSelectable(cell)}
+                      style={[styles.markdownTableCell, { width: columnWidth }]}
+                    >
+                      {renderInlines(cell, spanFor(inlinesSelectable(cell)))}
+                    </MarkdownSelectableText>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      );
+    }
+    return (
+      <MarkdownSelectableText
+        allowIosUITextView={allowIosUITextView}
+        key={`${block.key}:${pinSettledWidth ? contentWidth : 'hug'}`}
+        selectable={inlinesSelectable(block.inlines)}
+        style={settledTextStyle}
+      >
+        {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
+      </MarkdownSelectableText>
+    );
+  }, [allowIosUITextView, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
   return (
     <View
       collapsable={false}
@@ -5192,189 +5395,9 @@ function MarkdownBody({
         style={pinSettledWidth ? { width: contentWidth, maxWidth: '100%' } : null}
       >
       {groups.flatMap((group, groupIndex) => {
-        const renderedGroup = (() => {
-          if (group.type === 'text_run') {
-            return renderTextRun(group);
-          }
-          const block = group.block;
-          if (block.type === 'mermaid') {
-          // 内联图表按「图片」形态呈现:无卡片 chrome、无标签文字、无按钮,
-          // 就是一块圆角图表;点击任意位置打开沉浸式全屏详情(透明 Pressable
-          // 盖住整块——WebView 会吞掉触摸事件,不盖层拿不到点击)。
-          return (
-            <View key={block.key} testID="message.mermaidPreviewButton">
-              <ViewabilityGatedMermaidDiagram source={block.text} testID="message.mermaidDiagram" />
-              {onOpenPayload ? (
-                <Pressable
-                  accessibilityLabel={t('message.renderer.openDiagramDetail')}
-                  accessibilityRole="button"
-                  onPress={() => onOpenPayload(buildMermaidPayload(block.text))}
-                  style={StyleSheet.absoluteFill}
-                  testID="message.mermaidPreviewTap"
-                />
-              ) : null}
-            </View>
-          );
-        }
-        if (block.type === 'math') {
-          // display 公式:WebView + KaTeX(形态对齐 mermaid 块,无 chip 卡壳——
-          // 公式在视觉上是正文的一部分,背景与气泡底色一致)。
-          return (
-            <ViewabilityGatedMathFormula
-              key={block.key}
-              source={block.text}
-              testID="message.mathFormula"
-            />
-          );
-        }
-        if (block.type === 'code') {
-          // 围栏代码在气泡内换行,不用横向 ScrollView:后者在展开长用户消息时
-          // 会按未折行内容报出超高,气泡巨幅空白并把每行裁在右侧圆角外。
-          return (
-            <View key={block.key} style={styles.markdownCodeFrame}>
-              <View
-                style={[
-                  styles.markdownCodeContent,
-                  {
-                    paddingHorizontal: layout.codePaddingHorizontal,
-                    paddingVertical: layout.codePaddingVertical,
-                  },
-                ]}
-              >
-                <HighlightedCodeText
-                  SpanComponent={spanFor(selectable === true) ?? Text}
-                  allowIosUITextView={allowIosUITextView}
-                  language={block.language}
-                  selectable={selectable === true}
-                  styles={styles}
-                  text={block.text}
-                />
-              </View>
-            </View>
-          );
-        }
-        if (block.type === 'heading') {
-          const headingStyle = [
-            styles.markdownHeading,
-            headingSizeStyle(styles, block.level),
-          ];
-          const headingSelectable = inlinesSelectable(block.inlines);
-          return (
-            <MarkdownSelectableText
-              allowIosUITextView={allowIosUITextView}
-              key={block.key}
-              selectable={headingSelectable}
-              style={headingStyle}
-              testID="message.markdownHeading"
-            >
-              {renderInlines(block.inlines, spanFor(headingSelectable))}
-            </MarkdownSelectableText>
-          );
-        }
-        if (block.type === 'blockquote') {
-          return (
-            <View key={block.key} style={styles.markdownQuote} testID="message.markdownQuote">
-              <MarkdownSelectableText
-                allowIosUITextView={allowIosUITextView}
-                selectable={inlinesSelectable(block.inlines)}
-                style={[styles.messageText, styles.markdownQuoteText]}
-              >
-                {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
-              </MarkdownSelectableText>
-            </View>
-          );
-        }
-        if (block.type === 'list_item') {
-          const task = typeof block.checked === 'boolean';
-          return (
-            <View
-              key={block.key}
-              style={[styles.markdownListRow, { gap: layout.markdownListGap }]}
-              testID={task ? 'message.markdownTaskItem' : undefined}
-            >
-              <Text style={[
-                styles.markdownListMarker,
-                { width: layout.markdownListMarkerWidth },
-                task && styles.markdownTaskMarker,
-              ]}>
-                {task ? (block.checked ? '✓' : '') : block.ordered ? block.marker : '•'}
-              </Text>
-              <MarkdownSelectableText
-                allowIosUITextView={allowIosUITextView}
-                selectable={inlinesSelectable(block.inlines)}
-                style={[styles.messageText, styles.markdownListText]}
-              >
-                {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
-              </MarkdownSelectableText>
-            </View>
-          );
-        }
-        if (block.type === 'table') {
-          const columnWidths = buildMobileMarkdownTableColumnWidths({
-            header: block.header,
-            rows: block.rows,
-            availableWidth: layout.markdownTableAvailableWidth,
-            minWidth: layout.markdownTableCellMinWidth,
-          });
-          return (
-            <ScrollView
-              horizontal
-              key={block.key}
-              style={styles.markdownTableScroll}
-              testID="message.markdownTable"
-            >
-              <View style={styles.markdownTable}>
-                <View style={[styles.markdownTableRow, styles.markdownTableHeaderRow]}>
-                  {columnWidths.map((columnWidth, index) => {
-                    const cell = block.header[index] ?? [];
-                    return (
-                      <MarkdownSelectableText
-                        allowIosUITextView={allowIosUITextView}
-                        key={`${block.key}:th:${index}`}
-                        selectable={inlinesSelectable(cell)}
-                        style={[
-                          styles.markdownTableCell,
-                          { width: columnWidth },
-                          styles.markdownTableHeaderCell,
-                        ]}
-                      >
-                        {renderInlines(cell, spanFor(inlinesSelectable(cell)))}
-                      </MarkdownSelectableText>
-                    );
-                  })}
-                </View>
-                {block.rows.map((row) => (
-                  <View key={row.key} style={styles.markdownTableRow}>
-                    {columnWidths.map((columnWidth, index) => {
-                      const cell = row.cells[index] ?? [];
-                      return (
-                        <MarkdownSelectableText
-                          allowIosUITextView={allowIosUITextView}
-                          key={`${row.key}:td:${index}`}
-                          selectable={inlinesSelectable(cell)}
-                          style={[styles.markdownTableCell, { width: columnWidth }]}
-                        >
-                          {renderInlines(cell, spanFor(inlinesSelectable(cell)))}
-                        </MarkdownSelectableText>
-                      );
-                    })}
-                  </View>
-                ))}
-              </View>
-            </ScrollView>
-          );
-        }
-        return (
-          <MarkdownSelectableText
-            allowIosUITextView={allowIosUITextView}
-            key={`${block.key}:${pinSettledWidth ? contentWidth : 'hug'}`}
-            selectable={inlinesSelectable(block.inlines)}
-            style={settledTextStyle}
-          >
-            {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
-          </MarkdownSelectableText>
-        );
-        })();
+        const renderedGroup = group.type === 'text_run'
+          ? renderTextRun(group)
+          : <MarkdownBlockContent key={group.key} block={group.block} renderBlock={renderSingleBlock} />;
         if (groupIndex === 0 || isTextRunContinuationGroup(group)) {
           return [renderedGroup];
         }
