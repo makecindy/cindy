@@ -73,7 +73,7 @@ import {
 } from './claude-session-route-registry.js';
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
-import { getSessionProvider } from './session-provider-store.js';
+import { getSessionProvider, hasSessionProvider } from './session-provider-store.js';
 import {
   buildRouteDecision,
   gatewayDefaultRouteDecision,
@@ -725,20 +725,28 @@ export function createModelRoutingTransform(): RoutingTransform {
     //     偶发 API Error 400、重试后恢复。与 codex-proxy-host ①.5 段同语义:
     //       - anthropic-messages wire 来源(智谱/自定义 Anthropic 兼容上游)透明转发;
     //       - 唯一 provider-oauth 来源(xai/grok-*)注入对应供应商 OAuth。
-    //     刻意排除:显式自定义供应商会话(① 段已裁决,镜像 codex 的 !explicitProviderId
-    //     闸门)、anthropic wire 模型(claude-* 辅助调用保持 #886 的默认路径语义)、xd
-    //     来源(网关即默认上游,② 段处理且带计费路由记账,这里接管会漏记)、PI 会话
-    //     (PI 有自己的 per-model 路由解析 resolvePiModelRoute,不受隐式推断接管)。
+    //     刻意排除:任何已绑定供应商的会话(含内置 XD/anthropic;① 段 scope 门放行下来的
+    //     辅助请求除外,见下)。镜像 codex 的 !explicitProviderId 闸门 —— 已显式选 XD 在
+    //     gateway key 清除后仍带冻结 x-api-key 时,② 段有专门的 XD passthrough 分支处理
+    //     计费;若这里接管会把显式选 XD 的提示词改送到用户 bridge,违背用户选择
+    //     (#3210 codex review P1)。注意不能用 explicitCustomProvider:它对内置 XD/anthropic
+    //     为 false(applyExclusiveReroute=true),会把已绑定内置来源的非 anthropic-wire 模型
+    //     误纳入隐式推断。其余排除:anthropic wire 模型(claude-* 辅助调用保持 #886 的默认
+    //     路径语义,同时也是 scope 辅助请求的安全回落)、xd 来源(网关即默认上游,② 段处理
+    //     且带计费路由记账,这里接管会漏记)、PI 会话(PI 有自己的 per-model 路由解析
+    //     resolvePiModelRoute,不受隐式推断接管)。
     //     解析复用
     //     resolveImplicitLocalBridgeRouteResolution —— 与模型选择器共用连接态(providerViewsReader),
     //     目录无 bridge 候选的模型同步短路,热路径零额外开销。
     const implicitRouteEligible =
       !piSessionId
-      && !explicitCustomProvider
+      && !selectedProviderId
       && wireModel
       && !isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()));
     if (implicitRouteEligible) {
-      return resolveImplicitLocalBridgeRouteResolution(wireModel, 'claude-code').then((resolution) => {
+      return resolveImplicitLocalBridgeRouteResolution(wireModel, 'claude-code', {
+        preserveDisabled: Boolean(sessionId && hasSessionProvider(sessionId)),
+      }).then((resolution) => {
         if (resolution.kind === 'ambiguous') {
           return refuseAmbiguousImplicitProviderRoute(wireModel);
         }

@@ -109,6 +109,7 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     setCustomProviderKeyReader(() => null);
     setProviderViewsReader(async () => []);
     clearSessionProvider('sess-race');
+    clearSessionProvider('sess-xd');
     resetClaudeSessionRouteRegistryForTest();
   });
 
@@ -134,6 +135,61 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
         ctxWith({ 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' }),
       ),
     );
+    expect(decision).toMatchObject({
+      upstreamOverride: ZHIPU_UPSTREAM,
+      headerOverride: { 'x-api-key': 'glm-user-key' },
+    });
+  });
+
+  it('未完成 provider 持久化绑定的首包不保留已停用的隐式来源', async () => {
+    const views = buildRegistry(getActiveCatalog(), { 'zhipu-plan': true })
+      .map((view) => ({
+        ...view,
+        models: {
+          ...view.models,
+          'claude-code': (view.models['claude-code'] ?? []).map((model) =>
+            model.id === 'glm-5.3' ? { ...model, disabled: true } : model,
+          ),
+        },
+      }));
+    setProviderViewsReader(async () => views);
+    setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-race' ? 'sess-race' : null));
+    clearSessionProvider('sess-race');
+
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'glm-5.3' },
+        ctxWith({ 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' }),
+      ),
+    );
+
+    // 只有 session id,但 provider 尚未 hydrate 时,停用来源不能被当成既有会话续跑。
+    expect(decision).toBeNull();
+  });
+
+  it('已 hydrate 的隐式会话续跑时保留原已停用来源', async () => {
+    const views = buildRegistry(getActiveCatalog(), { 'zhipu-plan': true })
+      .map((view) => ({
+        ...view,
+        models: {
+          ...view.models,
+          'claude-code': (view.models['claude-code'] ?? []).map((model) =>
+            model.id === 'glm-5.3' ? { ...model, disabled: true } : model,
+          ),
+        },
+      }));
+    setProviderViewsReader(async () => views);
+    setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-race' ? 'sess-race' : null));
+    // null 是已持久化的隐式来源状态,不是“尚未有条目”。
+    setSessionProvider('sess-race', null);
+
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'glm-5.3' },
+        ctxWith({ 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' }),
+      ),
+    );
+
     expect(decision).toMatchObject({
       upstreamOverride: ZHIPU_UPSTREAM,
       headerOverride: { 'x-api-key': 'glm-user-key' },
@@ -278,5 +334,27 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
       ),
     );
     expect(readClaudeSessionRoute('sess-race')).toBe('gateway');
+  });
+
+  it('已显式绑定 XD 的会话不被隐式 bridge 覆盖(#3210 P1,冻结 x-api-key 场景)', async () => {
+    // 场景:会话显式选了内置 XD,运行期 gateway key 被清除(此处把网关注入器置空),
+    // 但 Claude 子进程仍携带 spawn 时冻结的 x-api-key;同时一个已连接的用户 Anthropic
+    // 兼容上游也提供该非 anthropic-wire 裸 id。隐式推断若以 explicitCustomProvider 为闸
+    // (对内置 XD 为 false)会先选中用户 bridge,把用户明确选 XD 的提示词与计费改送到
+    // 另一上游。必须以 !selectedProviderId 为闸(镜像 codex !explicitProviderId):任何
+    // 已绑定供应商的会话都不进入隐式推断,交由 ② 段 XD passthrough 处理。
+    setClaudeProxyGatewayKeyReader(() => null);
+    setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-xd' ? 'sess-xd' : null));
+    setSessionProvider('sess-xd', 'xd');
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'glm-5.3' },
+        // 子进程冻结的 x-api-key 不是占位 key,但 host 已无活网关 key 可换。
+        ctxWith({ 'x-claude-code-session-id': 'sdk-xd', 'x-api-key': 'frozen-xd-key' }),
+      ),
+    );
+    // ② 段:显式 XD 会话携带冻结 key → passthrough(null),不被 ①.5 隐式推断改送到
+    // 智谱上游(修复前会返回 upstreamOverride=ZHIPU_UPSTREAM + glm-user-key)。
+    expect(decision).toBeNull();
   });
 });

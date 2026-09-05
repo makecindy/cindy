@@ -138,7 +138,14 @@ export type DispatchWorkerTaskResult =
 
 /** 简单生命周期操作的 domain result，供 IPC 与 MCP adapter 各自翻译。 */
 export type OrcaOkResult =
-  { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string };
+   | { ok: true; workerId?: string }
+   | {
+       ok: false;
+       errorCode: string;
+       message: string;
+       /** The automatic done-ack channel may translate this registered retry into success. */
+       deferredAcknowledgementRegistered?: true;
+     };
 
 /** worker 排队消息控制(list/update/cancel)对外暴露的失败码。 */
 export type WorkerQueuedMessageFailureCode =
@@ -1140,6 +1147,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
           message: `worker ${params.workerId} has an active turn`,
+          ...(!opts?.deferredRetry ? { deferredAcknowledgementRegistered: true as const } : {}),
         };
       }
       if (params.expectedStatus && deps.hasSendToSessionLock(worker.sessionId)) {
@@ -1150,6 +1158,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
           message: `worker ${params.workerId} has a send in progress`,
+          ...(!opts?.deferredRetry ? { deferredAcknowledgementRegistered: true as const } : {}),
         };
       }
       if (params.expectedStatus && (await deps.hasPendingWorkerInput(worker.sessionId))) {
@@ -1188,10 +1197,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker');
         if (!didClose) {
           await rollbackDoneAcknowledgement();
+          // closeIfIdle 与新 direct send 竞争失败时,与入口处观察到 active turn
+          // 属于同一个可恢复拒绝族:普通 renderer ack 要交给本 turn 的 terminal
+          // 边界 fire-once 补收口;terminal retry 自身仍不得重新登记。
+          if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
+            deferredDoneAcknowledgements.add(worker.id);
+          }
           return {
             ok: false,
             errorCode: 'WORKER_STATE_CHANGED',
             message: `worker ${params.workerId} has an active turn`,
+            ...(!opts?.deferredRetry ? { deferredAcknowledgementRegistered: true as const } : {}),
           };
         }
       }
@@ -1610,11 +1626,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           const state = autoBridge.get(params.sessionId);
           if (worker.status === 'done' || worker.status === 'error' || worker.status === 'idle') {
             if (state?.retryAfterRejectedDelivery === true) {
-              await bridgeWorkerCompletion(params.sessionId, {
+              const delivery = await bridgeWorkerCompletion(params.sessionId, {
                 status: params.status,
                 finalText: params.finalText,
                 diagnostic: params.diagnostic,
               });
+              // A prior renderer acknowledgement may have been deferred by the
+              // same turn/send guard that rejected the first auto-bridge. The
+              // terminal retry must consume that one-shot acknowledgement when
+              // delivery actually succeeds; a rejected retry keeps the bridge
+              // generation alive and must not let the follow-up idle clear it.
+              if (delivery === 'accepted') {
+                retryAcknowledgeDone =
+                  worker.status === 'done' && deferredDoneAcknowledgements.delete(link.workerId);
+              }
               return;
             }
             // (#3153) done 的回报 settle 会先于本 turn 终止落库,renderer「看到 done

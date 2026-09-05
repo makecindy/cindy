@@ -385,6 +385,13 @@ describe('AgentTaskCard', () => {
           React.createElement(AgentTaskCard, {
             sessionId: `session-${sessionAgentKind}`,
             sessionAgentKind,
+            toolCall: {
+              clientId: `historical-pi-${sessionAgentKind}`,
+              role: 'tool_use',
+              content: '',
+              toolName: 'Agent',
+              toolUseId: 'historical-pi-tool',
+            },
             update: {
               provider: 'pi',
               taskId: 'historical-pi-tool',

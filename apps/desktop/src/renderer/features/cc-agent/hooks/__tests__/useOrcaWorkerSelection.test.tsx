@@ -39,6 +39,16 @@ vi.mock('@/lib/makerTransport', () => ({
     idleWorker: mocks.idleWorker,
     archiveWorker: vi.fn(async () => undefined),
   }),
+  orcaWorkflowsForDevice: () => ({
+    createWorker: mocks.createWorker,
+    switchFocus: mocks.switchFocus,
+    idleWorker: mocks.idleWorker,
+    archiveWorker: vi.fn(async () => undefined),
+  }),
+}));
+
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: () => undefined,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -129,6 +139,62 @@ describe('useOrcaWorkerSelection', () => {
     expect(hasWorkerAttention('worker-b')).toBe(false);
     expect(mocks.refresh).toHaveBeenCalled();
   });
+
+  it.each(['has an active turn', 'has a send in progress'])(
+    'defers done acknowledgement to the terminal boundary without renderer retry (%s)',
+    async (reason) => {
+      // #3153:Main 会把 active-turn / send-lock 拒绝登记到本轮 terminal
+      // generation,并在 terminal 边界 fire-once 补收口。Renderer 只发一次确认,
+      // 立即清掉已读 attention;不得留下能误确认下一轮结果的 timer。
+      mocks.workers = [
+        makeWorker('worker-a', 'session-a', true),
+        makeWorker('worker-b', 'session-b', false, 'done'),
+      ];
+      mocks.idleWorker.mockRejectedValueOnce(
+        new Error(`[WORKER_STATE_CHANGED] worker worker-b ${reason}`),
+      );
+      markWorkerAttention('worker-b');
+      const { result } = renderHook(
+        () => useOrcaWorkerSelection({ leadSessionId: 'lead-1' }),
+        { wrapper },
+      );
+
+      act(() => result.current.handleSwitchFocus('worker-b'));
+
+      await waitFor(() => expect(mocks.refresh).toHaveBeenCalled());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      expect(mocks.idleWorker).toHaveBeenCalledTimes(1);
+      expect(hasWorkerAttention('worker-b')).toBe(false);
+      expect(mocks.toastError).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['has an active turn', 'has a send in progress'])(
+    'keeps attention for a legacy remote target without terminal deferred ack (%s)',
+    async (reason) => {
+      mocks.workers = [
+        makeWorker('worker-a', 'session-a', true),
+        makeWorker('worker-b', 'session-b', false, 'done'),
+      ];
+      mocks.idleWorker.mockRejectedValueOnce(
+        new Error(`[WORKER_STATE_CHANGED] worker worker-b ${reason}`),
+      );
+      markWorkerAttention('worker-b');
+      const { result } = renderHook(
+        () => useOrcaWorkerSelection({ leadSessionId: 'lead-1', deviceId: 'device-1' }),
+        { wrapper },
+      );
+
+      act(() => result.current.handleSwitchFocus('worker-b'));
+
+      await waitFor(() => expect(mocks.refresh).toHaveBeenCalled());
+      expect(mocks.idleWorker).toHaveBeenCalledTimes(1);
+      expect(hasWorkerAttention('worker-b')).toBe(true);
+      expect(mocks.toastError).not.toHaveBeenCalled();
+    },
+  );
 
   it('silently keeps done attention and refreshes when acknowledgement loses a state race', async () => {
     mocks.workers = [

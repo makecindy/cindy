@@ -23,6 +23,7 @@ import {
   actualSourceIdForModel,
   chatEligibleSourcesForModel,
   isExclusiveXaiModelId,
+  isModelSelectableForNewRoute,
   resolvePiModelRoute,
   runtimeCustomProviderId,
   storedCustomProviderId,
@@ -881,10 +882,21 @@ type ConnectedDefaultProviderResolution =
 async function connectedDefaultProviderForModel(
   modelId: string,
   agent: AgentKind,
+  options: ImplicitLocalBridgeRouteOptions,
 ): Promise<ConnectedDefaultProviderResolution> {
   const providers = await providerViewsReader();
+  // 新会话 / 尚未完成 provider 绑定的首包走严格准入口径,不能把用户已停用的来源
+  // 当成上游。只有调用方确认 session-provider-store 已有该会话条目时才沿用实际
+  // 路由口径,保留 suspended / disabled 拷贝以便续跑,避免设置变更把后续请求静默改送
+  // 到默认上游。
   const eligible = chatEligibleSourcesForModel(providers, modelId, agent, {
-    includeDisabled: true,
+    includeDisabled: options.preserveDisabled,
+  }).filter((provider) => {
+    if (options.preserveDisabled) return true;
+    const model = (provider.models[agent] ?? []).find((candidate) => candidate.id === modelId);
+    return model !== undefined && isModelSelectableForNewRoute(model, {
+      userProvider: provider.source === 'user',
+    });
   });
   // Claude Code can emit its first request before the selected Provider is
   // bound to the session. If more than one connected source exposes the same
@@ -893,11 +905,16 @@ async function connectedDefaultProviderForModel(
   // session binding arrives; Codex retains its established native-default
   // semantics because its implicit bridge is also used for explicit prefixes.
   if (agent === 'claude-code' && eligible.length > 1) return { kind: 'ambiguous' };
-  // This runs while dispatching an already-created implicit-source session. Admission for new
-  // sessions/model switches happened earlier; keep its retired/disabled source usable for resume.
-  const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
+  const defaultId = options.preserveDisabled
+    ? actualSourceIdForModel(providers, null, modelId, agent)
+    : actualSourceIdForModel(eligible, null, modelId, agent);
   const provider = eligible.find((candidate) => candidate.id === defaultId);
   return provider ? { kind: 'provider', provider } : { kind: 'none' };
+}
+
+export interface ImplicitLocalBridgeRouteOptions {
+  /** Keep disabled/retired copies only when routing an already-established session. */
+  preserveDisabled?: boolean;
 }
 
 /**
@@ -951,12 +968,13 @@ export type ImplicitLocalBridgeRouteResolution =
 export async function resolveImplicitLocalBridgeRouteResolution(
   modelId: string,
   agent: AgentKind,
+  options: ImplicitLocalBridgeRouteOptions = {},
 ): Promise<ImplicitLocalBridgeRouteResolution> {
   const catalogModelId = modelId.replace(/\[1m\]$/, '');
   if (!hasImplicitLocalBridgeCandidate(catalogModelId, agent)) {
     return { kind: 'none' };
   }
-  const source = await connectedDefaultProviderForModel(catalogModelId, agent);
+  const source = await connectedDefaultProviderForModel(catalogModelId, agent, options);
   if (source.kind !== 'provider') return source;
   const routing = providerRoutingForModel(source.provider, agent, modelId);
   const wire = implicitBridgeWire(routing, agent);
@@ -977,8 +995,9 @@ export async function resolveImplicitLocalBridgeRouteResolution(
 export function resolveImplicitLocalBridgeRoute(
   modelId: string,
   agent: AgentKind,
+  options: ImplicitLocalBridgeRouteOptions = {},
 ): Promise<ResolvedSessionRoute | null> {
-  return resolveImplicitLocalBridgeRouteResolution(modelId, agent).then((resolution) =>
+  return resolveImplicitLocalBridgeRouteResolution(modelId, agent, options).then((resolution) =>
     resolution.kind === 'route' ? resolution.route : null,
   );
 }

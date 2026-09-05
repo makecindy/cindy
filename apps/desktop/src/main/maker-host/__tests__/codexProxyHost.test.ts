@@ -2606,6 +2606,70 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
     setProviderOAuthTokenReader(() => null);
   });
 
+  it('uses the hydrated-session gate before preserving a disabled implicit bridge source', async () => {
+    const host = await import('../codex-proxy-host.js');
+    const { buildRegistry, buildUserProvider } = await import('@cindy/model-providers');
+    const { getActiveCatalog, setCustomProviders } = await import('../active-catalog.js');
+    const {
+      setCustomProviderKeyReader,
+      setProviderViewsReader,
+    } = await import('../provider-route.js');
+    const { clearSessionProvider, setSessionProvider } = await import('../session-provider-store.js');
+    const sessionId = 'session-disabled-implicit';
+    const threadId = 'thread-disabled-implicit';
+    setCustomProviders([
+      buildUserProvider({
+        id: 'disabled-implicit-provider',
+        name: 'Disabled implicit provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://disabled-implicit.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'resume-model', name: 'Resume model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'resume-key');
+    const views = buildRegistry(getActiveCatalog(), { 'disabled-implicit-provider': true })
+      .map((view) => ({
+        ...view,
+        models: {
+          ...view.models,
+          codex: (view.models.codex ?? []).map((model) =>
+            model.id === 'resume-model' ? { ...model, disabled: true } : model,
+          ),
+        },
+      }));
+    setProviderViewsReader(async () => views);
+    host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+    host.setCodexProxyAuthInjection('env-key');
+    clearSessionProvider(sessionId);
+
+    try {
+      const request = {
+        model: 'resume-model',
+        input: [{ role: 'user', content: 'hello' }],
+      };
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      // session id alone is not proof that persistence finished; strict admission rejects the
+      // disabled source and the env-key default route remains a passthrough.
+      await expect(Promise.resolve(host.createModelRoutingTransform()(request, ctx))).resolves.toBeNull();
+
+      // A hydrated null provider entry is the durable fact for an established implicit session.
+      setSessionProvider(sessionId, null);
+      await expect(Promise.resolve(host.createModelRoutingTransform()(request, { ...ctx, reqId: 2 })))
+        .resolves.toMatchObject({ localHandler: expect.any(Function) });
+    } finally {
+      host.unregister(sessionId);
+      clearSessionProvider(sessionId);
+      setCustomProviderKeyReader(() => null);
+      setProviderViewsReader(async () => []);
+      setCustomProviders([]);
+      host.clearCodexProxyAuthInjection();
+    }
+  });
+
   it('provider-oauth spawn + xAI session + 非 xai/ 模型 → 换网关 key 的可用默认路由 (#890 review 第二轮)', async () => {
     // scope 门放下来的请求在 provider-oauth spawn 下只带占位 env key,直落网关必 401 ——
     // 必须换真网关 key 兜底(与 cc oauth-spawn 默认换 key 同语义)。

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import {
@@ -1165,6 +1165,69 @@ describe('OrcaTeamService', () => {
     ]);
   });
 
+  it('retries a deferred done acknowledgement only after auto-bridge delivery succeeds', async () => {
+    let turnRunning = false;
+    const sendAutoBridgeToLead = vi
+      .fn()
+      .mockResolvedValueOnce({ accepted: false })
+      .mockResolvedValueOnce({ accepted: false })
+      .mockResolvedValueOnce({ accepted: true });
+    const { deps, getWorker, service } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => turnRunning })),
+      sendAutoBridgeToLead,
+    });
+
+    await service.dispatchWorkerTask({
+      targetSessionId: 'worker-session-1',
+      message: '分析 issue',
+      dispatchMeta: { source: 'test-source', context: 'deferred-done-after-bridge-retry' },
+    });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '第一次结果',
+    });
+    expect(getWorker().status).toBe('done');
+
+    // Renderer saw done while the turn was still unwinding, so its acknowledgement
+    // is registered for the terminal boundary.
+    turnRunning = true;
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'WORKER_STATE_CHANGED',
+      deferredAcknowledgementRegistered: true,
+    });
+
+    // A rejected retry keeps the bridge generation alive and must not clear the
+    // worker runtime or consume the one-shot acknowledgement.
+    turnRunning = false;
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '第一次结果',
+    });
+    expect(getWorker().status).toBe('done');
+    expect(deps.markWorkerIdleIfStatus).not.toHaveBeenCalled();
+
+    // Once a later terminal boundary delivers the bridge, it must consume the
+    // deferred done acknowledgement in that same boundary.
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '第一次结果',
+    });
+
+    expect(sendAutoBridgeToLead).toHaveBeenCalledTimes(3);
+    expect(getWorker().status).toBe('idle');
+    expect(deps.markWorkerIdleIfStatus).toHaveBeenCalledTimes(1);
+  });
+
   it('does not auto-bridge when there is no worker link', async () => {
     const leadMessages: string[] = [];
     const { deps, service } = createDeps({
@@ -1858,6 +1921,7 @@ describe('OrcaTeamService', () => {
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has a send in progress',
+      deferredAcknowledgementRegistered: true,
     });
 
     expect(deps.hasSendToSessionLock).toHaveBeenCalledWith('worker-session-1');
@@ -1881,6 +1945,7 @@ describe('OrcaTeamService', () => {
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has an active turn',
+      deferredAcknowledgementRegistered: true,
     });
 
     expect(deps.getLiveSession).toHaveBeenCalledWith('worker-session-1');
@@ -1910,6 +1975,7 @@ describe('OrcaTeamService', () => {
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has an active turn',
+      deferredAcknowledgementRegistered: true,
     });
     expect(getWorker().status).toBe('done');
 
@@ -2100,7 +2166,9 @@ describe('OrcaTeamService', () => {
   it('does not close a direct send that wins the atomic idle-close reservation after the CAS', async () => {
     const { calls, deps, getWorker, service, setWorker } = createDeps({
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
-      closeWorkerSessionIfIdle: vi.fn(async () => false),
+      closeWorkerSessionIfIdle: vi.fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true),
     });
     setWorker(createWorker({ status: 'done' }));
 
@@ -2114,6 +2182,7 @@ describe('OrcaTeamService', () => {
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has an active turn',
+      deferredAcknowledgementRegistered: true,
     });
 
     expect(deps.getLiveSession).toHaveBeenCalledTimes(1);
@@ -2123,6 +2192,18 @@ describe('OrcaTeamService', () => {
     expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledTimes(1);
     expect(getWorker().status).toBe('done');
     expect(calls).toContain('restoreWorkerDoneIfIdle');
+
+    // close race 与入口处的 active-turn 拒绝同族:本次普通 renderer ack 已登记,
+    // direct send 的 terminal 边界会 fire-once 补收口,不需要 renderer timer。
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    expect(getWorker().status).toBe('idle');
+    expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledTimes(2);
+    expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledTimes(2);
   });
 
   it('preserves queued worker input before acknowledging a done worker', async () => {

@@ -5,7 +5,12 @@ import { throwOrcaServiceFailure } from './orcaServiceFailure.js';
 
 type OrcaWorkerControlResult =
   | { ok: true; workerId?: string }
-  | { ok: false; errorCode: string; message: string };
+  | {
+      ok: false;
+      errorCode: string;
+      message: string;
+      deferredAcknowledgementRegistered?: true;
+    };
 type IdleWorkerExpectedStatus = 'done';
 
 export interface OrcaWorkerControlHandlerDeps {
@@ -32,7 +37,13 @@ export function registerOrcaWorkerControlHandlers(
     } catch (err) {
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }
-    if (!result.ok) throwOrcaServiceFailure(result);
+    if (!result.ok) {
+      if (forcedExpectedStatus === 'done' && result.deferredAcknowledgementRegistered === true) {
+        deps.logInfo('idleWorker deferred to terminal boundary', { workerId: b.workerId });
+        return { ok: true as const, workerId: b.workerId, deferred: true as const };
+      }
+      throwOrcaServiceFailure(result);
+    }
     deps.logInfo('idleWorker done', { workerId: b.workerId });
     return result;
   };

@@ -6,7 +6,12 @@ import { IpcHarness } from './helpers/ipcHarness';
 
 type WorkerControlResult =
   | { ok: true; workerId?: string }
-  | { ok: false; errorCode: string; message: string };
+  | {
+      ok: false;
+      errorCode: string;
+      message: string;
+      deferredAcknowledgementRegistered?: true;
+    };
 
 function createDeps() {
   return {
@@ -153,6 +158,33 @@ describe('Orca worker control IPC handlers', () => {
       workerId: 'worker-1',
       expectedStatus: 'done',
     });
+  });
+
+  it('returns success only when the automatic channel registered a terminal-boundary retry', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    deps.idleWorker.mockResolvedValue({
+      ok: false,
+      errorCode: 'WORKER_STATE_CHANGED',
+      message: 'worker worker-1 has an active turn',
+      deferredAcknowledgementRegistered: true,
+    });
+    registerOrcaWorkerControlHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_ACKNOWLEDGE_DONE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+      }),
+    ).resolves.toEqual({ ok: true, workerId: 'worker-1', deferred: true });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_IDLE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).rejects.toMatchObject({ code: 'WORKER_STATE_CHANGED' });
   });
 
   it('maps archive service not-found failures to stable IPC error codes', async () => {
