@@ -89,6 +89,41 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
+  it.each([false, true])('preserves an explicit animated jump when touchEnd precedes onPress: %s', (releaseFirst) => {
+    const h = harness();
+    h.state.nearBottomRef.current = false;
+    h.state.scrollMetricsRef.current.offsetY = 300;
+    // Native animation has not landed yet; command dispatch does not acknowledge its offset.
+    h.scrollToEnd.mockImplementation(() => {});
+    h.handleHistoryTouchStart(touch());
+    if (releaseFirst) h.handleHistoryTouchEnd(touch());
+    h.scrollToBottom();
+    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    if (!releaseFirst) h.handleHistoryTouchEnd(touch());
+    h.handleContentSize(400, 2200);
+    const remaining = h.state.programmaticScrollSettleAtRef.current - Date.now();
+    vi.advanceTimersByTime(remaining - 1);
+    // Releasing the button and receiving new content must not truncate the animation.
+    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    h.handleScroll(h.scrollEvent(1400));
+    settle();
+    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+  });
+
+  it('lets a new upward drag interrupt verification after an explicit animated jump', () => {
+    const h = harness();
+    h.scrollToBottom();
+    h.handleHistoryTouchStart(touch());
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1180));
+    h.handleContentSize(400, 2200);
+    h.handleHistoryTouchEnd(touch(420));
+    h.handleScrollEndDrag();
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+  });
+
   it('allows an upward drag to unpin while content grows before the first scroll event', () => {
     const h = harness();
     h.handleHistoryTouchStart(touch());
