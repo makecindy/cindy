@@ -22,6 +22,8 @@ export class DictionaryLearningTextModelClient implements TextModelClient {
     const result = await this.requestText(JSON.stringify(input.user), {
       systemPrompt: input.system,
       timeoutMs: 8_000,
+      // The advisor returns at most three actions, not a general text response.
+      maxTokens: 4_096,
       disableReasoning: true,
       beforeDispatch: async () => {
         this.assertRequestCurrent();
@@ -59,7 +61,8 @@ function parseDictionaryResponse(text: string): unknown {
   } catch {
     throw new Error('Invalid dictionary response');
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+    || !('actions' in parsed) || !Array.isArray(parsed.actions)) {
     throw new Error('Invalid dictionary response');
   }
   return parsed;

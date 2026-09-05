@@ -30,12 +30,16 @@ describe('DictionaryLearningTextModelClient', () => {
     const [prompt, opts] = requestText.mock.calls[0];
     expect(JSON.parse(prompt)).toEqual(input.user);
     expect(opts.systemPrompt).toBe(input.system);
+    expect(opts.maxTokens).toBe(4_096);
     expect(opts).not.toHaveProperty('providerId');
     expect(opts).not.toHaveProperty('model');
     expect(opts).not.toHaveProperty('pinnedProfileId');
     expect(opts.validateResponse?.(success.text)).toBe(true);
     expect(opts.validateResponse?.('{"actions":[]}')).toBe(true);
-    for (const text of ['private response body', '{"actions":', 'null', '[]']) {
+    for (const text of [
+      'private response body', '{"actions":', 'null', '[]',
+      '{}', '{"action":"add_entry"}', '{"actions":null}', '{"actions":{}}',
+    ]) {
       expect(opts.validateResponse?.(text)).toBe(false);
     }
     expect(client.servedRoute).toEqual({ providerId: 'anthropic', model: 'fixture-model' });

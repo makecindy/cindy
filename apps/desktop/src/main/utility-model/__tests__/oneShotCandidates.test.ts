@@ -2488,15 +2488,45 @@ describe('utility one-shot candidates', () => {
       expect(sut.client.servedRoute).toEqual({ providerId: 'anthropic', model: 'claude-haiku-4-5' });
       expect(readCodexCreds).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).max_tokens).toBe(4_096);
     });
 
-    it('continues after invalid catalog JSON and a failed second model to use the third selection', async () => {
+    const invalidOutputs = ['not JSON', '{}', '{"actions":null}', '{"actions":{}}'];
+
+    it.each(invalidOutputs)('falls back after user-provider output %s and accepts empty actions', async (invalidText) => {
+      chainState.source = 'custom';
+      chainState.refs = ['cat:dictionary-custom:codex:first', 'cat:dictionary-custom:codex:second'];
+      activeCatalog.mockReturnValue({ providers: [{
+        id: 'dictionary-custom', name: 'Dictionary Custom', source: 'user', agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: { codex: {
+          upstream: 'https://dictionary.example/v1', wireProtocol: 'openai-chat', authStrategy: 'api-key-header',
+        } },
+        models: { codex: ['first', 'second'].map((id) => ({ id, name: id, contextWindow: 100_000 })) },
+      }] } as never);
+      readCustomKey.mockReturnValue('fake-custom-key');
+      for (const content of [invalidText, '{"actions":[]}']) {
+        fetchMock.mockResolvedValueOnce({
+          ok: true, text: async () => JSON.stringify({ choices: [{ message: { content } }] }),
+        } as never);
+      }
+      const sut = advisor();
+
+      expect((await sut.advisor.advise(evidence)).actions).toEqual([]);
+      expect(sut.client.servedRoute).toEqual({ providerId: 'dictionary-custom', model: 'second' });
+      expect(fetchMock.mock.calls.map(([, opts]) => JSON.parse(String(opts?.body)))).toEqual([
+        expect.objectContaining({ model: 'first', max_tokens: 4_096 }),
+        expect.objectContaining({ model: 'second', max_tokens: 4_096 }),
+      ]);
+    });
+
+    it.each(invalidOutputs)('falls back to the third custom selection after %s and HTTP failure', async (invalidText) => {
       selectClaude();
       chainState.refs.push('litellm-kimi-k2.6', 'litellm-deepseek-v4-flash');
       readKey.mockReturnValue('fake-proxy-key');
       fetchMock
         .mockResolvedValueOnce({
-          ok: true, text: async () => JSON.stringify({ content: [{ type: 'text', text: 'not JSON' }] }),
+          ok: true, text: async () => JSON.stringify({ content: [{ type: 'text', text: invalidText }] }),
         } as never)
         .mockResolvedValueOnce({ ok: false, status: 503, body: { cancel: vi.fn() } } as never)
         .mockResolvedValueOnce({
@@ -2511,9 +2541,9 @@ describe('utility one-shot candidates', () => {
       ]);
     });
 
-    it('continues after invalid profile JSON and accepts an empty actions verdict', async () => {
+    it.each(invalidOutputs)('falls back after profile output %s and accepts empty actions', async (invalidText) => {
       const maker = makerMock(true);
-      vi.mocked(maker.oneShot).mockResolvedValue('not JSON');
+      vi.mocked(maker.oneShot).mockResolvedValue(invalidText);
       readKey.mockReturnValue('fake-proxy-key');
       fetchMock.mockResolvedValueOnce({
         ok: true, json: async () => ({ choices: [{ message: { content: '{"actions":[]}' } }] }),
@@ -2551,19 +2581,21 @@ describe('utility one-shot candidates', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it('rejects invalid output on an explicit route without using the auxiliary defaults', async () => {
+    it.each(invalidOutputs)('rejects explicit builtin output %s without using defaults', async (invalidText) => {
       selectClaude();
       fetchMock.mockResolvedValueOnce({
-        ok: true, text: async () => JSON.stringify({ content: [{ type: 'text', text: 'invalid' }] }),
+        ok: true, text: async () => JSON.stringify({ content: [{ type: 'text', text: invalidText }] }),
       } as never);
       const maker = makerMock(true);
+      const client = new DictionaryLearningTextModelClient(
+        (prompt, opts) => requestUtilityText(maker, prompt, {
+          ...opts, providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-haiku-4-5',
+        }),
+        () => {},
+      );
 
-      const result = await requestUtilityText(maker, 'classify', {
-        providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-haiku-4-5',
-        validateResponse: () => false,
-      });
-
-      expect(result).toMatchObject({ ok: false, reason: 'all_candidates_failed' });
+      await expect(new DictationDictionaryAdvisor({ client, model: 'auxiliary' }).advise(evidence))
+        .rejects.toThrow('Dictionary learning failed: all_candidates_failed');
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(maker.oneShot).not.toHaveBeenCalled();
     });
