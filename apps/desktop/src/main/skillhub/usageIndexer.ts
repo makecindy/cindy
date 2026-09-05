@@ -7,7 +7,7 @@ import { brandUserDataDirName } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 
 import type { DbClient } from '../localDb/client/DbClient.js';
-import { getDbClient } from '../localDb/client/current.js';
+import { getCurrentDbClientSnapshot, getDbClient, type CurrentDbClientSnapshot } from '../localDb/client/current.js';
 
 import { analyzeSkillUsageTranscript, hashSkillContent, type SkillUsageAgentKind } from './usageAnalyzer';
 import {
@@ -229,7 +229,13 @@ async function runLocalSkillUsageAnalyticsRefresh(
   database: SkillUsageDatabase,
   options: SkillUsageRefreshOptions = {},
 ): Promise<void> {
+  // In-process DbClient resolves getRawDb() dynamically. Keep the refresh tied
+  // to the owner/epoch it started with so an account switch cannot redirect a
+  // later write, cleanup, or promotion into the next owner's database.
+  const snapshot = captureRefreshSnapshot(database);
+  if (!isRefreshDatabaseStable(snapshot)) return;
   const activeBeforeRefresh = await readActiveAnalyzerVersion(database);
+  if (!isRefreshDatabaseStable(snapshot)) return;
   await ensureActiveAnalyzerVersionMeta(database, activeBeforeRefresh);
   const nowMs = options.nowMs ?? Date.now();
   const recentSince = recentWindowStartMs(nowMs);
@@ -241,6 +247,7 @@ async function runLocalSkillUsageAnalyticsRefresh(
     recentSince,
     options.statSource ?? statSource,
   );
+  if (!isRefreshDatabaseStable(snapshot)) return;
   const readTranscriptFile = options.readTranscriptFile ?? ((file: string) => fs.readFile(file, 'utf-8'));
   const sourceBatchSize = Math.max(1, options.maxSourcesPerRefresh ?? MAX_SOURCES_PER_REFRESH);
   const sources = mergeTranscriptSources(discovery.sources, cachedRecent.sources, platform);
@@ -251,6 +258,7 @@ async function runLocalSkillUsageAnalyticsRefresh(
   for (let start = 0; start < dirtySources.length; start += sourceBatchSize) {
     const batch = dirtySources.slice(start, start + sourceBatchSize);
     for (const source of batch) {
+      if (!isRefreshDatabaseStable(snapshot)) return;
       try {
         const text = await readTranscriptFile(source.rawFilePath);
         const analysis = analyzeSkillUsageTranscript({
@@ -260,6 +268,7 @@ async function runLocalSkillUsageAnalyticsRefresh(
           rawFilePath: source.rawFilePath,
           lines: text.split(/\r?\n/),
         });
+        if (!isRefreshDatabaseStable(snapshot)) return;
         await persistSkillUsageAnalysisInDatabase(database, {
           rawFilePath: source.rawFilePath,
           analyzerVersion: ANALYZER_VERSION,
@@ -272,6 +281,7 @@ async function runLocalSkillUsageAnalyticsRefresh(
         }, analysis);
       } catch (err) {
         failedCount += 1;
+        if (!isRefreshDatabaseStable(snapshot)) return;
         await markSkillUsageSourceFailedInDatabase(database, {
           rawFilePath: source.rawFilePath,
           analyzerVersion: ANALYZER_VERSION,
@@ -287,12 +297,29 @@ async function runLocalSkillUsageAnalyticsRefresh(
     }
     if (start + sourceBatchSize < dirtySources.length) await yieldToEventLoop();
   }
+  if (!isRefreshDatabaseStable(snapshot)) return;
   if (!discovery.hadDiscoveryFailure && !cachedRecent.hadStatFailure) {
     await deleteSkillUsageRecordsBeforeInDatabase(database, ANALYZER_VERSION, recentSince);
   }
   if (!discovery.hadDiscoveryFailure && !cachedRecent.hadStatFailure && failedCount === 0) {
     await promoteAnalyzerVersion(database, ANALYZER_VERSION);
   }
+}
+
+type RefreshSnapshot = CurrentDbClientSnapshot | null;
+
+function captureRefreshSnapshot(database: SkillUsageDatabase): RefreshSnapshot {
+  if (isRawDatabase(database)) return null;
+  const snapshot = getCurrentDbClientSnapshot();
+  return snapshot?.client === database ? snapshot : null;
+}
+
+function isRefreshDatabaseStable(snapshot: RefreshSnapshot): boolean {
+  if (!snapshot) return true;
+  const current = getCurrentDbClientSnapshot();
+  return current?.client === snapshot.client
+    && current.userId === snapshot.userId
+    && current.clientEpoch === snapshot.clientEpoch;
 }
 
 async function readActiveAnalyzerVersion(database: SkillUsageDatabase): Promise<string> {

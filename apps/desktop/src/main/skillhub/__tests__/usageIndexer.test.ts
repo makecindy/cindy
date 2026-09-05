@@ -8,10 +8,12 @@ import type { DbClient } from '../../localDb/client/DbClient';
 
 const currentDbClientMocks = vi.hoisted(() => ({
   getDbClient: vi.fn(),
+  getCurrentDbClientSnapshot: vi.fn(),
 }));
 
 vi.mock('../../localDb/client/current', () => ({
   getDbClient: currentDbClientMocks.getDbClient,
+  getCurrentDbClientSnapshot: currentDbClientMocks.getCurrentDbClientSnapshot,
 }));
 
 import { discoverTranscriptSources, refreshLocalSkillUsageAnalytics } from '../usageIndexer';
@@ -158,6 +160,7 @@ function insertUsageExposure(
 describe('discoverTranscriptSources', () => {
   afterEach(async () => {
     currentDbClientMocks.getDbClient.mockReset();
+    currentDbClientMocks.getCurrentDbClientSnapshot.mockReset();
     await Promise.all(
       tempRoots.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
     );
@@ -212,6 +215,11 @@ describe('discoverTranscriptSources', () => {
       tx: vi.fn(async () => undefined),
     } as unknown as DbClient;
     currentDbClientMocks.getDbClient.mockReturnValue(client);
+    currentDbClientMocks.getCurrentDbClientSnapshot.mockReturnValue({
+      client,
+      userId: 'owner-a',
+      clientEpoch: 1,
+    });
 
     try {
       await refreshLocalSkillUsageAnalytics(undefined, {
@@ -234,6 +242,48 @@ describe('discoverTranscriptSources', () => {
       expect(currentDbClientMocks.getDbClient).toHaveBeenCalledTimes(1);
       expect(freshnessCalls).toHaveLength(1);
       expect(JSON.parse(String(freshnessCalls[0][1]?.[0]))).toEqual([secondPath, firstPath]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('cancels an in-flight client refresh when the database owner changes', async () => {
+    const root = await makeTempRoot();
+    const db = createUsageDb();
+    const file = path.join(root, 'switch.jsonl');
+    await writeJsonl(file);
+    insertUsageExposure(db, file, { sourceMtimeMs: 100 });
+    let switched = false;
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => (
+      db.prepare(sql).all(...params) as unknown[]
+    ));
+    const client = {
+      query,
+      queryOne: vi.fn(async (sql: string, params: unknown[] = []) => db.prepare(sql).get(...params)),
+      exec: vi.fn(async (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params)),
+      tx: vi.fn(async () => undefined),
+    } as unknown as DbClient;
+    currentDbClientMocks.getDbClient.mockReturnValue(client);
+    currentDbClientMocks.getCurrentDbClientSnapshot.mockImplementation(() => switched
+      ? { client, userId: 'owner-b', clientEpoch: 2 }
+      : { client, userId: 'owner-a', clientEpoch: 1 });
+
+    try {
+      await refreshLocalSkillUsageAnalytics(undefined, {
+        homeDir: path.join(root, 'home'),
+        appDataDir: path.join(root, 'app-data'),
+        userDataDir: path.join(root, 'user-data'),
+        env: {},
+        platform: 'win32',
+        nowMs,
+        statSource: async () => ({ mtimeMs: 101, sizeBytes: 1 }),
+        readTranscriptFile: async () => {
+          switched = true;
+          return '{}\n';
+        },
+      });
+
+      expect(client.tx).not.toHaveBeenCalled();
     } finally {
       db.close();
     }
