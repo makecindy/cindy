@@ -9,7 +9,25 @@ import type { ResolveRemoteMediaFn } from "@/session/remoteMedia";
 vi.mock("react-native", () => ({
   Image: { getSize: vi.fn(async () => ({ width: 40, height: 20 })) },
 }));
-vi.mock("expo-file-system", () => ({ File: class {} }));
+const thumbs = vi.hoisted(() => ({
+  entries: new Map<string, string>(),
+  version: 0,
+  reads: vi.fn(async () => "aGVsbG8="),
+}));
+vi.mock("expo-file-system", () => ({
+  File: class {
+    exists = true;
+    size = 5;
+    base64 = thumbs.reads;
+  },
+}));
+vi.mock("@/session/sentAttachmentThumbStore", () => ({
+  useSentAttachmentThumbsVersion: () => thumbs.version,
+  applySentAttachmentThumbOverlay: (item: { uri: string }) => {
+    const uri = thumbs.entries.get(item.uri);
+    return uri ? { ...item, uri, previewable: true } : item;
+  },
+}));
 vi.mock("@/session/remoteMediaDiskCacheExpo", () => ({
   downloadRemoteMediaAsDataUri: vi.fn(),
 }));
@@ -47,10 +65,48 @@ const media = {
 afterEach(async () => {
   await act(async () => root.unmount());
   vi.useRealTimers();
+  thumbs.entries.clear();
+  thumbs.version = 0;
+  thumbs.reads.mockClear();
   root = createRoot(container);
 });
 
 describe("share image readiness", () => {
+  it.each(["cindy-oss-attach://upload/paste", "xdt-oss-attach://upload/paste"])(
+    "refreshes %s when its existing upload thumbnail becomes available",
+    async (uri) => {
+      const resolve = vi.fn<ResolveRemoteMediaFn>();
+      const messages: ConversationShareMessage[] = [
+        {
+          ...source,
+          attachments: [
+            { kind: "image", name: "paste", uri },
+            {
+              kind: "image",
+              name: "untrusted",
+              uri: "file:///private/image.png",
+            },
+          ],
+        },
+      ];
+      const render = () => createElement(Probe, { messages, resolve });
+      await act(async () => root.render(render()));
+      const oldReady = current.ready;
+      expect((await oldReady)[0]?.images?.size).toBe(0);
+      expect(thumbs.reads).not.toHaveBeenCalled();
+      thumbs.entries.set(uri, "file:///app/sent-attachment-thumbs/paste.png");
+      thumbs.version++;
+      await act(async () => root.render(render()));
+      expect(current.ready).not.toBe(oldReady);
+      const result = await current.ready;
+      expect(result[0]?.images?.get(uri)?.uri).toBe(media.url);
+      expect(result[0]?.images?.size).toBe(1);
+      expect(result[0]?.attachments?.[0]?.uri).toBe(uri);
+      expect(thumbs.reads).toHaveBeenCalledTimes(1);
+      expect(resolve).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps text and completed images when another image times out, ignoring its late result", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let finish!: (value: typeof media) => void;

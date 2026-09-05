@@ -12,6 +12,46 @@ const image = {
 };
 
 describe("conversation share images", () => {
+  it("charges every attachment and Markdown occurrence even when bytes are reused across messages", async () => {
+    const largeImage = {
+      ...image,
+      uri: "data:image/png;base64," + "A".repeat(6 * 1024 * 1024),
+    };
+    const source = "cindy-media://repeated";
+    const load = vi.fn(async () => largeImage);
+    const repeated = {
+      clientId: "one",
+      kind: "user" as const,
+      body: `![body](${source})`,
+      secondaryBody: `![secondary](${source})`,
+      attachments: [{ kind: "image" as const, name: "paste", uri: source }],
+    };
+    const messages = await prepareConversationShareImages(
+      [repeated, { ...repeated, clientId: "two" }],
+      load,
+    );
+    expect(messages[0]?.images?.get(source)).toBe(largeImage);
+    expect(messages[1]?.images?.size).toBe(0);
+    expect(load).toHaveBeenCalledTimes(1);
+    load.mockClear();
+    const tooMany = await prepareConversationShareImages(
+      [
+        {
+          ...repeated,
+          attachments: Array.from(
+            { length: 4 },
+            () => repeated.attachments[0]!,
+          ),
+        },
+        { ...repeated, clientId: "later" },
+      ],
+      load,
+    );
+    expect(tooMany[0]?.images?.size).toBe(0);
+    expect(tooMany[1]?.images?.get(source)).toBe(largeImage);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it.each([lightColors, darkColors])(
     "embeds pasted and inline images in both exporters without source URLs",
     async (theme) => {

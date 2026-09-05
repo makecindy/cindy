@@ -15,6 +15,10 @@ import {
 } from "@/session/remoteMedia";
 import { downloadRemoteMediaAsDataUri } from "@/session/remoteMediaDiskCacheExpo";
 import { imageMimeFromUrl } from "@/session/remoteMediaDiskCache";
+import {
+  applySentAttachmentThumbOverlay,
+  useSentAttachmentThumbsVersion,
+} from "@/session/sentAttachmentThumbStore";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
@@ -22,8 +26,14 @@ async function loadShareImage(
   url: string,
   resolve: ResolveRemoteMediaFn,
 ): Promise<ConversationShareImage | null> {
-  let uri = url;
-  let mimeType = imageMimeFromUrl(url) ?? "image/jpeg";
+  const overlay = applySentAttachmentThumbOverlay({
+    kind: "image",
+    uri: url,
+    previewable: false,
+  });
+  const hasLocalThumb = overlay.uri !== url;
+  let uri = overlay.uri;
+  let mimeType = imageMimeFromUrl(uri) ?? "image/jpeg";
   if (isDesktopLocalMediaUrl(url)) {
     const media = await resolve({
       kind: "image",
@@ -36,8 +46,11 @@ async function loadShareImage(
     uri = media.url;
     mimeType = media.mimeType;
   }
-  if (uri.startsWith("file://") && isDesktopLocalMediaUrl(url)) {
-    // Only resolver-owned phone cache files may be read locally.
+  if (
+    uri.startsWith("file://") &&
+    (hasLocalThumb || isDesktopLocalMediaUrl(url))
+  ) {
+    // Only existing upload-thumb or resolver-owned phone files may be read locally.
     const file = new File(uri);
     if (!file.exists || file.size <= 0 || file.size > MAX_IMAGE_BYTES)
       return null;
@@ -62,6 +75,7 @@ export function useConversationShareImages(
   resolve: ResolveRemoteMediaFn,
   { workdir, remoteHostId, sessionId }: ConversationShareImageContext,
 ) {
+  const thumbsVersion = useSentAttachmentThumbsVersion();
   // Unselected streaming messages recreate the projection array too. Keep the
   // selected content stable so they cannot cancel an in-flight image export.
   const sourceKey = JSON.stringify(messages);
@@ -75,7 +89,14 @@ export function useConversationShareImages(
       finish = done;
     });
     return { ready, finish };
-  }, [sourceMessages, resolve, workdir, remoteHostId, sessionId]);
+  }, [
+    sourceMessages,
+    resolve,
+    workdir,
+    remoteHostId,
+    sessionId,
+    thumbsVersion,
+  ]);
   const revision = useRef(0);
   const activeJob = useRef<typeof job | null>(null);
   const [prepared, setPrepared] = useState<{
