@@ -471,7 +471,7 @@ interface CCAgentSessionViewProps {
   botMentions?: readonly ComposerBotMention[];
   /**
    * 本对话所属的伙伴身份（仅 Bot 路由传）。传入即把这个聊天当成「跟 TA 聊天」渲染：
-   * 顶栏换成伙伴 lockup、assistant 气泡挂 TA 的头像、输入框收起权限/模型控件。
+   * 顶栏换成伙伴 lockup、assistant 气泡挂 TA 的头像、输入框使用伙伴称呼，保留标准权限入口。
    * 判定仍与 `session.source === 'bot'` 双重成立才生效——URL 不是身份。
    */
   botIdentity?: BotChatIdentity;
@@ -5014,6 +5014,7 @@ export function CCAgentSessionView({
                 ) : pendingPermission ? (
                   <PermissionPrompt
                     permission={pendingPermission}
+                    companion={botChatIdentity}
                     onRespond={respondToPermission}
                   />
                 ) : pendingAskUser ? (

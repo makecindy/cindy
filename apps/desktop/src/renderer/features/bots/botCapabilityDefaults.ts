@@ -1,16 +1,16 @@
 /**
- * New companions require confirmation. Full access is an explicit user choice
+ * New companions use automatic review. Full access is an explicit user choice
  * through the standard permission chip in the companion's canonical task.
  * Existing profiles retain their stored choice; missing values remain ask.
  */
-export type BotPermissionMode = 'ask' | 'trusted';
+export type BotPermissionMode = 'ask' | 'auto' | 'trusted';
 
 /** Default for teammates created from now on. */
-export const NEW_BOT_DEFAULT_PERMISSIONS: BotPermissionMode = 'ask';
+export const NEW_BOT_DEFAULT_PERMISSIONS: BotPermissionMode = 'auto';
 
 /** Read an existing profile's permission mode; unknown values stay conservative. */
 export function normalizeBotPermissions(value: unknown): BotPermissionMode {
-  return value === 'trusted' ? 'trusted' : 'ask';
+  return value === 'trusted' || value === 'auto' ? value : 'ask';
 }
 
 /**

@@ -7124,6 +7124,14 @@
       "retryFailed": "再試行できませんでした。少し待ってお試しください。",
       "leave": "いったん離れる",
       "avatarSkipped": "今は初期アバターを使っています。いつでも変更できます。"
+    },
+    "permissionRequest": "{{name}} が確認をお願いしています",
+    "remote": {
+      "online": "オンライン",
+      "offline": "オフライン",
+      "thisDevice": "このコンピュータ",
+      "offlineDescription": "{{name}} はオフラインです。{{device}} が再接続すると続けられます。",
+      "preparing": "準備ができるのを待っています…"
     }
   },
   "common": {

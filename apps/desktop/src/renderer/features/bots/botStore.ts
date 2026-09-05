@@ -49,7 +49,7 @@ export interface BotCapabilities {
   mcpMode: 'inherit' | 'allowlist';
   mcpServers: string[];
   memory: boolean;
-  permissions: 'ask' | 'trusted';
+  permissions: 'ask' | 'auto' | 'trusted';
 }
 
 export interface BotModelOverride {

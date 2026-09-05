@@ -19,7 +19,11 @@ import {
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
 } from '../allowlist.js';
-import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
+import { SESSION_ACTIVITY_CHANNEL, topicForPush } from '../topics.js';
+import {
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
+  REMOTE_RESOURCE_CHANNELS,
+} from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('allows the reduced teammate directory while keeping native configuration local', () => {
@@ -39,6 +43,16 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
     }
     expect(REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS.has('maker:input:get-projection')).toBe(false);
+  });
+
+  it('放行模块中立的远程资源 API，而不是逐功能扩张 channel', () => {
+    for (const channel of REMOTE_RESOURCE_CHANNELS) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(PUSH_FORWARD_ALLOWLIST.has(REMOTE_RESOURCE_CHANGED_CHANNEL)).toBe(true);
+    expect(topicForPush(REMOTE_RESOURCE_CHANGED_CHANNEL, {
+      collectionId: 'teammates',
+    })).toBe('sessions');
   });
 
   it('放行核心会话链路', () => {

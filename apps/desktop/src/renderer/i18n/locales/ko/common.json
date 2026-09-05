@@ -7124,6 +7124,14 @@
       "retryFailed": "지금은 다시 시도할 수 없어요. 잠시 후 시도해 주세요.",
       "leave": "잠시 나가기",
       "avatarSkipped": "지금은 기본 아바타를 사용해요. 언제든 바꿀 수 있어요."
+    },
+    "permissionRequest": "{{name}} 님이 확인을 기다리고 있어요",
+    "remote": {
+      "online": "온라인",
+      "offline": "오프라인",
+      "thisDevice": "이 컴퓨터",
+      "offlineDescription": "{{name}} 님이 오프라인입니다. {{device}}에 다시 연결하면 계속할 수 있어요.",
+      "preparing": "준비가 끝나기를 기다리고 있어요…"
     }
   },
   "common": {

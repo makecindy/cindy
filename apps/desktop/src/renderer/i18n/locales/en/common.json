@@ -7126,6 +7126,14 @@
       "retryFailed": "Couldn’t retry just now. Please try again shortly.",
       "leave": "Step away",
       "avatarSkipped": "Using the default portrait for now. You can change it anytime."
+    },
+    "permissionRequest": "{{name}} needs your go-ahead",
+    "remote": {
+      "online": "Online",
+      "offline": "Offline",
+      "thisDevice": "This computer",
+      "offlineDescription": "{{name}} is offline. Reconnect {{device}} to continue.",
+      "preparing": "Waiting for this teammate to get ready…"
     }
   },
   "common": {

@@ -186,11 +186,11 @@ describe('bot profile store', () => {
     });
   });
 
-  it('creates new Bots requiring confirmation, with memory enabled', () => {
+  it('creates new Bots with automatic review and memory enabled', () => {
     const bot = addBotProfile({ name: 'Fresh teammate', description: '' });
     createdIds.push(bot.id);
 
-    expect(bot.capabilities.permissions).toBe('ask');
+    expect(bot.capabilities.permissions).toBe('auto');
     expect(bot.capabilities.memory).toBe(true);
   });
 
@@ -345,7 +345,7 @@ describe('bot profile store', () => {
       expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({
         identitySource: '# SOUL\nYou are the real Bot identity.',
       });
-      // 新建默认改成 trusted 之后,**读**到的 profile 仍以 main 的值为准:
+      // 新建默认改成 auto 之后,**读**到的 profile 仍以 main 的值为准:
       // 已存在的伙伴不会因为默认值变了就被悄悄升成信任。
       expect(bot.capabilities.permissions).toBe('ask');
       expect(create).toHaveBeenCalledWith(

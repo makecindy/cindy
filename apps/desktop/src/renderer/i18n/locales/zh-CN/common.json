@@ -7124,6 +7124,14 @@
       "retryFailed": "暂时无法重试，请稍后再试。",
       "leave": "先去忙",
       "avatarSkipped": "暂时用了默认头像，你随时可以换一张。"
+    },
+    "permissionRequest": "{{name}} 想请你确认一下",
+    "remote": {
+      "online": "在线",
+      "offline": "离线",
+      "thisDevice": "这台电脑",
+      "offlineDescription": "{{name}} 暂时离线，{{device}} 重新联网后就能继续聊。",
+      "preparing": "正在等伙伴准备好…"
     }
   },
   "common": {

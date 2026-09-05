@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   islandActivity: new Map<string, { sessionId: string; phase: string }>(),
 }));
 
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
+
 vi.mock('@/state/agentIslandActivity', () => ({
   useAgentIslandActivityMap: () => mocks.islandActivity,
 }));

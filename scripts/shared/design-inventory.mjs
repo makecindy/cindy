@@ -547,6 +547,7 @@ export function catalogSurfaces() {
         'BotsHomeView',
         'BotRosterView',
         'BotSessionView',
+        'RemoteBotSessionView',
         'BotHistorySessionView',
         'BotDirectMessageView',
         'BotSettingsDrawer',
@@ -565,6 +566,7 @@ export function catalogSurfaces() {
         '/bots/:botId/history/:sessionId',
         '/bots/:botId/session/:sessionId',
         '/bots/roster',
+        '/bots/remote/:deviceId/:botId',
       ],
       routeEntryComponents: {
         '/bots': 'BotsHomeView',
@@ -573,6 +575,7 @@ export function catalogSurfaces() {
         '/bots/:botId/history/:sessionId': 'BotHistorySessionView',
         '/bots/:botId/session/:sessionId': 'BotSessionView',
         '/bots/roster': 'BotRosterView',
+        '/bots/remote/:deviceId/:botId': 'RemoteBotSessionView',
       },
     },
     {

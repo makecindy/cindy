@@ -19,6 +19,10 @@
  * 新增 channel 不进表即天然不可远程调用(代码保证确定性)。
  */
 import { SESSION_ACTIVITY_CHANNEL } from './topics.js';
+import {
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
+  REMOTE_RESOURCE_CHANNELS,
+} from './remoteResources.js';
 
 /**
  * 订阅控制帧 channel(控制端 → 被控端,push 驱动):注册 / 注销对某 topic 的变更推送。
@@ -246,6 +250,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'git-context:get-for-session',
   'git-context:pr-refs:list',
   'git-context:pr-status',
+  // —— 通用远程资源面——
+  // 固定的 manifest / list / get / invoke 入口。业务模块只在被控端 provider
+  // registry 注册资源与动作，后续新增模块或动作不再扩张 device-link channel 表。
+  ...REMOTE_RESOURCE_CHANNELS,
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:sessions:get',
@@ -560,6 +568,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:event',
   // Device-level runtime Agent roster changes; controllers refresh their local availability cache.
   'maker:agents:changed',
+  // Host-owned resource provider 的通用失效通知；payload 只含 collection/ref/revision。
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
   'maker:status-changed',
   'maker:input:projection',
   'maker:interaction-request',

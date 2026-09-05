@@ -19,6 +19,8 @@ import { BotAvatar } from './BotAvatar';
 
 export interface BotChatIdentity {
   id: string;
+  deviceId?: string;
+  deviceName?: string;
   name: string;
   avatar?: string | null;
   avatarColor?: string | null;
@@ -48,15 +50,16 @@ export function BotSessionContentHeader({
     >
       <button
         type="button"
-        onClick={openSettings}
-        title={t('bots.settings')}
+        onClick={bot.deviceId ? undefined : openSettings}
+        title={bot.deviceName || t('bots.settings')}
+        disabled={Boolean(bot.deviceId)}
         className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1 text-13 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
         style={WINDOW_NO_DRAG_STYLE}
       >
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
-      <button
+      {!bot.deviceId ? <button
         type="button"
         onClick={openSettings}
         aria-label={t('bots.settings')}
@@ -64,7 +67,7 @@ export function BotSessionContentHeader({
         style={WINDOW_NO_DRAG_STYLE}
       >
         <Settings2 size={15} />
-      </button>
+      </button> : <span className="ml-auto truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span>}
     </div>
   );
 }

@@ -27,6 +27,9 @@ import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
+import { useRemoteBots } from './useRemoteBots';
+import { remoteBotKey } from './remoteBotRoster';
+import { BotConnectionStatus } from './BotConnectionStatus';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
 import { BotDeleteDialog } from './BotDeleteDialog';
@@ -64,7 +67,8 @@ const UNREAD_BADGE_CLASS =
 function BotsSidebarContent() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { botId, sessionId } = useParams();
+  const { botId, sessionId, deviceId } = useParams();
+  const remoteBots = useRemoteBots();
   const bots = useBotProfiles();
   const unreadByBotId = useBotUnreadCounts();
   const rosterBots = bots.filter((bot) => bot.status !== 'archived');
@@ -118,7 +122,7 @@ function BotsSidebarContent() {
     return bot.sessions.some((session) => islandActivity.get(session.id)?.phase === 'running');
   };
   const roster = partitionBotRoster(rosterBots, { query, showHidden });
-  const showSearch = rosterBots.length >= 8 || query.trim().length > 0;
+  const showSearch = rosterBots.length + remoteBots.length >= 8 || query.trim().length > 0;
 
   const sessionOwners = useMemo(() => {
     const next = new Map<string, { bot: BotProfile; title: string }>();
@@ -297,14 +301,33 @@ function BotsSidebarContent() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
-        {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 ? (
+        {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 ? (
           <div className="px-3 py-3">
             <BotCreateMenu label={t('bots.add')} />
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {roster.visible.map((bot) => {
-              const selected = bot.id === botId;
+            {[...roster.visible, ...remoteBots.filter((bot) => !query.trim() || `${bot.name} ${bot.description} ${bot.deviceName}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))]
+              .sort((a, b) => {
+                const pin = Number('pinnedAt' in b && Boolean(b.pinnedAt)) - Number('pinnedAt' in a && Boolean(a.pinnedAt));
+                return pin || ('activityAt' in b ? b.activityAt : b.lastMessageAt ?? b.createdAt) - ('activityAt' in a ? a.activityAt : a.lastMessageAt ?? a.createdAt);
+              }).map((bot) => {
+              if ('deviceId' in bot) {
+                const selected = bot.id === botId && bot.deviceId === deviceId;
+                return (
+                  <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
+                    onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
+                    className={cn('flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus online={bot.online} deviceName={bot.deviceName} /></span>
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="truncate text-14 leading-5">{bot.name}</span>
+                      <span className="truncate text-12 leading-4 text-[var(--sidebar-list-muted)]">{bot.preview || bot.description || t('bots.list.startChat')}</span>
+                    </span>
+                    <span className="w-10 shrink-0 self-start pt-0.5 text-right text-11 tabular-nums text-[var(--sidebar-list-muted)]">{formatBotListTimestamp(bot.activityAt, now)}</span>
+                  </button>
+                );
+              }
+              const selected = !deviceId && bot.id === botId;
               const unread = unreadByBotId[bot.id] ?? 0;
               const subtitle = botListSubtitle(bot);
               // TA 正在回话时，第二行临时让位给「正在输入…」——聊天列表里这一行
@@ -364,7 +387,7 @@ function BotsSidebarContent() {
                   >
                     {/* 40px。28px 会让两行式行高塌成一行的观感——头像撑不住两行文字,
                         整行读起来像一条被拉高的单行列表。 */}
-                    <BotAvatar bot={bot} size="md" />
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
                         {bot.pinnedAt ? (

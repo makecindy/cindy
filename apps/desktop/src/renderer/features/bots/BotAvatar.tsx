@@ -17,6 +17,7 @@
  * `cindy://avatar/…` sentinel is not a grapheme, so it falls back to the neutral
  * initial instead of painting the raw sentinel string as text.
  */
+import { rewriteToRemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
 import { useEffect, useState } from 'react';
 
 import cindyPresetAvatar from '@/assets/bot-presets/cindy.png';
@@ -136,7 +137,7 @@ export function botAvatarInitial(name: string | null | undefined): string {
 
 export interface BotAvatarProps {
   /** Bot-shaped source; only these three fields are read. */
-  bot: { name: string; avatar?: string | null; avatarColor?: string | null };
+  bot: { deviceId?: string; name: string; avatar?: string | null; avatarColor?: string | null };
   size?: BotAvatarSize;
   className?: string;
 }
@@ -144,7 +145,7 @@ export interface BotAvatarProps {
 export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
   const emoji = (bot.avatar ?? '').trim();
   const bundledArtwork = BUNDLED_AVATAR_BY_SENTINEL[emoji.toLowerCase()] ?? null;
-  const artwork = bundledArtwork ?? (isManagedBotAvatarUrl(emoji) ? emoji : null);
+  const artwork = bundledArtwork ?? (isManagedBotAvatarUrl(emoji) ? rewriteToRemoteMediaOrigin(emoji, bot.deviceId ? { kind: 'device', deviceId: bot.deviceId } : undefined) : null);
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [artwork]);
   const visibleArtwork = imageFailed ? null : artwork;

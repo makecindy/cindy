@@ -2,12 +2,14 @@ import { useEffect } from 'react';
 import { Outlet, useOutletContext } from 'react-router-dom';
 
 import { useOwnTopNavScrollableRows } from '../feature-context';
+import { useRemoteBotSync } from './useRemoteBots';
 import { BotsSidebar } from './BotsSidebar';
 import { BotSettingsDrawer } from './BotSettingsDrawer';
 import { refreshBotProfiles } from './botStore';
 
 export function BotsFeatureLayout() {
   useOwnTopNavScrollableRows(false);
+  useRemoteBotSync();
   useEffect(() => {
     refreshBotProfiles();
     const unsubscribeProfile = window.electronAPI.maker.onBotProfileChanged(() =>

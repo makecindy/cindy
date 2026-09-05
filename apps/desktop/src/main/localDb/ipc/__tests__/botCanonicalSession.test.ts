@@ -135,6 +135,8 @@ vi.mock('../../../appSessionState.js', async (importOriginal) => {
 import {
   createBotCanonicalSession,
   registerBotIpc,
+  getBotRemoteResourceSource,
+  listBotRemoteResourceSources,
 } from '../bots';
 import { tx as runWorkerTx } from '../../worker/opHandlers/tx.js';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
@@ -382,6 +384,24 @@ beforeEach(async () => {
 });
 
 describe('Bot canonical Session lifecycle', () => {
+
+  it('projects canonical remote identity without exposing profile instructions or runtime snapshots', async () => {
+    const created = await invoke('local-db:bots:create', {
+      id: 'remote-writer', name: 'Writer', identitySource: 'Private background',
+      capabilities: { permissions: 'auto', userContextSource: 'Private user context' },
+    });
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const source = await getBotRemoteResourceSource(created.id);
+    expect(source).toMatchObject({ id: created.id, name: 'Writer', canonicalSessionId: canonical.session.id });
+    expect(JSON.stringify(source)).not.toContain('Private');
+    expect(source).not.toHaveProperty('capabilities');
+    expect(source).not.toHaveProperty('sessions');
+    expect((await listBotRemoteResourceSources()).map((row) => row.id)).toContain(created.id);
+    h.sqlite!.prepare('UPDATE bot_profiles SET hidden_at = 1 WHERE id = ?').run(created.id);
+    expect((await listBotRemoteResourceSources()).map((row) => row.id)).not.toContain(created.id);
+  });
 
   it('uses the official Bot defaults when created without renderer capabilities', async () => {
     await invoke('local-db:bots:create', {
@@ -666,7 +686,23 @@ describe('Bot canonical Session lifecycle', () => {
   });
 
   it.each([
-    [undefined, 'ask'],
+    ['pi', 'z-ai/glm-5.3-flash'],
+    ['claude', 'claude-sonnet-4-6'],
+    ['codex', 'gpt-5.6-sol'],
+  ])('keeps automatic review on the %s canonical task', async (harness, model) => {
+    const profile = await invoke('local-db:bots:create', {
+      id: `auto-${harness}`, name: 'Auto review companion',
+      capabilities: { harness, model, permissions: 'auto' },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: profile.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    expect(created.session).toMatchObject({ permissionMode: 'auto', agentKind: harness === 'claude' ? 'cc' : harness });
+  });
+
+  it.each([
+    [undefined, 'auto'],
+    ['auto', 'auto'],
     ['ask', 'ask'],
     ['trusted', 'bypassPermissions'],
   ])('creates a canonical task with permission %s mapped to %s', async (permissions, permissionMode) => {
@@ -674,7 +710,7 @@ describe('Bot canonical Session lifecycle', () => {
       id: 'bot-permission', name: 'Permission Bot',
       capabilities: permissions ? { permissions } : {},
     });
-    expect(profile.capabilities.permissions).toBe(permissions ?? 'ask');
+    expect(profile.capabilities.permissions).toBe(permissions ?? 'auto');
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: profile.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
     });

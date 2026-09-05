@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Maker } from '@cindy/maker-core';
 
 const h = vi.hoisted(() => ({
+  broadcastRemoteResourceChanged: vi.fn(),
   db: null as ReturnType<typeof drizzle> | null,
   tx: null as null | ((name: string, args: unknown) => Promise<unknown>),
 }));
@@ -16,6 +17,10 @@ vi.mock('electron', () => ({
 
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
+}));
+
+vi.mock('../botRemoteResourceInvalidation.js', () => ({
+  broadcastBotRemoteResourceChanged: h.broadcastRemoteResourceChanged,
 }));
 
 import { createBotLifecycleService } from '../botLifecycleService.js';
@@ -91,6 +96,7 @@ describe('Bot lifecycle coordinator', () => {
   let deleteProfileAndDetachSessions: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    h.broadcastRemoteResourceChanged.mockReset();
     sqlite = createDatabase();
     const db = drizzle(sqlite);
     h.db = db;
@@ -134,6 +140,7 @@ describe('Bot lifecycle coordinator', () => {
     expect(closeSession).toHaveBeenCalledWith('canonical');
     expect(closeSession).toHaveBeenCalledWith('delegation-session');
     expect(result).toMatchObject({ status: 'paused', affected: { sessions: 2, delegations: 2 } });
+    expect(h.broadcastRemoteResourceChanged).toHaveBeenCalledWith('bot-1');
   });
 
   it('uses the canonical registry even when the compatibility mirror disagrees', async () => {
@@ -179,6 +186,7 @@ describe('Bot lifecycle coordinator', () => {
       ).get(),
     ).toEqual({ session_id: 'canonical' });
     expect(result.status).toBe('active');
+    expect(h.broadcastRemoteResourceChanged).toHaveBeenLastCalledWith('bot-1');
   });
 
   it('refuses to resume or pause an archived Bot', async () => {

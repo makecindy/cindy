@@ -7124,6 +7124,14 @@
       "retryFailed": "暫時無法重試，請稍後再試。",
       "leave": "先去忙",
       "avatarSkipped": "暫時用了預設頭像，你隨時可以換一張。"
+    },
+    "permissionRequest": "{{name}} 想請你確認一下",
+    "remote": {
+      "online": "上線",
+      "offline": "離線",
+      "thisDevice": "這台電腦",
+      "offlineDescription": "{{name}} 暫時離線，{{device}} 重新連線後就能繼續聊。",
+      "preparing": "正在等夥伴準備好…"
     }
   },
   "common": {

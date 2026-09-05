@@ -83,6 +83,7 @@ import { botInvitationProgress } from '../../../shared/botInvitation.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady } from '../../maker-host/index.js';
 import { getResolvedMainLocale } from '../../i18n.js';
+import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 
 const log = createLogger('bots');
 
@@ -305,8 +306,8 @@ function defaultBotModelForConfig(config: Record<string, unknown>): string {
   return botSessionAgentKind(config) === 'pi' ? NEW_BOT_DEFAULT_PI_MODEL : 'claude-sonnet-4-6';
 }
 
-function botSessionPermissionMode(config: Record<string, unknown>): 'ask' | 'bypassPermissions' {
-  return config.permissions === 'trusted' ? 'bypassPermissions' : 'ask';
+function botSessionPermissionMode(config: Record<string, unknown>): 'ask' | 'auto' | 'bypassPermissions' {
+  return config.permissions === 'trusted' ? 'bypassPermissions' : config.permissions === 'auto' ? 'auto' : 'ask';
 }
 
 function readText(value: unknown, field: string, max = MAX_TEXT, required = false): string {
@@ -606,7 +607,7 @@ async function readProfile(
         ? config.mcpServers.filter((item): item is string => typeof item === 'string')
         : [],
       memory: config.memory !== false,
-      permissions: config.permissions === 'trusted' ? 'trusted' : 'ask',
+      permissions: config.permissions === 'trusted' || config.permissions === 'auto' ? config.permissions : 'ask',
     },
     sessions: links.flatMap((link) => {
       const row = byId.get(link.sessionId);
@@ -674,6 +675,85 @@ async function readRemoteBotProfile(client: ReturnType<typeof getDbClient>, botI
   };
 }
 
+/**
+ * User-facing Bot facts consumed by the module-neutral remote resource provider.
+ * This is an in-process connection function, not a wire DTO: the provider turns
+ * it into portable display/link/action primitives before anything crosses the
+ * device-link boundary.
+ */
+export interface BotRemoteResourceSource {
+  id: string;
+  name: string;
+  description: string;
+  avatar: string;
+  avatarColor: string;
+  status: string;
+  canonicalSessionId?: string;
+  lastMessagePreview: string | null;
+  lastMessageAt: number | null;
+  lastMessageRole: BotChatRole | null;
+  needsAttention: boolean;
+  hiddenAt: number | null;
+  pinnedAt: number | null;
+  activityAt: number;
+  currentVersion: number;
+  updatedAt: number;
+}
+
+async function readBotRemoteResourceSource(
+  client: ReturnType<typeof getDbClient>,
+  botId: string,
+): Promise<BotRemoteResourceSource> {
+  const owner = captureBotOperationOwner();
+  const db = client.drizzle;
+  const [profile] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+  if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
+  const { canonicalSessionId } = await reconcileCanonicalLink(botId, client);
+  owner.assertCurrent();
+  const [canonical] = canonicalSessionId ? await db
+    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
+    .from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1) : [];
+  const latest = await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null);
+  owner.assertCurrent();
+  return {
+    id: profile.id,
+    name: profile.displayName,
+    description: profile.description,
+    avatar: profile.avatar,
+    avatarColor: profile.avatarColor,
+    status: profile.status,
+    canonicalSessionId: canonicalSessionId ?? undefined,
+    lastMessagePreview: latest.preview,
+    lastMessageAt: latest.createdAt,
+    lastMessageRole: latest.role,
+    needsAttention: profile.attentionAt !== null &&
+      BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason) &&
+      isBotFailureAttentionWorthy(profile.attentionReason as BotFailureReason),
+    hiddenAt: profile.hiddenAt,
+    pinnedAt: profile.pinnedAt,
+    activityAt: Math.max(profile.createdAt, latest.createdAt ?? 0, canonical?.updatedAt ?? 0),
+    currentVersion: profile.currentVersion,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+export async function listBotRemoteResourceSources(): Promise<BotRemoteResourceSource[]> {
+  const owner = captureBotOperationOwner();
+  const client = getDbClient();
+  const profiles = await client.drizzle.select({ id: botProfiles.id }).from(botProfiles)
+    .where(isNull(botProfiles.hiddenAt)).orderBy(desc(botProfiles.updatedAt));
+  owner.assertCurrent();
+  // The roster reads only identity + canonical preview, never runtime snapshots
+  // or every historical task attached to a long-lived companion.
+  const sources = await Promise.all(profiles.map(({ id }) => readBotRemoteResourceSource(client, id)));
+  owner.assertCurrent();
+  return sources;
+}
+
+export async function getBotRemoteResourceSource(botId: string): Promise<BotRemoteResourceSource> {
+  return readBotRemoteResourceSource(getDbClient(), botId);
+}
+
 /** Upper bound on how many Bot read positions one list call may carry. */
 const MAX_READ_STATE_ENTRIES = 500;
 
@@ -731,7 +811,7 @@ function defaultNewBotCapabilities(): Record<string, unknown> {
     mcpMode: 'allowlist',
     mcpServers: [],
     memory: true,
-    permissions: 'ask',
+    permissions: 'auto',
   };
 }
 
@@ -739,6 +819,7 @@ export function broadcastBotProfileChanged(payload: {
   botId: string;
   change: 'created' | 'updated';
 }): void {
+  broadcastBotRemoteResourceChanged(payload.botId);
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -879,6 +960,7 @@ export async function createBotProfile(raw: unknown) {
     throwIpcError('PRECONDITION_FAILED', '账号正在切换，请稍后重试');
   }
   const persistedCapabilities = normalizeBotModelCapabilitiesOrThrow({
+    permissions: 'auto',
     ...(hasRequestedCapabilities ? {} : defaultNewBotCapabilities()),
     ...requestedCapabilities,
     skills,
@@ -1304,7 +1386,10 @@ export function registerBotIpc(): void {
       owner.assertCurrent();
       if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId, 'profile');
     }
-    return readProfile(client, id);
+    const profile = await readProfile(client, id);
+    owner.assertCurrent();
+    broadcastBotProfileChanged({ botId: id, change: 'updated' });
+    return profile;
   });
 
   const createBotCanonicalSessionUnlocked = async (
@@ -1516,6 +1601,7 @@ export function registerBotIpc(): void {
       .where(eq(sessions.id, canonicalSessionId))
       .limit(1);
     if (!canonical) throwIpcError('NOT_FOUND', 'Bot 主任务不存在');
+    broadcastBotProfileChanged({ botId, change: 'updated' });
     return {
       created,
       canonicalSessionId,
