@@ -68,9 +68,9 @@ export function ghostBootHtml(entry: string): string {
   return [
     '<!doctype html>',
     '<html><head><meta charset="utf-8">',
-    // 沙箱页自身的 CSP:只允许同源(即 cindy-ghost://<id>/ 自己的安装目录)
-    // 脚本与资源,连 inline script 都不给——意识代码全部来自落盘文件。
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">`,
+    // meta 与响应头 CSP 会取交集：保留原 default/style 约束，只为图片加入
+    // HTTPS；不在这里继承响应头已有的 data:/blob:/media 放行。
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https:">`,
     '</head><body>',
     `<script src="${src}"></script>`,
     '</body></html>',

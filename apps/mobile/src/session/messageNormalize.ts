@@ -416,12 +416,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       align: message.role === 'user' && hookSource === undefined ? 'user' : 'agent',
       createdAt: message.createdAt,
       isStreaming: readMessageStreaming(message) || undefined,
-      ...(message.role === 'assistant' && (
-        message.agentMeta?.turnCompleted === true ||
-        (turnCost.turnMoney?.amount ?? 0) > 0 ||
-        // 无报价轮只落 turnUsageDetails,它同样只在 turn 结束时写入,等价收尾信号。
-        turnCost.turnTotalTokens !== undefined
-      )
+      ...(remoteMessageCompletesTurn(message, turnCost)
         ? { turnCompleted: true }
         : {}),
       ...turnCost,
@@ -842,6 +837,19 @@ function projectTurnMoney(
     },
     turnCostUsd: cost,
   };
+}
+
+/** Same completion boundary for normalization and streaming-prefix invalidation. */
+export function remoteMessageCompletesTurn(
+  message: RemoteMessage,
+  turnCost = readTurnCost(message),
+): boolean {
+  return message.role === 'assistant' && (
+    message.agentMeta?.turnCompleted === true
+    || (turnCost.turnMoney?.amount ?? 0) > 0
+    // Usage without a price is also written only when the turn ends.
+    || turnCost.turnTotalTokens !== undefined
+  );
 }
 
 function readTurnCost(

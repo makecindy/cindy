@@ -45,11 +45,36 @@ export function groupWorkRuns<TItem, TChild extends TItem>(
   let previousEnd: number | null = null;
   const flushTurn = (activeTail: boolean) => {
     if (turn.length === 0) return;
+    if (activeTail && isSessionStreaming) {
+      // A new run's status can arrive before its user row. A durable done seal still
+      // closes the loaded work before it; only subsequent content may stay active.
+      const completedIndex = turn.findLastIndex(
+        (item) => adapter.isAnswer(item) && adapter.isSealedAnswer(item),
+      );
+      const activeStart =
+        completedIndex >= 0
+          ? adapter.boundaryTimestamp(turn[completedIndex])
+          : turnStart;
+      if (completedIndex >= 0) {
+        const completed = turn.slice(0, completedIndex + 1);
+        out.push(
+          ...(groupAnsweredTurn(completed, turnStart, adapter) ?? completed),
+        );
+      }
+      out.push(
+        ...groupActivityRuns(
+          turn.slice(completedIndex + 1),
+          activeStart,
+          true,
+          adapter,
+        ),
+      );
+      turn = [];
+      return;
+    }
     out.push(
-      ...(activeTail && isSessionStreaming
-        ? groupActivityRuns(turn, turnStart, true, adapter)
-        : (groupAnsweredTurn(turn, turnStart, adapter) ??
-          groupActivityRuns(turn, turnStart, false, adapter))),
+      ...(groupAnsweredTurn(turn, turnStart, adapter) ??
+        groupActivityRuns(turn, turnStart, false, adapter)),
     );
     turn = [];
   };

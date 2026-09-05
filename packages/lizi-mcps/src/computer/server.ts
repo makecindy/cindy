@@ -376,6 +376,22 @@ export function createComputerMcpServer(
         parsedArgs,
         callContext,
       );
+      if (
+        name === 'get_window_state' &&
+        isUnavailableWindowObservation(data, parsedData.capture_mode)
+      ) {
+        invalidateWindowSnapshot(name, parsedData, sessionId);
+        return textResult(
+          {
+            ok: false,
+            tool: name,
+            errorCode: 'CUA_UNAVAILABLE',
+            hint: 'The requested window observation failed. Do not reuse earlier snapshot IDs, element indices or coordinates. Check status/check_permissions and refresh list_windows for the target; after the window or capture state recovers, call get_window_state again. Repeated capture failure requires recovery before further actions.',
+            data,
+          },
+          true,
+        );
+      }
       const snapshotId = recordWindowSnapshot(name as ComputerMcpToolName, parsedData, data, sessionId);
       return textResult({
         ok: true,
@@ -384,6 +400,7 @@ export function createComputerMcpServer(
         data,
       });
     } catch (err) {
+      invalidateWindowSnapshot(name, parsedData, sessionId);
       return textResult(
         {
           ok: false,
@@ -392,6 +409,20 @@ export function createComputerMcpServer(
         },
         true,
       );
+    }
+  }
+
+  function invalidateWindowSnapshot(
+    name: string,
+    args: Record<string, unknown>,
+    sessionId: string | undefined,
+  ): void {
+    if (
+      name === 'get_window_state' &&
+      typeof args.pid === 'number' &&
+      typeof args.window_id === 'number'
+    ) {
+      snapshotTracker.invalidate(sessionId, args.pid, args.window_id);
     }
   }
 
@@ -957,6 +988,31 @@ export function createComputerMcpServer(
   }
 
   return server;
+}
+
+/** Only explicit driver failure signals override legacy/partial observation success. */
+function isUnavailableWindowObservation(
+  data: unknown,
+  captureMode: unknown,
+): boolean {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const state = data as Record<string, unknown>;
+  if (state.ok === false || state.isError === true) return true;
+  const screenshotFailed =
+    state.screenshot_frame_valid === false ||
+    (state.screenshot_error !== undefined && state.screenshot_error !== null);
+  const hasElements =
+    Array.isArray(state.elements) && state.elements.length > 0;
+  const hasTree =
+    typeof state.tree_markdown === 'string' &&
+    state.tree_markdown.trim().length > 0;
+  const axUnavailable = state.degraded === true && !hasElements && !hasTree;
+  // A screenshot explicitly requested by vision/SOM cannot be replaced by an AX tree.
+  // Conversely, a valid vision-only result may have no AX surface or input route.
+  if (captureMode === 'vision' || captureMode === 'som')
+    return screenshotFailed;
+  if (captureMode === 'ax') return axUnavailable;
+  return screenshotFailed && axUnavailable;
 }
 
 function readDriverSnapshotId(data: unknown): string | null {

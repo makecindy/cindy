@@ -172,6 +172,35 @@ describe('message render performance', () => {
     }
   });
 
+  it.each([
+    { turnCompleted: true },
+    { turnCostUsd: 0.5 },
+    { turnUsageDetails: { totalTokens: 10 } },
+  ])('invalidates an active prefix on completion %j and keeps it folded on send', (completion) => {
+    const messages = [
+      message({ id: 'u1', role: 'user', content: 'start', createdAt: timestamp(1) }),
+      message({ id: 't1', role: 'tool_use', toolUseId: 't1', content: { toolName: 'Read', input: {} }, createdAt: timestamp(2) }),
+      message({ id: 'p1', role: 'assistant', content: 'Checking more.', createdAt: timestamp(3) }),
+      message({ id: 't2', role: 'tool_use', toolUseId: 't2', content: { toolName: 'Read', input: {} }, createdAt: timestamp(4) }),
+      message({ id: 'p2', role: 'assistant', content: 'Checking again.', createdAt: timestamp(5) }),
+      message({ id: 'final', role: 'assistant', content: 'Done.', agentMeta: { isStreaming: true }, createdAt: timestamp(7) }),
+    ];
+    const prefixCache = { current: null as ReturnType<typeof buildMobileStreamingRenderWindow>['prefix'] };
+    const build = (input: RemoteMessage[], isSessionStreaming: boolean) => buildMobileStreamingRenderWindow({
+      cacheKey: 'en', messages: input, options: { isSessionStreaming, sessionId: 's1' }, prefixCache,
+    });
+    expect(build(messages, true).prefix).not.toBeNull();
+    const sealed = messages.map((item) => item.id === 'final'
+      ? { ...item, agentMeta: completion }
+      : item);
+    const completedItems = buildMobileMessageRenderItems(sealed, { isSessionStreaming: false });
+    expect(build(sealed, true).items).toEqual(completedItems);
+    expect(build(sealed, false).items).toEqual(completedItems);
+    expect(build(sealed, true).items).toEqual(completedItems);
+    const echoed = [...sealed, message({ id: 'u2', role: 'user', content: 'next', createdAt: timestamp(8) })];
+    expect(build(echoed, true).items.slice(0, completedItems.length)).toEqual(completedItems);
+  });
+
   it('reuses the normalized historical prefix while only the active turn streams', () => {
     const messages = createLargeDesktopMessageFixture(20);
     const messageStructureToken = {};
