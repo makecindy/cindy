@@ -2078,3 +2078,48 @@ describe('cindy-bridge extension source', () => {
     },
   );
 });
+
+it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const calls: unknown[] = [];
+  const client = { request: async (method: string, params: unknown) => {
+    calls.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_helper', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object' } },
+  ]);
+  const ordinary: any[] = [];
+  gateway.register({ registerTool: (tool: unknown) => ordinary.push(tool) });
+  expect(ordinary.map((tool) => tool.name)).toEqual(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
+  expect(gateway.resolveDirectHelperTool('start_session_task', {})).toBeNull();
+
+  const bot: any[] = [];
+  gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
+  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'create_teammate']) {
+    const tool = bot.find((item) => item.name === name);
+    expect(tool).toBeDefined();
+    const args = name === 'start_session_task' ? { instruction: 'Prepare a report' }
+      : name === 'send_to_agent' ? { target_id: 'bot-b', message: 'Please review' }
+      : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
+      : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
+      : { task_id: 'task-1' };
+    const resolved = gateway.resolveDirectHelperTool(name, args);
+    expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);
+    expect(resolved.args).toEqual(args); // Permission review retains the actual operation and arguments.
+    await tool.execute('call-1', args);
+    expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } } });
+  }
+});

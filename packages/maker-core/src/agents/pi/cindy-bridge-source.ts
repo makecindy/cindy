@@ -2483,6 +2483,7 @@ interface ConnectedMcpTool {
 }
 
 interface ResolvedMcpGatewayCall {
+  helperCommand?: string;
   qualifiedName: string;
   args: Record<string, unknown>;
   tool: ConnectedMcpTool;
@@ -2754,6 +2755,7 @@ class CindyMcpGateway {
   private readonly unavailableServers = new Map<string, string>();
   private readonly disclosedSchemas = new Set<string>();
   private botMemoryFacadeEnabled = false;
+  private botHelperFacadeEnabled = false;
 
   add(serverName: string, client: McpHttpClient, tools: any[]): void {
     for (const rawTool of tools) {
@@ -2799,9 +2801,12 @@ class CindyMcpGateway {
   }
 
   resolveDirectHelperTool(name: string, input: unknown): ResolvedMcpGatewayCall | null {
-    const tool = this.tools.get(mcpGatewayKey('cindy_helper', name));
+    const direct = this.tools.get(mcpGatewayKey('cindy_helper', name));
+    const tool = direct ?? (this.botHelperFacadeEnabled && CINDY_DIRECT_BOT_TOOLS.has(name)
+      ? this.tools.get(mcpGatewayKey('cindy_helper', 'call_tool')) : undefined);
     if (!tool) return null;
     return {
+      ...(!direct ? { helperCommand: name } : {}),
       qualifiedName: 'mcp__cindy_helper__' + name,
       args: recordInput(input),
       tool,
@@ -3017,7 +3022,8 @@ class CindyMcpGateway {
     try {
       result = await resolved.tool.client.request('tools/call', {
         name: resolved.tool.name,
-        arguments: resolved.args,
+        arguments: resolved.helperCommand
+          ? { name: resolved.helperCommand, args: resolved.args } : resolved.args,
       });
     } catch (error) {
       throw new Error(
@@ -3093,6 +3099,8 @@ class CindyMcpGateway {
   }
 
   register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
+    // Host-owned Bot identity enables native shortcuts; execution uses the scoped helper entry.
+    this.botHelperFacadeEnabled = options.botMemoryFacade === true;
     this.botMemoryFacadeEnabled = options.botMemoryFacade === true
       && this.tools.has(mcpGatewayKey('cindy_memory', 'call_tool'));
 
