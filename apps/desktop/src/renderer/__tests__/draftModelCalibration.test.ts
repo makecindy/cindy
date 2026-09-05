@@ -761,4 +761,32 @@ describe('resolveDraftSessionProviderId', () => {
       }),
     ).toBe('xd');
   });
+
+  it('pi 只有 BYOM 来源已连接时不得省略来源,否则 null 会落在网关鉴权失败', () => {
+    const deepseek = provider('deepseek', true, { pi: [model('deepseek-v4-flash')] });
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [deepseek],
+        agent: 'pi',
+        model: 'deepseek-v4-flash',
+        explicitProviderId: null,
+        effectiveProviderId: 'deepseek',
+      }),
+    ).toBe('deepseek');
+  });
+
+  it('pi 网关(xd)生效时可省略来源,与 null 恒路由网关的语义一致', () => {
+    const gateway = provider('xd', true, { pi: [model('gpt-5.4-mini')] });
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [gateway],
+        agent: 'pi',
+        model: 'gpt-5.4-mini',
+        explicitProviderId: null,
+        effectiveProviderId: 'xd',
+      }),
+    ).toBeNull();
+  });
 });
