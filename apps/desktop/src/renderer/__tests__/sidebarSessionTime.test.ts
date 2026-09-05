@@ -95,7 +95,7 @@ describe('SessionItem activity time', () => {
     // 2026-08-12 起多传 hasPrRef(让 PR 参与「按勾选顺序」排列),调用被 prettier
     // 折成多行——断言收窄到函数与前四个入参。
     expect(sessionItemSource).toMatch(
-      /buildSessionInfoPieces\(\s*session,\s*taskInfoFields,\s*activityIso,\s*t,/,
+      /useProjectedSessionInfoPieces\(\s*session,\s*taskInfoFields,\s*activityIso,\s*t,/,
     );
     expect(sessionItemSource).toContain('<SessionInfoMeta');
     expect(sessionItemSource).toContain('pieces={infoPieces}');

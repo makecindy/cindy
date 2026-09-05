@@ -40,6 +40,10 @@ export interface MessageTurnCostPayload {
   sessionId: string;
   /** 该轮最后一条 assistant 的 messages.client_id。 */
   clientId: string;
+  /** Immutable classification captured when this turn ran; undefined only for legacy rows. */
+  turnCostIsCustomProvider?: boolean;
+  /** Provider id captured at the same turn boundary for diagnostics and future read-side policy. */
+  turnCostProviderId?: string | null;
   turnMoney?: RegionalMoney;
   turnCostUsd?: number;
   turnCostIsEstimate?: boolean;

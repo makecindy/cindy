@@ -466,21 +466,242 @@ export function listSessionBackgroundTasksFor(
  * 与 goal/learn 链路同款);老被控端无此 channel → CHANNEL_NOT_ALLOWED,调用方 catch
  * 后退化为只显示已加载消息 + 实时推送的部分值。
  */
-export function estimatedSessionValueFor(sessionId: string): Promise<{
+export interface EstimatedSessionValueSnapshot {
+  projectionVersion?: number;
   totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
   totalValueUsd?: number;
   entries: Array<{
     clientId: string;
     money?: import('../../shared/regionalMoney').RegionalMoney;
     costUsd?: number;
+    excludedActualMoney?: import('../../shared/regionalMoney').RegionalMoney;
+    turnCostIsCustomProvider?: boolean;
+    turnCostProviderId?: string | null;
     turnUsageDetails?: unknown;
   }>;
-}> {
+}
+
+function tokenOnlyEstimatedSessionValueSnapshot(): EstimatedSessionValueSnapshot {
+  return { totalValueMoney: null, totalValueUsd: 0, entries: [] };
+}
+
+function isAuthoritativeEstimatedSessionValueSnapshot(
+  snapshot: unknown,
+): snapshot is EstimatedSessionValueSnapshot {
+  return Boolean(
+    snapshot &&
+    typeof snapshot === 'object' &&
+    (snapshot as { projectionVersion?: unknown }).projectionVersion === 1 &&
+    Array.isArray((snapshot as { entries?: unknown }).entries),
+  );
+}
+
+export async function estimatedSessionValueFor(
+  sessionId: string,
+  presentation: import('../../shared/regionalMoney').SdkCostPresentation = 'regular',
+  showSdkEstimate: boolean = presentation === 'estimate',
+): Promise<EstimatedSessionValueSnapshot> {
   const deviceId = getStickySessionDeviceId(sessionId);
-  if (!deviceId) return messageService.estimatedSessionValue(sessionId);
-  return invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
+  if (!deviceId) {
+    return messageService.estimatedSessionValue(sessionId, presentation, showSdkEstimate);
+  }
+  const snapshot = await invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
     sessionId,
-  ]) as ReturnType<typeof estimatedSessionValueFor>;
+    presentation,
+    showSdkEstimate,
+  ]);
+  return isAuthoritativeEstimatedSessionValueSnapshot(snapshot)
+    ? snapshot
+    : tokenOnlyEstimatedSessionValueSnapshot();
+}
+
+export interface EstimatedSessionValueSummary {
+  projectionVersion?: number;
+  estimatedValueMoney: import('../../shared/regionalMoney').RegionalMoney | null;
+  excludedActualMoney: import('../../shared/regionalMoney').RegionalMoney | null;
+  totalValueUsd?: number;
+}
+
+function summaryFromEstimatedSessionValueSnapshot(
+  snapshot: {
+    projectionVersion?: number;
+  totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
+    totalValueUsd?: number;
+    entries?: Array<{
+      excludedActualMoney?: import('../../shared/regionalMoney').RegionalMoney;
+    }>;
+  },
+): EstimatedSessionValueSummary {
+  const excluded = (snapshot.entries ?? []).flatMap((entry) =>
+    entry.excludedActualMoney ? [entry.excludedActualMoney] : [],
+  );
+  return {
+    projectionVersion: snapshot.projectionVersion,
+    estimatedValueMoney: snapshot.totalValueMoney ?? null,
+    excludedActualMoney:
+      excluded.length > 0
+        ? excluded.reduce((acc, money) => {
+            if (!acc) return money;
+            if (acc.currency !== money.currency) return acc;
+            return { ...acc, amount: acc.amount + money.amount };
+          })
+        : null,
+    ...(snapshot.totalValueUsd != null ? { totalValueUsd: snapshot.totalValueUsd } : {}),
+  };
+}
+
+function isAuthoritativeEstimatedSessionValueSummary(value: unknown): value is EstimatedSessionValueSummary {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value as { projectionVersion?: unknown }).projectionVersion === 1,
+  );
+}
+
+function tokenOnlyEstimatedSessionValueSummaries(
+  sessionIds: readonly string[],
+): Record<string, EstimatedSessionValueSummary> {
+  return Object.fromEntries(
+    sessionIds.map((sessionId) => [
+      sessionId,
+      { estimatedValueMoney: null, excludedActualMoney: null },
+    ]),
+  );
+}
+
+const ESTIMATED_SESSION_VALUE_BATCH_LIMIT = 256;
+
+async function estimatedSessionValueBatchOnDevice(
+  sessionIds: string[],
+  showSdkEstimate: boolean,
+  presentations: Record<string, import('../../shared/regionalMoney').SdkCostPresentation>,
+  deviceId: string | null,
+): Promise<Record<string, EstimatedSessionValueSummary>> {
+  if (sessionIds.length === 0) return {};
+  if (sessionIds.length > ESTIMATED_SESSION_VALUE_BATCH_LIMIT) {
+    const merged: Record<string, EstimatedSessionValueSummary> = {};
+    for (let i = 0; i < sessionIds.length; i += ESTIMATED_SESSION_VALUE_BATCH_LIMIT) {
+      Object.assign(
+        merged,
+        await estimatedSessionValueBatchOnDevice(
+          sessionIds.slice(i, i + ESTIMATED_SESSION_VALUE_BATCH_LIMIT),
+          showSdkEstimate,
+          presentations,
+          deviceId,
+        ),
+      );
+    }
+    return merged;
+  }
+  const payload = { sessionIds, showSdkEstimate, presentations };
+  const fallback = async (): Promise<Record<string, EstimatedSessionValueSummary>> => {
+    const entries = await Promise.all(
+      sessionIds.map(async (sessionId) => {
+        const snapshot = await estimatedSessionValueFor(
+          sessionId,
+          presentations[sessionId] ?? 'regular',
+          showSdkEstimate,
+        );
+        return [sessionId, summaryFromEstimatedSessionValueSnapshot(snapshot)] as const;
+      }),
+    );
+    return Object.fromEntries(entries);
+  };
+  try {
+    if (!deviceId) {
+      return await messageService.estimatedSessionValueBatch(payload);
+    }
+    const result = (await invokeRemote(
+      deviceId,
+      'local-db:messages:estimatedSessionValueBatch',
+      [payload],
+    )) as Record<string, unknown>;
+    return sessionIds.every((sessionId) =>
+      isAuthoritativeEstimatedSessionValueSummary(result[sessionId]),
+    )
+      ? result as Record<string, EstimatedSessionValueSummary>
+      : tokenOnlyEstimatedSessionValueSummaries(sessionIds);
+  } catch (err) {
+    if (extractIpcError(err)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+      return fallback();
+    }
+    throw err;
+  }
+}
+
+/**
+ * Sidebar cost projection: batch local/remote session totals instead of one
+ * full-history query per row. Older remotes without the batch channel fall
+ * back to the existing per-session read.
+ */
+export async function estimatedSessionValueBatchFor(
+  requests: Array<{
+    sessionId: string;
+    presentation?: import('../../shared/regionalMoney').SdkCostPresentation;
+  }>,
+  showSdkEstimate: boolean,
+): Promise<Record<string, EstimatedSessionValueSummary>> {
+  const grouped = new Map<
+    string,
+    {
+      deviceId: string | null;
+      sessionIds: string[];
+      presentations: Record<string, import('../../shared/regionalMoney').SdkCostPresentation>;
+    }
+  >();
+  for (const request of requests) {
+    if (!request.sessionId) continue;
+    const deviceId: string | null = getStickySessionDeviceId(request.sessionId) ?? null;
+    const key = deviceId ?? '';
+    const group = grouped.get(key) ?? {
+      deviceId,
+      sessionIds: [],
+      presentations: {} as Record<string, import('../../shared/regionalMoney').SdkCostPresentation>,
+    };
+    if (!Object.prototype.hasOwnProperty.call(group.presentations, request.sessionId)) {
+      group.sessionIds.push(request.sessionId);
+    }
+    group.presentations[request.sessionId] = request.presentation ?? 'regular';
+    grouped.set(key, group);
+  }
+  const merged: Record<string, EstimatedSessionValueSummary> = {};
+  await Promise.all(
+    [...grouped.values()].map(async (group) => {
+      try {
+        Object.assign(
+          merged,
+          await estimatedSessionValueBatchOnDevice(
+            group.sessionIds,
+            showSdkEstimate,
+            group.presentations,
+            group.deviceId,
+          ),
+        );
+      } catch {
+        Object.assign(merged, tokenOnlyEstimatedSessionValueSummaries(group.sessionIds));
+      }
+    }),
+  );
+  return merged;
+}
+
+export async function customProviderBillingGetFor(
+  deviceId: string | null | undefined,
+): Promise<{ showSdkCostForCustomProviders: boolean; isCustomized: boolean }> {
+  if (!deviceId) {
+    return window.electronAPI.maker.customProviderBillingGet();
+  }
+  try {
+    return (await invokeRemote(deviceId, 'maker:custom-provider-billing:get', [])) as {
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+    };
+  } catch (err) {
+    if (extractIpcError(err)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+      return { showSdkCostForCustomProviders: false, isCustomized: false };
+    }
+    throw err;
+  }
 }
 
 /**

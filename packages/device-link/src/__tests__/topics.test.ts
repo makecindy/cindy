@@ -34,6 +34,7 @@ describe('topicForPush', () => {
 
   it('账号 / 全局级 channel → sessions(随列表订阅走)', () => {
     expect(topicForPush('maker:provider:changed', { revision: 42 })).toBe('sessions');
+    expect(topicForPush('maker:custom-provider-billing:changed', {})).toBe('sessions');
     expect(topicForPush('maker:agents:changed', {})).toBe('sessions');
     expect(topicForPush('maker:schedule:event', { kind: 'x' })).toBe('sessions');
     expect(topicForPush('maker:project-automation:event', {})).toBe('sessions');

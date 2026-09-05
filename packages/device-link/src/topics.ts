@@ -150,6 +150,7 @@ const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
 const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // provider 目录是设备级快照；控制端订阅 sessions 后按来源 deviceId 精确刷新。
   'maker:provider:changed',
+  'maker:custom-provider-billing:changed',
   // runtime Agent roster is a device-level snapshot; controllers refresh after this push.
   'maker:agents:changed',
   'maker:schedule:event',

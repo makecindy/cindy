@@ -62,7 +62,7 @@ import {
 import { toast } from '@/lib/toast';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
-import { buildSessionInfoPieces, SessionInfoMeta } from './SessionInfoMeta';
+import { SessionInfoMeta, useProjectedSessionInfoPieces } from './SessionInfoMeta';
 import { useTaskInfoWorktree } from './sessionWorktreeInfo';
 import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
@@ -105,6 +105,9 @@ import {
   startSessionDrag,
 } from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import {
+  useSessionCustomProviderCostPresentation,
+} from '../contexts/CustomProviderCostPresentationContext';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -362,14 +365,23 @@ export const SessionItem = memo(function SessionItem({
   // PR 信息(C' 期):勾选且有引用时取最新一条(prRefs 已按 lastSeenAt 降序)。
   const infoPrRef = taskInfoFields.includes('pr') ? prRefs[0] : undefined;
   const infoWorktree = useTaskInfoWorktree(session, taskInfoFields.includes('worktree'));
+  const wantsCostInfo = taskInfoFields.includes('cost');
+  const { presentation: costPresentation, showSdkEstimate } =
+    useSessionCustomProviderCostPresentation(
+      session.providerId,
+      remoteDeviceId,
+      wantsCostInfo,
+    );
   // 传 hasPrRef / hasWorktree 让它们参与「按勾选顺序」排列。
-  const infoPieces = buildSessionInfoPieces(
+  const infoPieces = useProjectedSessionInfoPieces(
     session,
     taskInfoFields,
     activityIso,
     t,
     infoPrRef != null,
     infoWorktree != null,
+    costPresentation,
+    showSdkEstimate,
   );
   // 右侧状态指示器五档优先级(高→低),色表全端统一(侧栏 / 卡片 / 灵动岛同一张表):
   //   1. error(出错终止 / 定时任务失败未读)→ 红点   —— 红专职表示"坏了"

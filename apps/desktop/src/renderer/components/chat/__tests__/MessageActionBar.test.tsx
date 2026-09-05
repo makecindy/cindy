@@ -277,7 +277,47 @@ describe('MessageActionBar', () => {
 
   // 金额缺席时的回退:那一格显示本轮 token,而不是空着(2026-07-30 起网关目录整体
   // 不下发价格,消息底部只剩时间戳)。t 桩忽略插值,所以断言到 key 粒度;
-  // 数值形态由 maker-shared 的 formatCompactTokens 单测覆盖。
+  it('does not label mixed actual and SDK money as a pure SDK estimate', () => {
+    render(
+      <MessageActionBar
+        copyText="message body"
+        align="left"
+        hovered
+        userTurnMoney={{
+          amount: 6,
+          currency: 'USD',
+          approximate: true,
+          kind: 'actual-cost',
+          estimateReasons: ['sdk-estimate'],
+        }}
+        userTurnCostIsEstimate
+      />,
+    );
+
+    expect(screen.getByText('chat.messageActionBar.turnCostEstimated')).toBeTruthy();
+    expect(screen.queryByText('chat.messageActionBar.turnCostSdkEstimated')).toBeNull();
+  });
+
+  it('does not label reference plus SDK value as a pure SDK estimate', () => {
+    render(
+      <MessageActionBar
+        copyText="message body"
+        align="left"
+        hovered
+        turnMoney={{
+          amount: 5,
+          currency: 'USD',
+          approximate: true,
+          kind: 'value-estimate',
+          estimateReasons: ['reference-price', 'sdk-estimate'],
+        }}
+        turnCostIsEstimate
+      />,
+    );
+
+    expect(screen.getByText('chat.messageActionBar.turnCostEstimated')).toBeTruthy();
+    expect(screen.queryByText('chat.messageActionBar.turnCostSdkEstimated')).toBeNull();
+  });
   describe('token fallback when no money is available', () => {
     const details = {
       inputTokens: 12_400,

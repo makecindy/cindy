@@ -1177,7 +1177,9 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
-  onLocaleChanged?: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+  onLocaleChanged?: (
+    cb: (locale: import('../shared/locale').SupportedLocale) => void,
+  ) => () => void;
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
@@ -1391,6 +1393,33 @@ interface ElectronAPI {
       unsupportedSlots: string[];
       iconDataUrl?: string;
     }>;
+    /** 用户取消确认框时丢掉 inspect 签发的一次性打包凭证并清理 staging。 */
+    abandonPackTicket: (packTicket: string) => Promise<{ ok: true }>;
+    /** 本地包第三条恢复路径第一步:从已装目录读确认卡事实,零副作用。 */
+    reapproveInspect: (id: string) => Promise<{
+      manifest: import('../shared/ghost').GhostManifest;
+      trust: import('../shared/ghost').GhostTrustInfo;
+      /** 确认卡展示时的清单字节指纹;确认时回传,防确认间隙清单被换。 */
+      manifestSha256: string;
+      /** 确认卡展示时的完整批准投影指纹;覆盖技能、locale、icon、trust。 */
+      approvalProjectionSha256: string;
+      /** 升级前的启停偏好(.disabled 镜像读数):确认卡勾选默认值。 */
+      previouslyEnabled: boolean;
+      /** 一次性票据(Host 进程内钉住 inspect 时点的 owner 与事实,confirm 原子消费)。 */
+      inspectTicket: string;
+    }>;
+    /** 第三条恢复路径第二步:用户点过确认卡后开 receipt。 */
+    reapproveInstalled: (
+      id: string,
+      opts: {
+        enable: boolean;
+        expectedManifestSha256: string;
+        expectedApprovalProjectionSha256: string;
+        expectedInstalledApproval: string;
+        inspectTicket: string;
+      },
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
+
     uninstall: (id: string) => Promise<{ ok: true }>;
     /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
     export: (
@@ -2029,7 +2058,9 @@ interface ElectronAPI {
     rendererReady: () => Promise<void>;
     presentationReady: () => Promise<void>;
     onSamplingActiveChanged: (cb: (active: boolean) => void) => () => void;
-    onLocaleChanged: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+    onLocaleChanged: (
+      cb: (locale: import('../shared/locale').SupportedLocale) => void,
+    ) => () => void;
   };
 
   /** 插件停靠面板独立窗口(每 ghostId 一扇窗;状态机在 main)。 */
@@ -3622,9 +3653,7 @@ interface ElectronAPI {
     enableBeta: boolean;
     isCustomized?: boolean;
   }>;
-  setUpdateChannelSettings: (settings: {
-    enableBeta: boolean;
-  }) => Promise<{
+  setUpdateChannelSettings: (settings: { enableBeta: boolean }) => Promise<{
     enableBeta: boolean;
     isCustomized?: boolean;
   }>;
@@ -3928,7 +3957,12 @@ interface ElectronAPI {
       agent?: 'cc' | 'pi',
     ) => Promise<{ ok: true; daemonReady: boolean }>;
     ccMgrListPendingUpgrades: () => Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
+      pending: Array<{
+        hostId: string;
+        currentVersion: string;
+        availableVersion: string;
+        agent: 'cc' | 'pi';
+      }>;
     }>;
     ccMgrDismissPendingUpgrade: (hostId: string, agent?: 'cc' | 'pi') => Promise<{ ok: true }>;
     // Codex credential sync
@@ -4683,16 +4717,39 @@ interface ElectronAPI {
         sessionId: string,
         opts?: { limit?: number; before?: string; beforeTs?: number },
       ) => Promise<import('@/lib/ccAgent.types').Message[]>;
-      estimatedSessionValue: (sessionId: string) => Promise<{
+      estimatedSessionValue: (
+        sessionId: string,
+        presentation?: import('../shared/regionalMoney').SdkCostPresentation,
+        showSdkEstimate?: boolean,
+      ) => Promise<{
+        projectionVersion?: number;
         totalValueMoney?: import('../shared/regionalMoney').RegionalMoney | null;
         totalValueUsd?: number;
         entries: Array<{
           clientId: string;
           money?: import('../shared/regionalMoney').RegionalMoney;
           costUsd?: number;
+          excludedActualMoney?: import('../shared/regionalMoney').RegionalMoney;
+          turnCostIsCustomProvider?: boolean;
+          turnCostProviderId?: string | null;
           turnUsageDetails?: unknown;
         }>;
       }>;
+      estimatedSessionValueBatch: (payload: {
+        sessionIds: string[];
+        presentation?: import('../shared/regionalMoney').SdkCostPresentation;
+        showSdkEstimate?: boolean;
+        presentations?: Record<string, import('../shared/regionalMoney').SdkCostPresentation>;
+      }) => Promise<
+        Record<
+          string,
+          {
+            estimatedValueMoney: import('../shared/regionalMoney').RegionalMoney | null;
+            excludedActualMoney: import('../shared/regionalMoney').RegionalMoney | null;
+            totalValueUsd?: number;
+          }
+        >
+      >;
       around: (
         sessionId: string,
         messageId: string,
@@ -5788,7 +5845,9 @@ interface ElectronAPI {
 
     /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
     visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsSet: (patch: VisionBridgeSettingsPatch) => Promise<VisionBridgeSettingsState>;
+    visionBridgeSettingsSet: (
+      patch: VisionBridgeSettingsPatch,
+    ) => Promise<VisionBridgeSettingsState>;
     visionBridgeSettingsReset: () => Promise<VisionBridgeSettingsState>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
@@ -5904,6 +5963,26 @@ interface ElectronAPI {
       isCustomized: boolean;
       defaultAutoSnapshotEnabled: boolean;
     }>;
+
+    /** Custom provider billing: default off records token only, hides SDK cost. */
+    customProviderBillingGet: () => Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
+    }>;
+    customProviderBillingSet: (enabled: boolean) => Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
+    }>;
+    customProviderBillingReset: () => Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
+    }>;
+    onCustomProviderBillingChanged?: (
+      callback: (payload: { deviceId?: string }) => void,
+    ) => () => void;
 
     /**
      * 智能通讯录(maker-contacts)— 设置页管理 UI 数据通道。
@@ -6255,6 +6334,7 @@ interface ElectronAPI {
      * renderer 侧由 features/scheduler/lib 重新 narrow 成强类型）。
      */
     schedule: {
+      listCostSummaries: () => Promise<unknown[]>;
       list: (filter?: { status?: 'active' | 'paused' | 'expired' }) => Promise<unknown[]>;
       listTemplates: () => Promise<unknown[]>;
       createFromTemplate: (params: {

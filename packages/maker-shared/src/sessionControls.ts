@@ -20,13 +20,19 @@ export interface SessionControlsSessionLike {
   status: 'active' | 'archived' | 'deleted' | string;
   title?: string | null;
   totalCostUsd?: number;
+  totalMoney?: SessionControlsMoneyLike | null;
   totalTokenUsage?: number;
   workingDir?: string | null;
 }
 
+export interface SessionControlsMoneyLike {
+  amount: number;
+  currency: 'CNY' | 'USD';
+}
+
 export function summarizeSessionSpend(session: Pick<
   SessionControlsSessionLike,
-  'contextTokens' | 'contextWindow' | 'totalCostUsd' | 'totalTokenUsage'
+  'contextTokens' | 'contextWindow' | 'totalCostUsd' | 'totalMoney' | 'totalTokenUsage'
 > | null, localizer?: PresentationLocalizer): {
   title: string;
   detail: string;
@@ -38,13 +44,20 @@ export function summarizeSessionSpend(session: Pick<
     return { title, detail: unavailable, available: false };
   }
 
-  const totalCostUsd = readNumber(session.totalCostUsd);
+  // Structured money is authoritative. In particular, a CNY projection intentionally clears
+  // totalCostUsd; falling back to a stale legacy USD field would either hide the amount or leak
+  // the wrong currency into Mobile /cost and the session menu.
+  const totalMoney = readSessionMoney(session.totalMoney);
+  const totalCostUsd = totalMoney ? null : readNumber(session.totalCostUsd);
   const totalTokenUsage = readNumber(session.totalTokenUsage);
   const contextTokens = readNumber(session.contextTokens);
   const contextWindow = readNumber(session.contextWindow);
   const parts: string[] = [];
 
-  if (totalCostUsd !== null && totalCostUsd > 0) {
+  if (totalMoney && totalMoney.amount > 0) {
+    const cost = formatMoney(totalMoney.amount, totalMoney.currency);
+    parts.push(presentationText(localizer, 'session.presentation.controls.spend.taskCost', `本任务 ${cost}`, { cost }));
+  } else if (totalCostUsd !== null && totalCostUsd > 0) {
     const cost = formatUsd(totalCostUsd);
     parts.push(presentationText(localizer, 'session.presentation.controls.spend.taskCost', `本任务 ${cost}`, { cost }));
   }
@@ -332,6 +345,17 @@ function readNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function readSessionMoney(value: unknown): SessionControlsMoneyLike | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Partial<SessionControlsMoneyLike>;
+  return typeof record.amount === 'number'
+    && Number.isFinite(record.amount)
+    && record.amount >= 0
+    && (record.currency === 'CNY' || record.currency === 'USD')
+    ? { amount: record.amount, currency: record.currency }
+    : null;
+}
+
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
@@ -525,10 +549,15 @@ function formatPercent(value: number): string {
 }
 
 function formatUsd(value: number): string {
-  if (value >= 10) return `$${Math.round(value)}`;
-  if (value >= 0.01) return `$${value.toFixed(2)}`;
-  if (value >= 0.001) return `$${value.toFixed(3)}`;
-  return '<$0.001';
+  return formatMoney(value, 'USD');
+}
+
+function formatMoney(value: number, currency: SessionControlsMoneyLike['currency']): string {
+  const symbol = currency === 'CNY' ? '¥' : '$';
+  if (value >= 10) return `${symbol}${Math.round(value)}`;
+  if (value >= 0.01) return `${symbol}${value.toFixed(2)}`;
+  if (value >= 0.001) return `${symbol}${value.toFixed(3)}`;
+  return `<${symbol}0.001`;
 }
 
 function formatNumber(value: number): string {

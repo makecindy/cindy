@@ -1072,6 +1072,12 @@ export const scheduleRuns = sqliteTable(
     /** 新版区域真实费用与订阅价值；旧 USD 列只做历史兼容。 */
     costAmount: real('cost_amount').notNull().default(0),
     estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
+    /** estimated_value_amount 中来自自定义 Provider SDK 自报金额的子集。 */
+    sdkEstimatedValueAmount: real('sdk_estimated_value_amount').notNull().default(0),
+    /** 1 表示快照写入时已显式区分自定义 Provider SDK 估值；0 为升级前未知。 */
+    costProviderAttributionVersion: integer('cost_provider_attribution_version')
+      .notNull()
+      .default(1),
     costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
     costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /**

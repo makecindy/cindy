@@ -293,7 +293,7 @@ describe('sidebar nested namespace contract', () => {
     );
     expect(exposedNestedKeys(localDbBody, 'messages')).toEqual(
       expect.arrayContaining([
-        'list', 'around', 'aroundClientId', 'estimatedSessionValue',
+        'list', 'around', 'aroundClientId', 'estimatedSessionValue', 'estimatedSessionValueBatch',
         'onCreated', 'onDeleted', 'onErrorPersisted',
       ]),
     );

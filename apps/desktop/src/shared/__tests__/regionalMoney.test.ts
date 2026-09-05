@@ -77,11 +77,28 @@ describe('regional money', () => {
     });
   });
 
+  it('keeps SDK estimates distinct from subscription value', () => {
+    expect(usdMoney(3, 'value-estimate', 'sdk-estimate')).toEqual({
+      amount: 3,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['sdk-estimate'],
+    });
+  });
+
+  it('keeps provider reference estimates distinct from subscription value', () => {
+    expect(usdMoney(3, 'value-estimate', 'reference-price')).toEqual({
+      amount: 3,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['reference-price'],
+    });
+  });
+
   it('propagates approximation and reasons while adding same-currency values', () => {
-    const total = addRegionalMoney([
-      usdMoney(3),
-      usdMoney(1, 'value-estimate', 'legacy-usd'),
-    ]);
+    const total = addRegionalMoney([usdMoney(3), usdMoney(1, 'value-estimate', 'legacy-usd')]);
     expect(total).toMatchObject({
       amount: 4,
       currency: 'USD',
@@ -92,9 +109,7 @@ describe('regional money', () => {
   });
 
   it('rejects mixed currencies instead of silently combining them', () => {
-    expect(() => addRegionalMoney([cnyActual(1), usdMoney(1)])).toThrow(
-      /different currencies/,
-    );
+    expect(() => addRegionalMoney([cnyActual(1), usdMoney(1)])).toThrow(/different currencies/);
   });
 
   it('keeps actual cost when an incompatible estimate is present on read', () => {
@@ -111,10 +126,7 @@ describe('regional money', () => {
   });
 
   it('prefers an explicit ledger currency for mixed historical actual costs', () => {
-    const total = addCompatibleRegionalMoney(
-      [cnyActual(3), usdMoney(2)],
-      'USD',
-    );
+    const total = addCompatibleRegionalMoney([cnyActual(3), usdMoney(2)], 'USD');
 
     expect(total).toEqual(usdMoney(2));
   });
@@ -132,6 +144,26 @@ describe('regional money', () => {
       approximate: true,
       kind: 'value-estimate',
       estimateReasons: ['subscription-value'],
+    });
+  });
+
+  it('does not relabel an SDK estimate as subscription value', () => {
+    expect(asValueEstimateMoney(usdMoney(1, 'value-estimate', 'sdk-estimate'))).toEqual({
+      amount: 1,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['sdk-estimate'],
+    });
+  });
+
+  it('does not relabel a provider reference estimate as subscription value', () => {
+    expect(asValueEstimateMoney(usdMoney(1, 'value-estimate', 'reference-price'))).toEqual({
+      amount: 1,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['reference-price'],
     });
   });
 });

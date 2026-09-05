@@ -285,7 +285,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         // 1. 拉 manifest（不带 dev fallback —— dev mode 归属在 Boss 2 包壳层）
         let manifest = getCachedManifest();
         if (!manifest) manifest = await fetchManifest(undefined, opts?.signal);
-        
+
         // 2. manifest 获取失败时，检查本地已验证版本（离线 fallback）
         if (!manifest) {
           // Optional assets (currently Pi) must remain disabled when the

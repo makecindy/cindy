@@ -174,10 +174,20 @@ export async function recordTurnCostOnMessage(
     money: RegionalMoney;
     turnUsageDetails?: TurnUsageDetails | null;
     turnOrigin?: SendOrigin;
+    turnCostIsCustomProvider?: boolean;
+    turnCostProviderId?: string | null;
   },
   deps: TurnCostDeps = defaultDeps,
 ): Promise<boolean> {
-  const { sessionId, clientId, money, turnUsageDetails, turnOrigin } = args;
+  const {
+    sessionId,
+    clientId,
+    money,
+    turnUsageDetails,
+    turnOrigin,
+    turnCostIsCustomProvider,
+    turnCostProviderId,
+  } = args;
   if (!sessionId || !clientId) return false;
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return false;
@@ -217,6 +227,10 @@ export async function recordTurnCostOnMessage(
       if (turnOrigin?.kind === 'scheduler' && typeof turnOrigin.runId === 'string' && turnOrigin.runId) {
         patch.origin = turnOrigin;
       }
+      if (typeof turnCostIsCustomProvider === 'boolean') {
+        patch.turnCostIsCustomProvider = turnCostIsCustomProvider;
+      }
+      if (turnCostProviderId !== undefined) patch.turnCostProviderId = turnCostProviderId;
       if (turnUsageDetails) patch.turnUsageDetails = turnUsageDetails;
       const patchedMeta = await patchAgentMetaPreservingTurnDuration(
         deps,
@@ -245,6 +259,10 @@ export async function recordTurnCostOnMessage(
     const payload: MessageTurnCostPayload = {
       sessionId,
       clientId,
+      ...(typeof turnCostIsCustomProvider === 'boolean'
+        ? { turnCostIsCustomProvider }
+        : {}),
+      ...(turnCostProviderId !== undefined ? { turnCostProviderId } : {}),
       turnMoney: normalized,
       ...(normalized.currency === 'USD' ? { turnCostUsd: normalized.amount } : {}),
       turnCostIsEstimate: normalized.kind === 'value-estimate',
@@ -305,10 +323,18 @@ export async function recordTurnUsageOnMessage(
     sessionId: string;
     clientId: string;
     turnUsageDetails?: TurnUsageDetails | null;
+    turnCostIsCustomProvider?: boolean;
+    turnCostProviderId?: string | null;
   },
   deps: TurnUsageDeps = defaultDeps,
 ): Promise<boolean> {
-  const { sessionId, clientId, turnUsageDetails } = args;
+  const {
+    sessionId,
+    clientId,
+    turnUsageDetails,
+    turnCostIsCustomProvider,
+    turnCostProviderId,
+  } = args;
   if (!sessionId || !clientId || !turnUsageDetails) return false;
   const ownerScope = captureOwnerScope();
   try {
@@ -320,6 +346,10 @@ export async function recordTurnUsageOnMessage(
       const userTurnMoney =
         prior.money && prior.money.amount > 0 ? prior.money : null;
       const patch: Record<string, unknown> = { turnUsageDetails };
+      if (typeof turnCostIsCustomProvider === 'boolean') {
+        patch.turnCostIsCustomProvider = turnCostIsCustomProvider;
+      }
+      if (turnCostProviderId !== undefined) patch.turnCostProviderId = turnCostProviderId;
       if (userTurnMoney) {
         patch.userTurnCost = userTurnMoney;
         patch.userTurnCostIsEstimate = prior.hasEstimatedValue;
@@ -347,6 +377,10 @@ export async function recordTurnUsageOnMessage(
       const payload: MessageTurnCostPayload = {
         sessionId,
         clientId,
+        ...(typeof turnCostIsCustomProvider === 'boolean'
+          ? { turnCostIsCustomProvider }
+          : {}),
+        ...(turnCostProviderId !== undefined ? { turnCostProviderId } : {}),
         turnUsageDetails: persistedTurnUsageDetails,
         ...(userTurnMoney
           ? {
@@ -401,6 +435,8 @@ export async function recordSchedulerTurnCost(
     money: RegionalMoney;
     turnUsageDetails?: TurnUsageDetails | null;
     turnOrigin?: SendOrigin;
+    turnCostIsCustomProvider?: boolean;
+    turnCostProviderId?: string | null;
   },
   deps: SchedulerTurnCostFallbackDeps = defaultSchedulerTurnCostFallbackDeps,
 ): Promise<string | null> {
@@ -423,6 +459,8 @@ export async function recordSchedulerTurnCost(
     return await deps.recordDirect({
       runId: turnOrigin.runId,
       money: args.money,
+      turnUsageDetails: args.turnUsageDetails,
+      turnCostIsCustomProvider: args.turnCostIsCustomProvider,
     });
   } catch (err) {
     log.warn('recordSchedulerTurnCost fallback failed:', err instanceof Error ? err.message : String(err));

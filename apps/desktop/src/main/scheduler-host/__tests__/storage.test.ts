@@ -259,6 +259,7 @@ function baseRunRow(overrides: Partial<ScheduleRunRowLike> = {}): ScheduleRunRow
     estimatedValueUsd: 0,
     costAmount: 0,
     estimatedValueAmount: 0,
+    sdkEstimatedValueAmount: 0,
     costCurrency: null,
     costIsApproximate: false,
     costAttribution: 'legacy',

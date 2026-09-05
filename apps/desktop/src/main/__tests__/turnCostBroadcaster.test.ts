@@ -209,6 +209,27 @@ describe('recordTurnCostOnMessage', () => {
     });
   });
 
+  it('persists and broadcasts the provider classification captured at the turn boundary', async () => {
+    const { deps, broadcasts, patchCalls } = makeDeps(true);
+    await recordTurnCostOnMessage(
+      {
+        ...ARGS,
+        turnCostIsCustomProvider: true,
+        turnCostProviderId: 'my-provider',
+      },
+      deps,
+    );
+
+    expect(patchCalls[0]?.patch).toMatchObject({
+      turnCostIsCustomProvider: true,
+      turnCostProviderId: 'my-provider',
+    });
+    expect(broadcasts[0]).toMatchObject({
+      turnCostIsCustomProvider: true,
+      turnCostProviderId: 'my-provider',
+    });
+  });
+
   it('较晚到达的 token 明细保留同消息先落下的完整整轮耗时', async () => {
     const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
     const { deps, broadcasts, patchCalls } = makeDeps(
@@ -463,6 +484,27 @@ describe('recordTurnUsageOnMessage', () => {
     expect(payload.userTurnCostUsd).toBeUndefined();
   });
 
+  it('persists and broadcasts provider attribution on token-only turns', async () => {
+    const { deps, broadcasts, patchCalls } = makeDeps(true);
+    await recordTurnUsageOnMessage(
+      {
+        ...USAGE_ARGS,
+        turnCostIsCustomProvider: true,
+        turnCostProviderId: 'my-provider',
+      },
+      deps,
+    );
+
+    expect(patchCalls[0]?.patch).toMatchObject({
+      turnCostIsCustomProvider: true,
+      turnCostProviderId: 'my-provider',
+    });
+    expect(broadcasts[0]).toMatchObject({
+      turnCostIsCustomProvider: true,
+      turnCostProviderId: 'my-provider',
+    });
+  });
+
   it('明细缺省(整轮 0 token)→ 不落库不广播，绝不写空对象', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     await expect(
@@ -698,6 +740,8 @@ describe('recordSchedulerTurnCost', () => {
     expect(recordDirect).toHaveBeenCalledWith({
       runId: 'run-1',
       money: usdMoney(0.42),
+      turnUsageDetails: undefined,
+      turnCostIsCustomProvider: undefined,
     });
   });
 
@@ -752,6 +796,8 @@ describe('recordSchedulerTurnCost', () => {
     expect(recordDirect).toHaveBeenCalledWith({
       runId: 'run-1',
       money: usdMoney(0),
+      turnUsageDetails: undefined,
+      turnCostIsCustomProvider: undefined,
     });
   });
 });

@@ -11,6 +11,8 @@ import { getDbClient } from '../localDb/client/current';
 import { scheduleRuns } from '../localDb/schema';
 import { createLogger } from '../logger';
 import { legacyUsdMoney, normalizeRegionalMoney } from '../../shared/regionalMoney.js';
+import { sdkEstimatedValuePart } from '../../shared/customProviderBilling.js';
+import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 
 const log = createLogger('runCostLedger');
 
@@ -18,6 +20,7 @@ interface RunCostEntry {
   runId: string;
   costAmount: number;
   estimatedValueAmount: number;
+  sdkEstimatedValueAmount: number;
   currency: 'CNY' | 'USD';
   approximate: boolean;
 }
@@ -28,6 +31,7 @@ export interface ScheduleRunCostDelta {
   runId: string;
   costAmountDelta: number;
   estimatedValueAmountDelta: number;
+  sdkEstimatedValueAmountDelta: number;
   currency: 'CNY' | 'USD';
   approximate: boolean;
 }
@@ -52,11 +56,23 @@ function runCostEntry(meta: Record<string, unknown>): RunCostEntry | null {
       ? legacyUsdMoney(finitePositive(meta.turnCostUsd))
       : undefined);
   if (!money || money.amount <= 0) return null;
-  const isEstimate = meta.turnCostIsEstimate === true || money.kind === 'value-estimate';
+  const turnUsageDetails = normalizeTurnUsageDetails(meta.turnUsageDetails);
+  const sdkEstimatedValueMoney = sdkEstimatedValuePart(
+    money,
+    turnUsageDetails?.perModelCost?.map((entry) => entry.money),
+    meta.turnCostIsCustomProvider === true,
+  );
+  const isHistoricalCustomProviderSdkCost =
+    money.kind === 'actual-cost' && sdkEstimatedValueMoney !== null;
+  const isEstimate =
+    meta.turnCostIsEstimate === true ||
+    money.kind === 'value-estimate' ||
+    isHistoricalCustomProviderSdkCost;
   return {
     runId,
     costAmount: isEstimate ? 0 : money.amount,
     estimatedValueAmount: isEstimate ? money.amount : 0,
+    sdkEstimatedValueAmount: isEstimate ? (sdkEstimatedValueMoney?.amount ?? 0) : 0,
     currency: money.currency,
     // cost_is_approximate 只描述真实费用；订阅价值本身始终由
     // estimatedValueMoney 标成 value-estimate，不能污染真实费用。
@@ -80,11 +96,13 @@ export function computeScheduleRunCostDeltas(
       runId: entry.runId,
       costAmountDelta: 0,
       estimatedValueAmountDelta: 0,
+      sdkEstimatedValueAmountDelta: 0,
       currency: entry.currency,
       approximate: false,
     };
     current.costAmountDelta += direction * entry.costAmount;
     current.estimatedValueAmountDelta += direction * entry.estimatedValueAmount;
+    current.sdkEstimatedValueAmountDelta += direction * entry.sdkEstimatedValueAmount;
     // 这里是消息快照替换，不是新费用累加。只让 next 决定新的近似状态，
     // 避免 approximate 消息被精确金额替换后永久保持 true。
     if (direction === 1) current.approximate = entry.approximate;
@@ -95,7 +113,8 @@ export function computeScheduleRunCostDeltas(
   return [...changes.values()].filter(
     (change) =>
       Math.abs(change.costAmountDelta) >= MIN_RECORDED_COST_USD ||
-      Math.abs(change.estimatedValueAmountDelta) >= MIN_RECORDED_COST_USD,
+      Math.abs(change.estimatedValueAmountDelta) >= MIN_RECORDED_COST_USD ||
+      Math.abs(change.sdkEstimatedValueAmountDelta) >= MIN_RECORDED_COST_USD,
   );
 }
 
@@ -131,6 +150,12 @@ export async function applyScheduleRunCostMetaChange(
             THEN ${scheduleRuns.estimatedValueAmount}
           ELSE MAX(0, ${scheduleRuns.estimatedValueAmount} + ${change.estimatedValueAmountDelta})
         END`,
+        sdkEstimatedValueAmount: sql<number>`CASE
+          WHEN NOT ${sameCurrency} THEN ${scheduleRuns.sdkEstimatedValueAmount}
+          WHEN ${scheduleRuns.costAttribution} = 'direct'
+            THEN ${scheduleRuns.sdkEstimatedValueAmount}
+          ELSE MAX(0, ${scheduleRuns.sdkEstimatedValueAmount} + ${change.sdkEstimatedValueAmountDelta})
+        END`,
         costCurrency: sql`CASE
           WHEN NOT ${sameCurrency} THEN ${scheduleRuns.costCurrency}
           ELSE ${change.currency}
@@ -162,6 +187,8 @@ export async function applyScheduleRunCostMetaChange(
 export async function recordScheduleRunCostDirect(args: {
   runId: string;
   money: import('../../shared/regionalMoney.js').RegionalMoney;
+  turnUsageDetails?: import('../../shared/turnUsageDetails.js').TurnUsageDetails | null;
+  turnCostIsCustomProvider?: boolean;
 }): Promise<string | null> {
   const { runId } = args;
   const money = normalizeRegionalMoney(args.money);
@@ -170,7 +197,13 @@ export async function recordScheduleRunCostDirect(args: {
   // Match the message ledger's delta threshold; a tiny positive residue must
   // not create a direct-only run segment or a misleading changed broadcast.
   if (money.amount > 0 && amount === 0) return null;
-  const isEstimate = money.kind === 'value-estimate';
+  const sdkEstimatedValueMoney = sdkEstimatedValuePart(
+    money,
+    args.turnUsageDetails?.perModelCost?.map((entry) => entry.money),
+    args.turnCostIsCustomProvider,
+  );
+  const isEstimate = money.kind === 'value-estimate' || sdkEstimatedValueMoney !== null;
+  const sdkEstimatedValueAmount = sdkEstimatedValueMoney?.amount ?? 0;
 
   const db = getDbClient().drizzle;
   const [run] = await db
@@ -196,6 +229,7 @@ export async function recordScheduleRunCostDirect(args: {
     .set({
       costAmount: sql<number>`CASE WHEN ${sameCurrency} THEN MAX(0, ${scheduleRuns.costAmount} + ${isEstimate ? 0 : amount}) ELSE ${scheduleRuns.costAmount} END`,
       estimatedValueAmount: sql<number>`CASE WHEN ${sameCurrency} THEN MAX(0, ${scheduleRuns.estimatedValueAmount} + ${isEstimate ? amount : 0}) ELSE ${scheduleRuns.estimatedValueAmount} END`,
+      sdkEstimatedValueAmount: sql<number>`CASE WHEN ${sameCurrency} THEN MAX(0, ${scheduleRuns.sdkEstimatedValueAmount} + ${sdkEstimatedValueAmount}) ELSE ${scheduleRuns.sdkEstimatedValueAmount} END`,
       costCurrency: sql`CASE WHEN ${sameCurrency} THEN ${money.currency} ELSE ${scheduleRuns.costCurrency} END`,
       costIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${scheduleRuns.costIsApproximate} OR ${
         !isEstimate && money.approximate ? 1 : 0

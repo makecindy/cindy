@@ -242,7 +242,14 @@ function buildSessionMenuUsageSummary(session: RemoteSession): string | null {
             approximate: false,
             kind: 'actual-cost' as const,
           };
-  if (displayMoney) parts.push(formatMoney(displayMoney));
+  if (displayMoney) {
+    const amount = formatMoney(displayMoney);
+    parts.push(
+      displayMoney.kind === 'value-estimate' || displayMoney.approximate
+        ? i18n.t('session.menu.estimatedUsageSummary', { amount })
+        : amount,
+    );
+  }
   const contextTokens = readPositiveNumber(session.contextTokens);
   const contextWindow = readPositiveNumber(session.contextWindow);
   if (contextTokens !== null && contextWindow !== null) {

@@ -11,6 +11,7 @@ import type { PrStatusResult } from '@/lib/gitContext.types';
 let status: PrStatusResult | undefined;
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
   useTranslation: () => ({
     t: (key: string, opts?: { count?: number }) =>
       opts?.count != null ? `${key}:${opts.count}` : key,

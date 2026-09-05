@@ -149,7 +149,7 @@ describe('Feishu parent-chat file reuse', () => {
       fsSync.closeSync(allowedFd);
       fsSync.closeSync(rootFd);
     }
-  });
+  }, 15_000);
 
   it('rejects a source reached only through an intermediate directory link', async () => {
     const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-chain-link-'));

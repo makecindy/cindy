@@ -310,7 +310,9 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
       renderCounts.estimated += 1;
       const value = useSessionEstimatedValue(sessionId, true);
       return (
-        <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>
+        <div data-testid="estimated-value">
+          {value == null ? '' : value.estimatedValueMoney?.amount.toFixed(2)}
+        </div>
       );
     }
 
@@ -370,7 +372,9 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     function EstimatedValueProbe() {
       const value = useSessionEstimatedValue(sessionId, true);
       return (
-        <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>
+        <div data-testid="estimated-value">
+          {value == null ? '' : value.estimatedValueMoney?.amount.toFixed(2)}
+        </div>
       );
     }
 
@@ -400,6 +404,233 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     });
 
     await waitFor(() => expect(screen.getByTestId('estimated-value').textContent).toBe('2.50'));
+  });
+
+  it('keeps an unversioned Host value snapshot non-authoritative', async () => {
+    const sessionId = sid('legacy-value-projection');
+    sessionIds.push(sessionId);
+    (
+      window as unknown as {
+        electronAPI: {
+          onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
+        };
+      }
+    ).electronAPI = {
+      onUsageMessageTurnCost: () => () => undefined,
+    };
+    vi.mocked(messageService.estimatedSessionValue).mockResolvedValueOnce({
+      totalValueMoney: usdEstimate(0.42),
+      totalValueUsd: 0.42,
+      entries: [
+        {
+          clientId: 'legacy-estimate',
+          money: usdEstimate(0.42),
+          costUsd: 0.42,
+        },
+      ],
+    });
+
+    function EstimatedValueProbe() {
+      const value = useSessionEstimatedValue(sessionId, true, 'estimate', true);
+      return (
+        <div
+          data-testid="estimated-value-authority"
+          data-authoritative={String(value.authoritative)}
+        >
+          {value.estimatedValueMoney?.amount.toFixed(2) ?? ''}
+        </div>
+      );
+    }
+
+    render(
+      <ChatDisplaySnapshotProvider
+        value={displaySnapshot(sessionId, [], {
+          chatRealtime: true,
+          historyLoaded: false,
+          hasMoreMessages: true,
+        })}
+      >
+        <EstimatedValueProbe />
+      </ChatDisplaySnapshotProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('estimated-value-authority').textContent).toBe('0.42'),
+    );
+    expect(screen.getByTestId('estimated-value-authority').getAttribute('data-authoritative')).toBe(
+      'false',
+    );
+  });
+
+  it('keeps a versioned Host projection authoritative after merging a realtime turn cost', async () => {
+    const sessionId = sid('authoritative-live-merge');
+    sessionIds.push(sessionId);
+    (
+      window as unknown as {
+        electronAPI: {
+          onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
+        };
+      }
+    ).electronAPI = {
+      onUsageMessageTurnCost: (cb: TurnCostListener) => {
+        turnCostListener = cb;
+        return () => {
+          if (turnCostListener === cb) turnCostListener = null;
+        };
+      },
+    };
+    vi.mocked(messageService.estimatedSessionValue).mockResolvedValueOnce({
+      projectionVersion: 1,
+      totalValueMoney: usdEstimate(0.12),
+      totalValueUsd: 0.12,
+      entries: [
+        {
+          clientId: 'persisted-estimate',
+          money: usdEstimate(0.12),
+          costUsd: 0.12,
+        },
+      ],
+    });
+
+    function EstimatedValueProbe() {
+      const value = useSessionEstimatedValue(sessionId, true, 'hidden', false);
+      return (
+        <div
+          data-testid="authoritative-live-value"
+          data-authoritative={String(value.authoritative)}
+        >
+          {value.estimatedValueMoney?.amount.toFixed(2) ?? ''}
+        </div>
+      );
+    }
+
+    render(
+      <ChatDisplaySnapshotProvider
+        value={displaySnapshot(sessionId, [], {
+          chatRealtime: true,
+          historyLoaded: false,
+          hasMoreMessages: true,
+        })}
+      >
+        <EstimatedValueProbe />
+      </ChatDisplaySnapshotProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('authoritative-live-value').textContent).toBe('0.12'),
+    );
+    expect(screen.getByTestId('authoritative-live-value').getAttribute('data-authoritative')).toBe(
+      'true',
+    );
+
+    act(() => {
+      turnCostListener?.({
+        sessionId,
+        clientId: 'live-estimate',
+        turnMoney: usdEstimate(0.2),
+        turnCostUsd: 0.2,
+        turnCostIsEstimate: true,
+        turnUsageDetails: TURN_USAGE_DETAILS,
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('authoritative-live-value').textContent).toBe('0.32'),
+    );
+    expect(screen.getByTestId('authoritative-live-value').getAttribute('data-authoritative')).toBe(
+      'true',
+    );
+  });
+
+  it('keeps a versioned Host projection authoritative after makerChatStore cost updates', async () => {
+    const sessionId = sid('authoritative-remote-store-merge');
+    sessionIds.push(sessionId);
+    (
+      window as unknown as {
+        electronAPI: {
+          onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
+        };
+      }
+    ).electronAPI = {
+      onUsageMessageTurnCost: () => () => undefined,
+    };
+
+    const gatewayActual = {
+      ...assistantCostMessage('gateway-actual', 0.8),
+      turnMoney: {
+        amount: 0.8,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      } satisfies RegionalMoney,
+      turnCostIsEstimate: false,
+      turnCostIsCustomProvider: false,
+    } as ChatMessage;
+    const customSdkActual = {
+      ...assistantCostMessage('custom-sdk-actual', 0.2),
+      turnMoney: {
+        amount: 0.2,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      } satisfies RegionalMoney,
+      turnCostIsEstimate: false,
+      turnCostIsCustomProvider: true,
+    } as ChatMessage;
+    let storeSnapshot = {
+      ...makerChatStore.getSnapshot(sessionId),
+      messages: [gatewayActual],
+      historyLoaded: true,
+      hasMoreMessages: false,
+    };
+    let storeListener: (() => void) | null = null;
+    vi.spyOn(makerChatStore, 'getSnapshot').mockImplementation(() => storeSnapshot);
+    vi.spyOn(makerChatStore, 'subscribe').mockImplementation((_currentSessionId, listener) => {
+      storeListener = listener;
+      return () => {
+        if (storeListener === listener) storeListener = null;
+      };
+    });
+    vi.mocked(messageService.estimatedSessionValue).mockResolvedValueOnce({
+      projectionVersion: 1,
+      totalValueUsd: 0,
+      entries: [],
+    });
+
+    function EstimatedValueProbe() {
+      const value = useSessionEstimatedValue(sessionId, true, 'hidden', false);
+      return (
+        <div
+          data-testid="authoritative-store-value"
+          data-authoritative={String(value.authoritative)}
+        >
+          {value.excludedActualMoney?.amount.toFixed(2) ?? ''}
+        </div>
+      );
+    }
+
+    render(<EstimatedValueProbe />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('authoritative-store-value').getAttribute('data-authoritative'),
+      ).toBe('true'),
+    );
+
+    act(() => {
+      storeSnapshot = {
+        ...storeSnapshot,
+        messages: [gatewayActual, customSdkActual],
+      };
+      storeListener?.();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('authoritative-store-value').textContent).toBe('0.20'),
+    );
+    expect(screen.getByTestId('authoritative-store-value').getAttribute('data-authoritative')).toBe(
+      'true',
+    );
   });
 
   it('pauses direct turn-cost events while frozen and refreshes once when realtime resumes', async () => {
@@ -436,7 +667,9 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
       renderCounts.estimated += 1;
       const value = useSessionEstimatedValue(currentSessionId, true);
       return (
-        <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>
+        <div data-testid="estimated-value">
+          {value == null ? '' : value.estimatedValueMoney?.amount.toFixed(2)}
+        </div>
       );
     }
 
@@ -525,7 +758,9 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     function EstimatedValueProbe({ sessionId: currentSessionId }: { sessionId: string }) {
       const value = useSessionEstimatedValue(currentSessionId, true);
       return (
-        <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>
+        <div data-testid="estimated-value">
+          {value == null ? '' : value.estimatedValueMoney?.amount.toFixed(2)}
+        </div>
       );
     }
 

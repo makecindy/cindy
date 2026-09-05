@@ -346,6 +346,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'maker:interaction-dismissed',
       'maker:auto-permission:fallback',
       'maker:provider:changed',
+      'maker:custom-provider-billing:changed',
       'maker:agents:changed',
       'maker:schedule:event',
       'maker:orca:worker-changed',

@@ -2,7 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 5_000;
 const HELPER_START_TIMEOUT_MS = 5_000;
-const HELPER_PROBE_TIMEOUT_MS = 5_000;
+// Add-Type loads the CLR compiler and can take several seconds on a saturated
+// Windows runner. Keep the mutex already held while giving that cold path a
+// larger, bounded budget so a healthy helper is not mistaken for a timeout.
+const HELPER_PROBE_TIMEOUT_MS = 15_000;
 const HELPER_EXIT_TIMEOUT_MS = 2_000;
 const MAX_HELPER_OUTPUT_BYTES = 16 * 1024;
 

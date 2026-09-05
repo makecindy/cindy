@@ -198,6 +198,9 @@ function readDeviceSessionListMutationEpoch(deviceId: string): number {
 // 工作端拥有的 New Maker worktree 偏好按设备隔离；这里只是不持久化的显示镜像，
 // push 属 sessions topic，无 sessionId。唯一持久副本仍在被控端现有 Cindy 配置里。
 const newMakerWorktreePreferences = new Map<string, RemoteNewMakerWorktreePreference>();
+// 被控端自定义 Provider 费用偏好变更代次。偏好 push 不带 sessionId，详情页用该设备代次
+// 作为投影请求 key 的 fence，确保已打开的页面不会继续复用旧的 SDK 费用投影。
+const customProviderBillingRevisions = new Map<string, number>();
 // deviceId → canonical baseRepo → 工作端权威分支快照。分支与 checkbox 是两份独立镜像；
 // 任一分支 pull / push / write-back 都不得改动 newMakerWorktreePreferences。
 const newMakerWorktreeBranchPreferences = new Map<
@@ -4079,6 +4082,15 @@ export const remoteSessionStore = {
       if (snapshot !== null) this.setNewMakerWorktreeBranchPreference(deviceId, snapshot);
       return;
     }
+    if (channel === 'maker:custom-provider-billing:changed') {
+      if (!deviceId) return;
+      customProviderBillingRevisions.set(
+        deviceId,
+        (customProviderBillingRevisions.get(deviceId) ?? 0) + 1,
+      );
+      emit();
+      return;
+    }
     if (channel === 'local-db:sessions:created') {
       bumpDeviceSessionListMutationEpoch(deviceId);
       reseedHandlers.get(deviceId)?.forEach((handler) => handler());
@@ -4202,8 +4214,18 @@ export const remoteSessionStore = {
       const userTurnMoney = normalizeRemoteMoney(payload.userTurnMoney);
       const userTurnCostUsd = readNumber(payload, 'userTurnCostUsd');
       const userTurnCostIsEstimate = payload.userTurnCostIsEstimate === true;
+      const turnCostIsCustomProvider =
+        typeof payload.turnCostIsCustomProvider === 'boolean'
+          ? payload.turnCostIsCustomProvider
+          : undefined;
+      const turnCostProviderId =
+        typeof payload.turnCostProviderId === 'string' || payload.turnCostProviderId === null
+          ? payload.turnCostProviderId
+          : undefined;
       const basePatch: Record<string, unknown> = {
         ...(turnUsageDetails ? { turnUsageDetails } : {}),
+        ...(turnCostIsCustomProvider !== undefined ? { turnCostIsCustomProvider } : {}),
+        ...(turnCostProviderId !== undefined ? { turnCostProviderId } : {}),
       };
       if (userTurnMoney && userTurnMoney.amount > 0) {
         basePatch.userTurnCost = userTurnMoney;
@@ -4829,6 +4851,7 @@ export const remoteSessionStore = {
     shards.clear();
     newMakerWorktreePreferences.clear();
     newMakerWorktreeBranchPreferences.clear();
+    customProviderBillingRevisions.clear();
     messages.clear();
     emptySessionMessageStructureTokens.clear();
     livePlanSnapshots.clear();
@@ -4968,6 +4991,11 @@ export const remoteSessionStore = {
     });
     // 同值 push 仍需推进 revision：它可能比在途 pull 更新，必须让旧响应失去写权。
     emit();
+  },
+
+  getCustomProviderBillingRevision(deviceId: string | null | undefined): number {
+    if (!deviceId) return 0;
+    return customProviderBillingRevisions.get(deviceId) ?? 0;
   },
 
   getNewMakerWorktreePreference(
@@ -5657,6 +5685,15 @@ export function useRemoteSessionStoreVersion(): number {
   return usePausableRemoteSessionStoreSnapshot(
     'store-version',
     remoteSessionStore.getStoreVersion,
+  );
+}
+
+export function useCustomProviderBillingRevision(
+  deviceId: string | null | undefined,
+): number {
+  return useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.getCustomProviderBillingRevision(deviceId),
   );
 }
 

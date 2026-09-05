@@ -17,6 +17,7 @@ import {
 import type { AgentTaskStatus, AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
 import type { MobilePendingSendItem } from '@/session/pendingSendItems';
 import { normalizeRemoteMessages, type NormalizedRemoteMessage } from '@/session/messageNormalize';
+import type { MobileMessageBillingProjection } from '@/session/sessionBillingProjection';
 import type { RemoteMessage } from '@/session/types';
 import {
   buildSubagentAwareRenderItems,
@@ -74,12 +75,18 @@ export type MobileMessageRenderItem =
   // 回流时原地变实,不再跨 footer↔data 搬家(见 pendingSendItems.ts 的说明)。
   | MobilePendingSendItem;
 
+export type MobileMessageRenderOptions = MessageRenderOptions & {
+  autoResumePending?: Record<string, unknown> | null;
+  billingProjection?: MobileMessageBillingProjection;
+  sessionId?: string;
+};
+
 export function buildMobileMessageRenderItems(
   messages: readonly RemoteMessage[],
-  options: MessageRenderOptions & { autoResumePending?: Record<string, unknown> | null; sessionId?: string } = {},
+  options: MobileMessageRenderOptions = {},
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
 ): MobileMessageRenderItem[] {
-  const normalized = normalizeRemoteMessages(messages);
+  const normalized = normalizeRemoteMessages(messages, options.billingProjection);
   scopeUnsettledToolsToActiveTail(normalized);
   markTurnFinalAssistants(normalized, options.isSessionStreaming === true);
   if (options.autoResumePending) {

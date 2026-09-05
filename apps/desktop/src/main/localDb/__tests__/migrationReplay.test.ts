@@ -185,6 +185,71 @@ describeMigrationReplay('migration replay', () => {
     }
   });
 
+  it('marks pre-0100 Scheduler cost snapshots as legacy provider attribution', () => {
+    const { db, cleanup } = createTempDb();
+    const stagedDir = mkdtempSync(path.join(tmpdir(), 'xdmaker-drizzle-pre0100-'));
+    try {
+      for (const migration of listMigrations(drizzleDir())) {
+        if (migration.seq >= 100) continue;
+        copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+        if (migration.tsScriptPath) {
+          mkdirSync(path.join(stagedDir, 'scripts'), { recursive: true });
+          copyFileSync(
+            migration.tsScriptPath,
+            path.join(stagedDir, 'scripts', path.basename(migration.tsScriptPath)),
+          );
+        }
+      }
+      runMigrationReplay(db, { drizzleDir: stagedDir });
+      db.exec(`
+        INSERT INTO schedules (
+          id, name, prompt, cron_expr, timezone, agent_kind, created_at, updated_at
+        ) VALUES (
+          'snapshot-version-schedule', 'snapshot version', 'test', '* * * * *', 'UTC',
+          'claude-code', 1, 1
+        );
+        INSERT INTO schedule_runs (
+          id, schedule_id, fired_at, status, cost_attribution
+        ) VALUES
+          ('legacy-direct', 'snapshot-version-schedule', 1, 'success', 'direct'),
+          ('legacy-mixed', 'snapshot-version-schedule', 2, 'success', 'mixed');
+      `);
+
+      runMigrationReplay(db, { drizzleDir: drizzleDir() });
+
+      expect(
+        db
+          .prepare(
+            `SELECT id, cost_provider_attribution_version
+             FROM schedule_runs
+             ORDER BY id`,
+          )
+          .all(),
+      ).toEqual([
+        { id: 'legacy-direct', cost_provider_attribution_version: 0 },
+        { id: 'legacy-mixed', cost_provider_attribution_version: 0 },
+      ]);
+
+      db.prepare(
+        `INSERT INTO schedule_runs (id, schedule_id, fired_at, status, cost_attribution)
+         VALUES ('current-direct', 'snapshot-version-schedule', 3, 'success', 'direct')`,
+      ).run();
+      expect(
+        db
+          .prepare(
+            `SELECT cost_provider_attribution_version
+             FROM schedule_runs
+             WHERE id = 'current-direct'`,
+          )
+          .pluck()
+          .get(),
+      ).toBe(1);
+    } finally {
+      rmSync(stagedDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
   it('upgrades a schema v39 Orca workflow database through the 0040 script', () => {
     const { db, cleanup } = createTempDb();
     try {

@@ -292,6 +292,7 @@ export interface ScheduleRun {
   costMoney?: ScheduleRunMoney;
   /** 新版区域订阅价值估算；不代表实际账单。 */
   estimatedValueMoney?: ScheduleRunMoney;
+  sdkEstimatedValueMoney?: ScheduleRunMoney;
   /** 本次 run 关联 assistant 消息的 Token 用量总和，供无法可靠计价时展示。 */
   totalTokens?: number;
   /**
@@ -325,7 +326,12 @@ export interface ScheduleRunMoney {
   approximate: boolean;
   kind: 'actual-cost' | 'value-estimate';
   estimateReasons?: Array<
-    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency'
+    | 'fixed-fx'
+    | 'legacy-usd'
+    | 'subscription-value'
+    | 'reference-price'
+    | 'inferred-currency'
+    | 'sdk-estimate'
   >;
 }
 
