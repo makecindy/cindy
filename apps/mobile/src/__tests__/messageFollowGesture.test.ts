@@ -124,19 +124,19 @@ describe('streaming follow yields to the reader', () => {
     },
   );
 
-  it('resumes a dead-zone drag without letting its native acknowledgement unpin follow', () => {
+  it.each([1196, 1194])('preserves a dead-zone drag through a trailing offset of %i after large growth', (trailingOffset) => {
     const h = harness();
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleScroll(h.scrollEvent(1196));
-    h.handleContentSize(400, 2100);
+    h.handleContentSize(400, 2500);
     h.handleScrollEndDrag();
     // The trailing native event may arrive before the release verifier's first frame.
-    h.handleScroll(h.scrollEvent(1196));
+    h.handleScroll(h.scrollEvent(trailingOffset));
     settle();
     expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
-    h.handleScroll(h.scrollEvent(1300));
+    h.handleScroll(h.scrollEvent(1700));
     expect(h.state.nearBottomRef.current).toBe(true);
-    h.handleContentSize(400, 2140);
+    h.handleContentSize(400, 2540);
     expect(h.scrollToEnd).toHaveBeenCalledTimes(2);
   });
 
@@ -155,6 +155,35 @@ describe('streaming follow yields to the reader', () => {
     h.handleMomentumScrollEnd();
     settle();
     expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the drag dead zone authoritative when the tail grows beyond the distance threshold', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleContentSize(400, 2500);
+    h.handleScroll(h.scrollEvent(1194));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    h.handleScroll(h.scrollEvent(1190));
+    expect(h.state.nearBottomRef.current).toBe(false);
+    h.handleScrollEndDrag();
+    settle();
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it('still unpins a real momentum fling after a short drag', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleScrollEndDrag();
+    h.handleMomentumScrollBegin();
+    h.handleScroll(h.scrollEvent(900));
+    expect(h.state.nearBottomRef.current).toBe(false);
+    h.handleContentSize(400, 2500);
+    h.handleMomentumScrollEnd();
+    settle();
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
   });
 
   it('blocks a previously scheduled circuit recovery while the finger owns the viewport', () => {

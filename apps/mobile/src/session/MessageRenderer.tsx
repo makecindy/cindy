@@ -2140,9 +2140,20 @@ export function MessageRenderer({
           || isMomentumScrollingRef.current
           || historyTouchStartYRef.current !== null,
       });
+      // The explicit drag dead zone above owns unpinning while a finger is down. After release,
+      // keep that intent until the existing verifier catches up with growth during the gesture;
+      // a tiny trailing native delta must not become an unpin merely because the tail grew far
+      // away. Momentum still uses the direction/distance fallback to recognize a real fling.
+      const preserveFollowIntent = nearBottomRef.current && (
+        isDraggingRef.current
+        || historyTouchStartYRef.current !== null
+        || (!isMomentumScrollingRef.current && (
+          followVerifyFrameRef.current !== null || followVerifyTimerRef.current !== null
+        ))
+      );
       const nearBottom = preserveHistoryBrowseIntent
         ? false
-        : resolveMobileNearBottomOnScroll({
+        : preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
           metrics,
           programmaticScrollInFlight: programmaticScrollInFlightRef.current,
