@@ -12,7 +12,13 @@
  * FormField（label + 说明 + 错误行）首批调用点未用到，本张不建。
  */
 
-import { useState, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from 'react';
+import {
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type Ref,
+  type TextareaHTMLAttributes,
+} from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -84,6 +90,10 @@ const ERROR_CHROME =
 export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size' | 'onChange'> {
   value: string;
   onChange: (v: string) => void;
+  /** 绛兼潵鍏ョ粍浠剁殑 DOM input锛屼緥濡傝缃紑绐楃殑深链 focus。 */
+  inputRef?: Ref<HTMLInputElement>;
+  /** 兼容 SettingsTextInput 的可读名称别名，映射为原生 aria-label。 */
+  ariaLabel?: string;
   size?: InputSize;
   /** 底色档:默认 §4 规定的 `--surface-elevated`;`ivory` 见 SURFACE_STYLES 注释。 */
   surface?: InputSurface;
@@ -116,6 +126,8 @@ export function Input({
   autoComplete,
   spellCheck,
   style,
+  inputRef,
+  ariaLabel,
   ...rest
 }: InputProps) {
   const { t } = useTranslation();
@@ -146,6 +158,8 @@ export function Input({
     <div className={cn('relative', className)}>
       <input
         {...rest}
+        ref={inputRef}
+        aria-label={ariaLabel}
         type={secret ? (revealed ? 'text' : 'password') : type}
         value={value}
         onChange={(e) => onChange(e.target.value)}

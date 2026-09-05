@@ -543,7 +543,7 @@ import {
 } from '../maker-host/pi-package-mutation-grant.js';
 
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
-import { isIpcError } from '../../shared/ipc-errors.js';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import {
   runPiPackageListIpcBoundary,
   runPiPackageMutationIpcBoundary,
@@ -724,6 +724,10 @@ import {
 } from './agentHandoff.js';
 import {
   createContextOverflowRollover,
+  effectiveContextWindow,
+  hasModelWindowContextToProtect,
+  isContextOverflowErrorData,
+  isOversizedHistoryErrorData,
   isPiPromptRpcTimeoutError,
   lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
@@ -1040,6 +1044,10 @@ import { handleSessionEvent, type SessionEventDependencies } from './sessionEven
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
+
+function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
+  return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
+}
 
 async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<boolean> {
   // Slash/@ palettes are read-only device-link surfaces. Their remote invokes must not
@@ -14762,6 +14770,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: sessions.fastMode,
           workingDir: sessions.workingDir,
           contextTokens: sessions.contextTokens,
+          contextWindow: sessions.contextWindow,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
@@ -15201,7 +15210,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         if (!liveSessionBeforeRouteChange && runtimeStatus.remoteHostId) {
           throwIpcError(
-            'PRECONDITION_FAILED',
+            localModelWindowSwitchErrorCode('MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'),
             'cold remote Pi runtime cannot verify the target window; runtime selection was not changed',
           );
         }
@@ -15210,14 +15219,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             await rehydrateColdPiRuntimeForWindowVerification(sessionId);
           } catch {
             throwIpcError(
-              'PRECONDITION_FAILED',
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
               'Pi current runtime could not be verified; runtime selection was not changed',
             );
           }
           liveSessionBeforeRouteChange = maker.getSession(sessionId);
           if (!liveSessionBeforeRouteChange) {
             throwIpcError(
-              'PRECONDITION_FAILED',
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
               'Pi current runtime could not be verified; runtime selection was not changed',
             );
           }
@@ -15228,7 +15237,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       }
       let targetContextWindow: number | undefined;
+      let currentContextWindow: number | undefined;
       let verifiedCurrentWindow: number | undefined;
+      let modelWindowContextNeedsProtection = false;
       let modelWindowRebuilt = false;
       if (runtimeAgentKind && (runtimeRouteChanged || confirmedContextWindow !== undefined)) {
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
@@ -15247,7 +15258,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             runtimeAgentKind,
           ) ?? undefined;
         const liveCurrentWindow = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextWindow;
-        // Pi's effective window is a runtime route fact; catalog/persisted values may be larger.
+        const reportedCurrentWindow =
+          typeof liveCurrentWindow === 'number' &&
+          Number.isFinite(liveCurrentWindow) &&
+          liveCurrentWindow > 0
+            ? liveCurrentWindow
+            : typeof runtimeStatus.contextWindow === 'number' &&
+                Number.isFinite(runtimeStatus.contextWindow) &&
+                runtimeStatus.contextWindow > 0
+              ? runtimeStatus.contextWindow
+              : 0;
+        // Current-session usage has already been route-capped by the harness when a verified
+        // catalog ceiling exists. If the current route has no verified catalog entry, its live
+        // (or last persisted) effective window is still the best fact about the running context.
+        // Pi remains live-only because its provider/model reload can change the effective window.
+        currentContextWindow =
+          runtimeAgentKind === 'pi'
+            ? typeof liveCurrentWindow === 'number' &&
+              Number.isFinite(liveCurrentWindow) &&
+              liveCurrentWindow > 0
+              ? liveCurrentWindow
+              : undefined
+            : effectiveContextWindow(
+                currentRuntimeModel,
+                reportedCurrentWindow,
+                catalogCurrentWindow,
+              ) || undefined;
+        // Pi 的有效窗口只能相信运行时上报值；其它引擎的缩窗闸门只接受目录核实值。
         verifiedCurrentWindow =
           runtimeAgentKind === 'pi'
             ? typeof liveCurrentWindow === 'number' &&
@@ -15297,6 +15334,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const contextTokens = liveUsageIsAuthoritative
           ? verifiedLiveContextTokens
           : (persistedContextTokens ?? 0);
+        modelWindowContextNeedsProtection = hasModelWindowContextToProtect(
+          contextTokensKnown,
+          contextTokens,
+        );
         const modelSwitchPlan = planUserRuntimeModelSwitch({
           agentKind: runtimeAgentKind ?? 'claude-code',
           model,
@@ -15319,7 +15360,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         if (modelSwitchPlan.outcome === 'reject') {
           throwIpcError(
-            'PRECONDITION_FAILED',
+            localModelWindowSwitchErrorCode('MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED'),
             'remote model-window rebuild is unsupported; runtime selection was not changed',
           );
         }
@@ -15332,7 +15373,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ) {
           if (!contextOverflowRolloverHolder) {
             throwIpcError(
-              'PRECONDITION_FAILED',
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_PROTECTION_UNAVAILABLE'),
               'model window switch protection is unavailable; runtime selection was not changed',
             );
           }
@@ -15383,7 +15424,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
             if (!confirmationContextTokens || confirmationContextTokens <= 0) {
               throwIpcError(
-                'PRECONDITION_FAILED',
+                localModelWindowSwitchErrorCode('MODEL_CONTEXT_USAGE_UNKNOWN'),
                 'verified model-window confirmation usage is unavailable',
               );
             }
@@ -15399,7 +15440,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           if (preparation === 'remote-unsupported') {
             throwIpcError(
-              'PRECONDITION_FAILED',
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED'),
               'this remote task cannot safely rebuild context for the smaller model window',
             );
           }
@@ -15408,13 +15449,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
             }
             throwIpcError(
-              'PRECONDITION_FAILED',
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
               'current context window is unknown; runtime selection was not changed',
             );
           }
           if (preparation === 'in-flight') {
             throwIpcError(
-              'PRECONDITION_FAILED',
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_PREPARATION_IN_PROGRESS'),
               'context preparation is already running; retry the model switch after it finishes',
             );
           }
@@ -15587,7 +15628,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (!piSessionAfterRouteChange) {
             restoreControlStores();
             throwIpcError(
-              'PRECONDITION_FAILED',
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'),
               'Pi target runtime could not be verified; runtime selection was not accepted',
             );
           }
@@ -15595,16 +15636,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (typeof finalPiWindow !== 'number' || finalPiWindow <= 0) {
             await closeRejectedPiRuntime('final context window was not verified');
             throwIpcError(
-              'PRECONDITION_FAILED',
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'),
               'Pi did not expose its verified final context window; runtime selection was not accepted',
             );
           }
           targetContextWindow = finalPiWindow;
-          if (finalPiWindow < verifiedCurrentWindow!) {
+          if (
+            modelWindowContextNeedsProtection &&
+            typeof verifiedCurrentWindow === 'number' &&
+            finalPiWindow < verifiedCurrentWindow!
+          ) {
             if (!contextOverflowRolloverHolder) {
               await closeRejectedPiRuntime('model-window protection was unavailable');
               throwIpcError(
-                'PRECONDITION_FAILED',
+                localModelWindowSwitchErrorCode('MODEL_WINDOW_PROTECTION_UNAVAILABLE'),
                 'model window switch protection is unavailable; runtime selection was not changed',
               );
             }
@@ -15648,8 +15693,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               targetContextWindow = finalPiWindow;
             } else if (finalPreparation !== 'not-needed') {
               await closeRejectedPiRuntime(`final-window preparation returned ${finalPreparation}`);
+              const finalPreparationCode =
+                finalPreparation === 'remote-unsupported'
+                  ? 'MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED'
+                  : finalPreparation === 'busy'
+                    ? 'MODEL_SWITCH_TASK_RUNNING'
+                    : finalPreparation === 'in-flight'
+                      ? 'MODEL_WINDOW_PREPARATION_IN_PROGRESS'
+                      : 'MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN';
               throwIpcError(
-                'PRECONDITION_FAILED',
+                localModelWindowSwitchErrorCode(finalPreparationCode),
                 finalPreparation === 'remote-unsupported'
                   ? 'remote model-window rebuild is unsupported; runtime selection was not changed'
                   : `Pi final-window context preparation failed: ${finalPreparation}`,

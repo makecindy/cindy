@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createContextOverflowRollover,
+  effectiveContextWindow,
   effectivePiContextWindow,
   findLatestRebuildableError,
+  hasModelWindowContextToProtect,
   lookupVerifiedContextWindow,
   isContextOverflowErrorData,
   isOversizedHistoryErrorData,
@@ -60,6 +62,38 @@ describe('isContextOverflowErrorData', () => {
           'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
       }),
     ).toBe(false);
+  });
+});
+
+describe('effectiveContextWindow', () => {
+  it('uses the running route report when the current catalog window is unverified', () => {
+    expect(effectiveContextWindow('gpt-5.6-sol', 258_400, null)).toBe(258_400);
+  });
+
+  it('keeps a verified route window authoritative over an inflated runtime report', () => {
+    expect(effectiveContextWindow('gpt-5.6-sol', 1_000_000, 372_000)).toBe(372_000);
+  });
+
+  it('switches the reported 258400-token task directly to a verified larger window', () => {
+    const currentContextWindow = effectiveContextWindow('gpt-5.6-sol', 258_400, null);
+
+    expect(
+      shouldRebuildForModelWindowSwitch({
+        contextTokens: 90_789,
+        currentContextWindow,
+        targetContextWindow: 372_000,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('hasModelWindowContextToProtect', () => {
+  it('skips the window gate only for authoritative empty context', () => {
+    expect(hasModelWindowContextToProtect(true, 0)).toBe(false);
+    expect(hasModelWindowContextToProtect(true, 90_789)).toBe(true);
+    expect(hasModelWindowContextToProtect(true, -1)).toBe(true);
+    expect(hasModelWindowContextToProtect(true, Number.NaN)).toBe(true);
+    expect(hasModelWindowContextToProtect(false, 0)).toBe(true);
   });
 });
 

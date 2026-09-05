@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CODEX_INLINE_IMAGE_STRIP_MIN_CHARS,
@@ -16,6 +16,7 @@ import {
   rewriteOversizedToolOutputImages,
   sanitizeCodexForkRollout,
   sanitizeCodexForkRolloutFile,
+  sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
 
 function bigPngDataUri(chars = CODEX_INLINE_IMAGE_STRIP_MIN_CHARS): string {
@@ -170,6 +171,290 @@ describe('sanitizeCodexForkRollout', () => {
       expect(stats.bytesAfter).toBeLessThan(stats.bytesBefore);
       expect(stats.strippedBytes).toBeGreaterThan(CODEX_INLINE_IMAGE_STRIP_MIN_CHARS - 64);
     } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('atomically sanitizes an unloaded child rollout in place', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-test-'));
+    const rollout = path.join(dir, 'rollout-child.jsonl');
+    await fs.writeFile(
+      rollout,
+      [
+        JSON.stringify({ payload: { type: 'message', role: 'user', content: 'hello' } }),
+        JSON.stringify({ payload: { type: 'reasoning', encrypted_content: 'gAAA' } }),
+        JSON.stringify({ payload: { type: 'message', role: 'assistant', content: 'world' } }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+    try {
+      const stats = await sanitizeCodexForkRolloutFileInPlace(rollout);
+      const out = await fs.readFile(rollout, 'utf8');
+      expect(out).toContain('hello');
+      expect(out).toContain('world');
+      expect(out).not.toContain('encrypted_content');
+      expect(stats.unsafeLines).toBe(1);
+      expect((await fs.readdir(dir)).filter((name) => name.includes('.cindy-sanitize-'))).toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('materializes and sanitizes lazy history_base while preserving the source bytes', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-'));
+    const source = path.join(dir, 'rollout-source-thread.jsonl');
+    const child = path.join(dir, 'rollout-child-thread.jsonl');
+    const sourceText = [
+      JSON.stringify({ ordinal: 0, type: 'session_meta', payload: { id: 'source-thread', session_id: 'source-thread' } }),
+      JSON.stringify({ ordinal: 1, type: 'response_item', payload: { type: 'message', role: 'user', content: 'hello' } }),
+      JSON.stringify({ ordinal: 2, type: 'response_item', payload: { type: 'reasoning', encrypted_content: 'gAAA' } }),
+      JSON.stringify({ ordinal: 3, type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'world' } }),
+    ].join('\n') + '\n';
+    const childText = [
+      JSON.stringify({
+        ordinal: 4,
+        type: 'session_meta',
+        payload: {
+          id: 'child-thread',
+          session_id: 'child-thread',
+          model_provider: 'target-provider',
+          history_base: {
+            thread_id: 'source-thread',
+            end_ordinal_exclusive: 4,
+            end_byte_offset: Buffer.byteLength(sourceText),
+          },
+        },
+      }),
+      JSON.stringify({ ordinal: 5, type: 'event_msg', payload: { type: 'thread_settings_applied' } }),
+    ].join('\n') + '\n';
+    await fs.writeFile(source, sourceText, 'utf8');
+    await fs.writeFile(child, childText, 'utf8');
+    try {
+      const stats = await sanitizeCodexForkRolloutFileInPlace(child, {
+        resolveHistoryBaseRollout: (threadId) => threadId === 'source-thread' ? source : null,
+      });
+
+      const output = await fs.readFile(child, 'utf8');
+      expect(output).not.toContain('history_base');
+      expect(output).toContain('hello');
+      expect(output).toContain('world');
+      expect(output).not.toContain('encrypted_content');
+      expect(stats.unsafeLines).toBe(1);
+      expect(stats.bytesAfter).toBeGreaterThan(Buffer.byteLength(childText));
+      expect(await fs.readFile(source, 'utf8')).toBe(sourceText);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed instead of rewriting an unsafe lazy child tail', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-tail-'));
+    const child = path.join(dir, 'rollout-child.jsonl');
+    const childText = [
+      JSON.stringify({
+        ordinal: 4,
+        type: 'session_meta',
+        payload: {
+          id: 'child-thread',
+          history_base: {
+            thread_id: 'source-thread',
+            end_ordinal_exclusive: 4,
+            end_byte_offset: 1,
+          },
+        },
+      }),
+      JSON.stringify({ ordinal: 5, type: 'response_item', payload: { type: 'reasoning', encrypted_content: 'gAAA' } }),
+    ].join('\n') + '\n';
+    await fs.writeFile(child, childText, 'utf8');
+    try {
+      await expect(sanitizeCodexForkRolloutFileInPlace(child, {
+        resolveHistoryBaseRollout: () => null,
+      })).rejects.toThrow('history_base source is unavailable');
+      expect(await fs.readFile(child, 'utf8')).toBe(childText);
+      expect((await fs.readdir(dir)).some((name) => name.includes('.cindy-sanitize-'))).toBe(false);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detaches a fully materialized fork lineage without leaving ordinal gaps', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-fork-meta-'));
+    const child = path.join(dir, 'rollout-child.jsonl');
+    const childText = [
+      JSON.stringify({
+        ordinal: 0,
+        type: 'session_meta',
+        payload: {
+          id: 'child',
+          forked_from_id: 'source',
+          forked_from_ordinal_exclusive: 3,
+        },
+      }),
+      JSON.stringify({ ordinal: 1, type: 'response_item', payload: { type: 'message', content: 'one' } }),
+      JSON.stringify({ ordinal: 2, type: 'response_item', payload: { type: 'reasoning', encrypted_content: 'secret' } }),
+      JSON.stringify({ ordinal: 3, type: 'event_msg', payload: { type: 'task_complete' } }),
+    ].join('\n') + '\n';
+    await fs.writeFile(child, childText, 'utf8');
+    try {
+      await sanitizeCodexForkRolloutFileInPlace(child);
+      const lines = (await fs.readFile(child, 'utf8')).trimEnd().split('\n').map((line) => JSON.parse(line));
+      expect(lines.map((line) => line.ordinal)).toEqual([0, 1, 2, 3]);
+      expect(lines[0].payload).not.toHaveProperty('forked_from_id');
+      expect(lines[0].payload).not.toHaveProperty('forked_from_ordinal_exclusive');
+      expect(lines[2].payload).toMatchObject({ type: 'message' });
+      expect(JSON.stringify(lines[2])).not.toContain('encrypted_content');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for malformed lazy history_base metadata', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-invalid-'));
+    const child = path.join(dir, 'rollout-child.jsonl');
+    const childText = `${JSON.stringify({
+      ordinal: 1,
+      type: 'session_meta',
+      payload: { id: 'child', history_base: { thread_id: 'source', end_byte_offset: 1 } },
+    })}\n`;
+    await fs.writeFile(child, childText, 'utf8');
+    try {
+      await expect(sanitizeCodexForkRolloutFileInPlace(child)).rejects.toThrow('history_base fields are invalid');
+      expect(await fs.readFile(child, 'utf8')).toBe(childText);
+      expect((await fs.readdir(dir)).some((name) => name.includes('.cindy-sanitize-'))).toBe(false);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a lazy history_base offset that is outside the source rollout', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-offset-'));
+    const source = path.join(dir, 'rollout-source.jsonl');
+    const child = path.join(dir, 'rollout-child.jsonl');
+    const sourceText = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'source' },
+    })}\n`;
+    const childText = `${JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        id: 'child',
+        history_base: {
+          thread_id: 'source',
+          end_ordinal_exclusive: 1,
+          end_byte_offset: Buffer.byteLength(sourceText) + 1,
+        },
+      },
+    })}\n`;
+    await fs.writeFile(source, sourceText, 'utf8');
+    await fs.writeFile(child, childText, 'utf8');
+    try {
+      await expect(sanitizeCodexForkRolloutFileInPlace(child, {
+        resolveHistoryBaseRollout: () => source,
+      })).rejects.toThrow('offset is out of bounds');
+      expect(await fs.readFile(child, 'utf8')).toBe(childText);
+      expect(await fs.readFile(source, 'utf8')).toBe(sourceText);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a cyclic lazy history_base chain without changing either rollout', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-history-cycle-'));
+    const first = path.join(dir, 'rollout-first.jsonl');
+    const second = path.join(dir, 'rollout-second.jsonl');
+    const make = (id: string, threadId: string, endByteOffset: number) => `${JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        id,
+        history_base: {
+          thread_id: threadId,
+          end_ordinal_exclusive: 1,
+          end_byte_offset: endByteOffset,
+        },
+      },
+    })}\n`;
+    let firstText = '';
+    let secondText = '';
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      firstText = make('first', 'second', Buffer.byteLength(secondText) || 1);
+      secondText = make('second', 'first', Buffer.byteLength(firstText));
+    }
+    await fs.writeFile(first, firstText, 'utf8');
+    await fs.writeFile(second, secondText, 'utf8');
+    try {
+      await expect(sanitizeCodexForkRolloutFileInPlace(first, {
+        resolveHistoryBaseRollout: (threadId) => threadId === 'second' ? second : first,
+      })).rejects.toThrow('cycle detected');
+      expect(await fs.readFile(first, 'utf8')).toBe(firstText);
+      expect(await fs.readFile(second, 'utf8')).toBe(secondText);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('retries transient Windows replacement errors and then succeeds', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-retry-'));
+    const rollout = path.join(dir, 'rollout-child.jsonl');
+    const text = `${JSON.stringify({ payload: { type: 'message', content: 'safe' } })}\n`;
+    await fs.writeFile(rollout, text, 'utf8');
+    const realRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, 'rename')
+      .mockRejectedValueOnce(Object.assign(new Error('locked'), { code: 'EPERM' }))
+      .mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }))
+      .mockImplementation((from, to) => realRename(from, to));
+    try {
+      await sanitizeCodexForkRolloutFileInPlace(rollout, {
+        replaceMaxAttempts: 3,
+        replaceRetryMs: 0,
+      });
+      expect(rename).toHaveBeenCalledTimes(3);
+      expect(await fs.readFile(rollout, 'utf8')).toBe(text);
+    } finally {
+      rename.mockRestore();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not retry non-transient replacement errors and preserves the canonical child', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-no-retry-'));
+    const rollout = path.join(dir, 'rollout-child.jsonl');
+    const text = `${JSON.stringify({ payload: { type: 'message', content: 'safe' } })}\n`;
+    await fs.writeFile(rollout, text, 'utf8');
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(
+      Object.assign(new Error('invalid'), { code: 'EINVAL' }),
+    );
+    try {
+      await expect(sanitizeCodexForkRolloutFileInPlace(rollout, {
+        replaceMaxAttempts: 3,
+        replaceRetryMs: 0,
+      })).rejects.toMatchObject({ code: 'EINVAL' });
+      expect(rename).toHaveBeenCalledTimes(1);
+      expect(await fs.readFile(rollout, 'utf8')).toBe(text);
+      expect((await fs.readdir(dir)).some((name) => name.includes('.cindy-sanitize-'))).toBe(false);
+    } finally {
+      rename.mockRestore();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('stops after the bounded Windows replacement retry budget', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-retry-exhausted-'));
+    const rollout = path.join(dir, 'rollout-child.jsonl');
+    const text = `${JSON.stringify({ payload: { type: 'message', content: 'safe' } })}\n`;
+    await fs.writeFile(rollout, text, 'utf8');
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(
+      Object.assign(new Error('access denied'), { code: 'EACCES' }),
+    );
+    try {
+      await expect(sanitizeCodexForkRolloutFileInPlace(rollout, {
+        replaceMaxAttempts: 3,
+        replaceRetryMs: 0,
+      })).rejects.toMatchObject({ code: 'EACCES' });
+      expect(rename).toHaveBeenCalledTimes(3);
+      expect(await fs.readFile(rollout, 'utf8')).toBe(text);
+      expect((await fs.readdir(dir)).some((name) => name.includes('.cindy-sanitize-'))).toBe(false);
+    } finally {
+      rename.mockRestore();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });

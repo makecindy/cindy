@@ -282,6 +282,29 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       continue;
     }
 
+    // Desktop persists context rebuilds as empty assistant rows with metadata.
+    if (message.role === 'assistant') {
+      const rebuild = readRecord(message.agentMeta?.contextRebuild);
+      if (rebuild) {
+        result.push({
+          key: messageNormalizeKey(message),
+          source: message,
+          kind: 'system',
+          role: message.role,
+          label: 'system:context-rebuild',
+          body: '',
+          systemCardType: 'context-rebuild',
+          systemCardData: {
+            reason: typeof rebuild.reason === 'string' ? rebuild.reason : 'context-overflow',
+            handoff: typeof rebuild.handoff === 'string' ? rebuild.handoff : '',
+          },
+          align: 'agent',
+          createdAt: message.createdAt,
+        });
+        continue;
+      }
+    }
+
     // /goal 持久记录(桌面 goal-host 落库:role 'assistant' + 空 content + agentMeta 标记)
     // → goal 系统卡。不加分支会 fall through 到通用 assistant 处理,渲染成空白气泡。
     if (message.role === 'assistant') {
@@ -786,6 +809,7 @@ function normalizeSystemCardType(value: unknown): MobileSystemCardType | null {
     || value === 'pwd'
     || value === 'status'
     || value === 'compact'
+    || value === 'context-rebuild'
     || value === 'cmd'
     || value === 'learn'
     ? value

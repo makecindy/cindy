@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  copyCodexAuthSnapshot,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
   recoverCodexAuth,
@@ -191,6 +192,30 @@ describe('relinkSharedCodexAuth', () => {
     expect(second.kind).toBe('linked');
     expect(sameInode(systemAuth, myAuth)).toBe(true);
     expect(leftoverSidecars()).toEqual([]);
+  });
+});
+
+describe('copyCodexAuthSnapshot', () => {
+  it('publishes an independent snapshot so child writes cannot mutate the source', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+
+    const out = await copyCodexAuthSnapshot(systemAuth, myAuth, process.platform);
+
+    expect(out.kind).toBe('copied');
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(sameInode(systemAuth, myAuth)).toBe(false);
+
+    fs.writeFileSync(myAuth, JSON.stringify({ tokens: { access_token: 'child-refresh' } }));
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  it('leaves the existing local credential intact when the source cannot be copied', async () => {
+    fs.writeFileSync(myAuth, MY_CONTENT);
+
+    const out = await copyCodexAuthSnapshot(path.join(tmpRoot, 'missing-auth.json'), myAuth);
+
+    expect(out.kind).toBe('copy-unsupported');
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(MY_CONTENT);
   });
 });
 

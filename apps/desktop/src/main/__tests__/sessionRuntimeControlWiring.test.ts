@@ -439,7 +439,7 @@ describe('session runtime control wiring', () => {
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
   });
 
-  it('requires a verified target window before preparing any destructive model rebuild', () => {
+  it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -453,6 +453,22 @@ describe('session runtime control wiring', () => {
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
     expect(verifiedWindowOnly).toBeGreaterThan(-1);
+    expect(setModel).toContain('contextWindow: sessions.contextWindow,');
+    expect(setModel).toContain('effectiveContextWindow(');
+    expect(setModel).toContain('hasModelWindowContextToProtect(');
+    expect(setModel).toContain("'MODEL_CONTEXT_USAGE_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED'");
+    expect(setModel).toContain("'MODEL_WINDOW_PROTECTION_UNAVAILABLE'");
+    expect(setModel).toContain("'MODEL_SWITCH_TASK_RUNNING'");
+    expect(setModel).toContain("'MODEL_WINDOW_PREPARATION_IN_PROGRESS'");
+    expect(registerSource).toContain(
+      'function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode',
+    );
+    expect(registerSource).toContain(
+      "return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;",
+    );
     expect(setModel).toContain('await maker.getSessionMeta(sessionId)');
     expect(setModel).toContain(
       'liveSessionBeforeRouteChange?.model ?? persistedSessionMeta?.model',
@@ -1090,7 +1106,7 @@ describe('session runtime control wiring', () => {
     const finalWindowEnd = setModel.indexOf('if (atomicSelection) {', finalWindow);
     const runtimeCommit = setModel.indexOf('let generation: number;');
     const finalPreparation = setModel.indexOf('let finalPreparation:');
-    const smallerFinalWindow = setModel.indexOf('finalPiWindow < verifiedCurrentWindow!');
+    const smallerFinalWindow = setModel.indexOf('finalPiWindow < currentContextWindow');
     const preflightPreparation = setModel.indexOf(
       'preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(',
     );

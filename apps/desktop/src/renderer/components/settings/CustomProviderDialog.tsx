@@ -172,6 +172,9 @@ interface CustomProviderDialogProps {
   existingIds?: string[];
   /** Stable fallback for transitions whose immediate opener unmounts before this dialog mounts. */
   returnFocusRef?: RefObject<HTMLElement | null>;
+  /** Settings deep link target: open the matching runtime and focus its context-window field. */
+  focusModelId?: string;
+  focusAgent?: AgentKind;
   onSaved: () => void;
   onClose: () => void;
 }
@@ -505,17 +508,38 @@ export function CustomProviderDialog({
   initial,
   existingIds,
   returnFocusRef,
+  focusModelId,
+  focusAgent,
   onSaved,
   onClose,
 }: CustomProviderDialogProps) {
   const { t, i18n } = useTranslation();
   const editing = !!initial;
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
+  const focusedAgent = (() => {
+    if (!initial || !focusModelId) return null;
+    if (
+      focusAgent &&
+      VISIBLE_AGENTS.includes(focusAgent as DialogAgentKind) &&
+      initial.runtimes[focusAgent as DialogAgentKind]?.models.some(
+        (model) => model.id === focusModelId,
+      )
+    ) {
+      return focusAgent as DialogAgentKind;
+    }
+    return (
+      VISIBLE_AGENTS.find((agent) =>
+        initial.runtimes[agent]?.models.some((model) => model.id === focusModelId),
+      ) ?? null
+    );
+  })();
 
   const [name, setName] = useState(initial?.name ?? '');
   const [rt, setRt] = useState<Record<DialogAgentKind, RuntimeFields>>(() => initRuntimes(initial));
   const [activeTab, setActiveTab] = useState<DialogAgentKind>(
-    () => (initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || 'claude-code',
+    () =>
+      focusedAgent ??
+      ((initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || 'claude-code'),
   );
   const [hasKey, setHasKey] = useState<Record<DialogAgentKind, boolean>>({
     'claude-code': false,
@@ -551,7 +575,7 @@ export function CustomProviderDialog({
     scopes: initialOAuth?.scopes ?? '',
   });
   // OAuth 模式下模型 / 请求头收进默认折叠的「高级配置」——模型授权后自动发现,普通用户无需碰。
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(Boolean(focusModelId && initialOAuth));
   const [showImageGenerationAdvanced, setShowImageGenerationAdvanced] = useState(false);
   const [imageGenerationHelpPinned, setImageGenerationHelpPinned] = useState(false);
   const [imageGenerationHelpHovered, setImageGenerationHelpHovered] = useState(false);
@@ -602,6 +626,7 @@ export function CustomProviderDialog({
   const scrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
+  const focusedContextWindowRef = useRef<HTMLInputElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
   // 已提交的层状态写入 ref，既避开 passive effect 延迟，也不暴露被放弃的并发 render。
   const childLayerRef = useRef(childLayer);
@@ -611,6 +636,16 @@ export function CustomProviderDialog({
   const onCloseRef = useRef(onClose);
   const showImageGenerationHelp =
     imageGenerationHelpPinned || imageGenerationHelpHovered || imageGenerationHelpFocused;
+  useLayoutEffect(() => {
+    if (!focusModelId || !focusedAgent || activeTab !== focusedAgent) return;
+    if (authMode === 'oauth' && !showAdvanced) return;
+    const input = focusedContextWindowRef.current;
+    if (!input) return;
+    input.focus();
+    if (typeof input.scrollIntoView === 'function') {
+      input.scrollIntoView({ block: 'center' });
+    }
+  }, [activeTab, authMode, focusModelId, focusedAgent, showAdvanced]);
   const cancelImageGenerationHelpPointerLeave = useCallback(() => {
     if (imageGenerationHelpPointerLeaveTimerRef.current === null) return;
     window.clearTimeout(imageGenerationHelpPointerLeaveTimerRef.current);
@@ -767,7 +802,10 @@ export function CustomProviderDialog({
         ? document.activeElement
         : null;
     const frame = requestAnimationFrame(() => {
-      dialogPanelRef.current?.querySelector<HTMLInputElement>('input')?.focus();
+      (
+        focusedContextWindowRef.current ??
+        dialogPanelRef.current?.querySelector<HTMLInputElement>('input')
+      )?.focus();
     });
     return () => {
       cancelAnimationFrame(frame);
@@ -2419,6 +2457,16 @@ export function CustomProviderDialog({
                     <div key={i} className="flex flex-wrap items-center gap-2">
                       <div className="flex-1">
                         <SettingsTextInput
+                          inputRef={
+                            focusedAgent === activeTab && focusModelId === m.id
+                              ? focusedContextWindowRef
+                              : undefined
+                          }
+                          ariaLabel={
+                            focusedAgent === activeTab && focusModelId === m.id
+                              ? t('settings.providers.custom.fields.modelContextWindowTitle')
+                              : undefined
+                          }
                           surface="ivory"
                           value={m.id}
                           onChange={(v) =>
