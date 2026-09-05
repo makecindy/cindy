@@ -20,6 +20,7 @@ import {
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
   getNextAgentIslandTimerAt,
+  isAgentIslandPendingFocusAck,
   markAgentIslandSessionAttention,
   requestAgentIslandManualCollapse,
   requestAgentIslandManualExpand,
@@ -1629,6 +1630,37 @@ describe('Agent Island display state', () => {
     expect(collapsed.mode).toBe('compact');
     expect(collapsed.displaySurface).toBe('collapsed');
     expect(getNextAgentIslandTimerAt(state, 1_900)).toBeNull();
+  });
+
+  it('collapses after slow navigation without extending the background-window ack grace', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'done' }, doneEvent(), 1_000);
+    requestAgentIslandManualExpand(state);
+    expect(buildAgentIslandDisplayState(state, 1_100).mode).toBe('expanded');
+    requestAgentIslandSessionFocus(state, 'done', 1_200);
+    expect(isAgentIslandPendingFocusAck(state, 'done', 1_250)).toBe(true);
+
+    expect(buildAgentIslandDisplayState(state, 3_200).mode).toBe('expanded');
+    expect(isAgentIslandPendingFocusAck(state, 'done', 3_200)).toBe(false);
+    setAgentIslandAppFocused(state, true, 3_250);
+    setAgentIslandVisibleSession(state, 'done', 3_300);
+    acknowledgeAgentIslandSessionRead(state, 'done', 3_300);
+    expect(buildAgentIslandDisplayState(state, 3_350).mode).toBe('compact');
+  });
+
+  it('keeps the newest click when an earlier navigation finishes late', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'a' }, statusEvent(true, 'Running'), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'b' }, statusEvent(true, 'Running'), 1_000);
+    requestAgentIslandManualExpand(state);
+    requestAgentIslandSessionFocus(state, 'a', 1_200);
+    requestAgentIslandSessionFocus(state, 'b', 1_300);
+    buildAgentIslandDisplayState(state, 3_200);
+
+    setAgentIslandVisibleSession(state, 'a', 3_250);
+    expect(buildAgentIslandDisplayState(state, 3_250).mode).toBe('expanded');
+    setAgentIslandVisibleSession(state, 'b', 3_300);
+    expect(buildAgentIslandDisplayState(state, 3_350).mode).toBe('compact');
   });
 
   it('dismisses the first permission approval card after the clicked session becomes visible', () => {

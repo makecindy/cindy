@@ -187,6 +187,8 @@ export interface AgentIslandState {
   activeTransientSessionId: string | null;
   transientRevealQueue: string[];
   pendingFocusSessionId: string | null;
+  // Short grace for a renderer ack before OS focus settles. Navigation itself
+  // may take longer (for example a renderer reload) and retains its target.
   pendingFocusUntil: number | null;
   lastDisplayMode: AgentIslandDisplayState['mode'] | null;
   lastDisplayPolicy: AgentIslandDisplayPolicy | null;
@@ -1089,8 +1091,9 @@ export function requestAgentIslandSessionFocus(
 export function isAgentIslandPendingFocusAck(
   state: AgentIslandState,
   sessionId: string | readonly string[] | null,
+  now = Date.now(),
 ): boolean {
-  if (!state.pendingFocusSessionId) return false;
+  if (!state.pendingFocusSessionId || !state.pendingFocusUntil || state.pendingFocusUntil <= now) return false;
   return normalizeVisibleSessionIds(sessionId).includes(state.pendingFocusSessionId);
 }
 
@@ -1382,7 +1385,8 @@ function completionRevealDwellMs(session: AgentIslandSessionState, now: number):
 
 function updateFocusVerificationLifecycle(state: AgentIslandState, now: number): void {
   if (!state.pendingFocusUntil || state.pendingFocusUntil > now) return;
-  state.pendingFocusSessionId = null;
+  // Expire only the background-window exception. A later focused route report
+  // must still close the island for the user's last navigation request.
   state.pendingFocusUntil = null;
 }
 
