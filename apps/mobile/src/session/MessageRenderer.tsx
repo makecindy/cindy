@@ -1013,10 +1013,19 @@ export function MessageRenderer({
     );
   }, []);
 
+  const isUserControllingScroll = useCallback(() => (
+    historyTouchStartYRef.current !== null
+    || isDraggingRef.current
+    || isMomentumScrollingRef.current
+  ), []);
+
   const scrollToEndProgrammatically = useCallback((animated: boolean) => {
+    // Guard the command itself: content growth, delayed recovery and anchor retries must all
+    // yield before the first upward scroll event has had a chance to unpin follow.
+    if (isUserControllingScroll()) return;
     markProgrammaticScroll(animated);
     void listRef.current?.scrollToEnd({ animated });
-  }, [markProgrammaticScroll]);
+  }, [isUserControllingScroll, markProgrammaticScroll]);
 
   const scrollToOffsetProgrammatically = useCallback((offset: number, animated: boolean) => {
     markProgrammaticScroll(animated);
@@ -1354,6 +1363,12 @@ export function MessageRenderer({
     }
     const step = (attempts: number, waitRounds: number) => {
       if (followVerifyGenerationRef.current !== generation) return;
+      // Release handlers restart this bounded verifier, including when the stream ends while
+      // a finger is held still. Do not poll or issue corrections during a gesture.
+      if (isUserControllingScroll()) {
+        followVerifyFrameRef.current = null;
+        return;
+      }
       // 贴底跟随意图只认 nearBottomRef:死区内轻触 / 小幅拖动并没有真实解除贴底,
       // 不能让 userScrollForOlderRef 这根“允许加载历史”的手势记录把校验永久关掉。
       // 真正上移超过死区时 shouldUnpinMobileFollowOnDrag 会把 nearBottomRef 翻 false,
@@ -1407,7 +1422,7 @@ export function MessageRenderer({
     } else {
       start();
     }
-  }, [scrollToEndProgrammatically]);
+  }, [isUserControllingScroll, scrollToEndProgrammatically]);
 
   // DEV-only:把列表控制器 + 滚动 metrics 暴露给性能 harness(临时,profiling/回归测量用)。
   useEffect(() => {
@@ -2118,7 +2133,9 @@ export function MessageRenderer({
       setIsAwayFromBottom(true);
     } else {
       const preserveHistoryBrowseIntent = shouldPreserveMobileHistoryBrowseIntent({
-        historyBrowseIntent: userScrollForOlderRef.current,
+        // Only preserve an actual unpin. A dead-zone drag also enables pagination, but its
+        // final native event must not turn a temporary follow suspension into an unpin.
+        historyBrowseIntent: userScrollForOlderRef.current && !nearBottomRef.current,
         userControllingScroll: isDraggingRef.current
           || isMomentumScrollingRef.current
           || historyTouchStartYRef.current !== null,
@@ -2163,10 +2180,11 @@ export function MessageRenderer({
     isMomentumScrollingRef.current = false;
     historyTouchStartYRef.current = event.nativeEvent.pageY;
     historyTouchTriggeredRef.current = false;
+    clearProgrammaticScroll();
     // Touch-start only means the finger holds the ScrollView; it is not a viewport takeover yet.
     // maybeTriggerHistoryTouch / onScrollBeginDrag report the real move once it clears the dead zone.
     handoffHistoryPrependToUser(false);
-  }, [handoffHistoryPrependToUser]);
+  }, [clearProgrammaticScroll, handoffHistoryPrependToUser]);
 
   const maybeTriggerHistoryTouch = useCallback((pageY: number) => {
     const startY = historyTouchStartYRef.current;
@@ -2194,8 +2212,10 @@ export function MessageRenderer({
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    runStickToLatestVerify();
   }, [
     maybeTriggerHistoryTouch,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
@@ -2205,7 +2225,8 @@ export function MessageRenderer({
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
-  }, [scheduleHistoryPrependUserHandoffSettle, scheduleQueuedLoadEarlierFlush]);
+    runStickToLatestVerify();
+  }, [runStickToLatestVerify, scheduleHistoryPrependUserHandoffSettle, scheduleQueuedLoadEarlierFlush]);
 
   // 用户开始拖动 → 标记「上翻意图」,放行自动加载更早(onScrollBeginDrag 仅用户手势触发,
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
@@ -2230,7 +2251,7 @@ export function MessageRenderer({
     // 翻完 refs 立即补一次电平评估:列表已顶死时(Android 无 bounce 尤甚)这次拖动不产生
     // offset 变化,不会有 onScroll / onStartReached,ref 写入也不驱动 effect——没有这一刀,
     // 「失败后停在顶部再拖一下重试」的信号会整体丢失(review P2)。
-  }, [attemptAutoLoadEarlier, handoffHistoryPrependToUser]);
+  }, [attemptAutoLoadEarlier, clearProgrammaticScroll, handoffHistoryPrependToUser]);
 
   // 拖动结束(手指离开,可能进入惯性滚动)→ 关闭拖动追踪。惯性阶段的上滑不需要再判
   // 解除:上滑手势的拖动段必然已越过死区完成解除;下滑回底的恢复由 scroll 方向判定接手。
@@ -2241,8 +2262,10 @@ export function MessageRenderer({
     // Wait one frame so Android can report whether this drag transitioned into momentum.
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    runStickToLatestVerify();
   }, [
     refreshPreviousUserTarget,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
@@ -2256,8 +2279,10 @@ export function MessageRenderer({
     refreshPreviousUserTarget();
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    runStickToLatestVerify();
   }, [
     refreshPreviousUserTarget,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
@@ -2322,6 +2347,7 @@ export function MessageRenderer({
       }
       return;
     }
+    if (isUserControllingScroll()) return;
     if (nearBottomRef.current && viewportHeight > 0 && height > viewportHeight) {
       // Animated jump/send follow owns the viewport until its settle window closes. Content
       // growth during that animation only reschedules the verifier; a false-animated pin here
@@ -2366,6 +2392,7 @@ export function MessageRenderer({
       }
     }
   }, [
+    isUserControllingScroll,
     markMobileMvcpSettle,
     restoreHistoryAnchorOnce,
     runStickToLatestVerify,
