@@ -70,7 +70,7 @@ import {
 import { MAKER_PUSH } from '../../maker-ipc/channels.js';
 import { writeBlob } from '../../cindy-media/blobStore.js';
 import { recordBlob } from '../../cindy-media/ledger.js';
-import { validateBotAvatarBuffer } from './botAvatarSelection.js';
+import { decodeBotAvatarImage, validateBotAvatarBuffer } from './botAvatarSelection.js';
 import {
   inferBotTemplatePresetId,
   isBotTemplatePresetId,
@@ -824,9 +824,10 @@ export async function createBotProfile(raw: unknown) {
   const id =
     readText(body.id, 'id', 128) || `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const requestedAvatar = readBotAvatar(body.avatar) || '🤖';
-  // Creation has no prior main-owned upload receipt. Never let a renderer or
-  // model mint a managed-media address by string alone.
-  const avatar = portableBotAvatarOrFallback(requestedAvatar);
+  // Managed addresses must come from validated image bytes ingested below,
+  // never from a renderer or model supplying a URL string alone.
+  let avatar = portableBotAvatarOrFallback(requestedAvatar);
+  const avatarImage = decodeBotAvatarImage(body.avatarImageBase64);
   const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
   const identitySource =
     readText(body.identitySource, 'identitySource', 12000) || buildDefaultBotIdentity(name);
@@ -871,8 +872,18 @@ export async function createBotProfile(raw: unknown) {
   const now = Date.now();
   const client = getDbClient();
   const db = client.drizzle;
+  let botAvatarRef: { id: string; hash: string; createdAt: number } | undefined;
+  if (avatarImage) {
+    const written = await writeBlob(avatarImage);
+    assertCreationOwnerStillCurrent();
+    await recordBlob({ hash: written.hash, ext: written.ext, mimeType: written.mimeType, bytes: written.bytes, isCache: false }, db);
+    assertCreationOwnerStillCurrent();
+    avatar = written.url;
+    botAvatarRef = { id: randomUUID(), hash: written.hash, createdAt: now };
+  }
   await client.tx('bots.createProfile', {
     id,
+    ...(botAvatarRef ? { botAvatarRef } : {}),
     displayName: name,
     description,
     avatar,

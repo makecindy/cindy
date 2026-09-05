@@ -1,3 +1,5 @@
+export const BOT_AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+
 /**
  * A Bot profile may point at Cindy-managed image bytes, but never at an
  * arbitrary URL or local path. Keep this parser asset-free so main, renderer

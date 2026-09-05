@@ -1,13 +1,13 @@
-import { useState, type FormEvent } from 'react';
-import { Check } from 'lucide-react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { useEffect, useRef, useState, type FormEvent, type ChangeEvent } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
-import { cn } from '@/lib/utils';
+import { BOT_AVATAR_MAX_BYTES } from '../../../shared/botAvatarValue';
 import { addBotProfileAndWait, type BotProfile } from './botStore';
 import { BotBasicProfileFields, type BotBasicProfileValue } from './BotBasicProfileFields';
-import { BotAvatar } from './BotAvatar';
 import {
   BOT_TEMPLATE_CHOICES,
   CUSTOM_BOT_TEMPLATE_ID,
@@ -19,53 +19,93 @@ import {
 interface BotRosterViewProps {
   /** 创建成功后的落点。默认直接进 TA 的对话。 */
   onCreated?: (bot: BotProfile) => void;
+  onClose?: () => void;
+  restoreFocus?: () => void;
 }
 
 /**
  * The only teammate creation surface. Templates fill this same basic profile
  * draft; they never branch into a second editor or expose runtime internals.
  */
-export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
+export function BotRosterView({ onCreated, onClose, restoreFocus }: BotRosterViewProps = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [templateId, setTemplateId] = useState<BotTemplateChoiceId>('cindy');
   const initialTemplate = getBotTemplate('cindy');
-  const [profile, setProfile] = useState<BotBasicProfileValue>(() => ({
+  const [profile, setProfile] = useState<BotBasicProfileValue & { avatarData?: string }>(() => ({
     name: t('bots.createWizard.templates.cindy.defaultName'),
     description: t('bots.createWizard.templates.cindy.defaultDescription'),
     avatar: initialTemplate.avatar,
     avatarColor: initialTemplate.avatarColor,
   }));
+  const fileInput = useRef<HTMLInputElement>(null);
+  const reader = useRef<FileReader | null>(null);
+  const drafts = useRef<Partial<Record<BotTemplateChoiceId, typeof profile>>>({});
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState(false);
+  useEffect(() => () => reader.current?.abort(), []);
+  const chooseAvatar = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setAvatarError(false);
+    if (
+      !['image/png', 'image/jpeg', 'image/webp'].includes(file.type) ||
+      !file.size ||
+      file.size > BOT_AVATAR_MAX_BYTES
+    ) {
+      setAvatarError(true);
+      return;
+    }
+    setAvatarBusy(true);
+    const pending = new FileReader();
+    reader.current = pending;
+    pending.onload = () => {
+      setProfile((current) => ({ ...current, avatarData: String(pending.result) }));
+      setAvatarBusy(false);
+    };
+    pending.onerror = () => {
+      setAvatarError(true);
+      setAvatarBusy(false);
+    };
+    pending.readAsDataURL(file);
+  };
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const applyTemplate = (id: BotTemplateChoiceId) => {
+    if (id === templateId) return;
+    drafts.current[templateId] = profile;
     const template = getBotTemplateChoice(id);
     setTemplateId(id);
-    setProfile({
-      name:
-        id === CUSTOM_BOT_TEMPLATE_ID
-          ? ''
-          : t(`bots.createWizard.templates.${template.translationKey}.defaultName`),
-      description:
-        id === CUSTOM_BOT_TEMPLATE_ID
-          ? ''
-          : t(`bots.createWizard.templates.${template.translationKey}.defaultDescription`),
-      avatar: template.avatar,
-      avatarColor: template.avatarColor,
-    });
+    setProfile(
+      drafts.current[id] ?? {
+        name:
+          id === CUSTOM_BOT_TEMPLATE_ID
+            ? ''
+            : t(`bots.createWizard.templates.${template.translationKey}.defaultName`),
+        description:
+          id === CUSTOM_BOT_TEMPLATE_ID
+            ? ''
+            : t(`bots.createWizard.templates.${template.translationKey}.defaultDescription`),
+        avatar: template.avatar,
+        avatarColor: template.avatarColor,
+      },
+    );
     setError(null);
+    setAvatarError(false);
   };
 
   const handleCreated = (bot: BotProfile) => {
     if (onCreated) onCreated(bot);
     else navigate(`/bots/${bot.id}`);
+    onClose?.();
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const name = profile.name.trim();
-    if (!name || creating) return;
+    if (!name || creating || avatarBusy) return;
     setCreating(true);
     setError(null);
     try {
@@ -76,6 +116,7 @@ export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
         identitySource: template.identitySource,
         userContextSource: '',
         avatar: profile.avatar,
+        ...(profile.avatarData ? { avatarImageBase64: profile.avatarData.split(',')[1] } : {}),
         avatarColor: profile.avatarColor,
         welcomeMessage: t('bots.welcome.generic', { name }),
         skills: [],
@@ -93,82 +134,109 @@ export function BotRosterView({ onCreated }: BotRosterViewProps = {}) {
     }
   };
 
+  const close = () => {
+    if (creating) return;
+    if (onClose) onClose();
+    else navigate('/bots');
+  };
   return (
-    <main className="h-full overflow-y-auto bg-[var(--surface)]" role="main">
-      <form
-        className="mx-auto max-w-[720px] px-6 py-10 sm:px-8"
-        onSubmit={(event) => void submit(event)}
-      >
-        <h1 className="text-24 font-medium text-[var(--text-primary)]">
-          {t('bots.roster.customTitle')}
-        </h1>
-        <p className="mt-2 text-13 leading-6 text-[var(--text-secondary)]">
-          {t('bots.createWizard.chooseTemplateDescription')}
-        </p>
-
-        <div className="mt-7 grid gap-3 sm:grid-cols-2">
-          {BOT_TEMPLATE_CHOICES.map((template) => {
-            const selected = template.id === templateId;
-            const key = template.translationKey;
-            return (
-              <button
-                key={template.id}
-                type="button"
-                onClick={() => applyTemplate(template.id)}
-                className={cn(
-                  'flex min-h-36 min-w-0 flex-col rounded-xl border p-4 text-left transition-colors',
-                  selected
-                    ? 'border-[var(--accent-cta-bg)] bg-[var(--surface-hover)]'
-                    : 'border-[var(--border-default)] bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover)]',
-                )}
-                aria-pressed={selected}
-              >
-                <span className="flex w-full items-start justify-between gap-3">
-                  <BotAvatar
-                    bot={{
-                      name: t(`bots.createWizard.templates.${key}.title`),
-                      avatar: template.avatar,
-                      avatarColor: template.avatarColor,
-                    }}
-                    size="sm"
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) close();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          onCloseAutoFocus={(event) => {
+            if (restoreFocus) {
+              event.preventDefault();
+              restoreFocus();
+            }
+          }}
+          className="fixed left-1/2 top-1/2 z-50 max-h-[85vh] w-[calc(100vw-32px)] max-w-[440px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-5 outline-none"
+        >
+          <form className="min-w-0" onSubmit={(event) => void submit(event)}>
+            <Dialog.Title className="text-20 font-medium text-[var(--text-primary)]">
+              {t('bots.roster.customTitle')}
+            </Dialog.Title>
+            <fieldset
+              disabled={creating || avatarBusy}
+              className="mt-6 min-w-0 space-y-6 disabled:opacity-70"
+            >
+              <label className="block text-12 text-[var(--text-secondary)]">
+                {t('bots.createWizard.chooseTemplate')}
+                <span className="relative mt-1.5 block">
+                  <select
+                    value={templateId}
+                    onChange={(event) => applyTemplate(event.target.value as BotTemplateChoiceId)}
+                    className="h-10 w-full appearance-none rounded-full border border-[var(--border-default)] bg-[var(--surface)] pl-4 pr-10 text-14 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  >
+                    {BOT_TEMPLATE_CHOICES.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {t(`bots.createWizard.templates.${template.translationKey}.title`)}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    size={14}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-4 top-3 text-[var(--text-secondary)]"
                   />
-                  {selected ? <Check size={15} className="text-[var(--accent-cta-bg)]" /> : null}
                 </span>
-                <span className="mt-3 text-14 font-medium text-[var(--text-primary)]">
-                  {t(`bots.createWizard.templates.${key}.title`)}
-                </span>
-                <span className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                  {t(`bots.createWizard.templates.${key}.summary`)}
-                </span>
+              </label>
+              <BotBasicProfileFields
+                autoFocusName
+                value={profile}
+                onChange={(next) => setProfile((current) => ({ ...current, ...next }))}
+                onChooseAvatar={() => fileInput.current?.click()}
+                avatarBusy={avatarBusy}
+                avatarPreview={profile.avatarData}
+              />
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                aria-label={t('bots.profile.changeAvatar')}
+                onChange={chooseAvatar}
+              />
+            </fieldset>
+            {avatarError ? (
+              <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">
+                {t('bots.profile.avatarSelectionFailed')}
+              </p>
+            ) : null}
+
+            {error ? (
+              <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">
+                {error}
+              </p>
+            ) : null}
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={creating}
+                onClick={close}
+                className="h-9 rounded-full border border-[var(--border-default)] px-5 text-12 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+              >
+                {t('commonUi.confirmDialog.cancel')}
               </button>
-            );
-          })}
-        </div>
-
-        <div className="mt-5 min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-          <BotBasicProfileFields value={profile} onChange={(next) => setProfile(next)} />
-        </div>
-
-        <p className="mt-4 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('bots.roster.customHint')}
-        </p>
-        {error ? (
-          <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">
-            {error}
-          </p>
-        ) : null}
-
-        <div className="mt-7 flex justify-end">
-          <button
-            type="submit"
-            disabled={creating || profile.name.trim().length === 0}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
-          >
-            {creating ? <Spinner size={14} /> : null}
-            {t('bots.roster.create')}
-          </button>
-        </div>
-      </form>
-    </main>
+              <button
+                type="submit"
+                disabled={creating || avatarBusy || profile.name.trim().length === 0}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+              >
+                {creating ? <Spinner size={14} /> : null}
+                {t('bots.roster.create')}
+              </button>
+            </div>
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

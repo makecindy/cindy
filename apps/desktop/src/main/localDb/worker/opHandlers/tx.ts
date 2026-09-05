@@ -185,6 +185,15 @@ function botsCreateProfile(db: Database.Database, args: unknown): void {
       VALUES (?, ?, 1, ?, ?, ?)`)
       .run(`${id}:v1`, id, expectString(p.identitySource, 'identitySource'),
         expectString(p.capabilitiesJson, 'capabilitiesJson'), now);
+    if (p.botAvatarRef !== undefined) {
+      const ref = asRecord(p.botAvatarRef, 'botAvatarRef');
+      const hash = expectString(ref.hash, 'botAvatarRef.hash');
+      if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('botAvatarRef.hash is invalid');
+      db.prepare(`INSERT INTO media_refs
+        (id, hash, ref_kind, ref_id, origin_kind, created_at)
+        VALUES (?, ?, 'bot-avatar', ?, 'user', ?)`)
+        .run(expectString(ref.id, 'botAvatarRef.id'), hash, id, expectNumber(ref.createdAt, 'botAvatarRef.createdAt'));
+    }
     db.prepare(`INSERT INTO bot_lifecycle_events
       (id, bot_id, session_id, event_type, payload_json, created_at)
       VALUES (?, ?, NULL, 'created', '{}', ?)`)

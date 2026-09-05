@@ -100,14 +100,15 @@ describe('伙伴行的间距基线', () => {
     );
   });
 
-  it('归档行、空态卡与小节头跟伙伴行同一套左右内边距', () => {
+  it('归档行与小节头保持间距，空态复用紧凑创建入口', () => {
     expect(source).toContain(
       'group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors',
     );
-    // 空态卡:定稿 `.side-empty{padding:12px 14px}`,并且与行同宽(不缩 8px)。
+    // 空态只留创建入口，外层间距固定，不恢复大卡片。
     expect(source).toContain(
-      'flex w-full flex-col items-start gap-1 rounded-xl border border-dashed border-[var(--border-default)] px-3.5 py-3',
+      '<div className="px-3 py-3">',
     );
+    expect(source).toContain("<BotCreateMenu label={t('bots.add')} />");
     // 小节头与行内正文左边缘对齐:容器 px-3(12px) + 10px。
     expect(source).toContain('<div className="flex items-center justify-between px-2.5 pb-2">');
     expect(source).toContain(

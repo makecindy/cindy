@@ -28,11 +28,12 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
   it('shows three professional presets plus custom and the shared basic profile fields', () => {
     render(<BotRosterView />);
 
-    expect(screen.getAllByRole('button', { pressed: true })).toHaveLength(1);
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('cindy');
     for (const id of ['cindy', 'dash', 'lizi', 'custom']) {
       expect(screen.getByText(`bots.createWizard.templates.${id}.title`)).toBeTruthy();
     }
-    expect(screen.getAllByRole('button', { pressed: false })).toHaveLength(3);
+    expect(screen.getAllByRole('option')).toHaveLength(4);
+    expect(screen.getByRole('dialog')).toBeTruthy();
     expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
     expect(screen.getByLabelText('bots.profile.summary')).toBeTruthy();
     expect(screen.queryByText('bots.profile.avatar')).toBeNull();
@@ -42,7 +43,7 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
 
   it('starts custom from a blank profile and waits for a name', () => {
     render(<BotRosterView />);
-    fireEvent.click(screen.getByText('bots.createWizard.templates.custom.title'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'custom' } });
 
     expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText('bots.profile.summary') as HTMLInputElement).value).toBe('');
@@ -53,7 +54,7 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
 
   it('uses a template as a draft in the same fields', () => {
     render(<BotRosterView />);
-    fireEvent.click(screen.getByText('bots.createWizard.templates.dash.title'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'dash' } });
 
     expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe(
       'bots.createWizard.templates.dash.defaultName',
@@ -87,7 +88,7 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
 
   it('creates a custom teammate with a neutral professional identity', async () => {
     render(<BotRosterView />);
-    fireEvent.click(screen.getByText('bots.createWizard.templates.custom.title'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'custom' } });
     fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: '项目伙伴' } });
     fireEvent.change(screen.getByLabelText('bots.profile.summary'), {
       target: { value: '负责项目资料整理' },
@@ -123,5 +124,57 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('offline'));
     expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
+  });
+  it('previews a custom image without creating a profile, preserves the draft across roles, and submits the image bytes', async () => {
+    const { container } = render(<BotRosterView />);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Mika' } });
+    const image = new File(
+      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10])],
+      'avatar.png',
+      { type: 'image/png' },
+    );
+    fireEvent.change(document.querySelector('input[type=file]')!, { target: { files: [image] } });
+    await waitFor(() => expect(document.querySelector('img[src^="data:image/png"]')).toBeTruthy());
+    expect(mocks.addBotProfileAndWait).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'dash' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'custom' } });
+    expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe('Mika');
+    expect(document.querySelector('img[src^="data:image/png"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
+    await waitFor(() =>
+      expect(mocks.addBotProfileAndWait).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Mika',
+          avatarImageBase64: 'iVBORw0KGgo=',
+        }),
+      ),
+    );
+  });
+
+  it('leaves the draft alone when the picker is canceled and rejects unsupported or oversized files', async () => {
+    const { container } = render(<BotRosterView />);
+    const input = document.querySelector('input[type=file]')!;
+    fireEvent.change(input, { target: { files: [] } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    for (const file of [
+      new File(['<svg/>'], 'avatar.svg', { type: 'image/svg+xml' }),
+      new File([new Uint8Array(5 * 1024 * 1024 + 1)], 'large.png', { type: 'image/png' }),
+    ]) {
+      fireEvent.change(input, { target: { files: [file] } });
+      expect(screen.getByRole('alert').textContent).toBe('bots.profile.avatarSelectionFailed');
+    }
+    expect(mocks.addBotProfileAndWait).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole('button', { name: 'bots.roster.create' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('closes the creation dialog without creating a teammate', () => {
+    const onClose = vi.fn();
+    render(<BotRosterView onClose={onClose} />);
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mocks.addBotProfileAndWait).not.toHaveBeenCalled();
   });
 });

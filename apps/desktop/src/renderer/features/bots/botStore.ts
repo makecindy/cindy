@@ -441,6 +441,8 @@ function defaultCapabilities(
 }
 
 export interface CreateBotProfileInput {
+  /** Unsaved image bytes, validated and ingested by main on creation only. */
+  avatarImageBase64?: string;
   name: string;
   description: string;
   identitySource?: string;
@@ -873,6 +875,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         name: bot.name,
         description: bot.description,
         avatar: bot.avatar,
+        ...(input.avatarImageBase64 ? { avatarImageBase64: input.avatarImageBase64 } : {}),
         avatarColor: bot.avatarColor,
         skills: bot.skills,
         capabilities: bot.capabilities,

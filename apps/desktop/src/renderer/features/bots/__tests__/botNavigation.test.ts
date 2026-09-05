@@ -82,7 +82,7 @@ describe('Bot canonical Session creation retry', () => {
   });
 });
 
-describe('阵容是主区的一页,不是模态', () => {
+describe('伙伴创建统一使用弹窗，并兼容旧创建链接', () => {
   const router = readFileSync(resolve(__dirname, '..', '..', '..', 'router.tsx'), 'utf8');
   const home = readFileSync(resolve(__dirname, '..', 'BotsHomeView.tsx'), 'utf8');
   const sidebar = readFileSync(resolve(__dirname, '..', 'BotsSidebar.tsx'), 'utf8');
@@ -92,23 +92,22 @@ describe('阵容是主区的一页,不是模态', () => {
     expect(router.indexOf("path: 'roster'")).toBeLessThan(router.indexOf("path: ':botId'"));
   });
 
-  it('一个伙伴都没有时,主区直接就是阵容页 —— 没有中间那一层卖点卡', () => {
-    expect(home).toContain('if (bots.length === 0) return <BotRosterView />;');
+  it('没有伙伴时提供创建弹窗入口，不堆叠卖点卡', () => {
+    expect(home).toContain("<BotCreateMenu label={t('bots.add')} />");
     // 四张功能卖点卡整体删除:它用产品内部术语介绍一个靠「挑一个合拍的」就能懂的东西。
     expect(home).not.toContain('emptyBenefits');
-    // 模态入口整体下线。
     expect(home).not.toContain('AddBotDialog');
   });
 
-  it('老的 ?add=1 深链被送去阵容页,而不是在这里再开一层浮层', () => {
+  it('旧 ?add=1 深链进入同一个创建入口', () => {
     expect(home).toContain("navigate('/bots/roster', { replace: true })");
   });
 
-  it('侧栏的加号统一进入创建菜单,空态仍保留直接阵容入口', () => {
+  it('侧栏加号与空态复用同一个创建弹窗入口', () => {
     expect(sidebar).not.toContain('?add=1');
     expect(sidebar).toContain('<BotCreateMenu compact />');
     expect(sidebar).toContain('<BotCreateMenu />');
-    expect(sidebar).toContain("navigate('/bots/roster')");
+    expect(sidebar).toContain("<BotCreateMenu label={t('bots.add')} />");
   });
 });
 

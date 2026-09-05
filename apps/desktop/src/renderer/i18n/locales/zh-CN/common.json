@@ -6905,31 +6905,27 @@
     "add": "添加伙伴",
     "createWizard": {
       "createFailed": "无法创建伙伴，请重试。",
-      "chooseTemplateDescription": "选择一个起点，再确认名称和头像。以后新增模板也都在这里创建。",
       "templates": {
         "cindy": {
           "title": "Cindy 助理",
-          "summary": "写作、整理、分析、计划和日常事务推进。",
           "defaultName": "Cindy",
-          "defaultDescription": "处理日常工作与生活中的大部分需求，必要时请更合适的伙伴接手。"
+          "defaultDescription": "帮我写作、整理资料和安排日常工作。"
         },
         "dash": {
           "title": "Dash 公司 CEO",
-          "summary": "产品、财务、审美与管理决策。",
           "defaultName": "Dash",
-          "defaultDescription": "负责方向判断、方案取舍、优先级和工作审批。"
+          "defaultDescription": "帮我梳理业务方向、评估方案和做决策。"
         },
         "lizi": {
           "title": "LiZi 技术总监",
-          "summary": "开发、架构、调试、发布与技术风险。",
           "defaultName": "LiZi",
-          "defaultDescription": "负责技术问题判断、方案制定、执行推进和结果验证。"
+          "defaultDescription": "帮我开发功能、排查问题和把关技术方案。"
         },
         "custom": {
-          "title": "自定义",
-          "summary": "从空白开始，设置名称和职责。"
+          "title": "自定义"
         }
-      }
+      },
+      "chooseTemplate": "选择角色"
     },
     "homeFolder": {
       "title": "高级配置",
@@ -6941,10 +6937,11 @@
     "profile": {
       "changeAvatar": "更换头像",
       "avatarFailed": "无法更换头像，请选择小于 5 MB 的 PNG、JPEG 或 WebP 图片。",
-      "summary": "描述",
-      "summaryPlaceholder": "写下这个伙伴主要负责什么，以及你希望它怎样做事"
+      "summary": "主要做什么",
+      "summaryPlaceholder": "例如：整理每周进展，帮我写一份简短的周报",
+      "avatarSelectionFailed": "头像未能读取，请选择 5 MB 以内的 PNG、JPEG 或 WebP 图片"
     },
-    "nameLabel": "名称",
+    "nameLabel": "怎么称呼",
     "close": "关闭",
     "list": {
       "startChat": "开始对话",
@@ -7046,8 +7043,7 @@
     "send": "发送消息",
     "roster": {
       "create": "创建伙伴",
-      "customHint": "先定义伙伴的身份和职责。创建后可以调整模型，伙伴会在使用中积累记忆和做法。",
-      "customNamePlaceholder": "比如：阿橘",
+      "customNamePlaceholder": "给伙伴起个名字",
       "customTitle": "创建伙伴"
     },
     "chat": {

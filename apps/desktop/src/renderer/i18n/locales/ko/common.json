@@ -6905,31 +6905,27 @@
     "add": "동료 추가",
     "createWizard": {
       "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요.",
-      "chooseTemplateDescription": "시작점을 고른 뒤 이름과 아바타를 확인하세요. 앞으로 추가될 템플릿도 이 화면에서 만듭니다.",
       "templates": {
         "cindy": {
           "title": "Cindy 어시스턴트",
-          "summary": "작성, 정리, 분석, 계획과 일상 업무 추진.",
           "defaultName": "Cindy",
-          "defaultDescription": "일상 업무와 생활의 다양한 요청을 처리하고 필요하면 더 적합한 동료에게 맡깁니다."
+          "defaultDescription": "글쓰기, 자료 정리, 일상 업무 계획을 도와줘요."
         },
         "dash": {
           "title": "Dash 회사 CEO",
-          "summary": "제품, 재무, 디자인 판단과 경영 의사결정.",
           "defaultName": "Dash",
-          "defaultDescription": "방향 판단, 대안 선택, 우선순위 설정과 주요 업무 승인을 담당합니다."
+          "defaultDescription": "사업 방향을 정리하고, 대안을 평가하고, 의사결정을 도와줘요."
         },
         "lizi": {
           "title": "LiZi 엔지니어링 총괄",
-          "summary": "개발, 아키텍처, 디버깅, 출시와 엔지니어링 위험.",
           "defaultName": "LiZi",
-          "defaultDescription": "엔지니어링 문제 판단, 해결 방안 수립, 실행 추진과 결과 검증을 담당합니다."
+          "defaultDescription": "기능 개발, 문제 해결, 설계 검토를 도와줘요."
         },
         "custom": {
-          "title": "사용자 지정",
-          "summary": "빈 프로필에서 이름과 담당 업무를 설정합니다."
+          "title": "사용자 지정"
         }
-      }
+      },
+      "chooseTemplate": "역할 선택"
     },
     "homeFolder": {
       "title": "고급 설정",
@@ -6941,10 +6937,11 @@
     "profile": {
       "changeAvatar": "아바타 변경",
       "avatarFailed": "아바타를 변경할 수 없습니다. 5MB 미만의 PNG, JPEG 또는 WebP 이미지를 선택하세요.",
-      "summary": "설명",
-      "summaryPlaceholder": "이 동료가 맡을 일과 원하는 작업 방식을 적으세요"
+      "summary": "어떤 일을 맡길까요?",
+      "summaryPlaceholder": "예: 매주 진행 상황을 정리하고 짧은 주간 보고서 작성하기",
+      "avatarSelectionFailed": "이미지를 읽지 못했어요. 5 MB 이하의 PNG, JPEG, WebP 이미지를 선택해 주세요."
     },
-    "nameLabel": "이름",
+    "nameLabel": "어떻게 부를까요?",
     "close": "닫기",
     "list": {
       "startChat": "대화 시작하기",
@@ -7046,8 +7043,7 @@
     "send": "메시지 보내기",
     "roster": {
       "create": "동료 만들기",
-      "customHint": "먼저 동료의 역할과 책임을 정하세요. 생성 후 모델을 바꿀 수 있으며, 사용하면서 기억과 작업 방식을 쌓아 갑니다.",
-      "customNamePlaceholder": "예: 아주",
+      "customNamePlaceholder": "동료의 이름을 지어 주세요",
       "customTitle": "동료 만들기"
     },
     "chat": {

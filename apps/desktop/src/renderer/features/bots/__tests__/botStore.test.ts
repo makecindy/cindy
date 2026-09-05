@@ -326,6 +326,7 @@ describe('bot profile store', () => {
     try {
       const bot = await addBotProfileAndWait({
         name: 'Draft name',
+        avatarImageBase64: 'iVBORw0KGgo=',
         description: '',
         identitySource: '# SOUL\nPersistent release steward.',
         userContextSource: '# USER\nWorks with the release team.',
@@ -351,6 +352,7 @@ describe('bot profile store', () => {
       expect(create).toHaveBeenCalledWith(
         expect.objectContaining({
           identitySource: '# SOUL\nPersistent release steward.',
+          avatarImageBase64: 'iVBORw0KGgo=',
           userContextSource: '# USER\nWorks with the release team.',
           avatar: '🛠️',
           avatarColor: 'blue',

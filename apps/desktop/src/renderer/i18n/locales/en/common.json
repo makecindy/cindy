@@ -6907,31 +6907,27 @@
     "add": "Add teammate",
     "createWizard": {
       "createFailed": "The teammate could not be created. Try again.",
-      "chooseTemplateDescription": "Choose a starting point, then confirm the name and avatar. Future templates will use this same flow.",
       "templates": {
         "cindy": {
           "title": "Cindy Assistant",
-          "summary": "Writing, organization, analysis, planning, and everyday work.",
           "defaultName": "Cindy",
-          "defaultDescription": "Handles most everyday work and personal needs, bringing in a better-suited teammate when needed."
+          "defaultDescription": "Help me write, organize information, and plan daily work."
         },
         "dash": {
           "title": "Dash, Company CEO",
-          "summary": "Product, finance, design judgment, and management decisions.",
           "defaultName": "Dash",
-          "defaultDescription": "Makes direction calls, weighs options, sets priorities, and reviews important work."
+          "defaultDescription": "Help me explore business direction, evaluate options, and make decisions."
         },
         "lizi": {
           "title": "LiZi, Technical Director",
-          "summary": "Development, architecture, debugging, releases, and technical risk.",
           "defaultName": "LiZi",
-          "defaultDescription": "Owns technical diagnosis, solution design, execution, and verification."
+          "defaultDescription": "Help me build features, troubleshoot issues, and review technical plans."
         },
         "custom": {
-          "title": "Custom",
-          "summary": "Start from a blank profile and define its name and responsibilities."
+          "title": "Custom"
         }
-      }
+      },
+      "chooseTemplate": "Choose a Role"
     },
     "homeFolder": {
       "title": "Advanced configuration",
@@ -6943,10 +6939,11 @@
     "profile": {
       "changeAvatar": "Change avatar",
       "avatarFailed": "Couldn’t change the avatar. Choose a PNG, JPEG, or WebP image under 5 MB.",
-      "summary": "Description",
-      "summaryPlaceholder": "Describe what this teammate is responsible for and how you want it to work"
+      "summary": "What Should They Help With?",
+      "summaryPlaceholder": "For example: summarize weekly progress and draft a short update",
+      "avatarSelectionFailed": "Couldn’t read the image. Choose a PNG, JPEG, or WebP image up to 5 MB."
     },
-    "nameLabel": "Name",
+    "nameLabel": "What Should We Call Them?",
     "close": "Close",
     "list": {
       "startChat": "Start the conversation",
@@ -7048,8 +7045,7 @@
     "send": "Send message",
     "roster": {
       "create": "Create teammate",
-      "customHint": "Define the teammate’s identity and responsibilities. You can change its model after creation; it will build memories and working methods as you use it.",
-      "customNamePlaceholder": "e.g. Juju",
+      "customNamePlaceholder": "Give your teammate a name",
       "customTitle": "Create a teammate"
     },
     "chat": {

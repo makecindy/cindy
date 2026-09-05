@@ -298,16 +298,9 @@ function BotsSidebarContent() {
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 ? (
-          <button
-            type="button"
-            onClick={() => navigate('/bots/roster')}
-            // 定稿 `.side-empty{padding:12px 14px}`。原来的 `mx-1 w-[calc(100%-8px)]`
-            // 让空态卡比它下面的伙伴行窄 8px,两种状态切换时左边缘会跳。
-            className="flex w-full flex-col items-start gap-1 rounded-xl border border-dashed border-[var(--border-default)] px-3.5 py-3 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-          >
-            <span className="font-medium text-[var(--text-primary)]">{t('bots.emptyTitle')}</span>
-            <span>{t('bots.emptyDescription')}</span>
-          </button>
+          <div className="px-3 py-3">
+            <BotCreateMenu label={t('bots.add')} />
+          </div>
         ) : (
           <div className="flex flex-col gap-1">
             {roster.visible.map((bot) => {

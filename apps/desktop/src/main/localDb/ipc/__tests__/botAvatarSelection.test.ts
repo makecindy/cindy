@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { BOT_AVATAR_MAX_BYTES, validateBotAvatarBuffer } from '../botAvatarSelection';
+import {
+  BOT_AVATAR_MAX_BYTES,
+  decodeBotAvatarImage,
+  validateBotAvatarBuffer,
+} from '../botAvatarSelection';
 
 describe('Bot avatar selection', () => {
   it('accepts supported image bytes by magic signature', () => {
@@ -23,5 +27,24 @@ describe('Bot avatar selection', () => {
     expect(() => validateBotAvatarBuffer(Buffer.from('not really a png'))).toThrow(
       /INVALID_PARAMS/,
     );
+  });
+  it('decodes bounded creation image bytes and still validates their actual signature', () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10]);
+    expect(decodeBotAvatarImage(png.toString('base64'))).toEqual({
+      buffer: png,
+      mimeType: 'image/png',
+    });
+    expect(decodeBotAvatarImage(undefined)).toBeNull();
+    for (const value of [
+      '',
+      null,
+      {},
+      'not base64',
+      'AAAA',
+      'data:image/png;base64,AAAA',
+      'A'.repeat(Math.ceil(BOT_AVATAR_MAX_BYTES / 3) * 4 + 4),
+    ]) {
+      expect(() => decodeBotAvatarImage(value)).toThrow(/INVALID_PARAMS/);
+    }
   });
 });

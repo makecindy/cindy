@@ -19,7 +19,7 @@ import {
   type BotCapabilities,
   type BotProfile,
 } from './botStore';
-import { BotRosterView } from './BotRosterView';
+import { BotCreateMenu } from './BotCreateMenu';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
 import {
@@ -352,7 +352,7 @@ export function BotsHomeView() {
   const [createSessionError, setCreateSessionError] = useState<unknown>(null);
   const selectedBot = useMemo(() => bots.find((bot) => bot.id === botId) ?? null, [botId, bots]);
   // `?add=1` 是阵容还在弹模态那阵子的入口。阵容页面化之后它只剩兼容职责:
-  // 老书签、老深链一律送到 /bots/roster,不再在这里开一层浮层。
+  // 老书签、老深链通过 /bots/roster 复用同一个创建弹窗。
   const addRequested = searchParams.get('add') === '1';
   const settingsOpen = searchParams.get('settings') === '1';
 
@@ -549,15 +549,11 @@ export function BotsHomeView() {
   }, [addRequested, createCanonicalSession, selectedBot, sessionId, settingsOpen, navigate]);
 
   if (!selectedBot) {
-    // 一个伙伴都没有 → 主区直接就是阵容页,没有中间那一层。
-    //
-    // 这里曾经是另一套「还没有伙伴」推销页:Bot 图标 + 四张功能卖点卡（长期身份 /
-    // 自动接收任务事件 / 自动化与协同 / 按需挂载消息通道）+ 一个「添加伙伴」按钮,
-    // 点了才弹出阵容模态。它用产品内部术语介绍一个本来靠「挑一个合拍的」就能懂的
-    // 东西,还把定稿最重要的第一印象藏在两层之后。整页删除,不做兼容。
-    if (bots.length === 0) return <BotRosterView />;
-    // 有伙伴但 URL 还没落到具体一个(上面的重定向正在路上):安静地等,不要闪一页
-    // 阵容再跳走。
+    if (bots.length === 0) return (
+      <div className="flex flex-1 items-center justify-center">
+        <BotCreateMenu label={t('bots.add')} />
+      </div>
+    );
     return (
       <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">
         <Spinner

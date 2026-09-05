@@ -6905,31 +6905,27 @@
     "add": "新增夥伴",
     "createWizard": {
       "createFailed": "無法建立夥伴，請重試。",
-      "chooseTemplateDescription": "選擇一個起點，再確認名稱與頭像。之後新增的範本也都會從這裡建立。",
       "templates": {
         "cindy": {
           "title": "Cindy 助理",
-          "summary": "寫作、整理、分析、規劃與日常事務推進。",
           "defaultName": "Cindy",
-          "defaultDescription": "處理日常工作與生活中的大部分需求，必要時請更合適的夥伴接手。"
+          "defaultDescription": "幫我寫作、整理資料和安排日常工作。"
         },
         "dash": {
           "title": "Dash 公司 CEO",
-          "summary": "產品、財務、審美與管理決策。",
           "defaultName": "Dash",
-          "defaultDescription": "負責方向判斷、方案取捨、優先順序與工作審批。"
+          "defaultDescription": "幫我梳理業務方向、評估方案和做決策。"
         },
         "lizi": {
           "title": "LiZi 技術總監",
-          "summary": "開發、架構、除錯、發布與技術風險。",
           "defaultName": "LiZi",
-          "defaultDescription": "負責技術問題判斷、方案制定、執行推進與結果驗證。"
+          "defaultDescription": "幫我開發功能、排查問題和把關技術方案。"
         },
         "custom": {
-          "title": "自訂",
-          "summary": "從空白開始，設定名稱與職責。"
+          "title": "自訂"
         }
-      }
+      },
+      "chooseTemplate": "選擇角色"
     },
     "homeFolder": {
       "title": "進階設定",
@@ -6941,10 +6937,11 @@
     "profile": {
       "changeAvatar": "更換頭像",
       "avatarFailed": "無法更換頭像，請選擇小於 5 MB 的 PNG、JPEG 或 WebP 圖片。",
-      "summary": "描述",
-      "summaryPlaceholder": "寫下這個夥伴主要負責什麼，以及你希望它如何做事"
+      "summary": "主要做什麼",
+      "summaryPlaceholder": "例如：整理每週進度，幫我寫一份簡短的週報",
+      "avatarSelectionFailed": "無法讀取頭像，請選擇 5 MB 以內的 PNG、JPEG 或 WebP 圖片"
     },
-    "nameLabel": "名稱",
+    "nameLabel": "怎麼稱呼",
     "close": "關閉",
     "list": {
       "startChat": "開始對話",
@@ -7046,8 +7043,7 @@
     "send": "傳送訊息",
     "roster": {
       "create": "建立夥伴",
-      "customHint": "先定義夥伴的身分與職責。建立後可以調整模型，夥伴會在使用中累積記憶與做法。",
-      "customNamePlaceholder": "例如：阿橘",
+      "customNamePlaceholder": "幫夥伴取個名字",
       "customTitle": "建立夥伴"
     },
     "chat": {

@@ -6905,31 +6905,27 @@
     "add": "仲間を追加",
     "createWizard": {
       "createFailed": "仲間を作成できませんでした。もう一度お試しください。",
-      "chooseTemplateDescription": "出発点を選び、名前とアバターを確認します。今後のテンプレートも同じ画面から作成します。",
       "templates": {
         "cindy": {
           "title": "Cindy アシスタント",
-          "summary": "文章作成、整理、分析、計画、日常業務の推進。",
           "defaultName": "Cindy",
-          "defaultDescription": "日常の仕事や生活に関する幅広い依頼に対応し、必要に応じて適任の仲間に引き継ぎます。"
+          "defaultDescription": "文章作成、資料整理、日々の仕事の計画を手伝う。"
         },
         "dash": {
           "title": "Dash 会社 CEO",
-          "summary": "プロダクト、財務、審美、マネジメントの意思決定。",
           "defaultName": "Dash",
-          "defaultDescription": "方向性の判断、選択肢の比較、優先順位付け、重要業務の承認を担当します。"
+          "defaultDescription": "事業の方向性を整理し、提案の評価や意思決定を手伝う。"
         },
         "lizi": {
           "title": "LiZi 技術責任者",
-          "summary": "開発、アーキテクチャ、デバッグ、リリース、技術リスク。",
           "defaultName": "LiZi",
-          "defaultDescription": "技術的な診断、解決策の設計、実行の推進、結果の検証を担当します。"
+          "defaultDescription": "機能開発、不具合の調査、技術設計の確認を手伝う。"
         },
         "custom": {
-          "title": "カスタム",
-          "summary": "空白のプロフィールから名前と担当内容を設定します。"
+          "title": "カスタム"
         }
-      }
+      },
+      "chooseTemplate": "役割を選ぶ"
     },
     "homeFolder": {
       "title": "詳細設定",
@@ -6941,10 +6937,11 @@
     "profile": {
       "changeAvatar": "アバターを変更",
       "avatarFailed": "アバターを変更できませんでした。5 MB未満のPNG、JPEG、WebP画像を選択してください。",
-      "summary": "説明",
-      "summaryPlaceholder": "この仲間の担当と、どのように動いてほしいかを記入します"
+      "summary": "任せたいこと",
+      "summaryPlaceholder": "例：毎週の進捗を整理し、短い週報にまとめる",
+      "avatarSelectionFailed": "画像を読み込めませんでした。5 MB 以下の PNG、JPEG、WebP 画像を選んでください。"
     },
-    "nameLabel": "名前",
+    "nameLabel": "呼び名",
     "close": "閉じる",
     "list": {
       "startChat": "会話を始める",
@@ -7046,8 +7043,7 @@
     "send": "メッセージを送信",
     "roster": {
       "create": "仲間を作成",
-      "customHint": "まず仲間の役割と責任を決めます。作成後にモデルを変更でき、使うにつれて記憶や仕事の進め方が蓄積されます。",
-      "customNamePlaceholder": "例：アジュ",
+      "customNamePlaceholder": "仲間の呼び名を入力",
       "customTitle": "仲間を作成"
     },
     "chat": {

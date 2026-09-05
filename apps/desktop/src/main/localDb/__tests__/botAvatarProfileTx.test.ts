@@ -85,4 +85,42 @@ describe('Bot avatar profile transaction', () => {
     });
     expect(db.prepare('SELECT id FROM media_refs WHERE ref_id = ?').all('bot-1')).toEqual([]);
   });
+  it('creates the profile and image reference atomically, rolling both back on reference failure', () => {
+    db.exec(`
+      ALTER TABLE bot_profiles ADD COLUMN display_name TEXT;
+      ALTER TABLE bot_profiles ADD COLUMN description TEXT;
+      ALTER TABLE bot_profiles ADD COLUMN avatar_color TEXT;
+      ALTER TABLE bot_profiles ADD COLUMN status TEXT;
+      ALTER TABLE bot_profiles ADD COLUMN canonical_session_id TEXT;
+      ALTER TABLE bot_profiles ADD COLUMN created_at INTEGER;
+      CREATE TABLE bot_profile_versions (id TEXT PRIMARY KEY, bot_id TEXT, version INTEGER, identity_source TEXT, capabilities_json TEXT, created_at INTEGER);
+      CREATE TABLE bot_lifecycle_events (id TEXT PRIMARY KEY, bot_id TEXT, session_id TEXT, event_type TEXT, payload_json TEXT, created_at INTEGER);
+    `);
+    const create = (hash: string) =>
+      runWorkerTx(db, {
+        name: 'bots.createProfile',
+        args: {
+          id: 'new-bot',
+          displayName: 'Mika',
+          description: '',
+          avatar: `cindy-media://blobs/${hash}.png`,
+          avatarColor: 'blue',
+          identitySource: '',
+          capabilitiesJson: '{}',
+          now: 3,
+          botAvatarRef: { id: 'created-ref', hash, createdAt: 3 },
+        },
+      });
+    expect(() => create('c'.repeat(64))).toThrow();
+    expect(db.prepare("SELECT id FROM bot_profiles WHERE id = 'new-bot'").get()).toBeUndefined();
+    expect(db.prepare('SELECT * FROM bot_profile_versions').all()).toEqual([]);
+    expect(db.prepare("SELECT id FROM media_refs WHERE id = 'created-ref'").get()).toBeUndefined();
+    create(HASH_B);
+    expect(db.prepare("SELECT avatar FROM bot_profiles WHERE id = 'new-bot'").get()).toEqual({
+      avatar: `cindy-media://blobs/${HASH_B}.png`,
+    });
+    expect(
+      db.prepare("SELECT hash, ref_id FROM media_refs WHERE id = 'created-ref'").get(),
+    ).toEqual({ hash: HASH_B, ref_id: 'new-bot' });
+  });
 });
