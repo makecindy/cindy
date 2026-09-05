@@ -8,7 +8,8 @@
  *   - 每个用户选中的 agent 生成一份与鉴权形态匹配的路由（upstream = baseUrl，带用户自定义
  *     headers）；**API key 不在此注入**——它存 safeStorage，由 host 在路由 resolve 时按
  *     `provider_key_<id>` 读出并写进鉴权头，绝不进 catalog（防经 listProviders 泄漏给 renderer）。
- *   - 用户模型可携带预设确认的 contextWindow；缺省时补保守默认，effort 使用 runtime 默认。
+ *   - 用户模型可携带预设确认的 contextWindow；缺省时若模型 ID 能唯一命中 Registry 条目
+ *     则回填 Registry 窗口，仍未命中才补 200K 保守默认；effort 使用 runtime 默认。
  */
 
 import type {
@@ -221,6 +222,66 @@ function registryEffortMetadata(
   return consensusRegistryEffortMetadata(fallbackMatches, agent);
 }
 
+/** 取 id 去掉最后一层命名空间后的形态("z-ai/glm-5.2" → "glm-5.2";无 "/" 原样返回)。 */
+function suffixAfterNamespace(id: string): string {
+  const idx = id.lastIndexOf("/");
+  return idx >= 0 ? id.slice(idx + 1) : id;
+}
+
+/**
+ * 自定义模型缺省上下文窗口的 Registry 回填。与 `registryEffortMetadata` 同款两阶段:
+ *   - Stage 1 精确命中(entry.id / route.modelId 原样等于模型 ID);
+ *   - Stage 2 仅在精确无命中时,用去掉网关前缀(openai/xd/chatgpt)的形态,或与
+ *     Registry 命名空间条目 id 的去前缀形态(自定义 "glm-5.3" ↔ 条目 "z-ai/glm-5.3")
+ *     兜底匹配。
+ * 命中的、面向当前 agent 的条目在窗口上全部一致(perAgent 覆盖优先)才采用;
+ * 匹配不到、有条目未声明窗口或多方冲突时返回 undefined,由调用方落 200K 保守默认
+ * —— Registry 窗口是产品目录写定的真实上限,错误回填比不填更糟(见 #3883)。
+ * 两阶段必须分开:如 "gpt-5.5" 精确命中 openai/gpt-5.5,若混入后缀兜底还会捎上
+ * 折扣档 xd/codex-gpt-5.5(窗口不同),把本可回填的 1.05M 冲突成保守默认。
+ */
+function registryContextWindow(
+  registry: ModelRegistry | null | undefined,
+  modelId: string,
+  agent: AgentKind,
+): number | undefined {
+  if (agent === "pi" || !registry) return undefined;
+  const matchesEntry = (entry: ModelRegistry["models"][number], candidates: Set<string>) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        [...candidates].some(
+          (candidate) => entry.id === candidate || route.modelId === candidate,
+        ),
+    );
+  let matches = registry.models.filter((entry) =>
+    matchesEntry(entry, new Set([modelId])),
+  );
+  if (matches.length === 0) {
+    // Stage 2 — 网关前缀剥离 + 命名空间条目去前缀兜底。
+    const candidates = new Set<string>([modelId]);
+    for (const prefix of ['openai/', 'xd/', 'chatgpt/']) {
+      if (modelId.startsWith(prefix)) candidates.add(modelId.slice(prefix.length));
+    }
+    matches = registry.models.filter(
+      (entry) =>
+        matchesEntry(entry, candidates) ||
+        candidates.has(suffixAfterNamespace(entry.id)),
+    );
+  }
+  const uniqueEntries = [
+    ...new Map(matches.map((entry) => [entry.id, entry])).values(),
+  ];
+  if (uniqueEntries.length === 0) return undefined;
+  const windows = uniqueEntries.map(
+    (entry) => entry.perAgent?.[agent]?.contextWindow ?? entry.contextWindow,
+  );
+  if (windows.some((window) => window === undefined)) return undefined;
+  return windows.every((window) => window === windows[0])
+    ? windows[0]
+    : undefined;
+}
+
 /**
  * Fast mode is a Codex service-tier capability, so a user provider may inherit it only when the
  * configured model id exactly matches a Registry route for Codex. Prefix fallback is intentionally
@@ -278,6 +339,11 @@ function toCatalogModel(
     m.id,
     agent,
   );
+  // 用户显式填写优先;缺省才尝试 Registry 回填(命中即产品目录写定的真实上限)。
+  const registryWindow =
+    m.contextWindow === undefined
+      ? registryContextWindow(modelRegistry, m.id, agent)
+      : undefined;
   const effectiveEfforts = registryEfforts?.efforts ?? efforts;
   const defaultEffort =
     registryEfforts?.defaultEffort ??
@@ -293,10 +359,14 @@ function toCatalogModel(
     name: m.name,
     ...(agent === "pi" && m.piApi ? { piApi: m.piApi } : {}),
     ...(m.route ? { route: { ...m.route } } : {}),
-    contextWindow: m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
-    // 用户自己填了才算显式声明;走 DEFAULT_CUSTOM_CONTEXT_WINDOW 兜底的不标记 ——
-    // 那是「仅用于展示」的保守默认,不能拿去收敛运行期上报的窗口。
-    ...(m.contextWindow !== undefined ? { contextWindowVerified: true } : {}),
+    contextWindow:
+      m.contextWindow ?? registryWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
+    // 用户填写或 Registry 命中都属于「显式声明的真实上限」(产品目录写定),
+    // 可供 resolveVerifiedContextWindow 收敛运行期上报的窗口;纯 200K 兜底的
+    // 不标记 —— 那是「仅用于展示」的保守默认。
+    ...(m.contextWindow !== undefined || registryWindow !== undefined
+      ? { contextWindowVerified: true }
+      : {}),
     // 显式配置的窗口打标:编辑表单回转配置时必须与「缺省物化成的默认值」可区分,
     // 哪怕用户显式填的恰好等于当前默认(未来默认升级后显式值要原样保留)。
     ...(m.contextWindow !== undefined ? { contextWindowExplicit: true } : {}),

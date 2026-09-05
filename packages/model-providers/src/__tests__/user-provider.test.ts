@@ -5,7 +5,8 @@
  *   - source='user'、auth.method 与 access 元数据匹配；
  *   - 只为**已配置的 runtime** 生成 api-key-header 路由 + per-agent 模型清单（各自 baseUrl/models）；
  *   - **API key 绝不出现在产出的 Provider 里**（密钥在 host resolve 时按 (id,agent) 注入）；
- *   - 模型补保守默认（contextWindow / 无 effort / group=custom:<id> / defaultEnabled）。
+ *   - 模型补保守默认（contextWindow / 无 effort / group=custom:<id> / defaultEnabled）；
+ *     contextWindow 缺省时若模型 ID 唯一命中 Registry 条目则回填 Registry 窗口。
  */
 
 import { describe, it, expect } from "vitest";
@@ -703,6 +704,161 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     });
     expect(p.models.codex?.[0]).toMatchObject({
       contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
+      contextWindowVerified: true,
+      contextWindowExplicit: true,
+    });
+  });
+
+  it("backfills a Registry context window when the bare model id matches a namespaced entry", () => {
+    // #3883:自定义供应商填官方端点 + 裸模型 id "glm-5.3"(Registry 条目为
+    // "z-ai/glm-5.3")——过去一律 200K 保守默认,1M 模型被当 200K 用。
+    const p = buildUserProvider(
+      {
+        id: "glm",
+        name: "智谱 GLM",
+        runtimes: {
+          "claude-code": {
+            baseUrl: "https://open.bigmodel.cn/api/anthropic",
+            models: [
+              { id: "glm-5.3", name: "GLM-5.3" },
+              { id: "z-ai/glm-5.2", name: "GLM-5.2" },
+            ],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+    expect(p.models["claude-code"]?.[0]).toMatchObject({
+      id: "glm-5.3",
+      contextWindow: 1_000_000,
+      contextWindowVerified: true,
+    });
+    expect(p.models["claude-code"]?.[0]?.contextWindowExplicit).toBeUndefined();
+    // 命名空间形态的自定义 id 也算精确命中(entry.id === modelId)。
+    expect(p.models["claude-code"]?.[1]).toMatchObject({
+      id: "z-ai/glm-5.2",
+      contextWindow: 1_000_000,
+      contextWindowVerified: true,
+    });
+  });
+
+  it("respects per-agent Registry windows for the same model id", () => {
+    // openai/gpt-5.5:claude-code 1.05M / codex 272K —— 同一模型在不同 agent 下的
+    // 窗口不同,回填必须按 agent 取 perAgent 覆盖,不能拿顶层值一刀切。
+    const p = buildUserProvider(
+      {
+        id: "relay",
+        name: "Relay",
+        runtimes: {
+          "claude-code": {
+            baseUrl: "https://relay.example/anthropic",
+            models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+          },
+          codex: {
+            baseUrl: "https://relay.example/v1",
+            models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+    expect(p.models["claude-code"]?.[0]?.contextWindow).toBe(1_050_000);
+    expect(p.models.codex?.[0]?.contextWindow).toBe(272_000);
+  });
+
+  it("backfills after stripping a gateway prefix from the custom model id", () => {
+    const p = buildUserProvider(
+      {
+        id: "relay",
+        name: "Relay",
+        runtimes: {
+          codex: {
+            baseUrl: "https://relay.example/v1",
+            models: [{ id: "xd/gpt-5.5", name: "GPT-5.5" }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+    expect(p.models.codex?.[0]?.contextWindow).toBe(272_000);
+  });
+
+  it("keeps the conservative default when the registry match is ambiguous or windowless", () => {
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+    if (!registry) throw new Error("missing bundled model registry");
+    const base = registry.models.find((entry) => entry.id === "z-ai/glm-5.2");
+    if (!base) throw new Error("missing z-ai/glm-5.2 registry entry");
+    // 两个命名空间不同的条目,去前缀后同名 "glm-x" 但窗口不一致 → 冲突,不回填。
+    const conflictingA = structuredClone(base);
+    conflictingA.id = "vendor-a/glm-x";
+    conflictingA.routes = [
+      { providerId: "vendor-a", modelId: "glm-x", agents: ["claude-code", "codex"] },
+    ];
+    conflictingA.contextWindow = 128_000;
+    const conflictingB = structuredClone(base);
+    conflictingB.id = "vendor-b/glm-x";
+    conflictingB.routes = [
+      { providerId: "vendor-b", modelId: "glm-x", agents: ["claude-code", "codex"] },
+    ];
+    conflictingB.contextWindow = 200_000;
+    const windowless = structuredClone(base);
+    windowless.id = "bare/glm-windowless";
+    windowless.routes = [
+      {
+        providerId: "bare",
+        modelId: "glm-windowless",
+        agents: ["claude-code", "codex"],
+      },
+    ];
+    delete windowless.contextWindow;
+    registry.models.push(conflictingA, conflictingB, windowless);
+
+    const p = buildUserProvider(
+      {
+        id: "relay",
+        name: "Relay",
+        runtimes: {
+          codex: {
+            baseUrl: "https://relay.example/v1",
+            models: [
+              { id: "glm-x", name: "GLM X" }, // 两个条目后缀同名但窗口冲突
+              { id: "glm-windowless", name: "GLM Windowless" }, // 唯一命中但未声明窗口
+              { id: "totally-unknown", name: "Unknown" }, // 无命中
+            ],
+          },
+        },
+      },
+      { modelRegistry: registry },
+    );
+    expect(
+      p.models.codex?.map((m) => [
+        m.id,
+        m.contextWindow,
+        m.contextWindowVerified ?? null,
+      ]),
+    ).toEqual([
+      ["glm-x", DEFAULT_CUSTOM_CONTEXT_WINDOW, null],
+      ["glm-windowless", DEFAULT_CUSTOM_CONTEXT_WINDOW, null],
+      ["totally-unknown", DEFAULT_CUSTOM_CONTEXT_WINDOW, null],
+    ]);
+  });
+
+  it("prefers an explicit contextWindow over the Registry backfill", () => {
+    const p = buildUserProvider(
+      {
+        id: "relay",
+        name: "Relay",
+        runtimes: {
+          "claude-code": {
+            baseUrl: "https://relay.example/anthropic",
+            models: [{ id: "glm-5.3", name: "GLM-5.3", contextWindow: 300_000 }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+    expect(p.models["claude-code"]?.[0]).toMatchObject({
+      contextWindow: 300_000,
       contextWindowVerified: true,
       contextWindowExplicit: true,
     });
