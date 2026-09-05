@@ -677,7 +677,17 @@ describe('session runtime control wiring', () => {
     expect(relinkBoundary).toContain(
       "throwIpcError(\n                'PRECONDITION_FAILED'",
     );
-    expect(relinkBoundary).toContain('.catch((error) => {');
+    expect(relinkBoundary).toContain('.catch(async (error) => {');
+    expect(relinkBoundary).toContain('isCodexHistoryRecoveryRequired(error)');
+    expect(relinkBoundary).toContain('prepareNativeSessionRecovery(');
+    const applicability = setModel.slice(setModel.indexOf('const hasPersistedLocalCodexThread'), setModel.indexOf('const relinkDecision'));
+    expect(applicability).not.toContain('isDeviceLinkInvoke');
+    expect(applicability).not.toContain("internalOptions.source === 'user'");
+    expect(applicability).toContain('routeExplicit');
+    expect(setModel).toContain('if (requiresCodexThreadRelink && isSessionInTurn(sessionId))');
+    const busyCatch = setModel.slice(setModel.indexOf('if (err instanceof CredentialModeSwitchBusyError)'));
+    expect(busyCatch.indexOf('return deferLockedSelection();')).toBeGreaterThan(0);
+    expect(busyCatch.indexOf('return deferLockedSelection();')).toBeLessThan(busyCatch.indexOf("throwIpcError('CREDENTIAL_SWITCH_BUSY'"));
     expect(relinkBoundary).toContain('reserveCodexForkCleanup(');
     expect(relinkBoundary).toContain('...(cleanup ? { cleanup } : {})');
     expect(relinkBoundary).toContain('if (isIpcError(error)) throw error;');

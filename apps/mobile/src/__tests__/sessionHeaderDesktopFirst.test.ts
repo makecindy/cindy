@@ -188,8 +188,8 @@ describe('mobile session header desktop-first surface', () => {
     expect(draftScopeEnd).toBeGreaterThan(draftScopeStart);
     expect(draftScope).toContain('if (composerDraftStateKey !== activeComposerDraftScopeKey) {');
     expect(draftScope).toContain('const nextScope = readImmediateComposerDraftScope(sessionId, routeDraft);');
-    expect(draftScope).toContain('setComposerDocumentState(nextScope.document);');
-    expect(draftScope).toContain('setDraft(nextDraft);');
+    expect(draftScope).toContain('setComposerDraftSource(createComposerDraftSource(nextScope.document));');
+    expect(draftScope).toContain('draftRef.current = nextDraft;');
     expect(draftScope).toContain('setComposerDraftHydrated(false);');
     expect(draftScope).toContain('appliedRouteDraftRef.current = null;');
     expect(draftScope).toContain('composerDocumentRef.current = nextScope.document;');

@@ -99,7 +99,7 @@ import {
 } from '../shared/auto-review-decision.js';
 import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
-import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
+import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS } from '../shared/sensitive-credential-paths.js';
@@ -172,8 +172,10 @@ import {
   CODEX_HISTORY_OVERSIZED_REASON,
   isOversizedLiveTailStats,
   measureRolloutLiveTailStats,
+  assertCodexRolloutRewriteSupported,
   sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
+import { CodexHistoryRecoveryRequiredError } from './history-recovery.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -3197,7 +3199,7 @@ export class CodexAgent extends BaseAgent {
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => attachLiveGeneration(usageTracker.snapshot(), {
       outputTokens: usageTracker.getTurnUsage().output,
-      closedDurationMs: translatorRt.generationDurationMs,
+      durationMs: translatorRt.generationOutputDurationMs,
       openStartedAt: translatorRt.generationStartedAt,
       reliable: translatorRt.generationTimingReliable,
     });
@@ -9517,7 +9519,13 @@ export class CodexAgent extends BaseAgent {
         ),
         cachedTokens: realTurnUsage.cacheRead,
         segments: realTurnUsageSegments,
-        ...(generationDurationMs !== undefined ? { durationMs: generationDurationMs } : {}),
+        // With usage, exclude post-output finalization. Without usage, retain
+        // the measured duration metadata (zero output cannot produce a rate).
+        ...(generationDurationMs !== undefined ? {
+          durationMs: realTurnUsage.output > 0
+            ? translatorRt.generationOutputDurationMs || undefined
+            : generationDurationMs,
+        } : {}),
         ...(typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs)
           ? { turnDurationMs: turn.durationMs }
           : {}),
@@ -9717,7 +9725,7 @@ export class CodexAgent extends BaseAgent {
             status: 'Done',
             ...attachLiveGeneration(endSnap, {
               outputTokens: realTurnUsage.output,
-              closedDurationMs: translatorRt.generationDurationMs,
+              durationMs: translatorRt.generationOutputDurationMs,
               openStartedAt: null,
               reliable: translatorRt.generationTimingReliable,
             }),
@@ -10812,6 +10820,14 @@ export class CodexAgent extends BaseAgent {
               ? 'priority'
               : 'standard',
           });
+          // Input/cache-only segments still belong in the ledger, but cannot
+          // pair already reported output with a later generation denominator.
+          if (last.outputTokens > 0) {
+            translatorRt.generationOutputDurationMs = sampleGenerationDuration(
+              translatorRt.generationDurationMs,
+              translatorRt.generationStartedAt,
+            );
+          }
           maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
           if (memoryFlushController) {
@@ -13296,9 +13312,25 @@ export class CodexAgent extends BaseAgent {
       note: 'Codex 精确 fork: 独立一次性 host 上 thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
     });
     try {
+      // Source history inspection must not depend on the credentials we are leaving.
+      let preparedSourcePath = opts.stripEncryptedReasoning
+        ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId)
+        : undefined;
+      let historyChecked = false;
+      if (opts.stripEncryptedReasoning && (preparedSourcePath || this.codexHome)) {
+        await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+        historyChecked = true;
+      }
       const host = await this.getHost(undefined, forkCredentialMode, {
         keyOverride: forkHostKey,
         hostPurpose: 'control-plane',
+      }).catch((error) => {
+        // This is the outgoing source's offline fork host, not a target send.
+        // Missing old credentials must not trap a task on the provider it is leaving.
+        if (opts.stripEncryptedReasoning && error instanceof AgentNotAuthenticatedError) {
+          throw new CodexHistoryRecoveryRequiredError();
+        }
+        throw error;
       });
       forkHost = host;
       const initResp = await host.ensureStarted();
@@ -13309,7 +13341,13 @@ export class CodexAgent extends BaseAgent {
       // already asks the desktop host to link/adopt their state and rollout;
       // fork must cross the same preparation boundary before thread/fork or the
       // fork app-server cannot resolve a freshly imported thread.
-      await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
+      // A first host may have just created the managed state DB needed for imports.
+      preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
+      if (opts.stripEncryptedReasoning && !historyChecked) {
+        // Check before allocating a child: indexed native history must go through
+        // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.
+        await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+      }
       const params: ThreadForkParams = {
         threadId: opts.sourceSdkSessionId,
         persistExtendedHistory: true,
@@ -13338,21 +13376,13 @@ export class CodexAgent extends BaseAgent {
         newSdkSessionId = rollbackThreadId;
       }
       if (opts.stripEncryptedReasoning) {
-        // Codex 0.153 resolves thread/fork.path only inside the active
-        // CODEX_HOME sessions namespace. A sanitized copy in os.tmpdir() is
-        // invisible; a second sessions copy instead trips the stale-path
-        // guard while the source thread is indexed. Fork the canonical source
-        // first, unload/flush only the new child, then retire the one-shot host
-        // before inspecting its rollout. Codex 0.153 persists thread/fork as a
-        // lazy history_base reference whose byte boundary is consumed by the
-        // next resume. The sanitizer preserves lazy children byte-for-byte and
-        // only rewrites fully materialized/legacy rollouts.
+        // Legacy unindexed history can be sanitized after the one-shot writer closes.
+        // Indexed history was rejected before fork; a second guard inside the sanitizer
+        // also protects against a newer child format returned by the native daemon.
         await cleanupCreatedThreads();
         await retireForkHost(true);
         const childRolloutPath = await this.findRolloutPath(newSdkSessionId);
-        const sanitizeStats = await sanitizeCodexForkRolloutFileInPlace(childRolloutPath, {
-          resolveHistoryBaseRollout: (threadId) => this.findRolloutPath(threadId),
-        });
+        const sanitizeStats = await sanitizeCodexForkRolloutFileInPlace(childRolloutPath);
         log.info('fork child rollout sanitized', {
           newSdkSessionId,
           unsafeLines: sanitizeStats.unsafeLines,

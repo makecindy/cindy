@@ -92,26 +92,32 @@ export function EffortSlider({
       setDragging(false);
       draggingRef.current = false;
       // 先落值再清连续坐标:清早了会先闪回旧档再跳到新档。
-      commit(index);
+      if (!disabled) commit(index);
+      setDragPos(null);
+    };
+    const onCancel = () => {
+      setDragging(false);
+      draggingRef.current = false;
       setDragPos(null);
     };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
-    document.addEventListener('pointercancel', onUp);
+    document.addEventListener('pointercancel', onCancel);
     return () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
-      document.removeEventListener('pointercancel', onUp);
+      document.removeEventListener('pointercancel', onCancel);
     };
-  }, [commit, dragging, positionFromEvent]);
+  }, [commit, disabled, dragging, positionFromEvent]);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (disabled || event.button !== 0) return;
     event.preventDefault();
     setDragging(true);
     draggingRef.current = false;
-    // 按下即吸附到最近档(保留过渡 ⇒ 点远处 = 快速扫过去);后续 move 才切连续跟手。
-    commit(Math.round(positionFromEvent(event.clientX)));
+    // 按下只预览最近档，松手提交最终档位。提前提交会把一次拖动拆成两笔写入，
+    // 慢回执时可能只落下起点，或被后完成的旧请求覆盖终点。
+    setDragPos(Math.round(positionFromEvent(event.clientX)));
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {

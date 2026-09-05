@@ -412,7 +412,8 @@ export interface DeviceLinkPeerRouteStateChanged {
 }
 
 /**
- * 单个 peer 的可靠传输已在本地复位，需要 host 独立重建该 peer。
+ * 单个 peer 的可靠传输已在本地复位。Host 应作废该 peer 的内容就绪证据；
+ * 出站隔离策略由 host 重建，入站方向仍通知对端重开。
  *
  * 该事件不是 relay/WSS 断线信号；其它 peer 必须继续收发。代次字段供 host
  * 丢弃排队期间已经过期的恢复任务。`seq` 只用于诊断，不代表业务请求 id。
@@ -627,6 +628,10 @@ export class DeviceLinkClient {
   private pongMisses = 0;
   /** 最近一次收到任何有效 relay 帧的时刻；避免把有业务流量的 socket 误判为僵死。 */
   private lastInboundAt = 0;
+  private networkChangeTimer: ReturnType<typeof setTimeout> | null = null;
+  private networkProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  private networkProbeStartedAt = 0;
+  private connectionStartedAt = 0;
   /** 当前连接的代号,用于丢弃过期 socket 的事件回调 */
   private connEpoch = 0;
   /** 本轮连接的最后一条 socket error message(升级失败 401 只在 error 事件里可见) */
@@ -783,6 +788,50 @@ export class DeviceLinkClient {
     void this.connect(reason);
   }
 
+  /** Network changes are hints, not proof of failure. Probe the shared relay,
+   * never an individual peer; any valid inbound frame keeps the socket alive.
+   * Repeated hints coalesce and cannot extend an already running probe. */
+  notifyNetworkChanged(): void {
+    if (this.stopped || this.networkProbeTimer) return;
+    if (this.networkChangeTimer) clearTimeout(this.networkChangeTimer);
+    this.networkChangeTimer = setTimeout(() => {
+      this.networkChangeTimer = null;
+      if (this.stopped) return;
+      if (this.status !== 'online') {
+        // Do not interrupt a handshake or bypass relay 1013 cool-down.
+        if (this.reconnectTimer) this.connectNow('network-change');
+        return;
+      }
+      const epoch = this.connEpoch;
+      const socket = this.ws;
+      const startedAt = this.monotonicNow();
+      this.networkProbeStartedAt = startedAt;
+      // A network hint cannot narrow the existing weak-network latency envelope.
+      // Allow at least the normal 15s handshake tolerance (or a larger override)
+      // before discarding a shared socket.
+      this.networkProbeTimer = setTimeout(() => {
+        this.networkProbeTimer = null;
+        if (this.stopped || this.connEpoch !== epoch || this.ws !== socket) return;
+        this.log.info(`network probe timed out (elapsedMs=${this.monotonicNow() - startedAt})`);
+        this.restartConnection('network-probe-timeout');
+      }, Math.max(DEFAULT_TIMING.handshakeTimeoutMs, this.timing.handshakeTimeoutMs));
+      try {
+        this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'ping' });
+      } catch {
+        // A full send buffer is not proof of a dead relay. Allow inbound traffic
+        // to settle the same bounded probe rather than tearing down immediately.
+        this.log.debug('network probe send deferred; waiting for inbound activity');
+      }
+    }, 500);
+  }
+
+  private clearNetworkProbe(): void {
+    if (this.networkChangeTimer) clearTimeout(this.networkChangeTimer);
+    if (this.networkProbeTimer) clearTimeout(this.networkProbeTimer);
+    this.networkChangeTimer = null;
+    this.networkProbeTimer = null;
+  }
+
   /**
    * 有界等待连接就绪。online 立即 resolve;否则订阅状态变化,在 timeoutMs 内
    * 等到 online 就 resolve,超时 / stopped 则 reject(NOT_CONNECTED)。
@@ -933,7 +982,7 @@ export class DeviceLinkClient {
     return () => this.peerRouteStateHandlers.delete(cb);
   }
 
-  /** 订阅单 peer 可靠传输复位；host 应只重建 `change.deviceId`。 */
+  /** 订阅单 peer 可靠传输复位；host 恢复只能影响 `change.deviceId`。 */
   onPeerTransportReset(
     cb: (change: DeviceLinkPeerTransportReset) => void,
   ): () => void {
@@ -1476,7 +1525,9 @@ export class DeviceLinkClient {
 
   private async connect(reason: string): Promise<void> {
     if (this.stopped) return;
+    this.clearNetworkProbe();
     this.resetLegacyInboundQueue();
+    this.connectionStartedAt = this.monotonicNow();
     this.setStatus('connecting');
     const epoch = ++this.connEpoch;
     this.lastSocketErrorMessage = null;
@@ -1759,6 +1810,7 @@ export class DeviceLinkClient {
   }
 
   private clearTimers(): void {
+    this.clearNetworkProbe();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -1843,7 +1895,14 @@ export class DeviceLinkClient {
       this.log.warn(`dropping invalid device-link frame kind=${env.kind}`);
       return;
     }
-    if (validForHeartbeat) this.lastInboundAt = this.monotonicNow();
+    if (validForHeartbeat) {
+      this.lastInboundAt = this.monotonicNow();
+      if (this.networkProbeTimer) {
+        clearTimeout(this.networkProbeTimer);
+        this.networkProbeTimer = null;
+        this.log.debug(`network probe confirmed relay activity (elapsedMs=${Math.max(0, this.lastInboundAt - this.networkProbeStartedAt)})`);
+      }
+    }
 
     const ack = parseTransportAck(env);
     if (ack) {
@@ -1996,7 +2055,7 @@ export class DeviceLinkClient {
         if (wasOnline) {
           this.log.info(`duplicate hello-ack while already online (protocol=v${ack.serverProtocolVersion})`);
         } else {
-          this.log.info(`device-link online (protocol=v${ack.serverProtocolVersion})`);
+          this.log.info(`device-link online (protocol=v${ack.serverProtocolVersion}, elapsedMs=${Math.max(0, this.monotonicNow() - this.connectionStartedAt)})`);
         }
         return true;
       }
@@ -3832,9 +3891,10 @@ export class DeviceLinkClient {
     // 关闭；host 收到本地事件后用所有版本都支持的 link-open 恢复。
     if (peer.linkAcceptedInbound && peer.supportsTransportTimeoutClose) {
       this.notifyTransportTimeoutClose(dst, 1);
-    } else if (this.opts.peerFailurePolicy === 'isolate-peer') {
-      this.notifyPeerTransportReset(dst, seq, peer.linkGeneration);
     }
+    // Both directions share this peer state during mutual control. Notify local
+    // views even when the remote controller owns reopening the inbound link.
+    this.notifyPeerTransportReset(dst, seq, peer.linkGeneration);
   }
 
   /**

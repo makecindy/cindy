@@ -7420,6 +7420,7 @@
         "discountedVsStandard": "할인 중 · 표준가 대비 {{percent}}% 절약"
       },
       "trigger": {
+        "currentAndNext": "현재: {{current}}\n다음 메시지: {{next}}",
         "placeholder": "모델 선택",
         "aria": "모델 선택. 현재: {{model}}",
         "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}",
@@ -7462,6 +7463,9 @@
         "fastBadge": "고속"
       },
       "source": {
+        "unavailable": "모델 사용 불가",
+        "reconnect": "다시 연결",
+        "manage": "제공자 관리",
         "railLabel": "소스",
         "connect": "모델 추가",
         "connectCta": "소스 연결 →",
@@ -7478,10 +7482,6 @@
         "railAll": "전체",
         "favoritesGroup": "즐겨찾기",
         "favoritesEmpty": "즐겨찾기가 없습니다 — 모델 행에 마우스를 올리고 ☆를 눌러 저장하세요",
-        "layoutBadge": "스타일 B 사용해 보기",
-        "layoutClassic": "스타일 A로 돌아가기",
-        "layoutTryUnified": "새 선택기 사용해 보기",
-        "layoutOriginal": "이전 버전으로 돌아가기",
         "addFavorite": "즐겨찾기에 저장",
         "customize": "사용자 지정",
         "removeFavorite": "즐겨찾기 해제",
@@ -8075,6 +8075,7 @@
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
+      "tokenRateDescription": "이번 턴에서 메인 Agent의 평균 생성 속도입니다. 사고 과정을 포함하며 도구 실행과 승인 대기 시간은 제외합니다. 사용량 보고에 따라 갱신되며, 옆에는 턴의 전체 경과 시간이 표시됩니다.",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8819,6 +8820,8 @@
       "runningTool": "{{tool}} 실행 중…"
     },
     "remoteSession": {
+      "syncing": "동기화 중…",
+      "recovered": "복구됨",
       "reconnecting": "제어 대상 기기와 연결이 끊겼습니다. 다시 연결 중…",
       "hostOffline": "제어 대상 기기가 오프라인이라 지금은 동기화할 수 없습니다",
       "degraded": "제어 대상 기기와 연결이 불안정합니다. 자동으로 다시 시도 중…",

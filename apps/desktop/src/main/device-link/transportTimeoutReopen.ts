@@ -15,6 +15,8 @@
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface TransportTimeoutReopenDeps {
+  /** Local view invalidation, including another reset while reopen is already pending. */
+  onReset?(deviceId: string): void;
   /** 重开链路(通常是 openRemoteLink;自带同 device in-flight 去重)。 */
   reopen(deviceId: string): Promise<unknown>;
   /** 返回 true 则终止该设备的循环(撤权 / client 不在 / 待命态 / relay 离线)。 */
@@ -172,6 +174,7 @@ export function createTransportTimeoutReopenLoop(
 
   return {
     trigger(deviceId: string): void {
+      deps.onReset?.(deviceId);
       if (entries.has(deviceId)) return;
       const entry: ReopenEntry = { timer: null };
       entries.set(deviceId, entry);

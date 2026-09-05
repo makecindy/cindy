@@ -37,7 +37,7 @@ import {
 } from '../shared/context-overflow-error.js';
 import type { UsageTracker } from '../shared/usage-tracker.js';
 import { isModelAccessDenied } from './model-access-error.js';
-import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
+import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import {
   beginClaudeGeneration,
   beginClaudeGenerationAtRequestStart,
@@ -266,18 +266,6 @@ function applySubagentLiveReliability(ctx: TranslateContext): void {
   }
 }
 
-/**
- * Snapshot-only: the current parent generation interval has no streamed output
- * yet. Hide this status without sticky-failing `generation.reliable`, so a
- * later parent `message_delta` can restore tok/s.
- */
-function currentParentStreamedOutputPending(ctx: TranslateContext): boolean {
-  if (!ctx.rt.generation.sawSubagent) return false;
-  if (mainActiveSegmentHasOutput(ctx)) return false;
-  if (ctx.rt.generation.startedAt !== null) return true;
-  return Boolean(ctx.rt.activeUsageSegmentByParent.get(CLAUDE_MAIN_USAGE_PARENT));
-}
-
 function liveParentOutputTokens(
   ctx: TranslateContext,
   resultOutput?: number,
@@ -294,6 +282,9 @@ function liveParentOutputTokens(
     return mainOutput;
   }
   if (typeof resultOutput === 'number' && Number.isFinite(resultOutput)) {
+    // A first aggregate after resume may include historical output. Keep the
+    // accounting total, but never divide it by this turn's generation time.
+    if (!streamedOutputMatchesResult) markClaudeGenerationUnreliable(ctx.rt.generation);
     return Math.max(0, resultOutput);
   }
   return mainOutput;
@@ -309,9 +300,9 @@ function ccLiveStatus(
     status,
     ...attachLiveGeneration(ctx.tracker.snapshot(), {
       outputTokens: mainTurnOutputTokens(ctx.tracker),
-      closedDurationMs: ctx.rt.generation.durationMs,
+      durationMs: ctx.rt.generation.outputDurationMs,
       openStartedAt: ctx.rt.generation.startedAt,
-      reliable: ctx.rt.generation.reliable && !currentParentStreamedOutputPending(ctx),
+      reliable: ctx.rt.generation.reliable,
     }),
     isRunning,
   };
@@ -852,7 +843,7 @@ export function translateSdkMessage(
         }
       }
       for (const toolUseId of completedToolUseIds) {
-        resumeClaudeGeneration(ctx.rt.generation, toolUseId);
+        if (!parentToolUseId) resumeClaudeGeneration(ctx.rt.generation, toolUseId);
         ctx.rt.toolUseIdToName.delete(toolUseId);
       }
       if (completedToolUseIds.size > 0) {
@@ -1515,7 +1506,7 @@ function handleAssistant(
       const toolUseId = rememberClaudeToolUseId(ctx, block.id, block.name);
       if (toolUseId) {
         // 完整 assistant 消息已带工具参数,即使没有 stream_event 也可在此停表。
-        pauseClaudeGenerationForToolUse(ctx, toolUseId);
+        if (!parentToolUseId) pauseClaudeGenerationForToolUse(ctx, toolUseId);
         ctx.onToolUseStart?.(toolUseId, block.name, block.input, parentToolUseId);
       }
       queue.push({
@@ -1764,6 +1755,7 @@ function handleStreamEvent(
         'cache_read_input_tokens',
         'cache_creation_input_tokens',
       ].every((field) => Object.prototype.hasOwnProperty.call(usage, field));
+      const previousOutput = ctx.tracker.getTurnUsage().output;
       ctx.tracker.upsertApiCallUsage(segmentId, {
         id: segmentId,
         model: streamModel ?? ctx.getModel(),
@@ -1775,6 +1767,14 @@ function handleStreamEvent(
         complete: hasCompleteUsageSnapshot,
       });
       if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
+      else if (ctx.tracker.getTurnUsage().output > previousOutput) {
+        // Upserts retain the largest output count. Input-only, duplicate, and
+        // older usage must not advance the paired denominator on their own.
+        ctx.rt.generation.outputDurationMs = sampleGenerationDuration(
+          ctx.rt.generation.durationMs,
+          ctx.rt.generation.startedAt,
+        );
+      }
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
       // 让人看日志能直观看到 token 是怎么涨上去的, 而不是只在 turn end 看到一个总数。
       ctx.log.debug('SDK ▷ token usage (message_delta)', {
@@ -2381,7 +2381,7 @@ function handleResult(
       status: 'Done',
       ...attachLiveGeneration(endSnapshot, {
         outputTokens: liveTurnOutput,
-        closedDurationMs: liveGeneration.durationMs,
+        durationMs: liveGeneration.outputDurationMs,
         openStartedAt: null,
         reliable: liveGeneration.reliable,
       }),

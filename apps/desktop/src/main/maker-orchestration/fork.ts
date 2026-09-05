@@ -10,7 +10,7 @@
 
 import { eq, and, lt, gt, asc, desc, isNull, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
+import { CodexResumePreparationBlockedError, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 import { getDbClient } from '../localDb/client/current';
@@ -79,7 +79,7 @@ interface ForkNativeSource {
   nextSwitch: MessagePosition | null;
   /** false = 原生会话已因同引擎换窗失效，只复制可见历史，首次发送走交接。 */
   reuseVendorSession: boolean;
-  rebuildReason?: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
+  rebuildReason?: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
 }
 
 interface ForkTimelineMessage {
@@ -118,7 +118,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   agentKind: DbAgentKind;
   model: string;
   providerId: string | null;
-  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
 }): Promise<void> {
   const handoffMessages: HandoffSourceMessage[] = opts.rows
     .filter(
@@ -162,7 +162,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
 }
 
 interface ParsedContextRebuildBoundary {
-  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
   sourceAgentKind?: DbAgentKind;
   sourceModel?: string | null;
   sourceProviderId?: string | null;
@@ -174,7 +174,8 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
     if (
       parsed.reason !== 'context-overflow' &&
       parsed.reason !== 'model-window-switch' &&
-      parsed.reason !== 'pi-prompt-timeout'
+      parsed.reason !== 'pi-prompt-timeout' &&
+      parsed.reason !== 'native-session-recovery'
     ) {
       return null;
     }
@@ -200,7 +201,7 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
 
 function parseContextRebuildReason(
   content: string,
-): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | null {
+): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | null {
   return parseContextRebuildBoundary(content)?.reason ?? null;
 }
 
@@ -1056,6 +1057,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
       remoteHostId: source.remoteHostId ?? null,
     })
     .catch((err: unknown) => {
+      if (isCodexHistoryRecoveryRequired(err) && (sourceMessages.length > 0 || source.contextTokens === 0)) {
+        return { newSdkSessionId: null, uuidMap: new Map<string, string>() };
+      }
       const detail = codexForkFailureDetail(err);
       throw forkError('CODEX_FORK_STATE_UNAVAILABLE', detail);
     });
@@ -1063,6 +1067,31 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const now = Date.now();
   const newSessionId = createBusinessSessionId();
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
+  const recoveryMarker = newSdkSessionId === null ? {
+    id: createId(),
+    clientId: createId(),
+    createdAt: now,
+    content: JSON.stringify({
+      reason: 'native-session-recovery',
+      consumed: false,
+      sourceAgentKind: 'codex',
+      sourceModel: source.model,
+      sourceProviderId: source.providerId,
+      sourceSdkSessionId: source.sdkSessionId,
+      sourceUserClientId: newMessageIds[sourceMessages.findLastIndex((row) => row.role === 'user')]?.clientId ?? null,
+      handoff: buildHandoffText(sourceMessages.filter((row) => row.role !== 'error').map((row) => ({
+        role: row.role,
+        content: parseJsonContent(row.content),
+        createdAt: row.createdAt,
+        toolUseId: row.toolUseId,
+      })), {
+        fromLabel: 'Codex',
+        toLabel: 'Codex',
+        sessionId: newSessionId,
+        reason: 'native-session-recovery',
+      }),
+    }),
+  } : undefined;
   await getDbClient().tx('fork.session', {
     sourceSessionId,
     sourceClearedAt: source.clearedAt,
@@ -1097,11 +1126,12 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     },
     uuidMap: Array.from(uuidMap.entries()),
     newMessageIds,
+    recoveryMarker,
   });
 
   const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
   }
-  return sessionToCamel({ ...row, messageCount: sourceMessages.length });
+  return sessionToCamel({ ...row, messageCount: sourceMessages.length + (recoveryMarker ? 1 : 0) });
 }

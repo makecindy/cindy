@@ -23,6 +23,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { isSessionTurnRunningFor } from '@/lib/makerTransport';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
+import { createRemoteContentRecovery, type RemoteContentRecoveryState } from './remoteContentRecovery';
 
 const log = createLogger('useRemoteSessionSync');
 
@@ -336,6 +337,7 @@ export function createRemoteSessionSyncEngine(
 // ─── React adapter ────────────────────────────────────────────────────────────
 
 export interface RemoteSessionSync {
+  contentState: RemoteContentRecoveryState;
   /** 手动重新同步(banner 按钮):重订阅重 topic + 对账消息 + 重拉会话列表。 */
   resync: () => void;
   /**
@@ -353,6 +355,7 @@ export function useRemoteSessionSync(
 ): RemoteSessionSync {
   const engineRef = useRef<RemoteSyncEngine | null>(null);
   const [suspectStall, setSuspectStall] = useState(false);
+  const [content, setContent] = useState({ sessionId, deviceId, state: 'syncing' as RemoteContentRecoveryState });
 
   const resync = useCallback(() => {
     setSuspectStall(false);
@@ -369,12 +372,21 @@ export function useRemoteSessionSync(
       engineRef.current = null;
       return;
     }
+    setContent({ sessionId, deviceId, state: 'syncing' });
+    const recovery = createRemoteContentRecovery({
+      subscribe: () => window.electronAPI.deviceLink.subscribe(deviceId, [`session:${sessionId}`]),
+      reconcile: () => makerChatStore.reconcileRemoteMessages(sessionId),
+      changed: (state) => setContent({ sessionId, deviceId, state }),
+      completed: (elapsedMs) => log.info('remote content recovered', { elapsedMs }),
+      phaseCompleted: (phase, elapsedMs) => log.debug('remote recovery phase completed', { phase, elapsedMs }),
+    });
     // 每个 (sessionId, deviceId) 绑定一个 engine;getTarget 返回本 effect 的常量,
     // dispose 退订的就是本次订阅的 topic(不受后续 session 切换影响)。
     const engine = createRemoteSessionSyncEngine(
       () => ({ sessionId, deviceId }),
       {
         subscribe: (d, topics) => {
+          if (!recovery.isReady()) { recovery.request(); return; }
           return window.electronAPI.deviceLink
             .subscribe(d, topics)
             .catch((err) => log.warn('device-link subscribe(session) failed', err));
@@ -383,6 +395,7 @@ export function useRemoteSessionSync(
           return window.electronAPI.deviceLink.unsubscribe(d, topics).catch(() => {});
         },
         reconcile: (s) => {
+          if (!recovery.isReady()) { recovery.request(); return; }
           // 挂起交互(permission/ask/plan)重建已并入 reconcileRemoteMessages 的同一代
           // (远程回执的新鲜度语义需要两者同代落地),这里不再单独调用。
           void makerChatStore.reconcileRemoteMessages(s);
@@ -416,11 +429,30 @@ export function useRemoteSessionSync(
     // 切回时如果 isRunning=true → 可能是切走期间 done 丢了 → 延迟核实被控端
     engine.reconcileOnMount();
 
+    let relayAvailable: boolean | undefined;
+    let peerAvailable: boolean | undefined = remoteProjectsStore.getDeviceIds().includes(deviceId);
+    let peerResponsive: boolean | undefined;
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.((p) => {
+      if (p.deviceId !== deviceId) return;
+      recovery.invalidate(relayAvailable !== false && peerAvailable !== false && peerResponsive !== false);
+      // subscribe already waits for the existing per-peer openLink. Only its new
+      // ACK followed by an applied snapshot can restore this view's readiness.
+      recovery.request();
+    });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
+      const online = p.status === 'online';
+      if (relayAvailable !== online) recovery.invalidate(online);
+      relayAvailable = online;
+      if (!online) peerAvailable = undefined;
       if (p.status !== 'online') return;
       engine.handleOnline();
     });
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged((snap) => {
+      if (snap.deviceId === deviceId) {
+        const available = snap.online && snap.remoteControlEnabled;
+        if (peerAvailable !== available) recovery.invalidate(available && relayAvailable !== false);
+        peerAvailable = available;
+      }
       engine.handlePresence(snap.deviceId, snap.online);
     });
     // 「设备无响应」熔断恢复(main 权威)→ 与 relay 上线同处理:重订阅 + 对账。
@@ -429,6 +461,11 @@ export function useRemoteSessionSync(
     // (relay online / presence online / focus / turn 结束)一个都不会发生,恢复后
     // 视图会继续缺消息。连接类状态的恢复必须全自动,不能靠横幅按钮兜(review P2)。
     const offResponsiveness = window.electronAPI.deviceLink.onResponsivenessChanged((p) => {
+      if (p.deviceId === deviceId) {
+        const responsive = !p.unresponsive;
+        if (peerResponsive !== responsive) recovery.invalidate(responsive && relayAvailable !== false && peerAvailable !== false);
+        peerResponsive = responsive;
+      }
       if (p.unresponsive) return;
       engine.handleResponsivenessRecovered(p.deviceId);
     });
@@ -441,9 +478,11 @@ export function useRemoteSessionSync(
     window.addEventListener('focus', onFocus);
 
     return () => {
+      recovery.dispose();
       offStatus();
       offPresence();
       offResponsiveness();
+      offPeerReset?.();
       offStore();
       window.removeEventListener('focus', onFocus);
       engine.dispose();
@@ -451,5 +490,6 @@ export function useRemoteSessionSync(
     };
   }, [sessionId, deviceId]);
 
-  return { resync, suspectStall, forceFinalize };
+  const contentState = content.sessionId === sessionId && content.deviceId === deviceId ? content.state : 'syncing';
+  return { resync, suspectStall, forceFinalize, contentState };
 }

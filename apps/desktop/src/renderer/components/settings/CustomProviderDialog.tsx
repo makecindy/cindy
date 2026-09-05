@@ -96,6 +96,7 @@ import {
 } from '@/lib/customProviderRuntimeFill';
 
 import {
+  formatContextWindow,
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
   presetDisplayName,
@@ -305,6 +306,18 @@ function isCommittableWindowText(text: string): boolean {
   if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return false;
   const parsed = BigInt(trimmed.replace(/[,_ ]/g, ''));
   return parsed > 0n && parsed <= BigInt(Number.MAX_SAFE_INTEGER);
+}
+
+/** Compact context-window label shown inside the existing token-count input. */
+function compactContextWindowLabel(draft: string | undefined, contextWindow?: number): string | null {
+  if (draft !== undefined) {
+    if (!isCommittableWindowText(draft) || !draft.trim()) return null;
+    const value = Number(BigInt(draft.trim().replace(/[,_ ]/g, '')));
+    return Number.isSafeInteger(value) && value > 0 ? formatContextWindow(value) : null;
+  }
+  return contextWindow != null && Number.isSafeInteger(contextWindow) && contextWindow > 0
+    ? formatContextWindow(contextWindow)
+    : null;
 }
 
 /**
@@ -2547,6 +2560,20 @@ export function CustomProviderDialog({
                           placeholder={t(
                             'settings.providers.custom.fields.modelContextWindowPlaceholder',
                           )}
+                          trailing={(() => {
+                            const label = compactContextWindowLabel(
+                              windowDrafts[`${activeTab}:${i}`],
+                              m.contextWindow,
+                            );
+                            return label ? (
+                              <span
+                                aria-hidden="true"
+                                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-11 font-medium tabular-nums text-[var(--text-tertiary)]"
+                              >
+                                {label}
+                              </span>
+                            ) : null;
+                          })()}
                         />
                       </div>
                       <button

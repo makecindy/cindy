@@ -7419,6 +7419,7 @@
         "discountedVsStandard": "折扣中，較標準價省 {{percent}}%"
       },
       "trigger": {
+        "currentAndNext": "目前：{{current}}\n下一則訊息：{{next}}",
         "placeholder": "選擇模型",
         "aria": "選擇模型。當前：{{model}}",
         "ariaWithEffort": "選擇模型。當前：{{model}}，推理強度：{{effort}}",
@@ -7461,6 +7462,9 @@
         "fastBadge": "快速"
       },
       "source": {
+        "unavailable": "模型無法使用",
+        "reconnect": "重新連線",
+        "manage": "管理來源",
         "railLabel": "來源",
         "connect": "新增模型",
         "connectCta": "連線來源 →",
@@ -7477,10 +7481,6 @@
         "railAll": "全部",
         "favoritesGroup": "收藏",
         "favoritesEmpty": "還沒有收藏——把滑鼠停到模型列上，點 ☆ 存到這裡",
-        "layoutBadge": "試用樣式B",
-        "layoutClassic": "切回樣式A",
-        "layoutTryUnified": "試用新選擇器",
-        "layoutOriginal": "切回舊版",
         "addFavorite": "存為收藏",
         "customize": "自訂",
         "removeFavorite": "取消收藏",
@@ -8074,6 +8074,7 @@
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
+      "tokenRateDescription": "本輪主 Agent 的平均生成速度，含思考，排除工具執行與審批等待。隨用量回報更新；旁邊顯示本輪總耗時。",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8819,6 +8820,8 @@
       "runningTool": "{{tool}} 執行中…"
     },
     "remoteSession": {
+      "syncing": "正在同步…",
+      "recovered": "已恢復",
       "reconnecting": "與被控裝置的連線中斷，正在重連…",
       "hostOffline": "被控裝置已離線，暫時無法同步",
       "degraded": "與被控裝置的連線不穩定，正在自動重試…",

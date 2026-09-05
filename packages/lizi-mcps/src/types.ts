@@ -563,6 +563,7 @@ export type ComputerMcpToolName =
   | 'list_apps'
   | 'list_windows'
   | 'get_window_state'
+  | 'verify_state'
   | 'click'
   | 'double_click'
   | 'right_click'
@@ -615,6 +616,8 @@ export interface ComputerDriverPermissionState {
 
 export interface ComputerMcpCallContext {
   sessionId?: string;
+  /** Request cancellation stays on the host side; never serialized to the driver. */
+  signal?: AbortSignal;
   /** Identifies the agent runtime whose MCP server dispatched this call. */
   agentKind?: string;
 }

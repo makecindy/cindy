@@ -4622,6 +4622,11 @@ export function CCAgentSessionView({
             issue={remoteLinkIssue}
             onResync={remoteSync.resync}
           />
+        ) : remoteConn === 'connected' ? (
+          <RemoteSessionBanner
+            status={remoteSync.contentState === 'ready' ? 'recovered' : 'syncing'}
+            onResync={remoteSync.resync}
+          />
         ) : null}
 
         {/* 远程会话首屏:等被控端经隧道返回历史/元数据期间的 loading(仅远程、延迟防闪)。 */}
@@ -5095,6 +5100,8 @@ export function CCAgentSessionView({
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
+                  runtimeEffective={session?.runtimeEffective}
+                  runtimePending={session?.runtimePending}
                   // 协同会话不参与跨引擎切换；session 未加载时保留 undefined 未知态，
                   // 仅在完整元数据确认非 Orca 后传 null 开放入口。
                   sessionOrcaRole={session ? (session.orcaRole ?? null) : undefined}
@@ -5692,6 +5699,10 @@ function RunningStatusBar({
   });
   const rateText =
     usageMeta.kind === 'rate' ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate }) : null;
+  const rateTipText = [
+    t('chat.runningStatus.tokenRateDescription'),
+    ...(tokenUsage > 0 ? [tokenCountTipText] : []),
+  ].join('\n');
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -5804,17 +5815,11 @@ function RunningStatusBar({
                       &middot;
                     </span>
                     {rateText ? (
-                      tokenUsage > 0 ? (
-                        <Tip text={tokenCountTipText} side="top">
-                          <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                            {rateText}
-                          </span>
-                        </Tip>
-                      ) : (
+                      <Tip text={rateTipText} side="top" contentClassName="whitespace-pre-line">
                         <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                           {rateText}
                         </span>
-                      )
+                      </Tip>
                     ) : (
                       <>
                         <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />

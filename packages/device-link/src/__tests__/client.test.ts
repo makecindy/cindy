@@ -114,6 +114,76 @@ function makeHarness(opts?: {
 }
 
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('network change probes', () => {
+  it.each([true, false])('debounces hints and retains only a responsive socket (responsive=%s)', async (responsive) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current();
+      socket.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(499);
+      expect(socket.sent.filter((e) => e.kind === 'ping')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(socket.sent.filter((e) => e.kind === 'ping')).toHaveLength(1);
+      // More hints cannot extend the probe deadline.
+      h.client.notifyNetworkChanged();
+      if (responsive) socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(h.sockets).toHaveLength(responsive ? 1 : 2);
+      expect(socket.closed !== null).toBe(!responsive);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it.each([15_000, 25_000])('retains a slow healthy relay within its %s ms latency tolerance', async (handshakeTimeoutMs) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, handshakeTimeoutMs } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(handshakeTimeoutMs - 1_000);
+      expect(h.sockets).toHaveLength(1);
+      expect(socket.closed).toBeNull();
+      socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('cancels a pending probe on stop and ignores an old socket after restart', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const old = h.current(); old.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(500);
+      h.client.restartConnection('test');
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(500);
+      old.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(h.sockets).toHaveLength(3);
+      h.current().ack();
+      h.client.notifyNetworkChanged();
+      h.client.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.sockets).toHaveLength(3);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+});
+
 let inboundLinkId = 0;
 
 async function establishInboundReliableLink(
@@ -945,6 +1015,8 @@ describe('DeviceLinkClient', () => {
       },
     });
     const inboundInvokes: Envelope[] = [];
+    const resetDevices: string[] = [];
+    h.client.onPeerTransportReset(({ deviceId }) => resetDevices.push(deviceId));
     h.client.onFrame((env) => {
       if (env.kind === 'invoke' && env.src === 'ctrl-healthy') inboundInvokes.push(env);
     });
@@ -994,6 +1066,9 @@ describe('DeviceLinkClient', () => {
       ))).toBe(true);
     });
     expect(h.client.isLinkReady('ctrl-silent')).toBe(false);
+    // A mutual-control view must also invalidate locally, even though the
+    // remote controller receives transport-timeout and owns reopening the link.
+    expect(resetDevices).toEqual(['ctrl-silent']);
     expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
     expect(socket.terminated).toBe(false);
     expect(socket.closed).toBeNull();
@@ -1112,6 +1187,8 @@ describe('DeviceLinkClient', () => {
         requestTimeoutMs: 5_000,
       },
     });
+    const onReset = vi.fn();
+    h.client.onPeerTransportReset(onReset);
     h.client.start();
     await tick();
     h.current().ack();
@@ -1155,6 +1232,11 @@ describe('DeviceLinkClient', () => {
       ))).toBe(true);
     });
     // 共享 relay 连接完好:没有因互控覆盖误走整连接重连
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(onReset).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'dev-b', reason: 'ack-timeout',
+    }));
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
     expect(socket.terminated).toBe(false);
     expect(h.sockets).toHaveLength(1);
     h.client.stop();

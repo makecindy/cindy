@@ -11,6 +11,7 @@
  */
 
 import os from 'node:os';
+import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
 import WebSocket from 'ws';
@@ -353,6 +354,8 @@ let client: DeviceLinkClient | null = null;
  * 由 presence 闪断路径接管恢复) / 次数耗尽(用户下次打开远程视图惰性重建)。
  */
 const transportTimeoutReopen = createTransportTimeoutReopenLoop({
+  // Local Main→Renderer projection only; the relay and neighboring peers remain online.
+  onReset: (deviceId) => broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId }),
   reopen: async (deviceId) => {
     await openRemoteLink(deviceId);
     // link 重建成功后定向补一次订阅重放:transport-timeout 场景被控端保留了
@@ -624,6 +627,8 @@ export interface DeviceLinkServiceOptions {
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
 }
 
+let stopNetworkWatch: (() => void) | null = null;
+
 export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   // 「保持电脑唤醒」按持久化偏好在启动时应用(与登录 / relay 无关,幂等)。
   const initialKeepAwake = readDeviceLinkSettings().keepAwake;
@@ -738,6 +743,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (change.state === 'offline') {
       handleControllerOffline(change.deviceId, change);
     }
+  });
+  client.onPeerTransportReset(({ deviceId }) => {
+    // Mutual control shares one peer link: a locally exhausted inbound stream
+    // also invalidates this Desktop's remote view, without reopening other peers.
+    broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId });
   });
 
   client.onStatusChange((status) => {
@@ -1059,6 +1069,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (!authManager.getAuthState().isAuthenticated) return;
       linkTornDown = false;
       client?.start();
+      stopNetworkWatch?.();
+      stopNetworkWatch = watchNetworkChanges(() => {
+        if (linkTornDown || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
+        client?.notifyNetworkChanged();
+      });
       // 可靠帧可能在 ownership 接管前到达(那时非持有者,重建被 shouldAbort 挡掉):
       // 接管后对本机仍在控制、且 link 未就绪的设备补发一次重建,避免启动竞态留下
       // 半开链路,不必等对端下一帧。
@@ -1227,6 +1242,8 @@ export function getMobileNotifyGeneration(): number {
  * 同进程换账号登录还会把上一账号的控制端串到新账号。
  */
 function teardownActiveLink(): void {
+  stopNetworkWatch?.();
+  stopNetworkWatch = null;
   if (!client || linkTornDown) return;
   linkTornDown = true;
   controllerDisplayNameRefreshGeneration += 1;

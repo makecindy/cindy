@@ -108,6 +108,7 @@ export interface ApplyComposerResizeDragInput {
 }
 
 export function applyComposerResizeDrag(input: ApplyComposerResizeDragInput): number {
+  'worklet';
   const bounds = normalizeBounds(input.bounds);
   return clamp(
     Math.round(input.startContentHeight - input.translationY),
@@ -295,6 +296,7 @@ export function computeComposerResizeBounds(
 }
 
 function normalizeBounds(bounds: ComposerResizeBounds): ComposerResizeBounds {
+  'worklet';
   const minContentHeight = Math.max(1, Math.round(bounds.minContentHeight));
   return {
     minContentHeight,
@@ -311,5 +313,6 @@ function normalizeNonNegativeDimension(value: number, fallback: number): number 
 }
 
 function clamp(value: number, min: number, max: number): number {
+  'worklet';
   return Math.min(Math.max(value, min), max);
 }

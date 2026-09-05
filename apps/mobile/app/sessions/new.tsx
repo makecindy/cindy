@@ -3351,6 +3351,7 @@ export default function NewRemoteSessionScreen() {
     <ComposerResizeGrabber
       onAdjust={composerResize.adjustByLine}
       panHandlers={composerResize.panHandlers}
+      gesture={composerResize.gesture}
       testID="newSession.composerResizeGrabber"
       visible
     />
@@ -5788,7 +5789,7 @@ export default function NewRemoteSessionScreen() {
                   cursorColor={colors.inputCaret}
                   inputRef={firstMessageInputRef}
                   leading={renderComposerCompactLeading()}
-                  inputFrameHeight={composerResize.frameHeight}
+                  inputFrameAnimatedStyle={composerResize.frameStyle}
                   // 听写期间把输入区撑到 44pt 触控目标:此时「点输入区停止听写」的命中层
                   // 是这层输入区自身(TextInput 的 onPressIn),单行时只有 28pt。
                   inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}

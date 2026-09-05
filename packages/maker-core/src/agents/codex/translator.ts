@@ -85,6 +85,8 @@ export interface CodexRuntimeState {
   generationPendingToolIds: Set<string>;
   /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
   generationDurationMs: number;
+  /** Model time sampled with the latest accepted output usage. */
+  generationOutputDurationMs: number;
   generationTurnId: string | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
@@ -130,6 +132,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationStartedAt: null,
     generationPendingToolIds: new Set(),
     generationDurationMs: 0,
+    generationOutputDurationMs: 0,
     generationTurnId: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
@@ -181,6 +184,7 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
   rt.generationDurationMs = 0;
+  rt.generationOutputDurationMs = 0;
   rt.generationTurnId = null;
   rt.generationTimingReliable = true;
 }

@@ -1017,6 +1017,28 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(calls).toBe(2);
   });
 
+  it.each([true, false])('returns the final applied result to coalesced callers (first stale=%s)', async (firstStale) => {
+    const s = sid();
+    const keep = dbMessage(s, 'keep', 'keep', '2026-06-15T00:00:00.000Z');
+    const cut = dbMessage(s, 'cut', 'cut', '2026-06-16T00:00:00.000Z');
+    await openRemoteWithHistory(s, [keep, cut]);
+    const first = deferred<Message[]>();
+    const trailing = deferred<Message[]>();
+    let calls = 0;
+    remoteListResolver = () => ++calls === 1 ? first.promise : trailing.promise;
+    const result = makerChatStore.reconcileRemoteMessages(s);
+    await flush();
+    const coalesced = makerChatStore.reconcileRemoteMessages(s);
+    if (firstStale) makerChatStore.dropMessagesFromClientId(s, 'client-cut');
+    first.resolve([keep, cut]);
+    await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
+    expect(calls).toBe(2);
+    if (!firstStale) makerChatStore.dropMessagesFromClientId(s, 'client-cut');
+    trailing.resolve([keep]);
+    expect(await result).toBe(firstStale);
+    expect(await coalesced).toBe(firstStale);
+  });
+
   it('远程会话:飞行期间窗口被重置(rewind)时,陈旧对账整体作废;尾随重跑照常补', async () => {
     // 单飞之后"代际变了"必然来自真正的窗口重置,不可能是另一次对账 —— 这条守卫因此变成唯一一道。
     const s = sid();

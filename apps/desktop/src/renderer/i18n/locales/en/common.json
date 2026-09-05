@@ -7422,6 +7422,7 @@
         "discountedVsStandard": "Discounted · {{percent}}% off standard"
       },
       "trigger": {
+        "currentAndNext": "Current: {{current}}\nNext message: {{next}}",
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",
         "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}",
@@ -7464,6 +7465,9 @@
         "fastBadge": "Fast"
       },
       "source": {
+        "unavailable": "Model unavailable",
+        "reconnect": "Reconnect",
+        "manage": "Manage source",
         "railLabel": "Source",
         "connect": "Add a model",
         "connectCta": "Connect a source →",
@@ -7480,10 +7484,6 @@
         "railAll": "All",
         "favoritesGroup": "Favorites",
         "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
-        "layoutBadge": "Try style B",
-        "layoutClassic": "Back to style A",
-        "layoutTryUnified": "Try the new picker",
-        "layoutOriginal": "Back to old picker",
         "addFavorite": "Save to favorites",
         "customize": "Customize",
         "removeFavorite": "Remove from favorites",
@@ -8080,6 +8080,7 @@
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
+      "tokenRateDescription": "The main Agent’s average generation speed for this turn, including thinking and excluding tool execution and approval waits. Updated with reported usage; the adjacent timer shows total turn time.",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8834,6 +8835,8 @@
       "runningTool": "{{tool}} running…"
     },
     "remoteSession": {
+      "syncing": "Syncing…",
+      "recovered": "Restored",
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
       "degraded": "Connection to the controlled device is unstable — retrying automatically…",

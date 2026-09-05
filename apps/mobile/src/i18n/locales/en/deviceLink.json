@@ -1,4 +1,9 @@
 {
+  "recovery": {
+    "syncing": "Syncing…",
+    "recovered": "Restored",
+    "syncingHint": "Updating content from your computer."
+  },
   "syncFailed": "Sync failed",
   "resync": "Resync",
   "resyncing": "Resyncing",

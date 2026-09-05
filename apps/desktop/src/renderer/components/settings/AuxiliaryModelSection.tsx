@@ -48,19 +48,21 @@ export function AuxiliaryModelSection() {
   }, []);
 
   const persistModels = useCallback(
-    async (models: string[]): Promise<void> => {
-      if (pendingRef.current) return;
+    async (models: string[]): Promise<boolean> => {
+      if (pendingRef.current) return false;
       pendingRef.current = true;
       setPending(true);
       try {
         const next = await window.electronAPI.maker.auxiliaryModelSettingsSet({ models });
         setSettings(next);
         if (models.length === 0) setDrafting(false);
+        return true;
       } catch (error) {
         log.warn('auxiliaryModelSettingsSet failed', error);
         toast.error(
           error instanceof Error ? error.message : t('settings.auxiliaryModels.saveFailed'),
         );
+        return false;
       } finally {
         pendingRef.current = false;
         setPending(false);
@@ -115,10 +117,10 @@ export function AuxiliaryModelSection() {
     void persistModels([]);
   };
 
-  const applySlot = (index: number, pin: string | null): void => {
+  const applySlot = (index: number, pin: string | null): void | boolean | Promise<boolean> => {
     if (index === 0 && !pin) {
       if (customized) {
-        void persistModels([]);
+        return persistModels([]);
       } else {
         setDrafting(false);
       }
@@ -130,14 +132,14 @@ export function AuxiliaryModelSection() {
     } else if (index >= slots.length) {
       slots.push(pin);
     } else {
-      if (slots.some((entry, slotIndex) => slotIndex !== index && entry === pin)) return;
+      if (slots.some((entry, slotIndex) => slotIndex !== index && entry === pin)) return false;
       slots[index] = pin;
     }
     const unique: string[] = [];
     for (const entry of slots) {
       if (entry && !unique.includes(entry)) unique.push(entry);
     }
-    void persistModels(unique);
+    return persistModels(unique);
   };
 
   return (

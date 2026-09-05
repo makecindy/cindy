@@ -348,7 +348,7 @@ describe('ChatInput model source switching wiring', () => {
       'engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}',
     );
     expect(chatInputSource).toContain(
-      'resolveModelSelectorAgentIdentity(runtimeAgentKind, null)?.vendorKey ??',
+      'resolveModelSelectorAgentIdentity(runtimeAgentKind, composerSelection.pending ? composerSelection.display.agentKind : null)?.vendorKey ??',
     );
     // 草稿没有 session 身份可言,当前引擎就是 vendorKey。
     expect(chatInputSource).toContain(': (vendorKey ?? null);');
@@ -498,7 +498,8 @@ describe('ChatInput model source switching wiring', () => {
     // 会话或草稿持有的 wire id;这里不得改成面板的行 id。
     expect(selectorBlock).toContain('modelId={activeModel}');
     expect(selectorBlock).toContain('effort={activeEffort}');
-    expect(selectorBlock).toContain('agentSwitchIntent?.fastMode');
+    expect(selectorBlock).toContain('fastMode={composerSelection.display.fastMode}');
+    expect(selectorBlock).toContain('currentSelection={sessionId && runtimeAgentKind ? composerSelection.current : undefined}');
     expect(selectorBlock).not.toContain('rowModelId');
   });
 
@@ -527,7 +528,7 @@ describe('ChatInput model source switching wiring', () => {
 
   it('reopen snapshot keeps intent model/source together; idle falls back to runtime provider', () => {
     expect(chatInputSource).toContain(
-      'const activeProviderId = agentSwitchIntent ? agentSwitchIntent.providerId : selectedProviderId;',
+      'const activeProviderId = runtimeEffective || composerSelection.pending ? composerSelection.display.providerId : selectedProviderId;',
     );
     expect(chatInputSource).toContain('modelId={activeModel}');
     expect(chatInputSource).toContain('currentProviderId={activeProviderId}');

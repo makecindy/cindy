@@ -62,6 +62,13 @@ export function isOversizedHistoryErrorData(data: unknown): boolean {
 
 export type CodexStripRelinkResult = 'recovered' | 'not-needed' | 'failed' | 'busy' | 'stale';
 
+export interface NativeSessionRecoveryTarget {
+  model: string;
+  providerId: string | null;
+  effort: string | null;
+  fastMode: boolean;
+}
+
 const PI_PROMPT_RPC_TIMEOUT_RE = /pi rpc timeout after \d+ms: prompt\b/i;
 
 export function isPiPromptRpcTimeoutError(data: unknown): boolean {
@@ -344,12 +351,13 @@ export interface ContextOverflowRolloverDeps {
     sessionId: string,
     handoff: string,
     meta: {
-      reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
+      reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
       sourceUserClientId: string | null;
       sourceAgentKind?: 'cc' | 'codex' | 'pi';
       sourceModel?: string | null;
       sourceProviderId?: string | null;
       expectedClearedAt?: number | null;
+      replacementRoute?: NativeSessionRecoveryTarget & { expectedSdkSessionId: string };
     },
   ): Promise<void>;
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
@@ -413,6 +421,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   claim(sessionId: string): OverflowClaimResult;
   tryRecover(sessionId: string, errorData: unknown): Promise<boolean>;
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
+  prepareNativeSessionRecovery(
+    sessionId: string,
+    target: NativeSessionRecoveryTarget,
+    assertCanCommit: () => void,
+  ): Promise<void>;
   prepareModelWindowSwitch(
     sessionId: string,
     target: {
@@ -836,6 +849,51 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   };
 
   return {
+    async prepareNativeSessionRecovery(sessionId, target, assertCanCommit) {
+      if (inFlight.has(sessionId)) throw new Error('Native session recovery is already in progress');
+      inFlight.add(sessionId);
+      try {
+        await deps.withCloseSuppressed(sessionId, async () => {
+          await deps.drainPersistQueue();
+          const row = await deps.getSessionRow(sessionId);
+          if (!row?.sdkSessionId || row.status === 'deleted' || row.remoteHostId) {
+            throw new Error('Native session recovery source is unavailable');
+          }
+          const generation = deps.readPendingHandoffGeneration?.(sessionId);
+          const source = (await deps.listMessages(sessionId)).filter((message) => message.role !== 'error');
+          if (source.length === 0 && row.contextTokens !== 0) {
+            throw new Error('Cindy history is unavailable for native session recovery');
+          }
+          const handoff = buildHandoffText(source, {
+            fromLabel: engineLabelForOverflow(row.agentKind),
+            toLabel: engineLabelForOverflow(row.agentKind),
+            sessionId,
+            reason: 'native-session-recovery',
+          });
+          assertCanCommit();
+          const live = deps.getLiveSession(sessionId);
+          if (live?.isTurnRunning()) throw new Error('Native session recovery cannot interrupt a running turn');
+          if (live) await deps.closeSession(sessionId);
+          assertCanCommit();
+          // Durable handoff, SDK reset and complete target route succeed or fail together.
+          // No user turn or tool call is replayed by this control-plane operation.
+          await deps.commitRebuild(sessionId, handoff, {
+            reason: 'native-session-recovery',
+            sourceUserClientId: [...source].reverse().find((message) => message.role === 'user')?.clientId ?? null,
+            sourceAgentKind: normalizeOverflowDbAgentKind(row.agentKind),
+            sourceModel: row.model ?? null,
+            sourceProviderId: row.providerId ?? null,
+            expectedClearedAt: row.clearedAt,
+            replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId },
+          });
+          deps.setPendingHandoff(sessionId, handoff, generation);
+          deps.onRebuilt?.(sessionId);
+        });
+      } finally {
+        inFlight.delete(sessionId);
+      }
+    },
+
     claim(sessionId: string): OverflowClaimResult {
       if (inFlight.has(sessionId)) return 'in-flight';
       inFlight.add(sessionId);

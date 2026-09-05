@@ -115,6 +115,8 @@ import {
   subscribePromptInsert,
   subscribeSessionLinkInsert,
 } from '@/lib/composerActionsBus';
+import { resolveComposerModelSelection } from './composerModelSelection';
+import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
 import {
   ModelSelector,
   resolveRemoteModelListStatus,
@@ -340,7 +342,6 @@ import {
   setProviderModelThinking,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
-import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import {
   setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
   useSessionFavoriteAnchor,
@@ -487,6 +488,8 @@ interface ChatInputProps {
    * 不能用 vendorKey 的 Claude Code 默认回退冒充真实身份。
    */
   runtimeAgentKind?: AgentKind | null;
+  runtimeEffective?: SessionRuntimeProfileProjection;
+  runtimePending?: SessionRuntimePendingProjection | null;
   /**
    * 会话的 Orca 角色(lead / worker;null = 已确认非协同;undefined = 元数据未加载)。
    * 协同运行时对 agent 形态有独立
@@ -1068,6 +1071,8 @@ export function ChatInput({
   onSend,
   sessionId,
   runtimeAgentKind,
+  runtimeEffective,
+  runtimePending,
   sessionOrcaRole,
   initialWorkingDir,
   remoteHostId,
@@ -1621,6 +1626,7 @@ export function ChatInput({
     model: string;
     effort: Effort;
     providerId: string | null;
+    fastMode: boolean;
   } | null>(null);
   // device-link 远程切换的「禁用」只绑定隧道 await 进行中(被控端 ack 即解除),**不**等完整 mirror 回流。
   // 原因:providerId 等字段在控制端 mirror 上回流不可靠(远程会话 serverSession 恒空、mirrorSessionFields
@@ -1656,16 +1662,21 @@ export function ChatInput({
   // main,控制端 store 里这份是它的镜像(登记时乐观写、重连时读回、push 回流覆盖)。
   const agentSwitchIntent =
     sessionId && !remoteHostId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
-  const activeModel =
-    agentSwitchIntent?.model ??
-    pendingRemoteSwitch?.model ??
-    initialModel ??
-    localVendorDefaults.model;
-  const activeEffort =
-    (agentSwitchIntent?.effort as Effort | undefined) ??
-    pendingRemoteSwitch?.effort ??
-    initialEffort ??
-    localVendorDefaults.effort;
+  const composerSelection = resolveComposerModelSelection({
+    current: {
+      agentKind: runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey) ?? 'claude-code',
+      model: initialModel ?? localVendorDefaults.model,
+      providerId: initialProviderId ?? null,
+      effort: initialEffort ?? localVendorDefaults.effort,
+      fastMode: fastMode === true,
+    },
+    effective: sessionId ? runtimeEffective : undefined,
+    pending: sessionId ? runtimePending : undefined,
+    intent: agentSwitchIntent,
+    optimistic: pendingRemoteSwitch,
+  });
+  const activeModel = composerSelection.display.model;
+  const activeEffort = composerSelection.display.effort ?? 'low';
   const activePermissionMode: PermissionMode =
     initialPermissionMode ?? localVendorDefaults.permissionMode;
 
@@ -1686,7 +1697,7 @@ export function ChatInput({
   // 意图期的来源与模型/Agent 同属一份乐观展示快照。不能让旧会话的
   // selectedProviderId 继续参与断开态、默认来源与发送来源解析，否则会形成
   // 「目标 Agent + 目标模型 + 旧来源」的混合状态；null 仍表示跟随目标引擎默认路由。
-  const activeProviderId = agentSwitchIntent ? agentSwitchIntent.providerId : selectedProviderId;
+  const activeProviderId = runtimeEffective || composerSelection.pending ? composerSelection.display.providerId : selectedProviderId;
 
   /**
    * 会话内经统一面板选中的**收藏锚点**(model-selector-unified §1.5,2026-08-17 review 第三轮 G4)。
@@ -1726,14 +1737,15 @@ export function ChatInput({
     const settled =
       initialModel === pendingRemoteSwitch.model &&
       initialEffort === pendingRemoteSwitch.effort &&
-      (initialProviderId ?? null) === pendingRemoteSwitch.providerId;
+      (initialProviderId ?? null) === pendingRemoteSwitch.providerId &&
+      (fastMode === true) === pendingRemoteSwitch.fastMode;
     if (settled) {
       setPendingRemoteSwitch(null);
       return;
     }
     const timer = setTimeout(() => setPendingRemoteSwitch(null), 5000);
     return () => clearTimeout(timer);
-  }, [initialModel, initialEffort, initialProviderId, pendingRemoteSwitch]);
+  }, [initialModel, initialEffort, initialProviderId, fastMode, pendingRemoteSwitch]);
 
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link 远程会话:能力(模型 / fast / effort)从被控端读;本地会话 deviceLinkDeviceId undefined → 本地。
@@ -1849,6 +1861,7 @@ export function ChatInput({
   // 「有没有已连接来源」。vendorKey 锁定时直接信任;否则按 capabilities 反推
   // (按 availableModels 归类,不靠 id 前缀猜)。
   const currentModelAgentKind: AgentKind | null = useMemo(() => {
+    if (runtimeEffective || composerSelection.pending) return composerSelection.display.agentKind;
     if (agentKind) return agentKind;
     if ((ccCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) {
       return 'claude-code';
@@ -1860,7 +1873,7 @@ export function ChatInput({
       return 'pi';
     }
     return null;
-  }, [activeModel, agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
+  }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
   const localProviders = useProviders();
@@ -1891,8 +1904,7 @@ export function ChatInput({
     ? remoteModelListStatus === 'loading'
     : localProvidersLoading;
   // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关 —— **能力级**那一半
-  // (下面还要叠形态偏好才是真正启用,见 unifiedPanelCapable / unifiedPanelActive;
-  // NewMakerDraftRoute 的 unifiedModelPanelEnabled / unifiedModelPanelActive 与这两级逐字对应)。
+  // 下方还会核对任务引擎是否已确认；不再叠加本地样式偏好。
   //
   // 这一级唯一的降级条件是**没有供应商目录可用**:联合列表(unifiedModelEntries)只认目录里的
   // (provider, agent) 条目,而老被控端不支持 provider:list 时控制端只有一份拍平的
@@ -6355,6 +6367,7 @@ export function ChatInput({
       modelId: string,
       expectedRevision?: number,
       effort?: Effort,
+      fastMode?: boolean,
     ) => void | boolean | Promise<void | boolean>;
     byModel: (
       modelId: string,
@@ -6622,6 +6635,7 @@ export function ChatInput({
                 newModelId,
                 result.sameEngineRevision,
                 newEffort,
+                targetFast,
               )
             : await sameEngineReselectRef.current.byModel(newModelId, result.sameEngineRevision);
           // 被更新的选择超车(byProvider / byModel 自带修订号守卫)→ 同样按「没切」上报。
@@ -6797,18 +6811,15 @@ export function ChatInput({
   //     (绝不拿 vendorKey 的 Claude Code 回退冒充,见 runtimeAgentKind 的 prop 说明);
   //   · 草稿:没有 session 身份可言,当前引擎就是 vendorKey 本身。
   const composerEngineMarkVendor = sessionId
-    ? (resolveModelSelectorAgentIdentity(runtimeAgentKind, null)?.vendorKey ?? null)
+    ? (resolveModelSelectorAgentIdentity(runtimeAgentKind, composerSelection.pending ? composerSelection.display.agentKind : null)?.vendorKey ?? null)
     : (vendorKey ?? null);
 
   /**
    * 下发给统一面板的收藏锚点:草稿用调用方(NewMakerDraftRoute)持有的那一份,会话用上面
    * 那份内存态。
    *
-   * 收藏是**独立选中项**(Chris 2026-08-20):选中身份就是那条收藏的 uid,不拿正在跑的
-   * 模型 / 引擎 / 思维去对副本 —— 对上才会勾,等于让下面的同名模型行把焦点抢走(点了
-   * Pi 收藏、任务还停在 Claude 时必现)。uid 指向的收藏被删 / 换账号后查无此条,由面板
-   * 侧 activeFavoriteUid 兜底。用户点普通模型行时 favoriteUid 显式置 null,那才是离开
-   * 这条收藏。
+   * uid 只记录用户曾选过哪条收藏。面板统一核对来源、模型、引擎、深度与 Fast，
+   * 完整匹配才选中收藏；旧任务与已编辑的收藏不一致时，显示实际模型行。
    */
   const effectiveSelectedFavoriteUid = sessionId
     ? (sessionFavoriteAnchor?.uid ?? null)
@@ -6832,14 +6843,10 @@ export function ChatInput({
   const inSessionEngineLocked = Boolean(sessionId) && !sessionEngineFilter;
   const lockedSessionAgentKind =
     inSessionEngineLocked && sessionEngineConfirmed ? (runtimeAgentKind ?? agentKind) : null;
-  // 形态偏好(三档并存,Chris 2026-08-17):'original' = 最原始选择器(含旧 harness
-  // 分段切换,agentSwitch 因 unifiedPanelActive=false 自动回来);'classic'/'badge' =
-  // 新选择器 A/B 版。capable 表示统一面板**可用**(老面板 footer 据此摆「尝试新
-  // 选择器」入口),active 才真正启用。
-  const modelPickerLayoutPref = useModelPickerLayout();
+  // 新旧用户统一使用 A；仅在远端能力或任务引擎尚未确认时回落兼容列表。
   const unifiedPanelCapable =
     unifiedModelPanelEnabled && (!inSessionEngineLocked || lockedSessionAgentKind !== null);
-  const unifiedPanelActive = unifiedPanelCapable && modelPickerLayoutPref !== 'original';
+  const unifiedPanelActive = unifiedPanelCapable;
   const effectiveUnifiedAgents = useMemo<readonly AgentKind[] | undefined>(
     () => (lockedSessionAgentKind ? [lockedSessionAgentKind] : unifiedAgents),
     [lockedSessionAgentKind, unifiedAgents],
@@ -7010,6 +7017,7 @@ export function ChatInput({
               model: newModelId,
               effort: newEffort,
               providerId: selectedProviderId,
+              fastMode: atomicFast,
             });
             setRemoteSwitchInFlight(true);
             // 被控端可能返回 { deferred }(会话在跑,凭证切换登记为 pending、turn 结束生效);
@@ -7255,6 +7263,7 @@ export function ChatInput({
               model: activeModel,
               effort: newEffort,
               providerId: selectedProviderId,
+              fastMode: fastMode === true,
             });
             setRemoteSwitchInFlight(true);
             try {
@@ -7381,7 +7390,7 @@ export function ChatInput({
           void handleClickSend();
           return true;
         case 'composer.toggleFastMode':
-          void handleFastModeChange(!fastMode);
+          void handleFastModeChange(!composerSelection.display.fastMode);
           return true;
         case 'composer.togglePlanMode':
           if (!planModeEntry) return false;
@@ -7416,7 +7425,7 @@ export function ChatInput({
     editor,
     ownsHardwareComposerActions,
     effectiveSourceId,
-    fastMode,
+    composerSelection.display.fastMode,
     handleClickSend,
     handleEffortChange,
     handleFastModeChange,
@@ -7523,6 +7532,7 @@ export function ChatInput({
           newProviderId,
           {
             ...(nextEffort ? { effort: nextEffort as Effort } : {}),
+            ...(reconciledFast !== undefined ? { fastMode: reconciledFast } : {}),
           },
         );
       }
@@ -7568,6 +7578,7 @@ export function ChatInput({
           model: targetModel,
           effort: targetEffort,
           providerId: newProviderId,
+          fastMode: restoredFast,
         });
         setRemoteSwitchInFlight(true);
         // deferred 语义同 handleModelChange 远程分支(被控端会话在跑 → pending、turn 结束生效)。
@@ -7855,14 +7866,22 @@ export function ChatInput({
 
   // performAgentSwitch 的"选回当前引擎"分支经 ref 调用(两 handler 声明在其后,TDZ)。
   sameEngineReselectRef.current = {
-    byProvider: (providerId, modelId, expectedRevision, effort) =>
-      handleProviderChange(providerId, modelId, effort, expectedRevision),
+    byProvider: (providerId, modelId, expectedRevision, effort, fastMode) =>
+      handleProviderChange(providerId, modelId, effort, expectedRevision, fastMode),
     byModel: (modelId, expectedRevision) => handleModelChange(modelId, expectedRevision),
   };
 
   const handleNavigateToProviders = useCallback(() => {
     navigate('/settings?tab=providers');
   }, [navigate]);
+
+  const handleReconnectSource = useCallback(() => {
+    const params = new URLSearchParams({ tab: 'providers' });
+    if (activeProviderId) params.set('connect', activeProviderId);
+    if (activeModel) params.set('model', activeModel);
+    if (currentModelAgentKind) params.set('agent', currentModelAgentKind);
+    navigate(`/settings?${params.toString()}`);
+  }, [navigate, activeProviderId, activeModel, currentModelAgentKind]);
 
   const handlePermissionModeChange = useCallback(
     async (newMode: PermissionMode) => {
@@ -8622,11 +8641,8 @@ export function ChatInput({
                     effort={activeEffort}
                     onModelChange={handleModelChange}
                     onEffortChange={handleEffortChange}
-                    fastMode={
-                      agentSwitchIntent?.fastMode !== undefined
-                        ? agentSwitchIntent.fastMode
-                        : fastMode
-                    }
+                    fastMode={composerSelection.display.fastMode}
+                    currentSelection={sessionId && runtimeAgentKind ? composerSelection.current : undefined}
                     onFastModeChange={handleFastModeChange}
                     thinkingEnabled={
                       currentModelAgentKind && effectiveSourceId
@@ -8687,7 +8703,7 @@ export function ChatInput({
                       sessionId
                         ? resolveModelSelectorAgentIdentity(
                             runtimeAgentKind,
-                            agentSwitchIntent?.target,
+                            composerSelection.pending ? composerSelection.display.agentKind : null,
                           )
                         : undefined
                     }
@@ -8698,13 +8714,8 @@ export function ChatInput({
                     // 「模型名 + 引擎小标 + 思考深度」。会话内取已确认 / 意图中的引擎
                     // (agentIdentity 同一口径:身份没加载完就不画,不拿 vendorKey 的
                     // Claude Code 回退冒充);草稿直接取当前引擎。
-                    // original 形态不传:老 pill 仍写 harness 名字文本(agentIdentity),
-                    // 引擎小标是统一面板时代的形态,别把两代形态混在一颗 pill 上。
                     engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}
                     unifiedPanel={unifiedPanelActive}
-                    // 统一面板「可用但未启用」(original 形态)时,老面板 footer 摆
-                    // 「尝试新选择器」入口 —— 可用性与启用态分开传,设置类入口两者皆无。
-                    unifiedPanelAvailable={unifiedPanelCapable}
                     // 联合列表只列**运行时已注册**的引擎(撤掉 AgentSelect 后接住它的
                     // hiddenVendors 门禁);未加载时不传 = 不隐藏任何引擎。会话内没有
                     // 跨引擎切换事务可走时锁定当前引擎(见 inSessionEngineLocked)。
@@ -8770,6 +8781,7 @@ export function ChatInput({
                       handleProviderChange(providerId, modelId, effort, undefined, fast)
                     }
                     onNavigateToProviders={handleNavigateToProviders}
+                    onReconnectSource={handleReconnectSource}
                     switching={remoteSwitchInFlight}
                     disabled={
                       disabled || settingsLocked || agentSendDispatchInFlight || agentSwitchInFlight

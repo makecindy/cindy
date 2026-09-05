@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 const OPENROUTER_PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
@@ -23,8 +23,9 @@ vi.mock('@/components/ui/popover', () => ({
   PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+let picker: React.ComponentProps<typeof import('@/components/new-chat/ModelSelector').ModelSelector>;
 vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelIconMark: () => <span aria-hidden="true" />,
+  ModelSelector: (props: typeof picker) => { picker = props; return <div data-testid="shared-picker" />; },
 }));
 
 import { OneshotModelPinPicker, type OneshotPinOption } from '../OneshotModelPinPicker';
@@ -69,136 +70,64 @@ const xdOption: OneshotPinOption = {
   available: true,
 };
 
-describe('OneshotModelPinPicker provider-first mode', () => {
-  it('groups all suppliers without rendering the Agent rail', () => {
-    render(
-      <OneshotModelPinPicker
-        value={undefined}
-        defaultLabel=""
-        declaredLabel={null}
-        options={options}
-        onChange={vi.fn()}
-        ariaLabel="Auxiliary model"
-        groupByProvider
-      />,
-    );
+describe('OneshotModelPinPicker shared A adapter', () => {
+  const mount = (extra = {}) => render(<OneshotModelPinPicker defaultLabel="Automatic"
+    declaredLabel={null} options={options} onChange={vi.fn()} ariaLabel="Auxiliary model" {...extra} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary model' }));
-
-    expect(screen.getByRole('group', { name: 'OpenRouter' })).toBeTruthy();
-    expect(screen.getByRole('group', { name: 'Anthropic' })).toBeTruthy();
-    expect(
-      screen.getByPlaceholderText('settings.ghosts.detail.cindyPrefs.searchPlaceholder'),
-    ).toBeTruthy();
-    expect(screen.queryByText('Claude Code')).toBeNull();
-    expect(screen.queryByText('Codex')).toBeNull();
-    expect(screen.queryByRole('option', { name: /Claude Code/ })).toBeNull();
+  it('uses the shared picker with all host-approved routes, without a separate Agent step', () => {
+    mount();
+    expect(screen.getByTestId('shared-picker')).toBeTruthy();
+    expect(picker.unifiedPanel).toBeUndefined(); // shared default, no opt-in needed
+    expect(picker.configurationEnabled).toBe(true);
+    expect(picker.providersOverride?.every(p => Object.values(p.models).every(models => models?.every(m => m.efforts.length === 0 && !m.supportsFastMode)))).toBe(true);
+    expect(picker.providersOverride?.map(p => p.id)).toEqual(['openrouter', 'anthropic']);
   });
 
-  it('uses the standard Cindy AI name for the xd provider', () => {
-    render(
-      <OneshotModelPinPicker
-        value={xdOption.id}
-        defaultLabel=""
-        declaredLabel={null}
-        options={[xdOption]}
-        onChange={vi.fn()}
-        ariaLabel="Auxiliary model"
-        groupByProvider
-      />,
-    );
-
-    expect(screen.getByRole('button', { name: 'Auxiliary model' }).textContent)
-      .toContain('DeepSeek V4 Flash · Cindy AI');
-    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary model' }));
-
-    expect(screen.getByRole('group', { name: 'Cindy AI' })).toBeTruthy();
-    expect(screen.queryByRole('group', { name: 'XD Gateway' })).toBeNull();
-  });
-
-  it('returns the exact provider and Agent pin for a selected row', () => {
+  it('keeps provider labels and returns the exact selected provider/Harness pin', async () => {
     const onChange = vi.fn();
-    render(
-      <OneshotModelPinPicker
-        value={undefined}
-        defaultLabel=""
-        declaredLabel={null}
-        options={options}
-        onChange={onChange}
-        ariaLabel="Auxiliary model"
-        groupByProvider
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary model' }));
-    fireEvent.click(screen.getByRole('option', { name: /Claude Haiku 4\.5/ }));
-
+    mount({ options: [...options, xdOption], onChange, groupByProvider: true });
+    expect(picker.providersOverride?.find(p => p.id === 'xd')?.name).toBe('Cindy AI');
+    expect(await picker.onUnifiedSelect!({ providerId: 'anthropic', modelId: 'claude-haiku-4-5',
+      engine: 'cc', fast: false, favoriteUid: null })).toBe(true);
     expect(onChange).toHaveBeenCalledWith(ANTHROPIC_PIN);
   });
 
-  it('renders an unavailable current route but prevents selecting it', () => {
+  it('rejects forged, unavailable, and wrong-Harness routes without saving', async () => {
     const onChange = vi.fn();
-    const unavailable = {
-      ...xdOption,
-      id: 'cat:xd:codex:retired-model',
-      modelId: 'retired-model',
-      modelName: 'Retired model',
-      label: 'Retired model · Cindy AI',
-      available: false,
-    };
-    render(
-      <OneshotModelPinPicker
-        value={unavailable.id}
-        defaultLabel=""
-        declaredLabel={null}
-        options={[unavailable]}
-        onChange={onChange}
-        ariaLabel="Auxiliary model"
-        groupByProvider
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary model' }));
-    const option = screen.getByRole('option', { name: /Retired model/ });
-    expect(option.getAttribute('disabled')).not.toBeNull();
-    fireEvent.click(option);
-
+    mount({ options: [{ ...xdOption, available: false }, ...options], value: xdOption.id, onChange });
+    expect(picker.sourceDisconnected).toBe(true);
+    expect(picker.providersOverride?.some(p => p.id === 'xd')).toBe(false);
+    for (const route of [
+      { providerId: 'xd', modelId: xdOption.modelId, engine: 'codex' as const },
+      { providerId: 'anthropic', modelId: 'claude-haiku-4-5', engine: 'codex' as const },
+      { providerId: 'unlisted', modelId: 'gpt', engine: 'codex' as const },
+    ]) expect(await picker.onUnifiedSelect!({ ...route, fast: false, favoriteUid: null })).toBe(false);
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('keeps an available same-model route when the current agent route is unavailable', () => {
+  it('keeps an available same-model route when the saved Harness route is unavailable', async () => {
+    const unavailable = { ...xdOption, id: 'old', agentKind: 'claude-code', available: false };
     const onChange = vi.fn();
-    const available = {
-      ...xdOption,
-      id: 'cat:xd:codex:shared-model',
-      modelId: 'shared-model',
-      modelName: 'Shared model',
-      label: 'Shared model · Cindy AI',
-      available: true,
-    };
-    const unavailable = {
-      ...available,
-      id: 'cat:xd:claude-code:shared-model',
-      agentKind: 'claude-code',
-      available: false,
-    };
-    render(
-      <OneshotModelPinPicker
-        value={unavailable.id}
-        defaultLabel=""
-        declaredLabel={null}
-        options={[available, unavailable]}
-        onChange={onChange}
-        ariaLabel="Auxiliary model"
-        groupByProvider
-      />,
-    );
+    mount({ value: unavailable.id, options: [unavailable, xdOption], onChange });
+    expect(picker.providersOverride![0]!.agents).toEqual(['codex']);
+    await picker.onUnifiedSelect!({ providerId: 'xd', modelId: xdOption.modelId,
+      engine: 'codex', fast: false, favoriteUid: null });
+    expect(onChange).toHaveBeenCalledWith(xdOption.id);
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary model' }));
-    const option = screen.getByRole('option', { name: /Shared model/ });
-    expect(option.getAttribute('disabled')).toBeNull();
-    fireEvent.click(option);
-
-    expect(onChange).toHaveBeenCalledWith(available.id);
+  it('preserves failure results, same-pin no-op, automatic clearing, and legacy labels', async () => {
+    const onChange = vi.fn(async () => false);
+    const view = mount({ value: OPENROUTER_PIN, onChange });
+    expect(await picker.onUnifiedSelect!({ providerId: 'openrouter', modelId: 'openai/gpt-5-mini',
+      engine: 'codex', fast: false, favoriteUid: null })).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(await picker.onUnifiedSelect!({ providerId: 'anthropic', modelId: 'claude-haiku-4-5',
+      engine: 'cc', fast: false, favoriteUid: null })).toBe(false);
+    expect(await picker.fallbackOption!.onSelect()).toBe(false);
+    expect(onChange).toHaveBeenLastCalledWith(null);
+    view.unmount();
+    mount({ value: 'legacy', legacyPinLabel: 'Budget tier' });
+    expect(picker.sourceDisconnected).toBe(false);
+    expect(picker.unknownModelLabel!('legacy')).toBe('Budget tier');
   });
 });

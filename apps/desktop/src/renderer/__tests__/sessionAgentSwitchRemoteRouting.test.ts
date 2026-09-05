@@ -1207,7 +1207,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // 切引擎成功后收选单;取消才 setOpen(true) 留在原地。disabled 仍不得参与开关。
     expect(selectorSource).toContain('setOpenWithoutAutoRefresh(applied === false)');
     expect(selectorSource).toContain(
-      'handleRowSelect(args.providerId, args.wireModelId, true, args.effort, args.config.fast)',
+      "onProviderChange(args.providerId, args.wireModelId, args.effort ?? '', args.config.fast)",
     );
   });
 
@@ -1216,7 +1216,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('agentSwitchIntent?.target === targetAgent');
   });
 
-  it('会话收藏锚点只认 uid,不拿正在跑的模型/引擎去对副本', () => {
+  it('会话传入历史收藏 uid，由统一面板校验完整配置后显示选中态', () => {
     expect(source).toContain('sessionFavoriteAnchor?.uid ?? null');
     expect(source).not.toContain('sessionFavoriteAnchor.wireModelId === activeModel');
   });
@@ -1244,7 +1244,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
     );
     const ensure = panel.slice(
       panel.indexOf('const ensureSelectedVisible = useCallback'),
-      panel.indexOf('}, [pickerLayout]);'),
+      panel.indexOf('  useEffect(() => {', panel.indexOf('const ensureSelectedVisible = useCallback')),
     );
     expect(ensure).not.toContain('row.focus');
     expect(ensure).toContain('computeSelectedRowScrollTop');

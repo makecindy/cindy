@@ -23,7 +23,7 @@ import {
   listPiSubagentRuns,
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
-import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { MAIN_OWNED_SEND_CONTEXT, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
 import type {
   AgentEvent,
   AgentKind,
@@ -11708,6 +11708,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         {
           sdkSessionId: null,
           contextTokens: 0,
+          ...(meta.replacementRoute ? {
+            model: meta.replacementRoute.model,
+            providerId: meta.replacementRoute.providerId,
+            effort: meta.replacementRoute.effort,
+            fastMode: meta.replacementRoute.fastMode,
+          } : {}),
           ...(projectionContextWindow === undefined
             ? {}
             : { contextWindow: projectionContextWindow }),
@@ -15000,8 +15006,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
           : (normalizeSessionProviderId(effectiveProviderId) ?? null);
       const hasPersistedLocalCodexThread =
-        internalOptions.source === 'user' &&
-        !isDeviceLinkInvoke() &&
+        routeExplicit &&
         runtimeStatus.agentKind === 'codex' &&
         !runtimeStatus.remoteHostId &&
         !!runtimeStatus.sdkSessionId;
@@ -15018,6 +15023,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         );
       }
       const requiresCodexThreadRelink = relinkDecision === 'relink';
+      if (requiresCodexThreadRelink && isSessionInTurn(sessionId)) {
+        return deferLockedSelection();
+      }
       const targetCodexRoute: CodexProviderThreadRoute | undefined = requiresCodexThreadRelink
         ? {
             model,
@@ -15128,7 +15136,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 },
               },
               { sessionId, target: targetCodexRoute },
-            ).catch((error) => {
+            ).catch(async (error) => {
+              if (isCodexHistoryRecoveryRequired(error) && contextOverflowRolloverHolder) {
+                try {
+                  await contextOverflowRolloverHolder.prepareNativeSessionRecovery(
+                    sessionId, targetCodexRoute, assertRuntimeOwnerCurrent,
+                  );
+                  modelWindowRebuilt = true;
+                  return { previousSdkSessionId: runtimeStatus.sdkSessionId!, newSdkSessionId: null };
+                } catch (recoveryError) {
+                  error = recoveryError;
+                }
+              }
               if (isIpcError(error)) throw error;
               if (
                 error instanceof Error &&
@@ -15972,6 +15991,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         if (err instanceof CredentialModeSwitchBusyError) {
+          if (requiresCodexThreadRelink && isSessionInTurn(sessionId)) {
+            return deferLockedSelection();
+          }
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
           // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
           throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);

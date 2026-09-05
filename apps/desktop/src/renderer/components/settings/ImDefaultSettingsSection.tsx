@@ -172,16 +172,18 @@ export function ImDefaultSettingsSection({
 
   const persist = useCallback(
     async (patch: ImDefaultSettingsPatch) => {
-      if (!settings || pending) return;
+      if (!settings || pending) return false;
       const previous = settings;
       setPending(true);
       setSettings(mergeSettingsPatch(settings, patch));
       try {
         const next = await window.electronAPI.maker.imDefaultSettingsSet(patch, channel);
         setSettings(next);
+        return true;
       } catch (err) {
         setSettings(previous);
         toast.error(err instanceof Error ? err.message : t('settings.imBot.defaults.saveFailed'));
+        return false;
       } finally {
         setPending(false);
       }
@@ -278,7 +280,7 @@ export function ImDefaultSettingsSection({
     const effort = isImDefaultEffort(reconciledEffort)
       ? reconciledEffort
       : resolveEffort(settings.agentKind, model, activeSettings.effort);
-    void persist(
+    return persist(
       buildAgentSettingsPatch(settings.agentKind, {
         ...activeSettings,
         model,
@@ -290,7 +292,7 @@ export function ImDefaultSettingsSection({
 
   const changeEffort = (effort: Effort) => {
     if (!isImDefaultEffort(effort) || effort === activeSettings.effort) return;
-    void persist(
+    return persist(
       buildAgentSettingsPatch(settings.agentKind, {
         ...activeSettings,
         effort,

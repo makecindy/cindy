@@ -7420,6 +7420,7 @@
         "discountedVsStandard": "割引中 · 標準価格から {{percent}}% お得"
       },
       "trigger": {
+        "currentAndNext": "現在：{{current}}\n次のメッセージ：{{next}}",
         "placeholder": "モデルを選択",
         "aria": "モデルを選択。現在：{{model}}",
         "ariaWithEffort": "モデルを選択。現在：{{model}}、推論強度：{{effort}}",
@@ -7462,6 +7463,9 @@
         "fastBadge": "高速"
       },
       "source": {
+        "unavailable": "モデルを利用できません",
+        "reconnect": "再接続",
+        "manage": "接続先を管理",
         "railLabel": "ソース",
         "connect": "モデルを追加",
         "connectCta": "ソースを接続 →",
@@ -7478,10 +7482,6 @@
         "railAll": "すべて",
         "favoritesGroup": "お気に入り",
         "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
-        "layoutBadge": "スタイルBを試す",
-        "layoutClassic": "スタイルAに戻す",
-        "layoutTryUnified": "新しいセレクターを試す",
-        "layoutOriginal": "旧版に戻す",
         "addFavorite": "お気に入りに保存",
         "customize": "カスタマイズ",
         "removeFavorite": "お気に入りから削除",
@@ -8075,6 +8075,7 @@
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
+      "tokenRateDescription": "このターンのメイン Agent の平均生成速度です。思考を含み、ツール実行と承認待ちは除きます。使用量の報告に合わせて更新され、隣にはターン全体の経過時間が表示されます。",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8819,6 +8820,8 @@
       "runningTool": "{{tool}} を実行中…"
     },
     "remoteSession": {
+      "syncing": "同期中…",
+      "recovered": "復旧しました",
       "reconnecting": "被制御デバイスとの接続が切れました。再接続中…",
       "hostOffline": "被制御デバイスがオフラインのため、現在は同期できません",
       "degraded": "被制御デバイスとの接続が不安定です。自動的に再試行中…",

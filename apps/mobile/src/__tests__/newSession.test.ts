@@ -1588,7 +1588,8 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('inputTestID="newSession.firstMessageInput"');
     expect(newComposerSource).toContain('autoFocus={visualFocusComposer}');
     expect(newComposerSource).toContain('maxHeight={composerResize.inputMaxHeight}');
-    expect(newComposerSource).toContain('inputFrameHeight={composerResize.frameHeight}');
+    expect(newComposerSource).toContain('inputFrameAnimatedStyle={composerResize.frameStyle}');
+    expect(newSource).toContain('gesture={composerResize.gesture}');
     expect(newComposerSource).toContain('resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}');
     expect(newComposerSource).toContain('cardActive={composerCardActive}');
     expect(newComposerSource).toContain('toolbar={renderComposerToolbar()}');
@@ -2254,7 +2255,7 @@ describe('submit guard catalog wiring (source locks)', () => {
       sessionSource.indexOf('initial={goalRestoreForSession}') + 300,
     );
     expect(viewCall).toContain('initial={goalRestoreForSession}');
-    expect(viewCall).toContain('initialObjective={goalRestoreForSession ? undefined : (draft.trim() || undefined)}');
+    expect(viewCall).toContain('initialObjective={goalRestoreForSession ? undefined : (draftRef.current.trim() || undefined)}');
   });
 
   it('goal 接回载荷按 sessionId 换代清理:切任务不残留旧 objective/limits(codex P2)', () => {
