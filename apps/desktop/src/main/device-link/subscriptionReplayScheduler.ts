@@ -13,9 +13,10 @@ const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
 export function isPermanentSubscriptionReplayError(err: unknown, available: boolean | undefined): boolean {
   const message = err instanceof Error ? err.message : String(err);
   const code = err instanceof DeviceLinkError ? err.code : /\[([A-Z_]+)\]/.exec(message)?.[1];
-  // An offline response ends unknown-state recovery. Preserve the existing
-  // transient handling when a newer online presence contradicts the response.
-  // Never persist a route error into presence: late errors must not overwrite it.
+  // Bound the newly enabled unknown-state recovery on an explicit offline result.
+  // For known-available peers, preserve the pre-existing transient policy. This
+  // cached boolean does not establish event ordering; it may itself be stale.
+  // Route/presence reconciliation is outside this unknown-state recovery fix.
   return code !== undefined && (
     PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(code)
     || (code === 'DEVICE_OFFLINE' && available !== true)

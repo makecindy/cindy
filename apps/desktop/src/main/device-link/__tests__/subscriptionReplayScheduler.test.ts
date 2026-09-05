@@ -158,16 +158,19 @@ describe('subscription replay scheduler', () => {
       expect(presence.has(deviceId)).toBe(false);
     });
 
-    it('preserves online presence when an earlier subscribe rejects offline', async () => {
-      const first = deferred<unknown>();
-      remoteSubscribe.mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
-      scheduler.replay('ws-online');
-      presence.set(deviceId, true);
-      first.reject(new DeviceLinkError('DEVICE_OFFLINE', 'late response'));
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
-      expect(presence.get(deviceId)).toBe(true);
-    });
+    it.each(['before request', 'while request pending'])(
+      'preserves the existing policy when presence becomes true %s', async (when) => {
+        const first = deferred<unknown>();
+        remoteSubscribe.mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+        if (when === 'before request') presence.set(deviceId, true);
+        scheduler.replay('ws-online');
+        if (when === 'while request pending') presence.set(deviceId, true);
+        first.reject(new DeviceLinkError('DEVICE_OFFLINE', 'route offline without a presence update'));
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+        expect(presence.get(deviceId)).toBe(true);
+      },
+    );
 
     it('does not lose an online trigger queued before the offline response settles', async () => {
       const first = deferred<unknown>();
