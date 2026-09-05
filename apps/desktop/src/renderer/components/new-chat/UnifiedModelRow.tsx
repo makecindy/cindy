@@ -155,7 +155,8 @@ export function UnifiedModelRow({
   providers: readonly ProviderView[];
   onReveal: (anchor: UnifiedAnchor, element: HTMLElement, toggle?: boolean) => void;
   onSelect: () => void;
-  onStar: () => void;
+  /** Omit for model-only selectors that do not expose personal favorite configs. */
+  onStar?: () => void;
   /** Keyboard opening also moves focus into the configuration. */
   onRevealForKeyboard: (anchor: UnifiedAnchor, element: HTMLElement) => void;
   /** 行内价格展示;不传 = 无报价。字段语义见 `UnifiedRowPriceDisplay`。 */
@@ -231,7 +232,7 @@ export function UnifiedModelRow({
     },
   };
 
-  const starButton = (
+  const starButton = onStar ? (
     <button
       type="button"
       disabled={interactionDisabled || paymentRequired}
@@ -258,7 +259,7 @@ export function UnifiedModelRow({
     >
       <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
     </button>
-  );
+  ) : null;
   const customizeButton = (
     <button
       type="button"

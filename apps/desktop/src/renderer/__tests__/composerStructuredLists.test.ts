@@ -1816,4 +1816,34 @@ describe('composer structured list serialization', () => {
       description: 'Open issue',
     }]);
   });
+
+  it('serializes a Bot mention as a structured delegation target, not a filesystem mention', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{
+          type: 'mentionChip',
+          attrs: {
+            kind: 'bot',
+            label: 'Dash Bot',
+            path: 'bot-dash-1',
+          },
+        }],
+      }],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    const href = 'cindy://bot/bot-dash-1';
+    expect(serialized.text).toBe(`[Dash Bot](${href})`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([{
+      kind: 'bot',
+      start: 0,
+      end: serialized.text.length,
+      href,
+      botId: 'bot-dash-1',
+      name: 'Dash Bot',
+    }]);
+  });
 });

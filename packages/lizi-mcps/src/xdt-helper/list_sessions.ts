@@ -18,6 +18,7 @@ import type { XdtHelperHistoryDeps } from './_history_types.js';
 import type { SessionQueueDeps } from './list_session_queue.js';
 import { okPayload, errorPayload } from './_payload.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
+import { resolveHistoryScope } from './_history_scope.js';
 
 const DESCRIPTION = [
   '列出本地数据库里的 session 元数据(id / title / workingDir / agentKind / model /',
@@ -43,6 +44,7 @@ const DESCRIPTION = [
 
 export interface ListSessionsToolDeps {
   history: XdtHelperHistoryDeps;
+  getSessionContext?: () => import('../types.js').LiziMcpSessionContext | undefined;
   sessionQueue?: SessionQueueDeps;
 }
 
@@ -83,6 +85,8 @@ export function registerListSessionsTool(
         .describe('按 sessions.createdAt 排序, desc = 最新在前(默认)。'),
     },
     handler: async ({ workdir, from, to, agent_kind, include_deleted, limit, cursor, order }) => {
+      const scope = await resolveHistoryScope(deps.history, deps.getSessionContext, null);
+      if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       const fromMs = parseIsoMs(from);
       if (fromMs === 'invalid') {
         return errorPayload('INVALID_ARGS', `from 不是合法 ISO 8601 时间字符串: "${from}"`);
@@ -94,6 +98,7 @@ export function registerListSessionsTool(
       const cursorObj = decodeCursor(cursor);
 
       const result = await deps.history.listSessions({
+        sessionIds: scope.sessionIds,
         workdir: workdir ?? null,
         fromMs,
         toMs,

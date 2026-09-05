@@ -175,7 +175,8 @@
       "remoteControl": "遠端連線",
       "windowBehavior": "應用行為",
       "shortcuts": "鍵盤快捷鍵",
-      "mcpServers": "自定義 MCP"
+      "mcpServers": "自定義 MCP",
+      "bots": "伙伴"
     },
     "remote": {
       "title": "遠端機器",
@@ -6842,7 +6843,8 @@
       "projects": "專案",
       "skillhub": "技能",
       "plugins": "插件",
-      "issues": "Issue"
+      "issues": "Issue",
+      "bots": "夥伴"
     },
     "user": {
       "settingsLink": "設定，當前使用者：{{name}}",
@@ -6895,10 +6897,248 @@
       "close": "關閉"
     }
   },
+  "bots": {
+    "sidebar": {
+      "newTaskWith": "和{{name}}開個新任務"
+    },
+    "title": "夥伴",
+    "add": "新增夥伴",
+    "createWizard": {
+      "createFailed": "無法建立夥伴，請重試。",
+      "templates": {
+        "cindy": {
+          "title": "Cindy 助理",
+          "defaultName": "Cindy",
+          "defaultDescription": "我喜歡把忙亂的日子理順，也愛聽新鮮想法。寫作、資料和日常瑣事，都可以一起聊聊。"
+        },
+        "dash": {
+          "title": "Dash 公司 CEO",
+          "defaultName": "Dash",
+          "defaultDescription": "我對好產品和好生意充滿好奇，聊到有趣的方向會很投入。喜歡把事情想透，再一起做決定。"
+        },
+        "lizi": {
+          "title": "LiZi 技術總監",
+          "defaultName": "LiZi",
+          "defaultDescription": "我喜歡拆解難題，也享受把想法做成作品的過程。遇到棘手的問題，我們就一起找答案。"
+        },
+        "custom": {
+          "title": "自訂"
+        }
+      },
+      "chooseTemplate": "邀請誰"
+    },
+    "homeFolder": {
+      "title": "進階設定",
+      "description": "夥伴會自己維護記憶與學會的做法。只有需要修正時，才直接開啟它的資料夾。",
+      "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和記憶資料夾。模型、權限和連線仍由 Cindy 管理。",
+      "open": "開啟資料夾",
+      "openFailed": "無法開啟夥伴資料夾。"
+    },
+    "profile": {
+      "changeAvatar": "更換頭像",
+      "avatarFailed": "無法更換頭像，請選擇小於 5 MB 的 PNG、JPEG 或 WebP 圖片。",
+      "summary": "自我介紹",
+      "summaryPlaceholder": "例如：一位熱愛寫小說的作家，有點幽默，喜歡琢磨人物的小心思。",
+      "avatarSelectionFailed": "無法讀取頭像，請選擇 5 MB 以內的 PNG、JPEG 或 WebP 圖片",
+      "personality": "個性與說話習慣"
+    },
+    "nameLabel": "怎麼稱呼",
+    "close": "關閉",
+    "list": {
+      "startChat": "開始對話",
+      "typing": "正在輸入…",
+      "unread": "{{count}} 則未讀訊息",
+      "search": "搜尋夥伴",
+      "searchPlaceholder": "搜尋夥伴…",
+      "showHidden": "顯示隱藏的夥伴",
+      "hideHidden": "收起隱藏的夥伴",
+      "hidden": "已隱藏（{{count}}）",
+      "hide": "隱藏",
+      "unhideNamed": "取消隱藏 {{name}}",
+      "pin": "置頂",
+      "unpin": "取消置頂",
+      "pinned": "已置頂",
+      "needsAttention": "需要處理",
+      "duplicate": "複製夥伴",
+      "moreActions": "{{name}} 的更多操作"
+    },
+    "cancel": "取消",
+    "save": "儲存",
+    "autosave": {
+      "saving": "正在儲存…",
+      "saved": "已儲存",
+      "retry": "重新儲存"
+    },
+    "retry": "重試",
+    "backToBot": "返回夥伴",
+    "sessionLoadFailedTitle": "無法載入這個夥伴任務",
+    "sessionLoadFailedDescription": "任務關聯仍然存在，但 Cindy 暫時無法讀取夥伴狀態。你可以重試，或返回夥伴總覽。",
+    "sessionUnavailableTitle": "這個夥伴任務已無法使用",
+    "sessionUnavailableDescription": "這條任務可能已遺失、被刪除，或不再屬於這個伙伴。返回後會開啟已復原的主任務。",
+    "settings": "設定",
+    "settingsTabs": {
+      "model": "模型"
+    },
+    "model": {
+      "description": "選擇這位夥伴使用的模型。",
+      "restoreDefault": "恢復預設模型"
+    },
+    "modelChain": {
+      "primary": "首選模型",
+      "fallback": "備用 {{index}}",
+      "routeLabel": "模型候選 {{index}}",
+      "add": "新增備用模型",
+      "remove": "移除這個候選",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "description": "最多設定 5 個模型。目前候選無法使用時，夥伴會依序自動接替，不需要你切換任務或重試。",
+      "options": "備用模型（{{count}}）"
+    },
+    "actions": {
+      "message": "傳訊息",
+      "addToGroup": "加入群組",
+      "export": "匯出"
+    },
+    "emptyTitle": "尚未建立夥伴",
+    "emptyDescription": "先定義夥伴的職責，再依需要連接工具與訊息通道。",
+    "sessions": "個任務",
+    "open": "開啟",
+    "archived": "已封存",
+    "historyTitle": "封存歷史",
+    "historyEmpty": "還沒有封存的夥伴任務。",
+    "historySearch": {
+      "title": "搜尋夥伴歷史",
+      "description": "搜尋這個夥伴過去的訊息、背景任務與封存記錄。",
+      "placeholder": "你記得討論過什麼？",
+      "search": "搜尋",
+      "searching": "正在搜尋…",
+      "failed": "無法搜尋夥伴歷史，請重試。",
+      "empty": "找不到符合的夥伴歷史。"
+    },
+    "lifecycle": {
+      "stoppedBots": "需要處理的夥伴",
+      "title": "執行與歷史",
+      "description": "暫停或恢復夥伴，尋找過去的訊息與成果。",
+      "activeTitle": "夥伴正在執行",
+      "activeDescription": "可以接收訊息、執行背景任務並聯絡其他夥伴。",
+      "pausedTitle": "夥伴已暫停",
+      "pausedDescription": "不會接收新工作；使用者原本手動暫停的自動化在恢復夥伴後仍保持暫停。",
+      "stoppedTitle": "夥伴已停止運行",
+      "stoppedDescription": "這是舊版留下的停止狀態；你仍可保留任務記錄後永久刪除夥伴。",
+      "pause": "暫停夥伴",
+      "resume": "恢復夥伴",
+      "delete": "永久刪除",
+      "deleteTitle": "永久刪除夥伴",
+      "deleteDescription": "這會刪掉 {{name}}：個性、已連的通道、排定的行程都會消失。刪了找不回來。",
+      "working": "正在更新…",
+      "actionFailed": "操作未完成，請稍後重試。"
+    },
+    "backToChat": "返回對話",
+    "memoryRecovery": {
+      "action": "重新開啟記憶"
+    },
+    "profileSaveFailed": "夥伴設定未能儲存，變更沒有生效。",
+    "modelLabel": "模型",
+    "modelUnavailable": "{{model}}（目前無法使用）",
+    "codexAutomaticCompact": "Codex 伙伴會自己壓縮上下文，/new 也會保留目前任務。只有確實需要從頭開始時，才去開新任務。",
+    "image": "新增圖片",
+    "send": "傳送訊息",
+    "roster": {
+      "create": "邀請夥伴加入",
+      "customNamePlaceholder": "幫夥伴取個名字",
+      "customTitle": "認識一位新夥伴"
+    },
+    "chat": {
+      "newMessagesBoundary": "NEW",
+      "composerPlaceholder": "跟{{name}}說點什麼…",
+      "composerPlaceholderLatin": "跟 {{name}} 說點什麼…"
+    },
+    "globalSettings": {
+      "title": "伙伴",
+      "description": "和伙伴有關的通用設定。單個伙伴的設定在{{pronoun}}自己的頁面裡。",
+      "rosterNote": "預置陣容會隨版本更新。"
+    },
+    "collab": {
+      "backgroundTask": "背景任務",
+      "trackedTask": "獨立執行並自動回傳結果",
+      "stopTask": "停止任務",
+      "messageSent": "已向背景任務傳送訊息",
+      "watchWork": "看工作過程",
+      "actionFailed": "沒送出去，再試一次。",
+      "retrying": "還沒開始，正在重試…",
+      "status": {
+        "queued": "正在開始",
+        "waiting": "等待處理",
+        "running": "正在做",
+        "completed": "已完成",
+        "failed": "失敗了",
+        "cancelled": "已停止",
+        "timed-out": "已逾時",
+        "unknown": "任務狀態查不到了"
+      },
+      "duration": {
+        "seconds": "{{n}} 秒",
+        "minutes": "{{n}} 分鐘",
+        "hoursMinutes": "{{h}} 小時 {{m}} 分"
+      }
+    },
+    "directMessage": {
+      "sentTo": "已傳訊息給 {{name}}",
+      "receivedFrom": "訊息來自 {{name}}",
+      "exchangeCount": "與 {{name}} 的 {{count}} 則訊息往來",
+      "open": "查看夥伴之間的對話",
+      "readOnly": "此對話僅供查看",
+      "close": "關閉對話",
+      "unavailable": "這則夥伴對話已無法使用。",
+      "empty": "還沒有可查看的訊息。",
+      "limitReached": "本輪夥伴對話已達上限，雙方已回到各自的主任務"
+    },
+    "joined": {
+      "today": "今天加入",
+      "yesterday": "昨天加入",
+      "days": "{{n}} 天前加入",
+      "months": "{{n}} 個月前加入",
+      "years": "{{n}} 年前加入"
+    },
+    "background": {
+      "title": "職責",
+      "edit": "編輯",
+      "done": "完成",
+      "placeholder": "負責什麼、哪些事情主動推進、哪些決策必須先問，以及希望它如何溝通。",
+      "empty": "尚未定義職責與邊界。",
+      "footnote": "這段內容會進入夥伴的身分上下文；快速性格設定會單獨保存，修改這裡不會覆蓋它。"
+    },
+    "welcome": {
+      "generic": "嗨，我是{{name}}。以後有事直接跟我說，我先熟悉一下這裡。",
+      "withRole": "嗨，我是{{name}}——{{description}}。有事直接跟我說。"
+    },
+    "invitation": {
+      "title": "準備見面",
+      "waiting": "{{name}}，待會見",
+      "background": "你可以先去忙，準備好後再來見面。",
+      "profile": "正在寫下自己的故事",
+      "skills": "正在為 {{name}} 準備電腦",
+      "avatar": "{{name}} 正在挑選新頭像",
+      "welcome": "正在準備第一聲問候",
+      "failed": "準備暫時停住了。已完成的內容會保留，可以再試一次。",
+      "retryFailed": "暫時無法重試，請稍後再試。",
+      "leave": "先去忙",
+      "avatarSkipped": "暫時用了預設頭像，你隨時可以換一張。"
+    },
+    "permissionRequest": "{{name}} 想請你確認一下",
+    "remote": {
+      "online": "上線",
+      "offline": "離線",
+      "thisDevice": "這台電腦",
+      "offlineDescription": "{{name}} 暫時離線，{{device}} 重新連線後就能繼續聊。",
+      "preparing": "正在等夥伴準備好…"
+    }
+  },
   "common": {
     "dismiss": "關閉"
   },
   "commonUi": {
+    "retry": "重試",
     "crossAgentConvert": {
       "asking": {
         "title": "檢測到工作區配置可轉換",
@@ -7538,6 +7778,7 @@
       "browserTab": "瀏覽器標籤",
       "desktopWindow": "應用視窗",
       "task": "任務",
+      "bot": "傳訊息或委派",
       "pluginResources": "插件資源",
       "pluginResource": "插件資源",
       "backToAll": "返回全部 @ 內容",
@@ -7808,6 +8049,7 @@
     },
     "messageActionBar": {
       "copy": "複製訊息",
+      "reply": "回覆",
       "linkCopied": "連結已複製",
       "moreActions": "更多訊息操作",
       "copyLink": "複製當前訊息連結",
@@ -8447,6 +8689,9 @@
     },
     "generatedFiles": {
       "title": "本條訊息生成的檔案",
+      "botTitle": "本次成果",
+      "relatedFiles": "相關檔案 {{count}}",
+      "openWebPreview": "開啟網頁預覽",
       "showMore": "顯示另外 {{count}} 個",
       "showLess": "收起",
       "artifactLabel": "成品",

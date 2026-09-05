@@ -74,6 +74,8 @@ import type {
 import { normalizeAgentInputClearBoundaryMs } from '../../shared/agentInputQueue';
 import { hasUserVisibleText } from '../../shared/visibleText';
 import { readReviewRunMeta } from '../../shared/reviewRun';
+import { readBotCollaborationMeta } from '../../shared/botCollaboration';
+import { readBotDirectMessageMeta } from '../../shared/botDirectMessage';
 import {
   deriveAutoTitleSeed,
   reconcileSessionRefsForText,
@@ -358,6 +360,8 @@ export interface AskUserQuestionItem {
 }
 
 export interface ChatMessage {
+  /** Private Bot reply provenance, projected from persisted/live agent metadata. */
+  botPrivateReply?: boolean;
   clientId: string;
   /** Server message id when this row came from history; used as a pagination cursor. */
   id?: string;
@@ -493,6 +497,15 @@ export interface ChatMessage {
      */
     | 'auto-resume-pending'
     | 'agent-switch'
+    /** 对进行中后台任务的补充消息留痕。 */
+    | 'bot-session-task-message'
+    /** 伙伴发起的可追踪后台任务。 */
+    | 'bot-session-task'
+    /**
+     * 伙伴之间的私聊入口：消息正文单独存储，这里只投影一枚可打开的时间线痕迹。
+     * 它不进入左栏，也不与后台任务卡混用。
+     */
+    | 'bot-direct-message'
     | 'context-rebuild';
   systemCardData?: Record<string, unknown>;
   /** FP-3: plan_review message fields */
@@ -2372,7 +2385,7 @@ export interface SessionChatState {
    * 当前 terminal error 的稳定 reason key(maker-core/main 下发,如
    * 'silent-stop-exhausted')。ErrorBanner 据此渲染专用 action(「继续」按钮);
    * 仅在 error 非空时有意义,error 被清/被无 reason 的错误覆盖时同步清。
-  */
+   */
   errorReason?: string | null;
   /** Structured details for a tool-loop terminal error; null when no such error is active. */
   toolLoop?: ToolLoopErrorDetails | null;
@@ -2603,6 +2616,8 @@ export interface SessionChatState {
    * review)。transition snapshot 与 hasSessionTerminalError 都按此豁免。
    */
   lastStopWasSideTask: boolean;
+  /** Successful automatic private replies remain in history without completion alerts. */
+  lastStopWasPrivateReply?: boolean;
   /**
    * 后台 subagent「唤醒桥接」标记(claude-code 专用)。
    *
@@ -2801,6 +2816,7 @@ function createInitialState(): SessionChatState {
     planModeEnabled: false,
     planModeRev: 0,
     lastStopWasSideTask: false,
+    lastStopWasPrivateReply: false,
     pendingTaskWake: 0,
     pendingTaskWakeDuringTurn: 0,
     pendingTaskWakeStarted: false,
@@ -3900,10 +3916,6 @@ function scheduleWakeBridgeReconciliation(sessionId: string): void {
   wakeBridgeReconcileTimers.set(sessionId, timer);
 }
 
-function notify(sessionId: string): void {
-  emitStateNotifications(sessionId);
-}
-
 /**
  * 「正在自动继续」ephemeral 卡的固定 clientId。每个会话一份 state，所以固定串足够；
  * 用固定值而不是随机 id，是为了让插入幂等（同一接管窗口内 projection 会 emit 多次）。
@@ -4767,7 +4779,7 @@ function mergeAgentTaskUpdate(
     // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
-    model: next.model === null ? null : next.model ?? prev.model,
+    model: next.model === null ? null : (next.model ?? prev.model),
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
 }
@@ -4994,6 +5006,7 @@ export function handleStreamEvent(
   // - turnCompleted 由 main 在 done 边界盖到该 SDK turn 的最后一条 assistant 上,
   //   让后台任务自动续跑时前一轮正式总结不会被后续补充回复顶掉。
   const assistantMetaFields: {
+    botPrivateReply?: boolean;
     model?: string;
     parentToolUseId?: string;
     turnCompleted?: boolean;
@@ -5005,6 +5018,7 @@ export function handleStreamEvent(
       ? { parentToolUseId: incomingMeta.parentUuid }
       : {}),
     ...(incomingMeta?.turnCompleted === true ? { turnCompleted: true } : {}),
+    ...(typeof incomingMeta?.botPrivateReply === 'boolean' ? { botPrivateReply: incomingMeta.botPrivateReply } : {}),
   };
   switch (event.type) {
     case 'text': {
@@ -5070,7 +5084,8 @@ export function handleStreamEvent(
         const hasAssistantFields =
           assistantMetaFields.model !== undefined ||
           assistantMetaFields.parentToolUseId !== undefined ||
-          assistantMetaFields.turnCompleted === true;
+          assistantMetaFields.turnCompleted === true ||
+          assistantMetaFields.botPrivateReply !== undefined;
         const shouldCalibrateText = Boolean(
           isFullText === true &&
           text &&
@@ -5351,8 +5366,8 @@ export function handleStreamEvent(
         // 直到唤醒桥接整体被清除。
         pendingTaskWakeDuringTurn:
           nextWake > 0
-          ? (state.pendingTaskWakeDuringTurn + (wakesAfterTerminal && mainTurnDoneNotCrossed ? 1 : 0))
-          : 0,
+          ? state.pendingTaskWakeDuringTurn + (wakesAfterTerminal && mainTurnDoneNotCrossed ? 1 : 0)
+            : 0,
         // 最小年龄闸的时钟起点:每次真实置位都刷新(见字段注释)。
         pendingTaskWakeArmedAt: wakesAfterTerminal ? Date.now() : state.pendingTaskWakeArmedAt,
         // 置位代次:对账收口的 ABA 防护(见字段注释)。
@@ -5532,7 +5547,7 @@ export function handleStreamEvent(
       });
 
       const terminalData = event.data as
-        { cancelled?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+        | { cancelled?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
         | null
         | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
@@ -5583,6 +5598,7 @@ export function handleStreamEvent(
         pendingGhostGrantConfirm: null,
         pendingRemoteDesktopConfirmation: null,
         pendingRemoteDesktopConfirmationQueue: [],
+        lastStopWasPrivateReply: (incomingMeta ?? state.lastAgentMeta)?.botPrivateReply === true,
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
@@ -5788,9 +5804,9 @@ export function handleStreamEvent(
         errorPersistId:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError
             ? null
-            : (typeof event.persistId === 'string' && event.persistId
+            : typeof event.persistId === 'string' && event.persistId
                 ? event.persistId
-                : state.errorPersistId),
+                : state.errorPersistId,
         isStreaming: false,
         activeTurnRetryText: null,
         continuationTurnClientId: null,
@@ -6456,6 +6472,7 @@ function handleStatusUpdate(
     ...state,
     // 真实 turn 的起/止都把 side-task 标记复位(它只描述「最近一次 stop」)。
     lastStopWasSideTask: false,
+    lastStopWasPrivateReply: update.isRunning ? false : state.lastStopWasPrivateReply,
     // 唤醒桥接:仅在 wake turn 真正启动(isRunning:true)时消费一个计数,或 wake turn
     // 失败时消费——后者表现为 Done + !isRunning 且主 turn 已经结束
     // (state.agentStatus.isRunning 已为 false),此时 isTurnStart 永远不会
@@ -6467,16 +6484,16 @@ function handleStatusUpdate(
     // Done 前 SDK 先推了 isRunning=false 的中间 status」误判成 wake 失败。
     // pendingTaskWakeStarted:isTurnStart 已消费桥接时置 true,防止 Done 分支
     // 因 SDK 中间 isRunning=false 而重复消费下一个任务的桥接计数。
-    pendingTaskWake: isTurnStart ? Math.max(0, state.pendingTaskWake - 1) :
-      (isTurnComplete && state.pendingTaskWake > 0 && !state.agentStatus.isRunning && state.pendingTaskWakeDuringTurn === 0 && !state.pendingTaskWakeStarted) ? Math.max(0, state.pendingTaskWake - 1) :
+    pendingTaskWake: isTurnStart ? Math.max(0, state.pendingTaskWake - 1) : isTurnComplete && state.pendingTaskWake > 0 && !state.agentStatus.isRunning && state.pendingTaskWakeDuringTurn === 0 && !state.pendingTaskWakeStarted
+        ? Math.max(0, state.pendingTaskWake - 1) :
       state.pendingTaskWake,
     // 跨主 turn 标记:主 turn 自己的 Done 越过(标记仍为 true 时到达的首个 Done)后,
     // 标记使命已尽、立即退休。否则 wake turn 失败(从未 isRunning:true、无 isTurnStart)
     // 时,终态 Done 会因 !pendingTaskWakeDuringTurn 恒为 false 而永远无法清除
     // pendingTaskWake,会话永久卡在 running/Stop 态。退休只清标记、不清桥接:
     // 桥接(pendingTaskWake)仍存活,直到 wake turn 真正启动或失败。
-    pendingTaskWakeDuringTurn: isTurnStart ? 0 :
-      (isTurnComplete && state.pendingTaskWakeDuringTurn > 0) ? 0 :
+    pendingTaskWakeDuringTurn: isTurnStart ? 0 : isTurnComplete && state.pendingTaskWakeDuringTurn > 0
+        ? 0 :
       state.pendingTaskWakeDuringTurn,
     // isTurnStart 已消费标记:isTurnStart 且 pendingTaskWake > 0 时置 true(本轮
     // 桥接已消费),isTurnComplete 时复位。防止 SDK 中间推送 isRunning=false 后,
@@ -15321,6 +15338,8 @@ export const makerChatStore = {
   /** F-SB-7: Authoritative terminal-error read, immune to snapshot-generation races. */
   hasSessionTerminalError,
   wasLastStopSideTask,
+  wasLastStopPrivateReply: (sessionId: string): boolean =>
+    sessions.get(sessionId)?.lastStopWasPrivateReply === true,
   /** 输入框推荐后台完成配对用的 non-creating turn 起点。 */
   getPromptRecommendationRunStartedAt,
   /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
@@ -16327,6 +16346,42 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         },
       };
     }
+    // 后台任务锚点与补充消息留痕共享历史 metadata。只投影当前仍会生成的父任务
+    // 锚点和补充消息；旧的目标侧镜像不再生成，也不再重复画第二张任务卡。
+    const collaboration = readBotCollaborationMeta(m.agentMeta?.botCollaboration);
+    if (
+      m.role === 'assistant'
+      && (
+        collaboration?.role === 'delegation-request'
+        || collaboration?.role === 'interjection')
+    ) {
+      return {
+        clientId: m.clientId,
+        role: m.role,
+        content: '',
+        isStreaming: false,
+        systemCardType:
+          collaboration.role === 'interjection'
+            ? ('bot-session-task-message' as const)
+            : ('bot-session-task' as const),
+        systemCardData: {
+          ...collaboration,
+          // 插话卡要显示催的是哪句话；锚点卡正文为空。
+          text: typeof m.content === 'string' ? m.content : '',
+        },
+      };
+    }
+    const directMessage = readBotDirectMessageMeta(m.agentMeta?.botDirectMessage);
+    if (m.role === 'assistant' && directMessage) {
+      return {
+        clientId: m.clientId,
+        role: m.role,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'bot-direct-message' as const,
+        systemCardData: { ...directMessage },
+      };
+    }
     // image-local-cache: user role messages may have JSON-shaped content
     // ({ text, images: ImageRef[], files: FileRef[] }) — pull text + images
     // + files out, keep all three. Older plain-text messages fall through
@@ -16514,6 +16569,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       clientId: m.clientId,
       role: m.role,
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
       // tool_result 消息也带 toolUseId(DB 列),让 MessageStream 能按 id 配对
       ...(m.role === 'tool_result' && typeof m.toolUseId === 'string' && m.toolUseId.length > 0
         ? { toolUseId: m.toolUseId }
@@ -16663,9 +16719,6 @@ function formatToolUseSummary(toolName: string, input: unknown): string {
 
   return `${toolName}()`;
 }
-
-// `notify` kept here for potential future external dispatchers.
-void notify;
 
 // ---------------------------------------------------------------------------
 // HMR teardown — ensure old listeners are disposed before the module reloads

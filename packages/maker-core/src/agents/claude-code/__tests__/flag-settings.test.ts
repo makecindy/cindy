@@ -88,4 +88,24 @@ describe('buildClaudeFlagSettings', () => {
       'feishu-delegate:message-feishu-coworkers': 'user-invocable-only',
     });
   });
+
+  it('enforces a Bot Skill allowlist with native Claude skill overrides', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      botSkillPolicy: {
+        mode: 'allowlist',
+        configured: ['release'],
+        catalog: [
+          { name: 'release-notes', runtimeCommandName: 'release' },
+          { name: 'incident-response' },
+        ],
+      },
+    });
+
+    expect(settings.skillOverrides).toEqual({
+      'release-notes': 'on',
+      'incident-response': 'off',
+    });
+  });
 });

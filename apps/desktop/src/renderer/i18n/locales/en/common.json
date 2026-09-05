@@ -175,7 +175,8 @@
       "remoteControl": "Remote Connection",
       "windowBehavior": "App Behavior",
       "shortcuts": "Keyboard Shortcuts",
-      "mcpServers": "Custom MCP"
+      "mcpServers": "Custom MCP",
+      "bots": "Teammates"
     },
     "remote": {
       "title": "Remote machines",
@@ -6844,7 +6845,8 @@
       "projects": "Projects",
       "skillhub": "SkillHub",
       "plugins": "Plugins",
-      "issues": "Issues"
+      "issues": "Issues",
+      "bots": "Teammates"
     },
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
@@ -6897,10 +6899,248 @@
       "close": "Close Download Dialog"
     }
   },
+  "bots": {
+    "sidebar": {
+      "newTaskWith": "Start a task with {{name}}"
+    },
+    "title": "Teammates",
+    "add": "Add teammate",
+    "createWizard": {
+      "createFailed": "The teammate could not be created. Try again.",
+      "templates": {
+        "cindy": {
+          "title": "Cindy Assistant",
+          "defaultName": "Cindy",
+          "defaultDescription": "I like bringing a little order to busy days and hearing fresh ideas. Writing, research, everyday odds and ends—let’s work through them together."
+        },
+        "dash": {
+          "title": "Dash, Company CEO",
+          "defaultName": "Dash",
+          "defaultDescription": "I’m curious about good products and good businesses. I enjoy thinking things through, talking about possibilities, and making a clear decision together."
+        },
+        "lizi": {
+          "title": "LiZi, Technical Director",
+          "defaultName": "LiZi",
+          "defaultDescription": "I enjoy taking tricky problems apart and turning ideas into something real. When we hit a snag, we’ll figure it out together."
+        },
+        "custom": {
+          "title": "Custom"
+        }
+      },
+      "chooseTemplate": "Who would you like to invite?"
+    },
+    "homeFolder": {
+      "title": "Advanced configuration",
+      "description": "The teammate maintains its own memory and reusable ways of working. Open its folder only when something needs correcting.",
+      "contents": "Contains SOUL.md, USER.md, system_prompt.md, skills/, and memories/. Models, permissions, and connections remain managed by Cindy.",
+      "open": "Open folder",
+      "openFailed": "The teammate folder could not be opened."
+    },
+    "profile": {
+      "changeAvatar": "Change avatar",
+      "avatarFailed": "Couldn’t change the avatar. Choose a PNG, JPEG, or WebP image under 5 MB.",
+      "summary": "Self-introduction",
+      "summaryPlaceholder": "For example: a novelist who loves serial fiction, has a dry sense of humor, and is fascinated by what makes characters tick.",
+      "avatarSelectionFailed": "Couldn’t read the image. Choose a PNG, JPEG, or WebP image up to 5 MB.",
+      "personality": "Personality & conversation"
+    },
+    "nameLabel": "What Should We Call Them?",
+    "close": "Close",
+    "list": {
+      "startChat": "Start the conversation",
+      "typing": "Typing…",
+      "unread": "{{count}} unread messages",
+      "search": "Search teammates",
+      "searchPlaceholder": "Search teammates…",
+      "showHidden": "Show hidden teammates",
+      "hideHidden": "Collapse hidden teammates",
+      "hidden": "Hidden ({{count}})",
+      "hide": "Hide",
+      "unhideNamed": "Unhide {{name}}",
+      "pin": "Pin to top",
+      "unpin": "Unpin",
+      "pinned": "Pinned",
+      "needsAttention": "Needs attention",
+      "duplicate": "Duplicate teammate",
+      "moreActions": "More actions for {{name}}"
+    },
+    "cancel": "Cancel",
+    "save": "Save",
+    "autosave": {
+      "saving": "Saving…",
+      "saved": "Saved",
+      "retry": "Save Again"
+    },
+    "retry": "Retry",
+    "backToBot": "Back to teammate",
+    "sessionLoadFailedTitle": "This teammate task could not be loaded",
+    "sessionLoadFailedDescription": "The task link is valid, but Cindy could not read the teammate state. Retry or return to the teammate overview.",
+    "sessionUnavailableTitle": "This teammate task is no longer available",
+    "sessionUnavailableDescription": "This task may be missing, deleted, or no longer belong to this teammate. Go back to open the recovered main task.",
+    "settings": "Settings",
+    "settingsTabs": {
+      "model": "Model"
+    },
+    "model": {
+      "description": "Choose the models this teammate uses.",
+      "restoreDefault": "Restore default model"
+    },
+    "modelChain": {
+      "primary": "Primary model",
+      "fallback": "Fallback {{index}}",
+      "routeLabel": "Model candidate {{index}}",
+      "add": "Add fallback model",
+      "remove": "Remove this candidate",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "description": "Configure up to 5 models. If one is unavailable, the teammate automatically continues with the next one—no task switching or manual retry.",
+      "options": "Backup models ({{count}})"
+    },
+    "actions": {
+      "message": "Message",
+      "addToGroup": "Add to group",
+      "export": "Export"
+    },
+    "emptyTitle": "No teammates yet",
+    "emptyDescription": "Create a teammate with a clear role, then connect the tools and channels it needs.",
+    "sessions": "tasks",
+    "open": "Open",
+    "archived": "Archived",
+    "historyTitle": "Archived history",
+    "historyEmpty": "No archived teammate tasks yet.",
+    "historySearch": {
+      "title": "Search teammate history",
+      "description": "Search this teammate’s past messages, background tasks, and archived records.",
+      "placeholder": "What do you remember discussing?",
+      "search": "Search",
+      "searching": "Searching…",
+      "failed": "Teammate history could not be searched. Try again.",
+      "empty": "No matching teammate history was found."
+    },
+    "lifecycle": {
+      "stoppedBots": "Teammates needing attention",
+      "title": "Activity and history",
+      "description": "Pause or resume this teammate and find past messages and results.",
+      "activeTitle": "Teammate is active",
+      "activeDescription": "Can receive messages, run background tasks, and contact other teammates.",
+      "pausedTitle": "Teammate is paused",
+      "pausedDescription": "New work is blocked. User-paused automations remain paused after the teammate resumes.",
+      "stoppedTitle": "Teammate has stopped",
+      "stoppedDescription": "This is a legacy stopped state. You can still keep its task transcripts when permanently deleting it.",
+      "pause": "Pause teammate",
+      "resume": "Resume teammate",
+      "delete": "Delete permanently",
+      "deleteTitle": "Permanently delete teammate",
+      "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
+      "working": "Updating…",
+      "actionFailed": "The action did not finish. Try again shortly."
+    },
+    "backToChat": "Back to chat",
+    "memoryRecovery": {
+      "action": "Turn memory back on"
+    },
+    "profileSaveFailed": "Teammate settings could not be saved. No changes were applied.",
+    "modelLabel": "Model",
+    "modelUnavailable": "{{model}} (currently unavailable)",
+    "codexAutomaticCompact": "Codex teammates compact context on their own, and /new keeps the current task. Only start a new task when you actually need a clean slate.",
+    "image": "Add image",
+    "send": "Send message",
+    "roster": {
+      "create": "Invite companion",
+      "customNamePlaceholder": "Give your teammate a name",
+      "customTitle": "Meet someone new"
+    },
+    "chat": {
+      "newMessagesBoundary": "NEW",
+      "composerPlaceholder": "Say something to {{name}}…",
+      "composerPlaceholderLatin": "Say something to {{name}}…"
+    },
+    "globalSettings": {
+      "title": "Teammates",
+      "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
+      "rosterNote": "The shipped roster grows with each release."
+    },
+    "collab": {
+      "backgroundTask": "Background task",
+      "trackedTask": "Runs independently and returns its result",
+      "stopTask": "Stop task",
+      "messageSent": "Message sent to background task",
+      "watchWork": "Watch the work",
+      "actionFailed": "That didn't go through. Try again.",
+      "retrying": "Hasn't started yet — retrying…",
+      "status": {
+        "queued": "Getting started",
+        "waiting": "Waiting for input",
+        "running": "Working on it",
+        "completed": "Done",
+        "failed": "Failed",
+        "cancelled": "Stopped",
+        "timed-out": "Timed out",
+        "unknown": "Task status unavailable"
+      },
+      "duration": {
+        "seconds": "{{n}}s",
+        "minutes": "{{n}} min",
+        "hoursMinutes": "{{h}} h {{m}} min"
+      }
+    },
+    "directMessage": {
+      "sentTo": "Sent a message to {{name}}",
+      "receivedFrom": "Message from {{name}}",
+      "exchangeCount": "{{count}} messages with {{name}}",
+      "open": "View the conversation between teammates",
+      "readOnly": "This conversation is view-only",
+      "close": "Close conversation",
+      "unavailable": "This teammate conversation is no longer available.",
+      "empty": "There are no messages to view yet.",
+      "limitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks"
+    },
+    "joined": {
+      "today": "Joined today",
+      "yesterday": "Joined yesterday",
+      "days": "Joined {{n}} days ago",
+      "months": "Joined {{n}} months ago",
+      "years": "Joined {{n}} years ago"
+    },
+    "background": {
+      "title": "Responsibilities",
+      "edit": "Edit",
+      "done": "Done",
+      "placeholder": "What they own, what they should advance proactively, which decisions require approval, and how they should communicate.",
+      "empty": "Responsibilities and boundaries have not been defined.",
+      "footnote": "This enters the teammate's identity context. Quick personality settings are stored separately and are preserved when this text changes."
+    },
+    "welcome": {
+      "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
+      "withRole": "Hi, I'm {{name}} — {{description}}. Just tell me what you need."
+    },
+    "invitation": {
+      "title": "Getting ready to meet",
+      "waiting": "See you soon, {{name}}",
+      "background": "Feel free to step away. Preparation continues in the background.",
+      "profile": "Writing a personal story",
+      "skills": "Preparing a computer for {{name}}",
+      "avatar": "{{name}} is choosing a new portrait",
+      "welcome": "Getting a first hello ready",
+      "failed": "Preparation paused. Everything completed so far is saved. You can try again.",
+      "retryFailed": "Couldn’t retry just now. Please try again shortly.",
+      "leave": "Step away",
+      "avatarSkipped": "Using the default portrait for now. You can change it anytime."
+    },
+    "permissionRequest": "{{name}} needs your go-ahead",
+    "remote": {
+      "online": "Online",
+      "offline": "Offline",
+      "thisDevice": "This computer",
+      "offlineDescription": "{{name}} is offline. Reconnect {{device}} to continue.",
+      "preparing": "Waiting for this teammate to get ready…"
+    }
+  },
   "common": {
     "dismiss": "Dismiss"
   },
   "commonUi": {
+    "retry": "Try again",
     "crossAgentConvert": {
       "asking": {
         "title": "Convertible workspace config detected",
@@ -7540,6 +7780,7 @@
       "browserTab": "Browser tab",
       "desktopWindow": "App window",
       "task": "Task",
+      "bot": "Message or delegate",
       "pluginResources": "Plugin resources",
       "pluginResource": "Plugin resource",
       "backToAll": "Back to all @ resources",
@@ -7811,6 +8052,7 @@
     },
     "messageActionBar": {
       "copy": "Copy message",
+      "reply": "Reply",
       "linkCopied": "Link copied",
       "moreActions": "More message actions",
       "copyLink": "Copy current message link",
@@ -8454,6 +8696,9 @@
     },
     "generatedFiles": {
       "title": "Files created this message",
+      "botTitle": "Deliverables",
+      "relatedFiles": "{{count}} related files",
+      "openWebPreview": "Open web preview",
       "showMore": "Show {{count}} more",
       "showLess": "Show less",
       "artifactLabel": "Artifact",
@@ -9924,7 +10169,7 @@
         "weekly-work-draft": {
           "name": "Weekly report drafter",
           "description": "Compile this week's work from documents in the working directory into a report draft",
-          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
         },
         "knowledge-freshness": {
           "name": "Knowledge base freshness check",

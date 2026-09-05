@@ -35,6 +35,7 @@ const SESSION_SOURCES = [
   'review',
   'shared',
   'plugin',
+  'bot',
 ] as const satisfies readonly SessionSource[];
 
 export const sessions = sqliteTable(
@@ -256,6 +257,277 @@ export const sessions = sqliteTable(
     ),
     // IM 通用标识查询(slack 等渠道按 (source, botContextId, userId) 找会话行)
     idxImLookup: index('idx_sessions_im_lookup').on(t.source, t.imBotContextId, t.imUserId),
+  }),
+);
+
+/**
+ * Cindy Bots 的 Profile 权威记录。
+ *
+ * Renderer 只能通过 local-db:bots:* 读取/修改，不能把 Bot 身份或 canonical
+ * Session 关系留在 localStorage。JSON 字段保留 Profile runtime 的版本化扩展空间；
+ * 具体 Skill/MCP/Memory 引用仍由各自能力系统解析，不在这里复制凭证。
+ */
+export const botProfiles = sqliteTable(
+  'bot_profiles',
+  {
+    id: text('id').primaryKey(),
+    displayName: text('display_name').notNull(),
+    description: text('description').notNull().default(''),
+    avatar: text('avatar').notNull().default('🤖'),
+    avatarColor: text('avatar_color').notNull().default('violet'),
+    status: text('status', { enum: ['active', 'paused', 'error', 'archived', 'deleting'] })
+      .notNull()
+      .default('active'),
+    /** Roster display only; hidden Bots continue running and remain addressable. */
+    hiddenAt: integer('hidden_at'),
+    /** Roster ordering only; canonical Session ownership is unchanged. */
+    pinnedAt: integer('pinned_at'),
+    /** Latest durable, user-actionable failure observed for this Bot. */
+    attentionReason: text('attention_reason'),
+    /** Monotonic observation time used to stop stale successes clearing newer failures. */
+    attentionAt: integer('attention_at'),
+    currentVersion: integer('current_version').notNull().default(1),
+    canonicalSessionId: text('canonical_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxStatusUpdated: index('idx_bot_profiles_status_updated').on(t.status, t.updatedAt),
+    idxCanonicalSession: index('idx_bot_profiles_canonical_session').on(t.canonicalSessionId),
+  }),
+);
+
+/** Immutable-ish Profile snapshots used for runtime binding, audit and rollback. */
+export const botProfileVersions = sqliteTable(
+  'bot_profile_versions',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    identitySource: text('identity_source').notNull().default(''),
+    capabilitiesJson: text('capabilities_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqBotVersion: uniqueIndex('uniq_bot_profile_versions_bot_version').on(t.botId, t.version),
+    idxBotCreated: index('idx_bot_profile_versions_bot_created').on(t.botId, t.createdAt),
+  }),
+);
+
+/** Canonical, delegation-linked and archived/history Session projections for a Bot. */
+export const botSessionLinks = sqliteTable(
+  'bot_session_links',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    /** ProfileVersion pinned when this Session became canonical/delegation-linked. */
+    profileVersion: integer('profile_version').notNull().default(1),
+    role: text('role', { enum: ['canonical', 'history', 'delegation'] }).notNull(),
+    routeKey: text('route_key'),
+    createdAt: integer('created_at').notNull(),
+    archivedAt: integer('archived_at'),
+  },
+  (t) => ({
+    uniqSession: uniqueIndex('uniq_bot_session_links_session').on(t.sessionId),
+    uniqCanonicalPerBot: uniqueIndex('uniq_bot_session_links_canonical_per_bot')
+      .on(t.botId)
+      .where(sql`${t.role} = 'canonical'`),
+    idxBotRole: index('idx_bot_session_links_bot_role').on(t.botId, t.role),
+  }),
+);
+
+/** Prepared and terminal native runtime capability snapshot for each Bot Session start. */
+export const botRuntimeSnapshots = sqliteTable(
+  'bot_runtime_snapshots',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    profileVersion: integer('profile_version').notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    workingDir: text('working_dir').notNull(),
+    memoryScopeKey: text('memory_scope_key'),
+    configuredJson: text('configured_json').notNull().default('{}'),
+    resolvedJson: text('resolved_json').notNull().default('{}'),
+    status: text('status', { enum: ['prepared', 'applied', 'degraded', 'failed'] }).notNull(),
+    /** Resolution finished and the exact Profile/runtime bytes were frozen. */
+    preparedAt: integer('prepared_at').notNull().default(0),
+    /** Agent startup returned and Session storage succeeded. */
+    appliedAt: integer('applied_at'),
+    /** Startup failed before the Session became visible. */
+    failedAt: integer('failed_at'),
+    /** Sanitized stage/error metadata only; never stores prompt or user content. */
+    failureJson: text('failure_json'),
+  },
+  (t) => ({
+    idxBotPrepared: index('idx_bot_runtime_snapshots_bot_prepared').on(t.botId, t.preparedAt),
+    idxSessionPrepared: index('idx_bot_runtime_snapshots_session_prepared').on(
+      t.sessionId,
+      t.preparedAt,
+    ),
+  }),
+);
+
+/** Lifecycle audit trail for renew/archive/recovery and future migration events. */
+export const botLifecycleEvents = sqliteTable(
+  'bot_lifecycle_events',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    eventType: text('event_type').notNull(),
+    payloadJson: text('payload_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    idxBotCreated: index('idx_bot_lifecycle_events_bot_created').on(t.botId, t.createdAt),
+    idxSessionCreated: index('idx_bot_lifecycle_events_session_created').on(
+      t.sessionId,
+      t.createdAt,
+    ),
+  }),
+);
+
+/** Durable Bot-to-Bot handoff lineage using Cindy child Sessions as execution units. */
+export const botDelegations = sqliteTable(
+  'bot_delegations',
+  {
+    id: text('id').primaryKey(),
+    requestingBotId: text('requesting_bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    // null = 委派给一条普通 Cindy 任务（非 Bot），卡片与完成信号同一条链路。
+    targetBotId: text('target_bot_id').references(() => botProfiles.id, {
+      onDelete: 'cascade',
+    }),
+    parentSessionId: text('parent_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    childSessionId: text('child_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    objective: text('objective').notNull(),
+    contextRefsJson: text('context_refs_json').notNull().default('[]'),
+    artifactRefsJson: text('artifact_refs_json').notNull().default('[]'),
+    permissionSnapshotJson: text('permission_snapshot_json').notNull().default('{}'),
+    lineageJson: text('lineage_json').notNull().default('[]'),
+    targetProfileVersion: integer('target_profile_version'),
+    depth: integer('depth').notNull().default(1),
+    budgetTokens: integer('budget_tokens'),
+    tokensUsed: integer('tokens_used').notNull().default(0),
+    status: text('status', {
+      enum: ['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled', 'timed-out'],
+    })
+      .notNull()
+      .default('queued'),
+    resultSummary: text('result_summary'),
+    /** Output artifacts produced by the child task; never input authorization refs. */
+    outputArtifactsJson: text('output_artifacts_json').notNull().default('[]'),
+    /** User-visible waiting summary; the live resolver remains runtime-owned. */
+    pendingInteractionJson: text('pending_interaction_json'),
+    lastError: text('last_error'),
+    /** Stable task id, incrementing execution run. A terminal task may be continued in a new child Session. */
+    runSequence: integer('run_sequence').notNull().default(1),
+    createdAt: integer('created_at').notNull(),
+    acceptedAt: integer('accepted_at'),
+    completedAt: integer('completed_at'),
+    /** Set only after the terminal wake has been accepted by the requesting Bot task. */
+    completionDeliveredAt: integer('completion_delivered_at'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxRequesterStatus: index('idx_bot_delegations_requester_status').on(
+      t.requestingBotId,
+      t.status,
+    ),
+    idxTargetStatus: index('idx_bot_delegations_target_status').on(t.targetBotId, t.status),
+    idxParentSession: index('idx_bot_delegations_parent_session').on(t.parentSessionId),
+    uniqChildSession: uniqueIndex('uniq_bot_delegations_child_session').on(t.childSessionId),
+  }),
+);
+
+/** Hidden, pair-scoped Bot conversation. It is projected into each Bot's canonical timeline. */
+export const botDirectMessageThreads = sqliteTable(
+  'bot_direct_message_threads',
+  {
+    id: text('id').primaryKey(),
+    /** Pair ids are always stored in lexical order so one pair has one active thread. */
+    botAId: text('bot_a_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    botBId: text('bot_b_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['active', 'closed'] })
+      .notNull()
+      .default('active'),
+    closeReason: text('close_reason', { enum: ['message-limit', 'idle-timeout'] }),
+    messageCount: integer('message_count').notNull().default(0),
+    maxMessages: integer('max_messages').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    blockedUntil: integer('blocked_until'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    closedAt: integer('closed_at'),
+  },
+  (t) => ({
+    uniqActivePair: uniqueIndex('uniq_bot_dm_threads_active_pair')
+      .on(t.botAId, t.botBId)
+      .where(sql`${t.status} = 'active'`),
+    idxPairUpdated: index('idx_bot_dm_threads_pair_updated').on(t.botAId, t.botBId, t.updatedAt),
+  }),
+);
+
+/** One explicit send_to_agent delivery inside a hidden Bot pair conversation. */
+export const botDirectMessages = sqliteTable(
+  'bot_direct_messages',
+  {
+    id: text('id').primaryKey(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => botDirectMessageThreads.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    senderBotId: text('sender_bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    recipientBotId: text('recipient_bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    senderSessionId: text('sender_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    recipientSessionId: text('recipient_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    deliveryStatus: text('delivery_status', {
+      enum: ['pending', 'delivered', 'failed'],
+    })
+      .notNull()
+      .default('pending'),
+    content: text('content').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqThreadSequence: uniqueIndex('uniq_bot_direct_messages_thread_sequence').on(
+      t.threadId,
+      t.sequence,
+    ),
+    idxThreadCreated: index('idx_bot_direct_messages_thread_created').on(t.threadId, t.createdAt),
   }),
 );
 
@@ -1525,6 +1797,9 @@ export const rightSidebarTabs = sqliteTable(
     uniqSubagents: uniqueIndex('right_sidebar_tabs_subagents_singleton_idx')
       .on(t.sessionId)
       .where(sql`${t.kind} = 'subagents'`),
+    uniqBotArtifacts: uniqueIndex('right_sidebar_tabs_bot_artifacts_singleton_idx')
+      .on(t.sessionId)
+      .where(sql`${t.kind} = 'bot-artifacts'`),
   }),
 );
 

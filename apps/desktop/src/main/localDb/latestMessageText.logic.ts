@@ -88,8 +88,25 @@ function isInternalTitleAssistant(meta: Record<string, unknown> | null): boolean
     meta.goalCompletion !== undefined ||
     meta.goalNotice !== undefined ||
     meta.reviewRun !== undefined ||
-    meta.scheduleSkip !== undefined
+    meta.scheduleSkip !== undefined ||
+    isBotCollaborationCardRow(meta)
   );
+}
+
+/**
+ * 伙伴协作里**渲染成内联卡**的那两种行：委派锚点（空正文）与插话留痕。它们是对话
+ * 的注解，不是对话内容，不该被拿去当标题或列表预览。
+ *
+ * 刻意不排除客座请求 / 客座结果 / 终态镜像：那三种带的是伙伴真正说的话，本来就是
+ * 合法的会话主题证据，把它们一起挡掉会让「刚收到委派结果」的任务预览凭空变空。
+ */
+function isBotCollaborationCardRow(meta: Record<string, unknown>): boolean {
+  const collaboration = meta.botCollaboration;
+  if (!collaboration || typeof collaboration !== 'object' || Array.isArray(collaboration)) {
+    return false;
+  }
+  const role = (collaboration as { role?: unknown }).role;
+  return role === 'delegation-request' || role === 'interjection';
 }
 
 /** Only an explicit user send starts a new title turn; steer stays inside the current turn. */

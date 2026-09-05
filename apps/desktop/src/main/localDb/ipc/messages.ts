@@ -51,6 +51,7 @@ import {
 import { capReferenceMessageRows } from './history.js';
 import { maybeUpgradeCodexHistoryOversizedError } from '../codexHistoryOversizedUpgrade';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
+import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation';
 
 const log = createLogger('localDb/messages');
 
@@ -707,6 +708,9 @@ export function broadcastMessageRow(
   ownerScope?: DataOwnerBroadcastScope | null,
 ): void {
   broadcastOwnedPayload('local-db:messages:created', { sessionId, message: msg }, ownerScope);
+  if (msg.role === 'user' || msg.role === 'assistant') {
+    scheduleBotRemoteResourceChangedForSession(sessionId, ownerScope?.ownerScopeKey);
+  }
 }
 
 export interface MessageDeletedPayload {
@@ -1082,6 +1086,7 @@ export function broadcastMessageDeleted(
   payload: MessageDeletedPayload,
   ownerScope?: DataOwnerBroadcastScope | null,
 ): void {
+  scheduleBotRemoteResourceChangedForSession(payload.sessionId, ownerScope?.ownerScopeKey);
   const ownerStamp = ownerStampForBroadcast(ownerScope);
   if (ownerStamp === null) return;
   if (ownerScope !== undefined && ownerScope !== null) {

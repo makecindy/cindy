@@ -31,6 +31,11 @@ import {
   type ReviewFailureCode,
 } from '../../../shared/reviewRun';
 import {
+  BotSessionTaskCard,
+  BotSessionTaskMessageTrace,
+} from '@/features/bots/BotCollaborationCard';
+import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
+import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
@@ -54,6 +59,9 @@ interface SystemCardProps {
     | 'auto-resume'
     | 'auto-resume-pending'
     | 'agent-switch'
+    | 'bot-session-task-message'
+    | 'bot-session-task'
+    | 'bot-direct-message'
     | 'context-rebuild';
   data?: Record<string, unknown>;
   /**
@@ -122,9 +130,7 @@ function HelpCard({ data }: { data?: Record<string, unknown> }) {
           {renderCommandRows(projectCmds)}
         </>
       )}
-      {commands.length === 0 && (
-        <div className={labelClass}>No commands available.</div>
-      )}
+      {commands.length === 0 && <div className={labelClass}>No commands available.</div>}
     </div>
   );
 }
@@ -170,9 +176,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
     return (
       <div className={cardClass}>
         <div className={titleClass}>{t('chat.systemCard.context.title')}</div>
-        <span className={labelClass}>
-          {error || t('chat.systemCard.context.noLiveSession')}
-        </span>
+        <span className={labelClass}>{error || t('chat.systemCard.context.noLiveSession')}</span>
       </div>
     );
   }
@@ -418,11 +422,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                       <span className="shrink-0 tabular-nums">{fmtContextTokens(row.tokens)}</span>
                       <span className="w-[42px] shrink-0 text-right tabular-nums">{row.count}</span>
                     </button>
-                    {isDetailExpanded && (
-                      <div className="mt-1 pl-[18px]">
-                        {row.content}
-                      </div>
-                    )}
+                    {isDetailExpanded && <div className="mt-1 pl-[18px]">{row.content}</div>}
                   </div>
                 );
               })}
@@ -525,9 +525,7 @@ function ContextDetailSection({
 
   return (
     <div>
-      {title && (
-        <div className="mb-1 text-12 font-medium text-[var(--msg-user-text)]">{title}</div>
-      )}
+      {title && <div className="mb-1 text-12 font-medium text-[var(--msg-user-text)]">{title}</div>}
       <div className="flex flex-col gap-[2px]">
         {visibleRows.map(([label, tokens]) => (
           <div key={label} className="flex items-baseline justify-between gap-3 text-12">
@@ -683,8 +681,7 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
   const durationMs = typeof data?.durationMs === 'number' ? data.durationMs : 0;
   const saved = preTokens > postTokens ? preTokens - postTokens : 0;
 
-  const fmtTokens = (n: number) =>
-    n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+  const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
   // Build a single line of stats — only show pieces that have real data so
   // the chip doesn't read "saved 0 tokens · 0 ms" when SDK omits the optional
@@ -815,7 +812,8 @@ function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
 }
 
 function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCardInfo {
-  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
+  const num = (v: unknown) =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
   return {
     ...(typeof data?.error === 'string' && data.error.length > 0 ? { error: data.error } : {}),
     ...(num(data?.attempt) !== undefined ? { attempt: num(data?.attempt) } : {}),
@@ -988,7 +986,7 @@ function AutoResumeActionRow({
         )}
         <span className="flex-1" />
         <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
-          {canExpand ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
+          {canExpand ? expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
         </span>
       </button>
       {canExpand && expanded && (
@@ -1092,7 +1090,9 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           {toModel && (
             <>
               <span className="opacity-50">·</span>
-              <span title={toModel} className="min-w-0 truncate font-mono">{toModel}</span>
+              <span title={toModel} className="min-w-0 truncate font-mono">
+                {toModel}
+              </span>
             </>
           )}
           {Boolean(data?.resumed) && (
@@ -1334,6 +1334,12 @@ export function SystemCard({
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
       return <ReviewCard data={data} workingDir={workingDir} />;
+    case 'bot-session-task-message':
+      return <BotSessionTaskMessageTrace data={data} />;
+    case 'bot-session-task':
+      return <BotSessionTaskCard data={data} sessionId={sessionId} />;
+    case 'bot-direct-message':
+      return <BotDirectMessageCard data={data} />;
     default:
       return null;
   }

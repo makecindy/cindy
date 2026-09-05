@@ -2952,7 +2952,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(cardUpdates.every((u) => u.provider === 'pi')).toBe(true);
         expect(cardUpdates.at(0)?.status).toBe('running');
         expect(cardUpdates.at(-1)?.status).toBe('completed');
-        expect(cardUpdates.at(-1)?.title).toBe('scout');
+        expect(cardUpdates.at(-1)?.title).toBe('find the auth entry point');
         const finalUsage = cardUpdates.at(-1)?.usage as Record<string, number> | undefined;
         // 真实用量来自子进程的 message_end.usage(fake gateway 上报 42 input tokens)。
         expect(finalUsage?.totalTokens).toBeGreaterThan(0);

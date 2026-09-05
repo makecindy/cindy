@@ -5,7 +5,7 @@
  * SKILL.md,与 CC/Codex 的技能可见性对齐;发现层零基线上下文(仅 name/description)。
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -66,6 +66,7 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     expect(found?.scope).toBe('repo');
     expect(found?.runtimeStatus).toBe('discovered');
     expect(found?.runtimeCommandName).toBe('skill:demo-skill');
+    expect(found?.path).toBe(realpathSync(path.join(skillDir, 'SKILL.md')));
     expect(found?.description).toContain('demo skill');
   });
 

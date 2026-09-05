@@ -175,7 +175,8 @@
       "remoteControl": "원격 연결",
       "windowBehavior": "앱 동작",
       "shortcuts": "키보드 단축키",
-      "mcpServers": "사용자 지정 MCP"
+      "mcpServers": "사용자 지정 MCP",
+      "bots": "파트너"
     },
     "remote": {
       "title": "원격 머신",
@@ -6842,7 +6843,8 @@
       "projects": "프로젝트",
       "skillhub": "SkillHub",
       "plugins": "플러그인",
-      "issues": "이슈"
+      "issues": "이슈",
+      "bots": "동료"
     },
     "user": {
       "settingsLink": "설정, 현재 사용자: {{name}}",
@@ -6895,10 +6897,248 @@
       "close": "다운로드 화면 닫기"
     }
   },
+  "bots": {
+    "sidebar": {
+      "newTaskWith": "{{name}}와(과) 새 작업 시작"
+    },
+    "title": "동료",
+    "add": "동료 추가",
+    "createWizard": {
+      "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요.",
+      "templates": {
+        "cindy": {
+          "title": "Cindy 어시스턴트",
+          "defaultName": "Cindy",
+          "defaultDescription": "바쁜 일상을 정리하고 새로운 아이디어를 듣는 것을 좋아해요. 글쓰기부터 자료, 소소한 일까지 함께 이야기해 봐요."
+        },
+        "dash": {
+          "title": "Dash 회사 CEO",
+          "defaultName": "Dash",
+          "defaultDescription": "좋은 제품과 사업에 호기심이 많아요. 가능성을 깊이 생각하고 함께 결정을 내리는 것을 좋아해요."
+        },
+        "lizi": {
+          "title": "LiZi 엔지니어링 총괄",
+          "defaultName": "LiZi",
+          "defaultDescription": "어려운 문제를 풀고 아이디어를 실제로 만드는 것을 좋아해요. 막히는 일이 있으면 함께 답을 찾아봐요."
+        },
+        "custom": {
+          "title": "사용자 지정"
+        }
+      },
+      "chooseTemplate": "누구를 초대할까요?"
+    },
+    "homeFolder": {
+      "title": "고급 설정",
+      "description": "동료는 기억과 익힌 작업 방식을 스스로 관리합니다. 바로잡을 때만 폴더를 직접 여세요.",
+      "contents": "SOUL.md, USER.md, system_prompt.md, skills/, memories/가 들어 있습니다. 모델, 권한과 연결은 Cindy가 관리합니다.",
+      "open": "폴더 열기",
+      "openFailed": "동료 폴더를 열 수 없습니다."
+    },
+    "profile": {
+      "changeAvatar": "아바타 변경",
+      "avatarFailed": "아바타를 변경할 수 없습니다. 5MB 미만의 PNG, JPEG 또는 WebP 이미지를 선택하세요.",
+      "summary": "자기소개",
+      "summaryPlaceholder": "예: 웹소설 쓰기를 사랑하는 소설가. 유머가 있고 등장인물의 속마음을 상상하는 것을 좋아해요.",
+      "avatarSelectionFailed": "이미지를 읽지 못했어요. 5 MB 이하의 PNG, JPEG, WebP 이미지를 선택해 주세요.",
+      "personality": "성격과 대화 방식"
+    },
+    "nameLabel": "어떻게 부를까요?",
+    "close": "닫기",
+    "list": {
+      "startChat": "대화 시작하기",
+      "typing": "입력 중…",
+      "unread": "읽지 않은 메시지 {{count}}개",
+      "search": "동료 검색",
+      "searchPlaceholder": "동료 검색…",
+      "showHidden": "숨긴 동료 표시",
+      "hideHidden": "숨긴 동료 접기",
+      "hidden": "숨김({{count}})",
+      "hide": "숨기기",
+      "unhideNamed": "{{name}} 숨기기 해제",
+      "pin": "맨 위에 고정",
+      "unpin": "고정 해제",
+      "pinned": "고정됨",
+      "needsAttention": "확인 필요",
+      "duplicate": "동료 복제",
+      "moreActions": "{{name}} 추가 작업"
+    },
+    "cancel": "취소",
+    "save": "저장",
+    "autosave": {
+      "saving": "저장 중…",
+      "saved": "저장됨",
+      "retry": "다시 저장"
+    },
+    "retry": "다시 시도",
+    "backToBot": "동료로 돌아가기",
+    "sessionLoadFailedTitle": "이 동료 작업을 불러올 수 없습니다",
+    "sessionLoadFailedDescription": "작업 연결은 남아 있지만 Cindy가 동료 상태를 읽지 못했습니다. 다시 시도하거나 동료 개요로 돌아가세요.",
+    "sessionUnavailableTitle": "이 동료 작업은 더 이상 사용할 수 없습니다",
+    "sessionUnavailableDescription": "이 작업이 없어졌거나 삭제되었거나 더 이상 이 파트너의 것이 아닐 수 있습니다. 돌아가면 복구된 기본 작업을 열 수 있어요.",
+    "settings": "설정",
+    "settingsTabs": {
+      "model": "모델"
+    },
+    "model": {
+      "description": "이 팀원이 사용할 모델을 선택합니다.",
+      "restoreDefault": "기본 모델로 되돌리기"
+    },
+    "modelChain": {
+      "primary": "기본 모델",
+      "fallback": "대체 {{index}}",
+      "routeLabel": "모델 후보 {{index}}",
+      "add": "대체 모델 추가",
+      "remove": "이 후보 제거",
+      "moveUp": "위로 이동",
+      "moveDown": "아래로 이동",
+      "description": "모델을 최대 5개까지 설정할 수 있습니다. 현재 후보를 사용할 수 없으면 팀원이 다음 후보로 자동 전환하므로 작업 전환이나 수동 재시도가 필요하지 않습니다.",
+      "options": "예비 모델 ({{count}})"
+    },
+    "actions": {
+      "message": "메시지",
+      "addToGroup": "그룹에 추가",
+      "export": "내보내기"
+    },
+    "emptyTitle": "아직 동료가 없습니다",
+    "emptyDescription": "역할을 정해 동료를 만들고 필요한 도구와 메시지 채널을 연결하세요.",
+    "sessions": "개 작업",
+    "open": "열기",
+    "archived": "보관됨",
+    "historyTitle": "보관된 기록",
+    "historyEmpty": "보관된 동료 작업이 아직 없습니다.",
+    "historySearch": {
+      "title": "동료 기록 검색",
+      "description": "이 동료의 이전 메시지, 백그라운드 작업 및 보관 기록을 검색합니다.",
+      "placeholder": "무엇을 논의했는지 기억하시나요?",
+      "search": "검색",
+      "searching": "검색 중…",
+      "failed": "동료 기록을 검색하지 못했습니다. 다시 시도하세요.",
+      "empty": "일치하는 동료 기록이 없습니다."
+    },
+    "lifecycle": {
+      "stoppedBots": "확인이 필요한 동료",
+      "title": "실행 상태 및 기록",
+      "description": "동료를 일시 중지하거나 재개하고 이전 메시지와 결과를 찾습니다.",
+      "activeTitle": "동료 실행 중",
+      "activeDescription": "메시지를 받고 백그라운드 작업을 실행하며 다른 동료에게 연락할 수 있습니다.",
+      "pausedTitle": "동료 일시 중지됨",
+      "pausedDescription": "새 작업을 받지 않습니다. 사용자가 직접 중지한 자동화는 동료 재개 후에도 중지 상태를 유지합니다.",
+      "stoppedTitle": "동료가 중지됨",
+      "stoppedDescription": "이전 버전에서 남은 중지 상태입니다. 영구 삭제할 때 작업 기록은 계속 보관할 수 있습니다.",
+      "pause": "동료 일시 중지",
+      "resume": "동료 재개",
+      "delete": "영구 삭제",
+      "deleteTitle": "동료 영구 삭제",
+      "deleteDescription": "{{name}}을(를) 삭제합니다. 성격, 연결한 채널, 예약한 실행이 모두 사라지며 되돌릴 수 없어요.",
+      "working": "업데이트 중…",
+      "actionFailed": "작업이 완료되지 않았습니다. 잠시 후 다시 시도하세요."
+    },
+    "backToChat": "채팅으로 돌아가기",
+    "memoryRecovery": {
+      "action": "메모리 다시 켜기"
+    },
+    "profileSaveFailed": "동료 설정을 저장하지 못했습니다. 변경 사항은 적용되지 않았습니다.",
+    "modelLabel": "모델",
+    "modelUnavailable": "{{model}}(현재 사용할 수 없음)",
+    "codexAutomaticCompact": "Codex 파트너는 스스로 맥락을 압축하고 /new 를 써도 지금 작업이 유지됩니다. 정말 새로 시작해야 할 때만 새 작업을 여세요.",
+    "image": "이미지 추가",
+    "send": "메시지 보내기",
+    "roster": {
+      "create": "동료 초대하기",
+      "customNamePlaceholder": "동료의 이름을 지어 주세요",
+      "customTitle": "새로운 동료 만나기"
+    },
+    "chat": {
+      "newMessagesBoundary": "NEW",
+      "composerPlaceholder": "{{name}}에게 말 걸기…",
+      "composerPlaceholderLatin": "{{name}} 에게 말 걸기…"
+    },
+    "globalSettings": {
+      "title": "파트너",
+      "description": "파트너 전체에 적용되는 설정입니다. 개별 파트너 설정은 각자의 페이지에 있어요.",
+      "rosterNote": "기본 제공되는 구성원은 버전마다 늘어납니다."
+    },
+    "collab": {
+      "backgroundTask": "백그라운드 작업",
+      "trackedTask": "독립적으로 실행하고 결과를 자동 반환",
+      "stopTask": "작업 중지",
+      "messageSent": "백그라운드 작업에 메시지를 보냈습니다",
+      "watchWork": "작업 과정 보기",
+      "actionFailed": "보내지 못했습니다. 다시 시도해 주세요.",
+      "retrying": "아직 시작하지 못했습니다. 다시 시도 중…",
+      "status": {
+        "queued": "시작하는 중",
+        "waiting": "처리 대기 중",
+        "running": "작업 중",
+        "completed": "완료",
+        "failed": "실패",
+        "cancelled": "중지됨",
+        "timed-out": "시간 초과",
+        "unknown": "작업 상태를 확인할 수 없어요"
+      },
+      "duration": {
+        "seconds": "{{n}}초",
+        "minutes": "{{n}}분",
+        "hoursMinutes": "{{h}}시간 {{m}}분"
+      }
+    },
+    "directMessage": {
+      "sentTo": "{{name}}에게 메시지를 보냄",
+      "receivedFrom": "{{name}}의 메시지",
+      "exchangeCount": "{{name}}와 주고받은 메시지 {{count}}개",
+      "open": "동료 간 대화 보기",
+      "readOnly": "이 대화는 보기 전용입니다",
+      "close": "대화 닫기",
+      "unavailable": "이 동료 간 대화를 더 이상 사용할 수 없습니다.",
+      "empty": "아직 볼 수 있는 메시지가 없습니다.",
+      "limitReached": "이번 동료 간 대화가 한도에 도달해 양쪽 모두 각자의 기본 작업으로 돌아갔습니다"
+    },
+    "joined": {
+      "today": "오늘 합류",
+      "yesterday": "어제 합류",
+      "days": "{{n}}일 전 합류",
+      "months": "{{n}}개월 전 합류",
+      "years": "{{n}}년 전 합류"
+    },
+    "background": {
+      "title": "책임",
+      "edit": "편집",
+      "done": "완료",
+      "placeholder": "담당할 일, 먼저 추진할 일, 사전 확인이 필요한 결정, 원하는 소통 방식.",
+      "empty": "책임과 경계가 아직 정의되지 않았습니다.",
+      "footnote": "이 내용은 동료의 정체성 문맥에 포함됩니다. 빠른 성격 설정은 별도로 저장되며 여기를 바꿔도 유지됩니다."
+    },
+    "welcome": {
+      "generic": "안녕하세요, {{name}}이에요. 앞으로 필요한 게 있으면 바로 말씀하세요. 그동안 저는 여기부터 익혀 둘게요.",
+      "withRole": "안녕하세요, {{name}}이에요 — {{description}}. 필요한 게 있으면 바로 말씀하세요."
+    },
+    "invitation": {
+      "title": "만날 준비 중",
+      "waiting": "곧 만나요, {{name}}",
+      "background": "잠시 다른 일을 해도 괜찮아요. 준비는 계속됩니다.",
+      "profile": "자신의 이야기를 쓰고 있어요",
+      "skills": "{{name}}의 컴퓨터를 준비하고 있어요",
+      "avatar": "{{name}}이 새 아바타를 고르고 있어요",
+      "welcome": "첫인사를 준비하고 있어요",
+      "failed": "준비가 잠시 멈췄어요. 완료된 내용은 저장되어 있으니 다시 시도할 수 있어요.",
+      "retryFailed": "지금은 다시 시도할 수 없어요. 잠시 후 시도해 주세요.",
+      "leave": "잠시 나가기",
+      "avatarSkipped": "지금은 기본 아바타를 사용해요. 언제든 바꿀 수 있어요."
+    },
+    "permissionRequest": "{{name}} 님이 확인을 기다리고 있어요",
+    "remote": {
+      "online": "온라인",
+      "offline": "오프라인",
+      "thisDevice": "이 컴퓨터",
+      "offlineDescription": "{{name}} 님이 오프라인입니다. {{device}}에 다시 연결하면 계속할 수 있어요.",
+      "preparing": "준비가 끝나기를 기다리고 있어요…"
+    }
+  },
   "common": {
     "dismiss": "닫기"
   },
   "commonUi": {
+    "retry": "다시 시도",
     "crossAgentConvert": {
       "asking": {
         "title": "변환 가능한 워크스페이스 설정 감지됨",
@@ -7538,6 +7778,7 @@
       "browserTab": "브라우저 탭",
       "desktopWindow": "앱 창",
       "task": "작업",
+      "bot": "메시지 또는 위임",
       "pluginResources": "플러그인 리소스",
       "pluginResource": "플러그인 리소스",
       "backToAll": "모든 @ 콘텐츠로 돌아가기",
@@ -7809,6 +8050,7 @@
     },
     "messageActionBar": {
       "copy": "메시지 복사",
+      "reply": "답장",
       "linkCopied": "링크가 복사되었습니다",
       "moreActions": "메시지 추가 작업",
       "copyLink": "현재 메시지 링크 복사",
@@ -8448,6 +8690,9 @@
     },
     "generatedFiles": {
       "title": "이 메시지에서 생성된 파일",
+      "botTitle": "이번 결과물",
+      "relatedFiles": "관련 파일 {{count}}개",
+      "openWebPreview": "웹 미리보기 열기",
       "showMore": "{{count}}개 더 보기",
       "showLess": "간략히 보기",
       "artifactLabel": "산출물",

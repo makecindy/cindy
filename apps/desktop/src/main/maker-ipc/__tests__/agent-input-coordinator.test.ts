@@ -718,6 +718,9 @@ function createHarness(opts?: {
   const resolveSessionReferences = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['resolveSessionReferences']>
   >(async () => []);
+  const refreshAgentReferencesBeforeDispatch = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['refreshAgentReferencesBeforeDispatch']>
+  >(async () => {});
   const emitProjection = vi.fn((projection: AgentInputProjection) => {
     projections.push(projection);
   });
@@ -811,6 +814,7 @@ function createHarness(opts?: {
     onResumableTurnErrorDiscarded,
     noteSessionClearBoundary,
     resolveSessionReferences,
+    refreshAgentReferencesBeforeDispatch,
     hasPendingCredentialSwitch: () => hasPendingCredentialSwitch?.() === true,
     screenUserMessage: (sessionId, agentFacingText, item) =>
       screenUserMessage
@@ -850,6 +854,7 @@ function createHarness(opts?: {
     onResumableTurnErrorDiscarded,
     noteSessionClearBoundary,
     resolveSessionReferences,
+    refreshAgentReferencesBeforeDispatch,
     emitProjection,
     projections,
     onUiRetry,
@@ -1265,6 +1270,24 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([]);
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
+  });
+
+  it('attributes synchronous provider output to its active input and clears after completion', async () => {
+    const h = createHarness();
+    const sid = 'private-reply-attribution';
+    expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
+    h.sendToAgent.mockImplementationOnce(async () => {
+      expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+      h.setRunning(true);
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('bot-dm:thread:delivery', 'private message'));
+    await flush();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
   });
 
   it('silently keeps a queue head when host dispatch returns SESSION_RUNNING', async () => {
@@ -2209,6 +2232,51 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(callbackDoneAtSendResolve).toBe(true);
+  });
+
+  it('refreshes transient Bot status when a queued message actually dispatches', async () => {
+    const h = createHarness();
+    const sid = 'refresh-bot-reference-at-dispatch';
+    const href = 'cindy://bot/bot-b';
+    const item = makeItem('q-refresh-bot', href, {
+      agentReferences: [{
+        kind: 'bot',
+        start: 0,
+        end: href.length,
+        href,
+        botId: 'bot-b',
+        name: 'Dash Bot',
+        hostSnapshot: {
+          availability: 'ready',
+          activity: 'idle',
+          activeDelegations: 0,
+        },
+      }],
+    });
+    h.refreshAgentReferencesBeforeDispatch.mockImplementationOnce(async (queued) => {
+      queued.agentReferences = queued.agentReferences?.map((reference) => reference.kind === 'bot'
+        ? {
+            ...reference,
+            hostSnapshot: {
+              availability: 'ready',
+              activity: 'working',
+              activeDelegations: 1,
+            },
+          }
+        : reference);
+    });
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+
+    expect(h.refreshAgentReferencesBeforeDispatch).toHaveBeenCalledOnce();
+    const sentMessage = h.sendToAgent.mock.calls[0]?.[1];
+    expect(JSON.stringify(sentMessage)).toContain(
+      'availability=ready; activity=working; active_tracked_tasks=1',
+    );
+    expect(JSON.stringify(sentMessage)).not.toContain(
+      'availability=ready; activity=idle; active_tracked_tasks=0',
+    );
   });
 
   it('awaits the pre-dispatch hook after persistence and before vendor dispatch', async () => {

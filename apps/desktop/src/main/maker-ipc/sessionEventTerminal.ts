@@ -1,3 +1,4 @@
+import type { BotDelegationService } from './botDelegationService.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
@@ -45,6 +46,7 @@ import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionDeliveryResult } from './sessionEventDelivery.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
   readonly pendingFailedTurnAssistantPersistId: Map<string, string>;
   readonly autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
@@ -61,6 +63,7 @@ export interface FinishSessionTerminalEventDeps {
   >;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
+    | 'getQueueControlSnapshot'
     | 'getAutoResumeAttemptToken'
     | 'getAutoResumeDeferredOwner'
     | 'isAutoResumePending'
@@ -447,6 +450,25 @@ export function finishSessionTerminalEvent(
           deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true,
       })
     ) {
+      // Capture before queue-drain microtasks can promote the follow-up turn.
+      const botDelegationHadPendingInputAtTerminal =
+        (deps.agentInputCoordinatorHolder?.getQueueControlSnapshot(session.id).pendingQueue.length ?? 0) > 0;
+      void (async () => {
+        try {
+          const doneData = event.data as { result?: unknown; message?: unknown; reason?: unknown } | null;
+          await deps.botDelegationServiceHolder?.settleSession({
+            childSessionId: session.id,
+            outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+            resultText: typeof doneData?.result === 'string' ? doneData.result : '',
+            error: [doneData?.message, doneData?.reason].find((value): value is string => typeof value === 'string' && value.length > 0),
+            hadPendingInputAtTerminal: botDelegationHadPendingInputAtTerminal,
+          });
+        } catch (error) {
+          deps.log.warn('Bot delegation terminal settlement failed', {
+            sessionId: session.id, error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
       void (async () => {
         try {
           await deps.workerTurnStartSequencer.waitForStart(session.id);

@@ -33,3 +33,21 @@ describe('sessionCreateToRow providerId', () => {
     expect(sessionCreateToRow('id5', { workingDir: '/repo', providerId: '   ' }, now).providerId).toBeNull();
   });
 });
+
+describe('sessionCreateToRow source', () => {
+  const now = 1_700_000_000_000;
+
+  it('Bot canonical Session 使用 bot 来源', () => {
+    const row = sessionCreateToRow(
+      'bot-session',
+      { workingDir: '/repo', source: 'bot', workspaceKind: 'dialogue' },
+      now,
+    );
+    expect(row.source).toBe('bot');
+    expect(row.workspaceKind).toBe('dialogue');
+  });
+
+  it('未传 source 仍保持 desktop 兼容默认值', () => {
+    expect(sessionCreateToRow('desktop-session', { workingDir: '/repo' }, now).source).toBe('desktop');
+  });
+});

@@ -36,7 +36,13 @@ import { z } from 'zod';
  * 是为了让 list_tools(control) 的"改会话标题"结果里不混入 handoff,避免 LLM 在"改名"
  * 意图下误选 send_to_session。
  */
-export type XdtHelperToolCategory = 'cindy' | 'history' | 'control' | 'feedback' | 'handoff';
+export type XdtHelperToolCategory =
+  | 'cindy'
+  | 'history'
+  | 'control'
+  | 'feedback'
+  | 'handoff'
+  | 'bots';
 
 export type XdtHelperToolContentBlock =
   | { type: 'text'; text: string }

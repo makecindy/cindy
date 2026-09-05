@@ -57,6 +57,7 @@ const FAVORITE_FEEDBACK_MS = 700;
 const RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
 /** 定宽 sizer 的行不接交互。 */
 const noop = (): void => {};
+const NO_FAVORITES: readonly ModelFavoriteItem[] = [];
 
 export interface UnifiedSelectedRow {
   /** 该行**生效**引擎(推荐 ⊕ override ⊕ 会话内 pinnedEngine ⊕ 收藏副本)。 */
@@ -126,6 +127,11 @@ export interface UnifiedModelPanelProps {
   /** false = 只选模型,不出配置浮层(设置类入口的 configurationEnabled)。 */
   configurationEnabled?: boolean;
   isRouteDisabled?: (providerId: string, modelId: string, agent: AgentKind) => boolean;
+  /**
+   * official = 模型优先的受限入口。忽略全局引擎偏好、模型记忆和收藏配置，
+   * 始终使用目录为该模型给出的官方推荐引擎与默认配置。
+   */
+  selectionPolicy?: 'personalized' | 'official';
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
    *   - rail 顶部多一格「同引擎」(图标 = 当前引擎),**默认选中**;该视图列
@@ -270,6 +276,7 @@ export function UnifiedModelPanel({
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   configurationEnabled = true,
+  selectionPolicy = 'personalized',
   isRouteDisabled,
   sessionEngineFilter,
   followSession,
@@ -283,7 +290,8 @@ export function UnifiedModelPanel({
   panelWidthFluid = false,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
-  const favorites = useModelFavorites();
+  const storedFavorites = useModelFavorites();
+  const favorites = selectionPolicy === 'official' ? NO_FAVORITES : storedFavorites;
   // 引擎 override / 深度 / Fast 三份 store 的版本号:任一变化都要重算行三元组与浮层
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。
   const enginePrefsVersion = useModelEnginePrefsVersion();
@@ -454,14 +462,21 @@ export function UnifiedModelPanel({
         !activeFavoriteUid &&
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === entry.providerId);
+      const personalized = selectionPolicy === 'personalized';
       const base = resolveUnifiedRowConfig({
         entry,
-        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        ...(personalized
+          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          : {}),
         // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
-        memoryEffort: (agent) =>
-          modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
-        memoryFast: (agent) =>
-          modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+        ...(personalized
+          ? {
+              memoryEffort: (agent: AgentKind) =>
+                modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+              memoryFast: (agent: AgentKind) =>
+                modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+            }
+          : {}),
         agentFastModeCapable,
         // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上。
         // 同引擎轨再加一道:未选中行显示/点选都钉在轨上 —— leftover override 不能把
@@ -512,6 +527,7 @@ export function UnifiedModelPanel({
       selected.modelId,
       selected.providerId,
       selectedEffort,
+      selectionPolicy,
       sessionAgent,
     ],
   );
@@ -546,7 +562,9 @@ export function UnifiedModelPanel({
         (selected.providerId === null || selected.providerId === entry.providerId);
       return resolveUnifiedRowConfig({
         entry,
-        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        ...(selectionPolicy === 'personalized'
+          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          : {}),
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(isSelectedModelRow && liveEngineAgent
           ? { forceEngine: engineOfAgentKind(liveEngineAgent) }
@@ -559,6 +577,7 @@ export function UnifiedModelPanel({
       liveEngineAgent,
       selected.modelId,
       selected.providerId,
+      selectionPolicy,
       sessionAgent,
     ],
   );
@@ -783,7 +802,9 @@ export function UnifiedModelPanel({
     resolveDefaultRowConfig: (entry) =>
       resolveUnifiedRowConfig({
         entry,
-        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        ...(selectionPolicy === 'personalized'
+          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          : {}),
         agentFastModeCapable,
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
       }),
@@ -1074,10 +1095,13 @@ export function UnifiedModelPanel({
                       onReveal={revealFlyout}
                       onRevealForKeyboard={revealFlyoutForKeyboard}
                       onSelect={() => selectRow(row.anchor, config, row.favorite)}
-                      onStar={() =>
-                        row.favorite
-                          ? removeFavorite(row.anchor, row.entry)
-                          : addFavorite(row.anchor, config)
+                      onStar={
+                        selectionPolicy === 'personalized'
+                          ? () =>
+                              row.favorite
+                                ? removeFavorite(row.anchor, row.entry)
+                                : addFavorite(row.anchor, config)
+                          : undefined
                       }
                     />
                   );

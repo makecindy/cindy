@@ -144,6 +144,12 @@ export interface PiTranslateContext {
    * 暂存到 agent_settled 再终态上报，避免一次可恢复错误提前收口整个 turn。
    */
   pendingAssistantError: PiPendingAssistantError | null;
+  /**
+   * A terminal provider error already emitted before agent_settled (currently
+   * exhausted native auto-retry). The later empty settled frame is closure,
+   * not a silent assistant stop that the Host should continue automatically.
+   */
+  terminalAssistantErrorEmitted: boolean;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
@@ -221,6 +227,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     subagentToolCalls: new Map(),
     toolNamesByCallId: new Map(),
     pendingAssistantError: null,
+    terminalAssistantErrorEmitted: false,
     compactTurnScope: null,
   };
 }
@@ -303,6 +310,7 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   ctx.pendingHostTurnStartToken = null;
   clearPiHostAbortRequests(ctx);
   ctx.pendingAssistantError = null;
+  ctx.terminalAssistantErrorEmitted = false;
   ctx.compactTurnScope = null;
   ctx.subagentToolCalls.clear();
   ctx.toolNamesByCallId.clear();
@@ -650,6 +658,7 @@ export function translatePiEvent(
       ctx.finalAssistantText = '';
       ctx.finalAssistantStopReason = null;
       ctx.pendingAssistantError = null;
+      ctx.terminalAssistantErrorEmitted = false;
       ctx.turnWallClockStartedAt = Date.now();
       ctx.generationDurationMs = 0;
       ctx.generationTimingReliable = true;
@@ -815,10 +824,16 @@ export function translatePiEvent(
       const progress = parsePiSubagentProgress(event.partialResult);
       if (progress) {
         const previousUpdate = ctx.subagentToolCalls.get(progress.update.taskId);
+        // Legacy progress frames name the role (e.g. scout). Keep the task
+        // title chosen at spawn across progress and terminal events.
+        const update = {
+          ...progress.update,
+          ...(previousUpdate?.title ? { title: previousUpdate.title } : {}),
+        };
         if (previousUpdate) {
           ctx.subagentToolCalls.set(progress.update.taskId, {
             ...previousUpdate,
-            ...progress.update,
+            ...update,
           });
         }
         // 委派用量并进本 turn 的记账。子代理是独立 pi 进程,它的请求不走父进程的 usage 流,
@@ -830,7 +845,7 @@ export function translatePiEvent(
           progress.delegatedUsage,
           progress.delegatedUsageSegments,
         );
-        queue.push({ type: 'agent_task_update', data: progress.update, source: 'pi' });
+        queue.push({ type: 'agent_task_update', data: update, source: 'pi' });
       }
       return;
     }
@@ -924,6 +939,18 @@ export function translatePiEvent(
           source: 'pi',
         });
       }
+      const silentStop = outcome === 'completed'
+        && !hostAbortRequested
+        && pendingAssistantError === null
+        && !ctx.terminalAssistantErrorEmitted
+        && ctx.finalAssistantText.trim().length === 0;
+      if (silentStop) {
+        ctx.logger.warn('pi turn settled without a user-facing assistant reply', {
+          turnGeneration: ctx.turnGeneration,
+          inputTokens: ctx.turnInput,
+          outputTokens: ctx.turnOutput,
+        });
+      }
       queue.push({
         type: 'done',
         data: {
@@ -933,6 +960,10 @@ export function translatePiEvent(
           // 都读 done.data.result,不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
           result: outcome === 'completed' ? ctx.finalAssistantText : '',
           status: outcome,
+          // Reuse the host's bounded silent-stop continuation guard. This
+          // continues the same conversation after completed tools; it does not
+          // replay the original user request or its side effects.
+          ...(silentStop ? { silentStop: true } : {}),
           // ghost 订阅 did-turn-end 的 usage 上报(subscriptionGateway.normalizeTurnUsage
           // 认 camelCase);与 CC/Codex 的 done.usage 对齐,让插件能显示 pi turn 的用量。
           usage: {
@@ -1033,6 +1064,7 @@ export function translatePiEvent(
         ? piAssistantErrorOf(rawFinalError)
         : ctx.pendingAssistantError ?? piAssistantErrorOf('pi auto-retry failed');
       ctx.pendingAssistantError = null;
+      ctx.terminalAssistantErrorEmitted = true;
       // 只有 Pi 自己的 retry budget 用尽，才挡住 Host 续跑。首次 aborted 半截流
       // 没有 auto_retry_*，必须保持无 reason，好让 Host 按网络类接走。
       const exhaustedReason = !finalError.reason && isNetworkishErrorMessage(finalError.message)
