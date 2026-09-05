@@ -148,10 +148,11 @@ describe('Bot task route recovery', () => {
     expect(source).toContain('botUnreadBoundaryAt={gate.unreadBoundaryAt}');
   });
 
-  it('keeps the teammate a teammate in archived transcripts, without touching the write path', () => {
-    const history = readFileSync(resolve(__dirname, '..', 'BotHistorySessionView.tsx'), 'utf8');
+  it.each(['\n', '\r\n'])('keeps the teammate a teammate in archived transcripts with line ending %j, without touching the write path', (lineEnding) => {
+    const history = readFileSync(resolve(__dirname, '..', 'BotHistorySessionView.tsx'), 'utf8')
+      .replace(/\r?\n/g, lineEnding);
     // 只读历史也带头像与伙伴 lockup:这个视图本来就已经查过 history(botId) 确认归属。
-    expect(history).toContain('window.electronAPI.localDb.bots\n      .get(botId)');
+    expect(history).toMatch(/window\.electronAPI\.localDb\.bots\s*\.get\(botId\)/);
     expect(history).toContain(
       '<CCAgentSessionView readOnly {...(identity ? { botIdentity: identity } : {})} />',
     );
