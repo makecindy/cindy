@@ -58,6 +58,18 @@ describe('market route scope', () => {
     expect(previewSource).not.toContain('previewMarket');
   });
 
+  it('wires the host catalog scroll surface into the preview panel', () => {
+    const homeSource = readFileSync(resolve(skillhubDir, 'SkillhubHomeView.tsx'), 'utf8');
+    const listSource = readFileSync(resolve(skillhubDir, 'SkillhubMarketListView.tsx'), 'utf8');
+    const previewSource = readFileSync(resolve(skillhubDir, 'SkillhubMarketPreviewPanel.tsx'), 'utf8');
+
+    expect(previewSource).toContain('scrollLockRef');
+    expect(previewSource).toContain('useSkillhubPreviewScrollLock');
+    expect(homeSource).toContain('ref={skillhubScrollRef}');
+    expect(homeSource).toContain('scrollLockRef={skillhubScrollRef}');
+    expect(listSource).toContain('scrollLockRef={marketScrollRef}');
+  });
+
   it('gates cloud management to the My Published entry point', () => {
     const listSource = readFileSync(resolve(skillhubDir, 'SkillhubMarketListView.tsx'), 'utf8');
     const viewModelSource = readFileSync(resolve(skillhubDir, 'lib/marketDetailViewModel.ts'), 'utf8');

@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, FileText, GraduationCap, X } from 'lucide-react';
 
@@ -32,10 +38,13 @@ import { MarketPreviewTree } from './components/MarketPreviewTree';
 import { ManageMenu, type MarketCardManageAction } from './components/MarketCard';
 import { ScanResultDialog } from './ScanResultDialog';
 import type { ScanResultPayload } from './PublishDialog';
+import { useSkillhubPreviewScrollLock } from './lib/useSkillhubPreviewScrollLock';
 
 interface SkillhubMarketPreviewPanelProps {
   skill: MarketSkill | null;
   open: boolean;
+  /** The host list that must stop scrolling while the preview is open. */
+  scrollLockRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   /** 与卡片同口径的主操作:clone / manage / none。头部据此渲染操作按钮 */
   primaryAction?: MarketCardPrimaryAction;
@@ -54,6 +63,7 @@ interface SkillhubMarketPreviewPanelProps {
 export function SkillhubMarketPreviewPanel({
   skill,
   open,
+  scrollLockRef,
   onClose,
   primaryAction = 'none',
   onClone,
@@ -154,6 +164,8 @@ export function SkillhubMarketPreviewPanel({
   }, [panelOpen, selectedPath, skill?.catalogScope, skillName, skillVersion, t]);
 
   const tree = useMemo(() => buildPreviewTree(files), [files]);
+
+  useSkillhubPreviewScrollLock(panelOpen, scrollLockRef);
 
   return (
     <>
