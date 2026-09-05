@@ -626,6 +626,8 @@ describe('newSessionCreation pipeline', () => {
         },
       }),
       status: 'create-failed' as const,
+      startedAt: 0,
+      phase: 'creating' as const,
       error: 'create failed',
       firstMessageClientId: 'client-override',
     };

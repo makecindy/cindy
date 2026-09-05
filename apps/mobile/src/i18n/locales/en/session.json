@@ -268,6 +268,14 @@
     "composerPlaceholder": "What should we work on today?",
     "voiceSelectDeviceFirst": "Select a device before using voice input.",
     "creatingSession": "Creating session",
+    "slowSend": {
+      "preparing": "Preparing to send…",
+      "uploading": "Uploading attachments…",
+      "connecting": "Connecting to your computer…",
+      "checkingModel": "Checking model settings…",
+      "creating": "Creating session…",
+      "sending": "Sending your message…"
+    },
     "createAndSend": "Create session and send first message",
     "modelAccessibility": "Model: {{model}}",
     "voiceInput": "Voice input",

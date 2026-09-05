@@ -127,6 +127,43 @@ describe('useAvailableAgents roster cache', () => {
     await waitFor(() => expect(result.current.availableVendors.has('pi')).toBe(true));
   });
 
+  it('ignores phone presence without disturbing either known computer, and still refreshes a cached computer', async () => {
+    const { api, presenceListeners, statusListeners } = installDeviceLinkApi();
+    api.invoke.mockResolvedValue(['claude-code', 'codex']);
+    const { useAvailableAgents } = await import('../useAvailableAgents');
+    const { prefetchDeviceCapabilities } = await import('../useAgentCapabilities');
+    const first = renderHook(() => useAvailableAgents('computer-a'));
+    const second = renderHook(() => useAvailableAgents('computer-b'));
+    await waitFor(() => expect(first.result.current.loaded && second.result.current.loaded).toBe(true));
+    first.unmount(); // Cached devices must still invalidate even without a listener.
+    api.invoke.mockClear();
+    vi.mocked(prefetchDeviceCapabilities).mockClear();
+
+    await act(async () => {
+      for (const online of [true, false, true]) {
+        for (const listener of presenceListeners) listener({ deviceId: 'iphone', online });
+      }
+    });
+    expect(api.invoke).not.toHaveBeenCalled();
+    expect(prefetchDeviceCapabilities).not.toHaveBeenCalled();
+    expect(second.result.current.loaded).toBe(true);
+
+    await act(async () => {
+      for (const listener of presenceListeners) listener({ deviceId: 'computer-a', online: true });
+    });
+    expect(prefetchDeviceCapabilities).toHaveBeenCalledExactlyOnceWith('computer-a');
+    const remounted = renderHook(() => useAvailableAgents('computer-a'));
+    await waitFor(() => expect(remounted.result.current.loaded).toBe(true));
+    expect(api.invoke).toHaveBeenCalledExactlyOnceWith('computer-a', 'maker:list-available-agents', []);
+
+    // The ignored phone must not enter the cache-key set and get probed on relay recovery either.
+    await act(async () => {
+      for (const listener of statusListeners) listener({ status: 'online' });
+    });
+    expect(vi.mocked(prefetchDeviceCapabilities).mock.calls.every(([id]) => id !== 'iphone')).toBe(true);
+    expect(api.invoke.mock.calls.every(([id]) => id !== 'iphone')).toBe(true);
+  });
+
   it('shares one invalidation and result across mounted consumers', async () => {
     const first = deferred<RuntimeAgentKind[]>();
     const second = deferred<RuntimeAgentKind[]>();

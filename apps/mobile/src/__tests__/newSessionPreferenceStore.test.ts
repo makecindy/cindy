@@ -51,6 +51,7 @@ describe('newSessionPreferenceStore', () => {
     await expect(readNewSessionPreferences()).resolves.toEqual({
       agentKind: 'codex',
       device: { deviceId: 'devA', name: 'Mac A' },
+      workspaceKind: null,
       permissionModeByAgent: {},
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
@@ -76,6 +77,7 @@ describe('newSessionPreferenceStore', () => {
     await expect(readNewSessionPreferences()).resolves.toEqual({
       agentKind: null,
       device: { deviceId: 'devB', name: 'devB' },
+      workspaceKind: null,
       permissionModeByAgent: {},
     });
 
@@ -83,6 +85,7 @@ describe('newSessionPreferenceStore', () => {
     await expect(readNewSessionPreferences()).resolves.toEqual({
       agentKind: null,
       device: null,
+      workspaceKind: null,
       permissionModeByAgent: {},
     });
 
@@ -92,6 +95,7 @@ describe('newSessionPreferenceStore', () => {
     await expect(readNewSessionPreferences()).resolves.toEqual({
       agentKind: null,
       device: { deviceId: 'devC', name: 'devC' },
+      workspaceKind: null,
       permissionModeByAgent: {},
     });
   });
@@ -117,6 +121,7 @@ describe('newSessionPreferenceStore', () => {
     await expect(readNewSessionPreferences()).resolves.toEqual({
       agentKind: null,
       device: null,
+      workspaceKind: null,
       permissionModeByAgent: { 'claude-code': 'bypassPermissions', codex: 'ask' },
     });
 
@@ -127,7 +132,62 @@ describe('newSessionPreferenceStore', () => {
     await expect(readNewSessionPreferences()).resolves.toEqual({
       agentKind: null,
       device: null,
+      workspaceKind: null,
       permissionModeByAgent: { codex: 'auto' },
     });
+  });
+
+  it('remembers either workspace mode across reloads without losing other preferences', async () => {
+    const { readNewSessionPreferences, saveNewSessionPreferences } =
+      await import('@/session/newSessionPreferenceStore');
+
+    await Promise.all([
+      saveNewSessionPreferences({ workspaceKind: 'project' }),
+      saveNewSessionPreferences({ device: { deviceId: 'devA', name: 'Mac A' } }),
+      saveNewSessionPreferences({ agentKind: 'codex' }),
+    ]);
+    expect(await readNewSessionPreferences()).toMatchObject({
+      workspaceKind: 'project',
+      device: { deviceId: 'devA', name: 'Mac A' },
+      agentKind: 'codex',
+    });
+
+    await Promise.all([
+      saveNewSessionPreferences({ workspaceKind: 'project' }),
+      saveNewSessionPreferences({ workspaceKind: 'dialogue' }),
+      saveNewSessionPreferences({ permissionModeForAgent: { agentKind: 'codex', mode: 'ask' } }),
+    ]);
+    expect(await readNewSessionPreferences()).toMatchObject({
+      workspaceKind: 'dialogue',
+      agentKind: 'codex',
+      permissionModeByAgent: { codex: 'ask' },
+    });
+  });
+
+  it('ignores an unknown workspace mode in old or invalid storage', async () => {
+    const { __testing, readNewSessionPreferences } =
+      await import('@/session/newSessionPreferenceStore');
+    store.set(__testing.storageKey, JSON.stringify({ workspaceKind: 'unknown', agentKind: 'codex' }));
+    expect(await readNewSessionPreferences()).toMatchObject({ workspaceKind: null, agentKind: 'codex' });
+  });
+
+  it('restores the latest choice when the page reopens before saving finishes', async () => {
+    const { readNewSessionPreferences, saveNewSessionPreferences } =
+      await import('@/session/newSessionPreferenceStore');
+    const saving = saveNewSessionPreferences({ workspaceKind: 'project' });
+    const reopened = readNewSessionPreferences();
+    expect(await reopened).toMatchObject({ workspaceKind: 'project' });
+    await saving;
+  });
+
+  it('clears pending selections without letting them restore cleared preferences', async () => {
+    const { clearNewSessionPreferences, readNewSessionPreferences, saveNewSessionPreferences } =
+      await import('@/session/newSessionPreferenceStore');
+    await Promise.all([
+      saveNewSessionPreferences({ workspaceKind: 'project' }),
+      clearNewSessionPreferences(),
+    ]);
+    expect(await readNewSessionPreferences()).toMatchObject({ workspaceKind: null });
+    expect(store.size).toBe(0);
   });
 });
