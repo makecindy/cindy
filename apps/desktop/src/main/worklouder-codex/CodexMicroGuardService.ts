@@ -11,6 +11,10 @@ import {
 } from '../maker-host/override-settings-file.js';
 import hookContents from './codexMicroGuardHook.cjs?raw';
 import {
+  listCodexMicroGuardProcesses,
+  type CodexMicroGuardProcess,
+} from './codexMicroGuardProcesses.js';
+import {
   CodexMicroGuardManager,
   CodexMicroGuardStore,
   LaunchctlGuardCommandRunner,
@@ -29,6 +33,7 @@ interface CodexMicroGuardServiceOptions {
   runner?: GuardCommandRunner;
   hookContents?: string;
   heartbeatIntervalMs?: number;
+  listProcesses?: () => Promise<CodexMicroGuardProcess[]>;
 }
 
 const log = desktopMakerLogger.child('codex-micro-guard');
@@ -52,9 +57,13 @@ export class CodexMicroGuardService {
   private recoveryRequired = false;
   private disposed = false;
   private lastEmittedState: string | null = null;
+  private readonly listProcesses: () => Promise<CodexMicroGuardProcess[]>;
+  private protectionStartedAt = 0;
+  private restartRequired = false;
 
   constructor(options: CodexMicroGuardServiceOptions = {}) {
     this.platform = options.platform ?? process.platform;
+    this.listProcesses = options.listProcesses ?? listCodexMicroGuardProcesses;
     const supportPath = options.supportPath ?? defaultSupportPath();
     this.store = new CodexMicroGuardStore(supportPath);
     this.manager = new CodexMicroGuardManager(
@@ -88,6 +97,7 @@ export class CodexMicroGuardService {
 
   async getState(): Promise<CodexMicroGuardState> {
     await this.initialize();
+    await this.enqueue(() => this.refreshRestartRequired());
     return this.snapshot();
   }
 
@@ -149,7 +159,9 @@ export class CodexMicroGuardService {
     try {
       if (enabled) {
         await this.manager.enable(this.hookContents);
+        this.protectionStartedAt = Date.now();
         this.active = true;
+        await this.refreshRestartRequired();
         this.startHeartbeat();
       } else if (this.hasRecoveryState()) {
         // A previous Cindy process stopped during restoration. The hook is
@@ -184,6 +196,8 @@ export class CodexMicroGuardService {
       throw error;
     }
     this.active = true;
+    this.protectionStartedAt = Date.now();
+    await this.refreshRestartRequired();
     this.startHeartbeat();
     this.emitIfChanged();
   }
@@ -224,6 +238,7 @@ export class CodexMicroGuardService {
           }
           log.warn('Codex Micro guard heartbeat failed and protection was stopped');
         }
+        await this.refreshRestartRequired();
         this.emitIfChanged();
       });
     }, this.heartbeatIntervalMs);
@@ -244,6 +259,29 @@ export class CodexMicroGuardService {
     }
   }
 
+  private async refreshRestartRequired(): Promise<void> {
+    this.restartRequired = false;
+    if (!this.active || this.disposed) return;
+    try {
+      const processes = await this.listProcesses();
+      this.restartRequired = processes.some(
+        (process) =>
+          // ps has one-second resolution; an ambiguous same-second launch does
+          // not justify asking the user to restart.
+          process.startedAt < Math.floor(this.protectionStartedAt / 1_000) * 1_000 &&
+          !this.store.hasProcessInterceptionReceipt(process),
+      );
+      try {
+        this.store.pruneProcessReceipts(processes);
+      } catch {
+        // Diagnostic cleanup must not change the observed restart requirement.
+      }
+    } catch {
+      // Unknown process state is not evidence that the user needs to restart.
+      this.restartRequired = false;
+    }
+  }
+
   private snapshot(): CodexMicroGuardState {
     if (this.platform !== 'darwin') {
       return { supported: false, enabled: false, status: 'unsupported' };
@@ -254,7 +292,13 @@ export class CodexMicroGuardService {
     else if (this.failed) status = 'error';
     else if (!this.active || !this.store.isFresh()) status = 'disabled';
     else status = this.store.hasInterceptionReceipt() ? 'intercepted' : 'protecting';
-    return { supported: true, enabled, status };
+    return {
+      supported: true,
+      enabled,
+      status,
+      restartRequired:
+        (status === 'protecting' || status === 'intercepted') && this.restartRequired,
+    };
   }
 
   private emitIfChanged(): void {

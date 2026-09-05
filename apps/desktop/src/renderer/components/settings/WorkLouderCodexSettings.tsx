@@ -608,46 +608,6 @@ export function WorkLouderCodexSettings({
         </div>
       </SettingsCard>
 
-      {model === 'codex-micro' ? (
-        <SettingsGroup title={t('settings.shortcuts.workLouderCodex.codexGuard.title')}>
-          <SettingsRow
-            label={t('settings.shortcuts.workLouderCodex.codexGuard.label')}
-            description={t(
-              `settings.shortcuts.workLouderCodex.codexGuard.descriptions.${guardDescriptionKey(
-                guardState?.status,
-                guardError,
-              )}`,
-            )}
-            control={
-              <div className="flex items-center justify-end gap-2">
-                {guardState?.status === 'recovery-required' ? (
-                  <SettingsSecondaryButton
-                    disabled={guardSaving}
-                    onClick={() => void recoverGuard()}
-                  >
-                    {t('settings.shortcuts.workLouderCodex.codexGuard.recover')}
-                  </SettingsSecondaryButton>
-                ) : (
-                  <Switch
-                    checked={guardState?.enabled ?? false}
-                    disabled={guardLoading || guardSaving || !guardState || !guardState.supported}
-                    onCheckedChange={(checked) => void setGuardEnabled(checked)}
-                    aria-label={t('settings.shortcuts.workLouderCodex.codexGuard.aria')}
-                  />
-                )}
-                <DeviceChip>
-                  {t(
-                    `settings.shortcuts.workLouderCodex.codexGuard.status.${
-                      guardState?.status ?? (guardError ? 'error' : 'disabled')
-                    }`,
-                  )}
-                </DeviceChip>
-              </div>
-            }
-          />
-        </SettingsGroup>
-      ) : null}
-
       <SettingsCard className="flex flex-col gap-3">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
@@ -1081,6 +1041,43 @@ export function WorkLouderCodexSettings({
                 label: t(`settings.shortcuts.workLouderCodex.lighting.autoDim.options.${option}`),
               }))}
             />
+          }
+        />
+      </SettingsGroup>
+
+      {/* Both keyboards share the same Codex service and machine-local guard. */}
+      <SettingsGroup title={t('settings.shortcuts.workLouderCodex.codexGuard.title')}>
+        <SettingsRow
+          label={t('settings.shortcuts.workLouderCodex.codexGuard.label')}
+          description={t(
+            `settings.shortcuts.workLouderCodex.codexGuard.descriptions.${guardDescriptionKey(
+              guardState?.status,
+              guardError,
+            )}`,
+          )}
+          control={
+            <div className="flex items-center justify-end gap-2">
+              {guardState?.enabled &&
+                guardState.restartRequired &&
+                !guardError &&
+                (guardState.status === 'protecting' || guardState.status === 'intercepted') && (
+                  <span className="text-12 text-[var(--text-secondary)]">
+                    {t('settings.shortcuts.workLouderCodex.codexGuard.restartRequired')}
+                  </span>
+                )}
+              {guardState?.status === 'recovery-required' ? (
+                <SettingsSecondaryButton disabled={guardSaving} onClick={() => void recoverGuard()}>
+                  {t('settings.shortcuts.workLouderCodex.codexGuard.recover')}
+                </SettingsSecondaryButton>
+              ) : (
+                <Switch
+                  checked={guardState?.enabled ?? false}
+                  disabled={guardLoading || guardSaving || !guardState || !guardState.supported}
+                  onCheckedChange={(checked) => void setGuardEnabled(checked)}
+                  aria-label={t('settings.shortcuts.workLouderCodex.codexGuard.aria')}
+                />
+              )}
+            </div>
           }
         />
       </SettingsGroup>
@@ -1588,9 +1585,8 @@ function guardDescriptionKey(
     case 'unsupported':
       return 'unsupported';
     case 'protecting':
-      return 'protecting';
     case 'intercepted':
-      return 'intercepted';
+      return 'disabled';
     case 'recovery-required':
       return 'recovery-required';
     case 'error':

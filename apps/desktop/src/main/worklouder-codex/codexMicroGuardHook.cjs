@@ -130,7 +130,7 @@ function isExpectedBundleFile(filename, root, prefix) {
   );
 }
 
-function writeReceipt(serviceFilename) {
+function writeReceipt(serviceFilename, receiptPath = RECEIPT_PATH) {
   const temporary = path.join(SUPPORT_PATH, `.receipt-${process.pid}-${Date.now()}.tmp`);
   let descriptor;
   try {
@@ -138,6 +138,9 @@ function writeReceipt(serviceFilename) {
     const receipt = JSON.stringify({
       interceptedAt: Date.now() / 1000,
       service: path.basename(serviceFilename),
+      pid: process.pid,
+      startedAt: Date.now() - process.uptime() * 1000,
+      executable: process.execPath,
     });
     descriptor = fs.openSync(
       temporary,
@@ -155,9 +158,9 @@ function writeReceipt(serviceFilename) {
     fs.closeSync(descriptor);
     descriptor = undefined;
     assertSupportChainStable();
-    fs.renameSync(temporary, RECEIPT_PATH);
+    fs.renameSync(temporary, receiptPath);
     assertSupportChainStable();
-    if (!sameIdentity(temporaryStat, fs.lstatSync(RECEIPT_PATH))) {
+    if (!sameIdentity(temporaryStat, fs.lstatSync(receiptPath))) {
       throw new Error('guard receipt path changed while replacing');
     }
   } catch (error) {
@@ -216,6 +219,11 @@ if (bundleRoot !== null) {
         sourceHasServiceMarkers(resolved)
       ) {
         writeReceipt(resolved);
+        try {
+          // Keep evidence for this process across Cindy restarts and toggles.
+          // Diagnostic failure must not change the interception behavior.
+          writeReceipt(resolved, path.join(SUPPORT_PATH, `receipt-${process.pid}.json`));
+        } catch {}
         return serviceStub;
       }
     } catch {

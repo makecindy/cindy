@@ -3747,24 +3747,15 @@
         "codexGuard": {
           "title": "Codex 相容性",
           "label": "防止 Codex 佔用裝置",
-          "aria": "防止 Codex 佔用 Codex Micro",
+          "aria": "防止 Codex 佔用 Work Louder 鍵盤",
           "recover": "還原環境",
-          "status": {
-            "unsupported": "僅 macOS",
-            "disabled": "已關閉",
-            "protecting": "請重新啟動 Codex",
-            "intercepted": "保護中",
-            "recovery-required": "需要還原",
-            "error": "無法使用"
-          },
           "descriptions": {
             "unsupported": "此保護僅可在 macOS 上使用。",
-            "disabled": "Cindy 執行期間會阻止 Codex 連線至 Codex Micro；不會限制 Cindy 本身。",
-            "protecting": "保護已就緒。請完全結束後重新開啟 Codex；已在執行的 Codex 不受影響。",
-            "intercepted": "已阻止 Codex 的 Work Louder 服務，Cindy 可以繼續使用裝置。",
+            "disabled": "Cindy 執行期間會阻止 Codex 連線至 Work Louder 鍵盤；不會限制 Cindy 本身。",
             "recovery-required": "保護已停止，但 NODE_OPTIONS 尚未安全還原。請先重試還原，再重新開啟。",
             "error": "Cindy 無法更新 Codex 保護；原有 NODE_OPTIONS 已保留或等待還原。"
-          }
+          },
+          "restartRequired": "請完全結束並重新開啟 Codex 以生效"
         },
         "commands": {
           "session.selectPrevious": {

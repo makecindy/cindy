@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { CodexMicroGuardProcess } from './codexMicroGuardProcesses.js';
 
 export interface CodexMicroGuardStateRecord {
   version: 1;
@@ -25,7 +26,8 @@ const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 2_000;
 const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIRECTORY_MODE = 0o700;
-const LEASE_NAME = /^lease-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/u;
+const LEASE_NAME =
+  /^lease-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/u;
 const LEASE_MAX_AGE_MS = 15_000;
 const LEASE_LOCK_NAME = '.lease-lock';
 
@@ -160,6 +162,32 @@ export class CodexMicroGuardStore {
 
   removeEnabled(): void {
     this.removePrivateFile('enabled');
+  }
+
+  hasProcessInterceptionReceipt(process: CodexMicroGuardProcess): boolean {
+    try {
+      const receipt = JSON.parse(this.readPrivateFile(`receipt-${process.pid}.json`));
+      return (
+        receipt.pid === process.pid &&
+        receipt.executable === process.executable &&
+        typeof receipt.startedAt === 'number' &&
+        Math.abs(receipt.startedAt - process.startedAt) < 2_000
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  pruneProcessReceipts(processes: CodexMicroGuardProcess[], now = Date.now()): void {
+    const livePids = new Set(processes.map(({ pid }) => pid));
+    this.prepare();
+    for (const name of fs.readdirSync(this.supportPath)) {
+      const match = /^receipt-(\d+)\.json$/u.exec(name);
+      if (!match || livePids.has(Number(match[1]))) continue;
+      // A process can start and write after the scan. Only remove old evidence.
+      const stat = fs.lstatSync(path.join(this.supportPath, name));
+      if (now - stat.mtimeMs > 86_400_000) this.removePrivateFile(name);
+    }
   }
 
   removeHeartbeat(): void {
