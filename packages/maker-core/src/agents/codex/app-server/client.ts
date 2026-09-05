@@ -323,10 +323,13 @@ export class AppServerClient {
       this.closed = true;
       const reason = opts?.reason ?? 'AppServerClient.close()';
       // 缓存未吞错的完成结果，各调用方独立选择是否传播失败。
-      this.closePromise = Promise.resolve().then(() => this.transport?.close(reason)).catch((error) => {
+      const closePromise = Promise.resolve().then(() => this.transport?.close(reason)).catch((error) => {
+        // 保留 closed，后续调用仅重查幂等关闭，不重新开放协议。
+        if (this.closePromise === closePromise) this.closePromise = null;
         this.logger.warn('transport.close threw', { message: (error as Error).message });
         throw error;
       });
+      this.closePromise = closePromise;
 
       // reject 所有挂起 request — 包括正在 initialize 的调用。
       const err = new Error(`codex app-server closed: ${reason}`);

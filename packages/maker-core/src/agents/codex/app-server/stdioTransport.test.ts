@@ -213,6 +213,13 @@ describe('close() 强杀兜底 (#3699)', () => {
     expect(vi.getTimerCount()).toBe(0);
     child.emit('exit', null, 'SIGKILL');
     expect(dispose).toHaveBeenCalledOnce();
+    await expect(transport.close()).resolves.toBeUndefined();
+    await expect(transport.close()).resolves.toBeUndefined();
+    // 迟到退出只改变后续检查，不能把原调用的严格失败变成成功。
+    await expect(closing).rejects.toThrow('did not exit after SIGKILL');
+    expect(child.stdin.end).toHaveBeenCalledOnce();
+    expect(child.kill).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('stdin 错误不冒充进程退出，仍执行 EOF 和强杀收尾', async () => {

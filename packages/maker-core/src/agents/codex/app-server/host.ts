@@ -563,6 +563,10 @@ export class AppServerHost {
       return Promise.reject(new Error('AppServerHost: cannot ensureStarted() after retirement'));
     }
     if (this.shuttingDown) {
+      if (!this.shutdownPromise) {
+        return this.shutdown('recheck failed shutdown before restart', { throwOnTransportError: true })
+          .then(() => this.ensureStarted(capabilities));
+      }
       return Promise.reject(new Error('AppServerHost: cannot ensureStarted() during shutdown'));
     }
     if (this.startPromise) return this.startPromise;
@@ -885,15 +889,20 @@ export class AppServerHost {
     if (!this.shutdownPromise) {
       this.shuttingDown = true;
       const client = this.client;
-      this.shutdownPromise = Promise.resolve().then(async () => {
+      const shutdownPromise = Promise.resolve().then(async () => {
         await client?.close({ reason, throwOnTransportError: true });
+        if (this.client === client) this.client = null;
         // start() 的同步 transport 回调可能在 ensureStarted 赋值前触发关闭。
         this.startPromise = null;
         // 只在关闭成功后开放重启；失败保留 barrier，避免新旧 writer 并存。
         this.shutdownPromise = null;
         this.shuttingDown = false;
+      }).catch((error) => {
+        // 本次结果可以重查，但 client 与 shuttingDown 保留到真实关闭成功。
+        if (this.shutdownPromise === shutdownPromise) this.shutdownPromise = null;
+        throw error;
       });
-      this.client = null;
+      this.shutdownPromise = shutdownPromise;
       this.startPromise = null;
       // MCP readiness belongs to the concrete app-server process.
       this.mcpToolAvailability.clear();
@@ -921,16 +930,22 @@ export class AppServerHost {
     opts?: { throwOnTransportError?: boolean },
   ): Promise<void> {
     this.retired = true;
-    this.retirementPromise ??= Promise.resolve().then(async () => {
-      await this.shutdown(reason, { throwOnTransportError: true });
-      await Promise.resolve()
-        .then(() => this.opts.onRetired?.())
-        .catch((error) => {
-          this.logger.warn('app-server Host retirement cleanup failed', {
-            error: error instanceof Error ? error.message : String(error),
+    if (!this.retirementPromise) {
+      const retirementPromise = Promise.resolve().then(async () => {
+        await this.shutdown(reason, { throwOnTransportError: true });
+        await Promise.resolve()
+          .then(() => this.opts.onRetired?.())
+          .catch((error) => {
+            this.logger.warn('app-server Host retirement cleanup failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-        });
-    });
+      }).catch((error) => {
+        if (this.retirementPromise === retirementPromise) this.retirementPromise = null;
+        throw error;
+      });
+      this.retirementPromise = retirementPromise;
+    }
     try {
       await this.retirementPromise;
     } catch (error) {

@@ -208,6 +208,8 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     },
 
     close(reason = 'StdioTransport.close()'): Promise<void> {
+      // 首次严格关闭可以超时；迟到的真实 exit 使后续幂等检查成功。
+      if (exited) return exitPromise;
       if (!closePromise) {
         // 先发布 Promise，再调用可能同步重入 close() 的监听器。
         closePromise = Promise.resolve().then(async () => {

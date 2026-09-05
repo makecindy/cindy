@@ -17,6 +17,7 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-i
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
+import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
 import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
@@ -116,7 +117,7 @@ function parseJsonContent(content: string): unknown {
 /** 用实际复制的前缀建立交接，和子任务、恢复卡一起原子保存。 */
 function buildCodexForkRecoveryMarker(opts: {
   source: { model: string; providerId: string | null; sdkSessionId: string | null };
-  rows: Array<Pick<ForkTimelineMessage, 'role' | 'content' | 'createdAt' | 'toolUseId'>>;
+  rows: Array<Pick<ForkTimelineMessage, 'clientId' | 'role' | 'content' | 'createdAt' | 'toolUseId' | 'agentMeta' | 'agentKind'>>;
   newMessageIds: Array<{ clientId: string }>;
   sessionId: string;
   now: number;
@@ -124,6 +125,11 @@ function buildCodexForkRecoveryMarker(opts: {
   return {
     id: createId(),
     clientId: createId(),
+    sourceMessagesDigest: computeForkSourceMessagesDigest(opts.rows.map((row) => ({
+      client_id: row.clientId, role: row.role, content: row.content,
+      tool_use_id: row.toolUseId, agent_meta: row.agentMeta, agent_kind: row.agentKind,
+      created_at: row.createdAt,
+    }))),
     // 导入历史可能有晚于墙钟的合成时间；恢复边界必须排在复制内容之后。
     createdAt: opts.rows.reduce((latest, row) => Math.max(latest, row.createdAt), opts.now),
     content: JSON.stringify({

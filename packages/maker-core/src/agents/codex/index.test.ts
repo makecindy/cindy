@@ -215,11 +215,13 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
     }
 
     async close(reason = 'MockCodexTransport.close()'): Promise<void> {
-      if (this.closed) return;
-      this.closed = true;
-      for (const handler of this.closeHandlers) {
-        handler({ reason });
+      if (!this.closed) {
+        this.closed = true;
+        for (const handler of this.closeHandlers) {
+          handler({ reason });
+        }
       }
+      // Logical closure can precede confirmed physical exit; rechecks still fail until cleared.
       if (MockCodexTransport.closeError) throw MockCodexTransport.closeError;
     }
 
@@ -6205,7 +6207,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
-  it('does not replace a writer whose exit could not be confirmed', async () => {
+  it('does not replace an unconfirmed writer but recovers after its late exit', async () => {
     const agent = new CodexAgent(createDeps());
     const handle = await agent.startSession({ sessionId: 'failed-exit', model: 'gpt-5.4', workingDir: '/repo' });
     MockCodexTransport.closeError = new Error('exit not confirmed');
@@ -6215,6 +6217,34 @@ describe('CodexAgent MCP thread context hooks', () => {
     const guard = await agent.beginLocalHostCredentialChange('strict retry');
     await expect(guard.retireActiveHost()).rejects.toThrow('exit not confirmed');
     guard.release();
+    expect(createdTransports).toHaveLength(1);
+    MockCodexTransport.closeError = null;
+    const [replacement] = await Promise.all([
+      agent.startSession({ sessionId: 'replacement-after-exit', model: 'gpt-5.4', workingDir: '/repo' }),
+      agent.getMemoryStatus(),
+    ]);
+    expect(createdTransports).toHaveLength(2);
+    await replacement.close();
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it.each(['guard', 'dispose'] as const)('rechecks a failed retirement from %s after late exit', async (retryPath) => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({ sessionId: 'late-exit-recheck', model: 'gpt-5.4', workingDir: '/repo' });
+    const close = vi.spyOn(createdTransports[0]!, 'close');
+    MockCodexTransport.closeError = new Error('exit not confirmed');
+    await agent.forceDisposeLocalHostForAuthChange('failed retirement');
+    expect(close).toHaveBeenCalledOnce();
+    MockCodexTransport.closeError = null;
+    if (retryPath === 'guard') {
+      const guard = await agent.beginLocalHostCredentialChange('late exit');
+      await guard.retireActiveHost();
+      guard.release();
+    } else {
+      await agent.dispose();
+    }
+    expect(close).toHaveBeenCalledTimes(2);
     expect(createdTransports).toHaveLength(1);
     await handle.close();
     await agent.dispose();

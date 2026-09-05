@@ -284,7 +284,47 @@ describe('AppServerHost shutdown completion', () => {
     await Promise.all([shutdown, retirement]);
     expect(close).toHaveBeenCalledOnce();
     expect(onRetired).toHaveBeenCalledTimes(fails ? 0 : 1);
-    if (fails) await expect(host.shutdown('retry', { throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+    if (fails) {
+      await expect(host.shutdown('retry', { throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+      expect(onRetired).not.toHaveBeenCalled();
+      close.mockResolvedValue(undefined);
+      await Promise.all([host.retire(), host.retire('late exit', { throwOnTransportError: true })]);
+      expect(onRetired).toHaveBeenCalledOnce();
+      await expect(retire).rejects.toThrow('exit not confirmed');
+    }
+    await host.retire();
+    expect(close).toHaveBeenCalledTimes(fails ? 3 : 1);
+    expect(onRetired).toHaveBeenCalledOnce();
+    await expect(host.ensureStarted()).rejects.toThrow('after retirement');
+  });
+
+  it('rechecks failed shutdown before restarting and respects retirement during that recheck', async () => {
+    const transport = new NotificationTransport();
+    const close = vi.spyOn(transport, 'close').mockRejectedValue(new Error('exit not confirmed'));
+    const createTransport = vi.fn().mockReturnValueOnce(transport).mockReturnValue(new NotificationTransport());
+    const onRetired = vi.fn();
+    const host = new AppServerHost({ createTransport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, onRetired });
+    await host.ensureStarted();
+    await expect(host.shutdown('failed', { throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+    await expect(host.ensureStarted()).rejects.toThrow('exit not confirmed');
+    expect(createTransport).toHaveBeenCalledOnce();
+    close.mockResolvedValue(undefined);
+    await host.ensureStarted();
+    expect(createTransport).toHaveBeenCalledTimes(2);
+
+    const nextTransport = createTransport.mock.results[1]!.value as NotificationTransport;
+    const nextClose = vi.spyOn(nextTransport, 'close').mockRejectedValue(new Error('exit not confirmed'));
+    await host.shutdown();
+    let finish!: () => void;
+    nextClose.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const restart = expect(host.ensureStarted()).rejects.toThrow('after retirement');
+    const retiring = host.retire('retire during recheck', { throwOnTransportError: true });
+    await vi.waitFor(() => expect(nextClose).toHaveBeenCalledTimes(2));
+    finish();
+    await Promise.all([restart, retiring]);
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    expect(onRetired).toHaveBeenCalledOnce();
   });
 
   it('blocks bootstrap retry until the failed process has exited', async () => {

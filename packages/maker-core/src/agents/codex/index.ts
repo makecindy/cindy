@@ -1851,11 +1851,11 @@ export class CodexAgent extends BaseAgent {
    */
   private hostCredentialModeSwitches = new Map<string, Promise<void>>();
 
-  /** 同 key 的替代进程必须等待旧 writer 退出；失败保留原始结果供严格调用方检查。 */
+  /** 同 key 必须等旧 writer 退出；失败仅清本次 Promise，保留 Host 供下次重查。 */
   private retiringHosts = new Map<string, {
     host: AppServerHost;
     generation: number;
-    promise: Promise<void>;
+    promise: Promise<void> | null;
   }>();
 
   /**
@@ -2321,7 +2321,7 @@ export class CodexAgent extends BaseAgent {
       if (!remoteHostId) await this.waitForHostCredentialModeSwitch(key);
       const retiring = this.retiringHosts.get(key);
       if (retiring) {
-        await retiring.promise;
+        await this.beginHostRetirement(key, retiring.host, 'recheck retirement before Host reuse');
         continue;
       }
 
@@ -2486,7 +2486,7 @@ export class CodexAgent extends BaseAgent {
       await this.waitForHostCredentialModeSwitch(key);
       const retiring = this.retiringHosts.get(key);
       if (retiring) {
-        await retiring.promise;
+        await this.beginHostRetirement(key, retiring.host, 'recheck retirement before utility use');
         continue;
       }
       const existing = this.hosts.get(key);
@@ -13405,7 +13405,8 @@ export class CodexAgent extends BaseAgent {
     for (const [key, host] of this.hosts) {
       this.beginHostRetirement(key, host, 'CodexAgent.dispose()');
     }
-    const retirements = Array.from(this.retiringHosts.values(), (entry) => entry.promise);
+    const retirements = Array.from(this.retiringHosts, ([key, entry]) =>
+      this.beginHostRetirement(key, entry.host, 'CodexAgent.dispose()'));
     for (const key of this.hosts.keys()) {
       this.hostGenerations.set(key, (this.hostGenerations.get(key) ?? 0) + 1);
     }
@@ -13479,18 +13480,22 @@ export class CodexAgent extends BaseAgent {
 
   private beginHostRetirement(key: string, host: AppServerHost, reason: string): Promise<void> {
     const existing = this.retiringHosts.get(key);
-    if (existing?.host === host) return existing.promise;
-    const entry = {
+    if (existing?.host === host && existing.promise) return existing.promise;
+    const entry = existing?.host === host ? existing : {
       host,
       generation: this.hostGenerations.get(key) ?? 0,
-      promise: Promise.resolve().then(() => host.retire(reason, { throwOnTransportError: true })),
+      promise: null as Promise<void> | null,
     };
+    const promise = Promise.resolve().then(() => host.retire(reason, { throwOnTransportError: true }));
+    entry.promise = promise;
     this.retiringHosts.set(key, entry);
-    // 只清成功的当前 entry。关闭失败时不能误把旧 writer 当作已经退出。
-    void entry.promise.then(() => {
+    // 失败保留 key/Host 屏障；下次请求可重查迟到的 exit，不自动重试或另启 writer。
+    void promise.then(() => {
       if (this.retiringHosts.get(key) === entry) this.retiringHosts.delete(key);
-    }, () => undefined);
-    return entry.promise;
+    }, () => {
+      if (entry.promise === promise) entry.promise = null;
+    });
+    return promise;
   }
 
   private async retireHostKey(
@@ -13511,7 +13516,7 @@ export class CodexAgent extends BaseAgent {
       && (!opts.expectedHost || opts.expectedHost === retiring.host)
       && (opts.expectedGeneration === undefined || opts.expectedGeneration === retiring.generation)) {
       try {
-        await retiring.promise;
+        await this.beginHostRetirement(key, retiring.host, reason);
       } catch (error) {
         if (opts.throwOnShutdownFailure) throw error;
       }

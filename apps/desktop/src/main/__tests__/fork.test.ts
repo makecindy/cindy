@@ -18,6 +18,7 @@ import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -672,7 +673,7 @@ describe('forkSessionAtMessage', () => {
       const args = txCalls[0]!.args as {
         sourceClearedAt: number; targetCreatedAt: number; targetRowid: number;
         newSession: Record<string, unknown>; nativeForkAnchorSessionMap?: unknown;
-        newMessageIds: Array<{ clientId: string }>; recoveryMarker: { createdAt: number; content: string };
+        newMessageIds: Array<{ clientId: string }>; recoveryMarker: { createdAt: number; content: string; sourceMessagesDigest: string };
       };
       expect(args.sourceClearedAt).toBe(500);
       expect(args.targetCreatedAt).toBe(futureTime);
@@ -680,6 +681,10 @@ describe('forkSessionAtMessage', () => {
       expect(args.newSession).toMatchObject({ sdkSessionId: null, contextTokens: 0, contextWindow: 0,
         totalTokenUsage: 0, totalCostUsd: 0, parentSessionId: 'src-session', forkedAtMessageId: 'target' });
       expect(args.nativeForkAnchorSessionMap).toBeUndefined();
+      expect(args.recoveryMarker.sourceMessagesDigest).toBe(computeForkSourceMessagesDigest(rows.map((row) => ({
+        client_id: row.clientId, role: row.role, content: row.content, tool_use_id: row.toolUseId,
+        agent_meta: row.agentMeta, agent_kind: row.agentKind, created_at: row.createdAt,
+      }))));
       const marker = JSON.parse(args.recoveryMarker.content);
       expect(marker).toMatchObject({ reason: 'native-session-recovery', consumed: false,
         sourceAgentKind: 'codex', sourceModel: 'gpt-5.5', sourceProviderId: 'xd',
@@ -773,7 +778,7 @@ describe('forkSessionAtMessage', () => {
     const txCall = txCalls.find((c) => c.name === 'fork.session');
     expect(txCall).toBeDefined();
     const txArgs = txCall!.args as {
-      recoveryMarker?: { content: string };
+      recoveryMarker?: { content: string; sourceMessagesDigest: string };
       targetCreatedAt: number;
       newSession: Record<string, unknown>;
       newMessageIds: Array<{ id: string; clientId: string }>;
@@ -787,6 +792,10 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newMessageIds).toHaveLength(2);
     expect(txArgs.newSession.sdkSessionId).toBe(recover ? null : 'codex-thread-new');
     if (recover) {
+      expect(txArgs.recoveryMarker!.sourceMessagesDigest).toBe(computeForkSourceMessagesDigest([first, second].map((row) => ({
+        client_id: row.clientId, role: row.role, content: row.content, tool_use_id: row.toolUseId,
+        agent_meta: row.agentMeta, agent_kind: row.agentKind, created_at: row.createdAt,
+      }))));
       expect(JSON.parse(txArgs.recoveryMarker!.content)).toMatchObject({
         reason: 'native-session-recovery', consumed: false, sourceSdkSessionId: 'codex-thread-source',
         handoff: expect.stringContaining('[User]\nhello'),

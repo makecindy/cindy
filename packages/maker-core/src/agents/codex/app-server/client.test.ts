@@ -363,8 +363,18 @@ describe('AppServerClient close completion', () => {
     if (fails) fail(new Error('exit not confirmed'));
     else finish();
     await Promise.all([first, strictResult]);
-    if (fails) await expect(client.close({ throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
     expect(close).toHaveBeenCalledOnce();
+    if (fails) {
+      await expect(client.close({ throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+      expect(close).toHaveBeenCalledTimes(2);
+      close.mockResolvedValue(undefined);
+      await Promise.all([client.close(), client.close({ throwOnTransportError: true })]);
+      expect(close).toHaveBeenCalledTimes(3);
+      await expect(strict).rejects.toThrow('exit not confirmed');
+    }
+    await expect(client.close({ throwOnTransportError: true })).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledTimes(fails ? 3 : 1);
+    await expect(client.request('initialize')).rejects.toThrow('after close');
   });
 });
 
