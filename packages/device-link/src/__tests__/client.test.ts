@@ -134,9 +134,27 @@ describe('network change probes', () => {
       // More hints cannot extend the probe deadline.
       h.client.notifyNetworkChanged();
       if (responsive) socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
-      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.advanceTimersByTimeAsync(15_000);
       expect(h.sockets).toHaveLength(responsive ? 1 : 2);
       expect(socket.closed !== null).toBe(!responsive);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it.each([15_000, 25_000])('retains a slow healthy relay within its %s ms latency tolerance', async (handshakeTimeoutMs) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, handshakeTimeoutMs } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(handshakeTimeoutMs - 1_000);
+      expect(h.sockets).toHaveLength(1);
+      expect(socket.closed).toBeNull();
+      socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(1);
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
@@ -155,7 +173,7 @@ describe('network change probes', () => {
       h.client.notifyNetworkChanged();
       await vi.advanceTimersByTimeAsync(500);
       old.push({ v: PROTOCOL_VERSION, kind: 'pong' });
-      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.advanceTimersByTimeAsync(15_000);
       expect(h.sockets).toHaveLength(3);
       h.current().ack();
       h.client.notifyNetworkChanged();
@@ -997,6 +1015,8 @@ describe('DeviceLinkClient', () => {
       },
     });
     const inboundInvokes: Envelope[] = [];
+    const resetDevices: string[] = [];
+    h.client.onPeerTransportReset(({ deviceId }) => resetDevices.push(deviceId));
     h.client.onFrame((env) => {
       if (env.kind === 'invoke' && env.src === 'ctrl-healthy') inboundInvokes.push(env);
     });
@@ -1046,6 +1066,9 @@ describe('DeviceLinkClient', () => {
       ))).toBe(true);
     });
     expect(h.client.isLinkReady('ctrl-silent')).toBe(false);
+    // A mutual-control view must also invalidate locally, even though the
+    // remote controller receives transport-timeout and owns reopening the link.
+    expect(resetDevices).toEqual(['ctrl-silent']);
     expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
     expect(socket.terminated).toBe(false);
     expect(socket.closed).toBeNull();
@@ -1164,6 +1187,8 @@ describe('DeviceLinkClient', () => {
         requestTimeoutMs: 5_000,
       },
     });
+    const onReset = vi.fn();
+    h.client.onPeerTransportReset(onReset);
     h.client.start();
     await tick();
     h.current().ack();
@@ -1207,6 +1232,11 @@ describe('DeviceLinkClient', () => {
       ))).toBe(true);
     });
     // 共享 relay 连接完好:没有因互控覆盖误走整连接重连
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(onReset).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'dev-b', reason: 'ack-timeout',
+    }));
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
     expect(socket.terminated).toBe(false);
     expect(h.sockets).toHaveLength(1);
     h.client.stop();

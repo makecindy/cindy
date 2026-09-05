@@ -412,7 +412,8 @@ export interface DeviceLinkPeerRouteStateChanged {
 }
 
 /**
- * 单个 peer 的可靠传输已在本地复位，需要 host 独立重建该 peer。
+ * 单个 peer 的可靠传输已在本地复位。Host 应作废该 peer 的内容就绪证据；
+ * 出站隔离策略由 host 重建，入站方向仍通知对端重开。
  *
  * 该事件不是 relay/WSS 断线信号；其它 peer 必须继续收发。代次字段供 host
  * 丢弃排队期间已经过期的恢复任务。`seq` 只用于诊断，不代表业务请求 id。
@@ -805,12 +806,15 @@ export class DeviceLinkClient {
       const socket = this.ws;
       const startedAt = this.monotonicNow();
       this.networkProbeStartedAt = startedAt;
+      // A network hint cannot narrow the existing weak-network latency envelope.
+      // Allow at least the normal 15s handshake tolerance (or a larger override)
+      // before discarding a shared socket.
       this.networkProbeTimer = setTimeout(() => {
         this.networkProbeTimer = null;
         if (this.stopped || this.connEpoch !== epoch || this.ws !== socket) return;
         this.log.info(`network probe timed out (elapsedMs=${this.monotonicNow() - startedAt})`);
         this.restartConnection('network-probe-timeout');
-      }, 4_000);
+      }, Math.max(DEFAULT_TIMING.handshakeTimeoutMs, this.timing.handshakeTimeoutMs));
       try {
         this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'ping' });
       } catch {
@@ -978,7 +982,7 @@ export class DeviceLinkClient {
     return () => this.peerRouteStateHandlers.delete(cb);
   }
 
-  /** 订阅单 peer 可靠传输复位；host 应只重建 `change.deviceId`。 */
+  /** 订阅单 peer 可靠传输复位；host 恢复只能影响 `change.deviceId`。 */
   onPeerTransportReset(
     cb: (change: DeviceLinkPeerTransportReset) => void,
   ): () => void {
@@ -3887,9 +3891,10 @@ export class DeviceLinkClient {
     // 关闭；host 收到本地事件后用所有版本都支持的 link-open 恢复。
     if (peer.linkAcceptedInbound && peer.supportsTransportTimeoutClose) {
       this.notifyTransportTimeoutClose(dst, 1);
-    } else if (this.opts.peerFailurePolicy === 'isolate-peer') {
-      this.notifyPeerTransportReset(dst, seq, peer.linkGeneration);
     }
+    // Both directions share this peer state during mutual control. Notify local
+    // views even when the remote controller owns reopening the inbound link.
+    this.notifyPeerTransportReset(dst, seq, peer.linkGeneration);
   }
 
   /**

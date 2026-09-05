@@ -432,6 +432,13 @@ export function useRemoteSessionSync(
     let relayAvailable: boolean | undefined;
     let peerAvailable: boolean | undefined = remoteProjectsStore.getDeviceIds().includes(deviceId);
     let peerResponsive: boolean | undefined;
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.((p) => {
+      if (p.deviceId !== deviceId) return;
+      recovery.invalidate(relayAvailable !== false && peerAvailable !== false && peerResponsive !== false);
+      // subscribe already waits for the existing per-peer openLink. Only its new
+      // ACK followed by an applied snapshot can restore this view's readiness.
+      recovery.request();
+    });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
       const online = p.status === 'online';
       if (relayAvailable !== online) recovery.invalidate(online);
@@ -475,6 +482,7 @@ export function useRemoteSessionSync(
       offStatus();
       offPresence();
       offResponsiveness();
+      offPeerReset?.();
       offStore();
       window.removeEventListener('focus', onFocus);
       engine.dispose();

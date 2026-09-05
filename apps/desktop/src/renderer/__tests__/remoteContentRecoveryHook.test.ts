@@ -27,6 +27,88 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it('requires a fresh ACK and snapshot after peer-only resets without invalidating neighbors', async () => {
+  vi.useFakeTimers();
+  const resets = new Set<(payload: { deviceId: string }) => void>();
+  const subscribe = vi.fn(async () => {});
+  vi.stubGlobal('electronAPI', {
+    deviceLink: {
+      subscribe,
+      unsubscribe: async () => {},
+      onStatusChanged: () => () => {},
+      onPresenceChanged: () => () => {},
+      onResponsivenessChanged: () => () => {},
+      onPeerLinkReset: (cb: (payload: { deviceId: string }) => void) => {
+        resets.add(cb);
+        return () => resets.delete(cb);
+      },
+    },
+  });
+  mocks.running = false;
+  mocks.reconcile.mockResolvedValue(true);
+  const affected = renderHook(() => useRemoteSessionSync('session', 'host'));
+  const neighbor = renderHook(() => useRemoteSessionSync('neighbor-session', 'neighbor'));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(affected.result.current.contentState).toBe('ready');
+  expect(neighbor.result.current.contentState).toBe('ready');
+
+  let ack!: () => void;
+  let oldSnapshot!: (value: boolean) => void;
+  let newSnapshot!: (value: boolean) => void;
+  subscribe.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        ack = resolve;
+      }),
+  );
+  mocks.reconcile
+    .mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          oldSnapshot = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          newSnapshot = resolve;
+        }),
+    );
+  const callsBeforeReset = mocks.reconcile.mock.calls.length;
+  await act(async () => {
+    resets.forEach((cb) => cb({ deviceId: 'host' }));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(affected.result.current.contentState).toBe('syncing');
+  expect(neighbor.result.current.contentState).toBe('ready');
+  expect(mocks.reconcile).toHaveBeenCalledTimes(callsBeforeReset);
+  await act(async () => {
+    ack();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(affected.result.current.contentState).toBe('syncing');
+  await act(async () => {
+    resets.forEach((cb) => cb({ deviceId: 'host' }));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    oldSnapshot(true);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(affected.result.current.contentState).toBe('syncing');
+  expect(neighbor.result.current.contentState).toBe('ready');
+  await act(async () => {
+    newSnapshot(true);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(affected.result.current.contentState).toBe('ready');
+  affected.unmount();
+  neighbor.unmount();
+  expect(resets.size).toBe(0);
+});
+
 it('does not reset a recovered mounted task on its first busy presence update', async () => {
   vi.useFakeTimers();
   let presence!: (snapshot: {
