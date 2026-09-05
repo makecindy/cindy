@@ -13,12 +13,12 @@
  *
  * ## 两层判定
  *
- *   - **确定性绿灯 → `auto-approve`**：只读、会话内状态、工作区内文件写、明确只读 shell。
- *   - **灰区 → `prompt`**：交当前会话模型判 allow / block / ask；reviewer 故障时静默 block。
- *   - **确定性红线 → `prompt-each-time`**：凭证、提权、广泛破坏等极高风险动作才允许打扰用户。
+ *   - `auto-approve`：已有明确安全证据，可静态放行。
+ *   - `prompt` / `prompt-each-time`：历史风险等级，均交 AI 判断 allow / block / ask。
  *
- * 这里的 `prompt` 是内部灰区标记，不等于 UI 弹窗。最终只有轻量 reviewer 明确返回 `ask`，
- * 或本地规则命中确定性红线，才弹确认；拿不准与服务不可用都回主 Agent `block`，让它换安全做法。
+ * 本文件只分类风险，不决定弹窗。下面的“必问/逐次确认”注释描述旧等级名称；
+ * Auto 的最终决策统一由 resolveAutoReviewDecision 给出：只有模型 ask 或审阅故障
+ * 才交给用户，高风险名称、路径未知或 requireConsent 本身不能硬转人工。
  *
  * ## 已知静态残口(命令字符串层不可闭合,应在 env / OS / 会话配置层缓解,不在此兜底)
  *
@@ -54,7 +54,7 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
 
 /**
  * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
- *   read          读文件/内省(可带 path:读凭证文件必问;scope='tree' 的目录级递归读若根在区外必升级,其余放行)
+ *   read          读文件/内省(可带 path:读凭证文件需送审;scope='tree' 的目录级递归读若根在区外必升级,其余放行)
  *   session-state 会话内状态/控制,无本地写/外发(todo、后台 shell 读写、subagent 派生)
  *   file-write    带结构化路径的文件写(path 缺失=无法确认在区内→升级)
  *   exec          shell 命令(交给命令分类器)
@@ -91,7 +91,7 @@ export type ReviewableAction =
       command: string;
       cwd?: string;
       cwdUnknown?: boolean;
-      /** 远端路径不属于控制端文件系统；无法取得执行端 realpath 时所有写目标都逐次确认。 */
+      /** 远端路径不属于控制端文件系统；无法取得执行端 realpath 时写目标不做静态免审。 */
       destructivePathResolution?: 'host' | 'unavailable';
     }
   | { kind: 'network'; target?: string; operation?: string }
@@ -100,7 +100,7 @@ export type ReviewableAction =
 /**
  * 核心裁决。shell 写目标会在实际执行主机上解析最近存在祖先的 realpath，防止授权根内
  * symlink / junction 越界。远端 adapter 必须显式标记无法取证，
- * 此时 fail closed 到逐次确认。workspaceRoots 是全部可读根；opts.writableRoots 是明确可写根。
+ * 此时标为需送审。workspaceRoots 是全部可读根；opts.writableRoots 是明确可写根。
  * 旧调用未提供 writableRoots 时仍只有首个工作目录可写。
  */
 export function reviewAction(

@@ -413,3 +413,58 @@ describe('Session close lifecycle', () => {
     expect(detach).toHaveBeenCalledTimes(2);
   });
 });
+
+
+describe('Host automatic review lifecycle', () => {
+  function setup() {
+    const reviewGate = createDeferred();
+    const closeGate = createDeferred();
+    const modeGate = createDeferred();
+    const review = vi.fn(async () => { await reviewGate.promise; return { verdict: 'allow' as const }; });
+    const handle = { id: 'host-review', agentKind: 'pi', model: 'm',
+      close: () => closeGate.promise, setPermissionMode: () => modeGate.promise, abort: async () => {},
+      setInteractionResolver() {}, reviewAutoPermissionAction: review,
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'host-review', agentKind: 'pi', workDir: '/repo', handle,
+      capabilities: { permissionModes: [{ id: 'ask', displayName: 'Ask' }], setPermissionModeMidSession: { supported: true } } as never,
+      logger: createLogger(), permissionMode: 'auto', turnStallMs: 0,
+    });
+    return { session, review, reviewGate, closeGate, modeGate };
+  }
+  const action = { kind: 'other' as const, description: 'plugin file handoff' };
+  it('returns the reviewer decision while the session is stable', async () => {
+    const { session, reviewGate } = setup();
+    reviewGate.resolve();
+    expect(await session.reviewHostPermissionAction(action)).toEqual({ verdict: 'allow' });
+  });
+  it('rejects a late allow even after Stop has returned to active', async () => {
+    const { session, reviewGate } = setup();
+    const pending = session.reviewHostPermissionAction(action);
+    await session.abort();
+    expect(session.getStatus()).toBe('active');
+    reviewGate.resolve();
+    expect(await pending).toMatchObject({ verdict: 'block' });
+  });
+  it('rejects a late allow as soon as closing starts', async () => {
+    const { session, reviewGate, closeGate } = setup();
+    const pending = session.reviewHostPermissionAction(action);
+    const closing = session.close();
+    reviewGate.resolve();
+    expect(await pending).toMatchObject({ verdict: 'block' });
+    closeGate.resolve();
+    await closing;
+  });
+  it('rejects reviews during a permission change and invalidates earlier results', async () => {
+    const { session, review, reviewGate, modeGate } = setup();
+    const pending = session.reviewHostPermissionAction(action);
+    const changing = session.setPermissionMode('ask');
+    await vi.waitFor(() => expect(session.stablePermissionModeState).toBeNull());
+    expect(await session.reviewHostPermissionAction(action)).toMatchObject({ verdict: 'block' });
+    expect(review).toHaveBeenCalledOnce();
+    modeGate.resolve();
+    await changing;
+    reviewGate.resolve();
+    expect(await pending).toMatchObject({ verdict: 'block' });
+    expect(await session.reviewHostPermissionAction(action)).toEqual({ verdict: 'ask' });
+  });
+});

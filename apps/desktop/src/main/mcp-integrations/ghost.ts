@@ -32,7 +32,7 @@ import type {
   CindyGhostInfo,
   CindyGhostsMcpDeps,
 } from 'cindy-tools';
-import type { PermissionMode } from '@cindy/maker-core';
+import { toolAutoReviewAction, type PermissionMode, type ReviewableAction, type AutoReviewDecision } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
 import {
@@ -176,6 +176,7 @@ async function packForgeSource(
 export interface GhostGrantLiveSessionState {
   permissionMode: PermissionMode | null;
   remoteHostId: string | null;
+  reviewAction?: (action: ReviewableAction) => Promise<AutoReviewDecision>;
 }
 
 /**
@@ -223,7 +224,7 @@ export interface CindyGhostsHostDeps {
   onToolResultImagesFailed?: (sessionId: string, attemptedCount: number) => void;
 }
 
-type GhostGrantApprovalSource = 'user' | 'full-access';
+type GhostGrantApprovalSource = 'user' | 'full-access' | 'auto-review';
 
 /** 确认卡内嵌图片预览的文件体积上限(只是预览阈值,不是过户限制——超阈值
  *  照样可过户,卡片上退化为文件名 + 路径 + 大小)。 */
@@ -395,6 +396,18 @@ async function requestGrantConfirm(params: {
         });
         return { ok: true, approvalSource: 'full-access' };
       }
+      if (live?.permissionMode === 'auto' && live.reviewAction) {
+        const decision = await live.reviewAction(toolAutoReviewAction('plugin_file_handoff', {
+          ghostId: params.ghostId,
+          lane: params.lane,
+          files: params.items.map(({ absPath, size, mimeType, isDirectory }) => ({ absPath, size, mimeType, isDirectory })),
+        }, live.remoteHostId ? 'These are files on the controller, NOT the remote task filesystem.' : undefined));
+        if (decision.verdict === 'allow') {
+          log.info('ghost grant: AI approved outside-workdir handoff', { ghostId: params.ghostId, lane: params.lane, grantSource: 'auto-review' });
+          return { ok: true, approvalSource: 'auto-review' };
+        }
+        if (decision.verdict === 'block') return { ok: false, message: decision.reason ?? 'Automatic review denied this file handoff.' };
+      }
     } catch (error) {
       // 自动扩权查询必须 fail closed:运行时状态读不到就继续走原确认路径,
       // 绝不回退可能滞后的 DB permission_mode。
@@ -444,6 +457,8 @@ async function requestGrantConfirm(params: {
  */
 async function requestMediaPathRevealConfirm(params: {
   sessionId: string | null;
+  sessionInstanceId: string | null;
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
   absPath: string;
   mimeType: string;
 }): Promise<{ ok: true } | { ok: false; errorCode: string; message: string }> {
@@ -453,6 +468,18 @@ async function requestMediaPathRevealConfirm(params: {
       errorCode: 'LOCAL_PATH_REVEAL_CONFIRM_UNAVAILABLE',
       message: '当前调用没有会话语境，无法让用户确认是否把本机路径返回给 Agent',
     };
+  }
+  if (params.sessionInstanceId && params.getLiveSessionGrantState) {
+    const live = params.getLiveSessionGrantState(params.sessionId, params.sessionInstanceId);
+    if (live?.permissionMode === 'auto' && live.reviewAction) {
+      const decision = await live.reviewAction(toolAutoReviewAction('cindy_media.resolve_local_path', {
+        path: params.absPath, mimeType: params.mimeType,
+      }, 'Return the controller local path of this managed media to the agent.'));
+      if (decision.verdict === 'allow') return { ok: true };
+      if (decision.verdict === 'block') return {
+        ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED', message: decision.reason ?? 'Automatic review denied revealing this path.',
+      };
+    }
   }
   const bridge = getGhostGrantConfirmBridge();
   if (!bridge) {
@@ -1326,6 +1353,8 @@ export function getCindyGhostsMcpDeps(
         }
         const confirmed = await requestMediaPathRevealConfirm({
           sessionId: sessionId ?? null,
+          sessionInstanceId: resolveSessionContext()?.sessionInstanceId ?? null,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
           absPath: localPath,
           mimeType,
         });
@@ -1776,6 +1805,7 @@ export function getCindyGhostsMcpDeps(
         // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
         // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
         sessionId: callSessionContext?.sessionId ?? null,
+        sessionInstanceId: callSessionContext?.sessionInstanceId,
         // 未声明 network 的 Agent 调用只能借本机 Agent 授权走 Desktop 出网；
         // SSH remote 会话保留 host id，由 networkSlot 明确拒绝本地出口。
         remoteHostId: callSessionContext?.remoteHostId ?? null,

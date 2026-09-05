@@ -226,6 +226,11 @@ export interface AutoReviewRequest {
   providerId?: string | null;
   model: string;
   userIntent: string;
+  /** Host-verified requester authority, separate from model-visible/quoted text. */
+  authorizationContext?: {
+    requesterAuthority: 'owner' | 'guest' | 'unknown';
+    source: 'group' | 'direct';
+  };
   action: ReviewableAction;
   /** 全部可读根；首项必须是主工作目录，供相对路径解析。 */
   workspaceRoots: string[];
@@ -239,6 +244,16 @@ export interface AutoReviewRequest {
 export type AutoReviewDelegate = (
   request: AutoReviewRequest,
 ) => Promise<AutoReviewDecision | null>;
+
+/** Preserve the actual tool identity and arguments across progressive/Host approval entrypoints. */
+export function toolAutoReviewAction(
+  toolName: string,
+  input: unknown,
+  context?: string,
+  executionEvidence?: unknown,
+): ReviewableAction {
+  return { kind: 'other', description: JSON.stringify({ toolName, input, context, executionEvidence }) };
+}
 
 export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
 const MAX_AUTO_REVIEW_REASON_CHARS = 240;
@@ -380,8 +395,8 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
 }
 
 /**
- * 原生 reviewer 不可用时的统一裁决入口：明显安全和明显红线仍由本地规则确定，
- * 只有中间灰区才调用当前会话模型。
+ * Auto 的统一裁决入口：本地规则只可免审明显安全的动作；其余风险等级均交给
+ * 审阅器结合用户授权判断。风险分类不等于用户尚未授权，不能直接转换成人工确认。
  *
  * **审阅器故障时降级为 `ask`，不再静默 `block`。** 宿主侧已先做过重试
  * （见 desktop 的 createAutoPermissionReviewer），走到这里意味着重试也没救回来。
@@ -390,7 +405,7 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
  * 安全边界不降低（未经用户点头仍然不会执行），但用户至少知道该点头还是拒绝。
  *
  * 与「模型判定危险」的 `block` 仍然严格区分：那个继续静默，因为 Auto 的本意
- * 就是不打扰；只有 `unavailable` 才升级成打扰。
+ * 就是不打扰；模型 ask 与 unavailable 才交用户。
  */
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
@@ -398,7 +413,6 @@ export async function resolveAutoReviewDecision(
 ): Promise<AutoReviewDecision> {
   const localTier = classifyLocalAutoReviewTier(request);
   if (localTier === 'auto-approve') return { verdict: 'allow' };
-  if (localTier === 'prompt-each-time') return { verdict: 'ask' };
   // Never ask the model to approve an action whose material target/text is absent.
   // It has no evidence to distinguish routine work from an unsafe side effect.
   const missingEvidenceReason = missingReviewEvidence(request.action);
@@ -473,10 +487,10 @@ export async function resolveAutoReviewDecision(
 const MAX_USER_INTENT_CHARS = 2_000;
 const USER_INTENT_TRUNCATION_MARKER = '\n…[middle omitted]…\n';
 
-function compactCurrentUserIntent(text: string): string {
+function compactCurrentUserIntent(text: string, maxChars = MAX_USER_INTENT_CHARS): string {
   const normalized = text.trim();
-  if (normalized.length <= MAX_USER_INTENT_CHARS) return normalized;
-  const remaining = MAX_USER_INTENT_CHARS - USER_INTENT_TRUNCATION_MARKER.length;
+  if (normalized.length <= maxChars) return normalized;
+  const remaining = maxChars - USER_INTENT_TRUNCATION_MARKER.length;
   const headChars = Math.ceil(remaining * 0.75);
   const tailChars = remaining - headChars;
   return `${normalized.slice(0, headChars)}${USER_INTENT_TRUNCATION_MARKER}${normalized.slice(-tailChars)}`;
@@ -491,6 +505,18 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
       .map((block) => block.text)
       .join('\n');
   return compactCurrentUserIntent(text);
+}
+
+/** Preserve bounded user authorization across follow-ups; later restrictions take precedence. */
+export function appendAutoReviewUserIntent(previous: string, content: UserMessage['content']): string {
+  const latest = extractAutoReviewUserIntent(content);
+  if (!previous.trim()) return latest;
+  if (!latest) return compactCurrentUserIntent(previous);
+  const prefix = 'Earlier user messages (still apply unless explicitly changed below):\n';
+  const separator = '\n\nLatest user message:\n';
+  const latestText = compactCurrentUserIntent(latest, 1_400);
+  const priorBudget = MAX_USER_INTENT_CHARS - prefix.length - separator.length - latestText.length;
+  return prefix + compactCurrentUserIntent(previous, priorBudget) + separator + latestText;
 }
 
 /**

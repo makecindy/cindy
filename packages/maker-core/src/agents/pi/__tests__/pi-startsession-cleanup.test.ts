@@ -1630,6 +1630,31 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close({ reason: 'navigation' });
   });
 
+  it.each(['allow', 'block', 'ask'] as const)('reviews adopted approvals with current evidence: %s', async (verdict) => {
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' },
+      resolvedWritePath: path.join(cwd, 'a.txt'), resolvedWritableRoots: [cwd],
+    }, { runtimeOwnerId: ownerId('earlier-handle-instance'), parentSessionId: `auto-adopt-${verdict}` });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(async () => ({ verdict }));
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
+      ...opts(), sessionId: `auto-adopt-${verdict}`, sessionInstanceId: `new-${verdict}`, permissionMode: 'auto',
+    });
+    handle.setInteractionResolver(resolver);
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(expect.any(String), run.taskId, 'approval', expect.objectContaining({ confirmed: verdict === 'allow' })), { timeout: 3_000 });
+    expect(review).toHaveBeenCalledOnce();
+    const request = review.mock.calls[0]?.[0];
+    expect(request?.userIntent).toBe(''); // Child text must never masquerade as human authorization.
+    expect(JSON.parse((request?.action as { description: string }).description)).toMatchObject({
+      toolName: 'write', input: { path: 'a.txt' },
+      context: expect.stringContaining('Original user authorization and child cwd are unavailable'),
+      executionEvidence: { action: { path: 'a.txt', resolvedPath: path.join(cwd, 'a.txt'), resolvedWritableRoots: [cwd] } },
+    });
+    expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    await handle.close();
+  });
+
   it('never lets a Full Access session auto-allow an adopted approval', async () => {
     // Delivery surface only: the child was spawned under an earlier session's
     // mode, so reopening under Full Access must not launder its pending
@@ -1689,7 +1714,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
   });
 
-  it('requires confirmation when an older durable bridge omits canonical writable roots', async () => {
+  it('reviews older durable bridge calls with missing canonical evidence', async () => {
     const run = pendingSubagentRun({
       toolName: 'write',
       input: { path: 'tmp/legacy-safe.txt', content: 'legacy' },
@@ -1709,14 +1734,17 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect.any(String),
       run.taskId,
       'approval',
-      expect.objectContaining({ confirmed: false }),
+      expect.objectContaining({ confirmed: true }),
     ));
-    expect(review).not.toHaveBeenCalled();
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      action: { kind: 'file-write', path: 'tmp/legacy-safe.txt',
+        resolvedPath: path.join(cwd, 'tmp', 'legacy-safe.txt'), resolvedWritableRoots: null },
+    }));
+    expect(resolver).not.toHaveBeenCalled();
     await handle.close();
   });
 
-  it('forces confirmation when a durable Subagent writable-root path resolves outside it', async () => {
+  it('passes durable Subagent canonical escapes to AI for rejection', async () => {
     const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-writable-'));
     const outsideDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-outside-'));
     const run = pendingSubagentRun({
@@ -1727,7 +1755,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     });
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
-    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const review = vi.fn(async () => ({ verdict: 'block' as const }));
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
     const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
       ...opts(),
@@ -1743,11 +1771,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         'approval',
         expect.objectContaining({ confirmed: false }),
       ));
-      expect(review).not.toHaveBeenCalled();
-      expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'write',
-        metadata: expect.objectContaining({ subagent: true }),
+      expect(review).toHaveBeenCalledWith(expect.objectContaining({
+        action: { kind: 'file-write', path: path.join(writableDir, 'linked', 'result.txt'),
+          resolvedPath: path.join(outsideDir, 'result.txt'), resolvedWritableRoots: [cwd, writableDir] },
       }));
+      expect(resolver).not.toHaveBeenCalled();
     } finally {
       await handle.close();
       rmSync(writableDir, { recursive: true, force: true });

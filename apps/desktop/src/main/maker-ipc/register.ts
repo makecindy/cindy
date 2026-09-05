@@ -8519,6 +8519,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // cindy-brain 反向依赖 maker-ipc / localDb 形成模块环。
   setGhostLibraryExtraDirSync(syncLibraryReadonlyExtraDir);
   setGhostWorkspaceSessionService({
+    reviewPermissionAction: async (sessionId, instanceId, action) => {
+      const session = getMaker().getSession(sessionId);
+      if (!session || session.instanceId !== instanceId) {
+        return { verdict: 'block', reason: 'The originating task instance is no longer active.' };
+      }
+      const decision = await session.reviewHostPermissionAction(action);
+      return getMaker().getSession(sessionId) === session
+        ? decision
+        : { verdict: 'block', reason: 'The task instance changed during review.' };
+    },
     findActiveSessionByWorkdir,
     createDraftSession: async (params) => {
       // draft 跟随用户在 New Maker 面板的当前选择,与用户手建草稿的默认体验

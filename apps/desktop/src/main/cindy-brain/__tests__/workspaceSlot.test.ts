@@ -379,3 +379,35 @@ describe('workspaceSlot · 骚扰钳制与失败面', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
 });
+
+
+describe('workspace Auto review', () => {
+  it.each(['allow', 'block', 'ask'] as const)('obeys %s for an outside directory', async (verdict) => {
+    const reviewPermissionAction = vi.fn(async () => ({ verdict, reason: 'reviewed' }));
+    const service = makeService({ reviewPermissionAction });
+    const { slot, deps } = makeSlot({ isInsideWorkdir: () => false,
+      resolveCallContext: () => ({ ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' }),
+    }, service);
+    const result = await slot.handleRequest('ws-ghost', DIR_REQ);
+    expect(reviewPermissionAction).toHaveBeenCalledWith('sess-1', 'instance-1', expect.objectContaining({ kind: 'other', description: expect.stringContaining(DIR_REQ.dir) }));
+    expect(result.ok).toBe(verdict !== 'block');
+    expect(deps.confirmDir).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    expect(service.createDraftSession).toHaveBeenCalledTimes(verdict === 'block' ? 0 : 1);
+  });
+  it('does not create a workspace when the originating call ends during review', async () => {
+    let active = true;
+    const service = makeService({ reviewPermissionAction: async () => { active = false; return { verdict: 'allow' }; } });
+    const { slot } = makeSlot({ isInsideWorkdir: () => false,
+      resolveCallContext: () => active ? { ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' } : null,
+    }, service);
+    expect(await slot.handleRequest('ws-ghost', DIR_REQ)).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.createDraftSession).not.toHaveBeenCalled();
+  });
+  it('does not review without a runtime instance identity', async () => {
+    const reviewPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const { slot, deps } = makeSlot({ isInsideWorkdir: () => false }, makeService({ reviewPermissionAction }));
+    await slot.handleRequest('ws-ghost', DIR_REQ);
+    expect(reviewPermissionAction).not.toHaveBeenCalled();
+    expect(deps.confirmDir).toHaveBeenCalledOnce();
+  });
+});

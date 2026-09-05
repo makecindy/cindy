@@ -105,7 +105,7 @@ export function buildTelegramAdapter(
     // DM(无 speaker)不挂, owner 私聊保持全速。
     turnPermissionPolicyFor: (event) => {
       if (!event.speaker) return undefined;
-      const policy = createTelegramGuestTurnPermissionPolicy(event.messageId);
+      const policy = createTelegramGuestTurnPermissionPolicy(event.messageId, event.speaker.isOwner);
       if (event.speaker.isOwner) ownerGroupTurnPolicies.add(policy);
       return policy;
     },

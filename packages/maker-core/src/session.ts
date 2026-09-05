@@ -11,6 +11,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { ReviewableAction } from './agents/shared/auto-review.js';
+import type { AutoReviewDecision } from './agents/shared/auto-review-decision.js';
 
 import {
   extractNonSecretErrorSignals,
@@ -1471,6 +1473,34 @@ export class Session {
       return null;
     }
     return this.permissionModeState;
+  }
+
+  /** Review a Host-side tool step without reconstructing or persisting another copy of user intent. */
+  async reviewHostPermissionAction(action: ReviewableAction): Promise<AutoReviewDecision> {
+    const permission = this.stablePermissionModeState;
+    const turn = this.turnGeneration;
+    if (!permission) return { verdict: 'block', reason: 'Session permissions are changing or the task has closed.' };
+    if (permission.mode !== 'auto') return { verdict: 'ask' };
+    const terminal = this.terminalEventObservedGeneration;
+    const gracefulStop = this.turnControlState?.gracefulStopState;
+    let invalidated = false;
+    const unsubscribe = this.onStatusChange((status) => { if (status !== 'active') invalidated = true; });
+    let decision: AutoReviewDecision;
+    try {
+      decision = await this.handle.reviewAutoPermissionAction?.(action)
+        ?? { verdict: 'ask', unavailable: true };
+    } catch {
+      decision = { verdict: 'ask', unavailable: true };
+    } finally {
+      unsubscribe();
+    }
+    const current = this.stablePermissionModeState;
+    if (invalidated || !current || current.generation !== permission.generation
+      || this.turnGeneration !== turn || this.terminalEventObservedGeneration !== terminal
+      || this.turnControlState?.gracefulStopState !== gracefulStop) {
+      return { verdict: 'block', reason: 'Task or permissions changed; retry with the current scope.' };
+    }
+    return decision;
   }
 
   /**

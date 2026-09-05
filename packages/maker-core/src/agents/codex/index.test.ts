@@ -13066,6 +13066,31 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
   });
 
+  it.each(['prompt', 'prompt-each-time'] as const)('Auto MCP policy %s uses AI allow/block/ask', async (policy) => {
+    for (const verdict of ['allow', 'block', 'ask'] as const) {
+      const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict }));
+      const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => policy }));
+      const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'gmail-turn' } } : undefined);
+      const handle = await agent.startSession({ sessionId: 'auto-gmail', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+      const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+      handle.setInteractionResolver?.(resolver);
+      await handle.send({ type: 'user', content: '整理邮箱，先给清单，不发送邮件。' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+      const input = { ghost_id: 'google-gmail', tool: 'gmail', args: { action: 'search', query: 'in:inbox is:unread' } };
+      const result = await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'gmail-turn', serverName: 'cindy', mode: 'form',
+        _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call', tool_params: input }, message: 'Allow tool call', requestedSchema: {},
+      });
+      expect(result.action).toBe(verdict === 'allow' ? 'accept' : 'decline');
+      expect(review).toHaveBeenCalledOnce();
+      const request = review.mock.calls[0]?.[0];
+      expect(request?.userIntent).toContain('不发送邮件');
+      expect(JSON.parse((request?.action as { description: string }).description).input).toMatchObject({ toolParams: input });
+      expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+      await handle.close();
+    }
+  });
+
   it('passes MCP tool params to host policy and auto-approves safe inner calls', async () => {
     const policy = vi.fn(() => 'auto-approve' as const);
     const agent = new CodexAgent(createDeps({}, {
@@ -13743,7 +13768,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('requires direct confirmation when a remote destructive path has no execution-host realpath evidence', async () => {
+  it('reviews unavailable evidence when a remote destructive path has no execution-host realpath evidence', async () => {
     const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' as const }));
     const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
     const host = installFakeHost(agent);
@@ -13764,8 +13789,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       itemId: 'remote-rm',
       command: 'rm -rf build',
       cwd: '/remote/repo',
-    })).resolves.toEqual({ decision: 'decline' });
-    expect(reviewer).not.toHaveBeenCalled();
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewer).toHaveBeenCalledWith(expect.objectContaining({ action: expect.objectContaining({ command: 'rm -rf build', destructivePathResolution: 'unavailable' }) }));
     await handle.close();
   });
 
@@ -14164,7 +14189,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('asks the user when a file-change approval omits grantRoot', async () => {
+  it('blocks a file change with no destination or concrete patch evidence', async () => {
     const reviewAutoPermissionAction = vi.fn<AutoReviewDelegate>(async () => ({
       verdict: 'block' as const,
       reason: 'The destination path is missing.',
@@ -14190,24 +14215,17 @@ describe('CodexAgent MCP thread context hooks', () => {
       turnId: 'turn-file-change-without-root',
       itemId: 'patch-without-root',
       grantRoot: null,
-    })).resolves.toEqual({ decision: 'accept' });
+    })).resolves.toEqual({ decision: 'decline' });
 
     expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
-    expect(resolver).toHaveBeenCalledOnce();
-    expect(resolver.mock.calls[0]?.[0]).toMatchObject({
-      kind: 'permission',
-      toolName: 'file_change',
-      input: { grantRoot: null },
-    });
-    const request = resolver.mock.calls[0]?.[0];
-    expect(request?.kind).toBe('permission');
-    if (request?.kind !== 'permission') throw new Error('expected permission request');
-    expect(request.suggestions).toBeDefined();
+    expect(resolver).not.toHaveBeenCalled();
     await handle.close();
   });
 
-  it('accepts a pending missing-root file approval when switching to Full access', async () => {
-    const agent = new CodexAgent(createDeps());
+  it('accepts a reviewed concrete patch when switching to Full access', async () => {
+    const review = deferred<{ verdict: 'allow' }>();
+    const reviewer = vi.fn(() => review.promise);
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-auto-file-change-without-root-mode-switch',
@@ -14227,13 +14245,16 @@ describe('CodexAgent MCP thread context hooks', () => {
       turnId: 'turn-file-change-without-root-mode-switch',
       itemId: 'patch-without-root-mode-switch',
       grantRoot: null,
+      changes: [{ path: '/repo/a.txt', kind: { type: 'add' }, diff: '+hello' }],
     });
-    await vi.waitFor(() => expect(resolver).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
 
     if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
     await handle.setPermissionMode('bypassPermissions');
+    review.resolve({ verdict: 'allow' });
 
     await expect(approval).resolves.toEqual({ decision: 'accept' });
+    expect(resolver).not.toHaveBeenCalled();
     pendingDecision.resolve({ kind: 'permission', behavior: 'deny' });
     await handle.close();
   });
@@ -14345,12 +14366,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.setWritableDirs!([]);
     pendingReview.resolve({ verdict: 'allow' });
 
-    await expect(approval).resolves.toEqual({ decision: 'accept' });
-    expect(resolver).toHaveBeenCalledOnce();
-    expect(resolver.mock.calls[0]?.[0]).toMatchObject({
-      kind: 'permission',
-      suggestions: undefined,
-    });
+    await expect(approval).resolves.toEqual({ decision: 'decline' });
+    expect(resolver).not.toHaveBeenCalled();
     await handle.close();
   });
 
@@ -14395,18 +14412,14 @@ describe('CodexAgent MCP thread context hooks', () => {
       command: 'sudo rm -rf build', cwd: '/repo',
     });
     expect(danger).toEqual({ decision: 'accept' });
-    expect(resolver).toHaveBeenCalledOnce();
-    // prompt-each-time 必须剥离会话级 suggestion —— 否则用户点一次"总是允许"就把高风险 action 永久放行
-    // (与 Claude Code 侧等价断言对齐)。
-    const request = (resolver.mock.calls as unknown as Array<[InteractionRequest]>)[0]?.[0];
-    expect(request?.kind).toBe('permission');
-    if (request?.kind !== 'permission') throw new Error('expected permission request');
-    expect(request.suggestions).toBeUndefined();
+    expect(resolver).not.toHaveBeenCalled();
+    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({ action: expect.objectContaining({ command: expect.stringContaining('sudo') }) }));
     await handle.close();
   });
 
-  it('policy turn (unattended Auto): accepts only auto-approve, declines both prompt verdicts', async () => {
-    const agent = new CodexAgent(createDeps());
+  it('policy turn (unattended Auto): uses the reviewer for all non-green operations', async () => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'block' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) return { turn: { id: 'turn-policy-danger' } };
       return undefined;
@@ -14444,12 +14457,14 @@ describe('CodexAgent MCP thread context hooks', () => {
         threadId: 'start-thread-id', turnId: 'turn-policy-danger', itemId: `ok-${itemN++}`, command, cwd: '/repo',
       })).resolves.toEqual({ decision: 'accept' });
     }
+    expect(reviewer).toHaveBeenCalledTimes(4);
     expect(resolver).not.toHaveBeenCalled();
     await handle.close();
   });
 
-  it('policy turn (unattended Auto): declines permission escalation that has no classifiable action (fail-closed)', async () => {
-    const agent = new CodexAgent(createDeps());
+  it('policy turn (unattended Auto): reviews complete capability requests', async () => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'block' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) return { turn: { id: 'turn-policy-perm' } };
       return undefined;
@@ -14479,6 +14494,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       permissions: { network: true },
     });
     expect(res).toEqual({ permissions: {}, scope: 'turn' });
+    expect(reviewer).toHaveBeenCalledOnce();
+    expect(reviewer.mock.calls[0]?.[0].action).toMatchObject({ kind: 'other', description: expect.stringContaining('network') });
     expect(resolver).not.toHaveBeenCalled();
     await handle.close();
   });

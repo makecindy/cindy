@@ -809,6 +809,12 @@ export function getMaker(): Maker {
         return {
           permissionMode: permission.mode,
           remoteHostId: session.remoteHostId,
+          reviewAction: async (action: import('@cindy/maker-core').ReviewableAction) => {
+            const decision = await session.reviewHostPermissionAction(action);
+            return _maker?.getSession(sessionId) === session
+              ? decision
+              : { verdict: 'block' as const, reason: 'The task instance changed during review.' };
+          },
         };
       },
     };

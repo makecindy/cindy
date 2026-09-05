@@ -1237,16 +1237,16 @@ describe('fail-closed still precedes the MCP policy', () => {
     await handle.close();
   });
 
-  it('denies trusted MCP tools in auto mode too when no resolver is attached', async () => {
+  it('allows trusted MCP tools in auto mode too when no resolver is attached', async () => {
     const { handle, canUseTool } = await startSession(() => 'auto-approve', {
       bare: true,
       permissionMode: 'auto',
     });
 
-    // Auto 只让**内建**工具在无 UI 下由本地规则/轻量 reviewer 自决;mcp__* 被刻意排除。
+    // Auto can decide trusted MCP actions without a UI resolver.
     const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-bare-auto' });
 
-    expect(result.behavior).toBe('deny');
+    expect(result.behavior).toBe('allow');
     await handle.close();
   });
 
@@ -1568,7 +1568,7 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
-  it('does not let the controller auto-review remote destructive paths from lexical prefixes', async () => {
+  it('reviews remote destructive paths with explicit unavailable realpath evidence', async () => {
     const reviewer = vi.fn(async () => ({ verdict: 'allow' as const }));
     const { handle, onApprovalRequest, seen } = await startRemoteSession(
       () => 'prompt',
@@ -1586,9 +1586,10 @@ describe('remote sessions share the same permission semantics', () => {
       input: { command: 'rm -rf build' },
     });
 
-    expect(result.behavior).toBe('deny');
-    expect(reviewer).not.toHaveBeenCalled();
-    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(result.behavior).toBe('allow');
+    expect(reviewer).toHaveBeenCalledOnce();
+    expect(reviewer).toHaveBeenCalledWith(expect.objectContaining({ action: expect.objectContaining({ kind: 'exec', command: 'rm -rf build', destructivePathResolution: 'unavailable' }) }));
+    expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
 

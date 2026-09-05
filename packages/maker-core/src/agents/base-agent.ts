@@ -78,7 +78,8 @@ import type {
 import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
 import type { PiProjectTrustInputSnapshot } from '../types/pi-project-trust.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
-import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
+import type { AutoReviewDelegate, AutoReviewDecision, AutoReviewRequest } from './shared/auto-review-decision.js';
+import type { ReviewableAction } from './shared/auto-review.js';
 import type { ClaudeSubagentModelAccessResult } from './claude-code/subagent-model-access.js';
 
 export interface AgentCapabilityAdditions {
@@ -1074,28 +1075,13 @@ export interface AgentDeps {
   getGhostRosterPrompt?: (ctx: { workingDir?: string }) => string;
 
   /**
-   * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
-   * skips the permission prompt; `prompt` preserves the normal approval UI and
-   * its optional session grant; `prompt-each-time` always asks and never
-   * persists a server/tool grant.
-   *
-   * 背景:
-   *  - Codex CLI 对 raw `mcp_servers.*` 的 write 类 tool call 弹 user approval 是 known
-   *    limitation (openai/codex Issues #15437 / #19430 / #13476, 未修)。raw mcp_servers
-   *    没有像 `apps.*.default_tools_approval_mode=approve` 那样的 auto-approve 配置。
-   *  - host 自家可信的 MCP server (e.g. lizi_*) 每次写都弹严重影响 UX, 这里给一个
-   *    宿主策略短路。渐进式 server 还可利用 toolName/toolParams 区分 inner action,
-   *    让查询保持无打扰而删除/外部写入逐次确认。
-   *  - 同一个第一方 MCP 在两个 agent 下必须给出同一个答案。历史上 Claude 只有一份
-   *    静态 allowedTools 白名单、不查这个 hook, 结果 `cindy_browser` 之类高频 server
-   *    的 `call_tool` 在 Codex 侧静默执行、在 Claude 侧每调用一次弹一次窗。
-   *
-   * 实现位置:
-   *  - codex/index.ts mcpServerElicitation handler 在 dispatchInteraction 之前查这里;
-   *  - claude-code/index.ts canUseTool 对 `mcp__<server>__<tool>` 形态的工具查这里。
-   * 两侧同义: auto-approve 直接放行, prompt-each-time 禁掉 session persistence。
-   *
-   * 缺省 / undefined → 走原 dispatchInteraction (弹 UI), 行为与改动前一致。
+   * Host MCP risk classification shared by Claude Code, Codex and Pi.
+   * `auto-approve` permits a trusted shortcut. In Auto, both other grades go
+   * through the AI reviewer with the actual tool identity and arguments;
+   * only its ask verdict (including unavailable fallback) opens a user card.
+   * Outside Auto, prompt retains normal UI/session grants and prompt-each-time
+   * requires a one-time decision without persisting a server/tool grant.
+   * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
 
@@ -1698,6 +1684,8 @@ export type TurnPermissionOrigin =
   | { kind: 'hook'; source: string };
 
 export interface TurnPermissionPolicy {
+  /** Only the Host may supply this identity evidence; it is never parsed from message text. */
+  readonly autoReviewContext?: AutoReviewRequest['authorizationContext'];
   readonly origin: TurnPermissionOrigin;
   readonly confirmationSurface: 'desktop' | 'channel';
   readonly confirmationTimeoutMs?: number;
@@ -1916,6 +1904,9 @@ export interface AgentSessionHandle {
    * 通过同一个 resolver dispatch。host 侧根据 req.kind 弹不同 UI。
    */
   setInteractionResolver(resolver: InteractionResolver): void;
+
+  /** Host tool approval uses the same live intent/model/scope as native tool approval. */
+  reviewAutoPermissionAction?(action: ReviewableAction): Promise<AutoReviewDecision>;
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
   setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void>;
