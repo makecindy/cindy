@@ -4153,6 +4153,10 @@
         "menuAccelerator": "This combination cannot be registered as a menu shortcut"
       },
       "items": {
+        "open-quick-switcher": {
+          "label": "Quick Switch",
+          "description": "Find and open a project or task by name."
+        },
         "toggle-sidebar": {
           "label": "Toggle sidebar",
           "description": "Collapse or expand the session list sidebar"
@@ -8578,6 +8582,24 @@
     }
   },
   "ccAgent": {
+    "quickSwitcher": {
+      "title": "Switch Project or Task",
+      "placeholder": "Search project names and task titles",
+      "hint": "Type a project name or task title to switch.",
+      "loading": "Reading task titles…",
+      "noResults": "No matches. Try a different name.",
+      "incomplete": "Some directories are unavailable or incomplete. Reconnect or update the source device, then reopen search.",
+      "unavailable": "This target is no longer available. Refresh search and check access to its device or directory.",
+      "refine": "Showing 24 matches. Keep typing to narrow the results.",
+      "keys": "↑ ↓ Select · Enter Open · Esc Close",
+      "project": "Project",
+      "session": "Task",
+      "cancel": "Cancel",
+      "offline": "This device is offline or still connecting.",
+      "missing": "This task or directory no longer exists.",
+      "changed": "This project changed. Search again to choose its current location.",
+      "access": "Access to this device or task was denied."
+    },
     "agentStatus": {
       "thinking": "Thinking…",
       "generating": "Generating…",

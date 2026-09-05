@@ -4152,6 +4152,10 @@
         "menuAccelerator": "該組合鍵無法註冊為選單快捷鍵"
       },
       "items": {
+        "open-quick-switcher": {
+          "label": "快速切換",
+          "description": "依名稱尋找並開啟專案或任務"
+        },
         "toggle-sidebar": {
           "label": "切換側邊欄",
           "description": "收起或展開左側任務列表"
@@ -8563,6 +8567,24 @@
     "sessionLoading": "載入任務中"
   },
   "ccAgent": {
+    "quickSwitcher": {
+      "title": "切換專案或任務",
+      "placeholder": "搜尋專案名稱或任務標題",
+      "hint": "輸入專案名稱或任務標題以切換",
+      "loading": "正在讀取任務標題…",
+      "noResults": "沒有符合結果，請嘗試其他名稱",
+      "incomplete": "部分目錄無法使用或不完整，請連線或更新來源裝置後重新開啟搜尋",
+      "unavailable": "目標已無法使用，請重新搜尋並檢查裝置或目錄存取權限",
+      "refine": "顯示前 24 筆符合結果，請繼續輸入以縮小範圍",
+      "keys": "↑ ↓ 選擇 · Enter 開啟 · Esc 關閉",
+      "project": "專案",
+      "session": "任務",
+      "cancel": "取消",
+      "offline": "裝置已離線或仍在連線中",
+      "missing": "任務或目錄已不存在",
+      "changed": "專案已發生變更，請重新搜尋後選擇",
+      "access": "沒有存取此裝置或任務的權限"
+    },
     "agentStatus": {
       "thinking": "正在思考…",
       "generating": "正在生成…",

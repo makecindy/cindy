@@ -32,6 +32,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { clearQuickSwitcherFocus, useQuickSwitcherFocus } from '@/state/quickSwitcherFocus';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
@@ -196,7 +197,9 @@ export function PinnedSection({
   const ViewStyleTriggerIcon = viewStyleIcon(mode);
   // 卡片视觉(card 瀑布流 / list 单列满宽)统称"卡片态";text 为紧凑行。
   const isCardLike = mode !== 'text';
-  const [collapsed, setCollapsed] = useState(false);
+  const quickFocus = useQuickSwitcherFocus();
+  const [storedCollapsed, setCollapsed] = useState(false);
+  const collapsed = storedCollapsed && !quickFocus;
 
   const visibleEntries = entries;
   const visibleSessions = useMemo(
@@ -313,7 +316,7 @@ export function PinnedSection({
           {/* 段标题:与 项目/对话 段头同款,2026-07 用户定稿。 */}
           <button
             type="button"
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={() => { setCollapsed(!collapsed); clearQuickSwitcherFocus(); }}
             aria-expanded={!collapsed}
             className="text-sm font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
           >
@@ -323,7 +326,7 @@ export function PinnedSection({
             <Tip text={toggleLabel} side="bottom">
               <button
                 type="button"
-                onClick={() => setCollapsed((value) => !value)}
+                onClick={() => { setCollapsed(!collapsed); clearQuickSwitcherFocus(); }}
                 aria-label={toggleLabel}
                 aria-expanded={!collapsed}
                 className={cn(

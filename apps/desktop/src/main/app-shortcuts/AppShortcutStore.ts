@@ -78,8 +78,10 @@ export class AppShortcutStore {
     return getAppShortcutDefinition(id).getDefaultCombos(this.options.platform);
   }
 
-  getEffectiveMap(): Map<AppShortcutId, AppShortcutCombo[]> {
-    return getEffectiveAppShortcuts(this.load(), this.options.platform);
+  getEffectiveMap(
+    yieldToCombos: ReadonlyArray<AppShortcutCombo> = [],
+  ): Map<AppShortcutId, AppShortcutCombo[]> {
+    return getEffectiveAppShortcuts(this.load(), this.options.platform, yieldToCombos);
   }
 
   /**

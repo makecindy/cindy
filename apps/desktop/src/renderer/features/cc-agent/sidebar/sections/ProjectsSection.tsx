@@ -34,6 +34,7 @@ import {
   SquarePen,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { clearQuickSwitcherFocus, useQuickSwitcherFocus } from '@/state/quickSwitcherFocus';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
@@ -306,6 +307,7 @@ export function ProjectsSection({
   const projectKeysForOrderBaseline = allProjectKeysForOrder;
   // 段级收起已随「全部任务 = 范围下拉」取消(2026-08-13 用户定稿):标题的点击
   // 语义让给机器范围切换;「想要紧凑」由右侧「收起所有分组」承接。
+  const quickFocus = useQuickSwitcherFocus();
   const [showAllProjects, setShowAllProjects] = useCollapsibleShowAll(false);
   // 设备段各自的「显示全部」(2026-08-13 复核 P2:共用一个标志会让点任一段的
   // 段内按钮把所有段一起展开——按钮看起来是段内操作,作用域也必须是段内)。
@@ -548,13 +550,13 @@ export function ProjectsSection({
         entries,
         minVisibleCount: getProjectCollapseLimit(),
         showAll,
-        disableCollapse: false,
+        disableCollapse: quickFocus !== null,
         isFiltering: false,
         isActiveEntry: (entry) => entrySessions(entry).some((s) => s.id === viewedIdForSort),
         hasAttentionEntry: (entry) =>
           entrySessions(entry).some((s) => priorityContext.attentionSessionIds.has(s.id)),
       }),
-    [viewedIdForSort, entrySessions, priorityContext],
+    [viewedIdForSort, entrySessions, priorityContext, quickFocus],
   );
   const {
     visibleEntries: visibleMixedEntries,
@@ -644,10 +646,11 @@ export function ProjectsSection({
       return nextSet;
     });
   }, []);
-  const toggleDeviceSection = useCallback((key: string) => {
+  const toggleDeviceSection = useCallback((key: string, wasCollapsed: boolean) => {
+    clearQuickSwitcherFocus();
     setCollapsedDevices((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
+      if (wasCollapsed) next.delete(key);
       else next.add(key);
       return next;
     });
@@ -866,7 +869,7 @@ export function ProjectsSection({
       );
     }
     if (entry.kind === 'dialogue-group') {
-      const isCollapsed = collapsedDialogueGroups.has(dialogueGroupKey);
+      const isCollapsed = collapsedDialogueGroups.has(dialogueGroupKey) && !entry.sessions.some((s) => s.id === quickFocus?.session?.id);
       // 目标设备离线时不能在它上面新建(被控端才是真正的创建方)——与远程项目行的
       // 新建同款保护(isDeviceLinkWriteBlocked / actionsUnavailable 文案)。
       const targetDeviceOffline = Boolean(
@@ -881,7 +884,7 @@ export function ProjectsSection({
           key={`dialogue-group:${dialogueGroupKey}`}
           sessions={entry.sessions}
           collapsed={isCollapsed}
-          onToggle={() => setDialogueCollapsed([dialogueGroupKey], !isCollapsed)}
+          onToggle={() => { setDialogueCollapsed([dialogueGroupKey], !isCollapsed); clearQuickSwitcherFocus(); }}
           onCreateDialogue={() => onCreateDialogue(dialogueDeviceTarget)}
           isCreateDisabled={createDisabled}
           createDisabledReason={
@@ -984,13 +987,13 @@ export function ProjectsSection({
                 ? (device?.name ?? section.deviceId)
                 : t('ccAgent.sidebar.deviceGroup.local');
               const online = section.deviceId ? (device?.online ?? false) : true;
-              const sectionCollapsed = collapsedDevices.has(key);
+              const sectionCollapsed = collapsedDevices.has(key) && key !== (quickFocus?.session?.deviceLinkDeviceId ?? quickFocus?.project?.deviceLinkDeviceId ?? (quickFocus ? 'local' : undefined));
               return (
                 <div key={key} className="flex flex-col gap-1">
                   {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
                   <button
                     type="button"
-                    onClick={() => toggleDeviceSection(key)}
+                    onClick={() => toggleDeviceSection(key, sectionCollapsed)}
                     aria-expanded={!sectionCollapsed}
                     aria-label={
                       sectionCollapsed

@@ -36,6 +36,7 @@ import {
   type VoiceInputDictionaryEntry,
   type VoiceInputHistoryEntry,
   type VoiceInputSettings,
+  type VoiceInputShortcut,
   type VoiceInputSyncErrorResult,
 } from '../../shared/voiceInputData.js';
 
@@ -81,6 +82,12 @@ export class VoiceInputDataStore {
 
   getSettings(): VoiceInputSettings {
     return this.getSnapshot().settings;
+  }
+
+  /** Read live owner-scoped keys without cloning the dictionary/history on every keydown. */
+  getShortcut(): VoiceInputShortcut | null {
+    const shortcut = this.load().settings.shortcut;
+    return shortcut ? { ...shortcut, modifiers: { ...shortcut.modifiers } } : null;
   }
 
   getHistory(limit?: number): VoiceInputHistoryEntry[] {

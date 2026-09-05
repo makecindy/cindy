@@ -4152,6 +4152,10 @@
         "menuAccelerator": "이 조합은 메뉴 단축키로 등록할 수 없습니다"
       },
       "items": {
+        "open-quick-switcher": {
+          "label": "빠른 전환",
+          "description": "이름으로 프로젝트나 작업을 찾아 엽니다."
+        },
         "toggle-sidebar": {
           "label": "사이드바 전환",
           "description": "왼쪽 세션 목록을 접거나 펼칩니다"
@@ -8563,6 +8567,24 @@
     }
   },
   "ccAgent": {
+    "quickSwitcher": {
+      "title": "프로젝트 또는 작업 전환",
+      "placeholder": "프로젝트 이름 또는 작업 제목 검색",
+      "hint": "프로젝트 이름이나 작업 제목을 입력하여 전환하세요.",
+      "loading": "작업 제목을 불러오는 중…",
+      "noResults": "일치하는 항목이 없습니다. 다른 이름을 입력하세요.",
+      "incomplete": "일부 목록을 가져올 수 없거나 목록이 불완전합니다. 원본 기기를 연결하거나 업데이트한 후 검색을 다시 여세요.",
+      "unavailable": "이 항목을 사용할 수 없습니다. 다시 검색하고 기기 또는 폴더 접근 권한을 확인하세요.",
+      "refine": "24개 항목을 표시합니다. 계속 입력하여 결과를 좁히세요.",
+      "keys": "↑ ↓ 선택 · Enter 열기 · Esc 닫기",
+      "project": "프로젝트",
+      "session": "작업",
+      "cancel": "취소",
+      "offline": "기기가 오프라인이거나 연결 중입니다",
+      "missing": "작업 또는 디렉터리가 더 이상 존재하지 않습니다",
+      "changed": "프로젝트가 변경되었습니다. 다시 검색하여 선택하세요",
+      "access": "이 기기 또는 작업에 대한 접근 권한이 없습니다"
+    },
     "agentStatus": {
       "thinking": "생각 중…",
       "generating": "생성 중…",

@@ -300,6 +300,10 @@ stream_max_retries = 0
       createTransport: () =>
         createStdioTransport({
           binaryPath: codexBinary,
+          // This loopback fixture needs exec only. Match the local host's plugin
+          // isolation so background marketplace git downloads cannot outlive the
+          // app-server and keep its temporary CODEX_HOME locked on Windows.
+          extraArgs: ['--disable', 'plugins', '--disable', 'remote_plugin'],
           cwd: workingDir,
           env: {
             ...process.env,

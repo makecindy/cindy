@@ -2842,11 +2842,18 @@ interface ElectronAPI {
    * webview-security 用 before-input-event 拦截后推过来。BrowserTabBody 根据
    * 自身 active 状态过滤,active tab 执行对应 browser action。
    * 'close-tab' = guest 内 ⌘W / Ctrl+W,active tab 关掉自己。
+   * 'open-quick-switcher' is consumed by the main-window QuickSwitcher.
    */
   onRsbBrowserCommand: (
     callback: (payload: {
       command:
-        'go-back' | 'go-forward' | 'reload' | 'close-tab' | 'right-tab-prev' | 'right-tab-next';
+        | 'go-back'
+        | 'go-forward'
+        | 'reload'
+        | 'close-tab'
+        | 'right-tab-prev'
+        | 'right-tab-next'
+        | 'open-quick-switcher';
     }) => void,
   ) => () => void;
 
@@ -4481,6 +4488,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     conversations: {
+      catalog: (cursor?: string | null) => Promise<import('../shared/quickSwitcher').QuickSwitcherCatalogPage>;
       search: (
         request: import('../shared/conversationSearch').ConversationSearchRequest,
       ) => Promise<import('../shared/conversationSearch').ConversationSearchResponse>;

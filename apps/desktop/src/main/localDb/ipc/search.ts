@@ -1,6 +1,9 @@
 import { ipcMain } from 'electron';
 
 import { searchConversations } from '../conversationSearch.js';
+import { listQuickSwitcherCatalog } from '../quickSwitcher.js';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import type {
   ConversationSearchAgentFilter,
   ConversationSearchFilters,
@@ -18,6 +21,18 @@ const AGENT_VALUES = ['all', 'cc', 'codex', 'pi'] as const;
 const LAST_ACTIVITY_VALUES = ['all', '1d', '3d', '7d', '30d'] as const;
 
 export function registerSearchIpc(): void {
+  ipcMain.handle('local-db:conversations:catalog', async (event, cursor: unknown) => {
+    // Remote calls have already passed the authenticated device-link allowlist.
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    if (cursor != null && (typeof cursor !== 'string' || !cursor || cursor.length > 256)) {
+      throwIpcError('INVALID_PARAMS', 'invalid catalogue cursor');
+    }
+    try {
+      return await listQuickSwitcherCatalog(typeof cursor === 'string' ? cursor : null);
+    } catch {
+      throwIpcError('INTERNAL', 'Title catalogue is unavailable');
+    }
+  });
   ipcMain.handle('local-db:conversations:search', async (_e, payload: unknown) => {
     const body = requireObject(payload, 'payload');
     const query = typeof body.query === 'string' ? body.query.trim() : '';

@@ -4146,6 +4146,10 @@
         "menuAccelerator": "该组合键无法注册为菜单快捷键"
       },
       "items": {
+        "open-quick-switcher": {
+          "label": "快速切换",
+          "description": "按名称查找并打开项目或任务"
+        },
         "toggle-sidebar": {
           "label": "切换侧边栏",
           "description": "收起或展开左侧任务列表"
@@ -8563,6 +8567,24 @@
     }
   },
   "ccAgent": {
+    "quickSwitcher": {
+      "title": "切换项目或任务",
+      "placeholder": "搜索项目名称或任务标题",
+      "hint": "输入项目名称或任务标题以切换",
+      "loading": "正在读取任务标题…",
+      "noResults": "没有匹配结果，请尝试其他名称",
+      "incomplete": "部分目录不可用或不完整，请连接或更新来源设备后重新打开搜索",
+      "unavailable": "目标已不可用，请重新搜索并检查设备或目录访问权限",
+      "refine": "显示前 24 条匹配，请继续输入以缩小范围",
+      "keys": "↑ ↓ 选择 · Enter 打开 · Esc 关闭",
+      "project": "项目",
+      "session": "任务",
+      "cancel": "取消",
+      "offline": "设备已离线或仍在连接中",
+      "missing": "任务或目录已不存在",
+      "changed": "项目已发生变化，请重新搜索后选择",
+      "access": "没有访问此设备或任务的权限"
+    },
     "agentStatus": {
       "thinking": "正在思考…",
       "generating": "正在生成…",

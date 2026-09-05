@@ -21,6 +21,25 @@ import { EventEmitter } from 'node:events';
 
 import type { BrowserWindow, Session, WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AppShortcutCombo, AppShortcutOverrides } from '../../shared/appShortcuts';
+import type { VoiceInputShortcut } from '../../shared/voiceInputData';
+
+const shortcutMocks = vi.hoisted((): {
+  overrides: AppShortcutOverrides;
+  platform: string;
+  voiceShortcut: VoiceInputShortcut | null;
+} => ({ overrides: {}, platform: 'win32', voiceShortcut: null }));
+vi.mock('../app-shortcuts/index.js', () => ({
+  getAppShortcutStore: () => ({
+    getEffectiveMap: (yieldToCombos: ReadonlyArray<AppShortcutCombo> = []) =>
+      getEffectiveAppShortcuts(shortcutMocks.overrides, shortcutMocks.platform, yieldToCombos),
+  }),
+}));
+vi.mock('../voice-input/VoiceInputDataStore.js', () => ({
+  voiceInputDataStore: {
+    getShortcut: () => shortcutMocks.voiceShortcut,
+  },
+}));
 
 const nativeSurfaceMocks = vi.hoisted(() => ({
   create: vi.fn(() => 'surface-oauth'),
@@ -46,6 +65,7 @@ import {
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   RSB_BROWSER_POPUP_CHANNEL,
+  RSB_BROWSER_COMMAND_CHANNEL,
   applyGhostWebviewHardening,
   applyLoginCaptchaWebviewHardening,
   applyWebviewHardening,
@@ -210,6 +230,9 @@ describe('BLANK_POPUP_WINDOW_WEB_PREFERENCES(popup WebContents 安全集)', () =
 
 describe('installBrowserGuestHandlers(main-owned popup)', () => {
   afterEach(() => {
+    shortcutMocks.overrides = {};
+    shortcutMocks.platform = 'win32';
+    shortcutMocks.voiceShortcut = null;
     nativeSurfaceMocks.create.mockClear();
     nativeSurfaceMocks.attribute.mockClear();
     setRsbPopupOpenerResolver(null);
@@ -236,6 +259,91 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
     contents.getOpenHandler = () => openHandler;
     return contents;
   }
+
+  it('forwards guest keydown to the current host, using effective bindings and ignoring keyup', () => {
+    const host = makeContents(1);
+    const guest = makeContents(42);
+    const currentHost = makeContents(2);
+    setRsbPopupHostResolver(() => currentHost as never);
+    installBrowserGuestHandlers(host as never, guest as never);
+    const event = { preventDefault: vi.fn() };
+    const input = { code: 'KeyK', control: true, meta: false, alt: false, shift: false };
+    guest.emit('before-input-event', event, { ...input, type: 'keyUp' });
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    guest.emit('before-input-event', event, { ...input, type: 'keyDown' });
+    expect(currentHost.send).toHaveBeenCalledExactlyOnceWith(RSB_BROWSER_COMMAND_CHANNEL, {
+      command: 'open-quick-switcher',
+    });
+    expect(host.send).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+
+    currentHost.send.mockClear();
+    event.preventDefault.mockClear();
+    for (const state of [{ isAutoRepeat: true }, { isComposing: true }]) {
+      guest.emit('before-input-event', event, { ...input, ...state, type: 'keyDown' });
+    }
+    expect(currentHost.send).not.toHaveBeenCalled();
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    // The quick switcher's default must yield to an existing user binding, just as in the host.
+    shortcutMocks.overrides = {
+      'new-maker': { code: 'KeyK', ctrl: true, meta: false, alt: false, shift: false },
+    };
+    guest.emit('before-input-event', event, { ...input, type: 'keyDown' });
+    expect(currentHost.send).not.toHaveBeenCalled();
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it.each(['darwin', 'win32', 'linux'])(
+    'yields guest quick-switcher keys to live voice bindings on %s',
+    (platform) => {
+      shortcutMocks.platform = platform;
+      const host = makeContents(1);
+      const guest = makeContents(42);
+      installBrowserGuestHandlers(host as never, guest as never);
+      const event = { preventDefault: vi.fn() };
+      const input = {
+        type: 'keyDown',
+        code: 'KeyK',
+        key: 'k',
+        meta: platform === 'darwin',
+        control: platform !== 'darwin',
+        alt: false,
+        shift: false,
+      };
+      const voiceShortcut: VoiceInputShortcut = {
+        trigger: 'keyboard',
+        code: 'KeyK',
+        key: 'k',
+        modifiers: { meta: input.meta, ctrl: input.control, alt: false, shift: false, fn: false },
+      };
+      shortcutMocks.voiceShortcut = voiceShortcut;
+      guest.emit('before-input-event', event, input);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(host.send).not.toHaveBeenCalled();
+
+      // Rebinds, clearing and native-only keys release the default on the same guest.
+      const nonConflicting: Array<VoiceInputShortcut | null> = [
+        { ...voiceShortcut, code: 'KeyJ', key: 'j' },
+        null,
+        { ...voiceShortcut, modifiers: { ...voiceShortcut.modifiers, fn: true } },
+        { ...voiceShortcut, trigger: 'modifier', code: 'ControlLeft', key: 'Control' },
+      ];
+      for (const shortcut of nonConflicting) {
+        shortcutMocks.voiceShortcut = shortcut;
+        guest.emit('before-input-event', event, input);
+        expect(event.preventDefault).toHaveBeenCalledOnce();
+        expect(host.send).toHaveBeenCalledExactlyOnceWith(RSB_BROWSER_COMMAND_CHANNEL, {
+          command: 'open-quick-switcher',
+        });
+        event.preventDefault.mockClear();
+        host.send.mockClear();
+      }
+      shortcutMocks.voiceShortcut = voiceShortcut;
+      guest.emit('before-input-event', event, input);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(host.send).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ['direct URL', 'https://accounts.example.com/oauth'],
@@ -999,6 +1107,27 @@ describe('resolveGuestShortcutAction', () => {
     mods: Partial<{ meta: boolean; control: boolean; alt: boolean; shift: boolean }> = {},
     keyValue?: string,
   ) => ({ code, key: keyValue, meta: false, control: false, alt: false, shift: false, ...mods });
+
+  it.each(['darwin', 'win32', 'linux'])('forwards the quick switcher shortcut on %s', (platform) => {
+    expect(
+      resolveGuestShortcutAction(
+        key('KeyK', platform === 'darwin' ? { meta: true } : { control: true }),
+        combosFor(platform),
+      ),
+    ).toEqual({ kind: 'command', command: 'open-quick-switcher' });
+  });
+
+  it('uses the current quick switcher override and releases its old default', () => {
+    const effective = getEffectiveAppShortcuts(
+      { 'open-quick-switcher': { code: 'KeyJ', ctrl: true, meta: false, alt: true, shift: false } },
+      'win32',
+    );
+    const getCombos = (id: AppShortcutId) => effective.get(id) ?? [];
+    expect(resolveGuestShortcutAction(key('KeyK', { control: true }), getCombos)).toBeNull();
+    expect(
+      resolveGuestShortcutAction(key('KeyJ', { control: true, alt: true }), getCombos),
+    ).toEqual({ kind: 'command', command: 'open-quick-switcher' });
+  });
 
   it('maps darwin default combos to host actions (incl. ⌘W close-tab)', () => {
     const getCombos = combosFor('darwin');

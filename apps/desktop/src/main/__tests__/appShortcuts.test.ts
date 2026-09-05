@@ -52,6 +52,13 @@ function electronInput(code: string, mods: Partial<AppShortcutCombo> = {}) {
 }
 
 describe('matching', () => {
+  it('provides the app-wide quick switch shortcut on each platform and respects existing user bindings', () => {
+    for (const platform of ['win32', 'linux', 'darwin']) {
+      const expected = combo('KeyK', platform === 'darwin' ? { meta: true } : { ctrl: true });
+      expect(getEffectiveAppShortcuts({}, platform).get('open-quick-switcher')).toEqual([expected]);
+      expect(getEffectiveAppShortcuts({ 'new-maker': expected }, platform).get('open-quick-switcher')).toEqual([]);
+    }
+  });
   it('matches exact modifier state only', () => {
     const c = combo('KeyB', { meta: true });
     expect(matchesKeyboardEvent(keyboardEvent('KeyB', { meta: true }), c)).toBe(true);

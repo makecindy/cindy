@@ -3570,11 +3570,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // BrowserTabBody 焦点 chrome URL bar。payload 是 null,只用作信号。
   onRsbBrowserFocusUrlBar: (callback: () => void): (() => void) =>
     fanOutRsbBrowserFocusUrlBar(() => callback()),
-  // RSB web-browser plugin:guest webview 内浏览器级快捷键(导航 + ⌘W 关 tab)。
+  // Guest WebView shortcuts: browser commands and the host quick switcher.
   onRsbBrowserCommand: (
     callback: (payload: {
       command:
-        'go-back' | 'go-forward' | 'reload' | 'close-tab' | 'right-tab-prev' | 'right-tab-next';
+        | 'go-back'
+        | 'go-forward'
+        | 'reload'
+        | 'close-tab'
+        | 'right-tab-prev'
+        | 'right-tab-next'
+        | 'open-quick-switcher';
     }) => void,
   ): (() => void) =>
     fanOutRsbBrowserCommand((payload) => {
@@ -3585,7 +3591,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         command === 'reload' ||
         command === 'close-tab' ||
         command === 'right-tab-prev' ||
-        command === 'right-tab-next'
+        command === 'right-tab-next' ||
+        command === 'open-quick-switcher'
       ) {
         callback({ command });
       }
@@ -5089,6 +5096,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     },
     conversations: {
+      catalog: (cursor?: string | null) => ipcRenderer.invoke('local-db:conversations:catalog', cursor),
       search: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:conversations:search', request),
     },

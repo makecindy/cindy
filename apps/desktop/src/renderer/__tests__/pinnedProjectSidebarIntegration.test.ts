@@ -29,7 +29,7 @@ describe('pinned project sidebar integration', () => {
   });
 
   it('keeps all-pinned projects available while omitting their pinned child rows', () => {
-    expect(sidebarSource).toContain('const groupsWithPinnedProjects = useProjectGroups(');
+    expect(sidebarSource).toContain('const groupedWithPinnedProjects = useProjectGroups(');
     expect(sidebarSource).toContain('const notHidden = visibleSidebarProjects(');
     expect(sidebarSource).toContain('if (filter.projectsAsSet === null) return notHidden;');
     expect(sidebarSource).toContain(
@@ -80,7 +80,7 @@ describe('pinned project sidebar integration', () => {
 
   it('restores against the latest project catalogue and re-admits the active filter', () => {
     expect(sidebarSource).toContain(
-      'const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);',
+      'const savedFilter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);',
     );
     expect(sidebarSource).toContain('collectRestorableProjectKeys({');
     expect(sidebarSource).toContain('sessions: scopedSidebarSessions,');
