@@ -159,7 +159,7 @@ describe('streaming follow yields to the reader', () => {
     },
   );
 
-  it.each([1196, 1194])('preserves a dead-zone drag through a trailing offset of %i after large growth', (trailingOffset) => {
+  it.each([1196, 1194, 1192, 1190])('applies the cumulative drag threshold to a trailing offset of %i after large growth', (trailingOffset) => {
     const h = harness();
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleScroll(h.scrollEvent(1196));
@@ -167,12 +167,82 @@ describe('streaming follow yields to the reader', () => {
     h.handleScrollEndDrag();
     // The trailing native event may arrive before the release verifier's first frame.
     h.handleScroll(h.scrollEvent(trailingOffset));
+    expect(h.state.nearBottomRef.current).toBe(trailingOffset >= 1192);
     settle();
+    if (trailingOffset < 1192) {
+      expect(h.scrollToEnd).not.toHaveBeenCalled();
+      return;
+    }
     expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
     h.handleScroll(h.scrollEvent(1700));
     expect(h.state.nearBottomRef.current).toBe(true);
     h.handleContentSize(400, 2540);
     expect(h.scrollToEnd).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('unpins a trailing drag across momentum-start ordering: %s', (momentumFirst) => {
+    const h = harness();
+    h.handleHistoryTouchStart(touch());
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleHistoryTouchEnd(touch());
+    h.handleScrollEndDrag();
+    if (momentumFirst) h.handleMomentumScrollBegin();
+    h.handleScroll(h.scrollEvent(1190));
+    if (!momentumFirst) h.handleMomentumScrollBegin();
+    h.handleMomentumScrollEnd();
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it('retires a completed drag after a no-op release verification', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1200));
+    h.handleScrollEndDrag();
+    settle();
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    h.handleScroll(h.scrollEvent(1190));
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(true);
+    expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('can unpin again after returning to the bottom within the same drag', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1180));
+    expect(h.state.nearBottomRef.current).toBe(false);
+    h.handleScroll(h.scrollEvent(1200));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    h.handleScroll(h.scrollEvent(1180));
+    expect(h.state.nearBottomRef.current).toBe(false);
+  });
+
+  it('forgets the previous drag when an explicit command owns native scroll events', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleScrollEndDrag();
+    h.scrollToBottom();
+    h.handleScroll(h.scrollEvent(1190));
+    expect(h.state.nearBottomRef.current).toBe(true);
+  });
+
+  it('measures a new drag from its own starting offset', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleScrollEndDrag();
+    h.handleHistoryTouchStart(touch());
+    h.handleScrollBeginDrag(h.scrollEvent(1196));
+    h.handleScroll(h.scrollEvent(1190));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    h.handleScroll(h.scrollEvent(1186));
+    expect(h.state.nearBottomRef.current).toBe(false);
   });
 
   it('pauses already queued verification and waits for momentum to end before catching up', () => {
