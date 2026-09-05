@@ -2,7 +2,10 @@
  * QuoteChip — 输入框与已发送用户消息共用的紧凑引用胶囊。
  *
  * 默认只展示单行摘要，完整引用与文件来源放在 hover tooltip 中；输入框与
- * 消息气泡复用同一套紧凑尺寸、颜色与截断规则，均不显示关闭按钮。
+ * 消息气泡复用同一套紧凑尺寸、颜色与截断规则。
+ *
+ * 纯展示组件，不渲染任何交互按钮。删除按钮由调用方（如 ComposerQuoteNode）
+ * 在外层自行渲染，保持原子 chip 无 close-button 的设计契约。
  */
 import { FileText, MessageSquareQuote } from 'lucide-react';
 import type { ChatQuote } from '@/lib/chatQuotes';
@@ -15,17 +18,14 @@ interface QuoteChipProps {
 }
 
 /** 渲染紧凑、不可选中的引用摘要；完整内容仅在 tooltip 中展开。 */
-export function QuoteChip({
-  quote,
-  selected = false,
-}: QuoteChipProps) {
+export function QuoteChip({ quote, selected = false }: QuoteChipProps) {
   const sourceLabel = quoteSourceDisplayLabel(quote);
   const compactText = quote.text.replace(/\s+/g, ' ').trim();
 
   const tooltip = (
     <span className="flex flex-col gap-1">
       <span className="whitespace-pre-wrap text-12 leading-[1.5] [overflow-wrap:anywhere]">
-        “{quote.text}”
+        &ldquo;{quote.text}&rdquo;
       </span>
       {sourceLabel ? (
         <span

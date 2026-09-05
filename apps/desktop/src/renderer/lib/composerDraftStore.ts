@@ -36,6 +36,7 @@ import type { ChatQuote } from '@/lib/chatQuotes';
 import {
   appendQuoteToComposerDocument,
   prependLegacyQuotesToComposerDocument,
+  removeQuoteFromComposerDocument,
   COMPOSER_QUOTE_NODE_TYPE,
 } from '@/lib/composerQuoteDocument';
 import type { JSONContent } from '@tiptap/core';
@@ -802,6 +803,33 @@ export function appendQuoteToDraft(sessionId: string, quote: ChatQuote): void {
       attachments: existing?.attachments ?? [],
       quotes: [],
       browserComments: existing?.browserComments ?? [],
+    },
+    { preserveRemoteOptimisticRecovery: true },
+  );
+}
+
+/**
+ * chat-text-quote:从会话草稿正文中移除一条引用（精确匹配 text + source）。
+ * 非 silent——挂载中的 ChatInput 立即刷新正文。
+ */
+export function removeQuoteFromDraft(sessionId: string, quote: ChatQuote): void {
+  const existing = getDraft(sessionId);
+  if (!existing) return;
+  const currentDocument = prependLegacyQuotesToComposerDocument(
+    existing.text,
+    existing.quotes ?? [],
+  );
+  const updatedDocument = removeQuoteFromComposerDocument(currentDocument, quote);
+  // No change — the quote wasn't found in the document.
+  if (updatedDocument === currentDocument) return;
+  saveDraft(
+    sessionId,
+    {
+      ...existing,
+      text: updatedDocument,
+      attachments: existing.attachments ?? [],
+      quotes: [],
+      browserComments: existing.browserComments ?? [],
     },
     { preserveRemoteOptimisticRecovery: true },
   );

@@ -129,6 +129,50 @@ export function appendQuoteToComposerDocument(
 }
 
 /**
+ * Remove a quote by matching its text and source metadata from the composer
+ * document.  Returns the updated document or `null` if nothing changed.
+ */
+export function removeQuoteFromComposerDocument(
+  document: JSONContent | null | undefined,
+  quote: ChatQuote,
+): JSONContent | null {
+  const content = normalizeTopLevelQuoteNodes(document);
+  let removed = false;
+
+  for (let i = 0; i < content.length; i += 1) {
+    const node = content[i];
+    if (node.type !== 'paragraph' || !Array.isArray(node.content)) continue;
+
+    const filtered = node.content.filter((child) => {
+      if (child.type !== COMPOSER_QUOTE_NODE_TYPE) return true;
+      const attrs = child.attrs as ComposerQuoteAttrs | undefined;
+      if (!attrs) return true;
+      // Match on text + source metadata to disambiguate identical quotes.
+      if (attrs.text !== quote.text) return true;
+      if ((attrs.sourcePath ?? null) !== (quote.sourcePath ?? null)) return true;
+      if ((attrs.startLine ?? null) !== (quote.startLine ?? null)) return true;
+      if ((attrs.endLine ?? null) !== (quote.endLine ?? null)) return true;
+      removed = true;
+      return false;
+    });
+
+    if (filtered.length !== node.content.length) {
+      content[i] = paragraph(filtered);
+    }
+  }
+
+  if (!removed) return document ?? null;
+  // Drop empty trailing paragraphs left behind (but keep at least one paragraph).
+  const trimmed = content.filter(
+    (node, idx) =>
+      idx < content.length - 1 ||
+      node.type !== 'paragraph' ||
+      (Array.isArray(node.content) && node.content.length > 0),
+  );
+  return { type: 'doc', content: trimmed.length > 0 ? trimmed : [paragraph()] };
+}
+
+/**
  * One-way compatibility lift for drafts created by the former separate quote
  * array. Historical quotes preceded the whole body, so preserve that order.
  */
