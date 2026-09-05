@@ -482,7 +482,7 @@ export default function NewRemoteSessionScreen() {
   const [draft, setDraft] = useState<NewSessionDraft>({
     ...DEFAULT_NEW_SESSION_DRAFT,
     firstMessage: visualInitialDraft ?? DEFAULT_NEW_SESSION_DRAFT.firstMessage,
-    // 默认进入「对话」(无项目),对齐桌面;只有从项目入口带了 workingDir 才默认项目模式。
+    // 无记忆时默认对话；偏好加载后恢复上次选择，显式项目入口优先。
     workspaceKind: initialWorkingDir ? 'project' : 'dialogue',
     workingDir: initialWorkingDir ?? '',
   });
@@ -605,10 +605,13 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     const stashed = drainStashedNewSessionDraft();
     if (!stashed) return;
+    // 返回编辑沿用草稿的工作区，不能被随后加载的全局默认覆盖。
+    userTouchedWorkspaceRef.current = true;
     setDraft(stashed.draft);
     setAttachments([...stashed.attachments]);
     if (stashed.notice) setAttachmentError(stashed.notice);
     if (stashed.deviceId) {
+      userTouchedDeviceRef.current = true;
       setSelectedDeviceId(stashed.deviceId);
       setSelectedDeviceName(stashed.deviceName || stashed.deviceId);
     }
@@ -688,6 +691,7 @@ export default function NewRemoteSessionScreen() {
   // 权限记忆只在偏好加载后恢复一次(之后由用户选择 / 切 agent 驱动),防止重复覆盖。
   const appliedPermissionMemoryRef = useRef(false);
   const userTouchedDeviceRef = useRef(false);
+  const userTouchedWorkspaceRef = useRef(false);
   const firstMessageRef = useRef(draft.firstMessage);
   const firstMessageInputRef = useRef<NativeTextInput>(null);
   const voiceDraftScrollRef = useRef<ScrollView>(null);
@@ -827,7 +831,14 @@ export default function NewRemoteSessionScreen() {
     setNewSessionPreferencesLoaded(false);
     void readNewSessionPreferences()
       .then((preferences) => {
-        if (!cancelled) setNewSessionPreferences(preferences);
+        if (cancelled) return;
+        setNewSessionPreferences(preferences);
+        const workspaceKind = preferences.workspaceKind;
+        if (!initialWorkingDir && workspaceKind) {
+          setDraft((current) => userTouchedWorkspaceRef.current
+            ? current
+            : { ...current, workspaceKind });
+        }
       })
       .finally(() => {
         if (!cancelled) setNewSessionPreferencesLoaded(true);
@@ -2136,6 +2147,8 @@ export default function NewRemoteSessionScreen() {
   }, [patchDraft]);
 
   const selectDialogueWorkspace = useCallback(() => {
+    userTouchedWorkspaceRef.current = true;
+    void saveNewSessionPreferences({ workspaceKind: 'dialogue' });
     patchDraft({ workspaceKind: 'dialogue', workingDir: '' });
     setWorkspacePickerOpen(false);
     setBrowseOpen(false);
@@ -2143,6 +2156,8 @@ export default function NewRemoteSessionScreen() {
   }, [patchDraft]);
 
   const selectRecentProject = useCallback((workingDir: string) => {
+    userTouchedWorkspaceRef.current = true;
+    void saveNewSessionPreferences({ workspaceKind: 'project' });
     patchDraft({ workspaceKind: 'project', workingDir });
     setWorkspacePickerOpen(false);
     setBrowseOpen(false);
@@ -2150,6 +2165,8 @@ export default function NewRemoteSessionScreen() {
   }, [patchDraft]);
 
   const openProjectBrowse = useCallback(() => {
+    userTouchedWorkspaceRef.current = true;
+    void saveNewSessionPreferences({ workspaceKind: 'project' });
     patchDraft({ workspaceKind: 'project' });
     setWorkspacePickerOpen(false);
     setBrowseOpen(true);
@@ -3667,6 +3684,9 @@ export default function NewRemoteSessionScreen() {
 
   useEffect(() => {
     if (!selectedDeviceId || draft.workspaceKind !== 'project' || draft.workingDir.trim()) return;
+    // 恢复项目模式后，等默认设备同步完成再选目录，避免借用上一台电脑的路径。
+    if (!newSessionPreferencesLoaded) return;
+    if (!userTouchedDeviceRef.current && selectedDeviceId !== preferredDefaultDevice?.deviceId) return;
 
     const key = `${selectedDeviceId}:${initialWorkingDir ?? ''}`;
     if (initialWorkspaceKeyRef.current === key) return;
@@ -3688,6 +3708,8 @@ export default function NewRemoteSessionScreen() {
     loadBrowsePath,
     recentWorkspaces,
     selectWorkingDir,
+    newSessionPreferencesLoaded,
+    preferredDefaultDevice?.deviceId,
   ]);
 
   const selectSlashCommand = useCallback((command: MobileSlashCommand) => {
@@ -4075,6 +4097,7 @@ export default function NewRemoteSessionScreen() {
       if (!ensureDeviceAlive()) return;
       void saveNewSessionPreferences({
         agentKind: effectiveDraft.agentKind,
+        workspaceKind: effectiveDraft.workspaceKind,
         device: {
           deviceId: selectedDeviceId,
           name: selectedDeviceName || selectedDeviceId,
@@ -4828,6 +4851,7 @@ export default function NewRemoteSessionScreen() {
       }
       void saveNewSessionPreferences({
         agentKind: draft.agentKind,
+        workspaceKind: draft.workspaceKind,
         device: {
           deviceId: selectedDeviceId,
           name: selectedDeviceName || selectedDeviceId,

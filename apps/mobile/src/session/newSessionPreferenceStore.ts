@@ -4,6 +4,7 @@ import {
   type NewSessionAgentKind,
   type NewSessionDeviceOption,
   type NewSessionStoredPreferences,
+  type NewSessionWorkspaceKind,
 } from '@/session/newSession';
 
 const STORAGE_KEY = 'xdt-maker.mobile.new-session.preferences.v1';
@@ -11,11 +12,18 @@ const STORAGE_KEY = 'xdt-maker.mobile.new-session.preferences.v1';
 export interface NewSessionPreferencePatch {
   agentKind?: NewSessionAgentKind;
   device?: NewSessionDeviceOption;
+  workspaceKind?: NewSessionWorkspaceKind;
   /** 记住某 agent 在新建页选的权限档(单键合并进 permissionModeByAgent;'plan' 被忽略)。 */
   permissionModeForAgent?: { agentKind: NewSessionAgentKind; mode: string };
 }
 
 export async function readNewSessionPreferences(): Promise<NewSessionStoredPreferences> {
+  // 刚选完就重新打开新建页时，也要看到已提交但尚未落盘的选择。
+  await writeChain;
+  return loadNewSessionPreferences();
+}
+
+async function loadNewSessionPreferences(): Promise<NewSessionStoredPreferences> {
   const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
   if (!raw) return emptyPreferences();
   try {
@@ -25,11 +33,21 @@ export async function readNewSessionPreferences(): Promise<NewSessionStoredPrefe
   }
 }
 
-export async function saveNewSessionPreferences(patch: NewSessionPreferencePatch): Promise<void> {
-  const current = await readNewSessionPreferences();
+// 与首页偏好存储一致：连续选择不同字段时，读改写必须按操作顺序执行。
+let writeChain: Promise<void> = Promise.resolve();
+
+export function saveNewSessionPreferences(patch: NewSessionPreferencePatch): Promise<void> {
+  const next = writeChain.then(() => writeNewSessionPreferences(patch));
+  writeChain = next.catch(() => undefined);
+  return next;
+}
+
+async function writeNewSessionPreferences(patch: NewSessionPreferencePatch): Promise<void> {
+  const current = await loadNewSessionPreferences();
   const permissionPatch = patch.permissionModeForAgent;
   const next: NewSessionStoredPreferences = {
     agentKind: patch.agentKind ?? current.agentKind,
+    workspaceKind: patch.workspaceKind ?? current.workspaceKind,
     device: patch.device
       ? normalizeDeviceOption(patch.device)
       : current.device,
@@ -41,13 +59,16 @@ export async function saveNewSessionPreferences(patch: NewSessionPreferencePatch
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(serializePreferences(next))).catch(() => undefined);
 }
 
-export async function clearNewSessionPreferences(): Promise<void> {
-  await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+export function clearNewSessionPreferences(): Promise<void> {
+  const next = writeChain.then(() => AsyncStorage.removeItem(STORAGE_KEY));
+  writeChain = next.catch(() => undefined);
+  return writeChain;
 }
 
 function emptyPreferences(): NewSessionStoredPreferences {
   return {
     agentKind: null,
+    workspaceKind: null,
     device: null,
     permissionModeByAgent: {},
   };
@@ -78,6 +99,9 @@ function normalizeStoredPreferences(value: unknown): NewSessionStoredPreferences
   const deviceName = readString(record.deviceName);
   return {
     agentKind: normalizeNewSessionAgentKind(record.agentKind),
+    workspaceKind: record.workspaceKind === 'project' || record.workspaceKind === 'dialogue'
+      ? record.workspaceKind
+      : null,
     device: deviceId
       ? { deviceId, name: deviceName || deviceId }
       : null,
@@ -102,6 +126,7 @@ function serializePreferences(
   );
   return {
     ...(preferences.agentKind ? { agentKind: preferences.agentKind } : {}),
+    ...(preferences.workspaceKind ? { workspaceKind: preferences.workspaceKind } : {}),
     ...(preferences.device
       ? {
           deviceId: preferences.device.deviceId,
