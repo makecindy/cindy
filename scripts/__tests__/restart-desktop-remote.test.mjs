@@ -909,7 +909,7 @@ test("devEnvPrefix passes XDT_LOGIN_SCENARIO and VITE_SPLASH_PHASE_FIXTURE throu
 	);
 	assert.equal(
 		prefix,
-		"XDT_LOGIN_SCENARIO='error:verify-code:INVALID_CODE' VITE_SPLASH_PHASE_FIXTURE='spawn_failed' ",
+		"XDT_LOGIN_SCENARIO='error:verify-code:INVALID_CODE' VITE_SPLASH_PHASE_FIXTURE='spawn_failed' CINDY_CUA_SMOKE='0' ",
 	);
 });
 
@@ -930,12 +930,30 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	);
 	assert.equal(
 		prefix,
-		'set "XDT_LOGIN_SCENARIO=providers:both" && set "VITE_SPLASH_PHASE_FIXTURE=updating" && ',
+		'set "XDT_LOGIN_SCENARIO=providers:both" && set "VITE_SPLASH_PHASE_FIXTURE=updating" && set "CINDY_CUA_SMOKE=0" && ',
 	);
 });
 
+test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell", () => {
+	for (const value of [undefined, "", "0", "1"]) {
+		const env = value === undefined ? {} : { CINDY_CUA_SMOKE: value };
+		const node = process.platform === "win32" ? "%CINDY_TEST_NODE%" : "$CINDY_TEST_NODE";
+		const result = spawnSync(
+			`${devEnvPrefix(env)}"${node}" -p "process.env.CINDY_CUA_SMOKE"`,
+			{
+				shell: true,
+				env: { ...process.env, CINDY_CUA_SMOKE: "1", CINDY_TEST_NODE: process.execPath },
+				encoding: "utf8",
+				timeout: 5000,
+			},
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(result.stdout.trim(), value === "1" ? "1" : "0", `caller value: ${value}`);
+	}
+});
+
 test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () => {
-	assert.equal(devEnvPrefix({}, "darwin"), "");
+	assert.equal(devEnvPrefix({}, "darwin"), "CINDY_CUA_SMOKE='0' ");
 });
 
 test("devEnvPrefix passes the explicit isolated OAuth write escape hatch", () => {
@@ -949,7 +967,7 @@ test("devEnvPrefix passes the explicit isolated OAuth write escape hatch", () =>
 			"darwin",
 		),
 		"XDT_ISOLATED_AUTH='1' XDT_ALLOW_DEV_OAUTH_WRITE='1' " +
-			"XDT_ISOLATED_AUTH_PROOF='proof-nonce' ",
+			"XDT_ISOLATED_AUTH_PROOF='proof-nonce' CINDY_CUA_SMOKE='0' ",
 	);
 });
 
@@ -964,7 +982,7 @@ test("devEnvPrefix passes explicit model catalog test controls to Desktop", () =
 	);
 	assert.equal(
 		prefix,
-		"XDT_MODELS_URL='http://127.0.0.1:43181/api/model-catalog/catalog' " +
+		"CINDY_CUA_SMOKE='0' XDT_MODELS_URL='http://127.0.0.1:43181/api/model-catalog/catalog' " +
 			"XDT_MODELS_PATH='/tmp/model catalog.json' XDT_DISABLE_MODELS_FETCH='1' ",
 	);
 });
@@ -978,7 +996,7 @@ test("devEnvPrefix passes native iOS dev switches to Electron", () => {
 			},
 			"darwin",
 		),
-		"CINDY_IOS_SIMULATOR_NATIVE_H264='1' CINDY_IOS_SIMULATOR_NATIVE_HID='1' ",
+		"CINDY_CUA_SMOKE='0' CINDY_IOS_SIMULATOR_NATIVE_H264='1' CINDY_IOS_SIMULATOR_NATIVE_HID='1' ",
 	);
 });
 
