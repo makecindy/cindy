@@ -656,6 +656,9 @@ export const MAKER_INVOKE = {
   ANDROID_SET_DEFAULT_DEVICE: 'maker:android:set-default-device',
   ANDROID_SET_ADB_PATH: 'maker:android:set-adb-path',
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
+  // iOS Simulator presentation preference. Owner-scoped and independent from task grants.
+  IOS_SIMULATOR_GET_PREFERENCES: 'maker:ios-simulator:get-preferences',
+  IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL: 'maker:ios-simulator:set-auto-open-embedded-panel',
   // iOS Simulator pane and Agent discovery. Session id is required and checked in main.
   IOS_SIMULATOR_REQUEST_ACCESS: 'maker:ios-simulator:request-access',
   IOS_SIMULATOR_STATUS: 'maker:ios-simulator:status',

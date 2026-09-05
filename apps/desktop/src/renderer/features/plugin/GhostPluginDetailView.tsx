@@ -2,8 +2,8 @@
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
  *
  * Inputs: the renderer-safe Plugin detail model plus the installed Ghost when available.
- * Outputs: accessible detail interactions, a single-row responsive action hero, and the sticky
- * top bar that carries the back affordance plus this page's macOS window-drag region.
+ * Outputs: accessible detail interactions, Host-owned configuration rows, a single-row responsive
+ * action hero, and the sticky top bar carrying the back affordance and macOS window-drag region.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -70,6 +70,7 @@ import {
 } from '../../../shared/ghost';
 import { type GhostPluginDetail } from './lib/ghostPluginViewModel';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { IOSSimulatorPreferences } from './IOSSimulatorPreferences';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
@@ -191,7 +192,11 @@ export function GhostPluginDetailView({
       (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
   const hasConfiguration =
-    detail.hasMainView || detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
+    detail.hasMainView ||
+    detail.hasSettingsUi ||
+    detail.hostCapability === 'ios-simulator' ||
+    cindyCapabilities.length > 0 ||
+    detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
   /**
    * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
@@ -499,6 +504,7 @@ export function GhostPluginDetailView({
               title={t('settings.ghosts.detail.configurationTitle')}
             />
             <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-3')}>
+              {detail.hostCapability === 'ios-simulator' ? <IOSSimulatorPreferences /> : null}
               {detail.hasMainView ? (
                 <div
                   className={cn(

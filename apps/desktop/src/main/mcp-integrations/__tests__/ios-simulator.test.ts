@@ -8943,6 +8943,7 @@ describe('iOS Simulator host', () => {
       openUrlExact: vi.fn(async () => undefined),
     };
     const requestViewerFocus = vi.fn();
+    let autoOpenViewer = true;
     const host = createIOSSimulatorHost({
       actor,
       driverManager,
@@ -8950,6 +8951,7 @@ describe('iOS Simulator host', () => {
       appLifecycle,
       resourceScheduler: testResourceScheduler(),
       requestViewerFocus,
+      shouldAutoOpenViewer: () => autoOpenViewer,
       runtime: { inspect: vi.fn(async () => READY_REPORT) },
       getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
       resolveWorktreeRoot: vi.fn(async (workDir) => workDir),
@@ -9043,6 +9045,9 @@ describe('iOS Simulator host', () => {
           { sessionId: 'session-a', origin: 'user' },
         ),
       ).resolves.toMatchObject({ ok: true });
+      expect(requestViewerFocus).toHaveBeenCalledWith('session-a', instance.instanceId);
+      requestViewerFocus.mockClear();
+      autoOpenViewer = false;
 
       const mobileArtifact = { ...artifact, artifactId: 'mobile-artifact' };
       const mobileAppPath = path.join(worktree, 'apps', 'mobile', 'ios', 'build', 'Cindy.app');
@@ -9068,6 +9073,7 @@ describe('iOS Simulator host', () => {
           { sessionId: 'session-a', origin: 'user' },
         ),
       ).resolves.toMatchObject({ ok: true });
+      expect(requestViewerFocus).not.toHaveBeenCalled();
       expect(validateLaunch).toHaveBeenCalledWith(
         worktree,
         READY_REPORT.devices[0]!.udid,
@@ -9117,8 +9123,6 @@ describe('iOS Simulator host', () => {
         'demo://home',
         expect.any(AbortSignal),
       );
-      expect(requestViewerFocus).toHaveBeenCalledWith('session-a', instance.instanceId);
-
       let installSignal: AbortSignal | undefined;
       installExact.mockImplementationOnce(
         async (_simulatorUdid, _artifact, signal) =>

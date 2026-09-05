@@ -222,6 +222,7 @@ import type {
   IOSSimulatorAccessRequestResult,
   IOSSimulatorCopyScreenshotRequest,
   IOSSimulatorCopyScreenshotResult,
+  IOSSimulatorPreferences,
   IOSSimulatorSessionStatus,
   IOSSimulatorAgentControlRequest,
   IOSSimulatorFocusRequest,
@@ -7138,6 +7139,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:android:prepare-adb'),
     },
     iosSimulator: {
+      getPreferences: (): Promise<IOSSimulatorPreferences> =>
+        ipcRenderer.invoke('maker:ios-simulator:get-preferences'),
+      setAutoOpenEmbeddedPanel: (enabled: boolean): Promise<IOSSimulatorPreferences> =>
+        ipcRenderer.invoke('maker:ios-simulator:set-auto-open-embedded-panel', { enabled }),
       requestAccess: (
         request: IOSSimulatorAccessRequest,
       ): Promise<IOSSimulatorAccessRequestResult> =>

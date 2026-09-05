@@ -4967,6 +4967,8 @@
         "sidebarEntryTitle": "サイドバー項目",
         "showInSidebar": "サイドバーに表示",
         "sidebarEntryDescription": "オンにすると、サイドバーに「{{title}}」が表示されます。非表示にしてもプラグインは無効になりません。",
+        "iosSimulatorAutoOpenTitle": "内蔵シミュレータパネルを自動的に開く",
+        "iosSimulatorAutoOpenDescription": "シミュレータの起動時または App の起動後に、右側へシミュレータ画面を自動表示します。オフでも手動で開くことができ、ほかの機能には影響しません。",
         "openTool": "Tool {{name}} の詳細を表示",
         "noToolDescription": "この Tool には説明がありません。",
         "viewAllTools": "さらに表示",
