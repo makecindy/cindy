@@ -579,12 +579,12 @@ function isValidPreset(v: unknown): v is ProviderPreset {
   return true;
 }
 
-/** 是否合法 http(s) URL（modelsUrl 归一化用）。 */
+/** 是否为不含内嵌凭据的 http(s) URL（模型发现地址归一化用）。 */
 function isHttpUrl(v: unknown): boolean {
   if (typeof v !== 'string' || v.length === 0) return false;
   try {
     const u = new URL(v);
-    return u.protocol === 'https:' || u.protocol === 'http:';
+    return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password;
   } catch {
     return false;
   }
@@ -625,7 +625,7 @@ function isLegacyAnthropicPiRuntime(
 }
 
 /**
- * runtime.modelsUrl 非法（非 http(s) URL）时剥掉该字段、保留预设本体——OSS 推错一个
+ * runtime.modelsUrl 非法（非 http(s) URL 或含内嵌凭据）时剥掉该字段、保留预设本体——OSS 推错一个
  * 不可见字段不该让整条预设消失，更不该让用户保存时撞 main 侧 URL 校验无法自助修复。
  */
 function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {

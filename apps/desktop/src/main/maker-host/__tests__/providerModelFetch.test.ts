@@ -21,6 +21,16 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('buildModelsFetchRequest', () => {
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+    ),
+  )('rejects credentials in $field before building a request: $userinfo', ({ field, userinfo }) => {
+    expect(() => buildModelsFetchRequest(spec({
+      [field]: `https://${userinfo}api.acme.example/anthropic/v1/models`,
+    }))).toThrow('model discovery requires HTTP(S) URLs without embedded credentials');
+  });
+
   it('derives {base}/v1/models for non-/vN baseUrl; appends /models when baseUrl ends with /vN', () => {
     expect(buildModelsFetchRequest(spec()).url).toBe('https://api.acme.example/anthropic/v1/models');
     expect(
@@ -116,6 +126,24 @@ describe('buildModelsFetchRequest', () => {
 });
 
 describe('fetchProviderModels', () => {
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+    ),
+  )('does not dispatch a request with credentials in $field: $userinfo', async ({ field, userinfo }) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const result = await fetchProviderModels(spec({
+      [field]: `https://${userinfo}api.acme.example/anthropic/v1/models`,
+      authMethod: 'apiKey',
+    }), fetchImpl);
+    expect(result).toEqual({
+      ok: false,
+      code: 'UNKNOWN',
+      detail: 'model discovery requires HTTP(S) URLs without embedded credentials',
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       baseUrl: 'https://remote.example/v1',
