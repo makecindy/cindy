@@ -6,7 +6,10 @@ import {
   readSessionMenuAccountUsage,
   type SessionMenuAccountUsage,
 } from "./readSessionMenuAccountUsage";
-import { isPreconditionFailedRemoteError } from "@cindy/maker-shared/device-link-contract";
+import {
+  isPreconditionFailedRemoteError,
+  type MobileCodexRateLimitsResult,
+} from "@cindy/maker-shared/device-link-contract";
 
 export type SessionMenuUsageReader = Pick<
   MobileMakerTransport,
@@ -33,6 +36,7 @@ export function useSessionMenuUsage(
   session: RemoteSession,
   reader: SessionMenuUsageReader,
   visible: boolean,
+  codexRateLimits: MobileCodexRateLimitsResult | null = null,
 ) {
   const taskScope = [
     session.deviceLinkDeviceId,
@@ -56,6 +60,8 @@ export function useSessionMenuUsage(
   } | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = useCallback(() => setRefreshKey((key) => key + 1), []);
+  // Parent control reads/resets replace codexRateLimits. Effect cleanup discards
+  // pre-reset reads and refreshes immediately instead of waiting for polling.
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
@@ -125,7 +131,15 @@ export function useSessionMenuUsage(
       cancelled = true;
       clearInterval(timer);
     };
-  }, [scope, taskScope, reader, visible, refreshKey, session.id]);
+  }, [
+    scope,
+    taskScope,
+    reader,
+    visible,
+    refreshKey,
+    session.id,
+    codexRateLimits,
+  ]);
   return {
     ...(stored?.scope === scope
       ? stored.value

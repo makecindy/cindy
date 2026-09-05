@@ -170,7 +170,7 @@ export function SessionMenuSheet({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
-  const menuUsage = useSessionMenuUsage(session, usageReader, visible);
+  const menuUsage = useSessionMenuUsage(session, usageReader, visible, codexRateLimits);
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 

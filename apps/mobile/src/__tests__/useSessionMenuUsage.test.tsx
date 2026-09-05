@@ -56,8 +56,16 @@ function deferred<T>() {
 }
 function harness(r: SessionMenuUsageReader) {
   let value!: ReturnType<typeof useSessionMenuUsage>;
-  function Probe({ task, visible }: { task: RemoteSession; visible: boolean }) {
-    value = useSessionMenuUsage(task, r, visible);
+  function Probe({
+    task,
+    visible,
+    snapshot,
+  }: {
+    task: RemoteSession;
+    visible: boolean;
+    snapshot: MobileCodexRateLimitsResult | null;
+  }) {
+    value = useSessionMenuUsage(task, r, visible, snapshot);
     return null;
   }
   root = createRoot(document.createElement("div"));
@@ -65,9 +73,13 @@ function harness(r: SessionMenuUsageReader) {
     get value() {
       return value;
     },
-    render: async (task = session("a"), visible = true) => {
+    render: async (
+      task = session("a"),
+      visible = true,
+      snapshot: MobileCodexRateLimitsResult | null = null,
+    ) => {
       await act(async () =>
-        root!.render(createElement(Probe, { task, visible })),
+        root!.render(createElement(Probe, { task, visible, snapshot })),
       );
     },
   };
@@ -94,6 +106,44 @@ describe("menu usage refresh lifecycle", () => {
     expect(r.getCodexRateLimits).toHaveBeenCalledTimes(2);
     await h.render();
     expect(h.value.account?.plan).toBe("pro");
+  });
+  it("refreshes on the reset snapshot and rejects a late pre-reset response", async () => {
+    const r = reader();
+    const h = harness(r);
+    const exhausted = {
+      ...account,
+      rateLimits: { primary: { usedPercent: 100 } },
+    };
+    const reset = { ...account, rateLimits: { primary: { usedPercent: 0 } } };
+    vi.mocked(r.getCodexRateLimits).mockResolvedValue(exhausted);
+    await h.render(session("a"), true, exhausted);
+    expect(h.value.account?.windows[0].remainingPercent).toBe(0);
+    const pending = deferred<MobileCodexRateLimitsResult>();
+    vi.mocked(r.getCodexRateLimits).mockReturnValueOnce(pending.promise);
+    await act(async () => h.value.refresh());
+    vi.mocked(r.getCodexRateLimits).mockResolvedValue(reset);
+    await h.render(session("a"), true, reset);
+    expect(h.value.account?.windows[0].remainingPercent).toBe(100);
+    await act(async () => pending.resolve(exhausted));
+    expect(h.value.account?.windows[0].remainingPercent).toBe(100);
+    await h.render(session("a"), true, reset);
+    expect(r.getCodexRateLimits).toHaveBeenCalledTimes(3);
+  });
+  it("defers control snapshot refresh while hidden and discards results after closing", async () => {
+    const r = reader();
+    const h = harness(r);
+    await h.render(session("a"), false, account);
+    expect(r.getCodexRateLimits).not.toHaveBeenCalled();
+    const pending = deferred<MobileCodexRateLimitsResult>();
+    vi.mocked(r.getCodexRateLimits).mockReturnValueOnce(pending.promise);
+    await h.render(session("a"), true, account);
+    await h.render(session("a"), false, { ...account });
+    await act(async () => pending.resolve(account));
+    expect(h.value.account).toBeNull();
+    expect(r.getCodexRateLimits).toHaveBeenCalledTimes(1);
+    await h.render(session("a"), true, account);
+    expect(h.value.account?.plan).toBe("pro");
+    expect(r.getCodexRateLimits).toHaveBeenCalledTimes(2);
   });
   it("drops late responses from the previous task and does not show its values in the next task", async () => {
     const pending = deferred<MobileCodexRateLimitsResult>();
