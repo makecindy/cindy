@@ -8783,6 +8783,7 @@
         "archived": "アーカイブ済み",
         "all": "すべて"
       },
+      "archivedSessions": "アーカイブ済みタスク",
       "filterVendor": {
         "all": "すべて",
         "cc": "Claude Code",

@@ -392,7 +392,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
 
   it('空态 / 远程任务 loading-error / 设备目录 loading / 连接中占位都挂范围标题', () => {
     const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
-    expect(headerSource).toContain('<MachineSwitcherMenu onOpenDisplaySettings=');
+    expect(headerSource).toMatch(
+      /<MachineSwitcherMenu[\s\S]*?filter=\{filter\}[\s\S]*?onOpenDisplaySettings=/,
+    );
     expect(headerSource).not.toContain('filterActiveBadge');
     expect(headerSource).toContain('<SidebarFilterPopover');
     expect(projectsSectionSource).toContain('<MainListScopeHeader');
@@ -569,9 +571,26 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('useRemoteSessionBootstrapLoading(selectedDeviceId)');
     expect(menuSource).toContain('aria-busy={remoteSessionBootstrapLoading}');
     expect(menuSource).toMatch(
-      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*<ChevronDown[\s\S]*?animate-spinner motion-reduce:animate-none/,
+      /<span className="truncate leading-none">\{triggerText\}<\/span>[\s\S]*?<ChevronDown[\s\S]*?animate-spinner motion-reduce:animate-none/,
     );
     expect(menuSource).toContain('<Loader2 size={12} strokeWidth={1.8} />');
+  });
+
+  it('归档范围同步进入段头按钮的无障碍名称', () => {
+    expect(menuSource).toContain("const archivedLabel = filter.status === 'archived'");
+    expect(menuSource).toContain(
+      'aria-label={`${triggerLabel}: ${triggerText}${archivedLabel ? `, ${archivedLabel}` : \'\'}`}',
+    );
+    expect(menuSource).toContain('<span className="truncate">{archivedLabel}</span>');
+  });
+
+  it('归档菜单项向读屏暴露当前范围，而不暗示可取消的复选行为', () => {
+    expect(menuSource).toContain('role="menuitem"');
+    expect(menuSource).toContain(
+      "aria-current={filter.status === 'archived' ? 'page' : undefined}",
+    );
+    expect(menuSource).not.toContain('role="menuitemcheckbox"');
+    expect(menuSource).not.toContain('aria-checked=');
   });
 
   it('MachineSwitcherMenu 保留设备选择 / 显示设置 / 远程设置入口;无远程时仍带箭头只留设置项', () => {

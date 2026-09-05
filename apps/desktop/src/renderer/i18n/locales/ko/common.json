@@ -8783,6 +8783,7 @@
         "archived": "보관됨",
         "all": "전체"
       },
+      "archivedSessions": "보관된 작업",
       "filterVendor": {
         "all": "전체",
         "cc": "Claude Code",

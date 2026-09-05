@@ -8783,6 +8783,7 @@
         "archived": "已归档",
         "all": "全部"
       },
+      "archivedSessions": "已归档任务",
       "filterVendor": {
         "all": "全部",
         "cc": "Claude Code",
