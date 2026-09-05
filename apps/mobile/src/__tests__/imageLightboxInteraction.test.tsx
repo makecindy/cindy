@@ -21,6 +21,7 @@ const runtime = vi.hoisted(() => ({
   values: [] as Value[],
   immediate: false,
   dimensions: { width: 400, height: 800 },
+  insets: { top: 40, bottom: 20, left: 0, right: 0 },
   gesture: null as GestureNode | null,
 }));
 
@@ -34,7 +35,7 @@ vi.mock("@/session/remoteMedia", () => ({
   isDesktopLocalMediaUrl: (uri: string) => uri.startsWith("cindy-media:"),
 }));
 vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => ({ top: 40, bottom: 20, left: 0, right: 0 }),
+  useSafeAreaInsets: () => runtime.insets,
 }));
 vi.mock("lucide-react-native", () => ({
   MessageSquarePlus: () => null,
@@ -183,6 +184,7 @@ beforeEach(() => {
   runtime.values = [];
   runtime.immediate = false;
   runtime.dimensions = { width: 400, height: 800 };
+  runtime.insets = { top: 40, bottom: 20, left: 0, right: 0 };
   root = createRoot(document.createElement("div"));
 });
 afterEach(() => act(() => root.unmount()));
@@ -349,14 +351,24 @@ describe("image viewer actions", () => {
     act(() => runtime.nodes.get('Image').onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }));
     doubleTapAtCorner(); finishAnimations();
     runtime.dimensions = { width: 800, height: 400 };
+    runtime.insets = { top: 0, bottom: 20, left: 59, right: 0 };
     // The native dimensions hook schedules its own render; this mock uses a changed prop.
     harness.props.onClose = vi.fn();
     harness.render();
+    const chromeBounds = () => Object.assign({}, ...runtime.nodes.get('message.imageLightboxChrome').style);
+    const closeBounds = Object.assign({}, ...runtime.nodes.get('message.imageLightboxCloseButton').style);
+    expect(chromeBounds().left + closeBounds.left).toBe(75);
+    expect(chromeBounds().right).toBe(0);
     expect(transform().x).toBeCloseTo(0);
     expect(transform().y).toBe(-300);
     expect(transform().scale).toBe(2.5);
     doubleTapAtCorner(); finishAnimations();
     expect(transform()).toEqual({ x: 0, y: 0, scale: 1 });
+    runtime.insets = { top: 0, bottom: 20, left: 0, right: 59 };
+    harness.props.onClose = vi.fn();
+    harness.render();
+    expect(chromeBounds().left).toBe(0);
+    expect(chromeBounds().right).toBe(59);
   });
 
   it('includes the visible unfinished stroke and ignores drawing delivered after submit', async () => {

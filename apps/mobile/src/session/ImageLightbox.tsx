@@ -563,7 +563,14 @@ export const ImageLightbox = memo(function ImageLightbox({
         />
         <Animated.View
           pointerEvents={chromeInteractive ? 'box-none' : 'none'}
-          style={[styles.chrome, chromeStyle, { paddingBottom: insets.bottom + 16, paddingTop: insets.top + 8 }]}
+          // 整个操作层避开横屏两侧切口,让关闭、文件标题和所有底栏共用安全边界。
+          style={[styles.chrome, chromeStyle, {
+            left: insets.left,
+            right: insets.right,
+            paddingBottom: insets.bottom + 16,
+            paddingTop: insets.top + 8,
+          }]}
+          testID="message.imageLightboxChrome"
         >
           {!isAnnotating && !showFileHeader ? (
             <Pressable
