@@ -63,6 +63,18 @@ export interface SessionActivityPayload {
 export const SESSION_ACTIVITY_CHANNEL = 'local-db:sessions:activity';
 
 /**
+ * Opt-in recovery for session-text-snapshot-v1 controllers. Payload has sessionId,
+ * optional persistId/event (text, isFullText:true, isFinal:false, data.createdAt
+ * is the block's ISO host timestamp), and optional
+ * resyncRequired. The event replaces that in-flight block; the flag invalidates
+ * history independently. Host flushes older batches before sending, then sends
+ * newer deltas on the same reliable stream. Not coalescible/evictable: dropping
+ * the repair itself would leave the controller silently incomplete again.
+ * Old hosts ignore the capability; old controllers never receive this channel.
+ */
+export const SESSION_SYNC_CHANNEL = 'maker:session-sync';
+
+/**
  * `maker:event` 的**微批**转发 channel(同一会话的连续事件合并成一帧)。
  *
  * 为什么要它:agent 长思考期间 `maker:event` 逐帧直冲 per-peer 可靠传输窗口
