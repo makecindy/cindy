@@ -5673,7 +5673,7 @@ function RunningStatusBar({
                       &middot;
                     </span>
                     {rateText ? (
-                      <Tip text={rateTipText} side="top">
+                      <Tip text={rateTipText} side="top" contentClassName="whitespace-pre-line">
                         <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                           {rateText}
                         </span>

@@ -1755,6 +1755,7 @@ function handleStreamEvent(
         'cache_read_input_tokens',
         'cache_creation_input_tokens',
       ].every((field) => Object.prototype.hasOwnProperty.call(usage, field));
+      const previousOutput = ctx.tracker.getTurnUsage().output;
       ctx.tracker.upsertApiCallUsage(segmentId, {
         id: segmentId,
         model: streamModel ?? ctx.getModel(),
@@ -1766,7 +1767,9 @@ function handleStreamEvent(
         complete: hasCompleteUsageSnapshot,
       });
       if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
-      else {
+      else if (ctx.tracker.getTurnUsage().output > previousOutput) {
+        // Upserts retain the largest output count. Input-only, duplicate, and
+        // older usage must not advance the paired denominator on their own.
         ctx.rt.generation.outputDurationMs = sampleGenerationDuration(
           ctx.rt.generation.durationMs,
           ctx.rt.generation.startedAt,

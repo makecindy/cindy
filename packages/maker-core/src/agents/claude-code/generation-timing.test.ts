@@ -565,6 +565,52 @@ describe('claude generation pause boundaries', () => {
     });
   });
 
+  it('samples only accepted output growth across input-only, duplicate, and older deltas', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const send = (message: Parameters<typeof translateSdkMessage>[0]) =>
+      translateSdkMessage(message, queue, ctx);
+    send({ type: 'stream_event', event: {
+      type: 'message_start', message: { usage: { input_tokens: 10 } },
+    } });
+    vi.setSystemTime(2_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 100 } } });
+    for (const [index, usage] of [
+      { input_tokens: 20 },
+      { output_tokens: 0, cache_read_input_tokens: 10 },
+      { output_tokens: 100 },
+      { output_tokens: 50 },
+    ].entries()) {
+      vi.setSystemTime(3_000 + index * 1_000);
+      send({ type: 'stream_event', event: { type: 'message_delta', usage } });
+      expect(ctx.tracker.getTurnUsage().output).toBe(100);
+      expect(ctx.rt.generation.outputDurationMs).toBe(1_000);
+    }
+    expect(ctx.tracker.getTurnUsage()).toMatchObject({ input: 20, cacheRead: 10 });
+    vi.setSystemTime(7_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 200 } } });
+    expect(ctx.rt.generation.outputDurationMs).toBe(6_000);
+    vi.setSystemTime(8_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { input_tokens: 30 } } });
+    vi.setSystemTime(12_000);
+    send({ type: 'result', stop_reason: 'end_turn',
+      usage: { input_tokens: 30, output_tokens: 200, cache_read_input_tokens: 10 },
+    });
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const statuses = events.filter((event) => event.type === 'status');
+    expect(statuses.filter((event) => event.data.outputTokens === 100)).toHaveLength(5);
+    for (const event of statuses.filter((event) => event.data.outputTokens === 100)) {
+      expect(event.data.generationDurationMs).toBe(1_000);
+    }
+    expect(statuses.at(-1)?.data).toMatchObject({
+      status: 'Done', outputTokens: 200, generationDurationMs: 6_000, generationReliable: true,
+    });
+  });
+
   it('keeps the last paired rate when the matching final result is delayed', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

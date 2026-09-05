@@ -10749,10 +10749,14 @@ export class CodexAgent extends BaseAgent {
               ? 'priority'
               : 'standard',
           });
-          translatorRt.generationOutputDurationMs = sampleGenerationDuration(
-            translatorRt.generationDurationMs,
-            translatorRt.generationStartedAt,
-          );
+          // Input/cache-only segments still belong in the ledger, but cannot
+          // pair already reported output with a later generation denominator.
+          if (last.outputTokens > 0) {
+            translatorRt.generationOutputDurationMs = sampleGenerationDuration(
+              translatorRt.generationDurationMs,
+              translatorRt.generationStartedAt,
+            );
+          }
           maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
           if (memoryFlushController) {

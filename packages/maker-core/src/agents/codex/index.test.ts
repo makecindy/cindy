@@ -17024,7 +17024,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
-  it('keeps output usage paired with its timing through the next request and resets next turn', async () => {
+  it.each([0, 10])('keeps output paired through input-only usage (cached=%s) and resets next turn', async (cachedInputTokens) => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const agent = new CodexAgent(createDeps());
@@ -17068,13 +17068,28 @@ describe('CodexAgent MCP thread context hooks', () => {
       expectSample(100, 1_000);
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
-          total: { totalTokens: 520, inputTokens: 20, outputTokens: 500, cachedInputTokens: 0 },
+          total: { totalTokens: 120, inputTokens: 20, outputTokens: 100, cachedInputTokens },
+          last: { inputTokens: 10, outputTokens: 0, cachedInputTokens },
+        },
+      });
+      expectSample(100, 1_000);
+      expect(handle.getUsageSnapshot().tokenUsage).toBe(120 - cachedInputTokens);
+      handlers.tokenUsageUpdated!({
+        threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
+          total: { totalTokens: 530, inputTokens: 30, outputTokens: 500, cachedInputTokens },
           last: { inputTokens: 10, outputTokens: 400, cachedInputTokens: 0 },
         },
       });
       expectSample(500, 5_000);
       now = 11_000;
+      handlers.tokenUsageUpdated!({
+        threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
+          total: { totalTokens: 540, inputTokens: 40, outputTokens: 500, cachedInputTokens },
+          last: { inputTokens: 10, outputTokens: 0, cachedInputTokens: 0 },
+        },
+      });
       expectSample(500, 5_000);
+      expect(handle.getUsageSnapshot().tokenUsage).toBe(540 - cachedInputTokens);
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
       await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
       expect(events.find((event) => event.type === 'done')?.data.usage.durationMs).toBe(5_000);
