@@ -16,6 +16,7 @@ import { radius, spacing, typeScale } from '@/theme/tokens';
 interface RewindPreviewPanelProps {
   state: RewindPreviewState;
   committing?: boolean;
+  topOverlayHeight?: number;
   onCancel(): void;
   onConfirm(): void;
 }
@@ -23,6 +24,7 @@ interface RewindPreviewPanelProps {
 export function RewindPreviewPanel({
   state,
   committing,
+  topOverlayHeight = 0,
   onCancel,
   onConfirm,
 }: RewindPreviewPanelProps) {
@@ -47,6 +49,7 @@ export function RewindPreviewPanel({
         styles.container,
         {
           marginHorizontal: layout.containerMarginHorizontal,
+          marginTop: Math.max(spacing.sm, topOverlayHeight + spacing.sm),
           padding: layout.containerPadding,
         },
       ]}

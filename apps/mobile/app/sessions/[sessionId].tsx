@@ -9044,6 +9044,7 @@ export default function SessionScreen() {
                 onCancel={() => setRewindState({ kind: 'idle' })}
                 onConfirm={() => void confirmRewind()}
                 state={rewindState}
+                topOverlayHeight={topOverlayHeight}
               />
 
               {sessionOperationLayout.messageHistoryMode === 'collapsed' ? (
