@@ -338,30 +338,14 @@ export function mobileMessageListKeysSignature(keys: readonly string[]): string 
   return keys.join('\0');
 }
 
-export interface MobileFollowVerifyStartDelayInput {
-  animatedScrollInFlight: boolean;
-  now: number;
-  settleAt: number;
-}
-
-/**
- * Animated `scrollToEnd` must own the viewport until its bounded settle window closes.
- * Starting the verifier earlier would read an expected in-flight offset and replace the
- * smooth animation with an immediate non-animated retry.
- */
-export function mobileFollowVerifyStartDelayMs(
-  input: MobileFollowVerifyStartDelayInput,
-): number {
-  if (!input.animatedScrollInFlight) return 0;
-  return Math.max(0, input.settleAt - input.now);
-}
-
 export interface MobileAnchorVerifyInput {
   attempts: number;
   listVisible: boolean;
   metrics: MessageScrollMetrics;
   preserveVisibleContentPosition: boolean;
   stickToLatest: boolean;
+  /** Finger drag / native momentum owns the viewport, including iOS overscroll bounce. */
+  userControllingScroll: boolean;
   waitRounds: number;
 }
 
@@ -381,21 +365,21 @@ export type MobileAnchorVerifyAction =
  * 背景:贴底跟随的落底 scrollToOffset 存在两类静默落空——
  * (a) 行坐标或 size 锚定尚在结算的帧里执行,被后续布局调整吸收/抵消;
  * (b) 落底一刻 scrollMetricsRef 里的 contentHeight / viewportHeight 是陈旧值,目标
- *     offset 偏短,且之后再无 contentSize / layout 事件来纠正。
- * 两类的共同结果都是「最新消息停在底部浮层(composer)后面」。verify 环在每次落底后
- * 校验 offset 是否真到内容末端,未到位则带上限补滚,从机制上兜掉所有此类竞态。
+ *     offset 偏短或内容收缩后偏长,且之后再无 contentSize / layout 事件来纠正。
+ * 偏短会把最新消息留在 composer 后面,偏长会把消息顶上去并留下尾部空白。
+ * 用户没有控制滚动时,校验 offset 与真实末端的双向距离,未到位则带上限补滚。
  */
 export function evaluateMobileAnchorVerify(input: MobileAnchorVerifyInput): MobileAnchorVerifyAction {
   if (!input.stickToLatest || !input.listVisible) return 'settled';
   // 行坐标 / size 锚定仍在 settle 窗口:此刻补滚可能被后续布局吸收,下一轮再判。
   // 等待走独立预算,不消耗补滚额度。
   const { contentHeight, offsetY, viewportHeight } = input.metrics;
-  if (input.preserveVisibleContentPosition || contentHeight <= 0 || viewportHeight <= 0) {
+  if (input.userControllingScroll || input.preserveVisibleContentPosition || contentHeight <= 0 || viewportHeight <= 0) {
     return input.waitRounds >= MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS ? 'give-up' : 'wait';
   }
-  // 内容不足一屏时 end offset 为 0,任何非负 offset 都算贴底(iOS bounce 可为负,同样无遮挡)。
+  // 不足一屏时也必须回到 0;原生测量收缩后残留的正 offset 不是有效的贴底位置。
   const endOffset = mobileMessageListEndOffset(input.metrics);
-  if (offsetY >= endOffset - MOBILE_ANCHOR_VERIFY_TOLERANCE) return 'settled';
+  if (Math.abs(offsetY - endOffset) <= MOBILE_ANCHOR_VERIFY_TOLERANCE) return 'settled';
   if (input.attempts >= MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS) return 'give-up';
   return 'retry';
 }

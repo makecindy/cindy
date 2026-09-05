@@ -137,6 +137,7 @@ describe('evaluateMobileAnchorVerify (贴底锚定校验判定)', () => {
     metrics: anchoredMetrics,
     preserveVisibleContentPosition: false,
     stickToLatest: true,
+    userControllingScroll: false,
     waitRounds: 0,
   };
 
@@ -146,11 +147,16 @@ describe('evaluateMobileAnchorVerify (贴底锚定校验判定)', () => {
       ...base,
       metrics: { ...anchoredMetrics, offsetY: 1200 - MOBILE_ANCHOR_VERIFY_TOLERANCE },
     })).toBe('settled');
-    // iOS bounce 超滚(offset 超过 end)同样视为贴底。
+    // iOS bounce belongs to the gesture; only correct a stale overshoot after it ends.
+    expect(evaluateMobileAnchorVerify({
+      ...base,
+      userControllingScroll: true,
+      metrics: { ...anchoredMetrics, offsetY: 1210 },
+    })).toBe('wait');
     expect(evaluateMobileAnchorVerify({
       ...base,
       metrics: { ...anchoredMetrics, offsetY: 1210 },
-    })).toBe('settled');
+    })).toBe('retry');
   });
 
   it('retries when the drop-to-bottom silently fell short of the content end', () => {
@@ -187,7 +193,7 @@ describe('evaluateMobileAnchorVerify (贴底锚定校验判定)', () => {
     })).toBe('wait');
   });
 
-  it('treats sub-viewport content as anchored regardless of offset', () => {
+  it('treats sub-viewport content as anchored at zero offset', () => {
     expect(evaluateMobileAnchorVerify({
       ...base,
       metrics: { contentHeight: 400, offsetY: 0, viewportHeight: 800 },
