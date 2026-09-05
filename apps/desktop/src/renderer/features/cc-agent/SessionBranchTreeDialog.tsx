@@ -143,10 +143,15 @@ export function SessionBranchTreeDialog({
     navigate(route);
   }, [navigate, onOpenChange, session.id]);
 
-  const renderPiNode = (node: SessionTreeNode, depth: number): React.ReactNode => {
+  const renderPiNode = (node: SessionTreeNode, branchDepth: number, justBranched: boolean): React.ReactNode => {
     const active = tree?.activePathIds.includes(node.id) === true;
     const leaf = tree?.leafId === node.id;
     const branching = node.children.length > 1;
+    const childBranchDepth = branching
+      ? branchDepth + 1
+      : justBranched && branchDepth > 0
+        ? branchDepth + 1
+        : branchDepth;
     return (
       <div key={node.id}>
         <button
@@ -158,7 +163,7 @@ export function SessionBranchTreeDialog({
             'hover:bg-[var(--surface-elevated)] disabled:cursor-default',
             active && 'bg-[var(--surface-elevated)]',
           )}
-          style={{ paddingLeft: `${10 + depth * 18}px` }}
+          style={{ paddingLeft: `${10 + branchDepth * 18}px` }}
         >
           <span
             className={cn(
@@ -181,7 +186,7 @@ export function SessionBranchTreeDialog({
             </span>
           </span>
         </button>
-        {node.children.map((child) => renderPiNode(child, depth + 1))}
+        {node.children.map((child) => renderPiNode(child, childBranchDepth, branching))}
       </div>
     );
   };
@@ -211,7 +216,11 @@ export function SessionBranchTreeDialog({
             {loading ? (
               <div className="flex h-16 items-center justify-center"><Spinner size={16} /></div>
             ) : tree && tree.roots.length > 0 ? (
-              tree.roots.map((root) => renderPiNode(root, depth + 1))
+              tree.roots.map((root) => renderPiNode(
+                root,
+                depth + (tree.roots.length > 1 ? 2 : 1),
+                tree.roots.length > 1,
+              ))
             ) : (
               <div className="px-3 py-3 text-12 text-[var(--text-tertiary)]">
                 {t('ccAgent.sidebar.sessionBranches.empty')}

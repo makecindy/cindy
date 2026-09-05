@@ -88,10 +88,16 @@ export function PiSessionTreeSheet({
     }
   }, [disabledReason, maker, onNavigated, sessionId, switchingId, t, tree?.leafId]);
 
-  const renderNode = (node: MobilePiSessionTreeNode, depth: number): ReactNode => {
+  const renderNode = (node: MobilePiSessionTreeNode, branchDepth: number, justBranched: boolean): ReactNode => {
     const active = tree?.activePathIds.includes(node.id) === true;
     const current = tree?.leafId === node.id;
     const busy = switchingId !== null;
+    const branching = node.children.length > 1;
+    const childBranchDepth = branching
+      ? branchDepth + 1
+      : justBranched && branchDepth > 0
+        ? branchDepth + 1
+        : branchDepth;
     return (
       <View key={node.id}>
         <Pressable
@@ -102,7 +108,7 @@ export function PiSessionTreeSheet({
           onPress={() => void navigate(node)}
           style={({ pressed }) => [
             styles.node,
-            { paddingLeft: spacing.md + depth * spacing.lg },
+            { paddingLeft: spacing.md + branchDepth * spacing.lg },
             active && styles.nodeActive,
             pressed && styles.nodePressed,
           ]}
@@ -113,7 +119,7 @@ export function PiSessionTreeSheet({
               <ActivityIndicator color={colors.textPrimary} size="small" />
             ) : current ? (
               <Check color={colors.textPrimary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-            ) : node.children.length > 1 ? (
+            ) : branching ? (
               <GitBranch color={active ? colors.textPrimary : colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
             ) : (
               <MessageSquare color={active ? colors.textPrimary : colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
@@ -129,7 +135,7 @@ export function PiSessionTreeSheet({
             </Text>
           </View>
         </Pressable>
-        {node.children.map((child) => renderNode(child, depth + 1))}
+        {node.children.map((child) => renderNode(child, childBranchDepth, branching))}
       </View>
     );
   };
@@ -156,7 +162,7 @@ export function PiSessionTreeSheet({
         {loading ? (
           <View style={styles.loading}><ActivityIndicator color={colors.textSecondary} /></View>
         ) : tree && tree.roots.length > 0 ? (
-          tree.roots.map((node) => renderNode(node, 0))
+          tree.roots.map((node) => renderNode(node, tree.roots.length > 1 ? 1 : 0, tree.roots.length > 1))
         ) : !error ? (
           <Text style={styles.empty}>{t('session.menu.branchEmpty')}</Text>
         ) : null}
