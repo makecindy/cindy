@@ -252,6 +252,103 @@ beforeEach(() => {
   resetFavorites();
 });
 
+describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {
+  const originalProviders = providersRef.providers;
+  const routes = [
+    { providerId: 'xd', modelId: 'codex/gpt-5.6-sol', name: 'Discount Sol' },
+    { providerId: 'xd', modelId: 'codex/gpt-5.6-luna', name: 'Discount Luna' },
+    { providerId: 'openai', modelId: 'gpt-6-astra', name: 'GPT-6 Astra' },
+  ];
+  beforeEach(() => {
+    providersRef.providers = ['xd', 'openai'].map((id) => ({
+      id,
+      name: id,
+      source: 'builtin',
+      agents: ['codex'],
+      auth: { method: id === 'xd' ? 'api-key' : 'oauth' },
+      routing: { codex: {} },
+      connected: true,
+      models: {
+        codex: routes
+          .filter((route) => route.providerId === id)
+          .map((route) => ({
+            id: route.modelId,
+            name: route.name,
+            group: 'gpt',
+            efforts: ['low', 'high'],
+            defaultEffort: 'high',
+            supportsFastMode: true,
+          })),
+      },
+    }));
+  });
+  afterEach(() => {
+    providersRef.providers = originalProviders;
+  });
+
+  const cases = routes.slice(0, 2).flatMap((discounted) =>
+    [true, false].flatMap((fast) => [
+      { from: discounted, to: routes[2]!, fast },
+      { from: routes[2]!, to: discounted, fast },
+    ]),
+  );
+  it.each(cases)(
+    '$from.modelId → $to.modelId，Fast=$fast，失败可重试且不误报成功',
+    async ({ from, to, fast }) => {
+      const uid = addModelFavorite({
+        providerId: to.providerId,
+        modelId: to.modelId,
+        agent: 'codex',
+        effort: 'low',
+        ...(fast ? { fast: true } : {}),
+      });
+      let finish!: (success: boolean) => void;
+      const change = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const dismiss = vi.fn();
+      const anchor = vi.fn();
+      const crossEngine = vi.fn();
+      renderPanel({
+        vendorKey: 'codex',
+        currentProviderId: from.providerId,
+        modelId: from.modelId,
+        effort: 'high',
+        fastMode: !fast,
+        onProviderChange: change,
+        onDismiss: dismiss,
+        onSessionFavoriteAnchorChange: anchor,
+        sessionEngineFilter: {
+          currentAgent: 'codex',
+          runtimeAgent: 'codex',
+          onCrossEngineSelect: crossEngine,
+        },
+      });
+      const favorite = document.querySelector(`[data-unified-anchor="fav::${uid}"]`) as HTMLElement;
+      for (const success of [false, true]) {
+        await act(async () => {
+          fireEvent.click(favorite);
+        });
+        expect(change).toHaveBeenLastCalledWith(to.providerId, to.modelId, 'low', fast);
+        expect(crossEngine).not.toHaveBeenCalled();
+        expect(dismiss).not.toHaveBeenCalled();
+        expect(anchor).not.toHaveBeenCalled();
+        await act(async () => {
+          finish(success);
+        });
+      }
+      expect(change).toHaveBeenCalledTimes(2);
+      expect(dismiss).toHaveBeenCalledOnce();
+      expect(anchor).toHaveBeenCalledWith(
+        expect.objectContaining({ uid, wireModelId: to.modelId }),
+      );
+    },
+  );
+});
+
 describe('统一面板 · 配置应用与收尾一致', () => {
   it.each(['pending', 'rejected', 'thrown'] as const)(
     '换模型 %s 时保留面板和原收藏锚点',

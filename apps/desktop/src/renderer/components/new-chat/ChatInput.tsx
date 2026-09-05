@@ -6325,6 +6325,7 @@ export function ChatInput({
       modelId: string,
       expectedRevision?: number,
       effort?: Effort,
+      fastMode?: boolean,
     ) => void | boolean | Promise<void | boolean>;
     byModel: (
       modelId: string,
@@ -6592,6 +6593,7 @@ export function ChatInput({
                 newModelId,
                 result.sameEngineRevision,
                 newEffort,
+                targetFast,
               )
             : await sameEngineReselectRef.current.byModel(newModelId, result.sameEngineRevision);
           // 被更新的选择超车(byProvider / byModel 自带修订号守卫)→ 同样按「没切」上报。
@@ -7486,6 +7488,7 @@ export function ChatInput({
           newProviderId,
           {
             ...(nextEffort ? { effort: nextEffort as Effort } : {}),
+            ...(reconciledFast !== undefined ? { fastMode: reconciledFast } : {}),
           },
         );
       }
@@ -7818,8 +7821,8 @@ export function ChatInput({
 
   // performAgentSwitch 的"选回当前引擎"分支经 ref 调用(两 handler 声明在其后,TDZ)。
   sameEngineReselectRef.current = {
-    byProvider: (providerId, modelId, expectedRevision, effort) =>
-      handleProviderChange(providerId, modelId, effort, expectedRevision),
+    byProvider: (providerId, modelId, expectedRevision, effort, fastMode) =>
+      handleProviderChange(providerId, modelId, effort, expectedRevision, fastMode),
     byModel: (modelId, expectedRevision) => handleModelChange(modelId, expectedRevision),
   };
 
