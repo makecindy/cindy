@@ -378,6 +378,77 @@ function makeRelayClient(
 }
 
 describe('DeviceLinkClient', () => {
+  it('gives hello/ack a full window after a slow but successful socket upgrade', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { handshakeTimeoutMs: 15, pingIntervalMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current();
+      await vi.advanceTimersByTimeAsync(12);
+      socket.emit('open');
+      await vi.advanceTimersByTimeAsync(12);
+      expect(socket.terminated).toBe(false);
+      socket.push({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+        serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'dev-self', userId: 'u1',
+      } });
+      await vi.advanceTimersByTimeAsync(20);
+      expect(h.client.getStatus()).toBe('online');
+      expect(h.sockets).toHaveLength(1);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off large response copies for a slow controller without blocking a healthy controller', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current();
+      socket.ack();
+      for (const peer of ['ctrl-slow', 'ctrl-healthy']) {
+        const opening = establishInboundReliableLink(h, `${peer}-stream`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opening;
+      }
+      const acknowledge = (peer: string, id: string) => {
+        const frame = socket.sent.find(e => e.kind === 'invoke-result' && e.id === id)!;
+        const meta = parseTransportPayload(frame.payload)!.meta;
+        socket.push({ v: PROTOCOL_VERSION, kind: 'push', src: peer, payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        } });
+      };
+      h.client.sendInvokeResult('ctrl-slow', 'large', { ok: true, result: 'x'.repeat(240_000) });
+      const copies = () => socket.sent.filter(e => e.kind === 'invoke-result' && e.id === 'large');
+      const firstBytes = copies().reduce((sum, e) => sum + JSON.stringify(e).length, 0);
+      expect(copies()).toHaveLength(2);
+      // The local socket is drained, but the downstream controller needs ten seconds.
+      expect(socket.bufferedAmount).toBe(0);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(copies()).toHaveLength(6); // 0s, 2s, 6s; fixed 2s retries sent five copies.
+      h.client.sendInvokeResult('ctrl-healthy', 'healthy', { ok: true, result: 'ok' });
+      acknowledge('ctrl-healthy', 'healthy');
+      expect(h.client.getReliableSendQueueDepth('ctrl-healthy')).toBe(0);
+      expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      acknowledge('ctrl-slow', 'large');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(copies()).toHaveLength(6);
+      expect(copies().reduce((sum, e) => sum + JSON.stringify(e).length, 0)).toBe(firstBytes * 3);
+      expect(h.client.getReliableSendQueueDepth('ctrl-slow')).toBe(0);
+      expect(h.client.isLinkReady('ctrl-slow')).toBe(true);
+      expect(h.sockets).toHaveLength(1);
+      expect(socket.terminated).toBe(false);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('start → open 后第一帧是 hello,hello-ack 后 online', async () => {
     const h = makeHarness();
     const statuses: string[] = [];
@@ -4365,6 +4436,28 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it.each([1, 9, 11, 19])('last valid frame at %sms receives the full heartbeat idle budget', async (offset) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 10, pongMissLimit: 1 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      await vi.advanceTimersByTimeAsync(offset);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(19);
+      expect(ws.terminated).toBe(false);
+      expect(h.client.getStatus()).toBe('online');
+      // Still bounded: the first heartbeat tick after two full idle periods closes it.
+      await vi.advanceTimersByTimeAsync(11);
+      expect(ws.terminated).toBe(true);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('pong 持续回应则不判僵死', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
     h.client.start();
@@ -6642,6 +6735,9 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       // 再一趟:对端仍未 ACK,预算继续压在同样的队头 3 条上(不铺满窗口)
       await advance(200);
       expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
+      expect(seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq))).toEqual([2, 2, 2]);
+      // The head cooldown also holds the tail. Only retry again after the doubled interval.
+      await advance(200);
       const headCounts = seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq));
       expect(headCounts).toEqual([3, 3, 3]); // 首发 + 两趟重发
     }, {

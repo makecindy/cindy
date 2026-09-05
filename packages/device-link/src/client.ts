@@ -1615,6 +1615,9 @@ export class DeviceLinkClient {
 
     ws.on('open', () => {
       if (epoch !== this.connEpoch) return;
+      // TCP/TLS upgrade made progress. Give hello/ack its own bounded RTT window;
+      // a slow upgrade must not consume almost all of the application handshake budget.
+      this.armHandshakeTimeout(epoch);
       // 进站第一帧必须是 hello
       this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'hello', payload: this.opts.getHello() });
     });
@@ -1787,7 +1790,11 @@ export class DeviceLinkClient {
         this.pongMisses = 0;
       }
       this.pongMisses++;
-      if (this.pongMisses > this.timing.pongMissLimit) {
+      // Timer phase must not shorten the idle budget after a valid frame.
+      // Keep the missed-ping gate too: a delayed JS timer alone is not evidence
+      // that multiple probes actually went unanswered.
+      const idleBudgetMs = this.timing.pingIntervalMs * (this.timing.pongMissLimit + 1);
+      if (this.pongMisses > this.timing.pongMissLimit && now - this.lastInboundAt >= idleBudgetMs) {
         this.log.warn(
           `heartbeat lost, forcing reconnect (misses=${this.pongMisses}, idleForMs=${now - this.lastInboundAt})`,
         );
@@ -3622,8 +3629,16 @@ export class DeviceLinkClient {
     const budget = this.recoveryPassBudget();
     let framesSpent = 0;
     for (const pending of peer.pending.values()) {
-      if (!opts.ignoreInterval && now - pending.lastSentAt < this.timing.transportRetryIntervalMs) {
-        continue;
+      // A local ws write is not a delivery receipt: relay -> mobile can still be
+      // transmitting a large response even with bufferedAmount=0. Back off repeated
+      // copies per message (2/4/8/8s by default), retaining bounded failure detection
+      // and immediate replay only when a new connection/link actually resumes.
+      const retryDelayMs = this.timing.transportRetryIntervalMs
+        * Math.min(4, 2 ** Math.max(0, pending.attempts - 1));
+      if (!opts.ignoreInterval && now - pending.lastSentAt < retryDelayMs) {
+        // Do not spend the cooldown retransmitting later seqs: cumulative ACK
+        // cannot advance past this head, and those copies only deepen the backlog.
+        break;
       }
       if (pending.attempts >= this.timing.transportMaxRetryAttempts) {
         this.handleReliableRetryExhausted(dst, pending.seq);

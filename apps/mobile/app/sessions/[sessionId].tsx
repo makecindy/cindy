@@ -4400,7 +4400,10 @@ export default function SessionScreen() {
       // 用 mergeEarlierMessages 而不是 mergeMessages:这一页是沿 before 从窗口最旧端**连续**取的,
       // 登记进「已验证连续」区间后,后续满页的最新窗口同步才不会把用户一路翻出来的历史当成来源
       // 不明的缓存丢掉(#1210 review)。
-      remoteSessionStore.mergeEarlierMessages(sessionId, pageList, { authority: messageAuthority });
+      if (!remoteSessionStore.mergeEarlierMessages(sessionId, pageList, {
+        authority: messageAuthority,
+        before,
+      })) return;
       setHasOlderMessages(shouldKeepOlderMessagesAffordance(page));
     } catch (err) {
       if (remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) {

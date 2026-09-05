@@ -2114,6 +2114,47 @@ describe('remoteSessionStore', () => {
     ]);
   });
 
+  it('rejects late paging whose anchor was removed by a concurrent latest-window refresh', () => {
+    const old = messageAt('old-anchor', 's1', '2026-01-01T09:00:00.000Z');
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    remoteSessionStore.setMessages('s1', [old]);
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('late-old-page', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { before: old.id })).toBe(false);
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [], { before: old.id })).toBe(false);
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor']);
+    // Paging again from the surviving anchor fills the actual gap and may extend coverage.
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [old], { before: latest.id })).toBe(true);
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['old-anchor', 'new-anchor']);
+  });
+
+  it('does not join a late disjoint latest response to a newer verified window', () => {
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('stale-latest', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { moreBeyondWindow: true });
+    const tail = messageAt('live-tail', 's1', '2026-01-01T11:00:00.000Z');
+    remoteSessionStore.appendMessage('s1', tail);
+    remoteSessionStore.setLatestMessageWindow('s1', [tail], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor', 'live-tail']);
+  });
+
+  it('does not certify a gap when paging before an unverified older island', () => {
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    const island = messageAt('island', 's1', '2026-01-01T09:00:00.000Z');
+    remoteSessionStore.setMessages('s1', [latest]);
+    remoteSessionStore.mergeMessages('s1', [island]);
+    remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('old-page', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { before: island.id });
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor']);
+  });
+
   it('用户「加载更早」翻出来的历史在满页重连时保留（已验证连续）', () => {
     // 回归(#1210 review):只凭"最新页满页"就清空更早的行,会把用户一路翻出来的历史与滚动锚点
     // 一起丢掉,而且补齐也不会拉回(裁完窗口里已没有内部跳变可发现)。「加载更早」是沿 before 从

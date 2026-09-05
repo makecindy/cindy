@@ -411,7 +411,20 @@ function projectInvokeResultForTunnel(
   channel: string,
   result: unknown,
   supportsFullLogoKinds = false,
+  args: readonly unknown[] = [],
 ): unknown {
+  // Opt-in only: legacy/desktop controllers still receive complete runtime capabilities.
+  // Home only needs run state; repeating the model catalog per runtime blocks slow links.
+  const options = args[0];
+  if (channel === 'maker:list-active' && options && typeof options === 'object'
+    && !Array.isArray(options) && 'summary' in options && options.summary === true
+    && Array.isArray(result)) {
+    return result.map((item: unknown) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+      const row = item as Record<string, unknown>;
+      return { sessionId: row.sessionId, isTurnRunning: row.isTurnRunning };
+    });
+  }
   if (channel !== 'maker:provider:list') return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown };
   if (!Array.isArray(r.providers)) return result;
@@ -3043,6 +3056,7 @@ export async function runInvoke(
           CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
         )
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
+        args,
       ),
     };
   } catch (err) {
