@@ -152,7 +152,7 @@ describe('active-catalog discovered augment', () => {
     ]);
     expect(xai?.models.pi).not.toEqual(xai?.models['claude-code']);
     expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
-      efforts: ['low', 'medium', 'high'],
+      efforts: ['low', 'medium', 'high', 'xhigh'],
       defaultEffort: 'high',
     });
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
@@ -187,7 +187,7 @@ describe('active-catalog discovered augment', () => {
       defaultEffort: 'high',
     });
     expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
-      efforts: ['low', 'medium', 'high'],
+      efforts: ['low', 'medium', 'high', 'xhigh'],
       defaultEffort: 'high',
     });
   });
@@ -198,9 +198,9 @@ describe('active-catalog discovered augment', () => {
       { id: 'xai/grok-4.6', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
     ]);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    // Claude/Codex 静态梯子留给 #2601；Pi 目录已带官方 xhigh。
+    // Server Registry 和独立 Pi 目录均声明 xhigh，不被旧 discovery 降档。
     expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
-      efforts: ['low', 'medium', 'high'],
+      efforts: ['low', 'medium', 'high', 'xhigh'],
       defaultEffort: 'high',
     });
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
@@ -492,6 +492,8 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
       ['claude-sonnet-4-6', 'Sonnet 4.6'],
       ['claude-sonnet-4-5', 'Sonnet 4.5'],
       ['claude-haiku-4-5', 'Haiku 4.5'],
+      ['claude-fable-5-1', 'Fable 5.1'],
+      ['claude-mythos-5', 'Mythos 5'],
     ]);
     expect(anthropicList('codex')).toEqual(
       anthropicList('claude-code').map((model) => ({

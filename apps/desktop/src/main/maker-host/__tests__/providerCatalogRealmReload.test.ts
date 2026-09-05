@@ -444,6 +444,7 @@ describe('provider catalog realm reload', () => {
       (entry) => entry.id === 'openai/gpt-5.6-sol',
     );
     if (!currentEntry) throw new Error('expected gpt-5.6-sol Registry entry');
+    current.modelRegistry!.models = [currentEntry];
     currentEntry.perAgent = { ...currentEntry.perAgent, codex: { efforts: ['high'] } };
     setActiveCatalog(current);
 
@@ -464,6 +465,7 @@ describe('provider catalog realm reload', () => {
       (entry) => entry.id === 'openai/gpt-5.6-sol',
     );
     if (!nextEntry) throw new Error('expected gpt-5.6-sol Registry entry');
+    next.modelRegistry!.models = [nextEntry];
     nextEntry.perAgent = {
       ...nextEntry.perAgent,
       codex: { efforts: ['high', 'max', 'ultra'], defaultEffort: 'ultra' },
@@ -496,6 +498,7 @@ describe('provider catalog realm reload', () => {
       (candidate) => candidate.id === 'openai/gpt-5.6-sol',
     );
     if (!entry) throw new Error('expected gpt-5.6-sol Registry entry');
+    current.modelRegistry!.models = [entry];
     entry.perAgent = {
       ...entry.perAgent,
       codex: { efforts: ['minimal', 'max'], defaultEffort: 'max' },

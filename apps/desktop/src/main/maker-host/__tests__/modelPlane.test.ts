@@ -98,15 +98,19 @@ describe('registry presence 实体化', () => {
   it('a loaded legacy Catalog cannot replace the local Pi membership baseline', () => {
     const expected = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!expected) throw new Error('bundled catalog missing xai');
-    const generatedCatalog = structuredClone(BUNDLED_CATALOG);
+    // Root models consume Registry; Pi retains its independent native baseline.
+    const generatedCatalog = baseCatalog([grokEntry()]);
     const generatedXai = generatedCatalog.providers.find((provider) => provider.id === 'xai');
     if (!generatedXai) throw new Error('generated fixture missing xai');
     generatedXai.models['claude-code'] = [];
     generatedXai.models.codex = [];
     generatedXai.models.pi = [];
     setActiveCatalog(generatedCatalog);
-    expect(models('xai', 'claude-code')).toEqual(expected.models['claude-code']);
-    expect(models('xai', 'codex')).toEqual(expected.models.codex);
+    for (const agent of ['claude-code', 'codex'] as const) {
+      expect(models('xai', agent)).toEqual([
+        expect.objectContaining({ id: 'xai/grok-test', contextWindow: 500_000 }),
+      ]);
+    }
     expect(models('xai', 'pi')).toEqual(expected.models.pi);
   });
 

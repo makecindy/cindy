@@ -106,18 +106,25 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     const registry = BUNDLED_CATALOG.modelRegistry;
     expect(registry).toBeDefined();
     for (const entry of registry!.models) {
-      const efforts = entry.efforts ?? [];
-      if (efforts.length === 0) continue;
-      expect(entry.defaultEffort, entry.id).toBeTruthy();
-      expect(efforts, entry.id).toContain(entry.defaultEffort);
+      for (const agent of new Set(entry.routes.flatMap((route) => route.agents))) {
+        const override = entry.perAgent?.[agent];
+        const efforts = override?.efforts ?? entry.efforts ?? [];
+        const defaultEffort = override?.defaultEffort ?? entry.defaultEffort;
+        if (efforts.length === 0) continue;
+        // Disabled legacy entries may rely on discovery for a default, but must
+        // never declare a default that the target engine does not support.
+        if (entry.defaultEnabled === false && defaultEffort === undefined) continue;
+        expect(defaultEffort, `${entry.id}/${agent}`).toBeTruthy();
+        expect(efforts, `${entry.id}/${agent}`).toContain(defaultEffort);
+      }
     }
     expect(registryEntryForRoute('openai', 'gpt-5.6-luna')).toMatchObject({
       efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
     expect(registryEntryForRoute('openai', 'gpt-5.4-nano')).toMatchObject({
       efforts: ['low', 'medium', 'high', 'xhigh'],
-      defaultEffort: 'high',
+      defaultEnabled: false,
     });
     // Corrections must forward-fix: same updatedAt + different content is a
     // conflict, so cached clients would keep the entries without defaultEffort.
@@ -315,7 +322,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
   it('ships Codex support metadata for the current XD gateway model set', () => {
     const expected = {
       'qwen/qwen3.7-max': 'Qwen 3.7 Max',
-      'moonshotai/kimi-k3': 'Kimi K3',
+      'moonshot/kimi-k3': 'Kimi K3',
       'z-ai/glm-5.2': 'GLM-5.2',
       'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro',
       'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
@@ -342,7 +349,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
         },
       },
     });
-    expect(registryEntryForRoute('xd', 'moonshotai/kimi-k3')).toMatchObject({
+    expect(registryEntryForRoute('xd', 'moonshot/kimi-k3')).toMatchObject({
       efforts: ['low', 'high', 'max'],
       defaultEffort: 'max',
       supportsFastMode: false,
@@ -365,14 +372,14 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     });
     for (const id of ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash']) {
       expect(registryEntryForRoute('xd', id), id).toMatchObject({
-        efforts: ['high', 'max'],
+        efforts: id.endsWith('-flash') ? ['low', 'high', 'max'] : ['high', 'max'],
         defaultEffort: 'high',
         supportsFastMode: false,
       });
     }
     for (const id of [
       'bytedance-seed/seed-2.1-pro',
-      'moonshotai/kimi-k3',
+      'moonshot/kimi-k3',
       'qwen/qwen3.8-max-preview',
     ]) {
       expect(registryEntryForRoute('xd', id), id).not.toHaveProperty('description');
