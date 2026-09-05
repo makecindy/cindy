@@ -58,9 +58,6 @@
     "deviceName": "기기 이름",
     "deviceNameDetail": "컴퓨터의 승인 목록에 이 이름이 표시됩니다.",
     "platform": "플랫폼",
-    "remoteControl": "원격 제어 권한",
-    "remoteControlValue": "데스크톱에서 관리",
-    "remoteControlDetail": "이 휴대폰은 제어하는 쪽으로만 동작합니다. 피제어 허용·철회·복원은 데스크톱 설정에서 진행합니다.",
     "editAccessibility": "{{label}} 수정"
   },
   "relay": {

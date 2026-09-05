@@ -145,6 +145,10 @@ function remoteRosterKeys(): Set<string> {
 }
 
 function notifyRosterChanged(deviceId?: string): void {
+  // Presence includes controller-only phones. Only refresh devices whose roster
+  // was actually requested; reverse capability invokes to an iPhone are rejected
+  // and can tear down the peer link currently serving that phone's requests.
+  if (deviceId && !remoteRosterKeys().has(deviceId)) return;
   const key = cacheKeyOf(deviceId);
   if (!invalidateAgentsCache(key)) return;
   if (deviceId) refreshRemoteCapabilitiesOnce(deviceId);

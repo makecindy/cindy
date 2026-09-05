@@ -142,7 +142,7 @@ describe('PI Subagent reclaim before an update relaunch', () => {
       source.indexOf('async function executeRelaunch('),
       source.indexOf('async function executeRelaunchUnguarded('),
     );
-    expect(wrapper).toMatch(/try \{\s*await executeRelaunchUnguarded\(theme\);\s*\} catch/);
+    expect(wrapper).toMatch(/try \{\s*await executeRelaunchUnguarded\(theme, checkForBinaryUpdates\);\s*\} catch/);
     expect(wrapper).toContain("handleApplyFailure('relaunch_failed')");
     // The gate and everything after it live in the guarded body.
     const guarded = source.slice(source.indexOf('async function executeRelaunchUnguarded('));
@@ -153,9 +153,8 @@ describe('PI Subagent reclaim before an update relaunch', () => {
   it('keeps every relaunch entry point on the awaited path', () => {
     // `executeRelaunch` is now async; a forgotten `void` would silently drop
     // the gate's rejection handling.
-    expect([...source.matchAll(/(?<!void )executeRelaunch\(resolved\)/g)]).toHaveLength(0);
-    expect([...source.matchAll(/(?<!void )executeRelaunch\(theme\)/g)]).toHaveLength(0);
-    expect(source).toContain('void executeRelaunch(resolved);');
+    expect([...source.matchAll(/(?<!void )executeRelaunch\((?:resolved|theme)(?:,[^)]*)?\)/g)]).toHaveLength(0);
+    expect(source).toContain('void executeRelaunch(resolved, true);');
     expect(source).toContain('void executeRelaunch(theme);');
   });
 });

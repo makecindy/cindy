@@ -35,6 +35,7 @@ import { probeBinaryVersion } from './binary-version-probe.js';
 import { findDevBinary } from './dev-fallback.js';
 import {
   findCachedLinuxRuntimeFallbackBinary,
+  findUsableLinuxRuntimeFallbackBinary,
   prepareLinuxRuntimeFallback,
 } from './linux-runtime-fallback.js';
 import { getVendorAsset } from './manifest.js';
@@ -46,6 +47,15 @@ import {
 } from '../manifestService.js';
 import { ProgressNormalizer } from '../updateProgressNormalizer.js';
 import { createLogger } from '../logger.js';
+import { consumeStartupBinaryUpdateMarker } from './startup-update.js';
+
+let startupCheckForUpdates: boolean | undefined;
+
+function resolveUpdateCheck(checkForUpdates?: boolean): boolean {
+  startupCheckForUpdates ??= app.isPackaged
+    && consumeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion());
+  return checkForUpdates ?? startupCheckForUpdates;
+}
 
 /**
  * CDN 腿预算上限(毫秒)。有进展的慢速下载给 3 分钟窗口(百 MB 级资产在慢网
@@ -345,6 +355,8 @@ export async function prepare(
     return { ready: false, error: `${kind} dev binary not found for ${getPlatformKey()}`, downloaded: false };
   }
 
+  opts = { ...opts, checkForUpdates: resolveUpdateCheck(opts.checkForUpdates) };
+
   // ── packaged Linux: CDN manifest 段优先,失败静默回落 runtime fallback ─────
   // 2026-08 起 Linux 与 mac/win 同链:scripts 侧发版把 claude/codex 资产上传
   // 区域 CDN 并写进 manifest 段(国内可达)。CDN 链失败(manifest 无段——旧
@@ -354,6 +366,7 @@ export async function prepare(
   // pi 例外:没有官方 CLI fallback 链,Linux 也走下方通用 manifest 路径
   // (manifest 缺 pi 字段 → asset_missing 快速失败,由调用方降级)。
   if (process.platform === 'linux' && app.isPackaged && kind !== 'pi') {
+    if (opts.checkForUpdates === false && !getCachedManifest()) await probeManifestForPeek();
     // 本轮轮次起点:优先消费本轮 peek 探测的发起点(含 Phase 0 探测耗时,
     // 比 prepare 起点更接近 signal 创建时刻);本轮 peek 命中缓存未探测时
     // lastPeekProbeStartMs 为 0,退回 now。消费后清零,防跨轮残留
@@ -372,6 +385,16 @@ export async function prepare(
     // 可能已拉取并缓存)→ 清标记走 CDN,CDN 资产可用时不该被旧标记跳过。
     if (getCachedManifest()) skipCdnUntilNextProbeSuccess = false;
     const cdnSkipped = skipCdnUntilNextProbeSuccess;
+    if (opts.checkForUpdates === false) {
+      const hasLocalCdnRuntime = getCachedManifest() && !await getBase(kind).peekNeedsDownload(opts);
+      if (!hasLocalCdnRuntime) {
+        const localPath = await findUsableLinuxRuntimeFallbackBinary(kind, opts.signal);
+        if (localPath) {
+          lastReadyPath.set(kind, localPath);
+          return { ready: true, path: localPath, downloaded: false };
+        }
+      }
+    }
     // CDN 腿的信号与预算在 prepareViaCdn 内构造(预算从传输真正开始计起,
     // 排队等待不计入,见该函数注释)。CDN 链任何异常(含磁盘错误级)都是降级
     // 第一环的信号:吞掉走 fallback,绝不让 CDN 尝试本身变成 splash 失败原因。
@@ -477,7 +500,7 @@ async function prepareViaCdn(
 
   // ── 不广播 IPC 路径 (lazy 调用, 当前 desktop 不走) ────────────────────────
   if (!broadcastProgress) {
-    const result = await base.prepare({ signal: opts.signal });
+    const result = await base.prepare({ signal: opts.signal, checkForUpdates: opts.checkForUpdates });
     if (result.ready) {
       lastReadyPath.set(kind, result.binaryPath);
       return { ready: true, path: result.binaryPath };
@@ -542,6 +565,7 @@ async function prepareViaCdn(
   try {
     const result = await base.prepare({
       signal: effectiveSignal,
+      checkForUpdates: opts.checkForUpdates,
       onProgress: (p: VendorRuntimeState) => {
         if (p.status === 'downloading') {
           didDownload = true;
@@ -607,9 +631,13 @@ async function prepareViaCdn(
 
 // ── splash 顺序检查 helpers ──────────────────────────────────────────────────
 
-export async function peekNeedsDownload(kind: AgentBinaryKind): Promise<boolean> {
+export async function peekNeedsDownload(
+  kind: AgentBinaryKind,
+  opts: Pick<PrepareOpts, 'checkForUpdates'> = {},
+): Promise<boolean> {
   // dev 模式永不下载 (findDevBinary 命中 / 缺失都不走 OSS)
   if (!app.isPackaged) return false;
+  opts = { ...opts, checkForUpdates: resolveUpdateCheck(opts.checkForUpdates) };
   // Linux(cc/codex):manifest 有段 → 走通用 CDN peek(与 mac/win 同口径);
   // 无段(旧 canary / 首发渠道)→ 只看私有 fallback 是否已就位(fs 快查)。
   // peek 时 manifest 未缓存则做一次跨 vendor 的短超时探测(3s,single-flight +
@@ -627,11 +655,13 @@ export async function peekNeedsDownload(kind: AgentBinaryKind): Promise<boolean>
       manifest = await probeManifestForPeek();
     }
     if (manifest && getVendorAsset(manifest, CONFIG[kind].manifestField)) {
-      return getBase(kind).peekNeedsDownload();
+      const needsDownload = await getBase(kind).peekNeedsDownload(opts);
+      if (!needsDownload || opts.checkForUpdates) return needsDownload;
     }
+    if (opts.checkForUpdates === false) return await findUsableLinuxRuntimeFallbackBinary(kind) === null;
     return findCachedLinuxRuntimeFallbackBinary(kind) === null;
   }
-  return getBase(kind).peekNeedsDownload();
+  return getBase(kind).peekNeedsDownload(opts);
 }
 
 export async function getInstallState(kind: AgentBinaryKind): Promise<VendorRuntimeState> {

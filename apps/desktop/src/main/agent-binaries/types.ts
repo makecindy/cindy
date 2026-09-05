@@ -62,6 +62,7 @@ export interface BinaryProvisioner {
   /** 显式触发安装/升级流程；幂等：本地已有正确版本时立即返回 ready: true */
   prepare(opts?: {
     onProgress?: (p: VendorRuntimeState) => void;
+    checkForUpdates?: boolean;
     /** 取消排队、下载或重试等待；已完成的本地命中不受影响。 */
     signal?: AbortSignal;
   }): Promise<{ ready: boolean; binaryPath: string; error?: string }>;
@@ -71,7 +72,7 @@ export interface BinaryProvisioner {
    * 复用 cached manifest（splash phase 1 已 fetch）+ 本地 isInstalled+.verified 检查。
    * dev 模式下 host 包壳层应在调用前自行短路（dev 永不走 OSS）。
    */
-  peekNeedsDownload(): Promise<boolean>;
+  peekNeedsDownload(opts?: { checkForUpdates?: boolean }): Promise<boolean>;
 
   /** 清理旧版本 */
   cleanup(keepVersion: string): Promise<void>;
@@ -80,6 +81,7 @@ export interface BinaryProvisioner {
 // ── 上层包壳类型 (供 prepare(kind, opts) 使用) ──────────────────────────────
 
 export interface PrepareOpts {
+  checkForUpdates?: boolean;
   /** D 场景顺序下载阶段标记，会写进 IPC payload 给 splash 显示 (x/y) 文案。 */
   step?: 1 | 2 | 3;
   /** D 场景 = 本次需要下载的 vendor 数(2 或 3);B/C 场景缺省。 */

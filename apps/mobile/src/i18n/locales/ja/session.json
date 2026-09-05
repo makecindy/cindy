@@ -268,6 +268,14 @@
     "composerPlaceholder": "今日は何をしましょうか〜",
     "voiceSelectDeviceFirst": "デバイスを選択してから音声入力を使用してください。",
     "creatingSession": "セッションを作成中",
+    "slowSend": {
+      "preparing": "送信を準備中…",
+      "uploading": "添付ファイルをアップロード中…",
+      "connecting": "コンピュータに接続中…",
+      "checkingModel": "モデル設定を確認中…",
+      "creating": "セッションを作成中…",
+      "sending": "メッセージを送信中…"
+    },
     "createAndSend": "セッションを作成して最初のメッセージを送信",
     "modelAccessibility": "モデル：{{model}}",
     "voiceInput": "音声入力",

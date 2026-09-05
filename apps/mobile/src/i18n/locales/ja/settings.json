@@ -58,9 +58,6 @@
     "deviceName": "デバイス名",
     "deviceNameDetail": "パソコン側の承認リストにこの名前が表示されます。",
     "platform": "プラットフォーム",
-    "remoteControl": "リモート制御権限",
-    "remoteControlValue": "パソコン側で管理",
-    "remoteControlDetail": "このスマートフォンは操作する側としてのみ動作します。被操作の許可・取り消し・復元はパソコン側の設定で行います。",
     "editAccessibility": "{{label}}を変更"
   },
   "relay": {

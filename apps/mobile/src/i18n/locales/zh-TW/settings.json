@@ -58,9 +58,6 @@
     "deviceName": "裝置名稱",
     "deviceNameDetail": "電腦端授權列表會顯示這個名稱。",
     "platform": "平臺",
-    "remoteControl": "被控權限",
-    "remoteControlValue": "電腦端管理",
-    "remoteControlDetail": "手機只作為控制端。允許被控、撤銷和恢復權限仍在電腦端設定裡完成。",
     "editAccessibility": "修改{{label}}"
   },
   "relay": {

@@ -76,6 +76,8 @@ export interface NewSessionDeviceOption {
 export interface NewSessionStoredPreferences {
   agentKind: NewSessionAgentKind | null;
   device: NewSessionDeviceOption | null;
+  /** 上次显式选择的项目/对话模式；null 表示尚未选择，沿用入口默认。 */
+  workspaceKind: NewSessionWorkspaceKind | null;
   /**
    * 每个 agent 上次在新建页显式选过的权限档(对齐桌面 lastByVendor 的权限记忆语义);
    * 没选过 = 缺失,回落该 agent 的安全种子默认。'plan' 不入记忆(计划模式是独立开关)。
@@ -449,6 +451,8 @@ export function resolveRecentModelAndProvider(
  *   (循环 ≤3,防代际持续抖动死循环);重拉失败且代际稳定 → 未知 → 信任(fail-open)。
  */
 export async function resolveSubmitGuardCatalog(args: {
+  /** 普通创建保留用户选择，由后台建链后的权威目录终检；Goal 不适用。 */
+  deferRefreshToCreation?: boolean;
   /** 设备缓存读取(驱逐即清空;写入受代际门控)。 */
   cached: () => DeviceProvidersPayload | undefined;
   /** 当前设备缓存代际(驱逐 +1;0 = 从未驱逐)。 */
@@ -459,6 +463,10 @@ export async function resolveSubmitGuardCatalog(args: {
   buildRows: (payload: DeviceProvidersPayload) => readonly ProviderModelRow[];
 }): Promise<{ rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number }> {
   const { cached, gen, fetch, buildRows } = args;
+  if (args.deferRefreshToCreation) {
+    // 旧缓存可能缺少刚连接的来源，不能先把用户选择回退、再让 fresh 校验这个回退值。
+    return { rows: [], catalogKnown: false, genAt: gen() };
+  }
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const genAt = gen();
     const hit = cached();

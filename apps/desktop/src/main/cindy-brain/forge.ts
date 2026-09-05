@@ -3486,6 +3486,14 @@ const saved = await cindy.library({ op: 'saveAs', path: 'exports/a.psd', name: '
 //      或 { ok:true, cancelled:false, path:'exports/a.psd', bytes }
 // path 永远是库内相对键,不是用户另存到的绝对路径
 
+// 写系统剪贴板 PNG 位图(不是 Finder 文件列表,也不是 saveAs)
+const copied = await cindy.library({
+  op: 'clipboardWrite', content: pngBase64, encoding: 'base64',
+});
+// copied = { ok:true, bytes }  —— bytes 是写入的 PNG 字节数
+// 空字节 / 非 base64 / 非 PNG / 超限 → { ok:false, errorCode, message }
+// 外部应用能否粘上由操作系统剪贴板决定,插件侧不要自己承诺粘贴完成
+
 // SQLite:参数化语句 + 首词白名单(SELECT/WITH/INSERT/REPLACE/UPDATE/DELETE/
 // CREATE/DROP/ALTER/REINDEX/ANALYZE);ATTACH/PRAGMA/VACUUM/事务语句一律拒,
 // 事务由宿主管理(db.batch 整批原子),迁移按 user_version 幂等续跑
@@ -3517,6 +3525,12 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   对话框期间账号切换则拒绝拷贝(\`LIBRARY_UNAVAILABLE\`);
   拷贝完成替换前、reveal 打开文件夹前再核一次会话;
   确认后先拷到目标旁临时文件再替换,失败不破坏已有文件;
+- **clipboardWrite**:只收 \`encoding:'base64'\` 的 PNG 字节,写系统剪贴板位图,
+  成功回 \`{ ok:true, bytes }\`。不是 saveAs,也不在文件夹中显示作品。
+  空字节 / 非法 encoding / 非 PNG / 超限一律结构化失败,永不 \`ok:true\`。
+  同插件 3 秒内连发 \`RATE_LIMITED\`;无主壳窗 / 宿主不能写剪贴板 \`UNSUPPORTED\`;
+  账号切换后旧会话不得继续写(\`LIBRARY_UNAVAILABLE\`)。
+  外部粘贴是否成功由操作系统与目标应用决定,插件侧不要单独承诺已粘上;
 - **不可用 ≠ 空**:\`state:'unavailable'\` 时**不要**当空库重建、不要触发
   清理、不要把素材判成已删——如实向用户展示状态,等位置恢复;
 - **无跨库事务**:多个 .sqlite 之间没有 ATTACH;跨库一致性用幂等 + 墓碑
