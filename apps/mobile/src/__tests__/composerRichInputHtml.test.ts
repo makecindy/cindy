@@ -34,6 +34,12 @@ describe('mobile composer rich input HTML', () => {
   });
 
   it('ships an offline contenteditable protocol with atom deletion and caret placement', () => {
+    // The editor scrollport follows UI-driven WebView resizing without waiting
+    // for a setConfig message, while scrollHeight still reports natural content.
+    expect(html).toContain('max-height: min(var(--max-height), 100vh)');
+    expect(html).toContain('overflow-y: auto');
+    expect(html).toContain('root.scrollHeight');
+    expect(html).not.toContain('height: 100vh;');
     expect(html).toContain('contentEditable');
     expect(html).toContain("event.key === 'Backspace'");
     expect(html).toContain('placeCaretAroundAtom(atom, event.clientX)');
@@ -279,6 +285,7 @@ describe('mobile composer rich input HTML', () => {
       cindyComposer?: {
         applyDocument(value: unknown, focusAfter?: boolean): void;
         commitPaste(requestId: string, nodes: unknown[]): void;
+        setConfig(value: { maxHeight: number }): void;
       };
       getSelection(): typeof selection;
     } = {
@@ -292,12 +299,14 @@ describe('mobile composer rich input HTML', () => {
       },
     };
 
+    let onResize = () => {};
     runInNewContext(
       `Array.prototype.flatMap = undefined;\n${script}`,
       {
         document: documentStub,
         Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
         ResizeObserver: class {
+          constructor(callback: () => void) { onResize = callback; }
           observe() {}
         },
         window: windowStub,
@@ -306,6 +315,19 @@ describe('mobile composer rich input HTML', () => {
     expect(children).toHaveLength(1);
     expect(children[0]).toMatchObject({ nodeType: 3, nodeValue: 'hello' });
     expect(messages).toContainEqual({ type: 'ready' });
+    // A long draft's scrollport resizes on every drag frame; unchanged content
+    // measurements must not cross the WebView bridge again on those frames.
+    root.scrollHeight = 500;
+    const beforeResize = messages.length;
+    for (let frame = 0; frame < 100; frame += 1) onResize();
+    expect(messages.slice(beforeResize)).toEqual([{ type: 'height', height: 264 }]);
+    windowStub.cindyComposer?.setConfig({ maxHeight: 400 });
+    expect(messages.at(-1)).toEqual({ type: 'height', height: 400 });
+    root.scrollHeight = 80;
+    const beforeContentShrink = messages.length;
+    onResize();
+    onResize();
+    expect(messages.slice(beforeContentShrink)).toEqual([{ type: 'height', height: 80 }]);
     children[0].nodeValue = 'hello world';
     listeners.get('input')?.();
     expect(messages).toContainEqual({

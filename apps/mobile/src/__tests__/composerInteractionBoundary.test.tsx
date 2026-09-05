@@ -67,7 +67,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 const flushJS = () => act(() => { for (const job of runtime.js.splice(0)) job(); });
 const gestureOf = (value: unknown) => value as TestGesture;
-const styleOf = (value: unknown) => (value as { current: { height: number } }).current;
+const styleOf = (value: unknown) => (value as { current: { height: number; maxHeight?: number } }).current;
 
 beforeEach(() => {
   runtime.js = [];
@@ -99,12 +99,18 @@ describe('composer resize interaction boundary', () => {
     const input = composerInput();
     const harness = mountComposer(input);
     const gesture = gestureOf(harness.result.gesture);
+    const innerLimit = harness.result.inputMaxHeight;
+    expect(innerLimit).toBeGreaterThan(input.autoMaxContentHeight);
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBe(input.autoMaxContentHeight);
     gesture.begin({ translationY: 0 });
     // Even touch-down can wait for JS while the native frame follows the finger.
     const before = harness.renders;
     for (let index = 1; index <= 100; index++) gesture.update({ translationY: -index });
     expect(harness.result.contentHeight.value).toBe(160);
     expect(styleOf(harness.result.frameStyle).height).toBeGreaterThan(160);
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBeUndefined();
+    expect(innerLimit).toBeGreaterThanOrEqual(styleOf(harness.result.frameStyle).height);
+    expect(harness.result.inputMaxHeight).toBe(innerLimit);
     expect(harness.renders).toBe(before);
     expect(runtime.js).toHaveLength(1); // only begin, never pointer moves
     gesture.finalize({ translationY: -100 }, true);
@@ -125,10 +131,40 @@ describe('composer resize interaction boundary', () => {
     gesture.finalize({ translationY: 100 }, false);
     expect(harness.result.active.value).toBe(false);
     expect(harness.result.contentHeight.value).toBe(60);
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBe(input.autoMaxContentHeight);
     flushJS();
     expect(harness.result.contentHeight.value).toBe(60);
     expect(harness.result.mode).toBe('auto');
     expect(input.onSnapToAuto).not.toHaveBeenCalled();
+  });
+
+  it('keeps long drafts at the auto cap and restores that cap after cancel and reset', () => {
+    const input = { ...composerInput(), contentHeight: 500 };
+    const harness = mountComposer(input);
+    const gesture = gestureOf(harness.result.gesture);
+    expect(harness.result.visibleContentHeight).toBe(120);
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBe(120);
+    expect(harness.result.scrollEnabled).toBe(true);
+    gesture.begin({ translationY: 0 });
+    gesture.update({ translationY: -100 });
+    expect(harness.result.contentHeight.value).toBe(220);
+    expect(harness.result.inputMaxHeight).toBeGreaterThanOrEqual(220);
+    gesture.finalize({ translationY: -100 }, false);
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBe(120);
+    expect(harness.result.contentHeight.value).toBe(120);
+    flushJS();
+    gesture.begin({ translationY: 0 });
+    gesture.update({ translationY: -100 });
+    gesture.finalize({ translationY: -100 }, true);
+    flushJS();
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBeUndefined();
+    act(() => harness.result.reset());
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBe(120);
+    expect(harness.result.visibleContentHeight).toBe(120);
+    input.autoMaxContentHeight = 100;
+    harness.rerender();
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBe(100);
+    expect(harness.result.visibleContentHeight).toBe(100);
   });
 
   it('starts a new drag from the settled manual height before canceled JS callbacks arrive', () => {

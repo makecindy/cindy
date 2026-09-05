@@ -41,13 +41,13 @@ export function useComposerResize(input: UseComposerResizeInput) {
   latest.current = input;
   const bounds = computeComposerResizeBounds(input);
   const model = resolveComposerInputHeight({ ...input, bounds, userContentHeight });
-  const geometry = useSharedValue({ bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0 });
+  const geometry = useSharedValue({ bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0, autoMaxHeight: input.autoMaxContentHeight });
   const active = useSharedValue(false);
   const gestureId = useSharedValue(0);
   const startHeight = useSharedValue(model.visibleContentHeight);
   const dragHeight = useSharedValue(model.visibleContentHeight);
   useLayoutEffect(() => {
-    const nextGeometry = { bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0 };
+    const nextGeometry = { bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0, autoMaxHeight: input.autoMaxContentHeight };
     // Check the generation and publish together on UI: another gesture may
     // begin between React's commit and delivery of this geometry update.
     runOnUI((next: typeof nextGeometry, completed: number) => {
@@ -55,7 +55,7 @@ export function useComposerResize(input: UseComposerResizeInput) {
       geometry.value = next;
       if (completed === gestureId.value) active.value = false;
     })(nextGeometry, completedGesture);
-  }, [active, bounds.minContentHeight, bounds.maxContentHeight, completedGesture, gestureId, input.collapsed, input.minFrameHeight, model.mode, model.visibleContentHeight, geometry]);
+  }, [active, bounds.minContentHeight, bounds.maxContentHeight, completedGesture, gestureId, input.autoMaxContentHeight, input.collapsed, input.minFrameHeight, model.mode, model.visibleContentHeight, geometry]);
 
   const begin = useCallback((id: number) => {
     if (!mounted.current || id !== gestureId.value) return;
@@ -150,6 +150,9 @@ export function useComposerResize(input: UseComposerResizeInput) {
     ? Math.max(geometry.value.bounds.minContentHeight, Math.min(dragHeight.value, geometry.value.bounds.maxContentHeight))
     : geometry.value.visibleHeight);
   const frameStyle = useAnimatedStyle(() => ({
+    // Auto growth stays capped, but the grabber removes that cap on UI before
+    // begin can reach JS. Explicit heights are already bounded by the model.
+    maxHeight: active.value || geometry.value.explicit ? undefined : geometry.value.autoMaxHeight,
     height: active.value || geometry.value.explicit
       ? Math.max(geometry.value.minFrameHeight, contentHeight.value + COMPOSER_TEXT_VERTICAL_PADDING * 2)
       : undefined,
@@ -169,9 +172,9 @@ export function useComposerResize(input: UseComposerResizeInput) {
     dragging,
     frameStyle,
     gesture,
-    inputMaxHeight: dragging || model.mode === 'manual'
-      ? bounds.maxContentHeight + COMPOSER_TEXT_VERTICAL_PADDING * 2
-      : input.autoMaxContentHeight,
+    // The inner TextInput/WebView must be ready to fill any UI-driven frame;
+    // waiting for React dragging here would clip it during a busy JS thread.
+    inputMaxHeight: Math.max(input.autoMaxContentHeight, bounds.maxContentHeight + COMPOSER_TEXT_VERTICAL_PADDING * 2),
     maxFrameHeight: bounds.maxContentHeight + COMPOSER_TEXT_VERTICAL_PADDING * 2,
     mode: model.mode,
     panHandlers,
