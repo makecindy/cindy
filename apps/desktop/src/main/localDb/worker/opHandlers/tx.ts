@@ -4,6 +4,7 @@
 import type Database from 'better-sqlite3';
 
 import type { DbTxName } from '../../client/tx/types.js';
+import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
 import { capImportedToolResultContent } from '../../../../shared/toolResultPersistCap.js';
 import {
@@ -1599,46 +1600,39 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
   const detachAgentSwitchSessions = payload.detachAgentSwitchSessions === true;
   const resetHandoffBoundaryClientId = nullableString(payload.resetHandoffBoundaryClientId);
   const newMessageIds = normalizeNewMessageIds(payload.newMessageIds);
-  const sourceMessages = db
-    .prepare(
-      `SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at
-       FROM messages
-      WHERE session_id = ?
-        AND (? IS NULL OR created_at > ?)
-        AND (
-          created_at < ?
-          OR (? IS NOT NULL AND created_at = ? AND rowid < ?)
-        )
-        AND rewind_at IS NULL
-      ORDER BY created_at ASC, rowid ASC`,
-  ).all(
-    sourceSessionId,
-    sourceClearedAt,
-    sourceClearedAt,
-    targetCreatedAt,
-    targetRowid,
-    targetCreatedAt,
-    targetRowid,
-  ) as Array<{
-    client_id: string;
-    role: string;
-    content: string;
-    tool_use_id: string | null;
-    agent_meta: string | null;
-    agent_kind: string | null;
-    created_at: number;
-  }>;
-  if (newMessageIds.length !== sourceMessages.length) {
-    throw invalidArgs(
-      `newMessageIds length mismatch: expected ${sourceMessages.length}, got ${newMessageIds.length}`,
-    );
-  }
   const insertMessage = db.prepare(
     `INSERT INTO messages
       (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   );
   const transaction = db.transaction(() => {
+    if (payload.recoveryMarker != null && !db.prepare(
+      'SELECT 1 FROM sessions WHERE id = ? AND cleared_at IS ?',
+    ).get(sourceSessionId, sourceClearedAt)) {
+      throw invalidArgs('Source history changed while preparing recovery fork');
+    }
+    const sourceMessages = db.prepare(
+      `SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at
+       FROM messages
+       WHERE session_id = ?
+         AND (? IS NULL OR created_at > ?)
+         AND (created_at < ? OR (? IS NOT NULL AND created_at = ? AND rowid < ?))
+         AND rewind_at IS NULL
+       ORDER BY created_at ASC, rowid ASC`,
+    ).all(sourceSessionId, sourceClearedAt, sourceClearedAt, targetCreatedAt,
+      targetRowid, targetCreatedAt, targetRowid) as ForkSourceMessage[];
+    if (payload.recoveryMarker != null) {
+      const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      if (computeForkSourceMessagesDigest(sourceMessages)
+        !== expectString(marker.sourceMessagesDigest, 'recoveryMarker.sourceMessagesDigest')) {
+        throw invalidArgs('Source history changed while preparing recovery fork');
+      }
+    }
+    if (newMessageIds.length !== sourceMessages.length) {
+      throw invalidArgs(
+        `newMessageIds length mismatch: expected ${sourceMessages.length}, got ${newMessageIds.length}`,
+      );
+    }
     db.prepare(
       `INSERT INTO sessions (
         id, title, working_dir, model, provider_id, effort, permission_mode, status,
@@ -1726,9 +1720,9 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
         expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
       );
     }
+    return { messageCount: sourceMessages.length };
   });
-  transaction();
-  return { messageCount: sourceMessages.length };
+  return transaction();
 }
 
 /** 复制边界只保留可见语义；vendor session 绑定必须属于父分支。 */

@@ -1749,6 +1749,18 @@ function parseAgentMeta(raw) {
   }
 }
 
+// Keep the inline fallback aligned with localDb/forkRecoverySnapshot.ts.
+function computeForkSourceMessagesDigest(rows) {
+  const hash = crypto.createHash('sha256');
+  for (const row of rows) {
+    hash.update(JSON.stringify([
+      row.client_id, row.role, row.content, row.tool_use_id ?? null,
+      row.agent_meta ?? null, row.agent_kind ?? null, row.created_at,
+    ])).update('\\n');
+  }
+  return hash.digest('hex');
+}
+
 function forkSession(readyDb, args) {
   const payload = asRecord(args, 'fork.session args');
   const sourceSessionId = expectString(payload.sourceSessionId, 'sourceSessionId');
@@ -1763,16 +1775,27 @@ function forkSession(readyDb, args) {
   const detachAgentSwitchSessions = payload.detachAgentSwitchSessions === true;
   const resetHandoffBoundaryClientId = nullableString(payload.resetHandoffBoundaryClientId);
   const newMessageIds = normalizeNewMessageIds(payload.newMessageIds);
-  const sourceMessages = readyDb.prepare(
-    'SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM messages WHERE session_id = ? AND (? IS NULL OR created_at > ?) AND (created_at < ? OR (? IS NOT NULL AND created_at = ? AND rowid < ?)) AND rewind_at IS NULL ORDER BY created_at ASC, rowid ASC',
-  ).all(sourceSessionId, sourceClearedAt, sourceClearedAt, targetCreatedAt, targetRowid, targetCreatedAt, targetRowid);
-  if (newMessageIds.length !== sourceMessages.length) {
-    throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
-  }
   const insertMessage = readyDb.prepare(
     'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
   );
-  readyDb.transaction(() => {
+  return readyDb.transaction(() => {
+    if (payload.recoveryMarker != null && !readyDb.prepare(
+      'SELECT 1 FROM sessions WHERE id = ? AND cleared_at IS ?',
+    ).get(sourceSessionId, sourceClearedAt)) {
+      throw invalidArgs('Source history changed while preparing recovery fork');
+    }
+    const sourceMessages = readyDb.prepare(
+      'SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM messages WHERE session_id = ? AND (? IS NULL OR created_at > ?) AND (created_at < ? OR (? IS NOT NULL AND created_at = ? AND rowid < ?)) AND rewind_at IS NULL ORDER BY created_at ASC, rowid ASC',
+    ).all(sourceSessionId, sourceClearedAt, sourceClearedAt, targetCreatedAt, targetRowid, targetCreatedAt, targetRowid);
+    if (payload.recoveryMarker != null) {
+      const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      if (computeForkSourceMessagesDigest(sourceMessages) !== expectString(marker.sourceMessagesDigest, 'recoveryMarker.sourceMessagesDigest')) {
+        throw invalidArgs('Source history changed while preparing recovery fork');
+      }
+    }
+    if (newMessageIds.length !== sourceMessages.length) {
+      throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
+    }
     readyDb.prepare(
       'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     ).run(
@@ -1830,8 +1853,8 @@ function forkSession(readyDb, args) {
         expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
       );
     }
+    return { messageCount: sourceMessages.length };
   })();
-  return { messageCount: sourceMessages.length };
 }
 
 function sanitizeForkedMessageContent(message, opts) {

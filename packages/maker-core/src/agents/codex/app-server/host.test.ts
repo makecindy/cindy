@@ -258,6 +258,110 @@ describe('AppServerHost custom Provider subagent policy', () => {
   });
 });
 
+describe('AppServerHost shutdown completion', () => {
+  it.each([false, true])('shutdown and retire wait for the same process (failure=%s)', async (fails) => {
+    const transport = new NotificationTransport();
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const completion = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; });
+    const close = vi.spyOn(transport, 'close').mockImplementation(() => completion);
+    const onRetired = vi.fn();
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, onRetired });
+    await host.ensureStarted();
+    const settled = vi.fn();
+    const shutdown = host.shutdown().then(settled);
+    const retire = host.retire('retire', { throwOnTransportError: true });
+    const retirement = fails
+      ? expect(retire).rejects.toThrow('exit not confirmed')
+      : expect(retire).resolves.toBeUndefined();
+    await Promise.resolve();
+    await expect(host.ensureStarted()).rejects.toThrow('after retirement');
+    expect(onRetired).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+    if (fails) fail(new Error('exit not confirmed'));
+    else finish();
+    await Promise.all([shutdown, retirement]);
+    expect(close).toHaveBeenCalledOnce();
+    expect(onRetired).toHaveBeenCalledTimes(fails ? 0 : 1);
+    if (fails) {
+      await expect(host.shutdown('retry', { throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+      expect(onRetired).not.toHaveBeenCalled();
+      close.mockResolvedValue(undefined);
+      await Promise.all([host.retire(), host.retire('late exit', { throwOnTransportError: true })]);
+      expect(onRetired).toHaveBeenCalledOnce();
+      await expect(retire).rejects.toThrow('exit not confirmed');
+    }
+    await host.retire();
+    expect(close).toHaveBeenCalledTimes(fails ? 3 : 1);
+    expect(onRetired).toHaveBeenCalledOnce();
+    await expect(host.ensureStarted()).rejects.toThrow('after retirement');
+  });
+
+  it('rechecks failed shutdown before restarting and respects retirement during that recheck', async () => {
+    const transport = new NotificationTransport();
+    const close = vi.spyOn(transport, 'close').mockRejectedValue(new Error('exit not confirmed'));
+    const createTransport = vi.fn().mockReturnValueOnce(transport).mockReturnValue(new NotificationTransport());
+    const onRetired = vi.fn();
+    const host = new AppServerHost({ createTransport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, onRetired });
+    await host.ensureStarted();
+    await expect(host.shutdown('failed', { throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+    await expect(host.ensureStarted()).rejects.toThrow('exit not confirmed');
+    expect(createTransport).toHaveBeenCalledOnce();
+    close.mockResolvedValue(undefined);
+    await host.ensureStarted();
+    expect(createTransport).toHaveBeenCalledTimes(2);
+
+    const nextTransport = createTransport.mock.results[1]!.value as NotificationTransport;
+    const nextClose = vi.spyOn(nextTransport, 'close').mockRejectedValue(new Error('exit not confirmed'));
+    await host.shutdown();
+    let finish!: () => void;
+    nextClose.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const restart = expect(host.ensureStarted()).rejects.toThrow('after retirement');
+    const retiring = host.retire('retire during recheck', { throwOnTransportError: true });
+    await vi.waitFor(() => expect(nextClose).toHaveBeenCalledTimes(2));
+    finish();
+    await Promise.all([restart, retiring]);
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    expect(onRetired).toHaveBeenCalledOnce();
+  });
+
+  it('blocks bootstrap retry until the failed process has exited', async () => {
+    const failed = new RejectedInitializeTransport();
+    let finish!: () => void;
+    vi.spyOn(failed, 'close').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const createTransport = vi.fn().mockReturnValueOnce(failed).mockReturnValue(new NotificationTransport());
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    const failure = expect(host.ensureStarted()).rejects.toThrow('initialize boom');
+    await vi.waitFor(() => expect(failed.close).toHaveBeenCalledOnce());
+    await expect(host.ensureStarted()).rejects.toThrow('during shutdown');
+    expect(createTransport).toHaveBeenCalledOnce();
+    finish();
+    await failure;
+    await host.ensureStarted();
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    await host.shutdown();
+  });
+
+  it('recovers when subscribing synchronously reports a closed startup transport', async () => {
+    const failed = new NotificationTransport();
+    let finish!: () => void;
+    vi.spyOn(failed, 'onClose').mockImplementation((handler) => { handler({ reason: 'closed on subscribe' }); return () => {}; });
+    vi.spyOn(failed, 'close').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const createTransport = vi.fn().mockReturnValueOnce(failed).mockReturnValue(new NotificationTransport());
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    const failure = expect(host.ensureStarted()).rejects.toThrow();
+    await vi.waitFor(() => expect(failed.close).toHaveBeenCalledOnce());
+    await expect(host.ensureStarted()).rejects.toThrow('during shutdown');
+    finish();
+    await failure;
+    await host.ensureStarted();
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    await host.shutdown();
+  });
+});
+
 describe('AppServerHost MCP readiness', () => {
   it('releases Host-owned resources only on terminal retire and only once', async () => {
     const onRetired = vi.fn(async () => undefined);
