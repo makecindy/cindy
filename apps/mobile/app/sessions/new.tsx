@@ -26,7 +26,6 @@ import {
   useWindowDimensions,
   type StyleProp,
   type TextInputContentSizeChangeEvent,
-  type TextLayoutEvent,
   type ViewStyle,
 } from 'react-native';
 import { Text } from '@/components/AppText';
@@ -330,7 +329,6 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
-const COMPOSER_VOICE_CARET_GAP = 2;
 // composer 除输入区外的 chrome 高度估算（输入行上下 padding + 边框），
 // 只用于给拖拽调高的上限留余量，与会话页同量级。
 const COMPOSER_RESIZE_CHROME_HEIGHT = 34;
@@ -712,6 +710,8 @@ export default function NewRemoteSessionScreen() {
   const [firstMessageInputContentHeight, setFirstMessageInputContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
   const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(false);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
+  const voiceDraftCaretRef = useRef<View>(null);
+  const voiceDraftMeasuredBlockRef = useRef<View>(null);
   // 自动默认运行配置(跟随最近会话 / 区域默认 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
   // 记录已自动应用过的设备,切设备时(未手动选过)按新设备重算。
   const userTouchedRuntimeRef = useRef(false);
@@ -1593,19 +1593,15 @@ export default function NewRemoteSessionScreen() {
     ));
   }, []);
 
-  const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {
-    const lines = event.nativeEvent.lines;
-    const lastLine = lines[lines.length - 1];
-    if (!lastLine) return;
-    const nextFrame = {
-      left: Math.max(0, Math.round(lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP)),
-      top: Math.max(0, Math.round(lastLine.y + ((lastLine.height - MOBILE_COMPOSER_INPUT_LINE_HEIGHT) / 2))),
-    };
-    setVoiceDraftCaretFrame((currentFrame) => (
-      currentFrame.left === nextFrame.left && currentFrame.top === nextFrame.top
-        ? currentFrame
-        : nextFrame
-    ));
+  const handleVoiceDraftTextLayout = useCallback(() => {
+    const block = voiceDraftMeasuredBlockRef.current;
+    const caret = voiceDraftCaretRef.current;
+    if (!block || !caret) return;
+    caret.measureLayout(block, (x, y) => {
+      if (caret !== voiceDraftCaretRef.current || block !== voiceDraftMeasuredBlockRef.current) return;
+      const nextFrame = { left: Math.max(0, Math.round(x)), top: Math.max(0, Math.round(y)) };
+      setVoiceDraftCaretFrame((current) => current.left === nextFrame.left && current.top === nextFrame.top ? current : nextFrame);
+    }, () => undefined);
   }, []);
 
   const cancelVoiceForDeviceSwitch = useCallback(() => {
@@ -3175,7 +3171,11 @@ export default function NewRemoteSessionScreen() {
           voiceContext.warmRefiner(input),
         initialDraft: currentDraft,
         initialSelection,
-        refinementContext: { selectionBefore: selectionBefore || undefined, selectionAfter: selectionAfter || undefined },
+        refinementContext: {
+          selectionBefore: selectionBefore || undefined,
+          selectedText: currentDraft.slice(initialSelection.start, initialSelection.end).slice(0, 1200) || undefined,
+          selectionAfter: selectionAfter || undefined,
+        },
         localVoiceInputHistory,
         readCurrentDraft: () => firstMessageRef.current,
         onDraftChanged: (text, selection) => {
@@ -3362,10 +3362,10 @@ export default function NewRemoteSessionScreen() {
     if (!voiceIsListening) return undefined;
     const frame = requestAnimationFrame(() => {
       firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });
-      voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+      voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [composerInputContentHeight, draft.firstMessage, voiceIsListening]);
+  }, [composerInputContentHeight, draft.firstMessage, voiceDraftCaretFrame.top, voiceIsListening]);
 
   useEffect(() => {
     if (voiceIsListening && draft.firstMessage.length > 0) return;
@@ -3532,12 +3532,12 @@ export default function NewRemoteSessionScreen() {
       ]}
       onContentSizeChange={() => {
         requestAnimationFrame(() => {
-          voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+          voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
         });
       }}
       onLayout={() => {
         requestAnimationFrame(() => {
-          voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+          voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
         });
       }}
       pointerEvents="none"
@@ -3551,25 +3551,12 @@ export default function NewRemoteSessionScreen() {
           <Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>
         </View>
       ) : (
-        <View style={styles.voiceDraftMeasuredBlock}>
-          <Text
-            onTextLayout={handleVoiceDraftTextLayout}
-            style={styles.voiceDraftText}
-          >
-            {draft.firstMessage}
+        <View ref={voiceDraftMeasuredBlockRef} collapsable={false} style={styles.voiceDraftMeasuredBlock}>
+          <Text onTextLayout={handleVoiceDraftTextLayout} style={styles.voiceDraftText}>
+            {draft.firstMessage.slice(0, firstMessageSelectionRef.current.end)}
+            <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" viewRef={voiceDraftCaretRef} />
+            {draft.firstMessage.slice(firstMessageSelectionRef.current.end)}
           </Text>
-          <View
-            pointerEvents="none"
-            style={[
-              styles.voiceDraftCaretOverlay,
-              {
-                left: voiceDraftCaretFrame.left,
-                top: voiceDraftCaretFrame.top,
-              },
-            ]}
-          >
-            <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
-          </View>
         </View>
       )}
     </ScrollView>
@@ -6766,9 +6753,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceDraftMeasuredBlock: {
     minHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT,
     position: 'relative',
-  },
-  voiceDraftCaretOverlay: {
-    position: 'absolute',
   },
   // 草稿层的文本档必须与真实 TextInput 完全一致,否则换行位置错开、超出的行被裁在
   // 框外(见 MOBILE_COMPOSER_DRAFT_TEXT_STYLE)。

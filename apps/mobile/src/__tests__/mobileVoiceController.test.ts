@@ -374,6 +374,77 @@ describe('mobileVoiceController', () => {
     }
   });
 
+  it('rebases deferred partials onto edits outside the published voice range', async () => {
+    vi.useFakeTimers();
+    try {
+      let draft = '前 后';
+      const asr = new FakeAsrProvider();
+      const session = createMobileVoiceControllerSession({
+        credential: credential(), initialDraft: draft, initialSelection: { start: 1, end: 1 },
+        readCurrentDraft: () => draft, asr, refiner: null,
+        startAudio: async () => async () => undefined,
+        onDraftChanged: (text) => { draft = text; },
+      });
+      await session.start();
+      asr.emit({ type: 'partial', text: 'one', at: Date.now() });
+      asr.emit({ type: 'partial', text: 'one two', at: Date.now() });
+      draft = '前one 用户修改后文';
+      vi.advanceTimersByTime(80);
+      expect(draft).toBe('前one two 用户修改后文');
+      asr.emit({ type: 'stable', text: 'final', at: Date.now() });
+      expect(draft).toBe('前final 用户修改后文');
+      await session.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not rebase an internal pending draft when no external draft reader exists', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FakeAsrProvider();
+      const drafts: string[] = [];
+      const session = createMobileVoiceControllerSession({
+        credential: credential(), initialDraft: '', asr, refiner: null,
+        startAudio: async () => async () => undefined,
+        onDraftChanged: (text) => { drafts.push(text); },
+      });
+      await session.start();
+      asr.emit({ type: 'partial', text: 'one', at: Date.now() });
+      asr.emit({ type: 'partial', text: 'one two', at: Date.now() });
+      expect(session.currentDraft()).toBe('one two');
+      vi.advanceTimersByTime(80);
+      expect(drafts).toEqual(['one', 'one two']);
+      await session.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not resurrect a pending partial after cancellation with an external suffix edit', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FakeAsrProvider();
+      let draft = '前 后';
+      const session = createMobileVoiceControllerSession({
+        credential: credential(), initialDraft: draft, initialSelection: { start: 1, end: 1 },
+        readCurrentDraft: () => draft, asr, refiner: null,
+        startAudio: async () => async () => undefined,
+        onDraftChanged: (text) => { draft = text; },
+      });
+      await session.start();
+      asr.emit({ type: 'partial', text: 'one', at: Date.now() });
+      asr.emit({ type: 'partial', text: 'one two', at: Date.now() });
+      draft = '前one 用户修改后文';
+      await session.cancel();
+      vi.advanceTimersByTime(80);
+      expect(session.currentDraft()).toBe('前one 用户修改后文');
+      expect(draft).toBe('前one 用户修改后文');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('projects realtime ASR and streaming refinement into one composer insertion', async () => {
     const drafts: string[] = [];
     const states: string[] = [];

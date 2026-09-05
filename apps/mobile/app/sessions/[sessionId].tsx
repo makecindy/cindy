@@ -58,7 +58,6 @@ import {
   type PressableProps,
   type StyleProp,
   type TextInputContentSizeChangeEvent,
-  type TextLayoutEvent,
   type ViewStyle,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
@@ -642,7 +641,6 @@ const COMPOSER_STACK_GAP_HEIGHT = 4;
 const COMPOSER_INPUT_ROW_CHROME_HEIGHT = 22;
 // 聚焦卡片形态的 row chrome:paddingTop 26 + paddingBottom 8 + 层间 gap 8 + 工具排 ~36。
 const COMPOSER_CARD_ROW_CHROME_HEIGHT = 78;
-const COMPOSER_VOICE_CARET_GAP = 2;
 // 重开且检测到有新内容时,只拉最新小窗对账(比首开整窗 80 便宜很多);payload 过大再逐档退。
 const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 // session-tail-banner「重试」短窗口隐藏的超时兜底(接管信号全部丢失时恢复错误入口);
@@ -10086,6 +10084,8 @@ function SessionComposerInput({
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
+  const voiceDraftCaretRef = useRef<View>(null);
+  const voiceDraftMeasuredBlockRef = useRef<View>(null);
   const composerScrollViewRef = useRef<ScrollView>(null);
   const composerScrollEnabledRef = useRef(false);
   const voiceDraftScrollRef = useRef<ScrollView>(null);
@@ -10278,19 +10278,15 @@ function SessionComposerInput({
       Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
     ));
   }, []);
-  const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {
-    const lines = event.nativeEvent.lines;
-    const lastLine = lines[lines.length - 1];
-    if (!lastLine) return;
-    const nextFrame = {
-      left: Math.max(0, Math.round(lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP)),
-      top: Math.max(0, Math.round(lastLine.y + ((lastLine.height - COMPOSER_INPUT_LINE_HEIGHT) / 2))),
-    };
-    setVoiceDraftCaretFrame((currentFrame) => (
-      currentFrame.left === nextFrame.left && currentFrame.top === nextFrame.top
-        ? currentFrame
-        : nextFrame
-    ));
+  const handleVoiceDraftTextLayout = useCallback(() => {
+    const block = voiceDraftMeasuredBlockRef.current;
+    const caret = voiceDraftCaretRef.current;
+    if (!block || !caret) return;
+    caret.measureLayout(block, (x, y) => {
+      if (caret !== voiceDraftCaretRef.current || block !== voiceDraftMeasuredBlockRef.current) return;
+      const nextFrame = { left: Math.max(0, Math.round(x)), top: Math.max(0, Math.round(y)) };
+      setVoiceDraftCaretFrame((current) => current.left === nextFrame.left && current.top === nextFrame.top ? current : nextFrame);
+    }, () => undefined);
   }, []);
 
   const renderComposerResizeHandle = () => (
@@ -10303,6 +10299,7 @@ function SessionComposerInput({
     />
   );
 
+  const voiceDraftInsertionEnd = composerInputRef.current?.getSelection(draft).end ?? draft.length;
   const renderComposerInputOverlay = () => voiceIsListening ? (
     // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
     // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
@@ -10327,12 +10324,12 @@ function SessionComposerInput({
         ]}
         onContentSizeChange={() => {
           requestAnimationFrame(() => {
-            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+            voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
           });
         }}
         onLayout={() => {
           requestAnimationFrame(() => {
-            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+            voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
           });
         }}
         pointerEvents="none"
@@ -10346,25 +10343,12 @@ function SessionComposerInput({
             <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
           </View>
         ) : (
-          <View style={styles.voiceDraftMeasuredBlock}>
-            <Text
-              onTextLayout={handleVoiceDraftTextLayout}
-              style={styles.voiceDraftText}
-            >
-              {draft}
+          <View ref={voiceDraftMeasuredBlockRef} collapsable={false} style={styles.voiceDraftMeasuredBlock}>
+            <Text onTextLayout={handleVoiceDraftTextLayout} style={styles.voiceDraftText}>
+              {draft.slice(0, voiceDraftInsertionEnd)}
+              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" viewRef={voiceDraftCaretRef} />
+              {draft.slice(voiceDraftInsertionEnd)}
             </Text>
-            <View
-              pointerEvents="none"
-              style={[
-                styles.voiceDraftCaretOverlay,
-                {
-                  left: voiceDraftCaretFrame.left,
-                  top: voiceDraftCaretFrame.top,
-                },
-              ]}
-            >
-              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
-            </View>
           </View>
         )}
       </ScrollView>
@@ -10380,10 +10364,10 @@ function SessionComposerInput({
   useEffect(() => {
     if (!voiceIsListening) return undefined;
     const frame = requestAnimationFrame(() => {
-      voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+      voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceIsListening]);
+  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceDraftCaretFrame.top, voiceIsListening]);
 
   useEffect(() => {
     if (voiceIsListening && draft.length > 0) return;
@@ -10757,6 +10741,7 @@ function buildMobileVoiceSessionRefinementContext(
   const replyToMessage = findLastAssistantMessageText(items);
   return {
     selectionBefore: selectionBefore || undefined,
+    selectedText: draftText.slice(selection.start, selection.end).slice(0, 1200) || undefined,
     selectionAfter: selectionAfter || undefined,
     replyToMessage: replyToMessage || undefined,
   };
@@ -11588,9 +11573,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceDraftMeasuredBlock: {
     minHeight: COMPOSER_INPUT_LINE_HEIGHT,
     position: 'relative',
-  },
-  voiceDraftCaretOverlay: {
-    position: 'absolute',
   },
   // 草稿层的文本档必须与真实 TextInput 完全一致,否则换行位置错开、超出的行被裁在
   // 框外(见 MOBILE_COMPOSER_DRAFT_TEXT_STYLE)。

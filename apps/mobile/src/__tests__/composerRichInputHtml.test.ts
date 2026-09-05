@@ -61,6 +61,35 @@ describe('mobile composer rich input HTML', () => {
     expect(html).not.toContain('https://');
   });
 
+  it('counts selection prefixes without cloning or reading atom payloads', () => {
+    const text = (nodeValue: string) => ({ nodeType: 3, nodeValue });
+    const element = (tagName: string, childNodes: unknown[], atom = false) => ({
+      nodeType: 1, tagName, childNodes, classList: { contains: (name: string) => atom && name === 'atom' },
+      get dataset() { throw new Error('selection must not read semantic payloads'); },
+    });
+    const suffix = text('\u200B🙂尾');
+    const root = element('DIV', [element('DIV', [text('前')]), element('SPAN', [], true), suffix]);
+    const source = html.slice(html.indexOf('const prefixAt ='), html.indexOf('const reportSelection ='));
+    const measure = (container: unknown, offset: number) => runInNewContext(
+      source + '; prefixAt(container, offset);',
+      { root, container, offset, CARET_ANCHOR: '\u200B', Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 } },
+    );
+    expect(measure(root, 1)).toEqual({ textLength: 2, atomCount: 0 });
+    expect(measure(suffix, 3)).toEqual({ textLength: 4, atomCount: 1 });
+    expect(source).not.toContain('cloneContents');
+    const message = { type: 'selection', documentId: 7, before: measure(root, 1), through: measure(suffix, 3) };
+    expect(JSON.stringify(message).length).toBeLessThan(160);
+    expect(parseComposerWebMessage(JSON.stringify(message))).toEqual(message);
+    expect(parseComposerWebMessage(JSON.stringify({ ...message, documentId: -1 }))).toBeNull();
+    expect(parseComposerWebMessage(JSON.stringify({ ...message, before: { textLength: -1, atomCount: 0 } }))).toBeNull();
+    const slashTail = text('b\u200B');
+    const slash = element('SPAN', [text('/a'), element('BR', []), slashTail]);
+    slash.classList.contains = (name) => name === 'slash';
+    root.childNodes = [slash, text('尾')];
+    expect(measure(slashTail, 0)).toEqual({ textLength: 2, atomCount: 0 });
+    expect(measure(root, 1)).toEqual({ textLength: 4, atomCount: 0 });
+  });
+
   it('initializes on the Android WebView 85 API baseline', () => {
     const legacyHtml = buildComposerRichInputHtml({
       accessibilityLabel: '输入消息',

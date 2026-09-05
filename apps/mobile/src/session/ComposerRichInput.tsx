@@ -8,6 +8,7 @@ import {
   normalizeComposerDocument,
   composerDocumentProjectedText,
   composerCaretPosition,
+  composerSelectionOffset,
   parseStoredComposerDocument,
   type ComposerDocument,
   type ComposerNode,
@@ -91,6 +92,8 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     useEffect(() => registerMobileMessageWebView('composer'), []);
     const readyRef = useRef(false);
     const webSignatureRef = useRef('');
+    const projectedDraft = useMemo(() => composerDocumentProjectedText(document), [document]);
+    const webDocumentRef = useRef({ document, draft: projectedDraft, id: 0 });
     const selectionRef = useRef<{ draft: string; start: number; end: number } | null>(null);
     const pendingDocumentRef = useRef<{
       document: ComposerDocument;
@@ -152,11 +155,13 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       inject('window.cindyComposer.focus();');
     }, [inject]);
     const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
+      const documentId = webDocumentRef.current.id + 1;
+      webDocumentRef.current = { document: value, draft: composerDocumentProjectedText(value), id: documentId };
       if (!readyRef.current) {
         pendingDocumentRef.current = { document: value, focusAfter, caret };
         return;
       }
-      inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter}, ${JSON.stringify(caret) ?? 'null'});`);
+      inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter}, ${JSON.stringify(caret) ?? 'null'}, ${documentId});`);
     }, [inject]);
 
     useEffect(() => {
@@ -361,23 +366,23 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         return;
       }
       if (message.type === 'change') {
+        if ((message.documentId ?? 0) !== webDocumentRef.current.id) return;
         const next = parseStoredComposerDocument(message.document);
         if (!next) return;
         const normalized = normalizeComposerDocument(next);
         webSignatureRef.current = JSON.stringify(normalized);
+        webDocumentRef.current = { document: normalized, draft: composerDocumentProjectedText(normalized), id: webDocumentRef.current.id };
         onChangeDocument(normalized);
         return;
       }
       if (message.type === 'selection') {
-        if (hidden) return;
-        const full = parseStoredComposerDocument(message.document);
-        const before = parseStoredComposerDocument(message.before);
-        const through = parseStoredComposerDocument(message.through);
-        if (!full || !before || !through) return;
-        const draft = composerDocumentProjectedText(full);
-        const start = composerDocumentProjectedText(before).length;
-        const end = composerDocumentProjectedText(through).length;
-        if (start <= end && end <= draft.length) selectionRef.current = { draft, start, end };
+        const current = webDocumentRef.current;
+        if (hidden || message.documentId !== current.id) return;
+        const start = composerSelectionOffset(current.document, message.before);
+        const end = composerSelectionOffset(current.document, message.through);
+        if (start !== null && end !== null && start <= end && end <= current.draft.length) {
+          selectionRef.current = { draft: current.draft, start, end };
+        }
         return;
       }
       if (message.type === 'height') {

@@ -1778,8 +1778,12 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
     expect(newSource).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(newSource).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;');
-    expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: { start: end, end } });');
-    expect(newSource).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');
+    expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });');
+    expect(newSource).toContain('voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });');
+    expect(newSource).toContain('draft.firstMessage.slice(0, firstMessageSelectionRef.current.end)');
+    expect(newSource).toContain('draft.firstMessage.slice(firstMessageSelectionRef.current.end)');
+    expect(newSource).toContain('caret.measureLayout(block, (x, y) => {');
+    expect(newSource).toContain('viewRef={voiceDraftCaretRef}');
     expect(sharedSource).toContain('export function VoiceMicWaveCaret');
     expect(newSource).toContain('const creatingRef = useRef(false);');
     expect(createSource).toContain('|| voiceStartupInFlightRef.current');

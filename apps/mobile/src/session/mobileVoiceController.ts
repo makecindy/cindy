@@ -200,6 +200,7 @@ export function createMobileVoiceControllerSession(
   let asrStartError: unknown = null;
   let audioFailureError: Error | null = null;
   let voiceInsertion: MobileVoiceDraftInsertion | null = null;
+  let publishedVoiceInsertion: MobileVoiceDraftInsertion | null = null;
   let voiceInsertionSegmentIds: string[] = [];
   let voiceInsertionTouched = false;
   let historyEntryId: string | null = null;
@@ -210,6 +211,14 @@ export function createMobileVoiceControllerSession(
 
   const readCurrentDraft = (): string => {
     const visibleDraft = options.readCurrentDraft?.() ?? latestDraft;
+    if (
+      options.readCurrentDraft && pendingDraftToPublish !== null
+      && visibleDraft !== lastPublishedDraft
+      && voiceInsertion && publishedVoiceInsertion
+      && isInsertionIntact(visibleDraft, publishedVoiceInsertion)
+    ) {
+      return replaceInsertionText(visibleDraft, publishedVoiceInsertion, voiceInsertion.text);
+    }
     if (
       visibleDraft === lastPublishedDraft
       && (pendingDraftToPublish !== null || draftPublishThrottleTimer !== null)
@@ -223,6 +232,7 @@ export function createMobileVoiceControllerSession(
     pendingDraftToPublish = null;
     if (lastPublishedDraft === draft) return;
     lastPublishedDraft = draft;
+    publishedVoiceInsertion = voiceInsertion ? { ...voiceInsertion } : null;
     options.onDraftChanged(draft, voiceInsertion
       ? { start: voiceInsertion.end, end: voiceInsertion.end }
       : undefined);
@@ -231,12 +241,14 @@ export function createMobileVoiceControllerSession(
   const publishPendingDraftNow = (): void => {
     const pending = pendingDraftToPublish;
     if (pending === null) return;
-    if (voiceInsertion && !isInsertionIntact(readCurrentDraft(), voiceInsertion)) {
+    const currentDraft = readCurrentDraft();
+    if (voiceInsertion && !isInsertionIntact(currentDraft, voiceInsertion)) {
       voiceInsertionTouched = true;
       pendingDraftToPublish = null;
       return;
     }
-    publishDraftNow(pending);
+    latestDraft = currentDraft;
+    publishDraftNow(currentDraft);
   };
 
   const cancelPendingDraftPublish = (): void => {

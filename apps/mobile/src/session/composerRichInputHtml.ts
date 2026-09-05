@@ -121,6 +121,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
 
   let applying = false;
   let reportUserSelection = false;
+  let documentId = 0;
   let composing = false;
   let lastSignature = '';
   let pasteRequestSequence = 0;
@@ -243,20 +244,47 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     walk(root, nodes);
     return { version: 1, nodes };
   };
-  // Serialize semantic prefixes, not visible labels: reference chips project to
-  // URLs/raw mentions (and quotes to zero characters) in the native draft.
+  // Count prefixes without cloning DOM or decoding atom payloads. Native owns
+  // each atom's projected length, including long pasted text and titled links.
   const prefixAt = (container, offset) => {
-    const range = document.createRange();
-    range.setStart(root, 0);
-    range.setEnd(container, offset);
-    const fragment = range.cloneContents();
-    // A root boundary after a block includes its line break when siblings follow.
-    if (container === root && offset < root.childNodes.length) {
-      fragment.appendChild(document.createComment('selection-boundary'));
-    }
-    const nodes = [];
-    walk(fragment, nodes);
-    return { version: 1, nodes };
+    let textLength = 0, atomCount = 0, lastText = false, stopped = false;
+    const addText = (text, end, rawText) => {
+      let length = end;
+      if (!rawText) for (let at = text.indexOf(CARET_ANCHOR); at >= 0 && at < end; at = text.indexOf(CARET_ANCHOR, at + 1)) length--;
+      textLength += length;
+      if (length) lastText = true;
+    };
+    const visit = (parent, rawText = false) => {
+      const children = parent.childNodes;
+      for (let index = 0; index < children.length; index++) {
+        if (parent === container && index === offset) { stopped = true; return; }
+        const child = children[index];
+        if (child.nodeType === Node.TEXT_NODE) {
+          const text = child.nodeValue || '';
+          addText(text, child === container ? offset : text.length, rawText);
+          if (child === container) { stopped = true; return; }
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          // walk serializes slash spans via textContent, without block/BR separators.
+          if (rawText || child.classList.contains('slash')) {
+            visit(child, true);
+            if (stopped) return;
+            continue;
+          }
+          if (child.classList.contains('atom')) { atomCount++; lastText = false; continue; }
+          if (child.tagName === 'BR') { textLength++; lastText = true; continue; }
+          const beforeText = textLength, beforeAtoms = atomCount;
+          visit(child);
+          if (stopped) return;
+          if (/^(DIV|P|LI)$/.test(child.tagName) && index < children.length - 1
+            && (textLength !== beforeText || atomCount !== beforeAtoms || lastText)) {
+            textLength++; lastText = true;
+          }
+        }
+      }
+      if (parent === container) stopped = true;
+    };
+    visit(root);
+    return { textLength, atomCount };
   };
   const reportSelection = () => {
     if (applying || composing || !reportUserSelection) return;
@@ -264,7 +292,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     if (!selection || !selection.rangeCount) return;
     const range = selection.getRangeAt(0);
     if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return;
-    post({ type: 'selection', document: readDocument(),
+    post({ type: 'selection', documentId,
       before: prefixAt(range.startContainer, range.startOffset),
       through: prefixAt(range.endContainer, range.endOffset) });
   };
@@ -286,7 +314,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     const signature = JSON.stringify(value);
     if (signature !== lastSignature) {
       lastSignature = signature;
-      post({ type: 'change', document: value });
+      post(Object.assign({ type: 'change', document: value }, documentId ? { documentId } : {}));
     }
     reportHeight();
     reportSelection();
@@ -543,7 +571,8 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   }, { passive: false });
 
   window.cindyComposer = {
-    applyDocument(value, focusAfter, caret) {
+    applyDocument(value, focusAfter, caret, nextDocumentId) {
+      if (Number.isSafeInteger(nextDocumentId)) documentId = nextDocumentId;
       render(value, focusAfter === true && !caret);
       if (!focusAfter || !caret) return;
       root.focus();

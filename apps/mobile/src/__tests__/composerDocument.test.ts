@@ -6,6 +6,7 @@ import {
   composerDocumentFromSerializedMessage,
   composerDocumentProjectedText,
   composerCaretPosition,
+  composerSelectionOffset,
   hydrateComposerMessageReferenceBodies,
   isLongComposerPaste,
   mentionComposerNode,
@@ -23,6 +24,20 @@ import {
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
+  it('resolves compact prefixes through long pasted content and semantic reference projections', () => {
+    const document = { version: 1 as const, nodes: [
+      { type: 'text' as const, text: '前🙂后' },
+      { type: 'quote' as const, quote: { text: '引用' } },
+      { type: 'pasted-text' as const, text: '文'.repeat(4_000_000), display: '长文本' },
+      { type: 'session-link' as const, href: 'https://example.com/task', label: '标题', titled: true },
+    ] };
+    expect(composerSelectionOffset(document, { textLength: 3, atomCount: 1 })).toBe(3);
+    expect(composerSelectionOffset(document, { textLength: 4, atomCount: 2 })).toBe(4_000_004);
+    expect(composerSelectionOffset(document, { textLength: 4, atomCount: 3 }))
+      .toBe(composerDocumentProjectedText(document).length);
+    expect(composerSelectionOffset(document, { textLength: 5, atomCount: 0 })).toBeNull();
+    expect(composerSelectionOffset(document, { textLength: 0, atomCount: 4 })).toBeNull();
+  });
   it('locates a dictated caret using projected chip lengths and skips zero-width quotes', () => {
     const document = { version: 1 as const, nodes: [
       { type: 'quote' as const, quote: { text: '引用' } },

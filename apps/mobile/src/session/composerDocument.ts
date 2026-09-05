@@ -196,6 +196,21 @@ export function composerCaretPosition(document: ComposerDocument, offset: number
   return { nodeIndex: document.nodes.length, offset: 0 };
 }
 
+/** Compact DOM prefixes count text and atoms separately, without copying atom payloads. */
+export function composerSelectionOffset(
+  document: ComposerDocument,
+  prefix: { textLength: number; atomCount: number },
+): number | null {
+  let atomCount = 0;
+  let textLength = 0;
+  let offset = prefix.textLength;
+  for (const node of document.nodes) {
+    if (node.type === 'text') textLength += node.text.length;
+    else if (atomCount++ < prefix.atomCount) offset += composerNodeProjectedText(node).length;
+  }
+  return prefix.atomCount <= atomCount && prefix.textLength <= textLength ? offset : null;
+}
+
 /** Visible editable projection. Quote atoms intentionally contribute no text. */
 export function composerDocumentProjectedText(document: ComposerDocument): string {
   return document.nodes.map((node) => {
