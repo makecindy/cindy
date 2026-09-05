@@ -5675,9 +5675,9 @@
     "openProxyUsage": "브라우저에서 전체 사용량 대시보드 열기",
     "openXaiUsage": "Grok 사용량 페이지 열기",
     "xai": {
-      "requestsLine": "속도 제한(요청): 남음 {{remaining}}/{{limit}}",
-      "tokensLine": "속도 제한(토큰): 남음 {{remaining}}/{{limit}}",
-      "noQuotaDetail": "SuperGrok 주간 사용량을 가져오지 못해 가치 추정치만 표시됩니다",
+      "requestsLine": "마지막 응답 시 요청 잔여량: {{remaining}}/{{limit}}",
+      "tokensLine": "마지막 응답 시 토큰 잔여량: {{remaining}}/{{limit}}",
+      "noQuotaDetail": "현재 SuperGrok 주간 사용량을 가져올 수 없습니다",
       "weeklyLabel": "주간",
       "windowSegment": "{{label}} 남음 {{remaining}}",
       "windowLine": "{{label}} 남음 {{remaining}}(사용 {{used}})",
@@ -5685,7 +5685,7 @@
       "resetAt": "{{at}} 초기화",
       "productLine": "{{product}} {{percent}}",
       "extraCreditsLine": "추가 크레딧 {{amount}}",
-      "accountWeeklyHint": "계정 주간 사용량이며 이 작업의 할당량이 아닙니다"
+      "accountWeeklyHint": "계정 주간 사용량"
     },
     "dailyLimitLabel": "오늘 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "주기 {{spend}}/{{limit}}",
@@ -5746,10 +5746,20 @@
     }
   },
   "quotaCard": {
+    "usageCritical": "사용량이 높습니다",
+    "usageWarning": "사용량이 다소 높습니다",
+    "usageTitle": "사용량 상세",
+    "gatewayTitle": "Cindy AI Gateway",
+    "balanceLabel": "잔액 사용량",
+    "dailyLabel": "일일 소프트 한도",
+    "monthlyLabel": "월간 할당량",
+    "speedLabel": "속도",
+    "rateValue": "{{rate}} 토큰/초",
+    "waiting": "할당량 데이터 업데이트를 기다리는 중입니다.",
+    "windowsRegionLabel": "사용량 상세",
     "fiveHourLabel": "5시간",
     "weeklyLabel": "주간",
     "modelWeeklyLabel": "{{model}} 주간",
-    "windowsRegionLabel": "할당량 구간 목록",
     "usedPercent": "사용 {{percent}}%",
     "resetAt": "{{at}} 재설정",
     "noWindows": "할당량 구간 데이터가 없습니다",
@@ -5759,7 +5769,7 @@
     "costLine": "이번 메시지 비용: {{cost}}",
     "valueLine": "이번 메시지 토큰 가치: {{cost}}",
     "noBilledCost": "이번 메시지의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
-    "latestMessageTitle": "최근 메시지 합계",
+    "latestMessageTitle": "최근 메시지",
     "turnCostUnavailable": "이 메시지의 비용을 현재 추정할 수 없습니다",
     "tokenLabel": "Token",
     "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
@@ -5771,7 +5781,7 @@
     "paceTrendFast": "현재 평균 사용 속도는 빠른 편입니다(대략적인 추세)",
     "paceTrendNormal": "현재 평균 사용 속도는 보통입니다(대략적인 추세)",
     "paceTrendSlow": "현재 평균 사용 속도는 느린 편입니다(대략적인 추세)",
-    "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
+    "includedLabel": "그중 {{name}}"
   },
   "usageDetails": {
     "durationSeconds": "{{value}}초",

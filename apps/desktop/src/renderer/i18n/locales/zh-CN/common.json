@@ -5675,9 +5675,9 @@
     "openProxyUsage": "打开浏览器查看完整用量看板",
     "openXaiUsage": "打开 Grok 用量页面",
     "xai": {
-      "requestsLine": "限流(请求)：剩余 {{remaining}}/{{limit}}",
-      "tokensLine": "限流(token)：剩余 {{remaining}}/{{limit}}",
-      "noQuotaDetail": "暂未获取到 SuperGrok 周用量，此处仅显示价值估算",
+      "requestsLine": "上次响应请求余量：{{remaining}}/{{limit}}",
+      "tokensLine": "上次响应 Token 余量：{{remaining}}/{{limit}}",
+      "noQuotaDetail": "暂未获取到 SuperGrok 周用量",
       "weeklyLabel": "周限",
       "windowSegment": "{{label}} 剩余 {{remaining}}",
       "windowLine": "{{label}} 剩余 {{remaining}}(已用 {{used}})",
@@ -5685,7 +5685,7 @@
       "resetAt": "{{at}} 重置",
       "productLine": "{{product}} {{percent}}",
       "extraCreditsLine": "额外点数 {{amount}}",
-      "accountWeeklyHint": "账号周用量，不是本任务配额"
+      "accountWeeklyHint": "账号周用量"
     },
     "dailyLimitLabel": "今日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "本周期 {{spend}}/{{limit}}",
@@ -5746,10 +5746,20 @@
     }
   },
   "quotaCard": {
+    "usageCritical": "用量较高",
+    "usageWarning": "用量偏高",
+    "usageTitle": "用量明细",
+    "gatewayTitle": "Cindy AI Gateway",
+    "balanceLabel": "余额用量",
+    "dailyLabel": "每日软限额",
+    "monthlyLabel": "月度配额",
+    "speedLabel": "速度",
+    "rateValue": "{{rate}} tokens/秒",
+    "waiting": "等待配额数据更新。",
+    "windowsRegionLabel": "用量明细",
     "fiveHourLabel": "5 小时",
     "weeklyLabel": "周限",
     "modelWeeklyLabel": "{{model}} 周限",
-    "windowsRegionLabel": "配额窗口列表",
     "usedPercent": "已用 {{percent}}%",
     "resetAt": "{{at}} 重置",
     "noWindows": "暂无配额窗口数据",
@@ -5759,7 +5769,7 @@
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",
     "noBilledCost": "本轮费用暂不可用，仅显示用量",
-    "latestMessageTitle": "最近一轮用户请求累计",
+    "latestMessageTitle": "最近一轮",
     "turnCostUnavailable": "本轮费用暂无法估算",
     "tokenLabel": "Token",
     "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
@@ -5771,7 +5781,7 @@
     "paceTrendFast": "按当前平均速度偏快（粗略趋势）",
     "paceTrendNormal": "按当前平均速度正常（粗略趋势）",
     "paceTrendSlow": "按当前平均速度偏慢（粗略趋势）",
-    "waiting": "Claude 订阅余量会在下一轮完成后更新。"
+    "includedLabel": "其中 {{name}}"
   },
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
