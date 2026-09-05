@@ -54,13 +54,12 @@ function toDescriptor(
   agent: AgentKind,
   options: DescriptorProjectionOptions = {},
 ): ModelDescriptor {
-  // Pi runtime 原生接受 minimal thinking level。目录里的同一模型常从 CC/Codex
-  // 投影而来而未声明该档；只要模型有 reasoning 档，就把 Pi 的最小档补在最前。
-  // BYOM 的 efforts 则是用户显式声明的协议能力，必须原样保留，不能对外宣称一个
-  // models.json 会禁用的档位。
+  // 仅为缺少明确 Pi 能力字段的旧目录保留 minimal 兼容补档。独立 Pi 目录的
+  // reasoningEfforts 与 BYOM 声明都是协议能力，不能额外公布 models.json 禁用的档位。
   const efforts =
     agent === 'pi' &&
     options.preserveExplicitPiEfforts !== true &&
+    m.reasoningEfforts === undefined &&
     m.efforts.length > 0 &&
     !m.efforts.includes('minimal')
       ? (['minimal', ...m.efforts] as const)

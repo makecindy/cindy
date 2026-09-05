@@ -104,6 +104,34 @@ function injectedCatalog(): Catalog {
 }
 
 describe('deriveAvailableModels — dynamic-first catalog contract', () => {
+  it('keeps explicit GPT-6 Pi effort capabilities in the picker and runtime descriptor', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const efforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+    catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [
+      model('chatgpt/gpt-6-astra', {
+        contextWindow: 272_000,
+        maxOutput: 128_000,
+        efforts: [...efforts],
+        defaultEffort: 'medium',
+        reasoning: true,
+        reasoningEfforts: [...efforts],
+        reasoningDefaultEffort: 'medium',
+        supportsImageInput: true,
+      }),
+    ];
+    const expected = {
+      contextWindow: 272_000,
+      maxOutputTokens: 128_000,
+      efforts: [...efforts],
+      defaultEffort: 'medium',
+      supportsImageInput: true,
+    };
+    expect(deriveAvailableModels(catalog, 'pi').find((entry) => entry.id === 'chatgpt/gpt-6-astra'))
+      .toMatchObject(expected);
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-6-astra'))
+      .toMatchObject(expected);
+  });
+
   it('publishes Pi effort controls only when the official catalog has an explicit thinking map', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
     expect(pi.find((m) => m.id === 'grok-4.3')?.efforts).toEqual([
