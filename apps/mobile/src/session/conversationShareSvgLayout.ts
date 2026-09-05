@@ -258,11 +258,38 @@ function conversationShareBodyParts(
     }
   } else markdown(message.body);
   if (message.secondaryBody) markdown(message.secondaryBody);
-  return parts.flatMap<ShareBodyPart>((part) => {
+  const fullText = parts
+    .map((part) => ("text" in part ? part.text : ""))
+    .join("");
+  const redacted = redactSensitiveText(fullText);
+  let safeParts = parts;
+  if (redacted !== fullText) {
+    safeParts = [];
+    let sourceOffset = 0;
+    let safeOffset = 0;
+    for (const part of parts) {
+      if ("text" in part) {
+        sourceOffset += part.text.length;
+        continue;
+      }
+      // A secret can span an image. Position images against redacted prefixes,
+      // but take ALL output text from the fully redacted message, never a prefix.
+      const prefix = redactSensitiveText(fullText.slice(0, sourceOffset));
+      let boundary = 0;
+      while (
+        boundary < prefix.length &&
+        prefix[boundary] === redacted[boundary]
+      )
+        boundary++;
+      boundary = Math.max(safeOffset, boundary);
+      safeParts.push({ text: redacted.slice(safeOffset, boundary) }, part);
+      safeOffset = boundary;
+    }
+    safeParts.push({ text: redacted.slice(safeOffset) });
+  }
+  return safeParts.flatMap<ShareBodyPart>((part) => {
     if ("image" in part) return [part];
-    const text = redactSensitiveText(part.text)
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    const text = part.text.replace(/\n{3,}/g, "\n\n").trim();
     return text ? [{ text }] : [];
   });
 }

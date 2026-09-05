@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Image } from "react-native";
 import { File } from "expo-file-system";
 import {
@@ -17,7 +17,7 @@ import { downloadRemoteMediaAsDataUri } from "@/session/remoteMediaDiskCacheExpo
 import { imageMimeFromUrl } from "@/session/remoteMediaDiskCache";
 import {
   getSentAttachmentThumbUri,
-  useSentAttachmentThumbsVersion,
+  ensureSentAttachmentThumbsHydrated,
 } from "@/session/sentAttachmentThumbStore";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -37,6 +37,7 @@ async function loadShareImage(
   resolve: ResolveRemoteMediaFn,
 ): Promise<ConversationShareImage | null> {
   // The existing store owns both OSS and desktop-media upload thumbnails.
+  await ensureSentAttachmentThumbsHydrated();
   const localThumb = getSentAttachmentThumbUri(url);
   let uri = localThumb
     ? ((await readShareImageFile(
@@ -74,34 +75,35 @@ async function loadShareImage(
   return { uri, width: size.width, height: size.height };
 }
 
-/** Resolve readiness after React commits the prepared SVG, including selection changes. */
+interface ShareImageJob {
+  sourceMessages: readonly ConversationShareMessage[];
+  resolve: ResolveRemoteMediaFn;
+  context: ConversationShareImageContext;
+  finish: (messages: readonly ConversationShareMessage[]) => void;
+}
+
+/** Prepare one click-time snapshot; live message updates cannot replace it. */
 export function useConversationShareImages(
   messages: readonly ConversationShareMessage[],
   resolve: ResolveRemoteMediaFn,
   { workdir, remoteHostId, sessionId }: ConversationShareImageContext,
 ) {
-  const thumbsVersion = useSentAttachmentThumbsVersion();
-  // Unselected streaming messages recreate the projection array too. Keep the
-  // selected content stable so they cannot cancel an in-flight image export.
-  const sourceKey = JSON.stringify(messages);
-  const sourceMessages = useMemo(
-    () => JSON.parse(sourceKey) as ConversationShareMessage[],
-    [sourceKey],
-  );
-  const job = useMemo(() => {
-    let finish!: (messages: readonly ConversationShareMessage[]) => void;
-    const ready = new Promise<readonly ConversationShareMessage[]>((done) => {
-      finish = done;
+  const [job, setJob] = useState<ShareImageJob | null>(null);
+  const prepare = useCallback(() => {
+    return new Promise<readonly ConversationShareMessage[]>((finish) => {
+      setJob({
+        sourceMessages: messages,
+        resolve,
+        context: { workdir, remoteHostId, sessionId },
+        finish,
+      });
     });
-    return { ready, finish };
-  }, [
-    sourceMessages,
-    resolve,
-    workdir,
-    remoteHostId,
-    sessionId,
-    thumbsVersion,
-  ]);
+  }, [messages, resolve, workdir, remoteHostId, sessionId]);
+  const cancel = useCallback(() => setJob(null), []);
+  const selectionKey = JSON.stringify(
+    messages.map((message) => message.clientId),
+  );
+  useEffect(cancel, [cancel, selectionKey, sessionId]);
   const revision = useRef(0);
   const activeJob = useRef<typeof job | null>(null);
   const [prepared, setPrepared] = useState<{
@@ -110,6 +112,8 @@ export function useConversationShareImages(
     revision: number;
   } | null>(null);
   useEffect(() => {
+    if (!job) return;
+    const { sourceMessages, resolve, context } = job;
     let active = true;
     activeJob.current = job;
     let timedOut = false;
@@ -129,7 +133,7 @@ export function useConversationShareImages(
         timedOut
           ? Promise.resolve(null)
           : Promise.race([loadShareImage(url, resolve), imageDeadline]),
-      { workdir, remoteHostId, sessionId },
+      context,
       () => active,
     )
       .then((result) => {
@@ -156,12 +160,13 @@ export function useConversationShareImages(
         if (activeJob.current !== job) job.finish([]);
       });
     };
-  }, [job, sourceMessages, resolve, workdir, remoteHostId, sessionId]);
+  }, [job]);
   useEffect(() => {
-    if (prepared?.job === job) job.finish(prepared.messages);
+    if (job && prepared?.job === job) job.finish(prepared.messages);
   }, [job, prepared]);
   return {
-    ready: job.ready,
+    prepare,
+    cancel,
     messages: prepared?.job === job ? prepared.messages : [],
     revision: prepared?.job === job ? prepared.revision : 0,
   };

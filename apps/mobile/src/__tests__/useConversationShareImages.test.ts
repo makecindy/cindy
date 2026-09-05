@@ -11,7 +11,6 @@ vi.mock("react-native", () => ({
 }));
 const thumbs = vi.hoisted(() => ({
   entries: new Map<string, string>(),
-  version: 0,
   reads: vi.fn(async () => "aGVsbG8="),
 }));
 vi.mock("expo-file-system", () => ({
@@ -22,7 +21,7 @@ vi.mock("expo-file-system", () => ({
   },
 }));
 vi.mock("@/session/sentAttachmentThumbStore", () => ({
-  useSentAttachmentThumbsVersion: () => thumbs.version,
+  ensureSentAttachmentThumbsHydrated: vi.fn(async () => undefined),
   getSentAttachmentThumbUri: (uri: string) => thumbs.entries.get(uri) ?? null,
 }));
 vi.mock("@/session/remoteMediaDiskCacheExpo", () => ({
@@ -33,6 +32,12 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const container = document.createElement("div");
 let root = createRoot(container);
 let current!: ReturnType<typeof useConversationShareImages>;
+let ready!: Promise<readonly ConversationShareMessage[]>;
+async function startShare() {
+  await act(async () => {
+    ready = current.prepare();
+  });
+}
 function Probe({
   messages,
   resolve,
@@ -63,7 +68,6 @@ afterEach(async () => {
   await act(async () => root.unmount());
   vi.useRealTimers();
   thumbs.entries.clear();
-  thumbs.version = 0;
   thumbs.reads.mockClear();
   root = createRoot(container);
 });
@@ -75,7 +79,7 @@ describe("share image readiness", () => {
     "cindy-media://blobs/paste",
     "xdt-image://paste",
   ])(
-    "refreshes %s when its existing upload thumbnail becomes available",
+    "reads the latest %s thumbnail on each share without background preparation",
     async (uri) => {
       const resolve = vi.fn<ResolveRemoteMediaFn>(async () => {
         throw new Error("desktop offline");
@@ -95,15 +99,17 @@ describe("share image readiness", () => {
       ];
       const render = () => createElement(Probe, { messages, resolve });
       await act(async () => root.render(render()));
-      const oldReady = current.ready;
+      expect(resolve).not.toHaveBeenCalled();
+      await startShare();
+      const oldReady = ready;
       expect((await oldReady)[0]?.images?.size).toBe(0);
       expect(thumbs.reads).not.toHaveBeenCalled();
       resolve.mockClear();
       thumbs.entries.set(uri, "file:///app/sent-attachment-thumbs/paste.png");
-      thumbs.version++;
       await act(async () => root.render(render()));
-      expect(current.ready).not.toBe(oldReady);
-      const result = await current.ready;
+      await startShare();
+      expect(ready).not.toBe(oldReady);
+      const result = await ready;
       expect(result[0]?.images?.get(uri)?.uri).toBe(media.url);
       expect(result[0]?.images?.size).toBe(1);
       expect(result[0]?.attachments?.[0]?.uri).toBe(uri);
@@ -122,9 +128,10 @@ describe("share image readiness", () => {
     await act(async () =>
       root.render(createElement(Probe, { messages: [source], resolve })),
     );
-    expect(
-      (await current.ready)[0]?.images?.get("cindy-media://paste")?.uri,
-    ).toBe(media.url);
+    await startShare();
+    expect((await ready)[0]?.images?.get("cindy-media://paste")?.uri).toBe(
+      media.url,
+    );
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 
@@ -168,7 +175,7 @@ describe("share image readiness", () => {
         }),
       ),
     );
-    const ready = current.ready;
+    await startShare();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
@@ -209,9 +216,8 @@ describe("share image readiness", () => {
         }),
       );
     await act(async () => root.render(render()));
-    const ready = current.ready;
+    await startShare();
     await act(async () => root.render(render()));
-    expect(current.ready).toBe(ready);
     await act(async () => finish(media));
     expect((await ready)[0]?.images?.get("cindy-media://paste")?.uri).toBe(
       media.url,
@@ -230,7 +236,8 @@ describe("share image readiness", () => {
     await act(async () =>
       root.render(createElement(Probe, { messages: [source], resolve })),
     );
-    const oldReady = current.ready;
+    await startShare();
+    const oldReady = ready;
     await act(async () =>
       root.render(
         createElement(Probe, {
@@ -241,9 +248,52 @@ describe("share image readiness", () => {
     );
     expect(await oldReady).toEqual([]);
     await act(async () => finish(media));
-    expect((await current.ready).map((message) => message.clientId)).toEqual([
-      "next",
-    ]);
+    await startShare();
+    expect((await ready).map((message) => message.clientId)).toEqual(["next"]);
     expect(current.messages[0]?.images?.size).toBe(0);
+  });
+
+  it("retains the clicked snapshot through streaming and thumbnail updates", async () => {
+    let finish!: (value: typeof media) => void;
+    const resolve = vi.fn<ResolveRemoteMediaFn>(
+      () =>
+        new Promise((done) => {
+          finish = done;
+        }),
+    );
+    await act(async () =>
+      root.render(
+        createElement(Probe, {
+          messages: [{ ...source, body: "clicked text" }],
+          resolve,
+        }),
+      ),
+    );
+    await startShare();
+    const clickedReady = ready;
+    thumbs.entries.set(
+      "cindy-media://paste",
+      "file:///app/sent-attachment-thumbs/new.png",
+    );
+    await act(async () =>
+      root.render(
+        createElement(Probe, {
+          messages: [{ ...source, body: "later streamed text" }],
+          resolve,
+        }),
+      ),
+    );
+    await act(async () => finish(media));
+    const snapshot = await clickedReady;
+    expect(snapshot[0]?.body).toBe("clicked text");
+    expect(snapshot[0]?.images?.get("cindy-media://paste")?.uri).toBe(
+      media.url,
+    );
+    expect(current.messages).toBe(snapshot);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(thumbs.reads).not.toHaveBeenCalled();
+    await startShare();
+    expect((await ready)[0]?.body).toBe("later streamed text");
+    expect(thumbs.reads).toHaveBeenCalledTimes(1);
   });
 });

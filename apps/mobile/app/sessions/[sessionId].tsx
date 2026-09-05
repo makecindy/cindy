@@ -5606,12 +5606,13 @@ export default function SessionScreen() {
   }, [sessionId]);
   const cancelShareSelection = useCallback(() => {
     shareOperationSeqRef.current += 1;
+    shareImages.cancel();
     setConversationShareBusy(false);
     setShareSelectionTriggeredByScreenshot(false);
     shareSelectionStore.exit();
-  }, []);
+  }, [shareImages.cancel]);
   const exportConversationSharePng = useCallback(async () => {
-    const messages = await shareImages.ready;
+    const messages = await shareImages.prepare();
     if (messages.length === 0) throw new Error('conversation share selection changed');
     const nativeShareAssetsReady = Boolean(
       nativeConversationShareAvailable
@@ -5643,7 +5644,7 @@ export default function SessionScreen() {
     const svg = conversationShareSvgRef.current;
     if (!svg) throw new Error('conversation share svg renderer is unavailable');
     return svg.exportPng();
-  }, [shareImages.ready, allShareableIds, conversationShareColors, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
+  }, [shareImages.prepare, allShareableIds, conversationShareColors, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
   const shareSelectedConversation = useCallback(async () => {
     if (
       conversationShareBusy
