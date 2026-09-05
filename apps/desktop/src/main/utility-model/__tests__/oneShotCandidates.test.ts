@@ -95,6 +95,8 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 });
 
 import type { Maker } from '@cindy/maker-core';
+import { DictationDictionaryAdvisor } from '@cindy/voice-input-core';
+import { DictionaryLearningTextModelClient } from '../../voice-input/DictionaryLearningTextModelClient.js';
 import { fetch as undiciFetch } from 'undici';
 
 import { getAppCapabilities } from '../../appCapabilities.js';
@@ -2444,6 +2446,160 @@ describe('utility one-shot candidates', () => {
       expect(body).not.toHaveProperty('reasoning');
     },
   );
+
+  describe('dictionary learning through the auxiliary chain', () => {
+    const action = {
+      action: 'add_entry', term: 'Vibe Coding', aliases: ['web coding'],
+      type: 'technical_term', confidence: 'high',
+    };
+    const responseText = JSON.stringify({ actions: [action] });
+
+    function advisor(maker = makerMock(false)) {
+      const client = new DictionaryLearningTextModelClient(
+        (prompt, opts) => requestUtilityText(maker, prompt, opts),
+        () => {},
+      );
+      return { client, advisor: new DictationDictionaryAdvisor({ client, model: 'auxiliary' }) };
+    }
+
+    function selectClaude() {
+      chainState.source = 'custom';
+      chainState.refs = ['cat:anthropic:claude-code:claude-haiku-4-5'];
+      activeCatalog.mockReturnValue({ providers: [{
+        id: 'anthropic', name: 'Anthropic', source: 'builtin', agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: { 'claude-code': { upstream: 'https://anthropic.example/v1', authStrategy: 'oauth-passthrough' } },
+        models: { 'claude-code': [{ id: 'claude-haiku-4-5', name: 'Haiku', contextWindow: 200_000 }] },
+      }] } as never);
+      readClaudeOAuth.mockResolvedValue({ accessToken: 'fake-anthropic-token' });
+    }
+
+    const evidence = { beforeText: '继续试一下 web coding。', afterText: '继续试一下 Vibe Coding。' };
+
+    it('learns through a selected Claude model without any Codex credentials', async () => {
+      selectClaude();
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ content: [{ type: 'text', text: responseText }] }),
+      } as never);
+      const sut = advisor();
+
+      expect((await sut.advisor.advise(evidence)).actions).toEqual([action]);
+      expect(sut.client.servedRoute).toEqual({ providerId: 'anthropic', model: 'claude-haiku-4-5' });
+      expect(readCodexCreds).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).max_tokens).toBe(4_096);
+    });
+
+    const invalidOutputs = ['not JSON', '{}', '{"actions":null}', '{"actions":{}}'];
+
+    it.each(invalidOutputs)('falls back after user-provider output %s and accepts empty actions', async (invalidText) => {
+      chainState.source = 'custom';
+      chainState.refs = ['cat:dictionary-custom:codex:first', 'cat:dictionary-custom:codex:second'];
+      activeCatalog.mockReturnValue({ providers: [{
+        id: 'dictionary-custom', name: 'Dictionary Custom', source: 'user', agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: { codex: {
+          upstream: 'https://dictionary.example/v1', wireProtocol: 'openai-chat', authStrategy: 'api-key-header',
+        } },
+        models: { codex: ['first', 'second'].map((id) => ({ id, name: id, contextWindow: 100_000 })) },
+      }] } as never);
+      readCustomKey.mockReturnValue('fake-custom-key');
+      for (const content of [invalidText, '{"actions":[]}']) {
+        fetchMock.mockResolvedValueOnce({
+          ok: true, text: async () => JSON.stringify({ choices: [{ message: { content } }] }),
+        } as never);
+      }
+      const sut = advisor();
+
+      expect((await sut.advisor.advise(evidence)).actions).toEqual([]);
+      expect(sut.client.servedRoute).toEqual({ providerId: 'dictionary-custom', model: 'second' });
+      expect(fetchMock.mock.calls.map(([, opts]) => JSON.parse(String(opts?.body)))).toEqual([
+        expect.objectContaining({ model: 'first', max_tokens: 4_096 }),
+        expect.objectContaining({ model: 'second', max_tokens: 4_096 }),
+      ]);
+    });
+
+    it.each(invalidOutputs)('falls back to the third custom selection after %s and HTTP failure', async (invalidText) => {
+      selectClaude();
+      chainState.refs.push('litellm-kimi-k2.6', 'litellm-deepseek-v4-flash');
+      readKey.mockReturnValue('fake-proxy-key');
+      fetchMock
+        .mockResolvedValueOnce({
+          ok: true, text: async () => JSON.stringify({ content: [{ type: 'text', text: invalidText }] }),
+        } as never)
+        .mockResolvedValueOnce({ ok: false, status: 503, body: { cancel: vi.fn() } } as never)
+        .mockResolvedValueOnce({
+          ok: true, json: async () => ({ choices: [{ message: { content: responseText } }] }),
+        } as never);
+      const sut = advisor();
+
+      expect((await sut.advisor.advise(evidence)).actions).toEqual([action]);
+      expect(sut.client.servedRoute?.model).toBe('deepseek/deepseek-v4-flash');
+      expect(fetchMock.mock.calls.map(([, opts]) => JSON.parse(String(opts?.body)).model)).toEqual([
+        'claude-haiku-4-5', 'moonshotai/kimi-k2.6', 'deepseek/deepseek-v4-flash',
+      ]);
+    });
+
+    it.each(invalidOutputs)('falls back after profile output %s and accepts empty actions', async (invalidText) => {
+      const maker = makerMock(true);
+      vi.mocked(maker.oneShot).mockResolvedValue(invalidText);
+      readKey.mockReturnValue('fake-proxy-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true, json: async () => ({ choices: [{ message: { content: '{"actions":[]}' } }] }),
+      } as never);
+
+      expect((await advisor(maker).advisor.advise(evidence)).actions).toEqual([]);
+      expect(maker.oneShot).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails safely after invalid custom-chain output without trying unrelated defaults', async () => {
+      selectClaude();
+      fetchMock.mockResolvedValueOnce({
+        ok: true, text: async () => JSON.stringify({ content: [{ type: 'text', text: 'private response body' }] }),
+      } as never);
+      const maker = makerMock(true);
+
+      await expect(advisor(maker).advisor.advise(evidence))
+        .rejects.toThrow('Dictionary learning failed: all_candidates_failed');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(maker.oneShot).not.toHaveBeenCalled();
+    });
+
+    it.each(['owner', 'chain'] as const)('does not dispatch a fallback after the %s changes', async (changed) => {
+      chainState.source = 'custom';
+      chainState.refs = ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'];
+      readKey.mockReturnValue('fake-proxy-key');
+      fetchMock.mockImplementationOnce(async () => {
+        if (changed === 'owner') ownerState.key = 'owner-b';
+        else chainState.refs = ['litellm-gpt-5.4-mini'];
+        return { ok: true, json: async () => ({ choices: [{ message: { content: 'invalid' } }] }) } as never;
+      });
+
+      await expect(advisor().advisor.advise(evidence)).rejects.toThrow('Dictionary learning failed:');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(invalidOutputs)('rejects explicit builtin output %s without using defaults', async (invalidText) => {
+      selectClaude();
+      fetchMock.mockResolvedValueOnce({
+        ok: true, text: async () => JSON.stringify({ content: [{ type: 'text', text: invalidText }] }),
+      } as never);
+      const maker = makerMock(true);
+      const client = new DictionaryLearningTextModelClient(
+        (prompt, opts) => requestUtilityText(maker, prompt, {
+          ...opts, providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-haiku-4-5',
+        }),
+        () => {},
+      );
+
+      await expect(new DictationDictionaryAdvisor({ client, model: 'auxiliary' }).advise(evidence))
+        .rejects.toThrow('Dictionary learning failed: all_candidates_failed');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(maker.oneShot).not.toHaveBeenCalled();
+    });
+  });
 
   it('tries a one-item custom chain in order and never expands to AUTO', async () => {
     chainState.source = 'custom';
