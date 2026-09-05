@@ -1604,8 +1604,6 @@ export default function SessionScreen() {
     setLoading(false);
     rewindRequestSeqRef.current += 1;
   }
-  const [contextLoading, setContextLoading] = useState(false);
-  const [contextUsage, setContextUsage] = useState<unknown>(null);
   // 账号级限额快照(`maker:usage:account` 原始返回):账号级数据本身跨会话共享,但
   // 会话 agentKind 不同时语义不同(只对 codex 会话拉取/展示),随 sessionId 一起清。
   const [accountUsage, setAccountUsage] = useState<unknown>(null);
@@ -1615,14 +1613,11 @@ export default function SessionScreen() {
   const [codexResetBusy, setCodexResetBusy] = useState(false);
   // consume 回包丢失时保留本次 UUID;即使面板重新拉取额度,重试也不能换 key。
   const [codexResetRetryKey, setCodexResetRetryKey] = useState<string | null>(null);
-  // contextUsage 的归属会话号:同屏 sessionId 变化(深链 setParams 等原地切换路径)时
-  // 清空缓存并作废在途请求,防止上一会话的用量数据在新会话的「会话信息」里串档。
+  // 账号控制快照的归属会话号；上下文详情缓存由菜单自身管理。
   const contextUsageSessionRef = useRef(sessionId);
   useEffect(() => {
     if (contextUsageSessionRef.current === sessionId) return;
     contextUsageSessionRef.current = sessionId;
-    setContextUsage(null);
-    setContextLoading(false);
     setAccountUsage(null);
     setCodexRateLimits(null);
     setCodexResetBusy(false);
@@ -6220,13 +6215,11 @@ export default function SessionScreen() {
       if (localSystemCommand) {
         let data: Record<string, unknown>;
         if (localSystemCommand === 'context') {
-          setContextLoading(true);
           try {
             const usage = await maker.getContextUsage(
               sessionId,
               buildContextUsageCreateOpts(sessionAtSend),
             );
-            setContextUsage(usage);
             data = buildMobileSystemCardData(localSystemCommand, {
               contextUsage: usage,
               projection: inputProjection,
@@ -6240,8 +6233,6 @@ export default function SessionScreen() {
               remoteCommands: commandsAtSend,
               session: sessionAtSend,
             });
-          } finally {
-            setContextLoading(false);
           }
         } else {
           data = buildMobileSystemCardData(localSystemCommand, {
@@ -7899,25 +7890,6 @@ export default function SessionScreen() {
     setModelSheetOpen(true);
   }, [agentSwitchIntent, canUseRemoteSessionControls, modelSheetOpen, sessionAgentKind]);
 
-  const refreshContextUsage = useCallback(async () => {
-    if (!currentSession || contextLoading) return;
-    setContextLoading(true);
-    setError(null);
-    try {
-      const usage = await maker.getContextUsage(
-        sessionId,
-        buildContextUsageCreateOpts(currentSession),
-      );
-      // 会话已原地切换 → 丢弃迟到结果,归属校验见 contextUsageSessionRef 注释。
-      if (contextUsageSessionRef.current !== sessionId) return;
-      setContextUsage(usage);
-    } catch (err) {
-      if (contextUsageSessionRef.current === sessionId) setError(formatRemoteError(err));
-    } finally {
-      if (contextUsageSessionRef.current === sessionId) setContextLoading(false);
-    }
-  }, [contextLoading, currentSession, maker, sessionId]);
-
   // 账号限额按需拉取(会话信息面板打开时):优先走 Codex app-server 权威控制面,
   // 同时拿窗口和 reset credits。老被控端没有新通道时回退既有只读 usage channel;
   // 两条都失败则静默保留当前快照——限额是补充信息,不打断会话操作。
@@ -7930,7 +7902,7 @@ export default function SessionScreen() {
     }
     try {
       const snapshot = await maker.getCodexRateLimits();
-      // 迟到结果归属校验,同 contextUsage(见 contextUsageSessionRef 注释)。
+      // 迟到结果仍按账号控制快照的会话归属校验。
       if (contextUsageSessionRef.current !== sessionId) return;
       setCodexRateLimits(snapshot);
       setAccountUsage(snapshot.rateLimits);
@@ -8728,12 +8700,12 @@ export default function SessionScreen() {
         </View>
         {currentSession ? (
           <SessionMenuSheet
+            usageReader={maker}
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
             busy={controlBusy}
             codexRateLimits={localCodexRateLimitControl ? codexRateLimits : null}
             codexResetBusy={codexResetBusy}
-            contextLoading={contextLoading}
-            contextUsage={contextUsage}
+            onContextError={setError}
             extraDirBrowser={extraDirBrowser}
             initialView={menuInitialView}
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
@@ -8743,7 +8715,6 @@ export default function SessionScreen() {
             onDelete={() => patchSessionMeta({ status: 'deleted' })}
             onLoadExtraDirPath={(path) => void loadExtraDirBrowsePath(path)}
             onRefreshAccountUsage={() => void refreshAccountUsage()}
-            onRefreshContextUsage={() => void refreshContextUsage()}
             onResetCodexRateLimits={() => void resetCodexRateLimits()}
             onOpenWorkspace={() => {
               if (!currentSession.workingDir) return;
