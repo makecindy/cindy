@@ -105,7 +105,7 @@ describe('streaming follow yields to the reader', () => {
       const h = harness();
       h.handleHistoryTouchStart(touch());
       h.handleScrollBeginDrag(h.scrollEvent(1200));
-      h.handleScroll(h.scrollEvent(offset));
+      h.handleScroll(h.scrollEvent(lateEnd ? 1196 : offset));
       h.handleContentSize(400, 2500);
       h.handleHistoryTouchCancel();
       h.handleHistoryTouchCancel();
@@ -114,9 +114,59 @@ describe('streaming follow yields to the reader', () => {
       expect(h.state.nearBottomRef.current).toBe(offset === 1196);
       expect(h.tailScroll).toHaveBeenCalledTimes(offset === 1196 ? 1 : 0);
       expect(h.state.isDraggingRef.current).toBe(false);
-      expect(h.state.dragStartOffsetYRef.current).toBeNull();
+      if (lateEnd) expect(h.state.dragStartOffsetYRef.current).toBeNull();
     },
   );
+
+  it('consumes a late final sample even after a no-op cancellation verification', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleHistoryTouchCancel();
+    settle();
+    expect(h.tailScroll).not.toHaveBeenCalled();
+    h.handleScrollEndDrag(h.scrollEvent(1180));
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+
+  it('ignores layout corrections after cancel but consumes the final drag sample', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleContentSize(400, 2500);
+    h.handleHistoryTouchCancel();
+    h.handleScroll(h.scrollEvent(900));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    h.handleScrollEndDrag(h.scrollEvent(1180));
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+
+  it('discards the cancelled drag sample when an explicit scroll takes over', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1196));
+    h.handleHistoryTouchCancel();
+    h.scrollToBottom();
+    h.handleScrollEndDrag(h.scrollEvent(1180));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: true });
+  });
+
+  it('can return to the bottom in the final drag sample after cancellation', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1180));
+    h.handleHistoryTouchCancel();
+    h.handleScrollEndDrag(h.scrollEvent(1200));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
+  });
 
   it('allows native scrolling to take ownership after Android cancels the JS touch', () => {
     const h = harness();
