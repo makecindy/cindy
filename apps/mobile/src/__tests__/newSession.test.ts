@@ -205,6 +205,22 @@ describe('resolveSubmitGuardCatalog —— 提交终检目录取信(代际安全
     buildRows: (pl: DeviceProvidersPayload) => rowsOf((pl as TestPayload).id),
   };
 
+  it('ordinary creation hands off without awaiting a hung catalog refresh', async () => {
+    const fetch = vi.fn(() => new Promise<TestPayload>(() => {}));
+    const result = await resolveSubmitGuardCatalog({ ...baseArgs, fetch, cached: () => payload('cached'), deferRefreshToCreation: true });
+    expect(result).toEqual({ rows: [], catalogKnown: false, genAt: 1 });
+    const selected = { model: 'newly-connected-model', providerId: 'newly-connected-provider' };
+    expect(resolveRecentModelAndProvider(result.rows, selected, 'codex', result.catalogKnown)).toEqual(selected);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('defers an evicted catalog to the post-link check without trusting stale rows', async () => {
+    const fetch = vi.fn(baseArgs.fetch);
+    const result = await resolveSubmitGuardCatalog({ ...baseArgs, fetch, deferRefreshToCreation: true });
+    expect(result).toEqual({ rows: [], catalogKnown: false, genAt: 1 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('缓存命中 → join fetch revalidate,成功用新目录(工作站已换 provider,codex review P1)', async () => {
     const fetchSpy = vi.fn(baseArgs.fetch);
     const res = await resolveSubmitGuardCatalog({

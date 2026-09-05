@@ -268,6 +268,14 @@
     "composerPlaceholder": "오늘 무엇을 해볼까요~",
     "voiceSelectDeviceFirst": "기기를 선택한 후 음성 입력을 사용하세요.",
     "creatingSession": "세션 생성 중",
+    "slowSend": {
+      "preparing": "전송 준비 중…",
+      "uploading": "첨부 파일 업로드 중…",
+      "connecting": "컴퓨터에 연결 중…",
+      "checkingModel": "모델 설정 확인 중…",
+      "creating": "세션 생성 중…",
+      "sending": "메시지 전송 중…"
+    },
     "createAndSend": "세션을 만들고 첫 메시지 보내기",
     "modelAccessibility": "모델: {{model}}",
     "voiceInput": "음성 입력",

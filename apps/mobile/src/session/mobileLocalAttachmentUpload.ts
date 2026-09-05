@@ -283,9 +283,34 @@ export function createMobileLocalAttachmentUploadController(
     // 同步 throw(如已知 size 的超限校验)不会在 enqueue 调用栈里就把任务清掉。
     await Promise.resolve();
     let outcome: TaskOutcome = 'failed';
+    // 覆盖 token、相册读取、预处理和上传后的缩略图落盘，不能只给 HTTP 配超时。
+    // 捕获本轮 signal：失败卡重试会换 controller，迟到结果仍属于旧轮。
+    const signal = task.abort.signal;
+    let rejectWait!: (error: Error) => void;
+    let timedOut = false;
+    const interrupted = new Promise<never>((_resolve, reject) => { rejectWait = reject; });
+    const onAbort = () => rejectWait(new Error(i18n.t(timedOut ? 'composer.upload.timeout' : 'composer.upload.cancelled')));
+    signal.addEventListener('abort', onAbort);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      task.abort.abort();
+    }, 180_000);
+    const step = <T>(value: T | Promise<T>, late?: (result: T) => void): Promise<T> => Promise.race([
+      Promise.resolve(value).then((result) => {
+        if (signal.aborted) late?.(result);
+        return result;
+      }),
+      interrupted,
+    ]);
+    const cleanupLateFile = (result: { uri?: string }) => {
+      if (result.uri && result.uri !== task.candidate.uri) {
+        void task.candidate.cleanupLocalUris?.([result.uri]).catch(() => undefined);
+      }
+    };
     try {
+      if (signal.aborted) onAbort();
       // token 先就位(可能仍在网络 refresh):拿不到就快速失败,不浪费后面的转码/降采样。
-      const token = await task.token;
+      const token = await step(task.token);
       if (!token) {
         throw new Error(task.candidate.kind === 'image'
           ? i18n.t('composer.upload.sessionExpiredImage')
@@ -299,19 +324,19 @@ export function createMobileLocalAttachmentUploadController(
       // 先跑 candidate 自带的就位钩子(相册换址 / HEIC 转码),结果覆盖进管线输入。
       let source = task.candidate;
       if (source.resolve) {
-        source = { ...source, ...(await source.resolve()) };
+        source = { ...source, ...(await step(source.resolve(), cleanupLateFile)) };
       }
       task.localUris.add(source.uri);
       // 只有图片需要降采样;文件(pdf / office / 文本)与已优化产物原样直传。
       const prepared = source.kind === 'image' && !source.skipPreprocess
-        ? await deps.preprocess({
+        ? await step(deps.preprocess({
           uri: source.uri,
           name: source.name,
           mimeType: source.mimeType,
           size: source.size,
           width: source.width,
           height: source.height,
-        })
+        }), cleanupLateFile)
         : {
           uri: source.uri,
           name: source.name,
@@ -319,7 +344,7 @@ export function createMobileLocalAttachmentUploadController(
           size: source.size,
         };
       task.localUris.add(prepared.uri);
-      const size = prepared.size > 0 ? prepared.size : await deps.statSize(prepared.uri);
+      const size = prepared.size > 0 ? prepared.size : await step(deps.statSize(prepared.uri));
       deps.assertSize(size, task.candidate);
       // 取消检查点 2:资产就位 / 降采样(大图慢路径)期间被 X 掉的任务在发起 PUT 前短路
       // ——PUT 一旦开始便不可中止,只能事后 best-effort 删除,这里拦住就不产生 OSS 孤儿风险。
@@ -327,11 +352,11 @@ export function createMobileLocalAttachmentUploadController(
         outcome = 'discarded';
         return;
       }
-      const attachment = await deps.upload(
+      const attachment = await step(deps.upload(
         { name: prepared.name, size, mimeType: prepared.mimeType || undefined },
         prepared.uri,
-        { token, signal: task.abort.signal },
-      );
+        { token, signal },
+      ), deps.discard);
       if (task.discarded) {
         // 上传成功但用户已 X 掉 / 页面已退出:回收中转对象,不回调宿主。
         deps.discard(attachment);
@@ -340,14 +365,14 @@ export function createMobileLocalAttachmentUploadController(
         // 回传就位后的 candidate(kind / sourceId 随 spread 保留):resolve 型任务
         // (相册 ph:// 换址、HEIC / 粘贴转码)实际上传的是 source.uri,宿主的预览
         // 映射要指向这个仍然在世的 file://,而不是可能被系统回收的原始临时文件。
-        await deps.onUploaded(
+        await step(Promise.resolve(deps.onUploaded(
           attachment,
           source,
           prepared.uri,
           task.localId,
           [...task.localUris],
-          () => !disposed && !task.discarded,
-        );
+          () => !disposed && !task.discarded && !signal.aborted,
+        )), () => deps.discard(attachment));
         if (disposed || task.discarded) {
           // onUploaded 可能为粘贴图片等待持久缩略图；等待期间退屏 / removeAll
           // 时不能再把附件写回旧页面，且已经上传的 OSS 对象仍须回收。
@@ -365,6 +390,8 @@ export function createMobileLocalAttachmentUploadController(
         outcome = 'failed';
       }
     } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
       if (outcome === 'failed' && !disposed) {
         // 失败卡保留在托盘(state=failed,可 retry / remove),不再从 map 删除——
         // 弱网下「图直接消失 + 一条 toast」逼用户重新找图重选,原地重试才是对的。
