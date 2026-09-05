@@ -37,10 +37,7 @@ import {
   isScheduledSession,
 } from '@/features/cc-agent/lib/scheduledSessionGrouping';
 import { getFocusedScheduleStatusFilter } from '@/features/scheduler/SchedulerPage';
-import {
-  isUnreadFailedScheduleRun,
-  isUnreadScheduleRun,
-} from '@/features/scheduler/lib/runUnread';
+import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from '@/features/scheduler/lib/runUnread';
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
@@ -512,7 +509,7 @@ describe('automation-generated sessions', () => {
     ).toEqual(['ok']);
   });
 
-  it('surfaces unread failed schedule runs as an in-session mark-as-read banner', () => {
+  it('dismisses the failed-run summary in one click while keeping retry scoped to one run', () => {
     const sessionViewSource = readTextLf(
       new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
       'utf8',
@@ -531,12 +528,16 @@ describe('automation-generated sessions', () => {
     expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
     expect(sessionViewSource).toContain('latestUnreadFailedRunId');
     expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId])');
-    expect(sessionViewSource).not.toContain(
+    expect(sessionViewSource).toContain(
       'void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds)',
     );
     expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
-    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('这次定时任务没有完成。');
-    expect(zh.chat.unreadFailedScheduleBanner.markAsRead).toBe('标为已读');
+    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有定时任务未完成，可查看运行记录。');
+    expect(zh.chat.unreadFailedScheduleBanner.dismissTitle).toBe('关闭');
+    expect(bannerSource).toContain(
+      "aria-label={t('chat.unreadFailedScheduleBanner.dismissTitle')}",
+    );
+    expect(bannerSource).not.toContain('chat.unreadFailedScheduleBanner.markAsRead');
   });
 
   it('maps a focused schedule to the status bucket that can reveal it', () => {
@@ -1148,7 +1149,9 @@ describe('automation-generated sessions', () => {
     expect(sidebarSource).toContain('knownSessionIds: group.sessions.map((session) => session.id)');
     expect(sidebarSource).toContain("if (action === 'mark-read')");
     expect(sidebarSource).toContain('unreadSuccessScheduleRunIds(info)');
-    expect(sidebarSource).toContain("t('ccAgent.layout.markedAsRead', { count: processed.length })");
+    expect(sidebarSource).toContain(
+      "t('ccAgent.layout.markedAsRead', { count: processed.length })",
+    );
     expect(sidebarSource).not.toContain(
       "t('ccAgent.layout.markedAsRead', { count: unreadRunIds.length })",
     );

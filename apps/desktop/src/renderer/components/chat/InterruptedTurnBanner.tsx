@@ -34,6 +34,7 @@ import { useMemo, useState } from 'react';
 import { AlertCircle, CirclePause, Play, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
 import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import { ErrorBanner } from './ErrorBanner';
@@ -108,7 +109,7 @@ export function InterruptedTurnBanner({
   );
 }
 
-/** 定时任务失败/中断未读:只有「标为已读」,没有继续。继续走已有的 error/中断横幅。 */
+/** 定时任务历史失败/中断提示：关闭当前汇总，继续走已有的 error/中断横幅。 */
 export function UnreadFailedScheduleBanner({
   onDismiss,
   className,
@@ -135,18 +136,20 @@ export function UnreadFailedScheduleBanner({
       <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
         {t('chat.unreadFailedScheduleBanner.text')}
       </span>
-      <button
-        type="button"
-        onClick={onDismiss}
-        className={cn(
-          'shrink-0 text-xs font-medium',
-          'text-[var(--error-fg-strong)]',
-          'hover:opacity-70 transition-opacity',
-        )}
-        title={t('chat.unreadFailedScheduleBanner.markAsReadTitle')}
-      >
-        {t('chat.unreadFailedScheduleBanner.markAsRead')}
-      </button>
+      <Tip text={t('chat.unreadFailedScheduleBanner.dismissTitle')}>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={t('chat.unreadFailedScheduleBanner.dismissTitle')}
+          className={cn(
+            'shrink-0 flex h-5 w-5 items-center justify-center rounded-sm',
+            'text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          )}
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      </Tip>
     </div>
   );
 }
