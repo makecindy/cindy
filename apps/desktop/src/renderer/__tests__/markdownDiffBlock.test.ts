@@ -170,8 +170,10 @@ describe('F3 — MarkdownRenderer routes ```diff to MarkdownDiffBlock', () => {
   });
 
   it('default pre fallthrough still renders <pre className=...> for non-diff blocks', () => {
-    // 非 diff 代码块现在先落到 CodeBlockPre,再由 CodeBlockPre 渲染真实 <pre>。
-    expect(rendererSrc).toMatch(/return\s+<CodeBlockPre\s+\{\.\.\.props\}>\{children\}<\/CodeBlockPre>/);
+    // 非 diff 代码块现在先落到 renderCodeBlock helper,再由 CodeBlockPre 渲染
+    // 真实 <pre>。CodeBlockPre 接受可选 sessionId:baseComponents.pre(文档预览
+    // / TextLightbox)不传,聊天流 instance-level override 传 currentSessionId。
+    expect(rendererSrc).toMatch(/<CodeBlockPre\s+\{\.\.\.props\}\s+language=\{extractCodeLanguage\(firstChild\)\}\s+sessionId=\{sessionId\}>\s*\{children\}\s*<\/CodeBlockPre>/);
     expect(rendererSrc).toMatch(/function\s+CodeBlockPre[\s\S]*<pre[\s\S]*className=\{cn\(/);
     expect(rendererSrc).toMatch(/border-\[var\(--msg-code-block-border\)\]/);
   });
@@ -250,5 +252,46 @@ describe('F5 — parseDiffText classification', () => {
     expect(out).toHaveLength(2);
     expect(out[0].text).toBe('a');
     expect(out[1].text).toBe('b');
+  });
+});
+
+describe('F6 — 「在终端执行」按钮 TextLightbox 隔离', () => {
+  // CodeBlockPre 不再读 useChatSessionFile context,改由 prop 传入 sessionId。
+  // 这样 TextLightbox(挂在会话树内但渲染的是文件内容)不会因为外层
+  // ChatSessionFileProvider 而误显示执行按钮。baseComponents.pre 不传
+  // sessionId(doc-mode / TextLightbox 安全),只有聊天流的 instance-level
+  // override 才传 currentSessionId。
+
+  it('CodeBlockPre 不使用 useChatSessionFile', () => {
+    // 在 CodeBlockPre 函数体内不应出现 useChatSessionFile 调用。
+    const codeBlockPreMatch = rendererSrc.match(
+      /function\s+CodeBlockPre\s*\([^)]*\)\s*\{[\s\S]*?\n\}/,
+    );
+    expect(codeBlockPreMatch, 'CodeBlockPre function not found').toBeTruthy();
+    expect(codeBlockPreMatch![0]).not.toMatch(/useChatSessionFile/);
+  });
+
+  it('CodeBlockPre 接受 sessionId prop', () => {
+    expect(rendererSrc).toMatch(
+      /function\s+CodeBlockPre\s*\(\s*\{[^}]*sessionId[^}]*\}/,
+    );
+  });
+
+  it('renderCodeBlock helper 存在且接受 sessionId 参数', () => {
+    expect(rendererSrc).toMatch(
+      /function\s+renderCodeBlock\s*\(\s*children[^)]*sessionId\?:\s*string[^)]*\)/,
+    );
+  });
+
+  it('baseComponents.pre 调用 renderCodeBlock 不传 sessionId', () => {
+    expect(rendererSrc).toMatch(
+      /pre\(\{\s*children,\s*\.\.\.props\s*\}\)\s*\{[\s\S]*?return\s+renderCodeBlock\(children,\s*props\);/,
+    );
+  });
+
+  it('instance-level pre override 传入 currentSessionId(仅非 doc-mode)', () => {
+    expect(rendererSrc).toMatch(
+      /!\s*emitSourceLines\s*\?[\s\S]*?pre:\s*\([^)]*\)\s*=>\s*renderCodeBlock\(children,\s*props[^)]*,\s*currentSessionId\)/,
+    );
   });
 });
