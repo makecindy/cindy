@@ -42,9 +42,13 @@ describe('custom auxiliary chain does not hit the session agent', () => {
   });
 
   it('dictionary learning uses the same owner and chain dispatch guard', () => {
-    const source = readFileSync(path.join(root, 'voice-input/index.ts'), 'utf8');
-    expect(source).toContain('const advisorAttempts: FallbackTextModelAttempt[] = readyAdvisorProfiles.map');
-    expect(source).toContain('client: guardRefinerClientAgainstUnavailableRoute(');
-    expect(source).toContain('assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);');
+    const source = readFileSync(path.join(root, 'voice-input/index.ts'), 'utf8').replace(/\r\n/g, '\n');
+    expect(source).toContain(`const advisorClient = new DictionaryLearningTextModelClient(
+      (prompt, requestOptions) => requestUtilityText(getMaker(), prompt, requestOptions),
+      () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
+    );`);
+    expect(source).toContain(`const result = await advisor.advise(adviceInput);
+    assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
+    const recordResult = voiceInputDataStore.recordDictionaryLearningActions(result.actions);`);
   });
 });
