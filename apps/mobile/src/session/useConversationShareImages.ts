@@ -35,9 +35,11 @@ async function readShareImageFile(
 async function loadShareImage(
   url: string,
   resolve: ResolveRemoteMediaFn,
+  canRead: () => boolean,
 ): Promise<ConversationShareImage | null> {
   // The existing store owns both OSS and desktop-media upload thumbnails.
   await ensureSentAttachmentThumbsHydrated();
+  if (!canRead()) return null;
   const localThumb = getSentAttachmentThumbUri(url);
   let uri = localThumb
     ? ((await readShareImageFile(
@@ -45,6 +47,7 @@ async function loadShareImage(
         imageMimeFromUrl(localThumb) ?? "image/jpeg",
       ).catch(() => null)) ?? url)
     : url;
+  if (!canRead()) return null;
   let mimeType = imageMimeFromUrl(uri) ?? "image/jpeg";
   if (uri === url && isDesktopLocalMediaUrl(url)) {
     const media = await resolve({
@@ -53,20 +56,30 @@ async function loadShareImage(
       previewable: true,
       thumbnail: true,
     });
-    if (!media.mimeType.startsWith("image/") || media.size > MAX_IMAGE_BYTES)
+    if (
+      !canRead() ||
+      !media.mimeType.startsWith("image/") ||
+      !Number.isFinite(media.size) ||
+      media.size <= 0 ||
+      media.size > MAX_IMAGE_BYTES
+    )
       return null;
     uri = media.url;
     mimeType = media.mimeType;
+    // Only download objects whose size the controlled desktop resolver knows.
+    // Arbitrary HTTP sources have no trusted pre-transfer bound: keep alt text.
+    if (/^https?:\/\//i.test(uri)) {
+      uri =
+        (await downloadRemoteMediaAsDataUri(uri, mimeType, MAX_IMAGE_BYTES)) ??
+        "";
+    }
   }
   if (uri.startsWith("file://") && isDesktopLocalMediaUrl(url)) {
     // Other local files must come from the controlled media resolver.
     uri = (await readShareImageFile(uri, mimeType)) ?? "";
-  } else if (/^https?:\/\//i.test(uri)) {
-    uri =
-      (await downloadRemoteMediaAsDataUri(uri, mimeType, MAX_IMAGE_BYTES)) ??
-      "";
   }
   if (
+    !canRead() ||
     !uri.startsWith("data:image/") ||
     uri.length > (MAX_IMAGE_BYTES * 4) / 3 + 128
   )
@@ -132,7 +145,10 @@ export function useConversationShareImages(
       (url) =>
         timedOut
           ? Promise.resolve(null)
-          : Promise.race([loadShareImage(url, resolve), imageDeadline]),
+          : Promise.race([
+              loadShareImage(url, resolve, () => active && !timedOut),
+              imageDeadline,
+            ]),
       context,
       () => active,
     )
