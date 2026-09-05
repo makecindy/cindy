@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { createElement, type ReactElement } from 'react';
+import { createElement, type ButtonHTMLAttributes, type ReactElement, type ReactNode } from 'react';
 import type { WebviewTag } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,14 +36,14 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 
-vi.mock('@/components/ui/dropdown-menu', () => {
-  const react = require('react') as typeof import('react');
+vi.mock('@/components/ui/dropdown-menu', async () => {
+  const react = await vi.importActual<typeof import('react')>('react');
   return {
     DropdownMenu: ({
       children,
       onOpenChange,
     }: {
-      children: React.ReactNode;
+      children: ReactNode;
       onOpenChange?: (open: boolean) => void;
     }) =>
       react.createElement(
@@ -61,22 +61,33 @@ vi.mock('@/components/ui/dropdown-menu', () => {
         }),
         children,
       ),
-    DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuTrigger: ({ children }: { children: ReactNode }) =>
       react.createElement(react.Fragment, null, children),
-    DropdownMenuContent: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuContent: ({ children }: { children: ReactNode }) =>
       react.createElement('div', null, children),
+    DropdownMenuGroup: ({ children }: { children: ReactNode }) =>
+      react.createElement('div', null, children),
+    DropdownMenuLabel: ({ children }: { children: ReactNode }) =>
+      react.createElement('div', null, children),
+    DropdownMenuSeparator: () => react.createElement('hr'),
     DropdownMenuItem: ({
       children,
       onSelect,
       disabled,
-    }: {
-      children: React.ReactNode;
-      onSelect?: () => void;
+      ...props
+    }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onSelect'> & {
+      children: ReactNode;
+      onSelect?: (event: { preventDefault: () => void }) => void;
       disabled?: boolean;
     }) =>
       react.createElement(
         'button',
-        { type: 'button', disabled, onClick: () => onSelect?.() },
+        {
+          ...props,
+          type: 'button',
+          disabled,
+          onClick: () => onSelect?.({ preventDefault: vi.fn() }),
+        },
         children,
       ),
   };
@@ -130,6 +141,7 @@ function makeBrowserState(
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
+    setZoomFactor: vi.fn(),
     dismissResourceAlert: vi.fn(),
     ...patch,
   };
@@ -143,6 +155,7 @@ function renderBrowserTab(
     title: string;
     favicon: string | null;
     isAudible: boolean;
+    zoomFactor: number;
   }> = {},
   deviceLinkDeviceId?: string | null,
 ): ReactElement {
@@ -167,6 +180,7 @@ function renderBrowserTab(
       title: '',
       favicon: null,
       isAudible: false,
+      zoomFactor: 1,
       ...statePatch,
     },
   });
@@ -217,6 +231,19 @@ describe('BrowserTabBody navigation', () => {
     );
     expect(sharedWrapper.isConnected).toBe(false);
     expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  it('applies persisted tab zoom and patches the next zoom step', () => {
+    const setZoomFactor = vi.fn();
+    const patchState = vi.fn();
+    browserState = makeBrowserState({ setZoomFactor });
+
+    render(renderBrowserTab('https://www.taptap.cn/', patchState, true, { zoomFactor: 1.25 }));
+
+    expect(setZoomFactor).toHaveBeenCalledWith(1.25);
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.zoomIn' }));
+    expect(setZoomFactor).toHaveBeenLastCalledWith(1.5);
+    expect(patchState).toHaveBeenCalledWith({ zoomFactor: 1.5 });
   });
 
   it('hides a native popup view while the renderer more-menu portal is open', () => {
@@ -787,6 +814,7 @@ describe('BrowserTabBody navigation', () => {
           title: '',
           favicon: null,
           isAudible: false,
+          zoomFactor: 1,
         },
       }),
     );

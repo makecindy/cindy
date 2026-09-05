@@ -36,7 +36,9 @@ export type RsbNativePopupEvent =
   | { surfaceId: string; type: 'closed' };
 
 export type RsbNativePopupCommand =
-  { command: 'navigate'; url: string } | { command: 'reload' | 'go-back' | 'go-forward' | 'stop' };
+  | { command: 'navigate'; url: string }
+  | { command: 'set-zoom-factor'; zoomFactor: number }
+  | { command: 'reload' | 'go-back' | 'go-forward' | 'stop' };
 
 export interface RsbNativePopupClaimInput {
   surfaceId: string;
@@ -46,3 +48,7 @@ export interface RsbNativePopupClaimInput {
 
 export type RsbNativePopupClaimResult =
   { alive: true; snapshot: RsbNativePopupSnapshot } | { alive: false };
+
+/** Native Electron zoom is shared by origin; CSS zoom stays local to this document. */
+export const browserPageZoomScript = (zoomFactor: number): string =>
+  `document.documentElement.style.setProperty("zoom",${JSON.stringify(String(zoomFactor))},"important")`;
