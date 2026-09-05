@@ -150,16 +150,18 @@ export function createCardActionHandler(
     im: ChannelIM,
     event: IMCardActionEvent,
     where: string,
+    body?: string,
   ): Promise<void> {
     log.warn(
       `${where}: group card lane unresolved (senderId=...${event.senderId.slice(-8)} is not a lane) — ` +
         'refusing to attach so the takeover cannot land on the DM identity',
     );
-    const body =
+    const text =
+      body ??
       ui.cards.control.staleGroupCard ??
       ui.cards.control.attachFailed('card lane unresolved (app restarted)');
     try {
-      await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(body));
+      await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(text));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`${where}: stale group card patch failed (non-fatal): ${msg}`);
@@ -1230,6 +1232,12 @@ export function createCardActionHandler(
     const botContextId = String(event.payload.botAppId ?? '');
     if (!botContextId) {
       log.warn('project switch missing botAppId — ignoring');
+      return;
+    }
+    // 群卡认不出自己在哪条话题(app 重启过)时绝不切 —— 切换会落到私聊身份的
+    // 会话行上, 卡片还报「成功」。fail-closed, 让用户在目标话题里重发 /project。
+    if (isGroupCardWithLostLane(event)) {
+      await rejectStaleGroupCard(im, event, 'project:switch', projectUi.staleGroupCard);
       return;
     }
     // 接管期间语义冲突(slash 层已拦, 这里兜旧卡片迟到按压)。

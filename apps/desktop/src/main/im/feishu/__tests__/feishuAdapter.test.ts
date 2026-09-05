@@ -176,6 +176,35 @@ describe('feishu ImChannelAdapter characterization', () => {
     });
   });
 
+  it('/project 已接线: projectSwitching 为 true', () => {
+    expect(adapter.projectSwitching).toBe(true);
+  });
+
+  it('/project 卡文案已提供(orchestrator projectSwitching 断言不炸)', () => {
+    const project = adapter.ui.cards.project!;
+    expect(project.title).toBeTruthy();
+    expect(project.hint).toBeTypeOf('function');
+    expect(project.emptyBody).toBeTruthy();
+    expect(project.btnDialogue).toBeTruthy();
+    expect(project.btnCancel).toBeTruthy();
+    expect(project.resolvedPick).toBeTypeOf('function');
+    expect(project.resolvedDialogue).toBeTruthy();
+    expect(project.resolvedCancel).toBeTruthy();
+    expect(project.switchFailed).toBeTypeOf('function');
+    expect(project.attachedUnsupported).toBeTruthy();
+    expect(project.dialogueName).toBeTruthy();
+  });
+
+  it('群/话题 lane 隔离: 两个话题各自 sessionId 独立, 切不同项目互不影响', () => {
+    const topicA = adapter.sessions.sessionIdFor('cli_abc', 'g/oc_chat1/t1');
+    const topicB = adapter.sessions.sessionIdFor('cli_abc', 'g/oc_chat1/t2');
+    const dm = adapter.sessions.sessionIdFor('cli_abc', 'ou_owner');
+    expect(topicA).toBe('feishu_cli_abc_g-oc_chat1-t1');
+    expect(topicB).toBe('feishu_cli_abc_g-oc_chat1-t2');
+    expect(topicA).not.toBe(topicB);
+    expect(topicA).not.toBe(dm);
+  });
+
   it('默认 title 为 [飞书·DM] {openId 后 6 位}; ack emoji 为 SMUG', () => {
     expect(adapter.sessions.defaultTitle('ou_1234567890')).toBe('[飞书·DM] 567890');
     expect(adapter.processingEmoji).toBe('SMUG');

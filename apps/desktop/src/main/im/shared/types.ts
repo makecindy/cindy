@@ -412,6 +412,8 @@ export interface ImUiTextPack {
       switchFailed: (reason: string) => string;
       /** /ctr 接管期间不支持切项目(先 /exctr)。 */
       attachedUnsupported: string;
+      /** 群卡认不出自己在哪条话题(应用重启过)时的 fail-closed 提示。 */
+      staleGroupCard?: string;
       /** 当前目录显示名为托管对话目录时的称呼。 */
       dialogueName: string;
     };
