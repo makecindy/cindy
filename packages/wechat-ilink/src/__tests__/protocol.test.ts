@@ -435,6 +435,107 @@ describe("iLink HTTP boundary", () => {
     });
   });
 
+  it("maps generic send rejection to a retryable secret-free error", async () => {
+    const api = new IlinkApiClient({
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      token: "fake-token",
+      botAgent: "Cindy/1.0.0",
+      fetch: async () =>
+        new Response(JSON.stringify({ ret: 1, detail: "top-secret-response" })),
+    });
+    await expect(
+      api.sendText(
+        {
+          peerId: "peer",
+          text: "hello",
+          contextToken: "context",
+          clientId: "rejected-text",
+        },
+        signal(),
+      ),
+    ).rejects.toMatchObject({ code: "SEND_REJECTED", retryable: true });
+    await expect(
+      api.sendText(
+        {
+          peerId: "peer",
+          text: "hello",
+          contextToken: "context",
+          clientId: "rejected-text-2",
+        },
+        signal(),
+      ),
+    ).rejects.not.toThrow(/top-secret-response/);
+  });
+
+  it("maps send-side stale credentials to a stable non-retryable error", async () => {
+    const transport = new TencentIlinkTransport({
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      token: "fake-token",
+      botAgent: "Cindy/1.0.0",
+      fetch: async () => new Response(JSON.stringify({ ret: 1, errcode: -14 })),
+    });
+    await expect(
+      transport.sendMessage(
+        {
+          peerId: "peer",
+          text: "hello",
+          contextToken: "context",
+          clientId: "stale-text",
+        },
+        signal(),
+      ),
+    ).rejects.toMatchObject({ code: "AUTH_REPLACED", retryable: false });
+    await expect(
+      transport.sendMedia(
+        {
+          peerId: "peer",
+          contextToken: "context",
+          clientId: "stale-media",
+          uploaded: {
+            fileName: "image.png",
+            ref: {
+              kind: "image",
+              encryptedQuery: "download-token",
+              aesKeyBase64: Buffer.alloc(16, 1).toString("base64"),
+              byteLength: 1,
+              encryptedByteLength: 16,
+            },
+          },
+        },
+        signal(),
+      ),
+    ).rejects.toMatchObject({ code: "AUTH_REPLACED", retryable: false });
+  });
+
+  it("maps upload-side stale credentials to a stable non-retryable error before any CDN upload", async () => {
+    const calls: string[] = [];
+    const transport = new TencentIlinkTransport({
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      token: "fake-token",
+      botAgent: "Cindy/1.0.0",
+      fetch: async (input) => {
+        calls.push(String(input));
+        return new Response(JSON.stringify({ ret: 1, errcode: -14 }));
+      },
+    });
+    await expect(
+      transport.uploadMedia(
+        {
+          peerId: "peer",
+          bytes: Buffer.from("image bytes"),
+          fileName: "image.png",
+          kind: "image",
+        },
+        signal(),
+      ),
+    ).rejects.toMatchObject({ code: "AUTH_REPLACED", retryable: false });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].endsWith("/ilink/bot/getuploadurl")).toBe(true);
+    expect(
+      calls.some((url) => url.startsWith("https://cdn.weixin.qq.com/")),
+    ).toBe(false);
+  });
+
   it("maps stale credentials and malformed message lists to stable errors", async () => {
     const responses = [
       { ret: 1, errcode: -14 },
