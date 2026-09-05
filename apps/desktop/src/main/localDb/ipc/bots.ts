@@ -80,10 +80,19 @@ import { createMessage } from './messages.js';
 import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { botInvitationProgress } from '../../../shared/botInvitation.js';
-import { queueBotInvitation } from '../../maker-ipc/botInvitation.js';
+import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
+import { getMakerIfReady } from '../../maker-host/index.js';
 import { getResolvedMainLocale } from '../../i18n.js';
 
 const log = createLogger('bots');
+
+function queueBotInvitation(botId: string, retry = false): void {
+  enqueueBotInvitation(
+    botId,
+    { createCanonicalSession: createBotCanonicalSession, broadcastProfileChanged: broadcastBotProfileChanged },
+    retry,
+  );
+}
 
 /** Bind async profile work to the account that initiated it. */
 function captureBotOperationOwner() {
@@ -1496,7 +1505,6 @@ export function registerBotIpc(): void {
           });
         }
       }
-      const { getMakerIfReady } = await import('../../maker-host/index.js');
       await getMakerIfReady()
         ?.closeSession(archivedCanonicalSessionId)
         .catch(() => undefined);

@@ -8,6 +8,10 @@ import {
 import { getDbClient } from '../localDb/client/current.js';
 import { botProfiles, botProfileVersions } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
+import { getMaker } from '../maker-host/index.js';
+import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { createMessage } from '../localDb/ipc/messages.js';
+import { prepareBotInvitationAvatar, finishBotInvitationAvatar } from './botInvitationAvatar.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../shared/botInvitation.js';
 import {
   BOT_TEMPLATE_PRESET_IDENTITIES,
@@ -21,6 +25,16 @@ import {
   parseBotInvitationDraft,
   type BotInvitationDraft,
 } from './botInvitationDraft.js';
+
+/** The IPC owner supplies reverse calls; this worker never imports the IPC registry. */
+export interface BotInvitationCallbacks {
+  createCanonicalSession(input: {
+    botId: string;
+    expectedCanonicalSessionId: string | null;
+    expectedProfileVersion: number;
+  }): Promise<{ canonicalSessionId: string }>;
+  broadcastProfileChanged(payload: { botId: string; change: 'updated' }): void;
+}
 
 interface Invitation extends BotInvitationProgress {
   id: string;
@@ -37,7 +51,11 @@ const running = new Set<string>();
 const MAX_RUNNING = 2;
 
 /** Main owns the queue. Closing a renderer never cancels preparation. */
-export function queueBotInvitation(botId: string, retry = false): void {
+export function queueBotInvitation(
+  botId: string,
+  callbacks: BotInvitationCallbacks,
+  retry = false,
+): void {
   if (isAppSessionBoundaryPending()) return;
   const owner = activeOwnerScopeKey();
   const userDataDir = ownerScopedUserDataPath();
@@ -119,8 +137,7 @@ export function queueBotInvitation(botId: string, retry = false): void {
               : {}),
           });
           assertOwner();
-          const { broadcastBotProfileChanged } = await import('../localDb/ipc/bots.js');
-          broadcastBotProfileChanged({ botId, change: 'updated' });
+          callbacks.broadcastProfileChanged({ botId, change: 'updated' });
           return;
         } catch (error) {
           if (attempt === 2 || (error as { code?: string }).code !== 'PRECONDITION_FAILED')
@@ -143,10 +160,6 @@ export function queueBotInvitation(botId: string, retry = false): void {
         : null;
       let draft = state.draft;
       if (!preset && !draft && state.stage === 'profile') {
-        const [{ requestUtilityText }, { getMaker }] = await Promise.all([
-          import('../utility-model/oneShotCandidates.js'),
-          import('../maker-host/index.js'),
-        ]);
         assertOwner();
         const result = await requestUtilityText(
           getMaker(),
@@ -213,8 +226,6 @@ export function queueBotInvitation(botId: string, retry = false): void {
         const avatarPrompt = draft?.avatarPrompt ?? state.avatarPrompt;
         if (state.avatarRequested && avatarPrompt) {
           try {
-            const { prepareBotInvitationAvatar, finishBotInvitationAvatar } =
-              await import('./botInvitationAvatar.js');
             let invocationId = state.avatarInvocationId;
             if (!invocationId) {
               invocationId = (await prepareBotInvitationAvatar(assertOwner)) ?? undefined;
@@ -241,9 +252,7 @@ export function queueBotInvitation(botId: string, retry = false): void {
       }
       if (portraitOnly) return;
       const current = await load();
-      const { createBotCanonicalSession } = await import('../localDb/ipc/bots.js');
-      const { createMessage } = await import('../localDb/ipc/messages.js');
-      const canonical = await createBotCanonicalSession({
+      const canonical = await callbacks.createCanonicalSession({
         botId,
         expectedCanonicalSessionId: current.profile.canonicalSessionId,
         expectedProfileVersion: current.profile.currentVersion,

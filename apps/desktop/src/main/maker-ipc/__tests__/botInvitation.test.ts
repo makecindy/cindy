@@ -23,20 +23,23 @@ vi.mock('../../appSessionState.js', () => ({
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => h.client }));
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({ requestUtilityText: h.generate }));
 vi.mock('../../maker-host/index.js', () => ({ getMaker: () => ({}) }));
-vi.mock('../../localDb/ipc/bots.js', () => ({
-  broadcastBotProfileChanged: h.broadcast,
-  createBotCanonicalSession: async () => ({ canonicalSessionId: 'chat-1' }),
-}));
 vi.mock('../../localDb/ipc/messages.js', () => ({ createMessage: h.welcome }));
 vi.mock('../botInvitationAvatar.js', () => ({
   prepareBotInvitationAvatar: h.prepareAvatar,
   finishBotInvitationAvatar: h.finishAvatar,
 }));
 import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
-import { queueBotInvitation } from '../botInvitation.js';
+import { queueBotInvitation as enqueueBotInvitation } from '../botInvitation.js';
 import { readBotSkill, seedBotSkillIfMissing } from '../botSkillStore.js';
 import { readBotProfileFolder } from '../botProfileFolder.js';
 import { parseBotInvitationDraft, botInvitationPrompt } from '../botInvitationDraft.js';
+
+function queueBotInvitation(botId: string, retry = false): void {
+  enqueueBotInvitation(botId, {
+    createCanonicalSession: async () => ({ canonicalSessionId: 'chat-1' }),
+    broadcastProfileChanged: h.broadcast,
+  }, retry);
+}
 
 const draft = {
   background: '热爱网文的小说家，喜欢观察日常生活里的细节。',
