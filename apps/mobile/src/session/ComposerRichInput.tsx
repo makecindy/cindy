@@ -354,6 +354,9 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         const pending = pendingDocumentRef.current;
         pendingDocumentRef.current = null;
         if (pending) applyDocument(pending.document, pending.focusAfter, pending.caret);
+        // A reloaded page starts at id 0; restore the latest accepted draft and
+        // synchronize its id through the same path, without replaying focus.
+        else applyDocument(webDocumentRef.current.document);
         const pendingNodeInsertions = pendingNodeInsertionsRef.current;
         pendingNodeInsertionsRef.current = [];
         for (const node of pendingNodeInsertions) {
