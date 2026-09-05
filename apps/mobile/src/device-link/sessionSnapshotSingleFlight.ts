@@ -5,6 +5,8 @@ export interface SessionSnapshotRequestIdentity {
   deviceId: string;
   sessionId: string;
   connectionEpoch: number;
+  subscriptionIdentity?: number | null;
+  signal?: AbortSignal;
   resource: SessionSnapshotResource;
   /**
    * Exact request semantics and local authority fence. Requests only share a
@@ -16,7 +18,7 @@ export interface SessionSnapshotRequestIdentity {
 
 export type SessionSnapshotScope = Pick<
   SessionSnapshotRequestIdentity,
-  'deviceId' | 'sessionId' | 'connectionEpoch'
+  'deviceId' | 'sessionId' | 'connectionEpoch' | 'subscriptionIdentity' | 'signal'
 >;
 
 export type SessionMessageSnapshotFence =
@@ -58,13 +60,25 @@ export function sessionPendingInteractionsSnapshotVariant(
   return `snapshot=${id}`;
 }
 
-const inFlightSessionSnapshotRequests = new Map<string, Promise<unknown>>();
+interface SnapshotRead {
+  promise: Promise<unknown>;
+  cancel(): void;
+}
+/** Local invalidation, not a transport failure or a permanent missing resource. */
+export class SnapshotReadSupersededError extends Error {
+  constructor() {
+    super('Remote sync superseded');
+    this.name = 'SnapshotReadSupersededError';
+  }
+}
+const inFlightSessionSnapshotRequests = new Map<string, SnapshotRead>();
 
 function requestKey(identity: SessionSnapshotRequestIdentity): string {
   return JSON.stringify([
     identity.deviceId,
     identity.sessionId,
     identity.connectionEpoch,
+    identity.subscriptionIdentity ?? null,
     identity.resource,
     identity.variant,
   ]);
@@ -78,9 +92,13 @@ export function runSessionSnapshotSingleFlight<T>(
   identity: SessionSnapshotRequestIdentity,
   read: () => Promise<T>,
 ): Promise<T> {
+  if (identity.signal?.aborted) return Promise.reject(new SnapshotReadSupersededError());
   const key = requestKey(identity);
   const current = inFlightSessionSnapshotRequests.get(key);
-  if (current) return current as Promise<T>;
+  if (current) {
+    invalidateOnCancellation(key, current, identity.signal);
+    return current.promise as Promise<T>;
+  }
 
   let request: Promise<T>;
   try {
@@ -88,14 +106,37 @@ export function runSessionSnapshotSingleFlight<T>(
   } catch (error) {
     request = Promise.reject(error);
   }
-  inFlightSessionSnapshotRequests.set(key, request);
+  let cancel!: () => void;
+  const shared = new Promise<T>((resolve, reject) => {
+    cancel = () => reject(new SnapshotReadSupersededError());
+    // Always observe the physical response, including rejection after cancellation.
+    void request.then(resolve, reject);
+  });
+  const entry: SnapshotRead = { promise: shared, cancel };
+  inFlightSessionSnapshotRequests.set(key, entry);
+  invalidateOnCancellation(key, entry, identity.signal);
   const clear = () => {
-    if (inFlightSessionSnapshotRequests.get(key) === request) {
+    if (inFlightSessionSnapshotRequests.get(key) === entry) {
       inFlightSessionSnapshotRequests.delete(key);
     }
   };
-  void request.then(clear, clear);
-  return request;
+  void shared.then(clear, clear);
+  return shared;
+}
+
+/** Cancelled callers must not lend a pre-recovery physical response to a newer run. */
+function invalidateOnCancellation(key: string, entry: SnapshotRead, signal?: AbortSignal): void {
+  if (!signal) return;
+  const invalidate = () => {
+    if (inFlightSessionSnapshotRequests.get(key) === entry) inFlightSessionSnapshotRequests.delete(key);
+    // All consumers of this exact stale response lose commit eligibility, including
+    // a rehydrate caller sharing it with the detail page. Rehydrate classifies this
+    // local invalidation as needing a fresh snapshot. Other peers are untouched.
+    entry.cancel();
+  };
+  signal.addEventListener('abort', invalidate, { once: true });
+  const clear = () => signal.removeEventListener('abort', invalidate);
+  void entry.promise.then(clear, clear);
 }
 
 export function runSessionMessagesSnapshotSingleFlight<T>(
@@ -161,6 +202,40 @@ export async function runConnectionScopedSessionMetadataRead<T>(
   const value = await read();
   if (isCurrent()) commit(value);
   return value;
+}
+
+/** The visible message window never waits for unrelated control-state snapshots. */
+export async function readProgressiveMessageWindow<Metadata, History>(options: {
+  readMetadata(): Promise<Metadata>;
+  readMessages(): Promise<History>;
+  eager: boolean;
+  shouldReadMessages(metadata: Metadata): boolean;
+  isCurrent(): boolean;
+  commitMessages(history: History): void;
+}): Promise<{ metadata: Metadata; history: History | null }> {
+  const messages = () => runConnectionScopedSessionMetadataRead(
+    options.readMessages, options.isCurrent, options.commitMessages,
+  );
+  const metadata = options.readMetadata();
+  const history = options.eager
+    ? messages()
+    : metadata.then((value) => options.isCurrent() && options.shouldReadMessages(value) ? messages() : null);
+  const [metadataValue, historyValue] = await Promise.all([metadata, history]);
+  return { metadata: metadataValue, history: historyValue };
+}
+
+/** Apply each successful response immediately while retaining allSettled failure classification. */
+export async function settleProgressiveSnapshot<T>(
+  read: Promise<T>,
+  commit: (value: T) => void,
+): Promise<PromiseSettledResult<T>> {
+  try {
+    const value = await read;
+    commit(value);
+    return { status: 'fulfilled', value };
+  } catch (reason) {
+    return { status: 'rejected', reason };
+  }
 }
 
 /**
