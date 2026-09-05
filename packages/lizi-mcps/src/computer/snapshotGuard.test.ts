@@ -123,6 +123,26 @@ describe('WindowSnapshotTracker', () => {
 });
 
 describe('opaque element credentials', () => {
+  it('disambiguates repeated tokens with an explicit fresh observation without reviving old references', async () => {
+    let index = 3;
+    const dispatch = vi.fn(async (name: string) => name === 'get_window_state'
+      ? { snapshot_id: 'stable-window', elements: [{ element_index: index, element_token: 'reused-token' }] }
+      : { effect: 'confirmed' });
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: dispatch }, { sessionId: 'reused' });
+    try {
+      const first = await h.call('get_window_state', { pid: 1, window_id: 2 });
+      index = 4;
+      const second = await h.call('get_window_state', { pid: 1, window_id: 2 });
+      const args = { pid: 1, window_id: 2, element_token: 'reused-token' };
+      for (const snapshot_id of [undefined, first.snapshot_id, 'stable-window', 'unknown']) {
+        expect(await h.call('click', { ...args, snapshot_id })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+      }
+      expect(await h.call('click', { ...args, snapshot_id: second.snapshot_id, element_index: 3 })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      expect(await h.call('click', { ...args, snapshot_id: second.snapshot_id, element_index: 4 })).toMatchObject({ ok: true });
+      expect(dispatch).toHaveBeenLastCalledWith('click', expect.objectContaining({ snapshot_id: 'stable-window', element_token: 'reused-token', element_index: 4 }), expect.anything());
+    } finally { await h.cleanup(); }
+  });
   it('invalidates an interrupted index action even when window_id was omitted', async () => {
     const dispatch = vi.fn(async (name: string) => {
       if (name === 'get_window_state') return { snapshot_id: 'native-id', elements: [] };

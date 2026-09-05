@@ -960,7 +960,7 @@ export function createComputerMcpServer(
 
     let snapshotId = typeof parsedData.snapshot_id === 'string' ? parsedData.snapshot_id : undefined;
     if (typeof parsedData.element_token === 'string') {
-      const ref = snapshotTracker.elementReference(sessionId, parsedData.element_token);
+      const ref = snapshotTracker.elementReference(sessionId, parsedData.element_token, snapshotId);
       if (!ref || (typeof parsedData.element_index === 'number' && ref.index !== parsedData.element_index)
         || (snapshotId && !snapshotTracker.sameSnapshot(sessionId, snapshotId, ref.snapshotId))) {
         return textResult({ ok: false, errorCode: 'STALE_SNAPSHOT', data: { message: 'Unknown or conflicting element token. Call get_window_state again.' } }, true);
@@ -993,7 +993,7 @@ export function createComputerMcpServer(
           snapshot_id: snapshotId,
           reason: verdict.reason,
           hint:
-            'The element_index comes from a window snapshot that is no longer the latest observation of this window, so the target element may have moved or changed. Call get_window_state again for this pid/window_id, then retry with the fresh snapshot_id and element_index.',
+            'The element reference does not identify the latest observation of this window. Call get_window_state again, then use its top-level snapshot_id with element_index or element_token. Supplying that snapshot_id is required when the driver reuses tokens between observations.',
         },
       },
       true,

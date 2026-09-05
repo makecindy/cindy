@@ -145,8 +145,13 @@ export class WindowSnapshotTracker {
     }
   }
 
-  elementReference(sessionId: string | undefined, token: string) {
+  elementReference(sessionId: string | undefined, token: string, observationId?: string) {
+    // A repeated token is ambiguous without an explicit observation. Never silently
+    // promote an old reference to the newest generation just because its text matches.
+    const canonicalId = observationId === undefined ? undefined
+      : this.aliasToId.get(this.aliasKey(sessionId ?? '', observationId)) ?? observationId;
     for (const [snapshotId, meta] of this.metaById) {
+      if (canonicalId !== undefined && snapshotId !== canonicalId) continue;
       const index = meta.elements?.get(token);
       if (meta.sessionKey === (sessionId ?? '') && index !== undefined) {
         return { snapshotId, index, windowId: meta.windowId };

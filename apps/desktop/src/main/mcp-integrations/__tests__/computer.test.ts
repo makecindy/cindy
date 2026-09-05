@@ -1342,6 +1342,52 @@ describe('computer mcp integration', () => {
     expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'type_text')).toHaveLength(1);
   });
 
+  it.each(['connect', 'tools/list'] as const)('cancels the caller during %s without interrupting shared startup', async (phase) => {
+    mcpCallToolMock.mockResolvedValue({ structuredContent: { width: 1920, height: 1080 } });
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    if (phase === 'connect') mcpConnectMock.mockImplementationOnce(() => pending);
+    else mcpListToolsMock.mockImplementationOnce(async () => {
+      await pending;
+      return { tools: [{ name: 'get_screen_size', inputSchema: { type: 'object' } }] };
+    });
+    const controller = new AbortController();
+    const cancelled = callComputerDriverTool('click', { pid: 123, window_id: 7, x: 1, y: 1 }, {
+      sessionId: 'startup-cancel', signal: controller.signal,
+    });
+    const rejected = expect(cancelled).rejects.toMatchObject({ code: 'REQUEST_CANCELLED' });
+    await vi.waitFor(() => expect(phase === 'connect' ? mcpConnectMock : mcpListToolsMock).toHaveBeenCalledTimes(1));
+    const otherCaller = callComputerDriverTool('get_screen_size', {}, { sessionId: 'startup-cancel' });
+    controller.abort();
+    await rejected; // Must settle before startup finishes, rather than after its timeout.
+    expect(mcpCallToolMock).not.toHaveBeenCalled();
+    expect(mcpCloseMock).not.toHaveBeenCalled();
+    finish();
+    await otherCaller;
+    expect(mcpConnectMock).toHaveBeenCalledTimes(1);
+    expect(mcpCallToolMock.mock.calls.map(([call]) => call.name)).toEqual(['get_screen_size']);
+  });
+
+  it('cancels a fresh-session retry while its connection is still pending', async () => {
+    let finish!: () => void;
+    mcpConnectMock.mockResolvedValueOnce(undefined).mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    mcpCallToolMock.mockImplementation(({ name }) => {
+      if (name === 'get_window_state') throw new Error('Not connected');
+      return { structuredContent: { ok: true } };
+    });
+    const controller = new AbortController();
+    const call = callComputerDriverTool('get_window_state', { pid: 123, window_id: 7 }, {
+      sessionId: 'retry-startup-cancel', signal: controller.signal,
+    });
+    const rejected = expect(call).rejects.toMatchObject({ code: 'REQUEST_CANCELLED' });
+    await vi.waitFor(() => expect(mcpConnectMock).toHaveBeenCalledTimes(2));
+    controller.abort();
+    await rejected;
+    finish();
+    await Promise.resolve();
+    expect(mcpCallToolMock.mock.calls.filter(([tool]) => tool.name === 'get_window_state')).toHaveLength(1);
+  });
+
   it('stops optional cursor setup as soon as cancellation arrives', async () => {
     const controller = new AbortController();
     mcpCallToolMock.mockImplementation(({ name }) => {

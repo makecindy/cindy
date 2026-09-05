@@ -2153,24 +2153,43 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
   return entry;
 }
 
-async function getCuaMcpSession(sessionId: string): Promise<CuaMcpSessionEntry> {
+/** Cancel this caller's wait without cancelling shared startup or another caller. */
+async function waitForCuaSession<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(new ComputerDriverError('Computer Use cancelled while waiting for the driver.', 'REQUEST_CANCELLED'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    void pending.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      (error) => { signal.removeEventListener('abort', onAbort); reject(error); },
+    );
+  });
+}
+
+async function getCuaMcpSession(sessionId: string, signal?: AbortSignal): Promise<CuaMcpSessionEntry> {
+  signal?.throwIfAborted();
   assertComputerDriverToolDispatchAvailable();
   const existing = cuaMcpSessions.get(sessionId);
   if (existing) {
-    await existing.ready;
+    await waitForCuaSession(existing.ready, signal);
     return existing;
   }
   const cleanup = cuaMcpSessionCleanups.get(sessionId);
   if (cleanup) {
-    await cleanup.catch(() => undefined);
+    await waitForCuaSession(cleanup.catch(() => undefined), signal);
+    signal?.throwIfAborted();
     const next = cuaMcpSessions.get(sessionId);
     if (next) {
-      await next.ready;
+      await waitForCuaSession(next.ready, signal);
       return next;
     }
   }
   const entry = createCuaMcpSession(sessionId);
-  await entry.ready;
+  await waitForCuaSession(entry.ready, signal);
   return entry;
 }
 
@@ -3356,7 +3375,7 @@ export async function callComputerDriverTool(
   const rawArgs = args ?? {};
   const driverInputArgs = stripLocalListWindowsArgs(name, rawArgs);
   const normalizedArgs = normalizeToolArgsForDriver(name, driverInputArgs);
-  const entry = await getCuaMcpSession(sessionId);
+  const entry = await getCuaMcpSession(sessionId, signal);
   const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId, entry.toolSchemas);
   const timeoutMs = getCuaMcpToolTimeoutMs(name);
   try {
@@ -3398,7 +3417,7 @@ export async function callComputerDriverTool(
         if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
           throw err;
         }
-        const freshEntry = await getCuaMcpSession(sessionId);
+        const freshEntry = await getCuaMcpSession(sessionId, signal);
         let retryResult: unknown;
         try {
           assertActive();
