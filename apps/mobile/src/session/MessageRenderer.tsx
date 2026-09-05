@@ -2228,6 +2228,10 @@ export function MessageRenderer({
   ]);
 
   const handleHistoryTouchCancel = useCallback(() => {
+    // An interrupted drag may never emit endDrag. Android's normal native takeover emits
+    // touchCancel before beginDrag, so that subsequent beginDrag establishes its own ownership.
+    isDraggingRef.current = false;
+    dragStartOffsetYRef.current = null;
     historyTouchStartYRef.current = null;
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
