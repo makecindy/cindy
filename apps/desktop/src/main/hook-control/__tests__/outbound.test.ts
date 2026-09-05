@@ -173,6 +173,17 @@ describe('collectOutboundAttachments', () => {
     expect(r.skipped).toBe(0);
   });
 
+  it('tool_result 旁路视频形成可发送附件', async () => {
+    const r = await collectOutboundAttachments('视频已生成', [], {
+      ...deps({ '/blobs/video.mp4': Buffer.from('video-bytes') }),
+      extraVideoAbsPaths: ['/blobs/video.mp4'],
+    });
+    expect(r.attachments).toEqual([
+      expect.objectContaining({ name: 'video.mp4', mimeType: 'video/mp4' }),
+    ]);
+    expect(r.skipped).toBe(0);
+  });
+
   it('读盘失败 / 解析失败只跳过并计数, 不抛错', async () => {
     const text = '![a](xdt-image://gone.png) [b](xdt-file:///tmp/missing.bin)';
     const r = await collectOutboundAttachments(text, [], {

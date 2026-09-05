@@ -161,6 +161,8 @@ export interface OutboundDeps {
    * 正文变换仍然只作用于 finalText —— 这里扩大的只是"哪些引用要被收集成附件"。
    */
   refScanText?: string;
+  /** tool_result 旁路解析出的托管视频路径。 */
+  extraVideoAbsPaths?: string[];
   /** realpath 校验(生产: fs.promises.realpath; 测试注入)。 */
   realpath?: (absPath: string) => Promise<string>;
   /** 读文件字节(生产: fs.promises.readFile)。 */
@@ -298,6 +300,11 @@ export async function collectOutboundAttachments(
   }
   for (const absPath of imageAbsPaths) {
     if (await push(absPath, MAX_OUT_IMAGE_BYTES)) sentImageAbsPaths.add(absPath);
+  }
+
+  // tool_result 视频与图片共用附件总数/总字节水位；单个视频按普通文件上限。
+  for (const absPath of Array.from(new Set(deps.extraVideoAbsPaths ?? []))) {
+    await push(absPath, MAX_OUT_FILE_BYTES);
   }
 
   // 2. 文件引用(去重同上)
