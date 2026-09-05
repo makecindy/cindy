@@ -86,13 +86,23 @@ export function useConversationShareImages(
   useEffect(() => {
     let active = true;
     activeJob.current = job;
+    let timedOut = false;
+    let finishImageWait!: (image: null) => void;
+    const imageDeadline = new Promise<null>((done) => {
+      finishImageWait = done;
+    });
     const timer = setTimeout(() => {
-      active = false;
-      job.finish([]);
+      timedOut = true;
+      finishImageWait(null);
     }, 20_000);
     void prepareConversationShareImages(
       sourceMessages,
-      (url) => loadShareImage(url, resolve),
+      // Keep completed images and all message text when the shared deadline
+      // expires. Remaining images become placeholders without starting more IO.
+      (url) =>
+        timedOut
+          ? Promise.resolve(null)
+          : Promise.race([loadShareImage(url, resolve), imageDeadline]),
       { workdir, remoteHostId, sessionId },
       () => active,
     )
@@ -103,11 +113,17 @@ export function useConversationShareImages(
       })
       .catch(() => {
         clearTimeout(timer);
-        if (active) job.finish([]);
+        if (active)
+          setPrepared({
+            job,
+            messages: sourceMessages,
+            revision: ++revision.current,
+          });
       });
     return () => {
       active = false;
       clearTimeout(timer);
+      finishImageWait(null);
       activeJob.current = null;
       // StrictMode immediately replays this effect with the same job.
       queueMicrotask(() => {

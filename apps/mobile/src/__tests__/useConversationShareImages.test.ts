@@ -46,10 +46,71 @@ const media = {
 };
 afterEach(async () => {
   await act(async () => root.unmount());
+  vi.useRealTimers();
   root = createRoot(container);
 });
 
 describe("share image readiness", () => {
+  it("keeps text and completed images when another image times out, ignoring its late result", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let finish!: (value: typeof media) => void;
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async ({ url }) => {
+      if (url === "cindy-media://paste") return media;
+      return new Promise((done) => {
+        finish = done;
+      });
+    });
+    await act(async () =>
+      root.render(
+        createElement(Probe, {
+          messages: [
+            {
+              ...source,
+              body: "keep this text",
+              attachments: [
+                ...source.attachments!,
+                {
+                  kind: "image",
+                  name: "slow image",
+                  uri: "cindy-media://slow",
+                },
+                {
+                  kind: "image",
+                  name: "remaining image",
+                  uri: "cindy-media://remaining",
+                },
+              ],
+            },
+            {
+              clientId: "next",
+              kind: "assistant",
+              body: "keep the next message",
+            },
+          ],
+          resolve,
+        }),
+      ),
+    );
+    const ready = current.ready;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    const result = await ready;
+    expect(result.map((message) => message.body)).toEqual([
+      "keep this text",
+      "keep the next message",
+    ]);
+    expect(result[0]?.images?.size).toBe(1);
+    expect(result[0]?.images?.get("cindy-media://paste")?.uri).toBe(media.url);
+    expect(result[0]?.attachments?.[1]?.name).toBe("slow image");
+    expect(resolve).toHaveBeenCalledTimes(2);
+    await act(async () =>
+      finish({ ...media, url: "data:image/png;base64,bGF0ZQ==" }),
+    );
+    expect(current.messages).toBe(result);
+    expect(result[0]?.images?.size).toBe(1);
+  });
+
   it("survives StrictMode and unrelated rerenders while a remote image loads", async () => {
     let finish!: (value: typeof media) => void;
     const pending = new Promise<typeof media>((done) => {
