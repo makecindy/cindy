@@ -193,6 +193,152 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     expect(fs.existsSync(bindingFile)).toBe(false);
   });
 
+  it('explicitly adopts the current Codex CLI OAuth account after a durable disconnect', async () => {
+    const { codexHome, systemAuth, localAuth, bindingFile } = fixture();
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.copyFileSync(systemAuth, localAuth);
+    const {
+      CODEX_USER_DISCONNECT_REASON,
+      readInvalidatedSystemCodexAuthMarker,
+      writeInvalidatedSystemCodexAuthMarker,
+    } = await import('../codex-auth-invalidation.js');
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        codexHome,
+        systemAuth,
+        CODEX_USER_DISCONNECT_REASON,
+        localAuth,
+      ),
+    ).toBe(true);
+    h.dataOwnerId = 'owner-a';
+    writeStableProjectionOwner('owner-a');
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const refreshed = vi.fn();
+    adapter.setOnLoginSuccess(refreshed);
+
+    await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
+    await expect(adapter.triggerLogin({ mode: 'local-cli' })).resolves.toMatchObject({
+      authenticated: true,
+      authSource: 'oauth',
+      identity: 'dev@example.test',
+      credentialScope: 'system-shared',
+    });
+
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toBeNull();
+    expect(fs.statSync(localAuth, { bigint: true }).ino).toBe(
+      fs.statSync(systemAuth, { bigint: true }).ino,
+    );
+    expect(readBindingFile(bindingFile)).toMatchObject({
+      openai: 'owner-a',
+      sources: { openai: 'native-harness-inherited' },
+      sharedSystemCredential: { openai: 'owner-a' },
+    });
+    expect(refreshed).toHaveBeenCalledOnce();
+  });
+
+  it('removes an uncommitted CLI auth link when the session switches during relink', async () => {
+    const { codexHome, systemAuth, localAuth, bindingFile } = fixture();
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.copyFileSync(systemAuth, localAuth);
+    const {
+      CODEX_USER_DISCONNECT_REASON,
+      readInvalidatedSystemCodexAuthMarker,
+      writeInvalidatedSystemCodexAuthMarker,
+    } = await import('../codex-auth-invalidation.js');
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        codexHome,
+        systemAuth,
+        CODEX_USER_DISCONNECT_REASON,
+        localAuth,
+      ),
+    ).toBe(true);
+    h.dataOwnerId = 'owner-a';
+    writeStableProjectionOwner('owner-a');
+
+    const link = fs.promises.link.bind(fs.promises);
+    vi.spyOn(fs.promises, 'link').mockImplementationOnce(async (existingPath, newPath) => {
+      await link(existingPath, newPath);
+      h.dataOwnerId = 'owner-b';
+    });
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.triggerLogin({ mode: 'local-cli' })).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'auth_mutation_superseded',
+    });
+    expect(fs.existsSync(localAuth)).toBe(false);
+    expect(fs.existsSync(bindingFile)).toBe(false);
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).not.toBeNull();
+  });
+
+  it('does not roll an adopted binding into a new owner when the session switches mid-flight', async () => {
+    const { codexHome, systemAuth, localAuth, bindingFile } = fixture();
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.copyFileSync(systemAuth, localAuth);
+    const { CODEX_USER_DISCONNECT_REASON, writeInvalidatedSystemCodexAuthMarker } =
+      await import('../codex-auth-invalidation.js');
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        codexHome,
+        systemAuth,
+        CODEX_USER_DISCONNECT_REASON,
+        localAuth,
+      ),
+    ).toBe(true);
+    h.dataOwnerId = 'owner-a';
+    writeStableProjectionOwner('owner-a');
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    let finishRead!: (state: { authenticated: true; authSource: 'oauth' }) => void;
+    Object.defineProperty(adapter, 'readState', {
+      configurable: true,
+      value: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+      ),
+    });
+
+    const adoption = adapter.triggerLogin({ mode: 'local-cli' });
+    await vi.waitFor(() => expect(readBindingFile(bindingFile)).toMatchObject({ openai: 'owner-a' }));
+    h.dataOwnerId = 'owner-b';
+    finishRead({ authenticated: true, authSource: 'oauth' });
+
+    await expect(adoption).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'auth_mutation_superseded',
+    });
+    expect(readBindingFile(bindingFile)).toMatchObject({
+      openai: 'owner-a',
+      sharedSystemCredential: { openai: 'owner-a' },
+    });
+    expect(readBindingFile(bindingFile)).not.toHaveProperty('revoked.openai');
+  });
+
+  it.each([
+    ['missing', null, 'codex_cli_oauth_missing'],
+    ['malformed', '{not-json', 'codex_cli_auth_parse_failed'],
+    ['API-key-only', JSON.stringify({ OPENAI_API_KEY: 'placeholder' }), 'codex_cli_oauth_missing'],
+  ])('rejects a %s Codex CLI auth file without binding it', async (_case, contents, reason) => {
+    const { systemAuth, bindingFile } = fixture();
+    if (contents === null) fs.rmSync(systemAuth, { force: true });
+    else fs.writeFileSync(systemAuth, contents);
+    h.dataOwnerId = 'owner-a';
+    writeStableProjectionOwner('owner-a');
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.triggerLogin({ mode: 'local-cli' })).resolves.toEqual({
+      authenticated: false,
+      errorReason: reason,
+    });
+    expect(fs.existsSync(bindingFile)).toBe(false);
+  });
+
   it('drops the claim when the app session switches owners during an in-flight reconcile', async () => {
     // review P1:claim 只允许写给「reconcile 发起时」的会话;在途期间切换账号必须放弃,
     // 绝不把 A 时代发起的认领写到 B 名下。B 自己的下一次 reconcile 会按 B 的规则重试。

@@ -1322,6 +1322,7 @@
         "toast": {
           "loggedOut": "ChatGPT 帳號已斷開",
           "loginFailed": "無法連線 ChatGPT，請重試",
+          "cliConnectFailed": "無法使用 Codex CLI 帳號，請確認 CLI 已透過 ChatGPT 登入後再試一次",
           "logoutFailed": "無法斷開 ChatGPT，請重試",
           "binaryMissing": "Codex 元件不可用，請重啟應用"
         },
@@ -1434,7 +1435,8 @@
         "subtitle": "連線一個 ChatGPT 帳號，同時用於 Codex 和 Claude",
         "modelLabel": "GPT 模型",
         "reconnectRequired": "需要重新連線",
-        "connect": "連線 ChatGPT",
+        "connect": "登入 ChatGPT",
+        "useCodexCli": "使用目前的 Codex CLI 帳號",
         "reconnect": "重新連線 ChatGPT",
         "cancelConnect": "取消連線"
       },

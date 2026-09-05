@@ -86,7 +86,7 @@ function loginProgressListener(auth: ReturnType<typeof installAuthApi>) {
       (payload: {
         agentKind: string;
         phase: string;
-        mode?: 'browser' | 'device-code';
+        mode?: 'browser' | 'device-code' | 'local-cli';
         detail?: string;
         verificationUrl?: string;
         userCode?: string;
@@ -290,6 +290,34 @@ describe('useCodexAuth lifecycle', () => {
       oauthWritesBlocked: true,
     });
     expect(auth.triggerLogin).not.toHaveBeenCalled();
+  });
+
+  it('allows explicit local CLI adoption under the dev OAuth write policy', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({ authenticated: false, oauthWritesBlocked: true });
+    auth.triggerLogin.mockResolvedValue({
+      authenticated: true,
+      identity: 'cli@example.test',
+      authSource: 'oauth',
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('unauthenticated'));
+    await act(async () => {
+      await expect(result.current.triggerLogin('local-cli')).resolves.toBe('authenticated');
+    });
+
+    expect(auth.triggerLogin).toHaveBeenCalledWith('codex', {
+      mode: 'local-cli',
+      ownerId: expect.any(String),
+    });
+    expect(result.current.state).toMatchObject({
+      kind: 'authenticated',
+      identity: 'cli@example.test',
+      credentialScope: 'system-shared',
+    });
   });
 
   it('restores reconnect-required from a persisted OAuth invalidation', async () => {

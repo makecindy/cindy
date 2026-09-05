@@ -75,6 +75,7 @@ function detection(providerId: string, over: Partial<LocalCliDetection> = {}): L
     providerId,
     installed: true,
     loggedIn: true,
+    oauthLoggedIn: true,
     // 默认「确实是同一份凭证」；不共用的场景由用例显式覆写（见 sharedWithCindy 用例）。
     sharedWithCindy: true,
     ...over,

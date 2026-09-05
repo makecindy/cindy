@@ -1322,6 +1322,7 @@
         "toast": {
           "loggedOut": "ChatGPT アカウントを切断しました",
           "loginFailed": "ChatGPT に接続できませんでした。再試行してください",
+          "cliConnectFailed": "Codex CLI アカウントを使用できませんでした。CLI が ChatGPT にログイン済みか確認して再試行してください",
           "logoutFailed": "ChatGPT を切断できませんでした。再試行してください",
           "binaryMissing": "Codex コンポーネントが利用できません。アプリを再起動してください"
         },
@@ -1434,7 +1435,8 @@
         "subtitle": "1 つの ChatGPT アカウントを Codex と Claude の両方で使用",
         "modelLabel": "GPT モデル",
         "reconnectRequired": "再接続が必要",
-        "connect": "ChatGPT に接続",
+        "connect": "ChatGPT にログイン",
+        "useCodexCli": "現在の Codex CLI アカウントを使用",
         "reconnect": "ChatGPT に再接続",
         "cancelConnect": "接続をキャンセル"
       },

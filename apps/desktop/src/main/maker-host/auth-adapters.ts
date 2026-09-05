@@ -70,6 +70,7 @@ import {
   resolveCodexLoginCleanupPreflight,
   resolveCodexLoginExitState,
   terminateCodexLoginProcess,
+  type CodexLoginMode,
 } from './codex-auth-state.js';
 import {
   CODEX_GATEWAY_ENV_KEY,
@@ -177,6 +178,49 @@ async function readCodexAccountId(authPath: string): Promise<string | null> {
   return null;
 }
 
+/** 读取任意 Codex auth 文件；只返回可展示状态，token 永不离开 Main。 */
+async function readCodexAuthFileState(authPath: string): Promise<AuthState> {
+  try {
+    const raw = await fsp.readFile(authPath, 'utf-8');
+    const obj = JSON.parse(raw) as {
+      account?: { email?: unknown };
+      expires_at?: unknown;
+      tokens?: { access_token?: unknown; id_token?: unknown };
+    };
+    const idTokenClaims =
+      typeof obj.tokens?.id_token === 'string'
+        ? readChatgptIdTokenClaims(obj.tokens.id_token)
+        : null;
+    const identity =
+      typeof obj.account?.email === 'string'
+        ? obj.account.email
+        : typeof idTokenClaims?.email === 'string'
+          ? idTokenClaims.email
+          : (codexAccountIdFromAuthJson(raw) ?? undefined);
+    const expiresAt = typeof obj.expires_at === 'number' ? obj.expires_at : undefined;
+    const hasOAuthToken =
+      typeof obj.tokens?.access_token === 'string' && obj.tokens.access_token.length > 0;
+    return hasOAuthToken
+      ? { authenticated: true, identity, expiresAt, authSource: 'oauth' }
+      : { authenticated: true, identity, expiresAt };
+  } catch (error) {
+    return {
+      authenticated: false,
+      errorReason:
+        (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+          ? 'no_oauth'
+          : 'auth_parse_failed',
+    };
+  }
+}
+
+/** Main-only probe used by settings; returns metadata only, never credential contents or paths. */
+export async function hasSystemCodexOAuthLogin(): Promise<boolean> {
+  const authPath = getSystemCodexAuthPath();
+  const state = requireCodexOAuthLoginState(await readCodexAuthFileState(authPath));
+  return state.authenticated && (await readCodexAccountId(authPath)) !== null;
+}
+
 function codexAccountIdFromAuthJson(raw: string): string | null {
   try {
     const obj = JSON.parse(raw) as { tokens?: { account_id?: unknown; id_token?: unknown } };
@@ -218,6 +262,7 @@ function readCodexRecoveryCredentialProof(
 
 interface ChatgptIdTokenClaims {
   chatgpt_account_id?: unknown;
+  email?: unknown;
   sub?: unknown;
   'https://api.openai.com/auth'?: { chatgpt_account_id?: unknown };
 }
@@ -1741,45 +1786,29 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) {
       return { authenticated: false };
     }
-    try {
-      const raw = await fsp.readFile(authPath, 'utf-8');
-      const obj = JSON.parse(raw) as {
-        account?: { email?: unknown };
-        expires_at?: unknown;
-        tokens?: { access_token?: unknown };
-      };
-      const identity = typeof obj.account?.email === 'string' ? obj.account.email : undefined;
-      const expiresAt = typeof obj.expires_at === 'number' ? obj.expires_at : undefined;
-      // authSource='oauth' 必须与 spawn fallback 的判定同源(hasCodexOAuthLogin =
-      // auth.json 含 access_token,见下方 getAccessToken 的字段路径)。`codex login
-      // --api-key` 产生的 auth.json 没有 tokens —— 若仅凭"能解析"就标 oauth,
-      // maker-core 会把隐式会话归一成 oauth-bearer,而 spawn fallback 实际走
-      // gateway key,共享 host 被登记错形态 → 后续显式 oauth 会话静默复用网关
-      // key 进程(review P1)。tokens 缺失时不标 authSource,归一化解析不出
-      // 即回退保守的"重建"语义,登录门禁(authenticated)不受影响。
-      const hasOAuthToken =
-        typeof obj.tokens?.access_token === 'string' && obj.tokens.access_token.length > 0;
-      return hasOAuthToken
-        ? { authenticated: true, identity, expiresAt, authSource: 'oauth' }
-        : { authenticated: true, identity, expiresAt };
-    } catch {
-      // JSON.parse 失败 / IO 错 → 降级为未登录 + errorReason, 不抛
-      return { authenticated: false, errorReason: 'auth_parse_failed' };
-    }
+    // authSource='oauth' 必须与 spawn fallback 的判定同源(access_token)。API-key-only
+    // auth.json 仍算可解析，但不会被误标成 ChatGPT OAuth。
+    return readCodexAuthFileState(authPath);
   }
 
   triggerLogin(opts?: AuthLoginOptions): Promise<AuthState> {
-    if (this.devOAuthWritesBlocked()) {
+    const mode = opts?.mode ?? 'browser';
+    // 复用当前 Codex CLI 只把 Cindy 自己的 auth 入口重新链接到系统文件，不启动 OAuth、
+    // 不改写系统 token；开发版的只读继承策略因此允许这条显式恢复路径。
+    if (mode !== 'local-cli' && this.devOAuthWritesBlocked()) {
       return Promise.resolve({
         authenticated: false,
         errorReason: 'dev_oauth_write_blocked',
         oauthWritesBlocked: true,
       });
     }
-    this.warnDevOAuthWriteOverride('login');
-    this.devReadOnlyDetached = false;
-    this.memoryOnlyInvalidatedSystemCredential = null;
-    const mode = opts?.mode ?? 'browser';
+    if (mode !== 'local-cli') {
+      this.warnDevOAuthWriteOverride('login');
+      // Browser/device-code are fresh authorization attempts. Local CLI adoption must retain the
+      // existing fail-closed state until its external credential and link have both been verified.
+      this.devReadOnlyDetached = false;
+      this.memoryOnlyInvalidatedSystemCredential = null;
+    }
     if (this.pendingLogin) {
       if (this.pendingLogin.mode === mode && !this.pendingLogin.cancelled) {
         if (opts?.onProgress && !this.pendingLogin.progressListeners.has(opts.onProgress)) {
@@ -1867,6 +1896,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (this.loginAborted || isCancelled()) {
       return { authenticated: false, errorReason: 'login_cancelled' };
     }
+    if (opts?.mode === 'local-cli') {
+      // 隔离 OAuth 沙箱的目的就是不触碰真实本机登录，不能让一个 UI 动作绕回 ~/.codex。
+      if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1') {
+        return { authenticated: false, errorReason: 'local_cli_blocked_in_isolated_auth' };
+      }
+      return this.adoptSystemCodexLogin(isCancelled);
+    }
     if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1' && !this.isolatedAuthSanitized) {
       // This tracked login is itself the owner of the pending-login gate. After its logout barrier
       // has settled, allow only its trusted isolated-auth cleanup through that gate; ordinary
@@ -1912,7 +1948,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
     // spawn codex login。POSIX 建独立进程组，取消/超时时连同回调 server 一起收割。
     return new Promise<AuthState>((resolve) => {
-      const mode: AgentLoginMode = opts?.mode ?? 'browser';
+      const mode: CodexLoginMode = opts?.mode === 'device-code' ? 'device-code' : 'browser';
       const proc = spawn(binaryPath, codexLoginArgs(mode), {
         shell: false,
         env: { ...process.env, CODEX_HOME: this.codexHome },
@@ -1989,6 +2025,165 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         complete({ authenticated: false, errorReason: `spawn_error:${err.message}` });
       });
     });
+  }
+
+  /**
+   * 用户显式选择当前 Codex CLI 账号。与自动 reconcile 的关键差异是：该动作可以解除
+   * durable user_disconnect / provider revoked 边界；但仍只建立共享链接，绝不复制 token。
+   */
+  private async adoptSystemCodexLogin(isCancelled: () => boolean): Promise<AuthState> {
+    const sessionAtStart = getActiveAppSession();
+    if (!sessionAtStart.dataOwnerId || isAppSessionBoundaryPending()) {
+      return { authenticated: false, errorReason: 'auth_session_unavailable' };
+    }
+    const sessionIsCurrent = (): boolean => {
+      const current = getActiveAppSession();
+      return (
+        !isAppSessionBoundaryPending() &&
+        current.dataOwnerId === sessionAtStart.dataOwnerId &&
+        current.generation === sessionAtStart.generation
+      );
+    };
+    const rollbackLinkedAuth = async (): Promise<void> => {
+      try {
+        await this.disconnectCodexOAuth();
+      } catch (error) {
+        // disconnect 已先建立进程内 fail-closed 状态；绑定锁等收尾失败不能让 IPC reject。
+        log.warn('failed to finish Codex CLI adoption rollback', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    const cancelledState = async (linked: boolean): Promise<AuthState> => {
+      if (linked) await rollbackLinkedAuth();
+      return { authenticated: false, errorReason: 'login_cancelled' };
+    };
+
+    const systemAuth = getSystemCodexAuthPath();
+    const systemState = requireCodexOAuthLoginState(await readCodexAuthFileState(systemAuth));
+    if (!systemState.authenticated) {
+      return {
+        authenticated: false,
+        errorReason:
+          systemState.errorReason === 'auth_parse_failed'
+            ? 'codex_cli_auth_parse_failed'
+            : 'codex_cli_oauth_missing',
+      };
+    }
+    const systemAccountId = await readCodexAccountId(systemAuth);
+    if (!systemAccountId) {
+      return { authenticated: false, errorReason: 'codex_cli_account_unavailable' };
+    }
+    if (isCancelled()) return cancelledState(false);
+    if (!sessionIsCurrent()) {
+      return { authenticated: false, errorReason: 'auth_mutation_superseded' };
+    }
+
+    const localAuth = path.join(this.codexHome, 'auth.json');
+    await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
+    const relink = await relinkSharedCodexAuth(systemAuth, localAuth);
+    const linkCreatedByAdoption = relink.kind === 'linked' || relink.kind === 'recovered';
+    const discardUncommittedLink = async (): Promise<void> => {
+      if (!linkCreatedByAdoption) return;
+      try {
+        await fsp.rm(localAuth, { force: true });
+      } catch (error) {
+        // A Windows lock can keep the link alive. Detach this adapter in memory so the failed
+        // adoption cannot expose that unbound credential before the next owner builds fresh state.
+        this.devReadOnlyDetached = true;
+        this.suppressSystemCodexReconcile = true;
+        credPathLog.warn('failed to discard superseded Codex CLI auth link', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    const topology = await inspectCodexAuthLink(systemAuth, localAuth);
+    if (!topology.healthy) {
+      await discardUncommittedLink();
+      credPathLog.warn('explicit Codex CLI auth link failed', {
+        kind: relink.kind,
+        error: relink.error?.message,
+      });
+      return { authenticated: false, errorReason: 'codex_cli_link_failed' };
+    }
+    if (!sessionIsCurrent()) {
+      await discardUncommittedLink();
+      return { authenticated: false, errorReason: 'auth_mutation_superseded' };
+    }
+    if (isCancelled()) return cancelledState(true);
+
+    // 重读链接后的入口：CLI 可能在两次 await 之间原子换号或退出。只有眼前这份文件仍是
+    // 可识别 OAuth 才解除登出边界，避免把 malformed/API-key-only 文件绑定给当前 owner。
+    const linkedState = requireCodexOAuthLoginState(await readCodexAuthFileState(localAuth));
+    const linkedAccountId = await readCodexAccountId(localAuth);
+    const finalTopology = await inspectCodexAuthLink(systemAuth, localAuth);
+    if (!linkedState.authenticated || !linkedAccountId) {
+      await cancelledState(true);
+      return { authenticated: false, errorReason: 'codex_cli_oauth_missing' };
+    }
+    if (linkedAccountId !== systemAccountId || !finalTopology.healthy) {
+      await cancelledState(true);
+      return { authenticated: false, errorReason: 'codex_cli_account_changed' };
+    }
+    if (!sessionIsCurrent()) {
+      await discardUncommittedLink();
+      return { authenticated: false, errorReason: 'auth_mutation_superseded' };
+    }
+    if (isCancelled()) return cancelledState(true);
+
+    if (!clearInvalidatedSystemCodexAuthMarker(this.codexHome)) {
+      await rollbackLinkedAuth();
+      return { authenticated: false, errorReason: 'codex_cli_disconnect_boundary_clear_failed' };
+    }
+    try {
+      // 这是用户明确选择外部 CLI 账号，不是 Cindy 新发 OAuth；清 revoked 但保留 inherited
+      // provenance，后续“沿用本机订阅”文案和共享凭证保护才能继续准确工作。
+      bindNativeProviderAuth('openai', { inheritedSystem: true });
+    } catch (error) {
+      await rollbackLinkedAuth();
+      log.warn('failed to bind explicitly selected Codex CLI credential', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { authenticated: false, errorReason: 'codex_cli_binding_failed' };
+    }
+
+    this.devReadOnlyDetached = false;
+    this.oauthInvalidatedReason = null;
+    this.oauthInvalidatedCredentialScope = undefined;
+    this.oauthRecoveryRequiredReason = null;
+    this.oauthRecoveryCredentialScope = undefined;
+    this.memoryOnlyInvalidatedSystemCredential = null;
+    this.suppressSystemCodexReconcile = false;
+    this.lastKnownCodexCredentialScope = 'system-shared';
+
+    if (!sessionIsCurrent()) {
+      return { authenticated: false, errorReason: 'auth_mutation_superseded' };
+    }
+    if (isCancelled()) return cancelledState(true);
+    const state = requireCodexOAuthLoginState(
+      await this.readState({ skipReconcile: true, credentialMode: 'oauth-bearer' }),
+    );
+    if (!sessionIsCurrent()) {
+      return { authenticated: false, errorReason: 'auth_mutation_superseded' };
+    }
+    if (!state.authenticated) {
+      await rollbackLinkedAuth();
+      return state;
+    }
+    if (this.onLoginSuccess) {
+      try {
+        await this.onLoginSuccess();
+      } catch (error) {
+        log.warn('onLoginSuccess threw after Codex CLI adoption', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (!sessionIsCurrent()) {
+      return { authenticated: false, errorReason: 'auth_mutation_superseded' };
+    }
+    if (isCancelled()) return cancelledState(true);
+    return state;
   }
 
   private async finishSuccessfulCodexLogin(

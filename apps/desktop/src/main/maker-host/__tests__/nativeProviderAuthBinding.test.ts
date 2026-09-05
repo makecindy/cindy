@@ -818,6 +818,18 @@ describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () =
     expect(getNativeProviderAuthSource('openai')).toBe('native-harness-inherited');
   });
 
+  it('用户显式选择系统 CLI 时清除撤销边界但仍保留继承来路', () => {
+    unbindNativeProviderAuth('openai', { revoked: true });
+
+    bindNativeProviderAuth('openai', { inheritedSystem: true });
+
+    expect(isNativeProviderAuthBound('openai')).toBe(true);
+    expect(isNativeProviderAuthRevoked('openai')).toBe(false);
+    expect(isNativeProviderAuthSelfAuthorized('openai')).toBe(false);
+    expect(isNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+    expect(getNativeProviderAuthSource('openai')).toBe('native-harness-inherited');
+  });
+
   it('来路按 provider 分别记账,不互相串味', () => {
     bindNativeProviderAuth('anthropic');
     expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);

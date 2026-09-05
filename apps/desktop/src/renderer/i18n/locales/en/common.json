@@ -1322,6 +1322,7 @@
         "toast": {
           "loggedOut": "ChatGPT account disconnected",
           "loginFailed": "Couldn’t connect ChatGPT. Try again",
+          "cliConnectFailed": "Couldn’t use the Codex CLI account. Make sure the CLI is signed in with ChatGPT and try again",
           "logoutFailed": "Couldn’t disconnect ChatGPT. Try again",
           "binaryMissing": "Codex component is unavailable, please restart the app"
         },
@@ -1434,7 +1435,8 @@
         "subtitle": "Connect one ChatGPT account for both Codex and Claude",
         "modelLabel": "GPT models",
         "reconnectRequired": "Reconnect Needed",
-        "connect": "Connect ChatGPT",
+        "connect": "Sign In to ChatGPT",
+        "useCodexCli": "Use Current Codex CLI Account",
         "reconnect": "Reconnect ChatGPT",
         "cancelConnect": "Cancel Connection"
       },

@@ -19,7 +19,11 @@ export type MakerIpcBroadcast = (channel: string, payload: unknown) => void;
 
 /** IPC 允许的 agent 种类；运行时枚举校验不能靠 TypeScript 强转替代。 */
 const AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const satisfies readonly AgentKind[];
-const AGENT_LOGIN_MODES = ['browser', 'device-code'] as const satisfies readonly AgentLoginMode[];
+const AGENT_LOGIN_MODES = [
+  'browser',
+  'device-code',
+  'local-cli',
+] as const satisfies readonly AgentLoginMode[];
 const MAX_LOGIN_PROGRESS_CHARS = 16_384;
 const LOGIN_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const ANSI_SEQUENCE = new RegExp(
@@ -560,8 +564,8 @@ function requireLoginOptions(
 ): { mode: AgentLoginMode; ownerId?: string } {
   const options = value === undefined ? {} : requireObject(value, 'options');
   const mode = optionalEnum(options.mode, AGENT_LOGIN_MODES, 'login mode') ?? 'browser';
-  if (agentKind !== 'codex' && mode === 'device-code') {
-    throwIpcError('INVALID_PARAMS', 'device-code login is only supported by codex');
+  if (agentKind !== 'codex' && mode !== 'browser') {
+    throwIpcError('INVALID_PARAMS', `${mode} login is only supported by codex`);
   }
   const ownerId = requireLoginOwnerId(options.ownerId);
   if (agentKind !== 'codex' && ownerId) {

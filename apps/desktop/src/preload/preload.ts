@@ -6866,7 +6866,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:auth:get-state', agentKind),
       triggerLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi',
-        options?: { mode?: 'browser' | 'device-code'; ownerId?: string },
+        options?: { mode?: 'browser' | 'device-code' | 'local-cli'; ownerId?: string },
       ): Promise<unknown> => ipcRenderer.invoke('maker:auth:trigger-login', agentKind, options),
       cancelLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi',
