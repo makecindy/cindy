@@ -363,6 +363,30 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('stores the redacted permission request for reconnect and Feishu takeover', () => {
+    const interactionListenerSource = extractInstallDesktopInteractionListenerSource();
+    const boundaryIndex = interactionListenerSource.indexOf(
+      'const boundaryRequest: InteractionRequest =',
+    );
+    const entryIndex = interactionListenerSource.indexOf(
+      'const entry: PendingInteractionEntry =',
+    );
+    const pendingIndex = interactionListenerSource.indexOf(
+      'pendingInteractionResolvers.set(req.requestId, entry);',
+    );
+
+    expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+    expect(entryIndex).toBeGreaterThan(boundaryIndex);
+    expect(pendingIndex).toBeGreaterThan(entryIndex);
+    expect(interactionListenerSource.slice(entryIndex, pendingIndex)).toContain(
+      'request: boundaryRequest,',
+    );
+    expect(source).toContain('out.push({ request: entry.request, persistId: entry.persistId });');
+    expect(source).toContain(
+      'taken.push({ requestId, request: entry.request, resolve: entry.resolve });',
+    );
+  });
+
   it('clears git snapshot coordinator state when sessions close', () => {
     const closedBlock = extractSessionCloseAdaptersSource();
 

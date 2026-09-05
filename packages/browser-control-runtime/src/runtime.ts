@@ -19,6 +19,7 @@ import type {
   BrowserControlResult,
   BrowserControlRuntime,
 } from './types.js';
+import { parseBrowserProxyServer, redactBrowserProxyText } from './proxy.js';
 
 type Method = 'GET' | 'POST' | 'DELETE';
 interface DispatchPlan {
@@ -46,6 +47,18 @@ const DIAGNOSTIC_ACTIONS: ReadonlySet<BrowserControlAction> = new Set([
  *  Exported (pure) so the param-forwarding can be unit-tested as a regression
  *  net against future vendored re-syncs silently dropping fields. */
 export function planDispatch(req: BrowserControlRequest): DispatchPlan {
+  if (
+    (req.proxyServer !== undefined || req.proxyAllowedHostnames !== undefined)
+    && req.action !== 'start'
+  ) {
+    throw new Error('proxyServer and proxyAllowedHostnames are only valid for action=start');
+  }
+  if (
+    req.action === 'start'
+    && (req.proxyServer !== undefined || req.proxyAllowedHostnames !== undefined)
+  ) {
+    parseBrowserProxyServer(req.proxyServer, req.proxyAllowedHostnames);
+  }
   const profileQuery = req.profile ? { profile: req.profile } : undefined;
   const withProfile = (q?: Record<string, unknown>): Record<string, unknown> | undefined => {
     const merged = { ...profileQuery, ...q };
@@ -276,7 +289,7 @@ export function createBrowserControlRuntime(
               }),
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = redactBrowserProxyText(err);
         const disabled = /browser control disabled/i.test(message);
         return {
           ok: false,

@@ -1,5 +1,6 @@
 import {
   isPublicHttpResourceUrl,
+  parseBrowserProxyServer,
   type BrowserControlRequest,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
@@ -232,6 +233,12 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     rules: ['browser-workflow', 'recipe-author'],
     inputShape: {
       action: z.enum(ACTIONS).describe('浏览器操作类型'),
+      proxyServer: z.string().optional().describe(
+        'action=start 时使用的代理 URL（如 http://host:port）。**不支持带用户名/密码的认证代理**，带 userinfo 会被直接拒绝',
+      ),
+      proxyAllowedHostnames: z.array(z.string()).min(1).max(32).optional().describe(
+        'action=start 且启用代理时允许导航的公网 DNS 名称或 *.example.com 模式；代理模式默认禁止导航',
+      ),
       profile: z.string().optional().describe('浏览器 profile 名;省略则使用默认隔离 profile'),
       target: z.enum(['sandbox', 'host', 'node']).optional(),
       node: z.string().optional(),
@@ -325,6 +332,22 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     handler: async (args) => {
       const runtime = getRuntime(deps);
       try {
+        if (args.proxyServer !== undefined || args.proxyAllowedHostnames !== undefined) {
+          if (args.action !== 'start') {
+            return errorResult(
+              args.action,
+              'proxyServer 与 proxyAllowedHostnames 仅可用于 action=start；其他操作请省略这些字段',
+            );
+          }
+          try {
+            parseBrowserProxyServer(args.proxyServer, args.proxyAllowedHostnames);
+          } catch (err) {
+            return errorResult(
+              args.action,
+              err instanceof Error ? err.message : 'proxyServer 不合法',
+            );
+          }
+        }
         // Block non-web schemes at the boundary: navigate/open to file:// /
         // chrome:// / data: would let the agent reach local files or browser
         // internals. Only the scheme is constrained — localhost/private HTTP

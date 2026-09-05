@@ -449,6 +449,7 @@ import {
   markAutoResumeOutcome,
   onTurnErrorEvent,
   prepareSyntheticToolEventForBroadcast,
+  redactToolInputForUntrustedBoundary,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
 } from '../messagePersistBroadcaster.js';
@@ -3800,11 +3801,21 @@ export function installDesktopInteractionListener(session: {
       },
     );
     return new Promise<InteractionDecision>((resolve) => {
+      const boundaryRequest: InteractionRequest =
+        req.kind === 'permission'
+          ? {
+              ...req,
+              input: redactToolInputForUntrustedBoundary(
+                req.toolName,
+                req.input,
+              ) as Record<string, unknown>,
+            }
+          : req;
       const entry: PendingInteractionEntry = {
         sessionId: session.id,
         kind: req.kind,
         resolve,
-        request: req,
+        request: boundaryRequest,
         persistId: interactionPersistId ?? undefined,
       };
       if (req.kind === 'permission') {
@@ -3821,12 +3832,12 @@ export function installDesktopInteractionListener(session: {
       pendingInteractionResolvers.set(req.requestId, entry);
       broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId: session.id,
-        request: req,
+        request: boundaryRequest,
         persistId: interactionPersistId,
       });
       handleAgentIslandInteractionAfterBroadcast(
         session as { id: string; agentKind?: unknown; workDir?: unknown; workspaceKind?: unknown },
-        req,
+        boundaryRequest,
         agentIslandInteractionEpoch,
       );
     });
@@ -16425,6 +16436,16 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   const data = event.data as Record<string, unknown>;
   const safeData = { ...data };
   let changed = false;
+  if (
+    typeof safeData.toolName === 'string' &&
+    Object.prototype.hasOwnProperty.call(safeData, 'input')
+  ) {
+    const redactedInput = redactToolInputForUntrustedBoundary(safeData.toolName, safeData.input);
+    if (redactedInput !== safeData.input) {
+      safeData.input = redactedInput;
+      changed = true;
+    }
+  }
   // Main consumes this Cindy-owned durable projection marker before the event
   // crosses renderer/device-link boundaries. Live task-card payloads therefore
   // keep their existing wire shape and older mobile clients need no upgrade.

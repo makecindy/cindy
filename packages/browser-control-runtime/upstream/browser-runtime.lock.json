@@ -23,12 +23,8 @@
       "desc": "classify macOS Google Chrome Beta within the Chrome-only fallback"
     },
     {
-      "file": "extension/src/browser/config.ts",
-      "desc": "preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access"
-    },
-    {
-      "file": "extension/src/browser/config.ts",
-      "desc": "skip upstream auto-injected \"openclaw\"/\"user\" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user's Chrome)"
+      "file": "extension/src/browser/chrome.ts",
+      "desc": "expose managed-profile PID lookup so the host can confirm process exit from the OS, not from CDP endpoint silence (a stalled Chrome stops answering while still alive)"
     },
     {
       "file": "extension/src/browser/chrome.ts",
@@ -37,10 +33,54 @@
     {
       "file": "extension/src/browser/chrome.ts",
       "desc": "pass chipName into decorateOpenClawProfile instead of the disk key"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
+      "desc": "preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
+      "desc": "skip upstream auto-injected \"openclaw\"/\"user\" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user's Chrome)"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "allow explicit browser proxies only for public hostnames named in the strict hostname allowlist"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "export a non-blocking quarantine so the popup-overflow path can mark a target unusable without awaiting close() (a hung page must not keep the interaction pending)"
+    },
+    {
+      "file": "extension/src/browser/pw-tools-core.interactions.ts",
+      "desc": "propagate proxy mode through Playwright interaction navigation checks"
+    },
+    {
+      "file": "extension/src/browser/pw-tools-core.interactions.ts",
+      "desc": "guard direct input file uploads with the proxy navigation policy"
+    },
+    {
+      "file": "extension/src/browser/pw-tools-core.interactions.ts",
+      "desc": "guard hover/drag/scrollIntoView/wait interactions with the same proxy navigation policy"
+    },
+    {
+      "file": "extension/src/browser/routes/agent.act.hooks.ts",
+      "desc": "apply the effective browser proxy mode to file-chooser click navigation"
+    },
+    {
+      "file": "extension/src/browser/routes/agent.act.hooks.ts",
+      "desc": "apply the effective browser proxy mode to direct input file uploads"
+    },
+    {
+      "file": "extension/src/browser/routes/agent.act.ts",
+      "desc": "carry the effective browser proxy mode through interaction navigation guards"
+    },
+    {
+      "file": "extension/src/browser/ssrf-policy-helpers.ts",
+      "desc": "one-off hostname grants must also pass a strict hostnameAllowlist (else the loopback CDP endpoint is blocked by proxyAllowedHostnames and every proxied navigation fails)"
     }
   ],
   "fileCount": 335,
-  "contentHash": "ec71c1f65b7239df32b0e861d8ac55a1dc55747487dae4fcf1ea4d16002c02ec",
+  "contentHash": "ad67c8308b25a0475d8749b20132187797fd350bccb0bda152cc3b14985c7926",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

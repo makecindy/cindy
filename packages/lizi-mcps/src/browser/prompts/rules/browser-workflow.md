@@ -45,6 +45,20 @@
 5. **遇阻塞停下来报告**
    - 撞到登录墙 / 验证码 / 2FA / 需要人工授权时:**停下来如实告诉用户**当前页面状态 + 需要他做什么,不要反复尝试或假装能绕过。
 
+#### 指定代理与出口验证
+
+当任务要求浏览器使用指定代理或网络出口时,必须在继续目标操作之前按顺序验证:
+
+> **不支持认证代理。** 带用户名/密码的 `proxyServer` 会被直接拒绝（报 `authenticated proxies are not supported`）。原因:在当前架构下唯一能应答代理挑战的凭据通道会把凭据一并发给返回 `WWW-Authenticate` 的**任意站点**,而 allowlist 内的页面内容本就不可信——那等于把用户的代理凭据交给被访问的站点。需要认证出口时,请在代理侧改用免密方式(如按来源 IP 放行)。
+
+1. 用指定代理启动独立外置浏览器:`{action:"start",proxyServer:"http://代理主机:端口",proxyAllowedHostnames:["出口IP检查页host","目标站host或*.目标域"]}`。代理模式下导航默认全部拒绝(fail-closed),只放行 `proxyAllowedHostnames` 里列出的公网 DNS 名称或 `*.example.com` 模式,且仅允许 HTTPS——所以**启动时就必须把出口检查页与目标站都列入**;该清单随本次启动固定,后续要访问新域名必须用新的 `start` 重启。清单在浏览器整个生命周期内于请求层强制执行(不只在工具发起的导航时检查),因此地址栏手输、定时器跳转、meta refresh、弹窗等任何出网都同样受限——被拦的请求会像网络失败一样在页面上报错。`proxyServer` 与 `proxyAllowedHostnames` 只允许用于 `start`;侧边栏内置浏览器不支持这些参数,遇到明确拒绝时不要继续。
+2. 调 `status`,确认 `data.proxy.mode === "proxied"`,并核对 `data.proxy.server` 是预期的代理地址。
+3. 仍通过本浏览器导航到可信的出口 IP 检查页,读取页面显示的公网 IP。
+4. 将公网 IP 与预期的代理出口 IP 比较。只有一致时才继续。
+5. 验证通过后再继续目标网站或后续操作。
+6. 任一环失败就 `stop` 并报告;**绝不绕过代理改用直连继续**。
+7. 任务完成后,可用不带 `proxyServer` 的 `{action:"start"}` 明确恢复普通直连模式。代理 A 切代理 B、代理切直连都会重启浏览器;重复同一代理则保持当前进程。
+
 #### Token 效率(按"最省 → 兜底"的顺序选路)
 1. **先查有没有现成配方**:操作某个站之前,**先 `action: "siteguide"`**——带 `site`(站点 host)看该站内置指南 / 配方;**不确定有哪些站时,`siteguide` 不带 `site` 会列出全部内置站点 + 可用配方目录**(`sites:[{site,recipes,auth}]`)。命中配方就 `action: "recipe"`(`recipeId`+`inputs`)一步跑完(最省最稳),优先于手动 snapshot/extract。注意 `siteguide` 是我们内置的站点指南,**不是去抓网站自己的 `/sitemap.xml`**——不要为此去 navigate / curl `sitemap.xml`。
 2. **数据型页面优先读接口,别扒 DOM**:很多列表 / 详情背后是 JSON API,读接口比扒渲染后的 DOM 又稳又省。
@@ -62,6 +76,7 @@
 - **`data.backend === "rsb-webview"` = Cindy 侧边栏内置浏览器**:页面活在 Cindy 的会话侧边栏里,不是一个常规浏览器窗口。侧边栏本身可能内嵌在主窗口、也可能被用户开成独立子窗口,`status` **不区分**这两种承载方式——所以请用户看页面时说"Cindy 的侧边栏(若你把侧边栏开成了独立窗口,就是那个窗口)",不要断言窗口存在或不存在。系统默认的自动化后端是独立外置浏览器,不是侧边栏。
   - 仅此模式支持:`act:saveResource`(托管下载)、以及 `query` 语义元素查询(role / name / text / label / placeholder / testId / css)。在外置模式下用这两个会被 schema 或运行时门控直接拒掉,别当通用能力使。
 - **`data.backend` 不是 `"rsb-webview"`(通常没有该字段)= 独立外置浏览器**:一个专属持久自动化浏览器窗口(profile 显示为 "Cindy")。`act:saveResource` 与语义 `query` 在此模式不可用,元素定位改用 snapshot 的 `ref` 或 `selector`。
+  - 此模式的 `status.data.proxy` 报告当前启动路由:`direct`、`proxied`(带脱敏 `server`)或无法确认继承进程路由时的 `unknown`。需要指定代理时必须重新调用 `start` 并检查结果,不要从已有 tab 猜测出口。
 
 **两种模式彼此隔离**。侧边栏始终是独立身份。外置浏览器默认也是独立的 `Cindy` profile;仅当用户在设置里打开「使用我的浏览器登录态」且 `status.data.realProfile.applied === true` 时,外置窗口才带着系统 Chrome / Edge / Brave 的登录拷贝(可撤销,Agent 以用户身份访问)。**不要传 `profile`**,不要试图 attach 用户日常使用的 Chrome。
 

@@ -99,6 +99,52 @@ describe('createBrowserMcpServer', () => {
     await h.cleanup();
   });
 
+  it('accepts proxyServer for start and forwards it unchanged to the host', async () => {
+    const h = await makeHarness();
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'browser',
+        args: {
+          action: 'start',
+          proxyServer: 'http://proxy.example:8080',
+          proxyAllowedHostnames: ['auth.example.com', '*.service.example.com'],
+        },
+      },
+    });
+
+    expect(h.calls).toEqual([{
+      action: 'start',
+      proxyServer: 'http://proxy.example:8080',
+      proxyAllowedHostnames: ['auth.example.com', '*.service.example.com'],
+    }]);
+    expect(result.isError).not.toBe(true);
+    await h.cleanup();
+  });
+
+  it('rejects proxyServer for non-start actions without echoing credentials', async () => {
+    const h = await makeHarness();
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'browser',
+        args: {
+          action: 'status',
+          proxyServer: 'http://proxy.example:8080',
+        },
+      },
+    });
+
+    expect(h.calls).toEqual([]);
+    const text = (result.content as Array<{ text: string }>)[0].text;
+    expect(JSON.parse(text)).toMatchObject({
+      ok: false,
+      errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST',
+    });
+    expect(text).not.toMatch(/p%40ss/);
+    await h.cleanup();
+  });
+
   it('passes through the network actions (requests / responseBody)', async () => {
     const h = await makeHarness();
     await h.client.callTool({

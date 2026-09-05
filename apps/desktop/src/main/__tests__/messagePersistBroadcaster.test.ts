@@ -107,6 +107,7 @@ import {
   noteTurnStarted,
   saveTurnStartedAtForDeferred,
   preserveTurnPersistStateForBackground,
+  redactToolInputForUntrustedBoundary,
 } from '../messagePersistBroadcaster.js';
 
 const SESSION = 'sess-tr';
@@ -142,6 +143,250 @@ beforeEach(() => {
   ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
+});
+
+describe('browser proxy credential persistence', () => {
+  const proxyServer = 'http://user%40example.test:p%3Ass%2Fword%40%23@proxy.example.test:12323';
+
+  it('redacts proxyServer before persisting a browser tool_use', async () => {
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'browser-proxy-start',
+        toolName: 'mcp__cindy_browser__call_tool',
+        input: { name: 'browser', args: { action: 'start', proxyServer } },
+      },
+      null,
+    );
+    await flushWrites();
+
+    const persisted = vi.mocked(createMessage).mock.calls.find(
+      ([, body]) => (body as { toolUseId?: string }).toolUseId === 'browser-proxy-start',
+    )?.[1];
+    expect(persisted).toMatchObject({
+      content: {
+        input: {
+          name: 'browser',
+          args: {
+            action: 'start',
+            proxyServer: '[REDACTED]',
+          },
+        },
+      },
+    });
+    const serialized = JSON.stringify(persisted);
+    expect(serialized).not.toContain('user%40example.test');
+    expect(serialized).not.toContain('p%3Ass%2Fword%40%23');
+  });
+
+  it('leaves unrelated tools alone even when their input mentions proxyServer', () => {
+    // A patch that edits code containing the identifier must survive intact:
+    // blanking it would erase the tool detail from the live UI, the persisted
+    // record, and the rehydrated history.
+    const patch = 'diff --git a/proxy.ts b/proxy.ts\n+  const proxyServer = route.server;';
+    expect(redactToolInputForUntrustedBoundary('apply_patch', patch)).toBe(patch);
+    expect(redactToolInputForUntrustedBoundary('Bash', { command: 'grep -r proxyServer src' }))
+      .toEqual({ command: 'grep -r proxyServer src' });
+    // Even a literal proxyServer field on a non-browser tool is left as-is:
+    // only the browser tool surface is in scope for this redaction.
+    const unrelated = { proxyServer: 'http://user:pass@nope.test:8080' };
+    expect(redactToolInputForUntrustedBoundary('some_other_tool', unrelated)).toBe(unrelated);
+  });
+
+  it('still redacts on the browser tool surfaces', () => {
+    for (const name of ['mcp__cindy_browser__call_tool', 'cindy_mcp_call_tool', 'browser']) {
+      const redacted = redactToolInputForUntrustedBoundary(name, {
+        name: 'browser',
+        args: { action: 'start', proxyServer: 'http://user:secret@proxy.test:8080' },
+      }) as { args: { proxyServer: string } };
+      expect(redacted.args.proxyServer, name).toBe('[REDACTED]');
+    }
+  });
+
+  it('does not treat a third-party server impersonating the browser as first-party', () => {
+    // A custom MCP id may contain `__`, so `cindy_browser__evil` yields
+    // `mcp__cindy_browser__evil__call_tool`. A substring match reads that as
+    // the built-in browser and rewrites an unrelated server's input — blanking
+    // that tool call in the live UI, the persisted record and the rehydrated
+    // history. mcp-tool-target.ts names this exact id as why attribution must
+    // not be naive.
+    const impersonators = [
+      'mcp__cindy_browser__evil__call_tool',
+      'mcp__evil_browser__call_tool',
+      'browser_impersonator',
+      'not_cindy_browser_either',
+    ];
+    for (const name of impersonators) {
+      const input = {
+        name: 'browser',
+        args: { action: 'start', proxyServer: 'http://user:secret@proxy.test:8080' },
+      };
+      expect(redactToolInputForUntrustedBoundary(name, input), name).toBe(input);
+    }
+  });
+
+  it('redacts proxyServer nested inside a Pi MCP gateway call_tool envelope', async () => {
+    const gatewayInput = {
+      server: 'cindy_browser',
+      tool: 'call_tool',
+      args: { name: 'browser', args: { action: 'start', proxyServer } },
+    };
+    expect(redactToolInputForUntrustedBoundary('cindy_mcp_call_tool', gatewayInput)).toEqual({
+      server: 'cindy_browser',
+      tool: 'call_tool',
+      args: {
+        name: 'browser',
+        args: {
+          action: 'start',
+          proxyServer: '[REDACTED]',
+        },
+      },
+    });
+    const safeGatewayInput = {
+      server: 'cindy_workspace',
+      tool: 'status',
+      args: {},
+    };
+    expect(
+      redactToolInputForUntrustedBoundary('cindy_mcp_call_tool', safeGatewayInput),
+    ).toBe(safeGatewayInput);
+
+    // A non-browser MCP whose args happen to carry a `proxyServer` field must
+    // pass through untouched. Recursing on any {server, tool} shape re-enters
+    // with an empty name, which skips the mayCarryProxyServer gate and would
+    // blank an unrelated tool's input in the UI, the persisted record, and the
+    // rehydrated history. Only the exact browser envelope may recurse.
+    const unrelatedGatewayInput = {
+      server: 'cindy_workspace',
+      tool: 'configure',
+      args: { proxyServer: 'http://user:secret@proxy.example:8080' },
+    };
+    expect(
+      redactToolInputForUntrustedBoundary('cindy_mcp_call_tool', unrelatedGatewayInput),
+    ).toBe(unrelatedGatewayInput);
+
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'browser-proxy-gateway-start',
+        toolName: 'cindy_mcp_call_tool',
+        input: gatewayInput,
+      },
+      null,
+    );
+    await flushWrites();
+
+    const persisted = vi.mocked(createMessage).mock.calls.find(
+      ([, body]) => (body as { toolUseId?: string }).toolUseId === 'browser-proxy-gateway-start',
+    )?.[1];
+    const serialized = JSON.stringify(persisted);
+    expect(serialized).not.toContain('user%40example.test');
+    expect(serialized).not.toContain('p%3Ass%2Fword%40%23');
+    expect(serialized).toContain('[REDACTED]');
+  });
+
+  it('redacts proxyServer nested inside stringified gateway args', () => {
+    expect(
+      redactToolInputForUntrustedBoundary('cindy_mcp_call_tool', {
+        server: 'cindy_browser',
+        tool: 'call_tool',
+        args: JSON.stringify({ name: 'browser', args: { action: 'start', proxyServer } }),
+      }),
+    ).toEqual({
+      server: 'cindy_browser',
+      tool: 'call_tool',
+      args: JSON.stringify({
+        name: 'browser',
+        args: {
+          action: 'start',
+          proxyServer: '[REDACTED]',
+        },
+      }),
+    });
+  });
+
+  it('redacts the stringified-args fallback without changing unrelated browser inputs', () => {
+    expect(
+      redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', {
+        name: 'browser',
+        args: JSON.stringify({ action: 'start', proxyServer }),
+      }),
+    ).toEqual({
+      name: 'browser',
+      args: JSON.stringify({
+        action: 'start',
+        proxyServer: '[REDACTED]',
+      }),
+    });
+    const safeInput = { name: 'browser', args: { action: 'status' } };
+    expect(
+      redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', safeInput),
+    ).toBe(safeInput);
+    const unauthenticatedProxy = {
+      name: 'browser',
+      args: { action: 'start', proxyServer: 'http://proxy.example.test:12323' },
+    };
+    expect(
+      redactToolInputForUntrustedBoundary(
+        'mcp__cindy_browser__call_tool',
+        unauthenticatedProxy,
+      ),
+    ).toBe(unauthenticatedProxy);
+  });
+
+  it('fails closed for malformed or non-string proxyServer inputs', async () => {
+    const malformed = 'user:secret@proxy.example.test:12323';
+    const redacted = redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', {
+      name: 'browser',
+      args: { action: 'start', proxyServer: malformed },
+    });
+    expect(redacted).toEqual({
+      name: 'browser',
+      args: { action: 'start', proxyServer: '[REDACTED]' },
+    });
+    expect(
+      redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', {
+        name: 'browser',
+        args: JSON.stringify({ action: 'start', proxyServer: malformed }),
+      }),
+    ).toEqual({
+      name: 'browser',
+      args: JSON.stringify({ action: 'start', proxyServer: '[REDACTED]' }),
+    });
+    expect(
+      redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', {
+        name: 'browser',
+        args: { action: 'start', proxyServer: { password: 'nested-secret' } },
+      }),
+    ).toEqual({
+      name: 'browser',
+      args: { action: 'start', proxyServer: '[REDACTED]' },
+    });
+
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'browser-invalid-proxy-start',
+        toolName: 'mcp__cindy_browser__call_tool',
+        input: { name: 'browser', args: { action: 'start', proxyServer: malformed } },
+      },
+      null,
+    );
+    await flushWrites();
+
+    const persisted = vi.mocked(createMessage).mock.calls.find(
+      ([, body]) => (body as { toolUseId?: string }).toolUseId === 'browser-invalid-proxy-start',
+    )?.[1];
+    expect(JSON.stringify(persisted)).not.toContain('secret');
+    expect(persisted).toMatchObject({
+      content: {
+        input: {
+          name: 'browser',
+          args: { action: 'start', proxyServer: '[REDACTED]' },
+        },
+      },
+    });
+  });
 });
 
 describe('update_plan tool_use persistence', () => {
