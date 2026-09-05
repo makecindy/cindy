@@ -11,12 +11,14 @@ describe('host-managed Session presentation', () => {
     expect(isHostManagedSession(null)).toBe(false);
   });
 
-  it('removes Session-container and runtime controls while preserving the composer', () => {
+  it('hides host-owned settings while preserving permission controls and the composer', () => {
     const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     expect(source).toContain('const sessionManagedByHost = isHostManagedSession(currentSession);');
     expect(source).toContain('messageOnly={sessionManagedByHost}');
     expect(source).toContain('currentSession && !sessionManagedByHost ? (');
-    expect(source).toContain('!sessionManagedByHost ? renderSessionPermissionButton() : null');
+    expect(source).toContain('{renderSessionPermissionButton()}');
+    expect(source).toContain('currentSession && runtimeOptions ? (');
+    expect(source).not.toContain('!sessionManagedByHost ? renderSessionPermissionButton() : null');
     expect(source).toContain('!sessionManagedByHost && composerRuntimeSummary ? (');
     expect(source).toContain('{renderComposerAttachmentButton()}');
     expect(source).toContain('{renderComposerInlineStop()}');

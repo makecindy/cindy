@@ -11,7 +11,8 @@
  *  2. MCP 桥:CINDY_PI_MCP_BRIDGE 指向 host 的 localhost bridge，或用户显式配置的
  *     外部 Streamable HTTP MCP。外部认证只保存 env 引用，真值留在 Pi 父进程 env；
  *     对每个 server 走 initialize → 分页 tools/list；模型侧固定注册两个通用网关工具，
- *     cindy_helper 提供伙伴协作能力时再额外注册一个稳定的 collaborate_with_bot 门面。
+ *     cindy_helper 提供伙伴能力时再额外注册稳定的伙伴消息与 Session 任务门面，
+ *     避免模型把后台任务和同名 Bot 混为一谈。
  *     调用时再按 server/tool 路由，并把真实 mcp__<server>__<tool> 身份交给 Host 审批与审计。
  *  3. 会话树:注册 Cindy 私有 command，把 RPC prompt 桥到 ctx.navigateTree。
  *
@@ -1760,26 +1761,12 @@ function currentPermissionState(): {
   writableRoots: string[];
   reviewReadPaths: string[];
   reviewOnly: boolean;
-  workspaceReadOnly: boolean;
-  workspaceWritePaths: string[];
 } {
   // 轮 40-w4-t12 HIGH-1:review-only 是会话创建时的启动语义(reviewMode), 由
   // PiAgent 以独立 env 标记注入 —— 权限文件损坏/缺失时**不得**降级成普通 ask
   // (否则 hard review-only 变成可交互确认的普通会话)。文件解析失败 → fail-closed:
   // 保留 reviewOnly(按启动标记), reviewReadPaths 保守清空(读不了就不放行额外路径)。
   const reviewOnlyByStart = process.env.CINDY_PI_REVIEW_ONLY === '1';
-  const workspaceReadOnlyByStart = process.env.CINDY_PI_WORKSPACE_READ_ONLY === '1';
-  const workspaceWritePathsByStart = (() => {
-    if (!process.env.CINDY_PI_WORKSPACE_WRITE_PATHS) return null;
-    try {
-      const parsed = JSON.parse(process.env.CINDY_PI_WORKSPACE_WRITE_PATHS);
-      return Array.isArray(parsed)
-        ? parsed.filter((value: unknown) => typeof value === 'string')
-        : [];
-    } catch {
-      return [];
-    }
-  })();
   const file = process.env.CINDY_PI_PERMISSION_FILE ?? '';
   if (!file) {
     return {
@@ -1788,8 +1775,6 @@ function currentPermissionState(): {
       writableRoots: [],
       reviewReadPaths: [],
       reviewOnly: reviewOnlyByStart,
-      workspaceReadOnly: workspaceReadOnlyByStart,
-      workspaceWritePaths: workspaceWritePathsByStart ?? [],
     };
   }
   try {
@@ -1806,12 +1791,6 @@ function currentPermissionState(): {
         ? parsed.reviewReadPaths.filter((root: unknown) => typeof root === 'string')
         : [],
       reviewOnly: parsed?.reviewOnly === true || reviewOnlyByStart,
-      workspaceReadOnly:
-        parsed?.workspaceReadOnly === true || workspaceReadOnlyByStart,
-      workspaceWritePaths: workspaceWritePathsByStart
-        ?? (Array.isArray(parsed?.workspaceWritePaths)
-          ? parsed.workspaceWritePaths.filter((value: unknown) => typeof value === 'string')
-          : []),
     };
   } catch {
     return {
@@ -1820,8 +1799,6 @@ function currentPermissionState(): {
       writableRoots: [],
       reviewReadPaths: [],
       reviewOnly: reviewOnlyByStart,
-      workspaceReadOnly: workspaceReadOnlyByStart,
-      workspaceWritePaths: workspaceWritePathsByStart ?? [],
     };
   }
 }
@@ -2481,9 +2458,21 @@ interface McpServerRef {
 
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
-const CINDY_BOT_COLLABORATION_TOOL = 'collaborate_with_bot';
+const CINDY_START_SESSION_TASK_TOOL = 'start_session_task';
+const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task';
+const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task';
+const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
+const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
+const CINDY_DIRECT_BOT_TOOLS = new Set([
+  CINDY_START_SESSION_TASK_TOOL,
+  CINDY_CHECK_SESSION_TASK_TOOL,
+  CINDY_MESSAGE_SESSION_TASK_TOOL,
+  CINDY_STOP_SESSION_TASK_TOOL,
+  CINDY_SEND_TO_AGENT_TOOL,
+  CINDY_CREATE_TEAMMATE_TOOL,
+]);
 
 interface ConnectedMcpTool {
   serverName: string;
@@ -2809,24 +2798,22 @@ class CindyMcpGateway {
     };
   }
 
-  resolveBotCollaboration(input: unknown): ResolvedMcpGatewayCall | null {
-    const tool = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_BOT_COLLABORATION_TOOL));
+  resolveDirectHelperTool(name: string, input: unknown): ResolvedMcpGatewayCall | null {
+    const tool = this.tools.get(mcpGatewayKey('cindy_helper', name));
     if (!tool) return null;
     return {
-      qualifiedName: 'mcp__cindy_helper__' + CINDY_BOT_COLLABORATION_TOOL,
+      qualifiedName: 'mcp__cindy_helper__' + name,
       args: recordInput(input),
       tool,
     };
   }
 
+  resolveStartSessionTask(input: unknown): ResolvedMcpGatewayCall | null {
+    return this.resolveDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, input);
+  }
+
   resolveCreateTeammate(input: unknown): ResolvedMcpGatewayCall | null {
-    const tool = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_CREATE_TEAMMATE_TOOL));
-    if (!tool) return null;
-    return {
-      qualifiedName: 'mcp__cindy_helper__' + CINDY_CREATE_TEAMMATE_TOOL,
-      args: recordInput(input),
-      tool,
-    };
+    return this.resolveDirectHelperTool(CINDY_CREATE_TEAMMATE_TOOL, input);
   }
 
   resolveBotMemory(input: unknown): ResolvedMcpGatewayCall | null {
@@ -3067,13 +3054,20 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved);
   }
 
-  private async executeBotCollaboration(params: unknown): Promise<{
+  private async executeDirectHelperTool(name: string, params: unknown): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
-    const resolved = this.resolveBotCollaboration(params);
-    if (!resolved) throw new Error('Cindy Bot collaboration is unavailable in this task.');
+    const resolved = this.resolveDirectHelperTool(name, params);
+    if (!resolved) throw new Error('Cindy tool ' + name + ' is unavailable in this task.');
     return this.executeResolvedCall(resolved);
+  }
+
+  private async executeStartSessionTask(params: unknown): Promise<{
+    content: Array<Record<string, unknown>>;
+    details: unknown;
+  }> {
+    return this.executeDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, params);
   }
 
   private async executeCreateTeammate(params: unknown): Promise<{
@@ -3135,34 +3129,100 @@ class CindyMcpGateway {
       });
     }
 
-    if (this.resolveBotCollaboration({})) {
+    if (this.resolveStartSessionTask({})) {
       pi.registerTool({
-        name: CINDY_BOT_COLLABORATION_TOOL,
-        label: 'Collaborate with a Cindy Bot',
+        name: CINDY_START_SESSION_TASK_TOOL,
+        label: 'Start a Cindy Session task',
         description:
-          'Use one typed collaboration primitive. status reads a Bot or call. call starts tracked work: pass target_bot_id for another Bot, omit it for a full Cindy task. reply answers a waiting decision or continues a call. cancel stops a call. notify is fire-and-forget. A structured @Bot reference already contains the exact target ID, so do not list Bots first.',
+          'Start one real independent Cindy Session task in the background. Use it when the user explicitly asks to create a task, Session, or background task, and for development or deliverable work that needs independent execution, verification, progress, cancellation, and automatic result/artifact return. This never selects or wakes a Bot, including a Bot named Cindy. Start it once and do not poll.',
         parameters: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['status', 'notify', 'call', 'reply', 'cancel'] },
-            target_bot_id: { type: 'string', description: 'Exact stable Bot ID; required for notify, optional for call, or used by status.' },
-            call_id: { type: 'string', description: 'Tracked call ID; required for reply/cancel, or used by status.' },
-            instruction: { type: 'string', description: 'Required for call/notify and reply_kind=message.' },
-            context_refs: { type: 'array', items: { type: 'string' } },
-            max_depth: { type: 'integer', minimum: 1, maximum: 5 },
+            instruction: { type: 'string', minLength: 1, maxLength: 12000 },
+            title: { type: 'string', minLength: 1, maxLength: 120 },
+            working_dir: { type: 'string', minLength: 1, maxLength: 1024 },
+            context_refs: { type: 'array', items: { type: 'string' }, maxItems: 32 },
             timeout_ms: { type: 'integer', minimum: 1000, maximum: 86400000 },
-            title: { type: 'string', description: 'Cindy task call only: task title.' },
-            working_dir: { type: 'string', description: 'Cindy task call only: absolute path of an existing directory to work in.' },
-            reply_kind: { type: 'string', enum: ['approve', 'deny', 'answer', 'message'] },
-            answers: { type: 'object', additionalProperties: { type: 'string' } },
-            reason: { type: 'string' },
-            idempotency_key: { type: 'string' },
           },
-          required: ['action'],
+          required: ['instruction'],
           additionalProperties: false,
         },
         execute: async (_toolCallId: string, params: unknown) =>
-          this.executeBotCollaboration(params),
+          this.executeStartSessionTask(params),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_SEND_TO_AGENT_TOOL,
+        label: 'Send message to teammate',
+        description:
+          'Send one bounded asynchronous message to a named Cindy Bot teammate. This does not create a task or progress state. Use start_session_task for tracked work. A structured @Bot reference already contains the exact target ID, so do not list Bots first.',
+        parameters: {
+          type: 'object',
+          properties: {
+            target_id: { type: 'string', minLength: 1, maxLength: 128 },
+            message: { type: 'string', minLength: 1, maxLength: 12000 },
+          },
+          required: ['target_id', 'message'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) =>
+          this.executeDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, params),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_CHECK_SESSION_TASK_TOOL,
+        label: 'Check Session task',
+        description: 'Read one Session task state when the user asks for progress or automatic completion appears to be missing. Do not poll.',
+        parameters: { type: 'object',
+          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 } },
+          required: ['task_id'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) =>
+          this.executeDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, params),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_MESSAGE_SESSION_TASK_TOOL,
+        label: 'Message Session task',
+        description: 'Add instructions to the same Session task, or answer the exact approval/question it is waiting for. A terminal task resumes under the same task ID.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task_id: { type: 'string', minLength: 1, maxLength: 128 },
+            message: { type: 'string', minLength: 1, maxLength: 4000 },
+            decision: { type: 'string', enum: ['approve', 'deny'] },
+            answers: { type: 'object', additionalProperties: { type: 'string' } },
+            reason: { type: 'string', maxLength: 4000 },
+            idempotency_key: { type: 'string', minLength: 1, maxLength: 128 },
+          },
+          required: ['task_id'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) =>
+          this.executeDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, params),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_STOP_SESSION_TASK_TOOL,
+        label: 'Stop Session task',
+        description: 'Stop one running Session task and its child tasks.',
+        parameters: {
+          type: 'object',
+          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 } },
+          required: ['task_id'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) =>
+          this.executeDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, params),
       });
     }
 
@@ -3178,8 +3238,9 @@ class CindyMcpGateway {
             name: { type: 'string', minLength: 1, maxLength: 200 },
             description: { type: 'string', minLength: 1, maxLength: 4000 },
             identity_source: { type: 'string', minLength: 1, maxLength: 12000 },
+            welcome_message: { type: 'string', minLength: 1, maxLength: 4000 },
           },
-          required: ['name', 'description', 'identity_source'],
+          required: ['name', 'description', 'identity_source', 'welcome_message'],
           additionalProperties: false,
         },
         execute: async (_toolCallId: string, params: unknown) => this.executeCreateTeammate(params),
@@ -3330,7 +3391,80 @@ function rgGlob(
   });
 }
 
+/** Use Pi's existing UI RPC so a question becomes a real Host waiting interaction. */
+function registerCindyQuestionTool(pi: any): void {
+  pi.registerTool({
+    name: 'ask_user_question',
+    label: 'Ask a question',
+    description: 'Ask the user for missing information or a choice and wait for their answer. Use this instead of claiming in text that a task is waiting. The parent of a Session task can relay the answer. Do not infer an answer from cancellation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        questions: { type: 'array', minItems: 1, maxItems: 3, items: {
+          type: 'object', properties: {
+            question: { type: 'string', minLength: 1, maxLength: 512 },
+            options: { type: 'array', minItems: 2, maxItems: 6,
+              items: { type: 'string', minLength: 1, maxLength: 256 } },
+          }, required: ['question'], additionalProperties: false,
+        } },
+      }, required: ['questions'], additionalProperties: false,
+    },
+    execute: async (_id: string, params: any, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) => {
+      const questions = params?.questions;
+      if (!Array.isArray(questions) || questions.length < 1 || questions.length > 3
+        || questions.some((q: any) => !q || typeof q.question !== 'string'
+          || !q.question.trim() || q.question.length > 512
+          || (q.options !== undefined && (!Array.isArray(q.options)
+            || q.options.length < 2 || q.options.length > 6
+            || q.options.some((v: unknown) => typeof v !== 'string' || !v.trim() || v.length > 256)
+            || new Set(q.options).size !== q.options.length)))
+        || new Set(questions.map((q: any) => q.question)).size !== questions.length) {
+        throw new Error('Provide one to three distinct questions with optional distinct answer choices.');
+      }
+      if (ctx.hasUI === false || !ctx.ui) throw new Error('Question UI is unavailable in this runtime.');
+      const answers: Record<string, string> = {};
+      let cancelled = false;
+      for (const q of questions) {
+        if (signal?.aborted) { cancelled = true; break; }
+        const answer = q.options
+          ? await ctx.ui.select(q.question, q.options)
+          : await ctx.ui.input(q.question);
+        if (signal?.aborted || typeof answer !== 'string' || !answer.trim()) {
+          cancelled = true;
+          break;
+        }
+        answers[q.question] = answer;
+      }
+      const result = { answers, cancelled };
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
+    },
+  });
+}
+
+// Astra's public Responses contract differs from older Pi serializers. Keep this at the
+// native pre-request hook so BYOM, gateway and subagent calls share the same wire correction.
+function astraResponsesPayload(payload, model) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  if (!model || model.api !== 'openai-responses') return undefined;
+  if (!/(^|\/)gpt-6-astra(?:\[1m\])?$/.test(model.id ?? '')) return undefined;
+  const out = { ...payload };
+  delete out.prompt_cache_retention;
+  out.prompt_cache_options = { ttl: '30m', ...out.prompt_cache_options };
+  delete out.temperature;
+  delete out.top_p;
+  delete out.top_logprobs;
+  if (Array.isArray(out.include)) {
+    out.include = out.include.filter((entry) => entry !== 'message.output_text.logprobs');
+  }
+  if (out.reasoning?.effort === 'none' || out.reasoning?.effort === 'minimal') {
+    out.reasoning = { ...out.reasoning, effort: 'low' };
+  }
+  return out;
+}
+
 export default async function cindyBridge(pi: any) {
+  if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
+  pi.on('before_provider_request', (event, ctx) => astraResponsesPayload(event.payload, ctx.model));
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
   // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。
@@ -3649,20 +3783,7 @@ export default async function cindyBridge(pi: any) {
         reason: 'Cindy Review only permits read-only access to this task and its explicit artifacts.',
       };
     }
-    if (permission.workspaceReadOnly && event.toolName === 'bash') {
-      return {
-        block: true,
-        reason:
-          'This Cindy Bot project is mounted read-only. Choose a writable project policy to modify it.',
-      };
-    }
-    if (permission.workspaceWritePaths.length > 0 && event.toolName === 'bash') {
-      return {
-        block: true,
-        reason:
-          'This Cindy Bot has a restricted write scope. Shell commands are disabled because their write targets cannot be proven safe.',
-      };
-    }
+    if (event.toolName === 'ask_user_question') return;
     if (FILE_WRITE_BUILTINS.has(event.toolName)) {
       try {
         // Internal synchronization point: the host snapshots only the target file for
@@ -3715,22 +3836,6 @@ export default async function cindyBridge(pi: any) {
         isInsideRoot(targetPath, subagentRunDir)
         || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, subagentRunDir))
       );
-    const writeInsideWorkspaceControlDir = (() => {
-      if (!targetPath) return false;
-      const root = process.cwd();
-      const protectedDirs = new Set(['.git', '.agents', '.codex']);
-      const isProtected = (candidate: string) => {
-        const relative = path.relative(path.resolve(root), path.resolve(candidate));
-        if (relative === '' || relative === '..' || relative.startsWith('..' + path.sep)) return false;
-        return protectedDirs.has(relative.split(path.sep)[0] || '');
-      };
-      return isProtected(targetPath)
-        || (writeTargetResolved !== null && isProtected(writeTargetResolved));
-    })();
-    // A Bot project binding narrows project writes, but system-granted writable
-    // roots (notably this Bot's own Home) remain valid alongside that project.
-    // Otherwise mounting Home in writableRoots still gets vetoed by the project
-    // scope gate and the runtime returns to the same workaround loop.
     const writeInsideAnyGrantedRoot = (roots: readonly string[]) => targetPath
       && roots.some((root) => {
         let resolvedRoot: string | null = null;
@@ -3747,38 +3852,6 @@ export default async function cindyBridge(pi: any) {
         );
       });
     const writeInsideWritableRoot = writeInsideAnyGrantedRoot(permission.writableRoots);
-    const writeInsideGrantedScope = writeInsideAnyGrantedRoot([
-      ...permission.workspaceWritePaths,
-      ...permission.writableRoots,
-    ]);
-    if (
-      targetPath
-      && FILE_WRITE_BUILTINS.has(event.toolName)
-      && permission.workspaceReadOnly
-      && !writeInsideWritableRoot
-    ) {
-      return {
-        block: true,
-        reason:
-          'This Cindy Bot project is mounted read-only. Only the Bot\'s system-granted writable directories may be modified.',
-      };
-    }
-    if (
-      targetPath
-      && FILE_WRITE_BUILTINS.has(event.toolName)
-      && permission.workspaceWritePaths.length > 0
-      && writeInsideWorkspaceControlDir
-    ) {
-      return { block: true, reason: 'Cindy workspace control directories are read-only.' };
-    }
-    if (
-      targetPath
-      && FILE_WRITE_BUILTINS.has(event.toolName)
-      && permission.workspaceWritePaths.length > 0
-      && !writeInsideGrantedScope
-    ) {
-      return { block: true, reason: 'This path is outside the Cindy Bot project write allowlist.' };
-    }
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
@@ -3842,19 +3915,15 @@ export default async function cindyBridge(pi: any) {
     // every existing per-server policy without loading each schema at startup.
     const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
       ? mcpGateway.resolveCall(event.input)
-      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
-        ? mcpGateway.resolveBotCollaboration(event.input)
-        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
-          ? mcpGateway.resolveCreateTeammate(event.input)
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? mcpGateway.resolveBotMemory(event.input)
         : null;
     const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
       ? resolvedGatewayCall
-      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         ? resolvedGatewayCall
-        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
-          ? resolvedGatewayCall
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? resolvedGatewayCall
         : null;
@@ -3863,8 +3932,7 @@ export default async function cindyBridge(pi: any) {
     // without showing a misleading permission prompt for the wrapper itself.
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
-        || event.toolName === CINDY_BOT_COLLABORATION_TOOL
-        || event.toolName === CINDY_CREATE_TEAMMATE_TOOL
+        || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;
@@ -3918,19 +3986,15 @@ export default async function cindyBridge(pi: any) {
   pi.on('tool_result', async (event: any, ctx: any) => {
     const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
       ? mcpGateway.resolveCall(event.input)
-      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
-        ? mcpGateway.resolveBotCollaboration(event.input)
-        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
-          ? mcpGateway.resolveCreateTeammate(event.input)
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? mcpGateway.resolveBotMemory(event.input)
         : null;
     const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
       ? resolvedGatewayCall
-      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         ? resolvedGatewayCall
-        : event.toolName === CINDY_CREATE_TEAMMATE_TOOL
-          ? resolvedGatewayCall
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? resolvedGatewayCall
         : null;

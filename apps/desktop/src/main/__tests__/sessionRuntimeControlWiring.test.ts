@@ -270,12 +270,13 @@ describe('session runtime control wiring', () => {
     expect(syncLibrary).toContain('targets.add(focused)');
     expect(syncLibrary).toContain('sessionIsRemote(sessionId)');
     expect(syncLibrary).toContain('!remote && grantRoot && sessionId === focused ? grantRoot : null');
-    expect(syncLibrary).toContain("throw new Error('library extraDirs sync superseded')");
+    expect(syncLibrary).toContain("return 'superseded'");
+    expect(syncLibrary).not.toContain("throw new Error('library extraDirs sync superseded')");
     expect(syncLibrary).toContain("throw new Error('library extraDirs not granted to focused session')");
     expect(syncLibrary).toContain('if (!remote && nextRoot && sessionId === focused) throw error');
     expect(syncLibrary).toContain('libraryExtraDirSyncChain.then(run, run)');
     expect(syncLibrary).toMatch(
-      /await applyLibraryReadonlyExtraDir\(sessionId, nextRoot\);[\s\S]*if \(generation !== libraryExtraDirSyncGeneration\)/,
+      /await applyLibraryReadonlyExtraDir\(sessionId, nextRoot\);[\s\S]*if \(generation !== libraryExtraDirSyncGeneration\) return 'superseded'/,
     );
     expect(extraDirs).toContain('!isLibraryExtraDirSlot(dir)');
     expect(extraDirs).not.toContain('splitExtraDirSlots(persisted)');
@@ -307,7 +308,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
-  it('accepts null effort for fixed-effort local retries and device-link atomic selections', () => {
+  it('accepts local user null effort at the selection gate; ranked models still fail in catalog', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -322,9 +323,15 @@ describe('session runtime control wiring', () => {
     expect(confirmation).toBeGreaterThan(-1);
     expect(confirmation).toBeLessThan(selectionValidation);
     expect(setModel).toContain(
+      '!isSupportedRuntimeEffort(selectionEffort) &&\n          selectionEffort !== null',
+    );
+    expect(setModel).not.toContain(
       "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
     expect(setModel).toContain('catalogModel.efforts.length > 0');
+    expect(setModel).toContain(
+      "internalOptions.source === 'user' &&\n          atomicSelection.effort === null &&\n          catalogModel.efforts.length > 0",
+    );
     expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
     expect(fixedEffortValidation).toBeLessThan(prepare);
     expect(prepare).toBeLessThan(apply);
@@ -412,7 +419,7 @@ describe('session runtime control wiring', () => {
       normalWakeGuard,
     );
 
-    expect(setModel).toContain('selectionEffort === null &&');
+    expect(setModel).toContain('atomicSelection.effort === null');
     expect(setModel).toContain('isDeviceLinkInvoke() ||');
     expect(setModel).toContain(
       "(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')",
@@ -432,7 +439,7 @@ describe('session runtime control wiring', () => {
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
   });
 
-  it('requires a verified target window before preparing any destructive model rebuild', () => {
+  it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -441,12 +448,27 @@ describe('session runtime control wiring', () => {
     const verifiedWindowOnly = setModel.indexOf(
       'targetContextWindow = verifiedTargetWindow ?? undefined;',
     );
-    const unknownWindowGuard = setModel.indexOf(
-      'target model context window is unknown; runtime selection was not changed',
-    );
+    const gate = setModel.indexOf('planUserRuntimeModelSwitch({');
+    const skipRebuild = setModel.indexOf('!modelSwitchPlan.skipRebuild');
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
     expect(verifiedWindowOnly).toBeGreaterThan(-1);
+    expect(setModel).toContain('contextWindow: sessions.contextWindow,');
+    expect(setModel).toContain('effectiveContextWindow(');
+    expect(setModel).toContain('hasModelWindowContextToProtect(');
+    expect(setModel).toContain("'MODEL_CONTEXT_USAGE_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'");
+    expect(setModel).toContain("'MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED'");
+    expect(setModel).toContain("'MODEL_WINDOW_PROTECTION_UNAVAILABLE'");
+    expect(setModel).toContain("'MODEL_SWITCH_TASK_RUNNING'");
+    expect(setModel).toContain("'MODEL_WINDOW_PREPARATION_IN_PROGRESS'");
+    expect(registerSource).toContain(
+      'function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode',
+    );
+    expect(registerSource).toContain(
+      "return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;",
+    );
     expect(setModel).toContain('await maker.getSessionMeta(sessionId)');
     expect(setModel).toContain(
       'liveSessionBeforeRouteChange?.model ?? persistedSessionMeta?.model',
@@ -455,12 +477,20 @@ describe('session runtime control wiring', () => {
       'if (liveSessionBeforeRouteChange && runtimeAgentKind && runtimeRouteChanged)',
     );
     expect(setModel).not.toContain('verifiedTargetWindow ?? targetCatalogModel?.contextWindow');
-    expect(verifiedWindowOnly).toBeLessThan(unknownWindowGuard);
-    expect(unknownWindowGuard).toBeLessThan(prepare);
+    expect(setModel).not.toContain(
+      'target model context window is unknown; runtime selection was not changed',
+    );
+    expect(setModel).not.toContain(
+      'model window switch context is unknown; runtime selection was not changed',
+    );
+    expect(verifiedWindowOnly).toBeLessThan(gate);
+    expect(gate).toBeLessThan(skipRebuild);
+    expect(skipRebuild).toBeLessThan(prepare);
     expect(prepare).toBeGreaterThan(-1);
     expect(prepare).toBeLessThan(apply);
     expect(setModel).not.toContain('getAutoCompactThresholdPct');
     expect(setModel).toContain("preparation === 'busy'");
+    expect(setModel).toContain('return deferLockedSelection()');
     expect(setModel).toContain("preparation === 'remote-unsupported'");
     expect(setModel).toContain('beforeClose: () => {');
     expect(setModel).toContain('clearPendingCredentialSwitchForSession(sessionId, { wake: false })');
@@ -647,7 +677,17 @@ describe('session runtime control wiring', () => {
     expect(relinkBoundary).toContain(
       "throwIpcError(\n                'PRECONDITION_FAILED'",
     );
-    expect(relinkBoundary).toContain('.catch((error) => {');
+    expect(relinkBoundary).toContain('.catch(async (error) => {');
+    expect(relinkBoundary).toContain('isCodexHistoryRecoveryRequired(error)');
+    expect(relinkBoundary).toContain('prepareNativeSessionRecovery(');
+    const applicability = setModel.slice(setModel.indexOf('const hasPersistedLocalCodexThread'), setModel.indexOf('const relinkDecision'));
+    expect(applicability).not.toContain('isDeviceLinkInvoke');
+    expect(applicability).not.toContain("internalOptions.source === 'user'");
+    expect(applicability).toContain('routeExplicit');
+    expect(setModel).toContain('if (requiresCodexThreadRelink && isSessionInTurn(sessionId))');
+    const busyCatch = setModel.slice(setModel.indexOf('if (err instanceof CredentialModeSwitchBusyError)'));
+    expect(busyCatch.indexOf('return deferLockedSelection();')).toBeGreaterThan(0);
+    expect(busyCatch.indexOf('return deferLockedSelection();')).toBeLessThan(busyCatch.indexOf("throwIpcError('CREDENTIAL_SWITCH_BUSY'"));
     expect(relinkBoundary).toContain('reserveCodexForkCleanup(');
     expect(relinkBoundary).toContain('...(cleanup ? { cleanup } : {})');
     expect(relinkBoundary).toContain('if (isIpcError(error)) throw error;');
@@ -771,8 +811,8 @@ describe('session runtime control wiring', () => {
   it('retains runtime state across process closes and clears it at task lifecycle boundaries', () => {
     const closeBoundary = handlerBody(
       registerSource,
-      "if (status === 'closed') {",
-      'const closedDirectAbortBoundary',
+      'const sessionBindings = createSessionBindingLifecycle',
+      'export function wireSessionToIpc',
     );
     const terminalCleanup = handlerBody(
       registerSource,
@@ -908,21 +948,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('runtimePending: control.pending');
     expect(registerSource).toContain("effort: effective.effort ?? '',");
   });
+  // persists Pi runtime-verified windows without catalog replacement: covered by the executable sessionEventPipeline tests.
 
-  it('persists Pi runtime-verified windows without catalog replacement', () => {
-    const snapshotStart = registerSource.indexOf('if (pendingContextSnapshot) {');
-    const snapshotEnd = registerSource.indexOf(
-      'if (pendingCodexAccountUsageSnapshot)',
-      snapshotStart,
-    );
-    const snapshot = registerSource.slice(snapshotStart, snapshotEnd);
-
-    expect(snapshot).toContain("session.agentKind === 'pi'");
-    expect(snapshot).toContain('piRuntimeWindow ?? verifiedWindow');
-    expect(snapshot.indexOf('pendingContextSnapshot.contextWindow')).toBeLessThan(
-      snapshot.indexOf('lookupVerifiedContextWindow('),
-    );
-  });
 
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
     expect(registerSource).toContain(
@@ -1038,24 +1065,17 @@ describe('session runtime control wiring', () => {
     expect(deviceLinkHostSource).not.toContain(
       'CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
     );
-    const remoteAssessment = setModel.indexOf('const remoteTargetAssessment');
-    const remoteGuard = setModel.indexOf('const remoteRouteCannotRebuild', remoteAssessment);
+    const gate = setModel.indexOf('planUserRuntimeModelSwitch({');
     const remotePressureRejection = setModel.indexOf(
       'remote model-window rebuild is unsupported; runtime selection was not changed',
-      remoteGuard,
+      gate,
     );
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
-    expect(remoteGuard).toBeGreaterThan(remoteAssessment);
-    const remoteGuardBody = setModel.slice(remoteGuard, remotePressureRejection);
-    expect(remoteGuardBody).toContain('!!runtimeStatus.remoteHostId');
-    expect(remoteGuardBody).toContain('remoteRouteCannotRebuild && targetRequiresRebuild');
-    expect(remoteGuardBody).not.toContain("runtimeAgentKind === 'pi'");
-    // Protected Hosts may apply same-window, expansion, and low-pressure Pi routes,
-    // then use final get_state below to reject only an actual unsafe shrink.
-    expect(remotePressureRejection).toBeGreaterThan(remoteGuard);
+    expect(gate).toBeGreaterThan(-1);
+    expect(setModel).toContain("modelSwitchPlan.outcome === 'reject'");
+    expect(setModel).toContain('isRemote: !!runtimeStatus.remoteHostId || isDeviceLinkInvoke()');
+    expect(remotePressureRejection).toBeGreaterThan(gate);
     expect(remotePressureRejection).toBeLessThan(apply);
-    expect(setModel).toContain("remoteTargetAssessment.level === 'danger'");
-    expect(setModel).toContain("remoteTargetAssessment.level === 'overflow'");
     expect(setModel).toContain(
       'remote model-window confirmation is unsupported; runtime selection was not changed',
     );
@@ -1074,11 +1094,12 @@ describe('session runtime control wiring', () => {
     );
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
 
-    expect(setModel.indexOf('busy Pi task cannot change runtime selection')).toBeLessThan(apply);
+    expect(setModel.indexOf('return deferLockedSelection()')).toBeLessThan(apply);
     expect(
       setModel.indexOf('cold remote Pi runtime cannot verify the target window'),
     ).toBeLessThan(apply);
-    expect(setModel).toContain('model window switch context is unknown; runtime selection was not changed');
+    expect(setModel).toContain("runtimeAgentKind === 'pi' && runtimeRouteChanged");
+    expect(setModel).not.toContain('busy Pi task cannot change runtime selection');
     expect(setModel).toContain('finalPiWindow < verifiedCurrentWindow!');
     expect(setModel).not.toContain('finalPiWindow < targetContextWindow');
   });
@@ -1095,7 +1116,7 @@ describe('session runtime control wiring', () => {
     const finalWindowEnd = setModel.indexOf('if (atomicSelection) {', finalWindow);
     const runtimeCommit = setModel.indexOf('let generation: number;');
     const finalPreparation = setModel.indexOf('let finalPreparation:');
-    const smallerFinalWindow = setModel.indexOf('finalPiWindow < verifiedCurrentWindow!');
+    const smallerFinalWindow = setModel.indexOf('finalPiWindow < currentContextWindow');
     const preflightPreparation = setModel.indexOf(
       'preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(',
     );
@@ -1130,7 +1151,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('runtimeRouteChanged || confirmedContextWindow !== undefined');
     expect(setModel).toContain('targetContextWindow = finalPiWindow');
     expect(setModel).toContain("if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {");
-    expect(setModel).toContain("runtimeAgentKind !== 'pi' || !!runtimeStatus.remoteHostId");
+    expect(setModel).toContain('planUserRuntimeModelSwitch({');
     expect(setModel).not.toContain(
       "runtimeAgentKind !== 'pi' || isDeviceLinkInvoke() || !!runtimeStatus.remoteHostId",
     );
@@ -1200,7 +1221,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('runtime model context snapshot refresh failed');
   });
 
-  it('cancels deferred selection when final-window pressure would need confirmation', () => {
+  it('retries deferred selection with the confirmed window instead of dropping it', () => {
     const settle = handlerBody(
       registerSource,
       'const settlePendingSessionRuntimeControl =',
@@ -1208,11 +1229,11 @@ describe('session runtime control wiring', () => {
     );
 
     expect(settle).toContain('if (!pending) return;');
+    expect(settle).toContain('confirmedContextWindow: windowRetry.confirmedContextWindow');
     expect(settle).toContain('deferred model-window selection requires unsupported confirmation');
     expect(settle).toContain('cancelPendingSessionRuntimeMutation(sessionId, pending.generation)');
     expect(settle).toContain('await broadcastSessionRuntimeProjection(sessionId)');
     expect(settle).not.toContain('markPendingSessionRuntimeConfirmationRequired(');
-    expect(settle).not.toContain('confirmedContextWindow: pending.confirmedContextWindow');
   });
 
   it('composes later partial runtime changes on the accepted pending profile', () => {
@@ -1241,6 +1262,17 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
     expect(setModel).toContain('(routeExplicit || internalOptions.effortExplicit === true)');
     expect(setModel).toContain('applyFastMode: routeExplicit || internalOptions.fastExplicit === true');
+  });
+
+  it('defers in-turn selections with the clicked effort/Fast snapshot', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('buildDeferredRuntimeSelectionProfile({');
+    expect(setModel).toContain('atomicSelection,');
+    expect(registerSource).toContain('nextDeferredModelWindowRetry(');
   });
 
   it('rebuilds live Orca Workers for model routes while preserving effort-only hot updates', () => {

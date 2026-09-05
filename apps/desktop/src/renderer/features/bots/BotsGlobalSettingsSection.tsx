@@ -1,12 +1,4 @@
-/**
- * Settings › 伙伴 — the settings that belong to the *feature*, not to any one
- * teammate. A single teammate's personality, memory, capabilities and schedule
- * stay on its own page; what lives here is how the whole crew reaches you, and
- * how a teammate moves between machines.
- *
- * Card geometry follows the neighbouring general-tab sections (rounded-xl / Card
- * fill / 1px Board / 20px padding).
- */
+/** Shared default model chain; individual teammates may override it. */
 import { useEffect, useState } from 'react';
 import { useBotTranslation } from './botPronounContext';
 

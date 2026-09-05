@@ -9,6 +9,7 @@ import {
 
 import { createLogger } from '../logger.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth } from '../maker-host/anthropic-responses-bridge-host.js';
 import { getValidClaudeAiOAuth } from '../maker-host/claude-oauth-refresh.js';
@@ -26,7 +27,10 @@ import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
+import { parseAuxiliaryModelRef, type ParsedAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
+import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 import { getUtilityModelProfile, isUtilityModelProviderKind } from '../../shared/utilityModelProfiles.js';
 import type { UtilityModelProfile, UtilityModelTransport } from '../../shared/utilityModelProfiles.js';
 import type {
@@ -227,10 +231,9 @@ async function resolveUtilityTextCandidates(
 ): Promise<{ candidates: UtilityTextCandidate[]; attempts: UtilityTextAttempt[] }> {
   // 钉住某一档时只拿那一个候选:钉了还沿链回落,等于用户的选择被悄悄换掉。
   // 注意不能从链里筛——默认链只有 4 档,而可钉的档位有 9 个,链外的钉不上。
-  const pinned =
-    pinnedProfileId && isUtilityModelProviderKind(pinnedProfileId)
-      ? getUtilityModelProfile(pinnedProfileId)
-      : null;
+  const pinned = pinnedProfileId && isUtilityModelProviderKind(pinnedProfileId)
+    ? getUtilityModelProfile(pinnedProfileId)
+    : null;
   if (pinnedProfileId && !pinned) {
     log.warn('utility text pinned profile unknown, falling back to chain', { pinnedProfileId });
   }
@@ -520,36 +523,75 @@ function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string |
   return matches.length === 1 ? matches[0]?.id : undefined;
 }
 
-async function requestDefaultUtilityText(
-  maker: Maker,
-  prompt: string,
-  opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
-): Promise<UtilityTextResult> {
-  const { candidates, attempts } = await resolveUtilityTextCandidates(
-    maker,
-    opts?.capability ?? { transports: ['codex-responses', 'litellm-chat-completions'] },
-    opts?.pinnedProfileId,
-  );
-  if (candidates.length === 0) {
-    return { ok: false, reason: 'no_candidate', attempts };
+function auxiliaryRefDispatchRoute(parsed: ParsedAuxiliaryModelRef): UtilityTextDispatchRoute {
+  if (parsed.kind === 'catalog') {
+    return {
+      providerId: parsed.route.providerId,
+      agentKind: parsed.route.agentKind,
+      model: parsed.route.model,
+    };
   }
+  const profile = getUtilityModelProfile(parsed.id);
+  return {
+    providerId: profile.transport === 'codex-responses' ? 'openai' : 'xd',
+    agentKind: 'codex',
+    model: profile.model,
+  };
+}
 
+async function runDefaultProfileCandidates(
+  prompt: string,
+  candidates: UtilityTextCandidate[],
+  attempts: UtilityTextAttempt[],
+  opts?: UtilityTextRequestOptions,
+): Promise<UtilityTextResult | null> {
   for (const candidate of candidates) {
-      // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
-      // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
-      // 记 model_unavailable 落到下一候选。
-      if (isUtilityRouteDisabled(candidate.profile)) {
-        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
-        continue;
-      }
-      // 前一个 fallback 候选可能运行数十秒；在每个 XD 候选真正执行前重读
-      // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
-      if (isUtilityRoutePaymentRequired(candidate.profile)) {
-        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
-        continue;
-      }
+    // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
+    // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
+    // 记 model_unavailable 落到下一候选。
+    if (isUtilityRouteDisabled(candidate.profile)) {
+      attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+      continue;
+    }
+    // 前一个 fallback 候选可能运行数十秒；在每个 XD 候选真正执行前重读
+    // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
+    if (isUtilityRoutePaymentRequired(candidate.profile)) {
+      attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+      continue;
+    }
+    // Profile candidates may spend time awaiting credential discovery before
+    // they reach this loop (for example maker.getAgentAuthState for Codex).
+    // Re-check the owning workflow immediately before invoking the candidate;
+    // otherwise a profile route can bypass the catalog HTTP path's final
+    // beforeDispatch fence and send the old owner's prompt after a switch.
+    if (
+      opts?.beforeDispatch
+      && !(await opts.beforeDispatch({
+        providerId: utilityRouteProviderIdFor(candidate.profile.transport, candidate.providerId),
+        agentKind: 'codex',
+        model: candidate.model,
+      }))
+    ) {
+      log.warn('utility text profile candidate aborted before dispatch', {
+        providerId: candidate.providerId,
+        model: candidate.model,
+      });
+      return null;
+    }
+    // The first guard above only covers the time spent resolving the candidate.
+    // Codex candidates can still await host startup inside `oneShot`, so pass a
+    // second guard through to the actual dispatch and re-read the profile's
+    // live disable state after any caller-owned async checks.
+    const candidateOpts: UtilityTextRequestOptions = {
+      ...(opts ?? {}),
+      beforeDispatch: async (route) => {
+        if (isUtilityRouteDisabled(candidate.profile)) return false;
+        if (opts?.beforeDispatch && !(await opts.beforeDispatch(route))) return false;
+        return !isUtilityRouteDisabled(candidate.profile);
+      },
+    };
     try {
-      const text = (await candidate.execute(prompt, opts)).trim();
+      const text = (await candidate.execute(prompt, candidateOpts)).trim();
       if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
       return {
         ok: true,
@@ -570,9 +612,109 @@ async function requestDefaultUtilityText(
       });
     }
   }
-  const reason = aggregateFailureReason(attempts.filter((attempt) => attempt.status === 'failed'));
+  return null;
+}
+
+function failedChainResult(attempts: UtilityTextAttempt[]): UtilityTextResult {
+  const failed = attempts.filter((attempt) => attempt.status === 'failed');
+  const reason = failed.length > 0
+    ? aggregateFailureReason(failed)
+    : attempts.length > 0
+      ? 'no_candidate'
+      : 'all_candidates_failed';
   log.warn('all utility text candidates failed', { reason, attempts: attempts.length });
   return { ok: false, reason, attempts };
+}
+
+async function requestDefaultUtilityText(
+  maker: Maker,
+  prompt: string,
+  opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
+): Promise<UtilityTextResult> {
+  // Default-chain resolution and credential discovery can both await. Capture
+  // the owner before either starts so callers that do not provide their own
+  // workflow guard still fail closed instead of dispatching into a new owner.
+  const ownerScopeKey = activeOwnerScopeKey();
+  // A fallback chain is a user-selected routing decision. If it changes while
+  // an earlier candidate is awaiting credentials or failing, do not dispatch a
+  // later candidate from the stale snapshot into the new configuration.
+  const initialChain = opts?.pinnedProfileId
+    ? null
+    : getEffectiveAuxiliaryModelChain();
+  const chainSnapshot = initialChain ? stableSnapshot(initialChain) : null;
+  const callerBeforeDispatch = opts?.beforeDispatch;
+  const requestSnapshotStillCurrent = (): boolean => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
+    return chainSnapshot === null
+      || stableSnapshot(getEffectiveAuxiliaryModelChain()) === chainSnapshot;
+  };
+  const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
+    ...opts,
+    beforeDispatch: async (route) => {
+      if (!requestSnapshotStillCurrent()) return false;
+      if (callerBeforeDispatch && !(await callerBeforeDispatch(route))) return false;
+      // The caller guard may await account/database state. Re-check the
+      // captured owner, session boundary, and chain after that await so a
+      // concurrent account switch cannot turn a true result into permission
+      // to dispatch the old owner's prompt.
+      return requestSnapshotStillCurrent();
+    },
+    // Short auxiliary budgets cannot afford provider-default thinking. Callers
+    // that need reasoning must pass disableReasoning: false.
+    disableReasoning: opts?.disableReasoning ?? true,
+  };
+  const capability = opts?.capability ?? {
+    transports: ['codex-responses', 'litellm-chat-completions'],
+  };
+
+  if (opts?.pinnedProfileId) {
+    const { candidates, attempts } = await resolveUtilityTextCandidates(
+      maker,
+      capability,
+      opts.pinnedProfileId,
+    );
+    if (candidates.length === 0) {
+      return { ok: false, reason: 'no_candidate', attempts };
+    }
+    const success = await runDefaultProfileCandidates(prompt, candidates, attempts, requestOpts);
+    return success ?? failedChainResult(attempts);
+  }
+
+  const chain = initialChain!;
+  const attempts: UtilityTextAttempt[] = [];
+  for (const ref of chain.refs) {
+    const parsed = parseAuxiliaryModelRef(ref);
+    if (!parsed) continue;
+    if (
+      requestOpts.beforeDispatch
+      && !(await requestOpts.beforeDispatch(auxiliaryRefDispatchRoute(parsed)))
+    ) {
+      log.warn('utility text chain aborted before dispatch', { ref, source: chain.source });
+      return failedChainResult(attempts);
+    }
+    if (parsed.kind === 'profile') {
+      const resolved = await resolveUtilityTextCandidates(maker, capability, parsed.id);
+      attempts.push(...resolved.attempts);
+      if (resolved.candidates.length === 0) continue;
+      const success = await runDefaultProfileCandidates(
+        prompt,
+        resolved.candidates,
+        attempts,
+        requestOpts,
+      );
+      if (success) return success;
+      continue;
+    }
+    const result = await requestExplicitProviderText(prompt, {
+      ...requestOpts,
+      providerId: parsed.route.providerId,
+      agentKind: parsed.route.agentKind,
+      model: parsed.route.model,
+    });
+    if (result.ok) return result;
+    attempts.push(...result.attempts);
+  }
+  return failedChainResult(attempts);
 }
 
 function stableSnapshot(value: unknown): string {
@@ -680,6 +822,7 @@ async function requestExplicitProviderText(
   const routeStillCurrent = (): boolean => {
     if (isProviderRouteMutationInProgress(provider.id)) return false;
     if (isProviderModelRouteDisabled(provider.id, model)) return false;
+    if (provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(model, agentKind)) return false;
     const currentProvider = getActiveCatalog().providers.find((item) => item.id === provider.id);
     if (!currentProvider || !currentProvider.agents.includes(agentKind)) return false;
     const currentModel = currentProvider.models[agentKind]?.find((item) => item.id === model);
@@ -789,6 +932,7 @@ async function requestExplicitProviderText(
     settingsTab: 'providers',
     missingCredentialMessage: 'API key is required for the selected provider.',
   };
+  const isOllama = isOllamaProviderRoute(provider.id, routing.upstream);
   const candidate: UtilityTextCandidate = {
     providerId: provider.id,
     model,
@@ -799,6 +943,7 @@ async function requestExplicitProviderText(
       baseUrl: routing.upstream,
       requestPath: routing.requestPath,
       wireProtocol: routing.wireProtocol,
+      isOllama,
       headers: routing.headerOverride,
       credential: credential ?? '',
       authStrategy,
@@ -837,6 +982,14 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   if (provider.agents.includes('codex')) return 'codex';
   if (provider.agents.includes('claude-code')) return 'claude-code';
   return undefined;
+}
+
+function isOllamaProviderRoute(providerId: string, upstream: string): boolean {
+  const normalizedId = providerId.trim().toLowerCase();
+  return providerId === MANAGED_OLLAMA_PROVIDER_ID
+    || normalizedId === 'ollama'
+    || normalizedId.includes('ollama')
+    || /(?:127\.0\.0\.1|localhost):11434(?:\/|$)/i.test(upstream);
 }
 
 /** Matches the xAI bridge capability gate: coding/build variants reject `reasoning`. */
@@ -898,6 +1051,12 @@ async function requestBuiltinProviderText(
   // Codex 2026-08-06。
   if (routing.disabled) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+  }
+  // XD catalog entries can lose entitlement after they are selected. Recheck
+  // the owner-scoped payment snapshot before resolving credentials or creating
+  // an HTTP candidate, matching the profile-chain guard above.
+  if (input.provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(input.model, input.agentKind)) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
   }
 
   // 插件显式传了 maxTokens 时,钳到该模型目录声明的输出上限(maxOutput),
@@ -1184,6 +1343,16 @@ async function resolveCodexCandidate(
         model: profile.model,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
+        signal: opts?.signal,
+        systemPrompt: opts?.systemPrompt,
+        responseInstructions: opts?.responseInstructions,
+        beforeDispatch: opts?.beforeDispatch
+          ? () => opts.beforeDispatch!({
+            providerId: utilityProfileRouteProviderId(profile),
+            agentKind,
+            model: profile.model,
+          })
+          : undefined,
       }),
     },
   };
@@ -1214,7 +1383,17 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
         reasoningEffort: opts?.reasoningEffort,
+        disableReasoning: opts?.disableReasoning,
         signal: opts?.signal,
+        systemPrompt: opts?.systemPrompt,
+        responseInstructions: opts?.responseInstructions,
+        beforeDispatch: opts?.beforeDispatch
+          ? () => opts.beforeDispatch!({
+            providerId: utilityProfileRouteProviderId(profile),
+            agentKind: 'codex',
+            model: profile.model,
+          })
+          : undefined,
         routeStillAllowed: () => !isUtilityRoutePaymentRequired(profile),
       }),
     },
@@ -1229,7 +1408,12 @@ async function requestLiteLlmText(input: {
   maxTokens?: number;
   timeoutMs?: number;
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  disableReasoning?: boolean;
   signal?: AbortSignal;
+  systemPrompt?: string;
+  responseInstructions?: string;
+  /** Async final dispatch fence, including owner/settings checks. */
+  beforeDispatch?: () => Promise<boolean>;
   /** Synchronous owner entitlement fence immediately before the HTTP request. */
   routeStillAllowed?: () => boolean;
 }): Promise<string> {
@@ -1240,9 +1424,15 @@ async function requestLiteLlmText(input: {
   else input.signal?.addEventListener('abort', abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (input.beforeDispatch && !(await input.beforeDispatch())) {
+      throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    }
     if (input.routeStillAllowed && !input.routeStillAllowed()) {
       throw new UtilityTextExecutionError({ reason: 'request_failed' });
     }
+    const instructions = [input.systemPrompt, input.responseInstructions]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n');
     const response = await undiciFetch(joinProxyPath(input.baseUrl, '/v1/chat/completions'), {
       method: 'POST',
       signal: controller.signal,
@@ -1253,8 +1443,20 @@ async function requestLiteLlmText(input: {
       body: JSON.stringify({
         model: input.model,
         ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-        ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
-        messages: [{ role: 'user', content: input.prompt }],
+        ...(input.disableReasoning
+          ? { thinking: { type: 'disabled' } }
+          : input.reasoningEffort
+            ? { reasoning_effort: input.reasoningEffort }
+            : {}),
+        messages: [
+          ...(instructions
+            ? [{
+                role: 'system',
+                content: instructions,
+              }]
+            : []),
+          { role: 'user', content: input.prompt },
+        ],
       }),
     });
     if (!response.ok) {
@@ -1362,6 +1564,8 @@ async function requestProviderHttpText(input: {
   timeoutMs?: number;
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   disableReasoning?: boolean;
+  /** Ollama's OpenAI-compatible chat wire uses `reasoning_effort: "none"` to disable thinking. */
+  isOllama?: boolean;
   /** Some coding-specialized models reject their wire's reasoning field. */
   supportsReasoning?: boolean;
   /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
@@ -1391,8 +1595,11 @@ async function requestProviderHttpText(input: {
     const instructions = [input.systemPrompt, input.responseInstructions]
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       .join('\n');
+    // Responses-compatible routes do not have a reasoning "off" value. The
+    // lowest common supported effort for the subscribed GPT models is `low`;
+    // sending `minimal` to GPT-5.4 mini is rejected by ChatGPT with HTTP 400.
     const reasoningEffort = input.disableReasoning
-      ? 'minimal'
+      ? input.wire === 'responses' ? 'low' : 'minimal'
       : input.reasoningEffort;
     const supportsRequestedReasoning = Boolean(
       input.wire !== 'anthropic-messages'
@@ -1403,6 +1610,9 @@ async function requestProviderHttpText(input: {
       || input.maxTokens !== undefined
       || input.disableReasoning === true
       || supportsRequestedReasoning;
+    const ollamaReasoningOff = input.wire === 'chat-completions'
+      && input.isOllama === true
+      && input.disableReasoning === true;
     const buildBody = (minimal: boolean) => input.wire === 'responses'
       ? {
         model: input.model,
@@ -1433,8 +1643,12 @@ async function requestProviderHttpText(input: {
         : {
           model: input.model,
           ...(!minimal && input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-          ...(!minimal && input.disableReasoning ? { thinking: { type: 'disabled' } } : {}),
-          ...(!minimal && supportsRequestedReasoning
+          ...(!minimal && input.disableReasoning
+            ? ollamaReasoningOff
+              ? { reasoning_effort: 'none' }
+              : { thinking: { type: 'disabled' } }
+            : {}),
+          ...(!minimal && supportsRequestedReasoning && !ollamaReasoningOff
             ? { reasoning_effort: reasoningEffort }
             : {}),
           messages: [
@@ -1570,6 +1784,7 @@ function chatCompletionEmptyFingerprint(parsed: unknown): Record<string, unknown
           .map((part) => (typeof part === 'object' && part !== null ? (part as { type?: unknown }).type : typeof part))
       : undefined,
     hasReasoningContent: typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0,
+    hasReasoning: typeof message.reasoning === 'string' && message.reasoning.length > 0,
     finishReason: first?.finish_reason,
     messageKeys: Object.keys(message).slice(0, 8),
   };
@@ -1581,6 +1796,7 @@ async function requestCustomProviderText(input: {
   baseUrl: string;
   requestPath?: string;
   wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat';
+  isOllama?: boolean;
   headers?: Record<string, string>;
   credential: string;
   authStrategy: 'api-key-header' | 'oauth-token' | 'none';
@@ -1642,6 +1858,7 @@ async function requestCustomProviderText(input: {
     timeoutMs: input.timeoutMs,
     reasoningEffort: input.reasoningEffort,
     disableReasoning: input.disableReasoning,
+    isOllama: input.isOllama,
     retryWithMinimalBodyOnInvalidRequest: true,
     signal: input.signal,
     systemPrompt: input.systemPrompt,

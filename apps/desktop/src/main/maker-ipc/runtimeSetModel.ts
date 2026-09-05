@@ -27,6 +27,10 @@ interface RuntimeSetModelSession {
     model: string,
     opts?: { providerId?: string | null; effort?: Effort },
   ) => Promise<void>;
+  requiresModelSwitchRebuild?: (
+    model: string,
+    opts?: { providerId?: string | null },
+  ) => boolean | Promise<boolean>;
 }
 
 interface RuntimeSetModelActiveSession {
@@ -172,9 +176,8 @@ export async function applyRuntimeSetModelChange(
       : pendingTarget !== undefined
         ? pendingTarget.providerId
         : currentProviderId;
-  const shouldCloseSession = sess
-    ? input.forceSessionRebuild === true ||
-      shouldCloseSessionForCredentialSwitch({
+  const credentialModeRequiresRebuild = sess
+    ? shouldCloseSessionForCredentialSwitch({
         agentKind: sess.agentKind,
         remoteHostId: sess.remoteHostId,
         currentProviderId,
@@ -191,6 +194,18 @@ export async function applyRuntimeSetModelChange(
   if (requiresCodexThreadRelink && !input.relinkCodexThread) {
     throw new Error(`Codex provider thread relink is required for session ${sessionId}`);
   }
+  const modelSwitchRequiresRebuild =
+    sess &&
+    input.forceSessionRebuild !== true &&
+    !credentialModeRequiresRebuild &&
+    !requiresCodexThreadRelink
+      ? await sess.requiresModelSwitchRebuild?.(model, { providerId: nextProviderId }) ?? false
+      : false;
+  const shouldCloseSession = Boolean(sess) && (
+    input.forceSessionRebuild === true ||
+    modelSwitchRequiresRebuild ||
+    credentialModeRequiresRebuild
+  );
   let selfBusyMemo: boolean | undefined;
   const isSelfBusy = (): boolean => {
     if (selfBusyMemo !== undefined) return selfBusyMemo;
@@ -254,9 +269,14 @@ export async function applyRuntimeSetModelChange(
         model,
         providerId: nextProviderId,
       });
-      logger?.info('set-model: credential switch deferred until turn end', {
+      logger?.info('set-model: session rebuild deferred until turn end', {
         sessionId,
         agentKind: sess.agentKind,
+        reason: input.forceSessionRebuild === true
+          ? 'forced'
+          : modelSwitchRequiresRebuild
+            ? 'model-context-host'
+            : 'credential-mode',
         currentProviderId,
         nextProviderId,
         fromModel: sess.model,
@@ -304,14 +324,29 @@ export async function applyRuntimeSetModelChange(
       throw err;
     }
     if (requiresCodexThreadRelink) {
-      await input.relinkCodexThread?.();
+      try {
+        await input.relinkCodexThread?.();
+      } catch (error) {
+        // A failed history transfer must not discard an earlier accepted pending route.
+        if (clearedPending && input.registerPendingCredentialSwitch) {
+          await input.registerPendingCredentialSwitch(sessionId, clearedPending);
+        }
+        throw error;
+      }
     }
     if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
     // close + route 都落定后再唤醒队列:排队消息按新凭证形态 lazy-create 派发。
     input.wakeSessionInputQueue?.(sessionId);
-    logger?.info('set-model: closed live session after credential mode switch', {
+    logger?.info('set-model: closed live session for route rebuild', {
       sessionId,
       agentKind: sess.agentKind,
+      reason: input.forceSessionRebuild === true
+        ? 'forced'
+        : requiresCodexThreadRelink
+          ? 'provider-thread-relink'
+          : modelSwitchRequiresRebuild
+            ? 'model-context-host'
+            : 'credential-mode',
       currentProviderId,
       nextProviderId,
       fromModel: sess.model,

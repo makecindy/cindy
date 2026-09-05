@@ -64,6 +64,10 @@ export function buildTelegramAdapter(
   telegramIm: TelegramIM,
   config: ImOrchestratorConfig,
 ): ImChannelAdapter {
+  // 同一条群任务会混入 owner 与非 owner 的消息。Full access 只能取缔 owner
+  // 触发轮次的逐轮策略；用对象身份记录这批 policy，避免把会话级权限误当成
+  // 整个群所有成员的授权。WeakSet 不延长排队 policy 的生命周期。
+  const ownerGroupTurnPolicies = new WeakSet<object>();
   return {
     channel: 'telegram',
     im: telegramIm,
@@ -74,6 +78,7 @@ export function buildTelegramAdapter(
     sessions: {
       source: 'telegram',
       sessionIdFor: (botId, userId) => `telegram_${botId}_${sessionSafeUserId(userId)}`,
+      createTaskOnNew: true,
       defaultTitle: (userId) =>
         decodeTelegramLaneUserId(userId)
           ? `[TG·群] ${userId.slice(-6)}`
@@ -93,13 +98,23 @@ export function buildTelegramAdapter(
     // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
     projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
-    // 一群一会话的权限收紧(D1 + 2026-07-30 review 修订): **所有群轮次**都挂
-    // 破坏性操作强确认 — 不只成员触发的。群窗口/引用块把成员可控文本注入
+    // 一群一会话的权限收紧(D1 + 2026-07-30 review 修订): 除显式 Full access 外,
+    // 所有群轮次都挂破坏性操作强确认 — 不只成员触发的。群窗口/引用块把成员可控文本注入
     // owner 触发的轮次, 提示注入可借 owner 轮次的宽松档执行危险操作; 统一
     // 强确认后确认卡只认 owner 点击, owner 多一次点按换掉这条注入通路。
     // DM(无 speaker)不挂, owner 私聊保持全速。
-    turnPermissionPolicyFor: (event) =>
-      event.speaker ? createTelegramGuestTurnPermissionPolicy(event.messageId) : undefined,
+    turnPermissionPolicyFor: (event) => {
+      if (!event.speaker) return undefined;
+      const policy = createTelegramGuestTurnPermissionPolicy(event.messageId);
+      if (event.speaker.isOwner) ownerGroupTurnPolicies.add(policy);
+      return policy;
+    },
+    // Full access 是 owner 对这条任务的明确授权。该档下各 Agent 的工具调用不会
+    // 冒泡到 host，逐轮强确认策略无法兑现；owner 触发时取缔策略，避免 provider
+    // 启动前报不支持。非 owner 仍保留策略并 fail-closed，不能借同一群任务的
+    // Full access 直接驱动工具。其它权限档与群上下文隔离都不受影响。
+    turnPolicyOptionalForMode: (mode, policy) =>
+      mode === 'bypassPermissions' && ownerGroupTurnPolicies.has(policy),
     groupHistoryAccessFor: (event): GroupHistoryAccessScope => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const provider = `telegram-personal:${event.contextId}`;

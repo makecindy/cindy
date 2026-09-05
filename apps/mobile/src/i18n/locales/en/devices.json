@@ -8,6 +8,7 @@
     "create": "New"
   },
   "resources": {
+    "hostOffline": "Offline",
     "titleFallback": "Resources",
     "loading": "Loading…",
     "emptyTitle": "Nothing here yet",

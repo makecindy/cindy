@@ -302,6 +302,18 @@ class QueuedPiRouteSyncError extends Error {}
 /** 当前或目标 Codex 路由与 live thread 身份错配；继续派发会把模型送到错误上游。 */
 class QueuedCodexThreadIdentityMismatchError extends Error {}
 
+/** Codex 目标模型需要换 custom-context Host；排队回调内不能安全重建，必须在 vendor 前站下。 */
+class QueuedModelSwitchRebuildRequiredError extends Error {}
+
+function isModelSwitchRebuildRequiredError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD'
+  );
+}
+
 /**
  * 排队等派发超过 QUEUED_DISPATCH_MAX_WAIT_MS。用独立类型让 dispatchGate 的 catch
  * 能把它和真正的失败区分开:超时不是"这轮跑失败了",而是"这轮没轮到",按顺延收口。
@@ -1023,6 +1035,39 @@ export class MakerScheduleRunner implements ScheduleRunner {
               : 'all-local-codex',
         });
       }
+      if (
+        reusedLiveSession &&
+        liveSession &&
+        (await liveSession.requiresModelSwitchRebuild?.(model, { providerId: nextProviderId })) ===
+          true
+      ) {
+        // 自定义 Codex context window 会冻结在 app-server spawn / thread resume 边界。
+        // 空闲直发可以安全关掉旧 handle，再让下面的 createSession 用新目录 cold resume；
+        // 不能继续走 setModel 的 non-fatal fallback，否则本轮会静默沿用旧模型/窗口。
+        try {
+          await prepareLocalSessionCredentialModeSwitch({
+            maker: this.deps.maker,
+            sessionId,
+            isSessionInTurn,
+            signal: ctx.signal,
+          });
+        } catch (err) {
+          if (err instanceof CredentialModeSwitchBusyError) {
+            return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+          }
+          throw err;
+        }
+        throwIfFireAborted(ctx.signal, 'session creation');
+        reusedLiveSession = false;
+        this.deps.logger.info?.('[runner] closed live session for model context-host rebuild', {
+          scheduleId: schedule.id,
+          sessionId,
+          fromModel: liveSession.model,
+          toModel: model,
+          currentProviderId,
+          nextProviderId,
+        });
+      }
     }
     // The worktree path can also await filesystem work, so cancellation may
     // have arrived after the preceding guard.  Never create a late session.
@@ -1090,6 +1135,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
       } catch (err) {
         if (reusedLiveSession) modelSwitchApplied = false;
+        if (isModelSwitchRebuildRequiredError(err)) {
+          // preflight 与 setModel 都会动态解析目录身份；配置若在两者之间变化，最终
+          // guard 必须 fail-closed，不能落回下面的旧模型 non-fatal 路径。
+          throw new Error(
+            `schedule model switch requires rebuilding the session before dispatch (model "${model}")`,
+            { cause: err },
+          );
+        }
         if (mustSyncReusedPiRoute) {
           // 对 Pi 而言失败后来源未知；继续 send 可能把内容发给旧 BYOM endpoint，
           // 不能沿用 Claude/Codex 的 non-fatal 模型切换降级。
@@ -1880,9 +1933,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (
             err instanceof QueuedRouteDisabledError ||
             err instanceof QueuedPiRouteSyncError ||
-            err instanceof QueuedCodexThreadIdentityMismatchError
+            err instanceof QueuedCodexThreadIdentityMismatchError ||
+            err instanceof QueuedModelSwitchRebuildRequiredError
           ) {
-            // 停用轴拒绝、Pi 原生同步失败、Codex thread/store 错配都不能放行这次
+            // 停用轴拒绝、Pi 原生同步失败、Codex thread/store 错配、Codex context Host
+            // 需要重建都不能放行这次
             // 新付费调用。此刻仍在 vendor dispatch 之前 —— 取消派发并让 run 以
             // 明确错误失败收口(不含 abort 字样 ⇒ 引擎按 failed 记录)。
             failAfterAccept(err);
@@ -1893,7 +1948,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
                 ? 'Pi route sync failed'
                 : err instanceof QueuedCodexThreadIdentityMismatchError
                   ? 'Codex thread provider identity mismatch'
-                  : 'route disabled',
+                  : err instanceof QueuedModelSwitchRebuildRequiredError
+                    ? 'model switch requires session rebuild'
+                    : 'route disabled',
             );
             return;
           }
@@ -2232,6 +2289,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
       );
       return;
     }
+    if (
+      (await live.requiresModelSwitchRebuild?.(targetModel, { providerId: nextProviderId })) === true
+    ) {
+      // onAccepted 正运行在 coordinator 的 vendor-dispatch 边界，不能在这里关闭并替换
+      // live Session。明确中止本轮；recurring 的下一次 fire 会在空闲直发路径 cold resume。
+      throw new QueuedModelSwitchRebuildRequiredError(
+        `queued heartbeat model switch requires rebuilding the session before dispatch (model "${targetModel}", provider "${nextProviderId ?? 'cindy'}")`,
+      );
+    }
     // 与 live.model(随 setModel 实时更新)比较而非 fire 时刻的 baseline:排队
     // 等待期间用户可能在聊天里切了模型,schedule 显式选择必须仍以派发时刻的
     // 真实运行值为基准判断是否需要覆盖(review P2)。effort 无 live getter,
@@ -2252,6 +2318,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
       } catch (err) {
         modelApplied = false;
+        if (isModelSwitchRebuildRequiredError(err)) {
+          throw new QueuedModelSwitchRebuildRequiredError(
+            `queued heartbeat model switch requires rebuilding the session before dispatch (model "${targetModel}", provider "${nextProviderId ?? 'cindy'}")`,
+            { cause: err },
+          );
+        }
         if (mustSyncPiNativeRoute) {
           throw new QueuedPiRouteSyncError(
             `schedule Pi route sync failed before queued dispatch (model "${targetModel}", provider "${nextProviderId ?? 'cindy'}"): ${err instanceof Error ? err.message : String(err)}`,

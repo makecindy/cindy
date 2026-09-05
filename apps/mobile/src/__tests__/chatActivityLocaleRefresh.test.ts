@@ -37,4 +37,19 @@ describe('会话流文案随 app 语言刷新', () => {
       expect(source).toContain('i18n.language');
     },
   );
+
+  it('Markdown completed-block render callbacks invalidate translated fallback labels', () => {
+    const source = componentSource('MarkdownBody');
+    expect(source).toContain('const { t } = useTranslation()');
+    const inlineRenderer = source.slice(
+      source.indexOf('const renderInlines = useCallback('),
+      source.indexOf('const textRunGroupingOptions'),
+    );
+    expect(inlineRenderer).toMatch(/\[[^\]]*\bt\s*\],\s*\);\s*$/);
+    const runRenderer = source.slice(
+      source.indexOf('const renderTextRunBlock = useCallback('),
+      source.indexOf('const renderTextRun ='),
+    );
+    expect(runRenderer).toMatch(/\[[^\]]*\brenderInlines\b[^\]]*\]\);\s*$/);
+  });
 });

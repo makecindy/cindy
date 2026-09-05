@@ -764,7 +764,7 @@ describe('花名册 / ghost_list 过滤', () => {
     await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({
       ok: false,
       errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-      message: expect.stringContaining('Bot Profile'),
+      message: expect.stringContaining('伙伴配置'),
     });
     await expect(deps.readGhostManual({ ghostId: 'art' })).resolves.toMatchObject({
       ok: false,
@@ -1057,7 +1057,7 @@ describe('ghost_call 兜底拒绝', () => {
     expect(result).toMatchObject({
       ok: false,
       errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-      message: expect.stringContaining('Bot Profile'),
+      message: expect.stringContaining('伙伴配置'),
     });
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();

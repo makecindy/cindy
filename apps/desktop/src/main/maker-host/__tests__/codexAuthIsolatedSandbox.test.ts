@@ -14,14 +14,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getCodexAuthInvalidationMarkerPath } from '../codex-auth-invalidation.js';
+import {
+  getCodexAuthInvalidationMarkerPath,
+  writeInvalidatedSystemCodexAuthMarker,
+} from '../codex-auth-invalidation.js';
 
 const dirs: string[] = [];
-const h = vi.hoisted(() => ({ userDataDir: '', dataOwnerId: null as string | null }));
+const h = vi.hoisted(() => ({
+  userDataDir: '',
+  appDataDir: '',
+  dataOwnerId: null as string | null,
+}));
 
 vi.mock('electron', () => ({
   app: {
-    getPath: () => h.userDataDir,
+    getPath: (name: string) => (name === 'appData' ? h.appDataDir : h.userDataDir),
     getAppPath: () => h.userDataDir,
     isPackaged: false,
   },
@@ -47,10 +54,16 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
   };
 });
 
-function fixture(): { codexHome: string; systemAuth: string; localAuth: string } {
+function fixture(): {
+  codexHome: string;
+  systemAuth: string;
+  releaseAuth: string;
+  localAuth: string;
+} {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-isolated-auth-'));
   dirs.push(root);
   h.userDataDir = path.join(root, 'user-data');
+  h.appDataDir = path.join(root, 'app-data');
   fs.mkdirSync(h.userDataDir, { recursive: true });
   const home = path.join(root, 'home');
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
@@ -64,7 +77,22 @@ function fixture(): { codexHome: string; systemAuth: string; localAuth: string }
     }),
   );
   const codexHome = path.join(h.userDataDir, 'codex-home');
-  return { codexHome, systemAuth, localAuth: path.join(codexHome, 'auth.json') };
+  const releaseAuth = path.join(h.appDataDir, 'CindyGlobal', 'codex-home', 'auth.json');
+  return {
+    codexHome,
+    systemAuth,
+    releaseAuth,
+    localAuth: path.join(codexHome, 'auth.json'),
+  };
+}
+
+function bindReleaseOpenAi(releaseAuth: string, owner = 'owner-a'): string {
+  const bindingPath = path.join(
+    path.dirname(path.dirname(releaseAuth)),
+    'native-provider-auth.json',
+  );
+  fs.writeFileSync(bindingPath, JSON.stringify({ openai: owner }));
+  return bindingPath;
 }
 
 function trustIsolatedAuthSandbox(): void {
@@ -97,6 +125,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   h.dataOwnerId = null;
+  h.appDataDir = '';
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -198,7 +227,186 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(sysStat.ino).toBe(myStat.ino);
   });
 
-  it('dev 默认只读共享:登录、登出和失效都不改持久凭证', async () => {
+  it('普通隔离 Dev 优先使用同区域 Release 登录态', async () => {
+    const { codexHome, localAuth, releaseAuth, systemAuth } = fixture();
+    fs.rmSync(systemAuth);
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({
+        account: { email: 'release@example.test' },
+        tokens: { access_token: 'release-token', account_id: 'acct-release' },
+      }),
+    );
+    const releaseBinding = bindReleaseOpenAi(releaseAuth);
+    const releaseBytes = fs.readFileSync(releaseAuth);
+    const releaseStat = fs.statSync(releaseAuth);
+    const releaseBindingBytes = fs.readFileSync(releaseBinding);
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBe('release-token');
+    await expect(adapter.getAccountId()).resolves.toBe('acct-release');
+    await expect(adapter.hasCodexOAuthLogin()).resolves.toBe(true);
+    await expect(adapter.getAuthEnv({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      CODEX_HOME: codexHome,
+    });
+    expect(adapter.hasCodexOAuthLoginReadOnly()).toBe(true);
+    expect(readCodexOneShotCreds(adapter)).toEqual({
+      accessToken: 'release-token',
+      accountId: 'acct-release',
+    });
+    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(releaseAuth).ino);
+    // Codex may refresh its local auth.json in place; the Release credential must
+    // remain byte-for-byte unchanged because Dev receives a snapshot, not a link.
+    fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'dev-refresh' } }));
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(h.userDataDir, 'native-provider-auth.json'), 'utf8')),
+    ).toMatchObject({ openai: 'owner-a' });
+
+    await expect(adapter.triggerLogin()).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'dev_oauth_write_blocked',
+      oauthWritesBlocked: true,
+    });
+    await adapter.logout();
+    await expect(adapter.getState()).resolves.toMatchObject({
+      authenticated: true,
+      oauthWritesBlocked: true,
+    });
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+    expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+  });
+
+  it('共享 Dev 直接使用 Release 登录态，不重链接或改 binding', async () => {
+    const { releaseAuth, systemAuth } = fixture();
+    h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({
+        account: { email: 'release@example.test' },
+        tokens: { access_token: 'release-token', account_id: 'acct-release' },
+      }),
+    );
+    const releaseBinding = bindReleaseOpenAi(releaseAuth);
+    const releaseStat = fs.statSync(releaseAuth);
+    const releaseBindingBytes = fs.readFileSync(releaseBinding);
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBe('release-token');
+    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+    expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
+  });
+
+  it('共享 Dev 遇到未绑定的 Release 残留时不覆盖或回落', async () => {
+    const { releaseAuth, systemAuth } = fixture();
+    h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({
+        account: { email: 'unbound-release@example.test' },
+        tokens: { access_token: 'unbound-release-token', account_id: 'acct-unbound' },
+      }),
+    );
+    const releaseBytes = fs.readFileSync(releaseAuth);
+    const releaseStat = fs.statSync(releaseAuth);
+    const releaseBinding = path.join(h.userDataDir, 'native-provider-auth.json');
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: false,
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBeNull();
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+    expect(fs.statSync(releaseAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.existsSync(releaseBinding)).toBe(false);
+  });
+
+  it('Release 不属于当前 owner 时不继承，回落本机 Codex', async () => {
+    const { localAuth, releaseAuth, systemAuth } = fixture();
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({
+        account: { email: 'stale-release@example.test' },
+        tokens: { access_token: 'stale-release-token', account_id: 'acct-stale' },
+      }),
+    );
+    bindReleaseOpenAi(releaseAuth, 'owner-other');
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBe('system-token');
+    expect(fs.statSync(localAuth).ino).toBe(fs.statSync(systemAuth).ino);
+    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(releaseAuth).ino);
+  });
+
+  it('Release 登录态已被标记失效时不继承，回落本机 Codex', async () => {
+    const { localAuth, releaseAuth, systemAuth } = fixture();
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({
+        account: { email: 'invalidated-release@example.test' },
+        tokens: { access_token: 'invalidated-release-token', account_id: 'acct-invalidated' },
+      }),
+    );
+    bindReleaseOpenAi(releaseAuth);
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        path.dirname(releaseAuth),
+        releaseAuth,
+        'token_revoked',
+        releaseAuth,
+        'system-shared',
+        'owner-a',
+      ),
+    ).toBe(true);
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBe('system-token');
+    expect(fs.statSync(localAuth).ino).toBe(fs.statSync(systemAuth).ino);
+    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(releaseAuth).ino);
+  });
+
+  it('dev 默认只读共享:登录和登出不可改，失效只阻断当前进程', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
@@ -228,13 +436,20 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     });
     await adapter.logout();
     await expect(adapter.getState()).resolves.toMatchObject({
-      authenticated: false,
+      authenticated: true,
       oauthWritesBlocked: true,
     });
-    await expect(adapter.getAccessToken()).resolves.toBeNull();
-    await expect(adapter.getAccountId()).resolves.toBeNull();
-    expect(readCodexOneShotCreds(adapter)).toBeNull();
-    expect(onLogout).toHaveBeenCalledOnce();
+    await expect(adapter.getAccessToken()).resolves.toBe('system-token');
+    await expect(adapter.getAccountId()).resolves.toBe('acct-1');
+    await expect(adapter.hasCodexOAuthLogin()).resolves.toBe(true);
+    await expect(adapter.getAuthEnv({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      CODEX_HOME: codexHome,
+    });
+    expect(readCodexOneShotCreds(adapter)).toEqual({
+      accessToken: 'system-token',
+      accountId: 'acct-1',
+    });
+    expect(onLogout).not.toHaveBeenCalled();
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(beforeSystem);
     expect(fs.readFileSync(localAuth, 'utf8')).toBe(beforeLocal);
     expect(fs.statSync(systemAuth).ino).toBe(beforeSystemStat.ino);

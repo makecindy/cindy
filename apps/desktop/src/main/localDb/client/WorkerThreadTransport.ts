@@ -416,11 +416,87 @@ function dispatchTx(readyDb, payload) {
       return imDeleteBindings(readyDb, request.args);
     case 'im.replaceBinding':
       return imReplaceBinding(readyDb, request.args);
+    case 'skillUsage.applyMutation':
+      return skillUsageApplyMutation(readyDb, request.args);
     case 'session.importShare':
       return sessionImportShare(readyDb, request.args);
     default:
       throw Object.assign(new Error('unknown tx: ' + name), { code: 'UNKNOWN_TX' });
   }
+}
+
+// Keep in sync with worker/opHandlers/tx.ts:skillUsageApplyMutation.
+function skillUsageApplyMutation(readyDb, args) {
+  const payload = asRecord(args, 'skillUsage.applyMutation args');
+  const kind = expectString(payload.kind, 'kind');
+  if (kind === 'persist') {
+    const rawSource = asRecord(payload.source, 'source');
+    const source = {
+      rawFilePath: expectString(rawSource.rawFilePath, 'source.rawFilePath'),
+      analyzerVersion: expectString(rawSource.analyzerVersion, 'source.analyzerVersion'),
+      agentKind: expectString(rawSource.agentKind, 'source.agentKind'),
+      sessionId: expectString(rawSource.sessionId, 'source.sessionId'),
+      sdkSessionId: expectString(rawSource.sdkSessionId, 'source.sdkSessionId'),
+      mtimeMs: expectNumber(rawSource.mtimeMs, 'source.mtimeMs'),
+      sizeBytes: expectNumber(rawSource.sizeBytes, 'source.sizeBytes'),
+      scannedAt: expectNumber(rawSource.scannedAt, 'source.scannedAt'),
+    };
+    const exposures = expectArray(payload.exposures, 'exposures');
+    const upsertSource = readyDb.prepare(
+      "INSERT INTO skill_usage_sources (raw_file_path, analyzer_version, agent_kind, session_id, sdk_session_id, mtime_ms, size_bytes, last_scanned_at, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL) ON CONFLICT(raw_file_path) DO UPDATE SET analyzer_version = excluded.analyzer_version, agent_kind = excluded.agent_kind, session_id = excluded.session_id, sdk_session_id = excluded.sdk_session_id, mtime_ms = excluded.mtime_ms, size_bytes = excluded.size_bytes, last_scanned_at = excluded.last_scanned_at, status = 'ok', error = NULL",
+    );
+    const deleteExposure = readyDb.prepare(
+      'DELETE FROM skill_usage_exposures WHERE raw_file_path = ? AND analyzer_version = ?',
+    );
+    const insertExposure = readyDb.prepare(
+      'INSERT INTO skill_usage_exposures (id, analyzer_version, raw_file_path, raw_line_no, session_id, sdk_session_id, agent_kind, skill_name, skill_path, skill_document_hash, exposure_content_hash, document_hash_source, source, tool_use_id, seen_at, tool_call_count, repeated_tool_call_count, tool_error_count, command_call_count, command_failure_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    return readyDb.transaction(() => {
+      upsertSource.run(source.rawFilePath, source.analyzerVersion, source.agentKind, source.sessionId, source.sdkSessionId, source.mtimeMs, source.sizeBytes, source.scannedAt);
+      deleteExposure.run(source.rawFilePath, source.analyzerVersion);
+      for (let index = 0; index < exposures.length; index += 1) {
+        const row = asRecord(exposures[index], 'exposures.' + index);
+        insertExposure.run(
+          source.analyzerVersion + ':' + expectString(row.id, 'exposures.' + index + '.id'),
+          source.analyzerVersion,
+          expectString(row.rawFilePath, 'exposures.' + index + '.rawFilePath'),
+          expectNumber(row.rawLineNo, 'exposures.' + index + '.rawLineNo'),
+          expectString(row.sessionId, 'exposures.' + index + '.sessionId'),
+          expectString(row.sdkSessionId, 'exposures.' + index + '.sdkSessionId'),
+          expectString(row.agentKind, 'exposures.' + index + '.agentKind'),
+          expectString(row.skillName, 'exposures.' + index + '.skillName'),
+          nullableString(row.skillPath),
+          nullableString(row.skillDocumentHash),
+          expectString(row.exposureContentHash, 'exposures.' + index + '.exposureContentHash'),
+          expectString(row.documentHashSource, 'exposures.' + index + '.documentHashSource'),
+          expectString(row.source, 'exposures.' + index + '.source'),
+          nullableString(row.toolUseId),
+          expectNumber(row.seenAt, 'exposures.' + index + '.seenAt'),
+          expectNumber(row.toolCallCount, 'exposures.' + index + '.toolCallCount'),
+          expectNumber(row.repeatedToolCallCount, 'exposures.' + index + '.repeatedToolCallCount'),
+          expectNumber(row.toolErrorCount, 'exposures.' + index + '.toolErrorCount'),
+          expectNumber(row.commandCallCount, 'exposures.' + index + '.commandCallCount'),
+          expectNumber(row.commandFailureCount, 'exposures.' + index + '.commandFailureCount'),
+        );
+      }
+    })();
+  }
+  if (kind === 'deleteBefore') {
+    const analyzerVersion = expectString(payload.analyzerVersion, 'analyzerVersion');
+    const recentSince = expectNumber(payload.recentSince, 'recentSince');
+    return readyDb.transaction(() => {
+      readyDb.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version = ? AND seen_at < ?').run(analyzerVersion, recentSince);
+      readyDb.prepare('DELETE FROM skill_usage_sources WHERE analyzer_version = ? AND mtime_ms < ? AND raw_file_path NOT IN (SELECT raw_file_path FROM skill_usage_exposures)').run(analyzerVersion, recentSince);
+    })();
+  }
+  if (kind === 'promote') {
+    const analyzerVersion = expectString(payload.analyzerVersion, 'analyzerVersion');
+    return readyDb.transaction(() => {
+      readyDb.prepare("INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(analyzerVersion);
+      readyDb.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version <> ?').run(analyzerVersion);
+    })();
+  }
+  throw invalidArgs('unknown skill usage mutation: ' + kind);
 }
 
 // ⚠️ 与 worker/opHandlers/tx.ts 的 imDeleteBindings 保持一致。
@@ -517,9 +593,18 @@ function contextRebuild(readyDb, args) {
       ? null
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   return readyDb.transaction(() => {
-    const sessionResult = readyDb.prepare(
-      'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
-    ).run(updatedAt, sessionId, expectedClearedAt);
+    const replacement = payload.replacementRoute === undefined
+      ? null : asRecord(payload.replacementRoute, 'replacementRoute');
+    const sessionResult = replacement
+      ? readyDb.prepare(
+          'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL, model = ?, provider_id = ?, effort = COALESCE(?, effort), fast_mode = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
+        ).run(updatedAt, expectString(replacement.model, 'replacementRoute.model'),
+          nullableString(replacement.providerId), nullableString(replacement.effort),
+          replacement.fastMode === true ? 1 : 0, sessionId, expectedClearedAt,
+          expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
+      : readyDb.prepare(
+          'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+        ).run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error('Session missing or clear-boundary changed: ' + sessionId), {
         code: 'PRECONDITION_FAILED',
@@ -1725,6 +1810,30 @@ function forkSession(readyDb, args) {
       const message = sourceMessages[i];
       const ids = newMessageIds[i];
       insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role, sanitizeForkedMessageContent(message, { detachAgentSwitchSessions, resetHandoffBoundaryClientId }), message.tool_use_id, remapForkedAgentMeta(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids, nativeForkAnchorSessionMap), message.agent_kind, message.created_at);
+    }
+    if (payload.recoveryMarker != null) {
+      const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      readyDb.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?, ?)",
+      ).run(
+        expectString(marker.id, 'recoveryMarker.id'),
+        expectString(marker.clientId, 'recoveryMarker.clientId'),
+        expectString(newSession.id, 'newSession.id'),
+        expectString(marker.content, 'recoveryMarker.content'),
+        expectString(newSession.agentKind, 'newSession.agentKind'),
+        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
+        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
+      );
+      const content = asRecord(JSON.parse(expectString(marker.content, 'recoveryMarker.content')), 'recoveryMarker content');
+      insertMessage.run(
+        expectString(marker.id, 'recoveryMarker.id') + ':card',
+        expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
+        expectString(newSession.id, 'newSession.id'),
+        'assistant', '', null,
+        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        expectString(newSession.agentKind, 'newSession.agentKind'),
+        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
+      );
     }
   })();
   return { messageCount: sourceMessages.length };

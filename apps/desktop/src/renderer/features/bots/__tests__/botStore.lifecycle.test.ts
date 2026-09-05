@@ -28,7 +28,6 @@ vi.mock('../botReadState', () => ({
 const bot = {
   id: 'bot-1',
   name: 'Helper',
-  channel: 'local',
   description: '',
   avatar: '🤖',
   avatarColor: 'violet',
@@ -44,7 +43,7 @@ const bot = {
   createdAt: 1,
 };
 
-describe('Bot lifecycle deletion during legacy hydration', () => {
+describe('Bot lifecycle deletion during database hydration', () => {
   beforeEach(() => {
     vi.resetModules();
     window.localStorage.clear();
@@ -92,6 +91,7 @@ describe('Bot lifecycle deletion during legacy hydration', () => {
 
     const store = await import('../botStore');
     await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+    expect(store.getBotProfiles()).toEqual([]);
 
     const deletion = store.runBotLifecycleAction({
       botId: 'bot-1',
@@ -106,6 +106,79 @@ describe('Bot lifecycle deletion during legacy hydration', () => {
 
     expect(runBotLifecycleAction).toHaveBeenCalledOnce();
     expect(store.getBotProfiles()).toEqual([]);
-    expect(JSON.parse(window.localStorage.getItem('cindy.bots.v1') ?? '[]')).toEqual([]);
+    // Obsolete renderer snapshots are neither read nor used as a writable store.
+    expect(JSON.parse(window.localStorage.getItem('cindy.bots.v1') ?? '[]')).toEqual([bot]);
+  });
+});
+
+
+describe('Bot profile snapshot ownership', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    window.localStorage.clear();
+  });
+
+  it('ignores an older list response after a newer refresh has completed', async () => {
+    let release!: (rows: typeof bot[]) => void;
+    const list = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+      .mockResolvedValueOnce([{ ...bot, name: 'Newer profile' }]);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { localDb: { bots: { list } } },
+    });
+    const store = await import('../botStore');
+    store.refreshBotProfiles();
+    await vi.waitFor(() => expect(store.getBotProfiles()[0]?.name).toBe('Newer profile'));
+    release([bot]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.getBotProfiles()[0]?.name).toBe('Newer profile');
+  });
+
+  it('clears prior-owner data immediately and ignores its late list response', async () => {
+    const owner = await import('@/contexts/dataOwnerGeneration');
+    owner.setDataOwnerGeneration('owner-a');
+    let release!: (rows: typeof bot[]) => void;
+    const list = vi.fn()
+      .mockResolvedValueOnce([bot])
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+      .mockResolvedValueOnce([{ ...bot, id: 'bot-b', name: 'Owner B' }]);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { localDb: { bots: { list } } },
+    });
+    const store = await import('../botStore');
+    await vi.waitFor(() => expect(store.getBotProfiles()).toHaveLength(1));
+    store.refreshBotProfiles();
+    owner.setDataOwnerGeneration('owner-b');
+    expect(store.getBotProfiles()).toEqual([]);
+    store.refreshBotProfiles();
+    await vi.waitFor(() => expect(store.getBotProfiles()[0]?.name).toBe('Owner B'));
+    release([bot]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.getBotProfiles().map((row) => row.id)).toEqual(['bot-b']);
+  });
+
+  it('rejects a prior-owner update without changing the new owner projection', async () => {
+    const owner = await import('@/contexts/dataOwnerGeneration');
+    owner.setDataOwnerGeneration('owner-a');
+    let release!: (row: typeof bot) => void;
+    const list = vi.fn().mockResolvedValue([bot]);
+    const update = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { localDb: { bots: { list, update } } },
+    });
+    const store = await import('../botStore');
+    await vi.waitFor(() => expect(store.getBotProfiles()).toHaveLength(1));
+    const pending = store.updateBotProfile(bot.id, { name: 'Old owner edit' });
+    const rejected = expect(pending).rejects.toThrow('Bot data owner changed');
+    owner.setDataOwnerGeneration('owner-b');
+    list.mockResolvedValue([{ ...bot, name: 'Owner B' }]);
+    store.refreshBotProfiles();
+    await vi.waitFor(() => expect(store.getBotProfiles()[0]?.name).toBe('Owner B'));
+    release({ ...bot, name: 'Old owner edit' });
+    await rejected;
+    expect(store.getBotProfiles()[0]?.name).toBe('Owner B');
   });
 });

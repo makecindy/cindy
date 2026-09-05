@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "updatedAt": "2026-08-17T00:00:00.000Z",
+  "schemaVersion": 2,
+  "updatedAt": "2026-09-05T05:54:12.833Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -8,19 +8,16 @@
       "status": "active",
       "group": "gpt",
       "description": "GPT-5.6-Sol for coding tasks",
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "defaultEffort": "medium",
       "sortOrder": 18,
       "supportsFastMode": true,
       "perAgent": {
-        "claude-code": {
-          "supportsFastMode": false
-        },
         "codex": {
-          "contextWindow": 372000,
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "defaultEffort": "medium"
         }
       },
       "routes": [
@@ -38,6 +35,7 @@
               "cacheWritePerMtok": 6.25,
               "maxInputTokens": 272001,
               "effectiveFrom": "2026-07-09",
+              "effectiveUntil": "2026-08-21",
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
@@ -53,14 +51,154 @@
               "cacheWritePerMtok": 12.5,
               "minInputTokens": 272001,
               "effectiveFrom": "2026-07-09",
+              "effectiveUntil": "2026-08-21",
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
                 "verifiedAt": "2026-08-01"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-08-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+                "verifiedAt": "2026-08-28"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 30,
+              "cacheReadPerMtok": 0.8,
+              "cacheWritePerMtok": 10,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-08-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+                "verifiedAt": "2026-08-28"
+              }
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-5.6-sol[1m]",
+      "name": "GPT-5.6-Sol (1M · Higher usage)",
+      "status": "active",
+      "group": "gpt",
+      "description": "Explicit 1M context opt-in; inputs above 272K use higher long-context rates for the entire request",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "medium",
+      "sortOrder": 18,
+      "supportsFastMode": true,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-5.6-sol",
+          "agents": ["claude-code"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 5,
+              "outputPerMtok": 30,
+              "cacheReadPerMtok": 0.5,
+              "cacheWritePerMtok": 6.25,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-07-09",
+              "effectiveUntil": "2026-08-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+                "verifiedAt": "2026-08-01"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 10,
+              "outputPerMtok": 45,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 12.5,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-07-09",
+              "effectiveUntil": "2026-08-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+                "verifiedAt": "2026-08-01"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-08-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+                "verifiedAt": "2026-08-28"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 30,
+              "cacheReadPerMtok": 0.8,
+              "cacheWritePerMtok": 10,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-08-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+                "verifiedAt": "2026-08-28"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xd/gpt-5.6-sol",
+      "name": "GPT-5.6-Sol",
+      "status": "active",
+      "group": "gpt",
+      "description": "GPT-5.6-Sol for coding tasks",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "medium",
+      "sortOrder": 18,
+      "supportsFastMode": true,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
         },
+        "codex": {
+          "contextWindow": 272000,
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "defaultEffort": "medium"
+        }
+      },
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-sol",
@@ -74,19 +212,16 @@
       "status": "active",
       "group": "gpt",
       "description": "GPT-5.6-Terra for coding tasks",
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "defaultEffort": "medium",
       "sortOrder": 19,
       "supportsFastMode": true,
       "perAgent": {
-        "claude-code": {
-          "supportsFastMode": false
-        },
         "codex": {
-          "contextWindow": 372000,
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "defaultEffort": "medium"
         }
       },
       "routes": [
@@ -104,10 +239,11 @@
               "cacheWritePerMtok": 3.125,
               "maxInputTokens": 272001,
               "effectiveFrom": "2026-07-09",
+              "effectiveUntil": "2026-07-30",
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-                "verifiedAt": "2026-08-01"
+                "verifiedAt": "2026-08-07"
               }
             },
             {
@@ -119,14 +255,70 @@
               "cacheWritePerMtok": 6.25,
               "minInputTokens": 272001,
               "effectiveFrom": "2026-07-09",
+              "effectiveUntil": "2026-07-30",
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-                "verifiedAt": "2026-08-01"
+                "verifiedAt": "2026-08-07"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 2.5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-07-30",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+                "verifiedAt": "2026-08-07"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 5,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-07-30",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+                "verifiedAt": "2026-08-07"
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "xd/gpt-5.6-terra",
+      "name": "GPT-5.6-Terra",
+      "status": "active",
+      "group": "gpt",
+      "description": "GPT-5.6-Terra for coding tasks",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "medium",
+      "sortOrder": 19,
+      "supportsFastMode": true,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
         },
+        "codex": {
+          "contextWindow": 272000,
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "defaultEffort": "medium"
+        }
+      },
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-terra",
@@ -139,10 +331,10 @@
       "name": "GPT-5.6-Luna",
       "status": "active",
       "group": "gpt",
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "defaultEffort": "medium",
       "sortOrder": 17,
       "routes": [
         {
@@ -159,10 +351,11 @@
               "cacheWritePerMtok": 1.25,
               "maxInputTokens": 272001,
               "effectiveFrom": "2026-07-09",
+              "effectiveUntil": "2026-07-30",
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-                "verifiedAt": "2026-08-01"
+                "verifiedAt": "2026-08-07"
               }
             },
             {
@@ -174,14 +367,63 @@
               "cacheWritePerMtok": 2.5,
               "minInputTokens": 272001,
               "effectiveFrom": "2026-07-09",
+              "effectiveUntil": "2026-07-30",
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-                "verifiedAt": "2026-08-01"
+                "verifiedAt": "2026-08-07"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.2,
+              "outputPerMtok": 1.2,
+              "cacheReadPerMtok": 0.02,
+              "cacheWritePerMtok": 0.25,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-07-30",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+                "verifiedAt": "2026-08-07"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.4,
+              "outputPerMtok": 1.8,
+              "cacheReadPerMtok": 0.04,
+              "cacheWritePerMtok": 0.5,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-07-30",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+                "verifiedAt": "2026-08-07"
               }
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "id": "xd/gpt-5.6-luna",
+      "name": "GPT-5.6-Luna",
+      "status": "active",
+      "group": "gpt",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "medium",
+      "sortOrder": 17,
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000
+        }
+      },
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-luna",
@@ -195,18 +437,14 @@
       "status": "active",
       "group": "gpt",
       "description": "OpenAI Codex (GPT-5.5) for coding tasks",
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
+      "defaultEffort": "medium",
       "sortOrder": 20,
       "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
-        "claude-code": {
-          "contextWindow": 1050000,
-          "supportsFastMode": false
-        },
         "codex": {
           "contextWindow": 272000
         }
@@ -246,7 +484,31 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "xd/gpt-5.5",
+      "name": "GPT-5.5",
+      "status": "active",
+      "group": "gpt",
+      "description": "GPT-5.5 for coding tasks",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "medium",
+      "sortOrder": 20,
+      "supportsFastMode": true,
+      "defaultEnabled": false,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
         },
+        "codex": {
+          "contextWindow": 272000
+        }
+      },
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.5",
@@ -260,16 +522,16 @@
       "status": "active",
       "group": "gpt",
       "description": "OpenAI Codex (GPT-5.4) for coding tasks",
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
       "sortOrder": 21,
       "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
-        "claude-code": {
-          "supportsFastMode": false
+        "codex": {
+          "contextWindow": 272000,
+          "defaultEffort": "medium"
         }
       },
       "routes": [
@@ -307,7 +569,31 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "xd/gpt-5.4",
+      "name": "GPT-5.4",
+      "status": "active",
+      "group": "gpt",
+      "description": "GPT-5.4 for coding tasks",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "sortOrder": 21,
+      "supportsFastMode": true,
+      "defaultEnabled": false,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
         },
+        "codex": {
+          "contextWindow": 272000,
+          "defaultEffort": "medium"
+        }
+      },
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.4",
@@ -321,16 +607,19 @@
       "status": "active",
       "group": "gpt",
       "description": "Faster, lighter Codex variant — speed-optimized for quick edits",
-      "contextWindow": 400000,
+      "contextWindow": 272000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
       "sortOrder": 22,
       "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "claude-code": {
           "supportsFastMode": false
+        },
+        "codex": {
+          "contextWindow": 272000,
+          "defaultEffort": "medium"
         }
       },
       "routes": [
@@ -353,10 +642,163 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "xd/gpt-5.4-mini",
+      "name": "GPT-5.4-Mini",
+      "status": "active",
+      "group": "gpt",
+      "description": "GPT-5.4-Mini for coding tasks",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "sortOrder": 22,
+      "supportsFastMode": true,
+      "defaultEnabled": false,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
         },
+        "codex": {
+          "contextWindow": 272000,
+          "defaultEffort": "medium"
+        }
+      },
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-mini",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-5.4-pro",
+      "name": "GPT-5.4 Pro",
+      "status": "active",
+      "group": "gpt",
+      "description": "OpenAI GPT-5.4 Pro for demanding reasoning tasks",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "sortOrder": 23,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-5.4-pro",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-5.5-pro",
+      "name": "GPT-5.5 Pro",
+      "status": "active",
+      "group": "gpt",
+      "description": "OpenAI GPT-5.5 Pro for precise, high-quality reasoning",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "sortOrder": 24,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-5.5-pro",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-5.6-cyber",
+      "name": "GPT-5.6 Cyber",
+      "status": "active",
+      "group": "gpt",
+      "description": "OpenAI cyber security reasoning model; access requires approval",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "sortOrder": 25,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-5.6-cyber",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "status": "active",
+      "group": "gpt",
+      "description": "OpenAI GPT-6 Astra for complex reasoning, coding, computer use, research, and document creation",
+      "contextWindow": 272000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "medium",
+      "perAgent": {
+        "codex": {
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "defaultEffort": "medium"
+        }
+      },
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6-astra",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 10,
+              "outputPerMtok": 50,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 12.5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-04",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-05"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "cacheReadPerMtok": 2,
+              "cacheWritePerMtok": 25,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-04",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-05"
+              }
+            }
+          ]
+        }
+      ],
+      "supportsFastMode": true
+    },
+    {
+      "id": "anthropic/claude-fable-5-1",
+      "name": "Fable 5.1",
+      "status": "active",
+      "group": "anthropic",
+      "description": "Claude Fable 5.1 for long-running agentic coding and research",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "high",
+      "routes": [
+        {
+          "providerId": "anthropic",
+          "modelId": "claude-fable-5-1",
           "agents": ["claude-code", "codex"]
         }
       ]
@@ -410,6 +852,8 @@
       "group": "anthropic",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "high",
       "routes": [
         {
           "providerId": "anthropic",
@@ -473,11 +917,14 @@
               "variant": "fast",
               "inputPerMtok": 10,
               "outputPerMtok": 50,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 12.5,
+              "cacheWrite1hPerMtok": 20,
               "effectiveFrom": "2026-07-24",
               "source": {
                 "kind": "provider-official",
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-02"
               }
             }
           ]
@@ -527,11 +974,14 @@
               "variant": "fast",
               "inputPerMtok": 10,
               "outputPerMtok": 50,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 12.5,
+              "cacheWrite1hPerMtok": 20,
               "effectiveFrom": "2026-05-28",
               "source": {
                 "kind": "provider-official",
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-02"
               }
             }
           ]
@@ -699,26 +1149,10 @@
               "cacheWritePerMtok": 2.5,
               "cacheWrite1hPerMtok": 4,
               "effectiveFrom": "2026-06-30",
-              "effectiveUntil": "2026-09-01",
               "source": {
                 "kind": "provider-official",
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
-                "verifiedAt": "2026-07-31"
-              }
-            },
-            {
-              "currency": "USD",
-              "variant": "standard",
-              "inputPerMtok": 3,
-              "outputPerMtok": 15,
-              "cacheReadPerMtok": 0.3,
-              "cacheWritePerMtok": 3.75,
-              "cacheWrite1hPerMtok": 6,
-              "effectiveFrom": "2026-09-01",
-              "source": {
-                "kind": "provider-official",
-                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-12"
               }
             }
           ]
@@ -862,9 +1296,9 @@
       "name": "Grok 4.6",
       "status": "active",
       "group": "grok",
-      "description": "xAI Grok 4.6 旗舰,编码/agent 任务,500k 上下文(SuperGrok 订阅直连)",
+      "description": "xAI Grok 4.6 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
       "contextWindow": 500000,
-      "efforts": ["low", "medium", "high"],
+      "efforts": ["low", "medium", "high", "xhigh"],
       "defaultEffort": "high",
       "sortOrder": 48,
       "routes": [
@@ -879,11 +1313,26 @@
               "inputPerMtok": 2,
               "outputPerMtok": 6,
               "cacheReadPerMtok": 0.5,
+              "maxInputTokens": 200000,
               "effectiveFrom": "2026-08-12",
               "source": {
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
-                "verifiedAt": "2026-08-17"
+                "verifiedAt": "2026-08-13"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 1,
+              "minInputTokens": 200000,
+              "effectiveFrom": "2026-08-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-13"
               }
             }
           ]
@@ -895,7 +1344,7 @@
       "name": "Grok 4.5",
       "status": "active",
       "group": "grok",
-      "description": "xAI Grok 4.5,编码/agent 任务,500k 上下文(SuperGrok 订阅直连)",
+      "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
       "contextWindow": 500000,
       "efforts": ["low", "medium", "high"],
       "defaultEffort": "high",
@@ -1046,7 +1495,8 @@
       "group": "grok",
       "description": "xAI Grok 4.20 multi-agent model,1M 上下文(SuperGrok 订阅直连)",
       "contextWindow": 1000000,
-      "efforts": [],
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "low",
       "sortOrder": 52,
       "defaultEnabled": false,
       "routes": [
@@ -1194,11 +1644,6 @@
       "defaultEffort": "high",
       "sortOrder": 98,
       "defaultEnabled": false,
-      "perAgent": {
-        "codex": {
-          "efforts": ["low", "medium", "high"]
-        }
-      },
       "routes": [
         {
           "providerId": "xai",
@@ -1286,13 +1731,27 @@
       ]
     },
     {
+      "id": "xd/codex-gpt-5.6-luna",
+      "name": "GPT-5.6-Luna",
+      "group": "gpt-budget",
+      "sortOrder": 7,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "codex/gpt-5.6-luna",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
       "id": "xd/codex-gpt-5.6-sol",
       "name": "GPT-5.6-Sol",
       "group": "gpt-budget",
       "description": "GPT-5.6-Sol for coding tasks",
       "contextWindow": 372000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "medium",
       "sortOrder": 8,
       "supportsFastMode": true,
       "perAgent": {
@@ -1300,7 +1759,9 @@
           "supportsFastMode": false
         },
         "codex": {
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+          "contextWindow": 272000,
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "defaultEffort": "medium"
         }
       },
       "routes": [
@@ -1317,8 +1778,9 @@
       "group": "gpt-budget",
       "description": "GPT-5.6-Terra for coding tasks",
       "contextWindow": 372000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "medium",
       "sortOrder": 9,
       "supportsFastMode": true,
       "perAgent": {
@@ -1326,7 +1788,9 @@
           "supportsFastMode": false
         },
         "codex": {
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+          "contextWindow": 272000,
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "defaultEffort": "medium"
         }
       },
       "routes": [
@@ -1343,8 +1807,9 @@
       "group": "gpt-budget",
       "description": "GPT-5.5 for coding tasks",
       "contextWindow": 272000,
+      "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
+      "defaultEffort": "medium",
       "sortOrder": 10,
       "supportsFastMode": true,
       "defaultEnabled": false,
@@ -1367,8 +1832,9 @@
       "group": "gpt-budget",
       "description": "GPT-5.4 for coding tasks",
       "contextWindow": 272000,
+      "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
+      "defaultEffort": "medium",
       "sortOrder": 11,
       "supportsFastMode": true,
       "defaultEnabled": false,
@@ -1386,13 +1852,116 @@
       ]
     },
     {
+      "id": "google/gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash",
+      "status": "active",
+      "group": "google",
+      "description": "Google Gemini 3.7 Flash — agentic workflows and multimodal reasoning",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "efforts": ["low", "medium", "high"],
+      "defaultEffort": "medium",
+      "sortOrder": 28,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "gemini-3.7-flash",
+          "agents": ["claude-code"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.075,
+              "cacheWrite1hPerMtok": 0.5,
+              "effectiveFrom": "2026-08-13",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-08-13"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.15,
+              "cacheWrite1hPerMtok": 1,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-08-13"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-3.6-flash",
+      "name": "Gemini 3.6 Flash",
+      "status": "active",
+      "group": "google",
+      "description": "Google Gemini 3.6 Flash — frontier intelligence optimized for speed and cost",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "efforts": ["minimal", "low", "medium", "high"],
+      "defaultEffort": "medium",
+      "sortOrder": 29,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "gemini-3.6-flash",
+          "agents": ["claude-code"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.075,
+              "cacheWrite1hPerMtok": 0.5,
+              "effectiveFrom": "2026-07-21",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-08-13"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.15,
+              "cacheWrite1hPerMtok": 1,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-08-13"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "google/gemini-3.5-flash",
       "name": "Gemini 3.5 Flash",
       "group": "google",
       "description": "Google Gemini 3.5 Flash — upgraded Flash with stronger reasoning",
       "contextWindow": 1000000,
-      "efforts": ["low", "medium", "high"],
-      "defaultEffort": "high",
+      "maxOutputTokens": 65536,
+      "efforts": ["minimal", "low", "medium", "high"],
+      "defaultEffort": "medium",
       "sortOrder": 30,
       "supportsFastMode": false,
       "routes": [
@@ -1409,6 +1978,7 @@
       "group": "google",
       "description": "Google Gemini 3.1 Pro Preview — deepest reasoning, multimodal",
       "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
       "efforts": ["low", "medium", "high"],
       "defaultEffort": "high",
       "sortOrder": 31,
@@ -1428,7 +1998,8 @@
       "group": "google",
       "description": "Google Gemini 3 Flash Preview — fast multimodal reasoning",
       "contextWindow": 1000000,
-      "efforts": ["low", "medium", "high"],
+      "maxOutputTokens": 65536,
+      "efforts": ["minimal", "low", "medium", "high"],
       "defaultEffort": "high",
       "sortOrder": 32,
       "supportsFastMode": false,
@@ -1442,10 +2013,49 @@
       ]
     },
     {
+      "id": "google/gemini-3.5-flash-lite",
+      "name": "Gemini 3.5 Flash-Lite",
+      "status": "active",
+      "group": "google",
+      "description": "Google Gemini 3.5 Flash-Lite — cost-efficient multimodal model for high-volume workloads",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "efforts": ["minimal", "low", "medium", "high"],
+      "defaultEffort": "minimal",
+      "sortOrder": 33,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "gemini-3.5-flash-lite",
+          "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash-Lite",
+      "status": "active",
+      "group": "google",
+      "description": "Google Gemini 3.1 Flash-Lite — efficient multimodal model for large-scale tasks",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "sortOrder": 34,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "gemini-3.1-flash-lite",
+          "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
       "id": "bytedance-seed/seed-2.1-pro",
       "name": "Seed 2.1 Pro",
       "group": "china",
       "contextWindow": 256000,
+      "maxOutputTokens": 256000,
       "efforts": ["minimal", "low", "medium", "high"],
       "defaultEffort": "minimal",
       "supportsFastMode": false,
@@ -1464,8 +2074,26 @@
       ]
     },
     {
+      "id": "qwen/qwen3.8-max",
+      "name": "Qwen 3.8 Max",
+      "group": "china",
+      "contextWindow": 983616,
+      "maxOutputTokens": 131072,
+      "efforts": ["low", "high", "xhigh"],
+      "defaultEffort": "xhigh",
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "qwen/qwen3.8-max",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
       "id": "qwen/qwen3.8-max-preview",
       "name": "Qwen 3.8 Max Preview",
+      "status": "retired",
       "group": "china",
       "contextWindow": 983616,
       "efforts": ["low", "high", "xhigh"],
@@ -1485,6 +2113,7 @@
       "group": "china",
       "description": "Qwen 3.7 Max agentic coding model; thinking is provider-managed",
       "contextWindow": 992000,
+      "maxOutputTokens": 65536,
       "efforts": [],
       "sortOrder": 40,
       "supportsFastMode": false,
@@ -1492,6 +2121,52 @@
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.7-max",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "moonshotai/kimi-k2.7-code",
+      "name": "Kimi K2.7 Code",
+      "status": "active",
+      "group": "china",
+      "description": "Moonshot Kimi K2.7 Code agentic coding model",
+      "contextWindow": 262144,
+      "efforts": [],
+      "sortOrder": 107,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "moonshot-kimi-cn",
+          "modelId": "kimi-k2.7-code",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "moonshot-kimi-global",
+          "modelId": "kimi-k2.7-code",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "moonshotai/kimi-k2.7-code-highspeed",
+      "name": "Kimi K2.7 Code Highspeed",
+      "status": "active",
+      "group": "china",
+      "description": "Moonshot Kimi K2.7 Code high-speed API variant",
+      "contextWindow": 262144,
+      "efforts": [],
+      "sortOrder": 108,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "moonshot-kimi-cn",
+          "modelId": "kimi-k2.7-code-highspeed",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "moonshot-kimi-global",
+          "modelId": "kimi-k2.7-code-highspeed",
           "agents": ["claude-code", "codex"]
         }
       ]
@@ -1519,7 +2194,8 @@
       "name": "GLM-5.1",
       "group": "china",
       "description": "Zhipu GLM-5.1 agentic coding model; thinking is provider-managed",
-      "contextWindow": 202752,
+      "contextWindow": 200000,
+      "maxOutputTokens": 131072,
       "efforts": [],
       "sortOrder": 42,
       "supportsFastMode": false,
@@ -1538,6 +2214,7 @@
       "group": "china",
       "description": "Zhipu GLM-5.2 agentic coding model; 1M context",
       "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
       "efforts": ["minimal", "high", "max"],
       "defaultEffort": "max",
       "sortOrder": 43,
@@ -1557,20 +2234,93 @@
       ]
     },
     {
-      "id": "deepseek/deepseek-v4-pro",
-      "name": "DeepSeek V4 Pro",
+      "id": "z-ai/glm-5.3",
+      "name": "GLM-5.3",
+      "status": "active",
       "group": "china",
-      "description": "DeepSeek V4 Pro reasoning model; only high/max effective (low/medium→high, xhigh→max)",
-      "contextWindow": 1048576,
-      "efforts": ["high", "max"],
-      "defaultEffort": "high",
+      "description": "Zhipu GLM-5.3 agentic coding model; 1M context",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "efforts": ["low", "high", "max"],
+      "defaultEffort": "max",
       "sortOrder": 44,
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
-          "modelId": "deepseek/deepseek-v4-pro",
+          "modelId": "z-ai/glm-5.3",
           "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "name": "GLM-5.3-Flash",
+      "status": "active",
+      "group": "china",
+      "description": "Zhipu GLM-5.3-Flash native multimodal coding model; 1M context",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-5.3-flash",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "zhipu-glm-global",
+          "modelId": "glm-5.3-flash",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "xd/z-ai-glm-5.3-flash",
+      "name": "GLM-5.3-Flash",
+      "status": "active",
+      "group": "china",
+      "description": "Zhipu GLM-5.3-Flash native multimodal coding model; 1M context",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "z-ai/glm-5.3-flash",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "group": "china",
+      "description": "DeepSeek V4 Pro reasoning model; only high/max effective (low/medium→high, xhigh→max)",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 384000,
+      "efforts": ["high", "max"],
+      "defaultEffort": "high",
+      "sortOrder": 45,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "deepseek/deepseek-v4-pro",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.32,
+              "outputPerMtok": 3.96,
+              "cacheReadPerMtok": 0.044,
+              "effectiveFrom": "2026-08-16",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                "verifiedAt": "2026-08-16"
+              }
+            }
+          ]
         },
         {
           "providerId": "deepseek",
@@ -1588,6 +2338,20 @@
                 "kind": "provider-official",
                 "url": "https://api-docs.deepseek.com/quick_start/pricing",
                 "verifiedAt": "2026-08-05"
+              },
+              "effectiveUntil": "2026-08-16"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.32,
+              "outputPerMtok": 3.96,
+              "cacheReadPerMtok": 0.044,
+              "effectiveFrom": "2026-08-16",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                "verifiedAt": "2026-08-16"
               }
             }
           ]
@@ -1598,17 +2362,33 @@
       "id": "deepseek/deepseek-v4-flash",
       "name": "DeepSeek V4 Flash",
       "group": "china",
-      "description": "DeepSeek V4 Flash efficiency-optimized MoE; only high/max effective",
+      "description": "DeepSeek V4 Flash efficiency-optimized MoE; supports low/high/max effort",
       "contextWindow": 1048576,
-      "efforts": ["high", "max"],
+      "maxOutputTokens": 384000,
+      "efforts": ["low", "high", "max"],
       "defaultEffort": "high",
-      "sortOrder": 45,
+      "sortOrder": 46,
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "deepseek/deepseek-v4-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.44,
+              "outputPerMtok": 1.32,
+              "cacheReadPerMtok": 0.014,
+              "effectiveFrom": "2026-08-16",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                "verifiedAt": "2026-08-16"
+              }
+            }
+          ]
         },
         {
           "providerId": "deepseek",
@@ -1626,6 +2406,20 @@
                 "kind": "provider-official",
                 "url": "https://api-docs.deepseek.com/quick_start/pricing",
                 "verifiedAt": "2026-08-05"
+              },
+              "effectiveUntil": "2026-08-16"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.44,
+              "outputPerMtok": 1.32,
+              "cacheReadPerMtok": 0.014,
+              "effectiveFrom": "2026-08-16",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                "verifiedAt": "2026-08-16"
               }
             }
           ]
@@ -1641,7 +2435,6 @@
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
       "sortOrder": 101,
       "defaultEnabled": false,
       "routes": [
@@ -1676,6 +2469,9 @@
       "id": "xd/codex-gpt-5.4-mini",
       "name": "GPT-5.4-Mini",
       "group": "gpt-budget",
+      "contextWindow": 272000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "medium",
       "sortOrder": 103,
       "defaultEnabled": false,
       "routes": [
@@ -1684,13 +2480,183 @@
           "modelId": "codex/gpt-5.4-mini",
           "agents": ["claude-code", "codex"]
         }
+      ],
+      "maxOutputTokens": 128000
+    },
+    {
+      "id": "minimax/minimax-m3",
+      "name": "MiniMax M3",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 1000000,
+      "sortOrder": 114,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "minimax-cn",
+          "modelId": "MiniMax-M3",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "minimax-global",
+          "modelId": "MiniMax-M3",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "minimax/minimax-m2.7",
+      "name": "MiniMax M2.7",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 204800,
+      "sortOrder": 111,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "minimax-cn",
+          "modelId": "MiniMax-M2.7",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "minimax-global",
+          "modelId": "MiniMax-M2.7",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "minimax/minimax-m2.7-highspeed",
+      "name": "MiniMax M2.7 Highspeed",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 204800,
+      "sortOrder": 112,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "minimax-cn",
+          "modelId": "MiniMax-M2.7-highspeed",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "minimax-global",
+          "modelId": "MiniMax-M2.7-highspeed",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "minimax/minimax-m2.5",
+      "name": "MiniMax M2.5",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 204800,
+      "sortOrder": 116,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "minimax-cn",
+          "modelId": "MiniMax-M2.5",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "minimax-global",
+          "modelId": "MiniMax-M2.5",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "minimax/minimax-m2.5-highspeed",
+      "name": "MiniMax M2.5 Highspeed",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 204800,
+      "sortOrder": 117,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "minimax-cn",
+          "modelId": "MiniMax-M2.5-highspeed",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "minimax-global",
+          "modelId": "MiniMax-M2.5-highspeed",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "minimax/minimax-m2.1",
+      "name": "MiniMax M2.1",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 204800,
+      "sortOrder": 118,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "minimax-cn",
+          "modelId": "MiniMax-M2.1",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "minimax-global",
+          "modelId": "MiniMax-M2.1",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "minimax/minimax-m2.1-highspeed",
+      "name": "MiniMax M2.1 Highspeed",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 204800,
+      "sortOrder": 119,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "minimax-cn",
+          "modelId": "MiniMax-M2.1-highspeed",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "minimax-global",
+          "modelId": "MiniMax-M2.1-highspeed",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "minimax/minimax-m2",
+      "name": "MiniMax M2",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 204800,
+      "sortOrder": 120,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "minimax-cn",
+          "modelId": "MiniMax-M2",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "minimax-global",
+          "modelId": "MiniMax-M2",
+          "agents": ["claude-code", "codex"]
+        }
       ]
     },
     {
       "id": "moonshotai/kimi-k3",
       "name": "Kimi K3",
       "group": "china",
-      "contextWindow": 1000000,
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
       "efforts": ["low", "high", "max"],
       "defaultEffort": "max",
       "sortOrder": 41,
@@ -1698,7 +2664,17 @@
       "routes": [
         {
           "providerId": "xd",
-          "modelId": "moonshotai/kimi-k3",
+          "modelId": "moonshot/kimi-k3",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "moonshot-kimi-cn",
+          "modelId": "kimi-k3",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "moonshot-kimi-global",
+          "modelId": "kimi-k3",
           "agents": ["claude-code", "codex"]
         }
       ]
@@ -1707,6 +2683,10 @@
       "id": "qwen/qwen3.6-plus",
       "name": "Qwen 3.6 Plus",
       "group": "china",
+      "description": "Qwen 3.6 Plus with provider-managed thinking",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "efforts": [],
       "sortOrder": 105,
       "defaultEnabled": false,
       "routes": [
@@ -1714,6 +2694,124 @@
           "providerId": "xd",
           "modelId": "qwen/qwen3.6-plus",
           "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
+      "id": "qwen/qwen3.6-plus-api",
+      "name": "Qwen 3.6 Plus API",
+      "status": "active",
+      "group": "china",
+      "contextWindow": 991808,
+      "maxOutputTokens": 65536,
+      "sortOrder": 113,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.6-plus",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "aliyun-model-studio-global",
+          "modelId": "qwen3.6-plus",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "qwen/qwen3.7-flash",
+      "name": "Qwen 3.7 Flash",
+      "status": "active",
+      "group": "china",
+      "description": "Alibaba Qwen 3.7 Flash text model with provider-managed thinking",
+      "contextWindow": 991808,
+      "maxOutputTokens": 65536,
+      "efforts": [],
+      "sortOrder": 115,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.7-flash",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "aliyun-model-studio-global",
+          "modelId": "qwen3.7-flash",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "qwen/qwen3.8-flash",
+      "name": "Qwen 3.8 Flash",
+      "status": "active",
+      "group": "china",
+      "description": "Alibaba Qwen 3.8 Flash multimodal model with provider-managed thinking",
+      "contextWindow": 991808,
+      "maxOutputTokens": 131072,
+      "efforts": [],
+      "sortOrder": 121,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.8-flash",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "aliyun-model-studio-global",
+          "modelId": "qwen3.8-flash",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "qwen/qwen3.7-plus",
+      "name": "Qwen 3.7 Plus",
+      "status": "active",
+      "group": "china",
+      "description": "Alibaba Qwen 3.7 Plus text model with provider-managed thinking",
+      "contextWindow": 991808,
+      "maxOutputTokens": 65536,
+      "efforts": [],
+      "sortOrder": 109,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.7-plus",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "aliyun-model-studio-global",
+          "modelId": "qwen3.7-plus",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "qwen/qwen3.6-flash",
+      "name": "Qwen 3.6 Flash",
+      "status": "active",
+      "group": "china",
+      "description": "Alibaba Qwen 3.6 Flash text model with provider-managed thinking",
+      "contextWindow": 991808,
+      "maxOutputTokens": 65536,
+      "efforts": [],
+      "sortOrder": 110,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.6-flash",
+          "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "aliyun-model-studio-global",
+          "modelId": "qwen3.6-flash",
+          "agents": ["claude-code", "codex"]
         }
       ]
     },
@@ -1729,7 +2827,8 @@
           "modelId": "codex/gpt-5.5:auto",
           "agents": ["claude-code", "codex"]
         }
-      ]
+      ],
+      "maxOutputTokens": 128000
     }
   ]
 }

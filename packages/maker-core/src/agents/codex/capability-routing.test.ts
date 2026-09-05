@@ -66,6 +66,23 @@ describe('Bot Skill config', () => {
       ],
     });
   });
+
+  it('uses the SKILL.md file path for a Bot-owned Skill when provided', () => {
+    expect(buildCodexBotSkillConfigOverrides({
+      mode: 'allowlist',
+      configured: [],
+      catalog: [],
+      ownSkills: [{
+        name: 'weekly-report',
+        path: '/bots/a/skills/weekly-report',
+        filePath: '/bots/a/skills/weekly-report/SKILL.md',
+      }],
+    })).toEqual({
+      'skills.config': [
+        { path: '/bots/a/skills/weekly-report/SKILL.md', enabled: true },
+      ],
+    });
+  });
 });
 
 describe('Bot MCP config', () => {
@@ -81,12 +98,16 @@ describe('Bot MCP config', () => {
         { name: 'custom-a', source: 'custom' },
         { name: 'custom.with.dot', source: 'custom' },
       ],
-    })).toEqual({
+    }, new Set(['cindy_memory', 'cindy_helper', 'cindy', 'cindy_group_history', 'cindy_orca', 'custom-a', 'custom.with.dot']))).toEqual({
       'mcp_servers.cindy.enabled': false,
       'mcp_servers.cindy_group_history.enabled': false,
       'mcp_servers.cindy_orca.enabled': false,
       'mcp_servers."custom.with.dot".enabled': false,
     });
+  });
+
+  it('does not manufacture invalid disabled-only transport entries', () => {
+    expect(buildCodexBotMcpConfigOverrides({ mode: 'allowlist', configured: [], catalog: [{ name: 'cindy_contacts', source: 'builtin' }] }, new Set())).toEqual({});
   });
 
   it('keeps an explicitly configured builtin capability server enabled', () => {
@@ -101,7 +122,7 @@ describe('Bot MCP config', () => {
         { name: 'cindy_docs', source: 'builtin' },
         { name: 'cindy_scheduler', source: 'builtin' },
       ],
-    })).toEqual({
+    }, new Set(['cindy_memory', 'cindy_helper', 'cindy_docs', 'cindy_scheduler', 'cindy', 'cindy_group_history', 'cindy_orca', 'cindy_docs']))).toEqual({
       'mcp_servers.cindy_scheduler.enabled': false,
       'mcp_servers.cindy.enabled': false,
       'mcp_servers.cindy_group_history.enabled': false,

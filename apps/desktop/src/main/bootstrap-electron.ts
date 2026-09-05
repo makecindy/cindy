@@ -333,6 +333,8 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import { getActiveCatalog } from './maker-host/active-catalog';
+import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import {
   getSessionRowSnapshot,
   resumeDeletedPiSubagentCleanup,
@@ -952,6 +954,7 @@ import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
+import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { setMainLocale, t } from './i18n.js';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -3828,6 +3831,7 @@ const createWindow = () => {
       restoreFullscreen: shouldRestoreMacFullscreen,
     });
     if (!app.isPackaged) markDesktopDevWindowReady();
+    void runComputerUseSmokeIfRequested();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
     // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
     resourceUsagePrewarmTimer = setTimeout(() => {
@@ -8235,6 +8239,7 @@ app.on('ready', async () => {
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
   registerLocalDbIpc({
+    resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
     cancelSessionOperations: cancelIOSSimulatorSessionOperations,
     cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
     closeIdleSessionForMove: async (sessionId) => {

@@ -9,6 +9,7 @@ import { SESSION_SOURCES } from '../../../../shared/sessionSource.js';
 import { buildDbWorkerBundle } from '../../__tests__/dbWorkerTestUtils.js';
 import type { DbClient } from '../DbClient.js';
 import { createDbClient } from '../DbClient.js';
+import type { SkillUsageApplyMutationArgs } from '../tx/types.js';
 
 const INIT_SQL = `
 CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -17,6 +18,40 @@ CREATE TABLE migration_history (
   file_name TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   applied_at INTEGER NOT NULL
+);
+CREATE TABLE skill_usage_sources (
+  raw_file_path TEXT PRIMARY KEY,
+  analyzer_version TEXT NOT NULL,
+  agent_kind TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  sdk_session_id TEXT NOT NULL,
+  mtime_ms INTEGER NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  last_scanned_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT
+);
+CREATE TABLE skill_usage_exposures (
+  id TEXT PRIMARY KEY,
+  analyzer_version TEXT NOT NULL,
+  raw_file_path TEXT NOT NULL,
+  raw_line_no INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  sdk_session_id TEXT NOT NULL,
+  agent_kind TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  skill_path TEXT,
+  skill_document_hash TEXT,
+  exposure_content_hash TEXT NOT NULL,
+  document_hash_source TEXT NOT NULL,
+  source TEXT NOT NULL,
+  tool_use_id TEXT,
+  seen_at INTEGER NOT NULL,
+  tool_call_count INTEGER NOT NULL,
+  repeated_tool_call_count INTEGER NOT NULL,
+  tool_error_count INTEGER NOT NULL,
+  command_call_count INTEGER NOT NULL,
+  command_failure_count INTEGER NOT NULL
 );
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
@@ -42,6 +77,8 @@ CREATE TABLE sessions (
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
   source TEXT NOT NULL DEFAULT 'desktop',
+  im_bot_context_id TEXT,
+  im_user_id TEXT,
   remote_host_id TEXT,
   active_turn_started_at INTEGER,
   last_turn_ended_at INTEGER,
@@ -1719,6 +1756,30 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it.each([false, true])('fork.session recovery marker is atomic with the child (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)', ['m1', 'c1', 'src', 'user', 'keep my history', 100]);
+      const args = {
+        sourceSessionId: 'src', targetCreatedAt: 200,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }],
+        recoveryMarker: { id: 'm1', clientId: 'handoff', createdAt: 300, content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'keep my history' }) },
+      };
+      await expect(client.tx('fork.session', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+      expect(await client.queryOne('SELECT id FROM messages WHERE id = ?', ['copy1'])).toBeUndefined();
+      args.recoveryMarker.id = 'recovery';
+      await client.tx('fork.session', args);
+      expect(await client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['forked'])).toEqual({ sdk_session_id: null });
+      expect(await client.queryOne('SELECT role, rewind_at FROM messages WHERE id = ?', ['recovery'])).toEqual({ role: 'context_rebuild', rewind_at: 300 });
+      expect(await client.queryOne('SELECT content FROM messages WHERE id = ?', ['copy1'])).toEqual({ content: 'keep my history' });
+      const card = await client.queryOne<{ agent_meta: string }>('SELECT agent_meta FROM messages WHERE id = ?', ['recovery:card']);
+      expect(JSON.parse(card!.agent_meta)).toEqual({ contextRebuild: { reason: 'native-session-recovery', handoff: 'keep my history' } });
+      expect(await client.queryOne('SELECT content FROM messages WHERE id = ?', ['m1'])).toEqual({ content: 'keep my history' });
+    }, { useInlineWorker });
+  });
+
   it('fork.session rebinds completed Codex turn anchors to the child thread', async () => {
     await withClient(async (client) => {
       await seedSession(client, 'src');
@@ -1976,6 +2037,38 @@ describe('db worker tx handlers', () => {
         ]),
       ).resolves.toEqual({ content: '{"handoff":"full","resumed":false}' });
     });
+  });
+
+  it.each([false, true])('context recovery commits route and durable handoff atomically (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1', { contextTokens: 90_000, contextWindow: 272_000 });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ?, effort = ?, fast_mode = ? WHERE id = ?',
+        ['source-native', 'codex/gpt-5.6-sol', 'xd', 'high', 1, 's1']);
+      const args = {
+        sessionId: 's1', markerId: 'recovery', markerClientId: 'recovery',
+        markerContent: JSON.stringify({ reason: 'native-session-recovery', handoff: 'KEEP_CONTEXT', consumed: false }),
+        markerCreatedAt: 1000, updatedAt: 1000,
+        replacementRoute: { expectedSdkSessionId: 'source-native', model: 'gpt-6-astra', providerId: 'openai', effort: 'low', fastMode: false },
+      };
+      // A competing replacement must not be overwritten, and no marker may leak out.
+      await expect(client.tx('context.rebuild', { ...args, replacementRoute: { ...args.replacementRoute, expectedSdkSessionId: 'stale-native' } })).rejects.toThrow();
+      expect(await client.query('SELECT id FROM messages WHERE client_id = ?', ['recovery'])).toEqual([]);
+      expect(await client.queryOne('SELECT sdk_session_id, model FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'source-native', model: 'codex/gpt-5.6-sol' });
+      await client.tx('context.rebuild', args);
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id, effort, fast_mode, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({
+        sdk_session_id: null, model: 'gpt-6-astra', provider_id: 'openai', effort: 'low', fast_mode: 0, context_tokens: 0,
+      });
+      expect(await client.queryOne('SELECT content FROM messages WHERE client_id = ?', ['recovery'])).toEqual({ content: args.markerContent });
+      // If inserting the durable marker fails, the preceding route update must roll back too.
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ? WHERE id = ?', ['source-native', 'codex/gpt-5.6-sol', 'xd', 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'source-native', model: 'codex/gpt-5.6-sol', provider_id: 'xd' });
+      await client.tx('context.rebuild', {
+        ...args, markerId: 'fixed-effort', markerClientId: 'fixed-effort',
+        replacementRoute: { ...args.replacementRoute, effort: null },
+      });
+      expect(await client.queryOne('SELECT effort, sdk_session_id FROM sessions WHERE id = ?', ['s1'])).toEqual({ effort: 'low', sdk_session_id: null });
+    }, { useInlineWorker });
   });
 
   it.each([false, true])('context.rebuild resets usage and appends markers (inline=%s)', async (useInlineWorker) => {
@@ -2426,6 +2519,109 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('im.rotateSession atomically inserts the new route and retires the previous task', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'telegram-old');
+      await client.exec(
+        `UPDATE sessions
+         SET source = 'telegram', im_bot_context_id = 'bot', im_user_id = 'user'
+         WHERE id = 'telegram-old'`,
+      );
+      await client.exec(
+        `INSERT INTO im_bindings (
+           channel, bot_context_id, user_id, scope_key, target_session_id, attached_at
+         ) VALUES ('telegram', 'bot', 'user', '', 'telegram-old', 100)`,
+      );
+
+      const result = await client.tx('im.rotateSession', {
+        previousSessionId: 'telegram-old',
+        detachBinding: {
+          channel: 'telegram',
+          botContextId: 'bot',
+          userId: 'user',
+          scopeKey: '',
+          targetSessionId: 'telegram-old',
+        },
+        session: {
+          id: 'telegram-new',
+          title: 'TG · New',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          model: 'grok-4.6',
+          effort: 'high',
+          permissionMode: 'bypassPermissions',
+          fastMode: false,
+          agentKind: 'pi',
+          providerId: 'xai',
+          source: 'telegram',
+          imBotContextId: 'bot',
+          imUserId: 'user',
+        },
+        now: 500,
+      });
+
+      expect(result).toEqual({ previousStatus: 'active' });
+      await expect(
+        client.query(
+          `SELECT id, status, im_bot_context_id, im_user_id
+           FROM sessions WHERE id IN ('telegram-old', 'telegram-new') ORDER BY id`,
+        ),
+      ).resolves.toEqual([
+        {
+          id: 'telegram-new',
+          status: 'active',
+          im_bot_context_id: 'bot',
+          im_user_id: 'user',
+        },
+        {
+          id: 'telegram-old',
+          status: 'archived',
+          im_bot_context_id: null,
+          im_user_id: null,
+        },
+      ]);
+      await expect(client.query('SELECT * FROM im_bindings')).resolves.toEqual([]);
+    });
+  });
+
+  it('im.rotateSession never revives a concurrently deleted previous task', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'telegram-deleted');
+      await client.exec(
+        `UPDATE sessions
+         SET status = 'deleted', source = 'telegram',
+             im_bot_context_id = 'bot', im_user_id = 'user'
+         WHERE id = 'telegram-deleted'`,
+      );
+
+      const result = await client.tx('im.rotateSession', {
+        previousSessionId: 'telegram-deleted',
+        detachBinding: null,
+        session: {
+          id: 'telegram-after-delete',
+          title: 'TG · New',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          model: 'grok-4.6',
+          effort: 'high',
+          permissionMode: 'bypassPermissions',
+          fastMode: false,
+          agentKind: 'pi',
+          providerId: 'xai',
+          source: 'telegram',
+          imBotContextId: 'bot',
+          imUserId: 'user',
+        },
+        now: 600,
+      });
+
+      expect(result).toEqual({ previousStatus: 'deleted' });
+      await expect(
+        client.queryOne('SELECT status FROM sessions WHERE id = ?', ['telegram-deleted']),
+      ).resolves.toEqual({ status: 'deleted' });
+    });
+  });
+
   it('im.deleteBindings rolls back every startup cleanup when a later delete fails', async () => {
     await withClient(async (client) => {
       await seedSession(client, 'desktop-target');
@@ -2709,6 +2905,111 @@ describe('db worker tx handlers', () => {
         updated_at: 999,
       });
     });
+  });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('applies SkillHub usage mutations atomically through the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(async (client) => {
+      type PersistArgs = Extract<SkillUsageApplyMutationArgs, { kind: 'persist' }>;
+      const source = (rawFilePath: string, analyzerVersion: string, mtimeMs: number): PersistArgs['source'] => ({
+        rawFilePath,
+        analyzerVersion,
+        agentKind: 'codex',
+        sessionId: `session-${rawFilePath}`,
+        sdkSessionId: `sdk-${rawFilePath}`,
+        mtimeMs,
+        sizeBytes: 10,
+        scannedAt: mtimeMs,
+      });
+      const exposure = (
+        id: string,
+        rawFilePath: string,
+        analyzerVersion: string,
+        seenAt: number,
+      ): PersistArgs['exposures'][number] => ({
+        id,
+        rawFilePath,
+        rawLineNo: 1,
+        sessionId: `session-${rawFilePath}`,
+        sdkSessionId: `sdk-${rawFilePath}`,
+        agentKind: 'codex',
+        skillName: 'word-doc',
+        skillPath: null,
+        skillDocumentHash: `doc-${analyzerVersion}`,
+        exposureContentHash: `content-${id}`,
+        documentHashSource: 'transcript_file_read',
+        source: 'codex_skill_file_read',
+        toolUseId: null,
+        seenAt,
+        toolCallCount: 1,
+        repeatedToolCallCount: 0,
+        toolErrorCount: 0,
+        commandCallCount: 0,
+        commandFailureCount: 0,
+      });
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 1),
+        exposures: [exposure('first', 'current.jsonl', '6', 200)],
+      });
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 2),
+        exposures: [exposure('replacement', 'current.jsonl', '6', 201)],
+      });
+      await expect(client.query<{ id: string }>(
+        'SELECT id FROM skill_usage_exposures WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual([{ id: '6:replacement' }]);
+
+      await expect(client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 999),
+        exposures: [
+          exposure('duplicate', 'current.jsonl', '6', 300),
+          exposure('duplicate', 'current.jsonl', '6', 301),
+        ],
+      })).rejects.toThrow();
+      await expect(client.queryOne(
+        'SELECT mtime_ms, status FROM skill_usage_sources WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual({ mtime_ms: 2, status: 'ok' });
+      await expect(client.query<{ id: string }>(
+        'SELECT id FROM skill_usage_exposures WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual([{ id: '6:replacement' }]);
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('old.jsonl', '6', 10),
+        exposures: [exposure('old', 'old.jsonl', '6', 10)],
+      });
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'deleteBefore',
+        analyzerVersion: '6',
+        recentSince: 100,
+      });
+      await expect(client.queryOne(
+        'SELECT raw_file_path FROM skill_usage_sources WHERE raw_file_path = ?',
+        ['old.jsonl'],
+      )).resolves.toBeUndefined();
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('previous.jsonl', '5', 200),
+        exposures: [exposure('previous', 'previous.jsonl', '5', 200)],
+      });
+      await client.tx('skillUsage.applyMutation', { kind: 'promote', analyzerVersion: '6' });
+      await expect(client.queryOne(
+        "SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'",
+      )).resolves.toEqual({ value: '6' });
+      await expect(client.queryOne(
+        "SELECT id FROM skill_usage_exposures WHERE analyzer_version = '5'",
+      )).resolves.toBeUndefined();
+    }, { useInlineWorker });
   });
 
   it.each([

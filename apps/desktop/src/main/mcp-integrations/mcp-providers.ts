@@ -474,29 +474,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
         }
       },
-      botDelegation: {
-        listBots: async ({ callerSessionId }) => {
+      sessionTasks: {
+        startSessionTask: async (params) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
               ok: false,
               errorCode: 'HOST_NOT_READY',
-              message: 'Bot delegation service not initialized',
-            };
-          }
-          return svc.listBots(callerSessionId);
-        },
-        call: async (params) => {
-          const svc = tryGetBotDelegationService();
-          if (!svc) {
-            return {
-              ok: false,
-              errorCode: 'HOST_NOT_READY',
-              message: 'Bot delegation service not initialized',
+              message: 'Session task service not initialized',
             };
           }
           try {
-            return await svc.call(params);
+            return await svc.startSessionTask(params);
           } catch (err) {
             return {
               ok: false,
@@ -505,17 +494,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
         },
-        reply: async ({ callerSessionId, delegationId, reply }) => {
+        messageSessionTask: async ({ callerSessionId, taskId, reply }) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
               ok: false,
               errorCode: 'HOST_NOT_READY',
-              message: 'Bot delegation service not initialized',
+              message: 'Session task service not initialized',
             };
           }
           try {
-            return await svc.reply(callerSessionId, delegationId, reply);
+            return await svc.messageSessionTask(callerSessionId, taskId, reply);
           } catch (err) {
             return {
               ok: false,
@@ -524,27 +513,27 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
         },
-        listDelegations: async ({ callerSessionId, status }) => {
+        getSessionTask: async ({ callerSessionId, taskId }) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
               ok: false,
               errorCode: 'HOST_NOT_READY',
-              message: 'Bot delegation service not initialized',
+              message: 'Session task service not initialized',
             };
           }
-          return svc.listDelegations(callerSessionId, status);
+          return svc.getSessionTask(callerSessionId, taskId);
         },
-        cancelDelegation: async ({ callerSessionId, delegationId }) => {
+        stopSessionTask: async ({ callerSessionId, taskId }) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
               ok: false,
               errorCode: 'HOST_NOT_READY',
-              message: 'Bot delegation service not initialized',
+              message: 'Session task service not initialized',
             };
           }
-          return svc.cancelDelegation(callerSessionId, delegationId);
+          return svc.stopSessionTask(callerSessionId, taskId);
         },
       },
       botMessaging: {
@@ -569,7 +558,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botProfiles: {
-        create: async ({ callerSessionId, name, description, identitySource }) => {
+        create: async ({ callerSessionId, name, description, identitySource, welcomeMessage }) => {
           const dbClient = tryGetDbClient();
           if (!dbClient) {
             return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -590,7 +579,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前调用未绑定伙伴主任务' };
           }
           try {
-            const profile = await createBotProfile({ name, description, identitySource });
+            const profile = await createBotProfile({
+              name,
+              description,
+              identitySource,
+              welcomeMessage,
+            });
             return {
               ok: true,
               bot: { id: profile.id, name: profile.name, description: profile.description },

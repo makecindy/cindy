@@ -52,13 +52,16 @@ describe('Bot Profile runtime prompt', () => {
     const prompt = buildBotCapabilityContextPrompt();
     expect(prompt).toContain('You are running as a Cindy Bot');
     expect(prompt).toContain('Use direct Bot tools');
+    expect(prompt).toContain('`start_session_task`');
+    expect(prompt).toContain('`check_session_task`');
+    expect(prompt).toContain('`message_session_task`');
+    expect(prompt).toContain('`stop_session_task`');
+    expect(prompt).toContain('`send_to_agent`');
     expect(prompt).toContain('do not repeatedly list the whole tool surface');
-    expect(prompt).toContain('discover other available Bots');
-    expect(prompt).toContain('receive the result back in this task');
-    expect(prompt).toContain('inspect ongoing or completed handoffs');
-    expect(prompt).toContain('cancel a handoff that is still active');
+    expect(prompt).toContain('Completion returns automatically');
+    expect(prompt).toContain('It is not a task and has no progress or cancellation');
     expect(prompt).toContain('does not rewrite another Bot\'s identity');
-    expect(prompt).toContain('offer the available delegation path');
+    expect(prompt).toContain('offer either a message or a tracked Session task');
     expect(prompt).not.toContain('delegate_to_bot');
     expect(prompt).not.toContain('list_bot_delegations');
   });
@@ -69,6 +72,7 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('not a diary of every turn');
     expect(prompt).not.toContain('`list_tools`');
     expect(prompt).not.toContain('discover other available Bots');
+    expect(prompt).not.toContain('`start_session_task`');
     expect(prompt).not.toContain('`save_bot_skill`');
   });
 
@@ -76,6 +80,8 @@ describe('Bot Profile runtime prompt', () => {
     const prompt = buildBotCapabilityContextPrompt();
     expect(prompt).toContain('Use a `learned-` name only for a stable reusable working habit');
     expect(prompt).toContain('not a diary of every turn');
+    expect(prompt).toContain('instead of waiting for repetition');
+    expect(prompt).toContain('after that first verified success');
     expect(prompt).toContain('Never start a background review worker');
     expect(prompt).toContain('never for a one-off conclusion');
   });
@@ -107,10 +113,10 @@ describe('Bot Profile runtime prompt', () => {
         buildBotProfileContextPrompt(identity.name),
         buildBotCapabilityContextPrompt(),
       ].join('\n\n');
-      expect(runtimePrompt).toContain('can discover other available Bots');
-      expect(runtimePrompt).toContain('hand off a bounded objective');
-      expect(runtimePrompt).toContain('receive the result back in this task');
-      expect(runtimePrompt).toContain('offer the available delegation path');
+      expect(runtimePrompt).toContain('`send_to_agent`');
+      expect(runtimePrompt).toContain('`start_session_task`');
+      expect(runtimePrompt).toContain('Completion returns automatically');
+      expect(runtimePrompt).toContain('offer either a message or a tracked Session task');
       expect(runtimePrompt).not.toContain('redirecting them to a separate team workflow.\n\nYou are');
     }
   });

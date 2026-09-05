@@ -44,11 +44,17 @@ vi.mock('../../appSessionState', () => ({
 }));
 
 const ensureReady = vi.fn();
-const getRawDb = vi.fn(() => ({ id: 'db' }));
 vi.mock('../../localDb', () => ({
   ensureReady,
-  getRawDb,
 }));
+
+const defaultDbClient = { id: 'client' };
+const getCurrentDbClientSnapshot = vi.fn(() => ({
+  client: defaultDbClient,
+  userId: 'local-v1',
+  clientEpoch: 1,
+}));
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot }));
 
 const readSkillRawFile = vi.fn();
 const readSkillContent = vi.fn();
@@ -111,6 +117,12 @@ describe('registerSkillhubIpc usage handlers', () => {
     handlers.clear();
     vi.clearAllMocks();
     getCurrentDataOwnerId.mockReturnValue('local-v1');
+    getCurrentDbClientSnapshot.mockReset();
+    getCurrentDbClientSnapshot.mockReturnValue({
+      client: defaultDbClient,
+      userId: 'local-v1',
+      clientEpoch: 1,
+    });
     ensureReady.mockResolvedValue({ ready: true });
     requestLocalSkillUsageAnalyticsRefresh.mockReturnValue(null);
     showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
@@ -428,6 +440,13 @@ describe('registerSkillhubIpc usage handlers', () => {
   });
 
   it('retries usage summary after local DB becomes ready', async () => {
+    const firstClient = { id: 'first-client' };
+    const readyClient = { id: 'ready-client' };
+    const firstSnapshot = { client: firstClient, userId: 'local-v1', clientEpoch: 1 };
+    const readySnapshot = { client: readyClient, userId: 'local-v1', clientEpoch: 2 };
+    getCurrentDbClientSnapshot
+      .mockReturnValueOnce(firstSnapshot)
+      .mockReturnValue(readySnapshot);
     getLocalSkillUsageSummary
       .mockRejectedValueOnce(new Error('localDb not ready: pending'))
       .mockResolvedValueOnce({ success: true, summary: { totalUseCount: 1 }, refreshing: false });
@@ -437,7 +456,18 @@ describe('registerSkillhubIpc usage handlers', () => {
     const result = await handler?.({}, { name: 'word-doc' });
 
     expect(ensureReady).toHaveBeenCalledWith('local-v1');
+    expect(getCurrentDbClientSnapshot).toHaveBeenCalledTimes(3);
     expect(getLocalSkillUsageSummary).toHaveBeenCalledTimes(2);
+    expect(getLocalSkillUsageSummary).toHaveBeenNthCalledWith(1, {
+      skillName: 'word-doc',
+      currentSkillContent: null,
+      client: firstClient,
+    });
+    expect(getLocalSkillUsageSummary).toHaveBeenNthCalledWith(2, {
+      skillName: 'word-doc',
+      currentSkillContent: null,
+      client: readyClient,
+    });
     expect(result).toEqual({ success: true, summary: { totalUseCount: 1 }, refreshing: false });
   });
 
@@ -448,6 +478,36 @@ describe('registerSkillhubIpc usage handlers', () => {
     const result = await handler?.({}, { name: 'word-doc' });
 
     expect(result).toEqual({ success: false, error: 'bad transcript' });
+  });
+
+  it('does not return a usage summary from the previous database owner', async () => {
+    const previousClient = { id: 'previous-client' };
+    const currentClient = { id: 'current-client' };
+    const previousSnapshot = { client: previousClient, userId: 'owner-a', clientEpoch: 1 };
+    const currentSnapshot = { client: currentClient, userId: 'owner-b', clientEpoch: 2 };
+    getCurrentDbClientSnapshot
+      .mockReturnValueOnce(previousSnapshot)
+      .mockReturnValue(currentSnapshot);
+    getLocalSkillUsageSummary
+      .mockResolvedValueOnce({ success: true, summary: { totalUseCount: 99 }, refreshing: false })
+      .mockResolvedValueOnce({ success: true, summary: { totalUseCount: 1 }, refreshing: false });
+    getCurrentDataOwnerId.mockReturnValue('owner-b');
+
+    const handler = handlers.get('skillhub:get-usage-summary');
+    const result = await handler?.({}, { name: 'word-doc' });
+
+    expect(ensureReady).toHaveBeenCalledWith('owner-b');
+    expect(getLocalSkillUsageSummary).toHaveBeenNthCalledWith(1, {
+      skillName: 'word-doc',
+      currentSkillContent: null,
+      client: previousClient,
+    });
+    expect(getLocalSkillUsageSummary).toHaveBeenNthCalledWith(2, {
+      skillName: 'word-doc',
+      currentSkillContent: null,
+      client: currentClient,
+    });
+    expect(result).toEqual({ success: true, summary: { totalUseCount: 1 }, refreshing: false });
   });
 
   it('passes readable SKILL.md content and path into diagnosis context', async () => {
@@ -465,6 +525,7 @@ describe('registerSkillhubIpc usage handlers', () => {
       skillName: 'word-doc',
       currentSkillContent: 'skill body',
       skillPath: 'C:\\skills\\word-doc\\SKILL.md',
+      client: defaultDbClient,
     });
     expect(result).toEqual({ success: true, context: { prompt: 'diagnose' } });
   });

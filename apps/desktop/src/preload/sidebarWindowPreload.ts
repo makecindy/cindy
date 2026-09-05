@@ -147,6 +147,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload(DEVICE_LINK_PUSH.CONTROL_TARGET_CHANGED, cb),
     onResponsivenessChanged: (cb: (payload: unknown) => void): (() => void) =>
       onPayload(DEVICE_LINK_PUSH.RESPONSIVENESS_CHANGED, cb),
+    onPeerLinkReset: (cb: (payload: unknown) => void): (() => void) =>
+      onPayload(DEVICE_LINK_PUSH.PEER_LINK_RESET, cb),
     mirrorCache: {
       getMessages: (deviceId: string, sessionId: string): Promise<unknown> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_MESSAGES, { deviceId, sessionId }),
@@ -540,35 +542,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:pi-subagent:control', input),
     getPendingInteractions: (sessionId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-pending-interactions', sessionId),
-    /*
-      分离侧栏窗口里的「Bot 协同」tab 所需的最小集合。
-      ------------------------------------------------------------------
-      这五条此前**只在主窗口 preload 里有**,而 `bot-delegations` tab 在分离窗口
-      同样可达(executeSidebarCommand 的 open-bot-delegations-tab 会路由到持有侧栏
-      的那个窗口)。结果是 BotDelegationsBody 的 effect 里裸调
-      `onBotDelegationChanged` 直接抛 TypeError → TabBodyErrorBoundary 接住 →
-      一个**空白死 tab**。这一组当初漏了,是纯粹的漏配。
-
-      形态与主 preload 逐字同构(同 channel、同参数顺序、同 ownerStamp 双参推送),
-      由 `sidebarWindowBotChannels.test.ts` 扫源码钉死两侧集合一致。
-
-      为什么允许 cancel 这个写操作:它是这个面板**本身**的功能
-      (停止一个跑飞的委派),主窗口同一个面板就有;而且经
-      register.ts 的 ownership 校验(parentSessionId 必须属于调用方)。这与
-      `localDb.bots` 上「不暴露 Bot Profile / Session 变更」的边界不冲突 ——
-      那条边界针对的是伙伴身份与会话生命周期,不是委派运行态。
-    */
-    listBotDelegations: (parentSessionId: string, status?: unknown): Promise<unknown> =>
-      ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId, status),
-    cancelBotDelegation: (parentSessionId: string, delegationId: string): Promise<unknown> =>
-      ipcRenderer.invoke('maker:bot-delegation:cancel', parentSessionId, delegationId),
-    onBotDelegationChanged: (
-      cb: (payload: unknown, ownerStamp?: unknown) => void,
-    ): (() => void) => onPayloadWithMetadata('maker:bot-delegation:changed', cb),
-    // 分离窗口里没有 bots 路由,「打开任务」只能另开一个完整主窗口定位过去
-    // (BotDelegationsBody.openChild 的 isSidebarWindow() 分支就走这条)。
-    openSessionInNewWindow: (sessionId: string, deviceId?: string | null): Promise<void> =>
-      ipcRenderer.invoke('maker:open-session-in-new-window', sessionId, deviceId),
     iosSimulator: {
       requestAccess: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('maker:ios-simulator:request-access', request),

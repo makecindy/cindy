@@ -43,32 +43,54 @@ function installSendToSessionLockEntry(
   run: Promise<unknown>,
   getStage?: () => string | undefined,
 ): Promise<unknown> {
+  const previous = sendToSessionLocks.get(sessionId);
   let bail!: () => void;
   const bailGate = new Promise<void>((resolve) => {
     bail = resolve;
   });
-  const warnTimer = setTimeout(() => {
-    log.warn('sendToSession lock still held after expected budget', {
-      sessionId,
-      heldMs: SEND_LOCK_WARN_MS,
-      stage: getStage?.() ?? 'unknown',
+  let settled = false;
+  let warnTimer: ReturnType<typeof setTimeout> | undefined;
+  let bailTimer: ReturnType<typeof setTimeout> | undefined;
+  // Queued senders have not acquired the lock yet. Starting their watchdogs
+  // while they wait would release the entire queue together after one hung
+  // holder, allowing several route mutations to run concurrently.
+  void Promise.resolve(previous)
+    .catch(() => undefined)
+    .then(() => {
+      if (settled) return;
+      warnTimer = setTimeout(() => {
+        log.warn('sendToSession lock still held after expected budget', {
+          sessionId,
+          heldMs: SEND_LOCK_WARN_MS,
+          stage: getStage?.() ?? 'unknown',
+        });
+      }, SEND_LOCK_WARN_MS);
+      warnTimer.unref?.();
+      bailTimer = setTimeout(() => {
+        log.warn(
+          'sendToSession lock bailed out; later senders proceed while the stuck holder finishes',
+          {
+            sessionId,
+            heldMs: SEND_LOCK_BAIL_MS,
+            stage: getStage?.() ?? 'unknown',
+          },
+        );
+        bail();
+      }, SEND_LOCK_BAIL_MS);
+      bailTimer.unref?.();
     });
-  }, SEND_LOCK_WARN_MS);
-  warnTimer.unref?.();
-  const bailTimer = setTimeout(() => {
-    log.warn('sendToSession lock bailed out; later senders proceed while the stuck holder finishes', {
-      sessionId,
-      heldMs: SEND_LOCK_BAIL_MS,
-      stage: getStage?.() ?? 'unknown',
-    });
-    bail();
-  }, SEND_LOCK_BAIL_MS);
-  bailTimer.unref?.();
   // The map entry must never reject: waiters chain on it with `.catch(() => undefined)`
   // only as a legacy guard, and a rejecting entry would surface as an unhandled
   // rejection once the bail gate races it.
-  const entry = Promise.race([run.then(() => undefined, () => undefined), bailGate]);
+  const entry = Promise.race([
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+    bailGate,
+  ]);
   void entry.finally(() => {
+    settled = true;
     clearTimeout(warnTimer);
     clearTimeout(bailTimer);
     if (sendToSessionLocks.get(sessionId) === entry) {

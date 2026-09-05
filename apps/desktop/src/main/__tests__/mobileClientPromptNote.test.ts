@@ -301,6 +301,11 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
       .toEqual({ messageUuid: 'u' });
   });
 
+  it('剥掉客户端自报的 fromDeviceLinkClient', () => {
+    expect(stripMainOnlySendOpts({ messageUuid: 'u', fromDeviceLinkClient: true }))
+      .toEqual({ messageUuid: 'u' });
+  });
+
   it('剥掉客户端伪造的 generation 与 turn 身份,但保留待 IPC 校验的 clear token', () => {
     expect(
       stripMainOnlySendOpts({
@@ -387,9 +392,20 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
     expect(register).toContain('isMobileControllerInvoke(),');
   });
 
+  it('device-link provenance is stamped at both queue input boundaries', () => {
+    const stamps = register.match(/stampTrustedDeviceLinkQueuedOrigin\(/g) ?? [];
+    expect(stamps.length).toBe(2);
+    expect(register).toContain('deviceLinkInvoke,');
+  });
+
   it('coordinator 在 drain 与 steer 两处都透传', () => {
     const passes = coordinator.match(/fromMobileClient: true \} : \{\}\)/g) ?? [];
     expect(passes.length).toBe(2);
+  });
+
+  it('coordinator drain carries device-link provenance into the send transaction', () => {
+    expect(coordinator).toContain('fromDeviceLinkClient: true } : {})');
+    expect(transaction).toContain('requestedSendOpts.fromDeviceLinkClient === true');
   });
 
   it('send 事务认 async context 与透传值两个来源', () => {

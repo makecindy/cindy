@@ -287,6 +287,8 @@ beforeEach(() => {
 function renderSelector(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
   return render(
     React.createElement(ModelSelector, {
+      // Compatibility renderer for capabilities-only remote hosts.
+      unifiedPanel: false,
       modelId: 'claude-opus-4-8',
       effort: 'high',
       onModelChange: vi.fn(),

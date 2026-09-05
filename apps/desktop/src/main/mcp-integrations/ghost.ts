@@ -1320,7 +1320,7 @@ export function getCindyGhostsMcpDeps(
   const frozenProfileDenied = () => ({
     ok: false as const,
     errorCode: 'GHOST_DISABLED_IN_WORKDIR' as const,
-    message: '当前 Bot Profile 未启用该插件；不要重试，改用已授权能力或让用户更新 Bot 配置并 Renew。',
+    message: '当前伙伴配置未启用该插件；不要重试，改用已授权能力，或让用户更新伙伴配置后再试。',
   });
   return {
     callMedia: async (request) => {

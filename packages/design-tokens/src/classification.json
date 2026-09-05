@@ -1,12 +1,12 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 514,
+  "snapshotCount": 535,
   "categories": {
-    "literal": 248,
-    "alias": 235,
+    "literal": 260,
+    "alias": 239,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 25
+    "runtime-derived-or-protected": 30
   },
   "entries": [
     {
@@ -1756,6 +1756,94 @@
     },
     {
       "id": "file-badge-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-red-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-orange-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-amber-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-green-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-teal-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-blue-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-violet-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-pink-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-graphite-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-unread-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-unread-fg",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "hex",
@@ -4817,6 +4905,50 @@
       "modeledAsSemantic": true
     },
     {
+      "id": "text-danger",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "error-fg",
+        "dark": "error-fg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "danger-bg-soft",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "error-bg",
+        "dark": "error-bg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "status-info",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "info-700",
+        "dark": "info-700"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "status-success",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
       "id": "upgrade-banner-bg",
       "category": "literal",
       "destination": "reference-candidate",
@@ -5150,6 +5282,58 @@
         "light": "accent-cta-bg",
         "dark": "accent-cta-bg"
       },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-primary-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-primary-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-secondary-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-secondary-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-cta-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-hover",
+        "dark": "accent-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-cta-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
       "modeledAsSemantic": false
     }
   ]

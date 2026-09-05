@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 import { DismissableLayer, DismissableLayerBranch } from '@radix-ui/react-dismissable-layer';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -78,7 +78,8 @@ function resolvePanelRect(anchorEl: HTMLElement, panelElement: HTMLElement | nul
  *
  * 定位只在**锚点 / 面板元素变化**时算一次(规格 §1.3「同锚点内不重算」,防滑杆改高度
  * 导致抖动);面板元素从 null 变成真节点也要重算,否则会把首帧的兜底位置永久缓存。
- * 例外是 `repositionKey`:浮层开着时列表**结构**变了(在浮层里点 ☆ 插入收藏小节,锚点行
+ * 滚动与窗口尺寸改变会更新定位，不会关闭点击打开的配置。
+ * 另一个例外是 `repositionKey`:浮层开着时列表**结构**变了(在浮层里点 ☆ 插入收藏小节,锚点行
  * 整体下移)会脱锚 —— 那不是滑杆改高度那类自激抖动,必须按当前锚点矩形重算一次。
  */
 export function UnifiedFlyoutHost({
@@ -87,8 +88,6 @@ export function UnifiedFlyoutHost({
   flyoutRef,
   className,
   repositionKey,
-  onPointerEnter,
-  onPointerLeave,
   onDismiss,
   children,
 }: {
@@ -102,8 +101,6 @@ export function UnifiedFlyoutHost({
    * 正是「同锚点内不重算」要挡的抖动。
    */
   repositionKey?: unknown;
-  onPointerEnter: () => void;
-  onPointerLeave: () => void;
   onDismiss: () => void;
   children: ReactNode;
 }) {
@@ -112,42 +109,36 @@ export function UnifiedFlyoutHost({
     top: number;
     side: 'left' | 'right';
   } | null>(null);
-  const placedForRef = useRef<{
-    anchor: HTMLElement;
-    panel: HTMLElement | null;
-    repositionKey: unknown;
-  } | null>(null);
-
   useEffect(() => {
     if (!anchorEl || typeof window === 'undefined') return;
-    // 锚点行已从 DOM 卸载(收藏小节插入 / 重排可能整批重建行节点)→ 对着 detached 节点算
-    // rect 只会得到一堆 0。这不由本组件收场:面板侧「锚点行消失即收起浮层」的既有逻辑
-    // (flyTarget 为空 → closeFlyout)会紧接着到,这里只需按兵不动。
-    if (!anchorEl.isConnected) return;
-    const placedFor = placedForRef.current;
-    if (
-      placedFor &&
-      placedFor.anchor === anchorEl &&
-      placedFor.panel === panelElement &&
-      placedFor.repositionKey === repositionKey &&
-      placement
-    ) {
-      return;
-    }
-    placedForRef.current = { anchor: anchorEl, panel: panelElement, repositionKey };
-    const frame = requestAnimationFrame(() => {
-      const size = flyoutRef.current?.getBoundingClientRect();
-      setPlacement(
-        computeFlyoutPlacement({
+    let frame: number | null = null;
+    const reposition = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        if (!anchorEl.isConnected) return;
+        const size = flyoutRef.current?.getBoundingClientRect();
+        setPlacement(computeFlyoutPlacement({
           anchor: anchorEl.getBoundingClientRect(),
           panel: resolvePanelRect(anchorEl, panelElement),
           size: { width: FLYOUT_WIDTH, height: size?.height ?? 240 },
           viewport: { width: window.innerWidth, height: window.innerHeight },
-        }),
-      );
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [anchorEl, flyoutRef, panelElement, placement, repositionKey]);
+        }));
+      });
+    };
+    const onScroll = (event: Event) => {
+      if (!flyoutRef.current?.contains(event.target as Node)) reposition();
+    };
+    reposition();
+    // Explicitly opened configuration survives scrolling; follow its anchor instead.
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [anchorEl, flyoutRef, panelElement, repositionKey]);
 
   if (typeof document === 'undefined') return null;
   const side = placement?.side ?? 'left';
@@ -157,13 +148,6 @@ export function UnifiedFlyoutHost({
         // 见上:MorphPopover 的 outside / focusin 判定靠这个属性认「自己人」。
         data-radix-popper-content-wrapper=""
         data-unified-flyout-wrapper=""
-        onPointerEnter={onPointerEnter}
-        onPointerLeave={onPointerLeave}
-        onFocusCapture={onPointerEnter}
-        onBlurCapture={(event) => {
-          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-          onPointerLeave();
-        }}
         className="fixed z-50"
         style={{
           width: FLYOUT_WIDTH + UNIFIED_FLYOUT_GAP,
@@ -182,6 +166,22 @@ export function UnifiedFlyoutHost({
           asChild
           disableOutsidePointerEvents={false}
           onDismiss={onDismiss}
+          onPointerDownOutside={(event) => {
+            const target = event.detail.originalEvent.target;
+            const owner = panelElement ?? anchorEl?.closest(`[${UNIFIED_PANEL_ATTR}]`);
+            // Let the button's click toggle/switch the current configuration. Closing on
+            // pointerdown first would make that same click reopen it immediately.
+            if (target instanceof Element && target.closest('[data-row-customize]') && owner?.contains(target)) {
+              event.preventDefault();
+            }
+          }}
+          onFocusOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onDismiss();
+            if (anchorEl?.isConnected) anchorEl.focus({ preventScroll: true });
+          }}
         >
           <div
             ref={flyoutRef}

@@ -36,10 +36,27 @@ function rememberSession(sessionId: string): string {
   return sessionId;
 }
 
-describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
-  it('closes, relinks, then publishes an idle XD-to-subscription route', async () => {
+// Exercise both credential directions with the actual discounted and subscription IDs.
+const routeCases = ['codex/gpt-5.6-sol', 'codex/gpt-5.6-luna'].flatMap((discounted) => [
+  {
+    sourceProvider: 'xd',
+    sourceModel: discounted,
+    targetProvider: 'openai',
+    targetModel: 'gpt-6-astra',
+  },
+  {
+    sourceProvider: 'openai',
+    sourceModel: 'gpt-6-astra',
+    targetProvider: 'xd',
+    targetModel: discounted,
+  },
+]);
+
+describe.each(routeCases)('Codex route: $sourceModel → $targetModel', (route) => {
+  const { sourceProvider, sourceModel, targetProvider, targetModel } = route;
+  it('closes, relinks, then publishes the idle target route', async () => {
     const sessionId = rememberSession('runtime-set-model-atomic-relink');
-    setSessionProvider(sessionId, 'xd');
+    setSessionProvider(sessionId, sourceProvider);
     const order: string[] = [];
     const closeSession = vi.fn(async () => {
       order.push('close');
@@ -51,13 +68,13 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
       order.push('wake');
     });
     sessionProviderWriteObserver.current = (writtenSessionId, providerId) => {
-      if (writtenSessionId === sessionId && providerId === 'openai') order.push('route');
+      if (writtenSessionId === sessionId && providerId === targetProvider) order.push('route');
     };
     const maker: RuntimeSetModelMaker = {
       getSession: () => ({
         agentKind: 'codex',
         remoteHostId: null,
-        model: 'codex/gpt-5.6-sol',
+        model: sourceModel,
         setModel: vi.fn(async () => {}),
       }),
       listActiveSessions: () => [
@@ -70,8 +87,8 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
       applyRuntimeSetModelChange({
         maker,
         sessionId,
-        model: 'gpt-5.6-sol',
-        providerId: 'openai',
+        model: targetModel,
+        providerId: targetProvider,
         requiresCodexThreadRelink: true,
         relinkCodexThread,
         clearPendingCredentialSwitch: vi.fn(),
@@ -80,12 +97,12 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
     ).resolves.toEqual({ status: 'applied', persistedRoute: true });
 
     expect(order).toEqual(['close', 'relink', 'route', 'wake']);
-    expect(getSessionProvider(sessionId)).toBe('openai');
+    expect(getSessionProvider(sessionId)).toBe(targetProvider);
   });
 
   it('fails closed instead of registering pending work while the task is busy', async () => {
     const sessionId = rememberSession('runtime-set-model-busy-relink');
-    setSessionProvider(sessionId, 'xd');
+    setSessionProvider(sessionId, sourceProvider);
     const registerPendingCredentialSwitch = vi.fn();
     const relinkCodexThread = vi.fn(async () => {});
     const closeSession = vi.fn(async () => {});
@@ -93,7 +110,7 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
       getSession: () => ({
         agentKind: 'codex',
         remoteHostId: null,
-        model: 'codex/gpt-5.6-sol',
+        model: sourceModel,
         setModel: vi.fn(async () => {}),
       }),
       listActiveSessions: () => [
@@ -106,8 +123,8 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
       applyRuntimeSetModelChange({
         maker,
         sessionId,
-        model: 'gpt-5.6-sol',
-        providerId: 'openai',
+        model: targetModel,
+        providerId: targetProvider,
         requiresCodexThreadRelink: true,
         relinkCodexThread,
         registerPendingCredentialSwitch,
@@ -117,12 +134,12 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
     expect(relinkCodexThread).not.toHaveBeenCalled();
     expect(closeSession).not.toHaveBeenCalled();
-    expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(getSessionProvider(sessionId)).toBe(sourceProvider);
   });
 
   it('still fails closed when the task becomes busy during the close preflight', async () => {
     const sessionId = rememberSession('runtime-set-model-busy-race-relink');
-    setSessionProvider(sessionId, 'xd');
+    setSessionProvider(sessionId, sourceProvider);
     let busyCheck = 0;
     const registerPendingCredentialSwitch = vi.fn();
     const relinkCodexThread = vi.fn(async () => {});
@@ -131,7 +148,7 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
       getSession: () => ({
         agentKind: 'codex',
         remoteHostId: null,
-        model: 'codex/gpt-5.6-sol',
+        model: sourceModel,
         setModel: vi.fn(async () => {}),
       }),
       listActiveSessions: () => [
@@ -149,8 +166,8 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
       applyRuntimeSetModelChange({
         maker,
         sessionId,
-        model: 'gpt-5.6-sol',
-        providerId: 'openai',
+        model: targetModel,
+        providerId: targetProvider,
         requiresCodexThreadRelink: true,
         relinkCodexThread,
         registerPendingCredentialSwitch,
@@ -161,12 +178,12 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
     expect(relinkCodexThread).not.toHaveBeenCalled();
     expect(closeSession).not.toHaveBeenCalled();
-    expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(getSessionProvider(sessionId)).toBe(sourceProvider);
   });
 
   it('relinks a persisted thread even without a live Session handle', async () => {
     const sessionId = rememberSession('runtime-set-model-cold-relink');
-    setSessionProvider(sessionId, 'xd');
+    setSessionProvider(sessionId, sourceProvider);
     const relinkCodexThread = vi.fn(async () => {});
     const wakeSessionInputQueue = vi.fn();
     const maker: RuntimeSetModelMaker = {
@@ -179,8 +196,8 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
       applyRuntimeSetModelChange({
         maker,
         sessionId,
-        model: 'gpt-5.6-sol',
-        providerId: 'openai',
+        model: targetModel,
+        providerId: targetProvider,
         requiresCodexThreadRelink: true,
         relinkCodexThread,
         wakeSessionInputQueue,
@@ -189,6 +206,53 @@ describe('applyRuntimeSetModelChange Codex provider thread relink', () => {
 
     expect(relinkCodexThread).toHaveBeenCalledOnce();
     expect(wakeSessionInputQueue).toHaveBeenCalledWith(sessionId);
-    expect(getSessionProvider(sessionId)).toBe('openai');
+    expect(getSessionProvider(sessionId)).toBe(targetProvider);
+  });
+
+  it('keeps the source provider route when rebuilding the persisted thread fails', async () => {
+    const sessionId = rememberSession('runtime-set-model-relink-failed');
+    setSessionProvider(sessionId, sourceProvider);
+    const oldPending = { model: sourceModel, providerId: sourceProvider };
+    const registerPendingCredentialSwitch = vi.fn(async () => {});
+    const clearPendingCredentialSwitch = vi.fn();
+    const closeSession = vi.fn(async () => {});
+    const relinkCodexThread = vi.fn(async () => {
+      throw new Error('fork child sanitization failed');
+    });
+    const wakeSessionInputQueue = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: sourceModel,
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(
+      applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: targetModel,
+        providerId: targetProvider,
+        requiresCodexThreadRelink: true,
+        relinkCodexThread,
+        getPendingCredentialSwitch: () => oldPending,
+        registerPendingCredentialSwitch,
+        clearPendingCredentialSwitch,
+        wakeSessionInputQueue,
+      }),
+    ).rejects.toThrow('fork child sanitization failed');
+
+    expect(clearPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, { wake: false });
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, oldPending);
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(relinkCodexThread).toHaveBeenCalledOnce();
+    expect(getSessionProvider(sessionId)).toBe(sourceProvider);
+    expect(wakeSessionInputQueue).not.toHaveBeenCalled();
   });
 });

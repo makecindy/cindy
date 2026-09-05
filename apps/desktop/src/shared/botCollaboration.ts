@@ -1,10 +1,8 @@
 /**
- * 伙伴之间「群聊化」协作的消息级结构化标记。
+ * 伙伴发起的可追踪任务在消息流中的结构化标记。
  *
- * 委派本身的事实源仍是 `bot_delegations` 行（状态机 / 预算 / lineage）。这里补的是
- * **消息流里的锚点**：父任务与目标主任务各自的时间线上，哪几条消息属于同一次委派、
- * 各自扮演什么角色。renderer 据此把纯文本镜像升级成协作卡与客座气泡，并在两侧之间
- * 提供互看跳转。
+ * 事实源仍是 `bot_delegations` 行。这里是父任务消息流里的持久锚点，让 renderer 在原位
+ * 投影唯一任务卡与补充消息留痕。字段名 `botCollaboration` 为 v1 持久化兼容保留。
  *
  * 设计约束：
  *  - 只增不改。老数据（没有本标记的镜像消息）继续按普通文本渲染，不回填、不迁移。
@@ -13,27 +11,27 @@
  *    仍由既有的会话可见性决定，本标记不放宽任何边界。
  */
 
-/** 委派在某条消息上扮演的角色。判据是消息落在谁的时间线上。 */
+/** 后台任务标记在某条消息上的用途。后三种只用于读取旧数据，不再生成或展示。 */
 export type BotCollaborationRole =
-  /** 父任务：委派创建时写下的协作卡锚点（空正文，只为承载卡片）。 */
+  /** 父任务：启动时写下的任务卡锚点（空正文，只为承载卡片）。 */
   | 'delegation-request'
-  /** 父任务：目标伙伴回传的结果 —— 渲染成客座气泡。 */
+  /** 历史：父任务里的目标伙伴结果。 */
   | 'guest-result'
-  /** 父任务：发起方对进行中委派的插话 / 催促留痕。 */
+  /** 父任务：发起方给进行中任务追加消息的留痕。 */
   | 'interjection'
-  /** 目标主任务：收到的委派请求镜像 —— 客座来访。 */
+  /** 历史：目标伙伴主任务里的请求镜像。 */
   | 'guest-request'
-  /** 目标主任务：本次委派的终态镜像。 */
+  /** 历史：目标伙伴主任务里的终态镜像。 */
   | 'result-mirror';
 
 export interface BotCollaborationMeta {
   v: 1;
   role: BotCollaborationRole;
   delegationId: string;
-  /** 发起方伙伴（调用 delegate_to_bot 的那个）。 */
+  /** 发起后台任务的伙伴。 */
   fromBotId: string;
   fromBotName: string;
-  /** 目标伙伴；null = 委派给一条普通 Cindy 任务。 */
+  /** 新数据恒为 null；非 null 只可能来自旧版具名伙伴任务。 */
   toBotId: string | null;
   toBotName: string;
   /** 发起方任务；目标侧镜像据此回跳，看得到「这活是谁派的」。 */
@@ -91,14 +89,15 @@ export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta |
 
 /** 委派相关消息的幂等 clientId 前缀，main 与测试共用同一份常量。 */
 export const BOT_DELEGATION_CLIENT_ID = {
-  /** 父任务里的协作卡锚点。 */
+  /** 父任务里的任务卡锚点。 */
   parentRequest: (delegationId: string) => `bot-delegation-request:${delegationId}`,
-  /** 目标主任务里的请求镜像（历史值，不可改）。 */
-  targetRequest: (delegationId: string) => `bot-delegation-target-request:${delegationId}`,
-  /** 目标主任务里的终态镜像（历史值，不可改）。 */
-  targetResult: (delegationId: string) => `bot-delegation-target-result:${delegationId}`,
   /** 父任务里的结果回传（历史值，不可改）。 */
   completion: (delegationId: string) => `bot-delegation-completion:${delegationId}`,
+  /** 同一任务结束后继续执行时，每一轮必须有独立的完成回执。首轮保持历史值兼容。 */
+  completionRun: (delegationId: string, runSequence: number) =>
+    runSequence <= 1
+      ? `bot-delegation-completion:${delegationId}`
+      : `bot-delegation-completion:${delegationId}:${runSequence}`,
   /** 插话：投进子任务的那条。 */
   interjection: (delegationId: string, token: string) =>
     `bot-delegation-interject:${delegationId}:${token}`,

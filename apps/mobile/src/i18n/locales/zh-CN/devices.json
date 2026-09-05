@@ -8,6 +8,7 @@
     "create": "新建"
   },
   "resources": {
+    "hostOffline": "离线",
     "titleFallback": "资源",
     "loading": "正在加载…",
     "emptyTitle": "这里暂时没有内容",

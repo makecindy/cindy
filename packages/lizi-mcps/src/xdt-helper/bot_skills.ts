@@ -50,7 +50,7 @@ function callerSessionId(deps: BotSkillToolDeps): string | null {
 }
 
 function missingSession() {
-  return errorPayload('NOT_A_BOT_SESSION', '当前 MCP 调用未绑定 Cindy Bot 任务。');
+  return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务。');
 }
 
 export function registerBotSkillTools(

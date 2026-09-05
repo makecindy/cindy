@@ -1,4 +1,9 @@
 {
+  "recovery": {
+    "syncing": "正在同步…",
+    "recovered": "已恢復",
+    "syncingHint": "正在更新電腦上的內容。"
+  },
   "syncFailed": "同步失敗",
   "resync": "重新同步",
   "resyncing": "正在重新同步",

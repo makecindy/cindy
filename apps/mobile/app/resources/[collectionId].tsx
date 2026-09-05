@@ -17,8 +17,10 @@ import {
 } from '@cindy/device-link';
 
 import { Text } from '@/components/AppText';
-import { MainWindowEmptyState } from '@/components/MobilePrimitives';
+import { MainWindowEmptyState, StatusDot } from '@/components/MobilePrimitives';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
+import { useAuth } from '@/auth/AuthContext';
+import { isRemoteResourceHostOnline, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import {
   type HostedRemoteCollectionItem,
@@ -64,12 +66,24 @@ export default function RemoteCollectionScreen() {
   const targets = useMemo(() => parseRemoteResourceTargets(params.targets), [params.targets]);
   const {
     connectionEpoch,
+    status: relayStatus,
+    presenceVersion,
+    getPresenceAvailability,
     invoke,
     onRemoteResourceChanged,
     subscribe,
     unsubscribe,
   } = useDeviceLink();
-  const [items, setItems] = useState<HostedResourceItem[]>([]);
+  const { accountGeneration, user } = useAuth();
+  const cacheOwner = `${user?.id ?? ''}:${accountGeneration}`;
+  const accountRef = useRef(accountGeneration);
+  accountRef.current = accountGeneration;
+  const [replyEpochs, setReplyEpochs] = useState<Record<string, number>>({});
+  const presenceKey = targets.map((host) => `${host.deviceId}:${getPresenceAvailability(host.deviceId)}`).join('|');
+  // Reading presenceVersion makes the authoritative availability projection reactive.
+  void presenceVersion;
+  const [itemsAccount, setItemsAccount] = useState(accountGeneration);
+  const [items, setItems] = useState<HostedResourceItem[]>(() => readRemoteCollectionCache(cacheOwner, collectionId));
   const loadGenerationRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -77,6 +91,7 @@ export default function RemoteCollectionScreen() {
 
   const load = useCallback(async (visible: boolean) => {
     const generation = ++loadGenerationRef.current;
+    const expectedAccount = accountGeneration;
     if (!collectionId || targets.length === 0) {
       setItems([]);
       setError(t('devices.resources.noHosts'));
@@ -85,11 +100,11 @@ export default function RemoteCollectionScreen() {
     }
     if (visible) setRefreshing(true);
     else setLoading(true);
-    const results = await Promise.allSettled(targets.map(async (host) => ({
-      host,
-      response: await listRemoteCollection(invoke, host, collectionId, i18n.language),
-    })));
-    if (loadGenerationRef.current !== generation) return;
+    const results = await Promise.allSettled(targets.map(async (host) => {
+      if (relayStatus !== 'online' || getPresenceAvailability(host.deviceId) === false) throw new Error(t('devices.resources.hostOffline'));
+      return { host, response: await listRemoteCollection(invoke, host, collectionId, i18n.language) };
+    }));
+    if (loadGenerationRef.current !== generation || accountRef.current !== expectedAccount) return;
     const next: HostedResourceItem[] = [];
     const failures: string[] = [];
     const successfulDeviceIds = new Set<string>();
@@ -108,14 +123,25 @@ export default function RemoteCollectionScreen() {
         });
       }
     }
+    setReplyEpochs(Object.fromEntries([...successfulDeviceIds].map((id) => [id, connectionEpoch])));
     const allHostsFailed = failures.length === targets.length;
-    setItems((current) => allHostsFailed
-      ? current
-      : mergeRemoteCollectionHostShards(current, next, successfulDeviceIds, targets));
+    setItemsAccount(expectedAccount);
+    setItems((current) => {
+      const merged = allHostsFailed ? current : mergeRemoteCollectionHostShards(current, next, successfulDeviceIds, targets);
+      writeRemoteCollectionCache(cacheOwner, collectionId, merged);
+      return merged;
+    });
     setError(allHostsFailed ? failures.slice(0, 2).join('\n') : null);
     setLoading(false);
     setRefreshing(false);
-  }, [collectionId, i18n.language, invoke, t, targets]);
+  }, [accountGeneration, cacheOwner, collectionId, connectionEpoch, getPresenceAvailability, i18n.language, invoke, relayStatus, t, targets, presenceKey]);
+
+  useEffect(() => {
+    loadGenerationRef.current += 1;
+    setItems(readRemoteCollectionCache(cacheOwner, collectionId));
+    setItemsAccount(accountGeneration);
+    setReplyEpochs({});
+  }, [accountGeneration, cacheOwner, collectionId]);
 
   useFocusEffect(useCallback(() => {
     void load(false);
@@ -150,6 +176,7 @@ export default function RemoteCollectionScreen() {
   }), [collectionId, load, onRemoteResourceChanged, targets]);
 
   const openItem = useCallback((hosted: HostedResourceItem) => {
+    if (!isRemoteResourceHostOnline(relayStatus, getPresenceAvailability(hosted.host.deviceId), replyEpochs[hosted.host.deviceId], connectionEpoch)) return;
     guardedPush({
       pathname: '/resources/[collectionId]/[resourceId]',
       params: {
@@ -161,7 +188,7 @@ export default function RemoteCollectionScreen() {
         title: resolveRemoteText(hosted.item.display.title, i18n.language),
       },
     });
-  }, [collectionId, guardedPush, i18n.language]);
+  }, [collectionId, connectionEpoch, getPresenceAvailability, guardedPush, i18n.language, relayStatus, replyEpochs]);
 
   return (
     <SafeAreaView
@@ -184,7 +211,7 @@ export default function RemoteCollectionScreen() {
       ) : (
         <FlatList
           contentContainerStyle={items.length === 0 ? styles.emptyContent : styles.listContent}
-          data={items}
+          data={itemsAccount === accountGeneration ? items : []}
           keyExtractor={(item) => item.key}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} />}
           renderItem={({ item: hosted }) => {
@@ -195,7 +222,8 @@ export default function RemoteCollectionScreen() {
               : display.subtitle
                 ? resolveRemoteText(display.subtitle, i18n.language)
                 : '';
-            const status = display.status
+            const online = isRemoteResourceHostOnline(relayStatus, getPresenceAvailability(hosted.host.deviceId), replyEpochs[hosted.host.deviceId], connectionEpoch);
+            const status = !online ? t('devices.resources.hostOffline') : display.status
               ? resolveRemoteText(display.status.label, i18n.language)
               : '';
             const avatar = display.avatar?.kind === 'emoji' && display.avatar.value
@@ -206,12 +234,15 @@ export default function RemoteCollectionScreen() {
               <Pressable
                 accessibilityLabel={[titleText, subtitle, status].filter(Boolean).join(', ')}
                 accessibilityRole="button"
+                accessibilityState={{ disabled: !online }}
+                disabled={!online}
                 onPress={() => openItem(hosted)}
                 style={({ pressed }) => [styles.row, pressed && styles.pressed]}
                 testID={`remoteResources.item.${hosted.item.ref.id}`}
               >
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>{avatar}</Text>
+                  <View style={styles.connectionDot}><StatusDot tone={online ? 'ready' : 'off'} /></View>
                 </View>
                 <View style={styles.body}>
                   <View style={styles.titleRow}>
@@ -259,6 +290,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   pressed: { opacity: 0.72 },
+  connectionDot: { position: 'absolute', bottom: 0, right: 0 },
   avatar: {
     alignItems: 'center',
     backgroundColor: colors.surfaceChip,

@@ -130,7 +130,7 @@ async function defaultResolveBotId(callerSessionId: string): Promise<
     .where(and(eq(botSessionLinks.sessionId, callerSessionId), eq(sessions.source, 'bot')))
     .limit(1);
   if (!row) {
-    return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
+    return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
   }
   if (row.sessionStatus !== 'active') {
     return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '已归档的 Bot 任务不能沉淀技能' };
@@ -269,7 +269,7 @@ export async function collectBotOwnSkillMounts(
   deps: BotSkillServiceDeps = {},
 ): Promise<{
   pluginRoot: string;
-  skills: { name: string; description: string; path: string }[];
+  skills: { name: string; description: string; path: string; filePath: string }[];
 }> {
   const boundary = captureOwnerBoundary(deps);
   const userDataDir = await skillHomeOf(deps, botId, boundary);
@@ -281,6 +281,7 @@ export async function collectBotOwnSkillMounts(
       name: item.name,
       description: item.description,
       path: item.dirPath,
+      filePath: item.filePath,
     })),
   };
 }

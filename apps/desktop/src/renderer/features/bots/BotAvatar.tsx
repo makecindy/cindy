@@ -12,14 +12,17 @@
  * rows resolve without any data migration. Anything unrecognized is hashed into
  * a stable hue instead of collapsing every legacy Bot onto one color.
  *
- * A managed-URL `avatar` (a legacy uploaded image, normalized by main) still
- * renders as an `<img>`. Any other `cindy://avatar/…` sentinel — the legacy
- * official mark or a preset character from before this build stopped shipping
- * that artwork — is not a grapheme either, so it falls back to the neutral
+ * A managed-URL `avatar` (an uploaded image, normalized by main) and a known
+ * bundled preset sentinel render as an `<img>`. Any unknown
+ * `cindy://avatar/…` sentinel is not a grapheme, so it falls back to the neutral
  * initial instead of painting the raw sentinel string as text.
  */
+import { rewriteToRemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
 import { useEffect, useState } from 'react';
 
+import cindyPresetAvatar from '@/assets/bot-presets/cindy.png';
+import dashPresetAvatar from '@/assets/bot-presets/dash.png';
+import liziPresetAvatar from '@/assets/bot-presets/lizi.png';
 import { cn } from '@/lib/utils';
 import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue';
 import { CINDY_AVATAR_SCHEME_PREFIX, isCindyAvatarSentinel } from './botAvatarIdentity';
@@ -54,6 +57,12 @@ const HUE_TOKENS: Record<BotAvatarHue, string> = {
   violet: 'var(--bot-avatar-violet-bg)',
   pink: 'var(--bot-avatar-pink-bg)',
   graphite: 'var(--bot-avatar-graphite-bg)',
+};
+
+const BUNDLED_AVATAR_BY_SENTINEL: Readonly<Record<string, string>> = {
+  'cindy://avatar/preset/cindy': cindyPresetAvatar,
+  'cindy://avatar/preset/dash': dashPresetAvatar,
+  'cindy://avatar/preset/lizi': liziPresetAvatar,
 };
 
 const SIZE_CLASSES = {
@@ -128,14 +137,15 @@ export function botAvatarInitial(name: string | null | undefined): string {
 
 export interface BotAvatarProps {
   /** Bot-shaped source; only these three fields are read. */
-  bot: { name: string; avatar?: string | null; avatarColor?: string | null };
+  bot: { deviceId?: string; name: string; avatar?: string | null; avatarColor?: string | null };
   size?: BotAvatarSize;
   className?: string;
 }
 
 export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
   const emoji = (bot.avatar ?? '').trim();
-  const artwork = isManagedBotAvatarUrl(emoji) ? emoji : null;
+  const bundledArtwork = BUNDLED_AVATAR_BY_SENTINEL[emoji.toLowerCase()] ?? null;
+  const artwork = bundledArtwork ?? (isManagedBotAvatarUrl(emoji) ? rewriteToRemoteMediaOrigin(emoji, bot.deviceId ? { kind: 'device', deviceId: bot.deviceId } : undefined) : null);
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [artwork]);
   const visibleArtwork = imageFailed ? null : artwork;

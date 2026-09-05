@@ -55,8 +55,11 @@ export {
   buildUserProvider,
   DEFAULT_CUSTOM_CONTEXT_WINDOW,
   LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+  projectXaiApiImageModels,
   runtimeCustomProviderId,
   storedCustomProviderId,
+  xaiApiOfficialRuntimeAgents,
+  XAI_API_CUSTOM_PROVIDER_ID,
 } from './user-provider.js';
 export {
   appendProviderRequestPath,
@@ -142,6 +145,7 @@ export type { SectionModel, ProviderSection, ModelIconKind } from './sections.js
 export {
   resolveEffort,
   resolveRequestedEffort,
+  composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
   clampEffortToSupported,

@@ -31,12 +31,13 @@ import type {
 } from './types.js';
 
 /**
- * maker 的 effort 档(minimal/low/medium/high/xhigh/max)→ Responses 端点接受的 4 档。
- * Responses(codex / api.x.ai)只认 low/medium/high/xhigh:minimal 收敛到 low、max 收敛到 xhigh。
+ * Higher efforts require an explicit per-model capability; providers without one keep the
+ * historical xhigh ceiling. Codex subscription capabilities differ from the public API.
  * 无输入 / 无法识别 → undefined(translateRequest 回退默认档)。
  */
-function normalizeReasoningEffort(raw: string | undefined): ResponsesReasoningEffort | undefined {
-  switch ((raw ?? '').trim().toLowerCase()) {
+function normalizeReasoningEffort(raw: string | undefined, supported?: readonly string[]): ResponsesReasoningEffort | undefined {
+  const effort = (raw ?? '').trim().toLowerCase();
+  switch (effort) {
     case 'minimal':
     case 'low':
       return 'low';
@@ -45,8 +46,11 @@ function normalizeReasoningEffort(raw: string | undefined): ResponsesReasoningEf
     case 'high':
       return 'high';
     case 'xhigh':
+      return 'xhigh';
     case 'max':
     case 'ultra':
+      if (supported?.includes(effort)) return effort;
+      if (effort === 'ultra' && supported?.includes('max')) return 'max';
       return 'xhigh';
     default:
       return undefined;
@@ -339,7 +343,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // reasoning 档:host 经 prefs 闭包传入用户选定 effort(CC 不会把非 Anthropic 模型的 effort
     // 放进请求体,由 host 从会话态解析);模型不支持 reasoning → 'none'。
     const reasoningSupported = provider.supportsReasoning ? provider.supportsReasoning(realModel) : true;
-    const prefEffort = normalizeReasoningEffort(prefs?.reasoningEffort);
+    const prefEffort = normalizeReasoningEffort(prefs?.reasoningEffort, provider.supportedReasoningEfforts?.(realModel));
     const reasoningEffort = !reasoningSupported ? 'none' : prefEffort;
 
     // Fast 模式:prefs.fast × provider.fastServiceTier(codex='priority')。

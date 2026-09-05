@@ -8,6 +8,7 @@ export interface BotRuntimeRestoreService {
 }
 
 export interface BotRuntimeRestoreServices {
+  directMessages: BotRuntimeRestoreService | null;
   delegation: BotRuntimeRestoreService | null;
 }
 
@@ -42,6 +43,7 @@ export function createBotRuntimeRestoreCoordinator(
     if (Object.values(services).some((service) => service === null)) return false;
 
     const stages = [
+      ['Bot direct messages', services.directMessages],
       ['Bot delegation', services.delegation],
     ] as const;
 

@@ -3,8 +3,7 @@
  *
  * 版本号:
  *   - 应用版本号:仅国内版显示,值由 window.electronAPI.appDisplayVersion 同步注入
- *   - Claude Code 版本号: spawn 当前应用使用的 binary `--version`
- *   - Codex 版本号: 同上
+ *   - Claude Code / Codex / Pi 版本号: spawn 当前应用使用的 binary `--version`
  *
  * 卡片样式与 NotificationSection / FeishuBotSection 同级 (rounded-xl / Board border)。
  */
@@ -55,7 +54,7 @@ const DESKTOP_SOCIAL_LINKS = [
   },
 ] as const;
 
-function useAgentBinaryVersion(kind: 'claude-code' | 'codex'): AgentVersionState {
+function useAgentBinaryVersion(kind: 'claude-code' | 'codex' | 'pi'): AgentVersionState {
   const [state, setState] = useState<AgentVersionState>(INITIAL);
 
   useEffect(() => {
@@ -92,10 +91,38 @@ function renderVersion(state: AgentVersionState, t: (key: string) => string): st
   return t('settings.about.version.unknown');
 }
 
-export function AboutSection() {
+export function AgentVersionsRows() {
   const { t } = useTranslation();
   const claudeCode = useAgentBinaryVersion('claude-code');
   const codex = useAgentBinaryVersion('codex');
+  const pi = useAgentBinaryVersion('pi');
+
+  return (
+    <>
+      <InfoRow
+        label={t('settings.about.claudeCodeVersionLabel')}
+        value={renderVersion(claudeCode, t)}
+        dim={!claudeCode.version}
+      />
+      <Divider />
+      <InfoRow
+        label={t('settings.about.codexVersionLabel')}
+        value={renderVersion(codex, t)}
+        dim={!codex.version}
+      />
+      <Divider />
+      <InfoRow
+        label={t('settings.about.piVersionLabel')}
+        value={renderVersion(pi, t)}
+        dim={!pi.version}
+      />
+      <Divider />
+    </>
+  );
+}
+
+export function AboutSection() {
+  const { t } = useTranslation();
 
   return (
     <div className="flex flex-col gap-3">
@@ -130,18 +157,7 @@ export function AboutSection() {
         <Divider />
         <AnalyticsToggleRow />
         <Divider />
-        <InfoRow
-          label={t('settings.about.claudeCodeVersionLabel')}
-          value={renderVersion(claudeCode, t)}
-          dim={!claudeCode.version}
-        />
-        <Divider />
-        <InfoRow
-          label={t('settings.about.codexVersionLabel')}
-          value={renderVersion(codex, t)}
-          dim={!codex.version}
-        />
-        <Divider />
+        <AgentVersionsRows />
         <DebugLogToggleRow />
         <Divider />
         <OpenLogsRow />

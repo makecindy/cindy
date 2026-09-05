@@ -2,6 +2,13 @@
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
     "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
+    "MODEL_CONTEXT_USAGE_UNKNOWN": "Model not switched: Cindy can’t verify how much context this task uses. Keep the current model or start a new task.",
+    "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the current model’s context window. Check the window setting for a custom model. If it can’t be changed, keep the current model or start a new task.",
+    "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the target model’s context window. Check the window setting for a custom model. If it can’t be changed, choose another model or start a new task.",
+    "MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED": "Model not switched: this remote task can’t safely prepare its context for the smaller window. Keep the current model, or choose the target model in a new task.",
+    "MODEL_WINDOW_PROTECTION_UNAVAILABLE": "Model not switched: context protection is temporarily unavailable. Keep the current model or try again in a new task.",
+    "MODEL_SWITCH_TASK_RUNNING": "Model not switched: this task is still running. Wait for the current response to finish, then try again.",
+    "MODEL_WINDOW_PREPARATION_IN_PROGRESS": "Model not switched: Cindy is already preparing this task’s context. Wait for it to finish, then try again.",
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
@@ -788,6 +795,7 @@
       "appVersionLabel": "App version",
       "claudeCodeVersionLabel": "Claude Code version",
       "codexVersionLabel": "Codex version",
+      "piVersionLabel": "Pi version",
       "logsDirLabel": "Logs directory",
       "openLogsDir": "Open",
       "openLogsDirTooltip": "Open the logs directory in the system file manager",
@@ -1002,15 +1010,12 @@
         },
         "refiner": {
           "label": "Refinement model",
-          "hint": "Model used to clean up dictated text.",
+          "hint": "Follows the auxiliary model.",
+          "followAuxiliary": "Follow auxiliary model",
+          "followHint": "Refinement follows Settings → Personalization → Auxiliary models. Cindy-hosted voice is unchanged; refinement still runs on the server.",
+          "openAuxiliary": "Open auxiliary models",
+          "cannotRefine": "The current auxiliary models cannot refine speech (for example Claude Messages only), so this dictation will not be refined.",
           "ariaLabel": "Voice refinement model"
-        },
-        "refinerFallback": {
-          "label": "Refinement fallback",
-          "hint": "Backup model used only when the primary refiner fails; off by default.",
-          "ariaLabel": "Voice refinement fallback model selection",
-          "none": "No fallback",
-          "noneDescription": "Keep the raw transcript when the primary model fails"
         },
         "customAsr": {
           "optionLabel": "Custom realtime ASR",
@@ -2477,7 +2482,7 @@
       },
       "commandMenu": {
         "start": "Welcome and usage",
-        "new": "Start a new chat",
+        "new": "Create a new session",
         "help": "Show command help",
         "stop": "Stop the current task",
         "session": "Recent sessions, pick one to continue",
@@ -2680,28 +2685,40 @@
     },
     "auxiliaryModels": {
       "title": "Auxiliary models",
-      "description": "Choose one Agent and model pair for automatic task naming and another for composer prompt suggestions.",
-      "sessionTitle": {
-        "label": "Automatic task naming",
-        "description": "Applies to Claude Code, Codex, and Pi tasks, plus manual AI renaming.",
-        "ariaLabel": "Choose the automatic task naming model",
-        "automatic": "Automatic (follow the current task)"
+      "description": "Used for automatic task naming and AI rename, composer prompt suggestions, Help, pinned task summaries, IM / Feishu titles and group-context checks, scheduled-task scripts, plugin quick Q&A “follow default”, and BYOK voice refinement.",
+      "automatic": "Automatic recommendation",
+      "customize": "Custom",
+      "preferred": {
+        "label": "Preferred",
+        "description": "The first model used for short auxiliary text.",
+        "ariaLabel": "Choose the preferred auxiliary model"
       },
-      "promptRecommendation": {
-        "label": "Composer prompt suggestions",
-        "description": "Used only when prompt recommendations are enabled under Tips.",
-        "ariaLabel": "Choose the composer prompt suggestion model",
-        "automatic": "Automatic (keep current routing)"
+      "fallback1": {
+        "label": "Fallback 1",
+        "description": "Used if the preferred model is unavailable. Optional.",
+        "ariaLabel": "Choose the first fallback auxiliary model"
       },
+      "fallback2": {
+        "label": "Fallback 2",
+        "description": "Used if the first two models are unavailable. Optional.",
+        "ariaLabel": "Choose the second fallback auxiliary model"
+      },
+      "emptySlot": "Not selected",
+      "customHint": "A custom chain is tried in this order only. If none of them work, Cindy will not switch to another model.",
+      "signInHint": "Sign in to Cindy to use the automatic recommendations. While signed out, choose a configured model from another provider under Custom.",
       "chooseAgent": "Choose an Agent",
       "backToAgents": "Back to Agent selection",
-      "explicitRouteHint": "An explicit selection uses only that Agent and model. If unavailable, Cindy will not switch automatically.",
       "searchPlaceholder": "Search models or providers",
       "noResults": "No available models",
       "unavailable": "Currently unavailable",
       "budget": "Discount",
       "subscription": "Subscription",
-      "saveFailed": "Failed to save auxiliary model settings"
+      "saveFailed": "Failed to save auxiliary model settings",
+      "chain": {
+        "cindyHy3": "Hy3",
+        "cindyDeepseekV4Flash": "DeepSeek v4 flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
     },
     "compaction": {
       "title": "Context compaction",
@@ -5988,7 +6005,6 @@
         "terminal": "Terminal",
         "review": "Review",
         "subagents": "Subagent",
-        "botDelegations": "Teammate collaboration",
         "backgroundTasks": "Background tasks",
         "resourceUsage": "Activity Monitor",
         "collaboration": "Team",
@@ -6011,12 +6027,6 @@
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
         "desc": "Open files, review, Activity Monitor, a built-in browser, or a terminal here to work alongside the chat on the left.",
-        "botTitle": "Works and their collaboration",
-        "botDesc": "A teammate chat opens to works and their collaboration. Review and terminal stay available if you need them.",
-        "openArtifacts": "Open works",
-        "artifactsSub": "What they handed back",
-        "openDelegations": "Open their collaboration",
-        "delegationsSub": "Delegations and replies",
         "openFile": "Open files",
         "fileSub": "Files",
         "openReview": "Open review",
@@ -6592,33 +6602,6 @@
       "expandAllAria": "Expand all files",
       "collapseAllAria": "Collapse all files"
     },
-    "botDelegations": {
-      "retry": "Retry",
-      "back": "Back",
-      "duration": "Duration",
-      "tokens": "Tokens",
-      "depth": "Delegation depth",
-      "objective": "Objective",
-      "result": "Returned result",
-      "openTask": "Open task",
-      "stop": "Stop",
-      "empty": "No teammate collaboration yet",
-      "emptyDetail": "Delegations from this teammate will keep their progress and results here.",
-      "activity": {
-        "single": "Delegating to {{name}}…",
-        "multiple": "{{count}} teammate delegations in progress",
-        "openAria": "View teammate collaboration progress"
-      },
-      "status": {
-        "queued": "Queued",
-        "waiting": "Waiting",
-        "running": "Running",
-        "completed": "Completed",
-        "failed": "Failed",
-        "cancelled": "Cancelled",
-        "timed-out": "Timed out"
-      }
-    },
     "subagents": {
       "running": "Running",
       "finished": "Finished",
@@ -6917,65 +6900,51 @@
     }
   },
   "bots": {
-    "renewal": {
-      "permanentTitle": "Permanent Bot Chat",
-      "permanentDescription": "The Bot Chat stays on the same real Cindy Session. Compaction shortens model context without replacing the task or its visible messages.",
-      "title": "Permanent Bot Chat",
-      "offDescription": "The canonical Chat is never replaced automatically.",
-      "onDescription": "Legacy daily-reset settings are ignored; the canonical Chat remains permanent.",
-      "toggle": "Permanent Chat",
-      "hourLabel": "At",
-      "hourOption": "{{hour}}:00",
-      "now": "Compact context",
-      "nowDescription": "Shorten the model context in place. This task and all visible messages stay where they are.",
-      "nowConfirmTitle": "Compact this Bot Chat?",
-      "nowConfirmDescription": "Cindy will compact the model context in place. The Bot identity, task, and visible message history do not change."
-    },
     "sidebar": {
       "newTaskWith": "Start a task with {{name}}"
     },
-    "eyebrow": "Persistent assistants",
     "title": "Teammates",
-    "subtitle": "Keep each assistant's identity, skills, message channels, and canonical task together.",
     "add": "Add teammate",
-    "addTitle": "Add a teammate",
-    "addDescription": "Create a local teammate first, then mount IM message channels when needed.",
-    "createMenu": {
-      "recruit": "Recruit from examples",
-      "create": "Create teammate"
-    },
     "createWizard": {
-      "createFailed": "The teammate could not be created. Try again."
+      "createFailed": "The teammate could not be created. Try again.",
+      "templates": {
+        "cindy": {
+          "title": "Cindy Assistant",
+          "defaultName": "Cindy",
+          "defaultDescription": "I like bringing a little order to busy days and hearing fresh ideas. Writing, research, everyday odds and ends—let’s work through them together."
+        },
+        "dash": {
+          "title": "Dash, Company CEO",
+          "defaultName": "Dash",
+          "defaultDescription": "I’m curious about good products and good businesses. I enjoy thinking things through, talking about possibilities, and making a clear decision together."
+        },
+        "lizi": {
+          "title": "LiZi, Technical Director",
+          "defaultName": "LiZi",
+          "defaultDescription": "I enjoy taking tricky problems apart and turning ideas into something real. When we hit a snag, we’ll figure it out together."
+        },
+        "custom": {
+          "title": "Custom"
+        }
+      },
+      "chooseTemplate": "Who would you like to invite?"
     },
     "homeFolder": {
-      "title": "Its folder",
-      "description": "Soul, user profile and self-taught skills all live here as plain files — edit them in any editor, back the folder up, or copy it to start another teammate.",
-      "open": "Open"
+      "title": "Advanced configuration",
+      "description": "The teammate maintains its own memory and reusable ways of working. Open its folder only when something needs correcting.",
+      "contents": "Contains SOUL.md, USER.md, system_prompt.md, skills/, and memories/. Models, permissions, and connections remain managed by Cindy.",
+      "open": "Open folder",
+      "openFailed": "The teammate folder could not be opened."
     },
-    "portability": {
-      "title": "Export",
-      "description": "Export shareable behavior configuration without credentials, IM accounts, task history, memory, self-taught skills, project paths, or runtime state. Importing a teammate lives in Settings › Teammates.",
-      "export": "Export teammate configuration",
-      "exporting": "Exporting…",
-      "exported": "Teammate configuration exported.",
-      "exportedRedacted": "Teammate configuration exported with {{count}} sensitive items removed.",
-      "imported": "Teammate imported. {{channels}} external channels need rebinding and {{automations}} automations remain paused."
+    "profile": {
+      "changeAvatar": "Change avatar",
+      "avatarFailed": "Couldn’t change the avatar. Choose a PNG, JPEG, or WebP image under 5 MB.",
+      "summary": "Self-introduction",
+      "summaryPlaceholder": "For example: a novelist who loves serial fiction, has a dry sense of humor, and is fascinated by what makes characters tick.",
+      "avatarSelectionFailed": "Couldn’t read the image. Choose a PNG, JPEG, or WebP image up to 5 MB.",
+      "personality": "Personality & conversation"
     },
-    "nameLabel": "Name",
-    "namePlaceholder": "e.g. Release assistant",
-    "channelLabel": "Message surface",
-    "descriptionLabel": "Role",
-    "descriptionPlaceholder": "e.g. PR steward, personal assistant, project partner",
-    "skillsLabel": "Skills",
-    "skillsPlaceholder": "Comma-separated skill names",
-    "skillsDescription": "Choose which Skills this teammate can use.",
-    "skillCatalogLoading": "Loading the Skills available to this Harness…",
-    "skillCatalogError": "Skills could not be loaded. Saved selections are preserved.",
-    "skillAllowlistFrozenHint": "Pinned to exactly these. Skills added later will not reach this teammate — switch the selector above to “Follow global” to keep it up to date.",
-    "skillCatalogEmpty": "No available Skills were found for this Harness and project.",
-    "skillCatalogExpand": "Show {{count}} more",
-    "skillCatalogCollapse": "Show less",
-    "skillConfiguredUnavailable": "Unavailable — select to remove",
+    "nameLabel": "What Should We Call Them?",
     "close": "Close",
     "list": {
       "startChat": "Start the conversation",
@@ -7007,17 +6976,10 @@
     "sessionLoadFailedTitle": "This teammate task could not be loaded",
     "sessionLoadFailedDescription": "The task link is valid, but Cindy could not read the teammate state. Retry or return to the teammate overview.",
     "sessionUnavailableTitle": "This teammate task is no longer available",
-    "sessionUnavailableDescription": "It may have been replaced by a newer task, moved to history, or it no longer belongs to this teammate. Go back to open the current one.",
+    "sessionUnavailableDescription": "This task may be missing, deleted, or no longer belong to this teammate. Go back to open the recovered main task.",
     "settings": "Settings",
-    "settingsNav": {
-      "title": "Settings sections"
-    },
     "settingsTabs": {
-      "connections": "Capabilities & connections",
-      "growth": "Memory & growth",
-      "model": "Model",
-      "project": "Project",
-      "maintenance": "Maintenance"
+      "model": "Model"
     },
     "model": {
       "description": "Choose the models this teammate uses.",
@@ -7031,37 +6993,24 @@
       "remove": "Remove this candidate",
       "moveUp": "Move up",
       "moveDown": "Move down",
-      "description": "Configure up to 5 models. If one is unavailable, the teammate automatically continues with the next one—no task switching or manual retry."
-    },
-    "dataManagement": {
-      "title": "Data management",
-      "exportHint": "Export this teammate as a portable .cindy file."
+      "description": "Configure up to 5 models. If one is unavailable, the teammate automatically continues with the next one—no task switching or manual retry.",
+      "options": "Backup models ({{count}})"
     },
     "actions": {
       "message": "Message",
       "addToGroup": "Add to group",
       "export": "Export"
     },
-    "editProfile": "Edit teammate",
-    "editProfileDescription": "Update the teammate identity and description.",
     "emptyTitle": "No teammates yet",
     "emptyDescription": "Create a teammate with a clear role, then connect the tools and channels it needs.",
-    "noDescription": "No description yet",
     "sessions": "tasks",
-    "sessionsTitle": "Teammate tasks",
-    "sessionsDescription": "The canonical task, channel tasks, and archived tasks are stored separately.",
-    "canonicalChat": "Canonical teammate task",
-    "historySession": "Historical task",
     "open": "Open",
     "archived": "Archived",
-    "renew": "Compact context",
-    "renewing": "Compacting…",
     "historyTitle": "Archived history",
-    "historyDescription": "Review transcripts from previous canonical tasks.",
     "historyEmpty": "No archived teammate tasks yet.",
     "historySearch": {
       "title": "Search teammate history",
-      "description": "Search this teammate's canonical, channel, delegated, and archived tasks without loading all history into its prompt.",
+      "description": "Search this teammate’s past messages, background tasks, and archived records.",
       "placeholder": "What do you remember discussing?",
       "search": "Search",
       "searching": "Searching…",
@@ -7070,11 +7019,10 @@
     },
     "lifecycle": {
       "stoppedBots": "Teammates needing attention",
-      "title": "Health and history",
-      "description": "Inspect the canonical task, routes, automation, workspaces, archived transcripts, and lifecycle events.",
-      "refresh": "Refresh teammate health",
+      "title": "Activity and history",
+      "description": "Pause or resume this teammate and find past messages and results.",
       "activeTitle": "Teammate is active",
-      "activeDescription": "Channel routes, automation, deliveries, and teammate-to-teammate work can run.",
+      "activeDescription": "Can receive messages, run background tasks, and contact other teammates.",
       "pausedTitle": "Teammate is paused",
       "pausedDescription": "New work is blocked. User-paused automations remain paused after the teammate resumes.",
       "stoppedTitle": "Teammate has stopped",
@@ -7084,295 +7032,23 @@
       "delete": "Delete permanently",
       "deleteTitle": "Permanently delete teammate",
       "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
-      "keepHistory": "Keep task transcripts as ordinary archived tasks.",
-      "confirmName": "Enter “{{name}}” to confirm permanent deletion",
-      "worktree": {
-        "retain": "Keep worktrees",
-        "retainDescription": "Detach them from the teammate while keeping working directories and Git branches on disk.",
-        "recycle": "Safely recycle worktrees",
-        "recycleDescription": "Remove working directories after existing safety checks pass. Git branches are preserved."
-      },
       "working": "Updating…",
-      "actionFailed": "The teammate lifecycle change did not finish. Review health and try again.",
-      "loadFailed": "Teammate health and lifecycle events could not be loaded.",
-      "health": "Current health",
-      "noIssues": "The canonical task and attached capabilities have no known issues.",
-      "timeline": "Lifecycle timeline",
-      "noEvents": "No lifecycle events yet.",
-      "routesCount": "{{count}} routes",
-      "automationsCount": "{{count}} automations",
-      "deliveriesCount": "{{count}} delivery records",
-      "workspacesCount": "{{count}} workspaces",
-      "healthStatus": {
-        "healthy": "Healthy",
-        "attention": "Needs attention",
-        "recovering": "Recovering",
-        "paused": "Paused"
-      },
-      "issues": {
-        "profile-error": "This teammate’s settings are in an error state.",
-        "missing-canonical": "The canonical teammate task has not been created.",
-        "canonical-session-missing": "The canonical task record is missing and must be recovered.",
-        "canonical-session-deleted": "The canonical task was deleted and must be replaced.",
-        "canonical-link-missing": "The canonical task lost its teammate ownership link.",
-        "canonical-link-mismatch": "The canonical task ownership link is inconsistent.",
-        "profile-update-pending": "Newer settings are saved; they take effect in the next task.",
-        "runtime-degraded": "The current runtime started without every configured capability.",
-        "runtime-failed": "The current runtime failed to start.",
-        "routes-recovering": "{{count}} routes are recovering.",
-        "routes-error": "{{count}} routes need attention.",
-        "automation-error": "{{count}} automations need attention.",
-        "delivery-failed": "{{count}} messages are waiting to be delivered again.",
-        "delivery-dead-letter": "{{count}} messages need confirmation before delivery can recover.",
-        "workspace-error": "{{count}} workspaces need attention.",
-        "durable-attention": "This teammate has a runtime failure that needs attention.",
-        "lifecycle-incomplete": "A previous teammate lifecycle operation did not finish."
-      },
-      "attentionReasons": {
-        "agent_blocked": "The teammate is waiting for approval or a user decision.",
-        "missing_config": "The teammate is missing required configuration.",
-        "provider_auth_or_access": "Model provider authorization or access needs attention.",
-        "provider_quota_limit": "The model provider quota is exhausted."
-      },
-      "deliveries": {
-        "title": "Reliable delivery",
-        "description": "Inspect channel, Route, automation, and collaboration deliveries. Risky retries clearly warn about possible duplicates.",
-        "empty": "No deliveries yet.",
-        "local": "Local",
-        "attempts": "{{count}} attempt(s)",
-        "textSent": "Text sent",
-        "mediaSent": "{{count}} attachment(s) sent",
-        "finalCommitted": "Final message confirmed",
-        "retry": "Retry delivery",
-        "retrying": "Retrying…",
-        "duplicateTitle": "This may duplicate messages",
-        "duplicateDescription": "The local channel may already have sent the text or {{count}} attachment(s) without a complete receipt. Continuing sends the full result again.",
-        "duplicateConfirm": "Retry anyway",
-        "status": {
-          "pending": "Pending",
-          "sending": "Sending",
-          "suspended": "Suspended",
-          "delivered": "Delivered",
-          "failed": "Retry pending",
-          "dead-letter": "Needs attention",
-          "cancelled": "Cancelled"
-        }
-      },
-      "events": {
-        "created": "Teammate created",
-        "canonical-created": "Canonical task created",
-        "canonical-renewed": "Started a new task",
-        "canonical-linked": "Canonical task linked",
-        "session-linked": "Task linked to teammate history",
-        "legacy-profile-migrated": "Moved over from an older teammate setup",
-        "legacy-session-skipped": "Legacy task could not be linked",
-        "project-binding-upserted": "Project binding updated",
-        "workspace-lease-released": "Workspace released",
-        "im-migration-applied": "Message channel migrated",
-        "im-migration-rolled-back": "Message channel migration rolled back",
-        "pause-requested": "Teammate pause started",
-        "paused": "Teammate paused",
-        "paused-with-warnings": "Teammate paused with cleanup warnings",
-        "resumed": "Teammate resumed",
-        "resume-failed": "Teammate resume failed"
-      }
+      "actionFailed": "The action did not finish. Try again shortly."
     },
-    "adapterBoundaryTitle": "Adapter boundary preserved",
-    "adapterBoundaryDescription": "Telegram replies, Feishu cards, Slack threads and local delivery remain owned by their adapters. This screen only provides teammate identity and task projection.",
     "backToChat": "Back to chat",
-    "identityTitle": "Identity",
-    "identitySourceLabel": "Teammate identity (SOUL)",
-    "identitySourcePlaceholder": "Describe this teammate's personality, role, and durable behavior.",
-    "identitySourceDescription": "This is who they are. It is given to them once when a task starts, not repeated with every message.",
-    "userContextSourceLabel": "User profile (USER)",
-    "userContextSourcePlaceholder": "Tell this teammate who you are, how to address you, and your durable preferences.",
-    "userContextSourceDescription": "What they should know about you. Kept separate from their personality and from what they remember on their own, and frozen alongside the rest of the settings.",
-    "chooseAvatar": "Choose avatar {{avatar}}",
-    "chooseAvatarColor": "Choose avatar color {{color}}",
     "memoryRecovery": {
-      "title": "Long-term memory is off for this teammate",
-      "description": "Memory is now always on for new teammates. This one was turned off earlier, so here is the way back.",
       "action": "Turn memory back on"
     },
-    "capabilitiesTitle": "Capabilities",
-    "capabilitiesDescription": "These are the abilities it actually gets when a task starts.",
-    "profileApply": {
-      "title": "Settings saved",
-      "description": "The new settings are saved, but this task is still running the old ones. Start a new task to use them — this one moves to history.",
-      "keepCurrent": "Stay on this task",
-      "renewAndApply": "Start a new task",
-      "saveFailed": "Teammate settings could not be saved. No changes were applied.",
-      "renewFailed": "The new settings are saved, but a new task could not be started. This task is unchanged."
-    },
+    "profileSaveFailed": "Teammate settings could not be saved. No changes were applied.",
     "modelLabel": "Model",
     "modelUnavailable": "{{model}} (currently unavailable)",
-    "harnessLabel": "Engine",
-    "capabilityMode": {
-      "inherit": "Follow global",
-      "allowlist": "Custom"
-    },
-    "capabilityCatalogLoading": "Reading capabilities available to this project…",
-    "capabilityCatalogError": "The capability catalog could not be loaded. Saved selections are preserved.",
-    "toolsetsLabel": "Built-in Cindy tools",
-    "toolsetsDescription": "Choose which built-in Cindy tools this teammate can use.",
-    "toolsetCatalogEmpty": "This project has no configurable built-in Cindy tools.",
-    "mcpServersLabel": "Custom MCP",
-    "mcpServersDescription": "Choose which custom MCP servers this teammate can use.",
-    "mcpCatalogEmpty": "No custom MCP servers are configured yet.",
-    "capabilityApplied": "In use",
-    "capabilityUnavailable": "Unavailable",
-    "capabilityDisabledBySystem": "Disabled by the current project or account settings.",
-    "capabilityNotInstalled": "No longer installed",
-    "memoryLabel": "Persistent memory",
-    "memoryDescription": "Uses a private memory namespace for this teammate.",
-    "automationLabel": "Automation",
-    "automationDescription": "Let this teammate work on a schedule while you are away. Each run is pinned to the settings, project and delivery target in effect when it starts.",
     "codexAutomaticCompact": "Codex teammates compact context on their own, and /new keeps the current task. Only start a new task when you actually need a clean slate.",
-    "chatWelcome": "Chat with {{name}}",
-    "previewHint": "Local preview — messages are not sent to a real Agent yet.",
-    "chatPlaceholder": "Message this teammate…",
-    "attach": "Attach file",
     "image": "Add image",
-    "enterToSend": "Enter to send",
     "send": "Send message",
-    "channelsTitle": "Message channels",
-    "channelsDescription": "Mount Telegram, Feishu, Slack and other message surfaces without changing this teammate's identity or local chat.",
-    "channelLocalOwned": "Local teammate primary surface",
-    "channelLocalAdapter": "Local adapter",
-    "channelServerRelay": "Server relay",
-    "channelConnected": "Online",
-    "channelOffline": "Offline or unavailable",
-    "channelConnectionRequired": "Connect a {{channel}} Bot in Settings before mounting this channel.",
-    "routes": {
-      "title": "Channel routes",
-      "description": "Choose which incoming conversations and reply chains are handled by this teammate. A more specific route takes precedence over the channel default.",
-      "add": "Add route",
-      "addTitle": "Add a channel route",
-      "addDescription": "Use the platform's conversation or reply-chain identifier. Leave it empty only for a channel-wide fallback.",
-      "mountChannelFirst": "Mount an IM channel before adding a route.",
-      "empty": "No active channel routes yet.",
-      "channel": "Channel",
-      "routeKey": "Route name",
-      "routeKeyPlaceholder": "e.g. release-team",
-      "principalKey": "Conversation or DM identifier",
-      "principalKeyPlaceholder": "Platform conversation identifier",
-      "threadKey": "Reply-chain or topic identifier",
-      "threadKeyPlaceholder": "Optional reply-chain identifier",
-      "project": "Project for this route",
-      "botDefaultProject": "Use the teammate default project",
-      "create": "Create route",
-      "saving": "Saving…",
-      "openTask": "Open task",
-      "unknownChannel": "Unavailable channel",
-      "allMessages": "all messages on this channel",
-      "lastActivity": "Last activity: {{time}}",
-      "projectBound": "Uses a route-specific project",
-      "pause": "Pause",
-      "pausing": "Pausing…",
-      "resume": "Resume",
-      "resuming": "Resuming…",
-      "archive": "Archive",
-      "archiving": "Archiving…",
-      "status": {
-        "active": "Active",
-        "paused": "Paused",
-        "offline": "Ready",
-        "recovering": "Recovering",
-        "error": "Needs attention",
-        "archived": "Archived"
-      }
-    },
-    "projects": {
-      "title": "Projects and worktrees",
-      "description": "Bind projects to this teammate and choose whether tasks use the project directory or a managed worktree.",
-      "empty": "No project is bound to this teammate yet.",
-      "addTitle": "Bind a local project",
-      "chooseDirectory": "Choose folder",
-      "directoryPlaceholder": "Choose a project folder",
-      "add": "Bind project",
-      "adding": "Binding…",
-      "archive": "Remove binding",
-      "archiving": "Removing…",
-      "saveBinding": "Save binding",
-      "saving": "Saving…",
-      "releaseLease": "Release worktree",
-      "releasingLease": "Releasing…",
-      "localProject": "Local project",
-      "remoteProject": "Remote project",
-      "defaultBadge": "Default",
-      "makeDefault": "Use as the default project for new teammate tasks",
-      "policyLabel": "Workspace policy",
-      "defaultBranchLabel": "Base branch",
-      "defaultBranchPlaceholder": "HEAD or a branch name",
-      "allowedPathsLabel": "Additional allowed paths",
-      "allowedPathsPlaceholder": "One absolute path inside this project per line",
-      "leaseTitle": "Current workspace lease",
-      "leaseGeneration": "Owner generation {{generation}}",
-      "policies": {
-        "none": "Use the project directory",
-        "reuse": "Reuse one shared worktree",
-        "per-task": "Create a worktree for each task",
-        "read-only": "Read-only project access"
-      },
-      "leaseStatus": {
-        "acquiring": "Creating",
-        "active": "Active",
-        "releasing": "Releasing",
-        "released": "Released",
-        "retained": "Retained on disk",
-        "error": "Needs attention"
-      },
-      "errors": {
-        "chooseDirectory": "Choose a project folder first.",
-        "activeLease": "This binding still owns an active worktree. Release or finish its referenced tasks, automations, and delegations before removing it.",
-        "invalid": "The project or path settings are invalid.",
-        "generic": "Couldn’t update the project binding. Try again."
-      }
-    },
     "roster": {
-      "backToRoster": "Back to teammates",
-      "customAction": "Create your own",
-      "create": "Create teammate",
-      "customHint": "Define identity, responsibilities, and working style first. Configure the model, skills, and messaging channels after creation.",
-      "customIntro": "Start from a blank profile and define identity, responsibilities, and how you work together.",
-      "customName": "Custom teammate",
-      "customNameLabel": "Name",
-      "customNamePlaceholder": "e.g. Juju",
-      "customSkill": "Your requirements",
-      "customSubtitle": "Define identity, responsibilities, and working style first. Connect the model, skills, and messaging channels after creation.",
-      "showExamples": "Use an example",
-      "customTitle": "Create a teammate",
-      "footerHint": "After creation, Cindy opens the teammate's main chat. Messaging channels can be connected later in teammate settings.",
-      "goodAt": "Good at · {{skill}}",
-      "importLink": "Already have a teammate file? Import one",
-      "join": "Bring them in",
-      "joined": "Already here",
-      "subtitle": "Choose one as a starting point; every detail can be changed.",
-      "title": "Example teammates",
-      "customAvatarLabel": "Avatar",
-      "generate": {
-        "title": "Draft a teammate with AI",
-        "subtitle": "Describe the need and Cindy will draft the identity, responsibilities, and personality. Every field remains editable.",
-        "inputLabel": "What should this teammate be responsible for?",
-        "inputPlaceholder": "e.g. a designer / someone to keep my kid on track with homework",
-        "action": "Draft with AI",
-        "generating": "Drafting…",
-        "skip": "Fill it in directly",
-        "previewTitle": "Review the draft",
-        "previewSubtitle": "Confirm the identity, responsibilities, personality, name, and avatar before creating the teammate.",
-        "descriptionLabel": "One-line summary",
-        "memoriesLabel": "What they already remember",
-        "memoriesEmpty": "No starting notes this time.",
-        "confirm": "Create teammate",
-        "regenerate": "Draft again",
-        "errors": {
-          "emptyInput": "Say who they are first.",
-          "providerNotReady": "No model source is connected yet — sign in or connect one, then try again. You can always write it yourself.",
-          "invalidOutput": "That draft came back unreadable. Try again, or write it yourself.",
-          "failed": "Nothing came back this time. Try again, or write it yourself.",
-          "unavailable": "This build cannot draft teammates yet. Please write it yourself."
-        }
-      }
+      "create": "Invite companion",
+      "customNamePlaceholder": "Give your teammate a name",
+      "customTitle": "Meet someone new"
     },
     "chat": {
       "newMessagesBoundary": "NEW",
@@ -7382,181 +7058,25 @@
     "globalSettings": {
       "title": "Teammates",
       "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
-      "notifications": {
-        "title": "New message alerts",
-        "note": "New messages from a teammate show up as an unread mark in the teammate list on the left. No system banner, no sound.",
-        "footnote": "A teammate like a \"coordinator\" keeps an eye on task activity by itself — that is a capability of theirs, not a setting here."
-      },
-      "portability": {
-        "importTitle": "Import a teammate",
-        "importHint": "Restore someone from a teammate file.",
-        "importAction": "Choose a file",
-        "exportTitle": "Export a teammate",
-        "exportHint": "Pack up their personality and settings and take them with you.",
-        "exportAction": "Export",
-        "exportEmpty": "No teammate to export yet."
-      },
       "rosterNote": "The shipped roster grows with each release."
     },
-    "settingsBlocks": {
-      "who": "Identity and personality",
-      "can": "Capabilities and connections",
-      "understand": "Projects and workspaces",
-      "schedule": "Automation",
-      "advanced": "Advanced",
-      "whoDescription": "Define who this teammate is, what they own, and how they work with you.",
-      "canDescription": "Manage skills, tools, and messaging channels.",
-      "understandDescription": "Choose the projects and workspaces this teammate can access.",
-      "scheduleDescription": "Schedule work and review run and delivery history."
-    },
-    "advancedLinkLabel": "Advanced settings",
-    "appearanceTitle": "Name and avatar",
-    "persona": {
-      "title": "Personality",
-      "description": "Use the three quick settings below for tone, initiative, and how they address you. Put fuller working preferences in the responsibilities field.",
-      "freeformPlaceholder": "For example: be direct; warn me early about risks; ask before guessing.",
-      "freeformHint": "This becomes part of the teammate's identity, not just a display preference.",
-      "addButton": "Click to add",
-      "adjustButton": "Quick setup",
-      "quickAdjustLabel": "Optional quick settings",
-      "stepStyle": "Speaking style",
-      "stepProactivity": "How proactive",
-      "stepCall": "What they call you",
-      "style": {
-        "concise": {
-          "label": "Crisp and to the point",
-          "description": "Says it once, never twice."
-        },
-        "lively": {
-          "label": "Warm and chatty",
-          "description": "Relaxed tone, the odd bit of expression."
-        },
-        "steady": {
-          "label": "Steady and thorough",
-          "description": "Explains first, then gets to work."
-        }
-      },
-      "proactivity": {
-        "reactive": {
-          "label": "Speaks up only when needed",
-          "description": "Won't interrupt you otherwise."
-        },
-        "proactive": {
-          "label": "Gives proactive reminders",
-          "description": "Speaks up when something needs a heads-up."
-        },
-        "reportAll": {
-          "label": "Reports everything",
-          "description": "Tells you as soon as something is done."
-        }
-      },
-      "call": {
-        "name": "Your first name",
-        "boss": "Boss",
-        "custom": "Something else"
-      },
-      "customCallPlaceholder": "What should they call you?",
-      "previewTitle": "They are now",
-      "summaryUnset": "No quick settings applied",
-      "summaryCallName": "uses your name",
-      "summaryCallBoss": "calls you Boss",
-      "summaryCallCustom": "calls you {{name}}",
-      "ack": {
-        "concise": "Got it. This is how I'll talk from now on.",
-        "conciseBoss": "Got it, boss. This is how I'll talk from now on.",
-        "conciseCalled": "Got it, {{call}}. This is how I'll talk from now on.",
-        "lively": "Got it! This is my voice from now on — you'll get used to it 😉",
-        "livelyBoss": "Got it, boss! This is my voice from now on — you'll get used to it 😉",
-        "livelyCalled": "Got it, {{call}}! This is my voice from now on — you'll get used to it 😉",
-        "steady": "Understood. From now on I'll talk to you this way: explain first, then act.",
-        "steadyBoss": "Understood, boss. From now on I'll talk to you this way: explain first, then act.",
-        "steadyCalled": "Understood, {{call}}. From now on I'll talk to you this way: explain first, then act."
-      }
-    },
-    "memoryList": {
-      "title": "What they remember",
-      "empty": "Nothing remembered yet — talk a bit more and it will come.",
-      "clearAll": "Clear memory",
-      "clearing": "Clearing…",
-      "clearTitle": "Clear memory",
-      "clearDescription": "Once cleared, they'll forget these things. Past conversations are not affected. Continue?",
-      "clearConfirm": "Clear",
-      "deleteTitle": "Delete this memory",
-      "deleteDescription": "Delete \"{{title}}\"? This cannot be undone.",
-      "deleteConfirm": "Delete",
-      "deleteAria": "Delete \"{{title}}\"",
-      "footnote": "They jot things down here on their own, and you can delete any of it.",
-      "footnoteWithSeed": "A few came with them when they joined; after that they jot things down here on their own. You can delete any of it.",
-      "seedBack": "Write their starting notes back",
-      "seedingBack": "Writing…"
-    },
-    "learned": {
-      "title": "What they've learned",
-      "description": "Skills and working methods this teammate has picked up over time.",
-      "empty": "No know-how yet — give them a few things to do.",
-      "notesTitle": "Notes they wrote for themselves",
-      "deleteTitle": "Delete this skill",
-      "deleteDescription": "Delete \"{{title}}\"? They will stop using it from the next task on.",
-      "deleteConfirm": "Delete",
-      "deleteAria": "Delete \"{{title}}\"",
-      "loadingBody": "Opening…"
-    },
-    "growth": {
-      "rememberedOne": "Remembered: {{title}}",
-      "rememberedMany": "Remembered {{count}} things",
-      "rememberedFallback": "Remembered something",
-      "learnedOne": "Picked up a new knack: {{title}}",
-      "learnedMany": "Picked up {{count}} new knacks",
-      "learnedFallback": "Picked up a new knack",
-      "time": {
-        "justNow": "Just now",
-        "minutes": "{{n}} min ago",
-        "hours": "{{n}} h ago",
-        "days": "{{n}} d ago"
-      }
-    },
-    "imConnectionsTitle": "IM connections",
-    "imConnectionsDescription": "Manage the messaging accounts actually connected to this teammate.",
-    "folders": {
-      "addButton": "+ Give them a folder",
-      "adding": "Adding…",
-      "remove": "Remove"
-    },
-    "advancedIdentity": {
-      "title": "Description & background"
-    },
     "collab": {
-      "cindyTask": "Independent task",
-      "joined": "{{name}} joined the conversation",
-      "inboundJoined": "{{name}} handed you this work",
-      "guestTag": "Guest",
-      "nudge": "Nudge",
-      "nudgeSend": "Send",
-      "nudgePlaceholder": "How's it going?",
-      "nudgeAria": "Send {{name}} a note about this work",
-      "interjected": "You nudged {{name}}",
-      "stop": "Stop",
-      "openTask": "Open {{name}}'s conversation",
+      "backgroundTask": "Background task",
+      "trackedTask": "Runs independently and returns its result",
+      "stopTask": "Stop task",
+      "messageSent": "Message sent to background task",
       "watchWork": "Watch the work",
       "actionFailed": "That didn't go through. Try again.",
       "retrying": "Hasn't started yet — retrying…",
       "status": {
         "queued": "Getting started",
-        "waiting": "Waiting to start",
+        "waiting": "Waiting for input",
         "running": "Working on it",
         "completed": "Done",
         "failed": "Failed",
         "cancelled": "Stopped",
         "timed-out": "Timed out",
-        "unknown": "Can't tell what {{name}} is up to"
-      },
-      "report": {
-        "done": "{{name}} · {{duration}} · done",
-        "failed": "{{name}} · {{duration}} · failed",
-        "failedReason": "{{name}} · failed: {{reason}}",
-        "stopped": "{{name}} · {{duration}} · stopped",
-        "delivered": "{{name}} · {{duration}} · delivered {{count}}",
-        "timedOut": "{{name}} · {{duration}} · timed out"
+        "unknown": "Task status unavailable"
       },
       "duration": {
         "seconds": "{{n}}s",
@@ -7575,8 +7095,6 @@
       "empty": "There are no messages to view yet.",
       "limitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks"
     },
-    "channelConnect": "Connect",
-    "channelDisconnect": "Disconnect",
     "joined": {
       "today": "Joined today",
       "yesterday": "Joined yesterday",
@@ -7595,6 +7113,27 @@
     "welcome": {
       "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
       "withRole": "Hi, I'm {{name}} — {{description}}. Just tell me what you need."
+    },
+    "invitation": {
+      "title": "Getting ready to meet",
+      "waiting": "See you soon, {{name}}",
+      "background": "Feel free to step away. Preparation continues in the background.",
+      "profile": "Writing a personal story",
+      "skills": "Preparing a computer for {{name}}",
+      "avatar": "{{name}} is choosing a new portrait",
+      "welcome": "Getting a first hello ready",
+      "failed": "Preparation paused. Everything completed so far is saved. You can try again.",
+      "retryFailed": "Couldn’t retry just now. Please try again shortly.",
+      "leave": "Step away",
+      "avatarSkipped": "Using the default portrait for now. You can change it anytime."
+    },
+    "permissionRequest": "{{name}} needs your go-ahead",
+    "remote": {
+      "online": "Online",
+      "offline": "Offline",
+      "thisDevice": "This computer",
+      "offlineDescription": "{{name}} is offline. Reconnect {{device}} to continue.",
+      "preparing": "Waiting for this teammate to get ready…"
     }
   },
   "common": {
@@ -7891,6 +7430,7 @@
         "discountedVsStandard": "Discounted · {{percent}}% off standard"
       },
       "trigger": {
+        "currentAndNext": "Current: {{current}}\nNext message: {{next}}",
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",
         "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}",
@@ -7933,6 +7473,9 @@
         "fastBadge": "Fast"
       },
       "source": {
+        "unavailable": "Model unavailable",
+        "reconnect": "Reconnect",
+        "manage": "Manage source",
         "railLabel": "Source",
         "connect": "Add a model",
         "connectCta": "Connect a source →",
@@ -7949,11 +7492,8 @@
         "railAll": "All",
         "favoritesGroup": "Favorites",
         "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
-        "layoutBadge": "Try style B",
-        "layoutClassic": "Back to style A",
-        "layoutTryUnified": "Try the new picker",
-        "layoutOriginal": "Back to old picker",
         "addFavorite": "Save to favorites",
+        "customize": "Customize",
         "removeFavorite": "Remove from favorites",
         "favoriteConfig": "Saved setup",
         "recommended": "Recommended",
@@ -8173,6 +7713,11 @@
       },
       "remoteSwitchFailed": "Remote setting change failed; not applied",
       "switchFailed": "Setting change failed; not applied",
+      "modelWindowUnknown": {
+        "custom": "Model not switched: the target model “{{model}}” has no context-window information. Add it under {{provider}} model settings, then retry.",
+        "builtin": "Model not switched: Cindy can’t verify the context window for “{{model}}”. Refresh the {{provider}} model list; if that still fails, reconnect the provider.",
+        "openSettings": "Open Settings"
+      },
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",
@@ -8543,6 +8088,7 @@
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
+      "tokenRateDescription": "The main Agent’s average generation speed for this turn, including thinking and excluding tool execution and approval waits. Updated with reported usage; the adjacent timer shows total turn time.",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8619,6 +8165,7 @@
       "networkHideRaw": "Hide raw error",
       "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in",
+      "modelAccessDenied": "The upstream account cannot access this model. Select another model or check its access with the provider",
       "silentStopContinue": "Continue",
       "silentStopContinueTitle": "Continue the current task",
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
@@ -9149,6 +8696,9 @@
     },
     "generatedFiles": {
       "title": "Files created this message",
+      "botTitle": "Deliverables",
+      "relatedFiles": "{{count}} related files",
+      "openWebPreview": "Open web preview",
       "showMore": "Show {{count}} more",
       "showLess": "Show less",
       "artifactLabel": "Artifact",
@@ -9293,6 +8843,8 @@
       "runningTool": "{{tool}} running…"
     },
     "remoteSession": {
+      "syncing": "Syncing…",
+      "recovered": "Restored",
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
       "degraded": "Connection to the controlled device is unstable — retrying automatically…",

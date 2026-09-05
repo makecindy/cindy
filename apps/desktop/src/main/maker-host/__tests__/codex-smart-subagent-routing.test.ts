@@ -71,6 +71,26 @@ const baseCatalog = {
 };
 
 describe('Codex smart Subagent catalog', () => {
+  it('preserves a newly discovered native v2 model including its larger maximum window', () => {
+    const astra = {
+      slug: 'gpt-6-astra',
+      multi_agent_version: 'v2',
+      context_window: 272_000,
+      max_context_window: 872_000,
+      supported_reasoning_levels: [{ effort: 'ultra', description: 'native delegation' }],
+    };
+    const built = buildCodexSmartModelCatalog({ models: [astra] }, [
+      { providerId: 'openai', model: model('gpt-6-astra', 'gpt') },
+      { providerId: 'xd', model: model('deepseek/deepseek-v4-flash') },
+    ]);
+    expect(built?.models[0]).toEqual(astra);
+    expect(built?.models[1]).toMatchObject({
+      slug: 'deepseek/deepseek-v4-flash',
+      context_window: 200_000,
+      max_context_window: 200_000,
+    });
+  });
+
   it('keeps native Sol/Terra and selects additional connected Codex chat models', () => {
     const candidates = selectCodexSmartSubagentCandidates(
       [

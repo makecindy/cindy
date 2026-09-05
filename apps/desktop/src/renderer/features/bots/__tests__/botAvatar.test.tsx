@@ -102,6 +102,18 @@ describe('Reserved Cindy avatar sentinel', () => {
     }
   });
 
+  it('resolves the three built-in teammate portraits as packaged artwork', () => {
+    for (const id of ['cindy', 'lizi', 'dash']) {
+      const { container } = render(
+        <BotAvatar
+          bot={{ name: id, avatar: `cindy://avatar/preset/${id}`, avatarColor: 'blue' }}
+        />,
+      );
+      expect(container.querySelector('img')).not.toBeNull();
+      cleanup();
+    }
+  });
+
   it('rejects everything outside the namespace', () => {
     for (const value of ['', '   ', '🤖', 'cindy://media/official', null, undefined]) {
       expect(isCindyAvatarSentinel(value)).toBe(false);

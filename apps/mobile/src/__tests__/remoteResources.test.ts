@@ -4,6 +4,7 @@ import { DeviceLinkError } from '@cindy/device-link';
 import {
   MOBILE_REMOTE_RESOURCE_PRIMITIVES,
   discoverRemoteHomeCollections,
+  remoteResourceDiscoveryTargets,
   isRemoteResourcesUnsupported,
   mergeRemoteCollectionHostShards,
   normalizeRemoteCollectionItems,
@@ -18,6 +19,19 @@ const targets = [
 ];
 
 describe('remote resource discovery', () => {
+  it('keeps a discovered offline host while excluding revoked and disabled hosts', async () => {
+    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
+    const selected = remoteResourceDiscoveryTargets([
+      { deviceId: 'mac-1', name: 'Studio', canOpen: false, state: 'offline' },
+      { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'access_revoked' },
+      { deviceId: 'mac-3', name: 'Disabled', canOpen: false, state: 'remote_disabled' },
+    ], previous);
+    expect(selected).toEqual([targets[0]]);
+    const invoke = vi.fn(async () => { throw new Error('offline'); }) as RemoteInvoke;
+    const collections = await discoverRemoteHomeCollections(invoke, selected, 'en', previous);
+    expect(collections[0]?.targets).toEqual([targets[0]]);
+  });
+
   it('advertises only primitives implemented by the current mobile shell', () => {
     expect(MOBILE_REMOTE_RESOURCE_PRIMITIVES).toEqual(['status', 'session-link']);
   });

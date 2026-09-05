@@ -19,6 +19,10 @@ export interface CodexSubagentRouteSnapshot {
 
 export interface CodexSmartSubagentConfig {
   catalogPath: string;
+  /** Exact in-memory catalog written to catalogPath, retained for race-free custom-window patching. */
+  modelCatalog: {
+    models: Array<Record<string, unknown> & { slug: string }>;
+  };
   routes: CodexSubagentRouteSnapshot[];
   routingSignature: string;
 }

@@ -1,5 +1,5 @@
 {
-  "$description": "DS-3 reference 层：仅收录第一批 semantic 角色实际引用的冻结色值。",
+  "$description": "DS-3/DS-4 reference 层：semantic 与 component 角色实际引用的冻结色值。",
   "hex-f8f8f6": {
     "$type": "color",
     "$value": {

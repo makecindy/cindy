@@ -110,10 +110,6 @@ import { formatManagedImageReferences } from '../shared/managed-image-reference.
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
 import {
-  claudeStructuredWriteTarget,
-  isWorkspaceWritePathAllowed,
-} from '../shared/workspace-write-policy.js';
-import {
   applyExploreInheritCapEnv,
   applyOAuthSpawnEntrypointGate,
   applySubagentModelEnv,
@@ -1043,6 +1039,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     const model = opts?.model ?? 'claude-haiku-4-5';
     const maxTokens = opts?.maxTokens ?? 100;
     const timeoutMs = opts?.timeoutMs ?? 30_000;
+    const instructions = [opts?.systemPrompt, opts?.responseInstructions]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n');
 
     // Auth gate:与 startSession 对齐 — 未授权直接拒,不让 Anthropic 请求带空 key 跑出去
     // (避免被 fallback 到用户系统级 ~/.claude/.credentials.json 之类的别处 OAuth)
@@ -1054,8 +1053,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       );
     }
     // oneShot 凭证优先走 getOneShotAuth()(host 侧直连专用,与子进程 env 正交):
-    // Claude 'oauth' 模式下 getAuthEnv() 注入的是用户订阅 token,但 oneShot 无 system prompt、
-    // 不能走订阅(会被 claude.ai OAuth 策略拒),host 通过 getOneShotAuth 固定回 gateway key +
+    // Claude 'oauth' 模式下 getAuthEnv() 注入的是用户订阅 token,但 oneShot 直连
+    // Anthropic Messages API 不能走订阅 token(会被 claude.ai OAuth 策略拒),host 通过
+    // getOneShotAuth 固定回 gateway key +
     // gateway endpoint。不实现该方法的 adapter(或回 null)→ 回退旧逻辑(getAuthEnv 里的 key + runtimeConfig.endpoint)。
     let apiKey: string | undefined;
     let baseURL = this.deps.runtimeConfig.endpoint;
@@ -1092,10 +1092,18 @@ export class ClaudeCodeAgent extends BaseAgent {
         maxRetries: 0,
       });
 
+      // Auth and host setup can await asynchronous work. Re-check the caller's
+      // ownership fence immediately before the paid provider request, matching
+      // Codex oneShot's thread/start guard.
+      if (opts?.beforeDispatch && !(await opts.beforeDispatch())) {
+        throw new OneShotError('network', 'Claude oneShot dispatch guard rejected');
+      }
+
       const resp = await client.messages.create(
         {
           model,
           max_tokens: maxTokens,
+          ...(instructions ? { system: instructions } : {}),
           messages: [{ role: 'user', content: prompt }],
         },
         { signal: timeoutController.signal },
@@ -1147,9 +1155,6 @@ export class ClaudeCodeAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/claude-code` : 'claude-code');
     const reviewMode = opts.reviewMode === true;
-    const workspaceReadOnly = opts.workspaceAccess === 'read-only';
-    const workspaceWritePaths = [...(opts.workspaceWritePaths ?? [])];
-    const workspaceWriteRestricted = !workspaceReadOnly && workspaceWritePaths.length > 0;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Claude Code sessions only');
     }
@@ -1747,72 +1752,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       };
     };
-    const workspaceReadOnlyHook: HookCallback = async (input) => {
-      if (input.hook_event_name !== 'PreToolUse') return { continue: true };
-      const pre = input as PreToolUseHookInput;
-      if (!['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'].includes(pre.tool_name)) {
-        return { continue: true };
-      }
-      if (pre.tool_name !== 'Bash') {
-        const target = claudeStructuredWriteTarget(pre.tool_name, pre.tool_input);
-        if (target && isWorkspaceWritePathAllowed(target, opts.workingDir, mutableWritableDirs)) {
-          return { continue: true };
-        }
-      }
-      return {
-        continue: true,
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason:
-            'This Cindy Bot project is mounted read-only. Choose a writable project policy to modify it.',
-        },
-      };
-    };
-    const workspaceWriteScopeHook: HookCallback = async (input) => {
-      if (input.hook_event_name !== 'PreToolUse') return { continue: true };
-      const pre = input as PreToolUseHookInput;
-      if (pre.tool_name === 'Bash') {
-        return {
-          continue: true,
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'deny',
-            permissionDecisionReason:
-              'This Cindy Bot has a restricted write scope. Shell commands are disabled because their write targets cannot be proven safe.',
-          },
-        };
-      }
-      if (!['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(pre.tool_name)) {
-        return { continue: true };
-      }
-      const target = claudeStructuredWriteTarget(pre.tool_name, pre.tool_input);
-      if (target && isWorkspaceWritePathAllowed(
-        target,
-        opts.workingDir,
-        [...workspaceWritePaths, ...mutableWritableDirs],
-      )) {
-        return { continue: true };
-      }
-      return {
-        continue: true,
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason:
-            'This path is outside the Cindy Bot project write allowlist.',
-        },
-      };
-    };
     const localClaudeHooks = reviewMode
       ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
       : mergeClaudeHookSets(
-          workspaceReadOnly
-            ? { PreToolUse: [{ hooks: [workspaceReadOnlyHook] }] }
-            : undefined,
-          workspaceWriteRestricted
-            ? { PreToolUse: [{ hooks: [workspaceWriteScopeHook] }] }
-            : undefined,
           buildClaudeLocalToolGuardHooks(
             this.deps.capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -2589,7 +2531,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode =
-      reviewMode || workspaceReadOnly ? 'ask' : opts.permissionMode ?? 'default';
+      reviewMode ? 'ask' : opts.permissionMode ?? 'default';
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮 plan turn 由 planTurnActive 承载(SDK 保持 plan 档): ExitPlanMode 批准
@@ -3234,10 +3176,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           // gate 过 remoteHostId 非空。
           env: remoteEnv ?? env,
           permissionMode: remotePermissionMode,
-          ...(workspaceReadOnly ? { workspaceReadOnly: true } : {}),
-          ...(workspaceWriteRestricted
-            ? { workspaceWritePaths: [...workspaceWritePaths] }
-            : {}),
           // cc-manager 的 QueryStartParams 已原生支持 allowedTools; 传副本避免 RPC
           // 序列化前后任一侧原地改写 session 快照。
           ...(claudeAllowedTools ? { allowedTools: [...claudeAllowedTools] } : {}),
@@ -3836,7 +3774,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // **同一对象远端分支也透传 (extraOptions.settings)**, 别在两边漂移。
           settings: buildSettings(),
           allowDangerouslySkipPermissions:
-            !reviewMode && !workspaceReadOnly && !workspaceWriteRestricted,
+            !reviewMode,
           stderr: vo.onStderrLine as ((line: string) => void) | undefined,
           // SDK debug 等同 --debug CLI flag, 让 cc 子进程吐 verbose 日志。
           // - debug: true 触发 verbose 模式
@@ -6786,11 +6724,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setPermissionMode(newMode) {
-        if (reviewMode || workspaceReadOnly) {
+        if (reviewMode) {
           log.debug('setPermissionMode ignored for host-owned hard read-only session', {
             requested: newMode,
             reviewMode,
-            workspaceReadOnly,
           });
           return;
         }

@@ -1204,19 +1204,19 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(matches).toHaveLength(2);
     expect(selectorSource).not.toContain('(open || keepOpenForAgentConfirmation) && !disabled');
     expect(selectorSource).not.toContain('(open && !disabled) || keepOpenForAgentConfirmation');
-    // 切引擎成功也不收选单:applied=true 曾经会 setOpen(false),一点胶囊窗口就没了。
-    expect(selectorSource).toContain('setOpenWithoutAutoRefresh(true);');
-    expect(selectorSource).not.toContain('setOpenWithoutAutoRefresh(applied === false)');
-  });
-
-  it('换引擎确认只认任务真实引擎,不认挂着的意图', () => {
-    expect(source).toMatch(/runtimeAgentKind != null\s*&&\s*runtimeAgentKind === targetAgent/);
-    expect(source).not.toContain(
-      'makerChatStore.getAgentSwitchIntent(sessionId)?.target === targetAgent',
+    // 切引擎成功后收选单;取消才 setOpen(true) 留在原地。disabled 仍不得参与开关。
+    expect(selectorSource).toContain('setOpenWithoutAutoRefresh(applied === false)');
+    expect(selectorSource).toContain(
+      "onProviderChange(args.providerId, args.wireModelId, args.effort ?? '', args.config.fast)",
     );
   });
 
-  it('会话收藏锚点只认 uid,不拿正在跑的模型/引擎去对副本', () => {
+  it('换引擎确认:回原引擎或点已确认的意图目标不再弹,换第三家仍要问', () => {
+    expect(source).toContain('runtimeAgentKind === targetAgent');
+    expect(source).toContain('agentSwitchIntent?.target === targetAgent');
+  });
+
+  it('会话传入历史收藏 uid，由统一面板校验完整配置后显示选中态', () => {
     expect(source).toContain('sessionFavoriteAnchor?.uid ?? null');
     expect(source).not.toContain('sessionFavoriteAnchor.wireModelId === activeModel');
   });
@@ -1244,7 +1244,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
     );
     const ensure = panel.slice(
       panel.indexOf('const ensureSelectedVisible = useCallback'),
-      panel.indexOf('}, [pickerLayout]);'),
+      panel.indexOf('  useEffect(() => {', panel.indexOf('const ensureSelectedVisible = useCallback')),
     );
     expect(ensure).not.toContain('row.focus');
     expect(ensure).toContain('computeSelectedRowScrollTop');

@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   },
   capabilitiesLoading: false,
   providersLoading: false,
+  remoteUnsupported: false,
   // 「(providerId, modelId)」被可见性开关隐藏的组合(isModelEnabled mock 消费)。
   hiddenModels: [] as string[],
   // 本地已连接来源目录(narrowProviderSource 走真函数,消费这份最小 ProviderView 形状)。
@@ -110,6 +111,7 @@ vi.mock('@/hooks/useProviders', () => ({
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
   useDeviceProviders: () => ({
+    unsupported: mocks.remoteUnsupported,
     providers: mocks.remoteProviders.map((provider) => ({
       ...provider,
       routing: Object.fromEntries(provider.agents.map((agent) => [agent, {}])),
@@ -134,7 +136,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     modelId: string;
     effort?: string;
     currentProviderId?: string | null;
-    onProviderChange?: (providerId: string | null, modelId?: string, effort?: string) => void;
+    onProviderChange?: (providerId: string | null, modelId?: string, effort?: string, fast?: boolean) => void;
     onEffortChange: (effort: string) => void;
     reselectEmitsChange?: boolean;
     fastMode?: boolean;
@@ -158,7 +160,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       <button
         type="button"
         data-testid="pick-openai-row"
-        onClick={() => props.onProviderChange?.('openai', 'gpt-5.5', 'medium')}
+        onClick={() => props.onProviderChange?.('openai', 'gpt-5.5', 'medium', true)}
       />
       {/* 真组件选行只回传两参(见 ModelSelector.handleRowSelect),记忆恢复走全局预设。 */}
       <button
@@ -231,6 +233,7 @@ describe('CreateWorkerPopover', () => {
     mocks.providersLoading = false;
     mocks.localProviders = [];
     mocks.remoteProviders = [];
+    mocks.remoteUnsupported = false;
     mocks.hiddenModels = [];
     mocks.sidebarWindow = false;
     mocks.confirm.mockReset();
@@ -626,7 +629,32 @@ describe('CreateWorkerPopover', () => {
     expect(selector.dataset.navigateWired).toBe('true');
   });
 
-  it('keeps the degraded flat panel for device-link remote creation', async () => {
+  it('uses remote provider routes without local memory for device-link creation', async () => {
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.sourcesEnabled).toBe('true');
+    expect(selector.dataset.memoryWired).toBe('false');
+  });
+
+  it('persists the remote provider, effort and Fast without modifying local model memory', async () => {
+    mocks.remoteProviders = [{ id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'],
+      models: { codex: [model('gpt-5.5', ['medium', 'high'], 'high')] } }];
+    mocks.modelsByAgent.codex = [model('gpt-5.5', ['medium', 'high'], 'high')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }], hasFastMode: true } as never;
+    const before = getProviderModelChoice('codex', 'openai');
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={onCreate} />);
+    fireEvent.click(await screen.findByTestId('pick-openai-row'));
+    await waitFor(() => expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'gpt-5.5', providerId: 'openai', effort: 'medium', fast: true,
+    })));
+    expect(getProviderModelChoice('codex', 'openai')).toEqual(before);
+  });
+
+  it('retains the capabilities-only fallback for old remote hosts', async () => {
+    mocks.remoteUnsupported = true;
     render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
     const selector = await screen.findByTestId('model-selector');
     expect(selector.dataset.sourcesEnabled).toBe('false');

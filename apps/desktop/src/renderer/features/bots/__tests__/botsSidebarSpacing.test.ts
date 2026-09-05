@@ -16,11 +16,11 @@
  *   .row-name  { font-size:14px }                                        → text-14
  *   .row-time  { font-size:11px; flex:none }                             → text-11 shrink-0
  *   .row-prev  { font-size:12.5px }                                      → text-12(仓库字号阶梯里最近的一档)
- *   .badge     { min-width:18px; height:18px; padding:0 6px; radius:9999 } → h-[18px] min-w-[18px] px-1.5 rounded-full
+ *   .badge     { min-width:16px; height:16px; padding:0 4px; radius:9999 } → h-4 min-w-4 px-1 rounded-full
  *   .av-40     { 40px }                                                   → BotAvatar size="md"
  *   .side-list { padding:0 12px 12px }                                    → 容器 px-3
  *
- * 改这些数字之前先去改原型,不要反过来。
+ * 未读角标依用户的侧栏细化反馈收小，数字采用等宽，预览不再随未读加粗。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -75,11 +75,11 @@ describe('伙伴行的间距基线', () => {
   it('五要素的字号与固定尺寸不漂', () => {
     // 名字 14px / 时间 11px / 预览 12px。
     expect(source).toContain("'min-w-0 flex-1 truncate text-14 leading-5',");
-    expect(source).toContain("cn('min-h-4 text-11', mutedClass)");
+    expect(source).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
     expect(source).toContain("'min-w-0 flex-1 truncate text-12 leading-4',");
-    // 徽标 18×18,左右各 6px。
+    // 徽标 16×16,左右各 4px，数字变化不抖动。
     expect(source).toContain(
-      'flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1.5 text-11 font-medium leading-none text-[var(--bot-unread-fg)]',
+      'flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 font-medium tabular-nums leading-none text-[var(--bot-unread-fg)]',
     );
   });
 
@@ -89,25 +89,26 @@ describe('伙伴行的间距基线', () => {
     );
     const metaColumn = source.slice(start, source.indexOf('</button>', start));
     expect(metaColumn).toContain("aria-label={t('bots.list.unread', { count: unread })}");
-    expect(metaColumn).toContain("cn('min-h-4 text-11', mutedClass)");
+    expect(metaColumn).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
   });
 
   it('管理菜单不再占据消息行宽度', () => {
     expect(source).not.toContain('<MoreHorizontal');
     expect(source).toContain('onContextMenu={(event) => {');
     expect(source).toContain(
-      '<span className="pointer-events-none absolute right-2 top-2 h-px w-px" />',
+      'className="pointer-events-none fixed h-0 w-0"',
     );
   });
 
-  it('归档行、空态卡与小节头跟伙伴行同一套左右内边距', () => {
+  it('归档行与小节头保持间距，空态复用紧凑创建入口', () => {
     expect(source).toContain(
       'group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors',
     );
-    // 空态卡:定稿 `.side-empty{padding:12px 14px}`,并且与行同宽(不缩 8px)。
+    // 空态只留创建入口，外层间距固定，不恢复大卡片。
     expect(source).toContain(
-      'flex w-full flex-col items-start gap-1 rounded-xl border border-dashed border-[var(--border-default)] px-3.5 py-3',
+      '<div className="px-3 py-3">',
     );
+    expect(source).toContain("<BotCreateMenu label={t('bots.add')} />");
     // 小节头与行内正文左边缘对齐:容器 px-3(12px) + 10px。
     expect(source).toContain('<div className="flex items-center justify-between px-2.5 pb-2">');
     expect(source).toContain(

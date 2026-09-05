@@ -7,6 +7,48 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile session composer desktop-first surface', () => {
+  it('keeps draft subscriptions and the recording timer outside the task render boundary', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const paletteStart = source.indexOf('function SessionComposerPalette(');
+    const inputStart = source.indexOf('function SessionComposerInput(');
+    const inputEnd = source.indexOf('function SessionSearchSheet(', inputStart);
+    expect(paletteStart).toBeGreaterThan(source.indexOf('export default function SessionScreen()'));
+    const task = source.slice(source.indexOf('export default function SessionScreen()'), paletteStart);
+    const input = source.slice(inputStart, inputEnd);
+    expect(task).not.toContain('useSyncExternalStore(source.subscribe');
+    expect(task).not.toContain('composerDraftSource.subscribe');
+    expect(task).not.toContain('useMobileVoiceRecordingTimer(');
+    expect(task).toContain('<SessionComposerInput');
+    expect(task).toContain('<SessionComposerPalette');
+    expect(task).toContain('source={composerDraftSource}');
+    expect(input).toContain('useSyncExternalStore(source.subscribe, source.getSnapshot)');
+    expect(input).toContain('useMobileVoiceRecordingTimer(');
+    expect(task).toContain('const commandsAtSend = slashCommandsRef.current;');
+    expect(task).toContain('remoteCommands: commandsAtSend,');
+    // Dispatch and the keyed palette must receive a fresh ref synchronously;
+    // passive unmount cleanup leaves a window for the old command list to leak.
+    expect(task).toContain('const slashCommandsRef = useMemo<RefObject<MobileSlashCommand[]>>(\n'
+      + '    () => ({ current: [] }),\n'
+      + '    [activeComposerDraftScopeKey],\n'
+      + '  );');
+    expect(task).toContain('<SessionComposerPalette\n'
+      + '            key={activeComposerDraftScopeKey}\n'
+      + '            source={composerDraftSource}\n'
+      + '            commandsRef={slashCommandsRef}');
+  });
+
+  it('keeps local send and queue activity out of message grouping', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    expect(source).toContain('const isMessageListStreaming = remoteSessionRunning || currentTurnStreaming;');
+    expect(source).toContain('isSessionStreaming: isMessageListStreaming,');
+    expect(source).toContain('() => sending || canStopQueue || remoteSessionRunning || currentTurnStreaming');
+    const renderStart = source.indexOf('const renderWindow = useMemo(');
+    const renderEnd = source.indexOf('// Reconciliation must only use committed rows.', renderStart);
+    const renderSource = source.slice(renderStart, renderEnd);
+    expect(renderSource).not.toContain(', isSessionStreaming,');
+    expect(renderSource).toContain(', isMessageListStreaming,');
+  });
+
   it('fences every active-session snapshot request against newer retry progress', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
@@ -39,10 +81,10 @@ describe('mobile session composer desktop-first surface', () => {
     const trailingActionsEnd = source.indexOf('const resumeQueue = () => {', trailingActionsStart);
     const trailingActionsSource = source.slice(trailingActionsStart, trailingActionsEnd);
     const voiceButtonStart = source.indexOf('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
-    const voiceButtonEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceButtonStart);
+    const voiceButtonEnd = source.indexOf('const renderComposerAttachmentButton = () => (', voiceButtonStart);
     const voiceButtonSource = source.slice(voiceButtonStart, voiceButtonEnd);
-    const floatingVoiceIndex = composerInputSource.indexOf('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
-    const sendIndex = composerInputSource.indexOf('trailing={composerCardActive ? null : renderComposerTrailingActions()}');
+    const floatingVoiceIndex = composerInputSource.indexOf('floatingVoiceButton={voiceUiAvailable ? controls.voiceButton : undefined}');
+    const sendIndex = composerInputSource.indexOf('trailing={composerCardActive ? null : controls.trailing}');
     const composerSurfaceStart = source.indexOf('composerSurface: {');
     // composerOverlayPanel 已随「模型下拉改 ModelPickerSheet 浮窗」删除,锚到下一个样式键。
     const composerSurfaceEnd = source.indexOf('composerSurfaceCompact:', composerSurfaceStart);
@@ -112,8 +154,13 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('<Scan color={colors.textPrimary}');
     expect(source).toContain('<Folder color={colors.textPrimary}');
     expect(composerInputSource).toContain('cardActive={composerCardActive}');
-    expect(composerInputSource).toContain('leading={renderComposerCompactLeading()}');
+    expect(composerInputSource).toContain('leading={controls.leading}');
     expect(source).toContain('const renderComposerCompactLeading = () => (');
+    expect(source).toContain('leading: renderComposerCompactLeading()');
+    expect(source).toContain('toolbar: renderComposerToolbar()');
+    expect(source).toContain('trailing: renderComposerTrailingActions()');
+    expect(source).toContain('gesture={composerResize.gesture}');
+    expect(source).toContain('<GestureDetector gesture={composerResize.scrollGesture}>');
     expect(source).not.toContain('styles.composerCompactAttachmentSlot');
     expect(source).toContain('styles.composerCompactAttachmentHit');
     expect(source).not.toContain('styles.composerCompactAttachmentHitArea');
@@ -125,11 +172,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(source).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(source).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
-    expect(composerInputSource).toContain('toolbar={renderComposerToolbar()}');
+    expect(composerInputSource).toContain('toolbar={controls.toolbar}');
     expect(source).toContain('const renderComposerToolbar = () => (');
     expect(attachmentButtonSource).toContain('<Plus');
     expect(source).toContain('<Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />');
-    expect(composerInputSource).toContain('trailing={composerCardActive ? null : renderComposerTrailingActions()}');
+    expect(composerInputSource).toContain('trailing={composerCardActive ? null : controls.trailing}');
     expect(trailingActionsSource).toContain('<PaperPlaneIcon');
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
     expect(source).toContain('const composerCardActive = (canUseComposer && composerFocused)');
@@ -304,11 +351,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerResize = useComposerResize({');
     expect(source).toContain('const composerInputVisibleHeight = composerResize.visibleContentHeight;');
     expect(source).toContain('const composerInputScrollEnabled = composerResize.scrollEnabled;');
-    expect(source).toContain('const composerShellHasScrollableContent = attachments.length > 0');
-    expect(source).toContain('const composerScrollEnabled = nativeShellLayout.composerScrollEnabled');
-    // 外壳滚动必须仅在真有可滚内容时启用,且 grabber touch-down 通过
-    // setNativeProps 同步关闸(绝不能 setState——重页面 re-render 会阻塞
-    // JS 线程,拖拽 move 事件被合并延后,位移在 grant 重置前全部丢失)。
+    expect(source).toContain('const composerShellHasScrollableContent = attachmentCount > 0');
+    expect(source).toContain('const composerScrollEnabled = (nativeShellLayout.composerScrollEnabled');
+    // Scroll ownership is native in installed apps; retain Expo Go's JS fallback.
     expect(source).toContain('&& composerShellHasScrollableContent;');
     expect(source).not.toContain('&& (!composerInputScrollEnabled || composerShellHasScrollableContent);');
     expect(source).toContain('const handleGrabberTouchActiveChange = useCallback((active: boolean) => {');
@@ -324,7 +369,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('scrollEnabled={composerInputScrollEnabled}');
     expect(source.match(/scrollEnabled={composerInputScrollEnabled}/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     expect(composerInputSource).toContain('maxHeight={composerResize.inputMaxHeight}');
-    expect(composerInputSource).toContain('inputFrameHeight={composerResize.frameHeight}');
+    expect(composerInputSource).toContain('inputFrameAnimatedStyle={composerResize.frameStyle}');
     expect(composerInputSource).toContain('resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}');
     expect(sharedSource).toContain('{ maxHeight },');
     expect(source).not.toContain('{ height: composerInputVisibleHeight');
@@ -348,9 +393,10 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('modelSummary: [modelLabel, effortLabel].filter(Boolean).join');
     expect(source).toContain('const COMPOSER_CONTROL_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };');
     expect(source.match(/hitSlop={COMPOSER_CONTROL_HIT_SLOP}/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
-    expect(source).toContain('const composerHasText = draft.trim().length > 0;');
     expect(source).toContain('const composerQuoteCount = composerDocumentQuotes(composerDocument).length;');
-    expect(source).toContain('const composerHasPayload = composerHasText || attachments.length > 0 || pendingUploads.length > 0 || composerQuoteCount > 0;');
+    expect(source).toContain('attachmentCount: attachmentCount + pendingUploadCount,');
+    expect(source).toContain('quoteCount: composerQuoteCount,');
+    expect(source).toContain('draftText: draft,');
     expect(source).toContain('const composerShowSendButton = composerLayout.send.visible || voiceStartPending;');
     expect(source).not.toContain('composerLayout.send.visible && (!voiceIsListening || composerHasPayload)');
     expect(source).toContain('const latestDocument = latestDraft.trim()');
@@ -482,7 +528,7 @@ describe('mobile session composer desktop-first surface', () => {
       finishVoiceSource.indexOf('const latestDraft = await controller.stop();'),
     );
     expect(finishVoiceSource).toContain('voiceStopInFlightRef.current = false;');
-    expect(composerInputSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
+    expect(composerInputSource).toContain('floatingVoiceButton={voiceUiAvailable ? controls.voiceButton : undefined}');
     expect(composerInputSource).not.toContain('floatingVoiceButtonStyle=');
     expect(composerInputSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
@@ -690,7 +736,8 @@ describe('mobile session composer desktop-first surface', () => {
       + "      startupSeq = voiceStartupSeqRef.current + 1;",
     );
     expect(voiceSource).toContain('voiceStartupInFlightRef.current = false;');
-    expect(voiceSource).toContain('onDraftChanged: setComposerDraft');
+    expect(voiceSource).toContain('onDraftChanged: writeVoiceDraft');
+    expect(source).toContain('useComposerVoiceDraftWriter(sessionId, setComposerDraft)');
     expect(voiceSource).toContain('isMobileRealtimeAudioAvailable()');
     expect(voiceSource.indexOf('isMobileRealtimeAudioAvailable()')).toBeLessThan(
       voiceSource.indexOf('resolveMobileVoiceRecordingPermission({'),

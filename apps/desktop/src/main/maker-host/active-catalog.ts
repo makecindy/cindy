@@ -30,6 +30,7 @@ import {
   BUNDLED_CATALOG,
   buildUserProvider,
   findModelRegistryRoute,
+  projectXaiApiImageModels,
   type AgentKind,
   type Catalog,
   type CatalogCapabilityEvidence,
@@ -1234,6 +1235,15 @@ function computeMerged(): Catalog {
       models,
     };
   });
+
+  // The xAI API-key preset is chat-first in CustomProviderConfig, but its official
+  // endpoint can execute the same Imagine catalog. Keep the executable media facts
+  // in one projection so Settings and Art do not disagree. 未命中投影时保持原数组
+  // 引用,让下方的 identity 短路继续生效。
+  const projectedProviders = projectXaiApiImageModels(providers);
+  if (projectedProviders !== providers) {
+    providers = [...projectedProviders];
+  }
 
   if (providers === b.providers) return b; // 无 augment、无 custom → 原样返回
   return { ...b, providers }; // spread 保留 presets 等目录顶层字段

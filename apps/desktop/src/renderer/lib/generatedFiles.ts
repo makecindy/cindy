@@ -29,9 +29,7 @@ import { extractCommandOutputPathCandidates } from '../../shared/commandOutputPa
 import { resolveToolFilePath } from './localPathResolver';
 import { basename } from './utils';
 
-// 命令文本的写出语义判定搬到 `shared/commandOutputPaths`:仓库面板的主进程投影要
-// 用同一套口径(否则「对话里有卡、仓库里没有」)。这里保留再导出,既有 import 点
-// 与单测不受搬迁影响。
+// Keep the public extractor import compatible with existing consumers.
 export { extractCommandOutputPathCandidates };
 
 export interface GeneratedFileRef {

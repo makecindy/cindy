@@ -11,7 +11,7 @@ const idle = {
 };
 
 describe('Bot canonical replacement guard', () => {
-  it('allows Renew only when every runtime owner is idle', () => {
+  it('allows missing-task recovery only when every runtime owner is idle', () => {
     expect(isBotCanonicalReplacementBusy(idle)).toBe(false);
   });
 
@@ -21,7 +21,7 @@ describe('Bot canonical replacement guard', () => {
     ['tracked turn', { trackedTurn: true }],
     ['leased IM turn', { leasedTurn: true }],
     ['pending interaction', { pendingInteraction: true }],
-  ])('blocks Renew for %s', (_label, patch) => {
+  ])('blocks missing-task recovery for %s', (_label, patch) => {
     expect(isBotCanonicalReplacementBusy({ ...idle, ...patch })).toBe(true);
   });
 });

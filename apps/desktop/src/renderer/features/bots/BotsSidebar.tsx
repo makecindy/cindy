@@ -1,9 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bot, Copy, Eye, EyeOff, Pin, Search } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  Bot,
+  Copy,
+  Eye,
+  EyeOff,
+  Pin,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
+import * as sessionService from '@/lib/sessionService';
+import { isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,9 +24,15 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
+import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
+import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
+import { useRemoteBots } from './useRemoteBots';
+import { remoteBotKey } from './remoteBotRoster';
+import { BotConnectionStatus } from './BotConnectionStatus';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
+import { BotDeleteDialog } from './BotDeleteDialog';
 import {
   botListSubtitle,
   botListTimestampAt,
@@ -44,12 +62,13 @@ const MESSAGE_REFRESH_DEBOUNCE_MS = 800;
  * 认得的颜色。这个 token 只服务伙伴列表的未读徽标与待办点，不外溢到别的地方。
  */
 const UNREAD_BADGE_CLASS =
-  'flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1.5 text-11 font-medium leading-none text-[var(--bot-unread-fg)]';
+  'flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 font-medium tabular-nums leading-none text-[var(--bot-unread-fg)]';
 
 function BotsSidebarContent() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { botId } = useParams();
+  const { botId, sessionId, deviceId } = useParams();
+  const remoteBots = useRemoteBots();
   const bots = useBotProfiles();
   const unreadByBotId = useBotUnreadCounts();
   const rosterBots = bots.filter((bot) => bot.status !== 'archived');
@@ -58,26 +77,21 @@ function BotsSidebarContent() {
   const [query, setQuery] = useState('');
   const [showHidden, setShowHidden] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const [menuBotId, setMenuBotId] = useState<string | null>(null);
-  const contextMenuFrameRef = useRef<number | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    botId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<BotProfile | null>(null);
+  const menuOriginRef = useRef<HTMLButtonElement | null>(null);
+  const menuPointerDownRef = useRef(false);
+  const menuRestoreFocusRef = useRef(true);
 
-  useEffect(
-    () => () => {
-      if (contextMenuFrameRef.current !== null) {
-        window.cancelAnimationFrame(contextMenuFrameRef.current);
-      }
-    },
-    [],
-  );
-
-  const openBotContextMenu = (id: string) => {
-    if (contextMenuFrameRef.current !== null) {
-      window.cancelAnimationFrame(contextMenuFrameRef.current);
-    }
-    contextMenuFrameRef.current = window.requestAnimationFrame(() => {
-      contextMenuFrameRef.current = null;
-      setMenuBotId(id);
-    });
+  const openBotContextMenu = (botId: string, origin: HTMLButtonElement, x: number, y: number) => {
+    menuOriginRef.current = origin;
+    menuPointerDownRef.current = false;
+    menuRestoreFocusRef.current = true;
+    setContextMenu({ botId, x, y });
   };
 
   /*
@@ -93,8 +107,9 @@ function BotsSidebarContent() {
        (main/agent-island/service.ts 的 publish 两条分支都会 emit)。
      - 依赖轻：只吃 shared 里的类型，不用把整个聊天 store 拖进侧栏。
 
-    刻意**不**挂 useSessionRunningStatus —— 那个 hook 还负责完成/出错角标与系统
-    通知的状态机，在这里再挂一份会把那些副作用发两遍。
+    当前侧栏只有一个 owner：进入伙伴页时普通任务侧栏会被这个节点替换，因此这里
+    必须接手 useSessionRunningStatus。否则用户停留在伙伴页时，伙伴和普通任务的
+    完成、失败、待回复都没有系统通知。
   */
   const islandActivity = useAgentIslandActivityMap();
   const isBotWorking = (bot: BotProfile): boolean => {
@@ -107,7 +122,71 @@ function BotsSidebarContent() {
     return bot.sessions.some((session) => islandActivity.get(session.id)?.phase === 'running');
   };
   const roster = partitionBotRoster(rosterBots, { query, showHidden });
-  const showSearch = rosterBots.length >= 8 || query.trim().length > 0;
+  const showSearch = rosterBots.length + remoteBots.length >= 8 || query.trim().length > 0;
+
+  const sessionOwners = useMemo(() => {
+    const next = new Map<string, { bot: BotProfile; title: string }>();
+    for (const bot of bots) {
+      for (const session of bot.sessions) next.set(session.id, { bot, title: session.title });
+    }
+    return next;
+  }, [bots]);
+  const activeBotSessionId = useMemo(() => {
+    if (sessionId) return sessionId;
+    const selectedBot = bots.find((bot) => bot.id === botId);
+    return selectedBot ? canonicalBotSessionId(selectedBot) : undefined;
+  }, [botId, bots, sessionId]);
+  const fireSessionNotification = useCallback(
+    (targetSessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+      const owner = sessionOwners.get(targetSessionId);
+      if (owner) {
+        const title =
+          owner.title.trim() && owner.title !== owner.bot.name
+            ? `${owner.bot.name} · ${owner.title}`
+            : owner.bot.name;
+        sendSessionEventNotification(targetSessionId, title, kind);
+        return;
+      }
+      // useSessionRunningStatus observes the shared runtime map, so it also
+      // keeps ordinary tasks notifying while the user is on the Bots page.
+      // Resolve their real title lazily instead of exposing an internal id.
+      void sessionService
+        .get(targetSessionId)
+        .then((session) => {
+          if (isOrcaWorkerSession(session)) return;
+          sendSessionEventNotification(
+            targetSessionId,
+            projectDraftSessionTitle(session.title, t('ccAgent.common.unnamedSession')),
+            kind,
+          );
+        })
+        .catch(() => {
+          sendSessionEventNotification(
+            targetSessionId,
+            t('ccAgent.common.unnamedSession'),
+            kind,
+          );
+        });
+    },
+    [sessionOwners, t],
+  );
+  const handleSessionDone = useCallback(
+    (targetSessionId: string) => fireSessionNotification(targetSessionId, 'done'),
+    [fireSessionNotification],
+  );
+  const handleSessionError = useCallback(
+    (targetSessionId: string) => fireSessionNotification(targetSessionId, 'error'),
+    [fireSessionNotification],
+  );
+  const handleSessionNeedsReply = useCallback(
+    (targetSessionId: string) => fireSessionNotification(targetSessionId, 'needs-reply'),
+    [fireSessionNotification],
+  );
+  useSessionRunningStatus(activeBotSessionId, {
+    onSessionDone: handleSessionDone,
+    onSessionError: handleSessionError,
+    onSessionNeedsReply: handleSessionNeedsReply,
+  });
 
   useEffect(() => {
     if (roster.visible.length === 0) return;
@@ -222,21 +301,33 @@ function BotsSidebarContent() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
-        {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 ? (
-          <button
-            type="button"
-            onClick={() => navigate('/bots/roster')}
-            // 定稿 `.side-empty{padding:12px 14px}`。原来的 `mx-1 w-[calc(100%-8px)]`
-            // 让空态卡比它下面的伙伴行窄 8px,两种状态切换时左边缘会跳。
-            className="flex w-full flex-col items-start gap-1 rounded-xl border border-dashed border-[var(--border-default)] px-3.5 py-3 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-          >
-            <span className="font-medium text-[var(--text-primary)]">{t('bots.emptyTitle')}</span>
-            <span>{t('bots.emptyDescription')}</span>
-          </button>
+        {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 ? (
+          <div className="px-3 py-3">
+            <BotCreateMenu label={t('bots.add')} />
+          </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {roster.visible.map((bot) => {
-              const selected = bot.id === botId;
+            {[...roster.visible, ...remoteBots.filter((bot) => !query.trim() || `${bot.name} ${bot.description} ${bot.deviceName}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))]
+              .sort((a, b) => {
+                const pin = Number('pinnedAt' in b && Boolean(b.pinnedAt)) - Number('pinnedAt' in a && Boolean(a.pinnedAt));
+                return pin || ('activityAt' in b ? b.activityAt : b.lastMessageAt ?? b.createdAt) - ('activityAt' in a ? a.activityAt : a.lastMessageAt ?? a.createdAt);
+              }).map((bot) => {
+              if ('deviceId' in bot) {
+                const selected = bot.id === botId && bot.deviceId === deviceId;
+                return (
+                  <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
+                    onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
+                    className={cn('flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus online={bot.online} deviceName={bot.deviceName} /></span>
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="truncate text-14 leading-5">{bot.name}</span>
+                      <span className="truncate text-12 leading-4 text-[var(--sidebar-list-muted)]">{bot.preview || bot.description || t('bots.list.startChat')}</span>
+                    </span>
+                    <span className="w-10 shrink-0 self-start pt-0.5 text-right text-11 tabular-nums text-[var(--sidebar-list-muted)]">{formatBotListTimestamp(bot.activityAt, now)}</span>
+                  </button>
+                );
+              }
+              const selected = !deviceId && bot.id === botId;
               const unread = unreadByBotId[bot.id] ?? 0;
               const subtitle = botListSubtitle(bot);
               // TA 正在回话时，第二行临时让位给「正在输入…」——聊天列表里这一行
@@ -263,10 +354,6 @@ function BotsSidebarContent() {
               return (
                 <div
                   key={bot.id}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    openBotContextMenu(bot.id);
-                  }}
                   className={cn(
                     'group relative flex w-full items-center rounded-xl transition-colors',
                     selected
@@ -282,18 +369,25 @@ function BotsSidebarContent() {
                   <button
                     type="button"
                     onClick={() => navigate(`/bots/${bot.id}`)}
+                    aria-current={selected ? 'page' : undefined}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      openBotContextMenu(bot.id, event.currentTarget, event.clientX, event.clientY);
+                    }}
                     onKeyDown={(event) => {
                       if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) {
                         return;
                       }
                       event.preventDefault();
-                      setMenuBotId(bot.id);
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      openBotContextMenu(bot.id, event.currentTarget, rect.left + 10, rect.bottom);
                     }}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     {/* 40px。28px 会让两行式行高塌成一行的观感——头像撑不住两行文字,
                         整行读起来像一条被拉高的单行列表。 */}
-                    <BotAvatar bot={bot} size="md" />
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
                         {bot.pinnedAt ? (
@@ -323,19 +417,15 @@ function BotsSidebarContent() {
                         ) : null}
                       </span>
                       <span className="flex min-w-0 items-center gap-2">
-                        {/* 未读时不加 mutedClass:第二行跟着提到一级色,「有新消息」在
-                            一屏里靠亮度就能被扫到,不用先读数字。 */}
+                        {/* 未读只强调名字与数字，预览保持次级，避免整行同时争抢注意力。 */}
                         <span
                           className={cn(
                             'min-w-0 flex-1 truncate text-12 leading-4',
                             // 「正在输入…」是个过程说明,不是消息内容:斜体 + 三级色,
                             // 哪怕这一行有未读也不跟着提到一级——否则一个瞬时状态
                             // 会比真正的新消息还抢眼。
-                            typing
-                              ? cn('italic', mutedClass)
-                              : unread > 0
-                                ? 'font-medium'
-                                : mutedClass,
+                            mutedClass,
+                            typing && 'italic',
                           )}
                           title={subtitleText}
                         >
@@ -349,8 +439,8 @@ function BotsSidebarContent() {
                       有没有未读，所有数字都落在同一条垂直线上。
                     */}
                     <span className="flex w-10 shrink-0 self-stretch flex-col items-end justify-between py-0.5">
-                      <span className={cn('min-h-4 text-11', mutedClass)}>{timestamp}</span>
-                      <span className="flex min-h-[18px] items-center justify-end gap-1.5">
+                      <span className={cn('min-h-4 text-11 tabular-nums', mutedClass)}>{timestamp}</span>
+                      <span className="flex min-h-4 items-center justify-end">
                         {unread > 0 ? (
                           <span
                             className={UNREAD_BADGE_CLASS}
@@ -363,17 +453,42 @@ function BotsSidebarContent() {
                     </span>
                   </button>
                   <DropdownMenu
-                    open={menuBotId === bot.id}
-                    onOpenChange={(open) => setMenuBotId(open ? bot.id : null)}
+                    open={contextMenu?.botId === bot.id}
+                    onOpenChange={(open) => { if (!open) setContextMenu(null); }}
                   >
                     <DropdownMenuTrigger asChild>
-                      {/*
-                        菜单只作为右键 / 长按 / Shift+F10 的锚点。它不占一列，也不
-                        覆盖未读；常用动作是打开聊天，管理动作留在上下文菜单。
-                      */}
-                      <span className="pointer-events-none absolute right-2 top-2 h-px w-px" />
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none fixed h-0 w-0"
+                        style={{ left: contextMenu?.x ?? 0, top: contextMenu?.y ?? 0 }}
+                      />
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-40">
+                    <DropdownMenuContent
+                      align="start"
+                      className="min-w-40"
+                      onCloseAutoFocus={(event) => {
+                        event.preventDefault();
+                        if (menuRestoreFocusRef.current) menuOriginRef.current?.focus({ preventScroll: true });
+                      }}
+                      onInteractOutside={() => { menuRestoreFocusRef.current = false; }}
+                      onPointerDownCapture={(event) => {
+                        menuPointerDownRef.current = event.button === 0 && !event.ctrlKey;
+                      }}
+                      onPointerUpCapture={(event) => {
+                        // Radix synthesizes a click on release when the press happened
+                        // outside an item. Opening a context menu must never select it.
+                        if (!menuPointerDownRef.current || event.button !== 0 || event.ctrlKey) {
+                          event.preventDefault();
+                        }
+                        menuPointerDownRef.current = false;
+                      }}
+                      onClickCapture={(event) => {
+                        if (event.button !== 0 || event.ctrlKey) {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }
+                      }}
+                    >
                       <DropdownMenuItem onSelect={() => void setBotPinned(bot.id, !bot.pinnedAt)}>
                         <Pin size={14} className="mr-2" />
                         {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
@@ -402,6 +517,14 @@ function BotsSidebarContent() {
                       >
                         <Copy size={14} className="mr-2" />
                         {t('bots.list.duplicate')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-[var(--text-danger)] focus:text-[var(--text-danger)]"
+                        onSelect={() => setDeleteTarget(bot)}
+                      >
+                        <Trash2 size={14} className="mr-2" />
+                        {t('bots.lifecycle.delete')}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -443,6 +566,14 @@ function BotsSidebarContent() {
                         >
                           <Eye size={14} />
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(bot)}
+                          className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-danger)] hover:bg-[var(--danger-bg-soft)]"
+                          aria-label={t('bots.lifecycle.deleteTitle')}
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                     ))
                   : null}
@@ -457,10 +588,8 @@ function BotsSidebarContent() {
                 {archivedBots.map((bot) => {
                   const selected = bot.id === botId;
                   return (
-                    <button
-                      type="button"
+                    <div
                       key={bot.id}
-                      onClick={() => navigate(`/bots/${bot.id}?settings=1`)}
                       className={cn(
                         'group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors',
                         selected
@@ -468,14 +597,28 @@ function BotsSidebarContent() {
                           : 'text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover',
                       )}
                     >
-                      <BotAvatar bot={bot} size="sm" className="opacity-70" />
-                      <span
-                        className="min-w-0 flex-1 truncate text-13 font-medium"
-                        title={bot.name}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/bots/${bot.id}?settings=1`)}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                       >
-                        {bot.name}
-                      </span>
-                    </button>
+                        <BotAvatar bot={bot} size="sm" className="opacity-70" />
+                        <span
+                          className="min-w-0 flex-1 truncate text-13 font-medium"
+                          title={bot.name}
+                        >
+                          {bot.name}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(bot)}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-danger)] opacity-0 hover:bg-[var(--danger-bg-soft)] group-hover:opacity-100 focus:opacity-100"
+                        aria-label={t('bots.lifecycle.deleteTitle')}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -483,6 +626,19 @@ function BotsSidebarContent() {
           </div>
         )}
       </div>
+      <BotDeleteDialog
+        bot={deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        onDeleted={(deletedBotId) => {
+          if (botId !== deletedBotId) return;
+          const fallback = bots.find(
+            (candidate) => candidate.id !== deletedBotId && candidate.status !== 'archived',
+          );
+          navigate(fallback ? `/bots/${fallback.id}` : '/bots', { replace: true });
+        }}
+      />
     </div>
   );
 }

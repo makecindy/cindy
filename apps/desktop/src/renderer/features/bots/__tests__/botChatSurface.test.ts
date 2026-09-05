@@ -23,9 +23,7 @@ describe('Bot 对话的判定条件', () => {
   it('「这是跟伙伴的对话」需要路由身份与 session.source 同时成立', () => {
     // URL 只是导航投影。少了 source 这一半,任何 /bots/... 链接都能把普通任务
     // 伪装成伙伴对话。
-    expect(sessionView).toContain(
-      "botIdentity && session?.source === 'bot' ? botIdentity : null",
-    );
+    expect(sessionView).toContain("botIdentity && session?.source === 'bot' ? botIdentity : null");
   });
 
   it('气泡头像只在 Bot 对话下传给消息流', () => {
@@ -50,9 +48,7 @@ describe('Bot 对话的判定条件', () => {
 
 describe('消息流的头像挂载', () => {
   it('没有头像时原样返回气泡,不多包一层 DOM', () => {
-    const helper = messageStream.match(
-      /function withAssistantAvatar\([\s\S]*?\n}/,
-    )?.[0];
+    const helper = messageStream.match(/function withAssistantAvatar\([\s\S]*?\n}/)?.[0];
     expect(helper).toBeTruthy();
     expect(helper).toContain('if (!avatar) return bubble;');
   });
@@ -66,14 +62,16 @@ describe('消息流的头像挂载', () => {
 });
 
 describe('伙伴输入框只保留对话动作', () => {
-  it('权限 chip 与模型选择器共用同一隐藏门', () => {
-    expect(chatInput.match(/!hideRuntimeControls \? \(/g)?.length).toBe(2);
+  it('伙伴保留标准权限 chip，仅隐藏模型选择器', () => {
+    expect(chatInput.match(/!hideRuntimeControls \? \(/g)?.length).toBe(1);
+    expect(chatInput.indexOf('<PermissionSelector')).toBeLessThan(chatInput.indexOf('!hideRuntimeControls ? ('));
     expect(chatInput).toContain('<PermissionSelector');
     expect(chatInput).toContain('<ModelSelector');
   });
 
-  it('隐藏控件时也禁用权限快捷键', () => {
-    expect(chatInput).toContain('settingsLocked || hideRuntimeControls');
+  it('伙伴仍可使用权限快捷键，锁定任务不能切换', () => {
+    expect(chatInput).toContain('settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
+    expect(chatInput).not.toContain('settingsLocked || hideRuntimeControls');
   });
 
   it('伙伴不渲染任务目录、费用或压缩状态行', () => {
@@ -83,11 +81,13 @@ describe('伙伴输入框只保留对话动作', () => {
   });
 });
 
-describe('伙伴设置只展示伙伴自己的成长内容', () => {
-  it('不再挂载全局 Skill、内置工具与 MCP 能力目录', () => {
+describe('伙伴设置收口为基本资料与高级文件入口', () => {
+  it('不再挂载旧成长列表或全局能力目录', () => {
     expect(botSettings).not.toContain('import { BotCapabilitySettings }');
     expect(botSettings).not.toContain('<BotCapabilitySettings');
-    expect(botSettings).toContain('<BotGrowthLists');
+    expect(botSettings).not.toContain('<BotGrowthLists');
+    expect(botSettings).toContain('<BotBasicProfileFields');
+    expect(botSettings).toContain("t('bots.homeFolder.title')");
   });
 });
 
@@ -128,24 +128,11 @@ describe('伙伴消息流收起内部工作过程', () => {
     expect(messageActionBar).toContain('simplifiedBotConversation ? null : costText || tokensText');
     expect(messageActionBar).toContain('simplifiedBotConversation || visible || menuOpen');
   });
-});
 
-/**
- * 恢复选择器带来的**必须**配套:伙伴主任务会在 Renew 时按 Profile 的
- * capabilities 重建,输入框只写会话行的话,用户选的模型会在 Renew 后回跳。
- */
-describe('伙伴对话的运行时选择回写 Profile', () => {
-  it('模型 / effort / 权限 / 供应商 / fast 五个入口都接上了回写', () => {
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ model: newModelId })');
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ effort: newEffort })');
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ permissionMode: newMode })');
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ providerId: newProviderId })');
-    expect(sessionView).toContain('mirrorBotComposerRuntime({ fastMode: next })');
-    expect(sessionView).toContain('onProviderDidChange={handleProviderDidChange}');
-    expect(sessionView).toContain('onFastModeChange={handleFastModeChange}');
-  });
-
-  it('普通任务一行都不写:没有伙伴身份就直接返回', () => {
-    expect(sessionView).toContain('const botId = botChatIdentityRef.current?.id;\n      if (!botId) return;');
+  it('伙伴身份同时接通专属成果采集与成果卡，普通任务不触发', () => {
+    expect(messageStream).toContain(
+      'botSessionId: simplifiedBotConversation ? sessionId : undefined',
+    );
+    expect(messageStream).toContain('botArtifacts={simplifiedBotConversation}');
   });
 });

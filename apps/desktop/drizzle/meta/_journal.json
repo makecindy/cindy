@@ -719,8 +719,15 @@
     {
       "idx": 102,
       "version": "6",
-      "when": 1788512810642,
-      "tag": "0102_bot_profiles_and_messages",
+      "when": 1788503589671,
+      "tag": "0102_optimal_ender_wiggin",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "6",
+      "when": 1788596996011,
+      "tag": "0103_bot_mode",
       "breakpoints": true
     }
   ]

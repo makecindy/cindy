@@ -944,12 +944,6 @@ registerColor('bot-avatar-graphite-bg', {
 // 不是「你现在站在这一行」。值与 focus-ring / Auto Approval / Toast info 同族 #417CDD,
 // 前景恒白(--accent-pure-cta-fg 在 Dark 会翻成黑,不能借)。
 // 作用域严格限定为伙伴列表的未读徽标与待办点,不得外溢到别的徽标、状态点或表面。
-// 客座气泡描边:比 Board(--border-default)亮一档的中性描边。「有人来串门」应该在
-// 一屏里被扫到,而不是要逐条读名字才发现;灰阶,不是新的语义色。
-registerColor('bot-guest-border', {
-  light: '#bdbdb9',
-  dark: '#525250',
-}, '客座气泡描边 — 比 Board 亮一档的中性描边(伙伴对话专用)');
 registerColor('bot-unread-bg', {
   light: '#417CDD',
   dark: '#417CDD',
@@ -2197,7 +2191,7 @@ registerColor('warning-fg', {
 // 的规矩补注册,不在消费点撒 fallback。
 //
 // 三个走 alias:错误族直接复用既有 error-* 语义槽,info 复用 info-700
-// (与 BotDelegationActivityIndicator 原先写死的 fallback 同源),这样非默认
+// 与任务状态的既有 fallback 同源,这样非默认
 // 主题对 error-* / info-700 的 override 能自动流下来,不会有一族颜色脱队。
 registerColor('text-danger', {
   light: 'var(--error-fg)',
@@ -2392,3 +2386,43 @@ registerColor('caret-accent', {
   light: 'var(--accent-cta-bg)',
   dark: 'var(--accent-cta-bg)',
 }, 'Editable caret accent; CINDY overrides to focus blue #417CDD per user decision 2026-07-18(撤红改蓝)');
+
+// DS-4 Button 状态矩阵（G2 hover 换色 / G3 pressed）。拍板人 = 用户/设计师，2026-09-03。
+//
+// 为什么 hover / pressed 是 color-mix 派生值而不是 alias 到既有 slot：
+// 暗色下 `--surface-hover` 与 `--surface-chip` 本就同值（default-dark / cindy-dark /
+// one-dark-pro / monokai-pro 实测），primary rest 与 hover 会撞成同色 —— 悬停零反馈，
+// 违反 DESIGN.md §10 双模式交付门槛「状态不可区分即真实缺陷」。secondary 的
+// `--surface-hover-soft` 同样在 atom-one-light / cindy-dark / eclipse / github-dark
+// 贴着 `--surface-elevated`（CINDY 暗色只差 2/255）。
+// 因此改为「从本变体的 rest 底色朝本变体的前景色推一档」：hover 8%、pressed 再 10%。
+// 这套派生按主题自动跟随（rest 与前景都是被 override 的 token），11 个内置主题实测
+// 每一级 ΔRGB ≥ 8；也不再引入不跟主题的字面量。运行期派生值按治理合同 §3.4
+// 留在代码中、只登记不进 DTCG 影子层（classification 里为
+// runtime-derived-or-protected）。
+registerColor('button-primary-hover', {
+  light: 'color-mix(in srgb, var(--surface-chip) 92%, var(--text-primary))',
+  dark: 'color-mix(in srgb, var(--surface-chip) 92%, var(--text-primary))',
+}, 'DS-4 button/primary hover — rest 底色朝 text-primary 推 8%');
+registerColor('button-primary-pressed', {
+  light: 'color-mix(in srgb, var(--button-primary-hover) 90%, var(--text-primary))',
+  dark: 'color-mix(in srgb, var(--button-primary-hover) 90%, var(--text-primary))',
+}, 'DS-4 button/primary pressed — 自 hover 再推 10%，保证梯子单调');
+registerColor('button-secondary-hover', {
+  light: 'color-mix(in srgb, var(--surface-elevated) 92%, var(--text-primary))',
+  dark: 'color-mix(in srgb, var(--surface-elevated) 92%, var(--text-primary))',
+}, 'DS-4 button/secondary hover — rest 底色朝 text-primary 推 8%');
+registerColor('button-secondary-pressed', {
+  light: 'color-mix(in srgb, var(--button-secondary-hover) 90%, var(--text-primary))',
+  dark: 'color-mix(in srgb, var(--button-secondary-hover) 90%, var(--text-primary))',
+}, 'DS-4 button/secondary pressed — 自 hover 再推 10%');
+// cta hover 沿用 §4 既有规定的 --accent-hover（其注释本写明 "CTA pressed/hover"），
+// 只给 Button 一个组件级名字，便于 DS-8 生成 component 层时落回 semantic。
+registerColor('button-cta-hover', {
+  light: 'var(--accent-hover)',
+  dark: 'var(--accent-hover)',
+}, 'DS-4 button/cta hover — 沿用 --accent-hover（DESIGN.md §4）');
+registerColor('button-cta-pressed', {
+  light: 'color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))',
+  dark: 'color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))',
+}, 'DS-4 button/cta pressed — 自 cta hover 朝 CTA 前景再推 10%');

@@ -76,6 +76,31 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('keeps the task title when a progress frame reports only the role name', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({
+      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'subagent',
+      args: { agent: 'scout', task: 'find the auth entry point' },
+    }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'tool_execution_update', toolCallId: 'sa-title',
+      partialResult: { details: {
+        __cindySubagent: 1, taskId: 'sa-title', status: 'completed', agentName: 'scout',
+      } },
+    }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'tool_execution_end', toolCallId: 'sa-title', result: 'done', isError: false,
+    }), queue, ctx);
+    const updates = events.filter((event) => event.type === 'agent_task_update');
+    expect(updates).toHaveLength(3);
+    expect(updates.map((event) => event.data)).toEqual([
+      expect.objectContaining({ title: 'find the auth entry point' }),
+      expect.objectContaining({ title: 'find the auth entry point' }),
+      expect.objectContaining({ title: 'find the auth entry point', status: 'completed' }),
+    ]);
+  });
+
   it('does not project management commands as Subagent runs', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -1333,7 +1358,43 @@ describe('pi translator', () => {
     ]);
   });
 
-  it('marks generation active on message_start so the UI can tick live TPS', () => {
+  it('retains the completed output/time pair throughout the next streamed message', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue } = makeQueue();
+    try {
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      nowSpy.mockReturnValue(11_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [], usage: { input: 10, output: 1_000 }, duration: 10_000,
+      } }), queue, ctx);
+      nowSpy.mockReturnValue(21_000);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      nowSpy.mockReturnValue(31_000);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: 'still generating',
+      } }), queue, ctx);
+      expect(usageSnapshotOf(ctx)).toMatchObject({
+        outputTokens: 1_000, generationDurationMs: 10_000, generationActive: true,
+      });
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [], usage: { input: 10, output: 1_000 }, duration: 10_000,
+      } }), queue, ctx);
+      expect(usageSnapshotOf(ctx)).toMatchObject({
+        outputTokens: 2_000, generationDurationMs: 20_000, generationActive: false,
+      });
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      expect(usageSnapshotOf(ctx).outputTokens).toBe(0);
+      expect(usageSnapshotOf(ctx)).not.toHaveProperty('generationDurationMs');
+    } finally {
+      disposePiTranslateContext(ctx);
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('marks generation active on message_start without advancing sampled usage', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);

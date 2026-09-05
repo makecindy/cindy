@@ -1224,8 +1224,9 @@ export function ModelEffortChip({
           onFastModeChange={onChangeFast}
           onDismiss={() => setOpenWithoutAutoRefresh(false)}
           currentProviderId={providerId || null}
-          onProviderChange={(pid, reconciledModelId, reconciledEffort) => {
+          onProviderChange={(pid, reconciledModelId, reconciledEffort, reconciledFast) => {
             onChangeProviderId(pid && pid !== nativeDefault ? pid : '');
+            if (reconciledFast !== undefined) onChangeFast?.(reconciledFast);
             if (reconciledModelId) onChangeModel(reconciledModelId);
             if (reconciledEffort !== undefined) {
               onChangeEffort(reconciledEffort as EffortValue | '');

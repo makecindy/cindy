@@ -24,6 +24,7 @@ import {
   isUtilityRouteDisabled,
   isUtilityRoutePaymentRequired,
 } from '../utility-model/oneShotCandidates.js';
+import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -31,7 +32,11 @@ import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
 } from '../maker-host/auth-adapters.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+} from '../appSessionState.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -70,6 +75,7 @@ import {
   collectRefinerPrewarmTransports,
   orderVoiceInputRefinerChainForRuntime,
 } from './VoiceInputRefinerRouting.js';
+import { isActiveCatalogVoiceRefinerProfile } from './mapAuxiliaryRefsToVoiceRefiners.js';
 import {
   getMicrophoneSettingsUrl,
   isExplicitMicrophonePermissionDenied,
@@ -329,6 +335,12 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
     return { ok: true, actions: [], elapsedMs: 0 };
   }
 
+  // Bind dictionary learning to the owner and auxiliary chain that initiated
+  // this advisor request. Readiness and model resolution below both await, so
+  // a later account or chain switch must fail closed before any advisor fetch
+  // or dictionary mutation.
+  const ownerScopeKey = activeOwnerScopeKey();
+  const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
   const sourceLabel = options.sourceLabel ?? payload.source ?? 'in_app';
   // 锚点资格只认 main 侧由 event.sender 反查出的 fromOverlaySender，不认 payload.source
   // 这个 renderer 自报字段。锚点必须在任何 await 之前取：此刻的呈现代次才代表这次请求
@@ -381,7 +393,15 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
     const advisorAttempts: FallbackTextModelAttempt[] = readyAdvisorProfiles.map((profile) => ({
       profileId: profile.id as VoiceInputRefinerProviderKind,
       model: profile.model,
-      client: createVoiceInputTextModelClient(profile),
+      client: guardRefinerClientAgainstUnavailableRoute(
+        profile,
+        createVoiceInputTextModelClient(profile, {
+          beforeDispatch: () => {
+            assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
+            assertRefinerRouteAvailable(profile);
+          },
+        }),
+      ),
       promptCacheScope: `dictionaryLearning:${profile.id}:${senderId}`,
     }));
     const advisor = new DictationDictionaryAdvisor({
@@ -397,6 +417,7 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
       existingCandidates: toDictionaryLearningCandidateState(settings.dictionaryCandidates),
     };
     const result = await advisor.advise(adviceInput);
+    assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
     const recordResult = voiceInputDataStore.recordDictionaryLearningActions(result.actions);
     if (recordResult.newAutomaticEntries.length > 0) {
       showVoiceInputDictionaryToast(
@@ -933,10 +954,32 @@ async function getVoiceInputRefinerReadiness(
   };
 }
 
+function assertRefinerRouteAvailable(profile: VoiceInputRefinerProfile): void {
+  if (isUtilityRouteDisabled(profile)) {
+    throw new Error('voice refiner route disabled in settings');
+  }
+  if (!isActiveCatalogVoiceRefinerProfile(profile)) {
+    throw new Error('voice refiner catalog route unavailable');
+  }
+  if (isUtilityRoutePaymentRequired(profile)) {
+    throw new Error('voice refiner route requires paid entitlement');
+  }
+}
+
+function assertVoiceInputOwnerScopeCurrent(ownerScopeKey: string, chainSnapshot?: string): void {
+  if (
+    isAppSessionBoundaryPending()
+    || activeOwnerScopeKey() !== ownerScopeKey
+    || (chainSnapshot !== undefined && getEffectiveAuxiliaryModelChainSnapshot() !== chainSnapshot)
+  ) {
+    throw new Error('voice input owner scope changed');
+  }
+}
+
 /**
- * TextModelClient 的 live 可用性包装(BYOK):每次 requestJson(= 一次精修请求)
- * 前重查设置停用与 Cindy 账号付费权限；不可用即抛错，FallbackTextModelClient
- * 将其视为该档失败并自然落到下一档。
+ * TextModelClient 的 live 可用性包装(BYOK):先在 requestJson 入口快速失败，
+ * 再把同一判据传入具体 HTTP client，在每次实际 fetch 前最后复核一次。
+ * FallbackTextModelClient 会将任一复核失败视为该档失败并自然落到下一档。
  */
 function guardRefinerClientAgainstUnavailableRoute(
   profile: VoiceInputRefinerProfile,
@@ -944,14 +987,10 @@ function guardRefinerClientAgainstUnavailableRoute(
 ): TextModelClient {
   return {
     requestJson: (input) => {
-      if (isUtilityRouteDisabled(profile)) {
-        return Promise.reject(new Error('voice refiner route disabled in settings'));
-      }
-      // Refinement may start minutes after chain resolution. Re-read the live
-      // owner-scoped catalog immediately before every direct XD request so a
-      // newly denied paid model cannot be dispatched from a retained session.
-      if (isUtilityRoutePaymentRequired(profile)) {
-        return Promise.reject(new Error('voice refiner route requires paid entitlement'));
+      try {
+        assertRefinerRouteAvailable(profile);
+      } catch (error) {
+        return Promise.reject(error);
       }
       return client.requestJson(input);
     },
@@ -971,6 +1010,8 @@ function createVoiceInputTextModelClient(
     /** Idle watchdog per attempt; both clients re-arm it on every stream chunk. */
     timeoutMs?: number;
     voiceContext?: CindyVoiceRunContext;
+    /** Final route guard invoked immediately before each network dispatch. */
+    beforeDispatch?: () => void;
   },
 ): TextModelClient {
   if (options?.voiceContext) {
@@ -984,6 +1025,7 @@ function createVoiceInputTextModelClient(
       ),
       onUsage: options.onUsage,
       timeoutMs: options.timeoutMs,
+      beforeDispatch: options.beforeDispatch,
     });
   }
   if (profile.transport === 'codex-responses') {
@@ -995,6 +1037,7 @@ function createVoiceInputTextModelClient(
       onAuthInvalidated: (reason) => {
         void desktopCodexAuthAdapter.invalidate(reason);
       },
+      beforeDispatch: options?.beforeDispatch,
     });
   }
 
@@ -1006,6 +1049,7 @@ function createVoiceInputTextModelClient(
       baseUrl: proxyBaseUrl,
       onUsage: options?.onUsage,
       timeoutMs: options?.timeoutMs,
+      beforeDispatch: options?.beforeDispatch,
     });
   }
 
@@ -2066,6 +2110,11 @@ export function registerVoiceInputIpc(): void {
   });
 
   ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
+    // Bind this run to the owner that initiated it before any cancellation,
+    // readiness, or credential await. A later account switch must fail closed
+    // at the final refiner dispatch instead of using the new owner's route.
+    const ownerScopeKey = activeOwnerScopeKey();
+    const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
     const isInlineSender = !isGlobalVoiceInputOverlaySender(event.sender);
     const existing = activeByWebContentsId.get(event.sender.id);
     if (existing) {
@@ -2217,6 +2266,11 @@ export function registerVoiceInputIpc(): void {
             ?? `${VOICE_INPUT_REFINEMENT_CACHE_SCOPE}:${CINDY_MANAGED_REFINER_PROVIDER}`;
           refiner = new DictationRefiner({
             client: createVoiceInputTextModelClient(effectiveRefinerProfile, {
+              // Managed refinement is routed and failed over by voice-server;
+              // changing the local auxiliary chain must not cancel it. The
+              // owner fence still prevents a previous account's text from
+              // being sent after an account switch.
+              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),
               timeoutMs: VOICE_INPUT_MANAGED_REFINER_IDLE_TIMEOUT_MS,
               voiceContext,
               onUsage: ({ servedModel, ...usage }) => {
@@ -2252,6 +2306,10 @@ export function registerVoiceInputIpc(): void {
             client: guardRefinerClientAgainstUnavailableRoute(
               profile,
               createVoiceInputTextModelClient(profile, {
+                beforeDispatch: () => {
+                  assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
+                  assertRefinerRouteAvailable(profile);
+                },
                 timeoutMs: VOICE_INPUT_REFINER_IDLE_TIMEOUT_MS,
                 onUsage: (usage) => {
                   if (!runId) return;

@@ -124,7 +124,7 @@ async function startPlanSession(
   depOverrides: Partial<AgentDeps> = {},
   permissionMode: PermissionMode = 'acceptEdits',
   reviewMode = false,
-  workspaceReadOnly = false,
+  botProfile = false,
   writableDirs: string[] = [],
 ) {
   const configDir = await makeTempDir();
@@ -143,9 +143,8 @@ async function startPlanSession(
     planMode,
     ...(writableDirs.length > 0 ? { writableDirs } : {}),
     ...(reviewMode ? { reviewMode: true as const } : {}),
-    ...(workspaceReadOnly
+    ...(botProfile
       ? {
-          workspaceAccess: 'read-only' as const,
           botProfilePrompt: 'BOT SOUL: research without changing the project.',
         }
       : {}),
@@ -512,82 +511,25 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
-  it('keeps the normal Bot runtime while hard-blocking project mutation tools', async () => {
-    const downstreamHook = vi.fn(async () => ({ continue: true }));
+  it('keeps Bot identity and native tools under ordinary task permissions', async () => {
     const { handle, queryOptions, fakeQuery } = await startPlanSession(
-      false,
-      {
-        claudeHooks: { PreToolUse: [{ hooks: [downstreamHook] }] },
-      },
-      'bypassPermissions',
-      false,
-      true,
+      false, {}, 'bypassPermissions', false, true,
     );
-
-    expect(queryOptions.permissionMode).toBe('default');
-    expect(queryOptions.allowDangerouslySkipPermissions).toBe(false);
-    expect(queryOptions.settingSources).toEqual(['user', 'project', 'local']);
+    expect(queryOptions.permissionMode).toBe('bypassPermissions');
+    expect(queryOptions.allowDangerouslySkipPermissions).toBe(true);
     expect(queryOptions.systemPrompt?.append).toContain('BOT SOUL');
-    const workspaceHook = queryOptions.hooks?.PreToolUse?.[0]?.hooks[0];
-    if (!workspaceHook) throw new Error('expected Bot workspace read-only hook');
-    await expect(workspaceHook({
-      hook_event_name: 'PreToolUse',
-      tool_name: 'Read',
-      tool_input: { file_path: '/repo/source.ts' },
-    })).resolves.toEqual({ continue: true });
-    for (const toolName of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash']) {
-      await expect(workspaceHook({
-        hook_event_name: 'PreToolUse',
-        tool_name: toolName,
-        tool_input: {},
-      })).resolves.toMatchObject({
-        hookSpecificOutput: { permissionDecision: 'deny' },
-      });
+    for (const toolName of ['Write', 'Bash']) {
+      for (const group of queryOptions.hooks?.PreToolUse ?? []) {
+        for (const hook of group.hooks) {
+          const decision = await hook({
+            hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: {},
+          });
+          expect(decision.hookSpecificOutput).not.toMatchObject({ permissionDecision: 'deny' });
+        }
+      }
     }
-    await expect(workspaceHook({
-      hook_event_name: 'PreToolUse',
-      tool_name: 'mcp__bot_helper__delegate_to_bot',
-      tool_input: {},
-    })).resolves.toEqual({ continue: true });
-
-    await handle.setPermissionMode?.('bypassPermissions');
-    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
-    expect(downstreamHook).not.toHaveBeenCalled();
-    await handle.close();
-  });
-
-  it('keeps a read-only Bot project immutable while allowing structured writes to Bot Home', async () => {
-    const homeDir = await makeTempDir();
-    const { handle, queryOptions, workingDir } = await startPlanSession(
-      false,
-      {},
-      'bypassPermissions',
-      false,
-      true,
-      [homeDir],
-    );
-    const workspaceHook = queryOptions.hooks?.PreToolUse?.[0]?.hooks[0];
-    if (!workspaceHook) throw new Error('expected Bot workspace read-only hook');
-
-    await expect(workspaceHook({
-      hook_event_name: 'PreToolUse',
-      tool_name: 'Write',
-      tool_input: { file_path: path.join(homeDir, 'memories', 'USER.md') },
-    })).resolves.toEqual({ continue: true });
-    await expect(workspaceHook({
-      hook_event_name: 'PreToolUse',
-      tool_name: 'Write',
-      tool_input: { file_path: path.join(workingDir, 'source.ts') },
-    })).resolves.toMatchObject({
-      hookSpecificOutput: { permissionDecision: 'deny' },
-    });
-    await expect(workspaceHook({
-      hook_event_name: 'PreToolUse',
-      tool_name: 'Bash',
-      tool_input: { command: 'touch memories/USER.md' },
-    })).resolves.toMatchObject({
-      hookSpecificOutput: { permissionDecision: 'deny' },
-    });
+    await handle.setPermissionMode?.('ask');
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
     await handle.close();
   });
 
@@ -624,56 +566,6 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(starts[0]?.allowedTools).not.toBe(source);
     expect(sdkMock.query).not.toHaveBeenCalled();
     await handle.close();
-  });
-
-  it('passes immutable Bot workspace boundaries to remote cc-manager', async () => {
-    const configDir = await makeTempDir();
-    process.env.CLAUDE_CONFIG_DIR = configDir;
-    const workingDir = await makeTempDir();
-    const allowed = path.join(workingDir, 'generated');
-    await fs.mkdir(allowed);
-
-    const restrictedStarts: Array<Record<string, unknown>> = [];
-    const restrictedAgent = new ClaudeCodeAgent(createDeps({
-      remoteCcQueryFactory: async (args) => {
-        restrictedStarts.push(args.startParams);
-        return createFakeQuery() as never;
-      },
-    }));
-    const restrictedHandle = await restrictedAgent.startSession({
-      sessionId: 'session-remote-bot-write-scope',
-      model: 'claude-opus-4-6',
-      workingDir,
-      remoteHostId: 'remote-1',
-      permissionMode: 'bypassPermissions',
-      workspaceWritePaths: [allowed],
-    });
-    expect(restrictedStarts[0]).toMatchObject({
-      permissionMode: 'bypassPermissions',
-      workspaceWritePaths: [allowed],
-    });
-    await restrictedHandle.close();
-
-    const readOnlyStarts: Array<Record<string, unknown>> = [];
-    const readOnlyAgent = new ClaudeCodeAgent(createDeps({
-      remoteCcQueryFactory: async (args) => {
-        readOnlyStarts.push(args.startParams);
-        return createFakeQuery() as never;
-      },
-    }));
-    const readOnlyHandle = await readOnlyAgent.startSession({
-      sessionId: 'session-remote-bot-readonly',
-      model: 'claude-opus-4-6',
-      workingDir,
-      remoteHostId: 'remote-1',
-      permissionMode: 'bypassPermissions',
-      workspaceAccess: 'read-only',
-    });
-    expect(readOnlyStarts[0]).toMatchObject({
-      permissionMode: 'default',
-      workspaceReadOnly: true,
-    });
-    await readOnlyHandle.close();
   });
 
   it('keeps a truncated image as a path reference instead of native inline data', async () => {

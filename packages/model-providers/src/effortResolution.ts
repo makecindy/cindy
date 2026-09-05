@@ -78,6 +78,26 @@ export function resolveRequestedEffort(args: {
 }
 
 /**
+ * 点选时交给 SET_MODEL 的原子快照。
+ *
+ * `resolveEffort` 在无档模型上会给 UI 占位 `'low'`。那一档不能写进运行时:
+ * 目录 `efforts` 为空的模型运行时语义是 `effort: null`,塞 low 会让胶囊显示
+ * thinking low/high,实际模型却没有思考档。Fast 同样:不支持就必须是 false,
+ * 不能把上一模型的插队状态带到新模型上。
+ */
+export function composeAtomicModelSelection(args: {
+  efforts: readonly Effort[];
+  effort: Effort;
+  fastSupported: boolean;
+  requestedFast: boolean;
+}): { effort: Effort | null; fastMode: boolean } {
+  return {
+    effort: args.efforts.length === 0 ? null : args.effort,
+    fastMode: args.fastSupported && args.requestedFast,
+  };
+}
+
+/**
  * 意图期内改选模型/来源时,面板交出来的档 vs 旧意图档。
  *
  * ModelSelector 对无思考档的行传空串(`rowEffortOf ?? ''`)。空串是「目标明确没有可调档」,

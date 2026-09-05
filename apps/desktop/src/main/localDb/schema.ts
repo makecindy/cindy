@@ -438,10 +438,16 @@ export const botDelegations = sqliteTable(
     resultSummary: text('result_summary'),
     /** Output artifacts produced by the child task; never input authorization refs. */
     outputArtifactsJson: text('output_artifacts_json').notNull().default('[]'),
+    /** User-visible waiting summary; the live resolver remains runtime-owned. */
+    pendingInteractionJson: text('pending_interaction_json'),
     lastError: text('last_error'),
+    /** Stable task id, incrementing execution run. A terminal task may be continued in a new child Session. */
+    runSequence: integer('run_sequence').notNull().default(1),
     createdAt: integer('created_at').notNull(),
     acceptedAt: integer('accepted_at'),
     completedAt: integer('completed_at'),
+    /** Set only after the terminal wake has been accepted by the requesting Bot task. */
+    completionDeliveredAt: integer('completion_delivered_at'),
     updatedAt: integer('updated_at').notNull(),
   },
   (t) => ({
@@ -487,7 +493,7 @@ export const botDirectMessageThreads = sqliteTable(
   }),
 );
 
-/** One explicit message_agent delivery inside a hidden Bot pair conversation. */
+/** One explicit send_to_agent delivery inside a hidden Bot pair conversation. */
 export const botDirectMessages = sqliteTable(
   'bot_direct_messages',
   {
@@ -1652,6 +1658,20 @@ export const skillUsageExposures = sqliteTable(
       t.skillName,
       t.skillDocumentHash,
     ),
+    bySkillRecent: index('idx_skill_usage_exposures_skill_recent').on(
+      t.skillName,
+      t.analyzerVersion,
+      t.seenAt,
+    ),
+    bySkillRecentAnyVersion: index('idx_skill_usage_exposures_skill_recent_any_version').on(
+      t.skillName,
+      t.seenAt,
+    ),
+    byAnalyzerRecentSource: index('idx_skill_usage_exposures_analyzer_recent_source').on(
+      t.analyzerVersion,
+      t.seenAt,
+      t.rawFilePath,
+    ),
     bySession: index('idx_skill_usage_exposures_session').on(t.sessionId),
     byRawFile: index('idx_skill_usage_exposures_raw_file').on(t.rawFilePath),
   }),
@@ -1777,9 +1797,6 @@ export const rightSidebarTabs = sqliteTable(
     uniqSubagents: uniqueIndex('right_sidebar_tabs_subagents_singleton_idx')
       .on(t.sessionId)
       .where(sql`${t.kind} = 'subagents'`),
-    uniqBotDelegations: uniqueIndex('right_sidebar_tabs_bot_delegations_singleton_idx')
-      .on(t.sessionId)
-      .where(sql`${t.kind} = 'bot-delegations'`),
     uniqBotArtifacts: uniqueIndex('right_sidebar_tabs_bot_artifacts_singleton_idx')
       .on(t.sessionId)
       .where(sql`${t.kind} = 'bot-artifacts'`),

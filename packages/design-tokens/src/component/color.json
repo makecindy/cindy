@@ -1,0 +1,15 @@
+{
+  "$description": "DS-4 component 层：只收录能落回 semantic 的 Button 角色。hover / pressed 是 color-mix 运行期派生值，按治理合同 §3.4 只在 classification 登记、不建模。",
+  "button": {
+    "button-cta-hover": {
+      "light": {
+        "$type": "color",
+        "$value": "{accent.accent-hover.light}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{accent.accent-hover.dark}"
+      }
+    }
+  }
+}

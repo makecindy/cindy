@@ -19,6 +19,28 @@ vi.mock('../UtilityModelSelection.js', () => ({
   getUtilityModelChainProfiles: vi.fn(),
 }));
 
+const chainState = vi.hoisted(() => ({
+  source: 'auto' as 'auto' | 'custom' | 'env',
+  refs: ['codex-gpt-5.4-mini', 'litellm-gpt-5.4-mini'],
+}));
+
+const ownerState = vi.hoisted(() => ({
+  key: 'owner-a',
+  pending: false,
+}));
+
+vi.mock('../resolveAuxiliaryModelChain.js', () => ({
+  getEffectiveAuxiliaryModelChain: () => ({
+    source: chainState.source,
+    refs: [...chainState.refs],
+  }),
+}));
+
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => ownerState.key,
+  isAppSessionBoundaryPending: () => ownerState.pending,
+}));
+
 vi.mock('../../maker-host/auth-adapters.js', () => ({
   readClaudeApiKey: vi.fn(),
 }));
@@ -125,6 +147,10 @@ describe('utility one-shot candidates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fetchMock.mockReset();
+    chainState.source = 'auto';
+    chainState.refs = ['codex-gpt-5.4-mini', 'litellm-gpt-5.4-mini'];
+    ownerState.key = 'owner-a';
+    ownerState.pending = false;
     appCapabilities.mockReturnValue({ canUseCindyGateway: true } as never);
     readKey.mockReturnValue(null);
     readCodexCreds.mockRejectedValue(new Error('not authenticated'));
@@ -183,6 +209,108 @@ describe('utility one-shot candidates', () => {
         }),
       ],
     });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('aborts the default chain when the owner changes before dispatch', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'must not dispatch' } }] }),
+    } as never);
+
+    const request = requestUtilityText(makerMock(false), 'hello');
+    ownerState.key = 'owner-b';
+
+    const result = await request;
+
+    expect(result).toMatchObject({ ok: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the owner after profile resolution before invoking Codex oneShot', async () => {
+    chainState.refs = ['codex-gpt-5.4-mini'];
+    getProfiles.mockReturnValue([{
+      id: 'codex-gpt-5.4-mini',
+      model: 'gpt-5.4-mini',
+      transport: 'codex-responses',
+      auth: 'codex',
+      settingsTab: 'connections',
+      missingCredentialMessage: 'codex missing',
+    }]);
+    const maker = makerMock(true);
+    vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {
+      ownerState.key = 'owner-b';
+      return { authenticated: true };
+    });
+
+    const result = await requestUtilityText(maker, 'must stay with owner-a');
+
+    expect(result).toMatchObject({ ok: false });
+    expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
+  });
+
+  it('rechecks profile disable status at final Codex dispatch', async () => {
+    chainState.refs = ['codex-gpt-5.4-mini'];
+    const maker = makerMock(true);
+    vi.mocked(maker.oneShot).mockImplementation(async (_agent, _prompt, options) => {
+      readDisableOverrides.mockReturnValue({
+        disabledModels: {},
+        disabledProviders: { openai: true },
+      } as never);
+      const allowed = options?.beforeDispatch ? await options.beforeDispatch() : true;
+      if (!allowed) throw new Error('request_failed');
+      return 'must not dispatch';
+    });
+
+    const result = await requestUtilityText(maker, 'hello');
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [expect.objectContaining({ reason: 'request_failed' })],
+    });
+    expect(vi.mocked(maker.oneShot)).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks the owner after an async caller guard before LiteLLM dispatch', async () => {
+    chainState.refs = ['litellm-gpt-5.4-mini'];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'must not dispatch' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'must stay with owner-a', {
+      beforeDispatch: async () => {
+        ownerState.key = 'owner-b';
+        return true;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('runs the caller guard at the final LiteLLM dispatch boundary', async () => {
+    chainState.refs = ['litellm-gpt-5.4-mini'];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'must not dispatch' } }] }),
+    } as never);
+
+    let guardCalls = 0;
+    const beforeDispatch = vi.fn(async () => {
+      guardCalls += 1;
+      return guardCalls < 3;
+    });
+    const result = await requestUtilityText(makerMock(false), 'must stay guarded', {
+      beforeDispatch,
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(beforeDispatch).toHaveBeenCalledTimes(3);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -246,8 +374,56 @@ describe('utility one-shot candidates', () => {
     });
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
       max_tokens: 10,
-      reasoning_effort: 'low',
+      thinking: { type: 'disabled' },
     });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty(
+      'reasoning_effort',
+    );
+  });
+
+  it('passes system and response instructions through profile candidates', async () => {
+    const maker = makerMock(true);
+    chainState.refs = ['codex-gpt-5.4-mini', 'litellm-gpt-5.4-mini'];
+    readKey.mockReturnValue('proxy-key');
+    vi.mocked(maker.oneShot).mockRejectedValueOnce(new Error('codex unavailable'));
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'lite text' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(maker, 'reference', {
+      systemPrompt: 'SYSTEM POLICY',
+      responseInstructions: 'ONE LINE ONLY',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'litellm-gpt-5.4-mini' });
+    expect(maker.oneShot).toHaveBeenCalledWith('codex', 'reference', expect.objectContaining({
+      systemPrompt: 'SYSTEM POLICY',
+      responseInstructions: 'ONE LINE ONLY',
+    }));
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      messages: [
+        { role: 'system', content: 'SYSTEM POLICY\nONE LINE ONLY' },
+        { role: 'user', content: 'reference' },
+      ],
+    });
+  });
+
+  it('stops before a later fallback when the auxiliary chain changes mid-request', async () => {
+    readKey.mockReturnValue('proxy-key');
+    const maker = makerMock(true);
+    vi.mocked(maker.oneShot).mockImplementationOnce(async () => {
+      chainState.refs = ['codex-gpt-5.4-mini'];
+      throw new Error('codex down');
+    });
+
+    const result = await requestUtilityText(maker, 'hello');
+
+    expect(result).toMatchObject({ ok: false });
+    expect(vi.mocked(maker.oneShot)).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    if (result.ok) throw new Error('expected the stale fallback chain to abort');
+    expect(result.attempts).toHaveLength(1);
   });
 
   it('chat-completions 的 content 为 parts 数组时拼接文本段(思考模型形态)', async () => {
@@ -340,6 +516,29 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('rechecks the owner for a pinned profile before invoking Codex oneShot', async () => {
+    const maker = makerMock(true);
+    vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {
+      ownerState.key = 'owner-b';
+      return { authenticated: true };
+    });
+    getProfiles.mockReturnValue([{
+      id: 'codex-gpt-5.4-mini',
+      model: 'gpt-5.4-mini',
+      transport: 'codex-responses',
+      auth: 'codex',
+      settingsTab: 'connections',
+      missingCredentialMessage: 'codex missing',
+    }]);
+
+    const result = await requestUtilityText(maker, 'must stay with owner-a', {
+      pinnedProfileId: 'codex-gpt-5.4-mini',
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
+  });
+
   it('不认的 pinnedProfileId 忽略,回落默认链', async () => {
     readKey.mockReturnValue('proxy-key');
     fetchMock.mockResolvedValueOnce({
@@ -384,6 +583,7 @@ describe('utility one-shot candidates', () => {
   });
 
   it('distinguishes an empty response from generic request failures', async () => {
+    chainState.refs = ['codex-gpt-5.4-mini'];
     getProfiles.mockReturnValue([{
       id: 'codex-gpt-5.4-mini',
       model: 'gpt-5.4-mini',
@@ -414,8 +614,8 @@ describe('utility one-shot candidates', () => {
       ok: false,
       reason: 'timeout',
       attempts: [
-        expect.objectContaining({ providerId: 'litellm-gpt-5.4-mini', status: 'skipped' }),
         expect.objectContaining({ providerId: 'codex-gpt-5.4-mini', reason: 'timeout' }),
+        expect.objectContaining({ providerId: 'litellm-gpt-5.4-mini', status: 'skipped' }),
       ],
     });
   });
@@ -609,6 +809,51 @@ describe('utility one-shot candidates', () => {
       reasoning_effort: 'low',
       messages: [{ role: 'user', content: 'generate' }],
     });
+  });
+
+  it('maps disabled thinking to Ollama reasoning_effort none', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'cindy-local-ollama',
+        name: 'Ollama',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'none',
+          },
+        },
+        models: {
+          codex: [{ id: 'qwen3.8:27b', name: 'Qwen 3.8 27B', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'local title', reasoning: 'hidden chain' } }],
+      }),
+    } as never);
+
+    const result = await requestExplicitUtilityText('generate', {
+      providerId: 'cindy-local-ollama',
+      agentKind: 'codex',
+      model: 'qwen3.8:27b',
+      maxTokens: 32,
+      disableReasoning: true,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'local title' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).toMatchObject({
+      model: 'qwen3.8:27b',
+      max_tokens: 32,
+      reasoning_effort: 'none',
+    });
+    expect(body).not.toHaveProperty('thinking');
   });
 
   it('keeps system instructions separate on an exact auxiliary chat route', async () => {
@@ -1786,6 +2031,45 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('fails closed when an explicit XD catalog model becomes payment-required', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD Gateway',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'managed' },
+        routing: {
+          codex: { upstream: 'https://ignored.invalid', authStrategy: 'gateway-key' },
+        },
+        models: {
+          codex: [{ id: 'paid-model', name: 'Paid model', contextWindow: 1_000_000 }],
+        },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    xdPaymentRequiredRoute.mockImplementation((model, agent) => model === 'paid-model' && agent === 'codex');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'paid-model',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [{
+        providerId: 'xd',
+        model: 'paid-model',
+        transport: 'codex-responses',
+        status: 'skipped',
+        reason: 'model_unavailable',
+      }],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('uses Anthropic OAuth and the selected Anthropic routing for an explicit builtin provider', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -1858,6 +2142,39 @@ describe('utility one-shot candidates', () => {
       reasoning: { effort: 'low' },
     });
     // ChatGPT Codex returns HTTP 400 for this public Responses API field.
+    expect(body).not.toHaveProperty('max_output_tokens');
+  });
+
+  it('maps disabled reasoning to low for OpenAI Responses instead of unsupported minimal', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'oauth' },
+        routing: { codex: { upstream: 'https://chatgpt.example/api/v1', authStrategy: 'oauth-passthrough' } },
+        models: { codex: [{ id: 'chatgpt/gpt-5.4-mini', name: 'GPT-5.4 Mini', contextWindow: 272_000 }] },
+      }],
+    } as never);
+    readCodexCreds.mockResolvedValue({ accessToken: 'codex-token', accountId: 'account-1' });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => 'data: {"type":"response.output_text.delta","delta":"title"}\ndata: [DONE]\n',
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'openai',
+      agentKind: 'codex',
+      model: 'chatgpt/gpt-5.4-mini',
+      maxTokens: 32,
+      disableReasoning: true,
+      reasoningEffort: 'minimal',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'openai', model: 'chatgpt/gpt-5.4-mini' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({ reasoning: { effort: 'low' } });
     expect(body).not.toHaveProperty('max_output_tokens');
   });
 
@@ -2127,4 +2444,143 @@ describe('utility one-shot candidates', () => {
       expect(body).not.toHaveProperty('reasoning');
     },
   );
+
+  it('tries a one-item custom chain in order and never expands to AUTO', async () => {
+    chainState.source = 'custom';
+    chainState.refs = ['litellm-kimi-k2.6'];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'kimi text' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'kimi text',
+      providerId: 'litellm-kimi-k2.6',
+      model: 'moonshotai/kimi-k2.6',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'moonshotai/kimi-k2.6',
+      thinking: { type: 'disabled' },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries a two-item custom chain strictly in order', async () => {
+    chainState.source = 'custom';
+    chainState.refs = ['litellm-kimi-k2.6', 'litellm-gpt-5.4-mini'];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        body: { cancel: vi.fn(async () => undefined) },
+      } as never)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'mini text' } }] }),
+      } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello');
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'mini text',
+      providerId: 'litellm-gpt-5.4-mini',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'moonshotai/kimi-k2.6',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      model: 'gpt-5.4-mini',
+    });
+  });
+
+  it('tries a three-item custom chain and stops after the last success', async () => {
+    chainState.source = 'custom';
+    chainState.refs = [
+      'litellm-kimi-k2.6',
+      'litellm-gpt-5.4-mini',
+      'litellm-deepseek-v4-flash',
+    ];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        body: { cancel: vi.fn(async () => undefined) },
+      } as never)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        body: { cancel: vi.fn(async () => undefined) },
+      } as never)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'flash text' } }] }),
+      } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello');
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'flash text',
+      providerId: 'litellm-deepseek-v4-flash',
+      model: 'deepseek/deepseek-v4-flash',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not fall back to AUTO candidates after a custom chain is exhausted', async () => {
+    chainState.source = 'custom';
+    chainState.refs = ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        body: { cancel: vi.fn(async () => undefined) },
+      } as never)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        body: { cancel: vi.fn(async () => undefined) },
+      } as never);
+
+    const maker = makerMock(true);
+    const result = await requestUtilityText(maker, 'hello');
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'all_candidates_failed',
+    });
+    expect(result.ok === false ? result.attempts.map((attempt) => attempt.providerId) : []).toEqual([
+      'litellm-kimi-k2.6',
+      'litellm-deepseek-v4-flash',
+    ]);
+    expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends reasoning_effort when the caller turns thinking back on', async () => {
+    chainState.refs = ['litellm-gpt-5.4-mini'];
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'reasoned' } }] }),
+    } as never);
+
+    await requestUtilityText(makerMock(false), 'hello', {
+      disableReasoning: false,
+      reasoningEffort: 'low',
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      reasoning_effort: 'low',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty('thinking');
+  });
 });

@@ -7,6 +7,7 @@ import {
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
 import { buildMobileMessageCopyText } from '@/session/messageActions';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
+import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
 import {
   MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES,
   projectLargeSettledToolInputs,
@@ -1258,6 +1259,39 @@ describe('normalizeRemoteMessages', () => {
       systemCardData: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3, outcome: 'failed' },
       align: 'agent',
     });
+  });
+});
+
+describe('context rebuild boundaries', () => {
+  it.each(['context-overflow', 'pi-prompt-timeout', 'codex-history-strip'])('restores %s as a visible standalone boundary', (reason) => {
+    const rows = [
+      message({ id: 'before', role: 'assistant', content: 'Before' }),
+      message({ id: 'rebuild', role: 'assistant', content: '', agentMeta: { contextRebuild: { reason, handoff: 'Private handoff' } } }),
+      message({ id: 'after', role: 'assistant', content: 'After' }),
+    ];
+    const items = buildMobileMessageRenderItems(rows);
+    const boundary = items.find((item) => item.type === 'message' && item.message.systemCardType === 'context-rebuild');
+    expect(boundary).toMatchObject({ type: 'message', message: {
+      kind: 'system', body: '', systemCardData: { reason, handoff: 'Private handoff' },
+    } });
+    // Intermediate assistant work can be folded; the following answer stays outside the marker.
+    expect(items.at(-1)).toMatchObject({ type: 'message', message: { body: 'After' } });
+  });
+
+  it('accepts projected cards and defaults incomplete persisted metadata', () => {
+    expect(normalizeRemoteMessages([
+      message({ id: 'projected', role: 'assistant', content: '', systemCardType: 'context-rebuild', systemCardData: { handoff: 'Summary' } }),
+      message({ id: 'legacy', role: 'assistant', content: '', agentMeta: { contextRebuild: { reason: 12, handoff: false } } }),
+    ])).toMatchObject([
+      { systemCardType: 'context-rebuild', systemCardData: { handoff: 'Summary' } },
+      { systemCardType: 'context-rebuild', systemCardData: { reason: 'context-overflow', handoff: '' } },
+    ]);
+  });
+
+  it.each([null, 'invalid', []])('keeps ordinary assistant text when metadata is invalid: %j', (contextRebuild) => {
+    const [item] = normalizeRemoteMessages([message({ id: 'ordinary', role: 'assistant', content: 'Keep this text', agentMeta: { contextRebuild } })]);
+    expect(item.body).toBe('Keep this text');
+    expect(item.systemCardType).toBeUndefined();
   });
 });
 

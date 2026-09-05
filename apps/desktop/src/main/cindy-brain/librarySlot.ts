@@ -73,6 +73,7 @@ export function libraryAvailableRef(input: {
 
 /** 单插件的库会话(vault + sql 绑定到同一根与 owner scope)。 */
 interface GhostLibrarySession {
+  ghostId: string;
   vault: LibraryVault;
   sql: LibrarySqlService;
   /** 会话创建时捕获的 owner scope key;每请求比对,变了就整会话作废。 */
@@ -114,8 +115,13 @@ export interface GhostLibrarySlotDeps {
   /**
    * 库根 realpath 变化后同步当前 Mivo 会话 extraDirs。
    * root 为 null 则撤槽。失败只记日志,不挡 library 主路径。
+   * 返回 granted = extraDirs 已挂上该库根;not-granted = 确定没挂上;
+   * superseded = 被更新一轮取代,不等于拆槽。void 仅留给旧单测 mock。
    */
-  syncAgentReadonlyExtraDir?(ghostId: string, root: string | null): Promise<void>;
+  syncAgentReadonlyExtraDir?(
+    ghostId: string,
+    root: string | null,
+  ): Promise<boolean | 'granted' | 'not-granted' | 'superseded' | void>;
 }
 
 const fail = (errorCode: string, message: string): GhostPipeLibraryResult => ({ ok: false, errorCode, message });
@@ -130,8 +136,13 @@ export class GhostLibrarySlot {
   private readonly lastSaveAsAttemptAt = new Map<string, number>();
   /** 全局另存为对话框在场标记(系统弹窗一次一个,不排队)。 */
   private saveAsDialogInFlight = false;
-  /** extraDirs 注入成功才握手 authorizedReadonly,失败走 cindy-media 备胎。 */
-  private extraDirGranted = false;
+  /**
+   * extraDirs 注入成功才握手 authorizedReadonly。系统槽同一时刻只有一个根,
+   * 所以只记当前 {ghostId, root};别人挂上或撤槽成功都要清掉这份记录。
+   */
+  private extraDirGrant: { ghostId: string; root: string } | null = null;
+  /** 最近一次显式 open 的插件;status 只给它复挂,别人 status 不得抢槽。 */
+  private extraDirOpenerGhostId: string | null = null;
 
   constructor(private readonly deps: GhostLibrarySlotDeps) {}
 
@@ -192,8 +203,8 @@ export class GhostLibrarySlot {
       const resolution = await this.deps.bindingStore.resolveLibraryRoot(ghostId);
       session = this.createSession(ghostId, resolution, scopeKey);
       this.sessions.set(ghostId, session);
-      // 会话建立即自动 open(幂等):消除"write 前忘 open"的脚枪;显式 open
-      // 操作仍有效,仅回状态。
+      // 会话建立即自动 open vault(幂等):消除"write 前忘 open"的脚枪。
+      // extraDirs 只在显式 open 时挂,status / 首次任意请求不得抢槽。
       if (session.drift === null) {
         await session.vault.open();
         // 重装自愈:能走到这里 = 插件已装入且启用,清掉卸载时留的 orphaned
@@ -201,8 +212,7 @@ export class GhostLibrarySlot {
         if (session.vault.getMeta()?.orphaned) {
           await session.vault.clearOrphaned().catch(() => {});
         }
-        await this.syncAgentReadonlyExtraDir(ghostId, session.vault.getRootDir());
-      } else {
+      } else if (this.extraDirGrant?.ghostId === ghostId) {
         await this.syncAgentReadonlyExtraDir(ghostId, null);
       }
     }
@@ -263,6 +273,7 @@ export class GhostLibrarySlot {
     const generation = record?.generation ?? 0;
     const identity = record ? `g${generation}` : 'default';
     return {
+      ghostId,
       vault,
       sql,
       ownerScopeKey: scopeKey,
@@ -273,6 +284,11 @@ export class GhostLibrarySlot {
     };
   }
 
+  private isExtraDirGrantedFor(ghostId: string, root: string | null): boolean {
+    if (root === null || this.extraDirGrant === null) return false;
+    return this.extraDirGrant.ghostId === ghostId && this.extraDirGrant.root === root;
+  }
+
   /** open/status 握手:已授权只读布尔 + 库代次/身份。谁问谁得,不回绝对路径。 */
   private handshakeFields(
     session: GhostLibrarySession,
@@ -280,22 +296,53 @@ export class GhostLibrarySlot {
   ): { authorizedReadonly: boolean; libraryGeneration: number; libraryIdentity: string } {
     return {
       authorizedReadonly:
-        this.extraDirGranted && session.drift === null && (state === 'ready' || state === 'readonly'),
+        this.isExtraDirGrantedFor(session.ghostId, session.vault.getRootDir())
+        && session.drift === null
+        && (state === 'ready' || state === 'readonly'),
       libraryGeneration: session.generation,
       libraryIdentity: session.identity,
     };
   }
 
+  private rememberExtraDirGrant(ghostId: string, root: string): void {
+    this.extraDirGrant = { ghostId, root };
+  }
+
+  private clearExtraDirGrant(ghostId?: string): void {
+    if (ghostId === undefined || this.extraDirGrant?.ghostId === ghostId) {
+      this.extraDirGrant = null;
+    }
+  }
+
   private async syncAgentReadonlyExtraDir(ghostId: string, root: string | null): Promise<void> {
     if (!this.deps.syncAgentReadonlyExtraDir) {
-      this.extraDirGranted = root !== null;
+      if (root === null) this.clearExtraDirGrant(ghostId);
+      else this.rememberExtraDirGrant(ghostId, root);
       return;
     }
     try {
-      await this.deps.syncAgentReadonlyExtraDir(ghostId, root);
-      this.extraDirGranted = root !== null;
+      const granted = await this.deps.syncAgentReadonlyExtraDir(ghostId, root);
+      if (root === null) {
+        if (granted === 'superseded') return;
+        this.clearExtraDirGrant(ghostId);
+        return;
+      }
+      if (granted === true || granted === 'granted') {
+        this.rememberExtraDirGrant(ghostId, root);
+        return;
+      }
+      if (granted === 'superseded') {
+        this.deps.log?.warn('library extraDirs sync superseded', { ghostId });
+        return;
+      }
+      if (granted === false || granted === 'not-granted') {
+        this.clearExtraDirGrant(ghostId);
+        return;
+      }
+      // void:单测 mock 没回结果时,按 root 非空视为已实写。
+      this.rememberExtraDirGrant(ghostId, root);
     } catch (error) {
-      this.extraDirGranted = false;
+      this.clearExtraDirGrant(ghostId);
       this.deps.log?.warn('library extraDirs sync failed', {
         ghostId,
         error: error instanceof Error ? error.message : String(error),
@@ -309,7 +356,10 @@ export class GhostLibrarySlot {
     this.sessions.delete(ghostId);
     await session.sql.dispose().catch(() => {});
     await session.vault.invalidate().catch(() => {});
-    await this.syncAgentReadonlyExtraDir(ghostId, null);
+    if (this.extraDirGrant?.ghostId === ghostId) {
+      await this.syncAgentReadonlyExtraDir(ghostId, null);
+    }
+    if (this.extraDirOpenerGhostId === ghostId) this.extraDirOpenerGhostId = null;
   }
 
   /** 停用/卸载/owner 切换收口:作废全部会话(commit 5 的生命周期接线点)。 */
@@ -404,6 +454,8 @@ export class GhostLibrarySlot {
       case 'open': {
         const r = await vault.open();
         if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        this.extraDirOpenerGhostId = ghostId;
+        await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
         const body = {
           ok: true as const, op: 'open' as const, state: r.state, reason: r.reason ?? undefined,
           usedBytes: r.usedBytes, fileCount: r.fileCount, location: session.locationKind,
@@ -413,6 +465,9 @@ export class GhostLibrarySlot {
       case 'status': {
         const r = await vault.status();
         if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (this.extraDirOpenerGhostId === ghostId) {
+          await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
+        }
         const body = {
           ok: true as const, op: 'status' as const, state: r.state, reason: r.reason ?? undefined,
           usedBytes: r.usedBytes, fileCount: r.fileCount,

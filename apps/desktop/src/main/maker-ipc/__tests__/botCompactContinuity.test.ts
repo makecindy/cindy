@@ -66,8 +66,8 @@ describe('压缩之后伙伴的身份被重新注入', () => {
   const register = read('apps/desktop/src/main/maker-ipc/register.ts');
 
   it('压缩边界被记下来,而不是当场重建 —— 同一轮里可能压好几次', () => {
-    expect(register).toContain("event.type === 'compact_boundary'");
-    expect(register).toContain('botCompactRuntimeRefreshCoordinator.noteBoundary(session)');
+    expect(read('apps/desktop/src/main/maker-ipc/sessionEventPreparation.ts')).toContain("event.type === 'compact_boundary'");
+    expect(read('apps/desktop/src/main/maker-ipc/sessionEventPreparation.ts')).toContain('botCompactRuntimeRefreshCoordinator.noteBoundary(session)');
   });
 
   it('真正的重建发生在轮次结束之后', () => {

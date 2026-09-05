@@ -14,7 +14,10 @@ import {
   buildUserProvider,
   DEFAULT_CUSTOM_CONTEXT_WINDOW,
   LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+  projectXaiApiImageModels,
   storedCustomProviderId,
+  xaiApiOfficialRuntimeAgents,
+  XAI_API_CUSTOM_PROVIDER_ID,
 } from "../user-provider.js";
 import type { CustomProviderConfig } from "../types.js";
 import type { ModelRegistry } from "../modelAccessBean.js";
@@ -58,6 +61,93 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(p.agents).toEqual(["codex"]);
     expect(p.routing["claude-code"]).toBeUndefined();
     expect(p.models["claude-code"]).toBeUndefined();
+  });
+
+  it("projects official Imagine models onto the xAI API-key source", () => {
+    const source = BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!;
+    const xaiApi = buildUserProvider({
+      id: XAI_API_CUSTOM_PROVIDER_ID,
+      name: "xAI API",
+      runtimes: {
+        codex: {
+          baseUrl: "https://api.x.ai/v1",
+          wireProtocol: "openai-chat",
+          models: [{ id: "grok-4.6", name: "Grok 4.6" }],
+        },
+      },
+    });
+
+    const projected = projectXaiApiImageModels([source, xaiApi]);
+    expect(projected.find((provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID)?.imageModels)
+      .toEqual(source.imageModels);
+  });
+
+  it("does not project Imagine models onto a non-official API-key endpoint", () => {
+    const source = BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!;
+    const proxy = buildUserProvider({
+      id: XAI_API_CUSTOM_PROVIDER_ID,
+      name: "xAI-compatible proxy",
+      runtimes: {
+        codex: {
+          baseUrl: "https://proxy.example/v1",
+          models: [{ id: "grok-4.6", name: "Grok 4.6" }],
+        },
+      },
+    });
+
+    expect(projectXaiApiImageModels([source, proxy])).toEqual([source, proxy]);
+  });
+
+  it("binds image credentials to runtimes routed at the official endpoint", () => {
+    // 官方 codex 路由 + 代理 pi 路由:只有 codex 可作为凭证来源,防止把
+    // 代理密钥发往官方图片端点(PR #3875 review P1)。
+    const mixed = buildUserProvider({
+      id: XAI_API_CUSTOM_PROVIDER_ID,
+      name: "xAI API",
+      runtimes: {
+        codex: {
+          baseUrl: "https://api.x.ai/v1",
+          wireProtocol: "openai-chat",
+          models: [{ id: "grok-4.6", name: "Grok 4.6" }],
+        },
+        pi: {
+          baseUrl: "https://proxy.example/v1",
+          models: [{ id: "grok-4.6", name: "Grok 4.6" }],
+        },
+      },
+    });
+    expect(xaiApiOfficialRuntimeAgents(mixed)).toEqual(["codex"]);
+
+    // 只有 pi 命中官方端点:凭证来源是 pi,而不是固定顺序里的 codex 代理。
+    const piOfficial = buildUserProvider({
+      id: XAI_API_CUSTOM_PROVIDER_ID,
+      name: "xAI API",
+      runtimes: {
+        codex: {
+          baseUrl: "https://proxy.example/v1",
+          models: [{ id: "grok-4.6", name: "Grok 4.6" }],
+        },
+        pi: {
+          baseUrl: "https://api.x.ai/v1",
+          models: [{ id: "grok-4.6", name: "Grok 4.6" }],
+        },
+      },
+    });
+    expect(xaiApiOfficialRuntimeAgents(piOfficial)).toEqual(["pi"]);
+
+    // 无任何官方路由:没有可用凭证来源。
+    const proxyOnly = buildUserProvider({
+      id: XAI_API_CUSTOM_PROVIDER_ID,
+      name: "xAI-compatible proxy",
+      runtimes: {
+        codex: {
+          baseUrl: "https://proxy.example/v1",
+          models: [{ id: "grok-4.6", name: "Grok 4.6" }],
+        },
+      },
+    });
+    expect(xaiApiOfficialRuntimeAgents(proxyOnly)).toEqual([]);
+    expect(xaiApiOfficialRuntimeAgents(undefined)).toEqual([]);
   });
 
   it("generates api-key-header routing with that runtime baseUrl, no key", () => {
@@ -203,12 +293,12 @@ describe("buildUserProvider (per-runtime)", () => {
       expect.objectContaining({
         id: "gpt-5.6-sol",
         efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       }),
       expect.objectContaining({
         id: "chatgpt/gpt-5.6-sol",
         efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       }),
       expect.objectContaining({
         id: "unregistered-model",
@@ -278,7 +368,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect(p.models.codex?.[0]).toMatchObject({
       id: 'xd/codex/gpt-5.6-sol',
       efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -300,7 +390,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect(p.models.codex?.[0]).toMatchObject({
       id: 'xd/gpt-5.6-sol',
       efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -323,7 +413,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect(p.models.codex?.[0]).toMatchObject({
       id: 'openai/gpt-5.6-sol',
       efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -379,7 +469,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
 
       expect(provider.models.codex?.[0]).toMatchObject({
         efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       });
     },
   );
@@ -418,7 +508,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
 
       expect(provider.models.codex?.[0]).toMatchObject({
         efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultEffort: "high",
+        defaultEffort: "medium",
       });
     },
   );
@@ -470,6 +560,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
       (entry) => entry.id === "openai/gpt-5.6-sol",
     );
     if (!baseEntry) throw new Error("missing gpt-5.6-sol registry entry");
+    registry.models = [baseEntry];
     baseEntry.perAgent = {
       ...baseEntry.perAgent,
       codex: { efforts: ["minimal", "max"], defaultEffort: "high" },

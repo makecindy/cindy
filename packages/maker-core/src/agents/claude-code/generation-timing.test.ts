@@ -256,7 +256,7 @@ describe('claude generation pause boundaries', () => {
     queue.end();
   });
 
-  it('attaches live generation fields to the terminal snapshot without message_delta', async () => {
+  it('keeps terminal tokens but omits unproven speed without message_delta', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const ctx = createTranslatorCtx();
@@ -301,10 +301,10 @@ describe('claude generation pause boundaries', () => {
     expect(doneStatus?.data).toMatchObject({
       isRunning: false,
       outputTokens: 40,
-      generationDurationMs: 800,
-      generationReliable: true,
+      generationReliable: false,
       generationActive: false,
     });
+    expect(doneStatus?.data).not.toHaveProperty('generationDurationMs');
     resetClaudeGenerationTiming(ctx.rt.generation);
     vi.useRealTimers();
   });
@@ -492,6 +492,8 @@ describe('claude generation pause boundaries', () => {
   });
 
   it('fails closed when a resumed result aggregate cannot prove streamed segment completeness', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const ctx = createTranslatorCtx();
     const queue = createAsyncQueue<AgentEvent>();
     translateSdkMessage(
@@ -505,6 +507,7 @@ describe('claude generation pause boundaries', () => {
       queue,
       ctx,
     );
+    vi.setSystemTime(2_000);
     translateSdkMessage(
       {
         type: 'stream_event',
@@ -535,6 +538,18 @@ describe('claude generation pause boundaries', () => {
     const events: AgentEvent[] = [];
     for await (const event of queue) events.push(event);
     const done = events.find((event) => event.type === 'done');
+    const statuses = events.filter((event) => event.type === 'status');
+    expect(statuses.at(-2)?.data).toMatchObject({
+      outputTokens: 25,
+      generationDurationMs: 1_000,
+      generationReliable: true,
+    });
+    expect(statuses.at(-1)?.data).toMatchObject({
+      status: 'Done',
+      outputTokens: 225,
+      generationReliable: false,
+    });
+    expect(statuses.at(-1)?.data).not.toHaveProperty('generationDurationMs');
     expect(done?.data).toMatchObject({
       usageSegmentsComplete: false,
       usageSegments: [
@@ -548,6 +563,137 @@ describe('claude generation pause boundaries', () => {
         },
       ],
     });
+  });
+
+  it('samples only accepted output growth across input-only, duplicate, and older deltas', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const send = (message: Parameters<typeof translateSdkMessage>[0]) =>
+      translateSdkMessage(message, queue, ctx);
+    send({ type: 'stream_event', event: {
+      type: 'message_start', message: { usage: { input_tokens: 10 } },
+    } });
+    vi.setSystemTime(2_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 100 } } });
+    for (const [index, usage] of [
+      { input_tokens: 20 },
+      { output_tokens: 0, cache_read_input_tokens: 10 },
+      { output_tokens: 100 },
+      { output_tokens: 50 },
+    ].entries()) {
+      vi.setSystemTime(3_000 + index * 1_000);
+      send({ type: 'stream_event', event: { type: 'message_delta', usage } });
+      expect(ctx.tracker.getTurnUsage().output).toBe(100);
+      expect(ctx.rt.generation.outputDurationMs).toBe(1_000);
+    }
+    expect(ctx.tracker.getTurnUsage()).toMatchObject({ input: 20, cacheRead: 10 });
+    vi.setSystemTime(7_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 200 } } });
+    expect(ctx.rt.generation.outputDurationMs).toBe(6_000);
+    vi.setSystemTime(8_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { input_tokens: 30 } } });
+    vi.setSystemTime(12_000);
+    send({ type: 'result', stop_reason: 'end_turn',
+      usage: { input_tokens: 30, output_tokens: 200, cache_read_input_tokens: 10 },
+    });
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const statuses = events.filter((event) => event.type === 'status');
+    expect(statuses.filter((event) => event.data.outputTokens === 100)).toHaveLength(5);
+    for (const event of statuses.filter((event) => event.data.outputTokens === 100)) {
+      expect(event.data.generationDurationMs).toBe(1_000);
+    }
+    expect(statuses.at(-1)?.data).toMatchObject({
+      status: 'Done', outputTokens: 200, generationDurationMs: 6_000, generationReliable: true,
+    });
+  });
+
+  it('keeps the last paired rate when the matching final result is delayed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage({ type: 'stream_event', event: {
+      type: 'message_start', message: { usage: { input_tokens: 10 } },
+    } }, queue, ctx);
+    vi.setSystemTime(2_000);
+    translateSdkMessage({ type: 'stream_event', event: {
+      type: 'message_delta', usage: { output_tokens: 100 },
+    } }, queue, ctx);
+    vi.setSystemTime(12_000);
+    translateSdkMessage({ type: 'result', stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 100 },
+    }, queue, ctx);
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const statuses = events.filter((event) => event.type === 'status');
+    for (const event of statuses.slice(-2)) {
+      expect(event.data).toMatchObject({
+        outputTokens: 100, generationDurationMs: 1_000, generationReliable: true,
+      });
+    }
+    expect(statuses.at(-1)?.data).toMatchObject({ status: 'Done', generationActive: false });
+  });
+
+  it.each([false, true])('ignores background child tool timing (assistant envelope: %s)', async (hasEnvelope) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const send = (message: Parameters<typeof translateSdkMessage>[0]) =>
+      translateSdkMessage(message, queue, ctx);
+    send({ type: 'stream_event', event: { type: 'message_start', message: {} } });
+    send({ type: 'stream_event', event: {
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'tool_use', id: 'bg-agent', name: 'Agent', input: {} },
+    } });
+    vi.setSystemTime(1_800);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 80 } } });
+    vi.setSystemTime(2_200);
+    send({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'bg-agent', content: 'async_launched' },
+    ] } });
+    vi.setSystemTime(3_000);
+    send({ type: 'stream_event', event: { type: 'message_start', message: {} } });
+    vi.setSystemTime(3_400);
+    send({ type: 'stream_event', parent_tool_use_id: 'bg-agent',
+      event: { type: 'message_start', message: {} } });
+    if (hasEnvelope) {
+      send({ type: 'assistant', parent_tool_use_id: 'bg-agent', message: { content: [
+        { type: 'tool_use', id: 'child-bash', name: 'Bash', input: { command: 'sleep 10' } },
+      ] } });
+    }
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    vi.setSystemTime(13_400);
+    send({ type: 'user', parent_tool_use_id: 'bg-agent', message: { content: [
+      { type: 'tool_result', tool_use_id: 'child-bash', content: 'child done' },
+    ] } });
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    vi.setSystemTime(14_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 1_180 } } });
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    expect(events.filter((event) => event.type === 'status').at(-1)?.data).toMatchObject({
+      outputTokens: 1_260,
+      generationDurationMs: 12_600,
+      generationReliable: true,
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done' },
+    }));
+    if (hasEnvelope) {
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'tool_use', data: expect.objectContaining({ toolUseId: 'child-bash' }),
+      }));
+    }
+    resetClaudeGenerationTiming(ctx.rt.generation);
   });
 
   it('keeps parent timing reliable for a complete subagent assistant without message_delta', () => {
@@ -693,8 +839,9 @@ describe('claude generation pause boundaries', () => {
     );
     expect(generating[1]?.data).toMatchObject({
       outputTokens: 0,
-      generationReliable: false,
+      generationReliable: true,
     });
+    expect(generating[1]?.data).not.toHaveProperty('generationDurationMs');
     expect(generating.at(-1)?.data).toMatchObject({
       outputTokens: 80,
       generationReliable: true,
@@ -711,7 +858,7 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 
-  it('hides live tok/s until the current parent request streams output', async () => {
+  it('retains the last paired parent sample until the next request reports output', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const ctx = createTranslatorCtx();
@@ -874,9 +1021,12 @@ describe('claude generation pause boundaries', () => {
     );
     const pendingCurrentParent = generating.filter((event) => {
       const data = event.data as { outputTokens?: number; generationReliable?: boolean };
-      return data.outputTokens === 80 && data.generationReliable === false;
+      return data.outputTokens === 80;
     });
     expect(pendingCurrentParent.length).toBeGreaterThan(0);
+    for (const event of pendingCurrentParent) {
+      expect(event.data).toMatchObject({ generationReliable: true, generationDurationMs: 800 });
+    }
     expect(generating.at(-1)?.data).toMatchObject({
       outputTokens: 120,
       generationReliable: true,
@@ -1731,7 +1881,7 @@ describe('claude generation pause boundaries', () => {
       outputTokens: 150,
       generationReliable: true,
       generationActive: false,
-      generationDurationMs: 1_300,
+      generationDurationMs: 1_000,
     });
     resetClaudeGenerationTiming(ctx.rt.generation);
     vi.useRealTimers();

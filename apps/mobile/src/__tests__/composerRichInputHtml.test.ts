@@ -6,6 +6,16 @@ import { buildComposerRichInputHtml } from '@/session/composerRichInputHtml';
 import { parseComposerWebMessage } from '@/session/composerRichInputProtocol';
 
 describe('mobile composer rich input HTML', () => {
+  it('animates a native frame that fills the horizontal input row, preserving the WebView command ref', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'), 'utf8');
+    const frame = source.slice(source.indexOf('frame: {'), source.indexOf('webView: {'));
+    expect(frame).toContain('flex: 1');
+    expect(frame).toContain('minWidth: 0');
+    expect(source).toContain('<Animated.View style={[styles.frame, heightStyle');
+    expect(source).not.toContain('createAnimatedComponent(WebView)');
+    expect(source).toContain('containerStyle={styles.webView}');
+  });
+
   const html = buildComposerRichInputHtml({
     accessibilityLabel: '输入消息',
     document: { version: 1, nodes: [{ type: 'quote', quote: { text: '<quoted>' } }] },
@@ -24,6 +34,12 @@ describe('mobile composer rich input HTML', () => {
   });
 
   it('ships an offline contenteditable protocol with atom deletion and caret placement', () => {
+    // The editor scrollport follows UI-driven WebView resizing without waiting
+    // for a setConfig message, while scrollHeight still reports natural content.
+    expect(html).toContain('max-height: min(var(--max-height), 100vh)');
+    expect(html).toContain('overflow-y: auto');
+    expect(html).toContain('root.scrollHeight');
+    expect(html).not.toContain('height: 100vh;');
     expect(html).toContain('contentEditable');
     expect(html).toContain("event.key === 'Backspace'");
     expect(html).toContain('placeCaretAroundAtom(atom, event.clientX)');
@@ -31,6 +47,7 @@ describe('mobile composer rich input HTML', () => {
     expect(html).not.toContain('drag-start');
     expect(html).not.toContain('touchmove');
     expect(html).toContain("compositionstart");
+    expect(html).toContain("compositioncancel");
     expect(html).toContain("paste-images-start");
     expect(html).toContain('.slice(0, MAX_PASTED_IMAGE_COUNT)');
     expect(html).toContain('SUPPORTED_PASTED_IMAGE_MIME_TYPES.has(mimeType)');
@@ -265,7 +282,11 @@ describe('mobile composer rich input HTML', () => {
     };
     const windowStub: {
       ReactNativeWebView: { postMessage(payload: string): void };
-      cindyComposer?: { commitPaste(requestId: string, nodes: unknown[]): void };
+      cindyComposer?: {
+        applyDocument(value: unknown, focusAfter?: boolean): void;
+        commitPaste(requestId: string, nodes: unknown[]): void;
+        setConfig(value: { maxHeight: number }): void;
+      };
       getSelection(): typeof selection;
     } = {
       ReactNativeWebView: {
@@ -278,12 +299,14 @@ describe('mobile composer rich input HTML', () => {
       },
     };
 
+    let onResize = () => {};
     runInNewContext(
       `Array.prototype.flatMap = undefined;\n${script}`,
       {
         document: documentStub,
         Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
         ResizeObserver: class {
+          constructor(callback: () => void) { onResize = callback; }
           observe() {}
         },
         window: windowStub,
@@ -292,12 +315,47 @@ describe('mobile composer rich input HTML', () => {
     expect(children).toHaveLength(1);
     expect(children[0]).toMatchObject({ nodeType: 3, nodeValue: 'hello' });
     expect(messages).toContainEqual({ type: 'ready' });
+    // A long draft's scrollport resizes on every drag frame; unchanged content
+    // measurements must not cross the WebView bridge again on those frames.
+    root.scrollHeight = 500;
+    const beforeResize = messages.length;
+    for (let frame = 0; frame < 100; frame += 1) onResize();
+    expect(messages.slice(beforeResize)).toEqual([{ type: 'height', height: 264 }]);
+    windowStub.cindyComposer?.setConfig({ maxHeight: 400 });
+    expect(messages.at(-1)).toEqual({ type: 'height', height: 400 });
+    root.scrollHeight = 80;
+    const beforeContentShrink = messages.length;
+    onResize();
+    onResize();
+    expect(messages.slice(beforeContentShrink)).toEqual([{ type: 'height', height: 80 }]);
     children[0].nodeValue = 'hello world';
     listeners.get('input')?.();
     expect(messages).toContainEqual({
       type: 'change',
       document: { version: 1, nodes: [{ type: 'text', text: 'hello world' }] },
     });
+
+    listeners.get('compositionstart')?.();
+    children[0].nodeValue = 'hello world composing';
+    listeners.get('input')?.();
+    expect(messages).not.toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world composing' }] },
+    });
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
+    children[0].nodeValue = 'hello world after chip';
+    listeners.get('input')?.();
+    expect(messages).toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world after chip' }] },
+    });
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
 
     const pasteRange = createRange();
     pasteRange.setStart(children[0], String(children[0].nodeValue).length);
@@ -379,6 +437,8 @@ describe('mobile composer rich input HTML', () => {
     expect(html).toContain('setCaretAfter(inserted[inserted.length - 1], current)');
     expect(html).toContain('if (isCaretAnchor(container))');
     expect(html).toContain('removeAtom(atom)');
+    expect(html).toContain('composing = false;');
+    expect(html).toContain("root.addEventListener('compositioncancel'");
   });
 
   it('escapes bootstrap markup instead of injecting it into the page', () => {
@@ -424,9 +484,10 @@ describe('mobile composer rich input HTML', () => {
       'utf8',
     ).replace(/\r\n/g, '\n');
     const overlayStart = screenSource.indexOf('const renderComposerInputOverlay = ');
+    expect(screenSource.indexOf('// 听写期间只滚动覆盖层', overlayStart)).toBeGreaterThan(overlayStart);
     const overlaySource = screenSource.slice(
       overlayStart,
-      screenSource.indexOf('const measureSendButtonTarget', overlayStart),
+      screenSource.indexOf('// 听写期间只滚动覆盖层', overlayStart),
     );
 
     expect(overlaySource).toContain('onPressIn={handleComposerInputPressIn}');

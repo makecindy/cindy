@@ -877,6 +877,7 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_ISOLATED_AUTH_PROOF', env.XDT_ISOLATED_AUTH_PROOF],
     // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
     ['XDT_CDP_PORT', env.XDT_CDP_PORT],
+    ['CINDY_CUA_SMOKE', env.CINDY_CUA_SMOKE],
     // 一次性 Grok wire 归因探针(dev-only;正常环境不设置,不产生额外日志)。
     ['XDT_WIRE_DIAGNOSTICS', env.XDT_WIRE_DIAGNOSTICS],
     // 一次性 Grok strict tool spike(dev-only;必须与 wire probe 一起显式开启)。
@@ -1067,9 +1068,15 @@ export function applyDesktopStartupConfigForPhase(options) {
   return applyDesktopDevStartupConfig(options);
 }
 
+export function clearInheritedIsolatedAuthAuthorization(env = process.env) {
+  delete env.XDT_ISOLATED_AUTH;
+  delete env.XDT_ALLOW_DEV_OAUTH_WRITE;
+  delete env.XDT_ISOLATED_AUTH_PROOF;
+}
+
 async function main() {
-  // Proofs are minted below only for this invocation's accepted --isolated-auth request.
-  delete process.env.XDT_ISOLATED_AUTH_PROOF;
+  // These capabilities are granted below only for this invocation's accepted --isolated-auth.
+  clearInheritedIsolatedAuthAuthorization();
   let argv = normalizeDesktopRestartArgv(process.argv.slice(2), process.env);
   const sharedArgvConflict = desktopRestartArgvConflictMessage(argv, process.env);
   if (sharedArgvConflict) throw new Error(sharedArgvConflict);

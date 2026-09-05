@@ -347,7 +347,8 @@ export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
     },
     {
       outputTokens: ctx.turnOutput,
-      closedDurationMs: ctx.generationDurationMs,
+      // Pi reports output only at message_end, alongside the closed duration.
+      durationMs: ctx.generationDurationMs,
       openStartedAt: ctx.generationOpenAt > 0 ? ctx.generationOpenAt : null,
       reliable: ctx.generationTimingReliable && ctx.generationHeartbeatReliable,
     },
@@ -684,8 +685,7 @@ export function translatePiEvent(
       const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
       ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
-      // Tell the UI generation is active so it can tick the TPS denominator
-      // locally between sparse message_end usage reports.
+      // Activity may advance before usage; the rate retains the last completed sample.
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }
@@ -824,10 +824,16 @@ export function translatePiEvent(
       const progress = parsePiSubagentProgress(event.partialResult);
       if (progress) {
         const previousUpdate = ctx.subagentToolCalls.get(progress.update.taskId);
+        // Legacy progress frames name the role (e.g. scout). Keep the task
+        // title chosen at spawn across progress and terminal events.
+        const update = {
+          ...progress.update,
+          ...(previousUpdate?.title ? { title: previousUpdate.title } : {}),
+        };
         if (previousUpdate) {
           ctx.subagentToolCalls.set(progress.update.taskId, {
             ...previousUpdate,
-            ...progress.update,
+            ...update,
           });
         }
         // 委派用量并进本 turn 的记账。子代理是独立 pi 进程,它的请求不走父进程的 usage 流,
@@ -839,7 +845,7 @@ export function translatePiEvent(
           progress.delegatedUsage,
           progress.delegatedUsageSegments,
         );
-        queue.push({ type: 'agent_task_update', data: progress.update, source: 'pi' });
+        queue.push({ type: 'agent_task_update', data: update, source: 'pi' });
       }
       return;
     }

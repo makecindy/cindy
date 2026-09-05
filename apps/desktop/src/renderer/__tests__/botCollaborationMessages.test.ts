@@ -1,13 +1,13 @@
 /**
  * botCollaborationMessages.test.ts
  * ---------------------------------------------------------------------------
- * 伙伴协作在消息流里的投影：主进程把结构化标记写进 `agent_meta.botCollaboration`，
- * mapServerMessages 据此派生协作卡与客座气泡。
+ * 伙伴后台任务在消息流里的投影：主进程把结构化标记写进
+ * `agent_meta.botCollaboration`，mapServerMessages 据此派生唯一任务卡与补充消息留痕。
  *
  * 这组用例锁住三件事：
  *  - 判据只认结构化标记，不认正文（否则任何人贴一段方括号文本就能冒充别的伙伴）；
- *  - 客座气泡显示的是伙伴说的那句话，不是给 agent 读的机读协议全文；
- *  - **没有标记的老镜像消息照旧按普通文本渲染** —— 本批不回填历史。
+ *  - 给 agent 读的完成指令不会泄漏到用户时间线；
+ *  - 历史目标侧镜像不再重复投影任务卡。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -110,11 +110,14 @@ describe('mapServerMessages — Bot collaboration', () => {
     expect(mapped.systemCardData).toMatchObject({ threadId: 'dm-1', peerBotName: 'Planner' });
   });
 
-  it('derives the inline collaboration card from the delegation anchor row', () => {
+  it('derives the tracked task card from the delegation anchor row', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
-      row({ clientId: 'bot-delegation-request:delegation-1', agentMeta: { botCollaboration: META } }),
+      row({
+        clientId: 'bot-delegation-request:delegation-1',
+        agentMeta: { botCollaboration: META },
+      }),
     ]);
-    expect(mapped.systemCardType).toBe('bot-collab');
+    expect(mapped.systemCardType).toBe('bot-session-task');
     expect(mapped.systemCardData).toMatchObject({
       role: 'delegation-request',
       delegationId: 'delegation-1',
@@ -130,7 +133,7 @@ describe('mapServerMessages — Bot collaboration', () => {
         agentMeta: { botCollaboration: { ...META, role: 'interjection' } },
       }),
     ]);
-    expect(mapped.systemCardType).toBe('bot-collab');
+    expect(mapped.systemCardType).toBe('bot-session-task-message');
     expect(mapped.systemCardData).toMatchObject({
       role: 'interjection',
       text: '先别铺开，我只要三条。',
@@ -151,11 +154,10 @@ describe('mapServerMessages — Bot collaboration', () => {
     // MessageStream 对它渲染 null —— 用户看不到任何机读文本。
     expect(mapped.isSyntheticTrigger).toBe(true);
     expect(mapped.content).toBe('');
-    expect(mapped.guestBot).toBeUndefined();
     expect(mapped.systemCardType).toBeUndefined();
   });
 
-  it('turns the inbound request into the same live collaboration card', () => {
+  it('does not turn a historical target-side request mirror into another task card', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
       row({
         clientId: 'bot-delegation-target-request:delegation-1',
@@ -164,17 +166,10 @@ describe('mapServerMessages — Bot collaboration', () => {
         agentMeta: { botCollaboration: { ...META, role: 'guest-request' } },
       }),
     ]);
-    expect(mapped.systemCardType).toBe('bot-collab');
-    expect(mapped.systemCardData).toMatchObject({
-      role: 'guest-request',
-      fromBotName: 'Cindy',
-      parentSessionId: SESSION_ID,
-      childSessionId: 'child-1',
-    });
-    expect(mapped.guestBot).toBeUndefined();
+    expect(mapped.systemCardType).toBeUndefined();
   });
 
-  it('turns the inbound result mirror into a collaboration report, not a wall of text', () => {
+  it('does not turn a historical target-side result mirror into another task card', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
       row({
         clientId: 'bot-delegation-target-result:delegation-1',
@@ -183,9 +178,7 @@ describe('mapServerMessages — Bot collaboration', () => {
         agentMeta: { botCollaboration: { ...META, role: 'result-mirror' } },
       }),
     ]);
-    expect(mapped.systemCardType).toBe('bot-collab');
-    expect(mapped.systemCardData).toMatchObject({ role: 'result-mirror' });
+    expect(mapped.systemCardType).toBeUndefined();
     expect(mapped.content).toBe('');
   });
-
 });

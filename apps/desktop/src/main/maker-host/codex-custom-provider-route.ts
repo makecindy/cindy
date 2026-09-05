@@ -193,8 +193,10 @@ export function deriveCodexCustomProviderRoutes(catalog: Catalog): CodexCustomPr
   });
 }
 
-export function codexCustomProviderRouteSignature(catalog: Catalog): string {
-  const snapshot = deriveCodexCustomProviderRoutes(catalog)
+export function codexCustomProviderRoutesSignature(
+  routes: readonly CodexCustomProviderRoute[],
+): string {
+  const snapshot = routes
     .map((route) => ({
       providerId: route.providerId,
       modelProviderId: route.modelProviderId,
@@ -210,6 +212,10 @@ export function codexCustomProviderRouteSignature(catalog: Catalog): string {
   return snapshot.length === 0
     ? ''
     : createHash('sha256').update(JSON.stringify(snapshot), 'utf8').digest('hex');
+}
+
+export function codexCustomProviderRouteSignature(catalog: Catalog): string {
+  return codexCustomProviderRoutesSignature(deriveCodexCustomProviderRoutes(catalog));
 }
 
 export function resolveCodexCustomProviderModelProviderId(

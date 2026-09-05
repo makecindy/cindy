@@ -133,7 +133,8 @@ function nonEmptyString(value: unknown): value is string {
 
 function stripDeepLinkPrefix(
   href: string,
-  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/' | 'bot/',
+  route:
+    | 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/' | 'bot/',
 ): string | null {
   for (const scheme of allDeepLinkSchemes()) {
     const prefix = `${scheme}://${route}`;
@@ -574,9 +575,11 @@ function formatReference(reference: AgentInputReference): string {
             `Host status: availability=${snapshot.availability}; activity=${snapshot.activity}; active_tracked_tasks=${snapshot.activeDelegations}.`,
             ...(snapshot.reason ? [`Host note: ${quotedMetadata(snapshot.reason)}`] : []),
           ]
-        : ['Host status: not refreshed; use collaborate_with_bot(action="status") only if the surrounding request truly asks for current status.']),
-      'Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. For work, deliverables, or anything whose result must return here, call collaborate_with_bot once with action="delegate". Use action="notify" only for a brief notice that explicitly needs no reply or result.',
-      'Boundary: Do not blindly forward the surrounding user text. A notification only confirms delivery and must never stand in for a tracked task.',
+        : [
+            "Host status: not refreshed. Do not invent availability or activity.",
+          ]),
+      "Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this teammate, call send_to_agent once with this Bot ID. For independently tracked work or deliverables, use start_session_task instead; it does not target a Bot.",
+      "Boundary: Do not blindly forward the surrounding user text. A teammate message only confirms delivery and must never stand in for a tracked task.",
       '[/Referenced Cindy Bot]',
     ].join('\n');
   }

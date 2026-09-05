@@ -39,6 +39,7 @@ describe("cindy_helper MCP server", () => {
           name: "程序员",
           description: "负责开发",
           identity_source: "你是一个可靠的程序员伙伴。",
+          welcome_message: "你好，我是程序员，以后开发工作可以直接找我。",
         },
       });
       expect(result.isError).not.toBe(true);
@@ -52,6 +53,7 @@ describe("cindy_helper MCP server", () => {
         name: "程序员",
         description: "负责开发",
         identitySource: "你是一个可靠的程序员伙伴。",
+        welcomeMessage: "你好，我是程序员，以后开发工作可以直接找我。",
       });
     } finally {
       await client.close();
@@ -141,42 +143,36 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("exposes one direct Bot call primitive for a Bot-bound session", async () => {
-    const listBots = vi.fn(async () => ({
+  it("exposes one Session-task lifecycle without a named-Bot task path", async () => {
+    const startSessionTask = vi.fn(async () => ({
       ok: true as const,
-      bots: [{ id: "bot-b", name: "Dash Bot" }],
-    }));
-    const call = vi.fn(async () => ({
-      ok: true as const,
-      delegationId: "delegation-1",
-      childSessionId: "bot-child-session",
+      delegationId: "session-task-1",
+      childSessionId: "desktop-child-session",
       status: "running",
-      targetBotId: "bot-b",
-      targetName: "Dash Bot",
+      deadlineAt: 1_788_000_000_000,
     }));
-    const reply = vi.fn(async () => ({
+    const messageSessionTask = vi.fn(async () => ({
       ok: true as const,
-      delegationId: "delegation-1",
-      childSessionId: "bot-child-session",
+      delegationId: "session-task-1",
+      childSessionId: "desktop-child-session",
       resumed: false,
     }));
-    const listDelegations = vi.fn(async () => ({
+    const getSessionTask = vi.fn(async () => ({
       ok: true as const,
-      delegations: [{ id: "delegation-1", status: "running" }],
+      task: { id: "session-task-1", status: "running" },
     }));
-    const cancelDelegation = vi.fn(async () => ({
+    const stopSessionTask = vi.fn(async () => ({
       ok: true as const,
-      delegationId: "delegation-1",
-      childSessionId: "bot-child-session",
+      delegationId: "session-task-1",
+      childSessionId: "desktop-child-session",
     }));
     const server = createXdtHelperMcpServer(
       {
-        botDelegation: {
-          listBots,
-          call,
-          reply,
-          listDelegations,
-          cancelDelegation,
+        sessionTasks: {
+          startSessionTask,
+          messageSessionTask,
+          getSessionTask,
+          stopSessionTask,
         },
       },
       {
@@ -190,83 +186,111 @@ describe("cindy_helper MCP server", () => {
 
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
-      const collaborationTool = (await client.listTools()).tools.find(
-        (tool) => tool.name === "collaborate_with_bot",
+      const tools = (await client.listTools()).tools;
+      const sessionTaskTool = tools.find((tool) => tool.name === "start_session_task");
+      expect(tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining([
+          "start_session_task",
+          "check_session_task",
+          "message_session_task",
+          "stop_session_task",
+        ]),
       );
-      expect(collaborationTool).toBeDefined();
-      expect(collaborationTool?.description).toContain(
-        "Prefer it for questions, discussion, and small direct requests",
-      );
-      expect(collaborationTool?.description).toContain(
-        "Do not choose call merely because a reply is expected",
-      );
+      expect(tools.map((tool) => tool.name)).not.toContain("collaborate_with_bot");
+      expect(sessionTaskTool?.description).toContain("real independent Cindy Session task");
+      expect(sessionTaskTool?.description).toContain("never calls a Cindy Bot");
+      expect(
+        (sessionTaskTool?.inputSchema as { properties?: Record<string, unknown> }).properties,
+      ).toHaveProperty("working_dir");
+      expect((sessionTaskTool?.inputSchema as { properties?: Record<string, unknown> }).properties)
+        .not.toHaveProperty("max_depth");
       const oversized = await client.callTool({
-        name: "collaborate_with_bot",
+        name: "start_session_task",
         arguments: {
-          action: "call",
-          target_bot_id: "bot-b",
           instruction: "x".repeat(12_001),
         },
       });
       expect(oversized.isError).toBe(true);
-      expect(call).not.toHaveBeenCalled();
-      const status = parsePayload(await client.callTool({
-        name: "collaborate_with_bot",
-        arguments: { action: "status", target_bot_id: "bot-b" },
-      }));
-      expect(status).toMatchObject({
+      expect(startSessionTask).not.toHaveBeenCalled();
+      const sessionTask = parsePayload(
+        await client.callTool({
+          name: "start_session_task",
+          arguments: {
+            title: "Build the demo",
+            working_dir: "/repo",
+            instruction: "Build and verify a standalone HTML demo.",
+          },
+        }),
+      );
+      expect(sessionTask).toMatchObject({
         ok: true,
-        action: "status",
-        bot: { id: "bot-b", name: "Dash Bot", activity: "idle" },
+        action: "start_session_task",
+        task_id: "session-task-1",
+        session_id: "desktop-child-session",
+        deadline_at: 1_788_000_000_000,
       });
+      expect(sessionTask).not.toHaveProperty("delegationId");
+      expect(startSessionTask).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          callerSessionId: "bot-parent-session",
+          objective: "Build and verify a standalone HTML demo.",
+          title: "Build the demo",
+          workingDir: "/repo",
+        }),
+      );
 
-      const delegated = parsePayload(await client.callTool({
-        name: "collaborate_with_bot",
-        arguments: {
-          action: "call",
-          target_bot_id: "bot-b",
-          instruction: "Return a tracked compatibility report.",
-        },
-      }));
-      expect(delegated).toMatchObject({
+      const replied = parsePayload(
+        await client.callTool({
+          name: "message_session_task",
+          arguments: {
+            task_id: "session-task-1",
+            decision: "approve",
+          },
+        }),
+      );
+      expect(replied).toMatchObject({
         ok: true,
-        action: "call",
-        call_id: "delegation-1",
-        expects_result: true,
-        delegationId: "delegation-1",
+        action: "message_session_task",
+        task_id: "session-task-1",
       });
-      expect(call).toHaveBeenCalledWith(expect.objectContaining({
+      expect(messageSessionTask).toHaveBeenCalledWith({
         callerSessionId: "bot-parent-session",
-        targetBotId: "bot-b",
-        objective: "Return a tracked compatibility report.",
-      }));
-
-      const replied = parsePayload(await client.callTool({
-        name: "collaborate_with_bot",
-        arguments: {
-          action: "reply",
-          call_id: "delegation-1",
-          reply_kind: "approve",
-        },
-      }));
-      expect(replied).toMatchObject({ ok: true, action: "reply", call_id: "delegation-1" });
-      expect(reply).toHaveBeenCalledWith({
-        callerSessionId: "bot-parent-session",
-        delegationId: "delegation-1",
+        taskId: "session-task-1",
         reply: { kind: "approve" },
       });
 
-      const callStatus = parsePayload(await client.callTool({
-        name: "collaborate_with_bot",
-        arguments: { action: "status", call_id: "delegation-1" },
-      }));
-      expect(callStatus).toMatchObject({
+      const taskStatus = parsePayload(
+        await client.callTool({
+          name: "check_session_task",
+          arguments: { task_id: "session-task-1" },
+        }),
+      );
+      expect(taskStatus).toMatchObject({
         ok: true,
-        action: "status",
-        call_id: "delegation-1",
-        call: { id: "delegation-1", status: "running" },
+        action: "check_session_task",
+        task_id: "session-task-1",
+        task: { id: "session-task-1", status: "running" },
       });
-      expect(listDelegations).toHaveBeenCalledWith({ callerSessionId: "bot-parent-session" });
+      expect(getSessionTask).toHaveBeenCalledWith({
+        callerSessionId: "bot-parent-session",
+        taskId: "session-task-1",
+      });
+
+      const stopped = parsePayload(
+        await client.callTool({
+          name: "stop_session_task",
+          arguments: { task_id: "session-task-1" },
+        }),
+      );
+      expect(stopped).toMatchObject({
+        ok: true,
+        action: "stop_session_task",
+        task_id: "session-task-1",
+      });
+      expect(stopSessionTask).toHaveBeenCalledWith({
+        callerSessionId: "bot-parent-session",
+        taskId: "session-task-1",
+      });
 
       const discovered = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "bots" } }),
@@ -278,7 +302,7 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("sends a bounded direct conversation message through the unified collaboration tool", async () => {
+  it("sends one bounded direct message through send_to_agent", async () => {
     const messageAgent = vi.fn(async () => ({
       ok: true as const,
       targetBotId: "bot-b",
@@ -299,20 +323,19 @@ describe("cindy_helper MCP server", () => {
 
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
-      const notified = parsePayload(await client.callTool({
-        name: "collaborate_with_bot",
-        arguments: {
-          action: "notify",
-          target_bot_id: "bot-b",
-          instruction: "发布风险已同步。",
-        },
-      }));
+      const notified = parsePayload(
+        await client.callTool({
+          name: "send_to_agent",
+          arguments: {
+            target_id: "bot-b",
+            message: "发布风险已同步。",
+          },
+        }),
+      );
       expect(notified).toMatchObject({
         ok: true,
-        action: "notify",
+        action: "send_to_agent",
         delivered: true,
-        expects_result: false,
-        reply_may_arrive: true,
       });
       expect(messageAgent).toHaveBeenCalledWith({
         callerSessionId: "bot-a-main",

@@ -15,7 +15,9 @@
 import type { ReactNode, RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
-import { Animated, Pressable, ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { GestureDetector } from '@/platform/gestureHandler';
 import { Text } from '@/components/AppText';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import type { ContextSheetSnap, ContextSheetSnapHeights } from '@/session/contextSheetModel';
@@ -85,7 +87,8 @@ export function SheetSurface({
       style={[
         styles.sheet,
         variant === 'tasksheet' && styles.sheetTasksheet,
-        { height: drag.animatedHeight, paddingBottom: bottomInset },
+        { paddingBottom: bottomInset },
+        drag.animatedStyle,
       ]}
       testID={testID}
     >
@@ -93,7 +96,8 @@ export function SheetSurface({
         intensity={32}
         overlayColor={variant === 'tasksheet' ? colors.sheetSurface : colors.surfaceGlassPanel}
       />
-      <View style={styles.dragZone} {...drag.panHandlers}>
+      <GestureDetector gesture={drag.gesture}>
+      <View collapsable={false} style={styles.dragZone} {...drag.panHandlers}>
         <SheetGrabber variant={variant} />
         <View style={styles.header}>
           {onBack ? (
@@ -116,12 +120,12 @@ export function SheetSurface({
           {headerTrailing ?? <View style={styles.headerSpacer} />}
         </View>
       </View>
+      </GestureDetector>
       {pinnedTop ? <View style={styles.pinnedTop}>{pinnedTop}</View> : null}
       <ScrollView
         contentContainerStyle={styles.contentScrollContent}
         keyboardShouldPersistTaps="handled"
         ref={scrollRef}
-        scrollEnabled={!drag.dragging}
         style={styles.contentScroll}
         testID={testID ? `${testID}.scroll` : undefined}
       >

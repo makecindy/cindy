@@ -189,8 +189,13 @@ button/primary  (Gray Pill)
   border    1px solid --surface-chip   (same as fill)
   radius    9999px (pill)
   padding   10px 24px
-  height    ⚠ not yet specified (only padding is normative)
+  height    32px (md) / 36px (lg) — no 40px size (DS-4 G1, 2026-09-03)
+  type      text-13 / font-medium 500 (DS-4 G4, 2026-09-03)
+  hover     --button-primary-hover     rest fill mixed 8% toward --text-primary   (swap-color, never opacity; DS-4 G2)
+  pressed   --button-primary-pressed   hover mixed a further 10% toward --text-primary   (DS-4 G3)
+  disabled  opacity 60%; ordinary pointer (#3246)
   note      understated, grayscale, always a pill
+  impl      components/ui/button.tsx variant="primary"
 
 button/secondary  (White Pill)
   fill      --surface-elevated    #ffffff / #2c2c2a
@@ -198,15 +203,29 @@ button/secondary  (White Pill)
   border    --border-default      #d7d7d4 / #3c3c3a
   radius    9999px (pill)
   padding   10px 24px
-  note      visually lighter than primary
+  height    32px (md) / 36px (lg) — no 40px size (DS-4 G1)
+  type      text-13 / font-medium 500 (DS-4 G4)
+  hover     --button-secondary-hover    rest fill mixed 8% toward --text-primary
+  pressed   --button-secondary-pressed  hover mixed a further 10% toward --text-primary
+  disabled  opacity 60%; ordinary pointer
+  note      visually lighter than primary; binds Tier-1, not --settings-btn-secondary-* (DS-4 G5)
+  impl      components/ui/button.tsx variant="secondary"
 
 button/cta  (Black Pill — maximum emphasis)
   fill      --accent-cta-bg-pure  #000000 / #ffffff
   text      --accent-pure-cta-fg  #ffffff / #000000
   radius    9999px (pill)
   padding   10px 24px
-  note      pure black on white (inverts in Dark)
+  height    32px (md) / 36px (lg) — no 40px size (DS-4 G1)
+  type      text-13 / font-medium 500 (DS-4 G4)
+  hover     --button-cta-hover    = --accent-hover  #262626 / #e5e5e5   (swap-color; was opacity-90 on the private prototype, DS-4 G2, intentional)
+  pressed   --button-cta-pressed  cta hover mixed a further 10% toward --accent-pure-cta-fg
+  disabled  opacity 60%; ordinary pointer
+  note      pure black on white (inverts in Dark); at most one per screen
+  impl      components/ui/button.tsx variant="cta"
 ```
+
+**Why hover / pressed are derived, not aliased** (DS-4; ratios ruled by the designer 2026-09-04): in Dark, `--surface-hover` and `--surface-chip` resolve to the same value in default-dark / cindy-dark / one-dark-pro / monokai-pro, so aliasing primary's hover to `--surface-hover` made the hover state invisible; `--surface-hover-soft` sat within 2/255 of `--surface-elevated` in cindy-dark, breaking secondary the same way. Each state is therefore mixed off **its own variant's rest fill toward its own foreground** — 8% for hover, a further 10% for pressed. The ladder follows any theme override automatically and introduces no theme-blind literals. Guard: `themes/__tests__/buttonStateContrast.test.ts` asserts every builtin theme keeps each step at ΔRGB ≥ 8. These are runtime-derived values, registered but not modeled in the DTCG shadow layer (governance §3.4).
 
 ### Cards & Containers
 
@@ -228,11 +247,17 @@ input/text
   text        --text-primary      #262626 / #d4d4d4
   border      --border-default    #d7d7d4 / #3c3c3a
   radius      9999px (pill — single-line inputs)
+  height      32px (sm) / 36px (md) / 40px (lg)  (DS-4 G1; three sizes, shared 4px step with buttons)
   focus       --focus-ring-soft   rgba(65,124,221,0.5)   (50% of #417CDD; opaque border variant = --focus-ring)
+              ⚠ known implementation deviation: components/ui/input.tsx ships the opaque --focus-ring, inherited from the SettingsTextInput convergence. DS-4 did NOT amend this spec value; the gap is registered in design-governance.md §10 pending a designer ruling.
   placeholder --text-placeholder  #c4c4c4 / #525252
+  error       --error-border / --error-fg
+  impl        components/ui/input.tsx
+  disabled    60% opacity + ordinary pointer  (new in DS-4; the pre-DS-4 SettingsTextInput had no disabled styling and none of its 6 consumers passed it)
+  ivory       surface="ivory" → --settings-input-bg (--surface-card-ivory). Registered debt (DS-4 G6, 2026-09-03) — colors.ts undocumented drift for white-panel dialogs; do not make it the default. Close as a separate issue.
 ```
 
-- **Multi-line inputs (textarea) take the 8px inner-control radius — never the pill** (tall frames deform it), whether nested in a container or standing alone in a form (§5 three-tier scale; single rule, no nesting condition).
+- **Multi-line inputs (textarea) take the 8px inner-control radius — never the pill** (tall frames deform it), whether nested in a container or standing alone in a form (§5 three-tier scale; single rule, no nesting condition). Implementation: `components/ui/input.tsx` `Textarea`.
 - Placeholders must **read as clearly empty** — Silver (`#a3a3a3`) is too prominent against either Card surface (≈5:1 Dark / ≈2.6:1 Light) and reads as real input; forbidden. **Every input surface's placeholder (chat / ask / settings / plan-action-fb) resolves to `--text-placeholder`** (2026-06 G3, archived in `design-decision-log.md`); non-default themes express their own placeholder color by overriding `text-placeholder`.
 
 ### Select & Dropdown
@@ -1112,8 +1137,8 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 
 **Reserved artwork namespace — Bot avatar sentinels (Desktop registered 2026-08-17).**
 
-- **Where**: the Bot identity mark only — `features/bots/BotAvatar.tsx`. A Bot's `avatar` field holds either one grapheme or a reserved `cindy://avatar/…` sentinel (`botAvatarIdentity.ts`). This build ships no bundled portraits; the mark renders the grapheme or the initial-letter fallback over the §10 `--bot-avatar-*-bg` hue.
-- **Forward compatibility**: a sentinel this build cannot resolve (artwork added by a newer client, or shipped by a future release) renders the neutral initial — never a broken `<img>` and never the raw `cindy://avatar/…` string as text. Contract test: `botAvatar.test.tsx`. Any future bundled portrait must come back through a fresh artwork-surface approval; this registration only reserves the namespace and the fallback contract.
+- **Where**: the Bot identity mark only — `features/bots/BotAvatar.tsx`. A Bot's `avatar` field holds either one grapheme or a reserved `cindy://avatar/…` sentinel (`botAvatarIdentity.ts`). The three user-selected Cindy, Dash and LiZi preset portraits share this component and its round crop. Custom graphemes and the initial-letter fallback render over the §10 `--bot-avatar-*-bg` hue.
+- **Forward compatibility**: a sentinel this build cannot resolve (artwork added by a newer client, or shipped by a future release) renders the neutral initial — never a broken `<img>` and never the raw `cindy://avatar/…` string as text. Contract test: `botAvatar.test.tsx`. Unknown sentinels retain this fallback contract; additional portrait sets require artwork-surface approval.
 
 **Sanctioned brand surface — session-switch deferred-loading overlay (Desktop approved 2026-08-10).**
 

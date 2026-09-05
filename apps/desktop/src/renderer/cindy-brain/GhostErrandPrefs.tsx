@@ -76,9 +76,11 @@ export function GhostErrandPrefs({
           next as Record<string, unknown>,
         );
         setConfig((result.config ?? {}) as ErrandConfig);
+        return true;
       } catch {
         setConfig(prev);
         toast.error(t('settings.ghosts.errors.generic'));
+        return false;
       }
     },
     [config, ghostId, t],
@@ -158,7 +160,7 @@ export function GhostErrandPrefs({
             if (next === vendor && config.agentKind !== undefined) return;
             // 换 agent 连带清掉模型组(跨 agent 的模型 id 互不通用);点选即把该组
             // 值钉进本插件配置(未选过时才实时跟随草稿)。
-            void save({
+            save({
               ...config,
               agentKind: next === 'pi' ? 'pi' : next === 'codex' ? 'codex' : 'cc',
               model: undefined,
@@ -186,17 +188,17 @@ export function GhostErrandPrefs({
           ariaContext={t('settings.ghosts.detail.errandPrefs.model')}
           onModelChange={(modelId) =>
             // 选模型即整组钉住(agent 一起钉,防草稿随后换 vendor 让模型悬空)。
-            void save({ ...config, agentKind: vendor, model: modelId, effort: undefined })
+            save({ ...config, agentKind: vendor, model: modelId, effort: undefined })
           }
           onEffortChange={(effort) => {
             if (!ERRAND_EFFORTS.has(effort)) return;
-            void save({ ...config, agentKind: vendor, model: shownModel, effort });
+            return save({ ...config, agentKind: vendor, model: shownModel, effort });
           }}
           onFastModeChange={(enabled) =>
-            void save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
+            save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
           }
-          onProviderChange={(providerId, modelId, reconciledEffort) =>
-            void save({
+          onProviderChange={(providerId, modelId, reconciledEffort, reconciledFast) =>
+            save({
               ...config,
               agentKind: vendor,
               model: modelId ?? shownModel,
@@ -204,6 +206,7 @@ export function GhostErrandPrefs({
                 ? reconciledEffort
                 : undefined,
               providerId: providerId ?? undefined,
+              fastMode: reconciledFast ?? false,
             })
           }
         />
@@ -225,7 +228,7 @@ export function GhostErrandPrefs({
             // disabledModes 已灰置非法档;这里再执一道白名单(UI 不是安全边界,
             // 存储层与协议层各有一道,三道口径一致)。
             if (!PERMISSION_ALLOWED.has(mode)) return;
-            void save({
+            save({
               ...config,
               permissionMode: mode === 'plan' ? undefined : (mode as 'acceptEdits' | 'auto'),
             });
@@ -248,7 +251,7 @@ export function GhostErrandPrefs({
           {config.workingDir ? (
             <button
               type="button"
-              onClick={() => void save({ ...config, workingDir: undefined })}
+              onClick={() => save({ ...config, workingDir: undefined })}
               aria-label={t('settings.ghosts.detail.errandPrefs.workdirClear')}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
             >

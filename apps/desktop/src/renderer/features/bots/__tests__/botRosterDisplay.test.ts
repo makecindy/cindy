@@ -15,7 +15,6 @@ function bot(
   return {
     id,
     name: id,
-    channel: 'local',
     description: '',
     avatar: '🤖',
     avatarColor: 'violet',

@@ -7,7 +7,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import type { BotDelegationStatus, BotDelegationView } from '../../../shared/botDelegation';
 
-/** 未落终态的委派：协作卡按这个集合决定「还在干活」还是「收拢成战报」。 */
+/** 未落终态的后台任务：任务卡按这个集合决定是否仍在执行。 */
 const ACTIVE_STATUSES = new Set<BotDelegationStatus>(['queued', 'waiting', 'running']);
 
 export function isActiveDelegationStatus(status: BotDelegationStatus): boolean {
@@ -20,13 +20,13 @@ interface SessionEntry {
    * 首次拉取是否已经**落地**（成功或失败都算）。
    *
    * 「还没读到」和「读完了但没有这一行」是两回事：前者该继续显示进行中的样子，
-   * 后者说明这条委派我们根本核实不了（列表拉取失败、或落在 100 行上限之外）。
+   * 后者说明这条任务我们暂时核实不了（例如列表拉取失败）。
    * 不区分的话，第二种情况会被当成第一种，卡片就永远停在带呼吸点的「正在开始」。
    */
   resolved: boolean;
   listeners: Set<() => void>;
   unsubscribe: (() => void) | null;
-  loading: Promise<void> | null;
+  reloadGeneration: number;
 }
 
 /**
@@ -48,7 +48,7 @@ function ensureEntry(sessionId: string): SessionEntry {
     resolved: false,
     listeners: new Set(),
     unsubscribe: null,
-    loading: null,
+    reloadGeneration: 0,
   };
   sessions.set(sessionId, entry);
   return entry;
@@ -62,18 +62,19 @@ async function reload(sessionId: string): Promise<void> {
   const entry = sessions.get(sessionId);
   if (!entry) return;
   const owner = getDataOwnerGeneration();
+  const generation = ++entry.reloadGeneration;
   try {
     const result = await window.electronAPI.maker.listBotDelegations(sessionId);
     if (!isDataOwnerGenerationCurrent(owner)) return;
-    if (sessions.get(sessionId) !== entry) return;
-    // 读不到就保持空：宁可少一张卡，也不要把无法核实的状态挂在对话里。
-    entry.rows = result.ok ? result.delegations : [];
+    if (sessions.get(sessionId) !== entry || entry.reloadGeneration !== generation) return;
+    // 短暂读取失败不能把已经显示的持久任务卡抹掉。成功时才替换快照；失败时
+    // 保留上一次可核实的状态，并让卡片继续可见。
+    if (result.ok) entry.rows = result.delegations;
     entry.resolved = true;
     emit(entry);
   } catch {
     if (!isDataOwnerGenerationCurrent(owner)) return;
-    if (sessions.get(sessionId) !== entry) return;
-    entry.rows = [];
+    if (sessions.get(sessionId) !== entry || entry.reloadGeneration !== generation) return;
     entry.resolved = true;
     emit(entry);
   }

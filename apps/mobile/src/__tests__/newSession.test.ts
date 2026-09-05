@@ -1588,7 +1588,8 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('inputTestID="newSession.firstMessageInput"');
     expect(newComposerSource).toContain('autoFocus={visualFocusComposer}');
     expect(newComposerSource).toContain('maxHeight={composerResize.inputMaxHeight}');
-    expect(newComposerSource).toContain('inputFrameHeight={composerResize.frameHeight}');
+    expect(newComposerSource).toContain('inputFrameAnimatedStyle={composerResize.frameStyle}');
+    expect(newSource).toContain('gesture={composerResize.gesture}');
     expect(newComposerSource).toContain('resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}');
     expect(newComposerSource).toContain('cardActive={composerCardActive}');
     expect(newComposerSource).toContain('toolbar={renderComposerToolbar()}');
@@ -1860,7 +1861,14 @@ describe('new session worktree wiring (source locks)', () => {
       'useRemoteNewMakerWorktreePreference(selectedDeviceId)',
     );
     expect(newSource).toContain("classification.status === 'missing'");
-    expect(newSource).toContain('worktreeHostSupportsRecoveryKeyDiscard === false');
+    expect(newSource).toContain('worktreeHostSupportsRecoveryKeyDiscardRef.current === false');
+    const seedEffect = newSource.indexOf('const worktreeSeedAgentKindRef = useRef(draft.agentKind);');
+    const seedDeps = newSource.slice(
+      newSource.indexOf('}, [', seedEffect),
+      newSource.indexOf(']);', seedEffect) + 3,
+    );
+    expect(seedDeps).toContain('worktreePreferenceSyncKey,');
+    expect(seedDeps).not.toContain('worktreeHostSupportsRecoveryKeyDiscard,');
     expect(newSource).not.toContain(
       'remoteSessionStore.setNewMakerWorktreePreference(selectedDeviceId, false);',
     );
@@ -1889,6 +1897,15 @@ describe('new session worktree wiring (source locks)', () => {
     expect(createBody).toContain('if (worktreeCreateBlocked) {');
     expect(newSource).toContain('worktreeBranchPreferenceSaving');
     expect(newSource).toContain('worktreeCreateBlocked && worktreeControlCaptionKey');
+    expect(newSource).toContain(
+      "worktreePreferenceAuthorityUnknown ? 'session.new.worktreeSettingsSyncFailed' : null",
+    );
+    expect(newSource).toContain("worktreePreferenceCreateBlocked ? 'session.new.worktreeSettingsSaving' : null");
+    expect(newSource).toContain('const resolveWorktreePreferenceGateErrorKey = useCallback(() => (');
+    expect(newSource).toContain("? 'session.new.worktreeSettingsSyncFailed'");
+    expect(newSource).toContain(": 'session.new.worktreeSettingsSaving'");
+    expect(newSource).toContain('setError(t(resolveWorktreePreferenceGateErrorKey()));');
+    expect(newSource).toContain('setGoalError(t(resolveWorktreePreferenceGateErrorKey()));');
   });
 
   it('re-probes worktree eligibility when the relay or workstation reconnects', () => {
@@ -2238,7 +2255,7 @@ describe('submit guard catalog wiring (source locks)', () => {
       sessionSource.indexOf('initial={goalRestoreForSession}') + 300,
     );
     expect(viewCall).toContain('initial={goalRestoreForSession}');
-    expect(viewCall).toContain('initialObjective={goalRestoreForSession ? undefined : (draft.trim() || undefined)}');
+    expect(viewCall).toContain('initialObjective={goalRestoreForSession ? undefined : (draftRef.current.trim() || undefined)}');
   });
 
   it('goal 接回载荷按 sessionId 换代清理:切任务不残留旧 objective/limits(codex P2)', () => {

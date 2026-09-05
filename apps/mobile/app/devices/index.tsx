@@ -85,6 +85,7 @@ import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import {
   discoverRemoteHomeCollections,
+  remoteResourceDiscoveryTargets,
   serializeRemoteResourceTargets,
   type RemoteHomeCollection,
 } from '@/device-link/remoteResources';
@@ -1542,9 +1543,7 @@ function HomeScreenContent() {
   }, [accountGeneration]);
   useEffect(() => {
     let cancelled = false;
-    const targets = deviceModels
-      .filter((item) => item.canOpen)
-      .map((item) => ({ deviceId: item.deviceId, deviceName: item.name }));
+    const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
     if (targets.length === 0) {
       remoteHomeCollectionsRef.current = [];
       setRemoteHomeCollections([]);

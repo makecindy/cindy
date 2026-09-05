@@ -192,19 +192,12 @@ import {
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
-import { openBotDelegationsTab } from '@/features/right-sidebar/lib/openBotDelegationsTab';
-import { BotDelegationActivityIndicator } from '@/features/bots/BotDelegationActivityIndicator';
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import {
   BotSessionContentHeaderRegistration,
   type BotChatIdentity,
 } from '@/features/bots/BotSessionContentHeader';
 import { botComposerPlaceholderKey } from '@/features/bots/botChatPresentation';
-import {
-  createBotRuntimeMirror,
-  type BotComposerRuntimeSnapshot,
-} from '@/features/bots/botComposerRuntime';
-import { getBotProfiles, subscribeBotProfiles, updateBotProfile } from '@/features/bots/botStore';
 import { isCurrentSubagentRunsChange } from '@/features/right-sidebar/plugins/subagents/subagentChangeFence';
 import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
@@ -236,6 +229,7 @@ import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions'
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
+import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
 import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
@@ -477,7 +471,7 @@ interface CCAgentSessionViewProps {
   botMentions?: readonly ComposerBotMention[];
   /**
    * 本对话所属的伙伴身份（仅 Bot 路由传）。传入即把这个聊天当成「跟 TA 聊天」渲染：
-   * 顶栏换成伙伴 lockup、assistant 气泡挂 TA 的头像、输入框收起权限/模型控件。
+   * 顶栏换成伙伴 lockup、assistant 气泡挂 TA 的头像、输入框使用伙伴称呼，保留标准权限入口。
    * 判定仍与 `session.source === 'bot'` 双重成立才生效——URL 不是身份。
    */
   botIdentity?: BotChatIdentity;
@@ -936,30 +930,12 @@ export function CCAgentSessionView({
   // 只有 URL 说了不算 —— 那是导航投影,不是身份。
   const botChatIdentity: BotChatIdentity | null =
     botIdentity && session?.source === 'bot' ? botIdentity : null;
-  // 输入框控件的回调是稳定闭包(不能挂 botChatIdentity 依赖,否则每次身份对象换新
-  // 都要重建整条 handleModelDidChange 链)。走 ref 取当前身份。
-  const botChatIdentityRef = useRef<BotChatIdentity | null>(botChatIdentity);
-  botChatIdentityRef.current = botChatIdentity;
   // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
   // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
   const botAssistantAvatar = useMemo(
-    () =>
-      botChatIdentity ? (
-        <BotAvatar bot={botChatIdentity} size="sm" />
-      ) : null,
+    () => (botChatIdentity ? <BotAvatar bot={botChatIdentity} size="sm" /> : null),
     [botChatIdentity],
   );
-
-  // Every Cindy Bot task owns one durable Bot-collaboration tab. Registration
-  // is silent: it never expands the sidebar or replaces the user's active tab.
-  useEffect(() => {
-    if (!ownsWindowRoute || !viewVisible || !sessionId || session?.source !== 'bot') return;
-    void openBotDelegationsTab(sessionId, {
-      focusTab: false,
-      revealSidebar: false,
-      userInitiated: false,
-    }).catch(() => undefined);
-  }, [ownsWindowRoute, session?.source, sessionId, viewVisible]);
 
   // worktree-parallel-sessions:订阅当前 session 的 worktree 创建态(creating/failed)。
   // 触发源:NewMakerDraftRoute 的 worktree 异步创建路径。
@@ -2834,50 +2810,12 @@ export function CCAgentSessionView({
     }
   }, []);
 
-  /*
-    回写队列。store 还没 hydrate 完时它把这次改动存住,等伙伴出现再补写 ——
-    判定与合并规则见 botComposerRuntime.ts 的 createBotRuntimeMirror。
-  */
-  const botRuntimeMirror = useMemo(
-    () =>
-      createBotRuntimeMirror({
-        getCapabilities: (botId) =>
-          getBotProfiles().find((item) => item.id === botId)?.capabilities ?? null,
-        write: (botId, capabilities) => {
-          void updateBotProfile(botId, { capabilities }).catch(() => {});
-        },
-        subscribe: subscribeBotProfiles,
-      }),
-    [],
-  );
-  // 会话视图卸载时把等待中的订阅摘掉,别让它跨会话活着。
-  useEffect(() => () => botRuntimeMirror.dispose(), [botRuntimeMirror]);
-
-  /*
-    伙伴对话的运行时选择要写回伙伴 Profile。
-
-    输入框的模型 / 权限控件本来只改**这条会话行**,而伙伴的主任务在 Renew 时按
-    Profile 的 capabilities 重建一条新会话 —— 不回写就会「改了不持久,Renew 后
-    回跳」。这里只在用户**显式**动过控件之后触发(不是跟着 session 快照跑),
-    否则会把尚未 Renew 的旧会话值倒灌回新 Profile。
-    等值时 mergeBotComposerRuntime 返回 null,不发 IPC,也就不会白顶版本号。
-  */
-  const mirrorBotComposerRuntime = useCallback(
-    (snapshot: BotComposerRuntimeSnapshot) => {
-      const botId = botChatIdentityRef.current?.id;
-      if (!botId) return;
-      botRuntimeMirror.mirror(botId, snapshot);
-    },
-    [botRuntimeMirror],
-  );
-
   // F3: Model switch linkage — 切到不支持 Fast Mode 的模型时自动关闭。
   // Called AFTER server persist succeeds (ChatInput handles the server-first flow).
   // 是否支持来自 capabilities.hasFastMode + availableModels[].supportsFastMode, renderer 不再 startsWith 解析 id。
   const handleModelDidChange = useCallback(
     (newModelId: string) => {
       refreshServerSession();
-      mirrorBotComposerRuntime({ model: newModelId });
       // contextWindow 仍取被控端能力(非 per-provider 概念)。
       const m = getModelById(newModelId, remoteDeviceId);
       if (sessionId) {
@@ -2912,7 +2850,6 @@ export function CCAgentSessionView({
       session?.agentKind,
       resetFastMode,
       refreshServerSession,
-      mirrorBotComposerRuntime,
       t,
     ],
   );
@@ -2926,9 +2863,6 @@ export function CCAgentSessionView({
       // callback 自身也可能来自旧 render；必须对照最新 committed view 的当前 scope，
       // 不能只比较旧闭包里的 sessionId。
       if (!targetSessionId || !refreshSequence.isCurrentSession(targetSessionId)) return;
-      // 回写伙伴 Profile 放在这道 scope 守卫**之后**:别的会话飘来的 effort
-      // 不能落到当前这位伙伴头上。
-      mirrorBotComposerRuntime({ effort: newEffort });
       // 远程会话由被控端 sessions:patched 镜像收敛；优先信任操作开始时捕获的稳定
       // device scope，relay origin 短暂缺失时也不能创建会盖住 remote store 的本地快照。
       if (sourceRemoteDeviceId || getSessionDeviceId(targetSessionId)) return;
@@ -2949,31 +2883,12 @@ export function CCAgentSessionView({
         );
       }
     },
-    [sessionId, mirrorBotComposerRuntime],
+    [sessionId],
   );
 
-  const handlePermissionModeDidChange = useCallback(
-    (newMode: PermissionMode) => {
-      refreshServerSession();
-      mirrorBotComposerRuntime({ permissionMode: newMode });
-    },
-    [refreshServerSession, mirrorBotComposerRuntime],
-  );
-
-  const handleProviderDidChange = useCallback(
-    (newProviderId: string | null) => {
-      mirrorBotComposerRuntime({ providerId: newProviderId });
-    },
-    [mirrorBotComposerRuntime],
-  );
-
-  const handleFastModeChange = useCallback(
-    (next: boolean) => {
-      setFastMode(next);
-      mirrorBotComposerRuntime({ fastMode: next });
-    },
-    [setFastMode, mirrorBotComposerRuntime],
-  );
+  const handlePermissionModeDidChange = useCallback(() => {
+    refreshServerSession();
+  }, [refreshServerSession]);
 
   // ─── Extra reference dirs(中途增删) ──────────────────────────────────────
   // Main 在 session 锁内校验、应用、持久化并回滚；renderer 只刷新它返回的实际子集。
@@ -3441,7 +3356,7 @@ export function CCAgentSessionView({
       // replacement Session". Claude accepts /compact as an agent command;
       // Pi exposes a native compact RPC because its slash input is escaped;
       // Codex only supports upstream automatic compaction, so keep the task
-      // intact and explain the explicit Renew escape hatch.
+      // intact and explain that it manages compaction automatically.
       const botNewMatch =
         deliveryMode !== 'steer' && sessionRef.current?.source === 'bot'
           ? message.match(/^\/new(?:\s+(.*))?$/s)
@@ -3772,6 +3687,7 @@ export function CCAgentSessionView({
     try {
       const contextWindow = resolveDisplayContextWindow({
         sdkContextWindow: agentStatus.contextWindow,
+        verifiedContextWindow: resolveSessionContextWindow({ providers }, sourceSession),
         modelContextWindow: getModelContextWindow(
           sourceSession.model,
           sourceSession.agentKind ?? 'cc',
@@ -3853,6 +3769,7 @@ export function CCAgentSessionView({
     compactRequestGuard,
     compactSession,
     confirmDialog,
+    providers,
     remoteDeviceId,
     session,
     t,
@@ -4705,6 +4622,11 @@ export function CCAgentSessionView({
             issue={remoteLinkIssue}
             onResync={remoteSync.resync}
           />
+        ) : remoteConn === 'connected' ? (
+          <RemoteSessionBanner
+            status={remoteSync.contentState === 'ready' ? 'recovered' : 'syncing'}
+            onResync={remoteSync.resync}
+          />
         ) : null}
 
         {/* 远程会话首屏:等被控端经隧道返回历史/元数据期间的 loading(仅远程、延迟防闪)。 */}
@@ -4735,13 +4657,6 @@ export function CCAgentSessionView({
               />
             </div>
           </div>
-        )}
-
-        {/* Bot 委派进行中状态条:与上方 bot-delegations tab 静默注册同条件(仅路由主人
-          且视图可见的 Bot 任务)。本会话没有活跃出向委派时组件自身返回 null,不占位、
-          不遮挡消息流;点击落到右栏 Bot 协同 tab。 */}
-        {ownsWindowRoute && viewVisible && sessionId && session?.source === 'bot' && (
-          <BotDelegationActivityIndicator sessionId={sessionId} maxWidth={messageWidth} />
         )}
 
         {/* Scroll container — full height, bottom padding reserves space for input overlay.
@@ -5099,6 +5014,7 @@ export function CCAgentSessionView({
                 ) : pendingPermission ? (
                   <PermissionPrompt
                     permission={pendingPermission}
+                    companion={botChatIdentity}
                     onRespond={respondToPermission}
                   />
                 ) : pendingAskUser ? (
@@ -5185,6 +5101,8 @@ export function CCAgentSessionView({
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
+                  runtimeEffective={session?.runtimeEffective}
+                  runtimePending={session?.runtimePending}
                   // 协同会话不参与跨引擎切换；session 未加载时保留 undefined 未知态，
                   // 仅在完整元数据确认非 Orca 后传 null 开放入口。
                   sessionOrcaRole={session ? (session.orcaRole ?? null) : undefined}
@@ -5199,7 +5117,7 @@ export function CCAgentSessionView({
                   planModeEnabled={planModeEnabled}
                   onPlanModeChange={setPlanMode}
                   fastMode={fastMode}
-                  onFastModeChange={handleFastModeChange}
+                  onFastModeChange={setFastMode}
                   onWorkingDirChange={handleWorkingDirChange}
                   isStreaming={isStreaming}
                   isAgentBusy={isAgentBusy}
@@ -5232,7 +5150,6 @@ export function CCAgentSessionView({
                   onModelDidChange={handleModelDidChange}
                   onEffortDidChange={handleEffortDidChange}
                   onPermissionModeDidChange={handlePermissionModeDidChange}
-                  onProviderDidChange={handleProviderDidChange}
                   attachmentState={attachmentState}
                   externalDragOver={isDragOver}
                   onComposerDropHandled={resetFullAreaDragState}
@@ -5332,26 +5249,29 @@ export function CCAgentSessionView({
                   !session?.workingDir && !worktreeCreation && 'invisible',
                 )}
               >
-                {/* Left: workingDir — 点击在系统文件管理器中打开;
+                  {/* Left: workingDir — 点击在系统文件管理器中打开;
                   click 区域宽度与文本一致(不拉伸到整行) */}
-                {worktreeCreation?.status === 'creating' ? (
+                  {worktreeCreation?.status === 'creating' ? (
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <Spinner size={12} className="text-[var(--workingdir-icon)]" />
-                    <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
-                      {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
-                      <code className="font-mono text-11 opacity-80">{worktreeCreation.name}</code>…
-                    </span>
-                  </div>
+                      <Spinner size={12} className="text-[var(--workingdir-icon)]" />
+                      <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
+                        {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
+                        <code className="font-mono text-11 opacity-80">
+                          {worktreeCreation.name}
+                        </code>
+                        …
+                      </span>
+                    </div>
                 ) : worktreeCreation?.status === 'failed' ? (
                   <Tip text={worktreeCreation.error} mono side="top">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <AlertCircle size={12} className="shrink-0 text-red-500 dark:text-red-400" />
-                      <span className="block min-w-0 truncate text-12 font-medium leading-none text-red-500 dark:text-red-400">
-                        {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
-                        {' — '}
-                        {worktreeCreation.error}
-                      </span>
-                      <button
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <AlertCircle size={12} className="shrink-0 text-red-500 dark:text-red-400" />
+                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-red-500 dark:text-red-400">
+                          {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
+                          {' — '}
+                          {worktreeCreation.error}
+                        </span>
+                        <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -5360,10 +5280,10 @@ export function CCAgentSessionView({
                         className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
                         aria-label={t('common.dismiss', 'Dismiss')}
                       >
-                        <X size={10} className="text-red-500/70 dark:text-red-400/70" />
-                      </button>
-                    </div>
-                  </Tip>
+                          <X size={10} className="text-red-500/70 dark:text-red-400/70" />
+                        </button>
+                      </div>
+                    </Tip>
                 ) : (
                   <Tip
                     text={
@@ -5373,9 +5293,9 @@ export function CCAgentSessionView({
                           // 同 workingDir 跨多 host 撞合场景下也能区分。hostId 即
                           // SSH alias (HostConfig.id), 不需要额外 lookup。
                           <>
-                            <div>Host: {session.remoteHostId}</div>
-                            <div>{composerDir}</div>
-                          </>
+                              <div>Host: {session.remoteHostId}</div>
+                              <div>{composerDir}</div>
+                            </>
                         ) : (
                           composerDir
                         )
@@ -5384,10 +5304,10 @@ export function CCAgentSessionView({
                     mono
                     side="top"
                   >
-                    {isRemoteWorktreeSession ? (
+                      {isRemoteWorktreeSession ? (
                       <div className="flex min-w-0 items-center gap-1.5">
-                        {workingDirChipContent}
-                      </div>
+                          {workingDirChipContent}
+                        </div>
                     ) : (
                       <button
                         type="button"
@@ -5395,25 +5315,25 @@ export function CCAgentSessionView({
                         onClick={handleOpenWorkingDir}
                         aria-label={t('ccAgent.layout.openWorkingDirAria')}
                       >
-                        {workingDirChipContent}
-                      </button>
+                          {workingDirChipContent}
+                        </button>
                     )}
-                  </Tip>
+                    </Tip>
                 )}
 
-                {/* Right: Context capacity indicator */}
-                <div className="flex shrink-0 items-center gap-3">
-                  {session?.usedProjectContext && (
+                  {/* Right: Context capacity indicator */}
+                  <div className="flex shrink-0 items-center gap-3">
+                    {session?.usedProjectContext && (
                     <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
-                      <Brain
+                        <Brain
                         size={14}
                         strokeWidth={1.75}
                         className="shrink-0 -translate-y-px text-foreground/70"
                         aria-label={t('ccAgent.layout.projectContextLoaded')}
                       />
-                    </Tip>
+                      </Tip>
                   )}
-                  <TodaySpendChip
+                    <TodaySpendChip
                     vendorKey={normalizeDbAgentKind(displayAgentKind)}
                     modelId={agentSwitchIntent?.model ?? session?.model ?? null}
                     providerId={
@@ -5428,11 +5348,21 @@ export function CCAgentSessionView({
                     remoteHostId={session?.remoteHostId ?? null}
                     deviceLinkDeviceId={remoteDeviceId ?? null}
                   />
-                  <ContextCapacityRing
+                    <ContextCapacityRing
                     contextTokens={agentStatus.contextTokens}
                     model={agentSwitchIntent?.model ?? session?.model ?? ''}
                     vendorKey={normalizeDbAgentKind(displayAgentKind)}
                     sdkContextWindow={agentStatus.contextWindow}
+                    verifiedContextWindow={resolveSessionContextWindow(
+                      { providers },
+                      {
+                        agentKind: normalizeDbAgentKind(displayAgentKind),
+                        model: agentSwitchIntent?.model ?? session?.model,
+                        providerId: agentSwitchIntent
+                          ? agentSwitchIntent.providerId
+                          : session?.providerId,
+                      },
+                    )}
                     deviceId={remoteDeviceId}
                     onCompact={
                       // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
@@ -5453,8 +5383,8 @@ export function CCAgentSessionView({
                         : undefined
                     }
                   />
+                  </div>
                 </div>
-              </div>
               ) : null}
             </div>
           </div>
@@ -5770,6 +5700,10 @@ function RunningStatusBar({
   });
   const rateText =
     usageMeta.kind === 'rate' ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate }) : null;
+  const rateTipText = [
+    t('chat.runningStatus.tokenRateDescription'),
+    ...(tokenUsage > 0 ? [tokenCountTipText] : []),
+  ].join('\n');
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -5882,17 +5816,11 @@ function RunningStatusBar({
                       &middot;
                     </span>
                     {rateText ? (
-                      tokenUsage > 0 ? (
-                        <Tip text={tokenCountTipText} side="top">
-                          <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                            {rateText}
-                          </span>
-                        </Tip>
-                      ) : (
+                      <Tip text={rateTipText} side="top" contentClassName="whitespace-pre-line">
                         <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                           {rateText}
                         </span>
-                      )
+                      </Tip>
                     ) : (
                       <>
                         <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
@@ -5947,6 +5875,7 @@ function ContextCapacityRing({
   model,
   vendorKey,
   sdkContextWindow,
+  verifiedContextWindow,
   deviceId,
   onCompact,
 }: {
@@ -5955,6 +5884,7 @@ function ContextCapacityRing({
   vendorKey: 'cc' | 'codex' | 'pi';
   /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
   sdkContextWindow: number;
+  verifiedContextWindow?: number | null;
   /** device-link 远程会话所属被控端 id;按被控端能力查 contextWindow(本机会话 undefined,行为不变)。 */
   deviceId?: string;
   /** 提供时圆环可点击 — 点击后(经用户确认)向 agent 发送 /compact 压缩上下文。 */
@@ -5963,6 +5893,7 @@ function ContextCapacityRing({
   const { t } = useTranslation();
   const contextWindow = resolveDisplayContextWindow({
     sdkContextWindow,
+    verifiedContextWindow,
     modelContextWindow: getModelContextWindow(model, vendorKey, deviceId),
   });
   const pct =

@@ -107,7 +107,6 @@ describe('bot profile store', () => {
   it('creates a Bot profile without a fake Session projection', () => {
     const bot = addBotProfile({
       name: 'Telegram release helper',
-      channel: 'telegram',
       description: 'Release notes',
     });
     createdIds.push(bot.id);
@@ -121,7 +120,6 @@ describe('bot profile store', () => {
 
     const bot = addBotProfile({
       name: 'Brand new',
-      channel: 'local',
       description: '',
       capabilities: { harness: 'claude' },
     });
@@ -136,7 +134,7 @@ describe('bot profile store', () => {
   });
 
   it('defaults new Bots to Pi GLM-5.3-Flash when it is selectable', () => {
-    const bot = addBotProfile({ name: 'Pi Bot', channel: 'local', description: '' });
+    const bot = addBotProfile({ name: 'Pi Bot', description: '' });
     createdIds.push(bot.id);
 
     expect(bot.capabilities).toMatchObject({
@@ -161,7 +159,7 @@ describe('bot profile store', () => {
       piProvider('xd', false, [piModel('z-ai/glm-5.3-flash')]),
     ]);
 
-    const bot = addBotProfile({ name: 'Fallback Bot', channel: 'local', description: '' });
+    const bot = addBotProfile({ name: 'Fallback Bot', description: '' });
     createdIds.push(bot.id);
 
     expect(bot.capabilities).toMatchObject({
@@ -177,7 +175,7 @@ describe('bot profile store', () => {
       piProvider('xd', false, [piModel('z-ai/glm-5.3-flash')]),
     ]);
 
-    const bot = addBotProfile({ name: 'Empty Bot', channel: 'local', description: '' });
+    const bot = addBotProfile({ name: 'Empty Bot', description: '' });
     createdIds.push(bot.id);
 
     expect(bot.capabilities).toMatchObject({
@@ -188,17 +186,16 @@ describe('bot profile store', () => {
     });
   });
 
-  it('creates new Bots hands-on by default, and never with memory turned off', () => {
-    const bot = addBotProfile({ name: 'Fresh teammate', channel: 'local', description: '' });
+  it('creates new Bots with automatic review and memory enabled', () => {
+    const bot = addBotProfile({ name: 'Fresh teammate', description: '' });
     createdIds.push(bot.id);
 
-    // 产品裁决 2026-08-18:默认放手做;记忆恒开。
-    expect(bot.capabilities.permissions).toBe('trusted');
+    expect(bot.capabilities.permissions).toBe('auto');
     expect(bot.capabilities.memory).toBe(true);
   });
 
   it('persists Hide and Pin as roster metadata without changing lifecycle status', async () => {
-    const original = addBotProfile({ name: 'Roster Bot', channel: 'local', description: '' });
+    const original = addBotProfile({ name: 'Roster Bot', description: '' });
     createdIds.push(original.id);
     let persisted = { ...original, status: 'active' as const, hiddenAt: null as number | null, pinnedAt: null as number | null };
     const update = vi.fn(async (input: { id: string; hidden?: boolean; pinned?: boolean }) => {
@@ -236,7 +233,6 @@ describe('bot profile store', () => {
   it('duplicates identity, capabilities, Skills, and appearance without copying chat ownership', async () => {
     const source = addBotProfile({
       name: 'Researcher',
-      channel: 'local',
       description: 'Find evidence',
       identitySource: '# SOUL\nResearch carefully.',
       userContextSource: '# USER\nChris',
@@ -249,7 +245,7 @@ describe('bot profile store', () => {
     source.pinnedAt = 11;
     source.canonicalSessionId = 'source-chat';
     source.sessions = [{
-      id: 'source-chat', title: 'Researcher', kind: 'chat', channel: 'local', updatedAt: 12,
+      id: 'source-chat', title: 'Researcher', kind: 'chat', updatedAt: 12,
     }];
     createdIds.push(source.id);
     const create = vi.fn(async (input: Record<string, unknown>) => ({
@@ -329,7 +325,7 @@ describe('bot profile store', () => {
     try {
       const bot = await addBotProfileAndWait({
         name: 'Draft name',
-        channel: 'local',
+        avatarImageBase64: 'iVBORw0KGgo=',
         description: '',
         identitySource: '# SOUL\nPersistent release steward.',
         userContextSource: '# USER\nWorks with the release team.',
@@ -337,6 +333,7 @@ describe('bot profile store', () => {
         avatarColor: 'blue',
         skills: ['research'],
         capabilities: { permissions: 'trusted' },
+        templateId: 'lizi',
       });
       createdIds.push(bot.id);
       expect(bot).toMatchObject({
@@ -348,16 +345,18 @@ describe('bot profile store', () => {
       expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({
         identitySource: '# SOUL\nYou are the real Bot identity.',
       });
-      // 新建默认改成 trusted 之后,**读**到的 profile 仍以 main 的值为准:
+      // 新建默认改成 auto 之后,**读**到的 profile 仍以 main 的值为准:
       // 已存在的伙伴不会因为默认值变了就被悄悄升成信任。
       expect(bot.capabilities.permissions).toBe('ask');
       expect(create).toHaveBeenCalledWith(
         expect.objectContaining({
           identitySource: '# SOUL\nPersistent release steward.',
+          avatarImageBase64: 'iVBORw0KGgo=',
           userContextSource: '# USER\nWorks with the release team.',
           avatar: '🛠️',
           avatarColor: 'blue',
           skills: ['research'],
+          templateId: 'lizi',
           capabilities: expect.objectContaining({
             permissions: 'trusted',
           }),
@@ -369,7 +368,7 @@ describe('bot profile store', () => {
   });
 
   it('keeps one canonical projection and archives the previous one', () => {
-    const bot = addBotProfile({ name: 'History helper', channel: 'local', description: '' });
+    const bot = addBotProfile({ name: 'History helper', description: '' });
     createdIds.push(bot.id);
 
     setCanonicalBotSession(bot.id, { id: 'session-1', title: 'History helper', updatedAt: 1 });
@@ -385,8 +384,8 @@ describe('bot profile store', () => {
   });
 
   it('returns the persisted Bot profile when updating only the selected Bot', async () => {
-    const first = addBotProfile({ name: 'First', channel: 'local', description: '' });
-    const second = addBotProfile({ name: 'Second', channel: 'slack', description: '' });
+    const first = addBotProfile({ name: 'First', description: '' });
+    const second = addBotProfile({ name: 'Second', description: '' });
     createdIds.push(first.id, second.id);
 
     const updated = await updateBotProfile(first.id, { name: 'Renamed', enabled: false });
@@ -477,8 +476,8 @@ describe('保存失败只回滚自己那一行', () => {
   }
 
   it('另一个伙伴在同期保存的修改不被撤销', async () => {
-    const failing = addBotProfile({ name: 'Failing', channel: 'local', description: '' });
-    const other = addBotProfile({ name: 'Other', channel: 'local', description: '' });
+    const failing = addBotProfile({ name: 'Failing', description: '' });
+    const other = addBotProfile({ name: 'Other', description: '' });
     createdIds.push(failing.id, other.id);
 
     const rejectorFor = stubDeferredUpdates();
@@ -505,7 +504,7 @@ describe('保存失败只回滚自己那一行', () => {
   });
 
   it('同一个伙伴上更新的那次写赢过落后的回滚', async () => {
-    const bot = addBotProfile({ name: 'Same row', channel: 'local', description: '' });
+    const bot = addBotProfile({ name: 'Same row', description: '' });
     createdIds.push(bot.id);
 
     const rejectorFor = stubDeferredUpdates();

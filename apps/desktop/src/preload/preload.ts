@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type {
@@ -792,6 +793,7 @@ const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake
 const fanOutDeviceLinkOwnershipChanged = createIpcFanOut('device-link:ownership-changed');
 // 控制端:目标设备「无响应」熔断状态翻转(payload = { deviceId, unresponsive })
 const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
+const fanOutDeviceLinkPeerLinkReset = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINK_RESET);
 
 // device-link 模型列表写穿:被控端本地 main → 自身 renderer,把控制端写穿的草稿 / 会话 pref
 // 交给 renderer 调它原来的本地 setter。仅被控端进程会收到(控制端从不收 → 监听不误触发)。
@@ -1797,10 +1799,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener(XBOX_GAMEPAD_STATE_CHANGED_CHANNEL, listener);
     },
     onPreviewInput: (callback: (input: XboxGamepadPreviewInput) => void): (() => void) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        input: XboxGamepadPreviewInput,
-      ): void => callback(input);
+      const listener = (_event: Electron.IpcRendererEvent, input: XboxGamepadPreviewInput): void =>
+        callback(input);
       ipcRenderer.on(XBOX_GAMEPAD_PREVIEW_INPUT_CHANNEL, listener);
       return () => ipcRenderer.removeListener(XBOX_GAMEPAD_PREVIEW_INPUT_CHANNEL, listener);
     },
@@ -3170,11 +3170,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       visibleSlugs?: string[];
     }): Promise<{
       success: boolean;
-      result?: { slug: string; visibility: 'private' | 'shared' | 'public'; requestedVisibility?: 'public'; reviewStatus?: 'pending' };
+      result?: {
+        slug: string;
+        visibility: 'private' | 'shared' | 'public';
+        requestedVisibility?: 'public';
+        reviewStatus?: 'pending';
+      };
       error?: string;
       errorCode?: string;
-    }> =>
-      ipcRenderer.invoke('skillhub:set-published-visibility', params),
+    }> => ipcRenderer.invoke('skillhub:set-published-visibility', params),
 
     // 读取已发布 skill 的可见对象(共享团队 + 可见部门),编辑可见范围弹窗回显用
     getPublishedVisibility: (
@@ -3899,8 +3903,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       mtimeMs?: number;
       birthtimeMs?: number;
       sizeBytes?: number;
-    }> =>
-      ipcRenderer.invoke('fs:stat-path', { path }),
+    }> => ipcRenderer.invoke('fs:stat-path', { path }),
     mkdirP: (path: string): Promise<{ resolvedPath: string }> =>
       ipcRenderer.invoke('fs:mkdir-p', { path }),
   },
@@ -4263,6 +4266,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onOwnershipChanged: fanOutDeviceLinkOwnershipChanged,
     /** 控制端:目标设备「无响应」熔断状态翻转,payload: { deviceId, unresponsive } */
     onResponsivenessChanged: fanOutDeviceLinkResponsivenessChanged,
+    onPeerLinkReset: fanOutDeviceLinkPeerLinkReset,
     /**
      * 控制端:远程会话镜像的本地冷缓存(main 落 userData,见 main/device-link/mirrorCacheStore.ts)。
      * 只做首屏加速,非权威;fresh 数据一到由 renderer 整体接管。
@@ -4375,8 +4379,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       hosts: unknown[];
       warningCount?: number;
       diagnostic?: { kind: 'io' | 'syntax' | 'limit' } | null;
-    }> =>
-      ipcRenderer.invoke('maker:remote-ssh:reload-config'),
+    }> => ipcRenderer.invoke('maker:remote-ssh:reload-config'),
     add: (host: {
       id: string;
       displayName?: string;
@@ -5044,9 +5047,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         input: import('../shared/localDbMaintenance').DbSlimmingScheduleInput,
       ): Promise<import('../shared/localDbMaintenance').DbSlimmingScheduleResult> =>
         ipcRenderer.invoke('local-db:maintenance:schedule', input),
-      getLastResult: (): Promise<
-        import('../shared/localDbMaintenance').DbSlimmingResult | null
-      > => ipcRenderer.invoke('local-db:maintenance:last-result'),
+      getLastResult: (): Promise<import('../shared/localDbMaintenance').DbSlimmingResult | null> =>
+        ipcRenderer.invoke('local-db:maintenance:last-result'),
       openLastBackupDirectory: (): Promise<{ opened: boolean }> =>
         ipcRenderer.invoke('local-db:maintenance:open-last-backup-directory'),
       getStartupProgress: (): Promise<
@@ -5114,27 +5116,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       list: (body?: { lastReadAtByBotId?: Record<string, number> }): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:list', body),
       get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
-      health: (botId: string): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:bots:health', botId),
-      lifecycleEvents: (body: unknown): Promise<unknown[]> =>
-        ipcRenderer.invoke('local-db:bots:lifecycle-events', body),
+      chooseAvatar: (body: { botId: string }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:choose-avatar', body),
       searchHistory: (body: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:bots:search-history', body),
       create: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:create', body),
       update: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:update', body),
       createCanonicalSession: (body: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:bots:create-canonical-session', body),
-      compactCanonicalSession: (body: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:bots:compact-canonical-session', body),
-      /** 到点换代:打开主对话时问一次「该翻篇了吗」。没到点就原样返回。 */
-      renewIfDue: (body: { botId: string }): Promise<{
-        renewed: boolean;
-        reason?: 'daily' | 'idle';
-        canonicalSessionId: string | null;
-        notify: boolean;
-      }> => ipcRenderer.invoke('local-db:bots:renew-if-due', body),
-      linkSession: (body: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:bots:link-session', body),
       history: (botId: string): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:history', botId),
     },
@@ -5476,27 +5465,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:get-capabilities', agentKind),
     listBotDelegations: (
       parentSessionId: string,
-      status?: import('../shared/botDelegation').BotDelegationStatus,
     ): Promise<import('../shared/botDelegation').BotDelegationListResult> =>
-      ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId, status),
+      ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId),
     cancelBotDelegation: (
       parentSessionId: string,
       delegationId: string,
     ): Promise<import('../shared/botDelegation').BotDelegationCancelResult> =>
       ipcRenderer.invoke('maker:bot-delegation:cancel', parentSessionId, delegationId),
-    interjectBotDelegation: (
-      parentSessionId: string,
-      delegationId: string,
-      text: string,
-      idempotencyKey?: string,
-    ): Promise<import('../shared/botCollaboration').BotDelegationInterjectResult> =>
-      ipcRenderer.invoke(
-        'maker:bot-delegation:interject',
-        parentSessionId,
-        delegationId,
-        text,
-        idempotencyKey,
-      ),
     onBotDelegationChanged: fanOutBotDelegationChanged,
     getBotDirectMessageThread: (
       threadId: string,
@@ -6280,7 +6255,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       model: string,
       providerId?: string | null,
       expectedAgentSwitchRevision?: number,
-      selection?: { effort: string; fastMode: boolean },
+      selection?: { effort: string | null; fastMode: boolean },
     ): Promise<{ deferred: boolean; superseded?: boolean } | undefined> =>
       ipcRenderer.invoke(
         'maker:set-model',
@@ -6415,46 +6390,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** Maker Memory 整库重置: 删 <userData>/maker-memory/ 全部 workdir 目录 + close db pool */
     makerMemoryReset: (): Promise<{ removedCount: number }> =>
       ipcRenderer.invoke('maker:maker-memory:reset'),
-
-    /**
-     * 单个伙伴的 Maker Memory 只读列表 + 单条删除 + 清空 ("TA 记得的" — 批次 β)。
-     * scope key 由 main 侧用 buildBotMemoryScopeKey(botId) 派生, 与 workdir 记忆
-     * 完全独立; 全局 Maker Memory 开关即使关闭也仍可查看/清理已有数据。
-     */
-    botMemory: {
-      list: (botId: string): Promise<import('@cindy/maker-core').MemoryRecord[]> =>
-        ipcRenderer.invoke('maker:bot-memory:list', botId),
-      delete: (botId: string, filename: string): Promise<{ ok: true }> =>
-        ipcRenderer.invoke('maker:bot-memory:delete', botId, filename),
-      clear: (botId: string): Promise<{ removedCount: number }> =>
-        ipcRenderer.invoke('maker:bot-memory:clear', botId),
-      /**
-       * 「初始记忆」落地(模板自带 / AI 生成)。按 slug 幂等: 已存在的分片不覆盖,
-       * 所以重复调用、重装或重试都只补缺的那几条。
-       */
-      seed: (
-        botId: string,
-        entries: readonly import('../shared/botMemorySeed').BotMemorySeedEntry[],
-      ): Promise<import('../shared/botMemorySeed').BotMemorySeedResult> =>
-        ipcRenderer.invoke('maker:bot-memory:seed', botId, entries),
-    },
-
-    /**
-     * 单个伙伴自己沉淀的**真技能** ("TA 学会的" — 批次 ζ)。
-     * 落盘在 <userData>/bot-skills/<botId>/, 与记忆分片是两套存储; 写入只由伙伴
-     * 自己经 save_bot_skill 完成, 设置页只读 + 单条删除。
-     */
-    botSkill: {
-      list: (botId: string): Promise<import('../shared/botSkill').BotSkillSummary[]> =>
-        ipcRenderer.invoke('maker:bot-skill:list', botId),
-      read: (
-        botId: string,
-        slug: string,
-      ): Promise<import('../shared/botSkill').BotSkillDetail | null> =>
-        ipcRenderer.invoke('maker:bot-skill:read', botId, slug),
-      delete: (botId: string, slug: string): Promise<{ ok: true; deleted: boolean }> =>
-        ipcRenderer.invoke('maker:bot-skill:delete', botId, slug),
-    },
 
     /**
      * 启动期同步三个 memory 开关的真实持久化值 (main <userData>/memory-settings.json)。
@@ -6599,9 +6534,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       owner: { dataOwnerId: string | null; ownerGeneration: number },
     ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:compaction:set-pct', pct, owner),
-    compactionResetPct: (
-      owner: { dataOwnerId: string | null; ownerGeneration: number },
-    ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+    compactionResetPct: (owner: {
+      dataOwnerId: string | null;
+      ownerGeneration: number;
+    }): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:compaction:reset-pct', owner),
 
     // Pi 原生自动上下文压缩阈值。下次启动或恢复 Pi 任务时生效。
@@ -6613,9 +6549,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       owner: { dataOwnerId: string | null; ownerGeneration: number },
     ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:pi-compaction:set-pct', pct, owner),
-    piCompactionResetPct: (
-      owner: { dataOwnerId: string | null; ownerGeneration: number },
-    ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+    piCompactionResetPct: (owner: {
+      dataOwnerId: string | null;
+      ownerGeneration: number;
+    }): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:pi-compaction:reset-pct', owner),
 
     // LSP Beta 开关 —— 控制 mcp providers 是否注入 lsp_* 工具 (Phase 1 Beta)。
@@ -7048,8 +6985,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         days?: number | 'all';
         modelDays?: number | 'all';
         forceRefresh?: boolean;
-      }): Promise<unknown> =>
-        ipcRenderer.invoke('maker:usage:history', opts),
+      }): Promise<unknown> => ipcRenderer.invoke('maker:usage:history', opts),
       /** Claude USD 推送 (per-turn, agentKind=claude-code 时订阅它)。 */
       onTodaySpendChanged: fanOutMakerUsageTodaySpend,
       /** Codex token 推送 (per-turn, agentKind=codex 时订阅它)。 */

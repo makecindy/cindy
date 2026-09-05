@@ -1,7 +1,5 @@
 import { useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
-import { PauseCircle, PlayCircle, Search, Settings2, Trash2, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { PauseCircle, PlayCircle, Search, Settings2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
@@ -23,15 +21,12 @@ export function BotLifecycleSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(false);
   const [searchResult, setSearchResult] = useState<ConversationSearchResponse | null>(null);
-  const [actionBusy, setActionBusy] = useState<'pause' | 'resume' | 'delete' | null>(null);
+  const [actionBusy, setActionBusy] = useState<'pause' | 'resume' | null>(null);
   const [actionError, setActionError] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [confirmName, setConfirmName] = useState('');
 
   const archivedSessions = bot.sessions
     .filter((item) => item.kind === 'history')
@@ -60,35 +55,17 @@ export function BotLifecycleSettings({
     setSearching(true);
     setSearchError(false);
     try {
-      setSearchResult(await window.electronAPI.localDb.bots.searchHistory({
-        botId: bot.id,
-        query: trimmed,
-        limit: 20,
-      }));
+      setSearchResult(
+        await window.electronAPI.localDb.bots.searchHistory({
+          botId: bot.id,
+          query: trimmed,
+          limit: 20,
+        }),
+      );
     } catch {
       setSearchError(true);
     } finally {
       setSearching(false);
-    }
-  };
-
-  const deleteBot = async () => {
-    setActionBusy('delete');
-    setActionError(false);
-    try {
-      await runBotLifecycleAction({
-        botId: bot.id,
-        action: 'delete',
-        confirmName,
-        keepTaskHistory: true,
-        worktreeDisposition: 'retain',
-      });
-      setDeleteOpen(false);
-      navigate('/bots', { replace: true });
-    } catch {
-      setActionError(true);
-    } finally {
-      setActionBusy(null);
     }
   };
 
@@ -131,17 +108,6 @@ export function BotLifecycleSettings({
                   : t('bots.lifecycle.pause')}
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              setConfirmName('');
-              setDeleteOpen(true);
-            }}
-            disabled={actionBusy !== null}
-            className="inline-flex h-9 items-center gap-2 rounded-full px-4 text-12 font-medium text-[var(--text-danger)] hover:bg-[var(--danger-bg-soft)] disabled:opacity-50"
-          >
-            <Trash2 size={15} /> {t('bots.lifecycle.delete')}
-          </button>
         </div>
       </div>
 
@@ -181,9 +147,7 @@ export function BotLifecycleSettings({
           </button>
         </form>
         {searchError ? (
-          <p className="mt-3 text-11 text-[var(--text-danger)]">
-            {t('bots.historySearch.failed')}
-          </p>
+          <p className="mt-3 text-11 text-[var(--text-danger)]">{t('bots.historySearch.failed')}</p>
         ) : searchResult ? (
           searchResult.results.length === 0 ? (
             <p className="mt-3 text-11 text-[var(--text-tertiary)]">
@@ -197,17 +161,19 @@ export function BotLifecycleSettings({
                   <button
                     type="button"
                     key={item.session.id}
-                    onClick={() => onOpenSession(
-                      item.session.id,
-                      hit
-                        ? {
-                            kind: 'conversation-search',
-                            sessionId: item.session.id,
-                            messageId: hit.messageId,
-                            messageClientId: hit.messageClientId,
-                          }
-                        : undefined,
-                    )}
+                    onClick={() =>
+                      onOpenSession(
+                        item.session.id,
+                        hit
+                          ? {
+                              kind: 'conversation-search',
+                              sessionId: item.session.id,
+                              messageId: hit.messageId,
+                              messageClientId: hit.messageClientId,
+                            }
+                          : undefined,
+                      )
+                    }
                     className="rounded-xl border border-[var(--border-default)] px-3 py-2 text-left hover:bg-[var(--surface-hover)]"
                   >
                     <span className="block truncate text-12 font-medium text-[var(--text-primary)]">
@@ -231,9 +197,7 @@ export function BotLifecycleSettings({
 
       <div className="mt-4">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-12 font-medium text-[var(--text-primary)]">
-            {t('bots.historyTitle')}
-          </p>
+          <p className="text-12 font-medium text-[var(--text-primary)]">{t('bots.historyTitle')}</p>
           <span className="text-11 text-[var(--text-tertiary)]">{archivedSessions.length}</span>
         </div>
         {archivedSessions.length === 0 ? (
@@ -263,50 +227,6 @@ export function BotLifecycleSettings({
           </div>
         )}
       </div>
-
-      <Dialog.Root open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <Dialog.Title className="text-16 font-medium text-[var(--text-danger)]">
-                  {t('bots.lifecycle.deleteTitle')}
-                </Dialog.Title>
-                <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                  {t('bots.lifecycle.deleteDescription', { name: bot.name })}
-                </Dialog.Description>
-              </div>
-              <Dialog.Close className="rounded-lg p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]">
-                <X size={16} />
-              </Dialog.Close>
-            </div>
-            <label className="mt-4 block text-12 text-[var(--text-secondary)]">
-              {t('bots.lifecycle.confirmName', { name: bot.name })}
-              <input
-                value={confirmName}
-                onChange={(event) => setConfirmName(event.target.value)}
-                className="mt-2 h-9 w-full rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-              />
-            </label>
-            <div className="mt-5 flex justify-end gap-2">
-              <Dialog.Close className="h-9 rounded-lg px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                {t('bots.cancel')}
-              </Dialog.Close>
-              <button
-                type="button"
-                onClick={() => void deleteBot()}
-                disabled={actionBusy !== null || confirmName !== bot.name}
-                className="h-9 rounded-lg bg-[var(--text-danger)] px-4 text-12 font-medium text-white disabled:opacity-50"
-              >
-                {actionBusy === 'delete'
-                  ? t('bots.lifecycle.working')
-                  : t('bots.lifecycle.delete')}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
     </BotSettingsBlock>
   );
 }

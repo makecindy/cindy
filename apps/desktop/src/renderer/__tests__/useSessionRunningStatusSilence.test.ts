@@ -25,6 +25,7 @@ const storeMock = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   terminalErrorSessions: new Set<string>(),
   sideTaskStopSessions: new Set<string>(),
+  privateReplySessions: new Set<string>(),
 }));
 
 vi.mock('@/lib/makerChatStore', () => ({
@@ -37,6 +38,7 @@ vi.mock('@/lib/makerChatStore', () => ({
     },
     getRunningSnapshot: () => storeMock.snapshot,
     hasSessionTerminalError: (sessionId: string) => storeMock.terminalErrorSessions.has(sessionId),
+    wasLastStopPrivateReply: (sessionId: string) => storeMock.privateReplySessions.has(sessionId),
     wasLastStopSideTask: (sessionId: string) => storeMock.sideTaskStopSessions.has(sessionId),
   },
 }));
@@ -78,11 +80,29 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.listeners.clear();
     storeMock.terminalErrorSessions.clear();
     storeMock.sideTaskStopSessions.clear();
+    storeMock.privateReplySessions.clear();
     resetSilencedSessionDoneStoreForTests();
     resetSessionStartingStoreForTests();
     vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it('keeps private replies quiet even when the final attribution arrives during debounce', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone }));
+    await emitSnapshot(new Map([['private', status(true)]]));
+    await emitSnapshot(new Map([['private', status(false)]]));
+    storeMock.privateReplySessions.add('private');
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(onSessionDone).not.toHaveBeenCalled();
+    expect(addSessionAttention).not.toHaveBeenCalled();
+    storeMock.privateReplySessions.clear();
+    await emitSnapshot(new Map([['private', status(true)]]));
+    await emitSnapshot(new Map([['private', status(false)]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(onSessionDone).toHaveBeenCalledWith('private');
   });
 
   it('does not mute a normal follow-up that starts during silenced completion linger', async () => {

@@ -77,6 +77,8 @@ type LiteLlmTextModelClientOptions = {
   }) => Promise<{ url: string; authorization: string }>;
   timeoutMs?: number;
   onUsage?: (usage: LiteLlmTokenUsage) => void;
+  /** Called after request target/dispatcher awaits and immediately before fetch. */
+  beforeDispatch?: () => void;
 };
 
 type ParsedSseBlock = { data: unknown };
@@ -89,6 +91,7 @@ export class LiteLlmTextModelClient implements TextModelClient {
   }) => Promise<{ url: string; authorization: string }>;
   private readonly timeoutMs: number;
   private readonly onUsage?: (usage: LiteLlmTokenUsage) => void;
+  private readonly beforeDispatch?: () => void;
 
   constructor(options: LiteLlmTextModelClientOptions) {
     this.proxyApiKey = options.proxyApiKey;
@@ -96,6 +99,7 @@ export class LiteLlmTextModelClient implements TextModelClient {
     this.requestTargetProvider = options.requestTargetProvider;
     this.timeoutMs = options.timeoutMs ?? 8_000;
     this.onUsage = options.onUsage;
+    this.beforeDispatch = options.beforeDispatch;
   }
 
   async requestJson<T>(input: {
@@ -168,6 +172,7 @@ export class LiteLlmTextModelClient implements TextModelClient {
         // 代理解析放在看门狗起表之前:它是本机一次解析(带 30s 缓存),不该占用
         // response-headers 的等待预算。
         const dispatcher = await resolveRefinerDispatcher(target.url, refinerDispatcher);
+        this.beforeDispatch?.();
         armIdleTimeout('response headers');
         return undiciFetch(target.url, {
           method: 'POST',

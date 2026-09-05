@@ -57,6 +57,7 @@ const h = vi.hoisted(() => {
     }),
     setSessionProvider: vi.fn(),
     hydrateSessionProvider: vi.fn(),
+    createSessionRow: vi.fn(async () => undefined),
     peekPendingHandoff: vi.fn(async () => null as string | null),
     consumePendingHandoff: vi.fn(),
     listProviders: vi.fn(async (): Promise<unknown[]> => []),
@@ -142,6 +143,9 @@ vi.mock('../../localDb/ipc/sessions.js', () => ({
 vi.mock('../../maker-host/session-provider-store.js', () => ({
   setSessionProvider: h.setSessionProvider,
   hydrateSessionProvider: h.hydrateSessionProvider,
+}));
+vi.mock('../../maker-host/session-storage.js', () => ({
+  desktopSessionStorage: { create: h.createSessionRow },
 }));
 vi.mock('../../maker-ipc/agentHandoffPendingSingleton.js', () => ({
   agentHandoffPending: {
@@ -495,6 +499,35 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
 });
 
 describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () => {
+  it('createOnly materializes and broadcasts a task without a synthetic user turn', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(baseReq({ createOnly: true }));
+
+    expect(outcome).toMatchObject({ status: 'ok', finalText: '' });
+    expect(fakeMaker.createSession).not.toHaveBeenCalled();
+    expect(h.createSessionRow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-new', model: 'test-model' }),
+    );
+    expect(h.createMessage).not.toHaveBeenCalled();
+    expect(h.calls).toEqual(expect.arrayContaining(['touch:sess-new', 'created:sess-new']));
+    expect(h.touchUserSendInDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('createOnly keeps the durable task when userSendAt enrichment fails', async () => {
+    h.touchUserSendInDb.mockRejectedValueOnce(new Error('db busy'));
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(baseReq({ createOnly: true }));
+
+    expect(outcome.status).toBe('ok');
+    expect(h.createSessionRow).toHaveBeenCalledTimes(1);
+    expect(h.calls).toContain('created:sess-new');
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('create-only touchUserSend failed'),
+    );
+  });
+
   it('isNew: touchUserSendInDb 在 sessions:created 广播之前落库, onAccepted 再 bump 一次', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(baseReq({}));

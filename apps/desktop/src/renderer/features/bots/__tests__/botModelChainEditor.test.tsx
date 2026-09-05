@@ -97,13 +97,14 @@ describe('BotModelChainEditor', () => {
     );
 
     expect(modelSelectorProps).toHaveBeenCalledTimes(1);
+    expect(modelSelectorProps.mock.calls[0]?.[0].unifiedLayout).toBeUndefined();
+    expect(modelSelectorProps.mock.calls[0]?.[0].unifiedLayoutControls).toBeUndefined();
     expect(modelSelectorProps.mock.calls[0]?.[0]).toMatchObject({
       configurationEnabled: false,
       unifiedPanel: true,
       unifiedAgents: ['pi', 'claude-code'],
       unifiedSelectionPolicy: 'official',
-      unifiedLayout: 'badge',
-      unifiedLayoutControls: false,
+      triggerVariant: 'toolbar',
     });
   });
 

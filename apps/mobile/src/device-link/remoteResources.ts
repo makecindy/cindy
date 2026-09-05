@@ -41,6 +41,17 @@ export interface RemoteHomeCollection {
   targets: RemoteResourceHostTarget[];
 }
 
+/** Offline hosts keep an already discovered entry; revoked/disabled hosts do not. */
+export function remoteResourceDiscoveryTargets(
+  devices: readonly { canOpen: boolean; state: string; deviceId: string; name: string }[],
+  previous: readonly RemoteHomeCollection[],
+): RemoteResourceHostTarget[] {
+  const known = new Set(previous.flatMap((collection) => collection.targets.map((host) => host.deviceId)));
+  return devices
+    .filter((device) => device.canOpen || (device.state === 'offline' && known.has(device.deviceId)))
+    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name }));
+}
+
 function clientDescriptor(locale?: string): RemoteResourceClientDescriptor {
   return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,

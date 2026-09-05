@@ -11,7 +11,7 @@ import {
   validateDualModes,
   validateStructure,
 } from '../guards.ts';
-import { findRepoRoot, referencePath, semanticPath } from '../paths.ts';
+import { componentPath, findRepoRoot, referencePath, semanticPath } from '../paths.ts';
 import { readSnapshot, snapshotById } from '../snapshot.ts';
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -32,6 +32,9 @@ describe('DS-3 · 结构守卫', () => {
     expect(JSON.parse(readFileSync(semanticPath(repoRoot), 'utf8'))).toEqual(
       layers.semantic,
     );
+    expect(JSON.parse(readFileSync(componentPath(repoRoot), 'utf8'))).toEqual(
+      layers.component,
+    );
   });
 
   it('错误 fixture：非法 DTCG 语法被命中', () => {
@@ -48,6 +51,16 @@ describe('DS-3 · 结构守卫', () => {
     const issues = validateAliasDirection({
       reference: readFixture('alias-from-reference.json'),
       semantic: layers.semantic,
+      component: layers.component,
+    });
+    expect(issues.some((issue) => issue.code === 'alias-direction')).toBe(true);
+  });
+
+  it('错误 fixture：component 写字面量被命中', () => {
+    const issues = validateAliasDirection({
+      reference: layers.reference,
+      semantic: layers.semantic,
+      component: readFixture('component-literal.json'),
     });
     expect(issues.some((issue) => issue.code === 'alias-direction')).toBe(true);
   });

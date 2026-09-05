@@ -117,7 +117,6 @@ import {
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
-import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import {
   rememberRecoverableHandoff,
   setPending,
@@ -1266,17 +1265,10 @@ export function NewMakerDraftRoute() {
     unsupported: deviceProvidersUnsupported,
   } = useDeviceProviders(effectiveDeviceLinkDeviceId);
   const providers = effectiveDeviceLinkDeviceId ? deviceProviders : localProviders;
-  // 统一面板的启用判据是**两级**,与 ChatInput 的 unifiedPanelCapable / unifiedPanelActive
-  // 一一对应,工具条的引擎下拉必须按后者(active)决定去留:
-  //   · capable(本变量)—— 联合列表只认供应商目录,老被控端(不支持 provider:list)只有
-  //     一份拍平 capabilities → 开了就是空列表,composer 那边会降级回旧面板;
-  //   · active —— 再叠上形态偏好(modelPickerLayout,默认 'classic' = A 版统一选择器)。
-  // 旧面板是「先选引擎再选模型」,所以只要没真正启用统一面板,就必须把工具条上的引擎下拉
-  // 还回来 —— 否则那条链路上根本换不了引擎(只按 capable 撤掉时,默认形态下的新建草稿
-  // 就彻底没有换引擎入口)。统一面板真启用时不注入(引擎跟着模型走)。
+  // 新旧用户统一使用 A。老被控端只有 capabilities、没有供应商目录时，
+  // 保留兼容列表与引擎下拉；否则联合列表会为空，也无法切换引擎。
   const unifiedModelPanelEnabled = !effectiveDeviceLinkDeviceId || !deviceProvidersUnsupported;
-  const modelPickerLayoutPref = useModelPickerLayout();
-  const unifiedModelPanelActive = unifiedModelPanelEnabled && modelPickerLayoutPref !== 'original';
+  const unifiedModelPanelActive = unifiedModelPanelEnabled;
   const remoteModelListStatus = !isDeviceLinkDraft
     ? 'idle'
     : capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)
@@ -2085,25 +2077,10 @@ export function NewMakerDraftRoute() {
   ]);
 
   // 收藏锚点的失效兜底:选中一条收藏后,如果草稿的 (模型, 来源) 又被别的路径改掉(引擎
-  // 不可用 coerce、模型校准、浮层里换来源…),这个锚点就不再描述当前选择了 —— 靠**派生**让
-  // 它不亮:比的是快照里的 (wire id, providerId) 与草稿当前值。wire id 不查收藏条目(它按
-  // 归一化行 id 存,与草稿的 wire id 天生可能不等,见 draftFavoriteAnchor 的说明);
-  // **来源必须比**(2026-08-19 review P1):同一 wire model 可来自多家供应商,只比 wire id,
-  // device-link seed / 另一窗口把草稿从来源 A 切到同 wire model 的来源 B 后,旧锚点会继续
-  // 勾着 A 的收藏并抑制 B 模型行的勾,之后编辑 / 删除的也是错误副本。引擎维度不必比:槽按
-  // 引擎分,读到的本来就是当前引擎那一格。锚点指向的收藏被删 / 换账号后查无此条的情形,
-  // 由面板侧 activeFavoriteUid 兜底。
-  //
-  // ★ 刻意**不做**「不符就把槽删掉」的清理 effect(2026-08-19 预审 P2-7):槽是持久化数据,
-  // 而 draftInitialModel / chatInitialProviderId 存在瞬态窗口 —— device-link 草稿在被控端
-  // seed 到达前暂用本地 chatPrefs 值,那一帧的失配会把用户真实的锚点**永久**删掉;两个窗口
-  // (本地草稿 × 远程草稿)共用同一引擎槽时也会互删。派生「不符不亮」已保证不会勾错;
-  // 显式选择(选普通模型行 → handleUnifiedDraftSelect 写 null)仍会清槽。留下的休眠锚点
-  // 只在 (模型, 来源) 改回那一刻重新亮起 —— 那本来就是用户对该配置最后一次显式选中的副本。
-  // 收藏是独立选中项(Chris 2026-08-20):勾选身份就是 uid,不拿草稿当前模型/来源去对
-  // 快照 —— 对不上就不勾,等于让下面同名模型行把焦点抢走。草稿模型被 coerce / seed
-  // 改走时收藏行仍是用户点过的那一条;显式点普通模型行才会经 handleUnifiedDraftSelect
-  // 把槽写成 null。条目被删 / 换账号由面板 activeFavoriteUid 兜底。
+  // 不可用 coerce、模型校准、浮层里换来源…)，面板会用当前收藏与草稿完整配置比对，
+  // 不一致就回落模型行。深度 / Fast 直接读实时值，不在锚点里复制第二份快照。
+  // 不做「不符就删槽」的 effect：目录 / 远端 seed 未到时的短暂失配不能抹掉历史选择。
+  // 收藏修改不会自动覆盖旧草稿；显式选普通模型行时才清掉该锚点。
   const selectedFavoriteUid = draftFavoriteAnchor?.uid ?? null;
 
   /**
@@ -5359,10 +5336,8 @@ export function NewMakerDraftRoute() {
                     showFolderPicker={false}
                     // 统一模型选择器(model-selector-unified §1.1):引擎不再是工具条上的
                     // 独立控件 —— 它跟着模型走(推荐映射自动配好,并在模型 pill 与每一行
-                    // 右侧常驻显示),高级调整收进行配置浮层。两条例外都由
-                    // unifiedModelPanelActive 表达:device-link 老被控端的 capabilities-only
-                    // 降级、以及形态偏好停在 'original'(默认档)—— 那两路 composer 都回落
-                    // 旧面板,引擎下拉必须一起回来。
+                    // 右侧常驻显示),高级调整收进行配置浮层。仅在老被控端
+                    // capabilities-only 降级时恢复独立引擎下拉。
                     middleToolbarSlot={
                       unifiedModelPanelActive ? undefined : (
                         <AgentSelect

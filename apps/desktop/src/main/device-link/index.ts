@@ -11,6 +11,7 @@
  */
 
 import os from 'node:os';
+import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
 import WebSocket from 'ws';
@@ -128,7 +129,7 @@ import {
   buildSessionNotifyPayload,
   type MobileSessionEventKind,
 } from './mobileNotify';
-import { createSubscriptionReplayScheduler } from './subscriptionReplayScheduler';
+import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
 import { getSessionNotificationBody } from '../sessionNotificationCopy';
 import { getClientEndpoint } from '../clientEndpointsService';
 import {
@@ -268,6 +269,7 @@ export function applyControllerPresenceListSnapshot(
     onPeerBecameOnline: (deviceId, platform) => {
       if (isMobilePlatform(platform)) handleMobilePeerOnline(deviceId);
       else handleDesktopPeerOnline(deviceId);
+      replayActiveSubscriptions('directory-online', deviceId);
     },
   });
 }
@@ -352,6 +354,8 @@ let client: DeviceLinkClient | null = null;
  * 由 presence 闪断路径接管恢复) / 次数耗尽(用户下次打开远程视图惰性重建)。
  */
 const transportTimeoutReopen = createTransportTimeoutReopenLoop({
+  // Local Main→Renderer projection only; the relay and neighboring peers remain online.
+  onReset: (deviceId) => broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId }),
   reopen: async (deviceId) => {
     await openRemoteLink(deviceId);
     // link 重建成功后定向补一次订阅重放:transport-timeout 场景被控端保留了
@@ -623,6 +627,8 @@ export interface DeviceLinkServiceOptions {
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
 }
 
+let stopNetworkWatch: (() => void) | null = null;
+
 export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   // 「保持电脑唤醒」按持久化偏好在启动时应用(与登录 / relay 无关,幂等)。
   const initialKeepAwake = readDeviceLinkSettings().keepAwake;
@@ -737,6 +743,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (change.state === 'offline') {
       handleControllerOffline(change.deviceId, change);
     }
+  });
+  client.onPeerTransportReset(({ deviceId }) => {
+    // Mutual control shares one peer link: a locally exhausted inbound stream
+    // also invalidates this Desktop's remote view, without reopening other peers.
+    broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId });
   });
 
   client.onStatusChange((status) => {
@@ -1058,6 +1069,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (!authManager.getAuthState().isAuthenticated) return;
       linkTornDown = false;
       client?.start();
+      stopNetworkWatch?.();
+      stopNetworkWatch = watchNetworkChanges(() => {
+        if (linkTornDown || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
+        client?.notifyNetworkChanged();
+      });
       // 可靠帧可能在 ownership 接管前到达(那时非持有者,重建被 shouldAbort 挡掉):
       // 接管后对本机仍在控制、且 link 未就绪的设备补发一次重建,避免启动竞态留下
       // 半开链路,不必等对端下一帧。
@@ -1226,6 +1242,8 @@ export function getMobileNotifyGeneration(): number {
  * 同进程换账号登录还会把上一账号的控制端串到新账号。
  */
 function teardownActiveLink(): void {
+  stopNetworkWatch?.();
+  stopNetworkWatch = null;
   if (!client || linkTornDown) return;
   linkTornDown = true;
   controllerDisplayNameRefreshGeneration += 1;
@@ -1259,41 +1277,15 @@ function replayActiveSubscriptions(reason: string, deviceId?: string): void {
   subscriptionReplayScheduler.replay(reason, deviceId);
 }
 
-/**
- * 订阅重放的永久失败判据:这些码代表「重试同一动作不可能改变结果」的终态
- * (协议不符 / 对端明确拒绝 / 授权被收回 / 本机 fail-closed 门),各自有独立的
- * 恢复事件,不归退避循环管。DeviceLinkError.code 优先,兜底解析 message 里的
- * [CODE] 编码(本机门禁抛的是普通 Error)。
- */
-const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
-  'VERSION_MISMATCH',
-  'REMOTE_DISABLED',
-  'ACCESS_REVOKED',
-  'CHANNEL_NOT_ALLOWED',
-  'DEVICE_LINK_CONTROL_DISABLED',
-  'DEVICE_LINK_STANDBY',
-  // DEVICE_OFFLINE 刻意不在列(MOBILE-PARITY-CHECKLIST §2 归瞬态):presence
-  // 滞后窗口内 subscribe 可能先吃到 DEVICE_OFFLINE,归永久会在「presence 仍
-  // available」期间放弃收敛;归瞬态则退避循环续跑,presence 补到 offline 时由
-  // 重试前置门(presenceAvailableByDevice !== true)自然终止,设备回归再由
-  // presence 翻转重放接棒——两个终止/恢复信号都已存在,无泄漏风险(review P2)。
-]);
-
-function isPermanentSubscriptionReplayError(err: unknown): boolean {
-  if (err instanceof DeviceLinkError) return PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(err.code);
-  const message = err instanceof Error ? err.message : String(err);
-  const code = /\[([A-Z_]+)\]/.exec(message)?.[1];
-  return code !== undefined && PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(code);
-}
-
 const subscriptionReplayScheduler = createSubscriptionReplayScheduler({
   snapshotSubscriptions,
   remoteSubscribe,
   isLinkTornDown: () => linkTornDown,
   isRelayOnline: () => client?.getStatus() === 'online',
   isDeviceUnresponsive: (deviceId) => responsivenessTracker?.isUnresponsive(deviceId) ?? false,
-  isPresenceAvailable: (deviceId) => presenceAvailableByDevice.get(deviceId) === true,
-  isPermanentError: isPermanentSubscriptionReplayError,
+  getPresenceAvailability: (deviceId) => presenceAvailableByDevice.get(deviceId)
+    ?? (presenceOnlineByDevice.get(deviceId) === false ? false : undefined),
+  isPermanentError: (error, deviceId) => isPermanentSubscriptionReplayError(error, presenceAvailableByDevice.get(deviceId)),
   log: {
     debug: (message) => log.debug(message),
     warn: (message) => log.warn(message),

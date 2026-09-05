@@ -1,7 +1,4 @@
 import type { ConversationSearchResponse } from './conversationSearch';
-import type { BotFailureReason } from './botFailureReason';
-
-export type BotHealthStatus = 'healthy' | 'attention' | 'recovering' | 'paused';
 
 export type BotProfileLifecycleStatus =
   | 'active'
@@ -38,67 +35,6 @@ export interface BotLifecycleActionResult {
     worktrees: number;
   };
   warnings?: string[];
-}
-
-export type BotHealthIssueCode =
-  | 'profile-error'
-  | 'missing-canonical'
-  | 'canonical-session-missing'
-  | 'canonical-session-deleted'
-  | 'canonical-link-missing'
-  | 'canonical-link-mismatch'
-  | 'profile-update-pending'
-  | 'runtime-degraded'
-  | 'runtime-failed'
-  | 'routes-recovering'
-  | 'routes-error'
-  | 'automation-error'
-  | 'delivery-failed'
-  | 'delivery-dead-letter'
-  | 'workspace-error'
-  | 'durable-attention'
-  | 'lifecycle-incomplete';
-
-export interface BotHealthIssue {
-  code: BotHealthIssueCode;
-  count?: number;
-}
-
-export interface BotHealthReport {
-  botId: string;
-  status: BotHealthStatus;
-  checkedAt: number;
-  failureReason: BotFailureReason | null;
-  needsAttention: boolean;
-  canonical: {
-    sessionId: string | null;
-    sessionStatus: 'active' | 'archived' | 'deleted' | 'missing' | null;
-    linked: boolean;
-    profileVersion: number | null;
-    runtimeStatus: 'not-started' | 'prepared' | 'applied' | 'degraded' | 'failed';
-  };
-  counts: {
-    routes: number;
-    recoveringRoutes: number;
-    errorRoutes: number;
-    automations: number;
-    errorAutomations: number;
-    deliveries: number;
-    failedDeliveries: number;
-    deadLetterDeliveries: number;
-    workspaceLeases: number;
-    errorWorkspaceLeases: number;
-  };
-  issues: BotHealthIssue[];
-}
-
-export interface BotLifecycleEventView {
-  id: string;
-  botId: string;
-  sessionId: string | null;
-  eventType: string;
-  payload: Record<string, unknown>;
-  createdAt: number;
 }
 
 export interface BotHistorySearchRequest {

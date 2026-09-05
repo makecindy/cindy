@@ -282,6 +282,29 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       continue;
     }
 
+    // Desktop persists context rebuilds as empty assistant rows with metadata.
+    if (message.role === 'assistant') {
+      const rebuild = readRecord(message.agentMeta?.contextRebuild);
+      if (rebuild) {
+        result.push({
+          key: messageNormalizeKey(message),
+          source: message,
+          kind: 'system',
+          role: message.role,
+          label: 'system:context-rebuild',
+          body: '',
+          systemCardType: 'context-rebuild',
+          systemCardData: {
+            reason: typeof rebuild.reason === 'string' ? rebuild.reason : 'context-overflow',
+            handoff: typeof rebuild.handoff === 'string' ? rebuild.handoff : '',
+          },
+          align: 'agent',
+          createdAt: message.createdAt,
+        });
+        continue;
+      }
+    }
+
     // /goal 持久记录(桌面 goal-host 落库:role 'assistant' + 空 content + agentMeta 标记)
     // → goal 系统卡。不加分支会 fall through 到通用 assistant 处理,渲染成空白气泡。
     if (message.role === 'assistant') {
@@ -416,12 +439,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       align: message.role === 'user' && hookSource === undefined ? 'user' : 'agent',
       createdAt: message.createdAt,
       isStreaming: readMessageStreaming(message) || undefined,
-      ...(message.role === 'assistant' && (
-        message.agentMeta?.turnCompleted === true ||
-        (turnCost.turnMoney?.amount ?? 0) > 0 ||
-        // 无报价轮只落 turnUsageDetails,它同样只在 turn 结束时写入,等价收尾信号。
-        turnCost.turnTotalTokens !== undefined
-      )
+      ...(remoteMessageCompletesTurn(message, turnCost)
         ? { turnCompleted: true }
         : {}),
       ...turnCost,
@@ -791,6 +809,7 @@ function normalizeSystemCardType(value: unknown): MobileSystemCardType | null {
     || value === 'pwd'
     || value === 'status'
     || value === 'compact'
+    || value === 'context-rebuild'
     || value === 'cmd'
     || value === 'learn'
     ? value
@@ -842,6 +861,19 @@ function projectTurnMoney(
     },
     turnCostUsd: cost,
   };
+}
+
+/** Same completion boundary for normalization and streaming-prefix invalidation. */
+export function remoteMessageCompletesTurn(
+  message: RemoteMessage,
+  turnCost = readTurnCost(message),
+): boolean {
+  return message.role === 'assistant' && (
+    message.agentMeta?.turnCompleted === true
+    || (turnCost.turnMoney?.amount ?? 0) > 0
+    // Usage without a price is also written only when the turn ends.
+    || turnCost.turnTotalTokens !== undefined
+  );
 }
 
 function readTurnCost(

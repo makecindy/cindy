@@ -37,18 +37,21 @@ export function useShowConnectionBanner(
   error: string | null,
   issue: DeviceLinkConnectionIssue | null,
   deviceUnresponsive = false,
+  recovery?: 'syncing' | 'recovered',
 ): boolean {
-  const offline = status !== 'online';
+  const offline = status !== 'online' || recovery === 'syncing';
+  const showRecovered = recovery !== undefined;
   const [offlineLongEnough, setOfflineLongEnough] = useState(false);
   useEffect(() => {
     if (!offline) {
-      setOfflineLongEnough(false);
-      return;
+      if (!showRecovered) { setOfflineLongEnough(false); return; }
+      const timer = setTimeout(() => setOfflineLongEnough(false), 2_000);
+      return () => clearTimeout(timer);
     }
     const timer = setTimeout(() => setOfflineLongEnough(true), OFFLINE_BANNER_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [offline]);
-  return resolveConnectionBannerVisibility({
+  }, [offline, showRecovered]);
+  return (recovery === 'recovered' && offlineLongEnough) || resolveConnectionBannerVisibility({
     offline,
     offlineLongEnough,
     // 熔断已关后屏幕残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃(review P1),
@@ -70,6 +73,7 @@ export function ConnectionBanner({
   lastSyncedAt,
   onSync,
   variant = 'bar',
+  recovery,
 }: {
   status: DeviceLinkStatus;
   loading: boolean;
@@ -82,6 +86,7 @@ export function ConnectionBanner({
   lastSyncedAt: number | null;
   onSync(): void;
   variant?: 'bar' | 'inline';
+  recovery?: 'syncing' | 'recovered';
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
@@ -106,7 +111,7 @@ export function ConnectionBanner({
     ? 'off'
     : showUnresponsive
       ? 'busy'
-      : friendlyError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
+      : friendlyError ? 'muted' : recovery === 'syncing' ? 'busy' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const compact = density === 'compact';
   const title = activeIssue
     ? activeIssue.kind === 'unstable'
@@ -114,14 +119,16 @@ export function ConnectionBanner({
       : connectionIssueTitle(activeIssue.kind)
     : showUnresponsive
       ? t('deviceLink.deviceUnresponsiveTitle')
-      : friendlyError ? t('deviceLink.syncFailed') : relayStatusLabel(status);
+      : friendlyError ? t('deviceLink.syncFailed') : status === 'online' && recovery
+        ? t(`deviceLink.recovery.${recovery}`) : relayStatusLabel(status);
   const copy = activeIssue
     ? activeIssue.kind === 'unstable'
       ? t('deviceLink.unstableHint')
       : connectionIssueHint(activeIssue.kind)
     : showUnresponsive
       ? t('deviceLink.deviceUnresponsiveHint')
-      : friendlyError ?? relayStatusHint(status, lastSyncedAt);
+      : friendlyError ?? (status === 'online' && recovery === 'syncing'
+        ? t('deviceLink.recovery.syncingHint') : relayStatusHint(status, lastSyncedAt));
   return (
     <View
       style={[
@@ -132,7 +139,7 @@ export function ConnectionBanner({
       ]}
       testID="connection.banner"
     >
-      <StatusDot tone={tone} pulsing={!activeIssue && (status === 'connecting' || showUnresponsive)} />
+      <StatusDot tone={tone} pulsing={!activeIssue && (status === 'connecting' || showUnresponsive || recovery === 'syncing')} />
       <View style={[styles.textBlock, compact && styles.textBlockCompact]}>
         <Text
           ellipsizeMode="tail"

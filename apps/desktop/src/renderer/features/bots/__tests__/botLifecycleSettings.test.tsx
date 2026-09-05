@@ -24,7 +24,6 @@ function bot(status: BotProfile['status']): BotProfile {
   return {
     id: 'bot-1',
     name: 'Helper',
-    channel: 'local',
     description: '',
     avatar: '🤖',
     avatarColor: 'violet',
@@ -36,7 +35,9 @@ function bot(status: BotProfile['status']): BotProfile {
       effort: '',
       fastMode: false,
       harness: 'pi',
-      modelChain: [{ harness: 'pi', model: 'test-model', providerId: null, effort: '', fastMode: false }],
+      modelChain: [
+        { harness: 'pi', model: 'test-model', providerId: null, effort: '', fastMode: false },
+      ],
       skillMode: 'inherit',
       skillsExcluded: [],
       toolsetMode: 'inherit',
@@ -69,7 +70,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotLifecycleSettings v1 actions', () => {
-  it('offers pause and delete, but no Bot archive or restore action', async () => {
+  it('offers pause while deletion stays in the teammate list', async () => {
     render(
       <MemoryRouter>
         <BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} />
@@ -78,12 +79,12 @@ describe('BotLifecycleSettings v1 actions', () => {
 
     await waitFor(() => expect(screen.getByText('bots.lifecycle.activeTitle')).toBeTruthy());
     expect(screen.getByRole('button', { name: 'bots.lifecycle.pause' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'bots.lifecycle.delete' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.lifecycle.delete' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.archive' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.restore' })).toBeNull();
   });
 
-  it('shows a legacy stopped Bot as delete-only', async () => {
+  it('shows a legacy stopped Bot as read-only because deletion lives in the list', async () => {
     render(
       <MemoryRouter>
         <BotLifecycleSettings bot={bot('archived')} onOpenSession={vi.fn()} />
@@ -91,7 +92,7 @@ describe('BotLifecycleSettings v1 actions', () => {
     );
 
     await waitFor(() => expect(screen.getByText('bots.lifecycle.stoppedTitle')).toBeTruthy());
-    expect(screen.getByRole('button', { name: 'bots.lifecycle.delete' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.lifecycle.delete' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.pause' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.resume' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.restore' })).toBeNull();

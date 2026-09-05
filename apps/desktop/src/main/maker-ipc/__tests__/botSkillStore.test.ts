@@ -21,6 +21,7 @@ import {
   readBotSkill,
   renderBotSkillFile,
   saveBotSkill,
+  seedBotSkillIfMissing,
 } from '../botSkillStore';
 
 let userDataDir = '';
@@ -56,6 +57,7 @@ describe('normalizeBotSkillSlug', () => {
 describe('SKILL.md frontmatter', () => {
   it('round-trips name / description / updatedAt / body', () => {
     const source = renderBotSkillFile({
+      slug: 'quoted-name',
       name: 'a "quoted" name',
       description: 'line one\nline two',
       updatedAt: '2026-08-19T00:00:00.000Z',
@@ -67,6 +69,36 @@ describe('SKILL.md frontmatter', () => {
     expect(parsed.description).toBe('line one line two');
     expect(parsed.updatedAt).toBe('2026-08-19T00:00:00.000Z');
     expect(parsed.body).toBe('do the thing');
+    expect(source).toContain('name: "quoted-name"');
+    expect(source).toContain('metadata:');
+    expect(source).not.toContain('\nupdatedAt:');
+  });
+
+  it('migrates Cindy\'s legacy top-level metadata without changing the body', async () => {
+    const skillDir = path.join(botSkillsDir(userDataDir, 'bot-1'), 'weekly-report');
+    await fs.mkdir(skillDir, { recursive: true });
+    const filePath = path.join(skillDir, 'SKILL.md');
+    await fs.writeFile(
+      filePath,
+      [
+        '---',
+        'name: "周报"',
+        'description: "整理本周进展时使用。"',
+        'updatedAt: "2026-08-19T00:00:00.000Z"',
+        '---',
+        '',
+        '# 用户改过的正文',
+        '',
+      ].join('\n'),
+    );
+
+    const record = await readBotSkill(userDataDir, 'bot-1', 'weekly-report');
+
+    expect(record).toMatchObject({ name: '周报', body: '# 用户改过的正文' });
+    const migrated = await fs.readFile(filePath, 'utf8');
+    expect(migrated).toContain('name: "weekly-report"');
+    expect(migrated).toContain('displayName: "周报"');
+    expect(migrated).not.toContain('\nupdatedAt:');
   });
 
   it('still yields a body for a hand-written file without frontmatter', () => {
@@ -122,7 +154,10 @@ describe('saveBotSkill — 形成', () => {
       BotSkillStoreError,
     );
     await expect(
-      saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, body: 'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1) }),
+      saveBotSkill(userDataDir, 'bot-1', {
+        ...SAMPLE,
+        body: 'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1),
+      }),
     ).rejects.toMatchObject({ errorCode: 'SKILL_BODY_TOO_LARGE' });
     await expect(
       saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, name: '周报怎么写' }),
@@ -156,6 +191,47 @@ describe('saveBotSkill — 形成', () => {
   });
 });
 
+describe('seedBotSkillIfMissing — 内置模板安装', () => {
+  const seed = {
+    name: '决策与审批',
+    description: '处理重要工作审批时使用。',
+    body: '先给结论，再写理由、风险和下一步。',
+    slug: 'executive-decision-review',
+    now: 1_700_000_000_000,
+  };
+
+  it('writes a real skill once and preserves later user edits', async () => {
+    const first = await seedBotSkillIfMissing(userDataDir, 'bot-dash', seed);
+    expect(first.created).toBe(true);
+
+    await saveBotSkill(userDataDir, 'bot-dash', {
+      ...seed,
+      body: '这是用户改过的审批方法。',
+      now: 1_800_000_000_000,
+    });
+    const second = await seedBotSkillIfMissing(userDataDir, 'bot-dash', {
+      ...seed,
+      body: '新版内置内容也不应覆盖用户。',
+    });
+
+    expect(second.created).toBe(false);
+    expect(second.record.body).toBe('这是用户改过的审批方法。');
+  });
+
+  it('is atomic when two creation paths seed the same skill together', async () => {
+    const results = await Promise.all([
+      seedBotSkillIfMissing(userDataDir, 'bot-dash', seed),
+      seedBotSkillIfMissing(userDataDir, 'bot-dash', seed),
+    ]);
+
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    expect(await readBotSkill(userDataDir, 'bot-dash', seed.slug)).toMatchObject({
+      name: seed.name,
+      body: seed.body,
+    });
+  });
+});
+
 describe('listBotSkills / deleteBotSkill — 取与删', () => {
   it('returns an empty list before the Bot ever learned anything', async () => {
     expect(await listBotSkills(userDataDir, 'bot-1')).toEqual([]);
@@ -186,7 +262,9 @@ describe('隔离 — 一个伙伴的技能不进另一个伙伴的目录', () =>
     await saveBotSkill(userDataDir, 'bot-2', { ...SAMPLE, name: 'theirs' });
 
     expect((await listBotSkills(userDataDir, 'bot-1')).map((item) => item.name)).toEqual(['mine']);
-    expect((await listBotSkills(userDataDir, 'bot-2')).map((item) => item.name)).toEqual(['theirs']);
+    expect((await listBotSkills(userDataDir, 'bot-2')).map((item) => item.name)).toEqual([
+      'theirs',
+    ]);
     expect(botSkillRootDir(userDataDir, 'bot-1')).not.toBe(botSkillRootDir(userDataDir, 'bot-2'));
   });
 

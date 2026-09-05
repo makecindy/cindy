@@ -24,7 +24,7 @@ function input(overrides: Partial<BotSystemPromptInput> = {}): BotSystemPromptIn
     capabilities: {
       toolsets: [],
       memoryEnabled: false,
-      delegationEnabled: false,
+      partnerActionsEnabled: false,
       ownSkillsEnabled: false,
     },
     skillIndex: [],
@@ -39,7 +39,7 @@ describe('稳定层:能力必须写进提示词', () => {
         capabilities: {
           toolsets: ['docs'],
           memoryEnabled: false,
-          delegationEnabled: false,
+          partnerActionsEnabled: false,
           botCreationEnabled: true,
           ownSkillsEnabled: false,
         },
@@ -65,7 +65,7 @@ describe('稳定层:能力必须写进提示词', () => {
         capabilities: {
           toolsets: [],
           memoryEnabled: false,
-          delegationEnabled: false,
+          partnerActionsEnabled: false,
           botCreationEnabled: true,
           ownSkillsEnabled: false,
           botModeEnabled: true,
@@ -82,25 +82,27 @@ describe('稳定层:能力必须写进提示词', () => {
         capabilities: {
           toolsets: ['docs'],
           memoryEnabled: true,
-          delegationEnabled: true,
+          partnerActionsEnabled: true,
           ownSkillsEnabled: true,
         },
       }),
     );
     expect(all).toContain('你记得住事');
+    expect(all).toContain('第一次明确说出一条稳定偏好');
     expect(all).toContain('save_bot_skill');
-    expect(all).toContain('把活交出去');
-    expect(all).toContain('action=notify');
-    expect(all).toContain('action=call');
-    expect(all).toContain('小活都优先走 notify');
-    expect(all).toContain('Hello World HTML”走 notify');
-    expect(all).toContain('不要仅仅因为“对方要给结果”');
+    expect(all).toContain('第一次验证完就');
+    expect(all).toContain('开后台任务，也可以给伙伴发消息');
+    expect(all).toContain('start_session_task');
+    expect(all).toContain('check_session_task');
+    expect(all).toContain('message_session_task');
+    expect(all).toContain('stop_session_task');
+    expect(all).toContain('send_to_agent');
+    expect(all).toContain('不启动任务');
+    expect(all).toContain('需要独立交付物或验证时必须用 `start_session_task`');
     expect(all).toContain('不要只为“收到”“好的”互相确认');
-    expect(all).toContain('action=reply');
-    expect(all).toContain('action=cancel');
-    expect(all).not.toContain('action=start_task');
-    expect(all).not.toContain('action=delegate');
-    expect(all).toContain('collaborate_with_bot');
+    expect(all).not.toContain('collaborate_with_bot');
+    expect(all).not.toContain('action=notify');
+    expect(all).not.toContain('action=call');
     expect(all).toContain('create_teammate');
     expect(all).not.toContain('list_tools');
 
@@ -114,6 +116,9 @@ describe('稳定层:能力必须写进提示词', () => {
     const stable = buildBotStableTier(input());
     expect(stable).toContain('把活干完');
     expect(stable).toContain('绝不编造');
+    expect(stable).toContain('不用 index、final、output');
+    expect(stable).toContain('交付物');
+    expect(stable).toContain('相关文件');
     // 「自己去发现有什么工具」那句话必须已经不在了 —— 它正是事故的根源。
     expect(stable).not.toContain('list_tools');
   });
@@ -178,7 +183,12 @@ describe('伙伴的家', () => {
   const base = {
     displayName: '小柴',
     identity: '你是小柴。',
-    capabilities: { toolsets: [], memoryEnabled: false, delegationEnabled: false, ownSkillsEnabled: false },
+    capabilities: {
+      toolsets: [],
+      memoryEnabled: false,
+      partnerActionsEnabled: false,
+      ownSkillsEnabled: false,
+    },
     skillIndex: [],
   };
 
@@ -203,6 +213,7 @@ describe('伙伴的家', () => {
     // 固定成员讲清楚,改灵魂的规矩讲清楚。
     expect(stable).toContain('SOUL.md');
     expect(stable).toContain('memories/USER.md');
+    expect(stable).toContain('不要自行改写 SOUL 或 system_prompt');
   });
 
   it('没有家就一个字都不提 —— 远端会话够不到本机目录', () => {
@@ -235,7 +246,7 @@ describe('Bot Mode 的角色边界', () => {
       capabilities: {
         toolsets: ['xdt_helper'],
         memoryEnabled: false,
-        delegationEnabled: true,
+        partnerActionsEnabled: true,
         ownSkillsEnabled: false,
         botModeEnabled: true,
       },
@@ -245,16 +256,18 @@ describe('Bot Mode 的角色边界', () => {
       capabilities: {
         toolsets: ['xdt_helper'],
         memoryEnabled: false,
-        delegationEnabled: true,
+        partnerActionsEnabled: true,
         ownSkillsEnabled: false,
         botModeEnabled: false,
       },
     });
-    expect(canonical).toContain('你可以把活交出去');
-    expect(canonical).toContain('collaborate_with_bot');
+    expect(canonical).toContain('你可以开后台任务，也可以给伙伴发消息');
+    expect(canonical).toContain('send_to_agent');
+    expect(canonical).toContain('start_session_task');
     expect(canonical).not.toContain('list_tools');
-    expect(worker).not.toContain('你可以把活交出去');
-    expect(worker).not.toContain('collaborate_with_bot');
+    expect(worker).not.toContain('你可以开后台任务，也可以给伙伴发消息');
+    expect(worker).not.toContain('send_to_agent');
+    expect(worker).not.toContain('start_session_task');
   });
 });
 
@@ -299,7 +312,11 @@ describe('buildBotTeammateRoster', () => {
 
   it('描述压成单行并截断 —— 名册是索引,不是简介', () => {
     const roster = buildBotTeammateRoster([
-      { id: 'bot-z', name: '话痨', description: `第一行\n第二行   还有   很多空格${'长'.repeat(400)}` },
+      {
+        id: 'bot-z',
+        name: '话痨',
+        description: `第一行\n第二行   还有   很多空格${'长'.repeat(400)}`,
+      },
     ]);
     expect(roster).not.toContain('\n第二行');
     expect(roster).toContain('第一行 第二行 还有 很多空格');
@@ -310,9 +327,10 @@ describe('buildBotTeammateRoster', () => {
   it('明确告诉伙伴不确定就别猜', () => {
     const roster = buildBotTeammateRoster([{ id: 'bot-a', name: 'A' }]);
     expect(roster).toContain('别猜');
-    expect(roster).toContain('collaborate_with_bot');
+    expect(roster).toContain('send_to_agent');
+    expect(roster).toContain('start_session_task');
     expect(roster).not.toContain('list_tools');
-    expect(roster).toContain('直接联系');
-    expect(roster).toContain('交活');
+    expect(roster).toContain('明确要联系');
+    expect(roster).not.toContain('把任务交给某个伙伴');
   });
 });

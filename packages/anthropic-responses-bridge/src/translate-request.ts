@@ -279,8 +279,8 @@ function resolveToolChoice(
   return choice;
 }
 
-/** Responses 端点接受的 reasoning effort 档(codex / api.x.ai 通用)。 */
-export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+/** Responses reasoning effort 的并集；各通道只接受自身声明的档位。 */
+export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export interface TranslateRequestOptions {
   /** 发给上游的真实 model id(已 strip 掉 bridge 前缀)。 */
@@ -295,7 +295,7 @@ export interface TranslateRequestOptions {
   maxOutputTokensSupported?: boolean;
   /**
    * reasoning 档控制:
-   *   - 具体档('low'|'medium'|'high'|'xhigh')→ 发 `reasoning: { effort, summary:'auto' }`(用户选的思维深度经此流入);
+   *   - 具体档(由通道能力限定)→ 发 `reasoning: { effort, summary:'auto' }`(用户选的思维深度经此流入);
    *   - `'none'` → **完全不发** reasoning 字段(某些模型如 xAI grok-code-fast 会对 reasoningEffort 报 400);
    *   - 省略(undefined)→ 回退到按 thinking.budget_tokens 推断(默认 medium),与旧行为一致。
    */
