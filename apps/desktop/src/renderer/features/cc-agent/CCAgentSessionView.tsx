@@ -95,8 +95,8 @@ import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
-  UnreadFailedScheduleBanner,
 } from '@/components/chat/InterruptedTurnBanner';
+import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedScheduleBanner';
 import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
@@ -1932,12 +1932,6 @@ export function CCAgentSessionView({
     );
     return false;
   }, [currentUnreadFailedRunId, t]);
-  const handleUnreadFailedScheduleDismiss = useCallback(() => {
-    // 横幅汇总当前任务的失败记录，一次关闭整批；只处理点击时的快照，保留后续新失败。
-    void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds).then(({ failed }) => {
-      if (failed.length > 0) toast.error(t('chat.unreadFailedScheduleBanner.dismissFailed'));
-    });
-  }, [unreadFailedScheduleRunIds, t]);
   const errorTailMsg = useMemo(() => {
     const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
     return last &&
@@ -4775,7 +4769,9 @@ export function CCAgentSessionView({
               !agentStatus.isRunning &&
               sessionId && (
                 <UnreadFailedScheduleBanner
-                  onDismiss={handleUnreadFailedScheduleDismiss}
+                  key={sessionId}
+                  runIds={unreadFailedScheduleRunIds}
+                  viewVisible={viewVisible && historyLoaded}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />

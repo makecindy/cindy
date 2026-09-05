@@ -509,13 +509,13 @@ describe('automation-generated sessions', () => {
     ).toEqual(['ok']);
   });
 
-  it('dismisses the failed-run summary in one click while keeping retry scoped to one run', () => {
+  it('routes historical failures to the seen receipt while keeping retry scoped to one run', () => {
     const sessionViewSource = readTextLf(
       new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
       'utf8',
     );
     const bannerSource = readTextLf(
-      new URL('../components/chat/InterruptedTurnBanner.tsx', import.meta.url),
+      new URL('../components/chat/UnreadFailedScheduleBanner.tsx', import.meta.url),
       'utf8',
     );
     const zh = JSON.parse(
@@ -528,16 +528,11 @@ describe('automation-generated sessions', () => {
     expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
     expect(sessionViewSource).toContain('latestUnreadFailedRunId');
     expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId])');
-    expect(sessionViewSource).toContain(
-      'void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds)',
-    );
+    expect(sessionViewSource).toContain('runIds={unreadFailedScheduleRunIds}');
+    expect(sessionViewSource).toContain('viewVisible={viewVisible && historyLoaded}');
     expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
     expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有定时任务未完成，可查看运行记录。');
-    expect(zh.chat.unreadFailedScheduleBanner.dismissTitle).toBe('关闭');
-    expect(bannerSource).toContain(
-      "aria-label={t('chat.unreadFailedScheduleBanner.dismissTitle')}",
-    );
-    expect(bannerSource).not.toContain('chat.unreadFailedScheduleBanner.markAsRead');
+    expect(bannerSource).not.toContain('<button');
   });
 
   it('maps a focused schedule to the status bucket that can reveal it', () => {

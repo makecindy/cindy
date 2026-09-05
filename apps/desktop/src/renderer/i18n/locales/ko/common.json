@@ -7942,9 +7942,7 @@
       "dismissTitle": "이 중단 알림 닫기"
     },
     "unreadFailedScheduleBanner": {
-      "text": "완료되지 않은 예약 실행이 있습니다. 실행 기록을 확인하세요.",
-      "dismissTitle": "닫기",
-      "dismissFailed": "알림을 닫지 못했습니다. 다시 시도하세요."
+      "text": "완료되지 않은 예약 실행이 있습니다. 실행 기록을 확인하세요."
     },
     "worktreeRestoreBanner": {
       "text": "이 세션의 워크트리가 정리되었습니다(디렉터리가 존재하지 않음).",

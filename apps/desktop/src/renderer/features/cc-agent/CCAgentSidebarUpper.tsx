@@ -1110,8 +1110,7 @@ function ExpandedView({
   const markAutomationSessionRunsRead = useCallback(
     (sessionId: string) => {
       const info = scheduleSessionIndex.get(sessionId);
-      // 成功未读可以看过即已读;失败未读必须等横幅或组菜单显式「标为已读」,
-      // 否则点进去横幅立刻消失,红点又没有可处置入口。
+      // 成功进入即已读；历史失败由横幅在可见驻留后确认，不能在路由切入时提前清掉。
       const successUnreadRunIds = info ? unreadSuccessScheduleRunIds(info) : [];
       if (successUnreadRunIds.length === 0) return;
       // …AndSync:settle 后无条件触发 renderer 本地刷新。跨实例场景下这些 runId

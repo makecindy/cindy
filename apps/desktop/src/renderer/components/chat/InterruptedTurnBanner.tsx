@@ -31,10 +31,9 @@
  */
 
 import { useMemo, useState } from 'react';
-import { AlertCircle, CirclePause, Play, X } from 'lucide-react';
+import { CirclePause, Play, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
-import { Tip } from '@/components/ui/tooltip';
 import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import { ErrorBanner } from './ErrorBanner';
@@ -105,51 +104,6 @@ export function InterruptedTurnBanner({
       >
         <X size={14} />
       </button>
-    </div>
-  );
-}
-
-/** 定时任务历史失败/中断提示：关闭当前汇总，继续走已有的 error/中断横幅。 */
-export function UnreadFailedScheduleBanner({
-  onDismiss,
-  className,
-  style,
-}: {
-  onDismiss: () => void;
-  className?: string;
-  style?: React.CSSProperties;
-}) {
-  const { t } = useTranslation();
-
-  return (
-    <div
-      className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
-        'border bg-[var(--error-bg)] border-[var(--error-border)]',
-        className,
-      )}
-      style={style}
-      data-testid="unread-failed-schedule-banner"
-      data-banner-kind="unread-failed-schedule"
-    >
-      <AlertCircle size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
-      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {t('chat.unreadFailedScheduleBanner.text')}
-      </span>
-      <Tip text={t('chat.unreadFailedScheduleBanner.dismissTitle')}>
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label={t('chat.unreadFailedScheduleBanner.dismissTitle')}
-          className={cn(
-            'shrink-0 flex h-5 w-5 items-center justify-center rounded-sm',
-            'text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          )}
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
-      </Tip>
     </div>
   );
 }
