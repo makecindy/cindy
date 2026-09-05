@@ -6,6 +6,16 @@ import { buildComposerRichInputHtml } from '@/session/composerRichInputHtml';
 import { parseComposerWebMessage } from '@/session/composerRichInputProtocol';
 
 describe('mobile composer rich input HTML', () => {
+  it('animates a native frame that fills the horizontal input row, preserving the WebView command ref', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'), 'utf8');
+    const frame = source.slice(source.indexOf('frame: {'), source.indexOf('webView: {'));
+    expect(frame).toContain('flex: 1');
+    expect(frame).toContain('minWidth: 0');
+    expect(source).toContain('<Animated.View style={[styles.frame, heightStyle');
+    expect(source).not.toContain('createAnimatedComponent(WebView)');
+    expect(source).toContain('containerStyle={styles.webView}');
+  });
+
   const html = buildComposerRichInputHtml({
     accessibilityLabel: '输入消息',
     document: { version: 1, nodes: [{ type: 'quote', quote: { text: '<quoted>' } }] },
@@ -452,9 +462,10 @@ describe('mobile composer rich input HTML', () => {
       'utf8',
     ).replace(/\r\n/g, '\n');
     const overlayStart = screenSource.indexOf('const renderComposerInputOverlay = ');
+    expect(screenSource.indexOf('// 听写期间只滚动覆盖层', overlayStart)).toBeGreaterThan(overlayStart);
     const overlaySource = screenSource.slice(
       overlayStart,
-      screenSource.indexOf('const measureSendButtonTarget', overlayStart),
+      screenSource.indexOf('// 听写期间只滚动覆盖层', overlayStart),
     );
 
     expect(overlaySource).toContain('onPressIn={handleComposerInputPressIn}');
