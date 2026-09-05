@@ -27,6 +27,7 @@ const TRUSTED_SENDER_CHANNELS = [
   'ghosts:export',
   'ghosts:set-enabled',
   'ghosts:restore-builtin',
+  'ghosts:mark-used',
 ] as const;
 
 function handlerBlock(source: string, channel: string): string {
@@ -53,4 +54,27 @@ describe('高权限 ghost IPC 的来源闸(源码契约)', () => {
       ).toBe(false);
     });
   }
+
+  it('keeps recommendation snapshots behind the trusted app frame check', () => {
+    const start = source.indexOf("ipcMain.on('ghosts:recommendations'");
+    expect(start).toBeGreaterThan(-1);
+    const block = source.slice(start, source.indexOf('\n  });', start));
+    expect(block).toMatch(/if \(!isTrustedAppRendererEvent\(event\)\)\s*\{\s*event.returnValue = empty;\s*return;/);
+    expect(block.indexOf('isTrustedAppRendererEvent')).toBeLessThan(
+      block.indexOf('readGhostRecommendationEntries'),
+    );
+  });
+
+  it('binds runtime replacement to the live logic sender, never a payload plugin id', () => {
+    const block = handlerBlock(source, 'ghost-pipe:send');
+    const updateStart = block.indexOf("if (type === 'recommendations-update')");
+    expect(updateStart).toBeGreaterThan(-1);
+    const beforeUpdate = block.slice(0, updateStart);
+    expect(beforeUpdate).toContain('ghostIdForLogicWebContents(event.sender.id)');
+    expect(beforeUpdate).toContain('requireGhostAvailableForActiveSession(id)');
+    const update = block.slice(updateStart, block.indexOf("if (type === 'tool-result')"));
+    expect(update).toContain('!ghost.enabled');
+    expect(update).toContain('replaceGhostRecommendations(id,');
+    expect(update).not.toMatch(/payload\.(?:id|ghostId)/);
+  });
 });

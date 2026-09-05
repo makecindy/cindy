@@ -1,4 +1,6 @@
 import {
+  validateGhostRecommendations,
+  type GhostRecommendation,
   GHOST_LOCALES,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_OAUTH_SCOPES_MAX,
@@ -1367,6 +1369,7 @@ export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorC
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
+  recommendations?: GhostRecommendation[];
   /** 原始清单格式版本；v2 已在解析边界投影成与 v3 相同的直接字段。 */
   schemaVersion: 2 | 3;
   /** 唯一标识,同时是安装目录名与 panelKind 后缀。 */
@@ -2879,6 +2882,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'recommendations',
   'schemaVersion',
   'id',
   'name',
@@ -3716,6 +3720,8 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
+  const recommendations = raw.recommendations === undefined ? undefined : validateGhostRecommendations(raw.recommendations);
+  if (recommendations && !recommendations.ok) return recommendations;
   if (!isValidGhostId(raw.id)) {
     return { ok: false, reason: 'id 必须是 1–32 位小写字母/数字/连字符(不能以连字符开头)' };
   }
@@ -5962,6 +5968,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(recommendations?.ok ? { recommendations: recommendations.items } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
       name: raw.name,
@@ -6217,6 +6224,12 @@ export type GhostPipeHostRequest =
       /** 只能读取本插件已声明的媒体能力配置。 */
       capability: GhostMediaCapability;
     };
+
+/** Replaces only the calling plugin's catalog; never starts a task. */
+export interface GhostPipeRecommendationsUpdate {
+  type: 'recommendations-update';
+  items: GhostRecommendation[];
+}
 
 /** 插件请求 Agent 新回合时可选的会话处理方式。 */
 export const GHOST_AGENT_RUN_MODES = ['continue', 'fork', 'new'] as const;

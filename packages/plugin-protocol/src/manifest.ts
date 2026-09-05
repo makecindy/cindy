@@ -1,3 +1,5 @@
+import { validateGhostRecommendations, type GhostRecommendation } from './recommendations.js';
+
 /** `.cindy` 包根目录中的 manifest 文件名。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
 
@@ -852,6 +854,7 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  recommendations?: GhostRecommendation[];
   /** v2 仅作存量兼容；新插件使用 v3。 */
   schemaVersion: 2 | typeof GHOST_MANIFEST_SCHEMA_VERSION;
   /** 唯一标识,同时是安装目录名与 panelKind 后缀。 */
@@ -1136,6 +1139,7 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'recommendations',
   'schemaVersion',
   'id',
   'name',
@@ -1318,6 +1322,8 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
+  const recommendations = raw.recommendations === undefined ? undefined : validateGhostRecommendations(raw.recommendations);
+  if (recommendations && !recommendations.ok) return recommendations;
   if (!isValidGhostId(raw.id)) {
     return {
       ok: false,
@@ -3785,6 +3791,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(recommendations?.ok ? { recommendations: recommendations.items } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
       name: raw.name,
