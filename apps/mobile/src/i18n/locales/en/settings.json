@@ -58,9 +58,6 @@
     "deviceName": "Device Name",
     "deviceNameDetail": "This name appears in the authorization list on your computer.",
     "platform": "Platform",
-    "remoteControl": "Remote Control",
-    "remoteControlValue": "Managed on desktop",
-    "remoteControlDetail": "This phone acts only as a controller. Granting, revoking, and restoring control permissions is done in desktop settings.",
     "editAccessibility": "Edit {{label}}"
   },
   "relay": {

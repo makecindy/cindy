@@ -58,9 +58,6 @@
     "deviceName": "设备名称",
     "deviceNameDetail": "电脑端授权列表会显示这个名称。",
     "platform": "平台",
-    "remoteControl": "被控权限",
-    "remoteControlValue": "电脑端管理",
-    "remoteControlDetail": "手机只作为控制端。允许被控、撤销和恢复权限仍在电脑端设置里完成。",
     "editAccessibility": "修改{{label}}"
   },
   "relay": {
