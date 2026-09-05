@@ -167,6 +167,40 @@ describe("task menu usage summary", () => {
     expect(host.textContent).toContain("45%");
     expect(host.textContent).not.toContain("90%");
   });
+  it.each([0, -1, NaN, Infinity, undefined])(
+    "falls back from an uninitialized window (%s), then accepts live counters including zero",
+    (contextWindow) => {
+      const render = (task: RemoteSession, contextUsage: unknown) =>
+        act(() =>
+          root.render(
+            <SessionUsageSummary
+              session={task}
+              usage={usage}
+              contextUsage={contextUsage}
+            />,
+          ),
+        );
+      const task = { ...session, contextWindow };
+      render(task, null);
+      expect(host.textContent).toContain("暂未获取");
+      render(task, { totalTokens: 90, rawMaxTokens: 0, maxTokens: 100 });
+      expect(host.textContent).toContain("45%");
+      for (const field of [
+        "rawMaxTokens",
+        "maxContextTokens",
+        "contextWindow",
+      ]) {
+        render(task, { totalTokens: 90, [field]: 100 });
+        expect(host.textContent).toContain("45%");
+      }
+      render(
+        { ...task, contextTokens: 0, contextWindow: 200 },
+        { totalTokens: 90, rawMaxTokens: 100 },
+      );
+      expect(host.textContent).toContain("上下文0%");
+      expect(host.textContent).not.toContain("90%");
+    },
+  );
   it("keeps the overall exhausted weekly limit visible beside the model-specific limit", () => {
     const account = {
       ...usage.account!,

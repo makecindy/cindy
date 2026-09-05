@@ -58,17 +58,26 @@ export function SessionUsageSummary({
       ? (contextUsage as Record<string, unknown>)
       : {};
   // Session counters are live pushes; an earlier detail read must not freeze this summary.
-  const contextTokens =
-    session.contextTokens ?? rawContext.totalTokens ?? rawContext.contextTokens;
-  const contextWindow =
-    session.contextWindow ??
-    rawContext.rawMaxTokens ??
-    rawContext.maxTokens ??
-    rawContext.contextWindow;
+  const contextTokens = [
+    session.contextTokens,
+    rawContext.totalTokens,
+    rawContext.contextTokens,
+  ].find(
+    (value): value is number =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0,
+  );
+  const contextWindow = [
+    session.contextWindow,
+    rawContext.rawMaxTokens,
+    rawContext.maxTokens,
+    rawContext.maxContextTokens,
+    rawContext.contextWindow,
+  ].find(
+    (value): value is number =>
+      typeof value === "number" && Number.isFinite(value) && value > 0,
+  );
   const context =
-    typeof contextTokens === "number" &&
-    typeof contextWindow === "number" &&
-    contextWindow > 0
+    typeof contextTokens === "number" && typeof contextWindow === "number"
       ? `${Math.round(Math.min(100, Math.max(0, (contextTokens / contextWindow) * 100)))}%`
       : t("session.menu.usage.unavailable");
   const amountText = amounts.total

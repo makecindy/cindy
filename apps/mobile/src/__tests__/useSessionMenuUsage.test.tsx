@@ -131,6 +131,36 @@ describe("menu usage refresh lifecycle", () => {
     expect(h.value.account?.source).toBe("unavailable");
     expect(h.value.account?.windows).toEqual([]);
   });
+  it("does not reuse web quota across an unresolved source and a Gateway switch", async () => {
+    const r = reader();
+    const pending = deferred<unknown>();
+    vi.mocked(r.getAccountUsage).mockReturnValueOnce(pending.promise);
+    const h = harness(r);
+    const task = {
+      ...session("a"),
+      agentKind: "pi" as const,
+      model: "chatgpt/gpt-5",
+    };
+    await h.render(task);
+    await h.render({ ...task, providerId: null });
+    expect(h.value.account?.source).toBe("unavailable");
+    expect(r.getAccountUsage).toHaveBeenCalledTimes(1);
+    vi.mocked(r.getAccountUsage).mockResolvedValue({
+      spend: 12,
+      maxBudget: 100,
+      currency: "CNY",
+    });
+    await h.render({ ...task, providerId: "xd" });
+    await act(async () =>
+      pending.resolve({ webSnapshot: { primary: { usedPercent: 20 } } }),
+    );
+    expect(h.value.account?.source).toBe("gateway");
+    expect(h.value.account?.windows).toEqual([]);
+    await h.render({ ...task, providerId: null });
+    expect(h.value.account?.source).toBe("unavailable");
+    expect(h.value.account?.amounts).toEqual([]);
+    expect(r.getAccountUsage).toHaveBeenCalledTimes(2);
+  });
   it("preserves the last successful values with failure metadata when disconnected", async () => {
     const r = reader();
     const h = harness(r);

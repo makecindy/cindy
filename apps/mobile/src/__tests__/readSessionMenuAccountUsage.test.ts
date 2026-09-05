@@ -91,12 +91,19 @@ describe("existing remote quota compatibility", () => {
         maxBudget: 100,
         currency: "CNY",
       });
-      const result = await readSessionMenuAccountUsage(
-        { ...session, agentKind: "pi", providerId, model: "claude-sonnet-4-6" },
-        r,
-      );
-      expect(result.source).not.toBe("gateway");
-      expect(result.amounts).toEqual([]);
+      for (const agentKind of ["pi", "cc"] as const) {
+        for (const model of ["claude-sonnet-4-6", "chatgpt/gpt-5"]) {
+          const result = await readSessionMenuAccountUsage(
+            { ...session, agentKind, providerId, model },
+            r,
+          );
+          expect(result.source).toBe(
+            providerId === "custom" ? "api" : "unavailable",
+          );
+          expect(result.windows).toEqual([]);
+          expect(result.amounts).toEqual([]);
+        }
+      }
       expect(r.getAccountUsage).not.toHaveBeenCalled();
       expect(r.getCodexRateLimits).not.toHaveBeenCalled();
     },

@@ -53,13 +53,15 @@ export async function readSessionMenuAccountUsage(
   reader: Reader,
 ): Promise<SessionMenuAccountUsage> {
   if (session.remoteHostId?.trim()) return empty("unavailable");
+  // The host projects runtime-effective selection onto providerId. Missing
+  // selection alone proves neither a Gateway nor an OpenAI web account route.
   const provider = session.providerId?.trim() || null;
   const model = session.model.trim();
   if (canUseLocalCodexRateLimitControl(session))
     return readCodexAccount(session, reader);
   if (
     session.agentKind !== "codex" &&
-    (provider === null || provider === "openai") &&
+    provider === "openai" &&
     model.startsWith("chatgpt/")
   ) {
     const payload = record(await reader.getAccountUsage("codex"));
@@ -75,8 +77,6 @@ export async function readSessionMenuAccountUsage(
       false,
     );
   }
-  // The host projects runtime-effective selection onto providerId. A missing
-  // Pi provider is still unresolved: its default can be a non-Gateway source.
   const gateway =
     provider === "xd" ||
     (provider === null &&
