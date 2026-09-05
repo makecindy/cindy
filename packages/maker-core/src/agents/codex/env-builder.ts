@@ -11,6 +11,7 @@
  * 由调用方原样传给 new Codex({ env })。
  */
 
+import { access } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -30,6 +31,78 @@ function prependPath(env: Record<string, string>, prepends: string[]): void {
   }
 
   env[key] = [...cleaned, current].filter(Boolean).join(path.delimiter);
+}
+
+/**
+ * Codex resolves `pwsh` from PATH before its absolute Windows fallback. A batch
+ * shim found first is accepted as the shell path, but Rust cannot launch it
+ * with the generated arguments. Prefer the first exact pwsh.exe already on the
+ * user's PATH while preserving every other entry and its relative order.
+ */
+function isUncPathEntry(directory: string): boolean {
+  return directory.startsWith('\\\\') || directory.startsWith('//');
+}
+
+const PWSH_PATH_PROBE_TIMEOUT_MS = 1_000;
+
+async function hasAccessiblePwshExecutable(directory: string): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      access(path.join(directory, 'pwsh.exe')).then(
+        () => true,
+        () => false,
+      ),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), PWSH_PATH_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+type PwshExecutableProbe = (directory: string) => Promise<boolean>;
+
+/**
+ * Walk PATH in resolution order and stop as soon as an exact executable is
+ * usable. Besides preserving PATH precedence, the short circuit avoids
+ * starting probes for later mapped drives after the answer is already known.
+ */
+export async function findFirstWindowsPwshExecutableIndex(
+  entries: string[],
+  probe: PwshExecutableProbe = hasAccessiblePwshExecutable,
+): Promise<number> {
+  for (const [index, entry] of entries.entries()) {
+    const trimmed = entry.trim();
+    const directory =
+      trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
+        ? trimmed.slice(1, -1).trim()
+        : trimmed;
+    if (directory.length === 0 || isUncPathEntry(directory)) continue;
+
+    const normalized = path.win32.normalize(directory).replace(/[\\/]+$/, '').toLowerCase();
+    if (normalized.endsWith('\\microsoft\\windowsapps')) continue;
+
+    if (await probe(directory)) return index;
+  }
+
+  return -1;
+}
+
+async function prioritizeWindowsPwshExecutable(env: Record<string, string>): Promise<void> {
+  if (process.platform !== 'win32') return;
+
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+  if (!pathKey || !env[pathKey]) return;
+
+  const entries = env[pathKey].split(path.delimiter);
+  const executableIndex = await findFirstWindowsPwshExecutableIndex(entries);
+  if (executableIndex <= 0) return;
+
+  const [executableDir] = entries.splice(executableIndex, 1);
+  entries.unshift(executableDir);
+  env[pathKey] = entries.join(path.delimiter);
 }
 
 export async function buildCodexEnv(
@@ -60,6 +133,7 @@ export async function buildCodexEnv(
     ? { credentialMode: options.credentialMode }
     : undefined;
   Object.assign(env, await auth.getAuthEnv(authOptions));
+  await prioritizeWindowsPwshExecutable(env);
   prependPath(env, runtimeConfig.pathPrepends ?? []);
 
   // Windows 下 Python piped stdout 默认走 locale encoding(cp936/GBK), 不看 chcp 65001。
