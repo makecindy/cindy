@@ -58,6 +58,7 @@ export const AGENT_ISLAND_HOVER_SHORT_COOLDOWN_MS = 300;
 export const AGENT_ISLAND_TOOL_DETAIL_LINGER_MS = 2_000;
 export const AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS = 1_600;
 export const AGENT_ISLAND_FOCUS_VERIFY_TIMEOUT_MS = 1_500;
+const AGENT_ISLAND_FOCUS_NAVIGATION_TIMEOUT_MS = 60_000;
 // 未读的 completed / error 在**灵动岛浮窗**里驻留的上限;超过后即便用户没 ack,
 // 也不再占用展开列表。岛 state 会按 TTL prune;远程绿/红点改订独立的
 // remoteUnreadTerminals 账本,不跟完整会话(含活动文本)一起留下。
@@ -187,6 +188,9 @@ export interface AgentIslandState {
   activeTransientSessionId: string | null;
   transientRevealQueue: string[];
   pendingFocusSessionId: string | null;
+  // Short grace for a renderer ack before OS focus settles. Navigation itself
+  // may take longer (for example a renderer reload); its bounded deadline is
+  // derived from this timestamp by pendingFocusNavigationExpiresAt.
   pendingFocusUntil: number | null;
   lastDisplayMode: AgentIslandDisplayState['mode'] | null;
   lastDisplayPolicy: AgentIslandDisplayPolicy | null;
@@ -1089,8 +1093,9 @@ export function requestAgentIslandSessionFocus(
 export function isAgentIslandPendingFocusAck(
   state: AgentIslandState,
   sessionId: string | readonly string[] | null,
+  now = Date.now(),
 ): boolean {
-  if (!state.pendingFocusSessionId) return false;
+  if (!state.pendingFocusSessionId || !state.pendingFocusUntil || state.pendingFocusUntil <= now) return false;
   return normalizeVisibleSessionIds(sessionId).includes(state.pendingFocusSessionId);
 }
 
@@ -1253,7 +1258,7 @@ export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number):
     state.hoverIntentAt,
     state.collapseAt,
     state.hoverCooldownUntil && isPointerInsideIsland(state) ? state.hoverCooldownUntil : null,
-    state.pendingFocusUntil,
+    pendingFocusNavigationExpiresAt(state),
     state.expandedProtectUntil && state.protectedDismissPending ? state.expandedProtectUntil : null,
   ]) {
     if (value && value > now && (next === null || value < next)) {
@@ -1380,8 +1385,17 @@ function completionRevealDwellMs(session: AgentIslandSessionState, now: number):
   return Math.max(AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS, remainingPreviewMs + AGENT_ISLAND_REVEAL_DWELL_MS);
 }
 
+function pendingFocusNavigationExpiresAt(state: AgentIslandState): number | null {
+  return state.pendingFocusUntil === null
+    ? null
+    : state.pendingFocusUntil - AGENT_ISLAND_FOCUS_VERIFY_TIMEOUT_MS + AGENT_ISLAND_FOCUS_NAVIGATION_TIMEOUT_MS;
+}
+
 function updateFocusVerificationLifecycle(state: AgentIslandState, now: number): void {
-  if (!state.pendingFocusUntil || state.pendingFocusUntil > now) return;
+  const expiresAt = pendingFocusNavigationExpiresAt(state);
+  if (expiresAt === null || expiresAt > now) return;
+  // Allow slow renderer loading, but do not let an abandoned navigation turn a
+  // much later ordinary visit into an acknowledgement of the old island click.
   state.pendingFocusSessionId = null;
   state.pendingFocusUntil = null;
 }
@@ -1949,6 +1963,8 @@ function applyVerifiedFocusIfMatched(
   state: AgentIslandState,
   now: number,
 ): boolean {
+  // A route report can arrive before the expiry timer gets a chance to run.
+  updateFocusVerificationLifecycle(state, now);
   const focusedSessionId = state.pendingFocusSessionId;
   if (!focusedSessionId || !state.visibleSessionIds.has(focusedSessionId)) return false;
   state.pendingFocusSessionId = null;

@@ -25,6 +25,7 @@ import { AGENT_ISLAND_DISPLAY_CONFIG } from '../displayConfig.js';
 import type { AgentIslandNativeFrame } from '../MacAgentIslandNativeHost.js';
 import { markAppContentWindow } from '../../windowFocusClassifier.js';
 import type { AgentIslandService } from '../service.js';
+import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
@@ -99,6 +100,7 @@ function tccDeniedError(): NodeJS.ErrnoException {
 vi.mock('electron', () => {
   return {
     app: {
+      focus: vi.fn(),
       getPreferredSystemLanguages: mocks.getPreferredSystemLanguages,
       getLocale: mocks.getLocale,
     },
@@ -136,6 +138,8 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 import { resetEpermGuidanceForTest } from '../../file-access/permissions.js';
 
 beforeEach(() => {
+  setDeepLinkMainWindow(null);
+  takePendingDeepLink();
   mocks.getSessionRowSnapshot.mockReset();
   mocks.getSessionRowSnapshot.mockResolvedValue(null);
   mocks.displays.splice(0, mocks.displays.length, mocks.primaryDisplay);
@@ -1883,11 +1887,15 @@ describe('AgentIslandService native publishing', () => {
     const mainWindow = {
       isDestroyed: () => false,
       isMinimized: () => false,
+      isVisible: () => true,
       restore: vi.fn(),
       show: vi.fn(),
       focus: vi.fn(),
-      webContents: { send },
+      setAlwaysOnTop: vi.fn(),
+      moveTop: vi.fn(),
+      webContents: { send, isLoading: () => false },
     } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(mainWindow);
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
       void state;
       void frameOrFrames;
@@ -1924,11 +1932,58 @@ describe('AgentIslandService native publishing', () => {
       'target-session',
     );
 
-    expect(send).toHaveBeenCalledWith('notification:focus-session', 'target-session');
+    expect(send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'target-session' });
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
       mode: 'compact',
       currentSessionId: 'target-session',
     });
+  });
+
+  it('retains a completion click during renderer reload and collapses after the target is shown', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const send = vi.fn();
+    const mainWindow = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isVisible: () => false,
+      isFocused: () => true,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
+      moveTop: vi.fn(),
+      webContents: { send, isLoading: () => true },
+    } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(mainWindow);
+    const publish = vi.fn((_state: AgentIslandDisplayState) => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    service.registerIpc();
+    service.handleUserPrompt({ sessionId: 'completed-session', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 'completed-session', agentKind: 'codex' }, doneEvent());
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded' });
+    const focusSession = (service as unknown as { focusSession(id: string): void }).focusSession.bind(service);
+
+    focusSession('completed-session');
+
+    // A loading renderer has no notification listener. The existing deep-link
+    // pull-on-mount path must retain the click instead of sending it into the gap.
+    expect(send).not.toHaveBeenCalled();
+    expect(mainWindow.show).toHaveBeenCalled();
+    expect(mainWindow.focus).toHaveBeenCalled();
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'completed-session' });
+    expect(takePendingDeepLink()).toBeNull();
+
+    service.setAppFocused(true);
+    mocks.browserWindowFromWebContents.mockReturnValue(mainWindow);
+    await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+      { sender: {} },
+      'completed-session',
+    );
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact' });
   });
 
   it('smart-suppresses all visible split sessions', async () => {
