@@ -32,6 +32,7 @@ describe('newSessionPreferenceStore', () => {
     await expect(readNewSessionPreferences()).resolves.toEqual({
       agentKind: 'grok-build',
       device: null,
+      workspaceKind: null,
       permissionModeByAgent: {},
     });
   });
