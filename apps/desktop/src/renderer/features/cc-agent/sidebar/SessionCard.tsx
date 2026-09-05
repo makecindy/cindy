@@ -102,6 +102,7 @@ import {
   needsDedicatedSplitGroupDragHandle,
   startSessionDrag,
 } from '../splitGroupDnd';
+import { useDetachSessionFromFamily } from './useDetachSessionFromFamily';
 
 const log = createLogger('SessionCard');
 
@@ -195,6 +196,7 @@ export const SessionCard = memo(function SessionCard({
     ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
+  const detachFromFamily = useDetachSessionFromFamily(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   const boundSchedules = useSessionBoundSchedules(session.id);
   const showScheduleBindingBadge = boundSchedules.length > 0;
@@ -565,6 +567,15 @@ export const SessionCard = memo(function SessionCard({
         />
       </DropdownMenuSubContent>
     </DropdownMenuSub>
+  ) : null;
+  const detachFamilyMenuItem = session.parentSessionId ? (
+    <DropdownMenuItem
+      disabled={remoteWritesBlocked}
+      onSelect={() => void detachFromFamily()}
+      className={MENU_ITEM_CLASS}
+    >
+      {t('ccAgent.sidebar.sessionFamily.detach')}
+    </DropdownMenuItem>
   ) : null;
 
   const statusIconNode = (
@@ -1097,6 +1108,7 @@ export const SessionCard = memo(function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
+                {detachFamilyMenuItem}
                 {exportShareMenuItem}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
@@ -1117,6 +1129,7 @@ export const SessionCard = memo(function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
+                {detachFamilyMenuItem}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1146,6 +1159,7 @@ export const SessionCard = memo(function SessionCard({
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
                 {moveToProjectSubmenu}
+                {detachFamilyMenuItem}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 {copySessionIdSubmenu}
                 <DropdownMenuItem

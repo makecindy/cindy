@@ -105,6 +105,7 @@ import {
   startSessionDrag,
 } from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import { useDetachSessionFromFamily } from './useDetachSessionFromFamily';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -514,6 +515,7 @@ export const SessionItem = memo(function SessionItem({
   //   - 右侧 ⋮ 菜单只显示 Rename + Unarchive（屏蔽 Pin/Delete/Archive 等无意义项）
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
+  const detachFromFamily = useDetachSessionFromFamily(session);
 
   // 右键菜单弹出位置：null = 关闭；{x,y} = 在该屏幕坐标处弹出（fixed 定位的
   // 隐形 trigger 锚定到这里）。与 ProjectNode 同款 coordinate-anchored 模式。
@@ -819,6 +821,15 @@ export const SessionItem = memo(function SessionItem({
         />
       </DropdownMenuSubContent>
     </DropdownMenuSub>
+  ) : null;
+  const detachFamilyMenuItem = session.parentSessionId ? (
+    <DropdownMenuItem
+      disabled={remoteWritesBlocked}
+      onSelect={() => void detachFromFamily()}
+      className={MENU_ITEM_CLASS}
+    >
+      {t('ccAgent.sidebar.sessionFamily.detach')}
+    </DropdownMenuItem>
   ) : null;
 
   const showAutomationRunAction =
@@ -1257,6 +1268,7 @@ export const SessionItem = memo(function SessionItem({
                 >
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
+                {detachFamilyMenuItem}
                 {exportShareMenuItem}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
@@ -1278,6 +1290,7 @@ export const SessionItem = memo(function SessionItem({
                 >
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
+                {detachFamilyMenuItem}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1308,6 +1321,7 @@ export const SessionItem = memo(function SessionItem({
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
                 {moveToProjectSubmenu}
+                {detachFamilyMenuItem}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 {copySessionIdSubmenu}
                 <DropdownMenuItem

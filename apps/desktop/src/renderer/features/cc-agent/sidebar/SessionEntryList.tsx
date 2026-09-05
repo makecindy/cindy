@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
@@ -12,6 +13,8 @@ import type {
 import {
   getEntryActivityMs,
   groupAutomationSidebarEntries,
+  groupSessionFamilySidebarEntries,
+  type SessionFamilyNode,
 } from '../lib/automationSidebarGrouping';
 import { getSessionListCollapseView } from '../lib/sessionListCollapse';
 import { AutomationSessionGroupItem } from './AutomationSessionGroupItem';
@@ -21,11 +24,15 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import { useCollapsibleShowAll } from './hooks/useCollapsibleShowAll';
 import { SessionCard } from './SessionCard';
+import { Tip } from '@/components/ui/tooltip';
 
 /** 条目是否为当前激活会话(group 命中其下任一会话)。 */
 function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): boolean {
   if (!activeSessionId) return false;
   if (entry.kind === 'session') return entry.session.id === activeSessionId;
+  if (entry.kind === 'session-family') {
+    return entry.family.sessions.some((session) => session.id === activeSessionId);
+  }
   return entry.group.sessions.some((s) => s.id === activeSessionId);
 }
 /** 条目是否需关注(group 命中其下任一会话)。 */
@@ -34,6 +41,9 @@ function entryHasAttention(
   notifications: ReadonlySet<string>,
 ): boolean {
   if (entry.kind === 'session') return notifications.has(entry.session.id);
+  if (entry.kind === 'session-family') {
+    return entry.family.sessions.some((session) => notifications.has(session.id));
+  }
   return entry.group.sessions.some((s) => notifications.has(s.id));
 }
 
@@ -85,6 +95,96 @@ export interface SessionEntryRowsProps extends Omit<
   entries: readonly SidebarSessionEntry[];
   automationGroupCollapsed?: (groupKey: string) => boolean;
   onAutomationGroupCollapsedChange?: (groupKey: string, collapsed: boolean) => void;
+}
+
+interface SessionFamilyBranchProps {
+  node: SessionFamilyNode;
+  depth: number;
+  rowProps: SessionEntryRowsProps;
+  isFirst: boolean;
+}
+
+/**
+ * 任务 family 的递归渲染节点。折叠按钮位于任务行外，不进入 SessionItem/SessionCard
+ * 的原生拖拽热区，因此不会抢占置顶排序或分屏拖拽手势。
+ */
+function SessionFamilyBranch({ node, depth, rowProps, isFirst }: SessionFamilyBranchProps) {
+  const { t } = useTranslation();
+  const [collapsed, setCollapsed] = useState(false);
+  const { session } = node;
+  const hasChildren = node.children.length > 0;
+  const toggleLabel = collapsed
+    ? t('ccAgent.sidebar.sessionFamily.expand')
+    : t('ccAgent.sidebar.sessionFamily.collapse');
+  const commonProps = {
+    session,
+    isActive: session.id === rowProps.activeSessionId,
+    isRunning: rowProps.runningSessionIds.has(session.id),
+    isAttached: rowProps.attachedSessionIds.has(session.id),
+    hasAttentionNotification: rowProps.notifications.has(session.id),
+    isSelected: rowProps.selectedSessionIds?.has(session.id) ?? false,
+    onClick: rowProps.onSessionClick,
+    onAction: rowProps.onAction,
+    onRename: rowProps.onRename,
+    onTogglePin: rowProps.onTogglePin,
+    onMoveSession: rowProps.onMoveSession,
+    projectOptions: rowProps.projectOptions,
+    indented: rowProps.indented,
+    matchIndices: rowProps.matchMap?.get(session.id),
+    sourceLabel: rowProps.sourceLabelMap?.get(session.id),
+  };
+
+  return (
+    <div role="group" aria-label={hasChildren ? toggleLabel : undefined}>
+      <div className="flex min-w-0 items-start" style={{ paddingLeft: `${depth * 14}px` }}>
+        <span className="flex h-8 w-4 shrink-0 items-center justify-center">
+          {hasChildren ? (
+            <Tip text={toggleLabel} side="bottom">
+              <button
+                type="button"
+                data-no-drag
+                aria-label={toggleLabel}
+                aria-expanded={!collapsed}
+                onClick={() => setCollapsed((value) => !value)}
+                className={cn(
+                  'flex size-4 items-center justify-center rounded-md',
+                  'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
+                  'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+                )}
+              >
+                {collapsed ? (
+                  <ChevronRight size={12} strokeWidth={2} />
+                ) : (
+                  <ChevronDown size={12} strokeWidth={2} />
+                )}
+              </button>
+            </Tip>
+          ) : null}
+        </span>
+        <div className="min-w-0 flex-1">
+          {rowProps.sessionVariant === 'list' ? (
+            <SessionCard
+              {...commonProps}
+              variant="list"
+              isFirst={rowProps.showFirstDivider && isFirst}
+            />
+          ) : (
+            <SessionItem {...commonProps} />
+          )}
+        </div>
+      </div>
+      {!collapsed &&
+        node.children.map((child) => (
+          <SessionFamilyBranch
+            key={child.session.id}
+            node={child}
+            depth={depth + 1}
+            rowProps={rowProps}
+            isFirst={false}
+          />
+        ))}
+    </div>
+  );
 }
 
 export function SessionEntryRows({
@@ -153,6 +253,39 @@ export function SessionEntryRows({
           );
         }
 
+        if (entry.kind === 'session-family') {
+          return (
+            <SessionFamilyBranch
+              key={entry.family.id}
+              node={entry.family.root}
+              depth={0}
+              rowProps={{
+                entries,
+                activeSessionId,
+                runningSessionIds,
+                attachedSessionIds,
+                notifications,
+                selectedSessionIds,
+                onSessionClick,
+                onAction,
+                onRename,
+                onTogglePin,
+                onMoveSession,
+                projectOptions,
+                onScheduleAction,
+                indented,
+                matchMap,
+                sourceLabelMap,
+                sessionVariant,
+                showFirstDivider,
+                automationGroupCollapsed,
+                onAutomationGroupCollapsedChange,
+              }}
+              isFirst={index === 0}
+            />
+          );
+        }
+
         return (
           <AutomationSessionGroupItem
             key={entry.group.id}
@@ -199,7 +332,10 @@ export function SessionEntryList({
   const { t } = useTranslation();
   const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
   const entries = useMemo(
-    () => groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
+    () =>
+      groupSessionFamilySidebarEntries(
+        groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
+      ),
     [notifications, scheduleSessionIndex, sessions],
   );
 

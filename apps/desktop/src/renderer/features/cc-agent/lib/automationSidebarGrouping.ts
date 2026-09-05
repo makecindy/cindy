@@ -61,9 +61,23 @@ export interface AutomationSessionGroup {
   attentionSessionIds: string[];
 }
 
+/** 侧栏中的一棵任务分支；children 顺序沿用调用方已经确定的任务排序。 */
+export interface SessionFamilyNode {
+  session: Session;
+  children: SessionFamilyNode[];
+}
+
+/** 父任务与其当前可见后代组成的侧栏树形分组。 */
+export interface SessionFamilyGroup {
+  id: string;
+  root: SessionFamilyNode;
+  sessions: Session[];
+}
+
 export type SidebarSessionEntry =
   | { kind: 'session'; session: Session }
-  | { kind: 'automation-group'; group: AutomationSessionGroup };
+  | { kind: 'automation-group'; group: AutomationSessionGroup }
+  | { kind: 'session-family'; family: SessionFamilyGroup };
 
 /**
  * 条目的"最近活动"时间戳(ms):会话取自身;自动化分组取组内最新一条。
@@ -71,6 +85,9 @@ export type SidebarSessionEntry =
  */
 export function getEntryActivityMs(entry: SidebarSessionEntry): number {
   if (entry.kind === 'session') return sessionActivityMs(entry.session);
+  if (entry.kind === 'session-family') {
+    return entry.family.sessions.reduce((max, session) => Math.max(max, sessionActivityMs(session)), 0);
+  }
   return entry.group.sessions.reduce((max, s) => Math.max(max, sessionActivityMs(s)), 0);
 }
 
@@ -186,6 +203,86 @@ export function groupAutomationSidebarEntries(
   }
 
   return entries;
+}
+
+/**
+ * 把仍是散排任务的 parentSessionId 链收成树。自动化分组优先保留自己的既有语义；
+ * 父任务不在当前可见集合（搜索、筛选、置顶拆段或跨项目）时，子任务保持独立可见。
+ * 循环/损坏引用同样降级为独立条目，避免侧栏吞掉任务。
+ */
+export function groupSessionFamilySidebarEntries(
+  entries: readonly SidebarSessionEntry[],
+): SidebarSessionEntry[] {
+  const standaloneSessions = entries.flatMap((entry) =>
+    entry.kind === 'session' ? [entry.session] : [],
+  );
+  if (standaloneSessions.length < 2) return [...entries];
+
+  const byId = new Map(standaloneSessions.map((session) => [session.id, session]));
+  const childrenByParent = new Map<string, Session[]>();
+  for (const session of standaloneSessions) {
+    const parentId = session.parentSessionId;
+    if (!parentId) continue;
+    const parent = byId.get(parentId);
+    if (!parent || parentId === session.id) continue;
+    // Device sections are rendered after this grouping pass. Never pull a remote child
+    // into the local parent's section (or vice versa) when stale metadata crosses devices.
+    if (
+      (parent.deviceLinkDeviceId ?? null) !== (session.deviceLinkDeviceId ?? null) ||
+      (parent.remoteHostId ?? null) !== (session.remoteHostId ?? null)
+    ) {
+      continue;
+    }
+    const children = childrenByParent.get(parentId);
+    if (children) children.push(session);
+    else childrenByParent.set(parentId, [session]);
+  }
+
+  const familyByMemberId = new Map<string, SessionFamilyGroup>();
+  const buildNode = (
+    session: Session,
+    path: ReadonlySet<string>,
+    collected: Session[],
+  ): SessionFamilyNode => {
+    const nextPath = new Set(path).add(session.id);
+    collected.push(session);
+    const children = (childrenByParent.get(session.id) ?? [])
+      .filter((child) => !nextPath.has(child.id))
+      .map((child) => buildNode(child, nextPath, collected));
+    return { session, children };
+  };
+
+  for (const session of standaloneSessions) {
+    const parentId = session.parentSessionId;
+    if (parentId && byId.has(parentId) && parentId !== session.id) continue;
+    if (!childrenByParent.has(session.id)) continue;
+    const familySessions: Session[] = [];
+    const family: SessionFamilyGroup = {
+      id: `session-family:${session.id}`,
+      root: buildNode(session, new Set(), familySessions),
+      sessions: familySessions,
+    };
+    if (family.sessions.length <= 1) continue;
+    for (const member of family.sessions) familyByMemberId.set(member.id, family);
+  }
+
+  const emitted = new Set<string>();
+  const result: SidebarSessionEntry[] = [];
+  for (const entry of entries) {
+    if (entry.kind !== 'session') {
+      result.push(entry);
+      continue;
+    }
+    const family = familyByMemberId.get(entry.session.id);
+    if (!family) {
+      result.push(entry);
+      continue;
+    }
+    if (emitted.has(family.id)) continue;
+    emitted.add(family.id);
+    result.push({ kind: 'session-family', family });
+  }
+  return result;
 }
 
 export interface AutomationGroupChildView {
