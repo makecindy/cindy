@@ -295,6 +295,17 @@ describe('messagePaging', () => {
     expect(shouldKeepOlderMessagesAffordance(result)).toBe(true);
   });
 
+  it('uses small network pages without reducing the cached history window', async () => {
+    const calls: number[] = [];
+    const result = await listMessagesWithPayloadRetry(async (limit) => {
+      calls.push(limit);
+      return Array.from({ length: limit }, (_, i) => message(`m${i}`, '2026-01-01T00:00:01.000Z'));
+    });
+    expect(calls).toEqual([20]);
+    expect(MESSAGE_PAGE_SIZE).toBe(80);
+    expect(shouldKeepOlderMessagesAffordance(result)).toBe(true);
+  });
+
   it('does not retry non-payload pagination errors', async () => {
     const calls: number[] = [];
     await expect(listMessagesWithPayloadRetry(async (limit) => {

@@ -429,7 +429,7 @@ describe('DeviceLinkClient', () => {
       // The local socket is drained, but the downstream controller needs ten seconds.
       expect(socket.bufferedAmount).toBe(0);
       await vi.advanceTimersByTimeAsync(9_999);
-      expect(copies()).toHaveLength(6); // 0s, 2s, 6s; fixed 2s retries sent five copies.
+      expect(copies()).toHaveLength(2); // The first two segments are still in transit.
       h.client.sendInvokeResult('ctrl-healthy', 'healthy', { ok: true, result: 'ok' });
       acknowledge('ctrl-healthy', 'healthy');
       expect(h.client.getReliableSendQueueDepth('ctrl-healthy')).toBe(0);
@@ -437,8 +437,8 @@ describe('DeviceLinkClient', () => {
       await vi.advanceTimersByTimeAsync(1);
       acknowledge('ctrl-slow', 'large');
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(copies()).toHaveLength(6);
-      expect(copies().reduce((sum, e) => sum + JSON.stringify(e).length, 0)).toBe(firstBytes * 3);
+      expect(copies()).toHaveLength(2);
+      expect(copies().reduce((sum, e) => sum + JSON.stringify(e).length, 0)).toBe(firstBytes);
       expect(h.client.getReliableSendQueueDepth('ctrl-slow')).toBe(0);
       expect(h.client.isLinkReady('ctrl-slow')).toBe(true);
       expect(h.sockets).toHaveLength(1);
@@ -1073,7 +1073,7 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('≥2 控制端共享同一被控端:一个停止 ACK 只复位该 peer,邻居 link 与在途请求零感知', async () => {
+  it.each([16, 300 * 1024])('≥2 控制端共享同一被控端:停止 ACK 的 %i 字节响应只复位该 peer,邻居零感知', async (bytes) => {
     // 故障半径要求的拓扑是「多个控制端共用一台被控桌面」,不是「一个控制端连两台桌面」。
     // 本用例站在被控 Desktop:ctrl-silent 永不 ACK,ctrl-healthy 的在途 invoke 必须仍能完成,
     // 且共享 WSS 不得被拆掉。
@@ -1100,7 +1100,7 @@ describe('DeviceLinkClient', () => {
     const socket = h.current();
     const socketCount = h.sockets.length;
 
-    h.client.sendInvokeResult('ctrl-silent', 'silent-req', { ok: true, result: ['silent'] });
+    h.client.sendInvokeResult('ctrl-silent', 'silent-req', { ok: true, result: 's'.repeat(bytes) });
     h.client.sendInvokeResult('ctrl-healthy', 'healthy-inflight', { ok: true, result: ['healthy'] });
     const healthyFrame = socket.sent
       .filter((env) => env.kind === 'invoke-result' && env.dst === 'ctrl-healthy')
@@ -6714,6 +6714,30 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     }
   }
 
+  it('a large response delivered after 18s is not duplicated while waiting for its first ACK', async () => {
+    await withFakeTimers(async (h, advance) => {
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      const ws = h.current();
+      const first = ws.sent.find((env) => env.kind === 'invoke-result')!;
+      const meta = parseTransportPayload(first.payload)!.meta;
+      await advance(18_000);
+      expect([...sendsBySeq(ws).values()]).toEqual([1]);
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        },
+      });
+      await advance(40_000);
+      expect([...sendsBySeq(ws).values()]).toEqual([1]);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+      expect(ws.closed).toBeNull();
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
   it('对端停止 ACK 时,一趟定时重发只发预算内的最旧几条(而不是整个窗口)', async () => {
     // 2026-08-08 线上:一趟重发遍历整个 pending 窗口(上限 64 条)、同步全部写进 ws,
     // 对端 relay 路由已失效时逐帧弹回 DEVICE_OFFLINE —— 单簇 213 条就是这个形状。
@@ -6804,7 +6828,8 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       // 预算 4 帧、每条 3 片:队头那条发完(3 帧)后,第二条会超预算 → 发送前就被拦下,
       // 留到下一趟。所以本趟只重发队头 1 条、只写出 3 帧。
       const framesBefore = framesSent(ws);
-      await advance(200);
+      // Large messages first receive a bounded transmission budget (15 ticks).
+      await advance(3_000);
       const retried = retriedSeqs(sendsBySeq(ws));
       expect(retried).toEqual([seqs[0]]);
       // 本趟真实写出的帧数不超过 max(预算, 队头分片数) —— 这才是「上限」的准确表述
@@ -6831,7 +6856,7 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
       const framesBefore = framesSent(ws);
 
-      await advance(200);
+      await advance(3_000);
       // 只有队头那条大消息被重发,5 条小消息一条都没被带出去
       expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[0]]);
       // 溢出被限制在「队头这一条的分片数」内,而不是预算 + 队头

@@ -1,7 +1,10 @@
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 
 export const MESSAGE_PAGE_SIZE = 80;
-export const MESSAGE_PAGE_RETRY_LIMITS = [80, 40, 20, 10, 5, 1] as const;
+// Keep the cache window independent of the wire page. On a slow mobile link an
+// 80-row page can occupy the reliable stream past the request deadline.
+export const MESSAGE_FETCH_PAGE_SIZE = 20;
+export const MESSAGE_PAGE_RETRY_LIMITS = [MESSAGE_FETCH_PAGE_SIZE, 10, 5, 1] as const;
 
 export function latestMessageCursor(messages: readonly RemoteMessage[]): string | null {
   let latest: RemoteMessage | null = null;

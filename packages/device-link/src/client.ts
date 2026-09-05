@@ -108,6 +108,11 @@ const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
 /** 「link 未就绪收到可靠帧」通知的 per-peer 节流(见 onReliableFrameBeforeLink)。 */
 const STALE_LINK_NOTIFY_THROTTLE_MS = 30_000;
 const SLOW_REQUEST_WARN_MS = 1_000;
+// Allow slow relay -> controller delivery before duplicating an entire message.
+// With the default 2s tick this allows 8KiB/s, capped at 30s per attempt. Small
+// messages retain their existing retry cadence; dead peers still exhaust retries.
+const RELIABLE_RETRY_BYTES_PER_INTERVAL = 16 * 1024;
+const RELIABLE_RETRY_MAX_SIZE_INTERVALS = 15;
 /** 连续三次握手成功后仍没撑过稳定期，才把普通抖动升级为可见问题。 */
 const SHORT_LIVED_STREAK_LIMIT = 3;
 const MAX_LEGACY_INBOUND_FRAMES = 128;
@@ -3630,11 +3635,18 @@ export class DeviceLinkClient {
     let framesSpent = 0;
     for (const pending of peer.pending.values()) {
       // A local ws write is not a delivery receipt: relay -> mobile can still be
-      // transmitting a large response even with bufferedAmount=0. Back off repeated
-      // copies per message (2/4/8/8s by default), retaining bounded failure detection
-      // and immediate replay only when a new connection/link actually resumes.
-      const retryDelayMs = this.timing.transportRetryIntervalMs
-        * Math.min(4, 2 ** Math.max(0, pending.attempts - 1));
+      // transmitting a large response even with bufferedAmount=0. A 200KB page
+      // took ~18s on Android's 256Kbit/s high-latency link; 2/4/8s backoff still
+      // queued several full copies before its first ACK. Include a bounded byte
+      // budget, retaining immediate replay when a new connection/link resumes.
+      const sizeIntervals = Math.min(
+        RELIABLE_RETRY_MAX_SIZE_INTERVALS,
+        Math.ceil(pending.bytes / RELIABLE_RETRY_BYTES_PER_INTERVAL),
+      );
+      const retryDelayMs = this.timing.transportRetryIntervalMs * Math.max(
+        sizeIntervals,
+        Math.min(4, 2 ** Math.max(0, pending.attempts - 1)),
+      );
       if (!opts.ignoreInterval && now - pending.lastSentAt < retryDelayMs) {
         // Do not spend the cooldown retransmitting later seqs: cumulative ACK
         // cannot advance past this head, and those copies only deepen the backlog.
