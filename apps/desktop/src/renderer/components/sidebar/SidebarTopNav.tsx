@@ -36,6 +36,16 @@ import { GhostMainViewNavEntries } from './GhostMainViewNavEntries';
 /** 列表行通用样式 —— 各行同款 pill 行。 */
 const ROW_CLASS =
   'flex h-8 w-full items-center gap-2.5 rounded-full px-3 text-sm font-normal text-[var(--sidebar-nav-text)] transition-colors hover:bg-sidebar-item-hover';
+/**
+ * 搜索钉住态(有查询时)的白底条样式。上下等量内边距(上4下4,对齐 DESIGN.md §5
+ * spacing scale;原 5px 折中方案已按 PR #3829 review 意见改为规范值):
+ * 只补 pt 会让输入框下跳,故同时把负 margin 加深等量,pill 视觉位置不变,白条向上
+ * 扩出 4px —— 否则白条顶边直接贴住搜索框上沿,与下方不对称(「白框上面是贴着的,
+ * 距离不一样」)。上扩会盖到上一行底部约 2px,该区域在行内文字/图标之下,且白底
+ * 近侧栏底色,肉眼不可感。抽成常量:machineSwitcherMenu.test.ts 以定义为源码契约。
+ */
+const PINNED_SEARCH_CLASS =
+  'sticky top-0 z-30 bg-[var(--cmd-palette-bg)] pt-[4px] pb-[4px] -mt-[10px]';
 /** 命中当前视图（自动任务 / Plugin 与 Skill 管理 / issue）时的高亮 —— 与下方会话列表
  *  选中行同款反相胶囊(sidebar-item-active 族;2026-07-21 用户裁决,替代原 chat-input-chip
  *  灰 chip,顶部导航选中态与对话选中样式统一)。hover:bg-sidebar-item-active 抵消
@@ -155,7 +165,7 @@ export function SidebarTopNav({
           className={cn(
             // -mt-1.5 抵消滚动容器 gap-2,与上面两行仍保持 gap-0.5。
             'px-3 pb-2.5 -mt-1.5',
-            pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]',
+            pinSearch && PINNED_SEARCH_CLASS,
           )}
         >
           {searchRow}
