@@ -5675,9 +5675,9 @@
     "openProxyUsage": "ブラウザで完全な使用量ダッシュボードを開く",
     "openXaiUsage": "Grok の使用量ページを開く",
     "xai": {
-      "requestsLine": "レート制限（リクエスト）: 残り {{remaining}}/{{limit}}",
-      "tokensLine": "レート制限（トークン）: 残り {{remaining}}/{{limit}}",
-      "noQuotaDetail": "SuperGrok の週間使用量を取得できないため、価値の推定のみ表示します",
+      "requestsLine": "前回の応答時 · リクエストの残り: {{remaining}}/{{limit}}",
+      "tokensLine": "前回の応答時 · トークンの残り: {{remaining}}/{{limit}}",
+      "noQuotaDetail": "SuperGrok の週間使用量は現在取得できません",
       "weeklyLabel": "週間",
       "windowSegment": "{{label}} 残り {{remaining}}",
       "windowLine": "{{label}} 残り {{remaining}}（使用 {{used}}）",
@@ -5685,7 +5685,7 @@
       "resetAt": "{{at}} にリセット",
       "productLine": "{{product}} {{percent}}",
       "extraCreditsLine": "追加クレジット {{amount}}",
-      "accountWeeklyHint": "アカウントの週間使用量であり、このセッションのクォータではありません"
+      "accountWeeklyHint": "アカウントの週間使用量"
     },
     "dailyLimitLabel": "本日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "周期 {{spend}}/{{limit}}",
@@ -5746,10 +5746,20 @@
     }
   },
   "quotaCard": {
+    "usageCritical": "使用量が高い状態です",
+    "usageWarning": "使用量がやや高い状態です",
+    "usageTitle": "使用量の詳細",
+    "gatewayTitle": "Cindy AI Gateway",
+    "balanceLabel": "残高の使用量",
+    "dailyLabel": "1日のソフト上限",
+    "monthlyLabel": "月間クォータ",
+    "speedLabel": "速度",
+    "rateValue": "{{rate}} トークン/秒",
+    "waiting": "クォータデータの更新を待っています。",
+    "windowsRegionLabel": "使用量の詳細",
     "fiveHourLabel": "5 時間",
     "weeklyLabel": "週間",
     "modelWeeklyLabel": "{{model}} 週間",
-    "windowsRegionLabel": "クォータ期間の一覧",
     "usedPercent": "使用済み {{percent}}%",
     "resetAt": "{{at}} にリセット",
     "noWindows": "クォータ期間のデータはありません",
@@ -5759,7 +5769,7 @@
     "costLine": "このメッセージの消費: {{cost}}",
     "valueLine": "このメッセージの token 価値: {{cost}}",
     "noBilledCost": "このメッセージの料金は現在取得できないため、使用量のみ表示しています",
-    "latestMessageTitle": "直近のメッセージ合計",
+    "latestMessageTitle": "直近のメッセージ",
     "turnCostUnavailable": "このメッセージの料金は現在見積もれません",
     "tokenLabel": "Token",
     "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
@@ -5771,7 +5781,7 @@
     "paceTrendFast": "現在の平均使用ペースは速めです（おおよその傾向）",
     "paceTrendNormal": "現在の平均使用ペースは通常です（おおよその傾向）",
     "paceTrendSlow": "現在の平均使用ペースは遅めです（おおよその傾向）",
-    "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
+    "includedLabel": "うち {{name}}"
   },
   "usageDetails": {
     "durationSeconds": "{{value}}秒",

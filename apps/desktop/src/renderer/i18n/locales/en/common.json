@@ -5677,9 +5677,9 @@
     "openProxyUsage": "Open the full usage dashboard in your browser",
     "openXaiUsage": "Open Grok usage page",
     "xai": {
-      "requestsLine": "Rate limit (requests): {{remaining}}/{{limit}} left",
-      "tokensLine": "Rate limit (tokens): {{remaining}}/{{limit}} left",
-      "noQuotaDetail": "SuperGrok weekly usage is unavailable; only the estimated value is shown",
+      "requestsLine": "Last response · requests left: {{remaining}}/{{limit}}",
+      "tokensLine": "Last response · tokens left: {{remaining}}/{{limit}}",
+      "noQuotaDetail": "SuperGrok weekly usage is currently unavailable",
       "weeklyLabel": "Weekly",
       "windowSegment": "{{label}} {{remaining}} left",
       "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
@@ -5687,7 +5687,7 @@
       "resetAt": "Resets {{at}}",
       "productLine": "{{product}} {{percent}}",
       "extraCreditsLine": "Extra credits {{amount}}",
-      "accountWeeklyHint": "Account weekly usage, not this session's quota"
+      "accountWeeklyHint": "Account weekly usage"
     },
     "dailyLimitLabel": "Today {{spend}}/{{limit}}",
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
@@ -5748,10 +5748,20 @@
     }
   },
   "quotaCard": {
+    "usageCritical": "High usage",
+    "usageWarning": "Elevated usage",
+    "usageTitle": "Usage details",
+    "gatewayTitle": "Cindy AI Gateway",
+    "balanceLabel": "Balance usage",
+    "dailyLabel": "Daily soft limit",
+    "monthlyLabel": "Monthly quota",
+    "speedLabel": "Speed",
+    "rateValue": "{{rate}} tokens/s",
+    "waiting": "Waiting for quota data.",
+    "windowsRegionLabel": "Usage details",
     "fiveHourLabel": "5 hours",
     "weeklyLabel": "Weekly",
     "modelWeeklyLabel": "{{model}} weekly",
-    "windowsRegionLabel": "Quota Windows",
     "usedPercent": "Used {{percent}}%",
     "resetAt": "Resets {{at}}",
     "noWindows": "No quota window data available",
@@ -5761,7 +5771,7 @@
     "costLine": "Cost this message: {{cost}}",
     "valueLine": "Token value this message: {{cost}}",
     "noBilledCost": "Cost unavailable for this message; showing usage only",
-    "latestMessageTitle": "Latest message total",
+    "latestMessageTitle": "Latest message",
     "turnCostUnavailable": "Cost unavailable for this message",
     "tokenLabel": "Tokens",
     "tokenBreakdown": "(input {{input}} · output {{output}})",
@@ -5773,7 +5783,7 @@
     "paceTrendFast": "Trending fast at the current average pace (rough estimate)",
     "paceTrendNormal": "Trending normally at the current average pace (rough estimate)",
     "paceTrendSlow": "Trending slowly at the current average pace (rough estimate)",
-    "waiting": "Claude subscription usage will update after the next request completes."
+    "includedLabel": "Including {{name}}"
   },
   "usageDetails": {
     "durationSeconds": "{{value}}s",
