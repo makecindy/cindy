@@ -9,6 +9,7 @@ import { SESSION_SOURCES } from '../../../../shared/sessionSource.js';
 import { buildDbWorkerBundle } from '../../__tests__/dbWorkerTestUtils.js';
 import type { DbClient } from '../DbClient.js';
 import { createDbClient } from '../DbClient.js';
+import type { SkillUsageApplyMutationArgs } from '../tx/types.js';
 
 const INIT_SQL = `
 CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -17,6 +18,40 @@ CREATE TABLE migration_history (
   file_name TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   applied_at INTEGER NOT NULL
+);
+CREATE TABLE skill_usage_sources (
+  raw_file_path TEXT PRIMARY KEY,
+  analyzer_version TEXT NOT NULL,
+  agent_kind TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  sdk_session_id TEXT NOT NULL,
+  mtime_ms INTEGER NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  last_scanned_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT
+);
+CREATE TABLE skill_usage_exposures (
+  id TEXT PRIMARY KEY,
+  analyzer_version TEXT NOT NULL,
+  raw_file_path TEXT NOT NULL,
+  raw_line_no INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  sdk_session_id TEXT NOT NULL,
+  agent_kind TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  skill_path TEXT,
+  skill_document_hash TEXT,
+  exposure_content_hash TEXT NOT NULL,
+  document_hash_source TEXT NOT NULL,
+  source TEXT NOT NULL,
+  tool_use_id TEXT,
+  seen_at INTEGER NOT NULL,
+  tool_call_count INTEGER NOT NULL,
+  repeated_tool_call_count INTEGER NOT NULL,
+  tool_error_count INTEGER NOT NULL,
+  command_call_count INTEGER NOT NULL,
+  command_failure_count INTEGER NOT NULL
 );
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
@@ -2787,6 +2822,111 @@ describe('db worker tx handlers', () => {
         updated_at: 999,
       });
     });
+  });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('applies SkillHub usage mutations atomically through the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(async (client) => {
+      type PersistArgs = Extract<SkillUsageApplyMutationArgs, { kind: 'persist' }>;
+      const source = (rawFilePath: string, analyzerVersion: string, mtimeMs: number): PersistArgs['source'] => ({
+        rawFilePath,
+        analyzerVersion,
+        agentKind: 'codex',
+        sessionId: `session-${rawFilePath}`,
+        sdkSessionId: `sdk-${rawFilePath}`,
+        mtimeMs,
+        sizeBytes: 10,
+        scannedAt: mtimeMs,
+      });
+      const exposure = (
+        id: string,
+        rawFilePath: string,
+        analyzerVersion: string,
+        seenAt: number,
+      ): PersistArgs['exposures'][number] => ({
+        id,
+        rawFilePath,
+        rawLineNo: 1,
+        sessionId: `session-${rawFilePath}`,
+        sdkSessionId: `sdk-${rawFilePath}`,
+        agentKind: 'codex',
+        skillName: 'word-doc',
+        skillPath: null,
+        skillDocumentHash: `doc-${analyzerVersion}`,
+        exposureContentHash: `content-${id}`,
+        documentHashSource: 'transcript_file_read',
+        source: 'codex_skill_file_read',
+        toolUseId: null,
+        seenAt,
+        toolCallCount: 1,
+        repeatedToolCallCount: 0,
+        toolErrorCount: 0,
+        commandCallCount: 0,
+        commandFailureCount: 0,
+      });
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 1),
+        exposures: [exposure('first', 'current.jsonl', '6', 200)],
+      });
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 2),
+        exposures: [exposure('replacement', 'current.jsonl', '6', 201)],
+      });
+      await expect(client.query<{ id: string }>(
+        'SELECT id FROM skill_usage_exposures WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual([{ id: '6:replacement' }]);
+
+      await expect(client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 999),
+        exposures: [
+          exposure('duplicate', 'current.jsonl', '6', 300),
+          exposure('duplicate', 'current.jsonl', '6', 301),
+        ],
+      })).rejects.toThrow();
+      await expect(client.queryOne(
+        'SELECT mtime_ms, status FROM skill_usage_sources WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual({ mtime_ms: 2, status: 'ok' });
+      await expect(client.query<{ id: string }>(
+        'SELECT id FROM skill_usage_exposures WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual([{ id: '6:replacement' }]);
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('old.jsonl', '6', 10),
+        exposures: [exposure('old', 'old.jsonl', '6', 10)],
+      });
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'deleteBefore',
+        analyzerVersion: '6',
+        recentSince: 100,
+      });
+      await expect(client.queryOne(
+        'SELECT raw_file_path FROM skill_usage_sources WHERE raw_file_path = ?',
+        ['old.jsonl'],
+      )).resolves.toBeUndefined();
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('previous.jsonl', '5', 200),
+        exposures: [exposure('previous', 'previous.jsonl', '5', 200)],
+      });
+      await client.tx('skillUsage.applyMutation', { kind: 'promote', analyzerVersion: '6' });
+      await expect(client.queryOne(
+        "SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'",
+      )).resolves.toEqual({ value: '6' });
+      await expect(client.queryOne(
+        "SELECT id FROM skill_usage_exposures WHERE analyzer_version = '5'",
+      )).resolves.toBeUndefined();
+    }, { useInlineWorker });
   });
 
   it.each([

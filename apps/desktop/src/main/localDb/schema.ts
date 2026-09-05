@@ -1386,6 +1386,20 @@ export const skillUsageExposures = sqliteTable(
       t.skillName,
       t.skillDocumentHash,
     ),
+    bySkillRecent: index('idx_skill_usage_exposures_skill_recent').on(
+      t.skillName,
+      t.analyzerVersion,
+      t.seenAt,
+    ),
+    bySkillRecentAnyVersion: index('idx_skill_usage_exposures_skill_recent_any_version').on(
+      t.skillName,
+      t.seenAt,
+    ),
+    byAnalyzerRecentSource: index('idx_skill_usage_exposures_analyzer_recent_source').on(
+      t.analyzerVersion,
+      t.seenAt,
+      t.rawFilePath,
+    ),
     bySession: index('idx_skill_usage_exposures_session').on(t.sessionId),
     byRawFile: index('idx_skill_usage_exposures_raw_file').on(t.rawFilePath),
   }),

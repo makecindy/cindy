@@ -156,6 +156,9 @@ describeMigrationReplay('migration replay', () => {
       expect(indexExists(db, 'idx_schedule_runs_running_legacy')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_unread_terminal')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_session_latest')).toBe(true);
+      expect(indexExists(db, 'idx_skill_usage_exposures_skill_recent')).toBe(true);
+      expect(indexExists(db, 'idx_skill_usage_exposures_skill_recent_any_version')).toBe(true);
+      expect(indexExists(db, 'idx_skill_usage_exposures_analyzer_recent_source')).toBe(true);
       expect(triggerExists(db, 'schedule_session_latest_run_insert')).toBe(true);
       expect(triggerExists(db, 'schedule_session_latest_run_delete')).toBe(true);
       expect(triggerExists(db, 'schedule_session_latest_run_update')).toBe(true);

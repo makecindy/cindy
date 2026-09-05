@@ -715,6 +715,13 @@
       "when": 1788431426308,
       "tag": "0101_repair_cjk_fts_missing_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "6",
+      "when": 1788503589671,
+      "tag": "0102_optimal_ender_wiggin",
+      "breakpoints": true
     }
   ]
 }

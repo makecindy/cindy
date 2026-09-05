@@ -178,18 +178,29 @@ export async function searchChatHistoryHybrid(
   const pageEntries = pool.slice(start, start + args.limit);
   const nextOffset = start + args.limit < pool.length ? start + args.limit : null;
 
-  // 5) 逐条命中拼上下文窗口
+  // radius=0 is the conversation-search hot path. Hydrate the whole page in
+  // one worker RPC; callers that need neighbours keep the original window query.
+  const anchorContexts =
+    args.contextRadius <= 0
+      ? await fetchAnchorContexts(pageEntries.map((entry) => entry.messageId))
+      : null;
+
+  // 5) 按命中顺序组装上下文窗口
   const hits: SearchChatHistoryHit[] = [];
   for (const fe of pageEntries) {
     const meta = metaById.get(fe.messageId);
     if (!meta) continue; // 理论不会发生(fused 的 id 必来自两路 arm)
-    const context = await fetchContextWindow(
-      fe.messageId,
-      meta.sessionId,
-      meta.createdAt,
-      args.roles,
-      args.contextRadius,
-    );
+    const context =
+      anchorContexts?.get(fe.messageId) ??
+      (anchorContexts
+        ? []
+        : await fetchContextWindow(
+            fe.messageId,
+            meta.sessionId,
+            meta.createdAt,
+            args.roles,
+            args.contextRadius,
+          ));
     hits.push({
       messageId: fe.messageId,
       sessionId: meta.sessionId,
@@ -220,6 +231,20 @@ export async function searchChatHistoryHybrid(
 }
 
 // ── FTS arm ──────────────────────────────────────────────────────────────────
+
+async function fetchAnchorContexts(
+  anchorIds: readonly string[],
+): Promise<Map<string, SearchChatHistoryContextMessage[]>> {
+  const uniqueIds = [...new Set(anchorIds)];
+  if (uniqueIds.length === 0) return new Map();
+
+  const rows = await getDbClient()
+    .drizzle.select()
+    .from(messagesTable)
+    .where(inArray(messagesTable.id, uniqueIds));
+
+  return new Map(rows.map((row) => [row.id, [rowToContext(row, true)]]));
+}
 
 async function runFtsArm(
   args: SearchChatHistoryEngineArgs,

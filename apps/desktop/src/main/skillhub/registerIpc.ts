@@ -4,7 +4,11 @@ import type { Maker } from '@cindy/maker-core';
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { getCurrentDataOwnerId } from '../authManager';
 import { isAppSessionBoundaryPending } from '../appSessionState';
-import { ensureReady as ensureLocalDbReady, getRawDb } from '../localDb';
+import { ensureReady as ensureLocalDbReady } from '../localDb';
+import {
+  getCurrentDbClientSnapshot,
+  type CurrentDbClientSnapshot,
+} from '../localDb/client/current.js';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -241,8 +245,28 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     onProgress: broadcastPublishProgress,
   });
   let usageRefreshBroadcastPromise: Promise<void> | null = null;
-  const scheduleUsageAnalyticsRefresh = (db: ReturnType<typeof getRawDb>) => {
-    const promise = requestLocalSkillUsageAnalyticsRefresh(db);
+  const captureUsageDbSnapshot = (): CurrentDbClientSnapshot => {
+    if (isAppSessionBoundaryPending()) {
+      throw new Error('localDb not ready: app session is switching');
+    }
+    const snapshot = getCurrentDbClientSnapshot();
+    if (!snapshot) throw new Error('DbClient not ready');
+    return snapshot;
+  };
+  const assertUsageDbSnapshotCurrent = (snapshot: CurrentDbClientSnapshot): void => {
+    const current = getCurrentDbClientSnapshot();
+    if (
+      isAppSessionBoundaryPending()
+      || !current
+      || current.client !== snapshot.client
+      || current.clientEpoch !== snapshot.clientEpoch
+      || current.userId !== snapshot.userId
+    ) {
+      throw new Error('localDb not ready: app session switched during Skill usage query');
+    }
+  };
+  const scheduleUsageAnalyticsRefresh = (snapshot: CurrentDbClientSnapshot) => {
+    const promise = requestLocalSkillUsageAnalyticsRefresh(snapshot.client);
     if (!promise || usageRefreshBroadcastPromise === promise) return;
     usageRefreshBroadcastPromise = promise;
     void promise
@@ -250,7 +274,15 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
         log.warn('[skillhub:usage-refresh] failed:', err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
-        broadcastUsageAnalyticsRefreshed();
+        const current = getCurrentDbClientSnapshot();
+        if (
+          !isAppSessionBoundaryPending()
+          && current?.client === snapshot.client
+          && current.clientEpoch === snapshot.clientEpoch
+          && current.userId === snapshot.userId
+        ) {
+          broadcastUsageAnalyticsRefreshed();
+        }
         if (usageRefreshBroadcastPromise === promise) usageRefreshBroadcastPromise = null;
       });
   };
@@ -655,12 +687,15 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
           if (raw.success) currentSkillContent = raw.content ?? null;
         }
         const readSummary = async () => {
-          if (isAppSessionBoundaryPending()) {
-            throw new Error('localDb not ready: app session is switching');
-          }
-          const db = getRawDb();
-          scheduleUsageAnalyticsRefresh(db);
-          return await getLocalSkillUsageSummary({ skillName: name, currentSkillContent, db });
+          const snapshot = captureUsageDbSnapshot();
+          scheduleUsageAnalyticsRefresh(snapshot);
+          const result = await getLocalSkillUsageSummary({
+            skillName: name,
+            currentSkillContent,
+            client: snapshot.client,
+          });
+          assertUsageDbSnapshotCurrent(snapshot);
+          return result;
         };
         try {
           return await readSummary();
@@ -688,24 +723,24 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
           const raw = await readSkillRawFile({ filePath: mdPath });
           if (raw.success) currentSkillContent = raw.content ?? null;
         }
-        try {
-          if (isAppSessionBoundaryPending()) {
-            return { success: false, error: 'localDb not ready: app session is switching' };
-          }
-          return await getLocalSkillUsageDiagnosisContext({
+        const readDiagnosisContext = async () => {
+          const snapshot = captureUsageDbSnapshot();
+          const result = await getLocalSkillUsageDiagnosisContext({
             skillName: name,
             currentSkillContent,
             skillPath: mdPath ?? null,
+            client: snapshot.client,
           });
+          assertUsageDbSnapshotCurrent(snapshot);
+          return result;
+        };
+        try {
+          return await readDiagnosisContext();
         } catch (err) {
           if (!isLocalDbNotReady(err)) throw err;
           const ready = await ensureSkillUsageLocalDbReady();
           if (!ready.success) return ready;
-          return await getLocalSkillUsageDiagnosisContext({
-            skillName: name,
-            currentSkillContent,
-            skillPath: mdPath ?? null,
-          });
+          return await readDiagnosisContext();
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
