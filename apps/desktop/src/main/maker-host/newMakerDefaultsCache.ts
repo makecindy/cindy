@@ -14,10 +14,18 @@ import {
  * 不再用 hardcode 默认值,优先读这份缓存 —— worker 实际启动参数 = "用户在 New Maker
  * 面板里该 vendor 当前的选择";旧 renderer 未推 providerId 时,创建服务才回退 Lead 来源。
  *
- * Vendor 名称差异: renderer 用 'cc' / 'codex' / 'pi'; worker spawn 路径用
- * 'claude-code' / 'codex' / 'pi'。getWorkerDefaultsFromNewMaker 内部做映射。
+ * Vendor 名称差异: renderer 用 'cc' / 'codex' / 'pi' / 'grok-build';
+ * worker spawn / 草稿镜像路径用 'claude-code' / 'codex' / 'pi' / 'grok-build'。
  */
-type VendorKey = 'cc' | 'codex' | 'pi';
+type VendorKey = 'cc' | 'codex' | 'pi' | 'grok-build';
+type DraftAgentKind = 'claude-code' | 'codex' | 'pi' | 'grok-build';
+
+function vendorKeyOf(agentKind: DraftAgentKind): VendorKey {
+  if (agentKind === 'claude-code') return 'cc';
+  if (agentKind === 'pi') return 'pi';
+  if (agentKind === 'grok-build') return 'grok-build';
+  return 'codex';
+}
 
 interface VendorPrefsSnapshot {
   model?: string;
@@ -116,10 +124,10 @@ export function getThinkingEnabledFromMemory(
  * 缓存未就绪 / 该 vendor 没有偏好 → 返回空对象, 调用方按自己的兜底规则处理。
  */
 export function getWorkerDefaultsFromNewMaker(
-  workerAgent: 'claude-code' | 'codex' | 'pi',
+  workerAgent: DraftAgentKind,
 ): WorkerDefaultsFromNewMaker {
   if (!cache) return {};
-  const vendor: VendorKey = workerAgent === 'claude-code' ? 'cc' : workerAgent === 'pi' ? 'pi' : 'codex';
+  const vendor = vendorKeyOf(workerAgent);
   const prefs = cache.lastByVendor[vendor];
   if (!prefs?.model) return {};
   const model = prefs.model;
@@ -168,10 +176,9 @@ export interface RemoteNewMakerDefaults {
 }
 
 export function getRemoteNewMakerDefaults(
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: DraftAgentKind,
 ): RemoteNewMakerDefaults {
-  const vendor: VendorKey =
-    agentKind === 'claude-code' ? 'cc' : agentKind === 'pi' ? 'pi' : 'codex';
+  const vendor = vendorKeyOf(agentKind);
   // providerModelMemory(草稿列表行真实读源)与「该 vendor 是否选过模型」无关:即便 cache 未就绪 /
   // 该 vendor 无选中模型(lastByVendor 空),只要被控端有模型级预设就要全量回给控制端,
   // 否则 req1「完整镜像被控端草稿模型列表」在这条边界上回落 capabilities 默认。故在所有早返回里都带上它。
@@ -205,10 +212,12 @@ export function getRemoteNewMakerDefaultsByVendor(): {
   claudeCode: RemoteNewMakerDefaults;
   codex: RemoteNewMakerDefaults;
   pi: RemoteNewMakerDefaults;
+  grokBuild: RemoteNewMakerDefaults;
 } {
   return {
     claudeCode: getRemoteNewMakerDefaults('claude-code'),
     codex: getRemoteNewMakerDefaults('codex'),
     pi: getRemoteNewMakerDefaults('pi'),
+    grokBuild: getRemoteNewMakerDefaults('grok-build'),
   };
 }

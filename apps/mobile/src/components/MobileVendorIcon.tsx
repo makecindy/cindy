@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Animated, Easing } from 'react-native';
 import { useTheme } from '@/theme';
 
+import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
+
 import { MobileAgentMark } from './MobileAgentMark';
 
 interface MobileVendorIconProps {
@@ -48,12 +50,12 @@ export function MobileVendorIcon({ color: colorOverride, running = false, size =
   return (
     <Animated.View
       accessible
-      accessibilityLabel={vendor === 'codex' ? 'Codex' : vendor === 'pi' ? 'Pi' : 'Claude Code'}
+      accessibilityLabel={mobileAgentLabelFromUnknown(vendor)}
       accessibilityRole="image"
       style={{ alignItems: 'center', height: size, justifyContent: 'center', opacity, width: size }}
     >
       <MobileAgentMark
-        agentKind={vendor === 'codex' || vendor === 'pi' ? vendor : 'claude-code'}
+        agentKind={vendor === 'codex' || vendor === 'pi' || vendor === 'grok-build' ? vendor : 'claude-code'}
         color={color}
         size={size}
       />

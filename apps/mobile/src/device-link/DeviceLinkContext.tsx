@@ -1362,7 +1362,7 @@ async function refreshDeviceCapabilities(
 ): Promise<void> {
   const generation = getAgentCapabilitiesGeneration(deviceId);
   await Promise.allSettled(
-    (['claude-code', 'codex', 'pi'] as const).map(async (agentKind) => {
+    (['claude-code', 'codex', 'pi', 'grok-build'] as const).map(async (agentKind) => {
       const raw = await sendInvokeWithAccessHandling<unknown>(
         client,
         deviceId,

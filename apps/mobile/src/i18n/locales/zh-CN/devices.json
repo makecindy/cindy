@@ -248,7 +248,8 @@
           "all": "全部",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "grok-build": "Grok Build"
         },
         "lastActivity": {
           "1d": "1 天",

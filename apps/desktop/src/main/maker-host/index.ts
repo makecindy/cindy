@@ -106,6 +106,7 @@ import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
   deriveAvailableModels,
+  deriveGrokBuildAvailableModels,
   refreshCatalogDerivedModels,
   resolvePiRuntimeModelDescriptor,
   resolvePiGatewayDescriptorProviderId,
@@ -122,6 +123,7 @@ import {
   invalidateLocalPiPackageRuntimeSnapshot,
   type PiPackageRuntimeInvalidationSnapshot,
 } from './pi-package-runtime-invalidation.js';
+import { buildGrokBuildAgent } from './grok-build-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -1909,7 +1911,7 @@ export function getMaker(): Maker {
     // Store mutations are serialized; each settled callback consumes the exact
     // latest-byte-edge runtime snapshot for its durable mutation.
     const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
-    const buildPiAgentForDesktop = () => buildPiAgent({
+    const desktopHostedLoopOpts = {
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
@@ -2176,8 +2178,8 @@ export function getMaker(): Maker {
         }
         return getRemoteAgentProxyEnv(remoteHost);
       },
-    });
-    const piAgent = buildPiAgentForDesktop();
+    };
+    const piAgent = buildPiAgent(desktopHostedLoopOpts);
     if (piAgent) makerAgents.pi = piAgent;
 
     setVisionGatewayKeyReader(readClaudeApiKey);
@@ -2201,6 +2203,14 @@ export function getMaker(): Maker {
         );
       },
     });
+
+    const grokBuildAgent = buildGrokBuildAgent({
+      ...desktopHostedLoopOpts,
+      capabilityAdditions: {
+        availableModels: deriveGrokBuildAvailableModels(getDesktopSelectableCatalog()),
+      },
+    });
+    if (grokBuildAgent) makerAgents['grok-build'] = grokBuildAgent;
 
     _maker = new Maker({
       agents: makerAgents,
@@ -2290,7 +2300,7 @@ export function getMaker(): Maker {
     });
     _registerPiAgent = () => {
       if (!_maker || _maker.listAvailableAgents().includes('pi')) return false;
-      const next = buildPiAgentForDesktop();
+      const next = buildPiAgent(desktopHostedLoopOpts);
       if (!next) return false;
       const registered = _maker.registerAgent('pi', next);
       if (!registered) {

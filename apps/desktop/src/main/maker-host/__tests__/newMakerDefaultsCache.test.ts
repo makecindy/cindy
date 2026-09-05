@@ -100,19 +100,23 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     });
   });
 
-  it('草稿变更广播快照始终包含 claude-code、codex、pi 三个槽', () => {
+  it('草稿变更广播快照始终包含 claude-code、codex、pi、grok-build 四个槽', () => {
     seed({
-      lastByVendor: { pi: { model: 'claude-sonnet-4-6' } },
-      modelChosenByVendor: { pi: false },
+      lastByVendor: { pi: { model: 'claude-sonnet-4-6' }, 'grok-build': { model: 'grok-build' } },
+      modelChosenByVendor: { pi: false, 'grok-build': true },
       fastModeByModel: {},
       effortByModel: {},
     });
 
     const snapshot = getRemoteNewMakerDefaultsByVendor();
-    expect(Object.keys(snapshot)).toEqual(['claudeCode', 'codex', 'pi']);
+    expect(Object.keys(snapshot)).toEqual(['claudeCode', 'codex', 'pi', 'grokBuild']);
     expect(snapshot.pi).toMatchObject({
       model: 'claude-sonnet-4-6',
       modelChosenByUser: false,
+    });
+    expect(snapshot.grokBuild).toMatchObject({
+      model: 'grok-build',
+      modelChosenByUser: true,
     });
   });
 

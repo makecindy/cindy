@@ -82,6 +82,8 @@ const providerRouting = (
         'pi-model': { efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
       },
     }],
+    // grok-build 走 Cindy hosted loop + SuperGrok;本 fixture 不挂 xAI。
+    'grok-build': [],
   },
   resolveDefaultProviderIdForModel: (agent: AgentKind) => defaults[agent] ?? (
     agent === 'claude-code' ? 'anthropic' : agent === 'codex' ? 'openai' : 'xd'
@@ -311,6 +313,7 @@ describe('resolveSendToSessionExecutionConfig', () => {
             },
           }],
           pi: [],
+          'grok-build': [],
         },
         resolveDefaultProviderIdForModel: () => 'xd',
       },

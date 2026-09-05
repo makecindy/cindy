@@ -43,6 +43,7 @@ export function useConversationSearchFilterMenu({
           cc: t("devices.list.search.filter.agent.cc"),
           codex: t("devices.list.search.filter.agent.codex"),
           pi: t("devices.list.search.filter.agent.pi"),
+          "grok-build": t("devices.list.search.filter.agent.grok-build"),
         },
         allProjectsLabel: t("devices.list.search.filter.allProjects"),
         lastActivity,

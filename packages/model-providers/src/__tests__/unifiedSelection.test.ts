@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   UNIFIED_AGENT_PRIORITY,
+  GROK_BUILD_HARNESS_MODEL_ID,
   candidateAgentsForModel,
   catalogModelIdCandidates,
   findCatalogModel,
@@ -1262,5 +1263,65 @@ describe('sortEntriesForAgent(原生底座优先,无主场不降级)', () => {
       isVisible: alwaysVisible,
     });
     expect(codexOnly.every((e) => e.candidates.includes('codex'))).toBe(true);
+  });
+});
+
+describe('Grok Build harness in unifiedModelEntries', () => {
+  it('does not inject grok-build as a model row — it is only a harness chip', () => {
+    const catalogOnly = unifiedModelEntries({ providers: [xai], isVisible: alwaysVisible });
+    expect(catalogOnly.some((entry) => entry.candidates.includes('grok-build'))).toBe(false);
+    expect(catalogOnly.some((entry) => entry.modelId === GROK_BUILD_HARNESS_MODEL_ID)).toBe(false);
+
+    const withHarness = unifiedModelEntries({
+      providers: [xai],
+      agents: ['claude-code', 'codex', 'pi', 'grok-build'],
+      isVisible: alwaysVisible,
+    });
+    expect(withHarness.some((entry) => entry.modelId === GROK_BUILD_HARNESS_MODEL_ID)).toBe(false);
+    expect(withHarness.some((entry) => entry.providerId === 'grok-build')).toBe(false);
+    expect(withHarness.some((entry) => entry.displayName === 'Grok Build')).toBe(false);
+    expect(xai.models?.['grok-build']).toBeUndefined();
+  });
+
+  it('puts a Grok Build chip on every exclusive Grok catalog row with the CLI slug', () => {
+    const grokCatalog = view({
+      id: 'xai',
+      models: {
+        'claude-code': [
+          m('xai/grok-4.6', { group: 'grok' }),
+          m('xai/grok-4.5', { group: 'grok' }),
+          m('grok-4.3', { group: 'grok' }),
+          m('claude-opus-5'),
+        ],
+        codex: [
+          m('xai/grok-4.6', { group: 'grok' }),
+          m('xai/grok-4.5', { group: 'grok' }),
+          m('grok-4.3', { group: 'grok' }),
+          m('claude-opus-5'),
+        ],
+        pi: [
+          m('xai/grok-4.6', { group: 'grok' }),
+          m('xai/grok-4.5', { group: 'grok' }),
+          m('grok-4.3', { group: 'grok' }),
+          m('claude-opus-5'),
+        ],
+      },
+      routingOverride: { codex: { modelIdRewrite: { stripPrefix: 'xai/' } } },
+    });
+    const entries = unifiedModelEntries({
+      providers: [grokCatalog],
+      agents: ['claude-code', 'codex', 'pi', 'grok-build'],
+      isVisible: alwaysVisible,
+    });
+    for (const slug of ['grok-4.6', 'grok-4.5', 'grok-4.3'] as const) {
+      const row = entries.find((entry) => entry.modelId === slug);
+      expect(row, slug).toBeDefined();
+      expect(row?.candidates).toContain('grok-build');
+      expect(row?.capabilities['grok-build']?.wireModelId).toBe(slug);
+      expect(row?.recommended).not.toBe('grok-build');
+    }
+    const claude = entries.find((entry) => entry.modelId === 'claude-opus-5');
+    expect(claude).toBeDefined();
+    expect(claude?.candidates).not.toContain('grok-build');
   });
 });

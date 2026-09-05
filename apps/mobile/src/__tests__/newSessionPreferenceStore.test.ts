@@ -23,6 +23,19 @@ describe('newSessionPreferenceStore', () => {
     store.clear();
   });
 
+  it('persists grok-build as the last selected new-session harness', async () => {
+    const { readNewSessionPreferences, saveNewSessionPreferences } = await import(
+      '@/session/newSessionPreferenceStore'
+    );
+
+    await saveNewSessionPreferences({ agentKind: 'grok-build' });
+    await expect(readNewSessionPreferences()).resolves.toEqual({
+      agentKind: 'grok-build',
+      device: null,
+      permissionModeByAgent: {},
+    });
+  });
+
   it('stores the last selected device and agent for new sessions', async () => {
     const {
       __testing,

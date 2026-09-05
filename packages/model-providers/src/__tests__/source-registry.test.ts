@@ -27,6 +27,7 @@ import {
   getModel,
   sourcesForModel,
   chatEligibleSourcesForModel,
+  hasUsableConnectedSource,
   effectiveSourceIdForModel,
   resolveRoute,
 } from '../registry.js';
@@ -1270,6 +1271,55 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
     expect(effectiveSourceIdForModel(views, 'custom-p', 'flux-image-x', 'claude-code')).toBe(
       'custom-p',
     );
+  });
+});
+
+describe('hasUsableConnectedSource (picker / send-ready)', () => {
+  it('treats grok-build as ready when SuperGrok/xAI is connected, without a catalog grok-build provider', () => {
+    const views = buildRegistry(
+      {
+        version: 'test',
+        providers: [
+          {
+            id: 'xai',
+            name: 'xAI',
+            source: 'builtin',
+            agents: ['claude-code', 'codex', 'pi'],
+            auth: { method: 'oauth' },
+            routing: {
+              'claude-code': { upstream: 'https://api.x.ai', authStrategy: 'oauth-passthrough' },
+              codex: { upstream: 'https://api.x.ai', authStrategy: 'oauth-passthrough' },
+              pi: { upstream: 'https://api.x.ai', authStrategy: 'oauth-passthrough' },
+            },
+            models: {
+              'claude-code': [
+                {
+                  id: 'xai/grok-4.6',
+                  name: 'Grok 4.6',
+                  contextWindow: 500_000,
+                  efforts: ['high'],
+                  defaultEffort: 'high',
+                },
+              ],
+            },
+          },
+        ],
+      },
+      { xai: true },
+    );
+    expect(views.some((provider) => provider.agents.includes('grok-build'))).toBe(false);
+    expect(hasUsableConnectedSource(views, 'grok-build', 'grok-4.6')).toBe(true);
+    expect(hasUsableConnectedSource(views, 'grok-build', 'xai/grok-4.5')).toBe(true);
+    expect(hasUsableConnectedSource(views, 'grok-build')).toBe(true);
+    expect(hasUsableConnectedSource([], 'grok-build', 'grok-4.3')).toBe(false);
+    expect(hasUsableConnectedSource([], 'grok-build', 'grok-build')).toBe(false);
+  });
+
+  it('still counts Claude / Codex / Pi with zero connected catalog providers as no source', () => {
+    expect(hasUsableConnectedSource([], 'claude-code', 'claude-opus-4-8')).toBe(false);
+    expect(hasUsableConnectedSource([], 'codex', 'gpt-5.5')).toBe(false);
+    expect(hasUsableConnectedSource([], 'pi', 'grok-4.6')).toBe(false);
+    expect(hasUsableConnectedSource([], 'claude-code')).toBe(false);
   });
 });
 

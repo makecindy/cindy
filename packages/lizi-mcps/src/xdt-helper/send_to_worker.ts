@@ -8,7 +8,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
-import type { ControlResult } from '../lizi_xdtHelperMcpServer.js';
+import type { ControlResult, ControlWorkerAgent } from '../lizi_xdtHelperMcpServer.js';
 import { errorPayload, okPayload } from './_payload.js';
 
 export interface SendToWorkerDeps {
@@ -22,7 +22,7 @@ export interface SendToWorkerDeps {
   }) => Promise<
     ControlResult<
       {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: ControlWorkerAgent;
         wakeKind: 'resumed' | 'already-active' | 'queued';
         targetTitle: string | null;
         targetLastUserSendAt: string | null;
@@ -38,7 +38,7 @@ export interface SendToWorkerDeps {
   }) => Promise<
     ControlResult<
       {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: ControlWorkerAgent;
         queuedMessageId: string;
         stopOutcome:
           | 'requested'

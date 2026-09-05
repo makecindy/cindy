@@ -42,13 +42,16 @@ import {
   resolveAgentSwitchSettings,
 } from './imDefaultSettingsLogic';
 
-function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
+function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' | 'grok-build' {
   return agentKind === 'claude-code' ? 'cc' : agentKind;
 }
 
 /** AgentSelect 的 vendor → IM 默认配置的 agentKind。 */
 function agentKindOfVendor(vendor: string): ImDefaultAgentKind {
-  return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
+  if (vendor === 'cc') return 'claude-code';
+  if (vendor === 'pi') return 'pi';
+  if (vendor === 'grok-build') return 'grok-build';
+  return 'codex';
 }
 
 export interface ImDefaultSettingsSummary {

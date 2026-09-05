@@ -23,6 +23,7 @@
 import {
   PI_REASONING_EFFORTS,
   isAgentSelectableModel,
+  isExclusiveXaiModelId,
   isModelSelectableForNewRoute,
   type Catalog,
   type CatalogModel,
@@ -58,6 +59,17 @@ function hasValidPiReasoningCapabilities(m: CatalogModel): boolean {
     typeof m.reasoningDefaultEffort === 'string' &&
     efforts.includes(m.reasoningDefaultEffort)
   );
+}
+
+/** ModelDescriptor.newSessionDefault 的元素类型（maker-core 只为三个 wire agent 记种子）。 */
+type NewSessionDefaultAgent = NonNullable<ModelDescriptor['newSessionDefault']>[number];
+
+/**
+ * grok-build 不进新对话默认种子:独占 Grok 由 SuperGrok 供货,目录里出现该标记
+ * 只能是脏数据。这里丢弃而不是投影,避免下游按不存在的目录默认改路由。
+ */
+function isNewSessionDefaultAgent(agent: AgentKind): agent is NewSessionDefaultAgent {
+  return agent !== 'grok-build';
 }
 
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
@@ -98,7 +110,9 @@ function toDescriptor(
   if (m.defaultEnabled !== undefined) d.defaultEnabled = m.defaultEnabled;
   // 新对话默认种子标记要透传：渲染层 getDefaultModelForVendor 据它优先选中被标记的模型。
   // v3 可携带 Pi 自己的标记；消费端按 Agent 严格解释，不跨 Agent 借用默认策略。
-  if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
+  if (m.newSessionDefault !== undefined) {
+    d.newSessionDefault = m.newSessionDefault.filter(isNewSessionDefaultAgent);
+  }
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
   const supportsImageInput =
@@ -137,6 +151,7 @@ function mergeNewSessionDefaultMarker(
   next: ModelDescriptor,
   agent: AgentKind,
 ): ModelDescriptor {
+  if (!isNewSessionDefaultAgent(agent)) return first;
   const hasNewMarker =
     next.newSessionDefault?.includes(agent) === true &&
     first.newSessionDefault?.includes(agent) !== true;
@@ -187,6 +202,15 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
     }
   }
   return out;
+}
+
+/** Exclusive Grok catalog slugs for the Grok Build harness (Cindy model plane). */
+export function deriveGrokBuildAvailableModels(catalog: Catalog): ModelDescriptor[] {
+  const fromPi = deriveAvailableModels(catalog, 'pi').filter((model) => isExclusiveXaiModelId(model.id));
+  if (fromPi.length > 0) return fromPi;
+  return deriveAvailableModels(catalog, 'claude-code').filter((model) =>
+    isExclusiveXaiModelId(model.id),
+  );
 }
 
 /**
@@ -292,5 +316,11 @@ export function refreshCatalogDerivedModels(
       continue;
     }
     availableModels.splice(0, availableModels.length, ...deriveAvailableModels(catalog, agent));
+  }
+  try {
+    const grokModels = target.getCapabilities('grok-build').availableModels;
+    grokModels.splice(0, grokModels.length, ...deriveGrokBuildAvailableModels(catalog));
+  } catch {
+    // grok-build 与 pi 共用 hosted loop；未注册时跳过。
   }
 }

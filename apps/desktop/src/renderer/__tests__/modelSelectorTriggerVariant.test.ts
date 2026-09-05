@@ -2154,6 +2154,99 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  it('shows the empty-source card for grok-build when SuperGrok is not connected', () => {
+    const previous = providersRef.providers;
+    providersRef.providers = [];
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'grok-4.6',
+          effort: 'high' as Effort,
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'grok-build' as const,
+          currentProviderId: null,
+          onProviderChange: vi.fn(),
+          onNavigateToProviders: vi.fn(),
+        }),
+      );
+      expect(screen.getByText('newChat.modelSelector.source.emptyTitle')).toBeTruthy();
+    } finally {
+      providersRef.providers = previous;
+    }
+  });
+
+  it('keeps the grok-build trigger on the Grok model when SuperGrok is connected without a catalog grok-build provider', () => {
+    const previousProviders = providersRef.providers;
+    const previousModels = visibleModelsRef.models;
+    providersRef.providers = [
+      {
+        id: 'xai',
+        name: 'xAI',
+        source: 'builtin',
+        agents: ['claude-code', 'codex', 'pi'],
+        auth: { method: 'oauth' },
+        routing: { pi: {} },
+        connected: true,
+        models: { pi: [{ id: 'grok-4.6', name: 'Grok 4.6', contextWindow: 500000, efforts: [], defaultEffort: null }] },
+      },
+    ];
+    visibleModelsRef.models = [
+      {
+        id: 'grok-4.6',
+        displayName: 'Grok 4.6',
+        contextWindow: 500000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
+    try {
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'grok-4.6',
+          effort: 'high' as Effort,
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'grok-build' as const,
+          currentProviderId: null,
+          onProviderChange: vi.fn(),
+          onNavigateToProviders: vi.fn(),
+        }),
+      );
+      expect(screen.queryByText('newChat.modelSelector.source.emptyTitle')).toBeNull();
+      const trigger = screen.getByRole('button', { name: /Grok 4\.6/ });
+      expect(trigger.textContent).toContain('Grok 4.6');
+      expect(trigger.textContent).not.toContain('newChat.modelSelector.source.connect');
+      expect(trigger.getAttribute('aria-label')).not.toContain(
+        'newChat.modelSelector.source.connect',
+      );
+    } finally {
+      providersRef.providers = previousProviders;
+      visibleModelsRef.models = previousModels;
+    }
+  });
+
+  it('still shows the empty-source title for Claude Code with zero connected providers', () => {
+    const previous = providersRef.providers;
+    providersRef.providers = [];
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high' as Effort,
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc' as const,
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      expect(screen.getByText('newChat.modelSelector.source.emptyTitle')).toBeTruthy();
+    } finally {
+      providersRef.providers = previous;
+    }
+  });
+
   it('binds the pane observer when providers arrive after the empty state', async () => {
     type ObserverInstance = {
       callback: ResizeObserverCallback;

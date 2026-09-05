@@ -14,9 +14,29 @@
 
 import type { MakerVendor } from './ccAgent.types';
 
-export const SELECTABLE_VENDORS = ['cc', 'codex', 'pi'] as const satisfies readonly MakerVendor[];
+export const SELECTABLE_VENDORS = ['cc', 'codex', 'pi', 'grok-build'] as const satisfies readonly MakerVendor[];
 
 export type SelectableVendor = (typeof SELECTABLE_VENDORS)[number];
+
+/** SELECTABLE_VENDORS 对应的 runtime AgentKind(统一选择器 / IPC 同一张表)。 */
+export type SelectableAgentKind = 'claude-code' | 'codex' | 'pi' | 'grok-build';
+
+export function agentKindOfVendor(vendor: SelectableVendor): SelectableAgentKind {
+  if (vendor === 'cc') return 'claude-code';
+  if (vendor === 'codex') return 'codex';
+  if (vendor === 'pi') return 'pi';
+  return 'grok-build';
+}
+
+export function vendorOfAgentKind(kind: SelectableAgentKind): SelectableVendor {
+  if (kind === 'claude-code') return 'cc';
+  if (kind === 'codex') return 'codex';
+  if (kind === 'pi') return 'pi';
+  return 'grok-build';
+}
+
+export const SELECTABLE_AGENT_KINDS: readonly SelectableAgentKind[] =
+  SELECTABLE_VENDORS.map(agentKindOfVendor);
 
 /** localStorage / IPC 等外部输入的引擎值校验(不认识的一律交给调用方回退默认)。 */
 export function isSelectableVendor(value: unknown): value is SelectableVendor {

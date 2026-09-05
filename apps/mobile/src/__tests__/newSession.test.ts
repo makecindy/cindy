@@ -1124,7 +1124,7 @@ describe('new session model', () => {
 
   it('exposes Pi as a first-class agent and preserves Fast for Pi sessions', () => {
     expect(NEW_SESSION_AGENT_OPTIONS.map((option) => option.kind)).toEqual([
-      'claude-code', 'codex', 'pi',
+      'claude-code', 'codex', 'pi', 'grok-build',
     ]);
     const pi = withAgentDefaults({ ...DEFAULT_NEW_SESSION_DRAFT, fastMode: true }, 'pi');
     expect(pi).toMatchObject({ agentKind: 'pi', model: 'gpt-5.4', fastMode: true });
@@ -1136,10 +1136,18 @@ describe('new session model', () => {
   });
 
   it('filters the new-session agent options by the controlled device runtime-registered set', () => {
-    // null(未拉到)→ fail-open,全部保留。
+    // null(未拉到)→ fail-open 保留随桌面端分发的 runtime;grok-build 跟 Cindy hosted
+    // loop,未确认注册前不露出,避免建出 requireAgent 报 not-registered 的会话。
     expect(availableNewSessionAgentOptions(null).map((o) => o.kind)).toEqual([
       'claude-code', 'codex', 'pi',
     ]);
+    // 被控端确认注册了 grok-build → 才出现在入口里。
+    expect(
+      availableNewSessionAgentOptions(new Set(['claude-code', 'codex', 'pi', 'grok-build']))
+        .map((o) => o.kind),
+    ).toEqual(['claude-code', 'codex', 'pi', 'grok-build']);
+    expect(availableNewSessionAgentOptions(new Set(['grok-build'])).map((o) => o.kind))
+      .toEqual(['grok-build']);
     // 被控端无 Pi(二进制缺失)→ 隐藏 Pi,避免建出 requireAgent 报 not-registered 的会话。
     expect(
       availableNewSessionAgentOptions(new Set(['claude-code', 'codex'])).map((o) => o.kind),

@@ -15,6 +15,7 @@
 import type { Catalog, Provider, CatalogModel, AgentKind, RoutingDescriptor } from './types.js';
 import {
   isAgentSelectableModel,
+  isExclusiveXaiModelId,
   isModelSelectableForNewRoute,
 } from './classification.js';
 import type { ProviderLogoKind } from './providerBranding.js';
@@ -286,6 +287,56 @@ export function chatEligibleSourcesForModel(
       isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
     );
   });
+}
+
+/**
+ * Grok Build 是 Cindy hosted harness,不是目录供应商。独占 Grok 走 SuperGrok
+ * (xAI);目录不会声明 `grok-build` runtime,所以不能用 connectedProvidersForAgent。
+ */
+export function isGrokBuildSourceReady(
+  views: readonly ProviderView[],
+  opts: { includeSuspended?: boolean } = {},
+): boolean {
+  return views.some(
+    (provider) =>
+      provider.id === 'xai' &&
+      provider.connected &&
+      (opts.includeSuspended === true || provider.suspended !== true),
+  );
+}
+
+/**
+ * Picker trigger / Send 门禁的「有没有可用来源」。
+ *
+ * Grok Build 复用 Cindy hosted loop + SuperGrok / xAI,不要求目录供应商声明
+ * `grok-build`。Claude / Codex / Pi 仍走 chatEligibleSourcesForModel /
+ * connectedProvidersForAgent。
+ */
+export function hasUsableConnectedSource(
+  views: ProviderView[],
+  agent: AgentKind | null,
+  modelId?: string,
+  opts: { onlyConnected?: boolean; includeDisabled?: boolean; includeSuspended?: boolean } = {},
+): boolean {
+  if (!agent) return false;
+  if (agent === 'grok-build') {
+    return isGrokBuildSourceReady(views, {
+      ...(opts.includeSuspended === true ? { includeSuspended: true } : {}),
+    });
+  }
+  if (modelId) {
+    return (
+      chatEligibleSourcesForModel(views, modelId, agent, {
+        onlyConnected: opts.onlyConnected ?? true,
+        ...(opts.includeDisabled === true ? { includeDisabled: true } : {}),
+      }).length > 0
+    );
+  }
+  return (
+    connectedProvidersForAgent(views, agent, {
+      ...(opts.includeSuspended === true ? { includeSuspended: true } : {}),
+    }).length > 0
+  );
 }
 
 /**

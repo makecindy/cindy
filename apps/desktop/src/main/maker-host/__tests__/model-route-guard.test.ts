@@ -559,6 +559,19 @@ describe('materializeExclusiveProviderRoute', () => {
       .toEqual({ kind: 'pass' });
   });
 
+  it('Grok Build hosted harness pins exclusive Grok to SuperGrok', () => {
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'grok-build', 'grok-4.6', null))
+      .toEqual({ kind: 'pin', providerId: 'xai' });
+    expect(materializeExclusiveProviderRoute(xaiViews({ xd: true, xai: false }), 'grok-build', 'xai/grok-4.6', null))
+      .toEqual({ kind: 'reject' });
+    expect(checkModelRoute(xaiViews({ xd: true, xai: false }), 'grok-build', 'grok-4.6', null))
+      .toEqual({ kind: 'reject', reason: 'exclusive-source-unavailable' });
+    expect(checkModelRoute(xaiViews(), 'grok-build', 'grok-4.6', null))
+      .toEqual({ kind: 'reroute', providerId: 'xai' });
+    expect(checkModelRoute(xaiViews(), 'claude-code', 'grok-4.6', null))
+      .toEqual({ kind: 'reroute', providerId: 'xai' });
+  });
+
   it('Claude/GPT 双来源保持 keep,不打断默认队列', () => {
     expect(materializeExclusiveProviderRoute(views(), 'claude-code', 'claude-opus-5', null))
       .toEqual({ kind: 'keep' });

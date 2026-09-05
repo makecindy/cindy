@@ -67,6 +67,7 @@ import {
   SlashCommandDecoration,
 } from './SlashCommandDecoration';
 
+import { SELECTABLE_AGENT_KINDS, type SelectableVendor } from '@/lib/agentVendors';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
@@ -317,7 +318,7 @@ import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
-import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, hasUsableConnectedSource } from '@cindy/model-providers';
 import {
   deriveModelsFromProviders,
   filterChatBridgedCodexProviders,
@@ -671,7 +672,7 @@ interface ChatInputProps {
    * M35: Vendor lock — when provided, ModelSelector only shows models
    * belonging to this vendor ('cc' for Claude, 'codex' for OpenAI Codex).
    */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: SelectableVendor;
   /**
    * Optional override for the composerDraftStore key used to persist editor
    * content (and via attachmentState, attachments) across mount/unmount.
@@ -788,7 +789,7 @@ interface ChatInputProps {
    * `lastByVendor.model` 并原样进 createSession,写错就是首条请求路由到一个不存在的模型。
    */
   onUnifiedDraftSelect?: (selection: {
-    vendor: 'cc' | 'codex' | 'pi';
+    vendor: SelectableVendor;
     providerId: string;
     /** 选中引擎的 **wire model id**。 */
     modelId: string;
@@ -806,17 +807,23 @@ interface ChatInputProps {
 }
 
 /** 统一模型选择器联合列表的候选引擎全集(与 SELECTABLE_VENDORS 同一顺序)。 */
-const UNIFIED_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const UNIFIED_AGENT_KINDS: readonly AgentKind[] = SELECTABLE_AGENT_KINDS;
+/** 需 Cindy hosted loop 才注册的 runtime:未拉到注册表时不 fail-open,避免建出 not-registered 会话。 */
+const OPT_IN_UNIFIED_AGENTS: ReadonlySet<AgentKind> = new Set(['grok-build']);
 
 /** AgentKind → NewMaker vendor(useAvailableAgents 用 vendor 口径)。 */
-function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' {
-  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+function agentKindToVendor(kind: AgentKind): SelectableVendor {
+  if (kind === 'codex') return 'codex';
+  if (kind === 'pi') return 'pi';
+  if (kind === 'grok-build') return 'grok-build';
+  return 'cc';
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: SelectableVendor): AgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'grok-build') return 'grok-build';
   return null;
 }
 
@@ -1902,15 +1909,19 @@ export function ChatInput({
   // 联合列表参与哪些引擎 —— 以**运行时注册结果**为准(device-link 取被控端的)。
   // 撤掉新会话工具条的 AgentSelect 后,它的 hiddenVendors 门禁就落到这里:Pi 二进制缺失
   // 时模型目录照样投影 Pi 模型,只看目录会让用户一路选到 requireAgent 的 not-registered。
-  // 未加载完成 → 传 undefined(fail-open,不隐藏任何引擎);当前引擎恒在列。
+  // 未加载完成 → 只 fail-open 随包分发的引擎;grok-build 跟 Cindy hosted loop
+  // 走,Pi runtime 未确认前不提前露出。
+  // 当前引擎恒在列。
   const { availableVendors: runtimeAvailableVendors, loaded: runtimeAgentsLoaded } =
     useAvailableAgents(deviceLinkDeviceId);
   const unifiedAgents = useMemo<readonly AgentKind[] | undefined>(() => {
-    if (!runtimeAgentsLoaded) return undefined;
+    // grok-build 跟 Pi hosted loop:未加载完成时不 fail-open 露出它。
+    const catalogKinds = UNIFIED_AGENT_KINDS.filter((kind) => !OPT_IN_UNIFIED_AGENTS.has(kind));
+    if (!runtimeAgentsLoaded) return catalogKinds;
     const kinds = UNIFIED_AGENT_KINDS.filter(
       (kind) => kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),
     );
-    return kinds.length > 0 ? kinds : undefined;
+    return kinds.length > 0 ? kinds : catalogKinds;
   }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind]);
   // 已有 device-link 任务在断链时仍有 pinned deviceId + renderer outbox 可接住发送，
   // 不能因为被控端 provider 目录暂时拉不到就禁用 composer。远程草稿没有既有 session
@@ -1924,12 +1935,15 @@ export function ChatInput({
   // (sessionId 在)按实际路由口径判(includeDisabled):运行中的会话不因停用打断,
   // 请求仍走原路由,把停用当「无来源」会误禁 Send(PR #744 review 第十轮)。草稿是
   // 新路由选择,保持准入口径(停用拷贝不算可发送来源)。
-  const hasConnectedSendSource = currentModelAgentKind
-    ? chatEligibleSourcesForModel(sendProviders, activeModel, currentModelAgentKind, {
-        onlyConnected: true,
-        includeDisabled: !!sessionId,
-      }).length > 0
-    : false;
+  const hasConnectedSendSource = hasUsableConnectedSource(
+    sendProviders,
+    currentModelAgentKind,
+    activeModel,
+    {
+      onlyConnected: true,
+      includeDisabled: !!sessionId,
+    },
+  );
   const noConnectedSource =
     enforceConnectedSourceGate &&
     !!currentModelAgentKind &&
@@ -5233,16 +5247,16 @@ export function ChatInput({
           // 已建会话按实际路由口径判(includeDisabled,与上方 hasConnectedSendSource
           // 同则):运行中会话不因停用打断,最终 preflight 若按准入 rail 判会在全停时
           // 弹「去连接来源」把继续发送挡死(PR #744 review 第十八轮)。草稿保持准入口径。
-          const connectedSources = chatEligibleSourcesForModel(
+          const hasSendSource = hasUsableConnectedSource(
             providers,
-            activeModel,
             currentModelAgentKind,
+            activeModel,
             {
               onlyConnected: true,
               includeDisabled: !!sessionId,
             },
           );
-          if (connectedSources.length === 0) {
+          if (!hasSendSource) {
             const goConnect = await confirmDialog({
               title: t('newChat.noProvider.title'),
               description: t('newChat.noProvider.description'),
@@ -5908,7 +5922,7 @@ export function ChatInput({
         ? [targetAgentKind]
         : currentModelAgentKind
           ? [currentModelAgentKind]
-          : ['claude-code', 'codex', 'pi'];
+          : UNIFIED_AGENT_KINDS;
       if (providerId) {
         for (const kind of kinds) {
           const scoped = resolveProviderModelEfforts({
@@ -6347,7 +6361,7 @@ export function ChatInput({
     ) => void | boolean | Promise<void | boolean>;
   }>({ byProvider: () => {}, byModel: () => {} });
   const confirmAgentBrowseSwitch = useCallback(
-    (targetAgent: 'claude-code' | 'codex' | 'pi' | null) =>
+    (targetAgent: AgentKind | null) =>
       confirmAgentSwitchRisk({
         // 不必再问的两种:回原引擎(same-engine no-op),或点的就是已经确认过的意图目标
         // Harness(只换模型,不换引擎)。换到第三家仍要问(Chris 2026-08-20:Claude 任务里
@@ -6371,7 +6385,7 @@ export function ChatInput({
   );
   const performAgentSwitch = useCallback(
     async (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: AgentKind,
       newModelId: string,
       providerId: string | null = null,
       // 意图期内的档位/Fast 改动经此显式覆盖(用户手选优先于记忆/默认解析)。
@@ -6846,7 +6860,7 @@ export function ChatInput({
       /** 选中引擎的 **wire model id** —— 唯一可发送、可当记忆键的那个 id。 */
       modelId: string;
       effort?: Effort;
-      engine: 'cc' | 'codex' | 'pi';
+      engine: SelectableVendor;
       fast: boolean;
       favoriteUid: string | null;
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
@@ -8722,7 +8736,7 @@ export function ChatInput({
                             currentVendor: vendorKey,
                             // 两步分段的目标是 vendor 口径,确认门按 AgentKind 判(与意图
                             // 记录同形),在边界上转一次 —— 见 confirmAgentBrowseSwitch。
-                            confirmBrowseSwitch: (targetVendor: 'cc' | 'codex' | 'pi') =>
+                            confirmBrowseSwitch: (targetVendor: SelectableVendor) =>
                               confirmAgentBrowseSwitch(vendorKeyToAgentKind(targetVendor)),
                             onSwitch: performAgentSwitch,
                           }
