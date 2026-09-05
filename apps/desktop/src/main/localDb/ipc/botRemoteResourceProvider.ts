@@ -2,7 +2,7 @@ import {
   getBotRemoteResourceSource,
   listBotRemoteResourceSources,
 } from './bots.js';
-import { remoteResourceRegistry } from '../../device-link/remoteResourceRegistry.js';
+import { RemoteResourceRegistryError, remoteResourceRegistry } from '../../device-link/remoteResourceRegistry.js';
 import {
   BOT_REMOTE_RESOURCE_KIND,
   TEAMMATES_REMOTE_COLLECTION_ID,
@@ -43,7 +43,13 @@ export function registerBotRemoteResourceProvider(): void {
       };
     },
     async get(_context, request) {
-      return botRemoteResourceFromSource(await getBotRemoteResourceSource(request.ref.id));
+      const [source] = visibleBotRemoteResourceSources([
+        await getBotRemoteResourceSource(request.ref.id),
+      ]);
+      if (!source) {
+        throw new RemoteResourceRegistryError('NOT_FOUND', 'remote resource does not exist');
+      }
+      return botRemoteResourceFromSource(source);
     },
   });
   registered = true;
