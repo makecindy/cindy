@@ -268,6 +268,14 @@
     "composerPlaceholder": "今天我們做點什麼呢~",
     "voiceSelectDeviceFirst": "請選擇裝置後再使用語音輸入。",
     "creatingSession": "正在建立任務",
+    "slowSend": {
+      "preparing": "正在準備傳送…",
+      "uploading": "正在上傳附件…",
+      "connecting": "正在連接電腦…",
+      "checkingModel": "正在檢查模型設定…",
+      "creating": "正在建立任務…",
+      "sending": "正在傳送訊息…"
+    },
     "createAndSend": "建立任務並傳送首條訊息",
     "modelAccessibility": "模型：{{model}}",
     "voiceInput": "語音輸入",

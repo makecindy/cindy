@@ -118,6 +118,7 @@ import { RecentPhotosStrip, ScreenshotsGrid } from '@/session/ContextSheetMediaV
 import { ContextSheetGoalCreateForm } from '@/session/ContextSheetGoalView';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from '@/session/ComposerAttachmentTray';
+import { SlowSendNotice, type SlowSendPhase } from '@/session/SlowSendNotice';
 import { ImageLightbox } from '@/session/ImageLightbox';
 import {
   useComposerImageAnnotations,
@@ -487,6 +488,8 @@ export default function NewRemoteSessionScreen() {
     workingDir: initialWorkingDir ?? '',
   });
   const [creating, setCreating] = useState(false);
+  const [createStartedAt, setCreateStartedAt] = useState<number | null>(null);
+  const [createPhase, setCreatePhase] = useState<SlowSendPhase>('preparing');
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<MobileAgentCapabilities | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
@@ -4010,6 +4013,9 @@ export default function NewRemoteSessionScreen() {
       return;
     }
     creatingRef.current = true;
+    const startedAt = Date.now();
+    setCreateStartedAt(startedAt);
+    setCreatePhase('preparing');
     setCreating(true);
     setError(null);
     // 乐观交接标记:startNewSessionCreation + router.replace 成功后本页即将
@@ -4045,10 +4051,12 @@ export default function NewRemoteSessionScreen() {
       // 拍照 / 选图后立刻点创建是常见路径:等在途图片上传落定(乐观托盘)。
       // 有失败就中止创建——错误文案已由上传回调写入 attachmentError,让用户处理;
       // 此时不该带着残缺附件去开新会话。
+      setCreatePhase('uploading');
       const { failedCount } = await waitForPendingUploads();
       if (!isCurrentOwner()) return;
       if (!ensureDeviceAlive()) return;
       if (failedCount > 0) return;
+      setCreatePhase('preparing');
       // await 之后闭包里的 attachments 是旧值,经 ref 拿含刚落定图片的最新列表。
       const sendAttachments = attachmentsRef.current;
       const validation = validateNewSessionDraft(effectiveDraft, { attachmentCount: sendAttachments.length });
@@ -4056,21 +4064,7 @@ export default function NewRemoteSessionScreen() {
         setError(validation);
         return;
       }
-      // 鉴权门禁:已知无已连接供应商时不发起创建(创建即失败,还会白跑一个往返)。
-      // 目录缓存可能过期(用户刚在电脑端配好 key):拦截前现拉一遍确认;确认不了
-      // (已连接 / 空目录 / 拉失败)时缓存判死已不可信,清掉重取并放行。
-      if (agentAuthVerdict === 'unauthenticated') {
-        if ((await confirmAgentUnauthenticated(effectiveDraft.agentKind, selectedDeviceId)).unauthenticated) {
-          if (!isCurrentOwner()) return;
-          if (!ensureDeviceAlive()) return;
-          setError(agentAuthGateHint(effectiveDraft.agentKind));
-          return;
-        }
-        if (!isCurrentOwner()) return;
-        // 确认期间切设备 → 不再驱逐(驱逐的是旧设备缓存,继续创建也无意义)。
-        if (!ensureDeviceAlive()) return;
-        evictDeviceProviders(selectedDeviceId);
-      }
+      // 鉴权和模型的网络终检集中在后台建链后执行，避免表单先等一轮、管线再等一轮。
       if (!isCurrentOwner()) return;
       if (!ensureDeviceAlive()) return;
       void saveNewSessionPreferences({
@@ -4314,6 +4308,7 @@ export default function NewRemoteSessionScreen() {
           providerId: effectiveDraft.providerId,
         });
         const runGuard = () => resolveSubmitGuardCatalog({
+          deferRefreshToCreation: true,
           cached: () => getCachedDeviceProviders(guardDeviceId),
           gen: () => getDeviceProvidersGen(guardDeviceId),
           // 强制刷新(codex review P2):fetchDeviceProviders 缓存命中直接返回旧目录,
@@ -4395,6 +4390,7 @@ export default function NewRemoteSessionScreen() {
         : null;
       if (!isCurrentOwner()) return;
       startNewSessionCreation({
+        startedAt,
         sessionId,
         deviceId: deviceIdSnapshot,
         deviceName: selectedDeviceName,
@@ -4488,6 +4484,7 @@ export default function NewRemoteSessionScreen() {
       if (!handedOff) {
         creatingRef.current = false;
         setCreating(false);
+        setCreateStartedAt(null);
       }
     }
   }, [
@@ -5760,6 +5757,7 @@ export default function NewRemoteSessionScreen() {
                   {attachmentError}
                 </Text>
               ) : null}
+              <SlowSendNotice startedAt={creating ? createStartedAt : null} phase={createPhase} />
               {voiceStatusVisible ? (
                 <View style={styles.voiceStatusRow}>
                   <Text style={styles.voiceStatusText} testID="newSession.voiceStatus">
