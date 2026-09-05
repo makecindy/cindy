@@ -776,6 +776,11 @@ export function MessageRenderer({
   // offset 0. Track raw downward touch displacement as a fallback history-browse intent.
   const historyTouchStartYRef = useRef<number | null>(null);
   const historyTouchTriggeredRef = useRef(false);
+  const isUserControllingScroll = useCallback(() => (
+    isDraggingRef.current
+    || isMomentumScrollingRef.current
+    || historyTouchStartYRef.current !== null
+  ), []);
   // 冷开时自动补齐短初窗,最多连续拉三页；用户主动浏览后改走既有不限页的近顶预取。
   const initialHistoryAutofillRemainingRef = useRef(MAX_INITIAL_HISTORY_AUTOFILL_PAGES);
   // 上一次自动 load-earlier 触发时的首项 key:相同 = 上次尝试无进展(失败 / 拉回重复页),
@@ -1365,6 +1370,7 @@ export function MessageRenderer({
         preserveVisibleContentPosition: readingOlderRef.current
           || isMobileMvcpSettling(Date.now(), mvcpSettleAtRef.current),
         stickToLatest: nearBottomRef.current,
+        userControllingScroll: isUserControllingScroll(),
         waitRounds,
       });
       if (action === 'settled' || action === 'give-up') {
@@ -1407,7 +1413,7 @@ export function MessageRenderer({
     } else {
       start();
     }
-  }, [scrollToEndProgrammatically]);
+  }, [isUserControllingScroll, scrollToEndProgrammatically]);
 
   // DEV-only:把列表控制器 + 滚动 metrics 暴露给性能 harness(临时,profiling/回归测量用)。
   useEffect(() => {
@@ -2194,8 +2200,10 @@ export function MessageRenderer({
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    if (nearBottomRef.current) runStickToLatestVerify();
   }, [
     maybeTriggerHistoryTouch,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
@@ -2205,7 +2213,8 @@ export function MessageRenderer({
     historyTouchTriggeredRef.current = false;
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
-  }, [scheduleHistoryPrependUserHandoffSettle, scheduleQueuedLoadEarlierFlush]);
+    if (nearBottomRef.current) runStickToLatestVerify();
+  }, [runStickToLatestVerify, scheduleHistoryPrependUserHandoffSettle, scheduleQueuedLoadEarlierFlush]);
 
   // 用户开始拖动 → 标记「上翻意图」,放行自动加载更早(onScrollBeginDrag 仅用户手势触发,
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
@@ -2241,8 +2250,11 @@ export function MessageRenderer({
     // Wait one frame so Android can report whether this drag transitioned into momentum.
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    // A long gesture can exhaust the verifier's bounded wait. Recheck after native settles.
+    if (nearBottomRef.current) runStickToLatestVerify();
   }, [
     refreshPreviousUserTarget,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
@@ -2256,8 +2268,10 @@ export function MessageRenderer({
     refreshPreviousUserTarget();
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
+    if (nearBottomRef.current) runStickToLatestVerify();
   }, [
     refreshPreviousUserTarget,
+    runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
@@ -2277,7 +2291,9 @@ export function MessageRenderer({
     const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
     scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
-  }, []);
+    markMobileMvcpSettle();
+    if (nearBottomRef.current) runStickToLatestVerify();
+  }, [markMobileMvcpSettle, runStickToLatestVerify]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
     listMetricsRef.current = metrics;
@@ -2322,7 +2338,13 @@ export function MessageRenderer({
       }
       return;
     }
-    if (nearBottomRef.current && viewportHeight > 0 && height > viewportHeight) {
+    if (nearBottomRef.current && viewportHeight > 0 && height > 0) {
+      // Shortening below one screen can leave the old offset beyond the new end. Verify after
+      // measurement settles; do not force-scroll every short-list layout or fight a gesture.
+      if (height <= viewportHeight || isUserControllingScroll()) {
+        runStickToLatestVerify();
+        return;
+      }
       // Animated jump/send follow owns the viewport until its settle window closes. Content
       // growth during that animation only reschedules the verifier; a false-animated pin here
       // would visibly cut the smooth scroll short and jump straight to the end.
@@ -2352,9 +2374,7 @@ export function MessageRenderer({
         followEndPinRecoveryTimerRef.current = setTimeout(() => {
           followEndPinRecoveryTimerRef.current = null;
           if (nearBottomRef.current && !readingOlderRef.current) {
-            scrollToEndProgrammatically(false);
-            // 清账补滚同样不保证真的落底(measurement 结算 / mVCP 吸收的静默落空同源风险),
-            // 跑一轮校验/补滚兜底。
+            // Let the verifier wait for any gesture before correcting the final position.
             runStickToLatestVerify();
           }
         }, MOBILE_FOLLOW_END_PIN_SUPPRESS_MS + 50);
@@ -2366,6 +2386,7 @@ export function MessageRenderer({
       }
     }
   }, [
+    isUserControllingScroll,
     markMobileMvcpSettle,
     restoreHistoryAnchorOnce,
     runStickToLatestVerify,
@@ -2434,6 +2455,7 @@ export function MessageRenderer({
         metrics: scrollMetricsRef.current,
         preserveVisibleContentPosition,
         stickToLatest: nearBottomRef.current && !userScrollForOlderRef.current,
+        userControllingScroll: isUserControllingScroll(),
         waitRounds,
       });
       if (action === 'settled' || action === 'give-up') {
@@ -2470,6 +2492,7 @@ export function MessageRenderer({
     });
   }, [
     initialRevealProgress,
+    isUserControllingScroll,
     listData.length,
     scrollResetKey,
     scrollToEndProgrammatically,
