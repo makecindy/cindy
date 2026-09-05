@@ -146,7 +146,10 @@ import type {
 } from '../../types/events.js';
 import type { MemoryResetResult, MemorySetResult, MemoryStatus } from '../../types/memory.js';
 import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../types/common.js';
-import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
+import type {
+  ListAgentSkillsOptions,
+  ListAgentSkillsResult,
+} from '../../types/palette.js';
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
 import { scanPiCustomizations } from './customization-scanner.js';
 import {

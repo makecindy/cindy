@@ -9021,6 +9021,8 @@
         "compactSuccessWithTokens": "컨텍스트를 압축했습니다: {{before}}k → {{after}}k tokens",
         "compactFailed": "압축 실패",
         "compactNothing": "아직 압축할 내용이 없습니다",
+        "manualCompactUnavailable": "이 작업에서는 수동 압축을 사용할 수 없습니다.",
+        "compactRunningBlocked": "현재 메시지 처리가 끝난 후 압축해 주세요.",
         "sessionBranches": "세션 분기",
         "copySessionLink": "세션 링크 복사"
       },

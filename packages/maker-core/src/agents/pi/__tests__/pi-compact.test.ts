@@ -105,6 +105,13 @@ describe('PiAgent.compactSession (mocked pi process)', () => {
     expect(new PiAgent(buildDeps()).capabilities.manualCompact?.supported).toBe(true);
   });
 
+  it('does not advertise a compact builtin command on shared palette surfaces', () => {
+    // 手动压缩的精确 /compact 拦截只在桌面发送路径存在;共享 listAgentCommands
+    // 会同时喂给移动端命令面板,未适配面暴露会把命令降级成普通 prompt
+    // (#3744 review P1)。桌面单测断言 Pi 不再发布该目录项。
+    expect(new PiAgent(buildDeps()).listAgentCommands()).toEqual([]);
+  });
+
   it('parses tokensBefore/estimatedTokensAfter and omits missing numbers', async () => {
     knobs.compactResponse = {
       success: true,

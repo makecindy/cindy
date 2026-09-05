@@ -9021,6 +9021,8 @@
         "compactSuccessWithTokens": "上下文已壓縮：{{before}}k → {{after}}k tokens",
         "compactFailed": "壓縮失敗",
         "compactNothing": "暫無可壓縮內容",
+        "manualCompactUnavailable": "此任務暫不支援手動壓縮。",
+        "compactRunningBlocked": "請等待目前訊息處理完成後再壓縮。",
         "sessionBranches": "任務分支",
         "copySessionLink": "複製任務連結"
       },

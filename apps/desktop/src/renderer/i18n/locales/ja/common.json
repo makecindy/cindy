@@ -9021,6 +9021,8 @@
         "compactSuccessWithTokens": "コンテキストを圧縮しました:{{before}}k → {{after}}k tokens",
         "compactFailed": "圧縮に失敗しました",
         "compactNothing": "圧縮できる内容がまだありません",
+        "manualCompactUnavailable": "このタスクでは手動圧縮を利用できません。",
+        "compactRunningBlocked": "現在のメッセージの処理が完了してから圧縮してください。",
         "sessionBranches": "セッション分岐",
         "copySessionLink": "セッションリンクをコピー"
       },

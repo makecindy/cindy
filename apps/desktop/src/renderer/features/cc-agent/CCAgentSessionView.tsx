@@ -166,6 +166,7 @@ import {
 import {
   loadAllCommands,
   dispatchCommand,
+  isExactManualCompactCommand,
   leadingSlashInvocation,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   rebaseInlineRangesAfterSlashCommandRewrite,
@@ -1833,6 +1834,28 @@ export function CCAgentSessionView({
   // 仍调 compact-session → pi 拒绝 → confirm 后吃 rejection toast」(codex P2)。
   const isRunningRef = useRef(agentStatus.isRunning);
   isRunningRef.current = agentStatus.isRunning;
+  // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
+  // 多个 confirm,逐个确认就会发多次 compact 请求。锁按 sessionId 隔离:A 的长请求不
+  // 阻塞切换后的 B，A 的迟到 finally 也不能清掉 B 的锁。/compact 命令与上下文环
+  // 共用同一把锁,避免两个入口并发压缩同一个任务。
+  const compactRequestGuardRef = useRef<SessionScopedRequestGuard | null>(null);
+  if (!compactRequestGuardRef.current) {
+    compactRequestGuardRef.current = createSessionScopedRequestGuard();
+  }
+  const compactRequestGuard = compactRequestGuardRef.current;
+  // commit 阶段切换当前会话:中断 render 不应提前作废旧视图请求；layout effect 又早于用户
+  // 交互与异步回调。setup 也要重写 sessionId，确保 React StrictMode 的 setup→cleanup→setup
+  // 重放后不会停在 null。
+  useLayoutEffect(() => {
+    const committedSessionId = sessionId ?? null;
+    compactRequestGuard.setCurrentSession(committedSessionId);
+    return () => {
+      // session 变更 / 路由离开 / 登出后旧请求的确认结果与迟到响应立即失效。
+      if (committedSessionId && compactRequestGuard.isCurrent(committedSessionId)) {
+        compactRequestGuard.setCurrentSession(null);
+      }
+    };
+  }, [compactRequestGuard, sessionId]);
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
@@ -3266,6 +3289,95 @@ export function CCAgentSessionView({
     [fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData],
   );
 
+  const maybeCompactSession = useCallback(
+    async (message: string, payloadsAttached: boolean): Promise<boolean> => {
+      if (!isExactManualCompactCommand(message)) return false;
+      // composer 在调用 handleSend 前已清空附件 / mention / 内联引用 / 粘贴文本等
+      // 载荷;拦截后提前返回会让这些载荷既不发送也无法找回。带载荷的 /compact 不
+      // 拦截,走原发送路径按普通消息消费(#3744 review P1)。
+      if (payloadsAttached) return false;
+      const channel = compactChannelRef.current;
+      if (!sessionId || channel === null) {
+        toast.warning(
+          realAgentKind === 'codex'
+            ? t('ccAgent.layout.contextRing.codexAutoHint')
+            : t('ccAgent.sidebar.sessionMenu.manualCompactUnavailable'),
+        );
+        return true;
+      }
+      if (channel === 'compact-session' && isRunningRef.current) {
+        toast.warning(t('ccAgent.sidebar.sessionMenu.compactRunningBlocked'));
+        return true;
+      }
+      if (channel === 'compact-session' && sessionRef.current?.remoteHostId) {
+        toast.warning(t('ccAgent.sidebar.sessionMenu.manualCompactUnavailable'));
+        return true;
+      }
+      // SSH 远程 Claude 会话没有 device-link 隧道路由:inputCoordinator 通道会落回
+      // 控制端本机 maker,压缩请求既到不了远端运行时,还可能作用于错误会话——与
+      // compact-session 分支同口径,显式提示不可用而不是静默错投(#3744 review P1)。
+      if (channel === 'claude-input' && sessionRef.current?.remoteHostId) {
+        toast.warning(t('ccAgent.sidebar.sessionMenu.manualCompactUnavailable'));
+        return true;
+      }
+      const begun = compactRequestGuard.tryBegin(sessionId);
+      if (!begun) return true;
+      try {
+        toast.info(t('ccAgent.sidebar.sessionMenu.compacting'));
+        if (channel === 'compact-session') {
+          const result = await makerApiForSticky(sessionId).compactSession(sessionId);
+          if (!compactRequestGuard.isCurrent(sessionId, begun.epoch)) return true;
+          if (result?.noop) {
+            toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
+          } else if (result) {
+            const before = result.tokensBefore;
+            const after = result.estimatedTokensAfter;
+            toast.success(
+              before !== undefined && after !== undefined && before > 0
+                ? t('ccAgent.sidebar.sessionMenu.compactSuccessWithTokens', {
+                    before: Math.round(before / 1000),
+                    after: Math.round(after / 1000),
+                  })
+                : t('ccAgent.sidebar.sessionMenu.compactSuccess'),
+            );
+          } else {
+            toast.warning(t('ccAgent.sidebar.sessionMenu.manualCompactUnavailable'));
+          }
+          return true;
+        }
+        const sessionNow = sessionRef.current;
+        if (sessionNow?.workingDir) {
+          const accepted = await compactSession(
+            sessionNow.model,
+            sessionNow.effort as Effort,
+            sessionNow.permissionMode as PermissionMode,
+            sessionNow.workingDir,
+          );
+          if (!compactRequestGuard.isCurrent(sessionId, begun.epoch)) return true;
+          // Claude's input coordinator returns when the compact turn is accepted;
+          // the compact_boundary event is the authoritative completion projection.
+          if (!accepted) toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+        } else {
+          toast.warning(t('ccAgent.sidebar.sessionMenu.manualCompactUnavailable'));
+        }
+      } catch (err) {
+        if (!compactRequestGuard.isCurrent(sessionId, begun.epoch)) return true;
+        log.warn('manual /compact failed', err);
+        toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+      } finally {
+        begun.release();
+      }
+      return true;
+    },
+    [
+      compactRequestGuard,
+      compactSession,
+      realAgentKind,
+      sessionId,
+      t,
+    ],
+  );
+
   const handleSend = useCallback(
     async (
       message: string,
@@ -3306,6 +3418,19 @@ export function CCAgentSessionView({
       }
 
       if (deliveryMode !== 'steer' && (await maybeShowContextUsage(message))) {
+        return;
+      }
+
+      // /compact 拦截只认"无载荷的精确命令":附件 / mention / 内联引用 / 粘贴文本
+      // / agent 引用任一存在时不拦截,载荷随原发送路径消费(#3744 review P1)。
+      const payloadsAttached =
+        (files?.length ?? 0) > 0 ||
+        (mentions?.length ?? 0) > 0 ||
+        (opts?.agentReferences?.length ?? 0) > 0 ||
+        (opts?.pastedTextRanges?.length ?? 0) > 0 ||
+        opts?.quotesEncoded === true;
+
+      if (deliveryMode !== 'steer' && (await maybeCompactSession(message, payloadsAttached))) {
         return;
       }
 
@@ -3509,6 +3634,7 @@ export function CCAgentSessionView({
     },
     [
       maybeDispatchDesktopSlashCommand,
+      maybeCompactSession,
       maybeShowContextUsage,
       folderPickerOpen,
       isCodex,
@@ -3568,27 +3694,6 @@ export function CCAgentSessionView({
   }, [sessionId, session, handleSend, t]);
 
   const { confirm: confirmDialog } = useConfirmDialog();
-  // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
-  // 多个 confirm,逐个确认就会发多次 compact 请求。锁按 sessionId 隔离:A 的长请求不
-  // 阻塞切换后的 B，A 的迟到 finally 也不能清掉 B 的锁。
-  const compactRequestGuardRef = useRef<SessionScopedRequestGuard | null>(null);
-  if (!compactRequestGuardRef.current) {
-    compactRequestGuardRef.current = createSessionScopedRequestGuard();
-  }
-  const compactRequestGuard = compactRequestGuardRef.current;
-  // commit 阶段切换当前会话:中断 render 不应提前作废旧视图请求；layout effect 又早于用户
-  // 交互与异步回调。setup 也要重写 sessionId，确保 React StrictMode 的 setup→cleanup→setup
-  // 重放后不会停在 null。
-  useLayoutEffect(() => {
-    const committedSessionId = sessionId ?? null;
-    compactRequestGuard.setCurrentSession(committedSessionId);
-    return () => {
-      // session 变更 / 路由离开 / 登出后旧请求的确认结果与迟到响应立即失效。
-      if (committedSessionId && compactRequestGuard.isCurrent(committedSessionId)) {
-        compactRequestGuard.setCurrentSession(null);
-      }
-    };
-  }, [compactRequestGuard, sessionId]);
   const handleCompactRequest = useCallback(async () => {
     const sourceSession = session;
     if (!sourceSession) return;
@@ -4011,6 +4116,27 @@ export function CCAgentSessionView({
           }
           return;
         }
+        // NewMaker 首条消费与 handleSend 共用同一 /compact 拦截:精确命令不落成
+        // 字面用户消息(否则 Pi 会经 escapeLeadingSlashCommand 把 /compact 写进首条
+        // 消息,#3744 review P1)。带载荷的首条不拦截,载荷随原发送路径消费。
+        const pendingPayloadsAttached =
+          (pending.files?.length ?? 0) > 0 ||
+          (pending.mentions?.length ?? 0) > 0 ||
+          (pending.pastedTextRanges?.length ?? 0) > 0 ||
+          pending.quotesEncoded === true ||
+          (pending.agentReferences?.length ?? 0) > 0;
+        if (await maybeCompactSession(pendingText, pendingPayloadsAttached)) {
+          await deliverRecoverableHandoff(sessionId, () => true);
+          if (deferredUiAssignment) {
+            void dispatchDeferredUiAssignment(sessionId, deferredUiAssignment, {
+              waitForLeadHistory: false,
+            }).catch((err) => {
+              log.error('deferred Worker assignment after slash command failed', err);
+              toast.error(t('newChat.collaboration.assignmentFailed'));
+            });
+          }
+          return;
+        }
         const pendingAgentReferences = pending.agentReferences
           ? rebaseInlineRangesAfterSlashCommandRewrite(
               pending.agentReferences,
@@ -4081,6 +4207,7 @@ export function CCAgentSessionView({
     })();
   }, [
     historyLoaded,
+    maybeCompactSession,
     maybeDispatchDesktopSlashCommand,
     restoreRecoverableHandoff,
     requestFollowLatest,

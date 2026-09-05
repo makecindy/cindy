@@ -9036,6 +9036,8 @@
         "compactSuccessWithTokens": "Context compacted: {{before}}k → {{after}}k tokens",
         "compactFailed": "Compaction failed",
         "compactNothing": "Nothing to compact yet",
+        "manualCompactUnavailable": "Manual compaction is unavailable for this task.",
+        "compactRunningBlocked": "Wait for the current message to finish before compacting.",
         "sessionBranches": "Session branches",
         "copySessionLink": "Copy session link"
       },
