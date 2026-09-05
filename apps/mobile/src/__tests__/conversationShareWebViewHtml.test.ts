@@ -7,6 +7,7 @@ import {
   type ConversationShareWebViewColors,
 } from '@/session/conversationShareWebViewHtml';
 import { i18n } from '@/i18n';
+import { buildConversationShareSvgLayout } from '@/session/conversationShareSvgLayout';
 
 const colors: ConversationShareWebViewColors = {
   background: '#ffffff',
@@ -50,6 +51,43 @@ function buildRichConversationHtml(): string {
 }
 
 describe('buildConversationShareHtml 富内容导出', () => {
+  it('继续脱敏跨行内格式和段落拆开的凭证', () => {
+    const html = buildConversationShareHtml({
+      allShareableIds: ['secret'], colors, contentWidth: 390,
+      selectedMessages: [{ clientId: 'secret', kind: 'assistant', body: 'password: `private-code-secret`\n\nAuthorization: Basic **private-strong-secret**\n\npassword:\n\nprivate-paragraph-secret' }],
+    });
+    expect(html).not.toContain('private-');
+    expect(html).toContain('[REDACTED]');
+  });
+
+  it.each(['token', 'access_token', 'api_key'])(
+    '带 %s 的已准备图片使用 SVG 备用成图，保留图片和脱敏文字',
+    (parameter) => {
+      const url = `https://example.com/pic.png?${parameter}=private-image-secret`;
+      const uri = 'data:image/png;base64,aGVsbG8=';
+      const picture = `![picture](${url})`;
+      const options = {
+        allShareableIds: ['plain', 'parts'], colors, contentWidth: 390,
+        selectedMessages: [
+          { clientId: 'plain', kind: 'assistant' as const, body: picture, images: new Map([[url, { uri, width: 40, height: 20 }]]) },
+          {
+            clientId: 'parts', kind: 'user' as const, body: '',
+            bodyParts: [{ kind: 'text' as const, text: `| image |\n| --- |\n| ${picture} |` }],
+            secondaryBody: `${picture}\n\npassword=private-text-secret\n\n[link](https://example.com/?token=private-link-secret)\n\n\`\`\`text\npassword=private-code-secret\n\`\`\``,
+            images: new Map([[url, { uri, width: 40, height: 20 }]]),
+          },
+        ],
+      };
+      expect(() => buildConversationShareHtml(options)).toThrow('conversation-share-image-requires-svg');
+      const svg = buildConversationShareSvgLayout({ ...options, width: 390, messages: options.selectedMessages });
+      expect(svg.images).toHaveLength(3);
+      expect(svg.images.every((image) => image.uri === uri)).toBe(true);
+      expect(JSON.stringify(svg)).not.toContain('private-');
+      expect(JSON.stringify(svg)).not.toContain(url);
+      expect(JSON.stringify(svg)).toContain('[REDACTED]');
+    },
+  );
+
   it('只按选中内容嵌入对应的富内容运行时', () => {
     const plainHtml = buildConversationShareHtml({
       allShareableIds: ['plain'],

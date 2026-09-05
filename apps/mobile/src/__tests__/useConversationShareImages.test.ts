@@ -23,10 +23,7 @@ vi.mock("expo-file-system", () => ({
 }));
 vi.mock("@/session/sentAttachmentThumbStore", () => ({
   useSentAttachmentThumbsVersion: () => thumbs.version,
-  applySentAttachmentThumbOverlay: (item: { uri: string }) => {
-    const uri = thumbs.entries.get(item.uri);
-    return uri ? { ...item, uri, previewable: true } : item;
-  },
+  getSentAttachmentThumbUri: (uri: string) => thumbs.entries.get(uri) ?? null,
 }));
 vi.mock("@/session/remoteMediaDiskCacheExpo", () => ({
   downloadRemoteMediaAsDataUri: vi.fn(),
@@ -72,10 +69,17 @@ afterEach(async () => {
 });
 
 describe("share image readiness", () => {
-  it.each(["cindy-oss-attach://upload/paste", "xdt-oss-attach://upload/paste"])(
+  it.each([
+    "cindy-oss-attach://upload/paste",
+    "xdt-oss-attach://upload/paste",
+    "cindy-media://blobs/paste",
+    "xdt-image://paste",
+  ])(
     "refreshes %s when its existing upload thumbnail becomes available",
     async (uri) => {
-      const resolve = vi.fn<ResolveRemoteMediaFn>();
+      const resolve = vi.fn<ResolveRemoteMediaFn>(async () => {
+        throw new Error("desktop offline");
+      });
       const messages: ConversationShareMessage[] = [
         {
           ...source,
@@ -94,6 +98,7 @@ describe("share image readiness", () => {
       const oldReady = current.ready;
       expect((await oldReady)[0]?.images?.size).toBe(0);
       expect(thumbs.reads).not.toHaveBeenCalled();
+      resolve.mockClear();
       thumbs.entries.set(uri, "file:///app/sent-attachment-thumbs/paste.png");
       thumbs.version++;
       await act(async () => root.render(render()));
@@ -106,6 +111,22 @@ describe("share image readiness", () => {
       expect(resolve).not.toHaveBeenCalled();
     },
   );
+
+  it("falls back to the controlled resolver if a registered thumbnail cannot be read", async () => {
+    thumbs.entries.set(
+      "cindy-media://paste",
+      "file:///app/sent-attachment-thumbs/paste.png",
+    );
+    thumbs.reads.mockRejectedValueOnce(new Error("file removed"));
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async () => media);
+    await act(async () =>
+      root.render(createElement(Probe, { messages: [source], resolve })),
+    );
+    expect(
+      (await current.ready)[0]?.images?.get("cindy-media://paste")?.uri,
+    ).toBe(media.url);
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps text and completed images when another image times out, ignoring its late result", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
