@@ -203,60 +203,62 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
   const showSourceView = showSource || (svg == null && error != null);
 
   return (
-    <div ref={blockRef} className="group relative my-3">
-      {showSourceView ? (
-        <pre
-          className={cn(
-            'overflow-x-auto rounded-[12px]',
-            'border border-[var(--msg-code-block-border)]',
-            'bg-[var(--msg-code-block-bg)]',
-            'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
-            'select-text',
-          )}
-        >
-          <code className="language-mermaid">{raw}</code>
-        </pre>
-      ) : svg != null ? (
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => setLightboxOpen(true)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              setLightboxOpen(true);
-            }
-          }}
-          aria-label={t('chat.mermaid.clickToZoom')}
-          title={t('chat.mermaid.clickToZoom')}
-          className={cn(
-            'overflow-x-auto rounded-[12px]',
-            'border border-[var(--msg-code-block-border)]',
-            'bg-[var(--msg-code-block-bg)]',
-            'p-4 flex justify-center cursor-zoom-in',
-            // With mermaid's useMaxWidth disabled, SVG carries its intrinsic
-            // width/height. Cap both axes so an oversized diagram shrinks to
-            // fit (preserving aspect ratio via the SVG's viewBox) without
-            // dominating the viewport — fine detail lives in the lightbox.
-            '[&>svg]:!max-w-full [&>svg]:!max-h-[60vh] [&>svg]:!h-auto [&>svg]:!w-auto',
-          )}
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-      ) : (
-        // Initial load (mermaid chunk in flight) — show a quiet placeholder
-        // matching the code-block frame so layout doesn't jump.
-        <pre
-          className={cn(
-            'overflow-x-auto rounded-[12px]',
-            'border border-[var(--msg-code-block-border)]',
-            'bg-[var(--msg-code-block-bg)]',
-            'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
-            'select-text opacity-60',
-          )}
-        >
-          <code className="language-mermaid">{raw}</code>
-        </pre>
-      )}
+    <div ref={blockRef} className="group relative my-3 flex flex-col">
+      <div className="-mt-9">
+        {showSourceView ? (
+          <pre
+            className={cn(
+              'overflow-x-auto rounded-[12px]',
+              'border border-[var(--msg-code-block-border)]',
+              'bg-[var(--msg-code-block-bg)]',
+              'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
+              'select-text',
+            )}
+          >
+            <code className="language-mermaid">{raw}</code>
+          </pre>
+        ) : svg != null ? (
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setLightboxOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setLightboxOpen(true);
+              }
+            }}
+            aria-label={t('chat.mermaid.clickToZoom')}
+            title={t('chat.mermaid.clickToZoom')}
+            className={cn(
+              'overflow-x-auto rounded-[12px]',
+              'border border-[var(--msg-code-block-border)]',
+              'bg-[var(--msg-code-block-bg)]',
+              'p-4 flex justify-center cursor-zoom-in',
+              // With mermaid's useMaxWidth disabled, SVG carries its intrinsic
+              // width/height. Cap both axes so an oversized diagram shrinks to
+              // fit (preserving aspect ratio via the SVG's viewBox) without
+              // dominating the viewport — fine detail lives in the lightbox.
+              '[&>svg]:!max-w-full [&>svg]:!max-h-[60vh] [&>svg]:!h-auto [&>svg]:!w-auto',
+            )}
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        ) : (
+          // Initial load (mermaid chunk in flight) — show a quiet placeholder
+          // matching the code-block frame so layout doesn't jump.
+          <pre
+            className={cn(
+              'overflow-x-auto rounded-[12px]',
+              'border border-[var(--msg-code-block-border)]',
+              'bg-[var(--msg-code-block-bg)]',
+              'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
+              'select-text opacity-60',
+            )}
+          >
+            <code className="language-mermaid">{raw}</code>
+          </pre>
+        )}
+      </div>
 
       {error != null && svg == null ? (
         <div
@@ -272,7 +274,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
 
       <div
         className={cn(
-          'absolute right-2 top-2 flex gap-1',
+          'pointer-events-none order-first sticky top-0 z-10 flex h-9 items-end justify-end gap-1 pr-2 select-none',
           'opacity-0 transition-opacity duration-150',
           'group-hover:opacity-100 focus-within:opacity-100',
         )}
@@ -287,7 +289,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             aria-label={t('chat.mermaid.zoom')}
             title={t('chat.mermaid.zoom')}
             className={cn(
-              'inline-flex h-7 w-7 items-center justify-center',
+              'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
               'rounded-md border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -306,7 +308,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             aria-label={t('chat.mermaid.annotate')}
             title={t('chat.mermaid.annotate')}
             className={cn(
-              'inline-flex h-7 w-7 items-center justify-center',
+              'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
               'rounded-md border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -325,7 +327,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             aria-label={showSourceView ? t('chat.mermaid.viewDiagram') : t('chat.mermaid.viewSource')}
             title={showSourceView ? t('chat.mermaid.viewDiagram') : t('chat.mermaid.viewSource')}
             className={cn(
-              'inline-flex h-7 w-7 items-center justify-center',
+              'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
               'rounded-md border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -346,7 +348,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
           aria-label={copied || copiedImage ? t('chat.mermaid.copied') : t('chat.mermaid.copy')}
           title={copied || copiedImage ? t('chat.mermaid.copied') : t('chat.mermaid.copy')}
           className={cn(
-            'inline-flex h-7 w-7 items-center justify-center',
+            'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
             'rounded-md border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
             'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
