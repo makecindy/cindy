@@ -339,7 +339,8 @@ export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
     },
     {
       outputTokens: ctx.turnOutput,
-      closedDurationMs: ctx.generationDurationMs,
+      // Pi reports output only at message_end, alongside the closed duration.
+      durationMs: ctx.generationDurationMs,
       openStartedAt: ctx.generationOpenAt > 0 ? ctx.generationOpenAt : null,
       reliable: ctx.generationTimingReliable && ctx.generationHeartbeatReliable,
     },
@@ -675,8 +676,7 @@ export function translatePiEvent(
       const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
       ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
-      // Tell the UI generation is active so it can tick the TPS denominator
-      // locally between sparse message_end usage reports.
+      // Activity may advance before usage; the rate retains the last completed sample.
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }

@@ -17024,6 +17024,72 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
+  it('keeps output usage paired with its timing through the next request and resets next turn', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-paired-generation-sample', model: 'gpt-5.4', workingDir: '/repo',
+    });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      await handle.send({ type: 'user', content: 'two requests' });
+      handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 2_000;
+      handlers.tokenUsageUpdated!({
+        threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
+          total: { totalTokens: 110, inputTokens: 10, outputTokens: 100, cachedInputTokens: 0 },
+          last: { inputTokens: 10, outputTokens: 100, cachedInputTokens: 0 },
+        },
+      });
+      const expectSample = (outputTokens: number, generationDurationMs: number) =>
+        expect(handle.getUsageSnapshot()).toMatchObject({
+          outputTokens, generationDurationMs, generationReliable: true,
+        });
+      expectSample(100, 1_000);
+      const tool = { id: 'tool-1', type: 'mcpToolCall', server: 'test', tool: 'read', arguments: {} };
+      handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-1', item: tool });
+      now = 6_000;
+      handlers.itemCompleted!({ threadId: 'start-thread-id', turnId: 'turn-1', item: tool });
+      now = 10_000;
+      handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { id: 'reasoning-2', type: 'reasoning', summary: [], content: [] } });
+      // No second usage yet: 100 / 1s, never 100 / 5s.
+      expectSample(100, 1_000);
+      handlers.tokenUsageUpdated!({
+        threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
+          total: { totalTokens: 520, inputTokens: 20, outputTokens: 500, cachedInputTokens: 0 },
+          last: { inputTokens: 10, outputTokens: 400, cachedInputTokens: 0 },
+        },
+      });
+      expectSample(500, 5_000);
+      now = 11_000;
+      expectSample(500, 5_000);
+      handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      expect(events.find((event) => event.type === 'done')?.data.usage.durationMs).toBe(5_000);
+      expect(events.filter((event) => event.type === 'status').at(-1)?.data).toMatchObject({
+        status: 'Done', outputTokens: 500, generationDurationMs: 5_000,
+      });
+      await handle.send({ type: 'user', content: 'next turn' });
+      expect(handle.getUsageSnapshot().outputTokens).toBe(0);
+      expect(handle.getUsageSnapshot()).not.toHaveProperty('generationDurationMs');
+    } finally {
+      await handle.close();
+      nowSpy.mockRestore();
+    }
+  });
+
   it('attaches throttled token usage to the Done snapshot without an extra running frame', async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -17083,7 +17149,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(doneStatus?.data).toMatchObject({
         isRunning: false,
         outputTokens: 40,
-        generationDurationMs: 250,
+        generationDurationMs: 150,
       });
 
       await handle.close();

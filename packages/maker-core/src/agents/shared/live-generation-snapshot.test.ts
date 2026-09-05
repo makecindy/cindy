@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { attachLiveGeneration } from './live-generation-snapshot.js';
+import { attachLiveGeneration, sampleGenerationDuration } from './live-generation-snapshot.js';
 
 const base = {
   tokenUsage: 120,
@@ -14,7 +14,7 @@ describe('attachLiveGeneration', () => {
     expect(
       attachLiveGeneration(base, {
         outputTokens: 40,
-        closedDurationMs: 1_000,
+        durationMs: 1_000,
         openStartedAt: 10_000,
         reliable: false,
       }),
@@ -26,14 +26,13 @@ describe('attachLiveGeneration', () => {
     });
   });
 
-  it('adds closed duration plus the open interval', () => {
+  it('captures closed duration plus the open interval when usage arrives', () => {
     expect(
       attachLiveGeneration(base, {
         outputTokens: 50,
-        closedDurationMs: 1_000,
+        durationMs: sampleGenerationDuration(1_000, 8_000, 8_250),
         openStartedAt: 8_000,
         reliable: true,
-        now: 8_250,
       }),
     ).toEqual({
       ...base,
@@ -48,10 +47,9 @@ describe('attachLiveGeneration', () => {
     expect(
       attachLiveGeneration(base, {
         outputTokens: 0,
-        closedDurationMs: 0,
+        durationMs: 0,
         openStartedAt: 5_000,
         reliable: true,
-        now: 5_000,
       }),
     ).toEqual({
       ...base,
@@ -59,5 +57,27 @@ describe('attachLiveGeneration', () => {
       generationReliable: true,
       generationActive: true,
     });
+  });
+
+  it('retains the paired usage duration while a later request is in flight', () => {
+    const timing = {
+      outputTokens: 100,
+      durationMs: 1_000,
+      openStartedAt: 8_000,
+      reliable: true,
+    };
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      for (const now of [8_000, 12_000, 18_000]) {
+        nowSpy.mockReturnValue(now);
+        expect(attachLiveGeneration(base, timing)).toMatchObject({
+          outputTokens: 100,
+          generationDurationMs: 1_000,
+          generationActive: true,
+        });
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

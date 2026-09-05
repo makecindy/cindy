@@ -4,6 +4,8 @@ const CLAUDE_GENERATION_SUSPEND_GAP_MS = 30_000;
 export interface ClaudeGenerationState {
   startedAt: number | null;
   durationMs: number;
+  /** Model time sampled with the latest parent output usage. */
+  outputDurationMs: number;
   pendingToolIds: Set<string>;
   /**
    * Pause ids that already resumed this generation. A later pause of the same
@@ -31,6 +33,7 @@ export function newClaudeGenerationState(): ClaudeGenerationState {
   return {
     startedAt: null,
     durationMs: 0,
+    outputDurationMs: 0,
     pendingToolIds: new Set(),
     settledPauseIds: new Set(),
     reliable: true,
@@ -85,6 +88,7 @@ export function resetClaudeGenerationTiming(state: ClaudeGenerationState): void 
   state.pendingToolIds.clear();
   state.settledPauseIds.clear();
   state.durationMs = 0;
+  state.outputDurationMs = 0;
   state.reliable = true;
   state.sawSubagent = false;
   state.parentStreamedOutputIncomplete = false;
