@@ -29,6 +29,8 @@ export interface MobileKeyboardState {
 export function useMobileKeyboardState(): MobileKeyboardState {
   const viewport = useWindowDimensions();
   const [state, setState] = useState(() => {
+    // Web 的 Keyboard shim 没有原生几何快照 API，沿用零占位初值。
+    if (Platform.OS === 'web') return { shown: false, frame: null };
     const frame = Keyboard.metrics() ?? null;
     return {
       shown: Keyboard.isVisible(),

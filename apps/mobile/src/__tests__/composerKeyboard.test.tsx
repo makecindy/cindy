@@ -55,8 +55,12 @@ vi.mock('react-native', async () => {
     Platform: native.platform,
     useWindowDimensions: () => native.viewport,
     Keyboard: {
-      isVisible: () => native.shown,
-      metrics: () => native.metrics,
+      get isVisible() {
+        return native.platform.OS === 'web' ? undefined : () => native.shown;
+      },
+      get metrics() {
+        return native.platform.OS === 'web' ? undefined : () => native.metrics;
+      },
       addListener: (
         name: KeyboardEventName,
         listener: (event: KeyboardEvent) => void,
@@ -378,6 +382,16 @@ describe('composer keyboard geometry and motion', () => {
     expect(native.configure).toHaveBeenLastCalledWith(
       expect.objectContaining({ duration: motionDuration.base }),
     );
+  });
+
+  it('mounts on web without native keyboard snapshot APIs or extra avoidance', () => {
+    native.platform.OS = 'web';
+    render({ inset: 34 });
+    expect(height()).toBe(0);
+    expect(container.querySelector('output')?.getAttribute('data-visible')).toBe('false');
+    expect(container.querySelector('[data-container="kav"]')).not.toBeNull();
+    expect(padding()).toBe('');
+    expect(native.schedule).not.toHaveBeenCalled();
   });
 
   it('removes every keyboard listener on unmount', () => {
