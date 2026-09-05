@@ -67,6 +67,7 @@ const LEARNED_SLUG_PREFIX = 'learned-';
 
 let root: string;
 let manager: MakerMemoryManager;
+let databases: DatabaseCtor.Database[];
 
 /** owner 作用域(登录态)由宿主注入;本测试默认「已就绪」,未登录态单列一个用例。 */
 let ownerAvailable = true;
@@ -79,7 +80,11 @@ function createManager(): MakerMemoryManager {
     ownerScopeKey: () => (ownerAvailable ? 'local:owner-a:1' : 'local:none:1'),
     reloadEnabled: () => memoryEnabled,
     initialEnabled: memoryEnabled,
-    sqliteFactory: (filePath) => new DatabaseCtor(filePath),
+    sqliteFactory: (filePath) => {
+      const database = new DatabaseCtor(filePath);
+      databases.push(database);
+      return database;
+    },
     agents: {},
     logger: noopLogger,
   });
@@ -88,11 +93,15 @@ function createManager(): MakerMemoryManager {
 beforeEach(async () => {
   ownerAvailable = true;
   memoryEnabled = true;
+  databases = [];
   root = await mkdtemp(path.join(tmpdir(), 'bot-memory-chain-'));
   manager = createManager();
 });
 
 afterEach(async () => {
+  // Windows cannot remove fts.db while the manager still owns an open connection.
+  manager.dispose();
+  for (const database of databases) expect(database.open).toBe(false);
   await rm(root, { recursive: true, force: true });
 });
 
