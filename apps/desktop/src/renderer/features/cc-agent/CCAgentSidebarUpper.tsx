@@ -47,7 +47,11 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -96,7 +100,11 @@ import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
-import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
+import {
+  getNotificationsEnabled,
+  getSoundNotificationsEnabled,
+} from '@/hooks/useNotificationSettings';
+import { playSessionEventSound } from '@/lib/notificationSound';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import type { Session } from '@/lib/ccAgent.types';
@@ -1030,12 +1038,19 @@ function ExpandedView({
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
-    (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+    async (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+      // The sound path may await autoplay permission or resource startup. Capture the
+      // current account boundary before that await and drop the event if the user logs
+      // out or switches accounts while the old session notification is still pending.
+      const dataOwnerAtNotification = getDataOwnerGeneration();
       // 灵动岛启用时,完成提示由灵动岛承载,不再走系统 toast,避免同一事件双重打扰;
       // 灵动岛未启用(或平台不支持)时,继续用系统通知。飞书是独立外发通道,不受影响。
       const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
       const desktopEnabled = getNotificationsEnabled() && !islandActive;
       const feishuEnabled = getFeishuNotificationsEnabled();
+      // 应用级提示音(#3177):与桌面通知同一去重形状——岛已承载该事件时岛会播
+      // 自己的音效,这里不再重响。
+      const soundRequested = getSoundNotificationsEnabled() && !islandActive;
       // 失焦才推 —— 见上注释。
       if (typeof document !== 'undefined' && document.hasFocus()) return;
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -1043,6 +1058,24 @@ function ExpandedView({
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
       if (session && isOrcaWorkerSession(session)) return;
+      // 先尝试或合并应用提示音,再决定 toast 是否静音(review P2):
+      // 已播放／已被同类提示音覆盖 → 静音 OS 通知音,避免同批声音叠加;
+      // 主播放失败 → 保持 Electron 默认,让这一条 OS 通知音兜底。
+      let suppressSystemSound = false;
+      if (soundRequested) {
+        const focusAbortController = new AbortController();
+        const abortPendingSound = () => focusAbortController.abort();
+        window.addEventListener('focus', abortPendingSound, { once: true });
+        try {
+          suppressSystemSound = await playSessionEventSound(kind, focusAbortController.signal);
+        } finally {
+          window.removeEventListener('focus', abortPendingSound);
+        }
+      }
+      // play() 最多会等待 500ms；等待期间用户可能已经切回 Cindy。焦点恢复既取消
+      // 待播音频，也终止桌面/飞书/手机与角标的整条通知分发。
+      if (typeof document !== 'undefined' && document.hasFocus()) return;
+      if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;
       void window.electronAPI.notificationMarkSessionAttention(sessionId);
       // 哨兵过投影:toast / 飞书 / 手机推送里都不能出现内部哨兵 "New Maker"。
       // (手机推送用的是**桌面侧**语言 —— 标题在 wire payload 里是字面量,让手机按自己
@@ -1059,6 +1092,7 @@ function ExpandedView({
           desktop: desktopEnabled,
           feishu: feishuEnabled,
           mobile: true,
+          sound: suppressSystemSound,
         },
       });
     },

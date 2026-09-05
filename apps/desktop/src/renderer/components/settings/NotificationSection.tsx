@@ -13,8 +13,17 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 
+import { DefaultOverrideControls } from './DefaultOverrideControls';
+
 export function NotificationSection() {
-  const { enabled, setEnabled } = useNotificationSettings();
+  const {
+    enabled,
+    setEnabled,
+    soundEnabled,
+    soundIsCustomized,
+    setSoundEnabled,
+    resetSoundEnabled,
+  } = useNotificationSettings();
   const { t } = useTranslation();
 
   return (
@@ -49,6 +58,38 @@ export function NotificationSection() {
           onCheckedChange={setEnabled}
           aria-label={t('settings.notifications.sessionDoneAria')}
         />
+      </div>
+
+      {/* 应用提示音(#3177)— 跨平台本地声音通道:OS 通知音可能被勿扰/专注助手
+          吞掉;开启后完成/待回复/出错时由应用播一段内置提示音,该条系统 toast
+          同时静音避免双响。 */}
+      <div
+        className={cn(
+          'flex items-center justify-between gap-3 rounded-xl p-5',
+          'bg-[var(--settings-theme-card-bg)]',
+          'border border-[var(--settings-theme-card-border)]',
+        )}
+      >
+        <div className="flex min-w-0 flex-col gap-1">
+          <p
+            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+            style={{ letterSpacing: '0.12px' }}
+          >
+            {t('settings.notifications.soundLabel')}
+          </p>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.notifications.soundHint')}
+          </p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <DefaultOverrideControls isCustomized={soundIsCustomized} onReset={resetSoundEnabled} />
+          <Switch
+            checked={soundEnabled}
+            onCheckedChange={setSoundEnabled}
+            aria-label={t('settings.notifications.soundAria')}
+          />
+        </div>
       </div>
     </div>
   );
