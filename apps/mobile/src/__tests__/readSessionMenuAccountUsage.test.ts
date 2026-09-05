@@ -163,7 +163,134 @@ describe("existing remote quota compatibility", () => {
     expect(result.windows).toEqual([]);
   });
 
-  it("selects the current model bucket and omits expired observations", async () => {
+  it.each(["official", "legacy"])(
+    "keeps exhausted overall quota alongside the current model quota via %s",
+    async (source) => {
+      const r = reader();
+      const buckets = {
+        codex: {
+          limitId: "codex",
+          secondary: { usedPercent: 100, windowMinutes: 10080 },
+        },
+        spark: {
+          limitId: "spark",
+          limitName: "GPT-5.3-Codex-Spark",
+          primary: { usedPercent: 20, windowMinutes: 300 },
+        },
+        other: {
+          limitId: "other",
+          limitName: "Another Model",
+          primary: { usedPercent: 40 },
+        },
+      };
+      if (source === "official") {
+        r.getCodexRateLimits.mockResolvedValue({
+          ...quota(),
+          rateLimitsByLimitId: buckets,
+        });
+      } else {
+        r.getCodexRateLimits.mockRejectedValue({ code: "CHANNEL_NOT_ALLOWED" });
+        r.getAccountUsage.mockResolvedValue({ appServerBuckets: buckets });
+      }
+      const result = await readSessionMenuAccountUsage(
+        { ...session, model: "gpt-5.3-codex-spark" },
+        r,
+      );
+      expect(result.windows).toEqual([
+        {
+          id: "secondary",
+          remainingPercent: 0,
+          minutes: 10080,
+          resetsAt: null,
+        },
+        {
+          id: "model:primary",
+          modelLabel: "GPT-5.3-Codex-Spark",
+          remainingPercent: 80,
+          minutes: 300,
+          resetsAt: null,
+        },
+      ]);
+    },
+  );
+
+  it("does not duplicate the generic bucket when no model bucket matches", async () => {
+    const r = reader();
+    r.getCodexRateLimits.mockResolvedValue({
+      ...quota(),
+      rateLimitsByLimitId: {
+        __default__: { primary: { usedPercent: 10 } },
+        codex: { limitId: "codex", primary: { usedPercent: 80 } },
+        other: {
+          limitId: "other",
+          limitName: "Another Model",
+          primary: { usedPercent: 40 },
+        },
+      },
+    });
+    const result = await readSessionMenuAccountUsage(session, r);
+    expect(result.windows).toEqual([
+      { id: "primary", remainingPercent: 20, minutes: null, resetsAt: null },
+    ]);
+  });
+
+  it.each(["gpt-5.3-codex-spark", "another-model"])(
+    "only shows a matching model bucket when overall quota is absent: %s",
+    async (model) => {
+      const r = reader();
+      r.getCodexRateLimits.mockResolvedValue({
+        ...quota(),
+        rateLimitsByLimitId: {
+          spark: {
+            limitId: "spark",
+            limitName: "GPT-5.3-Codex-Spark",
+            primary: { usedPercent: 20 },
+          },
+        },
+      });
+      const result = await readSessionMenuAccountUsage(
+        { ...session, model },
+        r,
+      );
+      expect(result.windows).toEqual(
+        model === "another-model"
+          ? []
+          : [
+              {
+                id: "model:primary",
+                modelLabel: "GPT-5.3-Codex-Spark",
+                remainingPercent: 80,
+                minutes: null,
+                resetsAt: null,
+              },
+            ],
+      );
+    },
+  );
+
+  it("retains the oldest bucket timestamp when combining legacy observations", async () => {
+    const r = reader();
+    r.getCodexRateLimits.mockRejectedValue({ code: "CHANNEL_NOT_ALLOWED" });
+    r.getAccountUsage.mockResolvedValue({
+      updatedAt: 3000,
+      appServerBuckets: {
+        codex: { updatedAt: 1000, primary: { usedPercent: 100 } },
+        spark: {
+          limitName: "GPT-5.3-Codex-Spark",
+          updatedAt: 2000,
+          primary: { usedPercent: 20 },
+        },
+      },
+    });
+    const result = await readSessionMenuAccountUsage(
+      { ...session, model: "gpt-5.3-codex-spark" },
+      r,
+    );
+    expect(result.updatedAt).toBe(1000);
+    expect(result.windows).toHaveLength(2);
+  });
+
+  it("keeps both buckets while omitting expired observations", async () => {
     const r = reader();
     r.getCodexRateLimits.mockResolvedValue({
       ...quota(),
@@ -182,7 +309,14 @@ describe("existing remote quota compatibility", () => {
       r,
     );
     expect(result.windows).toEqual([
-      { id: "primary", remainingPercent: 90, minutes: null, resetsAt: null },
+      { id: "primary", remainingPercent: 10, minutes: null, resetsAt: null },
+      {
+        id: "model:primary",
+        modelLabel: "GPT-5.3-Codex-Spark",
+        remainingPercent: 90,
+        minutes: null,
+        resetsAt: null,
+      },
     ]);
   });
 });

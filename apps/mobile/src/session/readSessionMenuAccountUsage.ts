@@ -157,45 +157,58 @@ function projectCodexAccount(
 ): SessionMenuAccountUsage {
   const payload = record(raw);
   const now = Date.now();
-  const selected = record(
-    selectCodexUsageForModel({
-      fallback: raw,
-      byLimitId,
-      appServerBuckets: payload.appServerBuckets,
-      modelId,
-      nowMs: now,
-    }),
-  );
-  const updatedAt = selected.updatedAt ?? payload.updatedAt;
+  const input = {
+    fallback: raw,
+    byLimitId,
+    appServerBuckets: payload.appServerBuckets,
+    nowMs: now,
+  };
+  // Generic and model-specific limits both apply. Reuse the shared selector's
+  // source precedence, generic aliases and stale-bucket rules for both reads.
+  const generic = selectCodexUsageForModel(input);
+  const selected = selectCodexUsageForModel({ ...input, modelId });
+  const selectedPlan = record(selected).planType;
+  const snapshots = [...new Set([generic, selected])]
+    .filter(Boolean)
+    .map(record);
+  const timestamps = snapshots
+    .map((snapshot) => snapshot.updatedAt ?? payload.updatedAt ?? observedAt)
+    .filter(finite);
   const windows: SessionMenuAccountUsage["windows"] = [];
-  for (const id of ["primary", "secondary"] as const) {
-    const window = record(selected[id]);
-    const used = window.usedPercent;
-    if (typeof used !== "number" || !Number.isFinite(used)) continue;
-    const resetsAt =
-      typeof window.resetsAt === "number" && Number.isFinite(window.resetsAt)
-        ? window.resetsAt
-        : null;
-    if (resetsAt !== null && resetsAt * 1000 <= now) continue;
-    windows.push({
-      id,
-      minutes:
-        typeof window.windowMinutes === "number" &&
-        Number.isFinite(window.windowMinutes)
-          ? window.windowMinutes
-          : null,
-      remainingPercent: Math.max(0, Math.min(100, 100 - used)),
-      resetsAt,
-    });
+  for (const snapshot of snapshots) {
+    const modelLabel =
+      snapshot !== generic
+        ? typeof snapshot.limitName === "string"
+          ? snapshot.limitName
+          : modelId
+        : undefined;
+    for (const id of ["primary", "secondary"] as const) {
+      const window = record(snapshot[id]);
+      const used = window.usedPercent;
+      if (typeof used !== "number" || !Number.isFinite(used)) continue;
+      const resetsAt =
+        typeof window.resetsAt === "number" && Number.isFinite(window.resetsAt)
+          ? window.resetsAt
+          : null;
+      if (resetsAt !== null && resetsAt * 1000 <= now) continue;
+      windows.push({
+        id: modelLabel ? `model:${id}` : id,
+        ...(modelLabel ? { modelLabel } : {}),
+        minutes:
+          typeof window.windowMinutes === "number" &&
+          Number.isFinite(window.windowMinutes)
+            ? window.windowMinutes
+            : null,
+        remainingPercent: Math.max(0, Math.min(100, 100 - used)),
+        resetsAt,
+      });
+    }
   }
   return {
     source: "chatgpt",
     accountOnly,
-    plan: typeof selected.planType === "string" ? selected.planType : plan,
-    updatedAt:
-      typeof updatedAt === "number" && Number.isFinite(updatedAt)
-        ? updatedAt
-        : observedAt,
+    plan: typeof selectedPlan === "string" ? selectedPlan : plan,
+    updatedAt: timestamps.length > 0 ? Math.min(...timestamps) : observedAt,
     windows,
     amounts: [],
   };
