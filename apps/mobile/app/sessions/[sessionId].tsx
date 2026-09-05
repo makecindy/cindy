@@ -62,6 +62,8 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
+import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
+import { GestureDetector } from '@/platform/gestureHandler';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
 import type { TextInput as NativeTextInput } from 'react-native';
 import { ScreenBackButton } from '@/components/MobilePrimitives';
@@ -143,6 +145,7 @@ import {
   useShareSelectionRevision,
 } from '@/session/shareSelectionStore';
 import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
+import { createComposerDraftSource, useComposerVoiceDraftWriter, type ComposerDraftSource } from '@/session/composerDraftSource';
 import { InlineQueueSection } from '@/session/InlineQueueSection';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
 import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
@@ -1013,14 +1016,13 @@ export default function SessionScreen() {
   const taskUpdates = useSessionTaskUpdates(sessionId);
   const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);
   const [composerDraftStateKey, setComposerDraftStateKey] = useState(activeComposerDraftScopeKey);
-  const [composerDocument, setComposerDocumentState] = useState<ComposerDocument>(
-    () => readImmediateComposerDraftScope(sessionId, routeDraft).document,
+  const [composerDraftSource, setComposerDraftSource] = useState(() =>
+    createComposerDraftSource(readImmediateComposerDraftScope(sessionId, routeDraft).document),
   );
-  const [draft, setDraft] = useState(() => composerDocumentProjectedText(composerDocument));
   const [composerDraftHydrated, setComposerDraftHydrated] = useState(false);
   const appliedRouteDraftRef = useRef<string | null>(null);
-  const draftRef = useRef(draft);
-  const composerDocumentRef = useRef<ComposerDocument>(composerDocument);
+  const draftRef = useRef(composerDraftSource.getSnapshot().draft);
+  const composerDocumentRef = useRef<ComposerDocument>(composerDraftSource.getSnapshot().document);
   // replaceParams 复用同一 SessionScreen。任务参数变化的这次 render 仍拿着 A 的
   // state；若直接让 key={sessionId} 子树挂载，B 编辑器会先用 A 文档初始化，再等
   // 被动 effect 水合纠正。沿本页 read-ack 的 render-phase 换代模式同步种入 B 的
@@ -1029,8 +1031,7 @@ export default function SessionScreen() {
     const nextScope = readImmediateComposerDraftScope(sessionId, routeDraft);
     const nextDraft = composerDocumentProjectedText(nextScope.document);
     setComposerDraftStateKey(activeComposerDraftScopeKey);
-    setComposerDocumentState(nextScope.document);
-    setDraft(nextDraft);
+    setComposerDraftSource(createComposerDraftSource(nextScope.document));
     setComposerDraftHydrated(false);
     // 旧 A 的 AsyncStorage promise 可能在 effect cleanup 前落定；先让它的 key 失配。
     // 保持 null 也确保 B 的 effect 仍会继续异步 hydrate 磁盘草稿与冷启动引用。
@@ -1158,9 +1159,6 @@ export default function SessionScreen() {
     });
     return () => { cancelled = true; };
   }, [mode, shareCharacterSrc, shareLogoSrc, shareSelectionActive]);
-  const [composerFocused, setComposerFocused] = useState(false);
-  const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
-  const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
   // Context 面板(+ 号弹出的可拖动 sheet):open + 面板内子视图(主视图 / 截图列表 / 目标模式)。
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
   const [contextSheetView, setContextSheetView] = useState<'main' | 'screenshots' | 'goal'>('main');
@@ -1324,6 +1322,9 @@ export default function SessionScreen() {
       }
     };
   }, [sessionId, removePendingUpload]);
+  const [voiceStartPending, setVoiceStartPending] = useState(false);
+  const voiceStartPendingSeqRef = useRef(0);
+  const voiceStartedOnPressInRef = useRef(false);
   const [voiceState, setVoiceStateInternal] = useState<MobileVoiceState>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
@@ -1519,13 +1520,6 @@ export default function SessionScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
   const [routeFocusedClientId, setRouteFocusedClientId] = useState<string | null>(null);
-  const [slashCommands, setSlashCommands] = useState<MobileSlashCommand[]>([]);
-  const [slashPaletteLoading, setSlashPaletteLoading] = useState(false);
-  const [slashPaletteError, setSlashPaletteError] = useState<string | null>(null);
-  const [atResources, setAtResources] = useState<MobileAtResourceItem[]>([]);
-  const [atPaletteLoading, setAtPaletteLoading] = useState(false);
-  const [atPaletteError, setAtPaletteError] = useState<string | null>(null);
-  const [atResourcesTruncated, setAtResourcesTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
@@ -1863,9 +1857,6 @@ export default function SessionScreen() {
   const voiceStopAfterStartRef = useRef(false);
   const finishVoiceRecordingRef = useRef<(() => void) | null>(null);
   const composerInputRef = useRef<ComposerRichInputHandle | null>(null);
-  const composerScrollViewRef = useRef<ScrollView>(null);
-  const composerScrollEnabledRef = useRef(false);
-  const voiceDraftScrollRef = useRef<ScrollView>(null);
   const voiceControllerSessionRef = useRef<MobileVoiceControllerSession | null>(null);
   const voiceDictionaryLearningTrackerRef = useRef<MobileVoiceDictionaryLearningTracker | null>(null);
   const sendLatestRef = useRef<((options?: {
@@ -1873,9 +1864,14 @@ export default function SessionScreen() {
     documentOverride?: ComposerDocument;
   }) => Promise<void>) | null>(null);
   const sendButtonRef = useRef<View>(null);
+  const composerSendTargetEnabledRef = useRef(false);
+  // Match the keyed palette lifetime. Old requests/cleanup retain their old
+  // reference and cannot affect command dispatch in the next draft scope.
+  const slashCommandsRef = useMemo<RefObject<MobileSlashCommand[]>>(
+    () => ({ current: [] }),
+    [activeComposerDraftScopeKey],
+  );
   const sendButtonFrameRef = useRef<{ height: number; width: number; x: number; y: number } | null>(null);
-  const slashLoadSeqRef = useRef(0);
-  const atLoadSeqRef = useRef(0);
   const capabilitiesLoadSeqRef = useRef(0);
   const alternateCapabilitiesLoadSeqRef = useRef(0);
   const agentSwitchIntentLoadSeqRef = useRef(0);
@@ -2253,26 +2249,9 @@ export default function SessionScreen() {
     hasSyncedThisOpen: lastSyncedAt !== null,
     remoteUnavailable: !!remoteUnavailableReason,
   });
-  const composerTrigger = useMemo(() => detectComposerTrigger(draft), [draft]);
-  const visibleSlashCommands = useMemo(
-    () => canUseComposer && composerTrigger.kind === 'slash'
-      ? filterSlashCommands(mergeMobileLocalSlashCommands(slashCommands), composerTrigger.query, 5)
-      : [],
-    [canUseComposer, composerTrigger, slashCommands],
-  );
-  const visibleAtResources = useMemo(
-    () => canUseComposer && composerTrigger.kind === 'at'
-      ? filterAtResources(atResources, composerTrigger.query, 5)
-      : [],
-    [atResources, canUseComposer, composerTrigger],
-  );
-  const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
-  const voiceIsListening = voiceState === 'listening';
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
-  const voiceIsBusy = voiceIsListening || voiceIsProcessing;
+  const composerSendUnavailableReason = canUseComposer ? null : composerDisabledReason;
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
-  const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
-  const composerHasText = draft.trim().length > 0;
   const canStopQueue = !!stopOptionsForProjection(inputProjection)
     && !inputProjection.queuePaused
     && !inputProjection.queueAbortPending;
@@ -2461,104 +2440,16 @@ export default function SessionScreen() {
       ? t('session.screen.nextAgentSwitch', { agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind), model: composerRuntimeSummary.modelSummary })
       : composerRuntimeSummary.modelSummary
     : '';
-  const composerSendUnavailableReason = canUseComposer ? null : composerDisabledReason;
-  // 引用已是 ComposerDocument 内的 atom；排队编辑同样可能只有引用而没有可见
-  // 文本，因此必须计入 payload，否则「保存修改」会被错误禁用。
-  const composerQuoteCount = composerDocumentQuotes(composerDocument).length;
-  // Context 面板是 Modal sheet,不再有内联附件面板 → attachmentPickerOpen 恒 false。
-  const composerLayout = useMemo(() => buildSessionComposerLayout({
-    attachmentBusy: false,
-    // pending(乐观上传中)计入:拍完照 / 选完文件立即可点发送,send() 内部会等落定。
-    attachmentCount: attachments.length + pendingUploads.length,
-    attachmentPickerOpen: false,
-    // Stop 的可见性跟随真实运行 / 队列状态；断线时只单独禁用交互。
-    canStop: canStopComposer,
-    draftText: draft,
-    queueBusy,
-    quoteCount: composerQuoteCount,
-    sendUnavailableReason: composerSendUnavailableReason,
-    sending,
-    voiceState,
-  }), [
-    attachments.length,
-    pendingUploads.length,
-    canStopComposer,
-    canUseComposer,
-    composerQuoteCount,
-    composerSendUnavailableReason,
-    draft,
-    i18nInstance.language,
-    queueBusy,
-    sending,
-    voiceState,
-  ]);
-  const compactComposer = composerLayout.density === 'compact';
-  // 「按下即录」的乐观反馈(对齐桌面 activeRecording = listening || longPressActive):
-  // pressIn 发起启动的同时置 pending,胶囊立刻展开计时,不等 ASR/权限链路把 state
-  // 翻到 listening——否则启动慢时按钮有一段「按了没反应」。启动完成(成功进
-  // listening / 失败报错)后由 finally 收回;成功路径收回时 listening 已为 true,
-  // 计时输入保持连续,不会闪断重置。声明在槽位 flags 之前:pending 期就要占住发送槽。
-  const [voiceStartPending, setVoiceStartPending] = useState(false);
-  // pending 的世代号:本组件会随 sessionId 复用,上一个会话的启动收尾不能把
-  // 当前会话刚展开的乐观胶囊收掉——finally 只在世代未前进时清 pending。
-  const voiceStartPendingSeqRef = useRef(0);
-  // pressIn 已起录的标记:同一次手势的松手(onPress)不能再被当作「再点一下停止」。
-  const voiceStartedOnPressInRef = useRef(false);
-  // 发送槽双语义(对齐桌面 ChatInput 的主槽判定,voice busy = listening|submitting|refining):
-  // 任务执行中且发送不可用、又没有语音在进行时,停止任务顶替发送位;语音一旦开始,
-  // 发送键回到发送位(录音期=「结束并发送」,润色期=禁用态占位),停止任务退到
-  // 语音按钮**左边**的独立槽。语音按钮由此永远是发送槽的左邻,右缘位置与是否有
-  // 草稿/是否录音/任务是否执行全部无关——录音胶囊只向左生长,「原地再点一下」
-  // 永远是停止录音,不会误停任务。
-  const composerSendSlotIsStop = composerLayout.stop.visible
-    && composerLayout.send.disabled
-    && !sending
-    && !voiceIsBusy
-    && !voiceStartPending;
-  // 只有确定性不可用(撤权 / 关闭远控等)才禁发送；普通断线与自动恢复状态仍可发，
-  // 消息进入本地 outbox 等连接恢复。输入框在两类状态下都保持可编辑与持久化。
-  const composerSendDisabled = composerLayout.send.disabled;
-  const composerStopDisabled = composerLayout.stop.disabled || !canUseRemoteSessionControls;
-  const composerStopDisabledReason = !canUseRemoteSessionControls
-    ? remoteUnavailableReason ?? t('session.menu.aiRenameOffline')
-    : composerLayout.stop.disabledReason;
-  const composerShowInlineStop = composerLayout.stop.visible && !composerSendSlotIsStop && !sending;
-  const composerHasPayload = composerHasText || attachments.length > 0 || pendingUploads.length > 0 || composerQuoteCount > 0;
-  // send.visible 在语音生命周期内恒 true(sessionOperation.ts),这里不再按
-  // voiceIsListening 二次过滤——那正是「首段转写落地瞬间发送键冒出来」的跳变源。
-  // 乐观 pending 期(state 还是 idle)同样要占住发送槽:否则空草稿按下语音时
-  // 胶囊先在 12pt 档展开,listening 一到发送键出现又整体跳到 52pt 档。
-  const composerShowSendButton = composerLayout.send.visible || voiceStartPending;
-  const composerVoicePlacement = voiceUiAvailable
-    ? resolveMobileComposerVoiceButtonPlacement({
-      // 行尾有发送或占发送位的停止按钮时让位;附件-only(无文字)同样命中。
-      hasTrailingAction: composerSendSlotIsStop || composerShowSendButton,
-    })
-    : undefined;
-  // 录音计时(红点+m:ss 胶囊);pillWidth 同时驱动语音按钮与工具排占位 slot,
-  // 胶囊展开时把左邻的停止任务按钮推开,而不是盖住它。expanded 含乐观 pending
-  // (按下即展开),counting 只认真实采集(listening)——启动链路(权限弹窗等)
-  // 不计入录音时长,pending 期显示静止的 0:00。
-  const voiceRecordingTimer = useMobileVoiceRecordingTimer({
-    expanded: voiceIsListening || voiceStartPending,
-    counting: voiceIsListening,
-  });
-  const composerEffectiveContentHeight = composerInputContentHeight;
-  const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
-  // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
-  // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
-  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
   const nativeShellLayout = useMemo(() => buildSessionNativeShellLayout({
     attachmentPickerOpen: false,
     keyboardHeight: keyboardState.height,
     keyboardVisible: keyboardState.visible,
-    paletteOpen: composerTrigger.kind === 'slash' || composerTrigger.kind === 'at',
+    paletteOpen: false,
     platform: Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
     safeAreaBottomInset: insets.bottom,
     screenHeight: windowDimensions.height,
     screenWidth: windowDimensions.width,
   }), [
-    composerTrigger.kind,
     insets.bottom,
     keyboardState.height,
     keyboardState.visible,
@@ -2695,129 +2586,11 @@ export default function SessionScreen() {
   const handleDrawerGoHome = useCallback(() => {
     queueDrawerNavigation(() => router.dismissTo('/'));
   }, [queueDrawerNavigation, router]);
-  // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
-  // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
-  // 否则「拖回单行退出激活态」永远收不回去。
-  // 语音结束后草稿仍有内容时经 hold 保持展开(一行文字也不收),
-  // 不随 voiceIsBusy 归零塌回简洁态。
-  const composerVoiceHoldActive = resolveComposerVoiceHoldActive({
-    armed: composerVoiceHoldArmed,
-    draftText: draft,
-  });
-  const composerCardActive = (canUseComposer && composerFocused)
-    || modelSheetOpen
-    || permissionSheetOpen
-    || voiceIsBusy
-    || composerVoiceHoldActive;
-  useComposerCardTransition(composerCardActive, keyboardState);
-  const composerChromeHeight = useMemo(() => {
-    const statusReserve = voiceStatusVisible
-      ? COMPOSER_STATUS_ROW_RESERVED_HEIGHT + COMPOSER_STACK_GAP_HEIGHT
-      : 0;
-    const rowChrome = composerCardActive
-      ? COMPOSER_CARD_ROW_CHROME_HEIGHT
-      : COMPOSER_INPUT_ROW_CHROME_HEIGHT;
-    return COMPOSER_VERTICAL_PADDING_HEIGHT + statusReserve + rowChrome;
-  }, [composerCardActive, voiceStatusVisible]);
-  const composerInputMaxContentHeight = useMemo(() => {
-    const availableHeight = nativeShellLayout.composerMaxHeight - composerChromeHeight;
-    return Math.min(
-      COMPOSER_INPUT_MAX_CONTENT_HEIGHT,
-      Math.max(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT, availableHeight),
-    );
-  }, [composerChromeHeight, nativeShellLayout.composerMaxHeight]);
-  // 下拉收起 = 退出聚焦激活态(模型浮窗已是独立 Modal,拖拽手势够不到它,无需在此关闭)。
-  // 语音结束 hold 态未聚焦,blur 是 no-op,需显式解除 hold 才能收回简洁态。
-  const handleComposerSnapToAuto = useCallback(() => {
-    setComposerVoiceHoldArmed(false);
-    composerInputRef.current?.blur();
-  }, []);
-  // grabber touch-down 同步关掉外壳滚动(setNativeProps 直改原生属性)。这里
-  // 绝不能走 setState:本页 re-render 很重,touch-down 触发渲染会阻塞 JS 线程,
-  // 手势 move 事件被合并延后,位移在 PanResponder grant 重置 dx/dy 前全部丢失,
-  // 拖拽调高变成「没反应」(实测第一个 move 到达时位移已累计 -180px)。
-  const handleGrabberTouchActiveChange = useCallback((active: boolean) => {
-    composerScrollViewRef.current?.setNativeProps({
-      scrollEnabled: active ? false : composerScrollEnabledRef.current,
-    });
-  }, []);
-  const composerResize = useComposerResize({
-    autoMaxContentHeight: composerInputMaxContentHeight,
-    // 简洁态一律收到单行(下拉收起和点别处收键盘的结果一致);
-    // auto / manual 记忆保留,重新聚焦后恢复。
-    collapsed: !composerCardActive,
-    composerChromeHeight,
-    contentHeight: composerEffectiveContentHeight,
-    keyboardHeight: keyboardState.visible ? keyboardState.height : 0,
-    onGrabberTouchActiveChange: handleGrabberTouchActiveChange,
-    onSnapToAuto: handleComposerSnapToAuto,
-    singleLineContentHeight: COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT,
-    windowHeight: windowDimensions.height,
-  });
-  composerResizeDraggingRef.current = composerResize.dragging;
-  // manual 高度跨聚焦/失焦、键盘开合保留(用户拖出的高度是显式意图);
-  // 唯一自然失效点:草稿清空(发送成功/删光)回 auto,避免空输入框残留定高。
-  const composerResizeReset = composerResize.reset;
-  useEffect(() => {
-    if (draft.length === 0) {
-      composerResizeReset();
-      // 草稿清空(发送成功/删光)后语音结束 hold 也失去意义,一并解除。
-      setComposerVoiceHoldArmed(false);
-    }
-  }, [draft, composerResizeReset]);
-  const composerInputIsMultiline = composerResize.dragging
-    || composerResize.mode === 'manual'
-    || (draft.length > 0
-      && (draft.includes('\n') || composerEffectiveContentHeight > COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD));
-  const composerInputVisibleHeight = composerResize.visibleContentHeight;
-  const composerInputScrollEnabled = composerResize.scrollEnabled;
-  const composerShellHasScrollableContent = attachments.length > 0
-    || pendingUploads.length > 0
-    || attachmentError !== null
-    || composerTrigger.kind === 'slash'
-    || composerTrigger.kind === 'at';
-  // 外壳滚动只在真有可滚内容(附件托盘/附件面板/触发面板)时启用:输入区自增长
-  // 本来就被 cap 在容器内,没有附件时启用滚动只会让原生滚动手势与 grabber 拖拽
-  // 竞争、吞掉 move 事件。有可滚内容时由 handleGrabberTouchActiveChange 在
-  // touch-down 同步关闸(见上),这里只维护声明式的目标值。
-  const composerScrollEnabled = nativeShellLayout.composerScrollEnabled
-    && !composerResize.dragging
-    && composerShellHasScrollableContent;
-  composerScrollEnabledRef.current = composerScrollEnabled;
-  const handleComposerInputContentSizeChange = useCallback((event: TextInputContentSizeChangeEvent) => {
-    const nextHeight = Math.max(
-      COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT,
-      Math.ceil(event.nativeEvent.contentSize.height),
-    );
-    setComposerInputContentHeight((currentHeight) => (
-      Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
-    ));
-  }, []);
-  const handleComposerRichInputHeight = useCallback((height: number) => {
-    const nextHeight = Math.max(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT, Math.ceil(height));
-    setComposerInputContentHeight((currentHeight) => (
-      Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
-    ));
-  }, []);
   const handleComposerInputPressIn = useCallback(() => {
     if (voiceRecordingActiveRef.current || voiceState === 'listening') {
       finishVoiceRecordingRef.current?.();
     }
   }, [voiceState]);
-  const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {
-    const lines = event.nativeEvent.lines;
-    const lastLine = lines[lines.length - 1];
-    if (!lastLine) return;
-    const nextFrame = {
-      left: Math.max(0, Math.round(lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP)),
-      top: Math.max(0, Math.round(lastLine.y + ((lastLine.height - COMPOSER_INPUT_LINE_HEIGHT) / 2))),
-    };
-    setVoiceDraftCaretFrame((currentFrame) => (
-      currentFrame.left === nextFrame.left && currentFrame.top === nextFrame.top
-        ? currentFrame
-        : nextFrame
-    ));
-  }, []);
   const openSessionMenu = useCallback((view: SessionMenuView = 'menu') => {
     setMenuInitialView(view);
     setSettingsOpen(true);
@@ -2831,171 +2604,6 @@ export default function SessionScreen() {
     setSessionTreePendingOpen(false);
     setSessionTreeOpen(true);
   }, [sessionTreePendingOpen]);
-  const renderComposerResizeHandle = () => (
-    <ComposerResizeGrabber
-      onAdjust={composerResize.adjustByLine}
-      panHandlers={composerResize.panHandlers}
-      testID="session.composerResizeGrabber"
-      visible
-    />
-  );
-  // 聚焦卡片形态的底部工具排:[+][模型] …… [语音][停止/发送]。
-  // + 号打开 Context 面板(附件 / 计划模式 / 目标模式收在面板内);权限模式入口收进会话设置。
-  // 权限模式图标钮(2026-07-29 用户裁决,对齐 Codex,与新建页同位同款):
-  // 只显示档位图标,不带文字;危险档(auto / bypass)只染图标色。
-  const renderSessionPermissionButton = () => {
-    const presentation = permissionPresentation(displayPermissionMode, displayPermissionLabel);
-    const accent = presentation.accent !== 'neutral'
-      ? permissionAccentColor(presentation.accent, colors)
-      : null;
-    return (
-      <RouteActionButton
-        accessibilityLabel={t('models.picker.permissionModeAccessibility', { mode: presentation.label })}
-        active={permissionSheetOpen}
-        disabled={controlBusy || !canUseRemoteSessionControls}
-        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-        onPress={() => {
-          setModelSheetOpen(false);
-          setPermissionSheetSnap('half');
-          setPermissionSheetOpen(true);
-        }}
-        style={[
-          styles.composerInlineToolButton,
-          permissionSheetOpen && styles.composerToolButtonActive,
-        ]}
-        testID="session.permissionIndicator"
-      >
-        <presentation.Icon
-          color={accent ?? colors.textSecondary}
-          size={iconSize.sm}
-          strokeWidth={iconStroke.regular}
-        />
-      </RouteActionButton>
-    );
-  };
-
-  // 工具条布局:左 = [+][权限][计划 chip][模型];右 = [停止][语音][发送]。
-  // 模型放左侧组,不随发送/停止出现而横向跳动。
-  const renderComposerToolbar = () => (
-    <>
-      <ComposerToolbarLeftGroup testID="session.composerToolbarLeft">
-        {renderComposerAttachmentButton()}
-        {renderSessionPermissionButton()}
-        {planModeOn ? (
-          <PlanModeChip
-            disabled={controlBusy || !canUseRemoteSessionControls}
-            onExit={() => togglePlanMode(false)}
-            testID="session.planModeChip"
-          />
-        ) : null}
-        {composerRuntimeSummary ? (
-          <ComposerRuntimePill
-            disabled={controlBusy || !canUseRemoteSessionControls}
-            fastOn={composerPillFastOn}
-            label={composerRuntimeLabel}
-            leading={agentSwitchIntent ? (
-              <MobileAgentMark
-                agentKind={agentSwitchIntent.targetAgentKind}
-                color={colors.textSecondary}
-                size={iconSize.sm}
-              />
-            ) : composerPillSourceId ? (
-              // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
-              // 不静默换成 activeSourceId 的默认回退 Logo。
-              <MobileModelIconMark
-                color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
-                icon={currentSession && composerPillSourceProvider
-                  ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
-                  : undefined}
-                name={composerPillSourceProvider?.name ?? composerPillSourceId}
-                providerId={composerPillSourceId}
-                routing={composerPillSourceProvider?.routing}
-                logoKind={composerPillSourceProvider?.logoKind}
-              />
-            ) : null}
-            onPress={toggleComposerModelPicker}
-            testID="session.composerModelButton"
-          />
-        ) : null}
-      </ComposerToolbarLeftGroup>
-      <ComposerToolbarSpacer />
-      {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边(对齐桌面),
-          语音占位宽度随录音胶囊(红点+计时)展开,把停止任务推开——语音右缘与发送槽
-          的邻接关系全程不变。模型在 spacer 左侧,不随右段显隐横向跳动。 */}
-      {renderComposerInlineStop()}
-      {composerVoicePlacement?.inline || composerVoicePlacement?.floating
-        ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
-        : null}
-      {renderComposerSendSlot()}
-    </>
-  );
-  const renderComposerInputOverlay = () => voiceIsListening ? (
-    // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
-    // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
-    // 的 view,它根本收不到触摸——把停听写挂在 WebView 的 focus / touch 上都不成立
-    // (focus 还会被 WKWebView 自己恢复焦点误触发,掐断刚开始的听写)。
-    <Pressable
-      accessibilityLabel={t('session.common.voiceStopRecording')}
-      accessibilityRole="button"
-      // onPressIn 给手指「触摸即停」的即时手感;onPress 是无障碍激活(VoiceOver /
-      // TalkBack 的 activate 只走 onPress,不会派发 onPressIn)的唯一入口,两者都要挂。
-      // handler 幂等:finishVoiceRecording 有 voiceStopInFlight 门,重复调用是 no-op。
-      onPress={handleComposerInputPressIn}
-      onPressIn={handleComposerInputPressIn}
-      style={styles.voiceDraftOverlay}
-      testID="session.voiceDraftOverlay"
-    >
-      <ScrollView
-        ref={voiceDraftScrollRef}
-        contentContainerStyle={[
-          styles.voiceDraftOverlayContent,
-          !composerCardActive && styles.voiceDraftOverlayContentGeometric,
-        ]}
-        onContentSizeChange={() => {
-          requestAnimationFrame(() => {
-            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
-          });
-        }}
-        onLayout={() => {
-          requestAnimationFrame(() => {
-            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
-          });
-        }}
-        pointerEvents="none"
-        scrollEnabled={composerInputScrollEnabled}
-        showsVerticalScrollIndicator={false}
-        style={styles.voiceDraftScroll}
-      >
-        {voiceDraftShowsListeningPrompt ? (
-          <View style={styles.voiceDraftListeningPrompt}>
-            <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
-            <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
-          </View>
-        ) : (
-          <View style={styles.voiceDraftMeasuredBlock}>
-            <Text
-              onTextLayout={handleVoiceDraftTextLayout}
-              style={styles.voiceDraftText}
-            >
-              {draft}
-            </Text>
-            <View
-              pointerEvents="none"
-              style={[
-                styles.voiceDraftCaretOverlay,
-                {
-                  left: voiceDraftCaretFrame.left,
-                  top: voiceDraftCaretFrame.top,
-                },
-              ]}
-            >
-              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
-            </View>
-          </View>
-        )}
-      </ScrollView>
-    </Pressable>
-  ) : null;
   const measureSendButtonTarget = useCallback(() => {
     sendButtonRef.current?.measureInWindow((x, y, width, height) => {
       sendButtonFrameRef.current = { x, y, width, height };
@@ -3003,14 +2611,14 @@ export default function SessionScreen() {
   }, []);
   const isPointInsideSendButton = useCallback((event: GestureResponderEvent) => {
     const frame = sendButtonFrameRef.current;
-    if (!composerShowSendButton || !frame || composerLayout.send.disabled || !canUseComposer) return false;
+    if (!composerSendTargetEnabledRef.current || !frame || !canUseComposer) return false;
     const { pageX, pageY } = event.nativeEvent;
     const pad = 10;
     return pageX >= frame.x - pad
       && pageX <= frame.x + frame.width + pad
       && pageY >= frame.y - pad
       && pageY <= frame.y + frame.height + pad;
-  }, [canUseComposer, composerLayout.send.disabled, composerShowSendButton]);
+  }, [canUseComposer]);
   const updateVoiceReleaseToSendTarget = useCallback((event: GestureResponderEvent): boolean => {
     const active = voiceLongPressActiveRef.current && isPointInsideSendButton(event);
     setVoiceReleaseToSendActive(active);
@@ -3031,10 +2639,14 @@ export default function SessionScreen() {
     options?: { persist?: boolean },
   ) => {
     composerDocumentRef.current = value;
-    setComposerDocumentState(value);
     const projected = composerDocumentProjectedText(value);
     draftRef.current = projected;
-    setDraft(projected);
+    const pendingSkill = pendingSkillSelectionRef.current;
+    const head = /^\/([a-z][\w-]*)/i.exec(projected.trimStart());
+    if (pendingSkill && (pendingSkill.sid !== sessionId || head?.[1].toLowerCase() !== pendingSkill.name.toLowerCase())) {
+      pendingSkillSelectionRef.current = null;
+    }
+    composerDraftSource.setDocument(value);
     voiceDictionaryLearningTrackerRef.current?.inspectDraft(projected);
     if (options?.persist !== false) {
       saveComposerDocumentDraft(sessionId, value);
@@ -3042,7 +2654,7 @@ export default function SessionScreen() {
       // older builds do not turn a rich draft into an empty composer.
       saveComposerDraft(sessionId, projected);
     }
-  }, [sessionId]);
+  }, [composerDraftSource, sessionId]);
 
   const applyComposerDraft = useCallback((value: string, options?: { persist?: boolean }) => {
     const document = reconcileComposerProjectedText(composerDocumentRef.current, value);
@@ -3067,24 +2679,7 @@ export default function SessionScreen() {
     applyComposerDraft(value, queueEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDraft]);
 
-  // 听写期间只滚动覆盖层跟随最新文字,**不碰隐藏编辑器的 caret**(2026-07-28):
-  // 旧实现每段转写都把选区挪到末尾,而富文本编辑器的选区操作底层是 WebView
-  // 程序化 focus,配合 keyboardDisplayRequiresUserAction={false} 会在点语音的
-  // 同时弹出软键盘。#551 之前这个 focus 表现为「听写刚开始就被掐断」(focus 即
-  // 停听写),#551 修掉掐断后它幸存为弹键盘。听写中输入框本就隐藏(覆盖层渲染
-  // 草稿),caret 无意义;落焦统一放在听写结束点(finishVoiceRecording)。
-  useEffect(() => {
-    if (!voiceIsListening) return undefined;
-    const frame = requestAnimationFrame(() => {
-      voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceIsListening]);
-
-  useEffect(() => {
-    if (voiceIsListening && draft.length > 0) return;
-    setVoiceDraftCaretFrame({ left: 0, top: 0 });
-  }, [draft.length, voiceIsListening]);
+  const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, setComposerDraft);
 
   useEffect(() => {
     const tracker = createMobileVoiceDictionaryLearningTracker({
@@ -3228,9 +2823,6 @@ export default function SessionScreen() {
     }
   }, [sessionId, sessionOperationLayout.messageHistoryMode]);
 
-  useEffect(() => {
-    if (!composerShowSendButton) sendButtonFrameRef.current = null;
-  }, [composerShowSendButton]);
 
   useEffect(() => {
     const key = activeComposerDraftScopeKey;
@@ -3311,217 +2903,6 @@ export default function SessionScreen() {
     clearQuotes(sessionId);
     applyComposerDocument(next, queueEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDocument, composerDraftHydrated, quotes, sessionId]);
-
-  // 点选意图的有效性跟随草稿前缀与会话:一旦草稿不再以点选的 `/name` 开头
-  // (清空、整段替换、改名)或切换了会话,点选立即作废——覆盖「清稿/替换后手输
-  // /learn 被旧点选绑架」与「跨会话残留」两类误让行(review P1/P2)。
-  // 在 `/name` 后继续追加参数属于同一次点选的自然延续,保留。
-  useEffect(() => {
-    const pending = pendingSkillSelectionRef.current;
-    if (!pending) return;
-    if (pending.sid !== sessionId) {
-      pendingSkillSelectionRef.current = null;
-      return;
-    }
-    const head = /^\/([a-z][\w-]*)/i.exec(draft.trimStart());
-    if (!head || head[1].toLowerCase() !== pending.name.toLowerCase()) {
-      pendingSkillSelectionRef.current = null;
-    }
-  }, [draft, sessionId]);
-
-  useEffect(() => {
-    if (!canUseRemoteSessionControls || composerTrigger.kind !== 'slash' || !currentSession || !deviceId) {
-      slashLoadSeqRef.current += 1;
-      setSlashCommands([]);
-      setSlashPaletteLoading(false);
-      setSlashPaletteError(null);
-      return;
-    }
-    // palette 重新打开:之前的点选意图作废,以本次新选择为准。
-    pendingSkillSelectionRef.current = null;
-    const seq = ++slashLoadSeqRef.current;
-    const agentKind = agentKindForSession(currentSession);
-    const paletteCacheKey = buildComposerPaletteCacheKey(
-      deviceId,
-      agentKind,
-      currentSession.workingDir ?? '',
-      currentSession.id,
-    );
-    const cachedCommands = readSlashCommandCache(paletteCacheKey);
-    if (cachedCommands) {
-      // 任意年龄的缓存先画(重开面板不闪 spinner),后台静默刷新覆盖(规则 7)。
-      // loading 必须同时清掉:上一轮无缓存请求可能把它置了 true 还没回来(如切会话 /
-      // 切 workdir 时面板未关),不清的话 ComposerPaletteFrame 的 spinner 会盖住刚画的缓存行。
-      setSlashCommands([...cachedCommands]);
-      setSlashPaletteLoading(false);
-    } else {
-      setSlashPaletteLoading(true);
-    }
-    setSlashPaletteError(null);
-    void withTransientRemoteRetry(async () => {
-      await openLink(deviceId);
-      const [builtins, skills, desktop] = await Promise.all([
-        maker.listAgentCommands(agentKind, { sessionId: currentSession.id }),
-        maker.listAgentSkills(agentKind, {
-          ...(currentSession.workingDir ? { workingDir: currentSession.workingDir } : {}),
-          forceReload: false,
-          sessionId: currentSession.id,
-        }),
-        // desktop 命令是 additive 展示(白名单分流不依赖此清单,清单只参与同名 skill
-        // 让行仲裁,见 desktopSlashCommands):拉取失败(含老被控端无此通道)静默降级
-        // 为不展示,不能拖垮 builtin/skill 两路。
-        maker.listDesktopCommands().catch(
-          () => ({ success: false } satisfies MobileDesktopCommandListResult),
-        ),
-      ]);
-      return { builtins, skills, desktop };
-    })
-      .then(({ builtins, skills, desktop }) => {
-        if (slashLoadSeqRef.current !== seq) return;
-        const builtinCommands = builtins.success && Array.isArray(builtins.commands)
-          ? builtins.commands
-          : [];
-        const skillCommands = skills.success && Array.isArray(skills.skills)
-          ? skills.skills
-          : [];
-        const desktopCommands = desktop.success && Array.isArray(desktop.commands)
-          ? filterMobileDesktopCommands(desktop.commands)
-          : [];
-        const merged = mergeSlashCommands(builtinCommands, skillCommands, desktopCommands);
-        // 刷新失败(整体或部分)且缓存已画:保留缓存行、不置 error——
-        // ComposerPaletteFrame 的 errorText 渲染在 children 之前,会把刚画的缓存
-        // 整体盖住,可用面板被错误文案顶掉正是本 PR 要消除的体验(codex review R18)。
-        const partialError = !builtins.success ? (builtins.error ?? 'slash command list failed')
-          : !skills.success ? (skills.error ?? 'skill list failed')
-            : null;
-        if (!partialError) {
-          setSlashCommands(merged);
-          // desktop 命令(kind === 'desktop')不写入共享缓存:缓存被 new.tsx 等
-          // 没有 desktop 命令分流逻辑的页面共读,写入会导致它们展示 /learn 但发送
-          // 时走普通文本透传给 agent(静默失效)。
-          writeSlashCommandCache(paletteCacheKey, merged.filter((c) => c.kind !== 'desktop'));
-          setSlashPaletteError(null);
-        } else if (!cachedCommands) {
-          setSlashCommands(merged);
-          setSlashPaletteError(partialError);
-        }
-      })
-      .catch((err) => {
-        if (slashLoadSeqRef.current !== seq) return;
-        // 同上:缓存已画时保留旧列表且不置 error;无缓存可画才显示错误。
-        if (!cachedCommands) {
-          setSlashCommands([]);
-          setSlashPaletteError(formatRemoteError(err));
-        }
-      })
-      .finally(() => {
-        if (slashLoadSeqRef.current === seq) setSlashPaletteLoading(false);
-      });
-  }, [canUseRemoteSessionControls, composerTrigger.kind, currentSession, deviceId, maker, openLink]);
-
-  useEffect(() => {
-    if (!canUseRemoteSessionControls || composerTrigger.kind !== 'at' || !currentSession?.workingDir || !deviceId) {
-      atLoadSeqRef.current += 1;
-      setAtResources([]);
-      setAtPaletteLoading(false);
-      setAtPaletteError(null);
-      setAtResourcesTruncated(false);
-      return;
-    }
-    // 旧行为是把 query 透传远端逐键扫描(每键一次 device-link 往返)。本地渲染层已有
-    // filterAtResources 打分过滤,远端逐键只在结果被 cap 截断时才有增量价值,所以:
-    //   - 打开面板拉一次全量并写缓存;全量未截断 → 逐键纯本地过滤,零远端流量;
-    //   - 截断仓库 → 先画缓存,query 变化 debounce 后带 query 补搜(不进缓存);
-    //   - TTL 内重开面板直接命中缓存不重拉。
-    const agentKind = agentKindForSession(currentSession);
-    const paletteCacheKey = buildComposerPaletteCacheKey(deviceId, agentKind, currentSession.workingDir);
-    const query = composerTrigger.query.trim();
-    const cachedScan = readAtResourceScanCache(paletteCacheKey);
-    if (cachedScan) {
-      setAtResources([...cachedScan.result.items]);
-      setAtResourcesTruncated(cachedScan.result.truncated);
-      setAtPaletteError(null);
-      if (cachedScan.fresh && !cachedScan.result.truncated) {
-        // 先作废在途请求再早退:切换会话 / workingDir 时上一个 scan 可能仍在天上,
-        // 不递增 seq 它就仍匹配当前代,回来会用旧目录的结果覆盖刚画的缓存。
-        atLoadSeqRef.current += 1;
-        setAtPaletteLoading(false);
-        return;
-      }
-    }
-    const remoteQuery = cachedScan?.result.truncated ? (query || undefined) : undefined;
-    const seq = ++atLoadSeqRef.current;
-    // 缓存已画时 loading 置 false(而非跳过):ComposerPaletteFrame 的 spinner 会整体
-    // 顶掉 children,置 true 会把刚画的缓存闪成「读取中」,而上一轮无缓存请求残留的
-    // true 不清掉同样会盖住缓存行(与 slash 的缓存命中清 loading 同口径)。
-    setAtPaletteLoading(!cachedScan);
-    setAtPaletteError(null);
-    const timer = setTimeout(() => {
-      void withTransientRemoteRetry(async () => {
-        await openLink(deviceId);
-        return maker.scanAtResources(agentKind, {
-          workingDir: currentSession.workingDir!,
-          cap: 2000,
-          query: remoteQuery,
-        });
-      })
-        .then((result) => {
-          if (atLoadSeqRef.current !== seq) return;
-          if (!result.success) {
-            // 缓存已画时保留旧列表且不置 error——ComposerPaletteFrame 的 errorText
-            // 渲染在 children 之前,会把刚画的缓存整体盖住(codex review R18);
-            // 无缓存可画才清空并显示错误。
-            if (!cachedScan) {
-              setAtResources([]);
-              setAtResourcesTruncated(false);
-              setAtPaletteError(result.error ?? 'resource scan failed');
-            }
-            return;
-          }
-          const items = Array.isArray(result.items) ? result.items : [];
-          const truncated = result.truncated === true;
-          setAtResources(items);
-          setAtResourcesTruncated(truncated);
-          setAtPaletteError(null);
-          // 只缓存全量扫描;带 query 的截断补搜是局部结果,不能当全量复用。
-          if (!remoteQuery) {
-            writeAtResourceScanCache(paletteCacheKey, { items, truncated });
-            // 首拉即截断且用户已在输入:全量结果对该 query 的本地过滤不完整,而
-            // effect 依赖不含缓存写入、不会自动重跑,这里立即链式补搜一次(不进缓存)。
-            if (truncated && query) {
-              void withTransientRemoteRetry(async () => {
-                await openLink(deviceId);
-                return maker.scanAtResources(agentKind, {
-                  workingDir: currentSession.workingDir!,
-                  cap: 2000,
-                  query,
-                });
-              })
-                .then((followup) => {
-                  if (atLoadSeqRef.current !== seq) return;
-                  if (!followup.success) return; // 补搜失败保留全量结果,不降级
-                  setAtResources(Array.isArray(followup.items) ? followup.items : []);
-                  setAtResourcesTruncated(followup.truncated === true);
-                })
-                .catch(() => undefined);
-            }
-          }
-        })
-        .catch((err) => {
-          if (atLoadSeqRef.current !== seq) return;
-          // 同上:缓存已画时不清列表、不置 error;无缓存可画才显示错误。
-          if (!cachedScan) {
-            setAtResources([]);
-            setAtResourcesTruncated(false);
-            setAtPaletteError(formatRemoteError(err));
-          }
-        })
-        .finally(() => {
-          if (atLoadSeqRef.current === seq) setAtPaletteLoading(false);
-        });
-    }, query === '' ? 0 : AT_RESOURCE_QUERY_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [canUseRemoteSessionControls, composerTrigger, currentSession, deviceId, maker, openLink]);
 
   useEffect(() => {
     if (!currentAgentKind || !deviceId) {
@@ -5365,11 +4746,11 @@ export default function SessionScreen() {
             voiceContext.createRefinerTarget(providerId, options),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string }) =>
             voiceContext.warmRefiner(input),
-          initialDraft: draft,
-          refinementContext: buildMobileVoiceSessionRefinementContext(draft, renderItems),
+          initialDraft: draftRef.current,
+          refinementContext: buildMobileVoiceSessionRefinementContext(draftRef.current, renderItems),
           localVoiceInputHistory,
           readCurrentDraft: () => draftRef.current,
-          onDraftChanged: setComposerDraft,
+          onDraftChanged: writeVoiceDraft,
           onStateChanged: setVoiceState,
           onError: (message) => {
             setVoiceState('error');
@@ -5465,7 +4846,7 @@ export default function SessionScreen() {
       setVoiceError(formatRemoteError(err));
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
-  }, [deviceId, draft, openLink, renderItems, t, voiceIsProcessing, voiceState]);
+  }, [deviceId, openLink, renderItems, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;
@@ -5654,83 +5035,6 @@ export default function SessionScreen() {
       });
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
-  const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
-    <RouteActionButton
-      accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
-      accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
-      active={composerLayout.voice.active}
-      busy={voiceIsProcessing}
-      disabled={composerLayout.voice.disabled || (!canUseComposer && !voiceIsBusy)}
-      delayLongPress={320}
-      hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-      onPressIn={handleVoiceButtonPressIn}
-      onLongPress={() => {
-        voiceLongPressActiveRef.current = true;
-        voiceSuppressNextPressRef.current = true;
-        measureSendButtonTarget();
-        // 录音已在 pressIn 起了;这里只兜 pressIn 守卫路径没起成的边缘
-        // (startVoiceRecording 自带重入守卫,重复调用无害)。
-        if (!voiceRecordingActiveRef.current) void startVoiceRecording();
-      }}
-      onPress={() => {
-        if (voiceSuppressNextPressRef.current) {
-          voiceSuppressNextPressRef.current = false;
-          return;
-        }
-        if (voiceStartedOnPressInRef.current) {
-          // 本次按下已在 pressIn 起录:这次松手属于同一手势,不再当作
-          // 「再点一下停止」;下一次完整点击才会 toggle 停止。
-          voiceStartedOnPressInRef.current = false;
-          return;
-        }
-        toggleVoiceRecording();
-      }}
-      onPressOut={(event) => {
-        if (!voiceLongPressActiveRef.current) return;
-        // 长按路径在此收尾,本次按下的生命周期结束;标记同步清掉,
-        // 手势取消(onTouchCancel)不再重复处理。
-        voiceStartedOnPressInRef.current = false;
-        const shouldSend = updateVoiceReleaseToSendTarget(event);
-        voiceLongPressActiveRef.current = false;
-        voiceSuppressNextPressRef.current = true;
-        setVoiceReleaseToSendActive(false);
-        if (!voiceRecordingActiveRef.current) {
-          voiceStopAfterStartRef.current = true;
-          return;
-        }
-        void finishVoiceRecording({ sendAfterTranscribe: shouldSend });
-      }}
-      onResponderMove={updateVoiceReleaseToSendTarget}
-      onTouchCancel={() => {
-        // 手势被系统/滚动打断(responder termination):撤销这次按下误触发的
-        // 录音——用户本意是滚动列表,不能留下一个还在采集的麦克风(review P1)。
-        // 正常松手(含拖出按钮后松开)不走这里,对齐桌面「pointercancel 才撤销」。
-        if (!voiceStartedOnPressInRef.current) return;
-        voiceStartedOnPressInRef.current = false;
-        cancelVoiceForGestureTermination();
-      }}
-      style={[
-        styles.composerInlineToolButton,
-        buttonStyle,
-        // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening——
-        // 否则按下瞬间胶囊已展开、底色却要等 ASR 连上才变,闪一次半成品态。
-        voiceRecordingTimer.label !== null && styles.composerToolButtonPrimary,
-        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
-      ]}
-      testID="session.voiceButton"
-    >
-      {voiceIsProcessing ? (
-        <ActivityIndicator color={colors.textSecondary} size="small" />
-      ) : voiceRecordingTimer.label !== null ? (
-        // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面 activeRecording 形态),
-        // 点胶囊任意位置停止录音;右缘锚定不动,只向左生长。
-        <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="session.voiceRecordingPill" />
-      ) : (
-        <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      )}
-    </RouteActionButton>
-  );
-
   const removeRemoteFileAttachment = useCallback((id: string) => {
     // 已上传中转区的对象移除时 best-effort 回收,避免未发送附件在 OSS 留孤儿(codex review #504)。
     const removed = attachments.find((item) => item.id === id);
@@ -5788,6 +5092,15 @@ export default function SessionScreen() {
     ));
   }, []);
 
+  const handleComposerDragActiveChange = useCallback((active: boolean) => {
+    composerResizeDraggingRef.current = active;
+    if (active) return;
+    const pendingHeight = pendingBottomOverlayHeightRef.current;
+    if (pendingHeight === null) return;
+    pendingBottomOverlayHeightRef.current = null;
+    setBottomOverlayContentHeight((height) => Math.abs(height - pendingHeight) > 1 ? pendingHeight : height);
+  }, []);
+
   // 顶部 chrome(半透明工具栏)是绝对定位浮层:量出实高喂给消息列表做顶部让位
   // (滚到历史最顶端时第一条消息不被工具栏盖住),与 bottomOverlayHeight 同款模式。
   const handleTopOverlayLayout = useCallback((event: LayoutChangeEvent) => {
@@ -5796,16 +5109,6 @@ export default function SessionScreen() {
       Math.abs(currentHeight - nextHeight) > 1 ? nextHeight : currentHeight
     ));
   }, []);
-
-  useEffect(() => {
-    if (composerResize.dragging) return;
-    const pendingHeight = pendingBottomOverlayHeightRef.current;
-    if (pendingHeight === null) return;
-    pendingBottomOverlayHeightRef.current = null;
-    setBottomOverlayContentHeight((currentHeight) => (
-      Math.abs(currentHeight - pendingHeight) > 1 ? pendingHeight : currentHeight
-    ));
-  }, [composerResize.dragging]);
 
   // ————— 本地待发队列(outbox):附件上传中消息先上屏 —————
   // 状态机纯函数在 sessionOutbox.ts;这里只做 React 接线与 enqueue 派发。
@@ -6392,6 +5695,7 @@ export default function SessionScreen() {
       await finishVoiceRecording({ sendAfterTranscribe: true });
       return;
     }
+    const commandsAtSend = slashCommandsRef.current;
     const documentAtSend = options.documentOverride
       ?? (options.draftOverride === undefined
         ? composerDocumentRef.current
@@ -6443,7 +5747,7 @@ export default function SessionScreen() {
     const pendingSkillAtSend = pendingSkillSelectionRef.current;
     const parsedDesktopCommandAtSend = willHaveAttachments
       ? null
-      : parseMobileDesktopCommand(body, slashCommands);
+      : parseMobileDesktopCommand(body, commandsAtSend);
     const earlyDesktopCommand =
       parsedDesktopCommandAtSend
       && pendingSkillAtSend?.sid === sessionId
@@ -6892,14 +6196,14 @@ export default function SessionScreen() {
             data = buildMobileSystemCardData(localSystemCommand, {
               contextUsage: usage,
               projection: inputProjection,
-              remoteCommands: slashCommands,
+              remoteCommands: commandsAtSend,
               session: sessionAtSend,
             });
           } catch (err) {
             data = buildMobileSystemCardData(localSystemCommand, {
               contextError: formatRemoteError(err),
               projection: inputProjection,
-              remoteCommands: slashCommands,
+              remoteCommands: commandsAtSend,
               session: sessionAtSend,
             });
           } finally {
@@ -6908,7 +6212,7 @@ export default function SessionScreen() {
         } else {
           data = buildMobileSystemCardData(localSystemCommand, {
             projection: inputProjection,
-            remoteCommands: slashCommands,
+            remoteCommands: commandsAtSend,
             session: sessionAtSend,
           });
         }
@@ -7145,6 +6449,176 @@ export default function SessionScreen() {
       .finally(() => setStopPending(false));
   };
 
+  const renderComposerControls = ({ composerLayout, composerSendUnavailableReason, composerStopDisabledReason, composerStopDisabled, composerShowInlineStop, composerSendSlotIsStop, composerShowSendButton, composerSendDisabled, voiceIsListening, voiceIsProcessing, voiceIsBusy, voiceRecordingTimer, composerVoicePlacement }: SessionComposerControlState): SessionComposerControls => {
+    composerSendTargetEnabledRef.current = composerShowSendButton && !composerLayout.send.disabled;
+    if (!composerShowSendButton) sendButtonFrameRef.current = null;
+  // 聚焦卡片形态的底部工具排:[+][模型] …… [语音][停止/发送]。
+  // + 号打开 Context 面板(附件 / 计划模式 / 目标模式收在面板内);权限模式入口收进会话设置。
+  // 权限模式图标钮(2026-07-29 用户裁决,对齐 Codex,与新建页同位同款):
+  // 只显示档位图标,不带文字;危险档(auto / bypass)只染图标色。
+  const renderSessionPermissionButton = () => {
+    const presentation = permissionPresentation(displayPermissionMode, displayPermissionLabel);
+    const accent = presentation.accent !== 'neutral'
+      ? permissionAccentColor(presentation.accent, colors)
+      : null;
+    return (
+      <RouteActionButton
+        accessibilityLabel={t('models.picker.permissionModeAccessibility', { mode: presentation.label })}
+        active={permissionSheetOpen}
+        disabled={controlBusy || !canUseRemoteSessionControls}
+        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+        onPress={() => {
+          setModelSheetOpen(false);
+          setPermissionSheetSnap('half');
+          setPermissionSheetOpen(true);
+        }}
+        style={[
+          styles.composerInlineToolButton,
+          permissionSheetOpen && styles.composerToolButtonActive,
+        ]}
+        testID="session.permissionIndicator"
+      >
+        <presentation.Icon
+          color={accent ?? colors.textSecondary}
+          size={iconSize.sm}
+          strokeWidth={iconStroke.regular}
+        />
+      </RouteActionButton>
+    );
+  };
+
+  // 工具条布局:左 = [+][权限][计划 chip][模型];右 = [停止][语音][发送]。
+  // 模型放左侧组,不随发送/停止出现而横向跳动。
+  const renderComposerToolbar = () => (
+    <>
+      <ComposerToolbarLeftGroup testID="session.composerToolbarLeft">
+        {renderComposerAttachmentButton()}
+        {renderSessionPermissionButton()}
+        {planModeOn ? (
+          <PlanModeChip
+            disabled={controlBusy || !canUseRemoteSessionControls}
+            onExit={() => togglePlanMode(false)}
+            testID="session.planModeChip"
+          />
+        ) : null}
+        {composerRuntimeSummary ? (
+          <ComposerRuntimePill
+            disabled={controlBusy || !canUseRemoteSessionControls}
+            fastOn={composerPillFastOn}
+            label={composerRuntimeLabel}
+            leading={agentSwitchIntent ? (
+              <MobileAgentMark
+                agentKind={agentSwitchIntent.targetAgentKind}
+                color={colors.textSecondary}
+                size={iconSize.sm}
+              />
+            ) : composerPillSourceId ? (
+              // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
+              // 不静默换成 activeSourceId 的默认回退 Logo。
+              <MobileModelIconMark
+                color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
+                icon={currentSession && composerPillSourceProvider
+                  ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
+                  : undefined}
+                name={composerPillSourceProvider?.name ?? composerPillSourceId}
+                providerId={composerPillSourceId}
+                routing={composerPillSourceProvider?.routing}
+                logoKind={composerPillSourceProvider?.logoKind}
+              />
+            ) : null}
+            onPress={toggleComposerModelPicker}
+            testID="session.composerModelButton"
+          />
+        ) : null}
+      </ComposerToolbarLeftGroup>
+      <ComposerToolbarSpacer />
+      {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边(对齐桌面),
+          语音占位宽度随录音胶囊(红点+计时)展开,把停止任务推开——语音右缘与发送槽
+          的邻接关系全程不变。模型在 spacer 左侧,不随右段显隐横向跳动。 */}
+      {renderComposerInlineStop()}
+      {composerVoicePlacement?.inline || composerVoicePlacement?.floating
+        ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
+        : null}
+      {renderComposerSendSlot()}
+    </>
+  );
+  const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
+    <RouteActionButton
+      accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
+      accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
+      active={composerLayout.voice.active}
+      busy={voiceIsProcessing}
+      disabled={composerLayout.voice.disabled || (!canUseComposer && !voiceIsBusy)}
+      delayLongPress={320}
+      hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+      onPressIn={handleVoiceButtonPressIn}
+      onLongPress={() => {
+        voiceLongPressActiveRef.current = true;
+        voiceSuppressNextPressRef.current = true;
+        measureSendButtonTarget();
+        // 录音已在 pressIn 起了;这里只兜 pressIn 守卫路径没起成的边缘
+        // (startVoiceRecording 自带重入守卫,重复调用无害)。
+        if (!voiceRecordingActiveRef.current) void startVoiceRecording();
+      }}
+      onPress={() => {
+        if (voiceSuppressNextPressRef.current) {
+          voiceSuppressNextPressRef.current = false;
+          return;
+        }
+        if (voiceStartedOnPressInRef.current) {
+          // 本次按下已在 pressIn 起录:这次松手属于同一手势,不再当作
+          // 「再点一下停止」;下一次完整点击才会 toggle 停止。
+          voiceStartedOnPressInRef.current = false;
+          return;
+        }
+        toggleVoiceRecording();
+      }}
+      onPressOut={(event) => {
+        if (!voiceLongPressActiveRef.current) return;
+        // 长按路径在此收尾,本次按下的生命周期结束;标记同步清掉,
+        // 手势取消(onTouchCancel)不再重复处理。
+        voiceStartedOnPressInRef.current = false;
+        const shouldSend = updateVoiceReleaseToSendTarget(event);
+        voiceLongPressActiveRef.current = false;
+        voiceSuppressNextPressRef.current = true;
+        setVoiceReleaseToSendActive(false);
+        if (!voiceRecordingActiveRef.current) {
+          voiceStopAfterStartRef.current = true;
+          return;
+        }
+        void finishVoiceRecording({ sendAfterTranscribe: shouldSend });
+      }}
+      onResponderMove={updateVoiceReleaseToSendTarget}
+      onTouchCancel={() => {
+        // 手势被系统/滚动打断(responder termination):撤销这次按下误触发的
+        // 录音——用户本意是滚动列表,不能留下一个还在采集的麦克风(review P1)。
+        // 正常松手(含拖出按钮后松开)不走这里,对齐桌面「pointercancel 才撤销」。
+        if (!voiceStartedOnPressInRef.current) return;
+        voiceStartedOnPressInRef.current = false;
+        cancelVoiceForGestureTermination();
+      }}
+      style={[
+        styles.composerInlineToolButton,
+        buttonStyle,
+        // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening——
+        // 否则按下瞬间胶囊已展开、底色却要等 ASR 连上才变,闪一次半成品态。
+        voiceRecordingTimer.label !== null && styles.composerToolButtonPrimary,
+        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
+      ]}
+      testID="session.voiceButton"
+    >
+      {voiceIsProcessing ? (
+        <ActivityIndicator color={colors.textSecondary} size="small" />
+      ) : voiceRecordingTimer.label !== null ? (
+        // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面 activeRecording 形态),
+        // 点胶囊任意位置停止录音;右缘锚定不动,只向左生长。
+        <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="session.voiceRecordingPill" />
+      ) : (
+        <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      )}
+    </RouteActionButton>
+  );
+
   const renderComposerAttachmentButton = () => (
     <RouteActionButton
       accessibilityLabel={composerLayout.attachment.active ? composerLayout.attachment.label : t('session.common.openContextPanel')}
@@ -7317,6 +6791,16 @@ export default function SessionScreen() {
       {renderComposerSendSlot()}
     </>
   );
+
+
+    return {
+      toolbar: renderComposerToolbar(),
+      leading: renderComposerCompactLeading(),
+      trailing: renderComposerTrailingActions(),
+      voiceButton: renderComposerVoiceButton,
+      attachmentTray: renderComposerAttachmentTray(),
+    };
+  };
 
   const resumeQueue = () => {
     void runQueueAction(() => maker.input.resume(sessionId));
@@ -9415,7 +8899,7 @@ export default function SessionScreen() {
               error={goalError}
               goal={goalStatus}
               initial={goalRestoreForSession}
-              initialObjective={goalRestoreForSession ? undefined : (draft.trim() || undefined)}
+              initialObjective={goalRestoreForSession ? undefined : (draftRef.current.trim() || undefined)}
               onClearGoal={handleClearGoal}
               onPauseGoal={handlePauseGoal}
               onResumeGoal={handleResumeGoal}
@@ -9648,54 +9132,22 @@ export default function SessionScreen() {
             ]}
             testID="session.bottomContent"
           >
-          {!shareSelectionActive && canUseComposer && composerTrigger.kind === 'slash' ? (
-            <ComposerPaletteFrame
-              emptyText={t('session.common.noMatchingCommands')}
-              errorText={slashPaletteError}
-              loading={slashPaletteLoading}
-              maxHeight={nativeShellLayout.paletteMaxHeight}
-              testID="session.slashPalette"
-            >
-              {visibleSlashCommands.map((command) => (
-                <ComposerPaletteRow
-                  accessibilityLabel={t('session.common.insertCommand', { name: command.name })}
-                  key={`${command.kind}:${command.name}`}
-                  onPress={() => selectSlashCommand(command)}
-                  primary={`/${command.name}`}
-                  secondary={
-                    command.kind === 'agent-skill'
-                      ? command.source
-                      : command.kind === 'desktop'
-                        ? 'desktop'
-                        : 'agent-cmd'
-                  }
-                  testID="session.slashCommandRow"
-                />
-              ))}
-            </ComposerPaletteFrame>
-          ) : null}
-
-          {!shareSelectionActive && canUseComposer && composerTrigger.kind === 'at' ? (
-            <ComposerPaletteFrame
-              emptyText={atResourcesTruncated ? t('session.common.keepTypingToNarrow') : t('session.common.noMatchingResources')}
-              errorText={atPaletteError}
-              loading={atPaletteLoading}
-              maxHeight={nativeShellLayout.paletteMaxHeight}
-              testID="session.atPalette"
-            >
-              {visibleAtResources.map((item) => (
-                <ComposerPaletteRow
-                  accessibilityLabel={t('session.common.insertResource', { name: item.name })}
-                  key={`${item.type}:${item.relPath}`}
-                  onPress={() => selectAtResource(item)}
-                  primary={item.type === 'dir' ? `${item.name}/` : item.name}
-                  secondary={item.type === 'agent' ? 'Agent' : item.relPath}
-                  testID="session.atResourceRow"
-                />
-              ))}
-            </ComposerPaletteFrame>
-          ) : null}
-
+          <SessionComposerPalette
+            key={activeComposerDraftScopeKey}
+            source={composerDraftSource}
+            commandsRef={slashCommandsRef}
+            pendingSkillSelectionRef={pendingSkillSelectionRef}
+            canUseComposer={canUseComposer}
+            canUseRemoteSessionControls={canUseRemoteSessionControls}
+            currentSession={currentSession}
+            deviceId={deviceId}
+            maker={maker}
+            openLink={openLink}
+            shareSelectionActive={shareSelectionActive}
+            nativeShellLayout={nativeShellLayout}
+            selectSlashCommand={selectSlashCommand}
+            selectAtResource={selectAtResource}
+          />
           {/*
             手机端终结不了的请求(plugin_setup 等)只贴在输入框上方:能看清电脑端
             在等什么、能取消,但不吃掉 composer —— 否则用户既处理不了这张卡又发不
@@ -9864,144 +9316,43 @@ export default function SessionScreen() {
                   <Text style={styles.queueEditBarText}>{composerAgentAuthHint}</Text>
                 </View>
               ) : null}
-              <View
-                style={[
-                  styles.composer,
-                  {
-                    // manual 拖高时容器上限放开到拖拽上限（bounds 已保证不顶穿屏幕），
-                    // 否则输入区超过 auto 上限后容器从底部裁剪掉发送按钮 trailing 行。
-                    maxHeight: composerResize.dragging || composerResize.mode === 'manual'
-                      ? composerResize.maxFrameHeight + composerChromeHeight
-                      : nativeShellLayout.composerMaxHeight,
-                    paddingHorizontal: composerTouchLayout.composerPaddingHorizontal,
-                  },
-                ]}
-                testID="session.composer"
-              >
-                {voiceStatusVisible ? (
-                  <View style={styles.voiceStatusRow}>
-                    <Text style={styles.voiceStatusText} testID="session.voiceStatus">
-                      {voiceError}
-                    </Text>
-                    {canOpenVoiceSettings ? (
-                      <RouteActionButton
-                        accessibilityLabel={t('session.common.openMicPermission')}
-                        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-                        onPress={openVoiceSettings}
-                        style={styles.voiceCancelButton}
-                        testID="session.voiceSettingsButton"
-                      >
-                        <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-                      </RouteActionButton>
-                    ) : null}
-                  </View>
-                ) : null}
-                <ScrollView
-                  ref={composerScrollViewRef}
-                  contentContainerStyle={styles.composerScrollContent}
-                  keyboardShouldPersistTaps="handled"
-                  scrollEnabled={composerScrollEnabled}
-                  showsVerticalScrollIndicator={composerScrollEnabled}
-                  style={styles.composerScroll}
-                  testID="session.composerScroll"
-                >
-
-                {attachmentError ? (
-                  <Text style={styles.attachmentErrorText} testID="session.attachmentStatus">
-                    {attachmentError}
-                  </Text>
-                ) : null}
-
-                <View style={[
-                  styles.composerSurface,
-                  compactComposer && !composerCardActive && styles.composerSurfaceCompact,
-                ]}>
-                  <MobileComposerInputRow
-                    key={sessionId}
-                    accessibilityLabel={t('session.screen.composerPlaceholder')}
-                    accessibilityHint={composerLayout.input.disabledReason ?? undefined}
-                    accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
-                    autoFocus={visualFocusComposer}
-                    cardActive={composerCardActive}
-                    caretHidden={voiceIsListening}
-                    compact={compactComposer && !composerCardActive}
-                    editable={!composerLayout.input.disabled}
-                    floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
-                    cursorColor={colors.inputCaret}
-                    inputFrameHeight={composerResize.frameHeight}
-                    // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
-                    // hitSlop 越不过父边界(见常量注释)。
-                    inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
-                    inputElement={(
-                      <ComposerRichInput
-                        ref={composerInputRef}
-                        accessibilityHint={composerLayout.input.disabledReason ?? undefined}
-                        accessibilityLabel={t('session.screen.composerPlaceholder')}
-                        document={composerDocument}
-                        editable={!composerLayout.input.disabled}
-                        height={composerInputVisibleHeight}
-                        hidden={voiceIsListening}
-                        maxHeight={composerResize.inputMaxHeight}
-                        opticalPadding={composerCardActive}
-                        onBlur={() => {
-                          setComposerFocused(false);
-                          setComposerVoiceHoldArmed(false);
-                        }}
-                        onChangeDocument={applyRichComposerChange}
-                        onFocus={() => setComposerFocused(true)}
-                        onHeightChange={handleComposerRichInputHeight}
-                        onPasteImages={(uris) => void addPastedImageAttachments(uris)}
-                        onPasteImagesLoading={beginPastePlaceholders}
-                        onPasteImagesLoadFailed={failPastePlaceholders}
-                        placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
-                        resolveSessionLinkLabel={resolvePastedSessionLinkLabel}
-                        testID="session.composerRichInput"
-                        theme={{
-                          background: colors.chatCodeSurface,
-                          border: colors.border,
-                          chip: colors.surfaceChip,
-                          focus: colors.inputCaret,
-                          placeholder: colors.textTertiary,
-                          text: colors.textPrimary,
-                          textSecondary: colors.textSecondary,
-                        }}
-                      />
-                    )}
-                    inputOverlay={renderComposerInputOverlay()}
-                    inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
-                    inputTestID="session.composerInput"
-                    leading={renderComposerCompactLeading()}
-                    maxHeight={composerResize.inputMaxHeight}
-                    multilineShape={!composerCardActive && composerInputIsMultiline}
-                    onBlur={() => {
-                      setComposerFocused(false);
-                      // 失焦收起与「点别处收键盘」同语义:语音结束 hold 一并解除。
-                      setComposerVoiceHoldArmed(false);
-                    }}
-                    onChangeText={setComposerDraft}
-                    onContentSizeChange={handleComposerInputContentSizeChange}
-                    onFocus={() => {
-                      setComposerFocused(true);
-                      handleComposerInputPressIn();
-                    }}
-                    onPasteImages={(uris) => void addPastedImageAttachments(uris)}
-                    onPasteImagesLoading={beginPastePlaceholders}
-                    onPasteImagesLoadFailed={failPastePlaceholders}
-                    onPressIn={handleComposerInputPressIn}
-                    placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
-                    placeholderTextColor={colors.textTertiary}
-                    resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
-                    scrollEnabled={composerInputScrollEnabled}
-                    selectionColor={colors.inputCaret}
-                    testID="session.composerInputRow"
-                    toolbar={renderComposerToolbar()}
-                    trailing={composerCardActive ? null : renderComposerTrailingActions()}
-                    value={draft}
-                    voicePlacement={composerVoicePlacement}
-                  />
-                </View>
-                </ScrollView>
-              </View>
+              <SessionComposerInput
+                key={activeComposerDraftScopeKey}
+                source={composerDraftSource}
+                sessionId={sessionId}
+                composerInputRef={composerInputRef}
+                canUseComposer={canUseComposer}
+                canStopComposer={canStopComposer}
+                canUseRemoteSessionControls={canUseRemoteSessionControls}
+                remoteUnavailableReason={remoteUnavailableReason}
+                voiceState={voiceState}
+                voiceStartPending={voiceStartPending}
+                voiceError={voiceError}
+                composerVoiceHoldArmed={composerVoiceHoldArmed}
+                setComposerVoiceHoldArmed={setComposerVoiceHoldArmed}
+                modelSheetOpen={modelSheetOpen}
+                permissionSheetOpen={permissionSheetOpen}
+                sending={sending}
+                queueBusy={queueBusy}
+                nativeShellLayout={nativeShellLayout}
+                composerTouchLayout={composerTouchLayout}
+                keyboardState={keyboardState}
+                attachmentError={attachmentError}
+                visualFocusComposer={visualFocusComposer}
+                applyRichComposerChange={applyRichComposerChange}
+                setComposerDraft={setComposerDraft}
+                handleComposerInputPressIn={handleComposerInputPressIn}
+                beginPastePlaceholders={beginPastePlaceholders}
+                failPastePlaceholders={failPastePlaceholders}
+                resolvePastedSessionLinkLabel={resolvePastedSessionLinkLabel}
+                openVoiceSettings={openVoiceSettings}
+                composerSendUnavailableReason={canUseComposer ? null : composerDisabledReason}
+                attachmentCount={attachments.length}
+                pendingUploadCount={pendingUploads.length}
+                onPasteImages={(uris) => void addPastedImageAttachments(uris)}
+                onDragActiveChange={handleComposerDragActiveChange}
+                renderControls={renderComposerControls}
+              />
             </>
         )}
           {shareSelectionActive ? (
@@ -10307,6 +9658,834 @@ function compactSessionHeaderNotice({
   if (session.status === 'archived') return i18n.t('session.screen.archived');
   if (queuePaused) return i18n.t('session.screen.queuePausedNotice');
   return null;
+}
+
+interface SessionComposerPaletteProps {
+  source: ComposerDraftSource;
+  commandsRef: RefObject<MobileSlashCommand[]>;
+  pendingSkillSelectionRef: RefObject<{ name: string; sid: string } | null>;
+  canUseComposer: boolean;
+  canUseRemoteSessionControls: boolean;
+  currentSession: RemoteSession | null | undefined;
+  deviceId: string;
+  maker: ReturnType<typeof useMobileMakerTransport>;
+  openLink: ReturnType<typeof useDeviceLink>['openLink'];
+  shareSelectionActive: boolean;
+  nativeShellLayout: ReturnType<typeof buildSessionNativeShellLayout>;
+  selectSlashCommand: (command: MobileSlashCommand) => void;
+  selectAtResource: (item: MobileAtResourceItem) => void;
+}
+
+/** Candidate filtering and remote query effects subscribe beside the editor. */
+function SessionComposerPalette({
+  source, commandsRef, pendingSkillSelectionRef, canUseComposer, canUseRemoteSessionControls,
+  currentSession, deviceId, maker, openLink, shareSelectionActive, nativeShellLayout,
+  selectSlashCommand, selectAtResource,
+}: SessionComposerPaletteProps) {
+  const { draft } = useSyncExternalStore(source.subscribe, source.getSnapshot);
+  const { t } = useTranslation();
+  const [slashCommands, setLocalSlashCommands] = useState<MobileSlashCommand[]>([]);
+  const [slashPaletteLoading, setSlashPaletteLoading] = useState(false);
+  const [slashPaletteError, setSlashPaletteError] = useState<string | null>(null);
+  const [atResources, setAtResources] = useState<MobileAtResourceItem[]>([]);
+  const [atPaletteLoading, setAtPaletteLoading] = useState(false);
+  const [atPaletteError, setAtPaletteError] = useState<string | null>(null);
+  const [atResourcesTruncated, setAtResourcesTruncated] = useState(false);
+
+  const slashLoadSeqRef = useRef(0);
+  const atLoadSeqRef = useRef(0);
+  const setSlashCommands = useCallback((commands: MobileSlashCommand[]) => {
+    commandsRef.current = commands;
+    setLocalSlashCommands(commands);
+  }, [commandsRef]);
+  useEffect(() => () => {
+    slashLoadSeqRef.current += 1;
+    atLoadSeqRef.current += 1;
+  }, []);
+  const composerTrigger = useMemo(() => detectComposerTrigger(draft), [draft]);
+  const visibleSlashCommands = useMemo(
+    () => canUseComposer && composerTrigger.kind === 'slash'
+      ? filterSlashCommands(mergeMobileLocalSlashCommands(slashCommands), composerTrigger.query, 5)
+      : [],
+    [canUseComposer, composerTrigger, slashCommands],
+  );
+  const visibleAtResources = useMemo(
+    () => canUseComposer && composerTrigger.kind === 'at'
+      ? filterAtResources(atResources, composerTrigger.query, 5)
+      : [],
+    [atResources, canUseComposer, composerTrigger],
+  );
+
+  useEffect(() => {
+    if (!canUseRemoteSessionControls || composerTrigger.kind !== 'slash' || !currentSession || !deviceId) {
+      slashLoadSeqRef.current += 1;
+      setSlashCommands([]);
+      setSlashPaletteLoading(false);
+      setSlashPaletteError(null);
+      return;
+    }
+    // palette 重新打开:之前的点选意图作废,以本次新选择为准。
+    pendingSkillSelectionRef.current = null;
+    const seq = ++slashLoadSeqRef.current;
+    const agentKind = agentKindForSession(currentSession);
+    const paletteCacheKey = buildComposerPaletteCacheKey(
+      deviceId,
+      agentKind,
+      currentSession.workingDir ?? '',
+      currentSession.id,
+    );
+    const cachedCommands = readSlashCommandCache(paletteCacheKey);
+    if (cachedCommands) {
+      // 任意年龄的缓存先画(重开面板不闪 spinner),后台静默刷新覆盖(规则 7)。
+      // loading 必须同时清掉:上一轮无缓存请求可能把它置了 true 还没回来(如切会话 /
+      // 切 workdir 时面板未关),不清的话 ComposerPaletteFrame 的 spinner 会盖住刚画的缓存行。
+      setSlashCommands([...cachedCommands]);
+      setSlashPaletteLoading(false);
+    } else {
+      setSlashPaletteLoading(true);
+    }
+    setSlashPaletteError(null);
+    void withTransientRemoteRetry(async () => {
+      await openLink(deviceId);
+      const [builtins, skills, desktop] = await Promise.all([
+        maker.listAgentCommands(agentKind, { sessionId: currentSession.id }),
+        maker.listAgentSkills(agentKind, {
+          ...(currentSession.workingDir ? { workingDir: currentSession.workingDir } : {}),
+          forceReload: false,
+          sessionId: currentSession.id,
+        }),
+        // desktop 命令是 additive 展示(白名单分流不依赖此清单,清单只参与同名 skill
+        // 让行仲裁,见 desktopSlashCommands):拉取失败(含老被控端无此通道)静默降级
+        // 为不展示,不能拖垮 builtin/skill 两路。
+        maker.listDesktopCommands().catch(
+          () => ({ success: false } satisfies MobileDesktopCommandListResult),
+        ),
+      ]);
+      return { builtins, skills, desktop };
+    })
+      .then(({ builtins, skills, desktop }) => {
+        if (slashLoadSeqRef.current !== seq) return;
+        const builtinCommands = builtins.success && Array.isArray(builtins.commands)
+          ? builtins.commands
+          : [];
+        const skillCommands = skills.success && Array.isArray(skills.skills)
+          ? skills.skills
+          : [];
+        const desktopCommands = desktop.success && Array.isArray(desktop.commands)
+          ? filterMobileDesktopCommands(desktop.commands)
+          : [];
+        const merged = mergeSlashCommands(builtinCommands, skillCommands, desktopCommands);
+        // 刷新失败(整体或部分)且缓存已画:保留缓存行、不置 error——
+        // ComposerPaletteFrame 的 errorText 渲染在 children 之前,会把刚画的缓存
+        // 整体盖住,可用面板被错误文案顶掉正是本 PR 要消除的体验(codex review R18)。
+        const partialError = !builtins.success ? (builtins.error ?? 'slash command list failed')
+          : !skills.success ? (skills.error ?? 'skill list failed')
+            : null;
+        if (!partialError) {
+          setSlashCommands(merged);
+          // desktop 命令(kind === 'desktop')不写入共享缓存:缓存被 new.tsx 等
+          // 没有 desktop 命令分流逻辑的页面共读,写入会导致它们展示 /learn 但发送
+          // 时走普通文本透传给 agent(静默失效)。
+          writeSlashCommandCache(paletteCacheKey, merged.filter((c) => c.kind !== 'desktop'));
+          setSlashPaletteError(null);
+        } else if (!cachedCommands) {
+          setSlashCommands(merged);
+          setSlashPaletteError(partialError);
+        }
+      })
+      .catch((err) => {
+        if (slashLoadSeqRef.current !== seq) return;
+        // 同上:缓存已画时保留旧列表且不置 error;无缓存可画才显示错误。
+        if (!cachedCommands) {
+          setSlashCommands([]);
+          setSlashPaletteError(formatRemoteError(err));
+        }
+      })
+      .finally(() => {
+        if (slashLoadSeqRef.current === seq) setSlashPaletteLoading(false);
+      });
+    return () => { slashLoadSeqRef.current += 1; };
+  }, [canUseRemoteSessionControls, composerTrigger.kind, currentSession, deviceId, maker, openLink, setSlashCommands, pendingSkillSelectionRef]);
+
+  useEffect(() => {
+    if (!canUseRemoteSessionControls || composerTrigger.kind !== 'at' || !currentSession?.workingDir || !deviceId) {
+      atLoadSeqRef.current += 1;
+      setAtResources([]);
+      setAtPaletteLoading(false);
+      setAtPaletteError(null);
+      setAtResourcesTruncated(false);
+      return;
+    }
+    // 旧行为是把 query 透传远端逐键扫描(每键一次 device-link 往返)。本地渲染层已有
+    // filterAtResources 打分过滤,远端逐键只在结果被 cap 截断时才有增量价值,所以:
+    //   - 打开面板拉一次全量并写缓存;全量未截断 → 逐键纯本地过滤,零远端流量;
+    //   - 截断仓库 → 先画缓存,query 变化 debounce 后带 query 补搜(不进缓存);
+    //   - TTL 内重开面板直接命中缓存不重拉。
+    const agentKind = agentKindForSession(currentSession);
+    const paletteCacheKey = buildComposerPaletteCacheKey(deviceId, agentKind, currentSession.workingDir);
+    const query = composerTrigger.query.trim();
+    const cachedScan = readAtResourceScanCache(paletteCacheKey);
+    if (cachedScan) {
+      setAtResources([...cachedScan.result.items]);
+      setAtResourcesTruncated(cachedScan.result.truncated);
+      setAtPaletteError(null);
+      if (cachedScan.fresh && !cachedScan.result.truncated) {
+        // 先作废在途请求再早退:切换会话 / workingDir 时上一个 scan 可能仍在天上,
+        // 不递增 seq 它就仍匹配当前代,回来会用旧目录的结果覆盖刚画的缓存。
+        atLoadSeqRef.current += 1;
+        setAtPaletteLoading(false);
+        return;
+      }
+    }
+    const remoteQuery = cachedScan?.result.truncated ? (query || undefined) : undefined;
+    const seq = ++atLoadSeqRef.current;
+    // 缓存已画时 loading 置 false(而非跳过):ComposerPaletteFrame 的 spinner 会整体
+    // 顶掉 children,置 true 会把刚画的缓存闪成「读取中」,而上一轮无缓存请求残留的
+    // true 不清掉同样会盖住缓存行(与 slash 的缓存命中清 loading 同口径)。
+    setAtPaletteLoading(!cachedScan);
+    setAtPaletteError(null);
+    const timer = setTimeout(() => {
+      void withTransientRemoteRetry(async () => {
+        await openLink(deviceId);
+        return maker.scanAtResources(agentKind, {
+          workingDir: currentSession.workingDir!,
+          cap: 2000,
+          query: remoteQuery,
+        });
+      })
+        .then((result) => {
+          if (atLoadSeqRef.current !== seq) return;
+          if (!result.success) {
+            // 缓存已画时保留旧列表且不置 error——ComposerPaletteFrame 的 errorText
+            // 渲染在 children 之前,会把刚画的缓存整体盖住(codex review R18);
+            // 无缓存可画才清空并显示错误。
+            if (!cachedScan) {
+              setAtResources([]);
+              setAtResourcesTruncated(false);
+              setAtPaletteError(result.error ?? 'resource scan failed');
+            }
+            return;
+          }
+          const items = Array.isArray(result.items) ? result.items : [];
+          const truncated = result.truncated === true;
+          setAtResources(items);
+          setAtResourcesTruncated(truncated);
+          setAtPaletteError(null);
+          // 只缓存全量扫描;带 query 的截断补搜是局部结果,不能当全量复用。
+          if (!remoteQuery) {
+            writeAtResourceScanCache(paletteCacheKey, { items, truncated });
+            // 首拉即截断且用户已在输入:全量结果对该 query 的本地过滤不完整,而
+            // effect 依赖不含缓存写入、不会自动重跑,这里立即链式补搜一次(不进缓存)。
+            if (truncated && query) {
+              void withTransientRemoteRetry(async () => {
+                await openLink(deviceId);
+                return maker.scanAtResources(agentKind, {
+                  workingDir: currentSession.workingDir!,
+                  cap: 2000,
+                  query,
+                });
+              })
+                .then((followup) => {
+                  if (atLoadSeqRef.current !== seq) return;
+                  if (!followup.success) return; // 补搜失败保留全量结果,不降级
+                  setAtResources(Array.isArray(followup.items) ? followup.items : []);
+                  setAtResourcesTruncated(followup.truncated === true);
+                })
+                .catch(() => undefined);
+            }
+          }
+        })
+        .catch((err) => {
+          if (atLoadSeqRef.current !== seq) return;
+          // 同上:缓存已画时不清列表、不置 error;无缓存可画才显示错误。
+          if (!cachedScan) {
+            setAtResources([]);
+            setAtResourcesTruncated(false);
+            setAtPaletteError(formatRemoteError(err));
+          }
+        })
+        .finally(() => {
+          if (atLoadSeqRef.current === seq) setAtPaletteLoading(false);
+        });
+    }, query === '' ? 0 : AT_RESOURCE_QUERY_DEBOUNCE_MS);
+    return () => { clearTimeout(timer); atLoadSeqRef.current += 1; };
+  }, [canUseRemoteSessionControls, composerTrigger, currentSession, deviceId, maker, openLink]);
+
+
+  return (
+    <>
+          {!shareSelectionActive && canUseComposer && composerTrigger.kind === 'slash' ? (
+            <ComposerPaletteFrame
+              emptyText={t('session.common.noMatchingCommands')}
+              errorText={slashPaletteError}
+              loading={slashPaletteLoading}
+              maxHeight={nativeShellLayout.paletteMaxHeight}
+              testID="session.slashPalette"
+            >
+              {visibleSlashCommands.map((command) => (
+                <ComposerPaletteRow
+                  accessibilityLabel={t('session.common.insertCommand', { name: command.name })}
+                  key={`${command.kind}:${command.name}`}
+                  onPress={() => selectSlashCommand(command)}
+                  primary={`/${command.name}`}
+                  secondary={
+                    command.kind === 'agent-skill'
+                      ? command.source
+                      : command.kind === 'desktop'
+                        ? 'desktop'
+                        : 'agent-cmd'
+                  }
+                  testID="session.slashCommandRow"
+                />
+              ))}
+            </ComposerPaletteFrame>
+          ) : null}
+
+          {!shareSelectionActive && canUseComposer && composerTrigger.kind === 'at' ? (
+            <ComposerPaletteFrame
+              emptyText={atResourcesTruncated ? t('session.common.keepTypingToNarrow') : t('session.common.noMatchingResources')}
+              errorText={atPaletteError}
+              loading={atPaletteLoading}
+              maxHeight={nativeShellLayout.paletteMaxHeight}
+              testID="session.atPalette"
+            >
+              {visibleAtResources.map((item) => (
+                <ComposerPaletteRow
+                  accessibilityLabel={t('session.common.insertResource', { name: item.name })}
+                  key={`${item.type}:${item.relPath}`}
+                  onPress={() => selectAtResource(item)}
+                  primary={item.type === 'dir' ? `${item.name}/` : item.name}
+                  secondary={item.type === 'agent' ? 'Agent' : item.relPath}
+                  testID="session.atResourceRow"
+                />
+              ))}
+            </ComposerPaletteFrame>
+          ) : null}
+
+
+    </>
+  );
+}
+
+interface SessionComposerControlState {
+  composerLayout: ReturnType<typeof buildSessionComposerLayout>;
+  composerSendUnavailableReason: string | null;
+  composerStopDisabledReason: string | null | undefined;
+  composerStopDisabled: boolean;
+  composerShowInlineStop: boolean;
+  composerSendSlotIsStop: boolean;
+  composerShowSendButton: boolean;
+  composerSendDisabled: boolean;
+  voiceIsListening: boolean;
+  voiceIsProcessing: boolean;
+  voiceIsBusy: boolean;
+  voiceRecordingTimer: ReturnType<typeof useMobileVoiceRecordingTimer>;
+  composerVoicePlacement: ReturnType<typeof resolveMobileComposerVoiceButtonPlacement> | undefined;
+}
+interface SessionComposerControls {
+  toolbar: ReactNode;
+  leading: ReactNode;
+  trailing: ReactNode;
+  attachmentTray: ReactNode;
+  voiceButton: (style?: StyleProp<ViewStyle>) => ReactNode;
+}
+interface SessionComposerInputProps {
+  source: ComposerDraftSource;
+  sessionId: string;
+  composerInputRef: RefObject<ComposerRichInputHandle | null>;
+  canUseComposer: boolean;
+  canStopComposer: boolean;
+  canUseRemoteSessionControls: boolean;
+  remoteUnavailableReason: string | null;
+  composerSendUnavailableReason: string | null;
+  voiceState: MobileVoiceState;
+  voiceStartPending: boolean;
+  voiceError: string | null;
+  composerVoiceHoldArmed: boolean;
+  setComposerVoiceHoldArmed: (value: boolean) => void;
+  modelSheetOpen: boolean;
+  permissionSheetOpen: boolean;
+  sending: boolean;
+  queueBusy: boolean;
+  nativeShellLayout: ReturnType<typeof buildSessionNativeShellLayout>;
+  composerTouchLayout: ReturnType<typeof buildComposerTouchLayout>;
+  keyboardState: ReturnType<typeof useMobileKeyboardState>;
+  attachmentError: string | null;
+  attachmentCount: number;
+  pendingUploadCount: number;
+  visualFocusComposer: boolean;
+  applyRichComposerChange: (value: ComposerDocument) => void;
+  setComposerDraft: (value: string) => void;
+  handleComposerInputPressIn: () => void;
+  onPasteImages: (uris: string[]) => void;
+  beginPastePlaceholders: (count: number) => void;
+  failPastePlaceholders: () => void;
+  resolvePastedSessionLinkLabel: NonNullable<React.ComponentProps<typeof ComposerRichInput>['resolveSessionLinkLabel']>;
+  openVoiceSettings: () => void;
+  onDragActiveChange: (active: boolean) => void;
+  renderControls: (state: SessionComposerControlState) => SessionComposerControls;
+}
+
+/** High-frequency editor, dictation, timer and resize state stops at this boundary. */
+function SessionComposerInput({
+  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceError, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
+  composerSendUnavailableReason, attachmentCount, pendingUploadCount,
+  onPasteImages, onDragActiveChange, renderControls,
+}: SessionComposerInputProps) {
+  const { document: composerDocument, draft } = useSyncExternalStore(source.subscribe, source.getSnapshot);
+  const { t, i18n: i18nInstance } = useTranslation();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const windowDimensions = useWindowDimensions();
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
+  const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
+  const composerScrollViewRef = useRef<ScrollView>(null);
+  const composerScrollEnabledRef = useRef(false);
+  const voiceDraftScrollRef = useRef<ScrollView>(null);
+  const composerTrigger = useMemo(() => detectComposerTrigger(draft), [draft]);
+  const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
+  const voiceIsListening = voiceState === 'listening';
+  const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
+  const voiceIsBusy = voiceIsListening || voiceIsProcessing;
+  const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
+  // 引用已是 ComposerDocument 内的 atom；排队编辑同样可能只有引用而没有可见
+  // 文本，因此必须计入 payload，否则「保存修改」会被错误禁用。
+  const composerQuoteCount = composerDocumentQuotes(composerDocument).length;
+  // Context 面板是 Modal sheet,不再有内联附件面板 → attachmentPickerOpen 恒 false。
+  const composerLayout = useMemo(() => buildSessionComposerLayout({
+    attachmentBusy: false,
+    // pending(乐观上传中)计入:拍完照 / 选完文件立即可点发送,send() 内部会等落定。
+    attachmentCount: attachmentCount + pendingUploadCount,
+    attachmentPickerOpen: false,
+    // Stop 的可见性跟随真实运行 / 队列状态；断线时只单独禁用交互。
+    canStop: canStopComposer,
+    draftText: draft,
+    queueBusy,
+    quoteCount: composerQuoteCount,
+    sendUnavailableReason: composerSendUnavailableReason,
+    sending,
+    voiceState,
+  }), [
+    attachmentCount,
+    pendingUploadCount,
+    canStopComposer,
+    canUseComposer,
+    composerQuoteCount,
+    composerSendUnavailableReason,
+    draft,
+    i18nInstance.language,
+    queueBusy,
+    sending,
+    voiceState,
+  ]);
+  const compactComposer = composerLayout.density === 'compact';
+  // 发送槽双语义(对齐桌面 ChatInput 的主槽判定,voice busy = listening|submitting|refining):
+  // 任务执行中且发送不可用、又没有语音在进行时,停止任务顶替发送位;语音一旦开始,
+  // 发送键回到发送位(录音期=「结束并发送」,润色期=禁用态占位),停止任务退到
+  // 语音按钮**左边**的独立槽。语音按钮由此永远是发送槽的左邻,右缘位置与是否有
+  // 草稿/是否录音/任务是否执行全部无关——录音胶囊只向左生长,「原地再点一下」
+  // 永远是停止录音,不会误停任务。
+  const composerSendSlotIsStop = composerLayout.stop.visible
+    && composerLayout.send.disabled
+    && !sending
+    && !voiceIsBusy
+    && !voiceStartPending;
+  // 只有确定性不可用(撤权 / 关闭远控等)才禁发送；普通断线与自动恢复状态仍可发，
+  // 消息进入本地 outbox 等连接恢复。输入框在两类状态下都保持可编辑与持久化。
+  const composerSendDisabled = composerLayout.send.disabled;
+  const composerStopDisabled = composerLayout.stop.disabled || !canUseRemoteSessionControls;
+  const composerStopDisabledReason = !canUseRemoteSessionControls
+    ? remoteUnavailableReason ?? t('session.menu.aiRenameOffline')
+    : composerLayout.stop.disabledReason;
+  const composerShowInlineStop = composerLayout.stop.visible && !composerSendSlotIsStop && !sending;
+  // send.visible 在语音生命周期内恒 true(sessionOperation.ts),这里不再按
+  // voiceIsListening 二次过滤——那正是「首段转写落地瞬间发送键冒出来」的跳变源。
+  // 乐观 pending 期(state 还是 idle)同样要占住发送槽:否则空草稿按下语音时
+  // 胶囊先在 12pt 档展开,listening 一到发送键出现又整体跳到 52pt 档。
+  const composerShowSendButton = composerLayout.send.visible || voiceStartPending;
+  const composerVoicePlacement = voiceUiAvailable
+    ? resolveMobileComposerVoiceButtonPlacement({
+      // 行尾有发送或占发送位的停止按钮时让位;附件-only(无文字)同样命中。
+      hasTrailingAction: composerSendSlotIsStop || composerShowSendButton,
+    })
+    : undefined;
+  // 录音计时(红点+m:ss 胶囊);pillWidth 同时驱动语音按钮与工具排占位 slot,
+  // 胶囊展开时把左邻的停止任务按钮推开,而不是盖住它。expanded 含乐观 pending
+  // (按下即展开),counting 只认真实采集(listening)——启动链路(权限弹窗等)
+  // 不计入录音时长,pending 期显示静止的 0:00。
+  const voiceRecordingTimer = useMobileVoiceRecordingTimer({
+    expanded: voiceIsListening || voiceStartPending,
+    counting: voiceIsListening,
+  });
+  const composerEffectiveContentHeight = composerInputContentHeight;
+  const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
+  // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
+  // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
+  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
+
+  // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
+  // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
+  // 否则「拖回单行退出激活态」永远收不回去。
+  // 语音结束后草稿仍有内容时经 hold 保持展开(一行文字也不收),
+  // 不随 voiceIsBusy 归零塌回简洁态。
+  const composerVoiceHoldActive = resolveComposerVoiceHoldActive({
+    armed: composerVoiceHoldArmed,
+    draftText: draft,
+  });
+  const composerCardActive = (canUseComposer && composerFocused)
+    || modelSheetOpen
+    || permissionSheetOpen
+    || voiceIsBusy
+    || composerVoiceHoldActive;
+  useComposerCardTransition(composerCardActive, keyboardState);
+  const composerChromeHeight = useMemo(() => {
+    const statusReserve = voiceStatusVisible
+      ? COMPOSER_STATUS_ROW_RESERVED_HEIGHT + COMPOSER_STACK_GAP_HEIGHT
+      : 0;
+    const rowChrome = composerCardActive
+      ? COMPOSER_CARD_ROW_CHROME_HEIGHT
+      : COMPOSER_INPUT_ROW_CHROME_HEIGHT;
+    return COMPOSER_VERTICAL_PADDING_HEIGHT + statusReserve + rowChrome;
+  }, [composerCardActive, voiceStatusVisible]);
+  const composerInputMaxContentHeight = useMemo(() => {
+    const availableHeight = nativeShellLayout.composerMaxHeight - composerChromeHeight;
+    return Math.min(
+      COMPOSER_INPUT_MAX_CONTENT_HEIGHT,
+      Math.max(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT, availableHeight),
+    );
+  }, [composerChromeHeight, nativeShellLayout.composerMaxHeight]);
+  // 下拉收起 = 退出聚焦激活态(模型浮窗已是独立 Modal,拖拽手势够不到它,无需在此关闭)。
+  // 语音结束 hold 态未聚焦,blur 是 no-op,需显式解除 hold 才能收回简洁态。
+  const handleComposerSnapToAuto = useCallback(() => {
+    setComposerVoiceHoldArmed(false);
+    composerInputRef.current?.blur();
+  }, []);
+  // Installed apps arbitrate grabber/scroll ownership on UI via Gesture.Native.
+  // Retain the native scroll switch for Expo Go's PanResponder fallback.
+  const handleGrabberTouchActiveChange = useCallback((active: boolean) => {
+    onDragActiveChange(active);
+    composerScrollViewRef.current?.setNativeProps({
+      scrollEnabled: active ? false : composerScrollEnabledRef.current,
+    });
+  }, [onDragActiveChange]);
+  const composerResize = useComposerResize({
+    autoMaxContentHeight: composerInputMaxContentHeight,
+    // 简洁态一律收到单行(下拉收起和点别处收键盘的结果一致);
+    // auto / manual 记忆保留,重新聚焦后恢复。
+    collapsed: !composerCardActive,
+    minFrameHeight: voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined,
+    composerChromeHeight,
+    contentHeight: composerEffectiveContentHeight,
+    keyboardHeight: keyboardState.visible ? keyboardState.height : 0,
+    onGrabberTouchActiveChange: handleGrabberTouchActiveChange,
+    onSnapToAuto: handleComposerSnapToAuto,
+    singleLineContentHeight: COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT,
+    windowHeight: windowDimensions.height,
+  });
+  // manual 高度跨聚焦/失焦、键盘开合保留(用户拖出的高度是显式意图);
+  // 唯一自然失效点:草稿清空(发送成功/删光)回 auto,避免空输入框残留定高。
+  const composerResizeReset = composerResize.reset;
+  useEffect(() => {
+    if (draft.length === 0) {
+      composerResizeReset();
+      // 草稿清空(发送成功/删光)后语音结束 hold 也失去意义,一并解除。
+      setComposerVoiceHoldArmed(false);
+    }
+  }, [draft, composerResizeReset]);
+  const composerInputIsMultiline = composerResize.dragging
+    || composerResize.mode === 'manual'
+    || (draft.length > 0
+      && (draft.includes('\n') || composerEffectiveContentHeight > COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD));
+  const composerInputVisibleHeight = composerResize.visibleContentHeight;
+  const composerInputScrollEnabled = composerResize.scrollEnabled;
+  const composerShellHasScrollableContent = attachmentCount > 0
+    || pendingUploadCount > 0
+    || attachmentError !== null
+    || composerTrigger.kind === 'slash'
+    || composerTrigger.kind === 'at';
+  // Only enable shell scrolling when attachments or palettes can overflow.
+  // Native gesture arbitration lets the grabber win without waiting for JS.
+  const composerScrollEnabled = (nativeShellLayout.composerScrollEnabled || composerTrigger.kind !== 'none')
+    && !composerResize.dragging
+    && composerShellHasScrollableContent;
+  composerScrollEnabledRef.current = composerScrollEnabled;
+  const resizeActive = composerResize.active;
+  const manualResize = composerResize.mode === 'manual';
+  const expandedMaxHeight = composerResize.maxFrameHeight + composerChromeHeight;
+  const autoMaxHeight = nativeShellLayout.composerMaxHeight;
+  const composerContainerStyle = useAnimatedStyle(() => ({
+    maxHeight: resizeActive.value || manualResize ? expandedMaxHeight : autoMaxHeight,
+  }));
+  const handleComposerInputContentSizeChange = useCallback((event: TextInputContentSizeChangeEvent) => {
+    const nextHeight = Math.max(
+      COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT,
+      Math.ceil(event.nativeEvent.contentSize.height),
+    );
+    setComposerInputContentHeight((currentHeight) => (
+      Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
+    ));
+  }, []);
+  const handleComposerRichInputHeight = useCallback((height: number) => {
+    const nextHeight = Math.max(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT, Math.ceil(height));
+    setComposerInputContentHeight((currentHeight) => (
+      Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
+    ));
+  }, []);
+  const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {
+    const lines = event.nativeEvent.lines;
+    const lastLine = lines[lines.length - 1];
+    if (!lastLine) return;
+    const nextFrame = {
+      left: Math.max(0, Math.round(lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP)),
+      top: Math.max(0, Math.round(lastLine.y + ((lastLine.height - COMPOSER_INPUT_LINE_HEIGHT) / 2))),
+    };
+    setVoiceDraftCaretFrame((currentFrame) => (
+      currentFrame.left === nextFrame.left && currentFrame.top === nextFrame.top
+        ? currentFrame
+        : nextFrame
+    ));
+  }, []);
+
+  const renderComposerResizeHandle = () => (
+    <ComposerResizeGrabber
+      onAdjust={composerResize.adjustByLine}
+      panHandlers={composerResize.panHandlers}
+      gesture={composerResize.gesture}
+      testID="session.composerResizeGrabber"
+      visible
+    />
+  );
+
+  const renderComposerInputOverlay = () => voiceIsListening ? (
+    // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
+    // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
+    // 的 view,它根本收不到触摸——把停听写挂在 WebView 的 focus / touch 上都不成立
+    // (focus 还会被 WKWebView 自己恢复焦点误触发,掐断刚开始的听写)。
+    <Pressable
+      accessibilityLabel={t('session.common.voiceStopRecording')}
+      accessibilityRole="button"
+      // onPressIn 给手指「触摸即停」的即时手感;onPress 是无障碍激活(VoiceOver /
+      // TalkBack 的 activate 只走 onPress,不会派发 onPressIn)的唯一入口,两者都要挂。
+      // handler 幂等:finishVoiceRecording 有 voiceStopInFlight 门,重复调用是 no-op。
+      onPress={handleComposerInputPressIn}
+      onPressIn={handleComposerInputPressIn}
+      style={styles.voiceDraftOverlay}
+      testID="session.voiceDraftOverlay"
+    >
+      <ScrollView
+        ref={voiceDraftScrollRef}
+        contentContainerStyle={[
+          styles.voiceDraftOverlayContent,
+          !composerCardActive && styles.voiceDraftOverlayContentGeometric,
+        ]}
+        onContentSizeChange={() => {
+          requestAnimationFrame(() => {
+            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+          });
+        }}
+        onLayout={() => {
+          requestAnimationFrame(() => {
+            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+          });
+        }}
+        pointerEvents="none"
+        scrollEnabled={composerInputScrollEnabled}
+        showsVerticalScrollIndicator={false}
+        style={styles.voiceDraftScroll}
+      >
+        {voiceDraftShowsListeningPrompt ? (
+          <View style={styles.voiceDraftListeningPrompt}>
+            <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
+            <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
+          </View>
+        ) : (
+          <View style={styles.voiceDraftMeasuredBlock}>
+            <Text
+              onTextLayout={handleVoiceDraftTextLayout}
+              style={styles.voiceDraftText}
+            >
+              {draft}
+            </Text>
+            <View
+              pointerEvents="none"
+              style={[
+                styles.voiceDraftCaretOverlay,
+                {
+                  left: voiceDraftCaretFrame.left,
+                  top: voiceDraftCaretFrame.top,
+                },
+              ]}
+            >
+              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
+            </View>
+          </View>
+        )}
+      </ScrollView>
+    </Pressable>
+  ) : null;
+
+  // 听写期间只滚动覆盖层跟随最新文字,**不碰隐藏编辑器的 caret**(2026-07-28):
+  // 旧实现每段转写都把选区挪到末尾,而富文本编辑器的选区操作底层是 WebView
+  // 程序化 focus,配合 keyboardDisplayRequiresUserAction={false} 会在点语音的
+  // 同时弹出软键盘。#551 之前这个 focus 表现为「听写刚开始就被掐断」(focus 即
+  // 停听写),#551 修掉掐断后它幸存为弹键盘。听写中输入框本就隐藏(覆盖层渲染
+  // 草稿),caret 无意义;落焦统一放在听写结束点(finishVoiceRecording)。
+  useEffect(() => {
+    if (!voiceIsListening) return undefined;
+    const frame = requestAnimationFrame(() => {
+      voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceIsListening]);
+
+  useEffect(() => {
+    if (voiceIsListening && draft.length > 0) return;
+    setVoiceDraftCaretFrame({ left: 0, top: 0 });
+  }, [draft.length, voiceIsListening]);
+
+
+  const controls = renderControls({ composerLayout, composerSendUnavailableReason, composerStopDisabledReason, composerStopDisabled, composerShowInlineStop, composerSendSlotIsStop, composerShowSendButton, composerSendDisabled, voiceIsListening, voiceIsProcessing, voiceIsBusy, voiceRecordingTimer, composerVoicePlacement });
+  return (
+              <Reanimated.View
+                style={[
+                  styles.composer,
+                  composerContainerStyle,
+                  {
+                    paddingHorizontal: composerTouchLayout.composerPaddingHorizontal,
+                  },
+                ]}
+                testID="session.composer"
+              >
+                {voiceStatusVisible ? (
+                  <View style={styles.voiceStatusRow}>
+                    <Text style={styles.voiceStatusText} testID="session.voiceStatus">
+                      {voiceError}
+                    </Text>
+                    {canOpenVoiceSettings ? (
+                      <RouteActionButton
+                        accessibilityLabel={t('session.common.openMicPermission')}
+                        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                        onPress={openVoiceSettings}
+                        style={styles.voiceCancelButton}
+                        testID="session.voiceSettingsButton"
+                      >
+                        <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                      </RouteActionButton>
+                    ) : null}
+                  </View>
+                ) : null}
+                <GestureDetector gesture={composerResize.scrollGesture}>
+                <ScrollView
+                  ref={composerScrollViewRef}
+                  contentContainerStyle={styles.composerScrollContent}
+                  keyboardShouldPersistTaps="handled"
+                  scrollEnabled={composerScrollEnabled}
+                  showsVerticalScrollIndicator={composerScrollEnabled}
+                  style={styles.composerScroll}
+                  testID="session.composerScroll"
+                >
+
+                {attachmentError ? (
+                  <Text style={styles.attachmentErrorText} testID="session.attachmentStatus">
+                    {attachmentError}
+                  </Text>
+                ) : null}
+
+                <View style={[
+                  styles.composerSurface,
+                  compactComposer && !composerCardActive && styles.composerSurfaceCompact,
+                ]}>
+                  <MobileComposerInputRow
+                    key={sessionId}
+                    accessibilityLabel={t('session.screen.composerPlaceholder')}
+                    accessibilityHint={composerLayout.input.disabledReason ?? undefined}
+                    accessoryAbove={controls.attachmentTray}
+                    autoFocus={visualFocusComposer}
+                    cardActive={composerCardActive}
+                    caretHidden={voiceIsListening}
+                    compact={compactComposer && !composerCardActive}
+                    editable={!composerLayout.input.disabled}
+                    floatingVoiceButton={voiceUiAvailable ? controls.voiceButton : undefined}
+                    cursorColor={colors.inputCaret}
+                    inputFrameAnimatedStyle={composerResize.frameStyle}
+                    // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
+                    // hitSlop 越不过父边界(见常量注释)。
+                    inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                    inputElement={(
+                      <ComposerRichInput
+                        ref={composerInputRef}
+                        accessibilityHint={composerLayout.input.disabledReason ?? undefined}
+                        accessibilityLabel={t('session.screen.composerPlaceholder')}
+                        document={composerDocument}
+                        editable={!composerLayout.input.disabled}
+                        height={composerInputVisibleHeight}
+                        animatedHeight={composerResize.contentHeight}
+                        hidden={voiceIsListening}
+                        maxHeight={composerResize.inputMaxHeight}
+                        opticalPadding={composerCardActive}
+                        onBlur={() => {
+                          setComposerFocused(false);
+                          setComposerVoiceHoldArmed(false);
+                        }}
+                        onChangeDocument={applyRichComposerChange}
+                        onFocus={() => setComposerFocused(true)}
+                        onHeightChange={handleComposerRichInputHeight}
+                        onPasteImages={onPasteImages}
+                        onPasteImagesLoading={beginPastePlaceholders}
+                        onPasteImagesLoadFailed={failPastePlaceholders}
+                        placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
+                        resolveSessionLinkLabel={resolvePastedSessionLinkLabel}
+                        testID="session.composerRichInput"
+                        theme={{
+                          background: colors.chatCodeSurface,
+                          border: colors.border,
+                          chip: colors.surfaceChip,
+                          focus: colors.inputCaret,
+                          placeholder: colors.textTertiary,
+                          text: colors.textPrimary,
+                          textSecondary: colors.textSecondary,
+                        }}
+                      />
+                    )}
+                    inputOverlay={renderComposerInputOverlay()}
+                    inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
+                    inputTestID="session.composerInput"
+                    leading={controls.leading}
+                    maxHeight={composerResize.inputMaxHeight}
+                    multilineShape={!composerCardActive && composerInputIsMultiline}
+                    onBlur={() => {
+                      setComposerFocused(false);
+                      // 失焦收起与「点别处收键盘」同语义:语音结束 hold 一并解除。
+                      setComposerVoiceHoldArmed(false);
+                    }}
+                    onChangeText={setComposerDraft}
+                    onContentSizeChange={handleComposerInputContentSizeChange}
+                    onFocus={() => {
+                      setComposerFocused(true);
+                      handleComposerInputPressIn();
+                    }}
+                    onPasteImages={onPasteImages}
+                    onPasteImagesLoading={beginPastePlaceholders}
+                    onPasteImagesLoadFailed={failPastePlaceholders}
+                    onPressIn={handleComposerInputPressIn}
+                    placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
+                    placeholderTextColor={colors.textTertiary}
+                    resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
+                    scrollEnabled={composerInputScrollEnabled}
+                    selectionColor={colors.inputCaret}
+                    testID="session.composerInputRow"
+                    toolbar={controls.toolbar}
+                    trailing={composerCardActive ? null : controls.trailing}
+                    value={draft}
+                    voicePlacement={composerVoicePlacement}
+                  />
+                </View>
+                </ScrollView>
+                </GestureDetector>
+              </Reanimated.View>
+
+  );
 }
 
 function SessionSearchSheet({

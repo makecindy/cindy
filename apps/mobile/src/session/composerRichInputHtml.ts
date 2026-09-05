@@ -58,7 +58,9 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   #editor {
     color: var(--text); caret-color: var(--focus);
     font-size: ${COMPOSER_TEXT_FONT_SIZE}px; line-height: ${COMPOSER_TEXT_LINE_HEIGHT}px;
-    min-height: ${COMPOSER_SINGLE_LINE_HEIGHT}px; max-height: var(--max-height);
+    /* The native frame sets the viewport on UI, without a JS config roundtrip.
+       Keep natural content height so scrollHeight still measures short drafts. */
+    min-height: ${COMPOSER_SINGLE_LINE_HEIGHT}px; max-height: min(var(--max-height), 100vh);
     overflow-y: auto; outline: none;
     padding: ${composerTextPadding.top}px ${COMPOSER_TEXT_HORIZONTAL_PADDING}px ${composerTextPadding.bottom}px;
     white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text;
@@ -239,7 +241,14 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     walk(root, nodes);
     return { version: 1, nodes };
   };
-  const reportHeight = () => post({ type: 'height', height: Math.min(config.maxHeight, Math.max(${COMPOSER_SINGLE_LINE_HEIGHT}, root.scrollHeight)) });
+  let lastReportedHeight = null;
+  const reportHeight = () => {
+    const height = Math.min(config.maxHeight, Math.max(${COMPOSER_SINGLE_LINE_HEIGHT}, root.scrollHeight));
+    // Viewport resizing can notify every frame without changing content height.
+    if (height === lastReportedHeight) return;
+    lastReportedHeight = height;
+    post({ type: 'height', height });
+  };
   const notify = () => {
     if (applying || composing) return;
     const value = readDocument();

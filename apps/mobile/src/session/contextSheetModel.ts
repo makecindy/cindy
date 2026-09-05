@@ -57,6 +57,7 @@ export interface ApplyContextSheetDragInput {
 
 /** 拖动跟手：位移换算成面板高度，上限 full；向下允许拖过 half（用于 dismiss 判定）。 */
 export function applyContextSheetDrag(input: ApplyContextSheetDragInput): number {
+  'worklet';
   const heights = normalizeHeights(input.heights);
   return clamp(Math.round(input.startHeight - input.translationY), 0, heights.full);
 }
@@ -74,6 +75,7 @@ export interface SettleContextSheetDragInput {
  * 其余情况回 half。half === full（小屏钳住）时只在 full 与 dismiss 之间二选一。
  */
 export function settleContextSheetDrag(input: SettleContextSheetDragInput): ContextSheetSettle {
+  'worklet';
   const heights = normalizeHeights(input.heights);
   if (input.draggedHeight < heights.half * CONTEXT_SHEET_DISMISS_RATIO) return 'dismiss';
   if (heights.full <= heights.half) return 'full';
@@ -82,6 +84,7 @@ export function settleContextSheetDrag(input: SettleContextSheetDragInput): Cont
 }
 
 function normalizeHeights(heights: ContextSheetSnapHeights): ContextSheetSnapHeights {
+  'worklet';
   const half = Math.max(1, Math.round(heights.half));
   return { half, full: Math.max(half, Math.round(heights.full)) };
 }
@@ -95,5 +98,6 @@ function normalizeNonNegativeDimension(value: number | undefined, fallback: numb
 }
 
 function clamp(value: number, min: number, max: number): number {
+  'worklet';
   return Math.min(Math.max(value, min), max);
 }

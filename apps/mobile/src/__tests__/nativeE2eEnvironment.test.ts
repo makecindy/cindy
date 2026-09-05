@@ -304,7 +304,8 @@ describe('native e2e environment', () => {
     );
     expect(sessionScreen).toContain('const latestDocument = latestDraft.trim()');
     expect(sessionScreen).toContain('readCurrentDraft: () => draftRef.current');
-    expect(sessionScreen).toContain('onDraftChanged: setComposerDraft');
+    expect(sessionScreen).toContain('onDraftChanged: writeVoiceDraft');
+    expect(sessionScreen).toContain('useComposerVoiceDraftWriter(sessionId, setComposerDraft)');
     expect(sessionScreen).toContain('createMobileVoiceControllerSession({');
     expect(sessionScreen).not.toContain('await sendLatest({ draftOverride: latestDraft });');
   });

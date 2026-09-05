@@ -112,6 +112,9 @@ vi.mock('@/hooks/useCodexRateLimits', () => ({
   }),
 }));
 vi.mock('@/hooks/useXaiRateLimit', () => ({ useXaiRateLimit: () => null }));
+vi.mock('../QuotaResetConfetti', () => ({
+  QuotaResetConfetti: () => <span data-testid="quota-reset-confetti" />,
+}));
 vi.mock('@/components/chat/ChatDisplaySnapshotContext', () => ({
   useChatDisplaySnapshot: () => mocks.displaySnapshot,
 }));
@@ -208,6 +211,44 @@ afterEach(() => {
 });
 
 describe('TodaySpendChip Claude subscription popover', () => {
+  it.each(['accountId', 'source', 'limitId'] as const)(
+    'does not celebrate a Codex %s switch as a reset',
+    (field) => {
+      mocks.codexAuthInjection = 'oauth-bearer';
+      mocks.codexSnapshot = {
+        accountId: 'account-a', source: 'codex-app-server', limitId: 'codex',
+        primary: { usedPercent: 40, windowMinutes: 300, resetsAt: Date.now() / 1000 - 1 },
+      };
+      const chip = <TodaySpendChip vendorKey="codex" providerId="openai" sessionId="codex" />;
+      const view = render(chip);
+      mocks.codexSnapshot = {
+        ...mocks.codexSnapshot,
+        [field]: 'another-quota',
+        primary: { usedPercent: 2, windowMinutes: 300, resetsAt: Date.now() / 1000 + 18_000 },
+      };
+      view.rerender(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="codex" />);
+      expect(screen.getByRole('button', { name: '打开 Codex 用量页面' }).textContent).toContain('98%');
+      expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+    },
+  );
+
+  it.each([false, true])('only celebrates a Claude reset for the same account (changed: %s)', (changed) => {
+    mocks.claudeSnapshot = {
+      accountFingerprint: 'account-a', source: 'unified-headers',
+      fiveHour: { utilization: 40, resetsAt: Date.now() / 1000 - 1 },
+    };
+    const view = renderClaudeSubscriptionChip();
+    mocks.claudeSnapshot = {
+      accountFingerprint: changed ? 'account-b' : 'account-a', source: 'oauth-endpoint',
+      fiveHour: { utilization: 2, resetsAt: Date.now() / 1000 + 18_000 },
+    };
+    view.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" modelId="claude-opus-5[1m]" sessionId="session-1" />);
+    expect(screen.queryByTestId('quota-reset-confetti') !== null).toBe(!changed);
+    if (changed) {
+      expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).textContent).toContain('98%');
+    }
+  });
+
   it('完整渲染 Claude 的 5h 与当前模型周窗口', () => {
     mocks.claudeSnapshot = {
       source: 'oauth-endpoint',

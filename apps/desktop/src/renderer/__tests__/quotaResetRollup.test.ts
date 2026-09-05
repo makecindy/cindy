@@ -1,6 +1,6 @@
 /**
  * quotaResetRollup 纯函数单测:重置检测、滚动插值、倒计时 tick 节奏。
- * (hook 本体只做 React 接线, 契约由 todaySpendChip.test.ts 的源码断言看住。)
+ * hook 生命周期另见 quotaResetRollup.hook.test.tsx。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -26,19 +26,21 @@ describe('shouldCelebrateQuotaReset', () => {
     expect(shouldCelebrateQuotaReset(
       slot({ remainingPercent: 0, resetsAtMs: 1_000_000 }),
       slot({ remainingPercent: 100, resetsAtMs: 19_000_000 }),
+      1_000_000,
     )).toBe(true);
     // resetsAt 语义确认了重置时, 小幅回升也触发 (轻度使用后的窗口翻转)
     expect(shouldCelebrateQuotaReset(
       slot({ remainingPercent: 92, resetsAtMs: 1_000_000 }),
       slot({ remainingPercent: 100, resetsAtMs: 19_000_000 }),
+      1_000_000,
     )).toBe(true);
   });
 
-  it('falls back to a large near-full jump when resetsAt is unavailable', () => {
+  it('does not infer a reset from a percentage jump without cycle evidence', () => {
     expect(shouldCelebrateQuotaReset(
       slot({ remainingPercent: 3 }),
       slot({ remainingPercent: 100 }),
-    )).toBe(true);
+    )).toBe(false);
     // 小幅数据修正不触发
     expect(shouldCelebrateQuotaReset(
       slot({ remainingPercent: 60 }),
@@ -49,6 +51,34 @@ describe('shouldCelebrateQuotaReset', () => {
       slot({ remainingPercent: 10 }),
       slot({ remainingPercent: 70 }),
     )).toBe(false);
+  });
+
+  it.each([
+    [2_000_000, 2_000_000], // 同周期大幅数据修正
+    [2_000_000, 1_500_000], // 截止时间倒退
+    [2_000_000, 2_001_000], // 两个截止时间都在未来
+    [1_000_001, 19_000_000], // 即使只差1ms,也不猜测服务端时钟偏差
+    [500_000, 900_000], // 两份都是历史快照
+    [null, 2_000_000],
+    [500_000, null],
+    [Number.NaN, 2_000_000],
+    [500_000, Number.POSITIVE_INFINITY],
+  ])('rejects unconfirmed reset times %s → %s', (previousReset, nextReset) => {
+    expect(shouldCelebrateQuotaReset(
+      slot({ remainingPercent: 60, resetsAtMs: previousReset }),
+      slot({ remainingPercent: 98, resetsAtMs: nextReset }),
+      1_000_000,
+    )).toBe(false);
+  });
+
+  it('does not celebrate unchanged or sub-point remaining values even across cycles', () => {
+    for (const remainingPercent of [98, 98.1, Number.NaN]) {
+      expect(shouldCelebrateQuotaReset(
+        slot({ remainingPercent: 98, resetsAtMs: 500_000 }),
+        slot({ remainingPercent, resetsAtMs: 2_000_000 }),
+        1_000_000,
+      )).toBe(false);
+    }
   });
 
   it('never triggers across window identities, on decreases, or without a baseline', () => {
