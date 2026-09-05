@@ -1,3 +1,7 @@
+import { mobileDurableOutbox, holdDurableOutboxCreation } from '@/session/mobileDurableOutbox';
+import { retainOutboxFile, durableOutboxUploadUri } from '@/session/durableOutboxFiles';
+import { buildOutboxItem, createOutboxClientId } from '@/session/sessionOutbox';
+import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -416,6 +420,7 @@ export default function NewRemoteSessionScreen() {
     deviceExplicit?: string;
     visualFocusComposer?: string;
     visualDraft?: string;
+    recoverySessionId?: string;
   }>();
   const routeDeviceId = String(params.deviceId ?? '');
   const routeDeviceName = String(params.deviceName ?? routeDeviceId);
@@ -609,6 +614,23 @@ export default function NewRemoteSessionScreen() {
   // 附件是已上传完成的引用,原样回列即可继续使用;notice 是「有内容没能带回」的告知
   // (创建期间发出的消息可能超出单条上限,装不下的只能丢,但不能静默丢,review P1)。
   // 声明在 attachmentError 之后:notice 就落在附件错误行上。
+  const outboxRecoveryRef = useRef<DurableOutboxRecord | null>(null);
+  useEffect(() => {
+    const sid = String(params.recoverySessionId ?? '');
+    if (!sid) return;
+    let active = true;
+    void mobileDurableOutbox.ready().then(() => {
+      if (!active) return;
+      const record = mobileDurableOutbox.getSnapshot().find((r) => r.item.sessionId === sid && r.creation);
+      if (!record?.creation || record.prepared) return;
+      outboxRecoveryRef.current = record;
+      setDraft(record.creation.draft);
+      setAttachments(record.item.attachmentSlots.filter((a): a is RemoteSerializedAttachment => a !== null));
+      setSelectedDeviceId(record.deviceId);
+      setSelectedDeviceName(record.creation.deviceName);
+    });
+    return () => { active = false; };
+  }, [params.recoverySessionId]);
   useEffect(() => {
     const stashed = drainStashedNewSessionDraft();
     if (!stashed) return;
@@ -649,6 +671,8 @@ export default function NewRemoteSessionScreen() {
     discardAllPendingUploads,
     waitForPendingUploads,
     getPendingUploadCount,
+    getUploadedSource,
+    releaseUploadedSources,
   } = useMobileLocalAttachments({
     getAccessToken: () => auth.getAccessToken(),
     getAttachmentCount: () => attachmentsRef.current.length,
@@ -3785,6 +3809,7 @@ export default function NewRemoteSessionScreen() {
     });
     // 标注附件退场时同步清「矢量笔迹 + 原图副本」的再编辑真相。
     composerAnnotationsRef.current?.forgetAttachment(id);
+    releaseUploadedSources([id]);
   }, [attachments, auth]);
 
   // 圈点标注(托盘再编辑)与附件管线的接线(新建会话页无聊天场景,chat 配置不用)。
@@ -4056,6 +4081,7 @@ export default function NewRemoteSessionScreen() {
     // 回来的是新 mount,creatingRef 天然复位。
     let handedOff = false;
     let releasePrecreatedRegistration: (() => void) | null = null;
+    let releaseDurableCreation: (() => void) | null = null;
     const accountIdAtCreate = auth.user?.id?.trim() ?? '';
     const authOwnerAtCreate = getMobileAuthOwner();
     const isCurrentOwner = () => (
@@ -4161,7 +4187,25 @@ export default function NewRemoteSessionScreen() {
       // 幂等),点创建**立即**进入会话页;openLink / 鉴权 revalidate / createSession
       // / 首条消息 enqueue 全部由 newSessionCreation 模块级后台管线完成(本页
       // unmount 不终止),失败重试面在会话页(横幅:重试 / 返回编辑)。
-      const sessionId = createNewSessionId();
+      const recovering = outboxRecoveryRef.current;
+      if (recovering && recovering.deviceId !== selectedDeviceId) {
+        throw new Error(t('session.outbox.recoveryTarget'));
+      }
+      const sessionId = recovering?.item.sessionId ?? createNewSessionId();
+      if (recovering) {
+        // Editing creation parameters is allowed only after the original task is proven absent.
+        let found = false;
+        try { found = !!(await maker.getSession(sessionId)); }
+        catch (error) {
+          if (!formatRemoteError(error).includes('NOT_FOUND')) throw error;
+        }
+        if (!isCurrentOwner()) return;
+        if (found) {
+          const latest = mobileDurableOutbox.getSnapshot().find((r) => r.item.clientId === recovering.item.clientId && r.item.sessionId === sessionId);
+          if (latest && !latest.prepared) await mobileDurableOutbox.update(latest, { suspended: false, state: 'queued' });
+          throw new Error(t('session.outbox.taskAlreadyCreated'));
+        }
+      }
       let precreatedWorktree: {
         path: string;
         recoveryKey: string;
@@ -4320,6 +4364,50 @@ export default function NewRemoteSessionScreen() {
           return;
         }
       }
+      const agentKindSnapshot = effectiveDraft.agentKind;
+      const deviceIdSnapshot = selectedDeviceId;
+      // 老协议 plan 一次性语义(对齐桌面 PR#494):入队后恢复进入前的底层权限档。
+      const legacyPlanRestore = effectiveDraft.permissionMode === 'plan'
+        ? (() => {
+          const fallback = runtimeOptions.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
+          const remembered = prePlanPermissionModeRef.current;
+          return remembered && remembered !== 'plan' ? remembered : fallback;
+        })()
+        : null;
+      if (!isCurrentOwner()) return;
+      releaseDurableCreation = holdDurableOutboxCreation(sessionId);
+      const firstMessageClientId = recovering?.item.clientId ?? createOutboxClientId();
+      const firstRecord: DurableOutboxRecord = {
+        version: 1, accountId: accountIdAtCreate, deviceId: deviceIdSnapshot,
+        createdAt: recovering?.createdAt ?? Date.now(), state: 'queued', suspended: false, uploads: [], clearBoundaryMs: null,
+        creation: { draft: effectiveDraft, deviceName: selectedDeviceName,
+          planModeArm: planModeCapability && planModeDraftOn, restorePermissionMode: legacyPlanRestore },
+        item: buildOutboxItem({
+          clientId: firstMessageClientId, sessionId, text: effectiveDraft.firstMessage,
+          quotesEncoded: false, agentReferences: [], pastedTextRanges: [], slashCommandRanges: [],
+          permissionModeAtSend: effectiveDraft.permissionMode, readyAttachments: sendAttachments,
+          readyPreviews: sendAttachments.map((a) => attachmentPreviews[a.id] ?? null), claimedUploads: [],
+        }),
+      };
+      for (let slot = 0; slot < sendAttachments.length; slot++) {
+        const attachment = sendAttachments[slot];
+        const source = getUploadedSource(attachment.id);
+        const oldSlot = recovering?.item.attachmentSlots.findIndex((a) => a?.id === attachment.id);
+        const oldUpload = recovering?.uploads.find((u) => u.slot === oldSlot);
+        if (source) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, source));
+        else if (recovering && oldUpload) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, {
+          ...oldUpload, uri: durableOutboxUploadUri(recovering, oldUpload),
+        }));
+      }
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+      if (recovering) {
+        const latest = mobileDurableOutbox.getSnapshot().find((r) => r.item.clientId === firstMessageClientId && r.item.sessionId === sessionId);
+        if (!latest || latest.prepared) throw new Error('OUTBOX_STALE_WRITE');
+        await mobileDurableOutbox.update(latest, firstRecord);
+      } else await mobileDurableOutbox.add(firstRecord);
+      outboxRecoveryRef.current = firstRecord;
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+      releaseUploadedSources(sendAttachments.map((a) => a.id));
       // 提交点联合终检(Greptile/Codex review P1):目录就绪后的清理 effect 跑在渲染后,
       // 用户可能在清理生效前点创建——创建路径自身必须守卫;来源失效时 model 随之一并
       // 回退(其他来源顶替 / 首项 / 内置默认),并同步校准 effort、组合变化时 fastMode
@@ -4410,20 +4498,10 @@ export default function NewRemoteSessionScreen() {
         if (!ensureDeviceAlive()) return;
         applyGuard(guardResult);
       }
-      const agentKindSnapshot = effectiveDraft.agentKind;
-      const deviceIdSnapshot = selectedDeviceId;
-      // 老协议 plan 一次性语义(对齐桌面 PR#494):入队后恢复进入前的底层权限档。
-      const legacyPlanRestore = effectiveDraft.permissionMode === 'plan'
-        ? (() => {
-          const fallback = runtimeOptions.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
-          const remembered = prePlanPermissionModeRef.current;
-          return remembered && remembered !== 'plan' ? remembered : fallback;
-        })()
-        : null;
-      if (!isCurrentOwner()) return;
       startNewSessionCreation({
         startedAt,
         sessionId,
+        firstMessageClientId,
         deviceId: deviceIdSnapshot,
         deviceName: selectedDeviceName,
         draft: effectiveDraft,
@@ -4480,6 +4558,12 @@ export default function NewRemoteSessionScreen() {
         isCurrentOwner,
         transport: {
           maker,
+          handoffFirstMessage: async (item) => {
+            if (!isCurrentOwner()) throw new Error('OUTBOX_OWNER_CHANGED');
+            const record = mobileDurableOutbox.getSnapshot().find((r) => r.item.sessionId === sessionId && r.item.clientId === firstMessageClientId);
+            if (!record) throw new Error('OUTBOX_STALE_WRITE');
+            await mobileDurableOutbox.update(record, { template: item, state: 'queued', suspended: false, error: undefined });
+          },
           openLink,
           subscribe,
           prepareQueuedMessage: (item) => prepareMobileQueuedSessionReferences(
@@ -4513,6 +4597,7 @@ export default function NewRemoteSessionScreen() {
       setError(raw);
     } finally {
       releasePrecreatedRegistration?.();
+      releaseDurableCreation?.();
       if (!handedOff) {
         creatingRef.current = false;
         setCreating(false);

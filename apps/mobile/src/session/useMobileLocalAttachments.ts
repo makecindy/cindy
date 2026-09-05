@@ -91,6 +91,9 @@ async function deleteLocalUris(uris: readonly string[]): Promise<void> {
 }
 
 export interface UseMobileLocalAttachmentsResult {
+  beginOutboxAttachmentHandoff: () => Promise<ReturnType<MobileLocalAttachmentUploadController['beginHandoff']>>;
+  getUploadedSource: (id: string) => MobileLocalAttachmentUploadCandidate | undefined;
+  releaseUploadedSources: (ids: readonly string[]) => void;
   /** 上传中的附件(托盘渲染 pending 卡)。 */
   pendingUploads: readonly PendingLocalAttachmentUpload[];
   /**
@@ -260,6 +263,9 @@ export function useMobileLocalAttachments(
     optionsRef.current.onError(t('composer.upload.clipboardReadFailed'));
   };
 
+  const uploadedSourcesRef = useRef(new Map<string, MobileLocalAttachmentUploadCandidate>());
+  const stagingUrisRef = useRef(new Set<string>());
+  const stagingOwnerRef = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const controller = useMemo(() => createMobileLocalAttachmentUploadController({
     preprocess: preprocessMobileImageForUpload,
     statSize: statMobileAttachmentFileSize,
@@ -268,8 +274,8 @@ export function useMobileLocalAttachments(
       else assertMobileDocumentSize(size);
     },
     upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, opts),
-    discard: (attachment) => discardMobileUploadedAttachment(attachment, {
-      getToken: () => optionsRef.current.getAccessToken(),
+    discard: (attachment, token) => discardMobileUploadedAttachment(attachment, {
+      getToken: () => token === undefined ? optionsRef.current.getAccessToken() : Promise.resolve(token),
     }),
     onPendingChange: setPendingUploads,
     onUploaded: async (attachment, candidate, uploadedUri, localId, localUris, isActive) => {
@@ -308,6 +314,23 @@ export function useMobileLocalAttachments(
         for (const uri of localUris) pastedImageLocalUrisRef.current.add(uri);
       }
       if (!isActive()) return;
+      // Keep the actual PUT bytes for all file kinds until the composer hands them off.
+      // Thumbnail caches are evictable and cannot be the only source of an unsent attachment.
+      if (!FileSystem.cacheDirectory) throw new Error('OUTBOX_STORAGE_UNAVAILABLE');
+      const stageDir = `${FileSystem.cacheDirectory}outbox-attachment-stage/${stagingOwnerRef.current}/`;
+      await FileSystem.makeDirectoryAsync(stageDir, { intermediates: true });
+      const stageUri = stageDir + encodeURIComponent(attachment.id);
+      await FileSystem.copyAsync({ from: uploadedUri, to: stageUri });
+      stagingUrisRef.current.add(stageUri);
+      if (!isActive()) {
+        await FileSystem.deleteAsync(stageUri, { idempotent: true });
+        stagingUrisRef.current.delete(stageUri);
+        return;
+      }
+      uploadedSourcesRef.current.set(attachment.id, {
+        ...candidate, uri: stageUri, name: attachment.name, mimeType: attachment.mimeType,
+        size: attachment.size, resolve: undefined, skipPreprocess: true, cleanupLocalUris: undefined,
+      });
       optionsRef.current.onUploaded(attachment, deliveredCandidate, localId);
       if (candidate.cleanupLocalUris) {
         // 只有持久缩略图已经接管 composer / sent-message 预览后才删源文件；
@@ -373,7 +396,10 @@ export function useMobileLocalAttachments(
 
   useEffect(() => () => {
     controller.dispose();
-    const pastedUris = [...pastedImageLocalUrisRef.current];
+    const pastedUris = [...pastedImageLocalUrisRef.current].filter((uri) => !controller.isRetainingUri(uri));
+    void deleteLocalUris([...stagingUrisRef.current]);
+    stagingUrisRef.current.clear();
+    uploadedSourcesRef.current.clear();
     pastedImageLocalUrisRef.current.clear();
     if (pastedUris.length > 0) void deleteLocalUris(pastedUris);
     if (pastePlaceholderTimerRef.current) {
@@ -559,6 +585,25 @@ export function useMobileLocalAttachments(
   };
 
   return {
+    beginOutboxAttachmentHandoff: async () => {
+      for (;;) {
+        await controller.waitForDelivering();
+        try { return controller.beginHandoff(); }
+        catch (error) {
+          if (!(error instanceof Error) || error.message !== 'ATTACHMENT_DELIVERING') throw error;
+        }
+      }
+    },
+    getUploadedSource: (id) => uploadedSourcesRef.current.get(id),
+    releaseUploadedSources: (ids) => {
+      for (const id of ids) {
+        const source = uploadedSourcesRef.current.get(id);
+        if (!source) continue;
+        uploadedSourcesRef.current.delete(id);
+        stagingUrisRef.current.delete(source.uri);
+        void deleteLocalUris([source.uri]);
+      }
+    },
     pendingUploads,
     pastePlaceholderCount,
     beginPastePlaceholders,

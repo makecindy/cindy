@@ -64,6 +64,7 @@ export type NewSessionCreationStatus = 'running' | 'create-failed' | 'enqueue-fa
 
 export interface NewSessionCreationTransport {
   maker: MobileMakerTransport;
+  handoffFirstMessage?: (item: QueuedRemoteMessage) => Promise<void>;
   openLink: (deviceId: string) => Promise<unknown>;
   subscribe: (owner: string, deviceId: string, topics: string[]) => Promise<void>;
   /** 手机控制端在首条消息越过 device-link 前读取各引用来源的可信历史快照。 */
@@ -73,6 +74,7 @@ export interface NewSessionCreationTransport {
 export interface NewSessionCreationParams {
   /** 从按下发送起计时，跨页面交接不重置慢发送提示。 */
   startedAt?: number;
+  firstMessageClientId?: string;
   sessionId: string;
   deviceId: string;
   deviceName: string;
@@ -269,7 +271,7 @@ function synthesizeSession(params: NewSessionCreationParams, draftOverride?: New
  */
 export function startNewSessionCreation(params: NewSessionCreationParams): void {
   if (params.isCurrentOwner && !params.isCurrentOwner()) return;
-  const firstMessageClientId = createUuid();
+  const firstMessageClientId = params.firstMessageClientId ?? createUuid();
   const firstMessageSessionRefs = extractMobileSessionReferences(
     params.draft.firstMessage,
     remoteSessionStore.getSessionDeviceId,
@@ -1026,6 +1028,18 @@ async function runPipeline(task: InternalTask): Promise<void> {
       task.firstMessageClientId,
       { attachments: [...params.attachments] },
     ), task.firstMessageSessionRefs);
+    if (params.transport.handoffFirstMessage) {
+      try {
+        await params.transport.handoffFirstMessage(queuedDraft);
+        assertTaskOwnerCurrent(task);
+        remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { pendingLocalCreation: false });
+        finishTask(task);
+      } catch (error) {
+        if (isStaleNewSessionOwnerError(error)) throw error;
+        failTask(task, 'enqueue-failed', formatRemoteError(error));
+      }
+      return;
+    }
     let queued = queuedDraft;
     if (params.transport.prepareQueuedMessage) {
       try {

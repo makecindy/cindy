@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getDbClient: vi.fn(),
+  epoch: 1,
 }));
 
 vi.mock('../client/current', () => ({
   getDbClient: mocks.getDbClient,
+  getCurrentDbClientSnapshot: () => ({ client: mocks.getDbClient(), userId: "test", clientEpoch: mocks.epoch }),
 }));
 
 import {
@@ -14,6 +16,9 @@ import {
   awaitAgentInputQueueSnapshotPersistence,
   loadAgentInputQueueSnapshotCounts,
   saveAgentInputQueueSnapshot,
+  saveCancelledInputDelivery,
+  hasInputDeliveryCancellation,
+  readInputDeliveryReceipts,
 } from '../agentInputQueueSnapshots.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 
@@ -238,4 +243,64 @@ describe('agent input queue snapshot durability boundary', () => {
       'db unavailable',
     );
   });
+  it('does not erase a snapshot when cancellation persistence fails, and retries the intent first', async () => {
+    let failing = true;
+    const inserted: Array<Record<string, unknown>> = [];
+    const insert = vi.fn(() => ({ values: (row: Record<string, unknown>) => ({
+      onConflictDoNothing: async () => {
+        if (failing) throw new Error('disk full');
+        inserted.push(row);
+      },
+      onConflictDoUpdate: async () => { inserted.push(row); },
+    }) }));
+    const where = vi.fn(async () => undefined);
+    mocks.getDbClient.mockReturnValue({ drizzle: { insert, delete: () => ({ where }) } });
+    await expect(saveCancelledInputDelivery('cancel-retry', 'cancelled-id')).rejects.toThrow('disk full');
+    await expect(saveAgentInputQueueSnapshot('cancel-retry', [])).rejects.toThrow('disk full');
+    expect(where).not.toHaveBeenCalled();
+    failing = false;
+    await saveAgentInputQueueSnapshot('cancel-retry', []);
+    expect(inserted).toEqual([expect.objectContaining({ role: 'message_tombstone', content: 'null', clientId: 'cancelled-id' })]);
+    expect(where).toHaveBeenCalledOnce();
+    expect(hasInputDeliveryCancellation('cancel-retry', 'cancelled-id')).toBe(true);
+    await expect(awaitAgentInputQueueSnapshotPersistence('cancel-retry')).resolves.toBeUndefined();
+  });
+  it('fences queued writes at an account switch without writing to the next account', async () => {
+    const gate = deferred<void>();
+    const first = installDb({ write: () => gate.promise });
+    const write1 = saveAgentInputQueueSnapshot('owner-switch', [queued('a')]);
+    const write2 = saveAgentInputQueueSnapshot('owner-switch', [queued('b')]);
+    await Promise.resolve();
+    mocks.epoch += 1;
+    const second = installDb();
+    gate.resolve();
+    await expect(write1).rejects.toThrow('DbClient not ready');
+    await expect(write2).rejects.toThrow('DbClient not ready');
+    expect(first.insert).toHaveBeenCalledOnce();
+    expect(second.insert).not.toHaveBeenCalled();
+    await saveAgentInputQueueSnapshot('owner-switch', [queued('new-owner')]);
+    expect(second.insert).toHaveBeenCalledOnce();
+  });
+  it('reads the queue before history so a queue-to-message transfer cannot appear unknown', async () => {
+    const events: string[] = [];
+    const where = vi.fn()
+      .mockImplementationOnce(async () => { events.push('queue'); return [{ payload: JSON.stringify([queued('a', 'id-a')]) }]; })
+      .mockImplementationOnce(async () => { events.push('history'); return [
+        { clientId: 'id-a', role: 'user', rewindAt: null },
+        { clientId: 'id-b', role: 'message_tombstone', rewindAt: 123 },
+      ]; });
+    mocks.getDbClient.mockReturnValue({ drizzle: { select: () => ({ from: () => ({ where }) }) } });
+    expect(await readInputDeliveryReceipts('receipt-transfer', ['id-a', 'id-b', 'id-c'])).toEqual([
+      { clientId: 'id-a', state: 'accepted' }, { clientId: 'id-b', state: 'removed' }, { clientId: 'id-c', state: 'unknown' },
+    ]);
+    expect(events).toEqual(['queue', 'history']);
+  });
+  it('does not report unknown when the delivery snapshot is corrupt or its database read fails', async () => {
+    const where = vi.fn().mockResolvedValue([{ payload: '{invalid' }]);
+    mocks.getDbClient.mockReturnValue({ drizzle: { select: () => ({ from: () => ({ where }) }) } });
+    await expect(readInputDeliveryReceipts('receipt-invalid', ['id-a'])).rejects.toThrow();
+    where.mockRejectedValueOnce(new Error('db unavailable'));
+    await expect(readInputDeliveryReceipts('receipt-invalid', ['id-a'])).rejects.toThrow('db unavailable');
+  });
+
 });

@@ -502,5 +502,13 @@
     "noExtraDirsSummary": "No additional directories",
     "attachmentUploadFailed": "Attachment upload failed; retry or delete this message.",
     "authGateHint": "{{agent}} has no connected model provider on this computer, so sending will fail. Set it up in {{appName}} on the computer under Settings → Model Providers."
+  },
+  "outbox": {
+    "creationRecoveryRequired": "Retry creating this task before deleting its first message. That message keeps the recovery details for your later messages.",
+    "confirmationRequired": "This computer cannot confirm whether the message was received. Check its history or update Cindy before retrying.",
+    "taskCleared": "This task was cleared after you sent the message. The saved message has been kept for you to review.",
+    "restoreFailed": "Saved messages could not be restored. They have not been deleted. Restart the app and try again.",
+    "recoveryTarget": "Keep the original computer while recovering this task. Its later messages are still saved.",
+    "taskAlreadyCreated": "This task already exists on the computer. Its saved messages will resume there."
   }
 }

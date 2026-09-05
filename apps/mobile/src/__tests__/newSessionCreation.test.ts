@@ -923,4 +923,24 @@ describe('newSessionCreation pipeline', () => {
       phase: 'session-create-started',
     }]);
   });
+  it('hands the persisted first message to the outbox without issuing a competing enqueue', async () => {
+    const maker = makeMaker();
+    const params = makeParams('durable-first', maker, { firstMessageClientId: 'persisted-first-id' });
+    const handoff = vi.fn(async () => undefined);
+    params.transport.handoffFirstMessage = handoff;
+    startNewSessionCreation(params);
+    await flushPipeline();
+    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }));
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('durable-first')).toBeNull();
+    expect(remoteSessionStore.getSessions().find((session) => session.id === 'durable-first')?.pendingLocalCreation).toBe(false);
+  });
+  it('keeps the creation task recoverable when saving the first-message handoff fails', async () => {
+    const maker = makeMaker(); const params = makeParams('durable-first-failed', maker, { firstMessageClientId: 'saved-id' });
+    params.transport.handoffFirstMessage = async () => { throw new Error('disk full'); };
+    startNewSessionCreation(params); await flushPipeline();
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('durable-first-failed')).toMatchObject({ status: 'enqueue-failed', firstMessageClientId: 'saved-id' });
+  });
+
 });
