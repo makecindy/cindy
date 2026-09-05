@@ -1077,6 +1077,194 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     expect(starts[1].attemptId).toMatch(/^[0-9a-f]{16,64}$/);
     expect(starts[0].attemptId).not.toBe(starts[1].attemptId);
   });
+
+  it('idle-stopped worker waits for old process exit before forking replacement (#3330)', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'on-demand' });
+    const children: FakeNodeProcess[] = [];
+
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => {
+        const child = makeAutoReplyProcess();
+        children.push(child);
+        return child as unknown as NodeWorkerProcess;
+      },
+    });
+
+    // Start first worker.
+    const p1 = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(p1).resolves.toMatchObject({ ok: true });
+    expect(children).toHaveLength(1);
+    const firstChild = children[0];
+
+    // Override kill to NOT auto-emit exit (simulate Windows delayed exit).
+    firstChild.removeAllListeners('exit');
+    firstChild.kill = vi.fn(() => {
+      firstChild.killed = true;
+      return true;
+    });
+
+    // Trigger idle stop by advancing past idle timeout (120s).
+    await vi.advanceTimersByTimeAsync(120_000 + 1);
+    expect(firstChild.killed).toBe(true);
+    expect(broker.stateOf('node-ghost')).toBe('off');
+
+    // Second request arrives while old process hasn't exited.
+    let resolved = false;
+    const p2 = broker.handleRequest('node-ghost', rpcRequest()).then((r) => {
+      resolved = true;
+      return r;
+    });
+
+    // ensureWorker should be awaiting draining — not yet resolved.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(resolved).toBe(false);
+    expect(children).toHaveLength(1); // no new child forked yet
+
+    // Old process finally exits.
+    firstChild.emit('exit', null, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Now the new child should start.
+    expect(children).toHaveLength(2);
+    const secondChild = children[1];
+    secondChild.emit('spawn');
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(p2).resolves.toMatchObject({ ok: true });
+    expect(broker.stateOf('node-ghost')).toBe('running');
+  });
+
+  it('同一 key 的并发 replacement 请求只启动一个 worker', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'on-demand' });
+    const children: FakeNodeProcess[] = [];
+    const brokers = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => {
+        const child = makeAutoReplyProcess();
+        children.push(child);
+        return child as unknown as NodeWorkerProcess;
+      },
+    });
+
+    const first = brokers.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(first).resolves.toMatchObject({ ok: true });
+    const old = children[0];
+    old.removeAllListeners('exit');
+    old.kill = vi.fn(() => {
+      old.killed = true;
+      return true;
+    });
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    const a = brokers.handleRequest('node-ghost', rpcRequest());
+    const b = brokers.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(1);
+    old.emit('exit', null, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+    children[1].emit('spawn');
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(a).resolves.toMatchObject({ ok: true });
+    await expect(b).resolves.toMatchObject({ ok: true });
+    brokers.destroyAll();
+  });
+
+  it('旧 worker 在强杀后仍不退出时拒绝 replacement，不并行启动新进程', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'on-demand' });
+    const children: FakeNodeProcess[] = [];
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => {
+        const child = makeAutoReplyProcess();
+        children.push(child);
+        return child as unknown as NodeWorkerProcess;
+      },
+    });
+
+    await expect(broker.handleRequest('node-ghost', rpcRequest())).resolves.toMatchObject({
+      ok: true,
+    });
+    const old = children[0];
+    old.removeAllListeners('exit');
+    old.kill = vi.fn(() => {
+      old.killed = true;
+      return true;
+    });
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    const replacement = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(2_501);
+
+    await expect(replacement).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: expect.stringContaining('停止超时'),
+    });
+    expect(children).toHaveLength(1);
+  });
+
+  it('停止超时后 drain 标记保留：下一个请求继续等待同一退出事件，不在旧进程存活时 fork', async () => {
+    // 回归(#3343 Codex P1)：stop 超时拒绝第一个 replacement 后，若 finally
+    // 无条件删除 drain 标记，后续请求会看到无 worker/无 startup/无 drain，
+    // 在旧进程仍握着 Windows 文件锁/端口时 fork replacement，重新制造 #3330。
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'on-demand' });
+    const children: FakeNodeProcess[] = [];
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => {
+        const child = makeAutoReplyProcess();
+        children.push(child);
+        return child as unknown as NodeWorkerProcess;
+      },
+    });
+
+    await expect(broker.handleRequest('node-ghost', rpcRequest())).resolves.toMatchObject({
+      ok: true,
+    });
+    const old = children[0];
+    old.removeAllListeners('exit');
+    old.kill = vi.fn(() => {
+      old.killed = true;
+      return true;
+    });
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    // 第一个 replacement：等待 drain 超时，被拒。
+    const first = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(2_501);
+    await expect(first).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('停止超时'),
+    });
+    expect(children).toHaveLength(1); // 未 fork
+
+    // 第二个请求：旧进程仍未退出，必须继续等待而不是 fork。
+    let secondSettled = false;
+    const second = broker.handleRequest('node-ghost', rpcRequest()).then((r) => {
+      secondSettled = true;
+      return r;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(secondSettled).toBe(false);
+    expect(children).toHaveLength(1); // 关键断言：不并行 fork
+
+    // 旧进程真正退出后，同一退出事件驱动 replacement 启动。
+    old.emit('exit', null, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+    children[1].emit('spawn');
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(second).resolves.toMatchObject({ ok: true });
+    expect(broker.stateOf('node-ghost')).toBe('running');
+    broker.destroyAll();
+  });
 });
 
 describe('nodeRuntimeBroker · 启动瞬时失败重试(2026-07-24)', () => {
