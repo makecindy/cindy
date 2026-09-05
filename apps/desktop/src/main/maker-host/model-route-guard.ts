@@ -128,7 +128,12 @@ export function materializeExclusiveProviderRoute(
   const catalogId = exclusiveXaiCatalogModelId(modelId);
   const copy =
     (catalogId ? getModel(xai, catalogId, planeAgent) : undefined)
-    ?? getModel(xai, modelId.replace(/\[1m\]$/i, ''), planeAgent);
+    ?? getModel(xai, modelId.replace(/\[1m\]$/i, ''), planeAgent)
+    ?? (agent === 'grok-build'
+      ? (catalogId ? getModel(xai, catalogId, 'claude-code') : undefined)
+        ?? getModel(xai, modelId.replace(/\[1m\]$/i, ''), 'claude-code')
+      : undefined);
+  if (agent === 'grok-build' && !copy) return { kind: 'reject' };
   if (copy && !isModelSelectableForNewRoute(copy, { userProvider: false })) {
     return { kind: 'reject' };
   }

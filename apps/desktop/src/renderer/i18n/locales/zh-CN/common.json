@@ -7325,15 +7325,15 @@
         "grok-build": {
           "ask": {
             "label": "默认权限",
-            "description": "Grok Build 写入文件、执行命令或离开工作区的工具每次都通过 ACP 询问。"
+            "description": "只读工具直接执行；写文件、跑命令和 MCP 工具每次都询问。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "工作区内写入和安全命令自动执行；区外写入和高风险命令仍会询问。Cindy 自动审批拦截 ACP 权限请求。"
+            "description": "工作区内写文件与安全命令自动执行；越界写、危险命令和 MCP 工具仍会询问。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "Grok Build 以 always-approve 运行，不再询问。风险最高，只适合可信任务。"
+            "description": "常规工具无需询问直接执行；agent 发起的扩展变更仍需确认。风险最高，只适合可信任务。"
           }
         }
       }

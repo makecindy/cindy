@@ -1309,7 +1309,8 @@ describe('hasUsableConnectedSource (picker / send-ready)', () => {
     );
     expect(views.some((provider) => provider.agents.includes('grok-build'))).toBe(false);
     expect(hasUsableConnectedSource(views, 'grok-build', 'grok-4.6')).toBe(true);
-    expect(hasUsableConnectedSource(views, 'grok-build', 'xai/grok-4.5')).toBe(true);
+    expect(hasUsableConnectedSource(views, 'grok-build', 'xai/grok-4.6')).toBe(true);
+    expect(hasUsableConnectedSource(views, 'grok-build', 'xai/grok-4.5')).toBe(false);
     expect(hasUsableConnectedSource(views, 'grok-build')).toBe(true);
     expect(hasUsableConnectedSource([], 'grok-build', 'grok-4.3')).toBe(false);
     expect(hasUsableConnectedSource([], 'grok-build', 'grok-build')).toBe(false);

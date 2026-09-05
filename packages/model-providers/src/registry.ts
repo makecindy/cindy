@@ -14,6 +14,7 @@
 
 import type { Catalog, Provider, CatalogModel, AgentKind, RoutingDescriptor } from './types.js';
 import {
+  exclusiveXaiCatalogModelId,
   isAgentSelectableModel,
   isExclusiveXaiModelId,
   isModelSelectableForNewRoute,
@@ -305,6 +306,30 @@ export function isGrokBuildSourceReady(
   );
 }
 
+function grokBuildModelCopy(
+  views: readonly ProviderView[],
+  modelId: string,
+  opts: { includeSuspended?: boolean } = {},
+): CatalogModel | undefined {
+  const xai = views.find(
+    (provider) =>
+      provider.id === 'xai' &&
+      provider.connected &&
+      (opts.includeSuspended === true || provider.suspended !== true),
+  );
+  if (!xai) return undefined;
+  const ids = [modelId, exclusiveXaiCatalogModelId(modelId)].filter(
+    (id, index, list): id is string => Boolean(id) && list.indexOf(id) === index,
+  );
+  for (const plane of ['pi', 'claude-code'] as const) {
+    for (const id of ids) {
+      const copy = getModel(xai, id, plane);
+      if (copy) return copy;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Picker trigger / Send 门禁的「有没有可用来源」。
  *
@@ -320,9 +345,16 @@ export function hasUsableConnectedSource(
 ): boolean {
   if (!agent) return false;
   if (agent === 'grok-build') {
-    return isGrokBuildSourceReady(views, {
+    const ready = isGrokBuildSourceReady(views, {
       ...(opts.includeSuspended === true ? { includeSuspended: true } : {}),
     });
+    if (!ready) return false;
+    if (!modelId) return true;
+    if (!isExclusiveXaiModelId(modelId)) return false;
+    const copy = grokBuildModelCopy(views, modelId, {
+      ...(opts.includeSuspended === true ? { includeSuspended: true } : {}),
+    });
+    return !!copy && isModelSelectableForNewRoute(copy, { userProvider: false });
   }
   if (modelId) {
     return (

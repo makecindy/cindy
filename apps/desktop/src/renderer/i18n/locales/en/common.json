@@ -7327,15 +7327,15 @@
         "grok-build": {
           "ask": {
             "label": "Default permissions",
-            "description": "Grok Build tools that write files, run commands, or leave the workspace ask each time via ACP prompts."
+            "description": "Read-only tools run directly; writing files, running commands, and MCP tools ask each time."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "In-workspace writes and safe commands run automatically; out-of-workspace writes and risky commands still ask. Cindy Auto-review intercepts ACP permission requests."
+            "description": "In-workspace writes and safe commands run automatically; out-of-workspace writes, risky commands, and MCP tools still ask."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Grok Build runs with always-approve. Highest risk; use only for trusted tasks."
+            "description": "Routine tools run without asking. Agent-initiated extension changes still require tool approval. Highest risk; use only for trusted tasks."
           }
         }
       }

@@ -560,14 +560,16 @@ describe('materializeExclusiveProviderRoute', () => {
   });
 
   it('Grok Build hosted harness pins exclusive Grok to SuperGrok', () => {
-    expect(materializeExclusiveProviderRoute(xaiViews(), 'grok-build', 'grok-4.6', null))
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'grok-build', 'xai/grok-4.5', null))
       .toEqual({ kind: 'pin', providerId: 'xai' });
-    expect(materializeExclusiveProviderRoute(xaiViews({ xd: true, xai: false }), 'grok-build', 'xai/grok-4.6', null))
+    expect(materializeExclusiveProviderRoute(xaiViews({ xd: true, xai: false }), 'grok-build', 'xai/grok-4.5', null))
       .toEqual({ kind: 'reject' });
-    expect(checkModelRoute(xaiViews({ xd: true, xai: false }), 'grok-build', 'grok-4.6', null))
+    expect(checkModelRoute(xaiViews({ xd: true, xai: false }), 'grok-build', 'xai/grok-4.5', null))
       .toEqual({ kind: 'reject', reason: 'exclusive-source-unavailable' });
-    expect(checkModelRoute(xaiViews(), 'grok-build', 'grok-4.6', null))
+    expect(checkModelRoute(xaiViews(), 'grok-build', 'xai/grok-4.5', null))
       .toEqual({ kind: 'reroute', providerId: 'xai' });
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'grok-build', 'grok-4.6', null))
+      .toEqual({ kind: 'reject' });
     expect(checkModelRoute(xaiViews(), 'claude-code', 'grok-4.6', null))
       .toEqual({ kind: 'reroute', providerId: 'xai' });
   });
