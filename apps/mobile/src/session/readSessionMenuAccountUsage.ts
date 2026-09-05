@@ -75,13 +75,13 @@ export async function readSessionMenuAccountUsage(
       false,
     );
   }
+  // The host projects runtime-effective selection onto providerId. A missing
+  // Pi provider is still unresolved: its default can be a non-Gateway source.
   const gateway =
     provider === "xd" ||
     (provider === null &&
-      ((session.agentKind === "codex" && model.startsWith("codex/")) ||
-        (session.agentKind === "pi" &&
-          !model.startsWith("xai/") &&
-          !model.startsWith("chatgpt/"))));
+      session.agentKind === "codex" &&
+      model.startsWith("codex/"));
   if (gateway) {
     const payload = record(await reader.getAccountUsage("claude-code"));
     const result = empty("gateway");

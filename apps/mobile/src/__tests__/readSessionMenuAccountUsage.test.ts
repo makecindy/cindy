@@ -82,30 +82,58 @@ describe("existing remote quota compatibility", () => {
     },
   );
 
-  it("uses existing Gateway cycle usage for an explicit Gateway provider and preserves currency", async () => {
-    const r = reader();
-    r.getAccountUsage.mockResolvedValue({
-      spend: 12,
-      maxBudget: 100,
-      todaySpend: 0,
-      currency: "CNY",
-      fetchedAt: 1000,
-    });
-    const result = await readSessionMenuAccountUsage(
-      { ...session, providerId: "xd" },
-      r,
-    );
-    expect(result).toMatchObject({
-      source: "gateway",
-      updatedAt: 1000,
-      amounts: [
-        { id: "cycle", amount: 12, limit: 100, currency: "CNY" },
-        { id: "today", amount: 0, currency: "CNY" },
-      ],
-    });
-    expect(r.getAccountUsage).toHaveBeenCalledWith("claude-code");
-    expect(r.getCodexRateLimits).not.toHaveBeenCalled();
-  });
+  it.each([null, undefined, "", "  ", "anthropic", "custom"])(
+    "does not attribute Gateway usage to a Pi task without a confirmed Gateway source: %s",
+    async (providerId) => {
+      const r = reader();
+      r.getAccountUsage.mockResolvedValue({
+        spend: 12,
+        maxBudget: 100,
+        currency: "CNY",
+      });
+      const result = await readSessionMenuAccountUsage(
+        { ...session, agentKind: "pi", providerId, model: "claude-sonnet-4-6" },
+        r,
+      );
+      expect(result.source).not.toBe("gateway");
+      expect(result.amounts).toEqual([]);
+      expect(r.getAccountUsage).not.toHaveBeenCalled();
+      expect(r.getCodexRateLimits).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { agentKind: "codex", providerId: "xd", model: "gpt-6-astra" },
+    { agentKind: "pi", providerId: "xd", model: "claude-sonnet-4-6" },
+    { agentKind: "cc", providerId: "xd", model: "claude-sonnet-4-6" },
+    { agentKind: "codex", providerId: null, model: "codex/gpt-6-astra" },
+  ] as const)(
+    "uses existing Gateway cycle usage for a confirmed Gateway route and preserves currency: %o",
+    async (route) => {
+      const r = reader();
+      r.getAccountUsage.mockResolvedValue({
+        spend: 12,
+        maxBudget: 100,
+        todaySpend: 0,
+        currency: "CNY",
+        fetchedAt: 1000,
+      });
+      const result = await readSessionMenuAccountUsage(
+        { ...session, ...route },
+        r,
+      );
+      expect(result).toMatchObject({
+        source: "gateway",
+        updatedAt: 1000,
+        amounts: [
+          { id: "cycle", amount: 12, limit: 100, currency: "CNY" },
+          { id: "today", amount: 0, currency: "CNY" },
+        ],
+      });
+      expect(r.getAccountUsage).toHaveBeenCalledWith("claude-code");
+      expect(r.getCodexRateLimits).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     null,
