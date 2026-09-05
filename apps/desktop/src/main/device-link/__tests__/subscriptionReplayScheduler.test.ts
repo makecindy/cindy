@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSubscriptionReplayScheduler } from '../subscriptionReplayScheduler';
 
@@ -13,6 +13,115 @@ function deferred<T>() {
 }
 
 describe('subscription replay scheduler', () => {
+  describe('recovery before presence arrives', () => {
+    const deviceId = 'device-a';
+    let presence: Map<string, boolean>;
+    let relayOnline: boolean;
+    let unresponsive: boolean;
+    let tornDown: boolean;
+    let refs: Array<{ deviceId: string; topics: string[] }>;
+    let remoteSubscribe: ReturnType<typeof vi.fn<(id: string, topics: string[]) => Promise<unknown>>>;
+    let scheduler: ReturnType<typeof createSubscriptionReplayScheduler>;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      presence = new Map();
+      relayOnline = true;
+      unresponsive = false;
+      tornDown = false;
+      refs = [{ deviceId, topics: ['session:one'] }];
+      remoteSubscribe = vi.fn<(id: string, topics: string[]) => Promise<unknown>>()
+        .mockRejectedValue(new Error('temporary'));
+      scheduler = createSubscriptionReplayScheduler({
+        snapshotSubscriptions: (id) => refs.filter((ref) => !id || ref.deviceId === id),
+        remoteSubscribe,
+        isLinkTornDown: () => tornDown,
+        isRelayOnline: () => relayOnline,
+        isDeviceUnresponsive: () => unresponsive,
+        getPresenceAvailability: (id) => presence.get(id),
+        isPermanentError: (error) => String(error).includes('ACCESS_REVOKED'),
+        log: { debug: vi.fn(), warn: vi.fn() },
+      });
+    });
+
+    afterEach(() => {
+      scheduler.teardown();
+      vi.useRealTimers();
+    });
+
+    it('recovers after reconnect without a presence event or replaying a healthy peer', async () => {
+      presence.set(deviceId, true);
+      presence.clear(); // The old connection verdict is invalidated on disconnect.
+      refs.push({ deviceId: 'device-b', topics: ['sessions'] });
+      const healthy = deferred<unknown>();
+      let attempts = 0;
+      remoteSubscribe.mockImplementation((id) => {
+        if (id === 'device-b') return healthy.promise;
+        return ++attempts === 1 ? Promise.reject(new Error('temporary')) : Promise.resolve();
+      });
+
+      scheduler.replay('ws-online');
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+      refs[0].topics = ['session:one', 'session:two'];
+      await vi.advanceTimersByTimeAsync(1);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(3);
+      expect(remoteSubscribe).toHaveBeenLastCalledWith(deviceId, ['session:one', 'session:two']);
+      healthy.resolve(undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(remoteSubscribe.mock.calls.filter(([id]) => id === 'device-b')).toHaveLength(1);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(3);
+    });
+
+    it('keeps exponential backoff capped at 30 seconds while presence stays unknown', async () => {
+      scheduler.replay('ws-online');
+      let attempts = 1;
+      for (const delay of [3_000, 6_000, 12_000, 24_000, 30_000, 30_000]) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(remoteSubscribe).toHaveBeenCalledTimes(attempts);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(remoteSubscribe).toHaveBeenCalledTimes(++attempts);
+      }
+    });
+
+    it('stops on explicit unavailability and resumes on the next online trigger', async () => {
+      scheduler.replay('ws-online');
+      await vi.advanceTimersByTimeAsync(0);
+      presence.set(deviceId, false);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(1);
+
+      presence.set(deviceId, true);
+      remoteSubscribe.mockResolvedValue(undefined);
+      scheduler.replay('presence-online', deviceId);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['relay-offline', 'torn-down', 'unresponsive', 'unsubscribed', 'cancel', 'teardown'])(
+      'does not retry unknown presence after %s', async (gate) => {
+        scheduler.replay('ws-online');
+        await vi.advanceTimersByTimeAsync(0);
+        if (gate === 'relay-offline') relayOnline = false;
+        if (gate === 'torn-down') tornDown = true;
+        if (gate === 'unresponsive') unresponsive = true;
+        if (gate === 'unsubscribed') refs = [];
+        if (gate === 'cancel') scheduler.cancel(deviceId);
+        if (gate === 'teardown') scheduler.teardown();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(remoteSubscribe).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('stops when an unknown peer retry receives a permanent rejection', async () => {
+      remoteSubscribe.mockRejectedValueOnce(new Error('temporary'))
+        .mockRejectedValue(new Error('[ACCESS_REVOKED] denied'));
+      scheduler.replay('ws-online');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('coalesces ws/presence triggers and replays the latest snapshot after settle', async () => {
     const deviceId = 'device-a';
     let refs = [{ deviceId, topics: ['session:one'] }];
@@ -30,7 +139,7 @@ describe('subscription replay scheduler', () => {
       isLinkTornDown: () => false,
       isRelayOnline: () => true,
       isDeviceUnresponsive: () => false,
-      isPresenceAvailable: () => true,
+      getPresenceAvailability: () => true,
       isPermanentError: () => false,
       log: { debug: vi.fn(), warn: vi.fn() },
     });
@@ -62,7 +171,7 @@ describe('subscription replay scheduler', () => {
       isLinkTornDown: () => false,
       isRelayOnline: () => true,
       isDeviceUnresponsive: () => false,
-      isPresenceAvailable: () => true,
+      getPresenceAvailability: () => true,
       isPermanentError: () => false,
       log: { debug: vi.fn(), warn: vi.fn() },
     });
@@ -96,7 +205,7 @@ describe('subscription replay scheduler', () => {
         isLinkTornDown: () => false,
         isRelayOnline: () => true,
         isDeviceUnresponsive: () => false,
-        isPresenceAvailable: () => true,
+        getPresenceAvailability: () => true,
         isPermanentError: () => false,
         log: { debug: vi.fn(), warn: vi.fn() },
         retryBaseMs: 10,

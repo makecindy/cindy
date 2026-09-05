@@ -49,6 +49,10 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     expect(deviceLinkHost).toContain('if (available && wasAvailable !== true)');
     expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
     expect(deviceLinkHost).toContain('createSubscriptionReplayScheduler({');
+    // Preserve unknown after reconnect; only explicit unavailability stops retries.
+    expect(deviceLinkHost).toContain(
+      'getPresenceAvailability: (deviceId) => presenceAvailableByDevice.get(deviceId),',
+    );
   });
 
   it('每个 relay 连接代上线时从设备目录补齐展示名与已在线桌面', () => {

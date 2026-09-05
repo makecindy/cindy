@@ -17,7 +17,8 @@ type SubscriptionReplaySchedulerOptions = {
   isLinkTornDown: () => boolean;
   isRelayOnline: () => boolean;
   isDeviceUnresponsive: (deviceId: string) => boolean;
-  isPresenceAvailable: (deviceId: string) => boolean;
+  /** undefined means this relay generation has not observed the peer yet. */
+  getPresenceAvailability: (deviceId: string) => boolean | undefined;
   isPermanentError: (error: unknown) => boolean;
   log: {
     debug(message: string): void;
@@ -89,7 +90,9 @@ export function createSubscriptionReplayScheduler(
         if (currentGeneration(deviceId) !== gen) return;
         if (options.isLinkTornDown() || !options.isRelayOnline()) return;
         if (options.isDeviceUnresponsive(deviceId)) return;
-        if (!options.isPresenceAvailable(deviceId)) return;
+        // Presence is incremental and resets on reconnect. Unknown must keep the
+        // existing backoff alive; only an explicit offline/disabled verdict stops it.
+        if (options.getPresenceAvailability(deviceId) === false) return;
         const current = options
           .snapshotSubscriptions(deviceId)
           .find((ref) => ref.deviceId === deviceId);

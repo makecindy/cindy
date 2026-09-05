@@ -1275,7 +1275,7 @@ const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
   // DEVICE_OFFLINE 刻意不在列(MOBILE-PARITY-CHECKLIST §2 归瞬态):presence
   // 滞后窗口内 subscribe 可能先吃到 DEVICE_OFFLINE,归永久会在「presence 仍
   // available」期间放弃收敛;归瞬态则退避循环续跑,presence 补到 offline 时由
-  // 重试前置门(presenceAvailableByDevice !== true)自然终止,设备回归再由
+  // 重试前置门(presenceAvailableByDevice === false)自然终止,设备回归再由
   // presence 翻转重放接棒——两个终止/恢复信号都已存在,无泄漏风险(review P2)。
 ]);
 
@@ -1292,7 +1292,7 @@ const subscriptionReplayScheduler = createSubscriptionReplayScheduler({
   isLinkTornDown: () => linkTornDown,
   isRelayOnline: () => client?.getStatus() === 'online',
   isDeviceUnresponsive: (deviceId) => responsivenessTracker?.isUnresponsive(deviceId) ?? false,
-  isPresenceAvailable: (deviceId) => presenceAvailableByDevice.get(deviceId) === true,
+  getPresenceAvailability: (deviceId) => presenceAvailableByDevice.get(deviceId),
   isPermanentError: isPermanentSubscriptionReplayError,
   log: {
     debug: (message) => log.debug(message),
