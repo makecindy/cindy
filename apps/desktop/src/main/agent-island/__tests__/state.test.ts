@@ -1663,6 +1663,28 @@ describe('Agent Island display state', () => {
     expect(buildAgentIslandDisplayState(state, 3_350).mode).toBe('compact');
   });
 
+  it.each([false, true])('expires abandoned navigation before an ordinary visit (timer ran: %s)', (timerRan) => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'a' }, statusEvent(true, 'Running'), 1_000);
+    requestAgentIslandManualExpand(state);
+    buildAgentIslandDisplayState(state, 1_100);
+    requestAgentIslandSessionFocus(state, 'a', 1_200);
+    buildAgentIslandDisplayState(state, 3_200);
+
+    // The grace is over, but the slow-navigation target still has a finite
+    // cleanup deadline. It must expire even if a route ack beats that timer.
+    expect(isAgentIslandPendingFocusAck(state, 'a', 3_200)).toBe(false);
+    expect(getNextAgentIslandTimerAt(state, 3_200)).toBe(61_200);
+    if (timerRan) buildAgentIslandDisplayState(state, 61_200);
+    setAgentIslandAppFocused(state, true, 61_200);
+    setAgentIslandVisibleSession(state, 'a', 61_200);
+
+    expect(buildAgentIslandDisplayState(state, 61_200).mode).toBe('expanded');
+    expect(state.pendingFocusSessionId).toBeNull();
+    expect(state.pendingFocusUntil).toBeNull();
+    expect(getNextAgentIslandTimerAt(state, 61_200)).toBeNull();
+  });
+
   it('dismisses the first permission approval card after the clicked session becomes visible', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask', agentKind: 'codex' }, statusEvent(true, 'Running'), 1_000);
