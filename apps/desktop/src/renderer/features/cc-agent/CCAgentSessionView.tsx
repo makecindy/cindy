@@ -1737,7 +1737,7 @@ export function CCAgentSessionView({
         action.commandId === 'composer.submit'
       ) {
         if (pendingPermission) {
-          respondToPermission({ behavior: 'allow' });
+          respondToPermission({ behavior: 'allow', requestId: pendingPermission?.requestId });
           return true;
         }
         if (pendingPlanReview) {
@@ -1755,6 +1755,7 @@ export function CCAgentSessionView({
             behavior: 'deny',
             message: 'User denied',
             decisionClassification: 'user_reject',
+            requestId: pendingPermission?.requestId,
           });
           return true;
         }

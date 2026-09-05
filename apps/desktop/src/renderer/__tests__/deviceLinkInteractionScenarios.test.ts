@@ -206,6 +206,9 @@ function emptyProjection(sessionId: string) {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+// 等待超过 permissionResponseInFlight 的防重窗口(500ms),模拟用户读完下一张卡后
+// 才做下一次批准;guard 未释放时第二次响应会被当作同一手势的重复输入挡下。
+const waitPastPermissionGuardWindow = () => new Promise((r) => setTimeout(r, 560));
 const DEVICE_ID = 'dev-int-scn';
 let n = 0;
 const sid = () => `int-scn-${n++}`;
@@ -262,6 +265,148 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
   });
 
+  it('同一会话并行 permission 按 FIFO 展示和回传,不会丢掉先到的请求', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'parallel-first',
+      toolName: 'Read',
+      input: { file_path: '/outside/first.md' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'parallel-second',
+      toolName: 'Read',
+      input: { file_path: '/outside/second.md' },
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('parallel-first');
+
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved[0]?.requestId).toBe('parallel-first');
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('parallel-second');
+
+    // 这是两次独立的用户手势(读完第二张卡再批):必须等防重窗口结束,
+    // 否则第二次响应会被当作双击重复输入挡下。
+    await waitPastPermissionGuardWindow();
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'parallel-first',
+      'parallel-second',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
+  });
+
+  it('duplicate permission response cannot authorize the promoted queue head', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'duplicate-first',
+      toolName: 'Read',
+      input: { file_path: '/first.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'duplicate-second',
+      toolName: 'Read',
+      input: { file_path: '/second.txt' },
+    });
+    await flush();
+
+    // Two synchronous approval commands model a double-click / key repeat.
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    makerChatStore.respondToPermission(s, { behavior: 'deny', message: 'duplicate' });
+    await flush();
+
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['duplicate-first']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('duplicate-second');
+  });
+
+  it('双击第二击在 IPC 已 settle 后到达也不能误批推广后的新卡', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'async-double-first',
+      toolName: 'Read',
+      input: { file_path: '/first.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'async-double-second',
+      toolName: 'Read',
+      input: { file_path: '/second.txt' },
+    });
+    await flush();
+
+    // 第一次点击:IPC 同步 handler 让 Promise 很快 settle(guard 已释放前
+    // 的窗口由防重窗口覆盖)。第二次点击在 IPC settle 之后、防重窗口之内到达。
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush(); // 此刻 IPC 已 settle,但 guard 仍应保持(窗口未结束)
+    makerChatStore.respondToPermission(s, { behavior: 'deny', message: 'double-click' });
+    await flush();
+
+    // 第二次输入被防重窗口挡下,只能批掉第一张卡,第二张卡仍挂起。
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['async-double-first']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('async-double-second');
+
+    // 防重窗口结束后,用户对新卡的正常批准仍可进行。
+    await waitPastPermissionGuardWindow();
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'async-double-first',
+      'async-double-second',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
+  });
+
+  it('dismissal 重新武装防重 guard:窗口内 A 的迟到输入不误批 B,窗口结束后 B 可正常响应', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'dismiss-guard-a',
+      toolName: 'Read',
+      input: { file_path: '/a.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'dismiss-guard-b',
+      toolName: 'Read',
+      input: { file_path: '/b.txt' },
+    });
+    await flush();
+
+    // 本端提交 A 后回程丢失,另一控制端解决 A → 被控端广播 dismissal 推进到 B。
+    // main 在 resolve A 时同步广播 dismissal;若此刻清除 guard,双击第二击会
+    // 读到刚推广的 B 并误批(security P1)。正确语义:重新武装窗口 —— 窗口内
+    // A 的迟到输入仍被挡下,窗口结束后 B 的真实响应不受旧 RPC 阻塞。
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    host.hostDismiss(s, 'dismiss-guard-a', 'resolved', { behavior: 'allow' });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('dismiss-guard-b');
+
+    // 窗口未结束(300ms):A 的迟到输入不得误批 B。
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['dismiss-guard-a']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('dismiss-guard-b');
+
+    // 窗口结束后:用户对 B 的真实响应送达(不等旧 RPC ~30s 超时)。
+    await waitPastPermissionGuardWindow();
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'dismiss-guard-a',
+      'dismiss-guard-b',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
+  });
+
   it('permission deny 同样经隧道回传 behavior=deny', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, {
@@ -277,6 +422,74 @@ describe('device-link 远程交互往返 — permission', () => {
       requestId: 'perm-2',
       decision: { kind: 'permission', behavior: 'deny', reason: '不允许' },
     });
+  });
+
+  it('authoritative permission snapshot replaces a stale displayed request after reconnect', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'stale-permission',
+      toolName: 'Read',
+      input: { file_path: '/stale.txt' },
+    });
+    await flush();
+
+    // The renderer missed the dismissal for A. The host snapshot is now the
+    // source of truth and contains only B, which must become the visible head.
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'fresh-permission',
+      toolName: 'Read',
+      input: { file_path: '/fresh.txt' },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('fresh-permission');
+    expect(makerChatStore.getSnapshot(s).pendingPermissionQueue).toEqual([]);
+  });
+
+  it('reconnect snapshot A-B rearm guard: A delayed input does not approve B, then B actionable', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'reconnect-guard-a',
+      toolName: 'Read',
+      input: { file_path: '/a.txt' },
+    });
+    await flush();
+
+    // A is in flight: the response guard is armed for the session.
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['reconnect-guard-a']);
+
+    // Reconnect: the authoritative snapshot replaces A with B. The stale
+    // displayed request must be dropped and B promoted.
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'reconnect-guard-b',
+      toolName: 'Read',
+      input: { file_path: '/b.txt' },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('reconnect-guard-b');
+
+    // Within the gesture window, A's delayed double-click must NOT approve B.
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['reconnect-guard-a']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('reconnect-guard-b');
+
+    // After the window, B's real response is delivered.
+    await waitPastPermissionGuardWindow();
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'reconnect-guard-a',
+      'reconnect-guard-b',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
   });
 });
 

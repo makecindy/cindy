@@ -801,6 +801,8 @@ interface CCAgentPermissionRequestPayload {
 
 interface CCAgentPermissionResult {
   behavior: 'allow' | 'deny';
+  /** Identity of the permission card the user actually acted on. */
+  requestId?: string;
   message?: string;
   updatedPermissions?: unknown[];
   decisionClassification?: string;
