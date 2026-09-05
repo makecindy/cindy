@@ -273,6 +273,28 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     expect(h.guardRollbacks).toEqual(['s1']);
   });
 
+  it('关闭设置只撤销尚在退避期的 attempt', async () => {
+    const h = createHarness();
+    const alreadyRunning = vi.fn(async () => undefined);
+    const stillWaiting = vi.fn();
+
+    h.book.beginAttempt('running', 1);
+    h.book.schedule('running', 1, 1_000, alreadyRunning);
+    h.book.beginAttempt('waiting', 2);
+    h.book.schedule('waiting', 2, 5_000, stillWaiting);
+
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+
+    expect(h.book.cancelWaitingSchedules()).toEqual([{ sessionId: 'waiting', attemptToken: 2 }]);
+    expect(h.guardRollbacks).toEqual(['waiting']);
+
+    vi.advanceTimersByTime(10_000);
+    await Promise.resolve();
+    expect(alreadyRunning).toHaveBeenCalledTimes(1);
+    expect(stillWaiting).not.toHaveBeenCalled();
+  });
+
   it('新排期顶替旧排期:旧回调不执行、**不**回滚守卫额度(那份属于新那次)', () => {
     const h = createHarness();
     const first = vi.fn();

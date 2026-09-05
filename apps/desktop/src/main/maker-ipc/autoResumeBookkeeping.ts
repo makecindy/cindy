@@ -760,6 +760,21 @@ export class AutoResumeBookkeeping {
     });
   }
 
+  /**
+   * Cancel only attempts that are still waiting for their backoff timer.
+   * A fired callback has `timer === null` and is already doing async work, so a settings change
+   * must not revoke or terminate it mid-flight.
+   */
+  cancelWaitingSchedules(): Array<{ sessionId: string; attemptToken: number }> {
+    const cancelled: Array<{ sessionId: string; attemptToken: number }> = [];
+    for (const [sessionId, scheduled] of [...this.schedules]) {
+      if (scheduled.timer === null || scheduled.attemptToken === null) continue;
+      const attemptToken = scheduled.attemptToken;
+      if (this.cancelSchedule(sessionId)) cancelled.push({ sessionId, attemptToken });
+    }
+    return cancelled;
+  }
+
   /** 终止当前 attempt 并回滚守卫的 pendingResume；没有 attempt 时是 no-op。 */
   cancelSchedule(sessionId: string): boolean {
     const scheduled = this.schedules.get(sessionId);

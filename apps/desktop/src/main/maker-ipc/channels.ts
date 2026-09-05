@@ -372,6 +372,9 @@ export const MAKER_INVOKE = {
   SESSION_RUNTIME_FALLBACK_GET: 'maker:session-runtime-fallback:get',
   SESSION_RUNTIME_FALLBACK_SET: 'maker:session-runtime-fallback:set',
   SESSION_RUNTIME_FALLBACK_RESET: 'maker:session-runtime-fallback:reset',
+  INTERRUPTED_TURN_AUTO_RESUME_GET: 'maker:interrupted-turn-auto-resume:get',
+  INTERRUPTED_TURN_AUTO_RESUME_SET: 'maker:interrupted-turn-auto-resume:set',
+  INTERRUPTED_TURN_AUTO_RESUME_RESET: 'maker:interrupted-turn-auto-resume:reset',
   /**
    * Claude Code 的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
    * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。

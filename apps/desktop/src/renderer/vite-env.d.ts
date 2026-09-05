@@ -5835,6 +5835,23 @@ interface ElectronAPI {
       defaultEnabled: boolean;
       effective: 'immediate';
     }>;
+    interruptedTurnAutoResumeGet: () => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+    }>;
+    interruptedTurnAutoResumeSet: (enabled: boolean) => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'immediate';
+    }>;
+    interruptedTurnAutoResumeReset: () => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'immediate';
+    }>;
 
     /** Claude Code 自动上下文压缩触发百分比。仅对新建会话生效 */
     compactionGetPct: () => Promise<number>;

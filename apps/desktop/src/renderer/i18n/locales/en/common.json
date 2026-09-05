@@ -567,6 +567,12 @@
     },
     "windowBehavior": {
       "title": "App Behavior",
+      "interruptedAutoResume": {
+        "label": "Continue Tasks After Connection Interruptions",
+        "hint": "When a running task is interrupted by a recoverable connection error, Cindy waits briefly and continues it automatically. This does not change provider request retries.",
+        "aria": "Continue tasks after connection interruptions",
+        "saveFailed": "Couldn’t update automatic continuation. Try again; if it still fails, check file permissions or restore the default setting."
+      },
       "closeBehavior": {
         "label": "When closing the main window",
         "hint": "You will be asked the first time. You can change the choice here later.",

@@ -111,7 +111,22 @@ describe('session runtime control wiring', () => {
         'MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_SET',
         'MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET',
       ],
-      ['MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET', 'MAKER_IPC_INVOKE.COMPACTION_GET_PCT'],
+      [
+        'MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET',
+        'MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_GET',
+      ],
+      [
+        'MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_GET',
+        'MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_SET',
+      ],
+      [
+        'MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_SET',
+        'MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_RESET',
+      ],
+      [
+        'MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_RESET',
+        'MAKER_IPC_INVOKE.COMPACTION_GET_PCT',
+      ],
       ['MAKER_IPC_INVOKE.COMPACTION_GET_PCT', 'MAKER_IPC_INVOKE.COMPACTION_GET_STATE'],
       ['MAKER_IPC_INVOKE.COMPACTION_GET_STATE', 'MAKER_IPC_INVOKE.COMPACTION_RESET_PCT'],
       ['MAKER_IPC_INVOKE.COMPACTION_RESET_PCT', 'MAKER_IPC_INVOKE.COMPACTION_SET_PCT'],
@@ -129,6 +144,9 @@ describe('session runtime control wiring', () => {
           'sessionRuntimeFallbackWire()',
           'writeSessionRuntimeFallbackEnabled(',
           'resetSessionRuntimeFallbackSettings()',
+          'interruptedTurnAutoResumeSettingsHandlers.get()',
+          'interruptedTurnAutoResumeSettingsHandlers.set(',
+          'interruptedTurnAutoResumeSettingsHandlers.reset()',
           'writeCompactionPct(',
           'resetCompactionPct()',
           'writePiCompactionPct(',
@@ -143,6 +161,25 @@ describe('session runtime control wiring', () => {
       );
       expect(guard).toBeLessThan(storeAccess);
     }
+  });
+
+  it('uses the user setting as the master gate and cancels only waiting backoffs', () => {
+    expect(registerSource).toContain(
+      'isEnabled: () => readInterruptedTurnAutoResumeSettings().enabled,',
+    );
+    expect(registerSource).not.toContain(
+      'readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled',
+    );
+    expect(registerSource).toContain('autoResumeBookkeeping.cancelWaitingSchedules()');
+
+    const scheduledCallback = handlerBody(
+      registerSource,
+      'autoResumeBookkeeping.schedule(',
+      '// 回传展示信息:',
+    );
+    expect(
+      scheduledCallback.indexOf('readInterruptedTurnAutoResumeSettings().enabled'),
+    ).toBeLessThan(scheduledCallback.indexOf('maybeApplySessionRuntimeFallback('));
   });
 
   it('binds compaction writes to the initiating owner stamp', () => {

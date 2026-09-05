@@ -624,6 +624,7 @@ import {
 import {
   anySessionInTurn,
   applyCodexSpawnConfigChangeWithRestart,
+  cancelWaitingInterruptedTurnAutoResumes,
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
@@ -701,6 +702,12 @@ import {
   resetSessionRuntimeFallbackSettings,
   writeSessionRuntimeFallbackEnabled,
 } from './maker-host/session-runtime-fallback-store.js';
+import {
+  readInterruptedTurnAutoResumeSettingsState,
+  resetInterruptedTurnAutoResumeSettings,
+  writeInterruptedTurnAutoResumeEnabled,
+} from './maker-host/interrupted-turn-auto-resume-store.js';
+import { createInterruptedTurnAutoResumeSettingsHandlers } from './maker-ipc/interruptedTurnAutoResumeSettingsHandlers.js';
 import { clearAllSessionProviders } from './maker-host/session-provider-store.js';
 import { clearAllSessionRuntimeAxes } from './maker-host/session-effort-store.js';
 import { clearAllSessionRuntimeControlStates } from './maker-ipc/sessionRuntimeControl.js';
@@ -1406,6 +1413,14 @@ const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
 const sessionDragPreviewLog = createLogger('session-drag-preview');
 const piSubagentLog = createLogger('pi-subagent');
+const interruptedTurnAutoResumeSettingsHandlers =
+  createInterruptedTurnAutoResumeSettingsHandlers({
+    readState: readInterruptedTurnAutoResumeSettingsState,
+    writeEnabled: writeInterruptedTurnAutoResumeEnabled,
+    reset: resetInterruptedTurnAutoResumeSettings,
+    cancelWaiting: cancelWaitingInterruptedTurnAutoResumes,
+    log: createLogger('interrupted-turn-auto-resume-settings'),
+  });
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
@@ -4477,6 +4492,22 @@ const registerIpcHandlers = () => {
     assertTrustedAppRendererEvent(event);
     resetSessionRuntimeFallbackSettings();
     return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
+  });
+
+  ipcMain.handle(MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_GET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return interruptedTurnAutoResumeSettingsHandlers.get();
+  });
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_SET,
+    async (event, enabled: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      return interruptedTurnAutoResumeSettingsHandlers.set(enabled);
+    },
+  );
+  ipcMain.handle(MAKER_IPC_INVOKE.INTERRUPTED_TURN_AUTO_RESUME_RESET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return interruptedTurnAutoResumeSettingsHandlers.reset();
   });
 
   ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async (event) => {

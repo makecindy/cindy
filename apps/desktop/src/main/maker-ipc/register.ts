@@ -1040,8 +1040,7 @@ const silentStopAutoResumeGuard = new SilentStopAutoResumeGuard({
 // 中断自动续跑守卫(上游把已有产出的 turn 打断 → 自动替用户点一次「继续」)。
 // 与 silent-stop 那份**额度独立记账**,理由见 interruptedTurnAutoResume.ts 文件头。
 const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
-  isEnabled: () =>
-    readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled,
+  isEnabled: () => readInterruptedTurnAutoResumeSettings().enabled,
   log: {
     debug: (message, meta) => log.debug(message, meta),
     warn: (message, meta) => log.warn(message, meta),
@@ -1290,6 +1289,20 @@ function settleUndispatchedInterruptedAutoResume(
     surfaceBanner: restored,
   });
   return true;
+}
+
+/**
+ * Settings-side master switch: cancel only backoff timers that have not fired yet. Attempts
+ * already classifying or dispatching remain untouched and settle through their existing owner.
+ */
+export function cancelWaitingInterruptedTurnAutoResumes(): number {
+  const cancelled = autoResumeBookkeeping.cancelWaitingSchedules();
+  for (const { sessionId, attemptToken } of cancelled) {
+    autoResumeBookkeeping.finalizeSuppressedError(sessionId, attemptToken, {
+      surfaceBanner: true,
+    });
+  }
+  return cancelled.length;
 }
 
 /**
@@ -11706,6 +11719,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return (async () => {
             let fallbackRebuildSession: Session | null = null;
             try {
+              if (!attempt.isCurrent()) return;
+              // The file is intentionally hot-readable for the manual kill-switch path. UI
+              // changes cancel waiting timers eagerly; an external file edit is fenced here.
+              if (!readInterruptedTurnAutoResumeSettings().enabled) {
+                interruptedTurnAutoResumeGuard.noteResumeSendFailed(
+                  sessionId,
+                  decision.attemptToken,
+                );
+                autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
+                  surfaceBanner: true,
+                });
+                log.info('interrupted-turn auto-resume cancelled by setting', { sessionId });
+                return;
+              }
               fallbackRebuildSession = await maybeApplySessionRuntimeFallback(
                 sessionId,
                 decision.episodeAttempt,
