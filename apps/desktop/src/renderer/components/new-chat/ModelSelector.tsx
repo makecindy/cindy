@@ -96,7 +96,6 @@ import {
 } from '../../../shared/subscriptionModels';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { seedDefaultFavorite } from '@/state/modelFavorites';
-import { setModelPickerLayout, useModelPickerLayout } from '@/state/modelPickerLayout';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useDeviceLinkModelMirrorVersion } from '@/state/deviceLinkModelMirror';
 import {
@@ -683,8 +682,6 @@ interface ModelSelectorProps {
   configurationEnabled?: boolean;
   /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，opt-in）。 */
   unifiedPanel?: boolean;
-  /** 语义同 ModelSelectorContentProps.unifiedPanelAvailable。 */
-  unifiedPanelAvailable?: boolean;
   /** 语义同 ModelSelectorContentProps.sessionEngineFilter（统一面板的会话内形态）。 */
   sessionEngineFilter?: UnifiedModelPanelProps['sessionEngineFilter'];
   /** 语义同 ModelSelectorContentProps.unifiedAgents（参与联合列表的引擎集合）。 */
@@ -836,12 +833,6 @@ interface ModelSelectorContentProps {
    */
   unifiedPanel?: boolean;
   /**
-   * 统一面板**可用但未启用**(用户形态偏好停在 'original')时为 true:老面板
-   * footer 据此摆「尝试新选择器」入口(modelPickerLayout 三档并存,Chris
-   * 2026-08-17)。设置类等从不支持统一面板的入口两者皆不传。
-   */
-  unifiedPanelAvailable?: boolean;
-  /**
    * 统一面板的**会话内形态**(model-selector-unified §1.6,M6 面板侧)。仅在
    * `unifiedPanel` 为 true 时生效;新会话 / 草稿不传。
    *
@@ -917,7 +908,7 @@ interface ModelSelectorContentProps {
     favoriteUid: string | null;
     /** 配置浮层「恢复推荐」的应用动作；调用方应删除 override，不得重新记忆推荐值。 */
     resetToRecommended?: true;
-  }) => void;
+  }) => void | boolean | Promise<void | boolean>;
   /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
   reselectEmitsChange?: boolean;
   /** 点击当前已选模型行时打开该行的配置浮层，而不是直接收起选择器。 */
@@ -1053,7 +1044,6 @@ function ModelSelectorContentView({
   followSession,
   configurationEnabled = true,
   unifiedPanel = false,
-  unifiedPanelAvailable = false,
   sessionEngineFilter,
   unifiedAgents,
   selectedFavoriteUid = null,
@@ -1080,7 +1070,6 @@ function ModelSelectorContentView({
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
   // 列表样式试用开关(本机偏好):footer 的切换按钮 + 面板行样式共用。
-  const pickerLayout = useModelPickerLayout();
   const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   const [paneElement, setPaneElement] = useState<HTMLDivElement | null>(null);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
@@ -1965,6 +1954,7 @@ function ModelSelectorContentView({
     const liveAgentKind = sessionEngineFilter?.currentAgent ?? currentAgentKind;
     if (
       anchor &&
+      !reselectEmitsChange &&
       isSelectedRow(args.providerId, args.wireModelId) &&
       liveAgentKind !== null &&
       vendorKeyToAgentKind(args.config.engine) === liveAgentKind
@@ -1975,11 +1965,13 @@ function ModelSelectorContentView({
       onDismiss?.();
       return;
     }
-    const applied = await Promise.resolve(
-      handleRowSelect(args.providerId, args.wireModelId, true, args.effort, args.config.fast),
-    ).catch(() => false);
-    if (applied === false) return;
+    const applied = await runLiveWrite(() =>
+      handleRowSelect(args.providerId, args.wireModelId, false, args.effort, args.config.fast),
+    );
+    if (!applied) return;
     onSessionFavoriteAnchorChange?.(anchor);
+    closeOptionsPanel();
+    onDismiss?.();
   };
   // ── hover / focus 浮层目标 ───────────────────────────────────────────────
   const editingModel: RowModel | null = useMemo(() => {
@@ -2856,26 +2848,31 @@ function ModelSelectorContentView({
               // 草稿(M5):整行原样直通给调用方 —— 引擎跟着模型一起落，中途不再被单引擎
               // 链路重解析一次(见 onUnifiedSelect 的说明)。
               if (onUnifiedSelect) {
-                onUnifiedSelect({
-                  providerId,
-                  modelId: id,
-                  ...(rowEffortValue ? { effort: rowEffortValue } : {}),
-                  engine: rowConfig.engine,
-                  fast: rowConfig.fast,
-                  favoriteUid: rowConfig.favoriteUid,
-                  ...(rowConfig.resetToRecommended
-                    ? { resetToRecommended: true as const }
-                    : {}),
+                return runLiveWrite(() =>
+                  onUnifiedSelect({
+                    providerId,
+                    modelId: id,
+                    ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+                    engine: rowConfig.engine,
+                    fast: rowConfig.fast,
+                    favoriteUid: rowConfig.favoriteUid,
+                    ...(rowConfig.resetToRecommended
+                      ? { resetToRecommended: true as const }
+                      : {}),
+                  }),
+                ).then((applied) => {
+                  if (applied) {
+                    closeOptionsPanel();
+                    onDismiss?.();
+                  }
+                  return applied;
                 });
-                closeOptionsPanel();
-                onDismiss?.();
-                return;
               }
               // 已建会话(M6):同引擎行照旧走 onProviderChange 直切;跨引擎行在 selectRow
               // 里就已经改道 sessionEngineFilter.onCrossEngineSelect,到不了这里。
               // 「同模型不同配置的收藏」与「锚点只在真的应用后才记」两件事收在
               // applyUnifiedSessionSelect 里(见其头注,M3 / M4)。
-              void applyUnifiedSessionSelect({
+              return applyUnifiedSessionSelect({
                 providerId,
                 wireModelId: id,
                 effort: rowEffortValue,
@@ -2890,7 +2887,7 @@ function ModelSelectorContentView({
               if (onUnifiedSelect) {
                 // 草稿:锚点由这条直通链路的 favoriteUid 承载(草稿层没有第二个清锚入口),
                 // 原样把当前 (来源, 模型, 引擎) 连同刚改完的深度 / Fast 重写一遍并置空 uid。
-                onUnifiedSelect({
+                return onUnifiedSelect({
                   providerId,
                   modelId: id,
                   ...(rowEffortValue ? { effort: rowEffortValue } : {}),
@@ -2898,7 +2895,6 @@ function ModelSelectorContentView({
                   fast: rowConfig.fast,
                   favoriteUid: null,
                 });
-                return;
               }
               onSessionFavoriteAnchorChange?.(null);
             }}
@@ -2909,10 +2905,9 @@ function ModelSelectorContentView({
               ? { overlayClassName: overlayContentClassName }
               : {})}
           />
-          {/* footer:「连接来源」(与既有面板同规则,device-link 远程隐藏)+ 右侧
-            列表样式试用开关(本机偏好,见 modelPickerLayout;两种样式并存期的入口)。 */}
-          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
-            {onNavigateToProviders && !deviceId ? (
+          {/* 连接来源入口只对本机展示。 */}
+          {onNavigateToProviders && !deviceId && (
+            <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
               <button
                 type="button"
                 disabled={interactionDisabled}
@@ -2926,39 +2921,8 @@ function ModelSelectorContentView({
                 <Plus size={14} className="shrink-0" />
                 <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
               </button>
-            ) : (
-              <span />
-            )}
-            {/* 右侧两个文字按钮(三档并存,Chris 2026-08-17):A/B 互切 + 切回老版。 */}
-            <div className="flex shrink-0 items-center gap-3">
-              <button
-                type="button"
-                data-layout-toggle
-                disabled={interactionDisabled}
-                onClick={() => setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')}
-                className={cn(
-                  'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                {pickerLayout === 'badge'
-                  ? t('newChat.modelSelector.unified.layoutClassic')
-                  : t('newChat.modelSelector.unified.layoutBadge')}
-              </button>
-              <button
-                type="button"
-                data-layout-original
-                disabled={interactionDisabled}
-                onClick={() => setModelPickerLayout('original')}
-                className={cn(
-                  'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                {t('newChat.modelSelector.unified.layoutOriginal')}
-              </button>
             </div>
-          </div>
+          )}
         </div>
       </div>
     );
@@ -3112,45 +3076,25 @@ function ModelSelectorContentView({
         </div>
       )}
 
-      {/* 「连接来源」footer(供应商入口)—— device-link 远程会话隐藏(无法替被控端连来源)。
-          统一面板可用但未启用('original' 形态)时,「添加模型」改为左对齐按钮,右侧摆
-          「尝试新选择器」入口(三档并存,Chris 2026-08-17,见 modelPickerLayout)。 */}
-      {((onNavigateToProviders && !deviceId) || unifiedPanelAvailable) && (
+      {/* 连接来源入口只对本机展示。 */}
+      {onNavigateToProviders && !deviceId && (
         <>
           <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
           <div className="flex items-center justify-between gap-2">
-            {onNavigateToProviders && !deviceId ? (
-              <button
-                type="button"
-                disabled={interactionDisabled}
-                onClick={onNavigateToProviders}
-                className={cn(
-                  'flex min-w-0 items-center gap-1.5 rounded-[8px] px-3 py-2',
-                  'transition-colors hover:bg-[var(--model-item-hover)]',
-                )}
-              >
-                <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-                <span className="truncate text-13 font-normal text-[var(--text-tertiary)]">
-                  {t('newChat.modelSelector.source.connect')}
-                </span>
-              </button>
-            ) : (
-              <span />
-            )}
-            {unifiedPanelAvailable && (
-              <button
-                type="button"
-                data-try-unified-picker
-                disabled={interactionDisabled}
-                onClick={() => setModelPickerLayout('classic')}
-                className={cn(
-                  'shrink-0 whitespace-nowrap rounded-[8px] px-3 py-2 text-12 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                {t('newChat.modelSelector.unified.layoutTryUnified')}
-              </button>
-            )}
+            <button
+              type="button"
+              disabled={interactionDisabled}
+              onClick={onNavigateToProviders}
+              className={cn(
+                'flex min-w-0 items-center gap-1.5 rounded-[8px] px-3 py-2',
+                'transition-colors hover:bg-[var(--model-item-hover)]',
+              )}
+            >
+              <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+              <span className="truncate text-13 font-normal text-[var(--text-tertiary)]">
+                {t('newChat.modelSelector.source.connect')}
+              </span>
+            </button>
           </div>
         </>
       )}
@@ -3201,7 +3145,6 @@ export function ModelSelector({
   maxVisibleModelRows,
   configurationEnabled = true,
   unifiedPanel = false,
-  unifiedPanelAvailable = false,
   sessionEngineFilter,
   unifiedAgents,
   engineMarkVendor = null,
@@ -3221,8 +3164,6 @@ export function ModelSelector({
   agentSwitch,
 }: ModelSelectorProps) {
   const { t, i18n } = useTranslation();
-  // 列表样式开关也决定 pill 首位图标形态(badge = 引擎 mark 打头,见 engineLeadsTrigger)。
-  const pickerLayout = useModelPickerLayout();
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
@@ -3574,10 +3515,6 @@ export function ModelSelector({
   // 传了 engineMarkVendor 就走新形态:harness 名字文本让位给尾部的一枚 mark,和深度档字
   // 紧挨着收尾(与面板行右侧三元组同构)。没传的入口一个像素都不变。
   const engineMarkOption = engineMarkVendor ? agentOptionOf(engineMarkVendor) : null;
-  // badge 样式的 pill(Chris 2026-08-17 裁决):首位图标 = 用户在用的 harness mark,
-  // 渠道图标与尾部 harness 小标一并去掉 —— 行内已按「引擎徽标行」建立了引擎优先的
-  // 心智,pill 跟着同一套;渠道归属由面板里的分栏题头回答。classic 一个像素不动。
-  const engineLeadsTrigger = pickerLayout === 'badge' && engineMarkOption !== null;
   // 引擎小标 + 深度是 pill 的**定宽身份位**:窄工具条下也要留着,先让模型名截断
   // (Chris 2026-08-12 裁决)。只有 ultra-compact(整段文字都收起、只剩图标)才一并隐藏。
   const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;
@@ -3767,26 +3704,9 @@ export function ModelSelector({
           {!currentModel && remoteModelLoadFailed && (
             <CircleAlert size={dense ? 12 : 13} className="shrink-0 text-[var(--error-fg)]" />
           )}
-          {/* 图标统一规则:badge 样式首位放**引擎 mark**(engineLeadsTrigger,渠道图标
-              让位);classic 保持模型条目 icon(AI Gateway / 目录设定)优先、缺省回落
+          {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先、缺省回落
               当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
-          {engineLeadsTrigger && engineMarkOption ? (
-            <span
-              data-composer-engine-lead={engineMarkVendor}
-              className="mr-1.5 flex shrink-0 items-center"
-              aria-hidden="true"
-            >
-              <engineMarkOption.Mark
-                size={isCreateAgentVariant ? 12 : 13}
-                className={cn(
-                  'shrink-0',
-                  isCreateAgentVariant
-                    ? 'text-[var(--create-agent-control-icon)]'
-                    : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
-                )}
-              />
-            </span>
-          ) : activeSourceId ? (
+          {activeSourceId ? (
             <ModelIconMark
               icon={triggerModelIcon}
               providerId={activeSourceId}
@@ -3823,14 +3743,13 @@ export function ModelSelector({
           </span>
           {/* 引擎小标 + 深度 = pill 的收尾身份组(新形态,见 engineMarkVendor)。
               旧形态没有 mark,深度前保留「·」分隔;有 mark 时图标本身就是分隔,再加点
-              会读成「模型 · 引擎 · 深度」三段,又变回被撤掉的那种堆砌。
-              badge 样式引擎已在首位(engineLeadsTrigger),尾部不再重复一枚。 */}
-          {showTriggerTail && !engineLeadsTrigger && engineMarkNode}
+              会读成「模型 · 引擎 · 深度」三段。 */}
+          {showTriggerTail && engineMarkNode}
           {effortLabel && showTriggerTail && (
             <>
-              {/* 尾部没有 mark 作视觉分隔(旧形态,或 badge 把 mark 移到了首位)时,
+              {/* 固定表单入口尾部没有引擎 mark 作视觉分隔时,
                   深度前补「·」—— 否则「名字 深度」贴着读会粘成一个词。 */}
-              {(!engineMarkOption || engineLeadsTrigger) && (
+              {!engineMarkOption && (
                 <span
                   className={cn(
                     'shrink-0 font-normal',
@@ -3934,7 +3853,6 @@ export function ModelSelector({
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
       unifiedPanel={unifiedPanel}
-      unifiedPanelAvailable={unifiedPanelAvailable}
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}
       selectedFavoriteUid={selectedFavoriteUid}
@@ -3979,10 +3897,7 @@ export function ModelSelector({
         panelClassName="flex min-h-0 flex-col p-0"
         // 宽度只进不退(2026-08-14 实测反馈):rail 筛选把内容变窄时面板宽度回缩,
         // rail 图标在指针底下移位。高度照常双向跟随(底边锚定向上收)。
-        // 列表样式切换是**形态换代**,水位随 key 清零 —— 否则从 classic(带 48px
-        // 侧栏)当场切到 badge,面板扛着旧宽度不回缩(Chris 2026-08-17:「有一点点宽」)。
         stickyWidth
-        stickyWidthKey={pickerLayout}
         panelAriaLabel={ariaLabel}
         {...(restoreFocusTarget ? { restoreFocusTarget } : {})}
         trigger={trigger}

@@ -87,16 +87,7 @@ describe('主题注册表 · Ask/Plan badge 文字语义', () => {
   );
 });
 
-/**
- * 统一模型选择器 badge 行的**引擎徽标标识色**(2026-08-17 review 第三项)。
- *
- * 原状:三支色以裸 hex 常量住在 `UnifiedModelRow.tsx` 里,徽标底(14%)、描边(30%)与
- * PiMark 的 currentColor 都从它派生 —— 组件持有一份、主题层一份都没有,换肤 / 双模式
- * 交付门槛在这三处完全失效。迁进注册表后锁两件事:
- *   ① 三个 token 都注册了,且 **light === dark** —— 「这一行挂在哪个引擎上」是身份信号,
- *      不表达界面明暗层次,同值是有意决策,不是漏配 dark;
- *   ② 组件只经 `var(--engine-badge-*)` 消费,不留 hex 副本(留一份就会两边漂移)。
- */
+/** B 版已移除；已发布的 Token 仍是用户主题兼容合同，不能随组件删除或改值。 */
 describe('主题注册表 · 引擎徽标标识色', () => {
   const ENGINE_BADGE_TOKENS = {
     'engine-badge-cc': '#d97757',
@@ -112,16 +103,5 @@ describe('主题注册表 · 引擎徽标标识色', () => {
     },
   );
 
-  it('UnifiedModelRow 只经 var(--engine-badge-*) 消费,组件里不留 hex 副本', () => {
-    const source = readFileSync(
-      resolve(__dirname, '..', '..', 'components', 'new-chat', 'UnifiedModelRow.tsx'),
-      'utf8',
-    ).toLowerCase();
-    for (const id of Object.keys(ENGINE_BADGE_TOKENS)) {
-      expect(source).toContain(`var(--${id})`);
-    }
-    for (const hex of Object.values(ENGINE_BADGE_TOKENS)) {
-      expect(source).not.toContain(hex);
-    }
-  });
+
 });

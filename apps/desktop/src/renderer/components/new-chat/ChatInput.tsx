@@ -335,7 +335,6 @@ import {
   setProviderModelThinking,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
-import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import {
   setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
   useSessionFavoriteAnchor,
@@ -1877,8 +1876,7 @@ export function ChatInput({
     ? remoteModelListStatus === 'loading'
     : localProvidersLoading;
   // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关 —— **能力级**那一半
-  // (下面还要叠形态偏好才是真正启用,见 unifiedPanelCapable / unifiedPanelActive;
-  // NewMakerDraftRoute 的 unifiedModelPanelEnabled / unifiedModelPanelActive 与这两级逐字对应)。
+  // 下方还会核对任务引擎是否已确认；不再叠加本地样式偏好。
   //
   // 这一级唯一的降级条件是**没有供应商目录可用**:联合列表(unifiedModelEntries)只认目录里的
   // (provider, agent) 条目,而老被控端不支持 provider:list 时控制端只有一份拍平的
@@ -6776,11 +6774,8 @@ export function ChatInput({
    * 下发给统一面板的收藏锚点:草稿用调用方(NewMakerDraftRoute)持有的那一份,会话用上面
    * 那份内存态。
    *
-   * 收藏是**独立选中项**(Chris 2026-08-20):选中身份就是那条收藏的 uid,不拿正在跑的
-   * 模型 / 引擎 / 思维去对副本 —— 对上才会勾,等于让下面的同名模型行把焦点抢走(点了
-   * Pi 收藏、任务还停在 Claude 时必现)。uid 指向的收藏被删 / 换账号后查无此条,由面板
-   * 侧 activeFavoriteUid 兜底。用户点普通模型行时 favoriteUid 显式置 null,那才是离开
-   * 这条收藏。
+   * uid 只记录用户曾选过哪条收藏。面板统一核对来源、模型、引擎、深度与 Fast，
+   * 完整匹配才选中收藏；旧任务与已编辑的收藏不一致时，显示实际模型行。
    */
   const effectiveSelectedFavoriteUid = sessionId
     ? (sessionFavoriteAnchor?.uid ?? null)
@@ -6804,14 +6799,10 @@ export function ChatInput({
   const inSessionEngineLocked = Boolean(sessionId) && !sessionEngineFilter;
   const lockedSessionAgentKind =
     inSessionEngineLocked && sessionEngineConfirmed ? (runtimeAgentKind ?? agentKind) : null;
-  // 形态偏好(三档并存,Chris 2026-08-17):'original' = 最原始选择器(含旧 harness
-  // 分段切换,agentSwitch 因 unifiedPanelActive=false 自动回来);'classic'/'badge' =
-  // 新选择器 A/B 版。capable 表示统一面板**可用**(老面板 footer 据此摆「尝试新
-  // 选择器」入口),active 才真正启用。
-  const modelPickerLayoutPref = useModelPickerLayout();
+  // 新旧用户统一使用 A；仅在远端能力或任务引擎尚未确认时回落兼容列表。
   const unifiedPanelCapable =
     unifiedModelPanelEnabled && (!inSessionEngineLocked || lockedSessionAgentKind !== null);
-  const unifiedPanelActive = unifiedPanelCapable && modelPickerLayoutPref !== 'original';
+  const unifiedPanelActive = unifiedPanelCapable;
   const effectiveUnifiedAgents = useMemo<readonly AgentKind[] | undefined>(
     () => (lockedSessionAgentKind ? [lockedSessionAgentKind] : unifiedAgents),
     [lockedSessionAgentKind, unifiedAgents],
@@ -8667,13 +8658,8 @@ export function ChatInput({
                     // 「模型名 + 引擎小标 + 思考深度」。会话内取已确认 / 意图中的引擎
                     // (agentIdentity 同一口径:身份没加载完就不画,不拿 vendorKey 的
                     // Claude Code 回退冒充);草稿直接取当前引擎。
-                    // original 形态不传:老 pill 仍写 harness 名字文本(agentIdentity),
-                    // 引擎小标是统一面板时代的形态,别把两代形态混在一颗 pill 上。
                     engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}
                     unifiedPanel={unifiedPanelActive}
-                    // 统一面板「可用但未启用」(original 形态)时,老面板 footer 摆
-                    // 「尝试新选择器」入口 —— 可用性与启用态分开传,设置类入口两者皆无。
-                    unifiedPanelAvailable={unifiedPanelCapable}
                     // 联合列表只列**运行时已注册**的引擎(撤掉 AgentSelect 后接住它的
                     // hiddenVendors 门禁);未加载时不传 = 不隐藏任何引擎。会话内没有
                     // 跨引擎切换事务可走时锁定当前引擎(见 inSessionEngineLocked)。

@@ -20,6 +20,7 @@ import {
   buildUnifiedListSections,
   engineOfAgentKind,
   entryMatchesModelId,
+  favoriteMatchesSelection,
   wireModelIdOf,
   buildUnifiedRail,
   computeFlyoutPlacement,
@@ -1074,5 +1075,49 @@ describe('默认种子置顶与原生底座排序', () => {
       'claude-opus-5',
       'gpt-5.5',
     ]);
+  });
+});
+
+describe('收藏锚点只代表当前完整配置', () => {
+  const entry = entryOf({
+    providerId: 'openai',
+    modelId: 'gpt-6',
+    candidates: ['codex'],
+    recommended: 'codex',
+    capabilities: { codex: capability('codex', { wireModelId: 'gpt-6', supportsFastMode: true }) },
+  });
+  const item = favoriteOf({
+    providerId: 'openai',
+    modelId: 'gpt-6',
+    agent: 'codex',
+    effort: 'high',
+    fast: true,
+  });
+  const selected = { providerId: 'openai', modelId: 'gpt-6' };
+  const base = { entry, item, selected, agent: 'codex' as const, effort: 'high', fast: true };
+
+  it('同一组合保持选中，关 Fast / 换档 / 换来源 / 换模型 / 换引擎都不冒充收藏', () => {
+    expect(favoriteMatchesSelection(base)).toBe(true);
+    for (const changed of [
+      { fast: false },
+      { effort: 'low' },
+      { effort: '' },
+      { agent: 'claude-code' as const },
+      { agent: null },
+      { selected: { ...selected, providerId: 'xd' } },
+      { selected: { ...selected, providerId: null } },
+      { selected: { ...selected, modelId: 'other' } },
+    ])
+      expect(favoriteMatchesSelection({ ...base, ...changed })).toBe(false);
+  });
+
+  it('收藏不支持的引擎不能静默回落后冒充当前收藏', () => {
+    expect(favoriteMatchesSelection({ ...base, item: { ...item, agent: 'cc' } })).toBe(false);
+  });
+
+  it('同一个归一化模型的 wire id 可以匹配，Fast 仍按该来源能力判断', () => {
+    const aliased = { ...entry, modelId: 'normalized-gpt-6' };
+    expect(favoriteMatchesSelection({ ...base, entry: aliased })).toBe(true);
+    expect(favoriteMatchesSelection({ ...base, agentFastModeCapable: () => false })).toBe(false);
   });
 });

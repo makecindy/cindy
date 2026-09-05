@@ -36,8 +36,6 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.unified.customized': '已自定义',
         'newChat.modelSelector.unified.reset': '恢复推荐',
         'newChat.modelSelector.unified.railAll': '全部',
-        'newChat.modelSelector.unified.layoutBadge': '尝试样式B',
-        'newChat.modelSelector.unified.layoutClassic': '切回样式A',
         'newChat.modelSelector.unified.railSameEngine': `仅 ${options?.agent ?? ''}`,
         'newChat.modelSelector.unified.crossEngineWarning': '切换引擎会重建上下文，可能丢失内容',
         'newChat.modelSelector.category.anthropic': 'Anthropic',
@@ -204,6 +202,7 @@ import {
   __resetForTest as resetFavorites,
   addModelFavorite,
   listModelFavorites,
+  updateModelFavorite,
 } from '@/state/modelFavorites';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 import { PRICE_TIER_COLORS } from '@/themes/effortTierColors';
@@ -251,6 +250,74 @@ beforeEach(() => {
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
+});
+
+describe('统一面板 · 配置应用与收尾一致', () => {
+  it.each(['pending', 'rejected', 'thrown'] as const)(
+    '换模型 %s 时保留面板和原收藏锚点',
+    async (result) => {
+      const onDismiss = vi.fn();
+      const onSessionFavoriteAnchorChange = vi.fn();
+      let finish!: (value: boolean) => void;
+      const onProviderChange = vi.fn(() => {
+        if (result === 'thrown') throw new Error('write failed');
+        if (result === 'rejected') return Promise.reject(new Error('write failed'));
+        return new Promise<boolean>((resolve) => {
+          finish = resolve;
+        });
+      });
+      renderPanel({ onDismiss, onProviderChange, onSessionFavoriteAnchorChange });
+      await act(async () => {
+        fireEvent.click(rowFor('GPT-5.5'));
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+      if (result === 'pending') {
+        await act(async () => {
+          finish(true);
+        });
+        expect(onDismiss).toHaveBeenCalledTimes(1);
+        expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith(null);
+      }
+    },
+  );
+
+  it.each([true, false])('普通模型恢复推荐成功=%s，只有成功才离开收藏', async (applied) => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+      fast: true,
+    });
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      selectedFavoriteUid: uid,
+      sessionEngineFilter: {
+        currentAgent: 'codex',
+        runtimeAgent: 'codex',
+        onCrossEngineSelect: vi.fn(),
+      },
+      onEffortChange: vi.fn(() => true),
+      onFastModeChange: vi.fn(() => applied),
+      onSessionFavoriteAnchorChange,
+    });
+    const row = screen
+      .getByRole('listbox')
+      .querySelector('[data-unified-anchor="model::xd::gpt-5.5"]') as HTMLElement;
+    const flyout = await openFlyoutForRow(row);
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    if (applied) expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith(null);
+    else expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+    expect(listModelFavorites()[0]?.uid).toBe(uid);
+  });
 });
 
 describe('统一模型选择器面板', () => {
@@ -2864,7 +2931,7 @@ describe('统一面板 · 新会话选中直通', () => {
     ).toBe(true);
   });
 
-  it('收藏是独立选中项:live 思维/引擎对不上副本,勾仍在收藏行,不落到下面同名模型', () => {
+  it('收藏配置已与任务不同，选中标记回到真实模型行', () => {
     const uid = addModelFavorite({
       providerId: 'xd',
       modelId: 'gpt-5.5',
@@ -2886,7 +2953,7 @@ describe('统一面板 · 新会话选中直通', () => {
     );
     const selected = screen.getByRole('listbox').querySelectorAll('[data-model-selected="true"]');
     expect(selected).toHaveLength(1);
-    expect(selected[0].getAttribute('data-unified-anchor')).toBe(`fav::${uid}`);
+    expect(selected[0].getAttribute('data-unified-anchor')).toBe('model::xd::gpt-5.5');
   });
 });
 
@@ -3345,141 +3412,335 @@ describe('统一面板 · 付费锁定行', () => {
   });
 });
 
-describe('列表样式试用开关(badge · v7 引擎徽标行)', () => {
-  afterEach(async () => {
-    const { __resetForTest } = await import('@/state/modelPickerLayout');
-    __resetForTest();
+
+
+describe('统一选择器 · 旧偏好与配置变更回归', () => {
+  afterEach(() => window.localStorage.removeItem('xdt:modelPickerLayout:v1'));
+
+  it.each(['original', 'badge', 'classic'])('保存过 %s 的用户仍使用唯一面板', (layout) => {
+    window.localStorage.setItem('xdt:modelPickerLayout:v1', layout);
+    renderPanel();
+    expect(rowFor('GPT-5.5').querySelector('[data-unified-triple]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: '全部' })).toBeTruthy();
+    expect(
+      document.querySelector(
+        '[data-layout-toggle], [data-layout-original], [data-try-unified-picker]',
+      ),
+    ).toBeNull();
+    expect(document.querySelector('[data-engine-badge], [data-channel-tag]')).toBeNull();
   });
 
-  it('badge 行:引擎徽标(可点快切)、来源字签、价格按实付比例上色且 0.5 字符钳制', async () => {
-    const { UnifiedModelRow } = await import('@/components/new-chat/UnifiedModelRow');
-    const entry = {
+  it('在另一任务修改收藏 Fast：旧任务显示实际配置，再点收藏才应用完整新配置', async () => {
+    const uid = addModelFavorite({
       providerId: 'xd',
       modelId: 'gpt-5.5',
-      displayName: 'GPT-5.5',
-      candidates: ['claude-code' as const, 'codex' as const],
-      recommended: 'codex' as const,
-      nativeAgent: 'codex' as const,
-      capabilities: {
-        codex: {
-          agent: 'codex' as const,
-          wireModelId: 'gpt-5.5',
-          efforts: ['low', 'high'] as const,
-          defaultEffort: 'high' as const,
-          defaultEffortSource: 'catalog' as const,
-          supportsFastMode: false,
-          contextWindow: 272000,
-          contextWindowVerified: false,
-        },
+      agent: 'codex',
+      effort: 'high',
+    });
+    const onFastModeChange = vi.fn(async () => true);
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      vendorKey: 'codex',
+      modelId: 'gpt-5.5',
+      currentProviderId: 'xd',
+      effort: 'high',
+      fastMode: false,
+      selectedFavoriteUid: uid,
+      onFastModeChange,
+      onSessionFavoriteAnchorChange,
+      sessionEngineFilter: {
+        currentAgent: 'codex',
+        runtimeAgent: 'codex',
+        onCrossEngineSelect: vi.fn(),
       },
-    };
-    const config = {
-      engine: 'codex' as const,
-      agent: 'codex' as const,
-      efforts: ['low', 'high'] as const,
-      effort: 'high' as const,
-      fast: false,
-      fastCapable: false,
-      customized: false,
-      capability: entry.capabilities.codex,
-      wireModelId: 'gpt-5.5',
-    };
-    const onSelect = vi.fn();
-    const onEngineCycle = vi.fn();
-    const common = {
-      entry,
-      anchor: { kind: 'model' as const, providerId: 'xd', modelId: 'gpt-5.5' },
-      config,
-      selected: false,
-      active: false,
-      isFavoriteRow: false,
-      justFavorited: false,
-      interactionDisabled: false,
-      effortLabelOf: (_agent: 'claude-code' | 'codex' | 'pi', effort: string) => effort,
-      providers: [],
-      onReveal: vi.fn(),
-      onRevealForKeyboard: vi.fn(),
-      onLeave: vi.fn(),
-      onBlurAway: vi.fn(),
-      onSelect,
-      onStar: vi.fn(),
-      layout: 'badge' as const,
-      channelLabel: 'Cindy AI',
-    };
-    const hexToRgb = (hex: string) =>
-      `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`;
-
-    // $1 档 ↓85%(实付 15%):比例只有 0.15 字符 → 钳到 0.5,裁掉右侧 50%,颜色 t1 绿。
-    const clamped = render(
-      React.createElement(UnifiedModelRow, {
-        ...common,
-        onEngineCycle,
-        priceDisplay: {
-          kind: 'tier' as const,
-          tier: 1 as const,
-          paidPct: 15,
-          discountPct: 85,
-          title: '立省 85%',
-        },
-      }),
-    );
-    const badgeEl = clamped.container.querySelector('[data-engine-badge]') as HTMLElement;
-    expect(badgeEl.getAttribute('data-engine-badge')).toBe('codex');
-    expect(clamped.container.querySelector('[data-channel-tag]')?.textContent).toBe('Cindy AI');
-    // 引擎在行首徽标承载,badge 行不再渲染旧三元组结构。
-    expect(clamped.container.querySelector('[data-unified-triple]')).toBeNull();
-    const lit = clamped.container.querySelector('[data-price-lit]') as HTMLElement;
-    expect(lit.getAttribute('data-price-lit')).toBe('0.50');
-    expect(lit.getAttribute('style')).toContain('inset(0 50.0% 0 0)');
-    expect(lit.getAttribute('style')).toContain(hexToRgb(PRICE_TIER_COLORS.t1));
-    // 徽标是按钮:点击走快切回调,且不触发行选中(stopPropagation)。
-    fireEvent.click(badgeEl);
-    expect(onEngineCycle).toHaveBeenCalledTimes(1);
-    expect(onSelect).not.toHaveBeenCalled();
-    clamped.unmount();
-
-    // $$$ ↓40%(实付 60%):1.8 字符按比例点亮(裁掉右侧 40%),颜色 round(1.8)=2 黄。
-    const proportional = render(
-      React.createElement(UnifiedModelRow, {
-        ...common,
-        priceDisplay: {
-          kind: 'tier' as const,
-          tier: 3 as const,
-          paidPct: 60,
-          discountPct: 40,
-          title: '立省 40%',
-        },
-      }),
-    );
-    const propLit = proportional.container.querySelector('[data-price-lit]') as HTMLElement;
-    expect(propLit.getAttribute('data-price-lit')).toBe('1.80');
-    expect(propLit.getAttribute('style')).toContain('inset(0 40.0% 0 0)');
-    expect(propLit.getAttribute('style')).toContain(hexToRgb(PRICE_TIER_COLORS.t2));
-    proportional.unmount();
-
-    // 不传 onEngineCycle(单候选)→ 徽标是纯标识 span,不可点。
-    const single = render(React.createElement(UnifiedModelRow, common));
-    expect(single.container.querySelector('button[data-engine-badge]')).toBeNull();
-    expect(single.container.querySelector('span[data-engine-badge]')).not.toBeNull();
+    });
+    const selected = () =>
+      screen.getByRole('listbox').querySelector('[data-model-selected="true"]');
+    expect(selected()?.getAttribute('data-unified-anchor')).toBe(`fav::${uid}`);
+    await act(async () => {
+      updateModelFavorite(uid, { fast: true });
+    });
+    expect(selected()?.getAttribute('data-unified-anchor')).toBe('model::xd::gpt-5.5');
+    expect(onFastModeChange).not.toHaveBeenCalled();
+    const favorite = screen
+      .getByRole('listbox')
+      .querySelector(`[data-unified-anchor="fav::${uid}"]`) as HTMLElement;
+    const flyout = await openFlyoutForRow(favorite);
+    expect(flyout.querySelector('[data-fast-toggle]')?.getAttribute('aria-pressed')).toBe('true');
+    await act(async () => {
+      fireEvent.click(favorite);
+    });
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
+    expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith(expect.objectContaining({ uid }));
   });
 
-  it('面板级:footer 按钮切换样式,行进入 badge 布局并带来源字签', async () => {
-    renderPanel();
+  it('连续点击不同模型只应用第一笔，失败后可以重试', async () => {
+    let finish!: (value: boolean) => void;
+    const change = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderPanel({ onProviderChange: change });
     await act(async () => {
-      fireEvent.click(screen.getByText('尝试样式B'));
+      fireEvent.click(rowFor('GPT-5.5'));
+      fireEvent.click(rowFor('GPT-5.6'));
     });
-    const { getModelPickerLayout } = await import('@/state/modelPickerLayout');
-    expect(getModelPickerLayout()).toBe('badge');
-    expect(screen.getByText('切回样式A')).toBeTruthy();
-    const row = rowFor('GPT-5.5');
-    expect(row.querySelector('[data-engine-badge]')).not.toBeNull();
-    expect(row.querySelector('[data-channel-tag]')?.textContent).toBe('Cindy AI');
-    // 组名常驻改由列表顶部覆盖层题头承载(sticky 会在滚动容器 padding 上沿漏行,
-    // 2026-08-16 实测废弃);组头保持普通元素,仅挂 data-group-label 供覆盖层测量。
-    const header = document.querySelector(
-      '[role="group"][aria-label="Cindy AI"] > div',
-    ) as HTMLElement;
-    expect(header.className).not.toContain('sticky');
-    expect(header.getAttribute('data-group-label')).toBe('Cindy AI');
+    expect(change).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish(false);
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.6'));
+    });
+    expect(change).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      finish(true);
+    });
+  });
+
+  it('编辑收藏的异步 Fast 写入期间，不能再改深度或删除收藏', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    let finish!: (value: boolean) => void;
+    const onFastModeChange = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const onEffortChange = vi.fn();
+    renderPanel({
+      vendorKey: 'codex',
+      modelId: 'gpt-5.5',
+      currentProviderId: 'xd',
+      effort: 'low',
+      fastMode: false,
+      selectedFavoriteUid: uid,
+      onFastModeChange,
+      onEffortChange,
+    });
+    const favorite = screen
+      .getByRole('listbox')
+      .querySelector(`[data-unified-anchor="fav::${uid}"]`) as HTMLElement;
+    const flyout = await openFlyoutForRow(favorite);
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-fast-toggle]') as HTMLElement);
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+      fireEvent.click(within(favorite).getByRole('button', { name: '取消收藏' }));
+    });
+    expect(onFastModeChange).toHaveBeenCalledTimes(1);
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(listModelFavorites()).toHaveLength(1);
+    await act(async () => {
+      finish(true);
+    });
+    expect(listModelFavorites()[0]?.fast).toBe(true);
+  });
+});
+
+describe('统一面板 · 重选与草稿失败恢复', () => {
+  it('重选同模型收藏仍经过来源修复，并原样带上深度和 Fast', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+      fast: true,
+    });
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'high',
+      reselectEmitsChange: true,
+      onEffortChange,
+      onFastModeChange,
+      onSessionFavoriteAnchorChange,
+    });
+    const row = document.querySelector(`[data-unified-anchor="fav::${uid}"]`) as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'low', true);
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+    expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith(expect.objectContaining({ uid }));
+  });
+
+  it.each(['select', 'reset', 'engine', 'remove'] as const)(
+    '草稿 %s 等待写入；失败保留偏好、收藏与面板，随后可以重试',
+    async (operation) => {
+      const uid =
+        operation === 'remove'
+          ? addModelFavorite({
+              providerId: 'xd',
+              modelId: 'gpt-5.5',
+              agent: 'codex',
+              effort: 'low',
+              fast: true,
+            })
+          : null;
+      setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+      let finish!: (value: boolean) => void;
+      const onUnifiedSelect = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const onDismiss = vi.fn();
+      renderPanel({
+        vendorKey: 'codex',
+        currentProviderId: 'xd',
+        modelId: 'gpt-5.5',
+        effort: 'low',
+        fastMode: true,
+        selectedFavoriteUid: uid,
+        onUnifiedSelect,
+        onDismiss,
+      });
+      const modelRow = document.querySelector(
+        '[data-unified-anchor="model::xd::gpt-5.5"]',
+      ) as HTMLElement;
+      let click: () => void;
+      if (operation === 'select') click = () => fireEvent.click(rowFor('GPT-5.6'));
+      else if (operation === 'remove') {
+        const favorite = document.querySelector(
+          `[data-unified-anchor="fav::${uid}"]`,
+        ) as HTMLElement;
+        click = () => fireEvent.click(within(favorite).getByRole('button', { name: '取消收藏' }));
+      } else {
+        const flyout = await openFlyoutForRow(modelRow);
+        click =
+          operation === 'reset'
+            ? () => fireEvent.click(within(flyout).getByText('恢复推荐'))
+            : () =>
+                fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+      }
+      await act(async () => {
+        click();
+      });
+      expect(onUnifiedSelect).toHaveBeenCalledTimes(1);
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+      if (uid) expect(listModelFavorites()[0]?.uid).toBe(uid);
+      await act(async () => {
+        finish(false);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+      if (uid) expect(listModelFavorites()[0]?.uid).toBe(uid);
+      await act(async () => {
+        click();
+      });
+      expect(onUnifiedSelect).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        finish(true);
+      });
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+      if (operation === 'reset') expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+      if (uid) expect(listModelFavorites()).toHaveLength(0);
+    },
+  );
+});
+
+describe('统一面板 · 推理滑杆一次拖动只写最终档', () => {
+  it.each(['pointerup', 'pointercancel'] as const)('%s 正确提交或取消拖动', async (eventType) => {
+    const onEffortChange = vi.fn(() => Promise.resolve(true));
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange,
+    });
+    const flyout = await openRowFlyout('GPT-5.5');
+    const slider = flyout.querySelector('[role="slider"]') as HTMLElement;
+    slider.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect;
+    const pointer = (target: HTMLElement | Document, type: string, x: number) => {
+      fireEvent(target, new MouseEvent(type, { bubbles: true, button: 0, clientX: x }));
+    };
+    await act(async () => {
+      pointer(slider, 'pointerdown', 50);
+    });
+    expect(onEffortChange).not.toHaveBeenCalled();
+    await act(async () => {
+      pointer(document, 'pointermove', 100);
+    });
+    expect(onEffortChange).not.toHaveBeenCalled();
+    await act(async () => {
+      pointer(document, eventType, 100);
+    });
+    if (eventType === 'pointerup') {
+      expect(onEffortChange).toHaveBeenCalledTimes(1);
+      expect(onEffortChange).toHaveBeenCalledWith('high');
+    } else expect(onEffortChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('统一面板 · 清收藏锚点也等待回执', () => {
+  it('普通模型改档后，草稿锚点写入失败不产生未处理错误，解锁后可重试', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    let reject!: (reason: Error) => void;
+    const onUnifiedSelect = vi.fn(
+      () =>
+        new Promise<boolean>((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    const onEffortChange = vi.fn(() => true);
+    const onFastModeChange = vi.fn();
+    const onDismiss = vi.fn();
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      selectedFavoriteUid: uid,
+      onUnifiedSelect,
+      onEffortChange,
+      onFastModeChange,
+      onDismiss,
+    });
+    const row = document.querySelector('[data-unified-anchor="model::xd::gpt-5.5"]') as HTMLElement;
+    const flyout = await openFlyoutForRow(row);
+    const slider = flyout.querySelector('[role="slider"]') as HTMLElement;
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    });
+    expect(onUnifiedSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ favoriteUid: null, effort: 'high' }),
+    );
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    });
+    expect(onEffortChange).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      reject(new Error('draft write failed'));
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    });
+    expect(onEffortChange).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      reject(new Error('draft write failed'));
+    });
   });
 });

@@ -984,7 +984,18 @@ test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', () =>
   assert.ok(login.bareRadii > 6, `camelCase borderRadius 应计入裸圆角(实际 ${login.bareRadii})`);
   // 会话工作台含 ImageLightbox 的 borderRadius: '9999px'。
   const session = surfaces.find((surface) => surface.id === 'desktop.chat.session');
-  assert.ok(session.bareRadii > 408, `ImageLightbox 内联圆角应计入(实际 ${session.bareRadii})`);
+  const lightboxPath = 'apps/desktop/src/renderer/components/chat/ImageLightbox.tsx';
+  assert.ok(session.styleSources.includes(lightboxPath), 'ImageLightbox 必须可达');
+  // 独立统计这个文件：3 处 rounded-full + 2 处 camelCase borderRadius。
+  // 不能用整个工作台的圆角总数作下限，否则合法删除 B 版等组件也会误报扫描器退化。
+  const isolated = buildGeneratedSurfaces(ROOT, {
+    catalog: [{
+      ...catalogSurfaces().find((surface) => surface.id === session.id),
+      styleRoots: [lightboxPath],
+      extraStyleRoots: [],
+    }],
+  }).surfaces[0];
+  assert.equal(isolated.bareRadii, 5, 'ImageLightbox 的两个内联圆角必须计入');
 });
 
 test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块映射必须与 catalog 一致', () => {
