@@ -1,9 +1,9 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 520,
+  "snapshotCount": 521,
   "categories": {
-    "literal": 248,
+    "literal": 249,
     "alias": 236,
     "hsl-triplet": 6,
     "runtime-derived-or-protected": 30
@@ -2292,6 +2292,14 @@
     },
     {
       "id": "engine-badge-pi",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "engine-badge-grok-build",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "hex",
