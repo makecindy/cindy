@@ -6909,23 +6909,23 @@
         "cindy": {
           "title": "Cindy アシスタント",
           "defaultName": "Cindy",
-          "defaultDescription": "文章作成、資料整理、日々の仕事の計画を手伝う。"
+          "defaultDescription": "忙しい毎日を少し整えることと、新しいアイデアを聞くことが好きです。文章も調べものも、日々のちょっとしたことも一緒に考えましょう。"
         },
         "dash": {
           "title": "Dash 会社 CEO",
           "defaultName": "Dash",
-          "defaultDescription": "事業の方向性を整理し、提案の評価や意思決定を手伝う。"
+          "defaultDescription": "よい製品やビジネスに興味津々です。可能性をじっくり話し合って、一緒に決めていくのが好きです。"
         },
         "lizi": {
           "title": "LiZi 技術責任者",
           "defaultName": "LiZi",
-          "defaultDescription": "機能開発、不具合の調査、技術設計の確認を手伝う。"
+          "defaultDescription": "難しい問題を解きほぐし、アイデアを形にするのが好きです。困ったときは一緒に答えを探しましょう。"
         },
         "custom": {
           "title": "カスタム"
         }
       },
-      "chooseTemplate": "役割を選ぶ"
+      "chooseTemplate": "誰を招待しますか"
     },
     "homeFolder": {
       "title": "詳細設定",
@@ -6937,9 +6937,10 @@
     "profile": {
       "changeAvatar": "アバターを変更",
       "avatarFailed": "アバターを変更できませんでした。5 MB未満のPNG、JPEG、WebP画像を選択してください。",
-      "summary": "任せたいこと",
-      "summaryPlaceholder": "例：毎週の進捗を整理し、短い週報にまとめる",
-      "avatarSelectionFailed": "画像を読み込めませんでした。5 MB 以下の PNG、JPEG、WebP 画像を選んでください。"
+      "summary": "自己紹介",
+      "summaryPlaceholder": "例：連載小説を書くのが大好きな小説家。少しユーモアがあり、登場人物の心の動きを考えるのが好き。",
+      "avatarSelectionFailed": "画像を読み込めませんでした。5 MB 以下の PNG、JPEG、WebP 画像を選んでください。",
+      "personality": "性格と話し方"
     },
     "nameLabel": "呼び名",
     "close": "閉じる",
@@ -6990,7 +6991,8 @@
       "remove": "この候補を削除",
       "moveUp": "上へ移動",
       "moveDown": "下へ移動",
-      "description": "モデルを最大5件設定できます。候補が利用できない場合、パートナーが順番に自動で切り替えるため、タスクの切り替えや手動再試行は不要です。"
+      "description": "モデルを最大5件設定できます。候補が利用できない場合、パートナーが順番に自動で切り替えるため、タスクの切り替えや手動再試行は不要です。",
+      "options": "予備のモデル（{{count}}）"
     },
     "actions": {
       "message": "メッセージ",
@@ -7042,9 +7044,9 @@
     "image": "画像を追加",
     "send": "メッセージを送信",
     "roster": {
-      "create": "仲間を作成",
+      "create": "仲間を招待する",
       "customNamePlaceholder": "仲間の呼び名を入力",
-      "customTitle": "仲間を作成"
+      "customTitle": "新しい仲間と出会う"
     },
     "chat": {
       "newMessagesBoundary": "NEW",
@@ -7109,6 +7111,19 @@
     "welcome": {
       "generic": "こんにちは、{{name}} です。これから何かあれば遠慮なく言ってください。まずはこのあたりを把握しておきます。",
       "withRole": "こんにちは、{{name}} です——{{description}}。何かあればそのまま言ってください。"
+    },
+    "invitation": {
+      "title": "出会いの準備",
+      "waiting": "もうすぐ会えます、{{name}}",
+      "background": "この画面を離れても、準備は続きます。",
+      "profile": "自分の物語を書いています",
+      "skills": "{{name}} のパソコンを準備しています",
+      "avatar": "{{name}} が新しいアバターを選んでいます",
+      "welcome": "最初の挨拶を準備しています",
+      "failed": "準備が一時停止しました。完了した内容は保存されています。もう一度試せます。",
+      "retryFailed": "再試行できませんでした。少し待ってお試しください。",
+      "leave": "いったん離れる",
+      "avatarSkipped": "今は初期アバターを使っています。いつでも変更できます。"
     }
   },
   "common": {

@@ -6911,23 +6911,23 @@
         "cindy": {
           "title": "Cindy Assistant",
           "defaultName": "Cindy",
-          "defaultDescription": "Help me write, organize information, and plan daily work."
+          "defaultDescription": "I like bringing a little order to busy days and hearing fresh ideas. Writing, research, everyday odds and ends—let’s work through them together."
         },
         "dash": {
           "title": "Dash, Company CEO",
           "defaultName": "Dash",
-          "defaultDescription": "Help me explore business direction, evaluate options, and make decisions."
+          "defaultDescription": "I’m curious about good products and good businesses. I enjoy thinking things through, talking about possibilities, and making a clear decision together."
         },
         "lizi": {
           "title": "LiZi, Technical Director",
           "defaultName": "LiZi",
-          "defaultDescription": "Help me build features, troubleshoot issues, and review technical plans."
+          "defaultDescription": "I enjoy taking tricky problems apart and turning ideas into something real. When we hit a snag, we’ll figure it out together."
         },
         "custom": {
           "title": "Custom"
         }
       },
-      "chooseTemplate": "Choose a Role"
+      "chooseTemplate": "Who would you like to invite?"
     },
     "homeFolder": {
       "title": "Advanced configuration",
@@ -6939,9 +6939,10 @@
     "profile": {
       "changeAvatar": "Change avatar",
       "avatarFailed": "Couldn’t change the avatar. Choose a PNG, JPEG, or WebP image under 5 MB.",
-      "summary": "What Should They Help With?",
-      "summaryPlaceholder": "For example: summarize weekly progress and draft a short update",
-      "avatarSelectionFailed": "Couldn’t read the image. Choose a PNG, JPEG, or WebP image up to 5 MB."
+      "summary": "Self-introduction",
+      "summaryPlaceholder": "For example: a novelist who loves serial fiction, has a dry sense of humor, and is fascinated by what makes characters tick.",
+      "avatarSelectionFailed": "Couldn’t read the image. Choose a PNG, JPEG, or WebP image up to 5 MB.",
+      "personality": "Personality & conversation"
     },
     "nameLabel": "What Should We Call Them?",
     "close": "Close",
@@ -6992,7 +6993,8 @@
       "remove": "Remove this candidate",
       "moveUp": "Move up",
       "moveDown": "Move down",
-      "description": "Configure up to 5 models. If one is unavailable, the teammate automatically continues with the next one—no task switching or manual retry."
+      "description": "Configure up to 5 models. If one is unavailable, the teammate automatically continues with the next one—no task switching or manual retry.",
+      "options": "Backup models ({{count}})"
     },
     "actions": {
       "message": "Message",
@@ -7044,9 +7046,9 @@
     "image": "Add image",
     "send": "Send message",
     "roster": {
-      "create": "Create teammate",
+      "create": "Invite companion",
       "customNamePlaceholder": "Give your teammate a name",
-      "customTitle": "Create a teammate"
+      "customTitle": "Meet someone new"
     },
     "chat": {
       "newMessagesBoundary": "NEW",
@@ -7111,6 +7113,19 @@
     "welcome": {
       "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
       "withRole": "Hi, I'm {{name}} — {{description}}. Just tell me what you need."
+    },
+    "invitation": {
+      "title": "Getting ready to meet",
+      "waiting": "See you soon, {{name}}",
+      "background": "Feel free to step away. Preparation continues in the background.",
+      "profile": "Writing a personal story",
+      "skills": "Preparing a computer for {{name}}",
+      "avatar": "{{name}} is choosing a new portrait",
+      "welcome": "Getting a first hello ready",
+      "failed": "Preparation paused. Everything completed so far is saved. You can try again.",
+      "retryFailed": "Couldn’t retry just now. Please try again shortly.",
+      "leave": "Step away",
+      "avatarSkipped": "Using the default portrait for now. You can change it anytime."
     }
   },
   "common": {

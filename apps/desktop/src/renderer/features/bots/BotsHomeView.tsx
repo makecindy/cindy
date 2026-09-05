@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Check, FolderOpen, PlugZap } from 'lucide-react';
+import { Bot, Check, FolderOpen } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useBotTranslation } from './botPronounContext';
 
@@ -12,6 +12,7 @@ import { useRegisterContentHeader } from '../feature-context';
 import {
   canonicalBotSessionId,
   chooseBotAvatar,
+  retryBotInvitation,
   setCanonicalBotSession,
   updateBotProfile,
   useBotProfiles,
@@ -28,7 +29,7 @@ import {
   withBotCanonicalSessionReadTimeout,
 } from './botNavigation';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
-import { BotSettingsBlock } from './BotSettingsBlock';
+import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import type { BotSettingsPayload } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
@@ -69,6 +70,7 @@ export function BotSettings({
   const { t } = useBotTranslation();
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
+  const [portraitRetryFailed, setPortraitRetryFailed] = useState(false);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
   const [userContextSource, setUserContextSource] = useState(bot.userContextSource ?? '');
   const [avatar, setAvatar] = useState(bot.avatar);
@@ -182,6 +184,13 @@ export function BotSettings({
     }
   };
 
+  if (
+    bot.invitation &&
+    bot.invitation.stage !== 'ready' &&
+    !(bot.invitation.stage === 'avatar' && bot.canonicalSessionId)
+  )
+    return <BotInvitationWelcome bot={bot} />;
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8 sm:px-7">
       <div className="mx-auto flex w-full max-w-xl flex-col gap-5 pb-10">
@@ -226,20 +235,53 @@ export function BotSettings({
             autosave.onEdit(kind);
           }}
         />
+        {bot.invitation?.avatarSkipped ? (
+          <p className="text-12 text-[var(--text-tertiary)]">
+            {t('bots.invitation.avatarSkipped')}
+            <button
+              type="button"
+              onClick={() => {
+                setPortraitRetryFailed(false);
+                void retryBotInvitation(bot.id).catch(() => setPortraitRetryFailed(true));
+              }}
+              disabled={bot.invitation.stage === 'avatar'}
+              className="ml-2 text-[var(--text-primary)] underline underline-offset-2 disabled:opacity-50"
+            >
+              {t('commonUi.retry')}
+            </button>
+            {portraitRetryFailed ? (
+              <span role="alert">{t('bots.invitation.retryFailed')}</span>
+            ) : null}
+          </p>
+        ) : null}
         {avatarError ? (
           <p className="text-center text-11 text-[var(--text-danger)]" role="alert">
             {t('bots.profile.avatarFailed')}
           </p>
         ) : null}
 
-        <BotSettingsBlock
-          icon={PlugZap}
-          title={t('bots.settingsTabs.model')}
-          hint={t('bots.model.description')}
-          action={
-            <button
-              type="button"
-              onClick={() => {
+        <details className="text-13 text-[var(--text-secondary)]">
+          <summary className="cursor-pointer py-2">{t('bots.profile.personality')}</summary>
+          <textarea
+            aria-label={t('bots.profile.personality')}
+            value={identitySource}
+            onChange={(event) => {
+              setIdentitySource(event.target.value);
+              autosave.onEdit('text');
+            }}
+            rows={6}
+            className="mt-2 w-full resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-3 text-13 leading-6 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          />
+        </details>
+
+        <section
+          aria-label={t('bots.settingsTabs.model')}
+          className="min-w-0 border-t border-[var(--border-default)] pt-4"
+        >
+          <div data-testid="bot-model-controls" className="min-w-0">
+            <BotModelChainEditor
+              label={t('bots.settingsTabs.model')}
+              onRestoreDefault={() => {
                 const modelChain = getEffectiveBotModelChain();
                 const primary = modelChain[0];
                 if (!primary) return;
@@ -252,14 +294,6 @@ export function BotSettings({
                 }));
                 autosave.onEdit('instant');
               }}
-              className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t('bots.model.restoreDefault')}
-            </button>
-          }
-        >
-          <div data-testid="bot-model-controls" className="flex w-full min-w-0 flex-col gap-5">
-            <BotModelChainEditor
               value={capabilities.modelChain}
               hiddenVendors={hiddenVendors}
               onChange={(modelChain) => {
@@ -281,7 +315,7 @@ export function BotSettings({
               }}
             />
           </div>
-        </BotSettingsBlock>
+        </section>
 
         <details className="group rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
           <summary className="cursor-pointer list-none px-4 py-3 text-12 font-medium text-[var(--text-secondary)] marker:content-none">
@@ -456,6 +490,7 @@ export function BotsHomeView() {
   useRegisterContentHeader(headerContent);
 
   useEffect(() => {
+    if (selectedBot?.invitation && selectedBot.invitation.stage !== 'ready') return;
     if (!selectedBot || shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addRequested }))
       return;
     if (selectedBot.status !== 'active') {
@@ -549,11 +584,12 @@ export function BotsHomeView() {
   }, [addRequested, createCanonicalSession, selectedBot, sessionId, settingsOpen, navigate]);
 
   if (!selectedBot) {
-    if (bots.length === 0) return (
-      <div className="flex flex-1 items-center justify-center">
-        <BotCreateMenu label={t('bots.add')} />
-      </div>
-    );
+    if (bots.length === 0)
+      return (
+        <div className="flex flex-1 items-center justify-center">
+          <BotCreateMenu label={t('bots.add')} />
+        </div>
+      );
     return (
       <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">
         <Spinner
@@ -565,6 +601,13 @@ export function BotsHomeView() {
       </main>
     );
   }
+
+  if (selectedBot.invitation && selectedBot.invitation.stage !== 'ready')
+    return (
+      <main className="flex h-full items-center justify-center px-6" role="main">
+        <BotInvitationWelcome bot={selectedBot} />
+      </main>
+    );
 
   return (
     <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">

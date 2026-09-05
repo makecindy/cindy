@@ -6909,23 +6909,23 @@
         "cindy": {
           "title": "Cindy 어시스턴트",
           "defaultName": "Cindy",
-          "defaultDescription": "글쓰기, 자료 정리, 일상 업무 계획을 도와줘요."
+          "defaultDescription": "바쁜 일상을 정리하고 새로운 아이디어를 듣는 것을 좋아해요. 글쓰기부터 자료, 소소한 일까지 함께 이야기해 봐요."
         },
         "dash": {
           "title": "Dash 회사 CEO",
           "defaultName": "Dash",
-          "defaultDescription": "사업 방향을 정리하고, 대안을 평가하고, 의사결정을 도와줘요."
+          "defaultDescription": "좋은 제품과 사업에 호기심이 많아요. 가능성을 깊이 생각하고 함께 결정을 내리는 것을 좋아해요."
         },
         "lizi": {
           "title": "LiZi 엔지니어링 총괄",
           "defaultName": "LiZi",
-          "defaultDescription": "기능 개발, 문제 해결, 설계 검토를 도와줘요."
+          "defaultDescription": "어려운 문제를 풀고 아이디어를 실제로 만드는 것을 좋아해요. 막히는 일이 있으면 함께 답을 찾아봐요."
         },
         "custom": {
           "title": "사용자 지정"
         }
       },
-      "chooseTemplate": "역할 선택"
+      "chooseTemplate": "누구를 초대할까요?"
     },
     "homeFolder": {
       "title": "고급 설정",
@@ -6937,9 +6937,10 @@
     "profile": {
       "changeAvatar": "아바타 변경",
       "avatarFailed": "아바타를 변경할 수 없습니다. 5MB 미만의 PNG, JPEG 또는 WebP 이미지를 선택하세요.",
-      "summary": "어떤 일을 맡길까요?",
-      "summaryPlaceholder": "예: 매주 진행 상황을 정리하고 짧은 주간 보고서 작성하기",
-      "avatarSelectionFailed": "이미지를 읽지 못했어요. 5 MB 이하의 PNG, JPEG, WebP 이미지를 선택해 주세요."
+      "summary": "자기소개",
+      "summaryPlaceholder": "예: 웹소설 쓰기를 사랑하는 소설가. 유머가 있고 등장인물의 속마음을 상상하는 것을 좋아해요.",
+      "avatarSelectionFailed": "이미지를 읽지 못했어요. 5 MB 이하의 PNG, JPEG, WebP 이미지를 선택해 주세요.",
+      "personality": "성격과 대화 방식"
     },
     "nameLabel": "어떻게 부를까요?",
     "close": "닫기",
@@ -6990,7 +6991,8 @@
       "remove": "이 후보 제거",
       "moveUp": "위로 이동",
       "moveDown": "아래로 이동",
-      "description": "모델을 최대 5개까지 설정할 수 있습니다. 현재 후보를 사용할 수 없으면 팀원이 다음 후보로 자동 전환하므로 작업 전환이나 수동 재시도가 필요하지 않습니다."
+      "description": "모델을 최대 5개까지 설정할 수 있습니다. 현재 후보를 사용할 수 없으면 팀원이 다음 후보로 자동 전환하므로 작업 전환이나 수동 재시도가 필요하지 않습니다.",
+      "options": "예비 모델 ({{count}})"
     },
     "actions": {
       "message": "메시지",
@@ -7042,9 +7044,9 @@
     "image": "이미지 추가",
     "send": "메시지 보내기",
     "roster": {
-      "create": "동료 만들기",
+      "create": "동료 초대하기",
       "customNamePlaceholder": "동료의 이름을 지어 주세요",
-      "customTitle": "동료 만들기"
+      "customTitle": "새로운 동료 만나기"
     },
     "chat": {
       "newMessagesBoundary": "NEW",
@@ -7109,6 +7111,19 @@
     "welcome": {
       "generic": "안녕하세요, {{name}}이에요. 앞으로 필요한 게 있으면 바로 말씀하세요. 그동안 저는 여기부터 익혀 둘게요.",
       "withRole": "안녕하세요, {{name}}이에요 — {{description}}. 필요한 게 있으면 바로 말씀하세요."
+    },
+    "invitation": {
+      "title": "만날 준비 중",
+      "waiting": "곧 만나요, {{name}}",
+      "background": "잠시 다른 일을 해도 괜찮아요. 준비는 계속됩니다.",
+      "profile": "자신의 이야기를 쓰고 있어요",
+      "skills": "{{name}}의 컴퓨터를 준비하고 있어요",
+      "avatar": "{{name}}이 새 아바타를 고르고 있어요",
+      "welcome": "첫인사를 준비하고 있어요",
+      "failed": "준비가 잠시 멈췄어요. 완료된 내용은 저장되어 있으니 다시 시도할 수 있어요.",
+      "retryFailed": "지금은 다시 시도할 수 없어요. 잠시 후 시도해 주세요.",
+      "leave": "잠시 나가기",
+      "avatarSkipped": "지금은 기본 아바타를 사용해요. 언제든 바꿀 수 있어요."
     }
   },
   "common": {

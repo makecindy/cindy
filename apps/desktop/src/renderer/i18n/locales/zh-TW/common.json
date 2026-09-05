@@ -6909,23 +6909,23 @@
         "cindy": {
           "title": "Cindy 助理",
           "defaultName": "Cindy",
-          "defaultDescription": "幫我寫作、整理資料和安排日常工作。"
+          "defaultDescription": "我喜歡把忙亂的日子理順，也愛聽新鮮想法。寫作、資料和日常瑣事，都可以一起聊聊。"
         },
         "dash": {
           "title": "Dash 公司 CEO",
           "defaultName": "Dash",
-          "defaultDescription": "幫我梳理業務方向、評估方案和做決策。"
+          "defaultDescription": "我對好產品和好生意充滿好奇，聊到有趣的方向會很投入。喜歡把事情想透，再一起做決定。"
         },
         "lizi": {
           "title": "LiZi 技術總監",
           "defaultName": "LiZi",
-          "defaultDescription": "幫我開發功能、排查問題和把關技術方案。"
+          "defaultDescription": "我喜歡拆解難題，也享受把想法做成作品的過程。遇到棘手的問題，我們就一起找答案。"
         },
         "custom": {
           "title": "自訂"
         }
       },
-      "chooseTemplate": "選擇角色"
+      "chooseTemplate": "邀請誰"
     },
     "homeFolder": {
       "title": "進階設定",
@@ -6937,9 +6937,10 @@
     "profile": {
       "changeAvatar": "更換頭像",
       "avatarFailed": "無法更換頭像，請選擇小於 5 MB 的 PNG、JPEG 或 WebP 圖片。",
-      "summary": "主要做什麼",
-      "summaryPlaceholder": "例如：整理每週進度，幫我寫一份簡短的週報",
-      "avatarSelectionFailed": "無法讀取頭像，請選擇 5 MB 以內的 PNG、JPEG 或 WebP 圖片"
+      "summary": "自我介紹",
+      "summaryPlaceholder": "例如：一位熱愛寫小說的作家，有點幽默，喜歡琢磨人物的小心思。",
+      "avatarSelectionFailed": "無法讀取頭像，請選擇 5 MB 以內的 PNG、JPEG 或 WebP 圖片",
+      "personality": "個性與說話習慣"
     },
     "nameLabel": "怎麼稱呼",
     "close": "關閉",
@@ -6990,7 +6991,8 @@
       "remove": "移除這個候選",
       "moveUp": "上移",
       "moveDown": "下移",
-      "description": "最多設定 5 個模型。目前候選無法使用時，夥伴會依序自動接替，不需要你切換任務或重試。"
+      "description": "最多設定 5 個模型。目前候選無法使用時，夥伴會依序自動接替，不需要你切換任務或重試。",
+      "options": "備用模型（{{count}}）"
     },
     "actions": {
       "message": "傳訊息",
@@ -7042,9 +7044,9 @@
     "image": "新增圖片",
     "send": "傳送訊息",
     "roster": {
-      "create": "建立夥伴",
+      "create": "邀請夥伴加入",
       "customNamePlaceholder": "幫夥伴取個名字",
-      "customTitle": "建立夥伴"
+      "customTitle": "認識一位新夥伴"
     },
     "chat": {
       "newMessagesBoundary": "NEW",
@@ -7109,6 +7111,19 @@
     "welcome": {
       "generic": "嗨，我是{{name}}。以後有事直接跟我說，我先熟悉一下這裡。",
       "withRole": "嗨，我是{{name}}——{{description}}。有事直接跟我說。"
+    },
+    "invitation": {
+      "title": "準備見面",
+      "waiting": "{{name}}，待會見",
+      "background": "你可以先去忙，準備好後再來見面。",
+      "profile": "正在寫下自己的故事",
+      "skills": "正在為 {{name}} 準備電腦",
+      "avatar": "{{name}} 正在挑選新頭像",
+      "welcome": "正在準備第一聲問候",
+      "failed": "準備暫時停住了。已完成的內容會保留，可以再試一次。",
+      "retryFailed": "暫時無法重試，請稍後再試。",
+      "leave": "先去忙",
+      "avatarSkipped": "暫時用了預設頭像，你隨時可以換一張。"
     }
   },
   "common": {

@@ -79,6 +79,10 @@ import { seedBotTemplateSkills } from '../../maker-ipc/botTemplateSkillSeed.js';
 import { createMessage } from './messages.js';
 import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
+import { botInvitationProgress } from '../../../shared/botInvitation.js';
+import { queueBotInvitation } from '../../maker-ipc/botInvitation.js';
+import { getResolvedMainLocale } from '../../i18n.js';
+
 const log = createLogger('bots');
 
 /** Bind async profile work to the account that initiated it. */
@@ -504,6 +508,8 @@ async function readProfile(
   const config = parseJson(version?.capabilitiesJson ?? '{}');
   const modelChain = readEffectiveBotModelChain(config);
   const primaryModelRoute = modelChain[0];
+  const invitation = botInvitationProgress(config.invitation);
+  if (invitation && isManagedBotAvatarUrl(profile.avatar)) invitation.avatarSkipped = false;
   const failureReason = BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason)
     ? (profile.attentionReason as BotFailureReason)
     : null;
@@ -517,6 +523,7 @@ async function readProfile(
     name: profile.displayName,
     description: profile.description,
     identitySource: version?.identitySource ?? '',
+    invitation,
     userContextSource: typeof config.userContextSource === 'string' ? config.userContextSource : '',
     // 与 userContextSource 同款:存在档案 JSON 里,投影成顶层字段。老档案没有这
     // 个键 → undefined → 界面回落「用名字称呼」,与升级前行为一致。
@@ -719,7 +726,7 @@ function defaultNewBotCapabilities(): Record<string, unknown> {
   };
 }
 
-function broadcastBotProfileChanged(payload: {
+export function broadcastBotProfileChanged(payload: {
   botId: string;
   change: 'created' | 'updated';
 }): void {
@@ -808,6 +815,7 @@ export async function recoverActiveBotTemplateSkills(): Promise<void> {
       .from(botProfiles)
       .where(ne(botProfiles.status, 'archived'));
     await Promise.all(profiles.map(({ id }) => recoverBotTemplateSkills(id)));
+    for (const { id } of profiles) queueBotInvitation(id);
   } catch (cause) {
     log.warn('recover active bot template skills failed', {
       error: cause instanceof Error ? cause.name : typeof cause,
@@ -868,7 +876,13 @@ export async function createBotProfile(raw: unknown) {
     userContextSource,
     ...(gender ? { gender } : {}),
   });
+  // Progress is main-owned; callers can request an invitation, never supply its result.
+  delete persistedCapabilities.invitation;
   if (templateId) persistedCapabilities.templateId = templateId;
+  if (body.prepareInvitation === true) persistedCapabilities.invitation = {
+    id: randomUUID(), stage: 'profile', locale: getResolvedMainLocale(),
+    avatarRequested: !avatarImage && !templateId,
+  };
   const now = Date.now();
   const client = getDbClient();
   const db = client.drizzle;
@@ -893,6 +907,12 @@ export async function createBotProfile(raw: unknown) {
     now,
   });
   assertCreationOwnerStillCurrent();
+  if (body.prepareInvitation === true) {
+    const profile = await readProfile(client, id);
+    broadcastBotProfileChanged({ botId: id, change: 'created' });
+    queueBotInvitation(id);
+    return profile;
+  }
   await syncBotProfileFolder(
     id,
     identitySource,
@@ -1134,6 +1154,10 @@ export function registerBotIpc(): void {
     const id = readText(body.id, 'botId', 128, true);
     const owner = captureBotOperationOwner();
     const client = getDbClient();
+    if (body.retryInvitation === true) {
+      queueBotInvitation(id, true);
+      return readProfile(client, id);
+    }
     const db = client.drizzle;
     const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, id)).limit(1);
     if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
@@ -1193,6 +1217,11 @@ export function registerBotIpc(): void {
       )
       .limit(1);
     const previous = parseJson(version?.capabilitiesJson ?? '{}');
+    const preparation = botInvitationProgress(previous.invitation);
+    const retryingPortrait = preparation?.stage === 'avatar' && current.canonicalSessionId;
+    if (preparation && preparation.stage !== 'ready' && !retryingPortrait && (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined)) {
+      throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面，请完成准备后再编辑资料');
+    }
     const nextConfig = mergeBotProfileCapabilities({
       previous,
       capabilities:
@@ -1204,6 +1233,9 @@ export function registerBotIpc(): void {
       skills: body.skills,
       hasSkills: Object.prototype.hasOwnProperty.call(body, 'skills'),
     });
+    // Keep preparation checkpoints outside caller-editable capabilities.
+    if (previous.invitation) nextConfig.invitation = previous.invitation;
+    else delete nextConfig.invitation;
     if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
       nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
     }
@@ -1323,6 +1355,9 @@ export function registerBotIpc(): void {
     const now = Date.now();
     const sessionId = resolveBusinessSessionId(undefined);
     const config = parseJson(profileVersion.capabilitiesJson);
+    const invitation = botInvitationProgress(config.invitation);
+    if (invitation && invitation.stage !== 'ready' && invitation.stage !== 'welcome')
+      throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
     const primaryRoute = readEffectiveBotModelChain(config)[0] ?? null;
     const workspaceKind = 'dialogue' as const;
     const workingDir = await ensureBotWorkspaceDir(

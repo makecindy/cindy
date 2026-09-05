@@ -10,8 +10,14 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 const mocks = vi.hoisted(() => ({
   addBotProfileAndWait: vi.fn(),
   navigate: vi.fn(),
+  profiles: [] as Array<{ id: string; name: string; invitation: { stage: string } }>,
 }));
-vi.mock('../botStore', () => ({ addBotProfileAndWait: mocks.addBotProfileAndWait }));
+vi.mock('../botStore', () => ({
+  addBotProfileAndWait: mocks.addBotProfileAndWait,
+  useBotProfiles: () => mocks.profiles,
+  refreshBotProfiles: vi.fn(),
+  retryBotInvitation: vi.fn(),
+}));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 import { BotRosterView } from '../BotRosterView';
@@ -20,11 +26,42 @@ beforeEach(() => {
   mocks.addBotProfileAndWait.mockReset();
   mocks.addBotProfileAndWait.mockResolvedValue({ id: 'bot-new', name: 'Ops buddy' });
   mocks.navigate.mockReset();
+  mocks.profiles = [];
 });
 
 afterEach(() => cleanup());
 
 describe('BotRosterView — 唯一的伙伴创建界面', () => {
+  it('waits in the invitation dialog and meets only after preparation completes', async () => {
+    const preparing = { id: 'new', name: '阿橙', invitation: { stage: 'skills' } };
+    mocks.addBotProfileAndWait.mockResolvedValue(preparing);
+    const view = render(<BotRosterView />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
+    await waitFor(() =>
+      expect(screen.getByText('bots.invitation.skills:{"name":"阿橙"}')).toBeTruthy(),
+    );
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    mocks.profiles = [{ ...preparing, invitation: { stage: 'ready' } }];
+    view.rerender(<BotRosterView />);
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/new'));
+  });
+
+  it('allows leaving the welcome while main continues preparing', async () => {
+    mocks.addBotProfileAndWait.mockResolvedValue({
+      id: 'new',
+      name: '阿橙',
+      invitation: { stage: 'profile' },
+    });
+    const onClose = vi.fn();
+    render(<BotRosterView onClose={onClose} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.invitation.leave' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
   it('shows three professional presets plus custom and the shared basic profile fields', () => {
     render(<BotRosterView />);
 
@@ -76,13 +113,13 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).toMatchObject({
       name: 'Ops buddy',
       description: 'Release partner',
+      prepareInvitation: true,
       avatar: 'cindy://avatar/preset/cindy',
       avatarColor: 'blue',
       identitySource: expect.stringContaining('Cindy 助理'),
       userContextSource: '',
       skills: [],
       capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
-      templateId: 'cindy',
     });
   });
 
@@ -106,14 +143,14 @@ describe('BotRosterView — 唯一的伙伴创建界面', () => {
     expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).not.toHaveProperty('templateId');
   });
 
-  it('sends the localized first greeting through the main-owned creation path', async () => {
+  it('requests main-owned preparation instead of sending a generic greeting', async () => {
     render(<BotRosterView />);
     fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Ops buddy' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.roster.create' }));
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-new'));
     expect(mocks.addBotProfileAndWait.mock.calls[0]?.[0]).toMatchObject({
-      welcomeMessage: 'bots.welcome.generic:{"name":"Ops buddy"}',
+      prepareInvitation: true,
     });
   });
 

@@ -446,6 +446,26 @@ describe('Bot canonical Session lifecycle', () => {
     );
   });
 
+  it.each(['profile', 'skills', 'avatar', 'welcome', 'failed'])('keeps initial invitation %s preparation from racing with profile edits', async (stage) => {
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ?')
+      .run(JSON.stringify({ invitation: { id: 'invite-1', stage } }), 'bot-1');
+    await expect(invoke('local-db:bots:update', { id: 'bot-1', name: 'New name' }))
+      .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.sqlite!.prepare('SELECT display_name AS name, current_version FROM bot_profiles WHERE id = ?').get('bot-1'))
+      .toEqual({ name: 'Release Bot', current_version: 1 });
+  });
+
+  it('allows profile edits while an existing companion retries only its portrait', async () => {
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ?')
+      .run(JSON.stringify({ invitation: { id: 'invite-1', stage: 'avatar' } }), 'bot-1');
+    const updated = await invoke('local-db:bots:update', { id: 'bot-1', name: 'New name' });
+    expect(updated.name).toBe('New name');
+    expect(updated.invitation.stage).toBe('avatar');
+  });
+
   it('stops profile saving before projecting or writing files under a newly selected owner', async () => {
     const runTx = h.tx!;
     h.tx = async (name, args) => {

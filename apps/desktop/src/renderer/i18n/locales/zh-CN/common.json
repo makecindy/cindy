@@ -6909,23 +6909,23 @@
         "cindy": {
           "title": "Cindy 助理",
           "defaultName": "Cindy",
-          "defaultDescription": "帮我写作、整理资料和安排日常工作。"
+          "defaultDescription": "我喜欢把忙乱的日子理顺，也爱听新鲜想法。写作、资料和日常琐事，都可以一起聊聊。"
         },
         "dash": {
           "title": "Dash 公司 CEO",
           "defaultName": "Dash",
-          "defaultDescription": "帮我梳理业务方向、评估方案和做决策。"
+          "defaultDescription": "我对好产品和好生意充满好奇，聊到有意思的方向会很投入。喜欢把事情想透，再一起做决定。"
         },
         "lizi": {
           "title": "LiZi 技术总监",
           "defaultName": "LiZi",
-          "defaultDescription": "帮我开发功能、排查问题和把关技术方案。"
+          "defaultDescription": "我喜欢拆解难题，也享受把想法做成作品的过程。遇到棘手的问题，我们就一起找答案。"
         },
         "custom": {
           "title": "自定义"
         }
       },
-      "chooseTemplate": "选择角色"
+      "chooseTemplate": "邀请谁"
     },
     "homeFolder": {
       "title": "高级配置",
@@ -6937,9 +6937,10 @@
     "profile": {
       "changeAvatar": "更换头像",
       "avatarFailed": "无法更换头像，请选择小于 5 MB 的 PNG、JPEG 或 WebP 图片。",
-      "summary": "主要做什么",
-      "summaryPlaceholder": "例如：整理每周进展，帮我写一份简短的周报",
-      "avatarSelectionFailed": "头像未能读取，请选择 5 MB 以内的 PNG、JPEG 或 WebP 图片"
+      "summary": "自我介绍",
+      "summaryPlaceholder": "例如：一个热爱写网文的小说家，有点幽默，喜欢琢磨人物的小心思。",
+      "avatarSelectionFailed": "头像未能读取，请选择 5 MB 以内的 PNG、JPEG 或 WebP 图片",
+      "personality": "性格与说话习惯"
     },
     "nameLabel": "怎么称呼",
     "close": "关闭",
@@ -6990,7 +6991,8 @@
       "remove": "移除这个候选",
       "moveUp": "上移",
       "moveDown": "下移",
-      "description": "最多设置 5 个模型。当前候选不可用时，伙伴会按顺序自动接替，不需要你切任务或重试。"
+      "description": "最多设置 5 个模型。当前候选不可用时，伙伴会按顺序自动接替，不需要你切任务或重试。",
+      "options": "备用模型（{{count}}）"
     },
     "actions": {
       "message": "消息",
@@ -7042,9 +7044,9 @@
     "image": "添加图片",
     "send": "发送消息",
     "roster": {
-      "create": "创建伙伴",
+      "create": "邀请伙伴加入",
       "customNamePlaceholder": "给伙伴起个名字",
-      "customTitle": "创建伙伴"
+      "customTitle": "认识一位新伙伴"
     },
     "chat": {
       "newMessagesBoundary": "NEW",
@@ -7109,6 +7111,19 @@
     "welcome": {
       "generic": "嗨，我是{{name}}。以后有事直接跟我说，我先熟悉一下这儿。",
       "withRole": "嗨，我是{{name}}——{{description}}。有事直接跟我说。"
+    },
+    "invitation": {
+      "title": "准备见面",
+      "waiting": "{{name}}，一会儿见",
+      "background": "你可以先去忙，准备好后再来见面。",
+      "profile": "正在写下自己的故事",
+      "skills": "正在为 {{name}} 准备电脑",
+      "avatar": "{{name}} 正在挑选新头像",
+      "welcome": "正在准备第一声问候",
+      "failed": "准备暂时停住了。已经完成的内容会保留，可以再试一次。",
+      "retryFailed": "暂时无法重试，请稍后再试。",
+      "leave": "先去忙",
+      "avatarSkipped": "暂时用了默认头像，你随时可以换一张。"
     }
   },
   "common": {

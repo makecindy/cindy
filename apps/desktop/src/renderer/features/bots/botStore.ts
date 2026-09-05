@@ -1,3 +1,4 @@
+import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation';
 import { useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { effectiveSourceIdForModel, getModel } from '@cindy/model-providers';
@@ -150,6 +151,7 @@ export interface BotSessionProjection {
 }
 
 export interface BotProfile {
+  invitation?: BotInvitationProgress;
   id: string;
   name: string;
   description: string;
@@ -441,6 +443,7 @@ function defaultCapabilities(
 }
 
 export interface CreateBotProfileInput {
+  prepareInvitation?: boolean;
   /** Unsaved image bytes, validated and ingested by main on creation only. */
   avatarImageBase64?: string;
   name: string;
@@ -546,6 +549,7 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
         ? []
         : legacyTools;
   return {
+    invitation: botInvitationProgress(item.invitation),
     id: item.id,
     name: item.name,
     description: typeof item.description === 'string' ? item.description : '',
@@ -885,6 +889,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         // 阵容卡上明明写着「让她加入」,进去就变成「林律是谁」(2026-08-21 实机)。
         ...(bot.gender ? { gender: bot.gender } : {}),
         ...(input.templateId ? { templateId: input.templateId } : {}),
+        ...(input.prepareInvitation ? { prepareInvitation: true } : {}),
         ...(input.welcomeMessage ? { welcomeMessage: input.welcomeMessage } : {}),
       }),
     );
@@ -1090,4 +1095,9 @@ export function setCanonicalBotSession(
 export function removeBotProfile(id: string): void {
   profiles = profiles.filter((bot) => bot.id !== id);
   emit();
+}
+
+export async function retryBotInvitation(id: string): Promise<void> {
+  await botsApi()?.update({ id, retryInvitation: true });
+  refreshBotProfiles();
 }
