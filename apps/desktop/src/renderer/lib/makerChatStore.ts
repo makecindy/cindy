@@ -134,7 +134,11 @@ import {
   markSessionAutomaticHistoryLoadCompleted,
   resetSessionAutomaticHistoryLoadCompletion,
 } from '@/lib/sessionScrollStore';
-import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
+import {
+  isInsideMainContiguousRun,
+  mainContiguousRunStartIndex,
+  type LoadedWindowIsland,
+} from '@/lib/searchJumpTargeting';
 import { extractIpcError } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
@@ -2444,25 +2448,31 @@ export interface SessionChatState {
   isLoadingMore: boolean;
   hasMoreMessages: boolean;
   /**
-   * 窗口里是否掺进过"孤岛" —— 跳转补齐失败时 merge 的 around 窗口,它与已加载的尾部窗口
-   * 之间隔着没加载的历史。
+   * 窗口里掺进过的孤岛区间(显式建模的"已加载窗口")—— 跳转补齐失败时 merge 的 around
+   * 窗口,每座孤岛与已加载的尾部窗口(主连续段)之间都隔着没加载的历史。
    *
-   * 为什么需要它:补齐的快速通道原来只判 `messages.some(clientId === target)`,那是**成员**
-   * 判定而不是**连续覆盖**判定。孤岛一旦落进窗口,再跳同一个目标就会命中 some()、直接返回
-   * covered 而不补齐,于是"中间缺失"再也修不好(#676 review)。有孤岛时快速通道失效,
-   * 每次跳转都重新从最新翻页,让这个状态可自愈。
+   * 为什么不是 boolean:单个标记无法回答"目标落在哪一段"。补齐快速通道与搜索落点判定都
+   * 需要"目标是否在主连续段里"(最新 → 目标的整段历史已确认连续)—— 那要求把已加载区间
+   * 显式建模(见 searchJumpTargeting 的 TODO 与 MessageStream 锚定窗口双向有界的 TODO,
+   * 同一条后续改动)。孤岛按时间升序(最老在前),主段就是最后一个孤岛最新边界行之后的
+   * 全部行;孤岛被向上翻页跨过(接回主段)时从本数组移除,于是"孤岛 + 已翻到历史起点"的
+   * 会话在窗口真正完整后不再每次搜索都白打一轮 around + list。
    *
-   * 只由**把窗口清空、从最新重新拉起**的路径清回 false:reloadMessages(rewind / origin
+   * 只由**把窗口清空、从最新重新拉起**的路径清回空:reloadMessages(rewind / origin
    * 漂移重载)、clearSessionAfterGuard(/clear)、_demoteIdleSessions(空闲降级)、
-   * _purgeSession(整条移除,重建后回到默认 false)。
+   * _purgeSession(整条移除,重建后回到默认空)。
    *
    * 反过来,这几处**刻意不清**(都在 #676 review 里逐条确认过):
    *  - `covered`:到达本次目标只证明"尾部 → 本目标"连续,不证明更早的孤岛都被跨过;
    *  - `_trimMessagesIfNeeded`:`slice(-TRIM_TARGET)` 只保证"最新 200 行",不保证连续;
    *  - 首拉落地:它只是把最新一页 merge 进来,孤岛与尾段之间的洞还在(游标交还给最新页
    *    下沿,好让往上翻能穿过去)。
+   *
+   * 边界行 clientId 恒在 messages 里:孤岛行全部来自 merge,不会被改名;裁剪、删除等
+   * 会动窗口形状的路径必须同步收口本模型(见 pruneIslandsForTrimmedWindow /
+   * conservativeIslandsFor 与各处调用)。
    */
-  historyWindowHasIsland?: boolean;
+  historyWindowIslands: readonly LoadedWindowIsland[];
   isFirstMessage: boolean;
   streamingClientId: string | null;
   streamingText: string;
@@ -2704,7 +2714,6 @@ export type SessionChatLightState = Pick<
   | 'continuationInFlightProjectionCapability'
   | 'isLoadingMore'
   | 'hasMoreMessages'
-  | 'historyWindowHasIsland'
   | 'isFirstMessage'
   | 'historyLoaded'
   | 'pendingPermission'
@@ -2731,7 +2740,13 @@ export type SessionChatLightState = Pick<
   | 'pendingTaskWake'
   | 'pendingTaskWakeStarted'
   | 'turnStoppedByUser'
->;
+> & {
+  /** 窗口是否掺进过孤岛(由 historyWindowIslands 派生,给 UI / 判定用)。 */
+  historyWindowHasIsland: boolean;
+};
+
+/** 没有孤岛的空模型(共享只读实例,避免无谓分配)。 */
+const EMPTY_WINDOW_ISLANDS: readonly LoadedWindowIsland[] = [];
 
 function createInitialState(): SessionChatState {
   return {
@@ -2767,7 +2782,7 @@ function createInitialState(): SessionChatState {
     continuationInFlightProjectionCapability: 'unknown',
     isLoadingMore: false,
     hasMoreMessages: true,
-    historyWindowHasIsland: false,
+    historyWindowIslands: EMPTY_WINDOW_ISLANDS,
     isFirstMessage: true,
     streamingClientId: null,
     streamingText: '',
@@ -2845,7 +2860,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   continuationInFlightProjectionCapability: 'unknown',
   isLoadingMore: false,
   hasMoreMessages: false,
-  historyWindowHasIsland: false,
+  historyWindowIslands: EMPTY_WINDOW_ISLANDS,
   isFirstMessage: true,
   streamingClientId: null,
   streamingText: '',
@@ -2887,6 +2902,12 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   turnStoppedByUser: false,
   lastAgentMeta: null,
 }) as SessionChatState;
+
+/** Stable empty light snapshot (sessionless callers; derived boolean off). */
+export const EMPTY_LIGHT_STATE: SessionChatLightState = Object.freeze({
+  ...EMPTY_SESSION_STATE,
+  historyWindowHasIsland: false,
+});
 
 // ---------------------------------------------------------------------------
 // Store internals
@@ -3476,28 +3497,240 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
 }
 
 /**
- * 已加载窗口里最新连续段的最老一行。
+ * 在 messages 里按 clientId 定位一行;找不到返回 -1。
  *
- * `messages` 是 oldest-first。窗口可能是「更老的孤岛 + 缺口 + 最新连续尾段」，
- * 此时 `messages[0]` 是孤岛边缘，不是向上翻页该用的游标。切段尺子与渲染层相同
- * (`HISTORY_GAP_SPLIT_MS`)；没有超过该阈值的空洞时，整窗都算最新连续段。
+ * 孤岛边界行恒在窗口里(模型不变量),找不到只可能是模型被破坏 —— 调用方一律按
+ * 保守方向处理(返回原集合或整窗不连续),绝不让快速通道把孤岛行当成主段。
  */
-function oldestMessageOfNewestContiguousRun(messages: ChatMessage[]): ChatMessage | null {
-  if (messages.length === 0) return null;
-  let runStart = 0;
-  for (let i = 1; i < messages.length; i++) {
-    const prev = messageTime(messages[i - 1].createdAt);
-    const next = messageTime(messages[i].createdAt);
-    if (!Number.isFinite(prev) || !Number.isFinite(next)) continue;
-    if (next - prev > HISTORY_GAP_SPLIT_MS) runStart = i;
-  }
-  return messages[runStart] ?? null;
+function messageIndexByClientId(
+  messages: readonly { clientId: string }[],
+  clientId: string,
+): number {
+  return messages.findIndex((message) => message.clientId === clientId);
 }
 
-function messageMatchesHistoryCursor(
-  message: ChatMessage,
-  cursorId: string,
-): boolean {
+/**
+ * 主连续段(最新尾段)最老一行的位置,用于向上翻页的 beforeTs 游标。
+ *
+ * `messages` 是 oldest-first。窗口可能是「更老的孤岛 + 缺口 + 最新连续尾段」,
+ * 此时 `messages[0]` 是孤岛边缘,不是向上翻页该用的游标。主段由显式孤岛模型推导
+ * (最后一个孤岛最新边界行之后的全部行),不再用时间阈值近似 —— 见 searchJumpTargeting
+ * 的 mainContiguousRunStartIndex 与 canFocusWithoutJumpLoad 的说明。
+ */
+function oldestMessageOfMainContiguousRun(
+  messages: ChatMessage[],
+  islands: readonly LoadedWindowIsland[],
+): ChatMessage | null {
+  return messages[mainContiguousRunStartIndex(messages, islands)] ?? null;
+}
+
+/**
+ * 分页把窗口从游标向更老一侧推进后,按"孤岛是否真的被翻页跨过"逐座收口孤岛集合。
+ *
+ * 翻页从主段游标一路取更老的行,凡是整座落在 [新边界, 游标] 区间里的孤岛都被接回主段
+ * (它的行本来就在库里,list 会原样带回、由 mergeMessages 去重)→ 从模型移除;只被跨过
+ * 最新一侧的孤岛存活部分的最老边界不变、最新边界换成新边界前一行(B-1 是存活部分的
+ * 最新一行,必然在窗口里);完全没被碰到的保持原样。
+ *
+ * 这就是「孤岛 + 已翻到历史起点」的会话恢复零成本跳转的通道:翻页把洞填上之后,
+ * 窗口内搜索不再需要每次白打一轮 around + list。
+ */
+function absorbIslandsCrossedByPaging(
+  islands: readonly LoadedWindowIsland[],
+  messages: ChatMessage[],
+  newOldestBoundaryId: string | null,
+): readonly LoadedWindowIsland[] {
+  if (islands.length === 0 || !newOldestBoundaryId) return islands;
+  // 游标可能是 DB row id(调用方传 oldestId / cursorId 等分页游标)也可能是
+  // clientId,统一按"clientId 或 server id 命中"匹配,与 retainedWindowKeepsGapCursor
+  // 同一口径 —— 只按 clientId 找会让生产里的边界永远落空、孤岛收口失效。
+  const boundaryIdx = messages.findIndex((message) =>
+    messageMatchesHistoryCursor(message, newOldestBoundaryId),
+  );
+  if (boundaryIdx < 0) return islands;
+  const next: LoadedWindowIsland[] = [];
+  for (const island of islands) {
+    const oldestIdx = messageIndexByClientId(messages, island.oldestClientId);
+    const newestIdx = messageIndexByClientId(messages, island.newestClientId);
+    if (oldestIdx >= boundaryIdx) continue; // 整座孤岛被翻页覆盖 → 接回主段
+    if (newestIdx >= boundaryIdx) {
+      // 只跨过最新一侧:存活部分 = [oldest, B-1],B-1 就在窗口里(孤岛连续块的一部分)。
+      next.push({
+        oldestClientId: island.oldestClientId,
+        newestClientId: messages[boundaryIdx - 1].clientId,
+      });
+      continue;
+    }
+    next.push(island);
+  }
+  return next;
+}
+
+/**
+ * around 行 merge 进窗口后,按"around 块与窗口里既有行 / 既有孤岛的重叠关系"重算孤岛集合。
+ *
+ * around 块是库里的一段连续行。它与窗口里某段已加载区间**重叠**(哪怕重叠一行)就说明它
+ * 和那段连成一片:重叠落在主段 → 主段向更老/更新延伸、不产生新洞;重叠落在既有孤岛 →
+ * 孤岛延伸(两座孤岛经 around 块连通后合并成一座)。完全不重叠才是新孤岛,边界取 around
+ * 块在窗口里的最老/最新行。
+ *
+ * 块与主段重叠时的保守口径:返回原集合 —— 即使块顺带接住了更深处的一座孤岛,多留一座
+ * 标记只是多做补齐尝试,方向安全(#676 的既有口径,见 commitAroundWindow 的 covered 注)。
+ *
+ * "块是否连上主段"必须在**合并前**的窗口(prevMessages)上判定:合并后主段起点会被新插入
+ * 的行顶到块自己身上,「无孤岛窗口 + 首座失败跳转孤岛」会退化成主段吸收,孤岛永远记不上
+ * (T / Y3 回归)。判据是"块里至少有一行本来就躺在 prevMessages 的主段里" —— 块是库里
+ * 一段连续行,它跨过主段边界时,边界两侧都必须已经在窗口里才算连上。
+ */
+function updateIslandsAfterAroundMerge(
+  islands: readonly LoadedWindowIsland[],
+  prevMessages: ChatMessage[],
+  messages: ChatMessage[],
+  aroundRows: readonly Message[],
+): readonly LoadedWindowIsland[] {
+  if (aroundRows.length === 0) return islands;
+  // around 块在窗口里的下标范围:只统计真的进了窗口的行(hidden thinking 行会被
+  // mapServerMessages 过滤掉,不进窗口,但不影响块的连通范围判定)。
+  let blockStart = -1;
+  let blockEnd = -1;
+  // 主段起点在合并前的窗口上算(见函数注释):无孤岛时整窗都算主段,合并后算会把
+  // 刚插进来的孤岛行也圈进主段。
+  const prevMainStart = mainContiguousRunStartIndex(prevMessages, islands);
+  let touchesPrevMainRun = false;
+  for (const row of aroundRows) {
+    const idx = messageIndexByClientId(messages, row.clientId);
+    if (idx < 0) continue;
+    if (blockStart < 0 || idx < blockStart) blockStart = idx;
+    if (idx > blockEnd) blockEnd = idx;
+    if (messageIndexByClientId(prevMessages, row.clientId) >= prevMainStart) {
+      touchesPrevMainRun = true;
+    }
+  }
+  if (blockStart < 0) return islands;
+  // 块里任何一行本来就躺在主段里 → 块经它连上主段,主段向更老/更新延伸,孤岛集合不动。
+  if (touchesPrevMainRun) return islands;
+
+  // 块完全落在主段更老一侧:与既有孤岛合并(经块连通的孤岛合并成一座)或新建一座。
+  let mergedOldestClientId: string | null = null;
+  let mergedNewestClientId: string | null = null;
+  let mergedAny = false;
+  const next: LoadedWindowIsland[] = [];
+  for (const island of islands) {
+    const oldestIdx = messageIndexByClientId(messages, island.oldestClientId);
+    const newestIdx = messageIndexByClientId(messages, island.newestClientId);
+    const overlaps =
+      oldestIdx >= 0 && newestIdx >= 0 && oldestIdx <= blockEnd && newestIdx >= blockStart;
+    if (!overlaps) {
+      next.push(island);
+      continue;
+    }
+    mergedAny = true;
+    if (mergedOldestClientId === null || oldestIdx < blockStart) {
+      mergedOldestClientId = island.oldestClientId;
+    }
+    if (mergedNewestClientId === null || newestIdx > blockEnd) {
+      mergedNewestClientId = island.newestClientId;
+    }
+  }
+  next.push({
+    oldestClientId: mergedOldestClientId ?? messages[blockStart].clientId,
+    newestClientId: mergedNewestClientId ?? messages[blockEnd].clientId,
+  });
+  // 块可能插在两座孤岛之间 → 按窗口位置重排(孤岛很少,排序开销可忽略)。
+  next.sort(
+    (a, b) =>
+      messageIndexByClientId(messages, a.oldestClientId) -
+      messageIndexByClientId(messages, b.oldestClientId),
+  );
+  return next;
+}
+
+/**
+ * 裁剪后按保留窗口收口孤岛集合。
+ *
+ * `slice(-TRIM_TARGET)` 从最老一侧裁。整座被裁掉的孤岛随洞一起消失;被拦腰裁断的那座
+ * 存活部分的最老边界换成本窗口最老行 —— 孤岛按时间升序、裁剪只会先切最老的孤岛,所以
+ * 窗口最老行就是那座被裁孤岛存活部分的最老一行,精确而非近似。
+ */
+function pruneIslandsForTrimmedWindow(
+  islands: readonly LoadedWindowIsland[],
+  retained: ChatMessage[],
+): readonly LoadedWindowIsland[] {
+  if (islands.length === 0) return islands;
+  const retainedIds = new Set(retained.map((message) => message.clientId));
+  const fallbackOldest = retained[0]?.clientId ?? null;
+  const next: LoadedWindowIsland[] = [];
+  for (const island of islands) {
+    if (!retainedIds.has(island.newestClientId)) continue;
+    next.push({
+      oldestClientId:
+        retainedIds.has(island.oldestClientId) || fallbackOldest === null
+          ? island.oldestClientId
+          : fallbackOldest,
+      newestClientId: island.newestClientId,
+    });
+  }
+  return next;
+}
+
+/**
+ * 保守的"整窗不连续"建模:主段置空(孤岛边界行取窗口最新行),任何目标都不会命中
+ * 主段快速通道,一律走补齐尝试 —— 与旧 boolean=true 同语义。
+ */
+function conservativeIslandsFor(messages: ChatMessage[]): readonly LoadedWindowIsland[] {
+  const newest = messages[messages.length - 1];
+  if (!newest) return EMPTY_WINDOW_ISLANDS;
+  return [{ oldestClientId: newest.clientId, newestClientId: newest.clientId }];
+}
+
+/**
+ * 删除行后重算孤岛集合:删除落在某座孤岛的区间内会把它拦腰截断,剩余部分的连通性
+ * 不再可判 → 保守按整窗不连续建模。删在主段里与旧 boolean 同口径(不另记孤岛)。
+ */
+function conservativeIfIslandRowRemoved(
+  islands: readonly LoadedWindowIsland[],
+  prevMessages: ChatMessage[],
+  removedIds: ReadonlySet<string>,
+  nextMessages: ChatMessage[],
+): readonly LoadedWindowIsland[] {
+  if (islands.length === 0) return islands;
+  for (const island of islands) {
+    const oldestIdx = messageIndexByClientId(prevMessages, island.oldestClientId);
+    const newestIdx = messageIndexByClientId(prevMessages, island.newestClientId);
+    if (oldestIdx < 0 || newestIdx < 0) return conservativeIslandsFor(nextMessages);
+    for (const message of prevMessages) {
+      if (!removedIds.has(message.clientId)) continue;
+      const idx = messageIndexByClientId(prevMessages, message.clientId);
+      if (idx >= oldestIdx && idx <= newestIdx) return conservativeIslandsFor(nextMessages);
+    }
+  }
+  return islands;
+}
+
+/**
+ * 从最新一侧截断(edit-last)后重算孤岛集合:整座落在截断区里的孤岛随洞消失;被拦腰
+ * 截断的那座存活部分的最老边界仍在、最新边界未知 → 保守按整窗不连续建模。
+ */
+function pruneIslandsAfterNewestTruncation(
+  islands: readonly LoadedWindowIsland[],
+  prevMessages: ChatMessage[],
+  truncateFromIdx: number,
+): readonly LoadedWindowIsland[] {
+  if (islands.length === 0) return islands;
+  const next: LoadedWindowIsland[] = [];
+  for (const island of islands) {
+    const oldestIdx = messageIndexByClientId(prevMessages, island.oldestClientId);
+    const newestIdx = messageIndexByClientId(prevMessages, island.newestClientId);
+    if (oldestIdx >= truncateFromIdx) continue;
+    if (newestIdx >= truncateFromIdx) {
+      return conservativeIslandsFor(prevMessages.slice(0, truncateFromIdx));
+    }
+    next.push(island);
+  }
+  return next;
+}
+
+function messageMatchesHistoryCursor(message: ChatMessage, cursorId: string): boolean {
   return message.clientId === cursorId || message.id === cursorId;
 }
 
@@ -3537,7 +3770,7 @@ function _trimMessagesIfNeeded(sessionId: string): void {
     // 的精确游标。清成 null 后空闲恢复会拿 messages[0](孤岛)当 beforeTs,向更老处
     // 翻页,填不了孤岛与尾段之间的缺口,未解析计划会一直缺席到整窗重载。
     const keepGapCursor =
-      s.historyWindowHasIsland === true &&
+      s.historyWindowIslands.length > 0 &&
       retainedWindowKeepsGapCursor(retained, s.oldestMessageId);
     return {
       ...s,
@@ -3545,13 +3778,13 @@ function _trimMessagesIfNeeded(sessionId: string): void {
       hasMoreMessages: true,
       oldestMessageId: keepGapCursor ? s.oldestMessageId : null,
       isLoadingMore: false,
-      // 孤岛标记**保持原值**:`slice(-TRIM_TARGET)` 只保证"取最新的 200 行",不保证这 200 行
+      // 孤岛集合按保留窗口收口:`slice(-TRIM_TARGET)` 只保证"取最新的 200 行",不保证这 200 行
       // 连续 —— 若先前几次深跳留下多个孤岛、而真正连续的尾段不足 200 行,裁剪结果里就还夹着
-      // 孤岛。清掉标记会让 canFocusWithoutJumpLoad 把命中孤岛当成已覆盖直接 focus,而从孤岛
-      // 边界往上翻又取不到那段更新的缺失区间 → 洞永久固化,直到整会话重载(#676 review)。
-      //
-      // 代价是出现过孤岛的会话在裁剪后仍会多做补齐尝试;方向上是安全的那一侧。
-      // 真正清零只发生在"整窗从最新重建"的路径(reloadMessages / clear / demote / purge)。
+      // 孤岛。整座被裁掉的孤岛随洞一起消失;被拦腰裁断的那座只保留存活部分(最老边界换成本
+      // 窗口最老行,见 pruneIslandsForTrimmedWindow)。漏收口会让 canFocusWithoutJumpLoad
+      // 把命中孤岛当成已覆盖直接 focus,而从孤岛边界往上翻又取不到那段更新的缺失区间 →
+      // 洞永久固化,直到整会话重载(#676 review)。
+      historyWindowIslands: pruneIslandsForTrimmedWindow(s.historyWindowIslands, retained),
     };
   });
 }
@@ -3791,7 +4024,7 @@ function _demoteIdleSessions(): void {
       oldestMessageId: null,
       hasMoreMessages: true,
       isLoadingMore: false,
-      historyWindowHasIsland: false,
+      historyWindowIslands: EMPTY_WINDOW_ISLANDS,
     }));
   }
 }
@@ -8773,7 +9006,8 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
     isLoadingMore: state.isLoadingMore,
     hasMoreMessages: state.hasMoreMessages,
-    historyWindowHasIsland: state.historyWindowHasIsland,
+    // 派生布尔给 UI / 判定用,正本始终是 historyWindowIslands 区间模型。
+    historyWindowHasIsland: state.historyWindowIslands.length > 0,
     isFirstMessage: state.isFirstMessage,
     historyLoaded: state.historyLoaded,
     pendingPermission: state.pendingPermission,
@@ -10555,7 +10789,7 @@ function ensureInitialMessages(sessionId: string): void {
           ),
           isFirstMessage: false,
           oldestMessageId:
-            s.historyWindowHasIsland === true
+            s.historyWindowIslands.length > 0
               ? initialOldestId
               : (oldestServerMessageIdForWindow(
                   existing,
@@ -10645,9 +10879,7 @@ function ensureInitialMessages(sessionId: string): void {
       const oldestId = oldestRow.id;
       settleCacheHydration(sessionId);
       if (!isCurrentHistoryLoad()) return;
-      setState(sessionId, (s) => ({
-        ...s,
-        historyLoaded: true,
+      setState(sessionId, (s) => {
         // Merge: keep any messages already appended by streaming events
         // (unlikely here since we gate history load on first mount, but
         // preserves slice invariants).
@@ -10655,36 +10887,46 @@ function ensureInitialMessages(sessionId: string): void {
         // 冷缓存 hydrate 的行先**整批剔除**再 merge:mergeMessages 只增不删,权威页里
         // 已经不存在的缓存行(被控端 /clear、rewind、删消息)否则会永久留在窗口里。
         // 仍在权威页里的那些会由 mapped 原样带回来,不会闪。
-        messages: mergeMessages(
+        const messages = mergeMessages(
           mapped,
           s.messages.some((m) => m.cacheHydrated === true)
             ? s.messages.filter((m) => m.cacheHydrated !== true)
             : s.messages,
           {},
           'newest-first',
-        ),
-        isFirstMessage: false,
-        // 窗口里掺着跳转孤岛时,**本页的下沿**接管游标,不再取"两者中更老的那个"。
-        //
-        // 序列(#676 review codex P1):会话刚打开就直接深跳,首拉还没回来 → 补齐无从下手、
-        // 退回 around 孤岛并用孤岛下沿播种游标(那时窗口里只有孤岛,只能这么播)。随后首拉
-        // 的最新页落地,若仍保留更老的孤岛游标,缺失区间恰好比它**更新**:普通向上翻页与
-        // 孤岛感知重试都只会请求比孤岛更老的行,那段洞永远拉不回来,除非整会话重载。
-        // 换成最新页下沿后,往上翻会一页页穿过那段洞,补齐也能真正命中目标并自愈。
-        //
-        // 孤岛标记**不清**:洞还在,直到翻页真的把它填上。
-        oldestMessageId:
-          s.historyWindowHasIsland === true
-            ? oldestId
-            : (oldestServerMessageIdForWindow(
-                merged,
-                s.messages,
-                s.oldestMessageId,
-                'newest-first',
-              ) ?? oldestId),
-        hasMoreMessages: hasMore,
-        isLoadingMore: false,
-      }));
+        );
+        return {
+          ...s,
+          historyLoaded: true,
+          messages,
+          isFirstMessage: false,
+          // 窗口里掺着跳转孤岛时,**本页的下沿**接管游标,不再取"两者中更老的那个"。
+          //
+          // 序列(#676 review codex P1):会话刚打开就直接深跳,首拉还没回来 → 补齐无从下手、
+          // 退回 around 孤岛并用孤岛下沿播种游标(那时窗口里只有孤岛,只能这么播)。随后首拉
+          // 的最新页落地,若仍保留更老的孤岛游标,缺失区间恰好比它**更新**:普通向上翻页与
+          // 孤岛感知重试都只会请求比孤岛更老的行,那段洞永远拉不回来,除非整会话重载。
+          // 换成最新页下沿后,往上翻会一页页穿过那段洞,补齐也能真正命中目标并自愈。
+          //
+          // 孤岛区间**不清**:洞还在,直到翻页真的把它填上(absorbIslandsCrossedByPaging)。
+          oldestMessageId:
+            s.historyWindowIslands.length > 0
+              ? oldestId
+              : (oldestServerMessageIdForWindow(
+                  merged,
+                  s.messages,
+                  s.oldestMessageId,
+                  'newest-first',
+                ) ?? oldestId),
+          hasMoreMessages: hasMore,
+          isLoadingMore: false,
+          historyWindowIslands: absorbIslandsCrossedByPaging(
+            s.historyWindowIslands,
+            messages,
+            oldestId,
+          ),
+        };
+      });
       if (import.meta.env.DEV) {
         const ingestDurMs = performance.now() - ingestStartMs;
         if (ingestDurMs >= 30) {
@@ -10742,7 +10984,7 @@ function scheduleIdlePlanDiscoveryIfNeeded(sessionId: string): void {
   const state = sessions.get(sessionId);
   if (!state?.historyLoaded || state.isLoadingMore || !state.hasMoreMessages) return;
   const planState = getLatestMessageTodoState(state.messages, {
-    taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+    taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowIslands.length > 0,
   });
   if (planState.hasPlanEvent && planState.isResolved) return;
   if (_idlePlanDiscoveryHandles.has(sessionId)) return;
@@ -10762,7 +11004,7 @@ function loadOneOlderPageForPlanDiscovery(sessionId: string): Promise<boolean> {
     return Promise.resolve(false);
   }
   const planState = getLatestMessageTodoState(state.messages, {
-    taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+    taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowIslands.length > 0,
   });
   if (planState.hasPlanEvent && planState.isResolved) return Promise.resolve(false);
   if (planState.hasPlanEvent && !planState.isResolved) {
@@ -10785,7 +11027,7 @@ async function continuePlanResolutionAfterIdleDiscovery(sessionId: string): Prom
     const state = sessions.get(sessionId);
     if (!state?.historyLoaded || state.isLoadingMore || !state.hasMoreMessages) return;
     const planState = getLatestMessageTodoState(state.messages, {
-      taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+      taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowIslands.length > 0,
     });
     if (!planState.hasPlanEvent || planState.isResolved) return;
     const advanced = await loadOlderMessages(sessionId, false, 1);
@@ -10852,7 +11094,7 @@ function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean 
       oldestMessageId: null,
       isStreaming: false,
       // 窗口从最新重新拉起 → 不再有孤岛。
-      historyWindowHasIsland: false,
+      historyWindowIslands: EMPTY_WINDOW_ISLANDS,
       // 分页锁归本次重置释放:窗口和游标都清了,in-flight 的翻页 / 跳转补齐也已被上面的
       // bumpMessagesEpoch 作废,锁再留着只会让行首守卫卡住下一次翻页。由这里清而不是
       // 让被作废的请求代清 —— 它们无法分辨锁是自己那一代的还是重置后新代际的(#676 review)。
@@ -10919,6 +11161,14 @@ function removeMessagesByClientIds(
       messages,
       taskUpdates,
       isFirstMessage: !messages.some((message) => message.role === 'user'),
+      // 删除落在孤岛区间内会把孤岛从中间截断,剩余部分的连通性不再可判 → 保守按
+      // 整窗不连续建模(主段为空)。删在主段里则与旧 boolean 同口径:不另记孤岛。
+      historyWindowIslands: conservativeIfIslandRowRemoved(
+        s.historyWindowIslands,
+        s.messages,
+        deletedClientIds,
+        messages,
+      ),
       ...lockReset,
     };
   });
@@ -10962,6 +11212,13 @@ function dropMessagesFromClientId(sessionId: string, clientId: string): void {
     return {
       ...s,
       messages: s.messages.slice(0, idx),
+      // 从最新一侧截断:整座落在截断区里的孤岛随洞一起消失;被拦腰截断的那座保守按
+      // 整窗不连续建模(存活部分的最老边界未知,见 pruneIslandsAfterNewestTruncation)。
+      historyWindowIslands: pruneIslandsAfterNewestTruncation(
+        s.historyWindowIslands,
+        s.messages,
+        idx,
+      ),
       taskUpdates: new Map(),
       isStreaming: false,
       // 同 reloadMessages / clearSessionAfterGuard:本地截断也是 epoch-reset 路径,
@@ -11200,7 +11457,7 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
       // 赢、把对账推到下一轮触发)会让被控端权威内容继续缺着,而走到这个分支本身就说明本地
       // 窗口已经严重过期。所以让权威重建赢。
       //
-      // historyWindowHasIsland 按"是否保留了晚到的本地行"决定清不清,见下方 lateArrivals。
+      // historyWindowIslands 按"是否保留了晚到的本地行"决定清不清,见下方 lateArrivals。
       const isContiguous = reachedKnownWindow;
       // 代际 bump 与分页锁释放都**只在重建确定提交时**做。不能放在 setState 外面提前 bump:
       // 更新器里的 isStreaming 守卫可能否掉重建。也不能等 setState 通知完成后才 bump:
@@ -11294,7 +11551,12 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
           // 锁归本次重置释放(与 reloadMessages / clear / trim / demote 同规矩):被作废的
           // 请求不会代清,漏清会让行首守卫把该会话的翻页永久卡住。
           isLoadingMore: false,
-          historyWindowHasIsland: hasDetachedArrival,
+          // 晚到行全部脱离权威窗口 → 窗口整体不可信:保守按"主段为空"建模(任何目标都
+          // 继续走补齐尝试,与旧 boolean=true 同语义)。没有脱离行 → 权威窗口本身是
+          // 连续拉回的一段,整窗即主段,窗口内搜索直接 focus。
+          historyWindowIslands: hasDetachedArrival
+            ? conservativeIslandsFor(messages)
+            : EMPTY_WINDOW_ISLANDS,
         };
       });
     } finally {
@@ -11367,10 +11629,13 @@ function loadOlderMessages(
     firstPageOpts = { limit: 50, before: state.oldestMessageId };
   } else if (state.messages.length > 0) {
     // 无 ID 时默认用 messages[0]。有孤岛时那是孤岛最老行,beforeTs 会翻到缺口
-    // 更早的一侧;改用最新连续段下沿,才能填孤岛与尾段之间的洞。
+    // 更早的一侧;改用主连续段(最后一个孤岛最新边界行之后)的下沿,才能填孤岛与
+    // 尾段之间的洞 —— 与 canFocusWithoutJumpLoad / 补齐快速通道同一把结构尺子,
+    // 不再用时间阈值近似(见 oldestMessageOfMainContiguousRun)。
     const oldest =
-      state.historyWindowHasIsland === true
-        ? (oldestMessageOfNewestContiguousRun(state.messages) ?? state.messages[0])
+      state.historyWindowIslands.length > 0
+        ? (oldestMessageOfMainContiguousRun(state.messages, state.historyWindowIslands) ??
+          state.messages[0])
         : state.messages[0];
     if (!oldest.createdAt) return Promise.resolve(false);
     const ts = new Date(oldest.createdAt).getTime();
@@ -11461,6 +11726,13 @@ function loadOlderMessages(
           oldestMessageId: nextOldestMessageId,
           hasMoreMessages: hasMore,
           isLoadingMore: false,
+          // 翻页从主段游标向更老一侧推进:被跨过的孤岛(行落进本批拉取范围)接回主段,
+          // 从显式模型里消失 —— 这是"孤岛 + 已翻到历史起点"的会话恢复零成本跳转的通道。
+          historyWindowIslands: absorbIslandsCrossedByPaging(
+            s.historyWindowIslands,
+            messages,
+            nextOldestMessageId,
+          ),
         };
       });
       if (didAdvanceWindow && automatic) {
@@ -11595,15 +11867,19 @@ async function backfillHistoryUntil(
   // 所以锁被占用时一律 busy —— 返回 busy 而不是 unavailable,是因为锁是别人的,
   // fallback 路径不得代为释放。
   if (getOrCreateState(sessionId).isLoadingMore) return { outcome: 'busy', ownsPagingLock: false };
-  // 快速通道只在窗口没有孤岛时可信:some(clientId) 是成员判定,不是连续覆盖判定。窗口里
-  // 掺过孤岛(补齐失败时 merge 的 around 窗口)时,目标可能正是那座孤岛上的行 —— 直接返回
-  // covered 就等于承认"中间缺失"永久修不好。有孤岛时一律走下面的翻页补齐,让它自愈。
+  // 快速通道只在目标落在**主连续段**里时可信:some(clientId) 是成员判定,不是连续覆盖
+  // 判定。窗口里掺过孤岛(补齐失败时 merge 的 around 窗口)时,目标可能正是那座孤岛上的行
+  // —— 直接返回 covered 就等于承认"中间缺失"永久修不好。目标在主段内(最新 → 目标的整段
+  // 历史已确认连续)才允许零成本短路;落在孤岛上的一律走下面的翻页补齐,让它自愈。
   const stateBeforeFetch = getOrCreateState(sessionId);
   if (
-    stateBeforeFetch.historyWindowHasIsland !== true &&
-    stateBeforeFetch.messages.some((message) => message.clientId === targetClientId)
+    isInsideMainContiguousRun(
+      stateBeforeFetch.messages,
+      stateBeforeFetch.historyWindowIslands,
+      targetClientId,
+    )
   ) {
-    // 窗口本身连续(无孤岛)时,成员判定就等于覆盖判定,可以零成本短路。
+    // 目标在主连续段内:成员判定就等于覆盖判定,可以零成本短路。
     // 注意 ownsPagingLock=false:这条路一个请求都没发、也没置锁,所以提交时不得清锁、
     // 不得写游标 —— 否则两个 around 响应同时落地时,这一次会把另一次刚拿到的锁清掉、
     // 并覆写它的游标(#676 review codex P1)。
@@ -11638,17 +11914,26 @@ async function backfillHistoryUntil(
   const publishCollected = (): void => {
     if (collected.length === 0) return;
     const mapped = mapServerMessages(collected);
-    setState(sessionId, (s) => ({
-      ...s,
+    setState(sessionId, (s) => {
       // addOnly:这些页可能是几秒前取到的,期间 live push 可能已经更新过其中某行;
       // 用旧快照 hydrate 会把 live 更新盖回去(见 mergeMessages 的 addOnly 说明)。
-      messages: mergeMessages(mapped, s.messages, { addOnly: true }, 'newest-first'),
-      historyLoaded: true,
-      isFirstMessage: false,
-      oldestMessageId: cursorId ?? s.oldestMessageId,
-      hasMoreMessages: hasMoreAtEnd,
-      isLoadingMore: true,
-    }));
+      const messages = mergeMessages(mapped, s.messages, { addOnly: true }, 'newest-first');
+      return {
+        ...s,
+        messages,
+        historyLoaded: true,
+        isFirstMessage: false,
+        oldestMessageId: cursorId ?? s.oldestMessageId,
+        hasMoreMessages: hasMoreAtEnd,
+        isLoadingMore: true,
+        // 同 loadOlderMessages:被翻页跨过的孤岛接回主段、移出模型。
+        historyWindowIslands: absorbIslandsCrossedByPaging(
+          s.historyWindowIslands,
+          messages,
+          cursorId,
+        ),
+      };
+    });
   };
 
   try {
@@ -11809,19 +12094,25 @@ function commitAroundWindow(
       'oldest-first',
     );
     if (!ownsPagingLock) {
-      // mergeMessages 只增不减 → "长度没变"等价于"没引入可能不连续的行"。
-      const addedRows = messages.length !== s.messages.length;
       // busy 意味着补齐**根本没跑**(让位给正在飞行的分页),这次 merge 进来的 around 行与
-      // 尾部窗口之间可能隔着没加载的历史 → 记上孤岛,否则下次跳同一目标会命中成员快速通道、
-      // 永远修不回连续。
+      // 尾部窗口之间可能隔着没加载的历史 → 交给 updateIslandsAfterAroundMerge 按"around 块
+      // 与窗口里既有行是否重叠"决定记孤岛、并入既有孤岛还是并入主段:一行没加进(addedRows
+      // 等价于 messages 没变)时窗口形状没动,孤岛集合原样返回 —— 绝不凭空记一座
+      // (#676 review codex P1 的 busy 零新增用例)。
       //
-      // covered 且不持锁 = 成员快速通道:它成立的前提就是"窗口无孤岛且目标在窗口里",
-      // 所以 radius 内的邻居与目标同处连续区间,不产生孤岛,标记不动。
-      const marksIsland = outcome === 'busy' && addedRows;
-      if (marksIsland) return { ...s, messages, historyWindowHasIsland: true };
-      // 真正的 no-op(merge 没换引用、也不用记孤岛)直接返回原 state:setState 只要
-      // next !== prev 就通知订阅者,白发一次会让整棵消息树重渲染(#676 review copilot)。
-      return messages === s.messages ? s : { ...s, messages };
+      // covered 且不持锁 = 成员快速通道:它成立的前提就是"目标在主连续段里",
+      // 所以 radius 内的邻居与目标同处连续区间,不产生孤岛,孤岛集合不动。
+      if (outcome === 'covered') {
+        return messages === s.messages ? s : { ...s, messages };
+      }
+      const nextIslands = updateIslandsAfterAroundMerge(
+        s.historyWindowIslands,
+        s.messages,
+        messages,
+        rows,
+      );
+      if (messages === s.messages && nextIslands === s.historyWindowIslands) return s;
+      return { ...s, messages, historyWindowIslands: nextIslands };
     }
     // 已补齐:hasMore 归 backfill 维护,不能被 around 窗口的边界回退。
     // 但游标要取两侧更早的那个:radius 决定的 around 窗口可能含比"命中那一页的
@@ -11839,10 +12130,11 @@ function commitAroundWindow(
         // (#676 review copilot)。
         historyLoaded: true,
         isFirstMessage: false,
-        // 注意这里**不清**孤岛标记。补齐到达目标只证明"尾部 → 本次目标"连续,不证明更早的
-        // 孤岛都被跨过:先前一次失败的深跳留下孤岛 A,之后跳一个更近的目标 B 并补齐成功,
-        // B↔A 之间的洞和 A 自己的行都还在。清掉唯一的 boolean 会让之后跳回 A 走成员快速
-        // 通道、永不修复(#676 review 给的两孤岛序列)。
+        // 注意这里**不动**孤岛集合:absorbIslandsCrossedByPaging 已按"本次翻页真的跨过"
+        // 逐座收口(目标所在的孤岛被接回主段时自然消失)。补齐到达目标只证明
+        // "尾部 → 本次目标"连续,不证明更早的孤岛都被跨过:先前一次失败的深跳留下孤岛 A,
+        // 之后跳一个更近的目标 B 并补齐成功,B↔A 之间的洞和 A 自己的行都还在。清掉
+        // 模型会让之后跳回 A 走成员快速通道、永不修复(#676 review 给的两孤岛序列)。
         oldestMessageId: oldestServerMessageIdForWindow(
           rows,
           s.messages,
@@ -11858,6 +12150,15 @@ function commitAroundWindow(
       messages,
       historyLoaded: true,
       isFirstMessage: false,
+      // 退回 around 窗口 = 窗口里多了一座孤岛(或并入既有孤岛;around 块与主段重叠时
+      // 则是主段向更老延伸,不产生新孤岛 —— 见 updateIslandsAfterAroundMerge)。
+      // 一行都没加进来时窗口形状没变,孤岛集合保持原值。
+      historyWindowIslands: updateIslandsAfterAroundMerge(
+        s.historyWindowIslands,
+        s.messages,
+        messages,
+        rows,
+      ),
       // 游标:已有连续窗口时**留在它的边缘**,不跟着孤岛前移(#676 review)。
       //
       // 退回 around 窗口时,缺失的区间比那座孤岛更新。若把 oldestMessageId 推到孤岛上,
@@ -11884,9 +12185,6 @@ function commitAroundWindow(
       hasMoreMessages: addedRows ? true : s.hasMoreMessages,
       // 锁由本次提交释放。
       isLoadingMore: false,
-      // 退回 around 窗口 = 窗口里多了一座孤岛(它与尾部窗口之间隔着没加载的历史)。
-      // 同理:没加进任何行就没有新孤岛,保持原值。
-      historyWindowHasIsland: addedRows ? true : s.historyWindowHasIsland,
     };
   });
 }
@@ -13967,12 +14265,12 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       streamingClientId: null,
       streamingText: '',
       isStreaming: false,
-      // 窗口清空 → 按构造没有孤岛,标记必须一起清零(与 reloadMessages / trim / demote
-      // 同规矩)。漏清的后果不是数据错而是永久降级:covered 刻意保留孤岛标记(到达本次
+      // 窗口清空 → 按构造没有孤岛,模型必须一起清零(与 reloadMessages / trim / demote
+      // 同规矩)。漏清的后果不是数据错而是永久降级:covered 刻意保留孤岛区间(到达本次
       // 目标不证明更早的洞都补上了),于是 /clear 之后这个会话永远被判为"不连续",
       // canFocusWithoutJumpLoad 拒绝每一次窗口内命中,每次搜索跳转都白跑一轮补齐
       // (#676 review)。
-      historyWindowHasIsland: false,
+      historyWindowIslands: EMPTY_WINDOW_ISLANDS,
       // 分页锁归本次重置释放(与 reloadMessages / dropMessagesFromClientId 同规矩):
       // 上面刚 bump epoch 作废了 in-flight 的翻页 / 跳转补齐,而被作废的请求不会(也不该)
       // 代清这把锁 —— 它们分辨不出锁属于哪一代。漏清会让行首守卫把该会话的翻页永久

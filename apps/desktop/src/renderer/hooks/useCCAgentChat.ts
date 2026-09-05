@@ -26,6 +26,7 @@ import {
 
 import {
   makerChatStore,
+  EMPTY_LIGHT_STATE,
   EMPTY_SESSION_STATE,
   EMPTY_TASK_UPDATES,
   type AgentStatus,
@@ -357,8 +358,8 @@ function useHeavyChatSnapshot(
 function useLiveChatLightState(sessionId: string | undefined): SessionChatLightState {
   return useSyncExternalStore(
     (cb) => (sessionId ? makerChatStore.subscribeLight(sessionId, cb) : NOOP_UNSUBSCRIBE),
-    () => (sessionId ? makerChatStore.getLightSnapshot(sessionId) : EMPTY_SESSION_STATE),
-    () => (sessionId ? makerChatStore.getLightSnapshot(sessionId) : EMPTY_SESSION_STATE),
+    () => (sessionId ? makerChatStore.getLightSnapshot(sessionId) : EMPTY_LIGHT_STATE),
+    () => (sessionId ? makerChatStore.getLightSnapshot(sessionId) : EMPTY_LIGHT_STATE),
   );
 }
 
