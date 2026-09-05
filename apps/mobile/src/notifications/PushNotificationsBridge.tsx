@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
 import Notifications from './nativeNotifications';
-import { parseNotificationResponseDeepLink } from './pushRegistrationModel';
+import { notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 import {
   configureForegroundNotificationBehavior,
   isPushSupported,
@@ -103,7 +103,7 @@ export function PushNotificationsBridge() {
       if (consumedNotificationResponseKeys.has(dedupeKey)) return;
       consumedNotificationResponseKeys.add(dedupeKey);
       void Notifications.clearLastNotificationResponseAsync?.()?.catch(() => undefined);
-      pendingDeepLinkRef.current = deepLink;
+      pendingDeepLinkRef.current = notificationRecoveryRoute(deepLink, dedupeKey);
       flushPendingDeepLink();
     };
 

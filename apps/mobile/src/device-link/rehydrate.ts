@@ -3,6 +3,7 @@ import type { RehydratePlan } from '@/device-link/topicRegistry';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 
 export interface DeviceLinkRehydrateSendOptions {
+  subscriptionIdentity?: number | null;
   /** 同一设备的一轮快照 fan-out 共享一个响应性观测 cohort。 */
   responsivenessCohort?: number;
 }

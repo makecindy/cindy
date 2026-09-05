@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { createBackgroundConnection } from './backgroundConnection';
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
 import {
@@ -71,6 +72,7 @@ import {
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import {
   runSessionMessagesSnapshotSingleFlight,
+  settleProgressiveSnapshot,
   runSessionPendingInteractionsSnapshotSingleFlight,
   runSessionProjectionSnapshotSingleFlight,
 } from '@/device-link/sessionSnapshotSingleFlight';
@@ -606,13 +608,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           presenceWipeTimerDeps,
         );
       },
-      rebuildSessionSnapshot: (deviceId, sessionId, opts) => rebuildSessionSnapshot(
-        client,
-        deviceId,
-        sessionId,
-        connectionEpochRef.current,
-        opts,
-      ),
+      rebuildSessionSnapshot: (deviceId, sessionId, opts) => {
+        const epoch = connectionEpochRef.current;
+        const releaseGeneration = backgroundReleaseGenerationRef.current;
+        return rebuildSessionSnapshot(client, deviceId, sessionId, epoch, {
+          ...opts,
+          subscriptionIdentity: remoteSubscribedTopicsRef.current.identity(deviceId, ['sessions', `session:${sessionId}`]),
+        }, () => client === clientRef.current
+          && client.getStatus() === 'online'
+          && connectionEpochRef.current === epoch
+          && backgroundReleaseGenerationRef.current === releaseGeneration
+          && !backgroundReleaseInFlightRef.current
+          && !revokedDevicesStore.has(deviceId)
+          && !client.isOutboundExplicitlyClosed(deviceId));
+      },
     });
 
     if (
@@ -1053,18 +1062,6 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    // 退后台的断连宽限状态:stopTimer 挂着表示还没真正 stop;backgroundAt 用于
-    // 回前台时判断 JS 是否在计时器触发前就被挂起(见 BACKGROUND_SUSPEND_SUSPECT_MS)。
-    const backgroundState: { stopTimer: ReturnType<typeof setTimeout> | null; backgroundAt: number } = {
-      stopTimer: null,
-      backgroundAt: 0,
-    };
-    const clearBackgroundStopTimer = () => {
-      if (backgroundState.stopTimer) {
-        clearTimeout(backgroundState.stopTimer);
-        backgroundState.stopTimer = null;
-      }
-    };
     const releaseHeavyTopics = (): Promise<void>[] => {
       const releases: Promise<void>[] = [];
       for (const plan of registryRef.current.snapshot()) {
@@ -1078,23 +1075,23 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       }
       return releases;
     };
+    const backgroundConnection = createBackgroundConnection({
+      isBackground: () => AppState.currentState === 'background',
+      releaseTopics: releaseHeavyTopics,
+      stop: () => client.stop(),
+      connect: () => client.connectNow('appstate-active', { overrideCongestionCooldown: true }),
+      graceMs: BACKGROUND_STOP_GRACE_MS,
+      releaseWaitMs: BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS,
+      suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
+    });
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
         backgroundReleaseInFlightRef.current = false;
-        const heldConnection = backgroundState.stopTimer !== null;
-        clearBackgroundStopTimer();
-        const backgroundedForMs = backgroundState.backgroundAt > 0 ? Date.now() - backgroundState.backgroundAt : 0;
-        backgroundState.backgroundAt = 0;
-        if (heldConnection && backgroundedForMs > BACKGROUND_SUSPEND_SUSPECT_MS) {
-          // 宽限计时器没来得及触发但后台已超阈值:JS 被挂起过,socket 大概率
-          // 已被系统回收而状态机仍认为 online——主动换新连接,别等心跳才发现假活。
-          client.stop();
-        }
         // 回前台立刻重连:绕开断线后遗留的指数退避计时器(可能 park 到 30s),
         // 让"打开 App → 打开会话"路径快速恢复在线,而不是干等退避。
         // overrideCongestionCooldown:用户显式回前台是拥塞冷却的合法豁免——
         // 冷却默认只拦请求路径的 un-park(waitUntilOnline),不拦真人操作。
-        client.connectNow('appstate-active', { overrideCongestionCooldown: true });
+        backgroundConnection.active();
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrateWithClient(client);
@@ -1110,26 +1107,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 后若订阅残留(宽限窗、挂起延迟最长可拖到 server 60s 空闲清扫),恰好在
         // 用户离开的瞬间完成的任务就永远收不到通知。只动远端订阅与 ack 簿记,
         // registry 所有权保留 —— 回前台的 rehydrate 会因 ack 已清而重新订阅。
-        for (const release of releaseHeavyTopics()) {
-          void release.catch(() => undefined);
-        }
-        // 短暂宽限再断:几秒内切回的快速 App 切换不触发整套断连/重连/补齐。
-        // iOS 挂起后计时器不再运行,恢复时由上面的 active 分支收拾残局。
-        backgroundState.backgroundAt = Date.now();
-        clearBackgroundStopTimer();
-        backgroundState.stopTimer = setTimeout(() => {
-          backgroundState.stopTimer = null;
-          if (AppState.currentState !== 'background') return;
-          // 已发出的 stale subscribe 无法撤回;断开前再幂等释放一次并等待已发出的
-          // unsubscribe 收尾,确保最后落到桌面端的 session topic 状态仍是释放。
-          const finalRelease = Promise.allSettled(releaseHeavyTopics());
-          const boundedWait = new Promise<void>((resolve) => {
-            setTimeout(resolve, BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS);
-          });
-          void Promise.race([finalRelease, boundedWait]).finally(() => {
-            if (AppState.currentState === 'background') client.stop();
-          });
-        }, BACKGROUND_STOP_GRACE_MS);
+        backgroundConnection.background();
       }
     });
 
@@ -1151,7 +1129,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       disposed = true;
       networkSubscription?.remove();
       sub.remove();
-      clearBackgroundStopTimer();
+      backgroundConnection.dispose();
       offUnresponsive();
       offResponseEvidence();
       offBeforeLink();
@@ -1382,7 +1360,8 @@ async function rebuildSessionSnapshot(
   deviceId: string,
   sessionId: string,
   connectionEpoch: number,
-  opts?: DeviceLinkRehydrateSendOptions,
+  opts: DeviceLinkRehydrateSendOptions | undefined,
+  isCurrent: () => boolean,
 ): Promise<void> {
   // 这四个并发请求是同一轮补齐:一次路由抖动可能让它们同时等满超时,但这只
   // 代表一个独立故障观测。共享显式 cohort,避免单轮 fan-out 直接凑满 3 次阈值。
@@ -1400,14 +1379,67 @@ async function rebuildSessionSnapshot(
   const unenteredMessageAuthorityAtRequestStart = messageDetailEnteredAtRequestStart
     ? null
     : remoteSessionStore.captureUnenteredSessionMessageAuthority(sessionId);
-  const snapshotScope = { deviceId, sessionId, connectionEpoch };
+  const snapshotScope = { deviceId, sessionId, connectionEpoch, subscriptionIdentity: opts?.subscriptionIdentity };
   const pendingSnapshotAtRequestStart = remoteSessionStore.getPendingInteractions(sessionId);
   // 四路快照独立拉取、独立落库:断连补齐窗口本就脆弱,一个子请求失败不应拖垮
   // 其余(旧实现共用一个 catch,任一失败三份快照全丢)。goal 覆盖断连窗口内
   // 丢失的 maker:goal:status-changed push;model-pref / turn-cost 无对应查询通道,
   // 暂不在补齐范围(需扩桌面端 invoke 白名单)。
-  const [history, pending, projection, goal] = await Promise.allSettled([
-    runSessionMessagesSnapshotSingleFlight(
+  const applyHistory = (value: RemoteMessage[]) => {
+    if (!isCurrent()) return;
+    if (Array.isArray(value)) {
+      // moreBeyondWindow:这一页上沿之外服务端还有历史(满 80 条,或被 device-link 裁过行)。为真时
+      // store 不保留早于本页的缓存段 —— 断连期间漏收的 push 可能正落在两段之间,保留就在窗口里
+      // 留下孤岛,而漏收的量不大时两侧时间差很小、时间阈值的空洞检测发现不了(#1222)。
+      const windowOptions = {
+        moreBeyondWindow: hasMoreOlderMessages(value, RECONNECT_MESSAGE_WINDOW_LIMIT),
+      };
+      if (messageAuthorityAtRequestStart) {
+        remoteSessionStore.setLatestMessageWindow(sessionId, value, {
+          ...windowOptions,
+          authority: messageAuthorityAtRequestStart,
+        });
+      } else if (
+        unenteredMessageAuthorityAtRequestStart
+        && remoteSessionStore.canCommitUnenteredSessionMessageWindow(
+          unenteredMessageAuthorityAtRequestStart,
+          deviceId,
+        )
+      ) {
+        // 从未打开过的 regular 仍承担首页/全局消息镜像；但请求飞行期间只要发生过
+        // enter / leave / forget / clear，生命周期 fence 就会失效，旧重连响应不得越过
+        // 新生命周期。Store 同时校验 regular retention 与物理设备归属，避免旧设备响应
+        // 写回新 shard。
+        remoteSessionStore.setLatestMessageWindow(sessionId, value, windowOptions);
+      }
+    }
+  };
+  const applyPending = (value: PendingInteraction[]) => {
+    if (!isCurrent()) return;
+    if (Array.isArray(value)) {
+      remoteSessionStore.setPendingInteractions(sessionId, value, { finalizeStreaming: true });
+    }
+  };
+  const applyProjection = (value: InputProjection) => {
+    if (!isCurrent()) return;
+    if (value) {
+      remoteSessionStore.setInputProjectionIfCurrent(
+        sessionId,
+        value,
+        projectionEpochAtRequestStart,
+      );
+    }
+  };
+  const applyGoal = (value: MobileGoalStatusPayload | null | undefined) => {
+    if (!isCurrent()) return;
+    // undefined = 未拿到/未知(兼容形态的空返回),不能当作权威「无 goal」落库——
+    // 那会把在世的 goal 卡清掉直到下一条 push;只有显式 null 才代表确认无 goal。
+    if (value !== undefined) {
+      remoteSessionStore.setGoalStatus(sessionId, value);
+    }
+  };
+  const [history, pending, projection, goal] = await Promise.all([
+    settleProgressiveSnapshot(runSessionMessagesSnapshotSingleFlight(
       snapshotScope,
       RECONNECT_MESSAGE_WINDOW_LIMIT,
       messageAuthorityAtRequestStart
@@ -1424,8 +1456,8 @@ async function rebuildSessionSnapshot(
         [sessionId, { limit: RECONNECT_MESSAGE_WINDOW_LIMIT }],
         sendOpts,
       ),
-    ),
-    runSessionPendingInteractionsSnapshotSingleFlight(
+    ), applyHistory),
+    settleProgressiveSnapshot(runSessionPendingInteractionsSnapshotSingleFlight(
       snapshotScope,
       pendingSnapshotAtRequestStart,
       () => sendInvokeWithAccessHandling<PendingInteraction[]>(
@@ -1435,8 +1467,8 @@ async function rebuildSessionSnapshot(
         [sessionId],
         sendOpts,
       ),
-    ),
-    runSessionProjectionSnapshotSingleFlight(
+    ), applyPending),
+    settleProgressiveSnapshot(runSessionProjectionSnapshotSingleFlight(
       snapshotScope,
       projectionEpochAtRequestStart,
       () => sendInvokeWithAccessHandling<InputProjection>(
@@ -1446,56 +1478,15 @@ async function rebuildSessionSnapshot(
         [sessionId],
         sendOpts,
       ),
-    ),
-    sendInvokeWithAccessHandling<MobileGoalStatusPayload | null | undefined>(
+    ), applyProjection),
+    settleProgressiveSnapshot(sendInvokeWithAccessHandling<MobileGoalStatusPayload | null | undefined>(
       client,
       deviceId,
       'maker:goal:get-status',
       [sessionId],
       sendOpts,
-    ),
+    ), applyGoal),
   ]);
-  if (history.status === 'fulfilled' && Array.isArray(history.value)) {
-    // moreBeyondWindow:这一页上沿之外服务端还有历史(满 80 条,或被 device-link 裁过行)。为真时
-    // store 不保留早于本页的缓存段 —— 断连期间漏收的 push 可能正落在两段之间,保留就在窗口里
-    // 留下孤岛,而漏收的量不大时两侧时间差很小、时间阈值的空洞检测发现不了(#1222)。
-    const windowOptions = {
-      moreBeyondWindow: hasMoreOlderMessages(history.value, RECONNECT_MESSAGE_WINDOW_LIMIT),
-    };
-    if (messageAuthorityAtRequestStart) {
-      remoteSessionStore.setLatestMessageWindow(sessionId, history.value, {
-        ...windowOptions,
-        authority: messageAuthorityAtRequestStart,
-      });
-    } else if (
-      unenteredMessageAuthorityAtRequestStart
-      && remoteSessionStore.canCommitUnenteredSessionMessageWindow(
-        unenteredMessageAuthorityAtRequestStart,
-        deviceId,
-      )
-    ) {
-      // 从未打开过的 regular 仍承担首页/全局消息镜像；但请求飞行期间只要发生过
-      // enter / leave / forget / clear，生命周期 fence 就会失效，旧重连响应不得越过
-      // 新生命周期。Store 同时校验 regular retention 与物理设备归属，避免旧设备响应
-      // 写回新 shard。
-      remoteSessionStore.setLatestMessageWindow(sessionId, history.value, windowOptions);
-    }
-  }
-  if (pending.status === 'fulfilled' && Array.isArray(pending.value)) {
-    remoteSessionStore.setPendingInteractions(sessionId, pending.value, { finalizeStreaming: true });
-  }
-  if (projection.status === 'fulfilled' && projection.value) {
-    remoteSessionStore.setInputProjectionIfCurrent(
-      sessionId,
-      projection.value,
-      projectionEpochAtRequestStart,
-    );
-  }
-  // undefined = 未拿到/未知(兼容形态的空返回),不能当作权威「无 goal」落库——
-  // 那会把在世的 goal 卡清掉直到下一条 push;只有显式 null 才代表确认无 goal。
-  if (goal.status === 'fulfilled' && goal.value !== undefined) {
-    remoteSessionStore.setGoalStatus(sessionId, goal.value);
-  }
   // 任一子快照瞬时失败 → 上抛让 rehydrate 计入重试;永久失败(老被控端无 goal
   // 通道的 CHANNEL_NOT_ALLOWED、权限撤销等)吞掉,重试没有意义。同批若已有
   // fulfilled 目标应答,兄弟 unavailable 只能算局部瞬态,不能升级为整机 verdict。
