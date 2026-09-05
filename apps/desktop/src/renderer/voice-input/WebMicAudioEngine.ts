@@ -1029,6 +1029,7 @@ export class WebMicAudioEngine {
   private sink?: GainNode;
   private pending: number[] = [];
   private carry = 0;
+  private previousSample = 0;
   private chunkIndex = 0;
   private trackCleanup: Array<() => void> = [];
   private watchdogId?: number;
@@ -1356,6 +1357,7 @@ export class WebMicAudioEngine {
     this.context = undefined;
     this.pending = [];
     this.carry = 0;
+    this.previousSample = 0;
   }
 
   async drainBufferedAudio(): Promise<void> {
@@ -1628,6 +1630,7 @@ export class WebMicAudioEngine {
   }
 
   private resample(input: Float32Array, fromRate: number, toRate: number): number[] {
+    if (input.length === 0) return [];
     if (fromRate === toRate) return Array.from(input);
 
     const ratio = fromRate / toRate;
@@ -1638,11 +1641,14 @@ export class WebMicAudioEngine {
       const left = Math.floor(sourceIndex);
       const right = Math.min(left + 1, input.length - 1);
       const fraction = sourceIndex - left;
-      output.push(input[left] + (input[right] - input[left]) * fraction);
+      // Match the worklet: negative carry refers to the previous block's tail.
+      const leftSample = left < 0 ? this.previousSample : input[left];
+      output.push(leftSample + (input[right] - leftSample) * fraction);
       sourceIndex += ratio;
     }
 
     this.carry = sourceIndex - input.length;
+    this.previousSample = input[input.length - 1];
     return output;
   }
 }
