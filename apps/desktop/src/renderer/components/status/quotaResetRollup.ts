@@ -53,6 +53,7 @@ export const RESET_PENDING_MAX_MS = 10 * 60_000;
 /**
  * 只有同一额度窗口已经到期、新快照进入未来周期且余量回升才庆祝。
  * 缺少周期信息、同周期修正或未来截止时间微调都不能证明发生了重置。
+ * 不猜测服务端时钟偏差;本机尚未到期时直接显示新余量,不补播庆祝。
  */
 export function shouldCelebrateQuotaReset(
   prev: ChipWindowSlot | null,
@@ -163,15 +164,18 @@ export function useQuotaResetRollup(slot: ChipWindowSlot | null): QuotaResetRoll
   const staleCycle = prev && slot && prev.key === slot.key
     && typeof prev.resetsAtMs === 'number'
     && (slot.resetsAtMs === null || slot.resetsAtMs < prev.resetsAtMs);
-  const slotChanged = prev?.key !== slot?.key
-    || !Object.is(prev?.remainingPercent, slot?.remainingPercent)
-    || !Object.is(prev?.resetsAtMs, slot?.resetsAtMs);
+  // 周期只前进,但百分比必须跟随已经展示的值。稀疏快照先显示98%后补齐截止
+  // 时间时,应比较98%→98%,不能继续拿更早的60%当基线。
+  const nextBaseline = staleCycle ? { ...slot, resetsAtMs: prev.resetsAtMs } : slot;
+  const slotChanged = prev?.key !== nextBaseline?.key
+    || !Object.is(prev?.remainingPercent, nextBaseline?.remainingPercent)
+    || !Object.is(prev?.resetsAtMs, nextBaseline?.resetsAtMs);
   // 切走/缺失/周期失配必须清掉描述符和计时器,不能仅隐藏输出后再复活旧动画。
   if (anim && (!slot || anim.key !== slot.key || anim.resetsAtMs !== slot.resetsAtMs)) {
     setAnim(null);
   }
-  if (slotChanged && !staleCycle) {
-    setPrev(slot);
+  if (slotChanged) {
+    setPrev(nextBaseline);
     if (slot && shouldCelebrateQuotaReset(prev, slot) && !prefersReducedMotion()) {
       setAnim({
         key: slot.key,

@@ -105,6 +105,27 @@ describe('quota reset animation lifecycle', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each([null, NOW - 2_000])(
+    'advances displayed remaining while retaining the cycle baseline (%s)',
+    (resetsAtMs) => {
+      const hook = mount();
+      hook.rerender({ value: { ...newSlot, resetsAtMs } });
+      expect(hook.result.current).toEqual({ percent: 98, celebrating: false });
+      hook.rerender({ value: { ...newSlot, resetsAtMs } });
+      hook.rerender({ value: newSlot });
+      expect(hook.result.current).toEqual({ percent: 98, celebrating: false });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it('does not lose the latest cycle after a reset-less percentage update', () => {
+    const hook = mount(newSlot);
+    hook.rerender({ value: { ...newSlot, remainingPercent: 60, resetsAtMs: null } });
+    hook.rerender({ value: oldSlot });
+    hook.rerender({ value: newSlot });
+    expect(hook.result.current).toEqual({ percent: 98, celebrating: false });
+  });
+
   it('skips the entire celebration for reduced motion', () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
     const hook = mount();
