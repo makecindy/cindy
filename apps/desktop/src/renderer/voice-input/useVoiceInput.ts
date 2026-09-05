@@ -34,10 +34,7 @@ import {
 import {
   VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
   buildReplyToMessageFromChatMessages,
-  MAX_REFINEMENT_SIDE_CONTEXT_CHARS,
-  takeContextHead,
-  takeContextTail,
-  truncateContextText,
+  buildEditorSelectionContext,
   type VoiceInputChatMessage,
 } from './refinementContext';
 import {
@@ -796,9 +793,7 @@ export function useVoiceInput(
       ...baseContext,
       // DictationRefiner.getContext re-imposes cache-friendly ordering when
       // serializing the request body.
-      selectionBefore: takeContextTail(doc.textBetween(0, range.from, '\n', '\n'), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-      selectedText: truncateContextText(doc.textBetween(range.from, range.to, '\n', '\n'), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-      selectionAfter: takeContextHead(doc.textBetween(range.to, doc.content.size, '\n', '\n'), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+      ...buildEditorSelectionContext(doc, range),
       replyToMessage,
     };
   }, [

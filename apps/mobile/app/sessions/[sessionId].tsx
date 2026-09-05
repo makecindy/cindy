@@ -1,4 +1,5 @@
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
+import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
   ArrowDown,
   Camera,
@@ -4734,9 +4735,10 @@ export default function SessionScreen() {
       // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
       // 被控端)就用上次缓存,绝不为它推迟开麦。本次拉到的内容供下一次润色使用。
       void refreshMobileVoiceDictionary(deviceId, () => maker.getVoiceDictionary());
+      const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null);
       const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
-        takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),
-        getMobileVoiceInputHistoryForHost(deviceId),
+        prewarmedVoicePromise,
+        prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(deviceId, voice?.credential.settings?.voiceInputHistory)),
         hydrateMobileVoiceDictionary(deviceId),
       ]);
       claimedPrewarm = prewarmedVoice;
@@ -10741,7 +10743,7 @@ function buildMobileVoiceSessionRefinementContext(
   draftText: string,
   items: readonly MobileMessageRenderItem[],
 ) {
-  const selectionBefore = truncateMobileVoiceContext(draftText, 1200);
+  const selectionBefore = takeRefinementContextTail(draftText);
   const replyToMessage = findLastAssistantMessageText(items);
   return {
     selectionBefore: selectionBefore || undefined,
@@ -10754,7 +10756,7 @@ function findLastAssistantMessageText(items: readonly MobileMessageRenderItem[])
     const item = items[index];
     if (!item) continue;
     if (item.type === 'message' && item.message.kind === 'assistant' && !item.message.isStreaming) {
-      return truncateMobileVoiceContext(item.message.body, 500);
+      return truncateRefinementReply(item.message.body);
     }
     if (item.type === 'work_group') {
       const nested = findLastAssistantMessageText(item.children);
@@ -10767,12 +10769,6 @@ function findLastAssistantMessageText(items: readonly MobileMessageRenderItem[])
     }
   }
   return '';
-}
-
-function truncateMobileVoiceContext(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(-maxChars).trim();
 }
 
 interface RouteActionButtonProps {

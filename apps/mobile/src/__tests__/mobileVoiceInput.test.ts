@@ -122,7 +122,7 @@ describe('mobileVoiceInput', () => {
       },
     }), {
       uiLanguage: 'zh-CN',
-      localVoiceInputHistory: ['手机最新术语', '手机较早术语'],
+      localVoiceInputHistory: ['手机最新术语', '手机较早术语', '桌面较新的术语', '桌面较早的术语'],
       refinementContext: {
         selectionBefore: '当前输入框前文',
         replyToMessage: '最近的助手回复',
@@ -149,6 +149,33 @@ describe('mobileVoiceInput', () => {
     expect(history.indexOf('- 桌面较早的术语')).toBeLessThan(history.indexOf('- 桌面较新的术语'));
     expect(history.indexOf('- 桌面较新的术语')).toBeLessThan(history.indexOf('- 手机较早术语'));
     expect(history.indexOf('- 手机较早术语')).toBeLessThan(history.indexOf('- 手机最新术语'));
+  });
+
+  it('does not reintroduce desktop entries already removed from the persisted combined history', () => {
+    const context = buildMobileVoiceRefinementContext(storedCredential({
+      settings: {
+        language: 'zh-CN', refinementEnabled: true, playInteractionSound: true,
+        voiceInputHistory: Array.from({ length: 50 }, (_, i) => `desktop ${i}`.padEnd(360, 'x')),
+      },
+    }), {
+      localVoiceInputHistory: Array.from({ length: 20 }, (_, i) => `mobile ${i}`.padEnd(360, 'y')),
+    });
+    expect(context.voiceInputHistory!.length).toBeLessThanOrEqual(8_000);
+    expect(context.voiceInputHistory).toContain('mobile 0');
+    expect(context.voiceInputHistory).not.toContain('desktop 0');
+    expect(context.voiceInputHistory).not.toContain('desktop 49');
+  });
+
+  it('bounds the desktop history fallback when a caller has no persisted mobile history', () => {
+    const context = buildMobileVoiceRefinementContext(storedCredential({
+      settings: {
+        language: 'zh-CN', refinementEnabled: true, playInteractionSound: true,
+        voiceInputHistory: Array.from({ length: 50 }, (_, i) => `desktop ${i}`.padEnd(360, 'x')),
+      },
+    }));
+    expect(context.voiceInputHistory!.length).toBeLessThanOrEqual(8000);
+    expect(context.voiceInputHistory).toContain('desktop 0');
+    expect(context.voiceInputHistory).not.toContain('desktop 49');
   });
 
   it('uses the current UI language for refinement when ASR language is auto', () => {
