@@ -1,4 +1,9 @@
 {
+  "recovery": {
+    "syncing": "동기화 중…",
+    "recovered": "복구됨",
+    "syncingHint": "컴퓨터의 내용을 업데이트하고 있습니다."
+  },
   "syncFailed": "동기화 실패",
   "resync": "다시 동기화",
   "resyncing": "다시 동기화하는 중",

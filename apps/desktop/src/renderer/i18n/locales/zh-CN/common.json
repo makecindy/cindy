@@ -8569,6 +8569,8 @@
       "runningTool": "{{tool}} 运行中…"
     },
     "remoteSession": {
+      "syncing": "正在同步…",
+      "recovered": "已恢复",
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",
       "degraded": "与被控设备的连接不稳定，正在自动重试…",

@@ -1,4 +1,9 @@
 {
+  "recovery": {
+    "syncing": "同期中…",
+    "recovered": "復旧しました",
+    "syncingHint": "パソコンの内容を更新しています。"
+  },
   "syncFailed": "同期に失敗しました",
   "resync": "再同期",
   "resyncing": "再同期しています",

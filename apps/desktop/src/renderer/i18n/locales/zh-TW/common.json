@@ -8569,6 +8569,8 @@
       "runningTool": "{{tool}} 執行中…"
     },
     "remoteSession": {
+      "syncing": "正在同步…",
+      "recovered": "已恢復",
       "reconnecting": "與被控裝置的連線中斷，正在重連…",
       "hostOffline": "被控裝置已離線，暫時無法同步",
       "degraded": "與被控裝置的連線不穩定，正在自動重試…",

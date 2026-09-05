@@ -11,6 +11,7 @@
  */
 
 import os from 'node:os';
+import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
 import WebSocket from 'ws';
@@ -623,6 +624,8 @@ export interface DeviceLinkServiceOptions {
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
 }
 
+let stopNetworkWatch: (() => void) | null = null;
+
 export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   // 「保持电脑唤醒」按持久化偏好在启动时应用(与登录 / relay 无关,幂等)。
   const initialKeepAwake = readDeviceLinkSettings().keepAwake;
@@ -1058,6 +1061,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (!authManager.getAuthState().isAuthenticated) return;
       linkTornDown = false;
       client?.start();
+      stopNetworkWatch?.();
+      stopNetworkWatch = watchNetworkChanges(() => {
+        if (linkTornDown || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
+        client?.notifyNetworkChanged();
+      });
       // 可靠帧可能在 ownership 接管前到达(那时非持有者,重建被 shouldAbort 挡掉):
       // 接管后对本机仍在控制、且 link 未就绪的设备补发一次重建,避免启动竞态留下
       // 半开链路,不必等对端下一帧。
@@ -1226,6 +1234,8 @@ export function getMobileNotifyGeneration(): number {
  * 同进程换账号登录还会把上一账号的控制端串到新账号。
  */
 function teardownActiveLink(): void {
+  stopNetworkWatch?.();
+  stopNetworkWatch = null;
   if (!client || linkTornDown) return;
   linkTornDown = true;
   controllerDisplayNameRefreshGeneration += 1;

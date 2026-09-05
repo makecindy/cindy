@@ -4515,6 +4515,11 @@ export function CCAgentSessionView({
             issue={remoteLinkIssue}
             onResync={remoteSync.resync}
           />
+        ) : remoteConn === 'connected' ? (
+          <RemoteSessionBanner
+            status={remoteSync.contentState === 'ready' ? 'recovered' : 'syncing'}
+            onResync={remoteSync.resync}
+          />
         ) : null}
 
         {/* 远程会话首屏:等被控端经隧道返回历史/元数据期间的 loading(仅远程、延迟防闪)。 */}

@@ -8569,6 +8569,8 @@
       "runningTool": "{{tool}} を実行中…"
     },
     "remoteSession": {
+      "syncing": "同期中…",
+      "recovered": "復旧しました",
       "reconnecting": "被制御デバイスとの接続が切れました。再接続中…",
       "hostOffline": "被制御デバイスがオフラインのため、現在は同期できません",
       "degraded": "被制御デバイスとの接続が不安定です。自動的に再試行中…",

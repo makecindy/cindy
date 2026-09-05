@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
 import {
   DeviceLinkClient,
@@ -142,6 +143,8 @@ export interface DeviceLinkContextValue {
   connectionIssue: DeviceLinkConnectionIssue | null;
   presenceVersion: number;
   connectionEpoch: number;
+  /** Current remote ACK identity; null until every requested topic is confirmed. */
+  getSubscriptionIdentity?(deviceId: string, topics: readonly Topic[]): number | null;
   lastPresenceSnapshot: PresenceSnapshot | null;
   /** 当前 relay 连接代内的逐设备 availability；null = 本代尚无权威 verdict。 */
   getPresenceAvailability(deviceId: string): boolean | null;
@@ -286,7 +289,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   currentDataOwnerIdRef.current = auth.user?.id ?? null;
   const clientRef = useRef<DeviceLinkClient | null>(null);
   const registryRef = useRef(new DeviceLinkTopicRegistry());
-  const remoteSubscribedTopicsRef = useRef(new Map<string, Set<Topic>>());
+  const [subscriptionVersion, setSubscriptionVersion] = useState(0);
+  const remoteSubscribedTopicsRef = useRef(new SubscriptionAcknowledgements(
+    () => setSubscriptionVersion((version) => version + 1),
+  ));
   // A local reliable ACK reset may happen after the last durable topic/open owner is gone,
   // while the client still holds an in-flight reliable frame. Preserve a per-peer transient
   // open intent until that exact peer is ready again; never promote it to a shared WSS reset.
@@ -392,12 +398,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     topics: readonly Topic[],
   ) => {
-    while (!backgroundReleaseInFlightRef.current) {
-      const releaseGeneration = backgroundReleaseGenerationRef.current;
-      const toSend = topicsMissingRemoteAck(remoteSubscribedTopicsRef.current, deviceId, topics)
-        .filter((topic) => registryRef.current.hasTopic(deviceId, topic));
-      if (toSend.length === 0) return;
-      const sent = await sendSubscribeWithAccessHandling(
+    const releaseGeneration = backgroundReleaseGenerationRef.current;
+    const startedAt = Date.now();
+    await confirmTrackedSubscription({
+      isCurrent: () => !backgroundReleaseInFlightRef.current
+        && backgroundReleaseGenerationRef.current === releaseGeneration && clientRef.current === client,
+      generation: () => `${connectionEpochRef.current}:${remoteSubscribedTopicsRef.current.generation(deviceId)}`,
+      missing: () => topicsMissingRemoteAck(remoteSubscribedTopicsRef.current, deviceId, topics)
+        .filter((topic) => registryRef.current.hasTopic(deviceId, topic)),
+      send: (toSend) => sendSubscribeWithAccessHandling(
         client,
         deviceId,
         toSend,
@@ -405,22 +414,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           !backgroundReleaseInFlightRef.current
           && toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic))
         ),
-      );
-      if (
-        backgroundReleaseInFlightRef.current
-        || backgroundReleaseGenerationRef.current !== releaseGeneration
-      ) return;
-      if (!sent) {
-        // Scope changed while ensureOnlineForRequest was waiting. Re-evaluate once more so topics
-        // still held by another owner are not starved, while released topics never reach the host.
-        continue;
-      }
-      // 只有仍被持有、真正记进 ACK 表的 topic 才算订阅生效(中途被释放的那些不算)。
-      noteSessionLiveStreamsAcked(
-        markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend),
-      );
-      return;
-    }
+      ),
+      acknowledge: (toSend) => {
+        // 只有仍被持有、真正记进 ACK 表的 topic 才算订阅生效(中途被释放的那些不算)。
+        noteSessionLiveStreamsAcked(
+          markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend),
+        );
+        console.debug('[device-link] recovery subscription acknowledged', { elapsedMs: Date.now() - startedAt });
+      },
+    });
   }, []);
 
   // 熔断 open 设备的显式代表性探测:openLink 建链(成功按不定论,不关熔断),
@@ -1131,7 +1133,23 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       }
     });
 
+    // Loaded inside the authenticated lifecycle; old native builds keep their
+    // existing heartbeat fallback if the optional runtime module is unavailable.
+    let disposed = false;
+    let networkSubscription: { remove(): void } | undefined;
+    void import('expo-network').then(({ addNetworkStateListener }) => {
+      if (disposed) return;
+      networkSubscription = addNetworkStateListener((network) => {
+        if (AppState.currentState !== 'active' || network.isConnected === false) return;
+        client.notifyNetworkChanged();
+      });
+    }).catch(() => {
+      console.warn('[device-link] network listener unavailable; using heartbeat recovery');
+    });
+
     return () => {
+      disposed = true;
+      networkSubscription?.remove();
       sub.remove();
       clearBackgroundStopTimer();
       offUnresponsive();
@@ -1246,6 +1264,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     presenceVersion,
     connectionEpoch,
     lastPresenceSnapshot,
+    getSubscriptionIdentity: (deviceId, topics) => remoteSubscribedTopicsRef.current.identity(deviceId, topics),
     getPresenceAvailability,
     openLink,
     reopenLink,
@@ -1268,6 +1287,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     subscribe,
     unsubscribe,
     subscribeRemoteAgentRoster,
+    subscriptionVersion,
   ]);
 
   return <DeviceLinkContext.Provider value={value}>{children}</DeviceLinkContext.Provider>;
