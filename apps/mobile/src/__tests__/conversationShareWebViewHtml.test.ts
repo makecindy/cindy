@@ -146,7 +146,8 @@ describe('buildConversationShareHtml 富内容导出', () => {
       }],
     });
 
-    expect(html).toContain(`alt="${i18n.t('message.renderer.imageFallbackTitle')}"`);
+    expect(html).toContain(`<span class="xdt-image-chip">${i18n.t('message.renderer.imageFallbackTitle')}</span>`);
+    expect(html).not.toContain('https://example.com/image.png');
   });
 
   it('限制原生与降级 renderer 的完整源尺寸，并安全保留已分享 PNG', () => {
@@ -202,7 +203,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
       'if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;',
     );
     expect(sessionSource).toContain(
-      '!nativeConversationShareAvailable\n      || !shareSelectionActive',
+      'const messages = await shareImages.ready;',
     );
     expect(sessionSource).toContain(
       'nativeConversationShareAvailable\n      && shareCharacterSrc',
@@ -381,7 +382,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(html).toContain('/review');
     expect(html).not.toContain('share-inline-chip-icon" aria-hidden="true">/</span>');
     expect(html).toContain('preview.png');
-    expect(html).not.toContain('share-attachment-image');
+    expect(html).not.toContain('<img class="share-attachment-image"');
     expect(html).toContain('remote.png');
     expect(html).toContain('notes.md');
     expect(html).not.toContain('visible fallback');

@@ -1,7 +1,7 @@
 export type ConversationShareFooterAsset = "character" | "logo";
 
 export interface ConversationShareFooterAssetGate {
-  markReady(asset: ConversationShareFooterAsset): void;
+  markReady(asset: string): void;
   waitUntilReady(): Promise<void>;
 }
 
@@ -10,8 +10,10 @@ export interface ConversationShareFooterAssetGate {
  * readiness latch separate from React so export can wait for both assets and
  * the ordering/duplicate-load behavior stays unit-testable.
  */
-export function createConversationShareFooterAssetGate(): ConversationShareFooterAssetGate {
-  const pending = new Set<ConversationShareFooterAsset>(["character", "logo"]);
+export function createConversationShareFooterAssetGate(
+  imageKeys: readonly string[] = [],
+): ConversationShareFooterAssetGate {
+  const pending = new Set<string>(["character", "logo", ...imageKeys]);
   let resolveReady = () => {};
   const ready = new Promise<void>((resolve) => {
     resolveReady = resolve;

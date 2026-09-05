@@ -8,6 +8,7 @@ import {
 } from "@/session/messageMarkdown";
 import type {
   ConversationShareMessage,
+  ConversationShareImage,
   ConversationShareWebViewColors,
 } from "@/session/conversationShareWebViewHtml";
 
@@ -40,6 +41,7 @@ export interface ConversationShareSvgBubble {
 }
 
 export interface ConversationShareSvgLayout {
+  images: Array<{ uri: string; x: number; y: number; width: number; height: number }>;
   bubbles: ConversationShareSvgBubble[];
   footerY: number;
   gaps: Array<{ color: string; y: number }>;
@@ -80,6 +82,7 @@ export function buildConversationShareSvgLayout({
   const canvasWidth = Math.max(280, Math.round(width));
   const contentWidth = canvasWidth - PADDING * 2;
   const bubbles: ConversationShareSvgBubble[] = [];
+  const images: ConversationShareSvgLayout['images'] = [];
   const gaps: Array<{ color: string; y: number }> = [];
   const messageIndex = new Map(allShareableIds.map((id, index) => [id, index]));
   let previousIndex: number | null = null;
@@ -100,6 +103,28 @@ export function buildConversationShareSvgLayout({
     const bubbleX = user ? canvasWidth - PADDING - bubbleWidth : PADDING;
     const horizontalPadding = user ? 12 : 0;
     const textWidth = bubbleWidth - horizontalPadding * 2;
+    const appendImage = (image: ConversationShareImage) => {
+      const scale = Math.min(1, bubbleWidth / image.width, 320 / image.height);
+      const imageWidth = image.width * scale;
+      const imageHeight = image.height * scale;
+      images.push({
+        uri: image.uri,
+        width: imageWidth,
+        height: imageHeight,
+        x: user ? canvasWidth - PADDING - imageWidth : PADDING,
+        y: cursorY,
+      });
+      cursorY += imageHeight + MESSAGE_GAP;
+    };
+    const attachmentSources = new Set<string>();
+    for (const attachment of message.attachments ?? []) {
+      const image = attachment.kind === 'image' && attachment.uri
+        ? message.images?.get(attachment.uri) : undefined;
+      if (image && attachment.uri) {
+        appendImage(image);
+        attachmentSources.add(attachment.uri);
+      }
+    }
     const blocks: Array<{
       color: string;
       fontSize: number;
@@ -116,6 +141,7 @@ export function buildConversationShareSvgLayout({
       });
     }
     for (const attachment of message.attachments ?? []) {
+      if (attachment.kind === 'image' && attachment.uri && message.images?.has(attachment.uri)) continue;
       blocks.push({
         color: colors.textSecondary,
         fontSize: META_FONT_SIZE,
@@ -149,7 +175,7 @@ export function buildConversationShareSvgLayout({
     }
     if (blocks.length > 0) innerY -= 5;
     const bubbleHeight = Math.max(user ? 44 : 30, innerY + (user ? 12 : 4));
-    bubbles.push({
+    if (blocks.length > 0) bubbles.push({
       fill: user ? colors.surfaceElevated : undefined,
       height: bubbleHeight,
       stroke: user ? colors.textSecondary : undefined,
@@ -158,13 +184,17 @@ export function buildConversationShareSvgLayout({
       x: bubbleX,
       y: cursorY,
     });
-    cursorY += bubbleHeight + MESSAGE_GAP;
+    if (blocks.length > 0) cursorY += bubbleHeight + MESSAGE_GAP;
+    for (const [source, image] of message.images ?? []) {
+      if (!attachmentSources.has(source)) appendImage(image);
+    }
     previousIndex = currentIndex;
   }
 
   const footerY = cursorY + 36;
   return {
     bubbles,
+    images,
     footerY,
     gaps,
     height: footerY + 22 + PADDING,

@@ -132,6 +132,7 @@ import {
   collectConversationShareBlockIds,
   collectConversationShareMessages,
 } from '@/session/conversationShareMessages';
+import { useConversationShareImages } from '@/session/useConversationShareImages';
 import {
   isFoldableBlockExpanded,
   useFoldableExpandedBlocksSnapshot,
@@ -5593,30 +5594,11 @@ export default function SessionScreen() {
     textTertiary: colors.textTertiary,
     dark: mode === 'dark',
   }), [colors, mode]);
-  const conversationShareHtml = useMemo(() => {
-    if (
-      !nativeConversationShareAvailable
-      || !shareSelectionActive
-      || selectedShareMessages.length === 0
-    ) return '';
-    return buildConversationShareHtml({
-      allShareableIds,
-      characterSrc: shareCharacterSrc ?? undefined,
-      colors: conversationShareColors,
-      contentWidth: windowDimensions.width,
-      logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
-      selectedMessages: selectedShareMessages,
-    });
-  }, [
-    allShareableIds,
-    conversationShareColors,
-    mode,
-    selectedShareMessages,
-    shareCharacterSrc,
-    shareLogoSrc,
-    shareSelectionActive,
-    windowDimensions.width,
-  ]);
+  const shareImages = useConversationShareImages(selectedShareMessages, resolveRemoteMedia, {
+    workdir: currentSession?.workingDir ?? undefined,
+    remoteHostId: currentSession?.remoteHostId ?? undefined,
+    sessionId,
+  });
   const enterShareSelection = useCallback((clientId: string) => {
     Keyboard.dismiss();
     setShareSelectionTriggeredByScreenshot(false);
@@ -5629,16 +5611,25 @@ export default function SessionScreen() {
     shareSelectionStore.exit();
   }, []);
   const exportConversationSharePng = useCallback(async () => {
+    const messages = await shareImages.ready;
+    if (messages.length === 0) throw new Error('conversation share selection changed');
     const nativeShareAssetsReady = Boolean(
       nativeConversationShareAvailable
       && shareCharacterSrc
       && shareLogoSrc
       && shareLogoModeRef.current === mode,
     );
-    if (conversationShareHtml && nativeShareAssetsReady) {
+    if (nativeShareAssetsReady) {
       try {
         const nativeBase64 = await renderConversationShareHtmlToPng({
-          html: conversationShareHtml,
+          html: buildConversationShareHtml({
+            allShareableIds,
+            characterSrc: shareCharacterSrc ?? undefined,
+            colors: conversationShareColors,
+            contentWidth: windowDimensions.width,
+            logoSrc: shareLogoSrc ?? undefined,
+            selectedMessages: messages,
+          }),
           width: windowDimensions.width,
         });
         if (nativeBase64) {
@@ -5652,7 +5643,7 @@ export default function SessionScreen() {
     const svg = conversationShareSvgRef.current;
     if (!svg) throw new Error('conversation share svg renderer is unavailable');
     return svg.exportPng();
-  }, [conversationShareHtml, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
+  }, [shareImages.ready, allShareableIds, conversationShareColors, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
   const shareSelectedConversation = useCallback(async () => {
     if (
       conversationShareBusy
@@ -9404,9 +9395,10 @@ export default function SessionScreen() {
       </ComposerKeyboardAvoidingView>
       {shareSelectionActive && selectedShareMessages.length > 0 ? (
         <ConversationShareSvg
+          key={`${shareImages.revision}-${mode}`}
           allShareableIds={allShareableIds}
           colors={conversationShareColors}
-          messages={selectedShareMessages}
+          messages={shareImages.messages}
           ref={conversationShareSvgRef}
           width={windowDimensions.width}
         />
