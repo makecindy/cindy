@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRewindPreviewLayout } from '@/session/rewindPreviewLayout';
+import { buildRewindPreviewLayout, rewindPreviewMaxHeight } from '@/session/rewindPreviewLayout';
 
 describe('rewindPreviewLayout', () => {
   it('compacts file rows on iPhone SE width', () => {
@@ -44,5 +44,21 @@ describe('rewindPreviewLayout', () => {
       containerPadding: 16,
       visibleFileCount: 3,
     });
+  });
+
+  it('reserves space for fixed overlays on a short viewport', () => {
+    expect(rewindPreviewMaxHeight({
+      bottomOverlayHeight: 92,
+      screenHeight: 320,
+      topOverlayHeight: 58,
+    })).toBe(154);
+  });
+
+  it('does not produce a negative panel height when overlays consume the viewport', () => {
+    expect(rewindPreviewMaxHeight({
+      bottomOverlayHeight: 220,
+      screenHeight: 320,
+      topOverlayHeight: 120,
+    })).toBe(0);
   });
 });

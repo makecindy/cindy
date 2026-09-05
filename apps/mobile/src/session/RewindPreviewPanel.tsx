@@ -1,5 +1,6 @@
 import {
   ActivityIndicator,
+  ScrollView,
   StyleSheet,
   View,
   useWindowDimensions,
@@ -9,7 +10,7 @@ import type { TFunction } from 'i18next';
 import { Text } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { RewindPreviewState } from '@/session/rewindPreview';
-import { buildRewindPreviewLayout } from '@/session/rewindPreviewLayout';
+import { buildRewindPreviewLayout, rewindPreviewMaxHeight } from '@/session/rewindPreviewLayout';
 import { fontWeight, lineHeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -17,6 +18,7 @@ interface RewindPreviewPanelProps {
   state: RewindPreviewState;
   committing?: boolean;
   topOverlayHeight?: number;
+  bottomOverlayHeight?: number;
   onCancel(): void;
   onConfirm(): void;
 }
@@ -25,13 +27,14 @@ export function RewindPreviewPanel({
   state,
   committing,
   topOverlayHeight = 0,
+  bottomOverlayHeight = 0,
   onCancel,
   onConfirm,
 }: RewindPreviewPanelProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { width: screenWidth } = useWindowDimensions();
+  const { height: screenHeight, width: screenWidth } = useWindowDimensions();
   if (state.kind === 'idle') return null;
 
   const canConfirm = state.kind === 'default' || state.kind === 'empty';
@@ -42,12 +45,18 @@ export function RewindPreviewPanel({
     fileCount,
     screenWidth,
   });
+  const maxHeight = rewindPreviewMaxHeight({
+    bottomOverlayHeight,
+    screenHeight,
+    topOverlayHeight,
+  });
 
   return (
     <View
       style={[
         styles.container,
         {
+          maxHeight,
           marginHorizontal: layout.containerMarginHorizontal,
           marginTop: Math.max(spacing.sm, topOverlayHeight + spacing.sm),
           padding: layout.containerPadding,
@@ -55,62 +64,68 @@ export function RewindPreviewPanel({
       ]}
       testID="rewind.panel"
     >
-      <View style={styles.header}>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>{title}</Text>
-          {detail ? <Text style={styles.detail}>{detail}</Text> : null}
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        nestedScrollEnabled
+        showsVerticalScrollIndicator
+        style={styles.scroll}
+      >
+        <View style={styles.header}>
+          <View style={styles.headerText}>
+            <Text style={styles.title}>{title}</Text>
+            {detail ? <Text style={styles.detail}>{detail}</Text> : null}
+          </View>
+          {state.kind === 'loading' ? <ActivityIndicator color={colors.textSecondary} /> : null}
         </View>
-        {state.kind === 'loading' ? <ActivityIndicator color={colors.textSecondary} /> : null}
-      </View>
 
-      {state.kind === 'default' ? (
-        <View style={styles.fileList}>
-          {state.filesChanged.slice(0, layout.visibleFileCount).map((file) => (
-            <Text
-              key={file}
-              numberOfLines={1}
-              selectable
-              style={[styles.filePath, { minHeight: layout.fileRowMinHeight }]}
-            >
-              {file}
+        {state.kind === 'default' ? (
+          <View style={styles.fileList}>
+            {state.filesChanged.slice(0, layout.visibleFileCount).map((file) => (
+              <Text
+                key={file}
+                numberOfLines={1}
+                selectable
+                style={[styles.filePath, { minHeight: layout.fileRowMinHeight }]}
+              >
+                {file}
+              </Text>
+            ))}
+            {state.filesChanged.length > layout.visibleFileCount ? (
+              <Text style={styles.moreFiles}>{t('interaction.rewind.moreFiles', { count: state.filesChanged.length - layout.visibleFileCount })}</Text>
+            ) : null}
+            <Text style={styles.stats}>
+              {t('interaction.rewind.stats', { count: state.filesChanged.length, insertions: state.insertions, deletions: state.deletions })}
             </Text>
-          ))}
-          {state.filesChanged.length > layout.visibleFileCount ? (
-            <Text style={styles.moreFiles}>{t('interaction.rewind.moreFiles', { count: state.filesChanged.length - layout.visibleFileCount })}</Text>
-          ) : null}
-          <Text style={styles.stats}>
-            {t('interaction.rewind.stats', { count: state.filesChanged.length, insertions: state.insertions, deletions: state.deletions })}
-          </Text>
-        </View>
-      ) : null}
+          </View>
+        ) : null}
 
-      {state.kind === 'empty' && state.note ? (
-        <Text selectable style={styles.note}>{state.note}</Text>
-      ) : null}
+        {state.kind === 'empty' && state.note ? (
+          <Text selectable style={styles.note}>{state.note}</Text>
+        ) : null}
 
-      {state.kind === 'error' ? (
-        <Text selectable style={styles.errorText}>{state.errorText}</Text>
-      ) : null}
-
-      {state.kind !== 'loading' ? (
-        <MainWindowActionGroup
-          cancelAction={{
-            accessibilityLabel: state.kind === 'error' ? t('interaction.rewind.gotIt') : t('interaction.rewind.cancelAccessibility'),
-            label: state.kind === 'error' ? t('interaction.rewind.gotIt') : t('interaction.rewind.cancel'),
-            onPress: onCancel,
-            testID: state.kind === 'error' ? 'rewind.dismissButton' : 'rewind.cancelButton',
-          }}
-          primaryActions={canConfirm ? [{
-            accessibilityLabel: t('interaction.rewind.confirm'),
-            disabled: committing,
-            label: committing ? t('interaction.rewind.confirming') : t('interaction.rewind.confirm'),
-            onPress: onConfirm,
-            testID: 'rewind.confirmButton',
-            tone: 'primary',
-          }] : []}
-          testID="rewind.actions"
-        />
-      ) : null}
+        {state.kind === 'error' ? (
+          <Text selectable style={styles.errorText}>{state.errorText}</Text>
+        ) : null}
+        {state.kind !== 'loading' ? (
+          <MainWindowActionGroup
+            cancelAction={{
+              accessibilityLabel: state.kind === 'error' ? t('interaction.rewind.gotIt') : t('interaction.rewind.cancelAccessibility'),
+              label: state.kind === 'error' ? t('interaction.rewind.gotIt') : t('interaction.rewind.cancel'),
+              onPress: onCancel,
+              testID: state.kind === 'error' ? 'rewind.dismissButton' : 'rewind.cancelButton',
+            }}
+            primaryActions={canConfirm ? [{
+              accessibilityLabel: t('interaction.rewind.confirm'),
+              disabled: committing,
+              label: committing ? t('interaction.rewind.confirming') : t('interaction.rewind.confirm'),
+              onPress: onConfirm,
+              testID: 'rewind.confirmButton',
+              tone: 'primary',
+            }] : []}
+            testID="rewind.actions"
+          />
+        ) : null}
+      </ScrollView>
     </View>
   );
 }
@@ -138,8 +153,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.md,
     marginHorizontal: spacing.md,
     marginTop: spacing.sm,
+    overflow: 'hidden',
     padding: spacing.md,
   },
+  scroll: { flexShrink: 1, minHeight: 0 },
+  scrollContent: { gap: spacing.md },
   header: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   headerText: { flex: 1, minWidth: 0 },
   title: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
