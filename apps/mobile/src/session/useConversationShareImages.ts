@@ -16,25 +16,36 @@ import {
 import { downloadRemoteMediaAsDataUri } from "@/session/remoteMediaDiskCacheExpo";
 import { imageMimeFromUrl } from "@/session/remoteMediaDiskCache";
 import {
-  applySentAttachmentThumbOverlay,
+  getSentAttachmentThumbUri,
   useSentAttachmentThumbsVersion,
 } from "@/session/sentAttachmentThumbStore";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
+async function readShareImageFile(
+  uri: string,
+  mimeType: string,
+): Promise<string | null> {
+  const file = new File(uri);
+  if (!file.exists || file.size <= 0 || file.size > MAX_IMAGE_BYTES)
+    return null;
+  return `data:${mimeType};base64,${await file.base64()}`;
+}
+
 async function loadShareImage(
   url: string,
   resolve: ResolveRemoteMediaFn,
 ): Promise<ConversationShareImage | null> {
-  const overlay = applySentAttachmentThumbOverlay({
-    kind: "image",
-    uri: url,
-    previewable: false,
-  });
-  const hasLocalThumb = overlay.uri !== url;
-  let uri = overlay.uri;
+  // The existing store owns both OSS and desktop-media upload thumbnails.
+  const localThumb = getSentAttachmentThumbUri(url);
+  let uri = localThumb
+    ? ((await readShareImageFile(
+        localThumb,
+        imageMimeFromUrl(localThumb) ?? "image/jpeg",
+      ).catch(() => null)) ?? url)
+    : url;
   let mimeType = imageMimeFromUrl(uri) ?? "image/jpeg";
-  if (isDesktopLocalMediaUrl(url)) {
+  if (uri === url && isDesktopLocalMediaUrl(url)) {
     const media = await resolve({
       kind: "image",
       url,
@@ -46,15 +57,9 @@ async function loadShareImage(
     uri = media.url;
     mimeType = media.mimeType;
   }
-  if (
-    uri.startsWith("file://") &&
-    (hasLocalThumb || isDesktopLocalMediaUrl(url))
-  ) {
-    // Only existing upload-thumb or resolver-owned phone files may be read locally.
-    const file = new File(uri);
-    if (!file.exists || file.size <= 0 || file.size > MAX_IMAGE_BYTES)
-      return null;
-    uri = `data:${mimeType};base64,${await file.base64()}`;
+  if (uri.startsWith("file://") && isDesktopLocalMediaUrl(url)) {
+    // Other local files must come from the controlled media resolver.
+    uri = (await readShareImageFile(uri, mimeType)) ?? "";
   } else if (/^https?:\/\//i.test(uri)) {
     uri =
       (await downloadRemoteMediaAsDataUri(uri, mimeType, MAX_IMAGE_BYTES)) ??

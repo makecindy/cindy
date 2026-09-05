@@ -134,6 +134,14 @@ function buildMessageHtml(
   markdownOptions: SelectableMarkdownHtmlOptions,
 ): string {
   markdownOptions = { ...markdownOptions, imageSources: message.images ?? new Map() };
+  // Raw-text redaction can consume signed URLs and Markdown delimiters. Use
+  // the existing SVG fallback (which looks up images before redacting text)
+  // rather than weakening redaction across inline code/emphasis boundaries.
+  for (const source of message.images?.keys() ?? []) {
+    if (redactSensitiveText(source) !== source) {
+      throw new Error('conversation-share-image-requires-svg');
+    }
+  }
   const body = redactSensitiveText(message.body).trim();
   const secondaryBody = message.secondaryBody
     ? redactSensitiveText(message.secondaryBody).trim()
