@@ -16,12 +16,15 @@ import { execFile } from 'node:child_process';
 
 import { createLogger } from '../logger.js';
 import {
+  getClaudeCodeRuntimeDecision,
   getReadyBinaryPath,
   getCachedBinaryStatus,
   isVettedAgentBinaryPath,
   type AgentBinaryKind,
 } from '../agent-binaries/index.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import type { ClaudeCodeRuntimeDecision } from '../../shared/claudeCodeRuntimeSettings.js';
 
 import { MAKER_INVOKE } from './channels.js';
 
@@ -31,6 +34,7 @@ export interface AgentBinaryVersionResult {
   kind: AgentBinaryKind;
   binaryPath: string | null;
   version: string | null;
+  runtimeDecision?: ClaudeCodeRuntimeDecision | null;
   error?: string;
 }
 
@@ -76,30 +80,39 @@ export function registerMakerBinaryVersionIpc(): void {
 
   ipcMain.handle(
     MAKER_INVOKE.AGENT_BINARY_VERSION,
-    async (_e, agentKind: unknown): Promise<AgentBinaryVersionResult> => {
+    async (event, agentKind: unknown): Promise<AgentBinaryVersionResult> => {
+      assertTrustedAppRendererEvent(event);
       if (!isAgentBinaryKind(agentKind)) {
         throwIpcError('INVALID_PARAMS', 'agentKind required (claude-code | codex | pi)');
       }
 
       const binaryPath = resolveBinaryPath(agentKind);
-      // 执行前复核路径确为受管二进制(CodeQL js/command-line-injection 防御纵深)
+      const runtimeDecision =
+        agentKind === 'claude-code' ? getClaudeCodeRuntimeDecision() : undefined;
+      // 执行前复核路径确为本次启动选定的二进制(CodeQL js/command-line-injection 防御纵深)
       if (!binaryPath || !isVettedAgentBinaryPath(agentKind, binaryPath)) {
-        return { kind: agentKind, binaryPath: null, version: null, error: 'binary_not_ready' };
+        return {
+          kind: agentKind,
+          binaryPath: null,
+          version: null,
+          runtimeDecision,
+          error: 'binary_not_ready',
+        };
       }
 
       const cached = versionCache.get(binaryPath);
       if (cached) {
-        return { kind: agentKind, binaryPath, version: cached };
+        return { kind: agentKind, binaryPath, version: cached, runtimeDecision };
       }
 
       try {
         const version = await spawnVersion(binaryPath);
         versionCache.set(binaryPath, version);
-        return { kind: agentKind, binaryPath, version };
+        return { kind: agentKind, binaryPath, version, runtimeDecision };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`${agentKind} --version failed: ${message}`);
-        return { kind: agentKind, binaryPath, version: null, error: message };
+        return { kind: agentKind, binaryPath, version: null, runtimeDecision, error: message };
       }
     },
   );

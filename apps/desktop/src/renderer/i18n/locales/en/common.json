@@ -793,6 +793,38 @@
       "description": "Runtime versions of the app and integrated agents. All version numbers are detected by the main process at startup.",
       "appVersionLabel": "App version",
       "claudeCodeVersionLabel": "Claude Code version",
+      "claudeRuntime": {
+        "title": "Claude Code Source",
+        "description": "Choose which local Claude Code installation Cindy launches. Changes apply after restart.",
+        "selectAria": "Choose Claude Code source",
+        "source": {
+          "managed": "Managed by Cindy",
+          "system": "System Installation"
+        },
+        "pathLabel": "Executable Path (Optional)",
+        "pathPlaceholder": "Detect claude from PATH",
+        "checkInstallation": "Check Installation",
+        "savePath": "Save Path",
+        "activeSource": "Active now: {{source}}",
+        "restartRequired": "Restart Cindy to use the selected source.",
+        "saveFailed": "Failed to save the Claude Code source.",
+        "probeFailed": "Could not check this Claude Code installation.",
+        "probeReady": "Found Claude Code {{version}} at {{path}}.",
+        "fallback": {
+          "not_found": "System Claude Code was not found. Cindy is using its managed copy; install Claude Code or choose another path.",
+          "not_executable": "The selected Claude Code file cannot be executed. Cindy is using its managed copy; check the path and permissions.",
+          "unsupported_launcher": "The selected launcher is not supported. Cindy is using its managed copy; choose the native Claude Code executable.",
+          "version_unavailable": "Cindy could not read the system Claude Code version. Cindy is using its managed copy; check the installation.",
+          "version_too_old": "System Claude Code is older than the required {{minimumVersion}}. Cindy is using its managed copy; update Claude Code and restart Cindy."
+        },
+        "probe": {
+          "not_found": "Claude Code was not found. Install it or choose its executable path.",
+          "not_executable": "This file cannot be executed. Check the path and permissions.",
+          "unsupported_launcher": "Choose the native Claude Code executable instead of a command script.",
+          "version_unavailable": "Could not read the Claude Code version. Check the installation.",
+          "version_too_old": "Update Claude Code to {{minimumVersion}} or newer."
+        }
+      },
       "codexVersionLabel": "Codex version",
       "piVersionLabel": "Pi version",
       "logsDirLabel": "Logs directory",

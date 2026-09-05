@@ -793,6 +793,35 @@
       "description": "アプリと統合された Agent のランタイムバージョン。すべてのバージョン番号は起動時にメインプロセスが自動検出します。",
       "appVersionLabel": "アプリのバージョン",
       "claudeCodeVersionLabel": "Claude Code バージョン",
+      "claudeRuntime": {
+        "title": "Claude Code のソース",
+        "description": "Cindy が起動するローカルの Claude Code を選択します。変更は再起動後に適用されます。",
+        "selectAria": "Claude Code のソースを選択",
+        "source": { "managed": "Cindy 内蔵", "system": "システムインストール" },
+        "pathLabel": "実行ファイルのパス（任意）",
+        "pathPlaceholder": "PATH から claude を自動検出",
+        "checkInstallation": "インストールを確認",
+        "savePath": "パスを保存",
+        "activeSource": "現在使用中：{{source}}",
+        "restartRequired": "選択したソースを使うには Cindy を再起動してください。",
+        "saveFailed": "Claude Code のソースを保存できませんでした。",
+        "probeFailed": "この Claude Code を確認できませんでした。",
+        "probeReady": "Claude Code {{version}} が {{path}} に見つかりました。",
+        "fallback": {
+          "not_found": "システムの Claude Code が見つからないため、Cindy 内蔵版を使用しています。インストールするか別のパスを選択してください。",
+          "not_executable": "選択したファイルを実行できないため、Cindy 内蔵版を使用しています。パスと権限を確認してください。",
+          "unsupported_launcher": "選択した起動スクリプトは未対応のため、Cindy 内蔵版を使用しています。Claude Code のネイティブ実行ファイルを選択してください。",
+          "version_unavailable": "システムの Claude Code バージョンを確認できないため、Cindy 内蔵版を使用しています。インストールを確認してください。",
+          "version_too_old": "システムの Claude Code が必要な {{minimumVersion}} より古いため、Cindy 内蔵版を使用しています。更新後に Cindy を再起動してください。"
+        },
+        "probe": {
+          "not_found": "Claude Code が見つかりません。インストールするか実行ファイルのパスを選択してください。",
+          "not_executable": "このファイルを実行できません。パスと権限を確認してください。",
+          "unsupported_launcher": "コマンドスクリプトではなく Claude Code のネイティブ実行ファイルを選択してください。",
+          "version_unavailable": "Claude Code のバージョンを確認できません。インストールを確認してください。",
+          "version_too_old": "Claude Code を {{minimumVersion}} 以降に更新してください。"
+        }
+      },
       "codexVersionLabel": "Codex バージョン",
       "piVersionLabel": "Pi バージョン",
       "logsDirLabel": "ログディレクトリ",

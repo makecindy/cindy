@@ -47,6 +47,12 @@ import {
 } from '../manifestService.js';
 import { ProgressNormalizer } from '../updateProgressNormalizer.js';
 import { createLogger } from '../logger.js';
+import { readClaudeCodeRuntimeSettings } from '../claude-code-runtime-settings-store.js';
+import type {
+  ClaudeCodeRuntimeDecision,
+  ClaudeCodeRuntimeProbeResult,
+} from '../../shared/claudeCodeRuntimeSettings.js';
+import { CLAUDE_CODE_MINIMUM_VERSION, resolveSystemClaudeCode } from './system-claude-code.js';
 import { consumeStartupBinaryUpdateMarker } from './startup-update.js';
 
 let startupCheckForUpdates: boolean | undefined;
@@ -183,8 +189,8 @@ interface AgentBinaryConfig {
   devBinaryName?: string;          // dev 可覆盖入口相对路径；prod 仍使用 binaryName
   vendorTag: VendorKey;            // 'binary-download-progress' IPC payload 的 vendor 字段
   artifactKind: 'gz' | 'tar-gz-dir'; // CDN 资产形态(单文件 gz / 整目录 tar.gz)
-  optionalAsset?: boolean;         // true = manifest 缺字段不算"需要下载"(可选 vendor)
-  preserveLocalVersion?: boolean;  // true = 本地真实版本 >= manifest 时保留，禁止降级
+  optionalAsset?: boolean; // true = manifest 缺字段不算"需要下载"(可选 vendor)
+  preserveLocalVersion?: boolean; // true = 本地真实版本 >= manifest 时保留，禁止降级
 }
 
 const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
@@ -247,13 +253,30 @@ function getBase(kind: AgentBinaryKind): BinaryProvisioner {
 // maker-host getMaker() 在构造期同步读, 必须早于第一次 createSession。
 
 const lastReadyPath = new Map<AgentBinaryKind, string>();
+let claudeCodeRuntimeDecision: ClaudeCodeRuntimeDecision | null = null;
+const systemClaudeCodeProbeCache = new Map<string, Promise<ClaudeCodeRuntimeProbeResult>>();
+
+function probeConfiguredSystemClaudeCode(customPath: string, signal?: AbortSignal) {
+  const key = customPath.trim();
+  let probe = systemClaudeCodeProbeCache.get(key);
+  if (!probe) {
+    if (signal) return resolveSystemClaudeCode(key, signal);
+    probe = resolveSystemClaudeCode(key);
+    systemClaudeCodeProbeCache.set(key, probe);
+  }
+  return probe;
+}
+
+export function getClaudeCodeRuntimeDecision(): ClaudeCodeRuntimeDecision | null {
+  return claudeCodeRuntimeDecision ? { ...claudeCodeRuntimeDecision } : null;
+}
 
 export function getReadyBinaryPath(kind: AgentBinaryKind): string | undefined {
   return lastReadyPath.get(kind);
 }
 
 /**
- * spawn/execFile 前的执行侧复核:candidate 必须与本模块此刻能解析出的受管二进制
+ * spawn/execFile 前的执行侧复核:candidate 必须与本模块此刻能解析出的已选二进制
  * 路径完全一致。二进制路径本就只该出自本模块,这里再挡一层意外来源作为防御纵深
  * (CodeQL js/command-line-injection)。
  */
@@ -337,6 +360,71 @@ export async function prepare(
   kind: AgentBinaryKind,
   opts: PrepareOpts = {},
 ): Promise<PrepareResult> {
+  if (kind !== 'claude-code') return prepareManaged(kind, opts);
+
+  const settings = readClaudeCodeRuntimeSettings();
+  if (settings.source === 'system') {
+    const system = await probeConfiguredSystemClaudeCode(settings.customPath, opts.signal);
+    if (system.ok && system.binaryPath) {
+      lastReadyPath.set(kind, system.binaryPath);
+      claudeCodeRuntimeDecision = {
+        requestedSource: 'system',
+        requestedPath: settings.customPath ? path.resolve(settings.customPath) : null,
+        activeSource: 'system',
+        binaryPath: system.binaryPath,
+        version: system.version,
+        minimumVersion: system.minimumVersion,
+      };
+      return {
+        ready: true,
+        path: system.binaryPath,
+        downloaded: false,
+        runtimeSource: 'system',
+      };
+    }
+
+    log.warn('Configured system Claude Code is unavailable; using the Cindy-managed runtime', {
+      reason: system.reason,
+    });
+    const managed = await prepareManaged(kind, opts, { allowLinuxSystemFallback: false });
+    claudeCodeRuntimeDecision = {
+      requestedSource: 'system',
+      requestedPath: settings.customPath ? path.resolve(settings.customPath) : null,
+      activeSource: 'managed',
+      binaryPath: managed.ready ? (managed.path ?? null) : null,
+      version: null,
+      minimumVersion: system.minimumVersion,
+      fallbackReason: system.reason,
+    };
+    return managed;
+  }
+
+  const managed = await prepareManaged(kind, opts);
+  claudeCodeRuntimeDecision = {
+    requestedSource: 'managed',
+    requestedPath: null,
+    activeSource: managed.runtimeSource ?? 'managed',
+    binaryPath: managed.ready ? (managed.path ?? null) : null,
+    version: null,
+    minimumVersion: CLAUDE_CODE_MINIMUM_VERSION,
+  };
+  return managed;
+}
+
+function withClaudeCodeRuntimeSource(
+  kind: AgentBinaryKind,
+  result: PrepareResult,
+  runtimeSource: 'managed' | 'system',
+): PrepareResult {
+  if (kind !== 'claude-code' || !result.ready) return result;
+  return { ...result, runtimeSource };
+}
+
+async function prepareManaged(
+  kind: AgentBinaryKind,
+  opts: PrepareOpts = {},
+  options: { allowLinuxSystemFallback?: boolean } = {},
+): Promise<PrepareResult> {
   const cfg = CONFIG[kind];
   const { step, totalSteps, broadcastProgress = true, broadcastFailure = true } = opts;
 
@@ -348,11 +436,21 @@ export async function prepare(
     });
     if (devPath) {
       console.log(`[agent-binaries/${kind}] dev fallback hit: ${devPath}`);
-      console.warn(`[agent-binaries/${kind}] dev fallback: SHA256 check SKIPPED — for development only`);
+      console.warn(
+        `[agent-binaries/${kind}] dev fallback: SHA256 check SKIPPED — for development only`,
+      );
       lastReadyPath.set(kind, devPath);
-      return { ready: true, path: devPath, downloaded: false };
+      return withClaudeCodeRuntimeSource(
+        kind,
+        { ready: true, path: devPath, downloaded: false },
+        'managed',
+      );
     }
-    return { ready: false, error: `${kind} dev binary not found for ${getPlatformKey()}`, downloaded: false };
+    return {
+      ready: false,
+      error: `${kind} dev binary not found for ${getPlatformKey()}`,
+      downloaded: false,
+    };
   }
 
   opts = { ...opts, checkForUpdates: resolveUpdateCheck(opts.checkForUpdates) };
@@ -372,7 +470,10 @@ export async function prepare(
     // lastPeekProbeStartMs 为 0,退回 now。消费后清零,防跨轮残留
     // (下一轮 peek 未探测时,预算不能拿上一轮的旧起点计算)。
     if (opts.signal && !linuxRoundStartBySignal.has(opts.signal)) {
-      linuxRoundStartBySignal.set(opts.signal, lastPeekProbeStartMs > 0 ? lastPeekProbeStartMs : Date.now());
+      linuxRoundStartBySignal.set(
+        opts.signal,
+        lastPeekProbeStartMs > 0 ? lastPeekProbeStartMs : Date.now(),
+      );
     }
     lastPeekProbeStartMs = 0;
     // 新一轮 check-environment 开始(Phase 0 peek 已全部完成):清空 peek
@@ -398,7 +499,11 @@ export async function prepare(
     // CDN 腿的信号与预算在 prepareViaCdn 内构造(预算从传输真正开始计起,
     // 排队等待不计入,见该函数注释)。CDN 链任何异常(含磁盘错误级)都是降级
     // 第一环的信号:吞掉走 fallback,绝不让 CDN 尝试本身变成 splash 失败原因。
-    let cdnResult: PrepareResult = { ready: false, error: 'cdn_skipped_probe_failed', downloaded: false };
+    let cdnResult: PrepareResult = {
+      ready: false,
+      error: 'cdn_skipped_probe_failed',
+      downloaded: false,
+    };
     if (!cdnSkipped) {
       try {
         cdnResult = await prepareViaCdn(kind, opts, {
@@ -407,11 +512,13 @@ export async function prepare(
           linuxCdnBudget: true,
         });
       } catch (err) {
-        log.warn(`CDN chain failed, falling back to linux runtime fallback: ${String((err as Error)?.message ?? err)}`);
+        log.warn(
+          `CDN chain failed, falling back to linux runtime fallback: ${String((err as Error)?.message ?? err)}`,
+        );
         cdnResult = { ready: false, error: 'cdn_chain_error', downloaded: false };
       }
     }
-    if (cdnResult.ready) return cdnResult;
+    if (cdnResult.ready) return withClaudeCodeRuntimeSource(kind, cdnResult, 'managed');
 
     if (broadcastProgress) {
       broadcastBinaryDownloadProgress({
@@ -424,6 +531,7 @@ export async function prepare(
     try {
       const fallback = await prepareLinuxRuntimeFallback(kind, {
         signal: opts.signal,
+        allowSystemBinary: options.allowLinuxSystemFallback !== false,
         onProgress: broadcastProgress
           ? (event) => {
               broadcastBinaryDownloadProgress({
@@ -448,11 +556,15 @@ export async function prepare(
           });
         }
         lastReadyPath.set(kind, fallback.binaryPath);
-        return {
-          ready: true,
-          path: fallback.binaryPath,
-          downloaded: fallback.installed,
-        };
+        return withClaudeCodeRuntimeSource(
+          kind,
+          {
+            ready: true,
+            path: fallback.binaryPath,
+            downloaded: fallback.installed,
+          },
+          fallback.source === 'system' ? 'system' : 'managed',
+        );
       }
       return { ready: false, error: fallback.error ?? 'unknown', downloaded: false };
     } catch (err) {
@@ -471,7 +583,12 @@ export async function prepare(
     }
   }
 
-  return prepareViaCdn(kind, opts, { broadcastProgress, broadcastFailure, linuxCdnBudget: false });
+  const result = await prepareViaCdn(kind, opts, {
+    broadcastProgress,
+    broadcastFailure,
+    linuxCdnBudget: false,
+  });
+  return withClaudeCodeRuntimeSource(kind, result, 'managed');
 }
 
 /**
@@ -574,9 +691,10 @@ async function prepareViaCdn(
         if (p.downloadProgress) {
           lastReceived = p.downloadProgress.received;
           lastTotal = p.downloadProgress.total;
-          lastSpeed = p.downloadProgress.speedBps > 0
-            ? `${formatBytes(p.downloadProgress.speedBps)}/s`
-            : undefined;
+          lastSpeed =
+            p.downloadProgress.speedBps > 0
+              ? `${formatBytes(p.downloadProgress.speedBps)}/s`
+              : undefined;
           normalizer.handle({
             loaded: lastReceived,
             total: lastTotal > 0 ? lastTotal : null,
@@ -635,6 +753,13 @@ export async function peekNeedsDownload(
   kind: AgentBinaryKind,
   opts: Pick<PrepareOpts, 'checkForUpdates'> = {},
 ): Promise<boolean> {
+  if (kind === 'claude-code') {
+    const settings = readClaudeCodeRuntimeSettings();
+    if (settings.source === 'system') {
+      const system = await probeConfiguredSystemClaudeCode(settings.customPath);
+      if (system.ok) return false;
+    }
+  }
   // dev 模式永不下载 (findDevBinary 命中 / 缺失都不走 OSS)
   if (!app.isPackaged) return false;
   opts = { ...opts, checkForUpdates: resolveUpdateCheck(opts.checkForUpdates) };
@@ -695,4 +820,10 @@ export function getBaseProvisioner(kind: AgentBinaryKind): BinaryProvisioner {
 }
 
 // re-export type for convenience
-export type { BinaryProvisioner, BinaryDownloadProgressPayload, CachedBinaryStatus, PrepareOpts, PrepareResult };
+export type {
+  BinaryProvisioner,
+  BinaryDownloadProgressPayload,
+  CachedBinaryStatus,
+  PrepareOpts,
+  PrepareResult,
+};

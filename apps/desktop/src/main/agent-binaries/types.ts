@@ -16,8 +16,8 @@ export type VendorKey = 'claude' | 'codex' | 'pi';
 /** @frozen v1.0(additive: 2026-08 增补 tar-gz-dir artifact 与 optionalAsset) */
 export interface BinaryProvisionerConfig {
   vendorKey: VendorKey;
-  manifestField: string;            // manifest 中该 vendor 的字段名 e.g. <vendor-field>
-  installSubdir: string;            // userData 下的安装目录名 e.g. <install-subdir>
+  manifestField: string; // manifest 中该 vendor 的字段名 e.g. <vendor-field>
+  installSubdir: string; // userData 下的安装目录名 e.g. <install-subdir>
   artifact:
     | { kind: 'gz'; binaryName: string }
     | { kind: 'raw'; binaryName: string }
@@ -102,6 +102,8 @@ export interface PrepareResult {
   ready: boolean;
   path?: string;
   error?: string;
+  /** 实际选中的 Claude Code 来源；仅 claude-code prepare 成功时使用。 */
+  runtimeSource?: 'managed' | 'system';
   /** 本次 prepare 是否触发了真实下载 (true=下了; false=cache 命中或 dev 短路)。 */
   downloaded?: boolean;
 }

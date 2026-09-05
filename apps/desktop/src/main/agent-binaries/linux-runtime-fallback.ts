@@ -97,10 +97,7 @@ export function privateBinaryPath(userDataPath: string, kind: LinuxRuntimeFallba
   return path.join(runtimeInstallRoot(userDataPath, kind), 'bin', CONFIG[kind].commandName);
 }
 
-function runtimeVersionMarkerPath(
-  userDataPath: string,
-  kind: LinuxRuntimeFallbackKind,
-): string {
+function runtimeVersionMarkerPath(userDataPath: string, kind: LinuxRuntimeFallbackKind): string {
   return path.join(runtimeInstallRoot(userDataPath, kind), '.version');
 }
 
@@ -133,14 +130,15 @@ function materializeSystemClaudeLauncher(candidate: string, nodeBinDir: string):
     fs.renameSync(tempPath, destination);
     return destination;
   } finally {
-    try { fs.rmSync(tempPath, { force: true }); } catch { /* ignore */ }
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      /* ignore */
+    }
   }
 }
 
-function legacyVerifiedMarkerPath(
-  userDataPath: string,
-  kind: LinuxRuntimeFallbackKind,
-): string {
+function legacyVerifiedMarkerPath(userDataPath: string, kind: LinuxRuntimeFallbackKind): string {
   return path.join(path.dirname(legacyManagedBinaryPath(userDataPath, kind)), '.verified');
 }
 
@@ -230,16 +228,18 @@ function execProbe(
   });
 }
 
-async function findCommandAsync(
-  commandName: string,
-  signal?: AbortSignal,
-): Promise<string | null> {
+async function findCommandAsync(commandName: string, signal?: AbortSignal): Promise<string | null> {
   try {
     const result = await execProbe('/bin/sh', ['-c', commandLookupScript(commandName)], {
       signal,
       timeoutMs: LOOKUP_TIMEOUT_MS,
     });
-    return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
+    return (
+      result.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean) ?? null
+    );
   } catch {
     if (signal?.aborted) throw probeCancelledError(commandName);
     return null;
@@ -280,7 +280,7 @@ async function findSystemBinaryAsync(
     if (!nodePath) return candidate;
     try {
       const launcher = materializeSystemClaudeLauncher(candidate, path.dirname(nodePath));
-      return await readExecutableVersion(launcher, signal) ? launcher : candidate;
+      return (await readExecutableVersion(launcher, signal)) ? launcher : candidate;
     } catch {
       if (signal?.aborted) throw probeCancelledError(candidate);
       return candidate;
@@ -290,10 +290,7 @@ async function findSystemBinaryAsync(
   return null;
 }
 
-function privateBinaryCandidates(
-  userDataPath: string,
-  kind: LinuxRuntimeFallbackKind,
-): string[] {
+function privateBinaryCandidates(userDataPath: string, kind: LinuxRuntimeFallbackKind): string[] {
   const canonical = privateBinaryPath(userDataPath, kind);
   if (kind !== 'codex') return [canonical];
   // Compatibility with the first private installer implementation.
@@ -322,7 +319,11 @@ async function findPrivateBinaryAsync(
       return candidate;
     }
   }
-  try { fs.rmSync(runtimeVersionMarkerPath(userDataPath, kind), { force: true }); } catch { /* ignore */ }
+  try {
+    fs.rmSync(runtimeVersionMarkerPath(userDataPath, kind), { force: true });
+  } catch {
+    /* ignore */
+  }
   return null;
 }
 
@@ -346,7 +347,11 @@ async function migrateLegacyManagedBinary(
     writeRuntimeVersionMarker(userDataPath, kind);
     return destination;
   } finally {
-    try { fs.rmSync(tempPath, { force: true }); } catch { /* ignore */ }
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -393,13 +398,16 @@ export function pinnedOfficialAssetDescriptor(
   arch: string = process.arch,
 ): OfficialAssetDescriptor {
   const platformKey = linuxPlatformKey(arch);
-  const entry = (pin as {
-    runtimeAssets?: Record<string, { url?: unknown; sha256?: unknown; size?: unknown }>;
-  })?.runtimeAssets?.[platformKey];
+  const entry = (
+    pin as {
+      runtimeAssets?: Record<string, { url?: unknown; sha256?: unknown; size?: unknown }>;
+    }
+  )?.runtimeAssets?.[platformKey];
   const sha256 = normalizeSha256(entry?.sha256);
-  const expectedUrl = kind === 'claude-code'
-    ? `https://downloads.claude.ai/claude-code-releases/${version}/${platformKey}/claude`
-    : `https://github.com/openai/codex/releases/download/rust-v${version}/${codexLinuxAsset(arch)}`;
+  const expectedUrl =
+    kind === 'claude-code'
+      ? `https://downloads.claude.ai/claude-code-releases/${version}/${platformKey}/claude`
+      : `https://github.com/openai/codex/releases/download/rust-v${version}/${codexLinuxAsset(arch)}`;
   if (entry?.url !== expectedUrl || !sha256) {
     throw new Error(`${kind} ${version} pin lacks a trusted ${platformKey} asset`);
   }
@@ -472,8 +480,16 @@ export async function extractCodexBinaryFromTarGz(
     }
     throw new Error(`Codex binary not found in ${archivePath}`);
   } finally {
-    try { fs.rmSync(tarPath, { force: true }); } catch { /* ignore */ }
-    try { fs.rmSync(tempDestination, { force: true }); } catch { /* ignore */ }
+    try {
+      fs.rmSync(tarPath, { force: true });
+    } catch {
+      /* ignore */
+    }
+    try {
+      fs.rmSync(tempDestination, { force: true });
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -523,7 +539,11 @@ async function installCodexFromOfficialAsset(
     });
     await extractCodexBinaryFromTarGz(archivePath, binaryPath);
   } finally {
-    try { fs.rmSync(archivePath, { force: true }); } catch { /* ignore */ }
+    try {
+      fs.rmSync(archivePath, { force: true });
+    } catch {
+      /* ignore */
+    }
   }
   const versionOutput = await readExecutableVersion(binaryPath, signal);
   if (!versionOutput || !runtimeVersionMatchesPin('codex', versionOutput)) {
@@ -548,7 +568,11 @@ export async function findUsableLinuxRuntimeFallbackBinary(
 
 export async function prepareLinuxRuntimeFallback(
   kind: LinuxRuntimeFallbackKind,
-  options: { signal?: AbortSignal; onProgress?: (event: ProgressEvent) => void } = {},
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (event: ProgressEvent) => void;
+    allowSystemBinary?: boolean;
+  } = {},
 ): Promise<{
   ready: boolean;
   binaryPath: string;
@@ -557,26 +581,37 @@ export async function prepareLinuxRuntimeFallback(
   error?: string;
 }> {
   if (!app.isPackaged || process.platform !== 'linux') {
-    return { ready: false, binaryPath: '', installed: false, source: 'system', error: 'not_linux_packaged' };
+    return {
+      ready: false,
+      binaryPath: '',
+      installed: false,
+      source: 'system',
+      error: 'not_linux_packaged',
+    };
   }
 
   const timeoutSignal = AbortSignal.timeout(STARTUP_INSTALL_TIMEOUT_MS);
-  const signal = options.signal
-    ? AbortSignal.any([options.signal, timeoutSignal])
-    : timeoutSignal;
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 
   const privatePath = await findPrivateBinaryAsync(kind, signal);
-  if (privatePath) return { ready: true, binaryPath: privatePath, installed: false, source: 'private' };
+  if (privatePath)
+    return { ready: true, binaryPath: privatePath, installed: false, source: 'private' };
 
   const legacyPath = await migrateLegacyManagedBinary(kind, signal);
-  if (legacyPath) return { ready: true, binaryPath: legacyPath, installed: false, source: 'legacy' };
+  if (legacyPath)
+    return { ready: true, binaryPath: legacyPath, installed: false, source: 'legacy' };
 
-  const systemPath = await findSystemBinaryAsync(kind, signal);
-  if (systemPath) return { ready: true, binaryPath: systemPath, installed: false, source: 'system' };
+  if (options.allowSystemBinary !== false) {
+    const systemPath = await findSystemBinaryAsync(kind, signal);
+    if (systemPath) {
+      return { ready: true, binaryPath: systemPath, installed: false, source: 'system' };
+    }
+  }
 
   if (signal.aborted) throw new Error(`${kind} install cancelled`);
-  const binaryPath = kind === 'codex'
-    ? await installCodexFromOfficialAsset(signal, options.onProgress)
-    : await installClaudeFromOfficialAsset(signal, options.onProgress);
+  const binaryPath =
+    kind === 'codex'
+      ? await installCodexFromOfficialAsset(signal, options.onProgress)
+      : await installClaudeFromOfficialAsset(signal, options.onProgress);
   return { ready: true, binaryPath, installed: true, source: 'installed' };
 }

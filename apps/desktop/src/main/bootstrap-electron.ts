@@ -785,6 +785,7 @@ import {
 } from './maker-ipc/usage.js';
 import { prewarmModelPricing } from './usage/modelPricing.js';
 import { registerMakerBinaryVersionIpc } from './maker-ipc/binary-version.js';
+import { registerClaudeCodeRuntimeSettingsIpc } from './maker-ipc/claude-code-runtime-settings.js';
 import { registerCrossAgentConvertIpc } from './cross-agent-convert/ipc.js';
 import { registerFileBrowserIpc } from './file-browser/index.js';
 import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
@@ -5763,6 +5764,7 @@ const registerIpcHandlers = () => {
       registerMakerStatusIpc(ipcMaker);
       registerMakerUsageIpc(ipcMaker);
       registerMakerBinaryVersionIpc();
+      registerClaudeCodeRuntimeSettingsIpc();
       registerCrossAgentConvertIpc();
       // Workdir File Browser (vscode-style lazy file tree + content viewer for
       // a session's working directory). Pure local fs IO, no Maker dependency,

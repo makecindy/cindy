@@ -793,6 +793,35 @@
       "description": "앱과 통합된 Agent의 런타임 버전. 모든 버전 번호는 시작 시 메인 프로세스가 자동 감지합니다.",
       "appVersionLabel": "앱 버전",
       "claudeCodeVersionLabel": "Claude Code 버전",
+      "claudeRuntime": {
+        "title": "Claude Code 소스",
+        "description": "Cindy가 실행할 로컬 Claude Code 설치를 선택합니다. 변경 사항은 재시작 후 적용됩니다.",
+        "selectAria": "Claude Code 소스 선택",
+        "source": { "managed": "Cindy 내장", "system": "시스템 설치" },
+        "pathLabel": "실행 파일 경로(선택 사항)",
+        "pathPlaceholder": "PATH에서 claude 자동 감지",
+        "checkInstallation": "설치 확인",
+        "savePath": "경로 저장",
+        "activeSource": "현재 사용: {{source}}",
+        "restartRequired": "선택한 소스를 사용하려면 Cindy를 다시 시작하세요.",
+        "saveFailed": "Claude Code 소스를 저장하지 못했습니다.",
+        "probeFailed": "이 Claude Code 설치를 확인하지 못했습니다.",
+        "probeReady": "{{path}}에서 Claude Code {{version}}을 찾았습니다.",
+        "fallback": {
+          "not_found": "시스템 Claude Code를 찾지 못해 Cindy 내장 버전을 사용합니다. Claude Code를 설치하거나 다른 경로를 선택하세요.",
+          "not_executable": "선택한 파일을 실행할 수 없어 Cindy 내장 버전을 사용합니다. 경로와 권한을 확인하세요.",
+          "unsupported_launcher": "선택한 실행 스크립트는 지원되지 않아 Cindy 내장 버전을 사용합니다. Claude Code 네이티브 실행 파일을 선택하세요.",
+          "version_unavailable": "시스템 Claude Code 버전을 읽을 수 없어 Cindy 내장 버전을 사용합니다. 설치를 확인하세요.",
+          "version_too_old": "시스템 Claude Code가 필요한 {{minimumVersion}}보다 오래되어 Cindy 내장 버전을 사용합니다. 업데이트한 뒤 Cindy를 다시 시작하세요."
+        },
+        "probe": {
+          "not_found": "Claude Code를 찾지 못했습니다. 설치하거나 실행 파일 경로를 선택하세요.",
+          "not_executable": "이 파일을 실행할 수 없습니다. 경로와 권한을 확인하세요.",
+          "unsupported_launcher": "명령 스크립트 대신 Claude Code 네이티브 실행 파일을 선택하세요.",
+          "version_unavailable": "Claude Code 버전을 읽을 수 없습니다. 설치를 확인하세요.",
+          "version_too_old": "Claude Code를 {{minimumVersion}} 이상으로 업데이트하세요."
+        }
+      },
       "codexVersionLabel": "Codex 버전",
       "piVersionLabel": "Pi 버전",
       "logsDirLabel": "로그 디렉터리",

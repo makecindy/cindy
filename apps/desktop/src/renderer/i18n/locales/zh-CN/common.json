@@ -793,6 +793,38 @@
       "description": "应用与已集成 Agent 的运行时版本。所有版本号在启动时由主进程自动探测。",
       "appVersionLabel": "应用版本号",
       "claudeCodeVersionLabel": "Claude Code 版本号",
+      "claudeRuntime": {
+        "title": "Claude Code 来源",
+        "description": "选择 Cindy 启动的本机 Claude Code。更改将在重启后生效。",
+        "selectAria": "选择 Claude Code 来源",
+        "source": {
+          "managed": "Cindy 内置",
+          "system": "系统安装"
+        },
+        "pathLabel": "可执行文件路径（可选）",
+        "pathPlaceholder": "从 PATH 自动查找 claude",
+        "checkInstallation": "检查安装",
+        "savePath": "保存路径",
+        "activeSource": "当前使用：{{source}}",
+        "restartRequired": "重启 Cindy 后使用所选来源。",
+        "saveFailed": "无法保存 Claude Code 来源。",
+        "probeFailed": "无法检查这个 Claude Code 安装。",
+        "probeReady": "已找到 Claude Code {{version}}：{{path}}。",
+        "fallback": {
+          "not_found": "未找到系统 Claude Code，Cindy 已改用内置副本。请安装 Claude Code 或选择其他路径。",
+          "not_executable": "所选 Claude Code 文件无法执行，Cindy 已改用内置副本。请检查路径和权限。",
+          "unsupported_launcher": "不支持所选启动脚本，Cindy 已改用内置副本。请选择 Claude Code 原生可执行文件。",
+          "version_unavailable": "无法读取系统 Claude Code 版本，Cindy 已改用内置副本。请检查安装。",
+          "version_too_old": "系统 Claude Code 低于要求的 {{minimumVersion}}，Cindy 已改用内置副本。请更新 Claude Code 并重启 Cindy。"
+        },
+        "probe": {
+          "not_found": "未找到 Claude Code。请先安装，或选择它的可执行文件路径。",
+          "not_executable": "这个文件无法执行。请检查路径和权限。",
+          "unsupported_launcher": "请选择 Claude Code 原生可执行文件，不要选择命令脚本。",
+          "version_unavailable": "无法读取 Claude Code 版本。请检查安装。",
+          "version_too_old": "请将 Claude Code 更新到 {{minimumVersion}} 或更高版本。"
+        }
+      },
       "codexVersionLabel": "Codex 版本号",
       "piVersionLabel": "Pi 版本号",
       "logsDirLabel": "日志目录",

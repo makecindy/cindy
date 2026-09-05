@@ -6134,8 +6134,21 @@ interface ElectronAPI {
         kind: 'claude-code' | 'codex' | 'pi';
         binaryPath: string | null;
         version: string | null;
+        runtimeDecision?: import('../shared/claudeCodeRuntimeSettings').ClaudeCodeRuntimeDecision | null;
         error?: string;
       }>;
+      getClaudeCodeRuntimeSettings: () => Promise<
+        import('../shared/claudeCodeRuntimeSettings').ClaudeCodeRuntimeSettingsState
+      >;
+      setClaudeCodeRuntimeSettings: (
+        settings: import('../shared/claudeCodeRuntimeSettings').ClaudeCodeRuntimeSettings,
+      ) => Promise<import('../shared/claudeCodeRuntimeSettings').ClaudeCodeRuntimeSettingsState>;
+      resetClaudeCodeRuntimeSettings: () => Promise<
+        import('../shared/claudeCodeRuntimeSettings').ClaudeCodeRuntimeSettingsState
+      >;
+      probeSystemClaudeCode: (
+        customPath: string,
+      ) => Promise<import('../shared/claudeCodeRuntimeSettings').ClaudeCodeRuntimeProbeResult>;
     };
 
     /* ── Agent 今日累计 (取代老 codex.usage.* + onUsageTodaySpendChanged) ── */

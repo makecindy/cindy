@@ -6,6 +6,12 @@ import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
 } from '../shared/customProviderUpdate';
+import type {
+  ClaudeCodeRuntimeDecision,
+  ClaudeCodeRuntimeProbeResult,
+  ClaudeCodeRuntimeSettings,
+  ClaudeCodeRuntimeSettingsState,
+} from '../shared/claudeCodeRuntimeSettings';
 import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import {
   isWindowsBackdropMaterial,
@@ -6889,8 +6895,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
         kind: 'claude-code' | 'codex' | 'pi';
         binaryPath: string | null;
         version: string | null;
+        runtimeDecision?: ClaudeCodeRuntimeDecision | null;
         error?: string;
       }> => ipcRenderer.invoke('maker:agent:binary-version', agentKind),
+      getClaudeCodeRuntimeSettings: (): Promise<ClaudeCodeRuntimeSettingsState> =>
+        ipcRenderer.invoke('maker:claude-code-runtime:settings-get'),
+      setClaudeCodeRuntimeSettings: (
+        settings: ClaudeCodeRuntimeSettings,
+      ): Promise<ClaudeCodeRuntimeSettingsState> =>
+        ipcRenderer.invoke('maker:claude-code-runtime:settings-set', settings),
+      resetClaudeCodeRuntimeSettings: (): Promise<ClaudeCodeRuntimeSettingsState> =>
+        ipcRenderer.invoke('maker:claude-code-runtime:settings-reset'),
+      probeSystemClaudeCode: (customPath: string): Promise<ClaudeCodeRuntimeProbeResult> =>
+        ipcRenderer.invoke('maker:claude-code-runtime:probe', customPath),
     },
 
     // ── Agent 今日累计 (取代老 electronAPI.codex.usage.* + electronAPI.onUsageTodaySpendChanged) ─

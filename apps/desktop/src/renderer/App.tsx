@@ -1,6 +1,7 @@
 import { RouterProvider } from 'react-router-dom';
 
 import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
@@ -30,6 +31,7 @@ import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { toast } from '@/lib/toast';
 import {
   initializePromptRecommendationStore,
   setPromptRecommendationOwner,
@@ -95,9 +97,33 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
 }
 
 function MakerBootstrap() {
+  const { t } = useTranslation();
   const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.maker.agent
+      .getClaudeCodeRuntimeSettings()
+      .then((state) => {
+        const decision = state.decision;
+        if (cancelled || !decision?.fallbackReason) return;
+        const warningKey = `cindy:claude-code-runtime-fallback:${decision.fallbackReason}:${decision.minimumVersion}`;
+        if (window.sessionStorage.getItem(warningKey)) return;
+        window.sessionStorage.setItem(warningKey, '1');
+        toast.warning(
+          t(`settings.about.claudeRuntime.fallback.${decision.fallbackReason}`, {
+            minimumVersion: decision.minimumVersion,
+          }),
+          { duration: 10_000 },
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
 
   useEffect(() => {
     setPromptRecommendationOwner(`${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`);
