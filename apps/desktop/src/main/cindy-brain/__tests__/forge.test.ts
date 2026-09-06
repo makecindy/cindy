@@ -1517,6 +1517,20 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).toContain('`RATE_LIMITED`');
   });
 
+  it('documents library capabilities as a sessionless support list with stable failure reasons', () => {
+    expect(FORGE_GUIDE).toContain("op: 'capabilities'");
+    expect(FORGE_GUIDE).toContain("operations:['clipboardWrite','saveAs']");
+    expect(FORGE_GUIDE).toContain('不等于此刻有窗口 / 已授权 / 库可用');
+    expect(FORGE_GUIDE).toContain('全部字符串');
+    expect(FORGE_GUIDE).toContain('数组内混入');
+    expect(FORGE_GUIDE).toContain('`IMPLEMENTATION_UNSUPPORTED`');
+    expect(FORGE_GUIDE).toContain('`NO_VISIBLE_WINDOW`');
+    expect(FORGE_GUIDE).toContain('`PERMISSION_DENIED`');
+    expect(FORGE_GUIDE).toContain('{ ok:false, errorCode, message, reason? }');
+    expect(FORGE_GUIDE).toContain('非法/越界 dbPath');
+    expect(FORGE_GUIDE).toContain("state:'unavailable'");
+  });
+
   it('documents explicit Forge install without changing pack into an install action', () => {
     expect(FORGE_GUIDE).toContain("ghost_forge_install({ dir: '<绝对路径>' })");
     expect(FORGE_GUIDE).toContain('不要因为 scaffold 或 pack 成功就自动调用本工具');

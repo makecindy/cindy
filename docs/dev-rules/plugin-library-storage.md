@@ -86,6 +86,47 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
     不是 `<hash>.<ext>`。同目录 sidecar `meta.json` / `preview.webp` 禁止当像素。
     16MiB 是 library 分块阈值（更大走 writeBegin），cindy-media 单件 50MiB、配额
     1GiB。library 软水位 8GiB + 磁盘保留 1GiB + 5 万文件保险丝。
+13. **只读操作能力合同（capabilities）**：`{op:'capabilities'}` 在资格审与 op 合法性
+    校验之后、会话创建之前返回，不捕获 owner、不解析库根、不 open vault、不弹窗、
+    不碰剪贴板、不泄漏 owner 或绝对库路径。成功形态固定为
+    `{ok:true, op:'capabilities', capabilities:{version:1, operations:['clipboardWrite','saveAs']}}`。
+    `operations` 只表达**实现支持**，不等于此刻有窗口、已授权或库可用。
+    消费规则：仅 `version===1` 且 `operations` 为字符串数组才有效；额外字段忽略，未知
+    operation 忽略，已知项保留；有效 v1 清单缺少某项才是 unsupported；缺字段、错类型、
+    `version` 非 1、或旧宿主 unknown-op 一律 unknown。旧插件无需重装或重授权。
+    实际操作失败仍用旧 `errorCode`，另加稳定 `reason`：无 handler=`IMPLEMENTATION_UNSUPPORTED`，
+    无窗口=`NO_VISIBLE_WINDOW`，权限=`PERMISSION_DENIED`，库不可用=`LIBRARY_UNAVAILABLE`
+    （含 vault 透传的 open/status 失败），非法请求=`INVALID_REQUEST`（含非法/越界
+    `dbPath` 与未知 op），取消=`CANCELLED`。成功 `open`/`status` 的 `state:'unavailable'`
+    仍用结果体 `reason`（如 `disk-missing`），不是失败 `reason` 枚举。查询/传输层本地分类
+    `TIMEOUT` / `TRANSPORT_ERROR`。插件不得解析人类 `message` 猜类别。插件基座改动按仓库白名单人工
+    Approve 才能合并。合同示例：
+
+    ```ts
+    // 旧宿主 unknown-op：没有 capabilities，不得当成全部支持或版本过旧
+    classifyGhostLibraryOperationSupport(
+      { ok: false, errorCode: 'PATH_INVALID', message: 'op 必须是 open / status / …' },
+      'clipboardWrite',
+    ) === 'unknown'
+
+    // 新版支持：只说明实现存在，不等于此刻有窗口 / 已授权 / 库可用
+    classifyGhostLibraryOperationSupport(
+      { ok: true, op: 'capabilities', capabilities: { version: 1, operations: ['clipboardWrite', 'saveAs'] } },
+      'clipboardWrite',
+    ) === 'supported'
+
+    // 新版无窗口：旧 errorCode 仍是 UNSUPPORTED，reason 才区分窗口缺失
+    { ok: false, errorCode: 'UNSUPPORTED', reason: 'NO_VISIBLE_WINDOW' }
+
+    // 新版拒权：能力查询与实际操作都不得越过资格审
+    { ok: false, errorCode: 'NOT_DECLARED', reason: 'PERMISSION_DENIED' }
+
+    // 错类型：数组内混入非字符串，整体 unknown，不得把其中合法项当有效 v1
+    classifyGhostLibraryOperationSupport(
+      { ok: true, op: 'capabilities', capabilities: { version: 1, operations: ['saveAs', 123] } },
+      'saveAs',
+    ) === 'unknown'
+    ```
 
 ## Review 清单
 
@@ -94,6 +135,7 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 3. 生命周期挂点（uninstall/setEnabled/owner 边界）是否补了对应的 dispose？
 4. i18n 五语与中文标点门禁、FORGE_GUIDE §4.10.1 是否同步？
 5. 会话级 extraDirs 是否只读、静默、专用槽不占 EXTRA_DIRS_MAX=10？confirmed 是否只认 writeCommit ACK，有没有发明 `libraryConfirmed.ts`？
+6. capabilities 是否在会话创建前返回？是否把 PERMISSION / UNAVAILABLE / 无窗口误判成旧宿主？失败 `reason` 是否稳定、旧 `errorCode` 是否保留？
 
 最小验证入口：
 
