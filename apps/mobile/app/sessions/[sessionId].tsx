@@ -2319,6 +2319,8 @@ export default function SessionScreen() {
     ? resolveSessionAgentKind(currentSession)
     : 'claude-code';
   const agentSwitchIntent = currentSession?.agentSwitchIntent ?? null;
+  const composerDisplayAgentKind = agentSwitchIntent?.targetAgentKind ?? sessionAgentKind;
+  const composerSwitchesAgent = composerDisplayAgentKind !== sessionAgentKind;
   const sessionAgentSwitchSupported = !!currentSession
     && supportsMobileSessionAgentSwitch(currentSession, capabilities);
   const runtimeOptions = useMemo(
@@ -2359,18 +2361,18 @@ export default function SessionScreen() {
   // 被控端供应商目录 → provider-aware 模型分段(与新建会话页同逻辑;0 供应商回退扁平 modelOptions)。
   const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
   const composerModelSections = useMemo(
-    () => currentSession
+    () => composerDisplaySession
       ? buildMobileModelSections({
           providers: composerDeviceProviders.providers,
-          agentKind: sessionAgentKind,
-          selectedModelId: currentSession.model,
-          selectedProviderId: currentSession.providerId ?? null,
+          agentKind: composerDisplayAgentKind,
+          selectedModelId: composerDisplaySession.model,
+          selectedProviderId: composerDisplaySession.providerId ?? null,
           visibilityOverrides: composerDeviceProviders.modelVisibilityOverrides,
           // 已建会话:实际路由口径(运行中会话跟真实扣费路由,含停用拷贝)。
           existingSessionRoute: true,
         })
       : null,
-    [composerDeviceProviders.providers, composerDeviceProviders.modelVisibilityOverrides, currentSession],
+    [composerDeviceProviders.providers, composerDeviceProviders.modelVisibilityOverrides, composerDisplayAgentKind, composerDisplaySession],
   );
   // 模型列表元信息(单价 / 折扣版 key presence)—— 与新建会话页同一套隧道缓存 hook。
   const deviceModelPricing = useDeviceModelPricing(deviceId || undefined);
@@ -2449,12 +2451,12 @@ export default function SessionScreen() {
   // 画成真实来源，否则手机会显示「默认来源 Logo」，发送却仍按已断开的 providerId 路由。
   // provider 列表加载期间不判，避免首帧短暂闪出断开态。
   const composerSelectedSourceDisconnected = useMemo(() => {
-    if (!currentSession) return false;
+    if (!composerDisplaySession) return false;
     return isSelectedSourceDisconnected({
       providers: composerDeviceProviders.providers,
-      providerId: currentSession.providerId,
-      modelId: currentSession.model,
-      agentKind: sessionAgentKind,
+      providerId: composerDisplaySession.providerId,
+      modelId: composerDisplaySession.model,
+      agentKind: composerDisplayAgentKind,
       loading: composerDeviceProviders.loading,
       error: composerDeviceProviders.error,
     });
@@ -2462,22 +2464,22 @@ export default function SessionScreen() {
     composerDeviceProviders.error,
     composerDeviceProviders.loading,
     composerDeviceProviders.providers,
-    currentSession,
-    sessionAgentKind,
+    composerDisplaySession,
+    composerDisplayAgentKind,
   ]);
   const composerPillSourceProvider = useMemo(() => {
     if (!composerSelectedSourceDisconnected) return composerActiveSourceProvider;
     return composerDeviceProviders.providers.find(
-      (provider) => provider.id === currentSession?.providerId,
+      (provider) => provider.id === composerDisplaySession?.providerId,
     ) ?? null;
   }, [
     composerActiveSourceProvider,
     composerDeviceProviders.providers,
     composerSelectedSourceDisconnected,
-    currentSession?.providerId,
+    composerDisplaySession?.providerId,
   ]);
   const composerPillSourceId = composerSelectedSourceDisconnected
-    ? currentSession?.providerId ?? null
+    ? composerDisplaySession?.providerId ?? null
     : composerPillSourceProvider?.id ?? null;
   const composerPillFastOn = agentSwitchIntent
     ? agentSwitchIntent.fastMode === true
@@ -2490,7 +2492,10 @@ export default function SessionScreen() {
       });
   const composerRuntimeLabel = composerRuntimeSummary
     ? agentSwitchIntent
-      ? t('session.screen.nextAgentSwitch', { agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind), model: composerRuntimeSummary.modelSummary })
+      ? t(composerSwitchesAgent ? 'session.screen.nextAgentSwitch' : 'session.screen.nextModelSelection', {
+          agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind),
+          model: composerRuntimeSummary.modelSummary,
+        })
       : composerRuntimeSummary.modelSummary
     : '';
   const nativeShellLayout = useMemo(() => buildSessionNativeShellLayout({
@@ -6571,7 +6576,7 @@ export default function SessionScreen() {
             disabled={controlBusy || !canUseRemoteSessionControls}
             fastOn={composerPillFastOn}
             label={composerRuntimeLabel}
-            leading={agentSwitchIntent ? (
+            leading={agentSwitchIntent && composerSwitchesAgent ? (
               <MobileAgentMark
                 agentKind={agentSwitchIntent.targetAgentKind}
                 color={colors.textSecondary}
@@ -6582,8 +6587,8 @@ export default function SessionScreen() {
               // 不静默换成 activeSourceId 的默认回退 Logo。
               <MobileModelIconMark
                 color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
-                icon={currentSession && composerPillSourceProvider
-                  ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
+                icon={composerDisplaySession && composerPillSourceProvider
+                  ? getModel(composerPillSourceProvider, composerDisplaySession.model, composerDisplayAgentKind)?.icon
                   : undefined}
                 name={composerPillSourceProvider?.name ?? composerPillSourceId}
                 providerId={composerPillSourceId}
