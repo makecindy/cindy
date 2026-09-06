@@ -6,6 +6,9 @@ import {
   DictationRefiner,
   VoiceInputController,
   VoiceTimelineLogger,
+  takeRefinementContextHead,
+  takeRefinementContextTail,
+  truncateRefinementReply,
   getDictationDictionaryAdviceSkipReason,
   type DictationDictionaryAdviceInput,
   type DictationDictionaryAdviceResult,
@@ -23,7 +26,9 @@ import {
   isProviderModelRouteDisabled,
   isUtilityRouteDisabled,
   isUtilityRoutePaymentRequired,
+  requestUtilityText,
 } from '../utility-model/oneShotCandidates.js';
+import { getMaker } from '../maker-host/index.js';
 import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
@@ -44,6 +49,7 @@ import {
   prewarmCodexResponsesEndpoint,
 } from './CodexResponsesTextModelClient.js';
 import { ElevenLabsScribeProvider } from './ElevenLabsScribeProvider.js';
+import { DictionaryLearningTextModelClient } from './DictionaryLearningTextModelClient.js';
 import { FallbackAsrProvider } from './FallbackAsrProvider.js';
 import {
   FallbackTextModelClient,
@@ -373,41 +379,15 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
     };
   }
 
-  // Same fallback chain as dictation refinement: the advisor is a background
-  // task, but a primary refiner outage should degrade to a backup model
-  // instead of silently dropping dictionary learning.
-  const {
-    refinerReadinessList: advisorReadinessList,
-    readyRefinerProfiles: readyAdvisorProfiles,
-  } = await resolveVoiceInputRefinerChainForRuntime();
-  const advisorHeadProfile = readyAdvisorProfiles[0];
-  if (!advisorHeadProfile) {
-    return {
-      ok: false,
-      error: advisorReadinessList[0]?.error ?? 'Dictionary learning advisor requires a configured refiner.',
-    };
-  }
-
   try {
-    const senderId = options.senderId ?? 'device-link';
-    const advisorAttempts: FallbackTextModelAttempt[] = readyAdvisorProfiles.map((profile) => ({
-      profileId: profile.id as VoiceInputRefinerProviderKind,
-      model: profile.model,
-      client: guardRefinerClientAgainstUnavailableRoute(
-        profile,
-        createVoiceInputTextModelClient(profile, {
-          beforeDispatch: () => {
-            assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
-            assertRefinerRouteAvailable(profile);
-          },
-        }),
-      ),
-      promptCacheScope: `dictionaryLearning:${profile.id}:${senderId}`,
-    }));
+    const advisorClient = new DictionaryLearningTextModelClient(
+      (prompt, requestOptions) => requestUtilityText(getMaker(), prompt, requestOptions),
+      () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
+    );
     const advisor = new DictationDictionaryAdvisor({
-      client: new FallbackTextModelClient(advisorAttempts),
-      model: advisorHeadProfile.model,
-      promptCacheScope: `dictionaryLearning:${advisorHeadProfile.id}:${senderId}`,
+      client: advisorClient,
+      // The adapter resolves the shared auxiliary chain; this is not a route pin.
+      model: 'auxiliary',
       debug: DICTIONARY_LEARNING_TEXT_DEBUG,
     });
     const settings = voiceInputDataStore.getSettings();
@@ -444,9 +424,8 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
         confidence: action.confidence,
         reason: action.reason,
       })),
-      refinerProvider: advisorHeadProfile.id,
-      refinerModel: advisorHeadProfile.model,
-      refinerChain: readyAdvisorProfiles.map((profile) => profile.id),
+      auxiliaryProvider: advisorClient.servedRoute?.providerId,
+      auxiliaryModel: advisorClient.servedRoute?.model,
       ignoreReason: result.ignoreReason,
       elapsedMs: Math.round(result.elapsedMs),
       debugText: DICTIONARY_LEARNING_TEXT_DEBUG
@@ -596,9 +575,9 @@ function normalizeRefinementContext(
     dictionaryAliasHints: normalizeDictionaryAliasHints(context?.dictionaryAliasHints),
     voiceInputHistory: normalizeMultilineText(context?.voiceInputHistory ?? ''),
     selectionBefore: takeTail(context?.selectionBefore ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-    selectedText: truncateText(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+    selectedText: takeHead(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     selectionAfter: takeHead(context?.selectionAfter ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-    replyToMessage: truncateText(
+    replyToMessage: truncateRefinementReply(
       context?.replyToMessage ?? '',
       MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS,
     ),
@@ -641,7 +620,7 @@ function beginOverlayContextInjection(
       // synchronous fields, so prompt sizing stays predictable regardless
       // of whether overlay capture won the race.
       targetContext.selectionBefore = takeTail(overlayContext.selectionBefore, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
-      targetContext.selectedText = truncateText(overlayContext.selectedText, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
+      targetContext.selectedText = takeHead(overlayContext.selectedText, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
       targetContext.selectionAfter = takeHead(overlayContext.selectionAfter, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
     })
     .catch((error: unknown) => {
@@ -733,13 +712,11 @@ function normalizeMultilineText(text: string): string {
 }
 
 function takeHead(text: string, maxChars: number): string {
-  return truncateText(text, maxChars);
+  return takeRefinementContextHead(text, maxChars);
 }
 
 function takeTail(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(-maxChars).trim();
+  return takeRefinementContextTail(text, maxChars);
 }
 
 function readActiveVoiceInputModelSelection(reason: string): ReturnType<typeof getVoiceInputModelSelection> {

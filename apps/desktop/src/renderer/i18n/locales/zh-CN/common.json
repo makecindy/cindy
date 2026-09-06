@@ -3741,24 +3741,15 @@
         "codexGuard": {
           "title": "Codex 兼容性",
           "label": "防止 Codex 占用设备",
-          "aria": "防止 Codex 占用 Codex Micro",
+          "aria": "防止 Codex 占用 Work Louder 键盘",
           "recover": "恢复环境",
-          "status": {
-            "unsupported": "仅 macOS",
-            "disabled": "已关闭",
-            "protecting": "请重启 Codex",
-            "intercepted": "保护中",
-            "recovery-required": "需要恢复",
-            "error": "不可用"
-          },
           "descriptions": {
             "unsupported": "此保护仅在 macOS 上可用。",
-            "disabled": "Cindy 运行期间阻止 Codex 连接 Codex Micro；不会限制 Cindy 本身。",
-            "protecting": "保护已就绪。请完全退出后重新打开 Codex；已经运行的 Codex 不受影响。",
-            "intercepted": "已阻止 Codex 的 Work Louder 服务，Cindy 可以继续使用设备。",
+            "disabled": "Cindy 运行期间阻止 Codex 连接 Work Louder 键盘；不会限制 Cindy 本身。",
             "recovery-required": "保护已停止，但 NODE_OPTIONS 尚未安全恢复。请先重试恢复，再重新开启。",
             "error": "Cindy 无法更新 Codex 保护；原有 NODE_OPTIONS 已保留或等待恢复。"
-          }
+          },
+          "restartRequired": "请完全退出并重新打开 Codex 以生效"
         },
         "commands": {
           "session.selectPrevious": {
@@ -5675,9 +5666,9 @@
     "openProxyUsage": "打开浏览器查看完整用量看板",
     "openXaiUsage": "打开 Grok 用量页面",
     "xai": {
-      "requestsLine": "限流(请求)：剩余 {{remaining}}/{{limit}}",
-      "tokensLine": "限流(token)：剩余 {{remaining}}/{{limit}}",
-      "noQuotaDetail": "暂未获取到 SuperGrok 周用量，此处仅显示价值估算",
+      "requestsLine": "上次响应请求余量：{{remaining}}/{{limit}}",
+      "tokensLine": "上次响应 Token 余量：{{remaining}}/{{limit}}",
+      "noQuotaDetail": "暂未获取到 SuperGrok 周用量",
       "weeklyLabel": "周限",
       "windowSegment": "{{label}} 剩余 {{remaining}}",
       "windowLine": "{{label}} 剩余 {{remaining}}(已用 {{used}})",
@@ -5685,7 +5676,7 @@
       "resetAt": "{{at}} 重置",
       "productLine": "{{product}} {{percent}}",
       "extraCreditsLine": "额外点数 {{amount}}",
-      "accountWeeklyHint": "账号周用量，不是本任务配额"
+      "accountWeeklyHint": "账号周用量"
     },
     "dailyLimitLabel": "今日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "本周期 {{spend}}/{{limit}}",
@@ -5746,10 +5737,20 @@
     }
   },
   "quotaCard": {
+    "usageCritical": "用量较高",
+    "usageWarning": "用量偏高",
+    "usageTitle": "用量明细",
+    "gatewayTitle": "Cindy AI Gateway",
+    "balanceLabel": "余额用量",
+    "dailyLabel": "每日软限额",
+    "monthlyLabel": "月度配额",
+    "speedLabel": "速度",
+    "rateValue": "{{rate}} tokens/秒",
+    "waiting": "等待配额数据更新。",
+    "windowsRegionLabel": "用量明细",
     "fiveHourLabel": "5 小时",
     "weeklyLabel": "周限",
     "modelWeeklyLabel": "{{model}} 周限",
-    "windowsRegionLabel": "配额窗口列表",
     "usedPercent": "已用 {{percent}}%",
     "resetAt": "{{at}} 重置",
     "noWindows": "暂无配额窗口数据",
@@ -5759,7 +5760,7 @@
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",
     "noBilledCost": "本轮费用暂不可用，仅显示用量",
-    "latestMessageTitle": "最近一轮用户请求累计",
+    "latestMessageTitle": "最近一轮",
     "turnCostUnavailable": "本轮费用暂无法估算",
     "tokenLabel": "Token",
     "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
@@ -5771,7 +5772,7 @@
     "paceTrendFast": "按当前平均速度偏快（粗略趋势）",
     "paceTrendNormal": "按当前平均速度正常（粗略趋势）",
     "paceTrendSlow": "按当前平均速度偏慢（粗略趋势）",
-    "waiting": "Claude 订阅余量会在下一轮完成后更新。"
+    "includedLabel": "其中 {{name}}"
   },
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
@@ -6954,53 +6955,105 @@
     "homeSuggestions": {
       "shuffle": "换一批",
       "dismiss": "不再显示",
-      "downloadsDesktop": {
-        "label": "看看我的下载和桌面堆了什么，列一份该清理的清单",
-        "prompt": "看一下我的下载文件夹和桌面，统计都堆了些什么：占空间最大的、明显重复的、半年以上没动过的、以及能安全归档的。给我一份清单，每一项标清在哪、多大、为什么建议处理。这一轮只看不动，等我确认再说要不要动手。"
-      },
-      "whatCindyCanDo": {
-        "label": "看看我这台电脑上都有什么，你能帮我做哪些事",
-        "prompt": "看一下我这台电脑上装了什么、我平时在弄什么类型的东西，据此判断我大概是做什么的。然后告诉我：以你的能力，最能帮到我的具体是哪几件事，每件用一句话说清在什么场景下用、能替我省掉什么。不要念功能清单，要针对我这台机器上真实存在的东西说。"
-      },
-      "recentDocs": {
-        "label": "看一遍我最近在弄的文档，帮我理成一份清单",
-        "prompt": "看一下我最近一段时间打开和改过的文档，按主题归一归，告诉我我手上大概有几摊事、每摊到哪一步了、有没有明显烂尾的。给我一份清单，标清每份文件在哪。只读，不要动我的文件。"
-      },
-      "listCodeProjects": {
-        "label": "把我电脑上的代码项目列出来，讲清每个是干什么的",
-        "prompt": "在我常用的目录里找出所有代码项目，列成一份清单：每个项目一句话说清是干什么的、用什么写的、最近一次改动是什么时候。然后指出哪几个看起来是主线、哪几个像是已经放弃的。如果一个都没找到，直接告诉我没找到。这一轮只读，不要改任何文件。"
-      },
       "storageUsage": {
-        "label": "盘一下这台电脑的存储，空间到底被什么吃掉了",
-        "prompt": "盘一遍这台电脑的存储：按占用从大到小列出目录和文件，指出哪些是缓存、哪些是重复、哪些是我大概忘了的旧东西。给我一份占用排行加一句结论：删掉哪几类能腾出最多空间。只统计，不要删任何东西。"
-      },
-      "unusedApps": {
-        "label": "盘一下我装了哪些应用，哪些很久没用还占着地方",
-        "prompt": "看一下这台电脑装了哪些应用，按占用空间和最近使用时间排一排，指出哪些很久没打开还占着大块地方。给我一份清单，先不要卸载任何东西。"
-      },
-      "uncommittedChanges": {
-        "label": "找出我最近在改的项目，看看有什么没提交的、有没有隐患",
-        "prompt": "找出我最近动过的那个代码项目，看一遍还没提交的改动，告诉我这些改动在干什么、有没有明显的问题或漏掉的地方。只读，不要动我的文件，也不要提交任何东西。"
-      },
-      "devEnvironment": {
-        "label": "检查一遍我的开发环境，有没有该修的",
-        "prompt": "检查这台机器的开发环境：装了哪些语言运行时和包管理器、各自什么版本、有没有版本冲突或者明显过旧的、git 配置有没有问题。给我一份现状清单加一句结论：哪几处建议先修。只检查，不要自己动手装或改配置。"
+        "label": "给电脑清一次垃圾",
+        "prompt": "帮我找出电脑里值得清理的内容，看看能省出多少空间，清理前让我确认。"
       },
       "whySlow": {
         "label": "查查电脑为什么卡",
-        "prompt": "查这台电脑现在为什么卡：负载、内存、磁盘、开机时长、占 CPU/内存最多的几个进程。用几句话给结论和依据。只读，不要改任何东西，不要杀进程，不要问我开了什么。"
+        "prompt": "帮我查查电脑为什么卡，找出原因并给我改善建议。"
+      },
+      "downloadsDesktop": {
+        "label": "彻底整理下载和桌面",
+        "prompt": "帮我把下载文件夹和桌面整理得清爽、好找，先给我看看整理方案。"
       },
       "diagnoseNetwork": {
         "label": "诊断一下网速",
-        "prompt": "诊断这台电脑的网络：ping、DNS、现在是有线还是 Wi-Fi，用一两句话给结论。不要跑长时间测速，不要问运营商。"
+        "prompt": "帮我查查网速为什么慢，找出问题并建议怎么解决。"
       },
-      "subscriptionSpend": {
-        "label": "盘点我的订阅支出",
-        "prompt": "扫一遍下载、收据和本地账单，盘点我的订阅都在扣多少钱：列出服务名和金额。找不到就直接说找不到。不要改订阅、不要问银行卡、不要登录邮箱。"
+      "unusedApps": {
+        "label": "盘一下我装了哪些应用，哪些很久没用还占着地方",
+        "prompt": "帮我找出电脑上可能很久没用、又占空间的应用，卸载前让我确认。"
+      },
+      "stockDigest": {
+        "label": "每天送我一份股票简报",
+        "prompt": "帮我设置每日股票简报。可以从 2400.HK（心动公司）开始，再问问我还关注哪些股票、想什么时候收到。"
+      },
+      "morningBrief": {
+        "label": "定制我的每日晨报",
+        "prompt": "帮我设置每日晨报，和我确定关注的内容和接收时间。"
+      },
+      "watchWebpage": {
+        "label": "替我盯住一个网页",
+        "prompt": "帮我盯住一个网页，有我关心的变化时提醒我。和我确定网址、关注点和检查频率。"
       },
       "expenseTracker": {
         "label": "做个记账小工具",
-        "prompt": "在这个任务的工作目录里做一个能直接打开的本地记账小工具：日期、金额、分类、备注。不要后端、不要问还要哪些功能。"
+        "prompt": "帮我做个适合自己的记账小工具，功能和用法可以一起聊聊，做好后给我试用。"
+      },
+      "kidsGame": {
+        "label": "我要做一个游戏",
+        "prompt": "我想做一个游戏。帮我完善已有的想法，或者推荐几个有趣的创意，选好方向后一起做出来。"
+      },
+      "habitTracker": {
+        "label": "做一个习惯打卡页",
+        "prompt": "帮我做个习惯打卡页，适合我想坚持的事，做好后给我试用。"
+      },
+      "recentDocs": {
+        "label": "把这些材料汇总成一页",
+        "prompt": "把我提供的材料整理成一页，让我快速抓住重点。"
+      },
+      "subscriptionSpend": {
+        "label": "盘点我的订阅支出",
+        "prompt": "帮我盘点订阅都花了多少钱，找出值得取消或调整的项目，先给我建议。"
+      },
+      "organizeFolder": {
+        "label": "把这个文件夹归类整理",
+        "prompt": "帮我整理一个文件夹，让文件更容易找。先和我确定文件夹及整理方案，不删除文件。"
+      },
+      "photoTimeline": {
+        "label": "把照片整理成时间线",
+        "prompt": "帮我把照片整理成清楚的时间线，保留原图。"
+      },
+      "photoAlbumPage": {
+        "label": "把这批照片做成相册页",
+        "prompt": "用我的照片做一个漂亮、方便翻看的相册网页，做好后打开给我看，保留原图。"
+      },
+      "uncommittedChanges": {
+        "label": "审查我未提交的改动",
+        "prompt": "帮我审查项目里还没提交的改动，找出问题和遗漏，先给建议，不修改文件。"
+      },
+      "exploreRepo": {
+        "label": "带我了解这个项目",
+        "prompt": "带我了解这个项目，讲清它是做什么的、怎么运行，以及值得深入看的地方。"
+      },
+      "initAgentDoc": {
+        "label": "生成 AGENTS.md",
+        "prompt": "帮我为项目生成合适的 AGENTS.md。如果已经有指导文件，先给补充建议，不直接覆盖。"
+      },
+      "listCodeProjects": {
+        "label": "把我电脑上的代码项目列出来，讲清每个是干什么的",
+        "prompt": "帮我盘点电脑上的代码项目，讲清每个项目是做什么的。"
+      },
+      "devEnvironment": {
+        "label": "检查一遍我的开发环境，有没有该修的",
+        "prompt": "帮我检查开发环境，找出值得修复或改善的地方，先给建议。"
+      },
+      "makePlugin": {
+        "label": "给 Cindy 做个插件",
+        "prompt": "我想给 Cindy 做个插件。帮我完善需求，或者推荐几个有用、有趣的创意，选好方向后做出来。"
+      },
+      "sendFeedback": {
+        "label": "给 Cindy 的开发者提个意见",
+        "prompt": "帮我把对 Cindy 的意见整理成清楚的反馈，给我看过后再提交。"
+      },
+      "readOwnSource": {
+        "label": "看看 Cindy 自己的源码",
+        "prompt": "带我看看 Cindy 的源码（github.com/makecindy/cindy），讲讲你是怎么实现的，再挑有趣的部分深入看看。"
+      },
+      "whatCindyCanDo": {
+        "label": "找出几件你能帮我的事",
+        "prompt": "结合我最近的任务和你现在的能力，推荐几件能帮我省事的具体事情，让我选一个开始。"
       }
     },
     "noProvider": {
@@ -7589,6 +7642,27 @@
       "offlineHint": "离线 · 连上后可用",
       "attachmentsDropped": "已移除 {{count}} 个附件：它们是上一台设备上的文件",
       "attachmentsRemoteUnsupported": "远程设备暂不支持文件附件，已跳过 {{count}} 个（图片可以）"
+    },
+    "pluginSuggestions": {
+      "changed": "这条推荐已更新，请换一批后重新选择。",
+      "unavailable": "暂时无法使用这个插件，请到插件页检查。",
+      "pending": "安装或启用插件后，将继续「{{task}}」。",
+      "cancel": "取消接续",
+      "usePlugin": "请使用 {{name}} 插件（{{id}}）完成这个任务。先通过 ghost_info 查询当前工具，再按需要调用 ghost_call；需要连接账号时，使用插件现有的连接流程。",
+      "mail": {
+        "today": {
+          "label": "整理今天需要我处理的邮件",
+          "prompt": "帮我看看今天有哪些邮件需要处理，整理出待办事项，先不改动邮件。"
+        },
+        "unanswered": {
+          "label": "找出还没回复的重要邮件",
+          "prompt": "帮我找出还没回复、值得关注的邮件，看看哪些需要跟进。"
+        },
+        "reply": {
+          "label": "把这封邮件整理成回复草稿",
+          "prompt": "帮我为这封邮件写一份回复草稿，结合邮件往来和我的想法，先不发送。"
+        }
+      }
     }
   },
   "onboarding": {
@@ -7623,19 +7697,6 @@
       },
       "detectedLabel": "已检测到",
       "oauthSub": "在浏览器打开授权页，登录后自动连接"
-    },
-    "inheritedSubscription": {
-      "title": "已沿用这台电脑上的 {{products}} 登录",
-      "desc": "Cindy 直接使用了本机已登录的账号，没有另外要你授权。想换账号或断开，去模型供应商里改。",
-      "openProviders": "打开模型供应商",
-      "acknowledge": "知道了",
-      "separator": "、"
-    },
-    "promotionalGrant": {
-      "title": "已为你开通 Cindy AI",
-      "desc": "赠送余额 {{amount}} 已到账，有效期至 {{date}}。用完或过期后可随时充值。",
-      "openBilling": "查看用量",
-      "acknowledge": "知道了"
     }
   },
   "voiceInputOverlay": {
@@ -7942,9 +8003,7 @@
       "dismissTitle": "关闭此中断提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "这次定时任务没有完成。",
-      "markAsRead": "标为已读",
-      "markAsReadTitle": "清除这条失败未读"
+      "text": "此前有定时任务未完成，可查看运行记录。"
     },
     "worktreeRestoreBanner": {
       "text": "该任务的 worktree 已被回收（目录不存在）。",

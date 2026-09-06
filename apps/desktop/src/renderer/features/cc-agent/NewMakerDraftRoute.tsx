@@ -62,8 +62,6 @@ import {
 import { useHasAnyRemoteTarget } from '@/hooks/useHasAnyReadyRemoteHost';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
-import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSubscriptionNotice';
-import { PromotionalGrantNotice } from '@/components/onboarding/PromotionalGrantNotice';
 import { HomeZeroModelAction } from './HomeZeroModelAction';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
@@ -126,7 +124,6 @@ import {
   clearDraftAndNotify as clearComposerDraftAndNotify,
   getDraft as getComposerDraft,
   plainTextToTiptapDoc,
-  quickStartTextToTiptapDoc,
   restoreRemoteOptimisticDraft,
   saveDraft as saveComposerDraft,
 } from '@/lib/composerDraftStore';
@@ -175,11 +172,19 @@ import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dia
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { ChevronDown, MessageSquare, MonitorSmartphone } from 'lucide-react';
 import { HomeSuggestionList } from './HomeSuggestionList';
+import { type HomeSuggestionId, homeSuggestionPromptKey } from './homeSuggestions';
 import {
-  type HomeSuggestionId,
-  homeSuggestionLabelKey,
-  homeSuggestionPromptKey,
-} from './homeSuggestions';
+  buildHomeTaskCatalog,
+  readPluginRecommendationSnapshot,
+  type HomeTaskSuggestion,
+} from './pluginHomeSuggestions';
+import {
+  startPendingPluginSuggestion,
+  takePendingPluginSuggestion,
+  type PluginSuggestionRequest,
+} from './pendingPluginSuggestion';
+import { expandGhostCommand } from '@/cindy-brain/ghostCommand';
+import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import {
   categorizeByFilename,
@@ -627,7 +632,7 @@ interface DraftTargetRequest {
 }
 
 export function NewMakerDraftRoute() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { dataOwnerId } = useAuth();
   const draft = useNewMakerDraft();
   const location = useLocation();
@@ -2978,7 +2983,6 @@ export function NewMakerDraftRoute() {
   // ref 负责同步 guard，state 只负责驱动 UI 禁用；所有写入都经 markSendInFlight，
   // 避免其中一半提前释放后让旧草稿目标被消费。
   const sendInFlightRef = useRef(false);
-  const pendingHomePromptRef = useRef<string | null>(null);
   const [sendInFlight, setSendInFlight] = useState(false);
   const markSendInFlight = useCallback((value: boolean) => {
     sendInFlightRef.current = value;
@@ -3334,6 +3338,8 @@ export function NewMakerDraftRoute() {
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
+        // 推荐直接发送，不写首页草稿；失败时在新任务中恢复这份完整内容。
+        recoveryDraftDoc?: JSONContent;
         onAccepted?: () => void;
       },
     ): Promise<boolean | undefined> => {
@@ -3909,9 +3915,9 @@ export function NewMakerDraftRoute() {
             // 里, route change 在那次 commit 同时发生,旧的 draft route 直接被 unmount,
             // 不会暴露 cleared 后的视觉状态。clearFiles 仍然在 React 提交 unmount cleanup
             // 之前同步执行,所以 useAttachments 的 cleanup 不会把刚送出去的附件回写到 store。
-            // 保存原始 doc JSON(含 quickStartPill 等 mark),供 worktree 失败恢复时原样还原。
+            // 推荐恢复独立的完整内容；普通发送保留原始富文本，供 worktree 失败时还原。
             const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
-            const preNavDraftDoc = preNavDraft?.text ?? null;
+            const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;
             const preNavBrowserComments = preNavDraft?.browserComments ?? [];
             navigate(`/cc-agent/${newSession.id}`, { replace: true });
             // clearDraftAndNotify (not bare clear): onSend returned false above
@@ -4200,7 +4206,7 @@ export function NewMakerDraftRoute() {
           const rehydratedFiles = await rehomeDraftAttachments(files, newSession.id);
           const sendWorkingDir = workingDir ?? newSession.workingDir;
           const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
-          const preNavDraftDoc = preNavDraft?.text ?? null;
+          const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;
           const preNavBrowserComments = rewriteBrowserCommentsFromRehomedFiles(
             preNavDraft?.browserComments,
             rehydratedFiles,
@@ -4219,6 +4225,8 @@ export function NewMakerDraftRoute() {
           const navigateToSession = () => {
             navigate(orcaNavTarget ?? `/cc-agent/${newSession.id}`, {
               replace: true,
+              // 新任务已发布到侧栏；同步提交详情，避免默认 transition 继续显示首页。
+              flushSync: true,
               state: orcaWorkersRevealState
                 ? { orcaWorkersReveal: orcaWorkersRevealState }
                 : undefined,
@@ -4282,11 +4290,7 @@ export function NewMakerDraftRoute() {
               ranges: readonly T[] | undefined,
             ): T[] | undefined => {
               if (!ranges) return undefined;
-              return rebaseInlineRangesAfterSlashCommandRewrite(
-                ranges,
-                message,
-                dispatchedMessage,
-              );
+              return rebaseInlineRangesAfterSlashCommandRewrite(ranges, message, dispatchedMessage);
             };
             const sendPromise = makerChatStore.sendMessage(
               newSession.id,
@@ -5033,36 +5037,10 @@ export function NewMakerDraftRoute() {
     return proceed;
   }, [vendorAuthGate]);
 
-  const handleComposerSend = useCallback(
-    (
-      message: string,
-      model: string,
-      effort: Effort,
-      permissionMode: PermissionMode,
-      files?: Parameters<typeof handleSend>[4],
-      mentions?: Parameters<typeof handleSend>[5],
-      opts?: Parameters<typeof handleSend>[6],
-    ) => {
-      const payload = pendingHomePromptRef.current ?? message;
-      pendingHomePromptRef.current = null;
-      return handleSend(payload, model, effort, permissionMode, files, mentions, opts);
-    },
-    [handleSend],
-  );
-
   const handleHomeSuggestion = useCallback(
     (id: HomeSuggestionId) => {
-      const label = t(homeSuggestionLabelKey(id));
+      if (sendInFlightRef.current) return;
       const prompt = t(homeSuggestionPromptKey(id));
-      const currentDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
-      saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
-        text: quickStartTextToTiptapDoc(label),
-        attachments: currentDraft?.attachments ?? attachmentState.attachments,
-        quotes: currentDraft?.quotes,
-        browserComments: currentDraft?.browserComments,
-      });
-      const pendingPrompt = prompt;
-      pendingHomePromptRef.current = pendingPrompt;
       void handleSend(
         prompt,
         draftInitialModel,
@@ -5070,14 +5048,11 @@ export function NewMakerDraftRoute() {
         chatInitialPermissionMode,
         attachmentState.attachments,
         undefined,
-        { providerId: chatInitialProviderId },
-      ).finally(() => {
-        // 清理失败路径上的完整 prompt，避免下一次普通发送被旧建议稿覆盖。
-        // 用值校验保护连续点击两条建议时后一次 pending prompt。
-        if (pendingHomePromptRef.current === pendingPrompt) {
-          pendingHomePromptRef.current = null;
-        }
-      });
+        {
+          providerId: chatInitialProviderId,
+          recoveryDraftDoc: plainTextToTiptapDoc(prompt),
+        },
+      );
     },
     [
       attachmentState.attachments,
@@ -5089,6 +5064,168 @@ export function NewMakerDraftRoute() {
       t,
     ],
   );
+
+  const pluginSuggestionFlight = useRef(false);
+  const pluginSuggestionMounted = useRef(true);
+  useEffect(() => {
+    pluginSuggestionMounted.current = true;
+    return () => {
+      pluginSuggestionMounted.current = false;
+    };
+  }, []);
+  const pluginSuggestionTargetKey = JSON.stringify([
+    effectiveWorkingDir,
+    effectiveRemoteHostId,
+    isDeviceLinkDraft,
+  ]);
+  const currentPluginSuggestionContext = useRef({
+    dataOwnerId,
+    targetKey: pluginSuggestionTargetKey,
+    generation: 0,
+  });
+  if (
+    currentPluginSuggestionContext.current.dataOwnerId !== dataOwnerId ||
+    currentPluginSuggestionContext.current.targetKey !== pluginSuggestionTargetKey
+  ) {
+    currentPluginSuggestionContext.current = {
+      dataOwnerId,
+      targetKey: pluginSuggestionTargetKey,
+      generation: currentPluginSuggestionContext.current.generation + 1,
+    };
+  }
+
+  const runPluginSuggestion = useCallback(
+    async (request: PluginSuggestionRequest) => {
+      if (sendInFlightRef.current || pluginSuggestionFlight.current) return;
+      pluginSuggestionFlight.current = true;
+      try {
+        const { suggestion } = request;
+        const snapshot = readPluginRecommendationSnapshot();
+        const generation = currentPluginSuggestionContext.current.generation;
+        const stillCurrent = () =>
+          pluginSuggestionMounted.current &&
+          currentPluginSuggestionContext.current.generation === generation &&
+          currentPluginSuggestionContext.current.dataOwnerId === request.ownerId &&
+          currentPluginSuggestionContext.current.targetKey === request.targetKey;
+        if (
+          !stillCurrent() ||
+          snapshot.ownerId !== request.ownerId ||
+          isRemoteProjectDraft ||
+          isDeviceLinkDraft
+        )
+          return;
+        const current = buildHomeTaskCatalog(
+          snapshot,
+          i18n.resolvedLanguage ?? i18n.language,
+          t,
+        ).find((x) => x.id === suggestion.id);
+        if (!current || current.prompt !== suggestion.prompt) {
+          toast.info(t('newChat.pluginSuggestions.changed'));
+          return;
+        }
+        const ghost = window.electronAPI.ghosts
+          .listSync()
+          .ghosts.find((g) => g.manifest.id === suggestion.pluginId);
+        const usable =
+          ghost && ghost.enabled && filterGhostsForWorkdir([ghost], request.workingDir).length > 0;
+        if (!usable) {
+          let route: string;
+          if (ghost) {
+            route = `/plugins?ghost=${encodeURIComponent(ghost.manifest.id)}`;
+          } else {
+            const market = await window.electronAPI.pluginMarket.snapshot();
+            if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
+              return;
+            const matches = market.items.filter(
+              (item) => item.ghostId === suggestion.pluginId && item.installState !== 'conflict',
+            );
+            // Do not silently choose between competing publishers/sources with the same id.
+            if (matches.length !== 1) {
+              toast.info(t('newChat.pluginSuggestions.unavailable'));
+              return;
+            }
+            route = `/plugins?market=${encodeURIComponent(matches[0].pluginId)}`;
+          }
+          if (!stillCurrent()) return;
+          const nonce = startPendingPluginSuggestion(request);
+          navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
+          return;
+        }
+        const recoveryPrompt = ghost.manifest.command
+          ? `$${ghost.manifest.command} ${suggestion.prompt}`
+          : `${suggestion.prompt}\n\n${t('newChat.pluginSuggestions.usePlugin', { name: ghost.manifest.name, id: ghost.manifest.id })}`;
+        // Retry goes through ChatInput, which expands $commands itself.
+        const prompt = ghost.manifest.command
+          ? expandGhostCommand(recoveryPrompt, [ghost])
+          : recoveryPrompt;
+        await handleSend(
+          prompt,
+          request.model,
+          request.effort,
+          request.permissionMode,
+          request.files,
+          undefined,
+          {
+            providerId: request.providerId,
+            recoveryDraftDoc: plainTextToTiptapDoc(recoveryPrompt),
+            onAccepted: () => {
+              void window.electronAPI.ghosts.markUsed(ghost.manifest.id).catch(() => undefined);
+            },
+          },
+        );
+      } catch {
+        if (pluginSuggestionMounted.current)
+          toast.error(t('newChat.pluginSuggestions.unavailable'));
+      } finally {
+        pluginSuggestionFlight.current = false;
+      }
+    },
+    [
+      handleSend,
+      i18n.language,
+      i18n.resolvedLanguage,
+      isDeviceLinkDraft,
+      isRemoteProjectDraft,
+      navigate,
+      t,
+    ],
+  );
+
+  const handlePluginSuggestion = useCallback(
+    (suggestion: HomeTaskSuggestion) => {
+      if (!dataOwnerId) return;
+      void runPluginSuggestion({
+        suggestion,
+        ownerId: dataOwnerId,
+        targetKey: pluginSuggestionTargetKey,
+        workingDir: effectiveWorkingDir,
+        model: draftInitialModel,
+        effort: (draftInitialEffort ?? 'medium') as Effort,
+        permissionMode: chatInitialPermissionMode,
+        providerId: chatInitialProviderId,
+        files: attachmentState.attachments,
+      });
+    },
+    [
+      attachmentState.attachments,
+      chatInitialPermissionMode,
+      chatInitialProviderId,
+      dataOwnerId,
+      draftInitialEffort,
+      draftInitialModel,
+      effectiveWorkingDir,
+      pluginSuggestionTargetKey,
+      runPluginSuggestion,
+    ],
+  );
+
+  useEffect(() => {
+    const nonce = (location.state as { pluginSuggestionNonce?: unknown } | null)
+      ?.pluginSuggestionNonce;
+    if (typeof nonce !== 'string') return;
+    const request = takePendingPluginSuggestion(nonce, dataOwnerId, pluginSuggestionTargetKey);
+    if (request) void runPluginSuggestion(request);
+  }, [dataOwnerId, location.state, pluginSuggestionTargetKey, runPluginSuggestion]);
 
   // 注意:不要给 ChatInput 加 key 强制 remount。ChatInput 内部 activeModel /
   // activeEffort / activePermissionMode 都是每次 render 直接从 props 派生
@@ -5306,7 +5443,7 @@ export function NewMakerDraftRoute() {
               >
                 <div className="w-full">
                   <ChatInput
-                    onSend={handleComposerSend}
+                    onSend={handleSend}
                     onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                     externalDragOver={pageDragOver}
                     visualVariant="create-agent"
@@ -5476,16 +5613,16 @@ export function NewMakerDraftRoute() {
                     narrow={isDraftNarrow}
                   />
                 )}
-                <InheritedSubscriptionNotice
-                  enabled={!isDeviceLinkDraft}
-                  className="mt-6 self-stretch"
-                />
-                <PromotionalGrantNotice
-                  enabled={!isDeviceLinkDraft}
-                  className="mt-6 self-stretch"
-                />
+                {/* 用户 2026-09-06 重申撤掉首页订阅/赠送告知卡，见 DESIGN.md §1.1。
+                    有模型时直接显示建议行；账号与余额详情继续在设置页查看。 */}
                 {!showProviderOnboardingCard && (
-                  <HomeSuggestionList narrow={isDraftNarrow} onSelect={handleHomeSuggestion} />
+                  <HomeSuggestionList
+                    key={`${dataOwnerId}:${isRemoteProjectDraft || isDeviceLinkDraft}:${i18n.resolvedLanguage ?? i18n.language}`}
+                    narrow={isDraftNarrow}
+                    onSelect={handleHomeSuggestion}
+                    includePlugins={!isRemoteProjectDraft && !isDeviceLinkDraft}
+                    onPluginSelect={handlePluginSuggestion}
+                  />
                 )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。
                 initialObjective = 点「新建目标」时输入框里已有的文字。 */}

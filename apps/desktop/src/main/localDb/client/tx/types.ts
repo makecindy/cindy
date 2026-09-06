@@ -169,7 +169,14 @@ export interface ForkSessionArgs {
    */
   newMessageIds: Array<{ id: string; clientId: string }>;
   /** Persist a native-history recovery handoff atomically with the child and copied history. */
-  recoveryMarker?: { id: string; clientId: string; content: string; createdAt: number };
+  recoveryMarker?: {
+    id: string;
+    clientId: string;
+    content: string;
+    createdAt: number;
+    /** Digest of the raw ordered prefix used to prepare content; checked inside the transaction. */
+    sourceMessagesDigest: string;
+  };
 }
 
 export interface EmbeddingMarkDoneArgs {

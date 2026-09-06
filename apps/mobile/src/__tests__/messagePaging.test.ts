@@ -38,6 +38,28 @@ function sessionVersion(patch: Partial<Pick<RemoteSession, '_count' | 'updatedAt
 }
 
 describe('messagePaging', () => {
+  it('never sends temporary stream identities as host pagination cursors', () => {
+    const rows = [
+      message('mobile-stream-old', '2026-01-01T00:00:01.000Z'),
+      message('host-row', '2026-01-01T00:00:02.000Z'),
+      message('mobile-stream-new', '2026-01-01T00:00:03.000Z'),
+    ];
+    expect(oldestMessageCursor(rows)).toBe('host-row');
+    expect(latestMessageCursor(rows)).toBe('host-row');
+    expect(oldestMessageCursor([rows[0], rows[2]])).toBeNull();
+    expect(latestMessageCursor([rows[0], rows[2]])).toBeNull();
+  });
+
+  it('does not let running stream rows consume the remaining host history count', () => {
+    const rows = [
+      message('host-row', '2026-01-01T00:00:01.000Z'),
+      message('mobile-stream-new', '2026-01-01T00:00:02.000Z'),
+    ];
+    expect(hasOlderMessagesAfterReopen(2, rows)).toBe(true);
+    expect(hasOlderMessagesByServerCount(2, rows)).toBe(true);
+    expect(hasOlderMessagesAfterReopen(undefined, [rows[1]], 1)).toBe(false);
+  });
+
   it('finds the oldest message id without relying on current array order', () => {
     expect(oldestMessageCursor([
       message('m3', '2026-01-01T00:00:03.000Z'),
@@ -270,6 +292,17 @@ describe('messagePaging', () => {
       limit: 10,
       reducedByPayloadTooLarge: true,
     });
+    expect(shouldKeepOlderMessagesAffordance(result)).toBe(true);
+  });
+
+  it('uses small network pages without reducing the cached history window', async () => {
+    const calls: number[] = [];
+    const result = await listMessagesWithPayloadRetry(async (limit) => {
+      calls.push(limit);
+      return Array.from({ length: limit }, (_, i) => message(`m${i}`, '2026-01-01T00:00:01.000Z'));
+    });
+    expect(calls).toEqual([20]);
+    expect(MESSAGE_PAGE_SIZE).toBe(80);
     expect(shouldKeepOlderMessagesAffordance(result)).toBe(true);
   });
 

@@ -11,6 +11,7 @@ import {
 import {
   MAKER_EVENT_BATCH_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
+  SESSION_SYNC_CHANNEL,
   expandMakerEventBatchPayload,
   type SessionActivityPayload,
 } from '@cindy/device-link';
@@ -484,6 +485,10 @@ function coverLatestPage(
 function coverEarlierPage(sessionId: string, pageOldest: string, joinsAt: string | undefined): void {
   const current = sessionWindowCoverage.get(sessionId);
   if (current) {
+    // A page before an unverified cache island cannot bridge that island to a
+    // newer verified window. Only extend coverage through an anchor inside it.
+    if (!joinsAt || joinsAt.localeCompare(current.since) < 0
+      || joinsAt.localeCompare(current.until) > 0) return;
     if (pageOldest.localeCompare(current.since) < 0) {
       sessionWindowCoverage.set(sessionId, { ...current, since: pageOldest });
     }
@@ -2436,6 +2441,13 @@ function applyRemoteTextEvent(
   const data = isRecord(event.data) ? event.data : null;
   const text = typeof data?.text === 'string' ? data.text : '';
   const isFinal = data?.isFinal === true;
+  // Legacy hosts already send isFullText on final events. Keep their existing
+  // reconciliation semantics; only the new in-flight snapshot replaces text.
+  const isFullText = data?.isFullText === true && !isFinal;
+  const snapshotCreatedAt = isFullText && !isFinal && typeof data?.createdAt === 'string'
+    && Number.isFinite(Date.parse(data.createdAt))
+    ? new Date(data.createdAt).toISOString()
+    : undefined;
   if (!text) return false;
 
   const authoritativeDeviceId = authoritativeSessionDeviceId(sessionId);
@@ -2495,6 +2507,8 @@ function applyRemoteTextEvent(
   const matchedExistingIsPersisted = matchedExisting !== undefined
     && !matchedExistingIsPending
     && isPersistedAssistantMessage(matchedExisting);
+  // A DB row is stronger than an earlier subscription snapshot still in flight.
+  if (isFullText && matchedExistingIsPersisted) return clientIdResolution.changed;
   const rejectsNonAuthoritativeTransportReplay = deviceId !== undefined
     && authoritativeDeviceId !== undefined
     && deviceId !== authoritativeDeviceId
@@ -2579,7 +2593,9 @@ function applyRemoteTextEvent(
   }
 
   const currentText = existing ? contentToPreview(existing.content) : '';
-  const nextText = isFinal
+  const nextText = isFullText && !hasDeviceLinkTruncationMarker(event) && !hasDeviceLinkTruncationMarker(data)
+    ? text
+    : isFinal
     ? (finalTextWasTruncated && existing
       ? currentText
       : existing && currentText
@@ -2598,7 +2614,7 @@ function applyRemoteTextEvent(
       ? { ...(existing?.agentMeta ?? {}), ...event.agentMeta }
       : existing?.agentMeta);
   const hostCreatedAtAnchor = existing ? undefined : liveRowCreatedAtAnchor(sessionId);
-  const needsHostAnchor = existing
+  const needsHostAnchor = snapshotCreatedAt ? false : existing
     ? [existing.id, existing.clientId, clientId].some((id) => (
       Boolean(id) && pendingHostAnchorLiveAssistantClientIds.get(sessionId)?.has(id) === true
     ))
@@ -2606,6 +2622,9 @@ function applyRemoteTextEvent(
   const hostAnchorIdentity = existing
     ? pendingHostAnchorIdentity(sessionId, existing.id, existing.clientId, clientId)
     : resetHostAnchorIdentity;
+  // A subscription snapshot knows the block's real host time. An earlier
+  // provisional row may be anchored to old history, so repair its position too.
+  const changesCreatedAt = snapshotCreatedAt !== undefined && snapshotCreatedAt !== existing?.createdAt;
   const changed = upsertMessage(sessionId, {
     id: existing?.id ?? clientId,
     clientId,
@@ -2617,14 +2636,14 @@ function applyRemoteTextEvent(
     // Existing rows keep their already-stamped createdAt unchanged (it may already be a
     // clamped value from the first delta). Only a brand-new row's fresh device-clock stamp
     // needs the clamp — see clampLiveRowCreatedAt doc comment in messagePaging.ts.
-    createdAt: existing?.createdAt ?? clampLiveRowCreatedAt(
+    createdAt: snapshotCreatedAt ?? existing?.createdAt ?? clampLiveRowCreatedAt(
       new Date().toISOString(),
       hostCreatedAtAnchor?.createdAt,
     ),
   }, {
     knownIndex: matchedExistingIndex,
-    preserveOrderOnReplace: true,
-    preserveStructureOnReplace: !isFinal && existing !== undefined,
+    preserveOrderOnReplace: !changesCreatedAt,
+    preserveStructureOnReplace: !isFinal && existing !== undefined && !changesCreatedAt,
   });
   if (resetsTransportAssembly && !changed) {
     forgetPendingLiveAssistantMessageIdentity(
@@ -2636,6 +2655,15 @@ function applyRemoteTextEvent(
   }
   if (changed || resetsTransportAssembly) {
     rememberPendingLiveAssistantClientId(sessionId, clientId);
+  }
+  if (snapshotCreatedAt) {
+    // An identical snapshot can make upsert a no-op. Its authoritative time
+    // still retires any provisional anchor, without retiring the live identity.
+    const anchors = pendingHostAnchorLiveAssistantClientIds.get(sessionId);
+    for (const id of [existing?.id, existing?.clientId, clientId]) {
+      if (id) anchors?.delete(id);
+    }
+    if (anchors?.size === 0) pendingHostAnchorLiveAssistantClientIds.delete(sessionId);
   }
   // upsertMessage intentionally clears pending reconciliation identities when it
   // replaces an assistant row. A live delta/final is not host-authoritative, so
@@ -2663,7 +2691,8 @@ function applyRemoteTextEvent(
 function isRemoteTextDeltaEvent(event: Record<string, unknown>): boolean {
   if (readString(event, 'type') !== 'text') return false;
   const data = isRecord(event.data) ? event.data : null;
-  return typeof data?.text === 'string' && data.text.length > 0 && data.isFinal === false;
+  return typeof data?.text === 'string' && data.text.length > 0 && data.isFinal === false
+    && data.isFullText !== true;
 }
 
 function enqueueRemoteTextDelta(
@@ -3312,6 +3341,15 @@ export const remoteSessionStore = {
 
     const latestOldestCreatedAt = latestWindow[0].createdAt;
     const latestNewestCreatedAt = latestWindow[latestWindow.length - 1].createdAt;
+    const currentCoverage = sessionWindowCoverage.get(sessionId);
+    if (currentCoverage && latestNewestCreatedAt.localeCompare(currentCoverage.since) < 0) {
+      // Concurrent latest reads (detail + reconnect) can finish in reverse order.
+      // An entirely older page cannot describe the current tail. Joining it to
+      // retained newer rows, then trusting live pushes, would certify the gap.
+      // Rewind/clear invalidates coverage explicitly, so it does not use this path.
+      if (textFlushed || projectionSettled) emit();
+      return;
+    }
     // A triggering user row must be inserted before its live assistant reply is
     // tied to the same host timestamp. Other authoritative tail rows keep the
     // existing live-before-persisted arrival order when their timestamps tie.
@@ -3500,6 +3538,9 @@ export const remoteSessionStore = {
   consumePendingRefresh(sessionId: string): boolean {
     if (!pendingRefreshSessions.has(sessionId)) return false;
     pendingRefreshSessions.delete(sessionId);
+    // A history read already in flight when the dirty push arrived may have
+    // reinstalled its older marker. The queued repair must still read history.
+    sessionMessageSyncMarkers.delete(sessionId);
     return true;
   },
 
@@ -3555,15 +3596,23 @@ export const remoteSessionStore = {
   mergeEarlierMessages(
     sessionId: string,
     list: readonly RemoteMessage[],
-    options: SessionMessageWriteOptions = {},
-  ): void {
-    if (retentionForSession(sessionId) === 'schedule') return;
-    if (!messageWriteAllowed(sessionId, options.authority)) return;
+    options: SessionMessageWriteOptions & { before?: string } = {},
+  ): boolean {
+    if (retentionForSession(sessionId) === 'schedule') return false;
+    if (!messageWriteAllowed(sessionId, options.authority)) return false;
+    const current = messages.get(sessionId) ?? emptyMessages;
+    const anchor = options.before ? current.find((row) => row.id === options.before) : undefined;
+    // A latest-window refresh can remove the request's anchor without changing
+    // detail authority. Joining that old page to the NEW oldest row invents a
+    // contiguous interval across missing history. Let the caller retry from the
+    // current window instead, and do not let a stale empty page close pagination.
+    if (options.before && !anchor) return false;
     // 合并前窗口的最旧行 = 这一页接上的那一行,尚无结论时它就是区间上界(见 coverEarlierPage)。
-    const joinsAt = oldestCreatedAt(messages.get(sessionId) ?? emptyMessages);
+    const joinsAt = anchor?.createdAt ?? oldestCreatedAt(current);
     this.mergeMessages(sessionId, list, options);
     const pageOldest = oldestCreatedAt(list);
     if (pageOldest) coverEarlierPage(sessionId, pageOldest, joinsAt);
+    return true;
   },
 
   appendMessage(
@@ -4065,6 +4114,19 @@ export const remoteSessionStore = {
   },
 
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
+    if (channel === SESSION_SYNC_CHANNEL && isRecord(payload)) {
+      const sessionId = readString(payload, 'sessionId');
+      if (!sessionId) return;
+      if (isRecord(payload.event)) this.applyRemotePush(deviceId, 'maker:event', payload);
+      if (payload.resyncRequired === true) {
+        sessionMessageSyncMarkers.delete(sessionId);
+        forgetWindowCoverage(sessionId);
+        pendingRefreshSessions.add(sessionId);
+        bumpMessageVersion(sessionId);
+        emit();
+      }
+      return;
+    }
     if (channel === SESSION_ACTIVITY_CHANNEL) {
       this.applySessionActivity(deviceId, payload);
       return;

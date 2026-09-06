@@ -1,14 +1,14 @@
 /**
  * HomeChromeDrawer —— 首页左上角系统菜单。
  *
- * 从左边滑出,不是下拉卡:现在有搜索任务和设置。
+ * 从左边滑出,不是下拉卡:承载搜索、设备管理、设置和账号入口。
  * 不用 RN Modal,避免和首页其它 Modal 抢 present/dismiss。
  * iOS 系统导航栏在 RN 内容之上,树内 overlay 盖不住顶栏,所以走
  * react-native-screens FullWindowOverlay(独立 UIWindow)。
  * 新窗口里要自带 GestureHandlerRootView,左滑关闭才有效。
  * Android 无系统顶栏,继续树内 overlay。动画遵循 reduce-motion。
  */
-import { LogOut, Search, Settings, UsersRound } from 'lucide-react-native';
+import { LogOut, Monitor, Search, Settings, UsersRound } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -62,6 +62,7 @@ export function HomeChromeDrawer({
   onClosed,
   onOpenSearch,
   onOpenAccounts,
+  onOpenDevices,
   onOpenSettings,
   onLogout,
   loggingOut = false,
@@ -74,6 +75,7 @@ export function HomeChromeDrawer({
   onClosed?(): void;
   onOpenSearch(): void;
   onOpenAccounts(): void;
+  onOpenDevices(): void;
   onOpenSettings(): void;
   onLogout(): void;
   loggingOut?: boolean;
@@ -319,6 +321,17 @@ export function HomeChromeDrawer({
             <Text numberOfLines={1} style={styles.menuLabel}>
               {t("devices.list.menu.search")}
             </Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityLabel={t('devices.management.title')}
+            accessibilityRole="button"
+            onPress={onOpenDevices}
+            style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
+            testID="home.chromeDrawer.devices"
+          >
+            <Monitor color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.management.title')}</Text>
           </Pressable>
 
           <Pressable

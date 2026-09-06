@@ -275,7 +275,7 @@ describe('UserInfoSection mobile download entry', () => {
     expect(screen.queryByRole('menuitem', { name: /Cindy user/ })).toBeNull();
   });
 
-  it('keeps the add-account entry before Settings when the user is not signed in', async () => {
+  it('keeps the sign-in entry before Settings when the user is not signed in', async () => {
     authState.user = null;
     authState.mode = 'local';
 
@@ -285,16 +285,16 @@ describe('UserInfoSection mobile download entry', () => {
       ctrlKey: false,
     });
 
-    const addAccount = await screen.findByRole('menuitem', {
-      name: 'sidebar.user.menuAddAccount',
+    const signIn = await screen.findByRole('menuitem', {
+      name: 'login.signIn',
     });
     const settings = screen.getByRole('menuitem', { name: 'sidebar.user.menuSettings' });
-    expect(addAccount.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    expect(signIn.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
     expect(listAccounts).not.toHaveBeenCalled();
 
-    fireEvent.click(addAccount);
+    fireEvent.click(signIn);
     await waitFor(() =>
       expect(navigate).toHaveBeenCalledWith('/add-account', { state: { returnTo: '/' } }),
     );

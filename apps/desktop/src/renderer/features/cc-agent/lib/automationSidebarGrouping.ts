@@ -27,10 +27,9 @@ export interface AutomationScheduleSessionInfo {
    * `aborted` 生而已读,不算未读失败。
    */
   unreadFailedRunIds: string[];
-  /**
-   * 该 session 上最近一次未读失败/中断 run。会话内横幅只清这一条;
-   * 清整组仍走组菜单。
-   */
+  /** 存在失败/中断历史；不随已读变化，用于保留失败提示。 */
+  hasFailedRun?: boolean;
+  /** 该 session 上最近一次未读失败/中断 run，供单次重试或继续操作使用。 */
   latestUnreadFailedRunId?: string;
   /**
    * 是否至少有一个未读失败 run —— 侧栏右侧据此涂红,而不是和成功完成一样涂绿。

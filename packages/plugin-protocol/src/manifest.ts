@@ -1,3 +1,4 @@
+
 /** `.cindy` 包根目录中的 manifest 文件名。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
 
@@ -852,6 +853,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Optional v3 extension; consumers validate it without changing legacy approval content. */
+  recommendations?: unknown;
   /** v2 仅作存量兼容；新插件使用 v3。 */
   schemaVersion: 2 | typeof GHOST_MANIFEST_SCHEMA_VERSION;
   /** 唯一标识,同时是安装目录名与 panelKind 后缀。 */

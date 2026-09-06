@@ -121,7 +121,7 @@ import { useProjectAliases } from './hooks/useProjectAliases';
 import { useCollapsedProjects } from './hooks/useCollapsedProjects';
 import { useOrcaLeadWorkerMap } from './hooks/useOrcaLeadWorkerMap';
 import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWatcher';
-import { useAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
+import { usePublishedAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
@@ -462,9 +462,7 @@ export function CCAgentSidebarUpper() {
   const filesMatch = useMatch('/cc-agent/files/:sessionId');
   const activeSessionId = orcaMatch?.params.sessionId ?? match?.params.sessionId;
   const filesSessionId = filesMatch?.params.sessionId;
-  // files 路由下用户注视的就是该会话(ExpandedView 的 viewedSessionId 同一口径),
-  // 可见成功同样不该给它点 done 角标。
-  const scheduleSessionIndex = useAutomationScheduleSessionIndex(activeSessionId ?? filesSessionId);
+  const scheduleSessionIndex = usePublishedAutomationScheduleSessionIndex();
   // 侧栏右侧 urgent 红点的"额外"来源:定时任务未读且失败(status != 'success')。
   // sessionAttentionStore 只跟踪 chat 内 attention;schedule 未读通过 sidebarNotifications
   // 合并进 hasAttentionNotification,但 attentionKind 缺失导致默认走绿(见 SessionItem
@@ -772,7 +770,7 @@ interface ExpandedProps {
   filter: UseSidebarFilterReturn;
   hiddenProjects: UseHiddenProjectsReturn;
   projectAliases: ReturnType<typeof useProjectAliases>;
-  scheduleSessionIndex: ReturnType<typeof useAutomationScheduleSessionIndex>;
+  scheduleSessionIndex: ReturnType<typeof usePublishedAutomationScheduleSessionIndex>;
 }
 
 /** rail 未分类隐藏态的空列表(引用稳定,免得 lampScope 发布 effect 空转)。 */
@@ -1110,8 +1108,7 @@ function ExpandedView({
   const markAutomationSessionRunsRead = useCallback(
     (sessionId: string) => {
       const info = scheduleSessionIndex.get(sessionId);
-      // 成功未读可以看过即已读;失败未读必须等横幅或组菜单显式「标为已读」,
-      // 否则点进去横幅立刻消失,红点又没有可处置入口。
+      // 成功进入即已读；历史失败在任务内容实际展示时确认，保留横幅、只清红点。
       const successUnreadRunIds = info ? unreadSuccessScheduleRunIds(info) : [];
       if (successUnreadRunIds.length === 0) return;
       // …AndSync:settle 后无条件触发 renderer 本地刷新。跨实例场景下这些 runId

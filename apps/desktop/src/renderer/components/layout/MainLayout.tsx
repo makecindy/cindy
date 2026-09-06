@@ -31,6 +31,7 @@ import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
+import { ScheduleSessionIndexOwner } from '@/features/scheduler/components/ScheduleSessionIndexOwner';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { isAppInteractionLocked } from '@/lib/appInteractionLock';
@@ -1352,6 +1353,7 @@ export function MainLayout() {
     <FeatureSidebarSlotProvider
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
+      <ScheduleSessionIndexOwner />
       <div
         ref={rowRef}
         className={cn(

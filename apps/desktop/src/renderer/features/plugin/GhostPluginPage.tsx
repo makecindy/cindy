@@ -48,6 +48,13 @@ import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAuth } from '@/contexts/AuthContext';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import {
+  cancelPendingPluginSuggestion,
+  getPendingPluginSuggestion,
+  readyPendingPluginSuggestion,
+  subscribePendingPluginSuggestion,
+} from '@/features/cc-agent/pendingPluginSuggestion';
+import { readPluginRecommendationSnapshot } from '@/features/cc-agent/pluginHomeSuggestions';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import {
   getDraft as getComposerDraft,
@@ -395,6 +402,62 @@ export function GhostPluginPage({
     [t],
   );
   const { user, mode, dataOwnerId } = useAuth();
+  const [recommendationNonce] = useState(() => searchParams.get('recommendation'));
+  const pendingRecommendation = useSyncExternalStore(
+    subscribePendingPluginSuggestion,
+    getPendingPluginSuggestion,
+  );
+  const recommendation =
+    pendingRecommendation?.nonce === recommendationNonce &&
+    pendingRecommendation.ownerId === dataOwnerId
+      ? pendingRecommendation
+      : null;
+  const recommendationPageMounted = useRef(false);
+  useEffect(() => {
+    recommendationPageMounted.current = true;
+    if (getPendingPluginSuggestion()?.ownerId !== dataOwnerId) cancelPendingPluginSuggestion();
+    return () => {
+      recommendationPageMounted.current = false;
+      queueMicrotask(() => {
+        if (!recommendationPageMounted.current && getPendingPluginSuggestion()?.phase === 'setup') {
+          cancelPendingPluginSuggestion(recommendationNonce ?? undefined);
+        }
+      });
+    };
+  }, [dataOwnerId, recommendationNonce]);
+  const continueRecommendation = useCallback(
+    (nonce: string | undefined, ghostId: string) => {
+      if (!recommendationPageMounted.current || !nonce) return false;
+      const snapshot = readPluginRecommendationSnapshot();
+      if (
+        snapshot.ownerId !== dataOwnerId ||
+        !snapshot.sources.some((s) => s.ghostId === ghostId && s.enabled)
+      )
+        return false;
+      const ready = readyPendingPluginSuggestion(nonce, dataOwnerId, ghostId);
+      if (!ready) return false;
+      navigate('/cc-agent/new', { state: { pluginSuggestionNonce: ready }, flushSync: true });
+      return true;
+    },
+    [dataOwnerId, navigate],
+  );
+  const recommendationNotice = recommendation ? (
+    <div
+      role="status"
+      className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-default)] px-4 py-3 text-13 text-[var(--text-secondary)]"
+    >
+      <span>
+        {t('newChat.pluginSuggestions.pending', { task: recommendation.suggestion.label })}
+      </span>
+      <button
+        type="button"
+        className="shrink-0 rounded-full px-2 py-1 hover:bg-[var(--surface-hover)]"
+        onClick={() => cancelPendingPluginSuggestion(recommendation.nonce)}
+      >
+        {t('newChat.pluginSuggestions.cancel')}
+      </button>
+    </div>
+  ) : null;
   const showEnterprise = user?.membershipKind === 'org';
   const ghosts = useInstalledGhosts();
   useMainViewVisibilityRevision();
@@ -524,6 +587,11 @@ export function GhostPluginPage({
       setProjectDisabled(new Set());
     }
   }, []);
+  useEffect(() => {
+    if (!recommendation) return;
+    const target = ghosts.find((g) => g.manifest.id === recommendation.suggestion.pluginId);
+    handlePickScope(target?.enabled ? recommendation.workingDir : null);
+  }, [recommendation?.nonce, handlePickScope]);
   const effectiveEnabled = useCallback(
     (id: string, globallyEnabled: boolean) =>
       scopeDir === null ? globallyEnabled : globallyEnabled && !projectDisabled.has(id),
@@ -870,6 +938,7 @@ export function GhostPluginPage({
 
   const handleToggle = useCallback(
     async (id: string, enabled: boolean, displayName: string) => {
+      const pendingNonce = getPendingPluginSuggestion()?.nonce;
       try {
         const dir = scopeDirRef.current;
         if (dir) {
@@ -886,11 +955,12 @@ export function GhostPluginPage({
         } else {
           await window.electronAPI.ghosts.setEnabled(id, enabled);
         }
+        if (enabled) continueRecommendation(pendingNonce, id);
       } catch (error) {
         toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
       }
     },
-    [t],
+    [continueRecommendation, t],
   );
 
   /** Main 在同一次 install IPC 事务内校验真实包与市场声明的能力上限。 */
@@ -1269,6 +1339,14 @@ export function GhostPluginPage({
       if (requestId === marketDetailRequestRef.current) throw error;
     }
   }, []);
+  useEffect(() => {
+    const pluginId = searchParams.get('market');
+    if (!pluginId) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('market');
+    setSearchParams(next, { replace: true });
+    void handleSelectMarket(pluginId);
+  }, [handleSelectMarket, searchParams, setSearchParams]);
   usePluginMarketLocaleRefresh(
     marketLocale,
     async () => {
@@ -1295,6 +1373,7 @@ export function GhostPluginPage({
 
   const runMarketInstallFlow = useCallback(
     async (marketDetailArg: PluginMarketDetail) => {
+      const pendingNonce = getPendingPluginSuggestion()?.nonce;
       const marketDetail = marketDetailArg;
       // 确认框等待期间也持有 lease。账号/模式切换会清除当前 lease,
       // 旧确认回调恢复后必须先验权,不能在新会话里继续安装。
@@ -1342,6 +1421,7 @@ export function GhostPluginPage({
           isStillActive: () => isMarketBusyLeaseActive(marketBusyLease),
         });
         if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        if (continueRecommendation(pendingNonce, ghost.manifest.id)) return;
         // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
         // 用"已更新"(生效状态未被改变),并留在当前页方便连续更新多个插件。
         toast.success(
@@ -1376,6 +1456,7 @@ export function GhostPluginPage({
       ghosts,
       isMarketBusyLeaseActive,
       installMarketPackage,
+      continueRecommendation,
       refreshMarket,
       refreshVisibleMarketDetail,
       releaseMarketBusy,
@@ -1423,21 +1504,25 @@ export function GhostPluginPage({
   if (marketDetail) {
     return (
       <div className="flex h-full min-h-0 w-full">
-        <div className="min-w-0 flex-1">
-          <MarketPluginDetailView
-            detail={marketDetail}
-            busy={marketBusyId === marketDetail.pluginId}
-            onBack={() => {
-              marketDetailRequestRef.current += 1;
-              setMarketDetail(null);
-            }}
-            onInstall={
-              canOfferMarketInstall(mode, marketDetail.ghostId)
-                ? () => void handleInstallFromMarket()
-                : undefined
-            }
-            onIconLoadError={handleMarketIconLoadError}
-          />
+        <div className="flex min-w-0 flex-1 flex-col">
+          {recommendationNotice}
+          <div className="min-h-0 flex-1">
+            <MarketPluginDetailView
+              detail={marketDetail}
+              busy={marketBusyId === marketDetail.pluginId}
+              onBack={() => {
+                cancelPendingPluginSuggestion(recommendationNonce ?? undefined);
+                marketDetailRequestRef.current += 1;
+                setMarketDetail(null);
+              }}
+              onInstall={
+                canOfferMarketInstall(mode, marketDetail.ghostId)
+                  ? () => void handleInstallFromMarket()
+                  : undefined
+              }
+              onIconLoadError={handleMarketIconLoadError}
+            />
+          </div>
         </div>
         {panelAside}
       </div>
@@ -1447,39 +1532,45 @@ export function GhostPluginPage({
   if (selectedDetail) {
     return (
       <div className="flex h-full min-h-0 w-full">
-        <div className="min-w-0 flex-1">
-          <GhostPluginDetailView
-            ghost={selectedGhost}
-            detail={selectedDetail}
-            panelStatus={panelStatus}
-            enabledOverride={
-              selectedGhost
-                ? effectiveEnabled(selectedGhost.manifest.id, selectedGhost.enabled)
-                : undefined
-            }
-            onBack={() => setSelectedId(null)}
-            onToggle={(enabled) =>
-              void handleToggle(selectedDetail.id, enabled, selectedDetail.name)
-            }
-            onUse={handleUse}
-            mainViewSidebarVisible={selectedMainViewSidebarVisible}
-            onMainViewSidebarVisibleChange={handleMainViewSidebarVisibleChange}
-            onUpdate={() => void handleUpdate()}
-            onUpdateFromFile={() => void handleUpdateFromFile()}
-            onReapprove={() => void handleRecoverInstall(selectedDetail.id)}
-            updateVersion={selectedMarketUpdate?.version}
-            updateBusy={(selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning}
-            onUninstall={() => void handleUninstall()}
-            // 官方保留前缀(cindy-/filo-/xd-)的插件走本地装入会被拒,
-            // 导出产物无法重装,不提供导出项。
-            onExport={
-              selectedGhost && !isOfficialGhostId(selectedDetail.id)
-                ? () => void handleExport()
-                : undefined
-            }
-            toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
-            onIconLoadError={handleMarketIconLoadError}
-          />
+        <div className="flex min-w-0 flex-1 flex-col">
+          {recommendationNotice}
+          <div className="min-h-0 flex-1">
+            <GhostPluginDetailView
+              ghost={selectedGhost}
+              detail={selectedDetail}
+              panelStatus={panelStatus}
+              enabledOverride={
+                selectedGhost
+                  ? effectiveEnabled(selectedGhost.manifest.id, selectedGhost.enabled)
+                  : undefined
+              }
+              onBack={() => {
+                cancelPendingPluginSuggestion(recommendationNonce ?? undefined);
+                setSelectedId(null);
+              }}
+              onToggle={(enabled) =>
+                void handleToggle(selectedDetail.id, enabled, selectedDetail.name)
+              }
+              onUse={handleUse}
+              mainViewSidebarVisible={selectedMainViewSidebarVisible}
+              onMainViewSidebarVisibleChange={handleMainViewSidebarVisibleChange}
+              onUpdate={() => void handleUpdate()}
+              onUpdateFromFile={() => void handleUpdateFromFile()}
+              onReapprove={() => void handleRecoverInstall(selectedDetail.id)}
+              updateVersion={selectedMarketUpdate?.version}
+              updateBusy={(selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning}
+              onUninstall={() => void handleUninstall()}
+              // 官方保留前缀(cindy-/filo-/xd-)的插件走本地装入会被拒,
+              // 导出产物无法重装,不提供导出项。
+              onExport={
+                selectedGhost && !isOfficialGhostId(selectedDetail.id)
+                  ? () => void handleExport()
+                  : undefined
+              }
+              toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
+              onIconLoadError={handleMarketIconLoadError}
+            />
+          </div>
         </div>
         {panelAside}
       </div>
@@ -1511,6 +1602,7 @@ export function GhostPluginPage({
           )}
         >
           <PluginManagementPage>
+            {recommendationNotice}
             <header className="plugin-motion-page-header pb-2">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center justify-between gap-3">

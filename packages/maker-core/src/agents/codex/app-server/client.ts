@@ -246,6 +246,7 @@ export class AppServerClient {
   private initialized = false;
   /** close() 调用后置 true, 阻止后续 request / 重复 close 的副作用。 */
   private closed = false;
+  private closePromise: Promise<void> | null = null;
 
   constructor(opts: AppServerClientOptions) {
     if (typeof opts.createTransport !== 'function') {
@@ -318,26 +319,31 @@ export class AppServerClient {
    * - 关闭 transport (杀子进程 / 关 ssh channel)
    */
   async close(opts?: { reason?: string; throwOnTransportError?: boolean }): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    const reason = opts?.reason ?? 'AppServerClient.close()';
+    if (!this.closePromise) {
+      this.closed = true;
+      const reason = opts?.reason ?? 'AppServerClient.close()';
+      // 缓存未吞错的完成结果，各调用方独立选择是否传播失败。
+      const closePromise = Promise.resolve().then(() => this.transport?.close(reason)).catch((error) => {
+        // 保留 closed，后续调用仅重查幂等关闭，不重新开放协议。
+        if (this.closePromise === closePromise) this.closePromise = null;
+        this.logger.warn('transport.close threw', { message: (error as Error).message });
+        throw error;
+      });
+      this.closePromise = closePromise;
 
-    // reject 所有挂起 request — 上层 await 不会无限等。
-    const err = new Error(`codex app-server closed: ${reason}`);
-    for (const [, pending] of this.pending) {
-      if (pending.timeoutId) clearTimeout(pending.timeoutId);
-      pending.reject(err);
-    }
-    this.pending.clear();
-    this.writeFailureTombstones.clear();
-
-    if (this.transport) {
-      try {
-        await this.transport.close(reason);
-      } catch (e) {
-        this.logger.warn('transport.close threw', { message: (e as Error).message });
-        if (opts?.throwOnTransportError) throw e;
+      // reject 所有挂起 request — 包括正在 initialize 的调用。
+      const err = new Error(`codex app-server closed: ${reason}`);
+      for (const [, pending] of this.pending) {
+        if (pending.timeoutId) clearTimeout(pending.timeoutId);
+        pending.reject(err);
       }
+      this.pending.clear();
+      this.writeFailureTombstones.clear();
+    }
+    try {
+      await this.closePromise;
+    } catch (error) {
+      if (opts?.throwOnTransportError) throw error;
     }
   }
 

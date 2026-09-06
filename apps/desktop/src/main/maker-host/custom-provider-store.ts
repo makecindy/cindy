@@ -343,6 +343,9 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       if (u.protocol !== 'http:' && u.protocol !== 'https:') {
         return invalid(`runtime '${agent}' modelsUrl must be http(s)`);
       }
+      if (u.username || u.password) {
+        return invalid(`runtime '${agent}' modelsUrl must not contain embedded credentials`);
+      }
     } catch {
       return invalid(`runtime '${agent}' modelsUrl is not a valid URL`);
     }

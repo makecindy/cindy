@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { createElement, type PropsWithChildren } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 
 import {
   resetAutomationScheduleOptimisticUnreadForTests,
   useAutomationScheduleSessionIndex,
+  usePublishedAutomationScheduleSessionIndex,
 } from '@/features/cc-agent/hooks/useAutomationScheduleSessionIndex';
+import { ScheduleSessionIndexOwner } from '@/features/scheduler/components/ScheduleSessionIndexOwner';
 import {
   addSessionAttention,
   clearSessionAttentionMany,
@@ -275,6 +279,52 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
         unreadRunIds: ['run-old-unread'],
         unreadFailedRunIds: ['run-old-unread'],
         latestUnreadFailedRunId: 'run-old-unread',
+        hasFailedRun: true,
+      });
+    });
+  });
+
+  it('publishes failure history without mounting a sidebar in a task window', async () => {
+    stubApiWithRuns([indexRun({ runId: 'aux-failure', status: 'failed', readAt: undefined })]);
+    const { result } = renderHook(() => usePublishedAutomationScheduleSessionIndex(), {
+      wrapper: ({ children }: PropsWithChildren) =>
+        createElement(
+          MemoryRouter,
+          { initialEntries: ['/cc-agent/session-1'] },
+          createElement(ScheduleSessionIndexOwner),
+          children,
+        ),
+    });
+    await waitFor(() =>
+      expect(result.current.get('session-1')).toMatchObject({
+        hasFailedRun: true,
+        unreadFailedRunIds: ['aux-failure'],
+      }),
+    );
+    expect(window.electronAPI.maker.schedule.listSidebarIndexRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps read failure history without a red dot after a newer success and reopening', async () => {
+    stubApiWithRuns([
+      indexRun({ runId: 'read-failure', status: 'failed', readAt: 30, firedAt: 10 }),
+      indexRun({ runId: 'latest-success', status: 'success', readAt: 30, firedAt: 20 }),
+    ]);
+    const view = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(view.result.current.get('session-1')).toMatchObject({
+        hasFailedRun: true,
+        hasUnreadFailedRun: false,
+        hasUnreadRun: false,
+        unreadRunIds: [],
+        unreadFailedRunIds: [],
+      });
+    });
+    view.unmount();
+    const reopened = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(reopened.result.current.get('session-1')).toMatchObject({
+        hasFailedRun: true,
+        hasUnreadFailedRun: false,
       });
     });
   });

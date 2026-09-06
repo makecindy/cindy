@@ -22,6 +22,20 @@ What makes this system distinctive is the combination of a single geometric sans
 - No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
 - Extreme content restraint — each surface presents one clear idea
 
+### 1.1 New-task home content (user decision, 2026-09-06)
+
+The new-task home does not display the inherited-subscription or promotional-credit
+notice cards. With a usable model, the composer is followed by suggestion rows;
+the existing zero-model action remains available when no model can be used.
+Subscription details belong in provider settings, and credit balances and expiry
+details remain in billing settings.
+
+Removing these two cards is an explicit product decision, including for users who
+have not dismissed them. Do not restore them or move them to another automatic
+notice surface merely to preserve their former one-time-notification behavior.
+The decision and review correction are recorded in
+[`design-decision-log.md`](./design-decision-log.md) (2026-09-06).
+
 ## 2. Color Palette & Roles
 
 > **Multi-theme note**: the values in this section are the concrete **Default Light / Default Dark** (base theme) palette, given as the visual-spec reference sample. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.

@@ -1851,6 +1851,13 @@ export class CodexAgent extends BaseAgent {
    */
   private hostCredentialModeSwitches = new Map<string, Promise<void>>();
 
+  /** 同 key 必须等旧 writer 退出；失败仅清本次 Promise，保留 Host 供下次重查。 */
+  private retiringHosts = new Map<string, {
+    host: AppServerHost;
+    generation: number;
+    promise: Promise<void> | null;
+  }>();
+
   /**
    * app-server 启动时返回的 $CODEX_HOME 绝对路径 (InitializeResponse.codexHome)。
    * 用来推 codex 自家 memory 数据目录 (<CODEX_HOME>/memories/), 进而把它加进 turn/start
@@ -2227,6 +2234,7 @@ export class CodexAgent extends BaseAgent {
       toMode: toMode ?? 'fallback',
       forcedBySubagentRoutingProfile: opts.forceRestart === true,
     });
+    const retirement = this.beginHostRetirement(key, host, 'CodexAgent credential mode changed');
     this.hosts.delete(key);
     this.hostCredentialModes.delete(key);
     this.hostEffectiveCredentialModes.delete(key);
@@ -2235,7 +2243,7 @@ export class CodexAgent extends BaseAgent {
     if (key === hostKey()) this.codexHome = null;
     this.createHostSeqByKey.delete(key);
     try {
-      await host.retire('CodexAgent credential mode changed');
+      await retirement;
     } catch (error) {
       this.deps.logger.warn('codex host shutdown after credential mode change failed', {
         key,
@@ -2311,6 +2319,11 @@ export class CodexAgent extends BaseAgent {
     };
     while (true) {
       if (!remoteHostId) await this.waitForHostCredentialModeSwitch(key);
+      const retiring = this.retiringHosts.get(key);
+      if (retiring) {
+        await this.beginHostRetirement(key, retiring.host, 'recheck retirement before Host reuse');
+        continue;
+      }
 
       const existing = this.hosts.get(key);
       if (existing) {
@@ -2326,6 +2339,7 @@ export class CodexAgent extends BaseAgent {
           || (subagentRoutingProfileCompatible
             && await canReuseRegistered(existing, currentMode, currentEffective))
         ) {
+          if (this.hosts.get(key) !== existing || this.retiringHosts.has(key)) continue;
           return existing;
         }
         await this.shutdownHostForCredentialModeChange(
@@ -2360,7 +2374,11 @@ export class CodexAgent extends BaseAgent {
           inflight.credentialMode === spawnMode ||
           this.canReuseHostCredentialMode(inflight.credentialMode, await resolveRequestedEffective())
         ))) {
-          if (remoteHostId) return inflight.promise;
+          if (remoteHostId) {
+            const host = await inflight.promise;
+            if (this.hosts.get(key) !== host || this.retiringHosts.has(key)) continue;
+            return host;
+          }
           let inflightHost: AppServerHost;
           try {
             inflightHost = await inflight.promise;
@@ -2384,6 +2402,7 @@ export class CodexAgent extends BaseAgent {
             )
             && await canReuseRegistered(inflightHost, registeredRaw, registeredEffective)
           ) {
+            if (this.hosts.get(key) !== inflightHost || this.retiringHosts.has(key)) continue;
             return inflightHost;
           }
           continue;
@@ -2419,6 +2438,7 @@ export class CodexAgent extends BaseAgent {
         ).catch(() => undefined);
       }
 
+      if (this.retiringHosts.has(key) || this.hosts.has(key) || this.hostPromises.has(key)) continue;
       const generation = this.bumpHostGeneration(key);
       // 超集归一化发生在 createHost 内(gateway-key → oauth-bearer);通过回调同步
       // in-flight 登记,让并发的 oauth-bearer 诉求命中复用而不是 supersede 重建。
@@ -2454,19 +2474,29 @@ export class CodexAgent extends BaseAgent {
         generation,
       };
       this.hostPromises.set(key, inflightEntry);
-      return promise;
+      const host = await promise;
+      if (this.hosts.get(key) !== host || this.retiringHosts.has(key)) continue;
+      return host;
     }
   }
 
   private async getUtilityHost(): Promise<{ key: string; host: AppServerHost }> {
     const key = hostKey();
-    await this.waitForHostCredentialModeSwitch(key);
-    const existing = this.hosts.get(key);
-    if (existing) return { key, host: existing };
-    const inflight = this.hostPromises.get(key);
-    if (inflight) return { key, host: await inflight.promise };
-    const host = await this.getHost();
-    return { key, host };
+    while (true) {
+      await this.waitForHostCredentialModeSwitch(key);
+      const retiring = this.retiringHosts.get(key);
+      if (retiring) {
+        await this.beginHostRetirement(key, retiring.host, 'recheck retirement before utility use');
+        continue;
+      }
+      const existing = this.hosts.get(key);
+      if (existing) return { key, host: existing };
+      const inflight = this.hostPromises.get(key);
+      if (!inflight) return { key, host: await this.getHost() };
+      const host = await inflight.promise;
+      if (this.hosts.get(key) !== host || this.retiringHosts.has(key)) continue;
+      return { key, host };
+    }
   }
 
   /** Start the local OAuth host used by non-model account control-plane RPCs. */
@@ -13372,7 +13402,11 @@ export class CodexAgent extends BaseAgent {
         });
       }
     }
-    const hostsSnapshot = Array.from(this.hosts.values());
+    for (const [key, host] of this.hosts) {
+      this.beginHostRetirement(key, host, 'CodexAgent.dispose()');
+    }
+    const retirements = Array.from(this.retiringHosts, ([key, entry]) =>
+      this.beginHostRetirement(key, entry.host, 'CodexAgent.dispose()'));
     for (const key of this.hosts.keys()) {
       this.hostGenerations.set(key, (this.hostGenerations.get(key) ?? 0) + 1);
     }
@@ -13387,11 +13421,9 @@ export class CodexAgent extends BaseAgent {
     // codexHome 也跟着 host 走: 下次 ensureStarted() 会用新 server 的返回值重新填,
     // 防止用户中途切 CODEX_HOME (改 auth / 重登) 后这边还拿着老路径。
     this.codexHome = null;
-    if (hostsSnapshot.length > 0) {
+    if (retirements.length > 0) {
       // 并发 shutdown — 互不依赖, 一起更快收完。失败不阻断其他。
-      await Promise.allSettled(
-        hostsSnapshot.map((h) => h.retire('CodexAgent.dispose()')),
-      );
+      await Promise.allSettled(retirements);
     }
     // dispose 完毕 → 重置 seq, 下次 createHost 重新从 1 开始计数 (logout/切账号场景)
     this.createHostSeqByKey.clear();
@@ -13446,6 +13478,26 @@ export class CodexAgent extends BaseAgent {
     });
   }
 
+  private beginHostRetirement(key: string, host: AppServerHost, reason: string): Promise<void> {
+    const existing = this.retiringHosts.get(key);
+    if (existing?.host === host && existing.promise) return existing.promise;
+    const entry = existing?.host === host ? existing : {
+      host,
+      generation: this.hostGenerations.get(key) ?? 0,
+      promise: null as Promise<void> | null,
+    };
+    const promise = Promise.resolve().then(() => host.retire(reason, { throwOnTransportError: true }));
+    entry.promise = promise;
+    this.retiringHosts.set(key, entry);
+    // 失败保留 key/Host 屏障；下次请求可重查迟到的 exit，不自动重试或另启 writer。
+    void promise.then(() => {
+      if (this.retiringHosts.get(key) === entry) this.retiringHosts.delete(key);
+    }, () => {
+      if (entry.promise === promise) entry.promise = null;
+    });
+    return promise;
+  }
+
   private async retireHostKey(
     key: string,
     reason: string,
@@ -13459,6 +13511,17 @@ export class CodexAgent extends BaseAgent {
       throwOnShutdownFailure?: boolean;
     },
   ): Promise<void> {
+    const retiring = this.retiringHosts.get(key);
+    if (retiring
+      && (!opts.expectedHost || opts.expectedHost === retiring.host)
+      && (opts.expectedGeneration === undefined || opts.expectedGeneration === retiring.generation)) {
+      try {
+        await this.beginHostRetirement(key, retiring.host, reason);
+      } catch (error) {
+        if (opts.throwOnShutdownFailure) throw error;
+      }
+      return;
+    }
     let expectedGeneration = opts.expectedGeneration;
     const matchesExpectedHost = (): boolean => {
       if (opts.expectedHost && this.hosts.get(key) !== opts.expectedHost) return false;
@@ -13526,6 +13589,7 @@ export class CodexAgent extends BaseAgent {
       host?.notifySubscribersOfForcedRetire(reason);
     }
 
+    const retirement = host ? this.beginHostRetirement(key, host, reason) : undefined;
     this.hosts.delete(key);
     this.hostPromises.delete(key);
     this.hostCredentialModes.delete(key);
@@ -13537,9 +13601,7 @@ export class CodexAgent extends BaseAgent {
     this.bumpHostGeneration(key);
     if (!host) return;
     try {
-      await host.retire(reason, {
-        throwOnTransportError: opts.throwOnShutdownFailure,
-      });
+      await retirement;
     } catch (error) {
       this.deps.logger.warn(`${opts.logPrefix}: host shutdown failed`, {
         key,

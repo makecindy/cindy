@@ -1,4 +1,5 @@
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
+import { takeRefinementContextTail } from '@cindy/voice-input-core';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
@@ -3125,9 +3126,10 @@ export default function NewRemoteSessionScreen() {
       // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
       // 被控端)就用上次缓存,绝不为它推迟开麦。
       void refreshMobileVoiceDictionary(selectedDeviceId, () => maker.getVoiceDictionary());
+      const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null);
       const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
-        takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null),
-        getMobileVoiceInputHistoryForHost(selectedDeviceId),
+        prewarmedVoicePromise,
+        prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(selectedDeviceId, voice?.credential.settings?.voiceInputHistory)),
         hydrateMobileVoiceDictionary(selectedDeviceId),
       ]);
       claimedPrewarm = prewarmedVoice;
@@ -3159,7 +3161,7 @@ export default function NewRemoteSessionScreen() {
         }
         return;
       }
-      const selectionBefore = currentDraft.slice(0, initialSelection.start).slice(-1200);
+      const selectionBefore = takeRefinementContextTail(currentDraft.slice(0, initialSelection.start));
       const selectionAfter = currentDraft.slice(initialSelection.end, initialSelection.end + 1200);
       const controller = createMobileVoiceControllerSession({
         credential,

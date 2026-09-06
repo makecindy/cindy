@@ -108,6 +108,11 @@ const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
 /** 「link 未就绪收到可靠帧」通知的 per-peer 节流(见 onReliableFrameBeforeLink)。 */
 const STALE_LINK_NOTIFY_THROTTLE_MS = 30_000;
 const SLOW_REQUEST_WARN_MS = 1_000;
+// Allow slow relay -> controller delivery before duplicating an entire message.
+// With the default 2s tick this allows 8KiB/s, capped at 30s per attempt. Small
+// messages retain their existing retry cadence; dead peers still exhaust retries.
+const RELIABLE_RETRY_BYTES_PER_INTERVAL = 16 * 1024;
+const RELIABLE_RETRY_MAX_SIZE_INTERVALS = 15;
 /** 连续三次握手成功后仍没撑过稳定期，才把普通抖动升级为可见问题。 */
 const SHORT_LIVED_STREAK_LIMIT = 3;
 const MAX_LEGACY_INBOUND_FRAMES = 128;
@@ -1615,6 +1620,9 @@ export class DeviceLinkClient {
 
     ws.on('open', () => {
       if (epoch !== this.connEpoch) return;
+      // TCP/TLS upgrade made progress. Give hello/ack its own bounded RTT window;
+      // a slow upgrade must not consume almost all of the application handshake budget.
+      this.armHandshakeTimeout(epoch);
       // 进站第一帧必须是 hello
       this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'hello', payload: this.opts.getHello() });
     });
@@ -1787,7 +1795,11 @@ export class DeviceLinkClient {
         this.pongMisses = 0;
       }
       this.pongMisses++;
-      if (this.pongMisses > this.timing.pongMissLimit) {
+      // Timer phase must not shorten the idle budget after a valid frame.
+      // Keep the missed-ping gate too: a delayed JS timer alone is not evidence
+      // that multiple probes actually went unanswered.
+      const idleBudgetMs = this.timing.pingIntervalMs * (this.timing.pongMissLimit + 1);
+      if (this.pongMisses > this.timing.pongMissLimit && now - this.lastInboundAt >= idleBudgetMs) {
         this.log.warn(
           `heartbeat lost, forcing reconnect (misses=${this.pongMisses}, idleForMs=${now - this.lastInboundAt})`,
         );
@@ -3621,8 +3633,38 @@ export class DeviceLinkClient {
     // 引发事故的量级。真出现这种负载时日志会给出真实形状,届时按证据设计,不先建机制。
     const budget = this.recoveryPassBudget();
     let framesSpent = 0;
+    const head = peer.pending.values().next().value;
     for (const pending of peer.pending.values()) {
-      if (!opts.ignoreInterval && now - pending.lastSentAt < this.timing.transportRetryIntervalMs) {
+      // Cumulative ACK cannot confirm a tail while a byte-paced head is still
+      // missing. Allow one early tail retry to fill the receiver's buffer, but
+      // do not burn its whole retry budget (and reset this healthy slow link)
+      // before the head has finished. ACK removal naturally releases this hold;
+      // genuine link recovery still replays immediately via ignoreInterval.
+      if (
+        !opts.ignoreInterval
+        && head
+        && pending !== head
+        && head.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL
+        && pending.attempts >= Math.min(2, this.timing.transportMaxRetryAttempts)
+      ) continue;
+      // A local ws write is not a delivery receipt: relay -> mobile can still be
+      // transmitting a large response even with bufferedAmount=0. A 200KB page
+      // took ~18s on Android's 256Kbit/s high-latency link; 2/4/8s backoff still
+      // queued several full copies before its first ACK. Include a bounded byte
+      // budget, retaining immediate replay when a new connection/link resumes.
+      const sizeIntervals = Math.min(
+        RELIABLE_RETRY_MAX_SIZE_INTERVALS,
+        Math.ceil(pending.bytes / RELIABLE_RETRY_BYTES_PER_INTERVAL),
+      );
+      const retryDelayMs = this.timing.transportRetryIntervalMs * Math.max(
+        sizeIntervals,
+        Math.min(4, 2 ** Math.max(0, pending.attempts - 1)),
+      );
+      if (!opts.ignoreInterval && now - pending.lastSentAt < retryDelayMs) {
+        // A large head frame may still be inside its byte-based cooldown while
+        // a later small request is already eligible. Cumulative ACK cannot
+        // advance past the head, but one early retry lets the receiver buffer
+        // the later frame without exhausting its budget behind that head.
         continue;
       }
       if (pending.attempts >= this.timing.transportMaxRetryAttempts) {

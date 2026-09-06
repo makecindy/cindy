@@ -23,6 +23,7 @@ import {
 import type { ApplicationMenuCommand } from '../../shared/applicationMenuCommands.js';
 
 import { hasSessionAttention as hasAppBadgeSessionAttention } from '../appBadgeService.js';
+import { openMainWindowSession } from '../deepLink.js';
 import {
   AGENT_ISLAND_MAX_RESIZABLE_WIDTH,
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
@@ -2325,13 +2326,11 @@ export class AgentIslandService {
       return;
     }
 
-    const mainWindow = this.deps.getMainWindow();
-    if (!mainWindow || mainWindow.isDestroyed()) return;
     const focusChanged = requestAgentIslandSessionFocus(this.state, nextSessionId, now);
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-    mainWindow.webContents.send('notification:focus-session', nextSessionId);
+    // Reuse the primary-window handoff: it retains navigation while the
+    // renderer reloads and restores macOS app focus. A one-shot notification
+    // sent during loading is lost before MainLayout can acknowledge the task.
+    openMainWindowSession(nextSessionId);
     if (focusChanged) this.publish();
   }
 

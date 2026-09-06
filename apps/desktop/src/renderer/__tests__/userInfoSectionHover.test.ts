@@ -228,7 +228,7 @@ describe('UserInfoSection — inner main button no longer owns hover background'
     expect(source).not.toContain('useLogout');
     expect(source).not.toContain('<LogOut');
     expect(source).toContain("mode === 'local'");
-    expect(source.indexOf("t('sidebar.user.menuAddAccount')")).toBeLessThan(
+    expect(source.indexOf("t('login.signIn')")).toBeLessThan(
       source.indexOf("t('sidebar.user.menuSettings')"),
     );
     expect(source).not.toContain('AccountSwitcherDialog');

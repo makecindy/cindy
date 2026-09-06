@@ -129,6 +129,9 @@ export const CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1 =
  */
 export const CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 = 'maker-event-batch-v1';
 
+/** Accepts ordered current-text snapshots and history repair hints, including after backpressure. */
+export const CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1 = 'session-text-snapshot-v1';
+
 export interface LinkAcceptPayload {
   appVersion: string;
   /** 被控端 allowlist 的指纹,便于控制端探测版本差异 */
