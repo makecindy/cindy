@@ -9,6 +9,20 @@ import { createProviderService } from '../provider-service.js';
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('keeps media readiness separate from subscription authorization and scopes it by provider', async () => {
+    let media = [{ providerId: 'openai', id: 'gpt-image-2' }];
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getAvailableMediaModels: () => media,
+    });
+    const providers = await svc.listProviders();
+    expect(providers.find((p) => p.id === 'openai')).toMatchObject({ connected: false, availableMediaModelIds: ['gpt-image-2'] });
+    expect(providers.find((p) => p.id === 'xd')?.availableMediaModelIds).toEqual([]);
+    media = [];
+    expect((await svc.listProviders()).find((p) => p.id === 'openai')?.availableMediaModelIds).toEqual([]);
+  });
+
   it('lists providers with injected connection state', async () => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,

@@ -483,7 +483,7 @@ describe('provider catalog realm reload', () => {
       expect(provider?.models.codex?.[0]).toMatchObject({
         id: 'gpt-5.6-sol',
         efforts: ['high', 'max', 'ultra'],
-        defaultEffort: 'ultra',
+        defaultEffort: 'high',
       });
       expect(events).toHaveLength(1);
     } finally {
@@ -521,14 +521,14 @@ describe('provider catalog realm reload', () => {
     setActiveCatalog(withoutRegistry);
     expect(
       getActiveCatalog().providers.find((provider) => provider.id === config.id)?.models.codex?.[0],
-    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'max' });
+    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'minimal' });
     expect(getActiveCatalog().modelRegistry).toBeUndefined();
 
     setActiveCatalog(current);
     commitModelPlaneFromCatalog(withoutRegistry);
     expect(
       getActiveCatalog().providers.find((provider) => provider.id === config.id)?.models.codex?.[0],
-    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'max' });
+    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'minimal' });
     expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-12T12:00:00.000Z');
     setCustomProviders([]);
   });

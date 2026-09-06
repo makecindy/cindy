@@ -59,7 +59,6 @@ import {
   type PressableProps,
   type StyleProp,
   type TextInputContentSizeChangeEvent,
-  type TextLayoutEvent,
   type ViewStyle,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
@@ -136,6 +135,7 @@ import {
   collectConversationShareBlockIds,
   collectConversationShareMessages,
 } from '@/session/conversationShareMessages';
+import { useConversationShareImages } from '@/session/useConversationShareImages';
 import {
   isFoldableBlockExpanded,
   useFoldableExpandedBlocksSnapshot,
@@ -277,12 +277,14 @@ import {
   migrateLegacyComposerDraft,
   normalizeComposerDocument,
   reconcileComposerProjectedText,
+  reconcileComposerVoiceDraft,
   replaceComposerTextRange,
   serializeComposerDocument,
   sessionLinkComposerNode,
   slashCommandTextNode,
   textComposerDocument,
   type ComposerDocument,
+  type ComposerVoiceDraftUpdate,
 } from '@/session/composerDocument';
 import { boundAgentReferenceText } from '@cindy/maker-shared/agent-input-projection';
 import {
@@ -645,7 +647,6 @@ const COMPOSER_STACK_GAP_HEIGHT = 4;
 const COMPOSER_INPUT_ROW_CHROME_HEIGHT = 22;
 // 聚焦卡片形态的 row chrome:paddingTop 26 + paddingBottom 8 + 层间 gap 8 + 工具排 ~36。
 const COMPOSER_CARD_ROW_CHROME_HEIGHT = 78;
-const COMPOSER_VOICE_CARET_GAP = 2;
 // 重开且检测到有新内容时,只拉最新小窗对账(比首开整窗 80 便宜很多);payload 过大再逐档退。
 const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 // session-tail-banner「重试」短窗口隐藏的超时兜底(接管信号全部丢失时恢复错误入口);
@@ -2731,7 +2732,9 @@ export default function SessionScreen() {
     applyComposerDraft(value, queueEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDraft]);
 
-  const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, setComposerDraft);
+  const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) => {
+    applyRichComposerChange(reconcileComposerVoiceDraft(composerDocumentRef.current, update));
+  });
 
   useEffect(() => {
     const tracker = createMobileVoiceDictionaryLearningTracker({
@@ -4802,6 +4805,11 @@ export default function SessionScreen() {
         return;
       }
       const startController = async () => {
+        const initialDraft = draftRef.current;
+        const initialDocument = composerDocumentRef.current;
+        const input = composerInputRef.current;
+        const initialSelection = input?.getSelection(initialDraft)
+          ?? { start: initialDraft.length, end: initialDraft.length };
         const controller = createMobileVoiceControllerSession({
           credential,
           ...(prewarmedVoice ? { asr: prewarmedVoice.asr } : {}),
@@ -4810,11 +4818,15 @@ export default function SessionScreen() {
             voiceContext.createRefinerTarget(providerId, options),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string }) =>
             voiceContext.warmRefiner(input),
-          initialDraft: draftRef.current,
-          refinementContext: buildMobileVoiceSessionRefinementContext(draftRef.current, renderItems),
+          initialDraft,
+          initialSelection,
+          refinementContext: buildMobileVoiceSessionRefinementContext(initialDraft, renderItems, initialSelection),
           localVoiceInputHistory,
           readCurrentDraft: () => draftRef.current,
-          onDraftChanged: writeVoiceDraft,
+          onDraftChanged: (text, selection, replacement) => {
+            if (selection) input?.rememberSelection(text, selection);
+            writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
+          },
           onStateChanged: setVoiceState,
           onError: (message) => {
             setVoiceState('error');
@@ -5014,20 +5026,22 @@ export default function SessionScreen() {
       // stop() can deliver an empty final transcript through onDraftChanged before
       // resolving. Capture the rich document first so quote/reference atoms survive.
       const documentBeforeStop = composerDocumentRef.current;
+      const inputBeforeStop = composerInputRef.current;
       const latestDraft = await controller.stop();
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
       setVoiceState('done');
-      // 听写结束落焦(既有行为,显式 focus 承担弹键盘语义):focus 的 web 侧
-      // 实现即 placeCaretAtEnd,caret 落在转写文字末尾。听写**进行中**禁止任何
-      // 程序化 focus(见 voiceIsListening 滚动效应的注释)。
-      requestAnimationFrame(() => {
-        composerInputRef.current?.focus();
-      });
       // chat-text-quote:纯引用(无转写文字、无附件)也要发出去——发送按钮在
       // quote-only 时可见,漏了引用会变成「点发送只停了录音、消息没发」。
       const latestDocument = latestDraft.trim()
-        ? reconcileComposerProjectedText(documentBeforeStop, latestDraft)
+        ? reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)
         : documentBeforeStop;
+      // Focus only after dictation ends, with the caret after the inserted text.
+      const insertionEnd = composerInputRef.current?.getSelection(latestDraft).end ?? latestDraft.length;
+      requestAnimationFrame(() => {
+        if (inputBeforeStop && composerInputRef.current === inputBeforeStop && draftRef.current === latestDraft) {
+          inputBeforeStop.applyDocumentAndFocusSelection(composerDocumentRef.current, insertionEnd);
+        }
+      });
       if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0)) {
         const sendLatest = sendLatestRef.current;
         if (!sendLatest) throw new Error(t('session.screen.voiceSenderNotReady'));
@@ -5623,30 +5637,11 @@ export default function SessionScreen() {
     textTertiary: colors.textTertiary,
     dark: mode === 'dark',
   }), [colors, mode]);
-  const conversationShareHtml = useMemo(() => {
-    if (
-      !nativeConversationShareAvailable
-      || !shareSelectionActive
-      || selectedShareMessages.length === 0
-    ) return '';
-    return buildConversationShareHtml({
-      allShareableIds,
-      characterSrc: shareCharacterSrc ?? undefined,
-      colors: conversationShareColors,
-      contentWidth: windowDimensions.width,
-      logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
-      selectedMessages: selectedShareMessages,
-    });
-  }, [
-    allShareableIds,
-    conversationShareColors,
-    mode,
-    selectedShareMessages,
-    shareCharacterSrc,
-    shareLogoSrc,
-    shareSelectionActive,
-    windowDimensions.width,
-  ]);
+  const shareImages = useConversationShareImages(selectedShareMessages, resolveRemoteMedia, {
+    workdir: currentSession?.workingDir ?? undefined,
+    remoteHostId: currentSession?.remoteHostId ?? undefined,
+    sessionId,
+  });
   const enterShareSelection = useCallback((clientId: string) => {
     Keyboard.dismiss();
     setShareSelectionTriggeredByScreenshot(false);
@@ -5654,21 +5649,31 @@ export default function SessionScreen() {
   }, [sessionId]);
   const cancelShareSelection = useCallback(() => {
     shareOperationSeqRef.current += 1;
+    shareImages.cancel();
     setConversationShareBusy(false);
     setShareSelectionTriggeredByScreenshot(false);
     shareSelectionStore.exit();
-  }, []);
+  }, [shareImages.cancel]);
   const exportConversationSharePng = useCallback(async () => {
+    const messages = await shareImages.prepare();
+    if (messages.length === 0) throw new Error('conversation share selection changed');
     const nativeShareAssetsReady = Boolean(
       nativeConversationShareAvailable
       && shareCharacterSrc
       && shareLogoSrc
       && shareLogoModeRef.current === mode,
     );
-    if (conversationShareHtml && nativeShareAssetsReady) {
+    if (nativeShareAssetsReady) {
       try {
         const nativeBase64 = await renderConversationShareHtmlToPng({
-          html: conversationShareHtml,
+          html: buildConversationShareHtml({
+            allShareableIds,
+            characterSrc: shareCharacterSrc ?? undefined,
+            colors: conversationShareColors,
+            contentWidth: windowDimensions.width,
+            logoSrc: shareLogoSrc ?? undefined,
+            selectedMessages: messages,
+          }),
           width: windowDimensions.width,
         });
         if (nativeBase64) {
@@ -5682,7 +5687,7 @@ export default function SessionScreen() {
     const svg = conversationShareSvgRef.current;
     if (!svg) throw new Error('conversation share svg renderer is unavailable');
     return svg.exportPng();
-  }, [conversationShareHtml, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
+  }, [shareImages.prepare, allShareableIds, conversationShareColors, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
   const shareSelectedConversation = useCallback(async () => {
     if (
       conversationShareBusy
@@ -8970,6 +8975,7 @@ export default function SessionScreen() {
             disabled={controlBusy || !canUseRemoteSessionControls}
             emptyHint={modelSheetCapabilitiesError ?? undefined}
             flatOptions={modelSheetRuntimeOptions.modelOptions}
+            providersReady={composerDeviceProviders.ready}
             modelVisibilityOverrides={composerDeviceProviders.modelVisibilityOverrides}
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
             loading={composerDeviceProviders.loading || modelSheetCapabilitiesLoading}
@@ -9415,9 +9421,10 @@ export default function SessionScreen() {
       </ComposerKeyboardAvoidingView>
       {shareSelectionActive && selectedShareMessages.length > 0 ? (
         <ConversationShareSvg
+          key={`${shareImages.revision}-${mode}`}
           allShareableIds={allShareableIds}
           colors={conversationShareColors}
-          messages={selectedShareMessages}
+          messages={shareImages.messages}
           ref={conversationShareSvgRef}
           width={windowDimensions.width}
         />
@@ -10087,6 +10094,8 @@ function SessionComposerInput({
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
+  const voiceDraftCaretRef = useRef<View>(null);
+  const voiceDraftMeasuredBlockRef = useRef<View>(null);
   const composerScrollViewRef = useRef<ScrollView>(null);
   const composerScrollEnabledRef = useRef(false);
   const voiceDraftScrollRef = useRef<ScrollView>(null);
@@ -10279,19 +10288,15 @@ function SessionComposerInput({
       Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
     ));
   }, []);
-  const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {
-    const lines = event.nativeEvent.lines;
-    const lastLine = lines[lines.length - 1];
-    if (!lastLine) return;
-    const nextFrame = {
-      left: Math.max(0, Math.round(lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP)),
-      top: Math.max(0, Math.round(lastLine.y + ((lastLine.height - COMPOSER_INPUT_LINE_HEIGHT) / 2))),
-    };
-    setVoiceDraftCaretFrame((currentFrame) => (
-      currentFrame.left === nextFrame.left && currentFrame.top === nextFrame.top
-        ? currentFrame
-        : nextFrame
-    ));
+  const handleVoiceDraftTextLayout = useCallback(() => {
+    const block = voiceDraftMeasuredBlockRef.current;
+    const caret = voiceDraftCaretRef.current;
+    if (!block || !caret) return;
+    caret.measureLayout(block, (x, y) => {
+      if (caret !== voiceDraftCaretRef.current || block !== voiceDraftMeasuredBlockRef.current) return;
+      const nextFrame = { left: Math.max(0, Math.round(x)), top: Math.max(0, Math.round(y)) };
+      setVoiceDraftCaretFrame((current) => current.left === nextFrame.left && current.top === nextFrame.top ? current : nextFrame);
+    }, () => undefined);
   }, []);
 
   const renderComposerResizeHandle = () => (
@@ -10304,6 +10309,7 @@ function SessionComposerInput({
     />
   );
 
+  const voiceDraftInsertionEnd = composerInputRef.current?.getSelection(draft).end ?? draft.length;
   const renderComposerInputOverlay = () => voiceIsListening ? (
     // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
     // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
@@ -10328,12 +10334,12 @@ function SessionComposerInput({
         ]}
         onContentSizeChange={() => {
           requestAnimationFrame(() => {
-            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+            voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
           });
         }}
         onLayout={() => {
           requestAnimationFrame(() => {
-            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+            voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
           });
         }}
         pointerEvents="none"
@@ -10347,25 +10353,12 @@ function SessionComposerInput({
             <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
           </View>
         ) : (
-          <View style={styles.voiceDraftMeasuredBlock}>
-            <Text
-              onTextLayout={handleVoiceDraftTextLayout}
-              style={styles.voiceDraftText}
-            >
-              {draft}
+          <View ref={voiceDraftMeasuredBlockRef} collapsable={false} style={styles.voiceDraftMeasuredBlock}>
+            <Text onTextLayout={handleVoiceDraftTextLayout} style={styles.voiceDraftText}>
+              {draft.slice(0, voiceDraftInsertionEnd)}
+              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" viewRef={voiceDraftCaretRef} />
+              {draft.slice(voiceDraftInsertionEnd)}
             </Text>
-            <View
-              pointerEvents="none"
-              style={[
-                styles.voiceDraftCaretOverlay,
-                {
-                  left: voiceDraftCaretFrame.left,
-                  top: voiceDraftCaretFrame.top,
-                },
-              ]}
-            >
-              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
-            </View>
           </View>
         )}
       </ScrollView>
@@ -10381,10 +10374,10 @@ function SessionComposerInput({
   useEffect(() => {
     if (!voiceIsListening) return undefined;
     const frame = requestAnimationFrame(() => {
-      voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+      voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceIsListening]);
+  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceDraftCaretFrame.top, voiceIsListening]);
 
   useEffect(() => {
     if (voiceIsListening && draft.length > 0) return;
@@ -10751,11 +10744,15 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 function buildMobileVoiceSessionRefinementContext(
   draftText: string,
   items: readonly MobileMessageRenderItem[],
+  selection: { start: number; end: number },
 ) {
-  const selectionBefore = takeRefinementContextTail(draftText);
+  const selectionBefore = takeRefinementContextTail(draftText.slice(0, selection.start));
+  const selectionAfter = draftText.slice(selection.end, selection.end + 1200);
   const replyToMessage = findLastAssistantMessageText(items);
   return {
     selectionBefore: selectionBefore || undefined,
+    selectedText: draftText.slice(selection.start, selection.end).slice(0, 1200) || undefined,
+    selectionAfter: selectionAfter || undefined,
     replyToMessage: replyToMessage || undefined,
   };
 }
@@ -11580,9 +11577,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceDraftMeasuredBlock: {
     minHeight: COMPOSER_INPUT_LINE_HEIGHT,
     position: 'relative',
-  },
-  voiceDraftCaretOverlay: {
-    position: 'absolute',
   },
   // 草稿层的文本档必须与真实 TextInput 完全一致,否则换行位置错开、超出的行被裁在
   // 框外(见 MOBILE_COMPOSER_DRAFT_TEXT_STYLE)。

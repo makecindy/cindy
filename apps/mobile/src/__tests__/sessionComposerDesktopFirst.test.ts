@@ -137,11 +137,8 @@ describe('mobile session composer desktop-first surface', () => {
     const voiceDraftOverlayContentEnd = source.indexOf('voiceDraftMeasuredBlock:', voiceDraftOverlayContentStart);
     const voiceDraftOverlayContentStyle = source.slice(voiceDraftOverlayContentStart, voiceDraftOverlayContentEnd);
     const voiceDraftMeasuredBlockStart = source.indexOf('voiceDraftMeasuredBlock: {');
-    const voiceDraftMeasuredBlockEnd = source.indexOf('voiceDraftCaretOverlay:', voiceDraftMeasuredBlockStart);
+    const voiceDraftMeasuredBlockEnd = source.indexOf('voiceDraftText:', voiceDraftMeasuredBlockStart);
     const voiceDraftMeasuredBlockStyle = source.slice(voiceDraftMeasuredBlockStart, voiceDraftMeasuredBlockEnd);
-    const voiceDraftCaretOverlayStart = source.indexOf('voiceDraftCaretOverlay: {');
-    const voiceDraftCaretOverlayEnd = source.indexOf('voiceDraftText:', voiceDraftCaretOverlayStart);
-    const voiceDraftCaretOverlayStyle = source.slice(voiceDraftCaretOverlayStart, voiceDraftCaretOverlayEnd);
     const voiceDraftTextStyleStart = source.indexOf('voiceDraftText: {');
     const voiceDraftTextStyleEnd = source.indexOf('voiceDraftListeningPrompt:', voiceDraftTextStyleStart);
     const voiceDraftTextStyle = source.slice(voiceDraftTextStyleStart, voiceDraftTextStyleEnd);
@@ -340,7 +337,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const COMPOSER_STATUS_ROW_RESERVED_HEIGHT = 28;');
     expect(source).toContain('const COMPOSER_STACK_GAP_HEIGHT = 4;');
     expect(source).toContain('const COMPOSER_INPUT_ROW_CHROME_HEIGHT = 22;');
-    expect(source).toContain('const COMPOSER_VOICE_CARET_GAP = 2;');
+    expect(voiceMicCaretStyle).toContain('marginLeft: 2');
     expect(source).not.toContain('const COMPOSER_VOICE_CARET_RESERVED_WIDTH');
     expect(source).not.toContain('const COMPOSER_VOICE_OVERLAY_HORIZONTAL_PADDING');
     expect(source).toContain('const composerInputIsMultiline = composerResize.dragging');
@@ -401,7 +398,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerShowSendButton = composerLayout.send.visible || voiceStartPending;');
     expect(source).not.toContain('composerLayout.send.visible && (!voiceIsListening || composerHasPayload)');
     expect(source).toContain('const latestDocument = latestDraft.trim()');
-    expect(source).toContain('reconcileComposerProjectedText(documentBeforeStop, latestDraft)');
+    expect(source).toContain('reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)');
     expect(source).toContain('if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0))');
     expect(source).toContain('const currentTurnStreaming = useMemo(');
     expect(source).toContain('const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)');
@@ -441,7 +438,7 @@ describe('mobile session composer desktop-first surface', () => {
     // 会在点语音的同时弹出软键盘。听写文字由覆盖层渲染,caret 只在用户点输入框
     // (停止听写并有意打字)时由 WebKit 按触点放置。
     expect(source).not.toContain('setSelectionToEnd');
-    expect(source).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');
+    expect(source).toContain('voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });');
     expect(source).toContain('caretHidden={voiceIsListening}');
     expect(source).toContain('const handleComposerInputPressIn = useCallback(() => {');
     expect(source).toContain('onPressIn={handleComposerInputPressIn}');
@@ -462,7 +459,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(voiceDraftMeasuredBlockStyle).not.toContain('paddingRight: COMPOSER_VOICE_CARET_RESERVED_WIDTH');
     expect(voiceDraftMeasuredBlockStyle).toContain("position: 'relative'");
     expect(voiceDraftMeasuredBlockStyle).not.toContain("width: '100%'");
-    expect(voiceDraftCaretOverlayStyle).toContain("position: 'absolute'");
+    expect(source).not.toContain('voiceDraftCaretOverlay:');
     expect(voiceDraftTextStyle).not.toContain("alignSelf: 'flex-start'");
     expect(voiceDraftTextStyle).toContain('color: colors.textPrimary');
     expect(voiceDraftTextStyle).not.toContain("color: 'transparent'");
@@ -475,18 +472,17 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('paddingRight: COMPOSER_VOICE_CARET_RESERVED_WIDTH');
     expect(voiceMicCaretStyle).toContain('height: MOBILE_COMPOSER_INPUT_LINE_HEIGHT');
     expect(voiceMicCaretStyle).toContain("justifyContent: 'center'");
-    expect(source.match(/voiceDraftScrollRef\.current\?\.scrollToEnd\(\{ animated: false \}\);/g)?.length ?? 0)
+    expect(source.match(/voiceDraftScrollRef\.current\?\.scrollTo\(\{ y: voiceDraftCaretFrame.top, animated: false \}\);/g)?.length ?? 0)
       .toBeGreaterThanOrEqual(3);
     expect(source).toContain('const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });');
     expect(source).not.toContain('const [composerTextInputFrameWidth, setComposerTextInputFrameWidth] = useState(0);');
     expect(source).not.toContain('const [voiceDraftContentHeight, setVoiceDraftContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);');
     expect(source).not.toContain('const handleComposerTextInputFrameLayout = useCallback((event: LayoutChangeEvent) => {');
     expect(source).not.toContain('onLayout={handleComposerTextInputFrameLayout}');
-    expect(source).toContain('const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {');
-    expect(source).toContain('const lastLine = lines[lines.length - 1];');
-    expect(source).toContain('lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP');
+    expect(source).toContain('const handleVoiceDraftTextLayout = useCallback(() => {');
+    expect(source).toContain('caret.measureLayout(block, (x, y) => {');
     expect(source).not.toContain('voiceDraftBlockWidth - COMPOSER_VOICE_CARET_WIDTH - COMPOSER_VOICE_CARET_EDGE_INSET');
-    expect(source).toContain('lastLine.y + ((lastLine.height - COMPOSER_INPUT_LINE_HEIGHT) / 2)');
+    expect(source).toContain('top: Math.max(0, Math.round(y))');
     expect(source).not.toContain('setVoiceDraftContentHeight((currentHeight) => (');
     expect(source).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;');
     expect(source).toContain('styles.voiceDraftListeningPrompt');
@@ -507,10 +503,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('textBreakStrategy="simple"');
     expect(source).not.toContain('android_hyphenationFrequency="none"');
     expect(source).toContain('onTextLayout={handleVoiceDraftTextLayout}');
-    expect(voiceDraftTextSource).toContain('{draft}');
-    expect(source).toContain('styles.voiceDraftCaretOverlay');
-    expect(source).toContain('left: voiceDraftCaretFrame.left');
-    expect(source).toContain('top: voiceDraftCaretFrame.top');
+    expect(voiceDraftTextSource).toContain('{draft.slice(0, voiceDraftInsertionEnd)}');
+    expect(voiceDraftTextSource).toContain('viewRef={voiceDraftCaretRef}');
+    expect(voiceDraftTextSource).toContain('{draft.slice(voiceDraftInsertionEnd)}');
     expect(source).not.toContain('voiceMicCaretInline');
     expect(source).not.toContain('<VoiceMicWaveCaret color={colors.statusReady} inline />');
     // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
@@ -738,8 +733,13 @@ describe('mobile session composer desktop-first surface', () => {
       + "      startupSeq = voiceStartupSeqRef.current + 1;",
     );
     expect(voiceSource).toContain('voiceStartupInFlightRef.current = false;');
-    expect(voiceSource).toContain('onDraftChanged: writeVoiceDraft');
-    expect(source).toContain('useComposerVoiceDraftWriter(sessionId, setComposerDraft)');
+    expect(voiceSource).toContain('if (selection) input?.rememberSelection(text, selection);');
+    expect(voiceSource).toContain('writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });');
+    expect(source).toContain('draft.slice(0, voiceDraftInsertionEnd)');
+    expect(source).toContain('draft.slice(voiceDraftInsertionEnd)');
+    expect(source).toContain('caret.measureLayout(block, (x, y) => {');
+    expect(source).toContain('viewRef={voiceDraftCaretRef}');
+    expect(source).toContain('useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) =>');
     expect(voiceSource).toContain('isMobileRealtimeAudioAvailable()');
     expect(voiceSource.indexOf('isMobileRealtimeAudioAvailable()')).toBeLessThan(
       voiceSource.indexOf('resolveMobileVoiceRecordingPermission({'),

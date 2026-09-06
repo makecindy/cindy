@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 2,
-  "updatedAt": "2026-09-05T05:54:12.833Z",
+  "schemaVersion": 3,
+  "updatedAt": "2026-09-05T13:36:11.674Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -10,21 +10,36 @@
       "description": "GPT-5.6-Sol for coding tasks",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 18,
       "supportsFastMode": true,
       "perAgent": {
         "codex": {
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
-          "defaultEffort": "medium"
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-sol",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -90,7 +105,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "openai/gpt-5.6-sol[1m]",
@@ -100,7 +116,12 @@
       "description": "Explicit 1M context opt-in; inputs above 272K use higher long-context rates for the entire request",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 18,
       "supportsFastMode": true,
@@ -108,7 +129,9 @@
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-sol",
-          "agents": ["claude-code"],
+          "agents": [
+            "claude-code"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -174,7 +197,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/gpt-5.6-sol",
@@ -184,7 +208,13 @@
       "description": "GPT-5.6-Sol for coding tasks",
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 18,
       "supportsFastMode": true,
@@ -194,17 +224,27 @@
         },
         "codex": {
           "contextWindow": 272000,
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
-          "defaultEffort": "medium"
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-sol",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "openai/gpt-5.6-terra",
@@ -214,21 +254,36 @@
       "description": "GPT-5.6-Terra for coding tasks",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 19,
       "supportsFastMode": true,
       "perAgent": {
         "codex": {
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
-          "defaultEffort": "medium"
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-terra",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -294,7 +349,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/gpt-5.6-terra",
@@ -304,7 +360,13 @@
       "description": "GPT-5.6-Terra for coding tasks",
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 19,
       "supportsFastMode": true,
@@ -314,17 +376,27 @@
         },
         "codex": {
           "contextWindow": 272000,
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
-          "defaultEffort": "medium"
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-terra",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "openai/gpt-5.6-luna",
@@ -333,14 +405,23 @@
       "group": "gpt",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 17,
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-luna",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -406,7 +487,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/gpt-5.6-luna",
@@ -415,7 +497,13 @@
       "group": "gpt",
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 17,
       "perAgent": {
@@ -427,9 +515,13 @@
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-luna",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "openai/gpt-5.5",
@@ -439,7 +531,12 @@
       "description": "OpenAI Codex (GPT-5.5) for coding tasks",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 20,
       "supportsFastMode": true,
@@ -453,7 +550,10 @@
         {
           "providerId": "openai",
           "modelId": "gpt-5.5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -485,7 +585,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/gpt-5.5",
@@ -495,7 +596,12 @@
       "description": "GPT-5.5 for coding tasks",
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 20,
       "supportsFastMode": true,
@@ -512,9 +618,13 @@
         {
           "providerId": "xd",
           "modelId": "gpt-5.5",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "openai/gpt-5.4",
@@ -524,21 +634,28 @@
       "description": "OpenAI Codex (GPT-5.4) for coding tasks",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "sortOrder": 21,
       "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "codex": {
-          "contextWindow": 272000,
-          "defaultEffort": "medium"
+          "contextWindow": 272000
         }
       },
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.4",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -570,7 +687,9 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses",
+      "defaultEffort": "medium"
     },
     {
       "id": "xd/gpt-5.4",
@@ -580,7 +699,12 @@
       "description": "GPT-5.4 for coding tasks",
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "sortOrder": 21,
       "supportsFastMode": true,
       "defaultEnabled": false,
@@ -589,17 +713,21 @@
           "supportsFastMode": false
         },
         "codex": {
-          "contextWindow": 272000,
-          "defaultEffort": "medium"
+          "contextWindow": 272000
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.4",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses",
+      "defaultEffort": "medium"
     },
     {
       "id": "openai/gpt-5.4-mini",
@@ -609,7 +737,12 @@
       "description": "Faster, lighter Codex variant — speed-optimized for quick edits",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "sortOrder": 22,
       "supportsFastMode": true,
       "defaultEnabled": false,
@@ -618,15 +751,17 @@
           "supportsFastMode": false
         },
         "codex": {
-          "contextWindow": 272000,
-          "defaultEffort": "medium"
+          "contextWindow": 272000
         }
       },
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.4-mini",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -643,7 +778,9 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses",
+      "defaultEffort": "medium"
     },
     {
       "id": "xd/gpt-5.4-mini",
@@ -653,7 +790,12 @@
       "description": "GPT-5.4-Mini for coding tasks",
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "sortOrder": 22,
       "supportsFastMode": true,
       "defaultEnabled": false,
@@ -662,17 +804,21 @@
           "supportsFastMode": false
         },
         "codex": {
-          "contextWindow": 272000,
-          "defaultEffort": "medium"
+          "contextWindow": 272000
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-mini",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses",
+      "defaultEffort": "medium"
     },
     {
       "id": "openai/gpt-5.4-pro",
@@ -688,9 +834,13 @@
         {
           "providerId": "openai",
           "modelId": "gpt-5.4-pro",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "openai/gpt-5.5-pro",
@@ -706,9 +856,13 @@
         {
           "providerId": "openai",
           "modelId": "gpt-5.5-pro",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "openai/gpt-5.6-cyber",
@@ -724,9 +878,13 @@
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-cyber",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "openai/gpt-6-astra",
@@ -736,19 +894,34 @@
       "description": "OpenAI GPT-6 Astra for complex reasoning, coding, computer use, research, and document creation",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "perAgent": {
         "codex": {
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
-          "defaultEffort": "medium"
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-6-astra",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -783,7 +956,8 @@
           ]
         }
       ],
-      "supportsFastMode": true
+      "supportsFastMode": true,
+      "nativeApi": "openai-responses"
     },
     {
       "id": "anthropic/claude-fable-5-1",
@@ -793,15 +967,25 @@
       "description": "Claude Fable 5.1 for long-running agentic coding and research",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-fable-5-1",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-fable-5",
@@ -811,15 +995,24 @@
       "description": "Most capable, supports xhigh effort",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 1,
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-fable-5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -841,9 +1034,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-fable-5",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-mythos-5",
@@ -852,13 +1048,22 @@
       "group": "anthropic",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-mythos-5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -877,7 +1082,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-opus-5",
@@ -887,15 +1093,24 @@
       "description": "Latest Opus for ambitious work",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 0,
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -932,9 +1147,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-opus-5",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-opus-4-8",
@@ -944,15 +1162,24 @@
       "description": "Most capable, supports xhigh effort",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 2,
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-4-8",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -989,9 +1216,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-8",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-opus-4-7",
@@ -1001,8 +1231,14 @@
       "description": "Most capable, supports xhigh effort",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 3,
       "supportsFastMode": false,
       "defaultEnabled": false,
@@ -1010,7 +1246,10 @@
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-4-7",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1032,9 +1271,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-7",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-opus-4-6",
@@ -1044,8 +1286,13 @@
       "description": "Most capable for ambitious work",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 4,
       "supportsFastMode": false,
       "defaultEnabled": false,
@@ -1053,7 +1300,10 @@
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-4-6",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1075,9 +1325,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-6",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-opus-4-5",
@@ -1087,8 +1340,12 @@
       "description": "Earlier Opus generation",
       "contextWindow": 200000,
       "maxOutputTokens": 64000,
-      "efforts": ["low", "medium", "high"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 5,
       "supportsFastMode": false,
       "defaultEnabled": false,
@@ -1096,7 +1353,10 @@
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-4-5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1118,9 +1378,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-5",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-sonnet-5",
@@ -1130,15 +1393,24 @@
       "description": "Latest Sonnet — fast and highly capable",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 6,
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-sonnet-5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1160,9 +1432,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-5",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-sonnet-4-6",
@@ -1172,8 +1447,13 @@
       "description": "Most efficient for everyday tasks",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "max"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 7,
       "supportsFastMode": false,
       "defaultEnabled": false,
@@ -1181,7 +1461,10 @@
         {
           "providerId": "anthropic",
           "modelId": "claude-sonnet-4-6",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1203,9 +1486,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-4-6",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-sonnet-4-5",
@@ -1223,7 +1509,10 @@
         {
           "providerId": "anthropic",
           "modelId": "claude-sonnet-4-5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1245,9 +1534,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-4-5",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "anthropic/claude-haiku-4-5",
@@ -1260,12 +1552,15 @@
       "efforts": [],
       "sortOrder": 9,
       "supportsFastMode": false,
-      "defaultEnabled": false,
+      "defaultEnabled": true,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-haiku-4-5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1287,9 +1582,12 @@
         {
           "providerId": "xd",
           "modelId": "claude-haiku-4-5",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "xai/grok-4.6",
@@ -1298,14 +1596,22 @@
       "group": "grok",
       "description": "xAI Grok 4.6 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
       "contextWindow": 500000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 48,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.6",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1337,7 +1643,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xai/grok-4.5",
@@ -1346,14 +1653,21 @@
       "group": "grok",
       "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
       "contextWindow": 500000,
-      "efforts": ["low", "medium", "high"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 49,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.5",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1385,7 +1699,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xai/grok-4.3",
@@ -1394,19 +1709,30 @@
       "group": "grok",
       "description": "xAI Grok 4.3 通用旗舰,1M 上下文(SuperGrok 订阅直连)",
       "contextWindow": 1000000,
-      "efforts": ["low", "medium", "high"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 51,
       "perAgent": {
         "codex": {
-          "efforts": ["low", "medium", "high"]
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.3",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1438,7 +1764,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xai/grok-build-0.1",
@@ -1454,7 +1781,10 @@
         {
           "providerId": "xai",
           "modelId": "xai/grok-build-0.1",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1486,7 +1816,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xai/grok-4.20-multi-agent-0309",
@@ -1495,15 +1826,23 @@
       "group": "grok",
       "description": "xAI Grok 4.20 multi-agent model,1M 上下文(SuperGrok 订阅直连)",
       "contextWindow": 1000000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "low",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 52,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.20-multi-agent-0309",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1535,7 +1874,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xai/grok-4.20-0309-reasoning",
@@ -1551,7 +1891,10 @@
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.20-0309-reasoning",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1583,7 +1926,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xai/grok-4.20-0309-non-reasoning",
@@ -1599,7 +1943,10 @@
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.20-0309-non-reasoning",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1631,7 +1978,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xai/grok-4.20",
@@ -1640,15 +1988,23 @@
       "group": "grok",
       "description": "旧版兼容 alias;新会话请使用明确的 Grok 4.20 model ID",
       "contextWindow": 1000000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 98,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.20",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1680,7 +2036,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xai/grok-code-fast",
@@ -1696,7 +2053,10 @@
         {
           "providerId": "xai",
           "modelId": "xai/grok-code-fast",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1728,7 +2088,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/codex-gpt-5.6-luna",
@@ -1739,9 +2100,13 @@
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.6-luna",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/codex-gpt-5.6-sol",
@@ -1750,7 +2115,13 @@
       "description": "GPT-5.6-Sol for coding tasks",
       "contextWindow": 372000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 8,
       "supportsFastMode": true,
@@ -1760,17 +2131,27 @@
         },
         "codex": {
           "contextWindow": 272000,
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
-          "defaultEffort": "medium"
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.6-sol",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/codex-gpt-5.6-terra",
@@ -1779,7 +2160,13 @@
       "description": "GPT-5.6-Terra for coding tasks",
       "contextWindow": 372000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 9,
       "supportsFastMode": true,
@@ -1789,17 +2176,27 @@
         },
         "codex": {
           "contextWindow": 272000,
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
-          "defaultEffort": "medium"
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.6-terra",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/codex-gpt-5.5",
@@ -1808,7 +2205,12 @@
       "description": "GPT-5.5 for coding tasks",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 10,
       "supportsFastMode": true,
@@ -1822,9 +2224,13 @@
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.5",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "xd/codex-gpt-5.4",
@@ -1833,7 +2239,12 @@
       "description": "GPT-5.4 for coding tasks",
       "contextWindow": 272000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 11,
       "supportsFastMode": true,
@@ -1847,9 +2258,13 @@
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.4",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses"
     },
     {
       "id": "google/gemini-3.7-flash",
@@ -1859,7 +2274,11 @@
       "description": "Google Gemini 3.7 Flash — agentic workflows and multimodal reasoning",
       "contextWindow": 1000000,
       "maxOutputTokens": 65536,
-      "efforts": ["low", "medium", "high"],
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 28,
       "supportsFastMode": false,
@@ -1867,7 +2286,9 @@
         {
           "providerId": "xd",
           "modelId": "gemini-3.7-flash",
-          "agents": ["claude-code"],
+          "agents": [
+            "claude-code"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1900,7 +2321,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "google-generative-ai"
     },
     {
       "id": "google/gemini-3.6-flash",
@@ -1910,7 +2332,12 @@
       "description": "Google Gemini 3.6 Flash — frontier intelligence optimized for speed and cost",
       "contextWindow": 1000000,
       "maxOutputTokens": 65536,
-      "efforts": ["minimal", "low", "medium", "high"],
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 29,
       "supportsFastMode": false,
@@ -1918,7 +2345,9 @@
         {
           "providerId": "xd",
           "modelId": "gemini-3.6-flash",
-          "agents": ["claude-code"],
+          "agents": [
+            "claude-code"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1951,7 +2380,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "google-generative-ai"
     },
     {
       "id": "google/gemini-3.5-flash",
@@ -1960,7 +2390,12 @@
       "description": "Google Gemini 3.5 Flash — upgraded Flash with stronger reasoning",
       "contextWindow": 1000000,
       "maxOutputTokens": 65536,
-      "efforts": ["minimal", "low", "medium", "high"],
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 30,
       "supportsFastMode": false,
@@ -1968,9 +2403,12 @@
         {
           "providerId": "xd",
           "modelId": "gemini-3.5-flash",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "google-generative-ai"
     },
     {
       "id": "google/gemini-3.1-pro-preview",
@@ -1979,8 +2417,12 @@
       "description": "Google Gemini 3.1 Pro Preview — deepest reasoning, multimodal",
       "contextWindow": 1000000,
       "maxOutputTokens": 65536,
-      "efforts": ["low", "medium", "high"],
-      "defaultEffort": "high",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 31,
       "supportsFastMode": false,
       "defaultEnabled": false,
@@ -1988,9 +2430,12 @@
         {
           "providerId": "xd",
           "modelId": "gemini-3.1-pro-preview",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "google-generative-ai"
     },
     {
       "id": "google/gemini-3-flash-preview",
@@ -1999,8 +2444,13 @@
       "description": "Google Gemini 3 Flash Preview — fast multimodal reasoning",
       "contextWindow": 1000000,
       "maxOutputTokens": 65536,
-      "efforts": ["minimal", "low", "medium", "high"],
-      "defaultEffort": "high",
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 32,
       "supportsFastMode": false,
       "defaultEnabled": false,
@@ -2008,9 +2458,12 @@
         {
           "providerId": "xd",
           "modelId": "gemini-3-flash-preview",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "google-generative-ai"
     },
     {
       "id": "google/gemini-3.5-flash-lite",
@@ -2020,17 +2473,25 @@
       "description": "Google Gemini 3.5 Flash-Lite — cost-efficient multimodal model for high-volume workloads",
       "contextWindow": 1000000,
       "maxOutputTokens": 65536,
-      "efforts": ["minimal", "low", "medium", "high"],
-      "defaultEffort": "minimal",
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "medium",
       "sortOrder": 33,
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gemini-3.5-flash-lite",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "google-generative-ai"
     },
     {
       "id": "google/gemini-3.1-flash-lite",
@@ -2046,9 +2507,12 @@
         {
           "providerId": "xd",
           "modelId": "gemini-3.1-flash-lite",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "google-generative-ai"
     },
     {
       "id": "bytedance-seed/seed-2.1-pro",
@@ -2056,22 +2520,34 @@
       "group": "china",
       "contextWindow": 256000,
       "maxOutputTokens": 256000,
-      "efforts": ["minimal", "low", "medium", "high"],
-      "defaultEffort": "minimal",
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "medium",
       "supportsFastMode": false,
       "perAgent": {
         "claude-code": {
-          "efforts": ["low", "medium", "high"],
-          "defaultEffort": "low"
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "bytedance-seed/seed-2.1-pro",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.8-max",
@@ -2079,16 +2555,25 @@
       "group": "china",
       "contextWindow": 983616,
       "maxOutputTokens": 131072,
-      "efforts": ["low", "high", "xhigh"],
-      "defaultEffort": "xhigh",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "medium",
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.8-max",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.8-max-preview",
@@ -2096,16 +2581,24 @@
       "status": "retired",
       "group": "china",
       "contextWindow": 983616,
-      "efforts": ["low", "high", "xhigh"],
-      "defaultEffort": "xhigh",
+      "efforts": [
+        "low",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "high",
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.8-max-preview",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.7-max",
@@ -2121,9 +2614,13 @@
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.7-max",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "moonshotai/kimi-k2.7-code",
@@ -2139,14 +2636,21 @@
         {
           "providerId": "moonshot-kimi-cn",
           "modelId": "kimi-k2.7-code",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "moonshot-kimi-global",
           "modelId": "kimi-k2.7-code",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "moonshotai/kimi-k2.7-code-highspeed",
@@ -2162,14 +2666,21 @@
         {
           "providerId": "moonshot-kimi-cn",
           "modelId": "kimi-k2.7-code-highspeed",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "moonshot-kimi-global",
           "modelId": "kimi-k2.7-code-highspeed",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "moonshotai/kimi-k2.6",
@@ -2185,9 +2696,12 @@
         {
           "providerId": "xd",
           "modelId": "moonshotai/kimi-k2.6",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "z-ai/glm-5.1",
@@ -2204,9 +2718,12 @@
         {
           "providerId": "xd",
           "modelId": "z-ai/glm-5.1",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "z-ai/glm-5.2",
@@ -2215,23 +2732,33 @@
       "description": "Zhipu GLM-5.2 agentic coding model; 1M context",
       "contextWindow": 1000000,
       "maxOutputTokens": 131072,
-      "efforts": ["minimal", "high", "max"],
-      "defaultEffort": "max",
+      "efforts": [
+        "minimal",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
       "sortOrder": 43,
       "supportsFastMode": false,
       "perAgent": {
         "claude-code": {
-          "efforts": ["high", "max"],
-          "defaultEffort": "max"
+          "efforts": [
+            "high",
+            "max"
+          ]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "z-ai/glm-5.2",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "z-ai/glm-5.3",
@@ -2241,17 +2768,25 @@
       "description": "Zhipu GLM-5.3 agentic coding model; 1M context",
       "contextWindow": 1000000,
       "maxOutputTokens": 131072,
-      "efforts": ["low", "high", "max"],
-      "defaultEffort": "max",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
       "sortOrder": 44,
       "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "z-ai/glm-5.3",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "z-ai/glm-5.3-flash",
@@ -2265,14 +2800,21 @@
         {
           "providerId": "zhipu-glm-cn",
           "modelId": "glm-5.3-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "zhipu-glm-global",
           "modelId": "glm-5.3-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "xd/z-ai-glm-5.3-flash",
@@ -2286,9 +2828,14 @@
         {
           "providerId": "xd",
           "modelId": "z-ai/glm-5.3-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions",
+      "defaultEffort": "medium"
     },
     {
       "id": "deepseek/deepseek-v4-pro",
@@ -2297,7 +2844,10 @@
       "description": "DeepSeek V4 Pro reasoning model; only high/max effective (low/medium→high, xhigh→max)",
       "contextWindow": 1048576,
       "maxOutputTokens": 384000,
-      "efforts": ["high", "max"],
+      "efforts": [
+        "high",
+        "max"
+      ],
       "defaultEffort": "high",
       "sortOrder": 45,
       "supportsFastMode": false,
@@ -2305,7 +2855,10 @@
         {
           "providerId": "xd",
           "modelId": "deepseek/deepseek-v4-pro",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2325,7 +2878,10 @@
         {
           "providerId": "deepseek",
           "modelId": "deepseek-v4-pro",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2356,7 +2912,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "deepseek/deepseek-v4-flash",
@@ -2365,7 +2922,11 @@
       "description": "DeepSeek V4 Flash efficiency-optimized MoE; supports low/high/max effort",
       "contextWindow": 1048576,
       "maxOutputTokens": 384000,
-      "efforts": ["low", "high", "max"],
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
       "defaultEffort": "high",
       "sortOrder": 46,
       "supportsFastMode": false,
@@ -2373,7 +2934,10 @@
         {
           "providerId": "xd",
           "modelId": "deepseek/deepseek-v4-flash",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2393,7 +2957,10 @@
         {
           "providerId": "deepseek",
           "modelId": "deepseek-v4-flash",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2424,7 +2991,8 @@
             }
           ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "openai/gpt-5.4-nano",
@@ -2434,14 +3002,22 @@
       "description": "OpenAI GPT-5.4 nano for simple, high-volume tasks",
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "sortOrder": 101,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.4-nano",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2461,16 +3037,26 @@
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-nano",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-responses",
+      "defaultEffort": "medium"
     },
     {
       "id": "xd/codex-gpt-5.4-mini",
       "name": "GPT-5.4-Mini",
       "group": "gpt-budget",
       "contextWindow": 272000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "defaultEffort": "medium",
       "sortOrder": 103,
       "defaultEnabled": false,
@@ -2478,10 +3064,14 @@
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.4-mini",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
       ],
-      "maxOutputTokens": 128000
+      "maxOutputTokens": 128000,
+      "nativeApi": "openai-responses"
     },
     {
       "id": "minimax/minimax-m3",
@@ -2495,14 +3085,21 @@
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M3",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M3",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "minimax/minimax-m2.7",
@@ -2516,14 +3113,21 @@
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.7",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.7",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "minimax/minimax-m2.7-highspeed",
@@ -2537,14 +3141,21 @@
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.7-highspeed",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.7-highspeed",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "minimax/minimax-m2.5",
@@ -2558,14 +3169,21 @@
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.5",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.5",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "minimax/minimax-m2.5-highspeed",
@@ -2579,14 +3197,21 @@
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.5-highspeed",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.5-highspeed",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "minimax/minimax-m2.1",
@@ -2600,14 +3225,21 @@
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.1",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.1",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "minimax/minimax-m2.1-highspeed",
@@ -2621,14 +3253,21 @@
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.1-highspeed",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.1-highspeed",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "minimax/minimax-m2",
@@ -2642,14 +3281,21 @@
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "anthropic-messages"
     },
     {
       "id": "moonshotai/kimi-k3",
@@ -2657,27 +3303,33 @@
       "group": "china",
       "contextWindow": 1048576,
       "maxOutputTokens": 1048576,
-      "efforts": ["low", "high", "max"],
-      "defaultEffort": "max",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
       "sortOrder": 41,
       "supportsFastMode": false,
       "routes": [
         {
-          "providerId": "xd",
-          "modelId": "moonshot/kimi-k3",
-          "agents": ["claude-code", "codex"]
-        },
-        {
           "providerId": "moonshot-kimi-cn",
           "modelId": "kimi-k3",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "moonshot-kimi-global",
           "modelId": "kimi-k3",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.6-plus",
@@ -2693,9 +3345,12 @@
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.6-plus",
-          "agents": ["claude-code"]
+          "agents": [
+            "claude-code"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.6-plus-api",
@@ -2710,14 +3365,21 @@
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.6-plus",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.6-plus",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.7-flash",
@@ -2734,14 +3396,21 @@
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.7-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.7-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.8-flash",
@@ -2758,14 +3427,21 @@
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.8-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.8-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.7-plus",
@@ -2782,14 +3458,21 @@
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.7-plus",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.7-plus",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "qwen/qwen3.6-flash",
@@ -2806,14 +3489,21 @@
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.6-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.6-flash",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
-      ]
+      ],
+      "nativeApi": "openai-completions"
     },
     {
       "id": "xd/codex-gpt-5.5-auto",
@@ -2825,10 +3515,265 @@
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.5:auto",
-          "agents": ["claude-code", "codex"]
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
         }
       ],
-      "maxOutputTokens": 128000
+      "maxOutputTokens": 128000,
+      "nativeApi": "openai-responses"
+    },
+    {
+      "id": "qwen/qwen3.8-27b",
+      "name": "Qwen3.8 27B",
+      "contextWindow": 991808,
+      "maxOutputTokens": 131072,
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "medium",
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "qwen/qwen3.8-27b",
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
+        }
+      ],
+      "nativeApi": "openai-completions"
+    },
+    {
+      "id": "tencent/hy3",
+      "name": "Hy3",
+      "contextWindow": 262144,
+      "maxOutputTokens": 128000,
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "medium",
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "tencent/hy3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
+        }
+      ],
+      "nativeApi": "openai-completions"
+    },
+    {
+      "id": "meta/muse-spark-1.2",
+      "name": "Muse Spark 1.2",
+      "nativeApi": "openai-responses",
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "meta/muse-spark-1.2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xd/moonshotai-kimi-k3",
+      "name": "Kimi K3",
+      "defaultEffort": "medium",
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "moonshot/kimi-k3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "moonshotai/kimi-k3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "group": "china",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "sortOrder": 41,
+      "supportsFastMode": false
+    },
+    {
+      "id": "xd/deepseek-deepseek-v4-flash-vision-exp",
+      "name": "DeepSeek V4 Flash Vision Exp",
+      "defaultEffort": "medium",
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "deepseek/deepseek-v4-flash-vision-exp",
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
+        }
+      ],
+      "nativeApi": "openai-completions"
+    },
+    {
+      "id": "xd/tencent-hy4-preview",
+      "name": "Hy4 preview",
+      "defaultEffort": "medium",
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "tencent/hy4-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
+        }
+      ],
+      "nativeApi": "openai-completions"
+    }
+  ],
+  "nativeApiRules": [
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "google/gemini-",
+      "nativeApi": "google-generative-ai"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "gemini-",
+      "nativeApi": "google-generative-ai"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "claude-",
+      "nativeApi": "anthropic-messages"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "anthropic/claude-",
+      "nativeApi": "anthropic-messages"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "anthropic-claude/claude-",
+      "nativeApi": "anthropic-messages"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "gpt-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "codex/gpt-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "openai/gpt-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "deepseek/deepseek-",
+      "nativeApi": "openai-completions"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "qwen/qwen",
+      "nativeApi": "openai-completions"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "moonshot/kimi-",
+      "nativeApi": "openai-completions"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "moonshotai/kimi-",
+      "nativeApi": "openai-completions"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "z-ai/glm-",
+      "nativeApi": "openai-completions"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "tencent/hy",
+      "nativeApi": "openai-completions"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "x-ai/grok-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "x-ai-grok/grok-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "xai/grok-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "meta/muse-spark-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "minimax/MiniMax-",
+      "nativeApi": "anthropic-messages"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "minimax/minimax-",
+      "nativeApi": "anthropic-messages"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "bytedance-seed/seed-",
+      "nativeApi": "openai-completions"
+    },
+    {
+      "providerId": "openai",
+      "modelIdPrefix": "gpt-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "anthropic",
+      "modelIdPrefix": "claude-",
+      "nativeApi": "anthropic-messages"
+    },
+    {
+      "providerId": "xai",
+      "modelIdPrefix": "xai/grok-",
+      "nativeApi": "openai-responses"
     }
   ]
 }

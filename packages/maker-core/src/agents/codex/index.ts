@@ -3224,6 +3224,7 @@ export class CodexAgent extends BaseAgent {
      * 归属的仍是它那一 turn 的模型。
      */
     let activeTurnModel: string | undefined = opts.model;
+    let activeTurnContextLimit = this.deps.resolveModelContextLimit?.(opts.providerId, opts.model) ?? null;
     /**
      * 本 turn 实际路由的 provider,与 activeTurnModel 同时快照。
      *
@@ -3264,6 +3265,8 @@ export class CodexAgent extends BaseAgent {
      * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为。
      */
     const capContextWindow = (reported: number | null): number | null => {
+      const configured = activeTurnContextLimit;
+      if (configured && Number.isFinite(configured) && configured > 0) return configured;
       const verified = activeTurnModel
         ? (this.deps.resolveVerifiedContextWindow?.(activeTurnProviderId, activeTurnModel) ?? null)
         : null;
@@ -5476,8 +5479,25 @@ export class CodexAgent extends BaseAgent {
     }
 
     let customProviderThreadConfig: Record<string, unknown> = {};
+    const currentContextLimit = (): number | null => {
+      const limit = this.deps.resolveModelContextLimit?.(mutableProviderId, mutableCatalogModel ?? mutableModel);
+      return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
+    };
+    // The stored setting is a cap on the provider's explicit window. Keep the raw
+    // setting for refresh detection (including reset), but use one effective
+    // window for both native thread configuration and turn-owned usage reporting.
+    const effectiveThreadContextWindow = (contextLimit: number | null): number | null => {
+      const customWindow = typeof initialCustomContextWindow === 'number'
+        && Number.isFinite(initialCustomContextWindow) && initialCustomContextWindow >= 1
+        ? Math.floor(initialCustomContextWindow)
+        : null;
+      return contextLimit === null ? customWindow
+        : customWindow === null ? contextLimit : Math.min(contextLimit, customWindow);
+    };
+    let appliedContextLimit = currentContextLimit();
+    activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
 
-    function currentThreadWorkspaceConfig(): Pick<
+    function currentThreadWorkspaceConfig(contextLimit = currentContextLimit()): Pick<
       ThreadStartParams,
       | 'approvalPolicy'
       | 'approvalsReviewer'
@@ -5487,7 +5507,7 @@ export class CodexAgent extends BaseAgent {
       | 'config'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
-      const threadContextWindow = initialCustomContextWindow;
+      const threadContextWindow = effectiveThreadContextWindow(contextLimit);
       const config = {
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
@@ -5504,15 +5524,15 @@ export class CodexAgent extends BaseAgent {
             }
           : {}),
         ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),
-        // 自定义供应商显式窗口。隔离 app-server 的静态模型目录先放开
-        // `max_context_window`,这里再按 thread 设置实际窗口和 95% 自动压缩阈值。
-        // 官方会话继续走共享 app-server + live catalog,不受该静态目录影响。
+        // Write the resolved window once: a custom-provider default must not
+        // overwrite the user's cap. Preserve 95% for an explicit provider window
+        // without an override, and 90% for a user-configured cap.
         ...(typeof threadContextWindow === 'number' && threadContextWindow > 0
           ? {
               model_context_window: Math.floor(threadContextWindow),
               model_auto_compact_token_limit: Math.max(
                 1,
-                Math.floor(threadContextWindow * 0.95),
+                Math.floor(threadContextWindow * (contextLimit === null ? 0.95 : 0.9)),
               ),
             }
           : {}),
@@ -6309,6 +6329,58 @@ export class CodexAgent extends BaseAgent {
             referenceRoots: mutableExtraDirs.length,
           });
         }
+      })();
+    };
+
+    // Loaded-thread resume ignores arbitrary config. Release only this thread,
+    // then cold-resume its intact rollout before accepting another turn.
+    const ensureContextLimitForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
+      const desired = currentContextLimit();
+      if (desired === appliedContextLimit) return null;
+      return (async () => {
+        if (signal?.aborted || closed) throw new Error('Codex context settings update cancelled');
+        if (!threadMayHaveRollout) {
+          await replaceUnusedThreadWithCurrentProfile(signal);
+        } else {
+          const released = await releaseCurrentThreadSubscription('context settings refresh', { retireHostOnFailure: false });
+          if (!released) throw new Error('Codex context settings update could not release the thread');
+          try {
+            assertCurrentHost('context settings refresh');
+            if (closed || signal?.aborted) throw new Error('Codex context settings update cancelled');
+            const workspaceConfig = currentThreadWorkspaceConfig(desired);
+            const resp = await requestProfileLifecycle<ThreadResumeResponse>({
+              action: 'refresh', signal,
+              request: () => host.request<ThreadResumeResponse>(Method.ThreadResume, {
+                threadId, cwd: opts.workingDir,
+                ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
+                ...workspaceConfig,
+                ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+                ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
+                ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+              }),
+              onLateResolve: async () => {
+                await runThreadCleanupOrRetire({
+                  cleanupThreadId: threadId, reason: 'late context settings refresh',
+                  cleanup: () => host.unsubscribeThread(threadId), retireHostOnFailure: false,
+                });
+              },
+            });
+            assertCurrentHost('context settings refresh');
+            if (closed || signal?.aborted || resp.thread.id !== threadId) {
+              throw new Error('Codex context settings resume was not confirmed');
+            }
+            subscription = host.subscribeThread(threadId, handlers);
+            registerRootCodexMcpContext();
+            resetAcceptedUsageCursors('context settings refresh');
+          } catch (error) {
+            // A timed-out resume can still complete later. Close this handle so a
+            // retry cannot use that loaded thread with an unconfirmed budget. The
+            // saved task can reopen; the shared daemon and other tasks stay alive.
+            terminateHandleAfterThreadCleanupFailure('context settings refresh failed');
+            throw error;
+          }
+        }
+        appliedContextLimit = desired;
       })();
     };
 
@@ -11689,6 +11761,8 @@ export class CodexAgent extends BaseAgent {
         let turnThreadWorkspaceConfig: ReturnType<typeof currentThreadWorkspaceConfig>;
         let turnThreadProfileFingerprint: string | null;
         try {
+          const contextRefresh = ensureContextLimitForNextTurn(sendOpts?.signal);
+          if (contextRefresh) await contextRefresh;
           const profileRefresh = ensureReadonlyReferencesProfileForNextTurn(sendOpts?.signal);
           if (profileRefresh) await profileRefresh;
           turnWorkspaceConfig = currentTurnWorkspaceConfig();
@@ -11785,6 +11859,7 @@ export class CodexAgent extends BaseAgent {
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
         // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
         activeTurnModel = mutableCatalogModel;
+        activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
         activeTurnProviderId = mutableProviderId;
         const markTurnConfigAccepted = (): void => {
           threadMayHaveRollout = true;
@@ -12212,6 +12287,7 @@ export class CodexAgent extends BaseAgent {
               // 恢复路径可能把 'gpt-5' 哨兵解析成具体路由模型 —— 重投的 turn 用的是新值,
               // 窗口归属必须跟着改写走, 否则查不到目录条目、沿用 app-server 的基础模型窗口。
               activeTurnModel = mutableCatalogModel;
+              activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
               activeTurnProviderId = mutableProviderId;
               if (mutableServiceTier !== undefined) {
                 turnParams.serviceTier = mutableServiceTier ?? null;

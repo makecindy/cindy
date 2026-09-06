@@ -31040,3 +31040,111 @@ describe('CodexAgent compaction storm escalation', () => {
     await handle.close();
   });
 });
+
+
+describe('Codex native model context overrides', () => {
+  it.each([
+    { storedLimit: 100_000, expectedWindow: 100_000, expectedCompact: 90_000 },
+    { storedLimit: 500_000, expectedWindow: 200_000, expectedCompact: 180_000 },
+    { storedLimit: null, expectedWindow: 200_000, expectedCompact: 190_000 },
+  ])('uses the same custom-provider window for config and usage with limit $storedLimit', async ({
+    storedLimit, expectedWindow, expectedCompact,
+  }) => {
+    let limit: number | null = storedLimit;
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: async (provider, model) =>
+        provider === 'mygpt' && model === 'gpt-5.6-sol' ? 200_000 : null,
+      resolveModelContextLimit: (provider, model) =>
+        provider === 'mygpt' && model === 'gpt-5.6-sol' ? limit : null,
+      // A catalog or app-server fallback must not replace the applied thread window.
+      resolveVerifiedContextWindow: () => 1_050_000,
+    }));
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.TurnStart) return { turn: { id: `custom-budget-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return {
+        thread: { id: (params as { threadId: string }).threadId },
+        model: 'gpt-5.6-sol', modelProvider: 'mygpt',
+      };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'custom-context-budget', model: 'gpt-5.6-sol', providerId: 'mygpt', workingDir: '/repo',
+    });
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)![1] as {
+      config: Record<string, unknown>;
+    };
+    expect(startParams.config).toMatchObject({
+      model_context_window: expectedWindow, model_auto_compact_token_limit: expectedCompact,
+    });
+    const pushUsage = (turnId: string) => {
+      host.getThreadHandlers()!.tokenUsageUpdated?.({
+        threadId: handle.id, turnId,
+        tokenUsage: {
+          total: { totalTokens: 110, inputTokens: 100, cachedInputTokens: 0, outputTokens: 10 },
+          last: { totalTokens: 110, inputTokens: 100, cachedInputTokens: 0, outputTokens: 10 },
+          modelContextWindow: 258_400,
+        },
+      } as never);
+    };
+    await handle.send({ type: 'user', content: 'hello' });
+    pushUsage('custom-budget-1');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(expectedWindow);
+    limit = null;
+    // Changing settings while a turn runs must not change that turn's usage window.
+    pushUsage('custom-budget-1');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(expectedWindow);
+    host.getThreadHandlers()!.turnCompleted?.({
+      threadId: handle.id, turn: { id: 'custom-budget-1', status: 'completed' },
+    });
+    await handle.send({ type: 'user', content: 'next' });
+    if (storedLimit !== null) {
+      const resumed = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)![1] as {
+        config: Record<string, unknown>;
+      };
+      expect(resumed.config).toMatchObject({
+        model_context_window: 200_000, model_auto_compact_token_limit: 190_000,
+      });
+    }
+    pushUsage('custom-budget-2');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(200_000);
+    await handle.close();
+  });
+
+  it('sends explicit limits to native compaction and removes them on cold resume after reset', async () => {
+    let limit: number | null = 500_000;
+    const resolveModelContextLimit = vi.fn((provider, model) => provider === 'openai' && model === 'gpt-5.4' ? limit : null);
+    const agent = new CodexAgent(createDeps({}, { resolveModelContextLimit }));
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.TurnStart) return { turn: { id: `budget-turn-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return { thread: { id: (params as { threadId: string }).threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'context-budget', model: 'gpt-5.4', providerId: 'openai', workingDir: '/repo' });
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)![1] as { config: Record<string, unknown> };
+    expect(startParams.config).toMatchObject({ model_context_window: 500_000, model_auto_compact_token_limit: 450_000 });
+    await handle.send({ type: 'user', content: 'hello' });
+    const originalSubscription = host.subscribeThread.mock.results[0]!.value;
+    // Native turn completion makes the next send eligible for a settings refresh.
+    host.getThreadHandlers()!.turnCompleted?.({ threadId: handle.id, turn: { id: 'budget-turn-1', status: 'completed' } });
+    limit = null;
+    await handle.send({ type: 'user', content: 'next' });
+    expect(originalSubscription.release).toHaveBeenCalledOnce();
+    const resumed = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)![1] as { config?: Record<string, unknown> };
+    expect(resumed.config?.model_context_window).toBeUndefined();
+    expect(resumed.config?.model_auto_compact_token_limit).toBeUndefined();
+    expect(host.subscribeThread).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  it('leaves native defaults untouched when no local override exists', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({ sessionId: 'default-budget', model: 'gpt-5.4', workingDir: '/repo' });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)![1] as { config?: Record<string, unknown> };
+    expect(params.config?.model_context_window).toBeUndefined();
+    expect(params.config?.model_auto_compact_token_limit).toBeUndefined();
+    await handle.close();
+  });
+});

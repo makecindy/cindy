@@ -10,6 +10,7 @@
     ".": "./src/index.ts",
     "./catalog": "./catalog/providers.json",
     "./pi-model-catalog": "./catalog/pi-model-catalog.json",
+    "./pi-thinking-levels": "./src/piThinkingLevels.mjs",
     "./sections": "./src/sections.ts",
     "./branding": "./src/providerBranding.ts",
     "./registry": "./src/registry.ts",

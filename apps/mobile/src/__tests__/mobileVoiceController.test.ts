@@ -15,6 +15,7 @@ import type {
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileVoiceControllerSession } from '@/session/mobileVoiceController';
 import { mobileVoiceEmptyTranscriptError } from '@/session/mobileVoiceInput';
+import { composerDocumentProjectedText, reconcileComposerVoiceDraft, serializeComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 
 vi.mock('@/session/mobileRealtimeAudio', () => ({
   startMobileRealtimeAudio: vi.fn(),
@@ -147,6 +148,86 @@ function credential(): StoredMobileVoiceCredential {
 }
 
 describe('mobileVoiceController', () => {
+  it.each([false, true])('removes selected quotes even when the first identical transcript arrives at stop (partials=%s)', async (partials) => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: [
+      { type: 'quote', quote: { text: 'selected quote' } }, { type: 'text', text: 'raw final' },
+    ] };
+    const initialSelection = { start: 0, end: 9, atomRange: { start: 0, end: 1 } };
+    let document = initialDocument;
+    const asr = new FakeAsrProvider();
+    const config = credential();
+    config.settings!.refinementEnabled = false;
+    const session = createMobileVoiceControllerSession({
+      credential: config, asr, initialDraft: 'raw final', initialSelection,
+      readCurrentDraft: () => composerDocumentProjectedText(document),
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (draft, selection, replacement) => {
+        document = reconcileComposerVoiceDraft(document, { draft, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
+      },
+    });
+    await session.start();
+    if (partials) {
+      asr.emit({ type: 'partial', text: 'raw draft', at: Date.now() });
+      expect(serializeComposerDocument(document).text).toBe('raw draft');
+    }
+    expect(await session.stop()).toBe('raw final');
+    expect(serializeComposerDocument(document).text).toBe('raw final');
+  });
+
+  it.each([
+    ['甲乙', 0, 0, '', '甲乙'],
+    ['甲乙', 1, 1, '甲', '乙'],
+    ['甲乙', 2, 2, '甲乙', ''],
+    ['甲旧词乙', 1, 3, '甲', '乙'],
+    ['🙂\n乙', 3, 3, '🙂\n', '乙'],
+  ])('keeps streaming ASR and refinement at selection in %s [%s, %s]', async (initialDraft, start, end, prefix, suffix) => {
+    let draft = initialDraft;
+    const drafts: string[] = [];
+    const selections: Array<{ start: number; end: number } | undefined> = [];
+    const asr = new FakeAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft,
+      initialSelection: { start, end },
+      readCurrentDraft: () => draft,
+      asr,
+      refiner: {
+        async refine(input) {
+          input.onPartial?.('润色中');
+          return { accepted: true, sourceSegmentIds: input.segmentIds, basedOnText: input.text,
+            refinedText: '润色完成', elapsedMs: 1 };
+        },
+      },
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (text, selection) => {
+        draft = text;
+        drafts.push(text);
+        selections.push(selection);
+      },
+    });
+    await session.start();
+    asr.emit({ type: 'partial', text: '识别中', at: Date.now() });
+    expect(draft).toBe(prefix + '识别中' + suffix);
+    expect(await session.stop()).toBe(prefix + '润色完成' + suffix);
+    expect(drafts).toEqual(['识别中', 'raw final', '润色中', '润色完成'].map((text) => prefix + text + suffix));
+    expect(selections.at(-1)).toEqual({ start: prefix.length + 4, end: prefix.length + 4 });
+  });
+
+  it('preserves typing that changed the selected draft before the first ASR result', async () => {
+    let draft = '用户刚修改';
+    const asr = new FakeAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), initialDraft: '原选区', initialSelection: { start: 0, end: 3 },
+      readCurrentDraft: () => draft, asr, refiner: null,
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (text) => { draft = text; },
+    });
+    await session.start();
+    asr.emit({ type: 'partial', text: '转写', at: Date.now() });
+    expect(draft).toBe('用户刚修改\n转写');
+    expect(await session.stop()).toBe('用户刚修改\nraw final');
+  });
+
   it('propagates and localizes empty-transcript failures from stop()', async () => {
     const errors: string[] = [];
     const states: string[] = [];
@@ -315,6 +396,77 @@ describe('mobileVoiceController', () => {
       expect(session.currentDraft()).toBe('manual edit');
 
       await session.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rebases deferred partials onto edits outside the published voice range', async () => {
+    vi.useFakeTimers();
+    try {
+      let draft = '前 后';
+      const asr = new FakeAsrProvider();
+      const session = createMobileVoiceControllerSession({
+        credential: credential(), initialDraft: draft, initialSelection: { start: 1, end: 1 },
+        readCurrentDraft: () => draft, asr, refiner: null,
+        startAudio: async () => async () => undefined,
+        onDraftChanged: (text) => { draft = text; },
+      });
+      await session.start();
+      asr.emit({ type: 'partial', text: 'one', at: Date.now() });
+      asr.emit({ type: 'partial', text: 'one two', at: Date.now() });
+      draft = '前one 用户修改后文';
+      vi.advanceTimersByTime(80);
+      expect(draft).toBe('前one two 用户修改后文');
+      asr.emit({ type: 'stable', text: 'final', at: Date.now() });
+      expect(draft).toBe('前final 用户修改后文');
+      await session.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not rebase an internal pending draft when no external draft reader exists', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FakeAsrProvider();
+      const drafts: string[] = [];
+      const session = createMobileVoiceControllerSession({
+        credential: credential(), initialDraft: '', asr, refiner: null,
+        startAudio: async () => async () => undefined,
+        onDraftChanged: (text) => { drafts.push(text); },
+      });
+      await session.start();
+      asr.emit({ type: 'partial', text: 'one', at: Date.now() });
+      asr.emit({ type: 'partial', text: 'one two', at: Date.now() });
+      expect(session.currentDraft()).toBe('one two');
+      vi.advanceTimersByTime(80);
+      expect(drafts).toEqual(['one', 'one two']);
+      await session.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not resurrect a pending partial after cancellation with an external suffix edit', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FakeAsrProvider();
+      let draft = '前 后';
+      const session = createMobileVoiceControllerSession({
+        credential: credential(), initialDraft: draft, initialSelection: { start: 1, end: 1 },
+        readCurrentDraft: () => draft, asr, refiner: null,
+        startAudio: async () => async () => undefined,
+        onDraftChanged: (text) => { draft = text; },
+      });
+      await session.start();
+      asr.emit({ type: 'partial', text: 'one', at: Date.now() });
+      asr.emit({ type: 'partial', text: 'one two', at: Date.now() });
+      draft = '前one 用户修改后文';
+      await session.cancel();
+      vi.advanceTimersByTime(80);
+      expect(session.currentDraft()).toBe('前one 用户修改后文');
+      expect(draft).toBe('前one 用户修改后文');
     } finally {
       vi.useRealTimers();
     }

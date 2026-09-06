@@ -23,6 +23,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
+import { readModelContextLimit } from './model-context-limit-store.js';
+
 import {
   PiAgent,
   PiNativeProviderProxyNotReadyError,
@@ -1810,6 +1812,8 @@ export function buildDesktopPiLoopDeps(opts: BuildPiAgentOpts): AgentDeps | null
   }
   log.info('cindy hosted loop enabled', { binaryPath });
   return {
+    resolveModelContextLimit: (providerId, modelId) => providerId
+      ? readModelContextLimit('pi', providerId, modelId) : null,
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     binaryPath,

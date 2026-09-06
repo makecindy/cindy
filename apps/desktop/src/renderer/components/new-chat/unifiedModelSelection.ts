@@ -495,6 +495,7 @@ export function buildUnifiedListSections(args: {
   entries: readonly UnifiedModelEntry[];
   favorites: readonly ModelFavoriteItem[];
   query: string;
+  matchesQuery?: (entry: UnifiedModelEntry, query: string) => boolean;
   rail: UnifiedRailFilter;
   /**
    * 该行(或该条收藏)**生效引擎**的解析器 —— 同引擎视图用它做**排序优先级**
@@ -507,6 +508,7 @@ export function buildUnifiedListSections(args: {
 }): UnifiedListSection[] {
   const { entries, favorites, rail, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
+  const matches = args.matchesQuery ?? matchesQuery;
   const byKey = new Map<string, UnifiedModelEntry>();
   for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
 
@@ -540,7 +542,7 @@ export function buildUnifiedListSections(args: {
       const favoriteEngine = effectiveEngineOf ? effectiveEngineOf(entry, item) : item.agent;
       if (favoriteEngine !== engineOfAgentKind(rail.agent)) continue;
     }
-    if (!matchesQuery(entry, q)) continue;
+    if (!matches(entry, q)) continue;
     favRows.push({
       anchor: {
         kind: 'fav',
@@ -564,7 +566,7 @@ export function buildUnifiedListSections(args: {
   // 行在后。不把兼容行转换成当前引擎 —— 点下去仍按其落点走,落点在别处就走跨引擎确认。
   const visible = entries.filter(
     (entry) =>
-      matchesQuery(entry, q) &&
+      matches(entry, q) &&
       (rail.kind !== 'provider' || entry.providerId === rail.providerId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );

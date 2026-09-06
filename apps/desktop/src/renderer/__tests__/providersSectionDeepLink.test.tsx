@@ -221,6 +221,34 @@ describe('ProvidersSection — 深链定位', () => {
     expect(codexAuthActions.logout).not.toHaveBeenCalled();
   });
 
+  it('invalidated OpenAI auth blocks model selection even before the catalog reports disconnection', async () => {
+    codexAuthState.state = { kind: 'reconnect-required', reason: 'token_revoked' };
+    providersState.providers = [
+      makeProvider('openai', {
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: {
+          codex: [
+            {
+              id: 'gpt-6',
+              name: 'GPT-6',
+              contextWindow: 272_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      }),
+    ];
+    renderAt('?tab=providers&connect=openai');
+    const toggle = (await screen.findByRole('switch', { name: 'GPT-6' })) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    fireEvent.click(toggle);
+    expect(setModelVisibilitiesSpy).not.toHaveBeenCalled();
+    expect(screen.getByText('settings.providers.models.manage.connectionRequired')).toBeTruthy();
+  });
+
   it('ChatGPT 系统共享登录失效时显示来源说明并打开 ChatGPT App', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
@@ -302,33 +330,37 @@ describe('ProvidersSection — 深链定位', () => {
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
   });
 
-  it('内置供应商深链会选中并定位目标模型行', async () => {
-    providersState.providers = [
-      makeProvider('openai', {
-        name: 'OpenAI',
-        connected: true,
-        agents: ['codex'],
-        models: {
-          codex: [
-            {
-              id: 'gpt-unknown',
-              name: 'GPT Unknown',
-              contextWindow: 0,
-              efforts: [],
-              defaultEffort: null,
-            },
-          ],
-        },
-      }),
-    ];
-    const view = renderAt('?tab=providers&connect=openai&model=gpt-unknown&agent=codex');
+  it.each([true, false])(
+    '内置供应商深链会定位目标模型行（默认显示：%s）',
+    async (defaultEnabled) => {
+      providersState.providers = [
+        makeProvider('openai', {
+          name: 'OpenAI',
+          connected: true,
+          agents: ['codex'],
+          models: {
+            codex: [
+              {
+                id: 'gpt-unknown',
+                defaultEnabled,
+                name: 'GPT Unknown',
+                contextWindow: 0,
+                efforts: [],
+                defaultEffort: null,
+              },
+            ],
+          },
+        }),
+      ];
+      const view = renderAt('?tab=providers&connect=openai&model=gpt-unknown&agent=codex');
 
-    await waitFor(() =>
-      expect(view.container.querySelector('[data-deep-link-target="true"]')).not.toBeNull(),
-    );
-    expect(screen.getByText('GPT Unknown')).not.toBeNull();
-    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
-  });
+      await waitFor(() =>
+        expect(view.container.querySelector('[data-deep-link-target="true"]')).not.toBeNull(),
+      );
+      expect(screen.getByText('GPT Unknown')).not.toBeNull();
+      await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+    },
+  );
 
   it('自定义供应商深链会打开编辑表单并定位模型上下文窗口', async () => {
     providersState.providers = [

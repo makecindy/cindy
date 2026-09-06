@@ -319,19 +319,13 @@ import { logUnhandledRenderItem } from '@/session/assertNever';
 import type { OrcaCollabCard as OrcaCollabCardModel } from '@/session/orcaCollab';
 import {
   buildMessageLoadEarlierAction,
-  createMobileFollowEndPinState,
   evaluateMessageWindowUpdate,
-  evaluateMobileAnchorVerify,
-  evaluateMobileFollowEndContentSizePin,
-  isMobileMvcpSettling,
   MOBILE_ANCHOR_VERIFY_TOLERANCE,
-  mobileFollowVerifyStartDelayMs,
   mobileLoadEarlierPrefetchThreshold,
   mobileMessageListKeysSignature,
   mobileMvcpSettleDeadline,
   mobileMessageListTopPadding,
   MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE,
-  MOBILE_FOLLOW_END_PIN_SUPPRESS_MS,
   MOBILE_MESSAGE_LIST_BOTTOM_PADDING,
   type MessageScrollMetrics,
   mobileMessageListBottomPadding,
@@ -341,6 +335,7 @@ import {
   shouldPreserveMobileHistoryBrowseIntent,
   shouldUnpinMobileFollowOnDrag,
 } from '@/session/messageScroll';
+import { createMobileTailFollower, type MobileTailFollower } from '@/session/messageTailFollower';
 import {
   captureMobileHistoryAnchor,
   isMobileHistoryAnchorSettled,
@@ -823,19 +818,11 @@ export function MessageRenderer({
     offsetY: 0,
     viewportHeight: 0,
   });
-  // 贴底补滚护栏状态(死区 + 振荡断路器,语义见 messageScroll.ts 的护栏段注释):
-  // 掐断 onContentSizeChange → scrollToEnd → 重测 的洪泛环(JS 忙死、消息区空白)。
-  const followEndPinStateRef = useRef(createMobileFollowEndPinState());
-  // 断路到期后的 one-shot 贴底清账 timer:断路窗内错过的最终高度可能停在半空且
-  // 之后再无 contentSize 事件,到期补一次(仍在贴底跟随时)把账清平(review P1)。
-  const followEndPinRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 首次进入锚定：完整历史从挂载起就在列表中，命令式落底与测量校正只在短暂
-  // opacity 遮罩下运行；揭示动画启动后完全交给 UI 线程，首批复杂消息占满 JS 时也不会
-  // 把 300ms 窗口拖成长达数秒的白屏。
+  const tailFollowerRef = useRef<MobileTailFollower | null>(null);
+  // 完整历史从挂载起就在列表中；首次揭示交给 UI 线程，首批复杂消息占满 JS 时也不会
+  // 把 300ms 窗口拖成长达数秒的白屏。位置校验由 tail follower 独立管理。
   const initialAnchorDoneRef = useRef(false);
-  const initialAnchorGenerationRef = useRef(0);
-  const initialAnchorVerifyFrameRef = useRef<number | null>(null);
-  const initialAnchorFrameRef = useRef<number | null>(null);
+  const initialRevealGenerationRef = useRef(0);
   const initialRevealAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
   const initialRevealProgress = useMemo(
     () => new Animated.Value(0),
@@ -849,9 +836,6 @@ export function MessageRenderer({
     ],
     outputRange: [0, 0, 1],
   }), [initialRevealProgress]);
-  const followVerifyGenerationRef = useRef(0);
-  const followVerifyFrameRef = useRef<number | null>(null);
-  const followVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [listRevealed, setListRevealed] = useState(false);
   // Re-evaluate the near-start predicate after a prepend request releases its ref-only lock.
   // Without a render tick, a user who remains at the top can stall after one page because the
@@ -911,28 +895,11 @@ export function MessageRenderer({
     firstVisibleIndexRef.current = 0;
     nativeScrollEventSequenceRef.current = 0;
     scrollMetricsRef.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
-    followEndPinStateRef.current = createMobileFollowEndPinState();
+    tailFollowerRef.current?.reset();
     initialAnchorDoneRef.current = false;
-    initialAnchorGenerationRef.current += 1;
-    if (initialAnchorFrameRef.current !== null) {
-      cancelAnimationFrame(initialAnchorFrameRef.current);
-      initialAnchorFrameRef.current = null;
-    }
-    if (initialAnchorVerifyFrameRef.current !== null) {
-      cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
-      initialAnchorVerifyFrameRef.current = null;
-    }
+    initialRevealGenerationRef.current += 1;
     initialRevealAnimationRef.current?.stop();
     initialRevealAnimationRef.current = null;
-    followVerifyGenerationRef.current += 1;
-    if (followVerifyTimerRef.current !== null) {
-      clearTimeout(followVerifyTimerRef.current);
-      followVerifyTimerRef.current = null;
-    }
-    if (followVerifyFrameRef.current !== null) {
-      cancelAnimationFrame(followVerifyFrameRef.current);
-      followVerifyFrameRef.current = null;
-    }
     setListRevealed(false);
   }
   const lastAppliedFocusKeyRef = useRef<string | null>(null);
@@ -1019,19 +986,42 @@ export function MessageRenderer({
     || isMomentumScrollingRef.current
   ), []);
 
+  const getTailFollower = useCallback(() => {
+    if (!tailFollowerRef.current) {
+      tailFollowerRef.current = createMobileTailFollower({
+        read: () => ({
+          metrics: scrollMetricsRef.current,
+          stickToLatest: nearBottomRef.current,
+          userControllingScroll: isUserControllingScroll(),
+          preservingHistory: readingOlderRef.current,
+          layoutSettleAt: mvcpSettleAtRef.current,
+          animatedScrollUntil: programmaticAnimatedScrollInFlightRef.current
+            ? programmaticScrollSettleAtRef.current : 0,
+        }),
+        seekEnd: (animated) => {
+          markProgrammaticScroll(animated);
+          return listRef.current?.scrollToEnd({ animated });
+        },
+        correctOffset: (offset) => {
+          markProgrammaticScroll(false);
+          void listRef.current?.scrollToOffset({ animated: false, offset });
+        },
+        onMeasurementOscillation: () => console.warn(
+          '[message-list] contentSize follow-pin circuit tripped: oscillating item measurements suspected',
+        ),
+      });
+    }
+    return tailFollowerRef.current;
+  }, [isUserControllingScroll, markProgrammaticScroll]);
+
   const scrollToEndProgrammatically = useCallback((
     animated: boolean,
     intent: 'follow' | 'explicit' = 'follow',
   ) => {
-    // Automatic growth/recovery/anchor retries yield to gestures. Explicit jump/send actions
-    // own their scroll even if onPress arrives before the ancestor's touchEnd clears the finger.
-    if (intent === 'follow' && isUserControllingScroll()) return;
-    // Only a new explicit destination supersedes a pending final drag sample. Automatic
-    // follow and offset compensation must leave that sample available to endDrag.
+    // Only an explicit destination supersedes a pending final drag sample.
     if (intent === 'explicit') dragStartOffsetYRef.current = null;
-    markProgrammaticScroll(animated);
-    void listRef.current?.scrollToEnd({ animated });
-  }, [isUserControllingScroll, markProgrammaticScroll]);
+    getTailFollower().requestEnd(animated, intent === 'explicit');
+  }, [getTailFollower]);
 
   const scrollToOffsetProgrammatically = useCallback((offset: number, animated: boolean) => {
     markProgrammaticScroll(animated);
@@ -1090,7 +1080,8 @@ export function MessageRenderer({
     readingOlderRef.current = false;
     setHistoryPrependNativeMvcpDisabled(false);
     setLoadEarlierEvaluationVersion((version) => version + 1);
-  }, []);
+    getTailFollower().reconcile();
+  }, [getTailFollower]);
 
   const maybeFinishHistoryPrependTransaction = useCallback((generation: number) => {
     const transaction = historyPrependTransactionRef.current;
@@ -1351,85 +1342,10 @@ export function MessageRenderer({
     });
   }, [maybeFinishHistoryPrependTransaction, scheduleHistoryAnchorRestore]);
 
-  // 贴底跟随的落底校验/补滚环:两条手动补滚路径——「跳到最新」(followLatestRequestKey)
-  // 与 handleContentSize 的贴底追赶——都只发一次命令式 scrollToEnd,不校验是否真的到达内容
-  // 末端。落地一刻的 native metrics 可能仍是陈旧值(测量结算未完成),或 mVCP 尚未真正关闭
-  // 吸收了这次滚动:两者都会让最新消息静默停在 composer 浮层后面(bug 现场)。复用冷开锚定
-  // 同一判定(evaluateMobileAnchorVerify)、同样的双帧节奏 + 有界重试,命中 settled/give-up
-  // 就收手——不吃冷开锚定的 generation/frame ref,两条校验环各自独立生命周期,互不打断。
+  // Initial entry, layout, content growth and release events share one tail controller.
   const runStickToLatestVerify = useCallback(() => {
-    const generation = followVerifyGenerationRef.current + 1;
-    followVerifyGenerationRef.current = generation;
-    if (followVerifyFrameRef.current !== null) {
-      cancelAnimationFrame(followVerifyFrameRef.current);
-      followVerifyFrameRef.current = null;
-    }
-    if (followVerifyTimerRef.current !== null) {
-      clearTimeout(followVerifyTimerRef.current);
-      followVerifyTimerRef.current = null;
-    }
-    const step = (attempts: number, waitRounds: number) => {
-      if (followVerifyGenerationRef.current !== generation) return;
-      // Release handlers restart this bounded verifier, including when the stream ends while
-      // a finger is held still. Do not poll or issue corrections during a gesture.
-      if (isUserControllingScroll()) {
-        followVerifyFrameRef.current = null;
-        return;
-      }
-      // 贴底跟随意图只认 nearBottomRef:死区内轻触 / 小幅拖动并没有真实解除贴底,
-      // 不能让 userScrollForOlderRef 这根“允许加载历史”的手势记录把校验永久关掉。
-      // 真正上移超过死区时 shouldUnpinMobileFollowOnDrag 会把 nearBottomRef 翻 false,
-      // 下一轮判定自然 settle。
-      const action = evaluateMobileAnchorVerify({
-        attempts,
-        listVisible: true,
-        metrics: scrollMetricsRef.current,
-        preserveVisibleContentPosition: readingOlderRef.current
-          || isMobileMvcpSettling(Date.now(), mvcpSettleAtRef.current),
-        stickToLatest: nearBottomRef.current,
-        waitRounds,
-      });
-      if (action === 'settled' || action === 'give-up') {
-        followVerifyFrameRef.current = null;
-        return;
-      }
-      if (action === 'retry') scrollToEndProgrammatically(false);
-      followVerifyFrameRef.current = requestAnimationFrame(() => {
-        followVerifyFrameRef.current = requestAnimationFrame(() => {
-          followVerifyFrameRef.current = null;
-          step(
-            attempts + (action === 'retry' ? 1 : 0),
-            waitRounds + (action === 'wait' ? 1 : 0),
-          );
-        });
-      });
-    };
-    const start = () => {
-      if (followVerifyGenerationRef.current !== generation) return;
-      // 双帧等待:与冷开锚定环同源——命令式 scrollToEnd 已由调用方发出,这里只负责校验,
-      // 给原生布局至少一帧结算再读 metrics,不把「刚发出去还没生效」误判成落空。
-      followVerifyFrameRef.current = requestAnimationFrame(() => {
-        followVerifyFrameRef.current = requestAnimationFrame(() => {
-          followVerifyFrameRef.current = null;
-          step(0, 0);
-        });
-      });
-    };
-    const startDelayMs = mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: programmaticAnimatedScrollInFlightRef.current,
-      now: Date.now(),
-      settleAt: programmaticScrollSettleAtRef.current,
-    });
-    if (startDelayMs > 0) {
-      followVerifyTimerRef.current = setTimeout(() => {
-        if (followVerifyGenerationRef.current !== generation) return;
-        followVerifyTimerRef.current = null;
-        start();
-      }, startDelayMs);
-    } else {
-      start();
-    }
-  }, [isUserControllingScroll, scrollToEndProgrammatically]);
+    getTailFollower().reconcile();
+  }, [getTailFollower]);
 
   // DEV-only:把列表控制器 + 滚动 metrics 暴露给性能 harness(临时,profiling/回归测量用)。
   useEffect(() => {
@@ -1808,20 +1724,11 @@ export function MessageRenderer({
     nearBottomRef.current = true;
     cancelHistoryPrependTransaction();
     userScrollForOlderRef.current = false;
-    // 用户主动跳底是明确的重锚意图:重建补滚护栏(清掉可能仍开着的断路窗,
-    // 让跳底后的贴底跟随立即恢复;振荡若还在会重新跳闸,review P2)。在飞的
-    // 断路清账 timer 一并作废——本次显式跳底就是清账。
-    followEndPinStateRef.current = createMobileFollowEndPinState();
-    if (followEndPinRecoveryTimerRef.current) {
-      clearTimeout(followEndPinRecoveryTimerRef.current);
-      followEndPinRecoveryTimerRef.current = null;
-    }
     setIsAwayFromBottom(false);
     setHasNewMessages(false);
     setPreviousUserTarget(null);
     scrollToEndProgrammatically(true, 'explicit');
-    runStickToLatestVerify();
-  }, [cancelHistoryPrependTransaction, runStickToLatestVerify, scrollToEndProgrammatically]);
+  }, [cancelHistoryPrependTransaction, scrollToEndProgrammatically]);
 
   const jumpToPreviousUserMessage = useCallback(() => {
     const target = previousUserMessageJumpTarget(
@@ -1839,36 +1746,13 @@ export function MessageRenderer({
     scrollToIndexProgrammatically(target.index, 0.12);
   }, [scrollToIndexProgrammatically]);
 
-  // 「跳到最新」请求(会话外部触发,含发送消息后的跟随):命令式滚到底,随后跑一轮有界
-  // 校验/补滚(runStickToLatestVerify)——单发的 scrollToEnd 落地一刻的 metrics 可能仍陈旧,
-  // 或被仍开着的 mVCP 吸收掉,不校验就会静默停在旧消息上(bug 现场,与冷开锚定同一根因)。
-  // 之后的贴底由 handleContentSize 补滚维持。
+  // Sending and the jump button share the same explicit follow action.
   useEffect(() => {
     if (previousFollowLatestRequestKeyRef.current === followLatestRequestKey) return;
     previousFollowLatestRequestKeyRef.current = followLatestRequestKey;
     if (followLatestRequestKey === null || followLatestRequestKey === undefined) return;
-    nearBottomRef.current = true;
-    cancelHistoryPrependTransaction();
-    // 发送后的显式贴底已经取代旧的历史浏览意图。先清掉该标记,否则 verifier 的
-    // stickToLatest 会被一次更早的拖动永久压成 false,退化回不可靠的单次 scrollToEnd。
-    // 用户若在校验期间再次拖动,onScrollBeginDrag 会重新置 true 并自然中止补滚。
-    userScrollForOlderRef.current = false;
-    // 与 scrollToBottom 同语义:显式重锚清掉补滚护栏的断路窗与在飞清账 timer。
-    followEndPinStateRef.current = createMobileFollowEndPinState();
-    if (followEndPinRecoveryTimerRef.current) {
-      clearTimeout(followEndPinRecoveryTimerRef.current);
-      followEndPinRecoveryTimerRef.current = null;
-    }
-    setHasNewMessages(false);
-    setIsAwayFromBottom(false);
-    scrollToEndProgrammatically(true, 'explicit');
-    runStickToLatestVerify();
-  }, [
-    cancelHistoryPrependTransaction,
-    followLatestRequestKey,
-    runStickToLatestVerify,
-    scrollToEndProgrammatically,
-  ]);
+    scrollToBottom();
+  }, [followLatestRequestKey, scrollToBottom]);
 
   // 自动加载更早:电平触发判定(shouldAutoLoadEarlier),在所有可能改变判定结果的时机重评估
   // (scroll 事件 / LegendList onStartReached 边沿 / eligibility 变化 effect)。
@@ -2325,7 +2209,9 @@ export function MessageRenderer({
     const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
     scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
-  }, []);
+    markMobileMvcpSettle();
+    if (nearBottomRef.current) runStickToLatestVerify();
+  }, [markMobileMvcpSettle, runStickToLatestVerify]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
     listMetricsRef.current = metrics;
@@ -2350,7 +2236,6 @@ export function MessageRenderer({
   // LegendList 内置 maintainScrollAtEnd 已弃用(见 LegendList props 注释),不存在双机制叠加。
   const handleContentSize = useCallback((_width: number, height: number) => {
     markMobileMvcpSettle();
-    const { viewportHeight } = scrollMetricsRef.current;
     scrollMetricsRef.current = { ...scrollMetricsRef.current, contentHeight: height };
     // readingOlderRef:load-earlier 的 prepend 也会撑高 contentHeight,但那是顶部增长、不该贴底(review P1)。
     if (readingOlderRef.current) {
@@ -2370,57 +2255,12 @@ export function MessageRenderer({
       }
       return;
     }
-    if (isUserControllingScroll()) return;
-    if (nearBottomRef.current && viewportHeight > 0 && height > viewportHeight) {
-      // Animated jump/send follow owns the viewport until its settle window closes. Content
-      // growth during that animation only reschedules the verifier; a false-animated pin here
-      // would visibly cut the smooth scroll short and jump straight to the end.
-      if (programmaticAnimatedScrollInFlightRef.current) {
-        runStickToLatestVerify();
-        return;
-      }
-      // 补滚护栏:死区去噪 + 振荡断路,掐断「scrollToEnd → 重测 → onContentSizeChange」
-      // 洪泛环(JS 忙死、冷开消息区空白;语义与参数见 messageScroll.ts 护栏段)。
-      // 单调增长(流式/冷开/回填)不限流,每次跟进;只有高度往返振荡才跳闸。
-      const decision = evaluateMobileFollowEndContentSizePin(followEndPinStateRef.current, {
-        now: Date.now(),
-        contentHeight: height,
-      });
-      if (decision.trippedNow) {
-        // 诊断告警(每个护栏周期一次——护栏状态随会话切换/显式跳底重建后可再报):
-        // 现场无日志通道,这条 warn 是洪泛环被触发的唯一取证点。
-        console.warn(
-          '[message-list] contentSize follow-pin circuit tripped: '
-          + `oscillating item measurements suspected (height=${Math.round(height)}, viewport=${Math.round(viewportHeight)})`,
-        );
-      }
-      if (decision.suppressionStarted) {
-        // 断路到期 + 缓冲一帧后清账:仍在贴底跟随(用户没上翻)时补一次落底,
-        // 覆盖「振荡在断路窗内自然停息、最终高度停在半空」的收尾状态。
-        if (followEndPinRecoveryTimerRef.current) clearTimeout(followEndPinRecoveryTimerRef.current);
-        followEndPinRecoveryTimerRef.current = setTimeout(() => {
-          followEndPinRecoveryTimerRef.current = null;
-          if (nearBottomRef.current && !readingOlderRef.current) {
-            scrollToEndProgrammatically(false);
-            // 清账补滚同样不保证真的落底(measurement 结算 / mVCP 吸收的静默落空同源风险),
-            // 跑一轮校验/补滚兜底。
-            runStickToLatestVerify();
-          }
-        }, MOBILE_FOLLOW_END_PIN_SUPPRESS_MS + 50);
-      }
-      if (decision.shouldScroll) {
-        scrollToEndProgrammatically(false);
-        // 贴底追赶的落底一样不校验就可能落空(陈旧 metrics / mVCP 吸收),补一轮有界校验。
-        runStickToLatestVerify();
-      }
-    }
+    getTailFollower().contentChanged();
   }, [
-    isUserControllingScroll,
+    getTailFollower,
     markMobileMvcpSettle,
     restoreHistoryAnchorOnce,
-    runStickToLatestVerify,
     scheduleHistoryAnchorRestore,
-    scrollToEndProgrammatically,
   ]);
 
   // 首次落底：完整历史已经在列表里。短暂遮住命令式落底与首轮测量校正，随后由 native
@@ -2435,22 +2275,13 @@ export function MessageRenderer({
     }
 
     initialAnchorDoneRef.current = true;
-    const generation = initialAnchorGenerationRef.current + 1;
-    initialAnchorGenerationRef.current = generation;
-    if (initialAnchorFrameRef.current !== null) cancelAnimationFrame(initialAnchorFrameRef.current);
-    if (initialAnchorVerifyFrameRef.current !== null) cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
+    const generation = initialRevealGenerationRef.current + 1;
+    initialRevealGenerationRef.current = generation;
     initialRevealAnimationRef.current?.stop();
     initialRevealProgress.setValue(0);
     setListRevealed(false);
-    const revealDeadlineAt = Date.now() + MOBILE_INITIAL_REVEAL_MAX_MS;
-
     const finish = () => {
-      if (initialAnchorGenerationRef.current !== generation) return;
-      if (initialAnchorVerifyFrameRef.current !== null) {
-        cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
-        initialAnchorVerifyFrameRef.current = null;
-      }
-      setListRevealed(true);
+      if (initialRevealGenerationRef.current === generation) setListRevealed(true);
     };
 
     const revealAnimation = Animated.timing(initialRevealProgress, {
@@ -2467,57 +2298,8 @@ export function MessageRenderer({
       if (finished) finish();
     });
 
-    const verify = (attempts: number, waitRounds: number) => {
-      if (initialAnchorGenerationRef.current !== generation) return;
-      // The native reveal is a real wall-clock deadline. If JS resumes after it, do not expose a
-      // late corrective scroll on an already-visible list.
-      if (Date.now() >= revealDeadlineAt) {
-        initialAnchorVerifyFrameRef.current = null;
-        setListRevealed(true);
-        return;
-      }
-      const preserveVisibleContentPosition = readingOlderRef.current
-        || isMobileMvcpSettling(Date.now(), mvcpSettleAtRef.current);
-      const action = evaluateMobileAnchorVerify({
-        attempts,
-        listVisible: true,
-        metrics: scrollMetricsRef.current,
-        preserveVisibleContentPosition,
-        stickToLatest: nearBottomRef.current && !userScrollForOlderRef.current,
-        waitRounds,
-      });
-      if (action === 'settled' || action === 'give-up') {
-        // The native animation owns the visual deadline. Settling early only stops verification;
-        // it must not replace that deadline or expose the hidden correction frames.
-        initialAnchorVerifyFrameRef.current = null;
-        return;
-      }
-      if (action === 'retry') scrollToEndProgrammatically(false);
-      initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-        initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-          initialAnchorVerifyFrameRef.current = null;
-          verify(
-            attempts + (action === 'retry' ? 1 : 0),
-            waitRounds + (action === 'wait' ? 1 : 0),
-          );
-        });
-      });
-    };
-
-    // Issue the first correction synchronously in the layout effect so native receives it before
-    // the UI-thread reveal starts, even when subsequent Markdown/cell work blocks JS.
+    // The controller seeks unmeasured rows once and owns all subsequent native correction.
     scrollToEndProgrammatically(false);
-    initialAnchorFrameRef.current = requestAnimationFrame(() => {
-      initialAnchorFrameRef.current = null;
-      if (initialAnchorGenerationRef.current !== generation) return;
-      initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-        initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-          initialAnchorVerifyFrameRef.current = null;
-          if (initialAnchorGenerationRef.current !== generation) return;
-          verify(0, 0);
-        });
-      });
-    });
   }, [
     initialRevealProgress,
     listData.length,
@@ -2530,11 +2312,6 @@ export function MessageRenderer({
   // 竞态误触发自动拉历史),此处不重复。
   useEffect(() => {
     lastAppliedFocusKeyRef.current = null;
-    // 上个会话遗留的断路清账 timer 作废(护栏状态本体已在渲染期同步块重建)。
-    if (followEndPinRecoveryTimerRef.current) {
-      clearTimeout(followEndPinRecoveryTimerRef.current);
-      followEndPinRecoveryTimerRef.current = null;
-    }
     setIsAwayFromBottom(false);
     setPreviousUserTarget(null);
     setHasNewMessages(false);
@@ -2542,18 +2319,13 @@ export function MessageRenderer({
   // 卸载时清掉在飞的定时器/rAF(闭包引用 listRef,卸载后触发是无害 no-op,
   // 但不留悬挂句柄)。
   useEffect(() => () => {
-    initialAnchorGenerationRef.current += 1;
+    initialRevealGenerationRef.current += 1;
     readingOlderRequestGenerationRef.current += 1;
     historyPrependTransactionRef.current = null;
-    followVerifyGenerationRef.current += 1;
-    if (followEndPinRecoveryTimerRef.current) clearTimeout(followEndPinRecoveryTimerRef.current);
+    tailFollowerRef.current?.reset();
     clearProgrammaticScroll();
-    if (initialAnchorFrameRef.current !== null) cancelAnimationFrame(initialAnchorFrameRef.current);
-    if (initialAnchorVerifyFrameRef.current !== null) cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
-    if (followVerifyFrameRef.current !== null) cancelAnimationFrame(followVerifyFrameRef.current);
     if (queuedLoadEarlierFlushFrameRef.current !== null) cancelAnimationFrame(queuedLoadEarlierFlushFrameRef.current);
     if (historyAnchorVerifyFrameRef.current !== null) cancelAnimationFrame(historyAnchorVerifyFrameRef.current);
-    if (followVerifyTimerRef.current !== null) clearTimeout(followVerifyTimerRef.current);
     if (scrollHistoryEvaluationTimerRef.current !== null) clearTimeout(scrollHistoryEvaluationTimerRef.current);
     initialRevealAnimationRef.current?.stop();
   }, [clearProgrammaticScroll]);

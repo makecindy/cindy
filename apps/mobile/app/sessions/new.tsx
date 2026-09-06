@@ -27,7 +27,6 @@ import {
   useWindowDimensions,
   type StyleProp,
   type TextInputContentSizeChangeEvent,
-  type TextLayoutEvent,
   type ViewStyle,
 } from 'react-native';
 import { Text } from '@/components/AppText';
@@ -331,7 +330,6 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
-const COMPOSER_VOICE_CARET_GAP = 2;
 // composer 除输入区外的 chrome 高度估算（输入行上下 padding + 边框），
 // 只用于给拖拽调高的上限留余量，与会话页同量级。
 const COMPOSER_RESIZE_CHROME_HEIGHT = 34;
@@ -697,6 +695,7 @@ export default function NewRemoteSessionScreen() {
   const userTouchedDeviceRef = useRef(false);
   const userTouchedWorkspaceRef = useRef(false);
   const firstMessageRef = useRef(draft.firstMessage);
+  const firstMessageSelectionRef = useRef({ start: draft.firstMessage.length, end: draft.firstMessage.length });
   const firstMessageInputRef = useRef<NativeTextInput>(null);
   const voiceDraftScrollRef = useRef<ScrollView>(null);
   const voiceRecordingActiveRef = useRef(false);
@@ -712,6 +711,8 @@ export default function NewRemoteSessionScreen() {
   const [firstMessageInputContentHeight, setFirstMessageInputContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
   const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(false);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
+  const voiceDraftCaretRef = useRef<View>(null);
+  const voiceDraftMeasuredBlockRef = useRef<View>(null);
   // 自动默认运行配置(跟随最近会话 / 区域默认 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
   // 记录已自动应用过的设备,切设备时(未手动选过)按新设备重算。
   const userTouchedRuntimeRef = useRef(false);
@@ -1593,19 +1594,15 @@ export default function NewRemoteSessionScreen() {
     ));
   }, []);
 
-  const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {
-    const lines = event.nativeEvent.lines;
-    const lastLine = lines[lines.length - 1];
-    if (!lastLine) return;
-    const nextFrame = {
-      left: Math.max(0, Math.round(lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP)),
-      top: Math.max(0, Math.round(lastLine.y + ((lastLine.height - MOBILE_COMPOSER_INPUT_LINE_HEIGHT) / 2))),
-    };
-    setVoiceDraftCaretFrame((currentFrame) => (
-      currentFrame.left === nextFrame.left && currentFrame.top === nextFrame.top
-        ? currentFrame
-        : nextFrame
-    ));
+  const handleVoiceDraftTextLayout = useCallback(() => {
+    const block = voiceDraftMeasuredBlockRef.current;
+    const caret = voiceDraftCaretRef.current;
+    if (!block || !caret) return;
+    caret.measureLayout(block, (x, y) => {
+      if (caret !== voiceDraftCaretRef.current || block !== voiceDraftMeasuredBlockRef.current) return;
+      const nextFrame = { left: Math.max(0, Math.round(x)), top: Math.max(0, Math.round(y)) };
+      setVoiceDraftCaretFrame((current) => current.left === nextFrame.left && current.top === nextFrame.top ? current : nextFrame);
+    }, () => undefined);
   }, []);
 
   const cancelVoiceForDeviceSwitch = useCallback(() => {
@@ -3122,6 +3119,7 @@ export default function NewRemoteSessionScreen() {
       // used to add 0.6–4.4s before the mic could open.
       void openLink(selectedDeviceId).catch(() => undefined);
       const currentDraft = firstMessageRef.current;
+      const initialSelection = { ...firstMessageSelectionRef.current };
       // Claim the connection prewarmed at pressIn (if any): its credential is
       // already resolved and its ASR WebSocket already connecting, so the
       // handshake overlaps the press gesture instead of following it.
@@ -3163,7 +3161,8 @@ export default function NewRemoteSessionScreen() {
         }
         return;
       }
-      const selectionBefore = takeRefinementContextTail(currentDraft) || undefined;
+      const selectionBefore = takeRefinementContextTail(currentDraft.slice(0, initialSelection.start));
+      const selectionAfter = currentDraft.slice(initialSelection.end, initialSelection.end + 1200);
       const controller = createMobileVoiceControllerSession({
         credential,
         ...(prewarmedVoice ? { asr: prewarmedVoice.asr } : {}),
@@ -3173,10 +3172,18 @@ export default function NewRemoteSessionScreen() {
         warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string }) =>
           voiceContext.warmRefiner(input),
         initialDraft: currentDraft,
-        refinementContext: selectionBefore ? { selectionBefore } : undefined,
+        initialSelection,
+        refinementContext: {
+          selectionBefore: selectionBefore || undefined,
+          selectedText: currentDraft.slice(initialSelection.start, initialSelection.end).slice(0, 1200) || undefined,
+          selectionAfter: selectionAfter || undefined,
+        },
         localVoiceInputHistory,
         readCurrentDraft: () => firstMessageRef.current,
-        onDraftChanged: setFirstMessageDraft,
+        onDraftChanged: (text, selection) => {
+          if (selection) firstMessageSelectionRef.current = selection;
+          setFirstMessageDraft(text);
+        },
         onStateChanged: setVoiceState,
         onError: (message) => {
           setVoiceState('error');
@@ -3273,8 +3280,7 @@ export default function NewRemoteSessionScreen() {
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
       setVoiceState('done');
       requestAnimationFrame(() => {
-        const end = latestDraft.length;
-        firstMessageInputRef.current?.setNativeProps({ selection: { start: end, end } });
+        firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });
       });
       return latestDraft;
     } catch (err) {
@@ -3357,12 +3363,11 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     if (!voiceIsListening) return undefined;
     const frame = requestAnimationFrame(() => {
-      const end = firstMessageRef.current.length;
-      firstMessageInputRef.current?.setNativeProps({ selection: { start: end, end } });
-      voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+      firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });
+      voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [composerInputContentHeight, draft.firstMessage, voiceIsListening]);
+  }, [composerInputContentHeight, draft.firstMessage, voiceDraftCaretFrame.top, voiceIsListening]);
 
   useEffect(() => {
     if (voiceIsListening && draft.firstMessage.length > 0) return;
@@ -3529,12 +3534,12 @@ export default function NewRemoteSessionScreen() {
       ]}
       onContentSizeChange={() => {
         requestAnimationFrame(() => {
-          voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+          voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
         });
       }}
       onLayout={() => {
         requestAnimationFrame(() => {
-          voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+          voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
         });
       }}
       pointerEvents="none"
@@ -3548,25 +3553,12 @@ export default function NewRemoteSessionScreen() {
           <Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>
         </View>
       ) : (
-        <View style={styles.voiceDraftMeasuredBlock}>
-          <Text
-            onTextLayout={handleVoiceDraftTextLayout}
-            style={styles.voiceDraftText}
-          >
-            {draft.firstMessage}
+        <View ref={voiceDraftMeasuredBlockRef} collapsable={false} style={styles.voiceDraftMeasuredBlock}>
+          <Text onTextLayout={handleVoiceDraftTextLayout} style={styles.voiceDraftText}>
+            {draft.firstMessage.slice(0, firstMessageSelectionRef.current.end)}
+            <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" viewRef={voiceDraftCaretRef} />
+            {draft.firstMessage.slice(firstMessageSelectionRef.current.end)}
           </Text>
-          <View
-            pointerEvents="none"
-            style={[
-              styles.voiceDraftCaretOverlay,
-              {
-                left: voiceDraftCaretFrame.left,
-                top: voiceDraftCaretFrame.top,
-              },
-            ]}
-          >
-            <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
-          </View>
         </View>
       )}
     </ScrollView>
@@ -5828,6 +5820,11 @@ export default function NewRemoteSessionScreen() {
                     setComposerVoiceHoldArmed(false);
                   }}
                   onChangeText={setFirstMessageDraft}
+                  onSelectionChange={(event) => {
+                    if (!voiceRecordingActiveRef.current && !voiceStopInFlightRef.current) {
+                      firstMessageSelectionRef.current = event.nativeEvent.selection;
+                    }
+                  }}
                   onContentSizeChange={handleFirstMessageInputContentSizeChange}
                   onFocus={() => setFirstMessageInputFocused(true)}
                   onPasteImages={(uris) => void addPastedImageAttachments(uris)}
@@ -6034,6 +6031,7 @@ export default function NewRemoteSessionScreen() {
         disabled={creating}
         emptyHint={selectedDeviceId ? t('session.new.noModelsAvailable') : t('session.new.selectDeviceFirst')}
         flatOptions={runtimeOptions.modelOptions}
+        providersReady={deviceProviders.ready}
         modelVisibilityOverrides={deviceProviders.modelVisibilityOverrides}
         keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         loading={deviceProviders.loading || capabilitiesLoading}
@@ -6758,9 +6756,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceDraftMeasuredBlock: {
     minHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT,
     position: 'relative',
-  },
-  voiceDraftCaretOverlay: {
-    position: 'absolute',
   },
   // 草稿层的文本档必须与真实 TextInput 完全一致,否则换行位置错开、超出的行被裁在
   // 框外(见 MOBILE_COMPOSER_DRAFT_TEXT_STYLE)。

@@ -12,6 +12,8 @@ import {
   MODEL_PRICE_VARIANTS,
   MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
+  MODEL_REGISTRY_V3_SCHEMA_VERSION,
+  MODEL_NATIVE_APIS,
   MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
   type ModelAccessParseResult,
@@ -587,11 +589,7 @@ function modelEntryError(
       ) {
         return `${path}.perAgent.pi.wireProtocol must be a non-empty string when present`;
       }
-      if (
-        agent !== 'pi' &&
-        isPlainObject(override) &&
-        override.wireProtocol !== undefined
-      ) {
+      if (agent !== 'pi' && isPlainObject(override) && override.wireProtocol !== undefined) {
         if (!isModelAccessWireProtocol(override.wireProtocol)) {
           return `${path}.perAgent.${agent}.wireProtocol must be a supported wire protocol`;
         }
@@ -715,10 +713,7 @@ export function parseListModelsResponse(
         return fail(`response.models[${index}].availability must be available or requires_payment`);
       }
       const { availability, ...legacyShape } = raw;
-      const sanitized = sanitizeModelEntryAgents(
-        legacyShape,
-        MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
-      );
+      const sanitized = sanitizeModelEntryAgents(legacyShape, MODEL_ACCESS_CATALOG_SCHEMA_VERSION);
       if (isPlainObject(sanitized) && typeof sanitized.id === 'string') {
         if (modelIds.has(sanitized.id)) {
           return fail(`response.models[${index}].id must be unique`);
@@ -864,17 +859,26 @@ function registryRouteError(value: unknown, path: string): string | null {
 function registryEntryError(
   value: unknown,
   path: string,
-  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION | typeof MODEL_REGISTRY_SCHEMA_VERSION,
+  schemaVersion: ModelRegistry['schemaVersion'],
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = unknownFieldError(
     value,
     schemaVersion === MODEL_REGISTRY_LEGACY_SCHEMA_VERSION
       ? MODEL_REGISTRY_ENTRY_V1_FIELDS
-      : MODEL_REGISTRY_ENTRY_V2_FIELDS,
+      : schemaVersion === MODEL_REGISTRY_V3_SCHEMA_VERSION
+        ? [...MODEL_REGISTRY_ENTRY_V2_FIELDS, 'nativeApi']
+        : MODEL_REGISTRY_ENTRY_V2_FIELDS,
     path,
   );
   if (error) return error;
+  if (
+    value.nativeApi !== undefined &&
+    value.nativeApi !== null &&
+    !MODEL_NATIVE_APIS.includes(value.nativeApi as never)
+  ) {
+    return `${path}.nativeApi must be a supported API or null`;
+  }
   if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256) {
     return `${path}.id must be a non-empty string of at most 256 characters`;
   }
@@ -954,7 +958,7 @@ function registryEntryError(
       if (error) return error;
     }
   }
-  if (schemaVersion === MODEL_REGISTRY_SCHEMA_VERSION) {
+  if (schemaVersion >= MODEL_REGISTRY_SCHEMA_VERSION) {
     if (value.status === 'retired' && value.newSessionDefault !== undefined) {
       return `${path}.newSessionDefault is not allowed when ${path}.status is retired`;
     }
@@ -970,20 +974,48 @@ function registryEntryError(
 
 export function parseModelRegistry(value: unknown): ModelAccessParseResult<ModelRegistry> {
   if (!isPlainObject(value)) return fail('modelRegistry must be an object');
-  const unknownField = unknownFieldError(value, MODEL_REGISTRY_FIELDS, 'modelRegistry');
+  const unknownField = unknownFieldError(
+    value,
+    value.schemaVersion === MODEL_REGISTRY_V3_SCHEMA_VERSION
+      ? [...MODEL_REGISTRY_FIELDS, 'nativeApiRules']
+      : MODEL_REGISTRY_FIELDS,
+    'modelRegistry',
+  );
   if (unknownField) return fail(unknownField);
   if (
     value.schemaVersion !== MODEL_REGISTRY_LEGACY_SCHEMA_VERSION &&
-    value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION
+    value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_REGISTRY_V3_SCHEMA_VERSION
   ) {
-    return fail(
-      `modelRegistry.schemaVersion must be ${MODEL_REGISTRY_LEGACY_SCHEMA_VERSION} or ${MODEL_REGISTRY_SCHEMA_VERSION}`,
-    );
+    return fail('modelRegistry.schemaVersion must be 1, 2 or 3');
   }
   if (!isIsoTimestamp(value.updatedAt)) {
     return fail('modelRegistry.updatedAt must be an ISO timestamp');
   }
   if (!Array.isArray(value.models)) return fail('modelRegistry.models must be an array');
+  if (value.nativeApiRules !== undefined) {
+    if (!Array.isArray(value.nativeApiRules))
+      return fail('modelRegistry.nativeApiRules must be an array');
+    const identities = new Set<string>();
+    for (const rule of value.nativeApiRules) {
+      if (
+        !isPlainObject(rule) ||
+        unknownFieldError(rule, ['providerId', 'modelIdPrefix', 'nativeApi'], 'nativeApiRule') ||
+        typeof rule.providerId !== 'string' ||
+        !rule.providerId ||
+        rule.providerId.length > 128 ||
+        typeof rule.modelIdPrefix !== 'string' ||
+        !rule.modelIdPrefix ||
+        rule.modelIdPrefix.length > 256 ||
+        !MODEL_NATIVE_APIS.includes(rule.nativeApi as never)
+      )
+        return fail('modelRegistry.nativeApiRules contains an invalid rule');
+      const key = `${rule.providerId}\u0000${rule.modelIdPrefix}`;
+      if (identities.has(key))
+        return fail('modelRegistry.nativeApiRules must have unique provider/prefix pairs');
+      identities.add(key);
+    }
+  }
   const modelIds = new Set<string>();
   for (const [index, model] of value.models.entries()) {
     if (isPlainObject(model) && typeof model.id === 'string') {

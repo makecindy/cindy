@@ -10,6 +10,10 @@ import {
   type XaiSubscriptionUsageSnapshot,
 } from '../../../shared/xaiSubscriptionUsage';
 import { formatCompactTokens } from '@/lib/usageFormat';
+import {
+  formatClaudeSubscriptionPlanLabel,
+  formatCodexPlanLabel,
+} from '@/lib/subscriptionPlanLabel';
 
 export interface UsageCardWindow {
   key: string;
@@ -35,31 +39,6 @@ export interface UsageCardAccount {
   notices?: Array<{ text: string; tone: 'warn' | 'crit' }>;
   emptyText?: string;
   updatedAt?: number | null;
-}
-
-const PLAN_LABELS: Record<string, string> = {
-  free: 'Free',
-  go: 'Go',
-  plus: 'Plus',
-  pro: 'Pro',
-  prolite: 'Pro Lite',
-  max: 'Max',
-  team: 'Team',
-  business: 'Business',
-  enterprise: 'Enterprise',
-  edu: 'Edu',
-  unknown: 'Unknown',
-  self_serve_business_usage_based: 'Self Serve Business Usage Based',
-  enterprise_cbp_usage_based: 'Enterprise CBP Usage Based',
-};
-
-function formatPlanType(value: unknown): string | null {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const trimmed = value.trim();
-  return (
-    PLAN_LABELS[trimmed.toLowerCase()] ??
-    trimmed.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
-  );
 }
 
 export function formatQuotaResetAt(
@@ -115,7 +94,7 @@ export function buildClaudeUsageCard(
     typeof rawRateLimitStatus === 'string' ? rawRateLimitStatus.trim().toLowerCase() : undefined;
   return {
     title: 'Claude',
-    planLabel: formatPlanType(snapshot.subscriptionType),
+    planLabel: formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType),
     windows,
     updatedAt: snapshot.updatedAt,
     emptyText: windows.length ? undefined : t('quotaCard.noWindows'),
@@ -185,7 +164,7 @@ export function buildCodexUsageCard(
   const exhausted = windows.some(({ window }) => window.utilization >= 99.95);
   return {
     title: 'ChatGPT',
-    planLabel: formatPlanType(snapshot?.planType),
+    planLabel: formatCodexPlanLabel(snapshot?.planType),
     windows,
     details,
     updatedAt: snapshot?.updatedAt,

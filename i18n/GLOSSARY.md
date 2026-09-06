@@ -227,6 +227,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
 
+### Doubao
+
+模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
+
 ### embedding
 
 文本转成的数值向量，用于语义检索。zh-CN 用「向量」而非「嵌入」——设置页的模型分组、UnifiedModelList 的能力分类既有注释都已用「向量」，「嵌入」在中文里更容易被读成动作。指模型本身时说「向量模型」，不说「嵌入模型」。插件 cindy.embed 能力与 embedding-client 的四语文案使用。
@@ -238,6 +242,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 ### Harness
 
 用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。
+
+### Hunyuan
+
+模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
 
 ### iOS Simulator
 
@@ -283,9 +291,21 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 用户确认并公开提交 Issue 时展示本轮在 Cindy 中冻结的模型标识。五语暂统一保留技术名称 Model ID，避免与可翻译的模型显示名混淆。
 
+### Native API
+
+模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。
+
 ### Not signed in
 
 跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。
+
+### Chat Completions
+
+模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。
+
+### Responses
+
+模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。
 
 ### OpenClaw
 
@@ -318,6 +338,10 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 ### Process
 
 OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。
+
+### Qwen
+
+模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
 
 ### Region badge
 

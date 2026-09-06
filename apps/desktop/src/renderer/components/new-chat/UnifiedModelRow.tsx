@@ -1,9 +1,8 @@
+import { localizedModelDescription } from '@/lib/modelDescriptions';
+import { localizedModelName } from '@/lib/modelDisplayNames';
 import { Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type {
-  KeyboardEvent as ReactKeyboardEvent,
-  MouseEvent as ReactMouseEvent,
-} from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 
 import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 
@@ -11,7 +10,7 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import type { Effort } from '@/lib/userPreferences.types';
 
-import { EFFORT_TIER_COLORS, PRICE_TIER_COLORS } from '@/themes/effortTierColors';
+import { PriceFreeBadge, PriceTierMarks, type UnifiedRowPriceDisplay } from './priceTierMarks';
 
 import { agentOptionOf } from './agentOptions';
 // 图标规则(模型条目 icon 优先、缺省回落来源供应商标)只有一份实现,复用它而不是抄一份。
@@ -19,102 +18,10 @@ import { ModelIconMark } from './ModelSelector';
 import { anchorKey, type UnifiedAnchor, type UnifiedRowConfig } from './unifiedModelSelection';
 
 /**
- * 行内价格展示(设计稿 v4 定稿的 F 样式):
- *   - `free` → 「限时免费」淡染小徽标;
- *   - `tier` → $ 档串($×1-3);**有折扣时**按折扣比例点亮,灰格是省掉的部分,尾随
- *     「↓X%」淡染小字。
- * 颜色语义(Chris 2026-08-14 裁决,第二版):**颜色只由点亮格数决定** —— 亮 1 格绿、
- * 2 格黄、3 格红,与模型档位无关。$$$ 打六折亮两格就是黄,$$ 打六折亮一格就是绿;
- * 无折扣行全亮,自然落回档位色。精确省幅由 ↓X% 与悬停说明表达。
- * 不传 = 无报价,行内不渲染任何价格节点(别把每行都加宽)。
+ * 行内价格展示(设计稿 v4 定稿的 F 样式)的类型与档串组件已抽到 `./priceTierMarks`,
+ * 与设置页 → 模型列表共用一份实现。这里 re-export 供既有 import 路径继续可用。
  */
-export interface UnifiedRowPriceDisplay {
-  kind: 'free' | 'tier';
-  /** 符号个数:按标准价分档(折扣不改变)。 */
-  tier?: 1 | 2 | 3;
-  /**
-   * 档串用的货币符号,按**该行报价的币种**取(CNY → ¥、USD → $)。设计稿里中文报价
-   * 是 ¥¥¥,写死 $ 会让国内用户看到一串对不上账单的美元号。
-   */
-  symbol?: string;
-  /** 折扣行:折后价占比(0-100,亮段宽度);无折扣不传。 */
-  paidPct?: number;
-  /** 折扣行:↓X% 的 X。 */
-  discountPct?: number;
-  /** 已本地化的悬停说明(折扣幅度全文)。 */
-  title?: string;
-}
-
-/** 价格档位与折扣展示。 */
-function PriceTierMarks({
-  priceDisplay,
-  symbol,
-  tier,
-}: {
-  priceDisplay: UnifiedRowPriceDisplay;
-  symbol: string;
-  tier: 1 | 2 | 3;
-}) {
-  const marks = symbol.repeat(tier);
-  const { paidPct, discountPct } = priceDisplay;
-  return (
-    <span
-      data-price-tier
-      className="flex shrink-0 items-center gap-1"
-      {...(priceDisplay.title ? { title: priceDisplay.title } : {})}
-    >
-      {paidPct !== undefined && discountPct !== undefined ? (
-        (() => {
-          const lit = litWholeMarks(paidPct, tier);
-          // 颜色按点亮字符数四舍五入取 1 绿 / 2 黄 / 3 红(见 UnifiedRowPriceDisplay 头注)。
-          const colorTier = Math.min(3, Math.max(1, Math.round(lit))) as 1 | 2 | 3;
-          return (
-            <>
-              <span
-                aria-hidden
-                className="relative inline-block text-11 font-semibold leading-none tracking-[0.5px]"
-              >
-                <span className="invisible">{marks}</span>
-                <span className="absolute inset-0 text-[var(--text-tertiary)] opacity-55">
-                  {marks}
-                </span>
-                <span
-                  className="absolute inset-0"
-                  style={{
-                    color: PRICE_TIER_COLORS[`t${colorTier}`],
-                    clipPath: `inset(0 ${100 - (lit / tier) * 100}% 0 0)`,
-                  }}
-                >
-                  {marks}
-                </span>
-              </span>
-              <span
-                data-discount-badge
-                // 设计稿 `.badge.save-tint`:淡染胶囊(14% 底 + 同色字),不是裸绿字 ——
-                // 裸字在长模型名旁边会被读成名字的一部分。
-                className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
-                style={{
-                  color: EFFORT_TIER_COLORS.low,
-                  backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
-                }}
-              >
-                {`↓${discountPct}%`}
-              </span>
-            </>
-          );
-        })()
-      ) : (
-        // 无折扣:全格点亮 → 颜色按格数(1 绿 / 2 黄 / 3 红),与折扣行同一条规则。
-        <span
-          className="text-11 font-semibold leading-none tracking-[0.5px]"
-          style={{ color: PRICE_TIER_COLORS[`t${tier}`] }}
-        >
-          {marks}
-        </span>
-      )}
-    </span>
-  );
-}
+export type { UnifiedRowPriceDisplay } from './priceTierMarks';
 
 /** 整格点亮(classic,Chris 2026-08-14 第二版):亮几格 = round(实付比例 × 格数),至少 1 格。 */
 const litWholeMarks = (paidPct: number, tier: 1 | 2 | 3): number =>
@@ -136,7 +43,6 @@ export function UnifiedModelRow({
   onStar,
   onRevealForKeyboard,
   priceDisplay,
-  subscriptionLabel,
   configurationEnabled = true,
   paymentRequired = false,
   paymentRequiredLabel,
@@ -160,11 +66,6 @@ export function UnifiedModelRow({
   onRevealForKeyboard: (anchor: UnifiedAnchor, element: HTMLElement) => void;
   /** 行内价格展示;不传 = 无报价。字段语义见 `UnifiedRowPriceDisplay`。 */
   priceDisplay?: UnifiedRowPriceDisplay;
-  /**
-   * 已本地化的「订阅」小签(设计稿 `.badge.sub`)。仅**订阅接入且无按量报价**的行传 ——
-   * 那类模型走套餐额度,行内画 $ 档串会误导成按量计费。
-   */
-  subscriptionLabel?: string;
   configurationEnabled?: boolean;
   /** 付费锁定行保留在原位置，可聚焦但不能选中、收藏或打开配置。 */
   paymentRequired?: boolean;
@@ -173,6 +74,8 @@ export function UnifiedModelRow({
   onPaymentRequired?: () => void;
 }) {
   const { t } = useTranslation();
+  const displayName = localizedModelName(entry.displayName, t);
+  const description = localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
   const provider = providers.find((item) => item.id === entry.providerId);
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
@@ -183,7 +86,7 @@ export function UnifiedModelRow({
     configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
   }${configurationEnabled && config.fast ? ' · Fast' : ''}`;
   const paymentRequiredActionLabel = paymentRequired
-    ? [entry.displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
+    ? [displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
         .filter(Boolean)
         .join(' · ')
     : undefined;
@@ -332,33 +235,19 @@ export function UnifiedModelRow({
           // 右侧三元组由 ml-auto 推到最右;空间不足时名字先收缩截断,title 给全名。
           // 字号/字重**不跟设计稿的 13.5px/normal**,按旧选择器恢复(text-14 + medium):
           // Chris 2026-08-13 实测裁决 —— 名字变小去粗后与描述行难以区分。
-          title={entry.displayName}
+          title={displayName}
           className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--model-item-text)]"
         >
-          {entry.displayName}
+          {displayName}
         </span>
-        {subscriptionLabel && (
-          <span
-            data-subscription-badge
-            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
-          >
-            {subscriptionLabel}
-          </span>
-        )}
         {priceDisplay?.kind === 'free' && (
-          <span
-            data-price-free
-            className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
-            style={{
-              color: EFFORT_TIER_COLORS.low,
-              backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
-            }}
-          >
-            {t('newChat.modelSelector.pricing.free')}
-          </span>
+          <PriceFreeBadge label={t('newChat.modelSelector.pricing.free')} />
         )}
         {priceDisplay?.kind === 'tier' && priceDisplay.tier !== undefined && (
           <PriceTierMarks
+            litOf={litWholeMarks}
+            formatClipPct={String}
+            exposeLit={false}
             priceDisplay={priceDisplay}
             symbol={priceSymbol}
             tier={priceDisplay.tier}
@@ -394,16 +283,16 @@ export function UnifiedModelRow({
         {/* 行尾不放 ✅(Chris 2026-08-13 裁决:选中已有整行底色,再加勾是重复信号,
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。 */}
       </div>
-      {entry.description && (
+      {description && (
         // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
         // 描述是辅助信息,不该比模型名更长地占据视线(2026-08-13 实测反馈)。
         // 颜色按旧选择器恢复用 --text-secondary(同日裁决:tertiary 太淡看不清;
         // 与名字的区分靠名字的 14px/medium,不靠把描述压淡)。
         <div
-          title={entry.description}
+          title={description}
           className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]"
         >
-          {entry.description}
+          {description}
         </div>
       )}
     </div>

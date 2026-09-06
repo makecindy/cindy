@@ -3378,6 +3378,24 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("keeps medium executable when the native model only declares sparse extended mappings", async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: "native-a", name: "Native A", baseUrl: "http://a.test", api: "openai-responses",
+        models: [{ id: "local-model", reasoning: true,
+          thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+        }],
+      }], env: {},
+    })));
+    const handle = await agent.startSession({
+      sessionId: "sparse-native-effort", workingDir: cwd,
+      model: "local-model", providerId: "native-a", effort: "medium",
+    });
+    await handle.setEffort!("medium");
+    expect(captured.requests).toContainEqual({ type: "set_thinking_level", level: "medium" });
+    await handle.close();
+  });
+
   it("freezes active BYOM effort selection to the startup models.json snapshot", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({

@@ -394,3 +394,15 @@ describe('modelVisibilityPrefs store', () => {
     expect(isModelEnabled('codex', 'xd', { id: 'gpt-5.5' })).toBe(true); // 脏数据丢弃 → 默认开
   });
 });
+
+
+it('restoring model visibility deletes overrides and follows future online defaults', async () => {
+  const prefs = await loadModuleForOwner();
+  const target = { agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
+  prefs.setModelVisibility(target.agent, 'openai', target.modelId, true);
+  expect(prefs.isModelVisibilityCustomized(target.agent, 'openai', target.modelId)).toBe(true);
+  expect(prefs.resetModelVisibilities('openai', [target])).toBe(true);
+  expect(prefs.isModelVisibilityCustomized(target.agent, 'openai', target.modelId)).toBe(false);
+  expect(prefs.isModelEnabled(target.agent, 'openai', { id: target.modelId, defaultEnabled: false })).toBe(false);
+  expect(prefs.isModelEnabled(target.agent, 'openai', { id: target.modelId, defaultEnabled: true })).toBe(true);
+});

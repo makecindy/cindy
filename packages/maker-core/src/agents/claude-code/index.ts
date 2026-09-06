@@ -1214,9 +1214,20 @@ export class ClaudeCodeAgent extends BaseAgent {
         mirrorOneMillionSuffix: false,
       };
     })();
-    const modelContextWindows = sessionRouteWindowEntry
-      ? [...providerRoutedModels, sessionRouteWindowEntry]
-      : providerRoutedModels;
+    const configuredWindows = [...new Set([...this.capabilities.availableModels.map((model) => model.id), opts.model])]
+      .flatMap((model) => {
+        const limit = this.deps.resolveModelContextLimit?.(opts.providerId, model);
+        return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0
+          ? [{ id: sdkModelFor(model), contextWindow: limit, mirrorOneMillionSuffix: false as const }]
+          : [];
+      });
+    const modelContextWindows = [...new Map([
+      ...providerRoutedModels,
+      ...(sessionRouteWindowEntry ? [sessionRouteWindowEntry] : []),
+      // Explicit local overrides win for this provider only. Uncustomized models
+      // retain their upstream/default metadata and continue to follow updates.
+      ...configuredWindows,
+    ].map((entry) => [entry.id, entry])).values()];
     // #3557:会话模型 id 带命名空间前缀(anthropic/... 等网关目录形态)时,CLI
     // 内部小模型调用(bash 前缀判定/标题/摘要)不能用它内置的裸名默认值 ——
     // 网关白名单字面比对,裸名必 403。钉到会话自身 wire 模型(唯一确定已授权);
@@ -2299,6 +2310,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       ]),
     ];
     const resolveModelContextWindow = (model: string): number | undefined => {
+      const configured = this.deps.resolveModelContextLimit?.(mutableProviderId, model);
+      if (configured && Number.isFinite(configured) && configured > 0) return configured;
+
       // 核实窗口按会话实际来源取。host 注入了 resolver 时,null = 不要收敛
       // (同 id 多来源 / 未核实兜底),采信 SDK 上报,不能再拿扁平目录首见值覆盖。
       // 只有未注入 resolver 的路径(测试 / 无 host)才退回扁平目录。

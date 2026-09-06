@@ -410,6 +410,29 @@ describe("PiAgent native auto-compaction ownership", () => {
     };
   }
 
+  it("writes the local override into the native model file and compression reserve", async () => {
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = (_provider, model) => model === "m" ? 500_000 : null;
+    const handle = await new PiAgent(deps).startSession({ sessionId: "budget", workingDir: cwd, model: "m" });
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(next);
+        else if (entry.name === "models.json") files.push(next);
+      }
+    };
+    walk(agentHome);
+    const models = files.flatMap((file) => {
+      const data = JSON.parse(readFileSync(file, "utf8")) as { providers: Record<string, { models?: Array<{ id: string; contextWindow: number }> }> };
+      return Object.values(data.providers).flatMap((provider) => provider.models ?? []);
+    });
+    expect(models.find((model) => model.id === "m")?.contextWindow).toBe(500_000);
+    expect(models.find((model) => model.id === "n")?.contextWindow).toBe(100_000);
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(125_000);
+    await handle.close();
+  });
+
   it("rewrites native reserve tokens when the model window changes", async () => {
     const handle = await start();
     expect(readLatestPiSettings().compaction?.reserveTokens).toBe(50_000);

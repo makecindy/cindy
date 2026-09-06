@@ -20,6 +20,8 @@ import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
 import { CINDY_MANAGED_REFINER_PROVIDER } from '@/session/mobileCindyVoiceSession';
 import {
   appendVoiceTranscriptDraftWithRange,
+  insertVoiceTranscriptDraftWithRange,
+  type MobileVoiceSelection,
   buildMobileVoiceRefinementContext,
   makeMobileRefinerPromptCacheKey,
   MobileLiteLlmTextModelClient,
@@ -55,6 +57,7 @@ export type MobileVoiceControllerSession = {
 type MobileVoiceControllerOptions = {
   credential: StoredMobileVoiceCredential;
   initialDraft: string;
+  initialSelection?: MobileVoiceSelection;
   refinementContext?: DictationRefinementContext;
   localVoiceInputHistory?: readonly string[];
   asr?: AsrProvider;
@@ -75,7 +78,7 @@ type MobileVoiceControllerOptions = {
   }) => Promise<void>;
   startAudio?: StartRealtimeAudio;
   readCurrentDraft?: () => string;
-  onDraftChanged: (draft: string) => void;
+  onDraftChanged: (draft: string, selection?: MobileVoiceSelection, replacement?: MobileVoiceDraftInsertion) => void;
   onStateChanged?: (state: VoiceInputState) => void;
   onError?: (message: string) => void;
   onReadyForStartCue?: () => void;
@@ -197,6 +200,7 @@ export function createMobileVoiceControllerSession(
   let asrStartError: unknown = null;
   let audioFailureError: Error | null = null;
   let voiceInsertion: MobileVoiceDraftInsertion | null = null;
+  let publishedVoiceInsertion: MobileVoiceDraftInsertion | null = null;
   let voiceInsertionSegmentIds: string[] = [];
   let voiceInsertionTouched = false;
   let historyEntryId: string | null = null;
@@ -208,6 +212,14 @@ export function createMobileVoiceControllerSession(
   const readCurrentDraft = (): string => {
     const visibleDraft = options.readCurrentDraft?.() ?? latestDraft;
     if (
+      options.readCurrentDraft && pendingDraftToPublish !== null
+      && visibleDraft !== lastPublishedDraft
+      && voiceInsertion && publishedVoiceInsertion
+      && isInsertionIntact(visibleDraft, publishedVoiceInsertion)
+    ) {
+      return replaceInsertionText(visibleDraft, publishedVoiceInsertion, voiceInsertion.text);
+    }
+    if (
       visibleDraft === lastPublishedDraft
       && (pendingDraftToPublish !== null || draftPublishThrottleTimer !== null)
     ) {
@@ -218,20 +230,29 @@ export function createMobileVoiceControllerSession(
 
   const publishDraftNow = (draft: string): void => {
     pendingDraftToPublish = null;
-    if (lastPublishedDraft === draft) return;
+    // The first insertion can change selected atoms even when its text is identical.
+    if (lastPublishedDraft === draft && (!voiceInsertion || publishedVoiceInsertion)) return;
+    const replacement = publishedVoiceInsertion && voiceInsertion
+      ? { ...publishedVoiceInsertion, text: voiceInsertion.text }
+      : undefined;
     lastPublishedDraft = draft;
-    options.onDraftChanged(draft);
+    publishedVoiceInsertion = voiceInsertion ? { ...voiceInsertion } : null;
+    options.onDraftChanged(draft, voiceInsertion
+      ? { start: voiceInsertion.end, end: voiceInsertion.end }
+      : undefined, replacement);
   };
 
   const publishPendingDraftNow = (): void => {
     const pending = pendingDraftToPublish;
     if (pending === null) return;
-    if (voiceInsertion && !isInsertionIntact(readCurrentDraft(), voiceInsertion)) {
+    const currentDraft = readCurrentDraft();
+    if (voiceInsertion && !isInsertionIntact(currentDraft, voiceInsertion)) {
       voiceInsertionTouched = true;
       pendingDraftToPublish = null;
       return;
     }
-    publishDraftNow(pending);
+    latestDraft = currentDraft;
+    publishDraftNow(currentDraft);
   };
 
   const cancelPendingDraftPublish = (): void => {
@@ -316,7 +337,11 @@ export function createMobileVoiceControllerSession(
       return buildEditableRange(voiceInsertion, segmentIds, voiceInsertionTouched);
     }
 
-    const result = appendVoiceTranscriptDraftWithRange(currentDraft, normalized);
+    // A selection belongs to its captured draft. If typing changed that draft
+    // before the first ASR result, preserve the edit instead of replacing stale offsets.
+    const result = options.initialSelection && currentDraft === baseDraft
+      ? insertVoiceTranscriptDraftWithRange(currentDraft, normalized, options.initialSelection)
+      : appendVoiceTranscriptDraftWithRange(currentDraft, normalized);
     if (!result.insertion) return undefined;
     voiceInsertion = result.insertion;
     voiceInsertionSegmentIds = segmentIds;

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 
 import { i18n } from "@/i18n";
-import { createConversationShareFooterAssetGate } from "@/session/conversationShareAssetGate";
+import { createConversationShareAssetGate } from "@/session/conversationShareAssetGate";
 import {
   buildConversationShareSvgLayout,
   conversationShareSvgRenderSize,
@@ -29,6 +30,271 @@ const colors = {
 };
 
 describe("ConversationShareSvg", () => {
+  it.each(["user", "assistant"] as const)(
+    "preserves mixed attachment order through every image fallback combination for %s",
+    (kind) => {
+      for (let ready = 0; ready < 8; ready++) {
+        const urls = ["first", "second", "third"];
+        const images = new Map(
+          urls.flatMap((url, index) =>
+            ready & (1 << index)
+              ? [
+                  [
+                    url,
+                    {
+                      uri: `data:image/png;base64,${url}`,
+                      width: 40,
+                      height: 20,
+                    },
+                  ] as const,
+                ]
+              : [],
+          ),
+        );
+        const layout = buildConversationShareSvgLayout({
+          allShareableIds: ["m"],
+          colors,
+          width: 390,
+          messages: [
+            {
+              clientId: "m",
+              kind,
+              automationOriginLabel: "automation",
+              body: "body",
+              attachments: [
+                { kind: "image", name: "first", uri: "first" },
+                { kind: "file", name: "document" },
+                { kind: "image", name: "second", uri: "second" },
+                { kind: "image", name: "third", uri: "third" },
+              ],
+              images,
+            },
+          ],
+        });
+        const visible = [
+          ...layout.images.map((image) => ({
+            y: image.y,
+            text: image.uri.split(",")[1],
+          })),
+          ...layout.bubbles.map((bubble) => ({
+            y: bubble.y,
+            text: bubble.textBlocks
+              .flatMap((block) => block.lines)
+              .join(" ")
+              .replace(/^[▧▤] /, ""),
+          })),
+        ].sort((a, b) => a.y - b.y);
+        expect(visible.map((item) => item.text)).toEqual([
+          "automation",
+          "first",
+          "document",
+          "second",
+          "third",
+          "body",
+        ]);
+        for (let i = 1; i < visible.length; i++) {
+          expect(visible[i]!.y).toBeGreaterThan(visible[i - 1]!.y);
+        }
+      }
+    },
+  );
+
+  it.each([0, 1, 2])(
+    "keeps attribution above all content with %i decoded attachments",
+    (decodedCount) => {
+      for (const body of ["", "message body"]) {
+        const image = {
+          uri: "data:image/png;base64,aGVsbG8=",
+          width: 40,
+          height: 20,
+        };
+        const urls = ["cindy-media://first", "cindy-media://second"];
+        const label = "Sent by automation: ".repeat(8);
+        const layout = buildConversationShareSvgLayout({
+          allShareableIds: ["previous", "skipped", "m", "next"],
+          colors,
+          width: 390,
+          messages: [
+            { clientId: "previous", kind: "assistant", body: "previous" },
+            {
+              clientId: "m",
+              kind: "user",
+              automationOriginLabel: label,
+              attachments: urls.map((uri) => ({
+                kind: "image",
+                name: "attachment",
+                uri,
+              })),
+              images: new Map(
+                urls.slice(0, decodedCount).map((uri) => [uri, image]),
+              ),
+              body,
+            },
+            { clientId: "next", kind: "assistant", body: "next" },
+          ],
+        });
+        const attribution = layout.bubbles[1]!;
+        expect(attribution.fill).toBeUndefined();
+        expect(attribution.stroke).toBeUndefined();
+        expect(attribution.textBlocks).toHaveLength(1);
+        expect(attribution.textBlocks[0]!.lines.length).toBeGreaterThan(1);
+        expect(attribution.textBlocks[0]!.lines.join(" ")).toContain(
+          "Sent by automation:",
+        );
+        expect(attribution.textBlocks[0]!.color).toBe(colors.textTertiary);
+        expect(layout.gaps[0]!.y).toBeLessThan(attribution.y);
+        expect(layout.images).toHaveLength(decodedCount);
+        const attributionBottom = attribution.y + attribution.height;
+        for (const item of [...layout.images, ...layout.bubbles.slice(2)]) {
+          expect(item.y).toBeGreaterThan(attributionBottom);
+        }
+        const content = layout.bubbles.slice(2, -1);
+        expect(content).toHaveLength(2 - decodedCount + (body ? 1 : 0));
+        expect(
+          content
+            .flatMap((bubble) => bubble.textBlocks)
+            .some((block) =>
+              block.lines.join(" ").includes("Sent by automation:"),
+            ),
+        ).toBe(false);
+        expect(layout.bubbles.at(-1)!.y).toBeGreaterThan(
+          layout.images.at(-1)?.y ?? attributionBottom,
+        );
+      }
+    },
+  );
+
+  it.each([
+    ["password: ", "private-secret"],
+    ["pass", "word: private-secret"],
+    ["password: private-", "secret"],
+    ["Authorization: Basic ", "private-secret"],
+    ["sk-abcd", "12345678"],
+    ["password: ", "`private-secret`"],
+    ["password: ", "**private-secret**"],
+    ["password:\n\n", "private-secret"],
+    ["token: [REDACTED]\npassword: ", "private-secret"],
+  ])("redacts across an image between %s and %s", (before, after) => {
+    const url = "cindy-media://same";
+    const image = {
+      uri: "data:image/png;base64,aGVsbG8=",
+      width: 40,
+      height: 20,
+    };
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["m"],
+      colors,
+      width: 390,
+      messages: [
+        {
+          clientId: "m",
+          kind: "assistant",
+          body: `${before}![one](${url})![two](${url})${after}`,
+          images: new Map([[url, image]]),
+        },
+      ],
+    });
+    const text = layout.bubbles
+      .flatMap((bubble) => bubble.textBlocks.flatMap((block) => block.lines))
+      .join("");
+    const visible = (before + after).replace(/[`*]/g, "");
+    expect(text.replace(/\s/g, "")).toBe(
+      redactSensitiveText(visible).replace(/\s/g, ""),
+    );
+    expect(layout.images).toHaveLength(2);
+    expect(layout.images[0]!.y).toBeLessThan(layout.images[1]!.y);
+    expect(text).not.toContain("private-secret");
+  });
+
+  it.each(["user", "assistant"] as const)(
+    "preserves repeated image positions inside a %s bubble, including an attachment with the same source",
+    (kind) => {
+      const url = "cindy-media://same";
+      const image = {
+        uri: "data:image/png;base64,aGVsbG8=",
+        width: 40,
+        height: 20,
+      };
+      const layout = buildConversationShareSvgLayout({
+        allShareableIds: ["m"],
+        colors,
+        width: 390,
+        messages: [
+          {
+            clientId: "m",
+            kind,
+            attachments: [{ kind: "image", name: "attachment", uri: url }],
+            body: `before ![first](${url}) middle ![second](${url}) after`,
+            images: new Map([[url, image]]),
+          },
+        ],
+      });
+      expect(layout.images).toHaveLength(3);
+      const bubble = layout.bubbles[0]!;
+      const text = bubble.textBlocks;
+      expect(text.map((block) => block.lines.join(""))).toEqual([
+        "before",
+        "middle",
+        "after",
+      ]);
+      expect(layout.images[0]!.y + layout.images[0]!.height).toBeLessThan(
+        bubble.y,
+      );
+      expect(text[0]!.y).toBeLessThan(layout.images[1]!.y);
+      expect(layout.images[1]!.y + layout.images[1]!.height).toBeLessThan(
+        text[1]!.y,
+      );
+      expect(text[1]!.y).toBeLessThan(layout.images[2]!.y);
+      expect(layout.images[2]!.y + layout.images[2]!.height).toBeLessThan(
+        text[2]!.y,
+      );
+      expect(layout.images[2]!.y + layout.images[2]!.height).toBeLessThan(
+        bubble.y + bubble.height,
+      );
+    },
+  );
+
+  it("traverses structured text, table cells, and secondary body without parsing code or chip labels as images", () => {
+    const url = "cindy-media://same";
+    const image = {
+      uri: "data:image/png;base64,aGVsbG8=",
+      width: 40,
+      height: 20,
+    };
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["m"],
+      colors,
+      width: 390,
+      messages: [
+        {
+          clientId: "m",
+          kind: "assistant",
+          body: "ignored",
+          images: new Map([[url, image]]),
+          bodyParts: [
+            { kind: "quote", label: `![chip](${url})` },
+            {
+              kind: "text",
+              text: `> quote ![quote image](${url})\n\n- item ![list image](${url})\n\n| header ![head](${url}) | next |\n| --- | --- |\n| ![cell](${url}) | last |\n\n\`\`\`md\n![code](${url})\n\`\`\``,
+            },
+          ],
+          secondaryBody: `secondary ![last](${url}) end`,
+        },
+      ],
+    });
+    expect(layout.images).toHaveLength(5);
+    expect(layout.images.map((image) => image.y)).toEqual(
+      layout.images.map((image) => image.y).sort((a, b) => a - b),
+    );
+    const text = layout.bubbles
+      .flatMap((bubble) => bubble.textBlocks.flatMap((block) => block.lines))
+      .join("\n");
+    expect(text).toContain("![chip]");
+    expect(text).toContain("![code]");
+    expect(text).not.toContain("quote image");
+    expect(text).toContain("secondary");
+  });
+
   it("wraps Chinese and Latin text within the available width", () => {
     expect(
       wrapSvgText("这是很长的一段中文消息", 60, 15).length,
@@ -95,9 +361,9 @@ describe("ConversationShareSvg", () => {
       ],
       width: 390,
     });
-    const renderedText =
-      layout.bubbles[0]?.textBlocks.flatMap((block) => block.lines).join(" ") ??
-      "";
+    const renderedText = layout.bubbles
+      .flatMap((bubble) => bubble.textBlocks.flatMap((block) => block.lines))
+      .join(" ");
     expect(renderedText).not.toContain("sk-12345678");
     expect(renderedText).toContain("[REDACTED]");
   });
@@ -199,9 +465,9 @@ describe("ConversationShareSvg", () => {
   });
 
   it("waits for both footer assets before allowing export", async () => {
-    const gate = createConversationShareFooterAssetGate();
+    const gate = createConversationShareAssetGate(["character", "logo"]);
     let ready = false;
-    const wait = gate.waitUntilReady().then(() => {
+    const wait = gate.waitUntilSettled().then(() => {
       ready = true;
     });
 

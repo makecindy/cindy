@@ -253,6 +253,15 @@ export const MAKER_INVOKE = {
   MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
   MODEL_PRICE_OVERRIDE_SET: 'maker:model-price-override:set',
   MODEL_PRICE_OVERRIDE_RESET: 'maker:model-price-override:reset',
+  /**
+   * 单模型上下文上限 override(设置 → 模型 → 高级设置)。窗口是自动压缩比例的分母,
+   * 调小它让压缩按用户设的长度提前触发。与价格 override 同一个 (providerId, agent,
+   * modelId) 目标形状。设置类写操作:仅本机主页面可调,**不进 device-link allowlist**
+   * (远程改被控端全局设置越权)。
+   */
+  MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
+  MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
+  MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',

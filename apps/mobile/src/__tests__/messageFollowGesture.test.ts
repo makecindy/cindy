@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as scrollModel from '@/session/messageScroll';
+import { createMobileTailFollower } from '@/session/messageTailFollower';
 
 // Execute the production callbacks without mounting Markdown/media/native views. Unlike source
 // assertions, this harness interleaves touch, native scroll, content-size, timers and frame delivery.
@@ -14,7 +15,7 @@ const renderer = source.statements.find((node): node is ts.FunctionDeclaration =
 ));
 const callbackNames = [
   'markProgrammaticScroll', 'clearProgrammaticScroll', 'markMobileMvcpSettle',
-  'isUserControllingScroll', 'scrollToEndProgrammatically', 'runStickToLatestVerify',
+  'isUserControllingScroll', 'getTailFollower', 'scrollToEndProgrammatically', 'runStickToLatestVerify',
   'scrollToOffsetProgrammatically', 'scrollToIndexProgrammatically',
   'scrollToBottom', 'handleScroll', 'handleHistoryTouchStart', 'maybeTriggerHistoryTouch',
   'handleHistoryTouchMove', 'handleHistoryTouchEnd', 'handleHistoryTouchCancel',
@@ -49,21 +50,25 @@ function harness() {
     programmaticScrollGenerationRef: ref(0), programmaticScrollTimerRef: ref<unknown>(null),
     programmaticScrollInFlightRef: ref(false), programmaticAnimatedScrollInFlightRef: ref(false),
     programmaticScrollSettleAtRef: ref(0), mvcpSettleAtRef: ref(0),
-    followVerifyGenerationRef: ref(0), followVerifyFrameRef: ref<unknown>(null),
-    followVerifyTimerRef: ref<unknown>(null), followEndPinRecoveryTimerRef: ref<unknown>(null),
-    followEndPinStateRef: ref(scrollModel.createMobileFollowEndPinState()),
+    tailFollowerRef: ref(null),
     historyPrependTransactionRef: ref(null), nativeScrollEventSequenceRef: ref(0),
     shareSelectionActiveRef: ref(false),
     scrollMetricsRef: ref({ contentHeight: 2000, offsetY: 1200, viewportHeight: 800 }),
   };
-  const scrollToEnd = vi.fn(() => {
+  const tailScroll = vi.fn((_options: { animated: boolean }) => {
     const metrics = state.scrollMetricsRef.current;
     metrics.offsetY = metrics.contentHeight - metrics.viewportHeight;
   });
   const environment = {
-    ...scrollModel, ...state,
-    listRef: ref({ scrollToEnd, scrollToOffset: vi.fn(), scrollToIndex: vi.fn() }),
-    bottomOverlayHeight: undefined,
+    ...scrollModel, ...state, createMobileTailFollower,
+    listRef: ref({
+      scrollToEnd: tailScroll,
+      scrollToIndex: vi.fn(),
+      scrollToOffset: ({ offset, animated }: { offset: number; animated: boolean }) => {
+        tailScroll({ animated });
+        state.scrollMetricsRef.current.offsetY = offset;
+      },
+    }), bottomOverlayHeight: undefined,
     useCallback: (callback: unknown) => callback,
     attemptAutoLoadEarlier: vi.fn(), handoffHistoryPrependToUser: vi.fn(),
     scheduleHistoryPrependUserHandoffSettle: vi.fn(), scheduleQueuedLoadEarlierFlush: vi.fn(),
@@ -80,7 +85,7 @@ function harness() {
     contentOffset: { y: offsetY }, layoutMeasurement: { height: 800 },
   } });
   return {
-    ...callbacks, state, scrollToEnd, scrollEvent,
+    ...callbacks, state, tailScroll, scrollEvent,
     handleScrollEndDrag: (event = scrollEvent(state.scrollMetricsRef.current.offsetY)) => (
       callbacks.handleScrollEndDrag(event)
     ),
@@ -108,13 +113,13 @@ describe('streaming follow yields to the reader', () => {
       h.handleHistoryTouchCancel();
       if (end === 'after-verify') {
         settle();
-        expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
-        h.scrollToEnd.mockClear();
+        expect(h.tailScroll).toHaveBeenCalledTimes(1);
+        h.tailScroll.mockClear();
       }
       if (end !== 'missing') h.handleScrollEndDrag(h.scrollEvent(offset));
       settle();
       expect(h.state.nearBottomRef.current).toBe(offset === 1196);
-      expect(h.scrollToEnd).toHaveBeenCalledTimes(offset === 1196 ? 1 : 0);
+      expect(h.tailScroll).toHaveBeenCalledTimes(offset === 1196 ? 1 : 0);
       expect(h.state.isDraggingRef.current).toBe(false);
       if (end !== 'missing') expect(h.state.dragStartOffsetYRef.current).toBeNull();
     },
@@ -125,12 +130,12 @@ describe('streaming follow yields to the reader', () => {
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleHistoryTouchCancel();
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleScrollEndDrag(h.scrollEvent(1180));
     h.handleContentSize(400, 2500);
     settle();
     expect(h.state.nearBottomRef.current).toBe(false);
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
   });
 
   it('ignores layout corrections after cancel but consumes the final drag sample', () => {
@@ -144,7 +149,7 @@ describe('streaming follow yields to the reader', () => {
     h.handleScrollEndDrag(h.scrollEvent(1180));
     settle();
     expect(h.state.nearBottomRef.current).toBe(false);
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
   });
 
   it.each(['end', 'index'])('discards the cancelled drag sample when explicit %s takes over', (target) => {
@@ -156,7 +161,7 @@ describe('streaming follow yields to the reader', () => {
     else h.scrollToIndexProgrammatically(10, 0.45);
     h.handleScrollEndDrag(h.scrollEvent(1180));
     expect(h.state.nearBottomRef.current).toBe(true);
-    if (target === 'end') expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    if (target === 'end') expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: true });
   });
 
   it('keeps the cancelled drag sample through automatic offset compensation', () => {
@@ -179,7 +184,7 @@ describe('streaming follow yields to the reader', () => {
     expect(h.state.nearBottomRef.current).toBe(true);
     h.handleContentSize(400, 2500);
     settle();
-    expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
   });
 
   it('allows native scrolling to take ownership after Android cancels the JS touch', () => {
@@ -189,12 +194,12 @@ describe('streaming follow yields to the reader', () => {
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleContentSize(400, 2500);
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleScroll(h.scrollEvent(1180));
     h.handleScrollEndDrag();
     settle();
     expect(h.state.nearBottomRef.current).toBe(false);
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
   });
 
   it('waits for independently reported momentum after cancelling a touch', () => {
@@ -205,10 +210,10 @@ describe('streaming follow yields to the reader', () => {
     h.handleHistoryTouchCancel();
     h.handleContentSize(400, 2500);
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleMomentumScrollEnd();
     settle();
-    expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
   });
 
   it('keeps an active drag when another finger touches the list', () => {
@@ -219,13 +224,13 @@ describe('streaming follow yields to the reader', () => {
     h.handleHistoryTouchStart(touch());
     h.handleContentSize(400, 2500);
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleScroll(h.scrollEvent(1180));
     h.handleHistoryTouchEnd(touch());
     h.handleScrollEndDrag();
     settle();
     expect(h.state.nearBottomRef.current).toBe(false);
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('preserves an explicit animated jump when touchEnd precedes onPress: %s', (releaseFirst) => {
@@ -233,20 +238,20 @@ describe('streaming follow yields to the reader', () => {
     h.state.nearBottomRef.current = false;
     h.state.scrollMetricsRef.current.offsetY = 300;
     // Native animation has not landed yet; command dispatch does not acknowledge its offset.
-    h.scrollToEnd.mockImplementation(() => {});
+    h.tailScroll.mockImplementation(() => {});
     h.handleHistoryTouchStart(touch());
     if (releaseFirst) h.handleHistoryTouchEnd(touch());
     h.scrollToBottom();
-    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: true });
     if (!releaseFirst) h.handleHistoryTouchEnd(touch());
     h.handleContentSize(400, 2200);
     const remaining = h.state.programmaticScrollSettleAtRef.current - Date.now();
     vi.advanceTimersByTime(remaining - 1);
     // Releasing the button and receiving new content must not truncate the animation.
-    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: true });
     h.handleScroll(h.scrollEvent(1400));
     settle();
-    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: true });
   });
 
   it('lets a new upward drag interrupt verification after an explicit animated jump', () => {
@@ -260,7 +265,7 @@ describe('streaming follow yields to the reader', () => {
     h.handleScrollEndDrag();
     settle();
     expect(h.state.nearBottomRef.current).toBe(false);
-    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: true });
   });
 
   it('allows an upward drag to unpin while content grows before the first scroll event', () => {
@@ -269,7 +274,7 @@ describe('streaming follow yields to the reader', () => {
     h.handleContentSize(400, 2040);
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleContentSize(400, 2080);
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleScroll(h.scrollEvent(1180));
     expect(h.state.nearBottomRef.current).toBe(false);
     h.handleHistoryTouchEnd(touch(420));
@@ -279,9 +284,9 @@ describe('streaming follow yields to the reader', () => {
     h.handleMomentumScrollEnd();
     settle();
     h.handleContentSize(400, 2240);
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.scrollToBottom();
-    expect(h.scrollToEnd).toHaveBeenLastCalledWith({ animated: true });
+    expect(h.tailScroll).toHaveBeenLastCalledWith({ animated: true });
   });
 
   it.each(['handleHistoryTouchEnd', 'handleHistoryTouchCancel'] as const)(
@@ -290,10 +295,10 @@ describe('streaming follow yields to the reader', () => {
       h.handleHistoryTouchStart(touch());
       h.handleContentSize(400, 2300);
       settle();
-      expect(h.scrollToEnd).not.toHaveBeenCalled();
+      expect(h.tailScroll).not.toHaveBeenCalled();
       h[release](touch());
       settle();
-      expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(h.tailScroll).toHaveBeenCalledTimes(1);
       expect(h.state.scrollMetricsRef.current.offsetY).toBe(1500);
     },
   );
@@ -309,14 +314,14 @@ describe('streaming follow yields to the reader', () => {
     expect(h.state.nearBottomRef.current).toBe(trailingOffset >= 1192);
     settle();
     if (trailingOffset < 1192) {
-      expect(h.scrollToEnd).not.toHaveBeenCalled();
+      expect(h.tailScroll).not.toHaveBeenCalled();
       return;
     }
-    expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
     h.handleScroll(h.scrollEvent(1700));
     expect(h.state.nearBottomRef.current).toBe(true);
     h.handleContentSize(400, 2540);
-    expect(h.scrollToEnd).toHaveBeenCalledTimes(2);
+    expect(h.tailScroll).toHaveBeenCalledTimes(2);
   });
 
   it.each([false, true])('unpins a trailing drag across momentum-start ordering: %s', (momentumFirst) => {
@@ -333,7 +338,7 @@ describe('streaming follow yields to the reader', () => {
     h.handleContentSize(400, 2500);
     settle();
     expect(h.state.nearBottomRef.current).toBe(false);
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
   });
 
   it('retires a completed drag after a no-op release verification', () => {
@@ -342,12 +347,12 @@ describe('streaming follow yields to the reader', () => {
     h.handleScroll(h.scrollEvent(1200));
     h.handleScrollEndDrag();
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleScroll(h.scrollEvent(1190));
     h.handleContentSize(400, 2500);
     settle();
     expect(h.state.nearBottomRef.current).toBe(true);
-    expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
   });
 
   it.each([1180, 900])('preserves a short drag through a post-release layout correction to %i', (offset) => {
@@ -360,7 +365,7 @@ describe('streaming follow yields to the reader', () => {
     h.handleScroll(h.scrollEvent(offset));
     expect(h.state.nearBottomRef.current).toBe(true);
     settle();
-    expect(h.scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: false });
+    expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: false });
     expect(h.state.scrollMetricsRef.current.offsetY).toBe(1700);
   });
 
@@ -404,15 +409,15 @@ describe('streaming follow yields to the reader', () => {
     h.runStickToLatestVerify();
     h.handleHistoryTouchStart(touch());
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleHistoryTouchEnd(touch());
     h.handleMomentumScrollBegin();
     h.handleContentSize(400, 2300);
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleMomentumScrollEnd();
     settle();
-    expect(h.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the drag dead zone authoritative when the tail grows beyond the distance threshold', () => {
@@ -422,12 +427,12 @@ describe('streaming follow yields to the reader', () => {
     h.handleContentSize(400, 2500);
     h.handleScroll(h.scrollEvent(1194));
     expect(h.state.nearBottomRef.current).toBe(true);
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleScroll(h.scrollEvent(1190));
     expect(h.state.nearBottomRef.current).toBe(false);
     h.handleScrollEndDrag();
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
   });
 
   it('still unpins a real momentum fling after a short drag', () => {
@@ -441,18 +446,18 @@ describe('streaming follow yields to the reader', () => {
     h.handleContentSize(400, 2500);
     h.handleMomentumScrollEnd();
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
   });
 
   it('blocks a previously scheduled circuit recovery while the finger owns the viewport', () => {
     const h = harness();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (let i = 0; i < 12; i++) h.handleContentSize(400, i % 2 ? 2100 : 2200);
-    expect(h.state.followEndPinRecoveryTimerRef.current).not.toBeNull();
-    h.scrollToEnd.mockClear();
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    h.tailScroll.mockClear();
     h.handleHistoryTouchStart(touch());
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
     h.handleHistoryTouchEnd(touch());
     settle();
     expect(h.state.scrollMetricsRef.current.offsetY).toBe(1300);
@@ -466,6 +471,6 @@ describe('streaming follow yields to the reader', () => {
     h.handleContentSize(400, 2500);
     h.handleHistoryTouchEnd(touch());
     settle();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.tailScroll).not.toHaveBeenCalled();
   });
 });

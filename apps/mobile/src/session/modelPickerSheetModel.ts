@@ -19,6 +19,16 @@ export type ModelPickerSheetView =
   | { kind: 'options'; providerId: string | null; modelId: string }
   | { kind: 'permission' };
 
+/** A known catalog with no eligible routes is not a legacy capabilities-only host. */
+export function canUseFlatModelFallback(args: {
+  providers: readonly ProviderView[];
+  providersReady: boolean;
+  browsingOtherAgent: boolean;
+  loading?: boolean;
+}): boolean {
+  return !args.loading && !args.providersReady && args.providers.length === 0 && !args.browsingOtherAgent;
+}
+
 /**
  * 返回手势的统一结算(Android 返回键 / iOS onRequestClose / 二级把手下拉):
  * 二级先回一级,处于一级才允许关闭整个浮窗。
