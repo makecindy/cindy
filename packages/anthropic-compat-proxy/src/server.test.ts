@@ -1040,6 +1040,62 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
     expect(upstream.bodies[2]).toBe(upstream.bodies[1]);
   });
 
+  it.each([false, true])('classifies rejected compaction after safe reasoning retry (reasoning=%s)', async (reasoning) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+      res.end(gzipSync(ENC_ERROR_BODY));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+    });
+    const compaction = { type: 'compaction', encrypted_content: 'opaque-prior-state' };
+    const message = { role: 'user', content: 'keep the original fact' };
+    const result = await post(proxy.url, { model: 'gpt-6-astra', input: [
+      message, compaction,
+      ...(reasoning ? [{ type: 'reasoning', encrypted_content: 'old-credentials' }] : []),
+    ] });
+    expect(result.status).toBe(400);
+    expect(JSON.parse(result.text).error.code).toBe('CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE');
+    expect(upstream.bodies).toHaveLength(reasoning ? 2 : 1);
+    const final = JSON.parse(upstream.bodies.at(-1)!);
+    expect(final.input).toContainEqual(compaction);
+    expect(final.input).toContainEqual(message);
+    expect(final.input.some((item: { type?: string }) => item.type === 'reasoning')).toBe(false);
+  });
+
+  it('preserves a compatible compaction without retry or classification', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })] });
+    const input = [{ type: 'compaction', encrypted_content: 'still-compatible' }];
+    const result = await post(proxy.url, { model: 'gpt-6-astra', input });
+    expect(result.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(1);
+    expect(JSON.parse(upstream.bodies[0]).input).toEqual(input);
+  });
+
+  it('leaves compaction errors unchanged when encrypted recovery is disabled', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => false })] });
+    const result = await post(proxy.url, { model: 'gpt-6-astra', input: [
+      { type: 'compaction', encrypted_content: 'opaque-prior-state' },
+    ] });
+    expect(result.text).toBe(ENC_ERROR_BODY);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
   it('retries invalid_encrypted_content once when enabled and marks the thread active', async () => {
     const upstream = await startFakeUpstream((idx, _body, res) => {
       if (idx === 0) {
@@ -3993,6 +4049,55 @@ describe('streaming response validity gate (#2242)', () => {
     expect(result.status).toBe(502);
     expect((JSON.parse(result.text) as { error: { code?: string } }).error.code)
       .toBe('non_sse_stream_response');
+  });
+
+  it('Codex HTTP fallback accepts SSE without Content-Type after encrypted reasoning recovery', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+        return;
+      }
+      res.writeHead(200);
+      res.write(': keepalive\r\n\r\nev');
+      setImmediate(() => res.end(SSE_BODY.slice(2)));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+    });
+    const response = await fetch(`${proxy.url}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-6-astra', stream: true, input: [
+        { type: 'reasoning', encrypted_content: 'foreign-reasoning', summary: [] },
+        { role: 'user', content: 'Remember the test code' },
+      ] }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(await response.text()).toBe(`: keepalive\r\n\r\n${SSE_BODY}`);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(upstream.bodies[1]).not.toContain('foreign-reasoning');
+    expect(upstream.bodies[1]).toContain('Remember the test code');
+  });
+
+  it.each([
+    { name: 'JSON without MIME', body: '{"ok":true}', headers: {} },
+    { name: 'HTML containing an SSE line', body: '<html>\ndata: fake\n</html>', headers: {} },
+    { name: 'explicit HTML MIME with SSE bytes', body: SSE_BODY, headers: { 'content-type': 'text/html' } },
+    { name: 'comment-only body without MIME', body: ': keepalive\n\n', headers: {} },
+  ])('does not infer SSE from $name', async ({ body, headers }) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, headers);
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('non_sse_stream_response');
   });
 
   it('零事件 SSE(只有注释/心跳)正常结束 → 502(sse_without_events)', async () => {

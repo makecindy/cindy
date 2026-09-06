@@ -290,7 +290,7 @@ describe('session runtime control wiring', () => {
       'const recoverRemoteRuntimeAxisPersistence',
     );
     const guard = setModel.indexOf(
-      "if (internalOptions.source === 'user' && !isDeviceLinkInvoke()) {",
+      "if (internalOptions.source === 'user' && !internalOptions.sessionLockHeld && !isDeviceLinkInvoke()) {",
     );
     expect(guard).toBeGreaterThan(-1);
     expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeGreaterThan(
@@ -699,128 +699,35 @@ describe('session runtime control wiring', () => {
     expect(terminalGuard).toBeGreaterThan(setModel.indexOf('const applyLocked = async () => {'));
     expect(terminalGuard).toBeLessThan(setModel.indexOf('acceptSessionRuntimeMutation({'));
     expect(terminalGuard).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
-    expect(setModel).toContain('return withSendToSessionLock(sessionId, applyLocked);');
+    expect(setModel).toContain('internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked)');
   });
 
-  it('maps every Codex relink failure to the structured IPC error protocol', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    const relinkBoundary = setModel.slice(
-      setModel.indexOf('const relinkCodexThread ='),
-      setModel.indexOf('const rebuildLiveOrcaWorker'),
-    );
-    expect(relinkBoundary).toContain(
-      "throwIpcError(\n                'PRECONDITION_FAILED'",
-    );
-    expect(relinkBoundary).toContain('.catch(async (error) => {');
-    expect(relinkBoundary).toContain('isCodexHistoryRecoveryRequired(error)');
-    expect(relinkBoundary).toContain('prepareNativeSessionRecovery(');
-    const applicability = setModel.slice(setModel.indexOf('const hasPersistedLocalCodexThread'), setModel.indexOf('const relinkDecision'));
-    expect(applicability).not.toContain('isDeviceLinkInvoke');
-    expect(applicability).not.toContain("internalOptions.source === 'user'");
-    expect(applicability).toContain('routeExplicit');
-    expect(setModel).toContain('if (requiresCodexThreadRelink && isSessionInTurn(sessionId))');
-    const busyCatch = setModel.slice(setModel.indexOf('if (err instanceof CredentialModeSwitchBusyError)'));
-    expect(busyCatch.indexOf('return deferLockedSelection();')).toBeGreaterThan(0);
-    expect(busyCatch.indexOf('return deferLockedSelection();')).toBeLessThan(busyCatch.indexOf("throwIpcError('CREDENTIAL_SWITCH_BUSY'"));
-    expect(relinkBoundary).toContain('reserveCodexForkCleanup(');
-    expect(relinkBoundary).toContain('...(cleanup ? { cleanup } : {})');
-    expect(relinkBoundary).toContain('if (isIpcError(error)) throw error;');
-    expect(relinkBoundary).toContain(
-      "throwIpcError('INTERNAL', 'Failed to rebuild Codex provider thread')",
-    );
-    expect(relinkBoundary).not.toContain('throw new Error');
+  it('stages user routes before every runtime mutation and prevents remote persistence of the source route', () => {
+    const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
+    const stage = body.indexOf('agentSwitchPending.set(sessionId, intent)');
+    expect(stage).toBeGreaterThan(body.indexOf('assertModelRouteUsable('));
+    expect(stage).toBeGreaterThan(body.indexOf('resolveSessionRuntimeAxes('));
+    expect(stage).toBeLessThan(body.indexOf('prepareModelWindowSwitch('));
+    expect(stage).toBeLessThan(body.indexOf('applyRuntimeSetModelChange({'));
+    const early = body.slice(body.indexOf('// A picker click'), body.indexOf('const axisPatch:'));
+    expect(early).toContain('!internalOptions.applyingUserSelectionOnSend');
+    expect(early).toContain('pendingUntilSend: true');
+    expect(early).toContain('markRemoteSettingPersistedInsideHandler(response)');
+    expect(early).not.toContain('persistSessionFields(');
+    expect(early).not.toContain('closeSession(');
+    expect(body).toContain("internalOptions.source === 'user' && agentSwitchPending.get(sessionId)?.sameAgentSelection");
   });
 
-  it('relinks legacy provider selections with the persisted effort and Fast axes', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    const targetRoute = setModel.slice(
-      setModel.indexOf('const targetCodexRoute:'),
-      setModel.indexOf('const relinkCodexThread ='),
-    );
-    expect(targetRoute).toContain('requiresCodexThreadRelink');
-    expect(targetRoute).toContain('? {');
-    expect(targetRoute).toContain(
-      'effort: atomicSelection ? atomicSelection.effort : runtimeStatus.effort',
-    );
-    expect(targetRoute).toContain(
-      'fastMode: atomicSelection ? atomicSelection.fastMode : runtimeStatus.fastMode',
-    );
-    expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
-  });
-
-  it('skips stale Codex thread relink after rebuild and still commits the target route', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    const rebuilt = setModel.indexOf("modelWindowRebuilt = preparation === 'rebuilt'");
-    const relinkGate = setModel.indexOf(
-      'const shouldRelinkCodexThread = requiresCodexThreadRelink && !modelWindowRebuilt;',
-    );
-    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
-    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);');
-
-    expect(rebuilt).toBeGreaterThan(-1);
-    expect(relinkGate).toBeGreaterThan(rebuilt);
-    expect(relinkGate).toBeLessThan(apply);
-    expect(setModel.slice(apply, persist)).toContain(
-      'requiresCodexThreadRelink: shouldRelinkCodexThread',
-    );
-    expect(setModel.slice(apply, persist)).toContain(
-      'shouldRelinkCodexThread && relinkCodexThread',
-    );
-    expect(setModel.slice(apply, persist)).toContain(
-      'result.persistedRoute !== true &&\n          (modelWindowRebuilt ||',
-    );
-    expect(persist).toBeGreaterThan(apply);
-  });
-
-  it('omits null runtime effort from the Codex relink SQLite commit', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    const relinkCommit = setModel.slice(
-      setModel.indexOf('commit: async ({ sessionId: targetSessionId, source, newSdkSessionId, target })'),
-      setModel.indexOf('if (write.changes === 0) return false;'),
-    );
-    expect(relinkCommit).toContain('persistableSessionEffort(target.effort)');
-    expect(relinkCommit).toContain(
-      '...(persistableEffort !== undefined ? { effort: persistableEffort } : {})',
-    );
-    expect(relinkCommit).not.toContain(
-      'effort: target.effort as (typeof sessions.$inferInsert)[\'effort\']',
-    );
-  });
-
-  it('derives the Codex relink boundary from effective credential identities', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    const relinkGate = setModel.slice(
-      setModel.indexOf('const hasPersistedLocalCodexThread ='),
-      setModel.indexOf('const targetCodexRoute:'),
-    );
-    expect(relinkGate).toContain('decideCodexProviderThreadRelink(');
-    expect(relinkGate).toContain(
-      '{ model: runtimeStatus.model, providerId: runtimeStatus.providerId }',
-    );
-    expect(relinkGate).toContain('{ model, providerId: targetProviderId }');
-    expect(relinkGate).toContain("relinkDecision === 'unresolved'");
-    expect(relinkGate).toContain("relinkDecision === 'relink'");
-    expect(relinkGate).toContain("throwIpcError(\n          'PRECONDITION_FAILED'");
+  it('resumes native Codex history across credentials and reserves window rebuilding for send', () => {
+    const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
+    expect(body).not.toContain('forkSdkSession(');
+    expect(body).not.toContain('relinkCodexProviderThread(');
+    expect(body).not.toContain('prepareNativeSessionRecovery(');
+    expect(body).toContain('codexAuthInjection: getCodexProxyAuthInjectionState()');
+    expect(body).toContain('confirmedTargetPressure:');
+    expect(body).toContain('internalOptions.applyingUserSelectionOnSend === true');
+    expect(body).toContain('if (atomicSelection.effort !== null)');
+    expect(registerSource).toContain('sessionLockHeld: true, applyingUserSelectionOnSend: applyNow');
   });
 
   it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {
@@ -1111,7 +1018,9 @@ describe('session runtime control wiring', () => {
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
     expect(gate).toBeGreaterThan(-1);
     expect(setModel).toContain("modelSwitchPlan.outcome === 'reject'");
-    expect(setModel).toContain('isRemote: !!runtimeStatus.remoteHostId || isDeviceLinkInvoke()');
+    expect(setModel.replace(/\s+/g, ' ')).toContain(
+      'isRemote: !!runtimeStatus.remoteHostId || (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())',
+    );
     expect(remotePressureRejection).toBeGreaterThan(gate);
     expect(remotePressureRejection).toBeLessThan(apply);
     expect(setModel).toContain(

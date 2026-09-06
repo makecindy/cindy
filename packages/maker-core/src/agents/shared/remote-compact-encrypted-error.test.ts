@@ -6,6 +6,9 @@ const COMPACT_ENCRYPTED =
   'Error running remote compact task: { "type": "error", "error": { "type": "invalid_request_error", "code": "invalid_encrypted_content", "message": "The encrypted content cind...9ln0 could not be verified. Reason: Encrypted content could not be decrypted or parsed." } }';
 
 describe("isRemoteCompactEncryptedContentError", () => {
+  it('recognizes a proxy-proven opaque compaction rejection', () => {
+    expect(isRemoteCompactEncryptedContentError('HTTP 400: CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE')).toBe(true);
+  });
   it("matches Codex remote compact 400 with invalid_encrypted_content", () => {
     expect(isRemoteCompactEncryptedContentError(COMPACT_ENCRYPTED)).toBe(true);
   });

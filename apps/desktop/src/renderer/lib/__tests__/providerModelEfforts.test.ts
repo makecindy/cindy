@@ -217,7 +217,7 @@ describe('resolveProviderModelEfforts', () => {
       /sameEngineReselectRef\.current\.byProvider\(\s*providerId,\s*newModelId,\s*result\.sameEngineRevision,\s*newEffort,\s*targetFast,/,
     );
     expect(source).toContain(
-      'handleProviderChange(providerId, modelId, effort, expectedRevision, fastMode)',
+      'performProviderChange(providerId, modelId, effort, expectedRevision, fastMode)',
     );
     expect(source.slice(modelChangeStart, modelChangeEnd)).toMatch(
       /resolveModelEfforts\(\s*newModelId,\s*effectiveSourceId,?\s*\)/,
