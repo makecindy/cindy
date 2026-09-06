@@ -1482,11 +1482,14 @@ export class Session {
   /** Review a Host-side tool step without reconstructing or persisting another copy of user intent. */
   async reviewHostPermissionAction(action: ReviewableAction): Promise<AutoReviewDecision> {
     const permission = this.stablePermissionModeState;
-    const turn = this.turnGeneration;
     if (!permission) return { verdict: 'block', reason: 'Session permissions are changing or the task has closed.' };
     if (permission.mode !== 'auto') return { verdict: 'ask' };
-    const terminal = this.terminalEventObservedGeneration;
-    const gracefulStop = this.turnControlState?.gracefulStopState;
+    // Host steps can belong to a still-active descendant after the foreground
+    // turn finishes. Guard Session authority here; root-turn generation is not
+    // the lifetime of that call. The harness checks changing user intent, and
+    // callers retain their own invocation-validity checks.
+    const turnControl = this.turnControlState;
+    const gracefulStop = turnControl?.gracefulStopState ?? 'none';
     let invalidated = false;
     const unsubscribe = this.onStatusChange((status) => { if (status !== 'active') invalidated = true; });
     let decision: AutoReviewDecision;
@@ -1500,8 +1503,8 @@ export class Session {
     }
     const current = this.stablePermissionModeState;
     if (invalidated || !current || current.generation !== permission.generation
-      || this.turnGeneration !== turn || this.terminalEventObservedGeneration !== terminal
-      || this.turnControlState?.gracefulStopState !== gracefulStop) {
+      || (turnControl?.gracefulStopState ?? 'none') !== gracefulStop
+      || (this.turnControlState?.gracefulStopState ?? 'none') !== gracefulStop) {
       return { verdict: 'block', reason: 'Task or permissions changed; retry with the current scope.' };
     }
     return decision;

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { Session } from './session.js';
+import { createAsyncQueue } from './agents/shared/async-queue.js';
+import type { AgentEvent } from './types/events.js';
 import {
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
@@ -416,20 +418,32 @@ describe('Session close lifecycle', () => {
 
 
 describe('Host automatic review lifecycle', () => {
-  function setup() {
+  function setup(agentKind: 'pi' | 'codex' = 'pi') {
+    const events = createAsyncQueue<AgentEvent>();
+    let running = false;
     const reviewGate = createDeferred();
     const closeGate = createDeferred();
     const modeGate = createDeferred();
     const review = vi.fn(async () => { await reviewGate.promise; return { verdict: 'allow' as const }; });
-    const handle = { id: 'host-review', agentKind: 'pi', model: 'm',
-      close: () => closeGate.promise, setPermissionMode: () => modeGate.promise, abort: async () => {},
+    const handle = { id: 'host-review', agentKind, model: 'm',
+      send: async () => { running = true; }, events: () => events, isTurnRunning: () => running,
+      requestGracefulStop: async () => ({ status: 'requested' }),
+      close: () => closeGate.promise.finally(() => events.end()), setPermissionMode: () => modeGate.promise, abort: async () => {},
       setInteractionResolver() {}, reviewAutoPermissionAction: review,
     } as unknown as AgentSessionHandle;
-    const session = new Session({ id: 'host-review', agentKind: 'pi', workDir: '/repo', handle,
+    const session = new Session({ id: 'host-review', agentKind, workDir: '/repo', handle,
       capabilities: { permissionModes: [{ id: 'ask', displayName: 'Ask' }], setPermissionModeMidSession: { supported: true } } as never,
       logger: createLogger(), permissionMode: 'auto', turnStallMs: 0,
     });
-    return { session, review, reviewGate, closeGate, modeGate };
+    const emit = async (event: AgentEvent) => {
+      if (event.type === 'done') running = false;
+      const seen = vi.fn();
+      const unsubscribe = session.onEvent(seen);
+      events.push(event);
+      await vi.waitFor(() => expect(seen).toHaveBeenCalled());
+      unsubscribe();
+    };
+    return { session, review, reviewGate, closeGate, modeGate, emit };
   }
   const action = { kind: 'other' as const, description: 'plugin file handoff' };
   it('returns the reviewer decision while the session is stable', async () => {
@@ -437,6 +451,20 @@ describe('Host automatic review lifecycle', () => {
     reviewGate.resolve();
     expect(await session.reviewHostPermissionAction(action)).toEqual({ verdict: 'allow' });
   });
+  it.each(['root-done', 'next-root-turn'] as const)(
+    'preserves an active background Host review across %s', async (boundary) => {
+      const { session, reviewGate, closeGate, emit } = setup('codex');
+      await session.send('Continue the approved background work.');
+      await emit({ type: 'tool_use', source: 'codex', turnScope: 'background', data: { toolUseId: 'child-tool', name: 'ghost_call', input: {} } });
+      const pending = session.reviewHostPermissionAction(action);
+      await emit({ type: 'done', source: 'codex', data: {} });
+      if (boundary === 'next-root-turn') await session.send('Continue the approved background work.');
+      reviewGate.resolve();
+      expect(await pending).toEqual({ verdict: 'allow' });
+      closeGate.resolve();
+      await session.close();
+    },
+  );
   it('rejects a late allow even after Stop has returned to active', async () => {
     const { session, reviewGate } = setup();
     const pending = session.reviewHostPermissionAction(action);
@@ -444,6 +472,18 @@ describe('Host automatic review lifecycle', () => {
     expect(session.getStatus()).toBe('active');
     reviewGate.resolve();
     expect(await pending).toMatchObject({ verdict: 'block' });
+  });
+  it('retains graceful Stop invalidation after normal done clears foreground control', async () => {
+    const { session, reviewGate, closeGate, emit } = setup('codex');
+    await session.send('Continue the approved background work.');
+    const pending = session.reviewHostPermissionAction(action);
+    expect(await session.requestGracefulStop()).toMatchObject({ status: 'requested' });
+    await emit({ type: 'done', source: 'codex', data: {} });
+    expect(session.getTurnControlSnapshot().gracefulStopState).toBe('none');
+    reviewGate.resolve();
+    expect(await pending).toMatchObject({ verdict: 'block' });
+    closeGate.resolve();
+    await session.close();
   });
   it('rejects a late allow as soon as closing starts', async () => {
     const { session, reviewGate, closeGate } = setup();
