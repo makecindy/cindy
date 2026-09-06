@@ -337,8 +337,10 @@ export function getAutoReviewActionTextLength(action: ReviewableAction): number 
     case 'exec':
       return action.command.length + (action.cwd?.length ?? 0);
     case 'read':
-    case 'file-write':
       return action.path?.length ?? 0;
+    case 'file-write':
+      return (action.path?.length ?? 0) + (action.resolvedPath?.length ?? 0)
+        + (action.resolvedWritableRoots?.reduce((total, root) => total + root.length, 0) ?? 0);
     case 'network':
       return (action.target?.length ?? 0) + (action.operation?.length ?? 0);
     case 'other':
@@ -411,6 +413,12 @@ export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
   delegate: AutoReviewDelegate | undefined,
 ): Promise<AutoReviewDecision> {
+  // Bound untrusted input before the static classifier's command/path parsers,
+  // not merely before the model request. Neither may inspect an oversized action.
+  const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
+  if (oversizedEvidenceReason) {
+    return { verdict: 'block', reason: oversizedEvidenceReason };
+  }
   const localTier = classifyLocalAutoReviewTier(request);
   if (localTier === 'auto-approve') return { verdict: 'allow' };
   // Never ask the model to approve an action whose material target/text is absent.
@@ -420,15 +428,6 @@ export async function resolveAutoReviewDecision(
     return {
       verdict: 'block',
       reason: missingEvidenceReason,
-    };
-  }
-  // The model must see the complete material action. Character sampling can hide
-  // a dangerous middle segment, so oversized gray actions must be retried in smaller form.
-  const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
-  if (oversizedEvidenceReason) {
-    return {
-      verdict: 'block',
-      reason: oversizedEvidenceReason,
     };
   }
   if (!delegate) {
@@ -516,7 +515,13 @@ export function appendAutoReviewUserIntent(previous: string, content: UserMessag
   const separator = '\n\nLatest user message:\n';
   const latestText = compactCurrentUserIntent(latest, 1_400);
   const priorBudget = MAX_USER_INTENT_CHARS - prefix.length - separator.length - latestText.length;
-  return prefix + compactCurrentUserIntent(previous, priorBudget) + separator + latestText;
+  // History is atomic: keeping an early approval while sampling away an
+  // intervening revocation would manufacture authorization. On overflow, drop
+  // the entire prior context, including its approvals, rather than sampling it.
+  if (previous.trim().length > priorBudget) {
+    return 'Earlier user context omitted; it cannot establish authorization.' + separator + latestText;
+  }
+  return prefix + previous.trim() + separator + latestText;
 }
 
 /**
@@ -530,10 +535,7 @@ export function composeAutoReviewIntentWithApprovedPlan(
 ): string {
   const plan = approvedPlan.trim();
   if (!plan) return compactCurrentUserIntent(currentUserIntent);
-  return compactCurrentUserIntent([
-    currentUserIntent.trim(),
-    `Approved plan:\n${plan}`,
-  ].filter(Boolean).join('\n\n'));
+  return appendAutoReviewUserIntent(currentUserIntent, `Approved plan:\n${plan}`);
 }
 
 /**
@@ -554,8 +556,5 @@ export function composeAutoReviewIntentWithClarification(
     })
     .filter(Boolean);
   if (lines.length === 0) return compactCurrentUserIntent(currentUserIntent);
-  return compactCurrentUserIntent([
-    currentUserIntent.trim(),
-    `Clarifications:\n${lines.join('\n')}`,
-  ].filter(Boolean).join('\n\n'));
+  return appendAutoReviewUserIntent(currentUserIntent, `Clarifications:\n${lines.join('\n')}`);
 }

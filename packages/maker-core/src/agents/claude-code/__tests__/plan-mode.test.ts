@@ -1132,7 +1132,8 @@ describe('ClaudeCodeAgent plan mode', () => {
 
     expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
       userIntent:
-        'Refactor the parser without changing public behavior\n\n'
+        'Earlier user messages (still apply unless explicitly changed below):\n'
+        + 'Refactor the parser without changing public behavior\n\nLatest user message:\n'
         + 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
     }));
     await handle.close();

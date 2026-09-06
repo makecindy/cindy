@@ -50,7 +50,8 @@ export interface WorkspaceSessionService {
     dirAbs: string;
     title: string | null;
     ghostId: string;
-  }): Promise<string>;
+    shouldContinue?: () => boolean;
+  }): Promise<string | null>;
   /** focus:true 时跳转聚焦到该会话(deep-link navigate 通道;尽力而为)。 */
   focusSession(sessionId: string): void;
 }
@@ -271,7 +272,10 @@ export class GhostWorkspaceSlot {
           this.deps.log?.info('ghost workspace ensured (reused)', { ghostId, sessionId: existing });
           return { ok: true, sessionId: existing, created: false, name };
         }
-        const sessionId = await service.createDraftSession({ dirAbs, title, ghostId });
+        const sessionId = await service.createDraftSession({ dirAbs, title, ghostId,
+          ...(callIsCurrent ? { shouldContinue: callIsCurrent } : {}),
+        });
+        if (!sessionId || (callIsCurrent && !callIsCurrent())) return fail('CANCELLED', 'The originating tool call has ended.');
         if (request.focus === true) service.focusSession(sessionId);
         this.deps.log?.info('ghost workspace ensured (created)', { ghostId, sessionId });
         return { ok: true, sessionId, created: true, name };

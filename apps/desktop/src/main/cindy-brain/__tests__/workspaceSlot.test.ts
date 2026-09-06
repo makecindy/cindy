@@ -382,6 +382,29 @@ describe('workspaceSlot · 骚扰钳制与失败面', () => {
 
 
 describe('workspace Auto review', () => {
+  it('does not focus after the call ends while creation is pending', async () => {
+    let active = true;
+    let finish!: (id: string) => void;
+    const service = makeService({ createDraftSession: vi.fn(() => new Promise<string>((resolve) => { finish = resolve; })) });
+    const { slot } = makeSlot({ resolveCallContext: () => active ? { ghostId: 'ws-ghost', sessionId: 'sess-1' } : null }, service);
+    const result = slot.handleRequest('ws-ghost', { ...DIR_REQ, focus: true });
+    await vi.waitFor(() => expect(service.createDraftSession).toHaveBeenCalledOnce());
+    const params = vi.mocked(service.createDraftSession).mock.calls[0][0];
+    expect(params.shouldContinue?.()).toBe(true);
+    active = false;
+    expect(params.shouldContinue?.()).toBe(false);
+    finish('committed-before-cancel');
+    expect(await result).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it('returns cancellation when the creation commit was prevented', async () => {
+    const service = makeService({ createDraftSession: vi.fn(async () => null) });
+    const { slot } = makeSlot({}, service);
+    expect(await slot.handleRequest('ws-ghost', { ...DIR_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
   it.each(['allow', 'block', 'ask'] as const)('obeys %s for an outside directory', async (verdict) => {
     const reviewPermissionAction = vi.fn(async () => ({ verdict, reason: 'reviewed' }));
     const service = makeService({ reviewPermissionAction });

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as staticReview from './auto-review.js';
 
 import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
@@ -30,6 +31,7 @@ const roots = ['/repo', '/extra'];
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function request(action: AutoReviewRequest['action']): AutoReviewRequest {
@@ -483,17 +485,14 @@ describe('extractAutoReviewUserIntent', () => {
     expect(composeAutoReviewIntentWithApprovedPlan(
       'Refactor the parser without changing public behavior',
       '1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
-    )).toBe(
-      'Refactor the parser without changing public behavior\n\n'
-      + 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
-    );
+    )).toContain('Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests');
 
     const compacted = composeAutoReviewIntentWithApprovedPlan(
       `original-${'x'.repeat(1_900)}`,
       `first plan step-${'y'.repeat(1_900)}-FINAL PLAN STEP`,
     );
-    expect(compacted).toHaveLength(2_000);
-    expect(compacted).toMatch(/^original-/);
+    expect(compacted.length).toBeLessThanOrEqual(2_000);
+    expect(compacted).not.toContain('original-');
     expect(compacted).toContain('…[middle omitted]…');
     expect(compacted).toMatch(/-FINAL PLAN STEP$/);
   });
@@ -564,6 +563,37 @@ describe('重试预算', () => {
 
 
 describe('user authorization across ordinary follow-ups', () => {
+  it.each(['follow-up', 'plan', 'clarification'] as const)('never retains stale approval across omitted revocations: %s', (kind) => {
+    const approval = 'APPROVED: send the report to Alex.';
+    const revocation = 'REVOKED: do not send anything.';
+    let intent = appendAutoReviewUserIntent(approval, revocation);
+    for (let index = 0; index < 3; index++) {
+      const text = `Only analyze this material ${index}. ` + 'reference '.repeat(150);
+      intent = kind === 'plan' ? composeAutoReviewIntentWithApprovedPlan(intent, text)
+        : kind === 'clarification' ? composeAutoReviewIntentWithClarification(intent, [{ answer: text }])
+        : appendAutoReviewUserIntent(intent, text);
+      expect(intent.length).toBeLessThanOrEqual(2000);
+      // Either the intervening restriction remains, or the old approval is gone too.
+      expect(!intent.includes(approval) || intent.includes(revocation)).toBe(true);
+    }
+    expect(intent).not.toContain(approval);
+  });
+
+  it('rejects oversized actions before static parsing or model review', async () => {
+    const classifier = vi.spyOn(staticReview, 'reviewAction');
+    const delegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    for (const action of [
+      { kind: 'exec', command: ' '.repeat(50_000) + '!' },
+      { kind: 'file-write', path: '/repo/file', resolvedPath: '/'.repeat(50_000) },
+      { kind: 'file-write', path: '/repo/file', resolvedWritableRoots: ['/'.repeat(50_000)] },
+    ] as const) {
+      expect(await resolveAutoReviewDecision(request(action), delegate))
+        .toMatchObject({ verdict: 'block', reason: expect.stringContaining('4096') });
+    }
+    expect(classifier).not.toHaveBeenCalled();
+    expect(delegate).not.toHaveBeenCalled();
+  });
+
   it('preserves original authorization and identifies the latest restriction', () => {
     const continued = appendAutoReviewUserIntent('Send the reviewed report to Alex.', 'Continue.');
     expect(continued).toContain('Send the reviewed report to Alex.');

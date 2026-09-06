@@ -452,8 +452,7 @@ async function requestGrantConfirm(params: {
 }
 
 /**
- * 媒体仓路径揭示必须由 Host-owned 点击确认授权。用户是否在正文里“明确问过”
- * 只能指导 Agent 何时发起，不能作为安全边界；模型本身无法代替用户点按钮。
+ * 媒体仓路径揭示按当前 Auto 审阅或既有人工确认授权；审阅故障回退确认。
  */
 async function requestMediaPathRevealConfirm(params: {
   sessionId: string | null;
@@ -470,15 +469,20 @@ async function requestMediaPathRevealConfirm(params: {
     };
   }
   if (params.sessionInstanceId && params.getLiveSessionGrantState) {
-    const live = params.getLiveSessionGrantState(params.sessionId, params.sessionInstanceId);
-    if (live?.permissionMode === 'auto' && live.reviewAction) {
-      const decision = await live.reviewAction(toolAutoReviewAction('cindy_media.resolve_local_path', {
-        path: params.absPath, mimeType: params.mimeType,
-      }, 'Return the controller local path of this managed media to the agent.'));
-      if (decision.verdict === 'allow') return { ok: true };
-      if (decision.verdict === 'block') return {
-        ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED', message: decision.reason ?? 'Automatic review denied revealing this path.',
-      };
+    try {
+      const live = params.getLiveSessionGrantState(params.sessionId, params.sessionInstanceId);
+      if (live?.permissionMode === 'auto' && live.reviewAction) {
+        const decision = await live.reviewAction(toolAutoReviewAction('cindy_media.resolve_local_path', {
+          path: params.absPath, mimeType: params.mimeType,
+        }, 'Return the controller local path of this managed media to the agent.'));
+        if (decision.verdict === 'allow') return { ok: true };
+        if (decision.verdict === 'block') return {
+          ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED', message: decision.reason ?? 'Automatic review denied revealing this path.',
+        };
+      }
+    } catch {
+      // Same failure boundary as file handoffs: a live-state/reviewer exception
+      // must reach the existing confirmation path, never disclose the path.
     }
   }
   const bridge = getGhostGrantConfirmBridge();

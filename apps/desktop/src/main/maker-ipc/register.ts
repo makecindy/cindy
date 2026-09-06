@@ -8561,6 +8561,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : {}),
         notifySessionCreated: (info) => notifyGhostSessionEvent('created', info),
       });
+      if (!sessionId) return null;
       broadcastSessionCreated(sessionId);
       return sessionId;
     },
