@@ -4088,6 +4088,10 @@ describe('streaming response validity gate (#2242)', () => {
     { name: 'HTML containing an SSE line', body: '<html>\ndata: fake\n</html>', headers: {} },
     { name: 'explicit HTML MIME with SSE bytes', body: SSE_BODY, headers: { 'content-type': 'text/html' } },
     { name: 'comment-only body without MIME', body: ': keepalive\n\n', headers: {} },
+    { name: 'truncated data field', body: 'data: upstream timeout', headers: {} },
+    { name: 'data line without event boundary', body: 'data: upstream timeout\n', headers: {} },
+    { name: 'event-only block', body: 'event: response.created\n\n', headers: {} },
+    { name: 'heartbeat followed by unfinished data', body: ': ping\n\ndata: {}\n', headers: {} },
   ])('does not infer SSE from $name', async ({ body, headers }) => {
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       res.writeHead(200, headers);
@@ -4098,6 +4102,28 @@ describe('streaming response validity gate (#2242)', () => {
     const result = await post(proxy.url, { model: 'test-model', stream: true });
     expect(result.status).toBe(502);
     expect(JSON.parse(result.text).error.code).toBe('non_sse_stream_response');
+  });
+
+  it.each(['\n', '\r\n'])('infers a complete data event across chunk boundaries (%j)', async (newline) => {
+    const body = `: keepalive${newline}${newline}event: response.created${newline}data: {}${newline}${newline}`;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200);
+      const chunks = [...Buffer.from(body)];
+      const writeNext = () => {
+        const byte = chunks.shift();
+        if (byte === undefined) {
+          res.end();
+        } else {
+          res.write(Buffer.from([byte]));
+          setImmediate(writeNext);
+        }
+      };
+      writeNext();
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result).toEqual({ status: 200, text: body });
   });
 
   it('零事件 SSE(只有注释/心跳)正常结束 → 502(sse_without_events)', async () => {

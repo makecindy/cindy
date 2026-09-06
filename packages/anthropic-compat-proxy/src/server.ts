@@ -1492,7 +1492,7 @@ function forward(
       .toLowerCase();
     const isCompressed = contentEncoding !== '' && contentEncoding !== 'identity';
     // Codex subscription HTTP fallback can omit Content-Type on a valid SSE response.
-    // Infer only an absent type, from an SSE prefix; never override an explicit MIME type.
+    // Infer only an absent type, after a complete data event; never override an explicit MIME type.
     const canInferSse = requestDeclaredStream && contentType === '' && !isCompressed;
     let toolUseIdRewrite: ToolUseIdRewriteTransform | null = null;
     if (responseToolUseIds && (isSse || canInferSse) && !isCompressed) {
@@ -1555,6 +1555,7 @@ function forward(
     const STREAM_GATE_PENDING_CAP_BYTES = 64 * 1024;
     const SSE_EVENT_MARKER_RE = /(^|\r?\n)(event|data):/;
     const SSE_PREFIX_RE = /^\uFEFF?(?:(?:|:[^\r\n]*)\r?\n)*(?:event|data):/;
+    const SSE_DATA_FIELD_RE = /(?:^\uFEFF?|\r?\n)data:/;
     let streamGateCommitted = false;
     const pendingChunks: Buffer[] = [];
     let pendingBytes = 0;
@@ -1637,7 +1638,11 @@ function forward(
         if (!isSse) {
           if (canInferSse) {
             pendingText += chunk.toString('utf8');
-            if (SSE_PREFIX_RE.test(pendingText)) {
+            // A field prefix alone cannot dispatch an event: keep buffering until
+            // a data-containing block ends in a blank line, including across chunks.
+            const completeEvents = pendingText.split(/\r?\n\r?\n/);
+            completeEvents.pop(); // The final block has no terminating blank line yet.
+            if (SSE_PREFIX_RE.test(pendingText) && completeEvents.some((event) => SSE_DATA_FIELD_RE.test(event))) {
               respHeaders['content-type'] = 'text/event-stream';
               commitStreamResponse();
               return;
