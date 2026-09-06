@@ -15,6 +15,16 @@ import {
  * 强制登出」的历史问题)。连续 N 次失败才升级、任何一次成功读取立即复位。
  */
 describe('authCredentialStoreHealth', () => {
+  it('startup read failure surfaces immediately and a later successful read clears it', () => {
+    const health = createCredentialStoreHealth();
+    health.noteStartupFailure();
+    expect(health.unavailable).toBe(true);
+    expect(health.noteReadFailure()).toBe(false);
+    expect(health.noteRecovered()).toBe(true);
+    expect(health.unavailable).toBe(false);
+    expect(health.noteReadFailure()).toBe(false);
+  });
+
   it('阈值之前保持瞬时语义,不升级', () => {
     const health = createCredentialStoreHealth(5);
     for (let i = 0; i < 4; i++) {
@@ -86,6 +96,22 @@ describe('authManager credential-store escalation wiring', () => {
     /\r\n/g,
     '\n',
   );
+
+  it('retains startup failure across all owner cleanup paths and exposes it before loading providers', () => {
+    const recovery = authSource.slice(
+      authSource.indexOf('async function withAccountFreeOwnerCommit'),
+      authSource.indexOf('interface CloudOwnerDataReservation'),
+    );
+    // Passive, normal commit and failed cleanup must all retain the same cause.
+    expect(recovery.match(/credentialStoreUnavailable: opts\.credentialStoreUnavailable/g)).toHaveLength(3);
+    expect(recovery).toContain('if (credentialStoreUnavailable) credentialStoreHealth.noteStartupFailure();');
+    const clear = authSource.slice(authSource.indexOf('function clearAuth('), authSource.indexOf('// ── Public API'));
+    expect(clear.indexOf('credentialStoreHealth.noteStartupFailure()'))
+      .toBeGreaterThan(clear.indexOf('credentialStoreHealth.reset()'));
+    const login = authSource.slice(authSource.indexOf('export async function getLoginState()'), authSource.indexOf('async function completeLogin('));
+    expect(login.indexOf('credentialStoreHealth.unavailable')).toBeLessThan(login.indexOf('await loadLoginProviders'));
+    expect(login).toContain("state: { step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier' }");
+  });
 
   it('transient-unreadable 分支喂失败计数并在翻转时广播,但仍保持瞬时语义', () => {
     const start = authSource.indexOf('export async function refresh(): Promise<boolean> {');

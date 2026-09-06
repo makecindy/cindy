@@ -209,12 +209,12 @@ describe('runHostedCallbackPolling', () => {
     });
   });
 
-  it('总时长耗尽按用户放弃处理(与 loopback 超时口径一致)', async () => {
+  it('总时长耗尽显示超时,而不是静默当成用户取消', async () => {
     const harness = createPollHarness([{ status: 'pending' }]);
 
     await expect(
       runHostedCallbackPolling({ ...harness.deps, timeoutMs: 3_000 }),
-    ).resolves.toEqual({ error: 'USER_CANCELLED' });
+    ).resolves.toEqual({ error: 'REQUEST_TIMEOUT' });
     // 3s 预算 / 1s 间隔 = 3 次轮询后耗尽。
     expect(harness.calls).toBe(3);
   });
@@ -317,8 +317,12 @@ describe('openSystemBrowserAuthorization 分流', () => {
     const hostedStart = source.indexOf('async function openHostedBrowserAuthorization(');
     const hostedBody = source.slice(hostedStart, source.indexOf('\n}\n', hostedStart));
 
-    expect(hostedBody).toContain('raceAuthBrowserCancellation(');
-    expect(hostedBody).toContain('AbortSignal.any([signal, launchDeadline])');
+    expect(hostedBody).toContain('launchAuthBrowser(() => shell.openExternal(authUrl), signal)');
+    expect(hostedBody).toContain('if (!launched.opened) return { error: launched.error };');
+    const loopbackStart = source.indexOf('async function openLoopbackBrowserAuthorization(');
+    const loopbackBody = source.slice(loopbackStart, source.indexOf('\n}\n', loopbackStart));
+    expect(loopbackBody).toContain('launchAuthBrowser(() => shell.openExternal(authUrl), launchCancellation.signal)');
+    expect(loopbackBody).toContain('launchCancellation.abort();');
     // 不能是裸 await:那样取消与超时都落不到这一步上
     expect(hostedBody).not.toMatch(/await shell\.openExternal\(authUrl\);/);
     // 轮询预算要扣掉唤起已花的时间,整次尝试仍是一个五分钟
