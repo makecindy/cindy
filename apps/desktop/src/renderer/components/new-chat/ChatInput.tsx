@@ -8430,7 +8430,7 @@ export function ChatInput({
                       type="button"
                       aria-label={`${t('newChat.chatInput.recommendationShortcut')}: ${recommendedPrompt ?? ''}`}
                       className={cn(
-                        'pointer-events-auto ml-1 inline-flex h-4 min-w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-lg border border-current',
+                        'pointer-events-auto ml-1 inline-flex h-4 min-w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-[4px] border border-current',
                         'bg-transparent px-0.5 text-11 font-normal leading-none text-inherit',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                       )}
