@@ -310,3 +310,30 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(__testing.projectInvokeResultForTunnel('maker:provider:list', weird)).toBe(weird);
   });
 });
+
+
+describe('active runtime summary projection', () => {
+  const rows = [true, false].map((isTurnRunning, i) => ({
+    sessionId: `session-${i}`, isTurnRunning, agentKind: 'codex', workDir: '/work',
+    capabilities: { availableModels: [{ id: 'model', description: 'x'.repeat(120_000) }] },
+  }));
+
+  it('omits repeated model catalogs only for an explicit summary request', () => {
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:list-active', rows, false, [{ summary: true }],
+    );
+    expect(projected).toEqual([
+      { sessionId: 'session-0', isTurnRunning: true },
+      { sessionId: 'session-1', isTurnRunning: false },
+    ]);
+    expect(JSON.stringify(projected).length).toBeLessThan(150);
+    expect(rows[0].capabilities.availableModels[0].description).toHaveLength(120_000);
+  });
+
+  it.each([[], [null], [{ summary: false }], [{ summary: 'true' }]])(
+    'preserves the complete response for legacy or non-opt-in callers (%j)', (...args) => {
+      expect(__testing.projectInvokeResultForTunnel('maker:list-active', rows, false, args))
+        .toBe(rows);
+    },
+  );
+});

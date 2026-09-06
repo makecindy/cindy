@@ -381,6 +381,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
         tokens: { access_token: 'invalidated-release-token', account_id: 'acct-invalidated' },
       }),
     );
+    const releaseBytes = fs.readFileSync(releaseAuth);
     bindReleaseOpenAi(releaseAuth);
     expect(
       writeInvalidatedSystemCodexAuthMarker(
@@ -402,8 +403,12 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       oauthWritesBlocked: true,
     });
     await expect(adapter.getAccessToken()).resolves.toBe('system-token');
-    expect(fs.statSync(localAuth).ino).toBe(fs.statSync(systemAuth).ino);
-    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(releaseAuth).ino);
+    // Inode values are not stable across all supported filesystems. Verify the
+    // isolation contract by comparing the selected credential bytes instead:
+    // local auth must contain the system credential and remain distinct from
+    // the invalidated Release credential.
+    expect(fs.readFileSync(localAuth)).toEqual(fs.readFileSync(systemAuth));
+    expect(fs.readFileSync(localAuth)).not.toEqual(releaseBytes);
   });
 
   it('dev 默认只读共享:登录和登出不可改，失效只阻断当前进程', async () => {

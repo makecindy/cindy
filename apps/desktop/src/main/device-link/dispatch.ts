@@ -38,8 +38,10 @@ import {
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
+  SESSION_SYNC_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   byteLength,
   DeviceLinkError,
   parseFsWatchTopic,
@@ -411,7 +413,20 @@ function projectInvokeResultForTunnel(
   channel: string,
   result: unknown,
   supportsFullLogoKinds = false,
+  args: readonly unknown[] = [],
 ): unknown {
+  // Opt-in only: legacy/desktop controllers still receive complete runtime capabilities.
+  // Home only needs run state; repeating the model catalog per runtime blocks slow links.
+  const options = args[0];
+  if (channel === 'maker:list-active' && options && typeof options === 'object'
+    && !Array.isArray(options) && 'summary' in options && options.summary === true
+    && Array.isArray(result)) {
+    return result.map((item: unknown) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+      const row = item as Record<string, unknown>;
+      return { sessionId: row.sessionId, isTurnRunning: row.isTurnRunning };
+    });
+  }
   if (channel !== 'maker:provider:list') return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown };
   if (!Array.isArray(r.providers)) return result;
@@ -617,6 +632,11 @@ const reportedControllerNameByDevice = new Map<string, string>();
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
 let onSessionsSubscribed: SessionsSubscribedListener | null = null;
+let readSessionTextSnapshot: ((sessionId: string) => unknown | null) | null = null;
+
+export function setSessionTextSnapshotReader(reader: typeof readSessionTextSnapshot): void {
+  readSessionTextSnapshot = reader;
+}
 
 export function setControllersChangedListener(cb: ControllersChangedListener | null): void {
   onControllersChanged = cb;
@@ -865,6 +885,76 @@ interface MakerEventBatchStage {
 
 const makerEventBatchStages = new Map<string, MakerEventBatchStage>();
 
+// Bound live traffic before it enters the shared socket FIFO. Only opt-in
+// controllers can repair skipped deltas from the authoritative in-flight block.
+const MAKER_EVENT_WINDOW_SOFT_CAP = 16;
+function isNonFinalTextPush(payload: unknown): boolean {
+  const event = (payload as { event?: { type?: unknown; data?: { isFinal?: unknown } } } | null)?.event;
+  return event?.type === 'text' && event.data?.isFinal === false;
+}
+
+const sessionSyncStages = new Map<string, {
+  sessions: Map<string, boolean>;
+  timer: ReturnType<typeof setTimeout> | null;
+  ownerStamp?: PushOwnerStamp;
+}>();
+
+function clearSessionSyncStage(dst: string): void {
+  const stage = sessionSyncStages.get(dst);
+  if (stage?.timer) clearTimeout(stage.timer);
+  sessionSyncStages.delete(dst);
+}
+
+function stageSessionSync(dst: string, sessionId: string, historyRequired = true): void {
+  if (!subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)) return;
+  let stage = sessionSyncStages.get(dst);
+  if (!stage) {
+    stage = { sessions: new Map(), timer: null, ownerStamp: broadcastTap.getSafeDataOwnerPushStamp?.() };
+    sessionSyncStages.set(dst, stage);
+  }
+  stage.sessions.set(sessionId, historyRequired || stage.sessions.get(sessionId) === true);
+  if (stage.sessions.size > SESSION_ACTIVITY_STAGE_MAX_KEYS) {
+    stage.sessions.delete(stage.sessions.keys().next().value!);
+  }
+  if (stage.timer) return;
+  stage.timer = setTimeout(() => {
+    stage.timer = null;
+    if (!activeClient || activeClient.getStatus() !== 'online'
+      || !makerEventBatchOwnerStampEquals(stage.ownerStamp, broadcastTap.getSafeDataOwnerPushStamp?.())) {
+      clearSessionSyncStage(dst);
+      return;
+    }
+    for (const sid of stage.sessions.keys()) {
+      if (!subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
+        stage.sessions.delete(sid);
+        continue;
+      }
+      if ((activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP) break;
+      // Flush older staged deltas before the snapshot. No await may split this
+      // boundary: newer deltas must be sequenced after the full-text replacement.
+      flushMakerEventBatchesForSession(dst, sid);
+      try {
+        const snapshot = readSessionTextSnapshot?.(sid);
+        activeClient.sendPush(dst, SESSION_SYNC_CHANNEL, {
+          ...(snapshot && typeof snapshot === 'object' ? snapshot : {}),
+          sessionId: sid,
+          // Text-only loss is repaired by this snapshot. Re-reading the same
+          // large DB page on every dropped delta would recreate the congestion.
+          // Once the block is sealed, history becomes the recovery authority.
+          resyncRequired: stage.sessions.get(sid) === true || !snapshot,
+        }, broadcastTap.getSafeDataOwnerPushStamp?.());
+        stage.sessions.delete(sid);
+      } catch {
+        break;
+      }
+    }
+    const next = stage.sessions.entries().next().value;
+    if (next) stageSessionSync(dst, next[0], next[1]);
+    else clearSessionSyncStage(dst);
+  }, 2_000);
+  (stage.timer as unknown as { unref?: () => void }).unref?.();
+}
+
 function makerEventBatchOwnerStampEquals(
   a: PushOwnerStamp | undefined,
   b: PushOwnerStamp | undefined,
@@ -872,6 +962,33 @@ function makerEventBatchOwnerStampEquals(
   if (a === b) return true;
   if (!a || !b) return false;
   return a.dataOwnerId === b.dataOwnerId && a.ownerGeneration === b.ownerGeneration;
+}
+
+/** Merge only adjacent deltas whose complete non-text payload is identical. */
+function coalesceMakerTextDelta(previous: unknown, incoming: unknown): unknown | null {
+  const read = (value: unknown) => {
+    if (!value || typeof value !== 'object') return null;
+    const p = value as Record<string, unknown>;
+    if (typeof p.persistId !== 'string' || !p.persistId) return null;
+    const event = p.event as Record<string, unknown> | undefined;
+    const data = event?.data as Record<string, unknown> | undefined;
+    if (event?.type !== 'text' || data?.isFinal !== false || data.isFullText === true
+      || typeof data.text !== 'string') return null;
+    return { p, event, data, text: data.text };
+  };
+  const a = read(previous);
+  const b = read(incoming);
+  if (!a || !b) return null;
+  const signature = (item: typeof a) => JSON.stringify({
+    ...item.p, event: { ...item.event, data: { ...item.data, text: '' } },
+  });
+  try {
+    if (signature(a) !== signature(b)) return null;
+  } catch {
+    // Serialization failures remain isolated by the existing send boundary.
+    return null;
+  }
+  return { ...b.p, event: { ...b.event, data: { ...b.data, text: a.text + b.text } } };
 }
 
 /**
@@ -915,8 +1032,15 @@ function stageMakerEventPush(
     tail = { events: [], bytes: 0, ...(ownerStamp ? { ownerStamp } : {}) };
     segments.push(tail);
   }
-  tail.events.push(payload);
-  tail.bytes += payloadBytes;
+  const previous = tail.events.at(-1);
+  const coalesced = coalesceMakerTextDelta(previous, payload);
+  if (coalesced) {
+    tail.events[tail.events.length - 1] = coalesced;
+    tail.bytes += estimateMakerEventBytes(coalesced) - estimateMakerEventBytes(previous);
+  } else {
+    tail.events.push(payload);
+    tail.bytes += payloadBytes;
+  }
   if (
     tail.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
     || tail.bytes >= MAKER_EVENT_BATCH_MAX_BYTES
@@ -1107,9 +1231,20 @@ function flushMakerEventBatchSession(
         continue;
       }
       const payload: MakerEventBatchPayload = { sessionId, events: slice };
+      const historyRequired = !slice.every(isNonFinalTextPush);
       try {
         if (!activeClient || activeClient.getStatus() !== 'online') {
           throw new DeviceLinkError('NOT_CONNECTED', 'relay offline');
+        }
+        if (
+          subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)
+          && (sessionSyncStages.get(dst)?.sessions.has(sessionId)
+            || (activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP)
+        ) {
+          // Once any part is skipped, subsequent deltas no longer have a valid
+          // prefix at the receiver. Resume only after the full snapshot is queued.
+          stageSessionSync(dst, sessionId, historyRequired);
+          continue;
         }
         if (segment.ownerStamp === undefined) {
           activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload);
@@ -1117,6 +1252,7 @@ function flushMakerEventBatchSession(
           activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, segment.ownerStamp);
         }
       } catch (err) {
+        stageSessionSync(dst, sessionId, historyRequired);
         // 发不出去就丢这一片(不降级、不重试、不滞留):理由与四轮 review 的推导见
         // MakerEventBatchFlushOutcome 注释。relay 离线时后续切片连尝试都省掉。
         if (err instanceof DeviceLinkError && err.code === 'NOT_CONNECTED') {
@@ -1443,18 +1579,36 @@ function sendPushBestEffort(
   ownerStamp?: PushOwnerStamp,
 ): void {
   if (!activeClient) return;
+  const sessionId = readPushSessionId(payload);
+  const markForRecovery = () => {
+    if (sessionId && channel !== SESSION_SYNC_CHANNEL
+      && topicForPush(channel, payload) === `session:${sessionId}`) {
+      stageSessionSync(dst, sessionId, channel !== 'maker:event' || !isNonFinalTextPush(payload));
+    }
+  };
+  // Oversized maker events and offline replay can bypass the batching path.
+  // They must obey the same missing-prefix boundary as ordinary deltas.
+  if (channel === 'maker:event' && sessionId
+    && subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)
+    && (sessionSyncStages.get(dst)?.sessions.has(sessionId)
+      || (activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP)) {
+    markForRecovery();
+    return;
+  }
   try {
     if (ownerStamp === undefined) activeClient.sendPush(dst, channel, payload);
     else activeClient.sendPush(dst, channel, payload, ownerStamp);
     return;
   } catch (err) {
     if (!isPayloadTooLargeError(err)) {
+      markForRecovery();
       log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
       return;
     }
 
     const compactPayload = compactOversizedPushPayload(channel, payload);
     if (!compactPayload) {
+      markForRecovery();
       log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
       return;
     }
@@ -1464,6 +1618,7 @@ function sendPushBestEffort(
       else activeClient.sendPush(dst, channel, compactPayload, ownerStamp);
       log.warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
     } catch (retryErr) {
+      markForRecovery();
       log.warn(
         `forwardPush to ${shortId(dst)} failed after compact retry (${channel}): ${String(retryErr)}`,
       );
@@ -1632,6 +1787,7 @@ function deactivateControllerState(
   changed = subscriptions.getControllerIds().includes(deviceId) || changed;
   clearReportedControllerName(deviceId);
   clearSessionActivityStage(deviceId);
+  clearSessionSyncStage(deviceId);
   clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId);
   return subscriptions.clearController(deviceId) || changed;
@@ -2833,6 +2989,7 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     for (const topic of topics) {
       const sessionId = topic.startsWith('session:') ? topic.slice('session:'.length) : null;
       if (sessionId) dropMakerEventBatch(src, sessionId);
+      if (sessionId) sessionSyncStages.get(src)?.sessions.delete(sessionId);
     }
   }
   syncForwarding();
@@ -2845,6 +3002,25 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
     flushMakerEventBatchesFor(src);
     drainOfflinePushQueueTo(src, topics);
+    if (subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)) {
+      // Synchronous with subscription registration: old batches/backlog precede
+      // this snapshot, and subsequent live deltas follow it on the same stream.
+      // Admission failure must fail subscribe so its existing retry repairs it.
+      for (const topic of topics) {
+        if (!topic.startsWith('session:')) continue;
+        const snapshot = readSessionTextSnapshot?.(topic.slice('session:'.length));
+        if (snapshot) {
+          try {
+            activeClient?.sendPush(src, SESSION_SYNC_CHANNEL, snapshot, broadcastTap.getSafeDataOwnerPushStamp?.());
+          } catch (error) {
+            return { ok: false, error: {
+              code: error instanceof DeviceLinkError ? error.code : 'INTERNAL',
+              message: 'session text snapshot could not be queued',
+            } };
+          }
+        }
+      }
+    }
   }
   return { ok: true, result: { ok: true } };
 }
@@ -3043,6 +3219,7 @@ export async function runInvoke(
           CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
         )
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
+        args,
       ),
     };
   } catch (err) {
@@ -3136,9 +3313,11 @@ export const __testing = {
     controllerDisplayNameByDevice.clear();
     reportedControllerNameByDevice.clear();
     onSessionsSubscribed = null;
+    readSessionTextSnapshot = null;
     activeClient = null;
     offlinePushQueue.clear();
     clearAllSessionActivityStages();
+    for (const dst of sessionSyncStages.keys()) clearSessionSyncStage(dst);
     clearAllMakerEventBatchStages();
     cancelAllLinkAcceptRetries();
     revokedLinkOpenRejectAt.clear();

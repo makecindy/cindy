@@ -7,6 +7,10 @@ import {
 } from '@/device-link/invokeTimeouts';
 
 describe('resolveMobileInvokeTimeoutMs', () => {
+  it('allows a large history row to finish on a slow link without widening small status reads', () => {
+    expect(resolveMobileInvokeTimeoutMs('local-db:messages:list')).toBe(30_000);
+    expect(resolveMobileInvokeTimeoutMs('maker:list-active')).toBeUndefined();
+  });
   it('mobile 精确表优先:media / 文件搜索 / 词典学习保住收紧前的 30s 窗口', () => {
     expect(resolveMobileInvokeTimeoutMs('device-link:media:fetch')).toBe(30_000);
     expect(resolveMobileInvokeTimeoutMs('file-browser:remote-op')).toBe(30_000);

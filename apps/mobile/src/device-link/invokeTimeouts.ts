@@ -47,6 +47,9 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
+  // Even a small row count can contain one large message: the Android weak-link
+  // regression took ~18s to deliver 200KB. Do not enqueue another copy at 15s.
+  'local-db:messages:list': 30_000,
   'device-link:media:fetch': 30_000,
   'device-link:voice:dictionary-learning': 30_000,
   'device-link:voice:transcribe': 30_000,

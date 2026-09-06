@@ -6,6 +6,7 @@ import {
   DeviceLinkClient,
   DeviceLinkError,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -182,6 +183,7 @@ const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
  * 被控端按能力缺失降级)。被控端只在看到对应能力后才发送新 wire 形状。
  */
 const CONTROLLER_CAPABILITIES = [
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   // maker:event 微批:被控端把同一会话的连续事件合并成一帧,本端拆包后逐条消费
   // (见 remoteSessionStore 的 MAKER_EVENT_BATCH_CHANNEL 分支)。

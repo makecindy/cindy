@@ -82,6 +82,7 @@ import {
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
+  getSessionTextSnapshot,
   onInteractionMessage,
   onInteractionResolved,
   onThinkingEvent,
@@ -1750,6 +1751,25 @@ describe('thinking persistence', () => {
 });
 
 describe('event timestamp persistence', () => {
+  it('reads current text with its stable identity without persisting or sealing it', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: 'prefix', isFinal: false }, null);
+      const snapshot = getSessionTextSnapshot(SESSION);
+      expect(Number.isFinite(Date.parse(snapshot!.event.data.createdAt))).toBe(true);
+    onAssistantTextEvent(SESSION, { text: ' suffix', isFinal: false }, null);
+    expect(snapshot?.event.data.text).toBe('prefix');
+    expect(getSessionTextSnapshot(SESSION)).toMatchObject({
+      persistId, event: { data: { text: 'prefix suffix', isFullText: true, isFinal: false } },
+    });
+    await flushWrites();
+    expect(createMessage).not.toHaveBeenCalled();
+    flushAssistantBlock(SESSION);
+    expect(getSessionTextSnapshot(SESSION)).toBeNull();
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledWith(SESSION,
+        expect.objectContaining({
+          clientId: persistId, content: 'prefix suffix', createdAt: Date.parse(snapshot!.event.data.createdAt),
+        }), broadcastGuard());
+  });
   it('uses the first assistant delta timestamp when the block is flushed later', async () => {
     const startedAt = Date.parse('2026-06-20T10:00:00.000Z');
     const delayedWriteTime = Date.parse('2026-06-20T10:00:05.000Z');

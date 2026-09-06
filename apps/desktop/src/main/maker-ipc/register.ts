@@ -439,6 +439,7 @@ import {
   flushOrphanToolResults,
   getLastAssistantTranscriptUuid,
   getSessionDbAgentKind,
+  getSessionTextSnapshot,
   markAssistantTurnFailed,
   noteSessionAgentKind,
   noteSessionClearBoundary,
@@ -918,6 +919,7 @@ import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { setBusyProbe as setDeviceLinkBusyProbe } from '../device-link/index.js';
 import {
   markRemoteSettingPersistedInsideHandler,
+  setSessionTextSnapshotReader,
   setRemoteReviewInputGuard as setDeviceLinkRemoteReviewInputGuard,
   setRemoteWorkingDirGuard as setDeviceLinkRemoteWorkingDirGuard,
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
@@ -4412,6 +4414,7 @@ export function registerModelVisibilitySyncIpc(): void {
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
+  setSessionTextSnapshotReader(getSessionTextSnapshot);
   log.info('registering maker:* IPC handlers');
   const broadcastSessionRuntimeProjection = async (
     sessionId: string,

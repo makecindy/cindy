@@ -39,7 +39,7 @@
  */
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
 
-import { MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
+import { MESSAGE_FETCH_PAGE_SIZE } from '@/session/messagePaging';
 import type { RemoteMessage } from '@/session/types';
 
 /**
@@ -87,10 +87,10 @@ export const HISTORY_GAP_MAX_CONSIDERED_PER_VISIT = 6;
  *
  * 不能只按行数算预算:被控端结果帧超限时 `listMessagesWithPayloadRetry` 会一路降 limit,
  * device-link 侧还会静默裁行(`remoteRowsTrimmed`),那种分片每次只带回几行。若与行数共用一个
- * 计数器,这类会话会在远未取到 400 行时就发出几十个请求。12 次是"5 个满页 + 若干降级页"的
- * 保守上界,也兼作防死循环兜底。
+ * 计数器,这类会话会在远未取到 400 行时就发出几十个请求。上限容纳 400 行的小网络页,
+ * 再留 7 次探测/降级余量,仍有独立请求数边界兜底。
  */
-export const HISTORY_BACKFILL_MAX_REQUESTS = 12;
+export const HISTORY_BACKFILL_MAX_REQUESTS = Math.ceil(HISTORY_BACKFILL_MAX_ROWS / MESSAGE_FETCH_PAGE_SIZE) + 7;
 
 /** 探测两行在服务端是否真的相邻时的页大小(只要一行就够,payload 最小)。 */
 export const HISTORY_GAP_PROBE_LIMIT = 1;
@@ -252,7 +252,7 @@ export async function backfillHistoryWindowGap(
     let rows = probeRows;
     let requests = probeRequests;
     while (rows < HISTORY_BACKFILL_MAX_ROWS && requests < HISTORY_BACKFILL_MAX_REQUESTS) {
-      const page = await deps.listPage(before, MESSAGE_PAGE_SIZE);
+      const page = await deps.listPage(before, MESSAGE_FETCH_PAGE_SIZE);
       if (deps.isCancelled()) return 'cancelled';
       requests += 1;
       if (page.length === 0) return 'exhausted';
