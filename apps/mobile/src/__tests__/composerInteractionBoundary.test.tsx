@@ -68,7 +68,26 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 const flushJS = () => act(() => { for (const job of runtime.js.splice(0)) job(); });
 const gestureOf = (value: unknown) => value as TestGesture;
-const styleOf = (value: unknown) => (value as { current: { height: number; maxHeight?: number } }).current;
+const styleOf = (value: unknown) => (value as { current: { height: number | 'auto'; maxHeight?: number } }).current;
+
+// Reanimated's native registry merges incremental props. JSI dynamicFromValue
+// omits undefined object fields; returning undefined does not remove an earlier
+// height/maxHeight. Keep the receiver's state to test transitions, not just the
+// worklet's latest return value. This models that boundary, not device rendering.
+function nativeFrameReceiver() {
+  let props: { height?: number | 'auto'; maxHeight?: number } = {};
+  return {
+    apply(style: unknown) {
+      const update = Object.fromEntries(Object.entries(styleOf(style)).filter(([, value]) => value !== undefined));
+      props = { ...props, ...update };
+      return props;
+    },
+    heightForContent(contentHeight: number) {
+      const height = typeof props.height === 'number' ? props.height : contentHeight;
+      return Math.min(height, props.maxHeight ?? Infinity);
+    },
+  };
+}
 
 beforeEach(() => {
   runtime.js = [];
@@ -97,6 +116,50 @@ function mountComposer(input: UseComposerResizeInput) {
 }
 
 describe('composer resize interaction boundary', () => {
+  it('clears a collapsed native height when reopening and lets content grow and shrink', () => {
+    const input = { ...composerInput(), collapsed: true };
+    const harness = mountComposer(input);
+    const frame = nativeFrameReceiver();
+    frame.apply(harness.result.frameStyle);
+    expect(frame.heightForContent(60)).toBeLessThan(60);
+    input.collapsed = false;
+    harness.rerender();
+    frame.apply(harness.result.frameStyle);
+    expect(frame.heightForContent(60)).toBe(60);
+    // Native TextInput can grow before its onContentSizeChange arrives.
+    expect(frame.heightForContent(104)).toBe(104);
+    expect(frame.heightForContent(20)).toBe(20);
+    input.autoMaxContentHeight = 80;
+    harness.rerender();
+    frame.apply(harness.result.frameStyle);
+    expect(frame.heightForContent(104)).toBe(80);
+    expect(harness.result.scrollEnabled).toBe(true);
+  });
+
+  it.each(['cancel', 'reset'] as const)('replaces the auto cap while dragging and restores intrinsic height after %s', (finish) => {
+    const input = composerInput();
+    const harness = mountComposer(input);
+    const frame = nativeFrameReceiver();
+    const gesture = gestureOf(harness.result.gesture);
+    frame.apply(harness.result.frameStyle);
+    expect(frame.heightForContent(500)).toBe(120);
+    gesture.begin({ translationY: 0 });
+    gesture.update({ translationY: -100 });
+    frame.apply(harness.result.frameStyle);
+    expect(frame.heightForContent(500)).toBe(styleOf(harness.result.frameStyle).height);
+    expect(frame.heightForContent(500)).toBeGreaterThan(120);
+    gesture.finalize({ translationY: -100 }, finish === 'reset');
+    flushJS();
+    if (finish === 'reset') {
+      frame.apply(harness.result.frameStyle);
+      expect(frame.heightForContent(500)).toBeGreaterThan(120);
+      act(() => harness.result.reset());
+    }
+    frame.apply(harness.result.frameStyle);
+    expect(frame.heightForContent(20)).toBe(20);
+    expect(frame.heightForContent(500)).toBe(120);
+  });
+
   it('tracks 100 pointer moves with no JS deliveries or React renders, then commits once', () => {
     const input = composerInput();
     const harness = mountComposer(input);
@@ -110,8 +173,8 @@ describe('composer resize interaction boundary', () => {
     for (let index = 1; index <= 100; index++) gesture.update({ translationY: -index });
     expect(harness.result.contentHeight.value).toBe(160);
     expect(styleOf(harness.result.frameStyle).height).toBeGreaterThan(160);
-    expect(styleOf(harness.result.frameStyle).maxHeight).toBeUndefined();
-    expect(innerLimit).toBeGreaterThanOrEqual(styleOf(harness.result.frameStyle).height);
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBe(harness.result.maxFrameHeight);
+    expect(styleOf(harness.result.frameStyle).height).toBeLessThanOrEqual(innerLimit);
     expect(harness.result.inputMaxHeight).toBe(innerLimit);
     expect(harness.renders).toBe(before);
     expect(runtime.js).toHaveLength(1); // only begin, never pointer moves
@@ -159,7 +222,7 @@ describe('composer resize interaction boundary', () => {
     gesture.update({ translationY: -100 });
     gesture.finalize({ translationY: -100 }, true);
     flushJS();
-    expect(styleOf(harness.result.frameStyle).maxHeight).toBeUndefined();
+    expect(styleOf(harness.result.frameStyle).maxHeight).toBe(harness.result.maxFrameHeight);
     act(() => harness.result.reset());
     expect(styleOf(harness.result.frameStyle).maxHeight).toBe(120);
     expect(harness.result.visibleContentHeight).toBe(120);

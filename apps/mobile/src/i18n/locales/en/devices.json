@@ -1,4 +1,31 @@
 {
+  "management": {
+    "title": "Device Management",
+    "openDevice": "View details for {{name}}",
+    "details": "Device details",
+    "retry": "Retry",
+    "unknown": "Not available",
+    "notFound": "This device is no longer in your account.",
+    "deleteDevice": "Delete device",
+    "deleteTitle": "Delete {{name}}?",
+    "deleteMessage": "Remove this device from your device list. This does not delete files on the computer.",
+    "deleteFailed": "Could not delete the device.",
+    "deleteOnline": "This device is online. Take it offline before deleting it.",
+    "currentlyOnline": "Currently online",
+    "nameTooLong": "Device names must be {{limit}} characters or fewer.",
+    "fields": {
+      "name": "Name",
+      "status": "Status",
+      "platform": "Platform",
+      "model": "Model",
+      "systemVersion": "System version",
+      "appVersion": "Cindy version",
+      "cpu": "Processor",
+      "memory": "Memory",
+      "lastSeen": "Last online",
+      "deviceId": "Device ID"
+    }
+  },
   "common": {
     "cancel": "Cancel",
     "save": "Save",

@@ -70,6 +70,18 @@ function parseNotificationPayloadDeepLink(data: unknown): string | null {
   return parseNotificationDeepLink(record.body) ?? parseNotificationDeepLink(record.data);
 }
 
+/** Local navigation hint only; neither the push payload nor the device-link protocol changes. */
+export function notificationRecoveryRoute(deepLink: string, responseKey: string): string {
+  const hashIndex = deepLink.indexOf('#');
+  const path = hashIndex < 0 ? deepLink : deepLink.slice(0, hashIndex);
+  const fragment = hashIndex < 0 ? '' : deepLink.slice(hashIndex);
+  const queryIndex = path.indexOf('?');
+  const pathname = queryIndex < 0 ? path : path.slice(0, queryIndex);
+  const query = new URLSearchParams(queryIndex < 0 ? '' : path.slice(queryIndex + 1));
+  query.set('notificationResponse', responseKey);
+  return `${pathname}?${query.toString()}${fragment}`;
+}
+
 /**
  * 从 expo-notifications 的点击响应中解析任务深链。
  *

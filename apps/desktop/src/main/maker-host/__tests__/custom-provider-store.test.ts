@@ -72,6 +72,25 @@ afterEach(() => {
 });
 
 describe('validateCustomProviderConfig (per-runtime)', () => {
+  it.each(['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'])(
+    'rejects credentials in modelsUrl without exposing them: %s',
+    (userinfo) => {
+      expect(validateCustomProviderConfig({
+        ...valid,
+        runtimes: {
+          codex: {
+            ...valid.runtimes.codex!,
+            modelsUrl: `https://${userinfo}openrouter.ai/api/v1/models`,
+          },
+        },
+      })).toEqual({
+        ok: false,
+        code: 'INVALID_PARAMS',
+        message: "runtime 'codex' modelsUrl must not contain embedded credentials",
+      });
+    },
+  );
+
   it('accepts a valid single-runtime config', () => {
     expect(validateCustomProviderConfig(valid)).toEqual({ ok: true });
   });

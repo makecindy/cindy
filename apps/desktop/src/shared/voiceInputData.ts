@@ -6,6 +6,15 @@ import type {
   DictationRefinementContext,
 } from '@cindy/voice-input-core';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+export {
+  compactVoiceInputHistoryIfNeeded,
+  estimateVoiceInputHistoryContextChars,
+  MAX_REFINEMENT_HISTORY_ITEM_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES,
+  VOICE_INPUT_HISTORY_HEADER,
+} from '@cindy/voice-input-core';
 
 import { CURRENT_CINDY_REGION } from './brandRegion';
 import { SUPPORTED_LOCALES, type SupportedLocale } from './locale';
@@ -125,15 +134,6 @@ export const MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS = 120;
 export const MAX_VOICE_INPUT_DICTIONARY_ALIASES = 8;
 export const MAX_VOICE_INPUT_DICTIONARY_CSV_BYTES = 5 * 1024 * 1024;
 export const MAX_VISIBLE_VOICE_INPUT_HISTORY_ENTRIES = 5;
-// 历史块只作术语/口语风格参考，术语纠错主要由用户字典 + alias hints 承载。
-// 线上日志实测（2026-06-21 ~ 07-04，1050 次听写）：历史从 33k 涨到 96k chars
-// 期间采纳率 / no_change 率 / 术语修正率均无变化，而它占 refine prompt 约八成
-// token（单次 42k+）。预算据此收紧到 ~12k chars（≈ 最近三四十条）。
-export const VOICE_INPUT_HISTORY_COMPACT_CHARS = 12_000;
-export const VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS = 8_000;
-export const VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES = 40;
-export const MAX_REFINEMENT_HISTORY_ITEM_CHARS = 360;
-export const VOICE_INPUT_HISTORY_HEADER = '语音输入历史（旧到新，仅作术语、别名和用词风格参考）：';
 export const VOICE_INPUT_MODIFIER_SHORTCUT_CODES: readonly VoiceInputModifierShortcutCode[] = [
   'MetaLeft',
   'MetaRight',
@@ -886,35 +886,6 @@ export function normalizeVoiceInputHistory(raw: unknown): VoiceInputHistoryEntry
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function compactVoiceInputHistoryIfNeeded(entries: VoiceInputHistoryEntry[]): VoiceInputHistoryEntry[] {
-  if (estimateVoiceInputHistoryContextChars(entries) <= VOICE_INPUT_HISTORY_COMPACT_CHARS) {
-    return entries;
-  }
-  // This is intentionally a rare reset, not a sliding cap. The history prefix
-  // grows append-only for prompt-cache reuse until it crosses the context
-  // budget, then we rewrite it to a compact recent base with enough headroom
-  // to accumulate a long new prefix. The lower target avoids re-compacting on
-  // the next few dictations, which would repeatedly invalidate the cache.
-  const recent = entries.slice(0, VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES);
-  let keepCount = recent.length;
-  while (
-    keepCount > 1 &&
-    estimateVoiceInputHistoryContextChars(recent.slice(0, keepCount)) > VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS
-  ) {
-    keepCount -= 1;
-  }
-  return recent.slice(0, keepCount);
-}
-
-export function estimateVoiceInputHistoryContextChars(newestFirst: ReadonlyArray<{ text: string }>): number {
-  const oldestFirst = normalizeVoiceInputHistoryTextEntries(newestFirst);
-  if (oldestFirst.length === 0) return 0;
-  return oldestFirst.reduce(
-    (total, entry) => total + 3 + entry.length,
-    VOICE_INPUT_HISTORY_HEADER.length,
-  );
-}
-
 export function createVoiceInputHistoryEntry(text: string, timestamp = Date.now()): VoiceInputHistoryEntry | null {
   const normalizedText = text.trim();
   if (!normalizedText) return null;
@@ -1265,20 +1236,6 @@ function normalizeVoiceInputHistoryEntry(raw: unknown): VoiceInputHistoryEntry |
     text,
     createdAt,
   };
-}
-
-function normalizeVoiceInputHistoryTextEntries(newestFirst: ReadonlyArray<{ text: string }>): string[] {
-  return newestFirst
-    .slice()
-    .reverse()
-    .map((entry) => truncateContextText(entry.text, MAX_REFINEMENT_HISTORY_ITEM_CHARS))
-    .filter(Boolean);
-}
-
-function truncateContextText(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(0, maxChars).trim();
 }
 
 function createId(prefix: string, timestamp = Date.now(), seed = ''): string {

@@ -346,8 +346,8 @@ export const LOGIN_PHONE_SPLASH_SPINNER_SIZE = 64;
 
 /**
  * 纯函数:物理 viewport → 登录 surface 构图(§3.6 断点 + 三构图布局统一出口)。
- * phone 分支复用 resolveLoginStage 两档插值;splash 簇偏移 = demo phoneStage
- * off = round((designHeight - cindy.h)/2 - cindy.y),spinner 居字标下方 44。
+ * phone 分支复用 resolveLoginStage 两档插值;横屏 splash 簇按实际视口高度居中
+ * (先除以 scale 换回 stage 坐标),竖屏沿用设计高,spinner 居字标下方 44。
  */
 export function resolveLoginSurface(
   viewportWidth: number,
@@ -361,8 +361,13 @@ export function resolveLoginSurface(
     return padSurface(mode, LOGIN_PAD_LANDSCAPE_STAGE, viewportWidth, viewportHeight);
   }
   const stage = resolveLoginStage(viewportWidth, viewportHeight);
+  // designHeight 的上下限只约束登录构图。横屏时它可能高于可见视口，
+  // 用它居中会把启动立绘、字标和 spinner 一起推到屏幕下方。
+  const splashHeight = viewportWidth > viewportHeight
+    ? viewportHeight / stage.scale
+    : stage.designHeight;
   const splashOffset = Math.round(
-    (stage.designHeight - stage.cindy.h) / 2 - stage.cindy.y,
+    (splashHeight - stage.cindy.h) / 2 - stage.cindy.y,
   );
   return {
     mode,

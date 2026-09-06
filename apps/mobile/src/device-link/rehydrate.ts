@@ -1,8 +1,10 @@
 import type { Topic } from '@cindy/device-link';
 import type { RehydratePlan } from '@/device-link/topicRegistry';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
+import { SnapshotReadSupersededError } from '@/device-link/sessionSnapshotSingleFlight';
 
 export interface DeviceLinkRehydrateSendOptions {
+  subscriptionIdentity?: number | null;
   /** 同一设备的一轮快照 fan-out 共享一个响应性观测 cohort。 */
   responsivenessCohort?: number;
 }
@@ -233,6 +235,12 @@ export function classifySnapshotBatchFailure(
       && !isRemoteDisabledError(result.reason),
   );
   if (availabilityRejections.length === 0) {
+    // A detail caller may invalidate a shared physical response while this peer's
+    // recovery is still current. Reuse the existing retry path rather than mark
+    // recovery complete or allow that old response to overwrite a fresh window.
+    if (rejections.some((result) => result.reason instanceof SnapshotReadSupersededError)) {
+      return { kind: 'partial-transient' };
+    }
     return otherTransient
       ? { kind: 'reject', error: otherTransient.reason }
       : { kind: 'none' };

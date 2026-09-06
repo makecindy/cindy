@@ -28,13 +28,17 @@ import {
   scheduleClearSilencedRun,
 } from '@/lib/silencedSessionDoneStore';
 import type { AutomationScheduleSessionInfo } from '../lib/automationSidebarGrouping';
-import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from '../../scheduler/lib/runUnread';
+import {
+  isFailedScheduleRun,
+  isUnreadFailedScheduleRun,
+  isUnreadScheduleRun,
+} from '../../scheduler/lib/runUnread';
 import { loadScheduleSidebarIndexSnapshot } from '../../scheduler/lib/scheduleSidebarIndexRuns';
 import { subscribeScheduleRunReadSync } from '../../scheduler/lib/scheduleRunReadSync';
 
 const log = createLogger('AutomationScheduleSessionIndex');
 
-/** 侧栏 hook 写入、会话视图只读。避免每个聊天窗再跑一遍全量 listSidebarIndexRuns。 */
+/** 窗口级 owner 写入，侧栏和任务视图只读；折叠侧栏不会中断索引。 */
 let publishedIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
 const publishedIndexListeners = new Set<() => void>();
 
@@ -90,6 +94,7 @@ function applyOptimisticUnreads(next: Map<string, AutomationScheduleSessionInfo>
       existing.unreadRunIds.push(overlay.runId);
     }
     if (overlay.kind === 'failed' && !existing.unreadFailedRunIds.includes(overlay.runId)) {
+      existing.hasFailedRun = true;
       existing.unreadFailedRunIds.push(overlay.runId);
       existing.latestUnreadFailedRunId = overlay.runId;
     }
@@ -108,6 +113,17 @@ function subscribePublishedIndex(listener: () => void): () => void {
   return () => {
     publishedIndexListeners.delete(listener);
   };
+}
+
+export function usePublishedAutomationScheduleSessionIndex(): ReadonlyMap<
+  string,
+  AutomationScheduleSessionInfo
+> {
+  return useSyncExternalStore(
+    subscribePublishedIndex,
+    () => publishedIndex,
+    () => publishedIndex,
+  );
 }
 
 export function useAutomationScheduleSessionInfo(
@@ -225,6 +241,7 @@ export function useAutomationScheduleSessionIndex(
           unreadRunIds,
           unreadFailedRunIds,
           latestUnreadFailedRunId,
+          hasFailedRun: Boolean(existing?.hasFailedRun || isFailedScheduleRun(run)),
           hasUnreadRun: unreadRunIds.length > 0,
           hasUnreadFailedRun: unreadFailedRunIds.length > 0,
         });

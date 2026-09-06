@@ -1,4 +1,5 @@
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
+import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
   ArrowDown,
   Camera,
@@ -92,12 +93,13 @@ import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import {
   createRemoteSyncReopenCoordinator,
+  retryRemoteSyncRead,
   useRemoteSyncCoordinator,
   type RemoteSyncRun,
 } from '@/device-link/remoteSyncTask';
 import {
   runConnectionScopedSessionMetadataRead,
-  runIndependentSnapshotReads,
+  readProgressiveMessageWindow,
   runSessionMessagesSnapshotSingleFlight,
   runSessionPendingInteractionsSnapshotSingleFlight,
   runSessionProjectionSnapshotSingleFlight,
@@ -896,6 +898,7 @@ export default function SessionScreen() {
   const { t, i18n: i18nInstance } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
+    notificationResponse?: string;
     deviceId?: string;
     deviceName?: string;
     draft?: string;
@@ -910,6 +913,8 @@ export default function SessionScreen() {
     visualSearchQuery?: string;
   }>();
   const sessionId = readRouteParam(params.sessionId) ?? '';
+  const notificationResponse = readRouteParam(params.notificationResponse);
+  const syncedNotificationResponseRef = useRef<string | null>(null);
   const shareSelectionActive = useShareSelectionActive(sessionId);
   const shareSelectionCount = useShareSelectionCount();
   const shareSelectionRevision = useShareSelectionRevision();
@@ -957,7 +962,7 @@ export default function SessionScreen() {
           remoteSessionStore.leaveSessionMessageDetail(sessionId, 'detail-blur', authority);
         }
       };
-    }, [deviceId, sessionId]),
+    }, [deviceId, notificationResponse, sessionId]),
   );
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -1604,8 +1609,6 @@ export default function SessionScreen() {
     setLoading(false);
     rewindRequestSeqRef.current += 1;
   }
-  const [contextLoading, setContextLoading] = useState(false);
-  const [contextUsage, setContextUsage] = useState<unknown>(null);
   // 账号级限额快照(`maker:usage:account` 原始返回):账号级数据本身跨会话共享,但
   // 会话 agentKind 不同时语义不同(只对 codex 会话拉取/展示),随 sessionId 一起清。
   const [accountUsage, setAccountUsage] = useState<unknown>(null);
@@ -1615,14 +1618,11 @@ export default function SessionScreen() {
   const [codexResetBusy, setCodexResetBusy] = useState(false);
   // consume 回包丢失时保留本次 UUID;即使面板重新拉取额度,重试也不能换 key。
   const [codexResetRetryKey, setCodexResetRetryKey] = useState<string | null>(null);
-  // contextUsage 的归属会话号:同屏 sessionId 变化(深链 setParams 等原地切换路径)时
-  // 清空缓存并作废在途请求,防止上一会话的用量数据在新会话的「会话信息」里串档。
+  // 账号控制快照的归属会话号；上下文详情缓存由菜单自身管理。
   const contextUsageSessionRef = useRef(sessionId);
   useEffect(() => {
     if (contextUsageSessionRef.current === sessionId) return;
     contextUsageSessionRef.current = sessionId;
-    setContextUsage(null);
-    setContextLoading(false);
     setAccountUsage(null);
     setCodexRateLimits(null);
     setCodexResetBusy(false);
@@ -1691,11 +1691,14 @@ export default function SessionScreen() {
   // A 上次访问落的 key 仍等于 `${sessionId}:${connectionEpoch}`,若不清,回到 A 会在
   // 新一轮 load() 拉到最新窗口前就凭缓存消息放行回执(离开期间只有轻 topic 在走,
   // 缓存未必含新完成 turn 的内容)。每次切换都强制等本次访问的 sync 重新落 key。
-  const [prevReadAckSessionId, setPrevReadAckSessionId] = useState(sessionId);
-  if (prevReadAckSessionId !== sessionId) {
-    setPrevReadAckSessionId(sessionId);
+  // A new push visit to the same route must also wait for its new message window.
+  const readAckVisitKey = JSON.stringify([deviceId, sessionId, notificationResponse]);
+  const [prevReadAckVisitKey, setPrevReadAckVisitKey] = useState(readAckVisitKey);
+  if (prevReadAckVisitKey !== readAckVisitKey) {
+    setPrevReadAckVisitKey(readAckVisitKey);
     setReadAckSyncedKey(null);
     setSessionMetadataSyncedKey(null);
+    setContentSyncedKey(null);
     readAckGateGenRef.current += 1;
   }
   // 远程媒体取件队列:屏实例级缓存 + 同 url 去重 + 并发上限(每次取件都让桌面端
@@ -3120,8 +3123,7 @@ export default function SessionScreen() {
     };
   }, [connectionEpoch, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
 
-  const syncSession = useCallback(async (syncRun: Pick<RemoteSyncRun, 'isStale' | 'replaceMessages'>) => {
-    const contentKeyAtStart = contentRecoveryKeyRef.current;
+  const syncSession = useCallback(async (syncRun: RemoteSyncRun) => {
     const snapshotStartedAt = Date.now();
     const options = { replaceMessages: syncRun.replaceMessages };
     if (!deviceId || !sessionId || syncRun.isStale()) return;
@@ -3176,7 +3178,7 @@ export default function SessionScreen() {
       && storedMessagesAtStart.length > 0
       && storedSessionAtStart !== null;
     const prepareLinkAndSubscription = async () => {
-      await withTransientRemoteRetry(() => openLink(deviceId));
+      await retryRemoteSyncRead(syncRun, () => openLink(deviceId));
       if (subscriptionRetryIsStale()) return;
       let subscriptionAttemptVersion = syncReopenCoordinator.captureVersion();
       // sessions topic 只负责之后的实时推送,不挡快照读。自己在后台
@@ -3193,13 +3195,14 @@ export default function SessionScreen() {
     };
     const retryRead = <T,>(read: () => Promise<T>): Promise<T> => {
       let failedAtVersion: number | null = null;
-      return withTransientRemoteRetry(async () => {
+      return retryRemoteSyncRead(syncRun, async () => {
         // 首轮复用上面统一完成的 link-open。只有本项真的因瞬态错误重试时才
         // 按失败请求开始时的恢复版本重开：同一旧代的错峰失败会合并；重开后
         // 发出的请求若再次断链，则以新版本触发下一次真正 reopen。
         if (failedAtVersion !== null) {
           await syncReopenCoordinator.reopenAfter(failedAtVersion);
         }
+        if (syncRun.isStale()) throw new Error('Remote sync superseded');
         const attemptVersion = syncReopenCoordinator.captureVersion();
         return read().catch((err) => {
           failedAtVersion = attemptVersion;
@@ -3207,10 +3210,17 @@ export default function SessionScreen() {
         });
       });
     };
-    const snapshotScope = {
+    const snapshotScope: {
+      deviceId: string;
+      sessionId: string;
+      connectionEpoch: number;
+      subscriptionIdentity?: number | null;
+      signal: AbortSignal;
+    } = {
       deviceId,
       sessionId,
       connectionEpoch: readAckEpochAtStart,
+      signal: syncRun.signal,
     };
     const fetchActiveSessionSnapshot = async () => {
       // Capture immediately before every request. Because this helper is invoked inside
@@ -3241,112 +3251,79 @@ export default function SessionScreen() {
     setError(null);
     try {
       await prepareLinkAndSubscription();
-      if (!isReopen) {
-        // 首开 / 强制替换:A1 仍保持并行，但每一项独立重试。一个 ACK timeout
-        // 不再把已经成功的 meta / history / pending / projection / active 全部重发。
-        const [sessionMeta, history, pendingInteractions, projectionResult, activeSessionSnapshot] = await runIndependentSnapshotReads([
-          fetchSessionMetadata,
-          () => listMessagesWithPayloadRetry((limit) => runSessionMessagesSnapshotSingleFlight(
+      if (syncRun.isStale() || !messageAuthorityCurrent()) return;
+      // Capture at the first snapshot read, after link-open. An ACK received while
+      // opening the link is already covered; it must not force another full batch.
+      const ackAtReadStart = getSubscriptionIdentity?.(deviceId, ['sessions', `session:${sessionId}`]) ?? null;
+      snapshotScope.subscriptionIdentity = ackAtReadStart;
+      const contentKeyAtStart = ackAtReadStart === null ? null
+        : JSON.stringify([deviceId, sessionId, readAckEpochAtStart, ackAtReadStart]);
+      const isCurrent = () => !syncRun.isStale() && messageAuthorityCurrent();
+      const pushRefresh = notificationResponse !== null
+        && syncedNotificationResponseRef.current !== notificationResponse;
+      const messageRead = readProgressiveMessageWindow({
+        readMetadata: () => retryRead(fetchSessionMetadata),
+        eager: !isReopen || pushRefresh,
+        shouldReadMessages: (sessionMeta) => shouldRefreshLatestMessageWindowOnReopen({
+          freshSession: sessionMeta,
+          messageWindowSynced: remoteSessionStore.isSessionMessageWindowSynced(sessionId, sessionMeta),
+          storedSession: storedSessionAtStart,
+        }),
+        readMessages: () => retryRead(() => listMessagesWithPayloadRetry(
+          (limit) => runSessionMessagesSnapshotSingleFlight(
             snapshotScope,
             limit,
             { kind: 'detail', generation: messageAuthority.generation },
             () => maker.listMessages(sessionId, { limit }),
-          )),
-          fetchPendingInteractions,
-          fetchProjection,
-          () => fetchActiveSessionSnapshot(),
-        ] as const, retryRead);
-        if (syncRun.isStale() || !messageAuthorityCurrent()) return;
-        remoteSessionStore.setActiveSessionSnapshots(
-          deviceId,
-          Array.isArray(activeSessionSnapshot.activeSessions)
-            ? activeSessionSnapshot.activeSessions
-            : [],
-          activeSessionSnapshot.activityEpochAtFetchStart,
-        );
-        const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
-        // moreBeyondWindow:本页上沿之外服务端还有历史(满页 / 被裁行)。为真时 store 不保留早于
-        // 本页的缓存段 —— 它与本页之间可能隔着从未加载的行,保留就是孤岛(#1222)。判据与
-        // 「加载更早」入口同源,两者本就该一致。
-        const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
-        if (options.replaceMessages) {
-          remoteSessionStore.setMessages(sessionId, historyPage, { authority: messageAuthority });
-        } else {
-          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, {
-            authority: messageAuthority,
-            moreBeyondWindow,
-          });
-        }
-        remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
-        setHasOlderMessages(moreBeyondWindow);
-        remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
-        remoteSessionStore.setInputProjectionIfCurrent(
-          sessionId,
-          projectionResult.projection,
-          projectionResult.authorityEpochAtStart,
-        );
-      } else {
-        // 重开:便宜并行(不含整窗 listMessages)拿 meta + pending + projection + active。
-        const [sessionMeta, pendingInteractions, projectionResult, activeSessionSnapshot] = await runIndependentSnapshotReads([
-          fetchSessionMetadata,
-          fetchPendingInteractions,
-          fetchProjection,
-          () => fetchActiveSessionSnapshot(),
-        ] as const, retryRead);
-        // 廉价对账:updatedAt 主信号(任何消息变化都会 bump),_count 仅在两侧都有时作辅助;
-        // 另外要求消息窗口已被详情页同步到当前 meta,避免首页先刷新 session preview 后,
-        // 详情页把旧消息缓存误判成最新。任一变化 → 拉取权威最新窗口并对账;
-        // 都没变 → 跳过整窗重拉(内容已是最新,新消息由 live subscribe 推送)。
-        const freshCount = sessionMeta._count?.messages;
-        const metaChanged = shouldRefreshLatestMessageWindowOnReopen({
-          freshSession: sessionMeta,
-          messageWindowSynced: remoteSessionStore.isSessionMessageWindowSynced(sessionId, sessionMeta),
-          storedSession: storedSessionAtStart,
-        });
-        if (syncRun.isStale() || !messageAuthorityCurrent()) return;
-        remoteSessionStore.setActiveSessionSnapshots(
-          deviceId,
-          Array.isArray(activeSessionSnapshot.activeSessions)
-            ? activeSessionSnapshot.activeSessions
-            : [],
-          activeSessionSnapshot.activityEpochAtFetchStart,
-        );
-        if (metaChanged) {
-          const history = await retryRead(() =>
-            listMessagesWithPayloadRetry(
-              (limit) => runSessionMessagesSnapshotSingleFlight(
-                snapshotScope,
-                limit,
-                { kind: 'detail', generation: messageAuthority.generation },
-                () => maker.listMessages(sessionId, { limit }),
-              ),
-              REOPEN_MESSAGE_WINDOW_LIMITS,
-            ),
-          );
-          if (syncRun.isStale() || !messageAuthorityCurrent()) return;
+          ),
+          isReopen ? REOPEN_MESSAGE_WINDOW_LIMITS : undefined,
+        )),
+        isCurrent,
+        commitMessages: (history) => {
           const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
-          // 同首开路径:上沿之外还有历史时不保留更早的缓存段(#1222)。
           const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
-          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, {
-            authority: messageAuthority,
-            moreBeyondWindow,
-          });
-          remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
-          setHasOlderMessages(moreBeyondWindow);
-        } else {
-          // 回归修复:没新内容也要补设 hasOlderMessages —— 屏幕重开把该 state 重置为 false,跳过整窗
-          // 重拉时若不补设,「加载更早」入口会消失、往上拖刷不出老消息。用服务端总数 vs in-store 已加载
-          // 真实消息数推断(getSession 没给总数时退化为窗口启发式)。
-          setHasOlderMessages(hasOlderMessagesAfterReopen(freshCount, remoteSessionStore.getMessages(sessionId)));
-        }
-        remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
-        remoteSessionStore.setInputProjectionIfCurrent(
-          sessionId,
-          projectionResult.projection,
-          projectionResult.authorityEpochAtStart,
-        );
+          if (options.replaceMessages) {
+            remoteSessionStore.setMessages(sessionId, historyPage, { authority: messageAuthority });
+          } else {
+            remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, {
+              authority: messageAuthority,
+              moreBeyondWindow,
+            });
+          }
+        },
+      });
+      const commitRead = <T,>(read: () => Promise<T>, commit: (value: T) => void) =>
+        runConnectionScopedSessionMetadataRead(() => retryRead(read), isCurrent, commit);
+      // Only the control/read-receipt barrier waits for all resources. Each response
+      // is applied independently, and a changed metadata response starts history
+      // immediately rather than waiting for pending/projection/active.
+      const [{ metadata: sessionMeta, history }] = await Promise.all([
+        messageRead,
+        commitRead(fetchPendingInteractions, (pendingInteractions) => {
+          remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
+        }),
+        commitRead(fetchProjection, (projectionResult) => {
+          remoteSessionStore.setInputProjectionIfCurrent(
+            sessionId, projectionResult.projection, projectionResult.authorityEpochAtStart,
+          );
+        }),
+        commitRead(fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
+          remoteSessionStore.setActiveSessionSnapshots(
+            deviceId,
+            Array.isArray(activeSessionSnapshot.activeSessions) ? activeSessionSnapshot.activeSessions : [],
+            activeSessionSnapshot.activityEpochAtFetchStart,
+          );
+        }),
+      ]);
+      if (!isCurrent()) return;
+      if (history !== null) {
+        remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
+        if (pushRefresh) syncedNotificationResponseRef.current = notificationResponse;
       }
-      // 不变量:上面 setHasOlderMessages 的校正(:806/:841/:846)与这里的 setLastSyncedAt 之间必须保持
+      setHasOlderMessages(history !== null
+        ? shouldKeepOlderMessagesAffordance(history)
+        : hasOlderMessagesAfterReopen(sessionMeta._count?.messages, remoteSessionStore.getMessages(sessionId)));
+      // 不变量:上面 setHasOlderMessages 的校正与这里的 setLastSyncedAt 之间必须保持
       // 同步尾、无 await —— 否则乐观点亮 effect(依赖 lastSyncedAt===null)会在 await 间隙把刚校正成 false
       // 的「加载更早」入口重新点亮。将来切勿在两者之间插入 await。
       if (syncRun.isStale() || !messageAuthorityCurrent()) return;
@@ -3356,6 +3333,7 @@ export default function SessionScreen() {
       setLastSyncedAt(Date.now());
       setContentSyncedKey(contentKeyAtStart);
       if (contentKeyAtStart !== null && contentRecoveryKeyRef.current === contentKeyAtStart) {
+        syncRun.satisfy('subscription-acked');
         console.debug('[device-link] recovery snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
       }
       // 已读回执门槛:本会话在当前连接代完成过整窗同步。sessionId / epoch / 门槛代号
@@ -3371,16 +3349,22 @@ export default function SessionScreen() {
         // 两类失败都写入 hold 且不能清门：瞬态错误继续自动重试，确定性错误保留
         // 手动同步入口；共享 UI error 被其它操作清掉时也不会变成不可见的永久自锁。
         latchOutboxTransportHold(formatted);
+        // The coordinator owns sibling cancellation and preserves this failure
+        // for rewind/navigation callers. Supersession remains a separate outcome.
+        throw err;
       }
     } finally {
       if (!syncRun.isStale() && messageAuthorityCurrent()) setLoading(false);
     }
-  }, [deviceId, deviceName, latchOutboxTransportHold, maker, openLink, reopenLink, sessionId, subscribe]);
+  }, [deviceId, deviceName, getSubscriptionIdentity, latchOutboxTransportHold, maker, notificationResponse, openLink, reopenLink, sessionId, subscribe]);
   // 任一连接恢复身份变化都会让旧读取失去提交资格。否则断线前启动的同步可能在
   // 新 hold 锁存后迟到，并从成功尾误清恢复屏障。
   const remoteSyncContextKey = JSON.stringify([
     deviceId,
     sessionId,
+    notificationResponse,
+    appStateActive,
+    messageReloadRevision,
     connectionEpoch,
     status,
     targetAvailableForDispatch,
@@ -3394,9 +3378,10 @@ export default function SessionScreen() {
   // the two. Reuse the existing coordinator to reconcile after this exact ACK.
   useEffect(() => {
     if (!contentRecoveryKey || status !== 'online') return;
+    if (contentSyncedKey === contentRecoveryKey) return;
     if (!messageScreenFocusedRef.current || !messageAppActiveRef.current) return;
     void requestSync({ reason: 'subscription-acked', replaceMessages: false });
-  }, [contentRecoveryKey, requestSync, status]);
+  }, [contentRecoveryKey, contentSyncedKey, requestSync, status]);
   const load = useCallback(
     () => requestSync({ reason: 'passive-refresh' }),
     [requestSync],
@@ -4734,9 +4719,10 @@ export default function SessionScreen() {
       // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
       // 被控端)就用上次缓存,绝不为它推迟开麦。本次拉到的内容供下一次润色使用。
       void refreshMobileVoiceDictionary(deviceId, () => maker.getVoiceDictionary());
+      const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null);
       const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
-        takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),
-        getMobileVoiceInputHistoryForHost(deviceId),
+        prewarmedVoicePromise,
+        prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(deviceId, voice?.credential.settings?.voiceInputHistory)),
         hydrateMobileVoiceDictionary(deviceId),
       ]);
       claimedPrewarm = prewarmedVoice;
@@ -6220,13 +6206,11 @@ export default function SessionScreen() {
       if (localSystemCommand) {
         let data: Record<string, unknown>;
         if (localSystemCommand === 'context') {
-          setContextLoading(true);
           try {
             const usage = await maker.getContextUsage(
               sessionId,
               buildContextUsageCreateOpts(sessionAtSend),
             );
-            setContextUsage(usage);
             data = buildMobileSystemCardData(localSystemCommand, {
               contextUsage: usage,
               projection: inputProjection,
@@ -6240,8 +6224,6 @@ export default function SessionScreen() {
               remoteCommands: commandsAtSend,
               session: sessionAtSend,
             });
-          } finally {
-            setContextLoading(false);
           }
         } else {
           data = buildMobileSystemCardData(localSystemCommand, {
@@ -7899,25 +7881,6 @@ export default function SessionScreen() {
     setModelSheetOpen(true);
   }, [agentSwitchIntent, canUseRemoteSessionControls, modelSheetOpen, sessionAgentKind]);
 
-  const refreshContextUsage = useCallback(async () => {
-    if (!currentSession || contextLoading) return;
-    setContextLoading(true);
-    setError(null);
-    try {
-      const usage = await maker.getContextUsage(
-        sessionId,
-        buildContextUsageCreateOpts(currentSession),
-      );
-      // 会话已原地切换 → 丢弃迟到结果,归属校验见 contextUsageSessionRef 注释。
-      if (contextUsageSessionRef.current !== sessionId) return;
-      setContextUsage(usage);
-    } catch (err) {
-      if (contextUsageSessionRef.current === sessionId) setError(formatRemoteError(err));
-    } finally {
-      if (contextUsageSessionRef.current === sessionId) setContextLoading(false);
-    }
-  }, [contextLoading, currentSession, maker, sessionId]);
-
   // 账号限额按需拉取(会话信息面板打开时):优先走 Codex app-server 权威控制面,
   // 同时拿窗口和 reset credits。老被控端没有新通道时回退既有只读 usage channel;
   // 两条都失败则静默保留当前快照——限额是补充信息,不打断会话操作。
@@ -7930,7 +7893,7 @@ export default function SessionScreen() {
     }
     try {
       const snapshot = await maker.getCodexRateLimits();
-      // 迟到结果归属校验,同 contextUsage(见 contextUsageSessionRef 注释)。
+      // 迟到结果仍按账号控制快照的会话归属校验。
       if (contextUsageSessionRef.current !== sessionId) return;
       setCodexRateLimits(snapshot);
       setAccountUsage(snapshot.rateLimits);
@@ -8728,12 +8691,12 @@ export default function SessionScreen() {
         </View>
         {currentSession ? (
           <SessionMenuSheet
+            usageReader={maker}
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
             busy={controlBusy}
             codexRateLimits={localCodexRateLimitControl ? codexRateLimits : null}
             codexResetBusy={codexResetBusy}
-            contextLoading={contextLoading}
-            contextUsage={contextUsage}
+            onContextError={setError}
             extraDirBrowser={extraDirBrowser}
             initialView={menuInitialView}
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
@@ -8743,7 +8706,6 @@ export default function SessionScreen() {
             onDelete={() => patchSessionMeta({ status: 'deleted' })}
             onLoadExtraDirPath={(path) => void loadExtraDirBrowsePath(path)}
             onRefreshAccountUsage={() => void refreshAccountUsage()}
-            onRefreshContextUsage={() => void refreshContextUsage()}
             onResetCodexRateLimits={() => void resetCodexRateLimits()}
             onOpenWorkspace={() => {
               if (!currentSession.workingDir) return;
@@ -10741,7 +10703,7 @@ function buildMobileVoiceSessionRefinementContext(
   draftText: string,
   items: readonly MobileMessageRenderItem[],
 ) {
-  const selectionBefore = truncateMobileVoiceContext(draftText, 1200);
+  const selectionBefore = takeRefinementContextTail(draftText);
   const replyToMessage = findLastAssistantMessageText(items);
   return {
     selectionBefore: selectionBefore || undefined,
@@ -10754,7 +10716,7 @@ function findLastAssistantMessageText(items: readonly MobileMessageRenderItem[])
     const item = items[index];
     if (!item) continue;
     if (item.type === 'message' && item.message.kind === 'assistant' && !item.message.isStreaming) {
-      return truncateMobileVoiceContext(item.message.body, 500);
+      return truncateRefinementReply(item.message.body);
     }
     if (item.type === 'work_group') {
       const nested = findLastAssistantMessageText(item.children);
@@ -10767,12 +10729,6 @@ function findLastAssistantMessageText(items: readonly MobileMessageRenderItem[])
     }
   }
   return '';
-}
-
-function truncateMobileVoiceContext(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(-maxChars).trim();
 }
 
 interface RouteActionButtonProps {

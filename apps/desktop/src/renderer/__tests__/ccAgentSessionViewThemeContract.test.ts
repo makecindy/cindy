@@ -33,8 +33,9 @@ describe('CCAgentSessionView 主题契约（语义 token，双模式）', () => 
   it('context 环阈值色不再裸写红/橙，改走 error-flat / warning-fg', () => {
     expect(viewSource).not.toContain(hex('EF4444'));
     expect(viewSource).not.toContain(hex('F59E0B'));
-    expect(viewSource).toContain("pct > 90 ? 'var(--error-flat)' :");
-    expect(viewSource).toContain("'var(--warning-fg)' : 'var(--msg-tool-card-chevron)'");
+    expect(viewSource).toMatch(
+      /pct\s*>\s*90\s*\?\s*'var\(--error-flat\)'\s*:\s*pct\s*>\s*70\s*\?\s*'var\(--warning-fg\)'\s*:\s*'var\(--msg-tool-card-chevron\)'/,
+    );
   });
 
   it('消费的 token 槽位同时具备 light / dark 双模式值', () => {

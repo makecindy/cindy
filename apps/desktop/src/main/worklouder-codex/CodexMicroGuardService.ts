@@ -11,6 +11,10 @@ import {
 } from '../maker-host/override-settings-file.js';
 import hookContents from './codexMicroGuardHook.cjs?raw';
 import {
+  listCodexMicroGuardProcesses,
+  type CodexMicroGuardProcess,
+} from './codexMicroGuardProcesses.js';
+import {
   CodexMicroGuardManager,
   CodexMicroGuardStore,
   LaunchctlGuardCommandRunner,
@@ -29,6 +33,7 @@ interface CodexMicroGuardServiceOptions {
   runner?: GuardCommandRunner;
   hookContents?: string;
   heartbeatIntervalMs?: number;
+  listProcesses?: () => Promise<CodexMicroGuardProcess[]>;
 }
 
 const log = desktopMakerLogger.child('codex-micro-guard');
@@ -52,9 +57,12 @@ export class CodexMicroGuardService {
   private recoveryRequired = false;
   private disposed = false;
   private lastEmittedState: string | null = null;
+  private readonly listProcesses: () => Promise<CodexMicroGuardProcess[]>;
+  private restartProcesses: CodexMicroGuardProcess[] = [];
 
   constructor(options: CodexMicroGuardServiceOptions = {}) {
     this.platform = options.platform ?? process.platform;
+    this.listProcesses = options.listProcesses ?? listCodexMicroGuardProcesses;
     const supportPath = options.supportPath ?? defaultSupportPath();
     this.store = new CodexMicroGuardStore(supportPath);
     this.manager = new CodexMicroGuardManager(
@@ -88,6 +96,7 @@ export class CodexMicroGuardService {
 
   async getState(): Promise<CodexMicroGuardState> {
     await this.initialize();
+    await this.enqueue(() => this.refreshRestartRequired());
     return this.snapshot();
   }
 
@@ -110,6 +119,7 @@ export class CodexMicroGuardService {
       this.settingsStore.writePatch({ enabled: false });
       this.stopHeartbeat();
       this.active = false;
+      this.restartProcesses = [];
       await this.manager.disable();
       this.failed = false;
       this.recoveryRequired = false;
@@ -129,6 +139,7 @@ export class CodexMicroGuardService {
       if (this.disposed) return;
       this.disposed = true;
       this.stopHeartbeat();
+      this.restartProcesses = [];
       if (this.platform !== 'darwin') return;
       try {
         if (this.active || this.hasRecoveryState()) await this.manager.disable();
@@ -149,6 +160,7 @@ export class CodexMicroGuardService {
     try {
       if (enabled) {
         await this.manager.enable(this.hookContents);
+        // Restart hints belong only to an explicit toggle, not startup recovery.
         this.active = true;
         this.startHeartbeat();
       } else if (this.hasRecoveryState()) {
@@ -172,6 +184,12 @@ export class CodexMicroGuardService {
     if (this.active && this.store.isFresh()) return;
     this.failed = false;
     this.recoveryRequired = false;
+    let processes: CodexMicroGuardProcess[] = [];
+    try {
+      processes = await this.listProcesses();
+    } catch {
+      // Process detection is only a hint; it must not fail protection activation.
+    }
     await this.manager.enable(this.hookContents);
     try {
       this.settingsStore.writePatch({ enabled: true });
@@ -184,6 +202,7 @@ export class CodexMicroGuardService {
       throw error;
     }
     this.active = true;
+    this.restartProcesses = processes;
     this.startHeartbeat();
     this.emitIfChanged();
   }
@@ -192,6 +211,7 @@ export class CodexMicroGuardService {
     if (options.persistSetting) this.settingsStore.writePatch({ enabled: false });
     this.stopHeartbeat();
     this.active = false;
+    this.restartProcesses = [];
     try {
       await this.manager.disable();
       this.failed = false;
@@ -224,6 +244,7 @@ export class CodexMicroGuardService {
           }
           log.warn('Codex Micro guard heartbeat failed and protection was stopped');
         }
+        await this.refreshRestartRequired();
         this.emitIfChanged();
       });
     }, this.heartbeatIntervalMs);
@@ -244,6 +265,29 @@ export class CodexMicroGuardService {
     }
   }
 
+  private async refreshRestartRequired(): Promise<void> {
+    if (!this.active || this.disposed) {
+      this.restartProcesses = [];
+      return;
+    }
+    if (this.restartProcesses.length === 0) return;
+    try {
+      const processes = await this.listProcesses();
+      // Only keep processes observed at activation. A later launch cannot
+      // bring the hint back, even if the OS reuses the same PID.
+      this.restartProcesses = this.restartProcesses.filter((previous) =>
+        processes.some(
+          (current) =>
+            current.pid === previous.pid &&
+            current.startedAt === previous.startedAt &&
+            current.executable === previous.executable,
+        ),
+      );
+    } catch {
+      this.restartProcesses = [];
+    }
+  }
+
   private snapshot(): CodexMicroGuardState {
     if (this.platform !== 'darwin') {
       return { supported: false, enabled: false, status: 'unsupported' };
@@ -254,7 +298,13 @@ export class CodexMicroGuardService {
     else if (this.failed) status = 'error';
     else if (!this.active || !this.store.isFresh()) status = 'disabled';
     else status = this.store.hasInterceptionReceipt() ? 'intercepted' : 'protecting';
-    return { supported: true, enabled, status };
+    return {
+      supported: true,
+      enabled,
+      status,
+      restartRequired:
+        (status === 'protecting' || status === 'intercepted') && this.restartProcesses.length > 0,
+    };
   }
 
   private emitIfChanged(): void {

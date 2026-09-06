@@ -7,3 +7,4 @@ export * from './DictationExternalEditInspector';
 export * from './DictationDictionaryAdvisor';
 export * from './dictionary-sync';
 export * from './streamingJson';
+export * from './refinementContext';

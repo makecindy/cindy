@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { GuardCommandResult, GuardCommandRunner } from '../codexMicroGuardCore.js';
+import type { CodexMicroGuardProcess } from '../codexMicroGuardProcesses.js';
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/unused' },
@@ -65,22 +66,107 @@ function paths() {
 function service(
   paths_: ReturnType<typeof paths>,
   runner: GuardCommandRunner,
+  listProcesses: () => Promise<CodexMicroGuardProcess[]> = async () => [],
 ): CodexMicroGuardService {
   return new CodexMicroGuardService({
     platform: 'darwin',
     ...paths_,
     launchctlDomain: 'gui/501',
     runner,
+    listProcesses,
     hookContents: '// safe test hook\n',
-    heartbeatIntervalMs: 60_000,
+    heartbeatIntervalMs: 5_000,
   });
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe('CodexMicroGuardService', () => {
+  const runningCodex = () => ({
+    pid: 101,
+    startedAt: Date.now() - 60_000,
+    executable: '/Applications/Codex.app/Contents/MacOS/Codex',
+  });
+
+  it('clears the restart hint on exit or restart through the existing heartbeat', async () => {
+    vi.useFakeTimers();
+    let processes = [runningCodex()];
+    const instance = service(paths(), new EnvironmentRunner(null), async () => processes);
+    const listener = vi.fn();
+    instance.subscribe(listener);
+    expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
+    processes = [];
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'protecting', enabled: true, restartRequired: false }),
+    );
+    processes = [{ ...runningCodex(), startedAt: Date.now(), pid: 102 }];
+    expect(await instance.getState()).toMatchObject({
+      status: 'protecting',
+      restartRequired: false,
+    });
+    await instance.dispose();
+  });
+
+  it('only considers processes running when the switch is enabled', async () => {
+    const list = vi.fn(async (): Promise<CodexMicroGuardProcess[]> => []);
+    const instance = service(paths(), new EnvironmentRunner(null), list);
+    expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: false });
+    list.mockResolvedValue([runningCodex()]);
+    expect(await instance.getState()).toMatchObject({ restartRequired: false });
+    expect(list).toHaveBeenCalledTimes(1);
+    await instance.setEnabled(false);
+    expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
+    expect(await instance.setEnabled(false)).toMatchObject({ restartRequired: false });
+    await instance.dispose();
+  });
+
+  it('clears restarted processes even when their PIDs are reused', async () => {
+    const original = runningCodex();
+    let processes = [original, { ...original, pid: 102 }];
+    const instance = service(paths(), new EnvironmentRunner(null), async () => processes);
+    expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
+    processes = [{ ...original, startedAt: original.startedAt + 10_000 }, processes[1]];
+    expect(await instance.getState()).toMatchObject({ restartRequired: true });
+    processes = [processes[0]];
+    expect(await instance.getState()).toMatchObject({ restartRequired: false });
+    await instance.dispose();
+  });
+
+  it('keeps protection active when process detection fails', async () => {
+    const list = vi.fn(async (): Promise<CodexMicroGuardProcess[]> => {
+      throw new Error('ps unavailable');
+    });
+    const instance = service(paths(), new EnvironmentRunner(null), list);
+    expect(await instance.setEnabled(true)).toMatchObject({
+      enabled: true,
+      restartRequired: false,
+    });
+    await instance.setEnabled(false);
+    list.mockResolvedValue([runningCodex()]);
+    expect(await instance.setEnabled(true)).toMatchObject({ restartRequired: true });
+    list.mockRejectedValue(new Error('ps unavailable'));
+    expect(await instance.getState()).toMatchObject({ enabled: true, restartRequired: false });
+    await instance.dispose();
+  });
+
+  it('does not carry restart hints across Cindy restarts', async () => {
+    const locations = paths();
+    const runner = new EnvironmentRunner(null);
+    const list = vi.fn(async () => [runningCodex()]);
+    const first = service(locations, runner, list);
+    expect(await first.setEnabled(true)).toMatchObject({ restartRequired: true });
+    await first.dispose();
+    list.mockClear();
+    const second = service(locations, runner, list);
+    expect(await second.getState()).toMatchObject({ enabled: true, restartRequired: false });
+    expect(list).not.toHaveBeenCalled();
+    await second.dispose();
+  });
+
   it('reports unsupported without touching launchctl on other platforms', async () => {
     const locations = paths();
     const runner = new EnvironmentRunner('--trace-warnings');

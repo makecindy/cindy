@@ -110,10 +110,6 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]');
     expect(source).not.toContain('pt-[clamp(96px,25.5vh,268px)]');
     expect(source).not.toContain('10vh');
-    expect(source).toContain('InheritedSubscriptionNotice');
-    expect(source).toContain('PromotionalGrantNotice');
-    expect(source).toContain('<InheritedSubscriptionNotice');
-    expect(source).toContain('<PromotionalGrantNotice');
     // 内容列宽度从死锁 800px 改为跟随 useProportionalWidth 的 inputWidth(与进行中
     // 对话页同源,封顶 914+20=934px):大屏留出左右呼吸空间、发送后同一 ChatInput 无宽度跳变。
     expect(source).toContain('relative flex w-full flex-col items-start');
@@ -123,9 +119,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('absolute right-0 top-[22px]');
     // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
     // 旧 800px 封顶在宽窗口下右缘短一截,2026-07-24 用户反馈后摘除。
-    expect(source).toContain(
-      '<HomeSuggestionList narrow={isDraftNarrow} onSelect={handleHomeSuggestion} />',
-    );
+    expect(source).toMatch(/<HomeSuggestionList[\s\S]*?narrow=\{isDraftNarrow\}[\s\S]*?onSelect=\{handleHomeSuggestion\}[\s\S]*?onPluginSelect=\{handlePluginSuggestion\}/);
     expect(source).toContain('<HomeZeroModelAction');
     expect(source).not.toContain('ConnectProviderCard');
     expect(source).not.toMatch(/data-testid="create-agent-quick-starts"/);
@@ -141,7 +135,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     );
 
     for (const invariant of [
-      'onSend={handleComposerSend}',
+      'onSend={handleSend}',
       'onBeforeVoiceInputStart={handleBeforeVoiceInputStart}',
       'externalDragOver={pageDragOver}',
       'sessionId={undefined}',
@@ -194,27 +188,21 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).not.toContain('boxShadow');
   });
 
-  it('clears a failed suggestion prompt before the next ordinary send', () => {
+  it('sends suggestions without first writing into the visible home composer', () => {
     const suggestionBlock = source.slice(
       source.indexOf('const handleHomeSuggestion'),
       source.indexOf('// 注意:不要给 ChatInput 加 key 强制 remount'),
     );
 
-    expect(suggestionBlock).toContain('const pendingPrompt = prompt;');
-    expect(suggestionBlock).toContain('pendingHomePromptRef.current = pendingPrompt;');
-    expect(suggestionBlock).toContain(').finally(() => {');
-    expect(suggestionBlock).toContain('if (pendingHomePromptRef.current === pendingPrompt)');
-    expect(source).toContain('const payload = pendingHomePromptRef.current ?? message;');
-
-    // 这就是回归场景：建议发送失败后，普通发送只能使用自己的文本。
-    let pendingPrompt: string | null = '完整的建议 prompt';
-    const ordinaryMessage = '用户随后输入的普通消息';
-    const settledPrompt = pendingPrompt;
-    if (pendingPrompt === settledPrompt) {
-      pendingPrompt = null;
-    }
-    const payload = pendingPrompt ?? ordinaryMessage;
-    expect(payload).toBe(ordinaryMessage);
+    expect(suggestionBlock).toContain('if (sendInFlightRef.current) return;');
+    expect(suggestionBlock).toMatch(/void handleSend\(\s*prompt,/);
+    expect(suggestionBlock).toContain('recoveryDraftDoc: plainTextToTiptapDoc(prompt)');
+    expect(suggestionBlock).not.toContain('saveComposerDraft(');
+    expect(suggestionBlock).not.toContain('quickStartTextToTiptapDoc(');
+    // 普通发送直接使用输入内容，不再经过可能残留推荐内容的中转 ref。
+    expect(source).toContain('onSend={handleSend}');
+    expect(source).not.toContain('pendingHomePromptRef');
+    expect(source).not.toContain('handleComposerSend');
   });
 
   it('keeps brand lockup tokens from the Figma slices', () => {

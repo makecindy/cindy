@@ -10,7 +10,9 @@ export type CodexMicroGuardStatus =
 
 export interface CodexMicroGuardState {
   supported: boolean;
-  /** Machine-local user override. The system default is false. */
+  /** Machine-local override shared by Codex Micro and Creator Micro 2. Defaults to false. */
   enabled: boolean;
   status: CodexMicroGuardStatus;
+  /** A running desktop Codex predates protection and has not applied it. */
+  restartRequired?: boolean;
 }

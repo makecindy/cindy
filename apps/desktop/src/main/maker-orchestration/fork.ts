@@ -4,7 +4,8 @@
  * 流程：读 source → 校验 target message (user / assistant) → 计算复制边界与
  *      agent 侧截断信息 → 调 SDK fork → SQLite 事务 insert + bulk copy messages。
  *
- * SDK 调用必须在事务外——SDK 失败时 DB 完全没动；DB 失败时 SDK jsonl 已落盘
+ * SDK 调用必须在事务外——确定性历史损坏可从 Cindy 消息恢复；其它失败不写 DB。
+ * DB 失败时 SDK jsonl 已落盘
  * 变成"孤儿 jsonl"，可接受（数量极少，留给后续清理脚本）。
  */
 
@@ -16,6 +17,7 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-i
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
+import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
 import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
@@ -110,6 +112,47 @@ function parseJsonContent(content: string): unknown {
   } catch {
     return content;
   }
+}
+
+/** 用实际复制的前缀建立交接，和子任务、恢复卡一起原子保存。 */
+function buildCodexForkRecoveryMarker(opts: {
+  source: { model: string; providerId: string | null; sdkSessionId: string | null };
+  rows: Array<Pick<ForkTimelineMessage, 'clientId' | 'role' | 'content' | 'createdAt' | 'toolUseId' | 'agentMeta' | 'agentKind'>>;
+  newMessageIds: Array<{ clientId: string }>;
+  sessionId: string;
+  now: number;
+}) {
+  return {
+    id: createId(),
+    clientId: createId(),
+    sourceMessagesDigest: computeForkSourceMessagesDigest(opts.rows.map((row) => ({
+      client_id: row.clientId, role: row.role, content: row.content,
+      tool_use_id: row.toolUseId, agent_meta: row.agentMeta, agent_kind: row.agentKind,
+      created_at: row.createdAt,
+    }))),
+    // 导入历史可能有晚于墙钟的合成时间；恢复边界必须排在复制内容之后。
+    createdAt: opts.rows.reduce((latest, row) => Math.max(latest, row.createdAt), opts.now),
+    content: JSON.stringify({
+      reason: 'native-session-recovery',
+      consumed: false,
+      sourceAgentKind: 'codex',
+      sourceModel: opts.source.model,
+      sourceProviderId: opts.source.providerId,
+      sourceSdkSessionId: opts.source.sdkSessionId,
+      sourceUserClientId: opts.newMessageIds[opts.rows.findLastIndex((row) => row.role === 'user')]?.clientId ?? null,
+      handoff: buildHandoffText(opts.rows.filter((row) => row.role !== 'error').map((row) => ({
+        role: row.role,
+        content: parseJsonContent(row.content),
+        createdAt: row.createdAt,
+        toolUseId: row.toolUseId,
+      })), {
+        fromLabel: 'Codex',
+        toLabel: 'Codex',
+        sessionId: opts.sessionId,
+        reason: 'native-session-recovery',
+      }),
+    }),
+  };
 }
 
 async function seedForkHandoffAfterSameEngineRebuild(opts: {
@@ -832,6 +875,9 @@ export async function forkSessionAtMessage(
   let uuidMap = new Map<string, string>();
   let initialContextTokens: number | undefined;
   let usedNativeForkAnchor = false;
+  let needsHistoryRecovery = isCodex
+    && !forkSource.reuseVendorSession
+    && forkSource.rebuildReason === 'native-session-recovery';
   if (
     forkSource.reuseVendorSession &&
     forkSource.sdkSessionId &&
@@ -856,19 +902,32 @@ export async function forkSessionAtMessage(
         // 错误码 + 文案,只有真 codex 失败才包装。pi 与 cc 一样裸抛原始错误(不会拿到指名道姓
         // 错对象的 "Codex 状态不可用" 提示)。改成 usesTailTurnFork 会让 pi 误报成 codex 错误。
         if (!isCodex) throw err;
+        if (isCodexHistoryRecoveryRequired(err) && (sourceMessages.length > 0 || target.role === 'user')) {
+          // 首条 user 之前的空前缀也是合法 fork；其它错误不得变成丢上下文的新任务。
+          needsHistoryRecovery = true;
+          return {
+            newSdkSessionId: null,
+            uuidMap: new Map<string, string>(),
+            initialContextTokens: undefined,
+            usedNativeForkAnchor: false,
+          };
+        }
         const detail = codexForkFailureDetail(err);
         throw forkError('CODEX_FORK_STATE_UNAVAILABLE', detail);
       });
     ({ newSdkSessionId, uuidMap, initialContextTokens, usedNativeForkAnchor = false } = forkResult);
   }
   const forkContextTokens = normalizePositiveInt(initialContextTokens);
-  const forkContextWindow = normalizePositiveInt(source.contextWindow);
+  const forkContextWindow = needsHistoryRecovery ? 0 : normalizePositiveInt(source.contextWindow);
 
   // 5. SQLite 事务：insert 新 session + bulk copy messages
   const now = Date.now();
   const newSessionId = createBusinessSessionId();
 
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
+  const recoveryMarker = needsHistoryRecovery ? buildCodexForkRecoveryMarker({
+    source: forkSource, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
+  }) : undefined;
   // pi 与 codex 一样:uuidMap 空、无 Claude transcript 锚点,跳过 Claude 专用的
   // synthetic uuid 补全 / parentUuid 采集(只有 Claude cc 需要)。
   const txUuidMap = usesTailTurnFork
@@ -926,6 +985,7 @@ export async function forkSessionAtMessage(
       detachAgentSwitchSessions: true,
       resetHandoffBoundaryClientId,
       newMessageIds,
+      recoveryMarker,
     });
   } catch (err) {
     // 轮 40-w4-t13 HIGH:SDK 侧已创建新 session file(forkSdkSession), DB 事务
@@ -945,7 +1005,7 @@ export async function forkSessionAtMessage(
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
   }
-  if (!forkSource.reuseVendorSession && forkSource.rebuildReason) {
+  if (!needsHistoryRecovery && !forkSource.reuseVendorSession && forkSource.rebuildReason) {
     await seedForkHandoffAfterSameEngineRebuild({
       sessionId: newSessionId,
       rows: sourceMessages,
@@ -955,7 +1015,7 @@ export async function forkSessionAtMessage(
       reason: forkSource.rebuildReason,
     });
   }
-  return sessionToCamel({ ...row, messageCount: sourceMessages.length });
+  return sessionToCamel({ ...row, messageCount: sourceMessages.length + (recoveryMarker ? 1 : 0) });
 }
 
 export async function forkSessionStripEncrypted(sourceSessionId: string): Promise<Session> {
@@ -1067,31 +1127,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const now = Date.now();
   const newSessionId = createBusinessSessionId();
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
-  const recoveryMarker = newSdkSessionId === null ? {
-    id: createId(),
-    clientId: createId(),
-    createdAt: now,
-    content: JSON.stringify({
-      reason: 'native-session-recovery',
-      consumed: false,
-      sourceAgentKind: 'codex',
-      sourceModel: source.model,
-      sourceProviderId: source.providerId,
-      sourceSdkSessionId: source.sdkSessionId,
-      sourceUserClientId: newMessageIds[sourceMessages.findLastIndex((row) => row.role === 'user')]?.clientId ?? null,
-      handoff: buildHandoffText(sourceMessages.filter((row) => row.role !== 'error').map((row) => ({
-        role: row.role,
-        content: parseJsonContent(row.content),
-        createdAt: row.createdAt,
-        toolUseId: row.toolUseId,
-      })), {
-        fromLabel: 'Codex',
-        toLabel: 'Codex',
-        sessionId: newSessionId,
-        reason: 'native-session-recovery',
-      }),
-    }),
-  } : undefined;
+  const recoveryMarker = newSdkSessionId === null ? buildCodexForkRecoveryMarker({
+    source, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
+  }) : undefined;
   await getDbClient().tx('fork.session', {
     sourceSessionId,
     sourceClearedAt: source.clearedAt,

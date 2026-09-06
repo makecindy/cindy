@@ -106,6 +106,8 @@ for (const flow of resolvedFlows) {
       '-e',
       `XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID=${hostDeviceChipId}`,
       '-e',
+      `XDT_MOBILE_E2E_HOST_DEVICE_ID=${hostDeviceId}`,
+      '-e',
       `XDT_MOBILE_E2E_EXPO_URL=${expoUrl ?? ''}`,
       '-e',
       `XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL=${hostAutomationsUrl}`,

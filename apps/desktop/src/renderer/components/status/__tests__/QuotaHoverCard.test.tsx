@@ -14,6 +14,8 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.modelWeeklyLabel') return `${options.model} 周限`;
       if (key === 'quotaCard.windowsRegionLabel') return '配额窗口列表';
       if (key === 'quotaCard.usedPercent') return `已用 ${options.percent}%`;
+      if (key === 'quotaCard.usageCritical') return '用量较高';
+      if (key === 'quotaCard.usageWarning') return '用量偏高';
       if (key === 'quotaCard.limitRejected') return '已触发套餐限额，请求可能被拒绝';
       if (key === 'quotaCard.limitWarning') return '接近套餐限额';
       if (key === 'quotaCard.resetAt') return `${options.at} 重置`;
@@ -23,8 +25,11 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.tokenBreakdown') {
         return `（输入 ${options.input} · 输出 ${options.output}）`;
       }
+      if (key === 'quotaCard.speedLabel') return '速度';
+      if (key === 'quotaCard.rateValue') return `${options.rate} tokens/秒`;
       if (key === 'quotaCard.timeLabel') return '耗时';
-      if (key === 'quotaCard.timeAndRateValue') return `${options.duration} 速度：${options.rate} token/秒`;
+      if (key === 'quotaCard.timeAndRateValue')
+        return `${options.duration} 速度：${options.rate} token/秒`;
       if (key === 'todaySpend.sessionCostLabel') return `本任务 ${options.cost}`;
       if (key === 'todaySpend.tooltip.sessionUsed') return `本任务已用 ${options.cost}`;
       if (key === 'todaySpend.codex.sessionValueLabel') return `本任务价值 ${options.cost}`;
@@ -34,7 +39,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'usageDetails.costBreakdownHeader') return '按模型拆分：';
       if (key === 'usageDetails.modelCostLine') return `· ${options.model} ${options.cost}`;
       if (key === 'quotaCard.turnCostUnavailable') return '本轮费用暂无法估算';
-      if (key === 'quotaCard.latestMessageTitle') return '最近一轮用户请求累计';
+      if (key === 'quotaCard.latestMessageTitle') return '最近一轮';
       if (key === 'chat.messageActionBar.userTurnCostDetailsTitle') return '本轮明细';
       if (key === 'quotaCard.staleData') return `quotaCard.staleData:${options.minutes}`;
       return key;
@@ -42,7 +47,18 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-import { QuotaHoverCard } from '../QuotaHoverCard';
+import { useTranslation } from 'react-i18next';
+import { QuotaHoverCard as UsageCard, type QuotaHoverCardProps } from '../QuotaHoverCard';
+import { buildClaudeUsageCard } from '../usageCardModel';
+
+// Exercise the Claude adapter and the shared card together, retaining all existing edge cases.
+function QuotaHoverCard({
+  snapshot,
+  ...props
+}: Omit<QuotaHoverCardProps, 'account'> & { snapshot: ClaudeSubscriptionUsageSnapshot | null }) {
+  const { t } = useTranslation();
+  return <UsageCard {...props} account={buildClaudeUsageCard(snapshot, t)} />;
+}
 
 const NOW_MS = new Date(2026, 7, 1, 10, 0, 0).getTime();
 const WEEKLY_WINDOW_MS = 7 * 24 * 60 * 60_000;
@@ -69,7 +85,7 @@ function weeklyAtProgress(utilization: number, progress: number) {
 }
 
 describe('QuotaHoverCard', () => {
-  it('renders only the waiting branch when snapshot is null', () => {
+  it('keeps the provider header while waiting for quota data', () => {
     render(<QuotaHoverCard snapshot={null} nowMs={NOW_MS} />);
 
     const card = screen.getByTestId('quota-hover-card');
@@ -80,7 +96,7 @@ describe('QuotaHoverCard', () => {
     expect(card.classList.contains('text-[var(--text-primary)]')).toBe(true);
     expect(card.style.boxShadow).toBe('var(--shadow-menu)');
     expect(screen.getByText('quotaCard.waiting')).toBeTruthy();
-    expect(screen.queryByText('Claude')).toBeNull();
+    expect(screen.getByText('Claude')).toBeTruthy();
     expect(screen.queryAllByRole('progressbar')).toHaveLength(0);
   });
 
@@ -117,7 +133,7 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByRole('progressbar', { name: '5 小时' })).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: '周限' })).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: 'Fable 周限' })).toBeTruthy();
-    expect(screen.getByRole('progressbar', { name: /Opus 周限.*接近套餐限额/ })).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: /Opus 周限.*用量偏高/ })).toBeTruthy();
     expect(screen.getByText('5 小时')).toBeTruthy();
     expect(screen.getByText('周限')).toBeTruthy();
     expect(screen.getByText('Fable 周限')).toBeTruthy();
@@ -355,7 +371,7 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('本任务价值 $0.50')).toBeTruthy();
   });
 
-  it('订阅卡用固定耗时标题和右对齐组合值，缺速度时结构保持不变', () => {
+  it('耗时与速度使用独立明细行，缺失时分别隐藏', () => {
     const { rerender } = render(
       <QuotaHoverCard
         snapshot={makeSnapshot()}
@@ -366,10 +382,9 @@ describe('QuotaHoverCard', () => {
 
     const performance = screen.getByTestId('quota-performance');
     expect(within(performance).getByText('耗时')).toBeTruthy();
-    const combinedValue = within(performance).getByTestId('quota-performance-value');
-    expect(combinedValue.textContent).toBe('12.3s 速度：40 token/秒');
-    expect(combinedValue.classList.contains('ml-auto')).toBe(true);
-    expect(combinedValue.classList.contains('text-right')).toBe(true);
+    expect(within(performance).getByText('12.3s')).toBeTruthy();
+    expect(within(performance).getByText('速度')).toBeTruthy();
+    expect(within(performance).getByText('40 tokens/秒')).toBeTruthy();
 
     rerender(
       <QuotaHoverCard
@@ -380,9 +395,8 @@ describe('QuotaHoverCard', () => {
     );
     const timeOnlyPerformance = screen.getByTestId('quota-performance');
     expect(within(timeOnlyPerformance).getByText('耗时')).toBeTruthy();
-    const timeOnlyValue = within(timeOnlyPerformance).getByTestId('quota-performance-value');
-    expect(timeOnlyValue.textContent).toBe('12.3s');
-    expect(timeOnlyValue.classList.contains('ml-auto')).toBe(true);
+    expect(within(timeOnlyPerformance).getByText('12.3s')).toBeTruthy();
+    expect(within(timeOnlyPerformance).queryByText('速度')).toBeNull();
 
     rerender(
       <QuotaHoverCard
@@ -391,7 +405,8 @@ describe('QuotaHoverCard', () => {
         turnUsage={{ outputRateText: '40', turnDurationText: null }}
       />,
     );
-    expect(screen.queryByTestId('quota-performance')).toBeNull();
+    expect(within(screen.getByTestId('quota-performance')).getByText('40 tokens/秒')).toBeTruthy();
+    expect(within(screen.getByTestId('quota-performance')).queryByText('耗时')).toBeNull();
 
     rerender(
       <QuotaHoverCard
@@ -431,7 +446,7 @@ describe('QuotaHoverCard', () => {
       />,
     );
 
-    expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
+    expect(screen.getByText('最近一轮')).toBeTruthy();
     expect(screen.getByText('本轮消耗：$0.70')).toBeTruthy();
     expect(screen.queryByText('本轮明细')).toBeNull();
   });
@@ -531,7 +546,11 @@ describe('QuotaHoverCard', () => {
     const card = screen.getByTestId('quota-hover-card');
     const scrollContent = screen.getByTestId('quota-hover-card-scroll-content');
     const dashboardButton = screen.getByRole('button', { name: '打开 Claude 用量页面' });
-    expect(card.classList.contains('max-h-[calc(100vh-16px)]')).toBe(true);
+    expect(
+      card.classList.contains(
+        'max-h-[min(calc(100vh-16px),var(--radix-popover-content-available-height,100vh))]',
+      ),
+    ).toBe(true);
     expect(scrollContent.classList.contains('min-h-0')).toBe(true);
     expect(scrollContent.classList.contains('overflow-y-auto')).toBe(true);
     expect(scrollContent.contains(dashboardButton)).toBe(false);
@@ -651,11 +670,11 @@ describe('QuotaHoverCard', () => {
       />,
     );
 
-    const criticalHint = screen.getByText(/已触发套餐限额，请求可能被拒绝/);
+    const criticalHint = screen.getByText(/用量较高/);
     expect(criticalHint.classList.contains('sr-only')).toBe(true);
     expect(
       screen.getByRole('progressbar', {
-        name: /5 小时.*已触发套餐限额，请求可能被拒绝/,
+        name: /5 小时.*用量较高/,
       }),
     ).toBeTruthy();
 
@@ -666,9 +685,9 @@ describe('QuotaHoverCard', () => {
       />,
     );
 
-    const warningHint = screen.getByText(/接近套餐限额/);
+    const warningHint = screen.getByText(/用量偏高/);
     expect(warningHint.classList.contains('sr-only')).toBe(true);
-    expect(screen.getByRole('progressbar', { name: /5 小时.*接近套餐限额/ })).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: /5 小时.*用量偏高/ })).toBeTruthy();
   });
 
   it('marks a critical window title with the critical styling hook', () => {
@@ -717,7 +736,10 @@ describe('QuotaHoverCard', () => {
   ])('renders the $label weekly pace trend', ({ utilization, expected }) => {
     render(
       <QuotaHoverCard
-        snapshot={makeSnapshot({ updatedAt: NOW_MS, sevenDay: weeklyAtProgress(utilization, 0.25) })}
+        snapshot={makeSnapshot({
+          updatedAt: NOW_MS,
+          sevenDay: weeklyAtProgress(utilization, 0.25),
+        })}
         nowMs={NOW_MS}
       />,
     );
@@ -760,9 +782,7 @@ describe('QuotaHoverCard', () => {
     const { rerender } = render(<QuotaHoverCard snapshot={snapshot} nowMs={NOW_MS} />);
     const originalText = screen.getByTestId('quota-pace').textContent;
 
-    rerender(
-      <QuotaHoverCard snapshot={snapshot} nowMs={NOW_MS + 30 * 60_000} />,
-    );
+    rerender(<QuotaHoverCard snapshot={snapshot} nowMs={NOW_MS + 30 * 60_000} />);
 
     expect(originalText).toBe('按当前平均速度偏快（粗略趋势）');
     expect(screen.getByTestId('quota-pace').textContent).toBe(originalText);
@@ -791,10 +811,12 @@ describe('QuotaHoverCard', () => {
     render(
       <QuotaHoverCard
         snapshot={makeSnapshot({
-          scoped: [{
-            modelDisplayName: 'Opus',
-            ...weeklyAtProgress(93, 0.25),
-          }],
+          scoped: [
+            {
+              modelDisplayName: 'Opus',
+              ...weeklyAtProgress(93, 0.25),
+            },
+          ],
         })}
         nowMs={NOW_MS}
       />,

@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { SESSION_SOURCES } from '../../../../shared/sessionSource.js';
 import { buildDbWorkerBundle } from '../../__tests__/dbWorkerTestUtils.js';
+import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import type { DbClient } from '../DbClient.js';
 import { createDbClient } from '../DbClient.js';
 import type { SkillUsageApplyMutationArgs } from '../tx/types.js';
@@ -1737,7 +1738,9 @@ describe('db worker tx handlers', () => {
         sourceSessionId: 'src', targetCreatedAt: 200,
         newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
         uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }],
-        recoveryMarker: { id: 'm1', clientId: 'handoff', createdAt: 300, content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'keep my history' }) },
+        recoveryMarker: { id: 'm1', clientId: 'handoff', createdAt: 300,
+          sourceMessagesDigest: computeForkSourceMessagesDigest([{ client_id: 'c1', role: 'user', content: 'keep my history', tool_use_id: null, agent_meta: null, agent_kind: null, created_at: 100 }]),
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'keep my history' }) },
       };
       await expect(client.tx('fork.session', args)).rejects.toThrow();
       expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
@@ -1750,6 +1753,68 @@ describe('db worker tx handlers', () => {
       const card = await client.queryOne<{ agent_meta: string }>('SELECT agent_meta FROM messages WHERE id = ?', ['recovery:card']);
       expect(JSON.parse(card!.agent_meta)).toEqual({ contextRebuild: { reason: 'native-session-recovery', handoff: 'keep my history' } });
       expect(await client.queryOne('SELECT content FROM messages WHERE id = ?', ['m1'])).toEqual({ content: 'keep my history' });
+    }, { useInlineWorker });
+  });
+
+  it.each([false, true])('recovery fork validates the full ordered prefix despite unchanged count (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      const originalContent = 'prefix\n'.repeat(5_000);
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
+        ['m1', 'c1', 'src', 'user', originalContent, 100, 'm2', 'c2', 'src', 'assistant', 'answer', 100],
+      );
+      const readPrefix = () => client.query<ForkSourceMessage>(
+        'SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM messages WHERE session_id = ? AND created_at < 200 ORDER BY created_at, rowid', ['src'],
+      );
+      const originalRows = await readPrefix();
+      const args = {
+        sourceSessionId: 'src', targetCreatedAt: 200,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }, { id: 'copy2', clientId: 'copy-client2' }],
+        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+          sourceMessagesDigest: computeForkSourceMessagesDigest(originalRows),
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'bounded handoff from original prefix' }) },
+      };
+      const edits: Array<[string, unknown[]]> = [
+        ["UPDATE messages SET content = ? WHERE id = 'm1'", [originalContent + 'edited beyond the handoff limit']],
+        ["UPDATE messages SET client_id = ? WHERE id = 'm1'", ['replacement-client']],
+        ["UPDATE messages SET role = ? WHERE id = 'm1'", ['assistant']],
+        ["UPDATE messages SET tool_use_id = ? WHERE id = 'm1'", ['different-tool']],
+        ["UPDATE messages SET agent_meta = ? WHERE id = 'm1'", ['{"nativeForkAnchor":{"id":"changed"}}']],
+        ["UPDATE messages SET agent_kind = ? WHERE id = 'm1'", ['codex']],
+        ["UPDATE messages SET created_at = ? WHERE id = 'm1'", [101]],
+      ];
+      for (const [sql, params] of edits) {
+        await client.exec(sql, params);
+        const changedRows = await readPrefix();
+        expect(changedRows).toHaveLength(originalRows.length);
+        await expect(client.tx('fork.session', args)).rejects.toThrow('Source history changed');
+        expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+        expect(await client.query('SELECT id FROM messages WHERE session_id = ?', ['forked'])).toEqual([]);
+        expect(await readPrefix()).toEqual(changedRows);
+        await client.exec("UPDATE messages SET client_id = 'c1', role = 'user', content = ?, tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, created_at = 100 WHERE id = 'm1'", [originalContent]);
+      }
+      // Edits outside the selected prefix do not invalidate this fork.
+      await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('tail', 'tail-client', 'src', 'user', 'new tail', 200)");
+      await expect(client.tx('fork.session', args)).resolves.toEqual({ messageCount: 2 });
+      expect(await client.query('SELECT content FROM messages WHERE id IN (?, ?) ORDER BY id', ['copy1', 'copy2']))
+        .toEqual([{ content: originalContent }, { content: 'answer' }]);
+    }, { useInlineWorker });
+  });
+
+  it.each([false, true])('recovery fork accepts an unchanged empty prefix (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await expect(client.tx('fork.session', {
+        sourceSessionId: 'src', targetCreatedAt: 100,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [],
+        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+          sourceMessagesDigest: computeForkSourceMessagesDigest([]),
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: '' }) },
+      })).resolves.toEqual({ messageCount: 0 });
+      expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toEqual({ id: 'forked' });
     }, { useInlineWorker });
   });
 
@@ -1801,6 +1866,26 @@ describe('db worker tx handlers', () => {
         },
       });
     });
+  });
+
+  it.each([false, true])('recovery fork rejects a concurrent clear without reviving history (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ['m1', 'c1', 'src', 'user', 'cleared content', 100]);
+      await client.exec('UPDATE sessions SET cleared_at = 500 WHERE id = ?', ['src']);
+      await expect(client.tx('fork.session', {
+        sourceSessionId: 'src', sourceClearedAt: null, targetCreatedAt: 200,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }],
+        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+          sourceMessagesDigest: computeForkSourceMessagesDigest([{ client_id: 'c1', role: 'user', content: 'cleared content', tool_use_id: null, agent_meta: null, agent_kind: null, created_at: 100 }]),
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'cleared content' }) },
+      })).rejects.toThrow('Source history changed');
+      expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+      expect(await client.query('SELECT id FROM messages ORDER BY id')).toEqual([{ id: 'm1' }]);
+      expect(await client.queryOne('SELECT cleared_at FROM sessions WHERE id = ?', ['src'])).toEqual({ cleared_at: 500 });
+    }, { useInlineWorker });
   });
 
   it('fork.session filters pre-clear/same-ms tail rows and detaches copied parked sessions', async () => {
