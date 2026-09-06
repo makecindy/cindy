@@ -13,9 +13,12 @@ import {
 } from '../../shared/pluginMarket.js';
 import {
   sendToTrustedAppWindows,
+  getGhostManager,
   setGhostUninstallLedgerPreparer,
 } from '../cindy-brain/index.js';
 import { createLogger } from '../logger.js';
+import { getActiveAppSession } from '../appSessionState.js';
+import { markGhostRecommendationInstalled } from '../cindy-brain/ghostRecommendationStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { parseMarketSource } from './sources/parse.js';
@@ -199,19 +202,31 @@ export function registerPluginMarketIpc(): void {
       if (typeof allowSourceReplacement !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'allowSourceReplacement must be a boolean');
       }
-      return invokePluginMarket(() =>
-        service().install(
-          requireString(pluginId, 'pluginId'),
-          {
-            expectedReleaseId,
-            ...(expectedInstalledApproval !== undefined
-              ? { expectedInstalledApproval }
-              : {}),
-            ...(expectedManifest !== undefined ? { expectedManifest } : {}),
-            allowSourceReplacement,
-          },
-        ),
+      const owner = getActiveAppSession();
+      const previouslyInstalled = new Set(
+        getGhostManager()
+          .list()
+          .map((g) => g.manifest.id),
       );
+      return invokePluginMarket(async () => {
+        const result = await service().install(requireString(pluginId, 'pluginId'), {
+          expectedReleaseId,
+          ...(expectedInstalledApproval !== undefined ? { expectedInstalledApproval } : {}),
+          ...(expectedManifest !== undefined ? { expectedManifest } : {}),
+          allowSourceReplacement,
+        });
+        if (
+          getActiveAppSession().generation === owner.generation &&
+          !previouslyInstalled.has(result.ghost.manifest.id)
+        ) {
+          try {
+            markGhostRecommendationInstalled(result.ghost.manifest.id);
+          } catch {
+            log.warn('ghost recommendation install history unavailable');
+          }
+        }
+        return result;
+      });
     },
   );
   ipcMain.handle('plugin-market:uninstall', (event, pluginId: unknown) => {

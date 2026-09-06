@@ -1,4 +1,5 @@
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
+import { ApiError, type ApiFetchOptions } from '@/api/client';
 import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
 import { MOBILE_VISUAL_MOCK_REALDATA_URL } from '@/config/env';
@@ -19,6 +20,7 @@ import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession 
 
 export const VISUAL_MOCK_DEVICE_ID = 'cindy-visual-mock-mac';
 export const VISUAL_MOCK_DEVICE_NAME = 'CINDY Visual Mock Mac';
+export const VISUAL_MOCK_OFFLINE_DEVICE_ID = 'cindy-visual-mock-offline-mac';
 const VISUAL_MOCK_REALDATA_DEVICE_ID = 'cindy-realdata-mac';
 const VISUAL_MOCK_REALDATA_DEVICE_NAME = 'CINDY Real Data Mac';
 export const VISUAL_MOCK_SESSION_ID = 'session-primary';
@@ -61,6 +63,8 @@ export const visualMockUser: MobileUser = {
 let realDataSnapshot: VisualRealDataSnapshot | null = null;
 let realDataLoadPromise: Promise<VisualRealDataSnapshot | null> | null = null;
 let didWarnRealDataLoad = false;
+const deletedDeviceIds = new Set<string>();
+const renamedDevices = new Map<string, string>();
 
 export function visualMockDevices(): DeviceView[] {
   const realData = realDataSnapshot;
@@ -100,7 +104,19 @@ export function visualMockDevices(): DeviceView[] {
       remoteControlEnabled: true,
       isSelf: false,
     },
-  ];
+    {
+      deviceId: VISUAL_MOCK_OFFLINE_DEVICE_ID,
+      name: 'CINDY Offline Mock Mac',
+      platform: 'darwin',
+      appVersion: '0.0.0-visual-mock',
+      lastSeenAt: ISO_NOW,
+      online: false,
+      busy: false,
+      remoteControlEnabled: false,
+      isSelf: false,
+    },
+  ].filter((device) => !deletedDeviceIds.has(device.deviceId))
+    .map((device) => ({ ...device, name: renamedDevices.get(device.deviceId) ?? device.name }));
 }
 
 export function seedVisualMockStore(): void {
@@ -253,12 +269,24 @@ async function visualMockInvoke<T = unknown>(
   }
 }
 
-export async function visualMockApiFetch<T>(path: string): Promise<T> {
+export async function visualMockApiFetch<T>(path: string, options?: Omit<ApiFetchOptions, 'token'>): Promise<T> {
   await loadVisualRealDataSnapshot();
   if (path === '/api/device-link/devices') return { devices: visualMockDevices() } as T;
   if (path.startsWith('/api/device-link/devices/')) {
-    const device = visualMockDevices().find((item) => path.includes(encodeURIComponent(item.deviceId)));
-    return { deviceId: device?.deviceId ?? VISUAL_MOCK_DEVICE_ID, name: device?.name ?? VISUAL_MOCK_DEVICE_NAME } as T;
+    const device = visualMockDevices().find((item) => path === `/api/device-link/devices/${encodeURIComponent(item.deviceId)}`);
+    if (!device) throw new ApiError('NOT_FOUND', 404, 'Device not found');
+    if (options?.method === 'DELETE') {
+      if (device.online) throw new ApiError('ALREADY_EXISTS', 409, 'Device is online');
+      deletedDeviceIds.add(device.deviceId);
+      renamedDevices.delete(device.deviceId);
+      return { deviceId: device.deviceId, deleted: true } as T;
+    }
+    if (options?.method === 'PATCH') {
+      const name = (options.body as { name?: unknown } | undefined)?.name;
+      if (typeof name !== 'string' || !name.trim()) throw new ApiError('INVALID_ARGUMENT', 400, 'Device name is required');
+      renamedDevices.set(device.deviceId, name.trim());
+    }
+    return { deviceId: device.deviceId, name: renamedDevices.get(device.deviceId) ?? device.name } as T;
   }
   if (path === '/api/device-link/media/presign-get') return { url: IMAGE_DATA_URL } as T;
   if (path === '/api/device-link/media/presign-put') return { url: IMAGE_DATA_URL, key: 'visual-mock-upload' } as T;

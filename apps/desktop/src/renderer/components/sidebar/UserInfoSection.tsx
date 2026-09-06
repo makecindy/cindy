@@ -284,7 +284,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         {mode === 'local' ? (
           <DropdownMenuItem onSelect={() => void openAddAccount()} className="gap-2.5">
             <UserPlus className="h-4 w-4" aria-hidden="true" />
-            {t('sidebar.user.menuAddAccount')}
+            {t('login.signIn')}
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuItem onSelect={openSettings} className="gap-2.5">

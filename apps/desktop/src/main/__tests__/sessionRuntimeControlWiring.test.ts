@@ -503,6 +503,44 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('wakeSessionInputAfterCredentialSwitch(sessionId);');
   });
 
+  it('restores the cold-session source provider before window evaluation even when the switch names a target provider (#3996)', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 目标 provider(用户要切去的来源)与源会话 provider(窗口评估所需身份)是两个
+    // 独立事实。冷会话内存未 hydrate 时,即使请求显式携带目标 provider,也必须先从
+    // DB 恢复源 provider,否则 currentProviderId 为 null,源模型窗口按全局 modelId
+    // 反查,同名模型跨 provider 时不确定 → fail-closed 误报
+    // MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN(#3996)。
+    expect(setModel).not.toContain(
+      'if (requestedProviderId === undefined && !hasSessionProvider(sessionId)) {',
+    );
+    const requested = setModel.indexOf('const requestedProviderId = normalizeSessionProviderId(');
+    const restore = setModel.indexOf('if (!hasSessionProvider(sessionId)) {');
+    const hydrate = setModel.indexOf('hydrateSessionProvider(sessionId, persistedProviderId);');
+    const current = setModel.indexOf('const currentProviderId = resolveCurrentSetModelProviderId(');
+    const catalogCurrent = setModel.indexOf('const catalogCurrentWindow =');
+    expect(requested).toBeGreaterThan(-1);
+    expect(restore).toBeGreaterThan(requested);
+    expect(hydrate).toBeGreaterThan(restore);
+    expect(current).toBeGreaterThan(hydrate);
+    // 恢复出的源 provider 必须先于源窗口解析被消费;目标窗口仍由目标 provider 解析。
+    expect(catalogCurrent).toBeGreaterThan(current);
+    expect(setModel).toContain(
+      'lookupVerifiedContextWindow(\n          resolveRouteWindow,\n          model,\n          targetRouteProviderId,',
+    );
+    expect(setModel).toContain('const targetProviderId =');
+    // 停用轴准入只依赖目标路由,源 provider 的 DB 查询失败不能跳过准入
+    // (只能放弃独占 pin 重裁决,#3996 review)。
+    expect(setModel).not.toContain('? await assertModelRouteUsable(');
+    const admission = setModel.indexOf('await assertModelRouteUsable(');
+    const rerouteApply = setModel.indexOf('resolveExclusiveSetModelReroute(');
+    expect(admission).toBeGreaterThan(-1);
+    expect(rerouteApply).toBeGreaterThan(admission);
+  });
+
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
     const commitRebuild = handlerBody(
       registerSource,

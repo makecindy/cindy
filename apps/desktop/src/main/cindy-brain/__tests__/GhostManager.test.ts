@@ -338,6 +338,20 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     });
   });
 
+  it.each([2, 3] as const)('keeps v%s legacy recommendation metadata approved across reload', async (schemaVersion) => {
+    const recommendations = { custom: 'unrelated metadata' };
+    const manifest = schemaVersion === 2
+      ? { ...goodManifest(), recommendations }
+      : { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'hello', name: 'Hello', version: '1.0.0', entry: 'main.js', recommendations };
+    await writeLegacyInstall('hello', manifest);
+    expect((await manager.migrateLegacyApprovalsOnce()).migrated).toEqual(['hello']);
+    expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    const approved = manager.approvedInstallEvidence('hello')?.approvedManifest;
+    if (schemaVersion === 2) expect(approved).not.toHaveProperty('recommendations');
+    else expect(approved).toHaveProperty('recommendations', recommendations);
+    expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+  });
+
   it('带 setup.kv 的旧安装无感迁移并保留标准化就绪声明', async () => {
     await writeLegacyInstall('hello', setupKvManifest(), {
       files: { 'settings.html': '<!doctype html>' },

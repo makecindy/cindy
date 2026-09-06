@@ -3747,24 +3747,15 @@
         "codexGuard": {
           "title": "Codex との互換性",
           "label": "Codex によるデバイスの占有を防ぐ",
-          "aria": "Codex による Codex Micro の占有を防ぐ",
+          "aria": "Codex による Work Louder キーボード の占有を防ぐ",
           "recover": "環境を復元",
-          "status": {
-            "unsupported": "macOS のみ",
-            "disabled": "オフ",
-            "protecting": "Codex を再起動",
-            "intercepted": "保護中",
-            "recovery-required": "復元が必要",
-            "error": "利用不可"
-          },
           "descriptions": {
             "unsupported": "この保護機能は macOS でのみ利用できます。",
-            "disabled": "Cindy の実行中、Codex が Codex Micro に接続するのを防ぎます。Cindy 自体は制限されません。",
-            "protecting": "保護の準備ができました。Codex を完全に終了してから開き直してください。実行中の Codex には影響しません。",
-            "intercepted": "Codex の Work Louder サービスをブロックしました。Cindy は引き続きデバイスを使用できます。",
+            "disabled": "Cindy の実行中、Codex が Work Louder キーボード に接続するのを防ぎます。Cindy 自体は制限されません。",
             "recovery-required": "保護は停止しましたが、NODE_OPTIONS は安全に復元されていません。再度有効にする前に復元を再試行してください。",
             "error": "Codex の保護を更新できませんでした。以前の NODE_OPTIONS は保持されているか、復元待ちです。"
-          }
+          },
+          "restartRequired": "適用するには Codex を完全に終了して再起動"
         },
         "commands": {
           "session.selectPrevious": {
@@ -5675,9 +5666,9 @@
     "openProxyUsage": "ブラウザで完全な使用量ダッシュボードを開く",
     "openXaiUsage": "Grok の使用量ページを開く",
     "xai": {
-      "requestsLine": "レート制限（リクエスト）: 残り {{remaining}}/{{limit}}",
-      "tokensLine": "レート制限（トークン）: 残り {{remaining}}/{{limit}}",
-      "noQuotaDetail": "SuperGrok の週間使用量を取得できないため、価値の推定のみ表示します",
+      "requestsLine": "前回の応答時 · リクエストの残り: {{remaining}}/{{limit}}",
+      "tokensLine": "前回の応答時 · トークンの残り: {{remaining}}/{{limit}}",
+      "noQuotaDetail": "SuperGrok の週間使用量は現在取得できません",
       "weeklyLabel": "週間",
       "windowSegment": "{{label}} 残り {{remaining}}",
       "windowLine": "{{label}} 残り {{remaining}}（使用 {{used}}）",
@@ -5685,7 +5676,7 @@
       "resetAt": "{{at}} にリセット",
       "productLine": "{{product}} {{percent}}",
       "extraCreditsLine": "追加クレジット {{amount}}",
-      "accountWeeklyHint": "アカウントの週間使用量であり、このセッションのクォータではありません"
+      "accountWeeklyHint": "アカウントの週間使用量"
     },
     "dailyLimitLabel": "本日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "周期 {{spend}}/{{limit}}",
@@ -5746,10 +5737,20 @@
     }
   },
   "quotaCard": {
+    "usageCritical": "使用量が高い状態です",
+    "usageWarning": "使用量がやや高い状態です",
+    "usageTitle": "使用量の詳細",
+    "gatewayTitle": "Cindy AI Gateway",
+    "balanceLabel": "残高の使用量",
+    "dailyLabel": "1日のソフト上限",
+    "monthlyLabel": "月間クォータ",
+    "speedLabel": "速度",
+    "rateValue": "{{rate}} トークン/秒",
+    "waiting": "クォータデータの更新を待っています。",
+    "windowsRegionLabel": "使用量の詳細",
     "fiveHourLabel": "5 時間",
     "weeklyLabel": "週間",
     "modelWeeklyLabel": "{{model}} 週間",
-    "windowsRegionLabel": "クォータ期間の一覧",
     "usedPercent": "使用済み {{percent}}%",
     "resetAt": "{{at}} にリセット",
     "noWindows": "クォータ期間のデータはありません",
@@ -5759,7 +5760,7 @@
     "costLine": "このメッセージの消費: {{cost}}",
     "valueLine": "このメッセージの token 価値: {{cost}}",
     "noBilledCost": "このメッセージの料金は現在取得できないため、使用量のみ表示しています",
-    "latestMessageTitle": "直近のメッセージ合計",
+    "latestMessageTitle": "直近のメッセージ",
     "turnCostUnavailable": "このメッセージの料金は現在見積もれません",
     "tokenLabel": "Token",
     "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
@@ -5771,7 +5772,7 @@
     "paceTrendFast": "現在の平均使用ペースは速めです（おおよその傾向）",
     "paceTrendNormal": "現在の平均使用ペースは通常です（おおよその傾向）",
     "paceTrendSlow": "現在の平均使用ペースは遅めです（おおよその傾向）",
-    "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
+    "includedLabel": "うち {{name}}"
   },
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
@@ -6954,53 +6955,105 @@
     "homeSuggestions": {
       "shuffle": "別の提案",
       "dismiss": "今後表示しない",
-      "downloadsDesktop": {
-        "label": "ダウンロードとデスクトップの溜まりを一覧にする",
-        "prompt": "ダウンロードフォルダとデスクトップを見て、何が溜まっているか整理して。容量が大きいもの、明らかな重複、半年以上触っていないもの、安全にアーカイブできそうなものをリストにして。各項目は場所・サイズ・理由を明記。このラウンドは閲覧のみ。動かす・削除するのは確認後。"
-      },
-      "whatCindyCanDo": {
-        "label": "このパソコンを見て、何を手伝えるか教えて",
-        "prompt": "このパソコンに入っているもの、普段扱っている種類から、私が何をしている人か見当をつけて。そのうえで、あなたの能力で具体的に手伝えることを数個、一文ずつ：いつ使うか、何が省けるか。機能一覧の読み上げはせず、このマシンに実際にあるものに即して。"
-      },
-      "recentDocs": {
-        "label": "最近の文書を見てリストにまとめて",
-        "prompt": "最近開いた・編集した文書をテーマごとにまとめ、いくつの仕事の山があるか、それぞれどこまで進んでいるか、放置されていないかを教えて。各ファイルの場所付きのリストを。読み取り専用。ファイルは動かさない。"
-      },
-      "listCodeProjects": {
-        "label": "このパソコンのコードプロジェクトを一覧して",
-        "prompt": "よく使うディレクトリからコードプロジェクトを見つけ、それぞれ何をするか・何で書いているか・最後の変更はいつか一文で。本線に見えるものと放棄済みに見えるものを分けて。一つもなければ、見つからなかったと言って。このラウンドは読み取り専用。ファイルは変更しない。"
-      },
       "storageUsage": {
-        "label": "ディスクを何が圧迫しているか調べて",
-        "prompt": "このパソコンのストレージを大きい順に見て、キャッシュ、重複、忘れている古いものを区別して。占用ランキングと、どれを消せば一番空くかの一文結論を。集計のみ。削除しない。"
-      },
-      "unusedApps": {
-        "label": "入っているアプリで、長いこと使っていないものを",
-        "prompt": "インストール済みアプリを容量と最終使用で並べ、長く開いていないのに場所を取っているものを指摘。リストだけ。まだアンインストールしない。"
-      },
-      "uncommittedChanges": {
-        "label": "最近触ったプロジェクトの未コミットを見て",
-        "prompt": "最近触ったコードプロジェクトの未コミット変更を見て、何をしているか、明らかな問題や漏れがないか教えて。読み取り専用。ファイルは動かさず、コミットもしない。"
-      },
-      "devEnvironment": {
-        "label": "開発環境を一通り点検して",
-        "prompt": "このマシンの開発環境を点検：言語ランタイムとパッケージマネージャ、各バージョン、衝突や明らかな古さ、git 設定の問題。現状リストと、先に直すべき箇所の一文。点検のみ。インストールや設定変更はしない。"
+        "label": "パソコンの不要なファイルを片付けて",
+        "prompt": "パソコンの中から整理するとよさそうなものを探して、どれくらい容量を空けられるか教えて。整理する前に私に確認して。"
       },
       "whySlow": {
         "label": "パソコンが重い理由を調べて",
-        "prompt": "このパソコンが重い理由を調べて：負荷、メモリ、ディスク、起動時間、CPU/メモリを食っているプロセス。結論を短く根拠つきで。読み取り専用。何も変えず、プロセスを殺さず、何を開いているかも聞かない。"
+        "prompt": "パソコンが重い理由を調べて、原因と改善案を教えて。"
+      },
+      "downloadsDesktop": {
+        "label": "ダウンロードとデスクトップを整理して",
+        "prompt": "ダウンロードフォルダとデスクトップを、すっきりして探しやすい状態に整理して。まず整理の案を見せて。"
       },
       "diagnoseNetwork": {
-        "label": "ネット速度を診断して",
-        "prompt": "このパソコンのネットワークを診断：ping、DNS、有線か Wi-Fi か。結論は一、二文。長時間のスピードテストはしない。回線業者も聞かない。"
+        "label": "ネットの遅さを診断して",
+        "prompt": "ネットが遅い理由を調べて、問題と解決方法を教えて。"
       },
-      "subscriptionSpend": {
-        "label": "サブスクの支出を洗い出して",
-        "prompt": "ダウンロード、領収書、ローカルの請求からサブスク課金を洗い出し、サービス名と金額を列挙。見つからなければ、見つからないと言って。サブスクは変更せず、カードも聞かない、メールにもログインしない。"
+      "unusedApps": {
+        "label": "長く使っていないアプリと占有容量を調べて",
+        "prompt": "パソコンで長く使っていない可能性があり、容量も取っているアプリを探して。アンインストール前に私に確認して。"
+      },
+      "stockDigest": {
+        "label": "毎日の株式レポートを届けて",
+        "prompt": "毎日の株式レポートを設定して。2400.HK（心動公司）から始めてもいいので、ほかに注目している銘柄と受け取りたい時刻を聞いて。"
+      },
+      "morningBrief": {
+        "label": "私向けの毎朝のニュースを作って",
+        "prompt": "毎朝のニュースを設定して。知りたい内容と受け取る時刻を一緒に決めて。"
+      },
+      "watchWebpage": {
+        "label": "気になるウェブページの変化を見守って",
+        "prompt": "ウェブページを見守って、気になる変化があったら知らせて。URL、注目する点、確認頻度を一緒に決めて。"
       },
       "expenseTracker": {
-        "label": "家計簿の小さなツールを作って",
-        "prompt": "この会話のワークスペースに、すぐ開けるローカルの家計簿を作って：日付、金額、分類、メモ。バックエンドなし。追加機能も聞かない。"
+        "label": "使いやすい家計簿ツールを作って",
+        "prompt": "私に合う家計簿ツールを作って。機能や使い方は一緒に相談して、できたら試させて。"
+      },
+      "kidsGame": {
+        "label": "ゲームを作りたい",
+        "prompt": "ゲームを作りたい。今あるアイデアを磨くのを手伝うか、面白いアイデアをいくつか提案して。方向性を選んで、一緒に形にしよう。"
+      },
+      "habitTracker": {
+        "label": "自分に合う習慣の記録ページを作って",
+        "prompt": "続けたいことに合う習慣の記録ページを作って。できたら試させて。"
+      },
+      "recentDocs": {
+        "label": "この資料を 1 ページにまとめて",
+        "prompt": "渡した資料を 1 ページにまとめて、要点をすぐにつかめるようにして。"
+      },
+      "subscriptionSpend": {
+        "label": "サブスクの支出を整理して",
+        "prompt": "サブスクにいくら使っているか整理して、解約や見直しを検討するとよさそうなものを探して。まずは提案だけして。"
+      },
+      "organizeFolder": {
+        "label": "フォルダの中身を分類して整理して",
+        "prompt": "フォルダを整理して、ファイルを探しやすくして。まず対象のフォルダと整理の案を一緒に決めて。ファイルは削除しないで。"
+      },
+      "photoTimeline": {
+        "label": "写真を時系列に整理して",
+        "prompt": "写真を分かりやすい時系列に整理して。元の写真は残して。"
+      },
+      "photoAlbumPage": {
+        "label": "この写真でアルバムページを作って",
+        "prompt": "私の写真で、きれいで見やすいアルバムのウェブページを作って。できたら開いて見せて。元の写真は残して。"
+      },
+      "uncommittedChanges": {
+        "label": "未コミットの変更をレビューして",
+        "prompt": "プロジェクトの未コミットの変更をレビューして、問題や不足を見つけて。まずは提案だけにして、ファイルは変更しないで。"
+      },
+      "exploreRepo": {
+        "label": "このプロジェクトを案内して",
+        "prompt": "このプロジェクトを案内して。何をするものか、どう動かすか、詳しく見るとよさそうな箇所を教えて。"
+      },
+      "initAgentDoc": {
+        "label": "AGENTS.md を作って",
+        "prompt": "プロジェクトに合う AGENTS.md を作って。既存のガイドがあれば、まず追記案を示して、直接上書きしないで。"
+      },
+      "listCodeProjects": {
+        "label": "パソコン内のコードプロジェクトと用途を一覧にして",
+        "prompt": "パソコンのコードプロジェクトを一覧にして、それぞれ何をするものか教えて。"
+      },
+      "devEnvironment": {
+        "label": "開発環境を点検して改善点を教えて",
+        "prompt": "開発環境を点検して、直したり改善したりするとよさそうな箇所を見つけて。まずは提案だけして。"
+      },
+      "makePlugin": {
+        "label": "Cindy のプラグインを作って",
+        "prompt": "Cindy のプラグインを作りたい。要望を整理するのを手伝うか、役に立つ面白いアイデアをいくつか提案して。方向性を選んでから作って。"
+      },
+      "sendFeedback": {
+        "label": "Cindy の開発者に意見を届けて",
+        "prompt": "Cindy への意見を分かりやすいフィードバックにまとめて。私が確認してから送って。"
+      },
+      "readOwnSource": {
+        "label": "Cindy 自身のソースコードを見せて",
+        "prompt": "Cindy のソースコード（github.com/makecindy/cindy）を案内して、あなたがどう実装されているか教えて。それから面白そうな部分を選んで詳しく見よう。"
+      },
+      "whatCindyCanDo": {
+        "label": "今、手伝えることをいくつか提案して",
+        "prompt": "最近の私のセッションと今使える機能をもとに、手間を減らせる具体的なことをいくつか提案して。私が 1 つ選んで始められるようにして。"
       }
     },
     "noProvider": {
@@ -7589,6 +7642,27 @@
       "offlineHint": "オフライン — 接続後に利用可能",
       "attachmentsDropped": "添付ファイル {{count}} 件を削除しました（前のデバイス上のファイルです）",
       "attachmentsRemoteUnsupported": "リモートデバイスではファイル添付に未対応のため {{count}} 件をスキップしました（画像は可）"
+    },
+    "pluginSuggestions": {
+      "changed": "このおすすめは更新されました。おすすめを入れ替えて、もう一度選んでください。",
+      "unavailable": "このプラグインは現在利用できません。プラグインページで確認してください。",
+      "pending": "プラグインをインストールまたは有効化すると、「{{task}}」を続行します。",
+      "cancel": "続行をキャンセル",
+      "usePlugin": "{{name}} プラグイン（{{id}}）を使って、このタスクを完了してください。まず ghost_info で現在のツールを確認し、必要に応じて ghost_call を呼び出してください。アカウントの接続が必要な場合は、プラグインの既存の接続フローを使ってください。",
+      "mail": {
+        "today": {
+          "label": "今日対応が必要なメールを整理する",
+          "prompt": "今日対応が必要なメールを調べて、やることをまとめて。まだメールは変更しないで。"
+        },
+        "unanswered": {
+          "label": "まだ返信していない重要なメールを探す",
+          "prompt": "まだ返信していない、気に留めておくべきメールを探して、どれに対応が必要か確認して。"
+        },
+        "reply": {
+          "label": "このメールへの返信を下書きする",
+          "prompt": "このメールへの返信の下書きを作って。これまでのやり取りと私の考えを踏まえて、まだ送信しないで。"
+        }
+      }
     }
   },
   "onboarding": {
@@ -7623,19 +7697,6 @@
       },
       "detectedLabel": "検出済み",
       "oauthSub": "ブラウザで認証ページが開き、ログイン後に自動接続されます"
-    },
-    "inheritedSubscription": {
-      "title": "このパソコンでログイン済みの {{products}} をそのまま使っています",
-      "desc": "Cindy はこの端末でログイン済みのアカウントをそのまま利用しました。別途の認証は不要です。アカウントの切り替えや解除はモデルプロバイダーから行えます。",
-      "openProviders": "モデルプロバイダーを開く",
-      "acknowledge": "了解",
-      "separator": "、"
-    },
-    "promotionalGrant": {
-      "title": "Cindy AI の利用を開始しました",
-      "desc": "特典残高 {{amount}} を付与しました。有効期限は {{date}} です。使い切った後や期限切れの後も、いつでもチャージできます。",
-      "openBilling": "使用量を見る",
-      "acknowledge": "了解"
     }
   },
   "voiceInputOverlay": {
@@ -7942,9 +8003,7 @@
       "dismissTitle": "この中断通知を閉じる"
     },
     "unreadFailedScheduleBanner": {
-      "text": "このスケジュール実行は完了しませんでした。",
-      "markAsRead": "既読にする",
-      "markAsReadTitle": "この失敗の未読を消す"
+      "text": "完了しなかったスケジュール実行があります。実行履歴を確認してください。"
     },
     "worktreeRestoreBanner": {
       "text": "このセッションのワークツリーは回収されました（ディレクトリが存在しません）。",

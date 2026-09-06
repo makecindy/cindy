@@ -5,7 +5,6 @@ import {
   buildHomeScopeMenuItems,
   buildHomeScopePullDownActions,
   homeDisplayMenuPatch,
-  parseHomeScopePullDownAction,
 } from "@/session/homeChromeMenus";
 import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
@@ -26,49 +25,18 @@ function filter(
 }
 
 describe("home chrome menus", () => {
-  it("nests open and rename under each native device scope item", () => {
-    const actions = buildHomeScopePullDownActions(
-      [
-        filter({ id: "all", label: "全部任务", selected: true }),
-        filter({
-          id: "mac",
-          label: "MacBook",
-          deviceId: "d1",
-          selected: false,
-        }),
-        filter({
-          id: "offline",
-          label: "旧电脑",
-          deviceId: "d2",
-          available: false,
-        }),
-      ],
-      "全部任务",
-      {
-        openLabel: "打开",
-        renameLabel: "重命名",
-        showTasksLabel: "查看任务",
-      },
-    );
+  it("selects native device scopes directly without a management submenu", () => {
+    const actions = buildHomeScopePullDownActions([
+      filter({ id: "all", label: "全部任务" }),
+      filter({ id: "mac", label: "MacBook", deviceId: "d1", selected: true }),
+      filter({ id: "offline", label: "旧电脑", deviceId: "d2", available: false }),
+    ], "全部任务");
 
-    expect(actions.map((item) => item.id)).toEqual(["all", "scope.submenu:mac"]);
-    expect(actions[1]?.subactions?.map((item) => item.id)).toEqual([
-      "mac",
-      "scope.open:d1",
-      "scope.rename:d1",
+    expect(actions).toEqual([
+      { id: "all", title: "全部任务", state: "off" },
+      { id: "mac", title: "MacBook", state: "on" },
     ]);
-    expect(parseHomeScopePullDownAction("scope.open:d1")).toEqual({
-      kind: "open",
-      deviceId: "d1",
-    });
-    expect(parseHomeScopePullDownAction("scope.rename:d1")).toEqual({
-      kind: "rename",
-      deviceId: "d1",
-    });
-    expect(parseHomeScopePullDownAction("mac")).toEqual({
-      kind: "select",
-      filterId: "mac",
-    });
+    expect(actions.every((item) => !item.subactions)).toBe(true);
   });
 
   it("lists all-conversations and available devices, marking the selected one", () => {

@@ -150,12 +150,15 @@ export function useComposerResize(input: UseComposerResizeInput) {
     ? Math.max(geometry.value.bounds.minContentHeight, Math.min(dragHeight.value, geometry.value.bounds.maxContentHeight))
     : geometry.value.visibleHeight);
   const frameStyle = useAnimatedStyle(() => ({
-    // Auto growth stays capped, but the grabber removes that cap on UI before
-    // begin can reach JS. Explicit heights are already bounded by the model.
-    maxHeight: active.value || geometry.value.explicit ? undefined : geometry.value.autoMaxHeight,
+    // Native animated updates omit undefined props, retaining the previous
+    // height/cap. Explicitly restore intrinsic sizing with 'auto' and replace
+    // the auto cap with the drag ceiling before begin can reach JS.
+    maxHeight: active.value || geometry.value.explicit
+      ? Math.max(geometry.value.minFrameHeight, geometry.value.bounds.maxContentHeight + COMPOSER_TEXT_VERTICAL_PADDING * 2)
+      : geometry.value.autoMaxHeight,
     height: active.value || geometry.value.explicit
       ? Math.max(geometry.value.minFrameHeight, contentHeight.value + COMPOSER_TEXT_VERTICAL_PADDING * 2)
-      : undefined,
+      : 'auto' as const,
   }));
   const reset = useCallback(() => setUserContentHeight(null), []);
   const adjustByLine = useCallback((direction: 1 | -1) => {

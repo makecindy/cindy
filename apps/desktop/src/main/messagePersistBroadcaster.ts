@@ -82,6 +82,24 @@ interface AssistantBlock {
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+
+/** Read the in-flight block without flushing or changing its persistence identity. */
+export function getSessionTextSnapshot(sessionId: string) {
+  const block = assistantBlocks.get(sessionId);
+  if (!block?.text) return null;
+  return {
+    sessionId,
+    persistId: block.persistId,
+    event: {
+      type: 'text',
+      data: {
+        text: block.text, isFinal: false, isFullText: true,
+        createdAt: new Date(block.createdAt).toISOString(),
+      },
+      agentMeta: block.agentMeta,
+    },
+  };
+}
 interface SealedAssistantLateFinalCandidate {
   persistId: string;
   text: string;

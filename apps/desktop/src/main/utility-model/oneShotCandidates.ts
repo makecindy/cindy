@@ -115,6 +115,8 @@ export type UtilityTextRequestOptions = {
   systemPrompt?: string;
   /** Additional output-shape instruction (mainly for Responses-compatible routes). */
   responseInstructions?: string;
+  /** Reject unusable output before selecting a winner, so the configured chain can continue. */
+  validateResponse?: (text: string) => boolean;
   /** Final ownership/config guard immediately before an explicit HTTP dispatch. */
   beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
@@ -592,7 +594,7 @@ async function runDefaultProfileCandidates(
     };
     try {
       const text = (await candidate.execute(prompt, candidateOpts)).trim();
-      if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+      validateUtilityResponse(text, opts);
       return {
         ok: true,
         text,
@@ -624,6 +626,13 @@ function failedChainResult(attempts: UtilityTextAttempt[]): UtilityTextResult {
       : 'all_candidates_failed';
   log.warn('all utility text candidates failed', { reason, attempts: attempts.length });
   return { ok: false, reason, attempts };
+}
+
+function validateUtilityResponse(text: string, opts?: UtilityTextRequestOptions): void {
+  if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+  if (opts?.validateResponse && !opts.validateResponse(text)) {
+    throw new UtilityTextExecutionError({ reason: 'request_failed' });
+  }
 }
 
 async function requestDefaultUtilityText(
@@ -855,6 +864,7 @@ async function requestExplicitProviderText(
       signal: opts.signal,
       systemPrompt: opts.systemPrompt,
       responseInstructions: opts.responseInstructions,
+      validateResponse: opts.validateResponse,
       beforeDispatch: opts.beforeDispatch,
       routeStillCurrent,
     });
@@ -1029,6 +1039,7 @@ async function requestBuiltinProviderText(
     signal?: AbortSignal;
     systemPrompt?: string;
     responseInstructions?: string;
+    validateResponse?: (text: string) => boolean;
     beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
     routeStillCurrent?: () => boolean;
   },
@@ -1285,7 +1296,7 @@ async function executeCandidates(
       }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
-      if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+      validateUtilityResponse(text, opts);
       log.info('explicit utility text provider succeeded', {
         providerId: candidate.providerId,
         model: candidate.model,

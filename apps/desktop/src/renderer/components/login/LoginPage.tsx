@@ -128,6 +128,7 @@ export function LoginPage({
   intent?: 'sign-in' | 'add-account';
   onClose?: () => void;
 }) {
+  // AddAccountLoginPage owns initialization: a second load would race its flow reset.
   const {
     isLoading,
     errorCode,
@@ -140,7 +141,7 @@ export function LoginPage({
     dispatchWithResult,
     clearError,
     enterLocalMode,
-  } = useLogin();
+  } = useLogin({ autoLoad: intent !== 'add-account' });
   const { t } = useTranslation();
   const handoff = useLoginHandoff();
   const isAddAccount = intent === 'add-account';
