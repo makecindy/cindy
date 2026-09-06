@@ -8,6 +8,7 @@ import { CodexAgent, isExactNoRolloutThreadResumeError } from './index.js';
 import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
+  AUTO_REVIEW_SOURCE_CONTENT,
   MAIN_OWNED_SEND_CONTEXT,
   CodexResumePreparationBlockedError,
   AgentNotAuthenticatedError,
@@ -14488,6 +14489,36 @@ describe('CodexAgent MCP thread context hooks', () => {
         await handle.close();
       }
     }
+  });
+
+
+  it.each(['allow', 'ask'] as const)('invalidates old %s when identical text refers to a new attachment', async (verdict) => {
+    let release!: (decision: { verdict: 'allow' | 'ask' }) => void;
+    const reviewer = vi.fn().mockImplementationOnce(() => new Promise<{ verdict: 'allow' | 'ask' }>((resolve) => { release = resolve; }))
+      .mockResolvedValue({ verdict: 'allow' });
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'resource-turn' } };
+      if (method === Method.TurnSteer) return { turnId: 'resource-turn' };
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'same-text-new-resource', model: 'gpt-5.5', providerId: 'openai', workingDir: '/repo', permissionMode: 'auto' });
+    const source = (file: string) => ({ [AUTO_REVIEW_SOURCE_CONTENT]: [
+      { type: 'text' as const, text: 'Send this.' }, { type: 'file' as const, path: file },
+    ] });
+    await handle.send({ type: 'user', content: 'Send this.' }, source('/tmp/attachment-a.txt'));
+    host.getThreadHandlers()?.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'resource-turn' } });
+    const action = { kind: 'other' as const, description: 'send the selected attachment' };
+    const old = handle.reviewAutoPermissionAction!(action);
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.steer!({ type: 'user', content: 'Send this.' }, source('/tmp/attachment-b.txt'));
+    // The same serialized request now has a different pending decision in the existing cache.
+    expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({ verdict: 'allow' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(reviewer.mock.calls[0][0].userIntent).toBe(reviewer.mock.calls[1][0].userIntent);
+    release({ verdict });
+    expect(await old).toMatchObject({ verdict: 'block', reason: expect.stringContaining('User instructions changed') });
+    await handle.close();
   });
 
   it('discards an in-flight allow when external directory permissions change', async () => {

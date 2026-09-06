@@ -3132,17 +3132,17 @@ export class PiAgent extends BaseAgent {
     let activeEffortSnapshot = initialEffortSnapshot;
     let mutableEffort: Effort | null = startupEffort ?? null;
     let currentAutoReviewIntent = '';
-    let currentAutoReviewAuthority = JSON.stringify(null);
     const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
       ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
         ? { requesterAuthority: 'unknown' as const, source: 'direct' as const }
         : undefined);
-    const autoReviewAuthority = () => JSON.stringify(autoReviewContext() ?? null);
-    const priorAutoReviewIntent = () => currentAutoReviewAuthority === autoReviewAuthority() ? currentAutoReviewIntent : '';
+    // Authorization belongs to the accepted input, not the foreground policy's lifetime.
+    let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext> | null;
+    const priorAutoReviewIntent = () => JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const setAutoReviewIntent = (content: UserMessage['content']): void => {
+    const setAutoReviewIntent = (content: UserMessage['content'], source = { authority: currentAutoReviewAuthority }): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
-      currentAutoReviewAuthority = autoReviewAuthority();
+      currentAutoReviewAuthority = source.authority && { ...source.authority };
       autoReviewDecisionCache.clear();
       // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
       // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
@@ -3250,8 +3250,8 @@ export class PiAgent extends BaseAgent {
           reason: 'Directory permissions are still being persisted.',
         });
       }
-      if (currentAutoReviewAuthority !== autoReviewAuthority()) {
-        return Promise.resolve({ verdict: 'block', reason: 'User authorization source changed; retry with the current request.' });
+      if (currentAutoReviewAuthority === null) {
+        return Promise.resolve({ verdict: 'block', reason: 'User request was not accepted; retry with the current request.' });
       }
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
@@ -3260,7 +3260,7 @@ export class PiAgent extends BaseAgent {
         providerId: mutableProviderId,
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
-        ...(autoReviewContext() ? { authorizationContext: autoReviewContext() } : {}),
+        ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
         writableRoots: [opts.workingDir, ...mutableWritableDirs],
@@ -3273,8 +3273,7 @@ export class PiAgent extends BaseAgent {
         autoReviewDecisionCache.set(cacheKey, pending);
       }
       return pending.then((decision) => (
-        request.userIntent !== currentAutoReviewIntent
-          || JSON.stringify(request.authorizationContext ?? null) !== autoReviewAuthority()
+        autoReviewDecisionCache.get(cacheKey) !== pending
           ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
           : directoryGeneration === autoReviewDirectoryGeneration
           && !directoryPermissionsPendingPersistence()
@@ -5774,6 +5773,7 @@ export class PiAgent extends BaseAgent {
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         let providerAccepted = false;
         let promptRequestStarted = false;
+        let reviewIntentUpdated = false;
         try {
           if (reviewMode) {
             await assertReviewMessageContentPaths(message.content, opts.workingDir, reviewReadGrants);
@@ -5781,7 +5781,8 @@ export class PiAgent extends BaseAgent {
           let { text, images } = await buildPiPrompt(message, { remote });
           rejectIfCancelled(sendOpts, 'send');
           assertImageInputSupported(images);
-          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
+          reviewIntentUpdated = true;
           const managedPackageRoute = await routeManagedPackageCommand(
             text,
             images.length,
@@ -5969,7 +5970,14 @@ export class PiAgent extends BaseAgent {
         } catch (err) {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表
           // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
-          if (!providerAccepted) activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+          if (!providerAccepted) {
+            activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+            if (reviewIntentUpdated) {
+              currentAutoReviewIntent = '';
+              currentAutoReviewAuthority = null;
+              autoReviewDecisionCache.clear();
+            }
+          }
           // Before proc.request the turn is known not to have reached Pi. Once
           // request starts, a transport/write/envelope failure cannot prove
           // whether Pi accepted the prompt; only success:false is an explicit

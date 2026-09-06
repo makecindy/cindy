@@ -1572,6 +1572,31 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     },
   );
 
+
+  it.each(['before-review', 'during-review'] as const)('retains durable child authority when root settles %s', async (boundary) => {
+    const run = pendingSubagentRun({ toolName: 'unknown_sender', input: { action: 'send' } });
+    const list = vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    let release!: (decision: { verdict: 'allow' }) => void;
+    const review = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(() => new Promise((resolve) => { release = resolve; }));
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({ ...opts(), permissionMode: 'auto' });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    handle.setInteractionResolver(resolver);
+    await handle.send({ type: 'user', content: 'Continue the approved child work.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel',
+        autoReviewContext: { requesterAuthority: 'guest', source: 'group' }, forceConfirmToolCall: () => true },
+    });
+    if (boundary === 'before-review') knobs.onEvent?.({ type: 'agent_settled' });
+    list.mockResolvedValue([run]);
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce(), { timeout: 3_000 });
+    if (boundary === 'during-review') knobs.onEvent?.({ type: 'agent_settled' });
+    expect(review.mock.calls[0][0].authorizationContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
+    release({ verdict: 'allow' });
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(expect.any(String), run.taskId, 'approval', expect.objectContaining({ confirmed: true })), { timeout: 3_000 });
+    expect(resolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('preserves Auto-review denial for durable Subagent child tools', async () => {
     const run = pendingSubagentRun({
       toolName: 'bash',

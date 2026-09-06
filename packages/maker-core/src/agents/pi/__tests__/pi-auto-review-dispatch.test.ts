@@ -166,6 +166,7 @@ vi.mock('../rpc-client.js', () => ({
 }));
 
 import {
+  AUTO_REVIEW_SOURCE_CONTENT,
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
   PiManagedPackageMutationFailedError,
@@ -3500,6 +3501,29 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     if (operation !== 'close') await handle.close();
   });
 
+
+  it.each(['allow', 'ask'] as const)('invalidates old %s when identical text refers to a new attachment', async (verdict) => {
+    let release!: (decision: { verdict: 'allow' | 'ask' }) => void;
+    const reviewer = vi.fn().mockImplementationOnce(() => new Promise<{ verdict: 'allow' | 'ask' }>((resolve) => { release = resolve; }))
+      .mockResolvedValue({ verdict: 'allow' });
+    const handle = await start('auto', reviewer);
+    const source = (file: string) => ({ [AUTO_REVIEW_SOURCE_CONTENT]: [
+      { type: 'text' as const, text: 'Send this.' }, { type: 'file' as const, path: file },
+    ] });
+    await handle.send({ type: 'user', content: 'Send this.' }, source('/tmp/attachment-a.txt'));
+    const action = { kind: 'other' as const, description: 'send the selected attachment' };
+    const old = handle.reviewAutoPermissionAction!(action);
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.steer!({ type: 'user', content: 'Send this.' }, source('/tmp/attachment-b.txt'));
+    // The same serialized request now has a different pending decision in the existing cache.
+    expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({ verdict: 'allow' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(reviewer.mock.calls[0][0].userIntent).toBe(reviewer.mock.calls[1][0].userIntent);
+    release({ verdict });
+    expect(await old).toMatchObject({ verdict: 'block', reason: expect.stringContaining('User instructions changed') });
+    await handle.close();
+  });
+
   it('rejects mismatched intent authority after a channel prompt is not accepted', async () => {
     const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'allow' as const }));
     const handle = await start('auto', review);
@@ -3511,6 +3535,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(await handle.reviewAutoPermissionAction?.({ kind: 'other', description: 'send the private report' })).toMatchObject({ verdict: 'block' });
     expect(review).not.toHaveBeenCalled();
     captured.failPrompt = false;
+    await handle.send({ type: 'user', content: 'Inspect only.' });
+    await handle.reviewAutoPermissionAction?.({ kind: 'other', description: 'inspect status' });
+    expect(review.mock.calls[0][0].userIntent).toBe('Inspect only.');
+    expect(review.mock.calls[0][0].authorizationContext).toBeUndefined();
     await handle.close();
   });
 
@@ -3541,7 +3569,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
-  it('does not carry guest authorization into a later owner turn', async () => {
+  it.each(['owner', 'desktop'] as const)('does not carry guest authorization into a later %s turn', async (source) => {
     const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
     const handle = await start('auto', review);
     const policy = (requesterAuthority: 'owner' | 'guest') => ({
@@ -3553,10 +3581,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await waitForResponse('guest-send');
     expect(review.mock.calls[0]?.[0].authorizationContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
     captured.onEvent?.({ type: 'agent_settled' });
-    await handle.send({ type: 'user', content: 'Owner: inspect the status.' }, { turnPermissionPolicy: policy('owner') });
+    await handle.send({ type: 'user', content: 'Owner: inspect the status.' }, source === 'owner' ? { turnPermissionPolicy: policy('owner') } : undefined);
     firePermissionRequest('owner-inspect', 'unknown_status', { action: 'inspect' });
     await waitForResponse('owner-inspect');
-    expect(review.mock.calls[1]?.[0].authorizationContext).toEqual({ requesterAuthority: 'owner', source: 'group' });
+    expect(review.mock.calls[1]?.[0].authorizationContext).toEqual(source === 'owner' ? { requesterAuthority: 'owner', source: 'group' } : undefined);
     expect(review.mock.calls[1]?.[0].userIntent).toBe('Owner: inspect the status.');
     await handle.close();
   });

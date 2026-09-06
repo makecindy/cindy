@@ -2360,13 +2360,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent = '';
-    let currentAutoReviewAuthority = JSON.stringify(null);
     const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
       ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
         ? { requesterAuthority: 'unknown' as const, source: 'direct' as const }
         : undefined);
-    const autoReviewAuthority = () => JSON.stringify(autoReviewContext() ?? null);
-    const priorAutoReviewIntent = () => currentAutoReviewAuthority === autoReviewAuthority() ? currentAutoReviewIntent : '';
+    // Authorization belongs to the accepted input, not the foreground policy's lifetime.
+    let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext>;
+    const priorAutoReviewIntent = () => JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     // Claude's native OAuth Auto classifier bypasses canUseTool entirely. Once a host MCP
     // is registered, that would also bypass Cindy's trusted-server and prompt policies,
@@ -2382,9 +2382,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       // bypasses canUseTool. Use the scope frozen into the active Query: after revoke,
       // that Query still carries its broader directory allowlist.
       && !activeQueryHasDirectoryGrants;
-    const setAutoReviewIntent = (content: UserMessage['content']): void => {
+    const setAutoReviewIntent = (content: UserMessage['content'], source = { authority: currentAutoReviewAuthority }): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
-      currentAutoReviewAuthority = autoReviewAuthority();
+      currentAutoReviewAuthority = source.authority && { ...source.authority };
       autoReviewDecisionCache.clear();
     // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
     // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
@@ -2424,9 +2424,6 @@ export class ClaudeCodeAgent extends BaseAgent {
       writableRoots: string[],
       platform: NodeJS.Platform,
     ): Promise<AutoReviewDecision> => {
-      if (currentAutoReviewAuthority !== autoReviewAuthority()) {
-        return Promise.resolve({ verdict: 'block', reason: 'User authorization source changed; retry with the current request.' });
-      }
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
@@ -2434,7 +2431,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         providerId: mutableProviderId,
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
-        ...(autoReviewContext() ? { authorizationContext: autoReviewContext() } : {}),
+        ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots,
         writableRoots,
@@ -2448,8 +2445,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         );
       if (!cached) autoReviewDecisionCache.set(key, pending);
       return pending.then((decision) => (
-        request.userIntent !== currentAutoReviewIntent
-          || JSON.stringify(request.authorizationContext ?? null) !== autoReviewAuthority()
+        autoReviewDecisionCache.get(key) !== pending
           ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
           : directoryGeneration === autoReviewDirectoryGeneration
           ? decision
@@ -5892,7 +5888,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
           userInputAccepted = true;
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
-          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
           replayableUserInput = sdkInput;
           sendInAcceptPhase = false;
           // upstream-response-idle watchdog 起表 — 放在 inputQueue.push 之后, 避免把

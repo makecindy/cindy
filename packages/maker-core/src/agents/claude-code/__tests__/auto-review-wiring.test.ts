@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAIN_OWNED_SEND_CONTEXT } from '../../base-agent.js';
+import { AUTO_REVIEW_SOURCE_CONTENT, MAIN_OWNED_SEND_CONTEXT } from '../../base-agent.js';
 
 import type {
   AgentDeps,
@@ -753,6 +753,29 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
 });
 
 describe('Auto-review wiring: lightweight reviewer controls gray actions', () => {
+
+  it.each(['allow', 'ask'] as const)('invalidates old %s when identical text refers to a new attachment', async (verdict) => {
+    let release!: (decision: { verdict: 'allow' | 'ask' }) => void;
+    const reviewer = vi.fn().mockImplementationOnce(() => new Promise<{ verdict: 'allow' | 'ask' }>((resolve) => { release = resolve; }))
+      .mockResolvedValue({ verdict: 'allow' });
+    const { handle } = await startSession('auto', { reviewer });
+    const source = (file: string) => ({ [AUTO_REVIEW_SOURCE_CONTENT]: [
+      { type: 'text' as const, text: 'Send this.' }, { type: 'file' as const, path: file },
+    ] });
+    await handle.send({ type: 'user', content: 'Send this.' }, source('/tmp/attachment-a.txt'));
+    const action = { kind: 'other' as const, description: 'send the selected attachment' };
+    const old = handle.reviewAutoPermissionAction!(action);
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.steer!({ type: 'user', content: 'Send this.' }, source('/tmp/attachment-b.txt'));
+    // The same serialized request now has a different pending decision in the existing cache.
+    expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({ verdict: 'allow' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(reviewer.mock.calls[0][0].userIntent).toBe(reviewer.mock.calls[1][0].userIntent);
+    release({ verdict });
+    expect(await old).toMatchObject({ verdict: 'block', reason: expect.stringContaining('User instructions changed') });
+    await handle.close();
+  });
+
   it('invalidates an in-flight approval when the user withdraws authorization', async () => {
     let release!: (decision: { verdict: 'allow' }) => void;
     const reviewer = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
