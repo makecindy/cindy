@@ -4506,6 +4506,7 @@ const HOST_CONTROL_CHARS = new RegExp('[\\s\\u0000-\\u001f\\u007f]', 'g');
  * 序列)静态不可证清白 → fail-closed。
  */
 function isInternalFetchTarget(t: string): boolean {
+  if (t.length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return true;
   const forms: string[] = [t];
   let cur = t;
   for (let round = 0; round < 3 && /%[0-9a-fA-F]{2}/.test(cur); round++) {

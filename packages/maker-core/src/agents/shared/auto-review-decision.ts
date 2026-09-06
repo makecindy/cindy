@@ -1,5 +1,5 @@
 import type { AgentKind, UserMessage } from '../../types/common.js';
-import { MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
+import { AUTO_REVIEW_SOURCE_CONTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
@@ -512,9 +512,12 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
 export function appendAutoReviewUserIntent(previous: string, content: UserMessage['content'], sendOpts?: SendOptions): string {
   // Only Main's Symbol carries authenticated channel text. Decorated replies and
   // group history remain model context, never evidence of the requester's consent.
-  const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? content);
-  if (!previous.trim()) return compactCurrentUserIntent(latest);
-  if (!latest) return compactCurrentUserIntent(previous);
+  const sourceContent = sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT] ?? content;
+  const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
+  // A new resource can change what an earlier "send this" refers to. Keep only
+  // the current user's text; generated image descriptions cannot renew consent.
+  const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
+  if (!previous.trim() || !latest || hasAttachments) return compactCurrentUserIntent(latest);
   const prefix = 'Earlier user messages (still apply unless explicitly changed below):\n';
   const separator = '\n\nLatest user message:\n';
   const priorBudget = MAX_USER_INTENT_CHARS - prefix.length - separator.length - latest.length;

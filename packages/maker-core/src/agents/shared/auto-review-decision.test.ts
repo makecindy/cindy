@@ -612,6 +612,7 @@ describe('user authorization across ordinary follow-ups', () => {
     const delegate = vi.fn(async () => ({ verdict: 'allow' as const }));
     for (const action of [
       { kind: 'exec', command: ' '.repeat(50_000) + '!' },
+      { kind: 'network', target: 'https://' + '/'.repeat(50_000) },
       { kind: 'file-write', path: '/repo/file', resolvedPath: '/'.repeat(50_000) },
       { kind: 'file-write', path: '/repo/file', resolvedWritableRoots: ['/'.repeat(50_000)] },
     ] as const) {
@@ -620,6 +621,32 @@ describe('user authorization across ordinary follow-ups', () => {
     }
     expect(classifier).not.toHaveBeenCalled();
     expect(delegate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { type: 'image' as const, path: '/new.png' },
+    { type: 'file' as const, path: '/new.pdf' },
+    { type: 'mention' as const, name: 'new', path: '/new' },
+  ])('does not transfer prior authorization to a new $type', (attachment) => {
+    const approval = 'Send the reviewed report to Alex.';
+    for (const text of ['', 'Continue.', 'Send this new file to Alex.']) {
+      const content = [{ type: 'text' as const, text }, attachment];
+      for (const rawChannelText of [undefined, '', 'Only summarize this.']) {
+        const opts: SendOptions | undefined = rawChannelText === undefined ? undefined : {
+          [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText },
+        };
+        const intent = appendAutoReviewUserIntent(approval, content, opts);
+        expect(intent).toBe(rawChannelText ?? text);
+        expect(appendAutoReviewUserIntent(intent, 'Continue.')).not.toContain(approval);
+      }
+    }
+    expect(appendAutoReviewUserIntent(approval, [attachment])).toBe('');
+  });
+
+  it('clears prior authorization on an empty authenticated message', () => {
+    expect(appendAutoReviewUserIntent('Send the report.', 'Decorated channel history', {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: '' },
+    })).toBe('');
   });
 
   it('preserves original authorization and identifies the latest restriction', () => {
