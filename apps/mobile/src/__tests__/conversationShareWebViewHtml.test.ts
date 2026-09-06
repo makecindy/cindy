@@ -305,9 +305,9 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(svgSource).toContain('const SHARE_LOGO_HEIGHT = 18;');
     expect(svgSource).toContain('const SHARE_LOCKUP_GAP = 6;');
     expect(svgSource).toContain('rx={6}');
-    expect(svgSource).toContain('footerAssetGate.waitUntilReady()');
-    expect(svgSource).toContain('footerAssetGate.markReady("character")');
-    expect(svgSource).toContain('footerAssetGate.markReady("logo")');
+    expect(svgSource).toContain('assetGate.waitUntilSettled()');
+    expect(svgSource).toContain('assetGate.markReady("character")');
+    expect(svgSource).toContain('assetGate.markReady("logo")');
     expect(html).toContain('width: 22px;');
     expect(html).toContain('height: 18px;');
     expect(html).toContain('gap: 6px;');

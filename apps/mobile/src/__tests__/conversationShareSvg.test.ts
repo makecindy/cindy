@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 
 import { i18n } from "@/i18n";
-import { createConversationShareFooterAssetGate } from "@/session/conversationShareAssetGate";
+import { createConversationShareAssetGate } from "@/session/conversationShareAssetGate";
 import {
   buildConversationShareSvgLayout,
   conversationShareSvgRenderSize,
@@ -331,9 +331,9 @@ describe("ConversationShareSvg", () => {
   });
 
   it("waits for both footer assets before allowing export", async () => {
-    const gate = createConversationShareFooterAssetGate();
+    const gate = createConversationShareAssetGate(["character", "logo"]);
     let ready = false;
-    const wait = gate.waitUntilReady().then(() => {
+    const wait = gate.waitUntilSettled().then(() => {
       ready = true;
     });
 
