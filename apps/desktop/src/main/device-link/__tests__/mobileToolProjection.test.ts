@@ -81,7 +81,9 @@ describe('mobile tool projection', () => {
     for (const output of ['x'.repeat(9000) + '\nhttps://example.com/file.pdf',
       '<tool_use_error>' + 'error'.repeat(9000) + '</tool_use_error>',
       JSON.stringify({ _xdt_render_image: false, text: 'x'.repeat(9000) })]) {
-      expect(projectMobileToolResult(output)).toBe(output);
+      const projected = projectMobileToolResult(output) as string;
+      expect(projected).not.toBe(output);
+      expect(new TextEncoder().encode(projected).byteLength).toBeLessThanOrEqual(MOBILE_TOOL_RESULT_BYTES);
     }
   });
 

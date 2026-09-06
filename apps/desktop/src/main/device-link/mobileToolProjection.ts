@@ -1,7 +1,10 @@
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
 import { isAgentPlanToolName } from '@cindy/maker-shared/message-render';
 import { isOrcaCommunicationTool } from '@cindy/maker-shared/message-normalize';
-import { formatPayloadToolUseSummary } from '@cindy/maker-shared/payload-summary';
+import {
+  extractPayloadToolResultMedia,
+  formatPayloadToolUseSummary,
+} from '@cindy/maker-shared/payload-summary';
 
 export const MOBILE_TOOL_INPUT_BYTES = 4 * 1024;
 export const MOBILE_TOOL_RESULT_BYTES = 8 * 1024;
@@ -37,10 +40,13 @@ function exceedsInputBudget(input: unknown): boolean {
  * exists. Cutting JSON or a reference-bearing string would silently remove artifacts. */
 export function projectMobileToolResult(content: unknown): unknown {
   if (typeof content !== 'string' || encoder.encode(content).byteLength <= MOBILE_TOOL_RESULT_BYTES) return content;
-  if (content.includes('://') || /xdt_(?:image|video|audio)|_xdt_actions|<tool_use_error>/i.test(content)) return content;
+  // Keep structured media payloads intact because truncating them can drop an artifact
+  // reference. Plain URLs, action markers, errors, and arbitrary JSON remain bounded.
   try {
     const parsed: unknown = JSON.parse(content);
-    if (parsed !== null && typeof parsed === 'object') return content;
+    if (parsed !== null && typeof parsed === 'object' && extractPayloadToolResultMedia(content).length > 0) {
+      return content;
+    }
   } catch { /* Plain tool output is the only format shortened in this phase. */ }
   const bytes = encoder.encode(content);
   let cut = MOBILE_TOOL_RESULT_BYTES - encoder.encode(TRUNCATION_SUFFIX).byteLength;
