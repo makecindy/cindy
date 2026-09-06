@@ -5871,6 +5871,7 @@
     "weeklyLabel": "주간",
     "modelWeeklyLabel": "{{model}} 주간",
     "usedPercent": "사용 {{percent}}%",
+    "remainingPercent": "남은 {{percent}}%",
     "resetAt": "{{at}} 재설정",
     "noWindows": "할당량 구간 데이터가 없습니다",
     "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",

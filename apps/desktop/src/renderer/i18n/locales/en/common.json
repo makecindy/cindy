@@ -5873,6 +5873,7 @@
     "weeklyLabel": "Weekly",
     "modelWeeklyLabel": "{{model}} weekly",
     "usedPercent": "Used {{percent}}%",
+    "remainingPercent": "Remaining {{percent}}%",
     "resetAt": "Resets {{at}}",
     "noWindows": "No quota window data available",
     "limitRejected": "Plan limit reached; requests may be rejected",

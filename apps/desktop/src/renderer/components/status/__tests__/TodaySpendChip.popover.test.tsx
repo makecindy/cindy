@@ -60,6 +60,7 @@ vi.mock('react-i18next', () => ({
         'quotaCard.includedLabel': '其中 {{name}}',
         'quotaCard.modelWeeklyLabel': '{{model}} 周限',
         'quotaCard.usedPercent': '已用 {{percent}}%',
+        'quotaCard.remainingPercent': '剩余 {{percent}}%',
         'quotaCard.resetAt': '{{at}} 重置',
         'quotaCard.turnCostUnavailable': '本轮费用暂无法估算',
         'quotaCard.tokenLabel': 'Token',
@@ -808,7 +809,8 @@ describe('TodaySpendChip Claude subscription popover', () => {
       within(card)
         .getAllByRole('progressbar')
         .map((bar) => bar.getAttribute('aria-valuenow')),
-    ).toEqual(['22', '48']);
+    ).toEqual(['22', '52']);
+    expect(within(card).getByText('剩余 52%')).toBeTruthy();
   });
 
   it('Grok 产品用量属于周限明细，不重复进度条或重置时间，过期后移除旧百分比', () => {
@@ -826,7 +828,9 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getAllByRole('progressbar')).toHaveLength(1);
     const breakdown = screen.getByTestId('quota-window-breakdown');
     expect(within(breakdown).getByText('其中 Grok Build')).toBeTruthy();
-    expect(within(breakdown).getByText('8%')).toBeTruthy();
+    expect(within(breakdown).getByText('已用 8%')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('92');
+    expect(screen.getByText('剩余 92%')).toBeTruthy();
     expect(screen.getAllByText(/重置$/)).toHaveLength(1);
     mocks.xaiSnapshot = { ...mocks.xaiSnapshot, updatedAt: Date.now() - 31 * 60_000 };
     view.rerender(

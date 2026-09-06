@@ -5871,6 +5871,7 @@
     "weeklyLabel": "周限",
     "modelWeeklyLabel": "{{model}} 周限",
     "usedPercent": "已用 {{percent}}%",
+    "remainingPercent": "剩余 {{percent}}%",
     "resetAt": "{{at}} 重置",
     "noWindows": "暂无配额窗口数据",
     "limitRejected": "已触发套餐限额，请求可能被拒绝",
