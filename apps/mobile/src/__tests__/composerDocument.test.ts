@@ -15,6 +15,8 @@ import {
   pastedTextComposerNode,
   parseStoredComposerDocument,
   reconcileComposerProjectedText,
+  reconcileComposerVoiceDraft,
+  type ComposerDocument,
   removeComposerNode,
   replaceComposerTextRange,
   serializeComposerDocument,
@@ -24,6 +26,53 @@ import {
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
+  it.each([
+    [0, 2, 0, 1, 'voice'],
+    [1, 1, 0, 1, 'avoiceb'],
+    [1, 1, 0, 0, 'avoice|b'],
+    [1, 1, 1, 1, 'a|voiceb'],
+    [0, 1, 0, 0, 'voice|b'],
+    [1, 2, 1, 1, 'a|voice'],
+  ])('replaces structural voice selection [%i, %i] atoms [%i, %i]', (start, end, atomStart, atomEnd, expected) => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: [
+      { type: 'text', text: 'a' }, { type: 'quote', quote: { text: 'quote' } }, { type: 'text', text: 'b' },
+    ] };
+    const result = reconcileComposerVoiceDraft(initialDocument, {
+      draft: 'ab'.slice(0, start) + 'voice' + 'ab'.slice(end), initialDocument,
+      initialSelection: { start, end, atomRange: { start: atomStart, end: atomEnd } }, insertionEnd: start + 5,
+    });
+    expect(result.nodes.map((node) => node.type === 'quote' ? '|' : node.type === 'text' ? node.text : '?').join('')).toBe(expected);
+  });
+
+  it('removes only the selected quote among consecutive zero-width atoms', () => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: ['one', 'two', 'three'].map((text) => ({ type: 'quote', quote: { text } })) };
+    const result = reconcileComposerVoiceDraft(initialDocument, {
+      draft: 'voice', initialDocument, initialSelection: { start: 0, end: 0, atomRange: { start: 1, end: 2 } }, insertionEnd: 5,
+    });
+    expect(result.nodes).toEqual([initialDocument.nodes[0], { type: 'text', text: 'voice' }, initialDocument.nodes[2]]);
+    expect(serializeComposerDocument(result).text).not.toContain('two');
+  });
+
+  it('keeps repeated streaming text on the original side of an unselected quote', () => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: [
+      { type: 'text', text: 'a' }, { type: 'quote', quote: { text: 'quote' } }, { type: 'text', text: 'a' },
+    ] };
+    const update = { draft: 'aa', initialDocument, initialSelection: { start: 0, end: 1, atomRange: { start: 0, end: 0 } }, insertionEnd: 1 };
+    const first = reconcileComposerVoiceDraft(initialDocument, update);
+    const next = reconcileComposerVoiceDraft(first, { ...update, draft: 'aaa', replacement: { start: 0, end: 1, text: 'aa' } });
+    expect(next.nodes).toEqual([{ type: 'text', text: 'aa' }, initialDocument.nodes[1], { type: 'text', text: 'a' }]);
+  });
+
+  it('does not reuse captured atom selection after the document was edited', () => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: [{ type: 'quote', quote: { text: 'keep' } }] };
+    const edited = appendComposerNode(initialDocument, { type: 'text', text: 'typed' });
+    const result = reconcileComposerVoiceDraft(edited, {
+      draft: 'typed\nvoice', initialDocument, initialSelection: { start: 0, end: 0, atomRange: { start: 0, end: 1 } }, insertionEnd: 11,
+    });
+    expect(result.nodes[0]).toEqual(initialDocument.nodes[0]);
+    expect(composerDocumentProjectedText(result)).toBe('typed\nvoice');
+  });
+
   it('resolves compact prefixes through long pasted content and semantic reference projections', () => {
     const document = { version: 1 as const, nodes: [
       { type: 'text' as const, text: '前🙂后' },

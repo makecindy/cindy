@@ -15,6 +15,7 @@ import type {
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileVoiceControllerSession } from '@/session/mobileVoiceController';
 import { mobileVoiceEmptyTranscriptError } from '@/session/mobileVoiceInput';
+import { composerDocumentProjectedText, reconcileComposerVoiceDraft, serializeComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 
 vi.mock('@/session/mobileRealtimeAudio', () => ({
   startMobileRealtimeAudio: vi.fn(),
@@ -147,6 +148,32 @@ function credential(): StoredMobileVoiceCredential {
 }
 
 describe('mobileVoiceController', () => {
+  it.each([false, true])('removes selected quotes even when the first identical transcript arrives at stop (partials=%s)', async (partials) => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: [
+      { type: 'quote', quote: { text: 'selected quote' } }, { type: 'text', text: 'raw final' },
+    ] };
+    const initialSelection = { start: 0, end: 9, atomRange: { start: 0, end: 1 } };
+    let document = initialDocument;
+    const asr = new FakeAsrProvider();
+    const config = credential();
+    config.settings!.refinementEnabled = false;
+    const session = createMobileVoiceControllerSession({
+      credential: config, asr, initialDraft: 'raw final', initialSelection,
+      readCurrentDraft: () => composerDocumentProjectedText(document),
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (draft, selection, replacement) => {
+        document = reconcileComposerVoiceDraft(document, { draft, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
+      },
+    });
+    await session.start();
+    if (partials) {
+      asr.emit({ type: 'partial', text: 'raw draft', at: Date.now() });
+      expect(serializeComposerDocument(document).text).toBe('raw draft');
+    }
+    expect(await session.stop()).toBe('raw final');
+    expect(serializeComposerDocument(document).text).toBe('raw final');
+  });
+
   it.each([
     ['甲乙', 0, 0, '', '甲乙'],
     ['甲乙', 1, 1, '甲', '乙'],

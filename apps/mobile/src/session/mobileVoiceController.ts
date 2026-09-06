@@ -78,7 +78,7 @@ type MobileVoiceControllerOptions = {
   }) => Promise<void>;
   startAudio?: StartRealtimeAudio;
   readCurrentDraft?: () => string;
-  onDraftChanged: (draft: string, selection?: MobileVoiceSelection) => void;
+  onDraftChanged: (draft: string, selection?: MobileVoiceSelection, replacement?: MobileVoiceDraftInsertion) => void;
   onStateChanged?: (state: VoiceInputState) => void;
   onError?: (message: string) => void;
   onReadyForStartCue?: () => void;
@@ -230,12 +230,16 @@ export function createMobileVoiceControllerSession(
 
   const publishDraftNow = (draft: string): void => {
     pendingDraftToPublish = null;
-    if (lastPublishedDraft === draft) return;
+    // The first insertion can change selected atoms even when its text is identical.
+    if (lastPublishedDraft === draft && (!voiceInsertion || publishedVoiceInsertion)) return;
+    const replacement = publishedVoiceInsertion && voiceInsertion
+      ? { ...publishedVoiceInsertion, text: voiceInsertion.text }
+      : undefined;
     lastPublishedDraft = draft;
     publishedVoiceInsertion = voiceInsertion ? { ...voiceInsertion } : null;
     options.onDraftChanged(draft, voiceInsertion
       ? { start: voiceInsertion.end, end: voiceInsertion.end }
-      : undefined);
+      : undefined, replacement);
   };
 
   const publishPendingDraftNow = (): void => {

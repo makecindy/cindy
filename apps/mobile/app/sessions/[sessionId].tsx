@@ -272,12 +272,14 @@ import {
   migrateLegacyComposerDraft,
   normalizeComposerDocument,
   reconcileComposerProjectedText,
+  reconcileComposerVoiceDraft,
   replaceComposerTextRange,
   serializeComposerDocument,
   sessionLinkComposerNode,
   slashCommandTextNode,
   textComposerDocument,
   type ComposerDocument,
+  type ComposerVoiceDraftUpdate,
 } from '@/session/composerDocument';
 import { boundAgentReferenceText } from '@cindy/maker-shared/agent-input-projection';
 import {
@@ -2698,7 +2700,9 @@ export default function SessionScreen() {
     applyComposerDraft(value, queueEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDraft]);
 
-  const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, setComposerDraft);
+  const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) => {
+    applyRichComposerChange(reconcileComposerVoiceDraft(composerDocumentRef.current, update));
+  });
 
   useEffect(() => {
     const tracker = createMobileVoiceDictionaryLearningTracker({
@@ -4771,6 +4775,7 @@ export default function SessionScreen() {
       }
       const startController = async () => {
         const initialDraft = draftRef.current;
+        const initialDocument = composerDocumentRef.current;
         const input = composerInputRef.current;
         const initialSelection = input?.getSelection(initialDraft)
           ?? { start: initialDraft.length, end: initialDraft.length };
@@ -4787,9 +4792,9 @@ export default function SessionScreen() {
           refinementContext: buildMobileVoiceSessionRefinementContext(initialDraft, renderItems, initialSelection),
           localVoiceInputHistory,
           readCurrentDraft: () => draftRef.current,
-          onDraftChanged: (text, selection) => {
+          onDraftChanged: (text, selection, replacement) => {
             if (selection) input?.rememberSelection(text, selection);
-            writeVoiceDraft(text);
+            writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
           },
           onStateChanged: setVoiceState,
           onError: (message) => {
@@ -4997,7 +5002,7 @@ export default function SessionScreen() {
       // chat-text-quote:纯引用(无转写文字、无附件)也要发出去——发送按钮在
       // quote-only 时可见,漏了引用会变成「点发送只停了录音、消息没发」。
       const latestDocument = latestDraft.trim()
-        ? reconcileComposerProjectedText(documentBeforeStop, latestDraft)
+        ? reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)
         : documentBeforeStop;
       // Focus only after dictation ends, with the caret after the inserted text.
       const insertionEnd = composerInputRef.current?.getSelection(latestDraft).end ?? latestDraft.length;

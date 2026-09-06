@@ -11,6 +11,7 @@ import {
   composerSelectionOffset,
   parseStoredComposerDocument,
   type ComposerDocument,
+  type ComposerSelection,
   type ComposerNode,
   type ResolvedSessionLinkSemantic,
 } from '@/session/composerDocument';
@@ -25,7 +26,7 @@ import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from '@/session/pastedImageAttachme
 import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 
 export interface ComposerRichInputHandle {
-  getSelection(draft: string): { start: number; end: number };
+  getSelection(draft: string): ComposerSelection;
   rememberSelection(draft: string, selection: { start: number; end: number }): void;
   applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;
   applyDocumentAndFocusSelection(document: ComposerDocument, offset: number): void;
@@ -94,7 +95,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     const webSignatureRef = useRef('');
     const projectedDraft = useMemo(() => composerDocumentProjectedText(document), [document]);
     const webDocumentRef = useRef({ document, draft: projectedDraft, id: 0 });
-    const selectionRef = useRef<{ draft: string; start: number; end: number } | null>(null);
+    const selectionRef = useRef<(ComposerSelection & { draft: string }) | null>(null);
     const pendingDocumentRef = useRef<{
       document: ComposerDocument;
       focusAfter: boolean;
@@ -155,6 +156,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       inject('window.cindyComposer.focus();');
     }, [inject]);
     const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
+      if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
       const documentId = webDocumentRef.current.id + 1;
       webDocumentRef.current = { document: value, draft: composerDocumentProjectedText(value), id: documentId };
       if (!readyRef.current) {
@@ -180,7 +182,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         getSelection: (draft) => {
           const saved = selectionRef.current;
           return saved?.draft === draft
-            ? { start: saved.start, end: saved.end }
+            ? { start: saved.start, end: saved.end, ...(saved.atomRange ? { atomRange: saved.atomRange } : {}) }
             : { start: draft.length, end: draft.length };
         },
         // Cache the dictated range without focusing the hidden editor (which opens the keyboard).
@@ -373,6 +375,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         const next = parseStoredComposerDocument(message.document);
         if (!next) return;
         const normalized = normalizeComposerDocument(next);
+        if (selectionRef.current?.atomRange) selectionRef.current = null;
         webSignatureRef.current = JSON.stringify(normalized);
         webDocumentRef.current = { document: normalized, draft: composerDocumentProjectedText(normalized), id: webDocumentRef.current.id };
         onChangeDocument(normalized);
@@ -384,7 +387,8 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         const start = composerSelectionOffset(current.document, message.before);
         const end = composerSelectionOffset(current.document, message.through);
         if (start !== null && end !== null && start <= end && end <= current.draft.length) {
-          selectionRef.current = { draft: current.draft, start, end };
+          selectionRef.current = { draft: current.draft, start, end,
+            atomRange: { start: message.before.atomCount, end: message.through.atomCount } };
         }
         return;
       }

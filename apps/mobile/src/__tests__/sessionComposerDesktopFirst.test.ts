@@ -397,7 +397,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerShowSendButton = composerLayout.send.visible || voiceStartPending;');
     expect(source).not.toContain('composerLayout.send.visible && (!voiceIsListening || composerHasPayload)');
     expect(source).toContain('const latestDocument = latestDraft.trim()');
-    expect(source).toContain('reconcileComposerProjectedText(documentBeforeStop, latestDraft)');
+    expect(source).toContain('reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)');
     expect(source).toContain('if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0))');
     expect(source).toContain('const currentTurnStreaming = useMemo(');
     expect(source).toContain('const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)');
@@ -732,12 +732,12 @@ describe('mobile session composer desktop-first surface', () => {
     );
     expect(voiceSource).toContain('voiceStartupInFlightRef.current = false;');
     expect(voiceSource).toContain('if (selection) input?.rememberSelection(text, selection);');
-    expect(voiceSource).toContain('writeVoiceDraft(text);');
+    expect(voiceSource).toContain('writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });');
     expect(source).toContain('draft.slice(0, voiceDraftInsertionEnd)');
     expect(source).toContain('draft.slice(voiceDraftInsertionEnd)');
     expect(source).toContain('caret.measureLayout(block, (x, y) => {');
     expect(source).toContain('viewRef={voiceDraftCaretRef}');
-    expect(source).toContain('useComposerVoiceDraftWriter(sessionId, setComposerDraft)');
+    expect(source).toContain('useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) =>');
     expect(voiceSource).toContain('isMobileRealtimeAudioAvailable()');
     expect(voiceSource.indexOf('isMobileRealtimeAudioAvailable()')).toBeLessThan(
       voiceSource.indexOf('resolveMobileVoiceRecordingPermission({'),

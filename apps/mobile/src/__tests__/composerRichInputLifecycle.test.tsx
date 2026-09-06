@@ -73,11 +73,23 @@ it('restores the latest accepted draft on every ready and accepts only the new d
   send({ type: 'change', documentId: restoredId, document: afterReload });
   send({ type: 'selection', documentId: restoredId, before: { textLength: 3, atomCount: 0 }, through: { textLength: 3, atomCount: 0 } });
   expect(onChangeDocument).toHaveBeenLastCalledWith(afterReload);
-  expect(ref.current?.getSelection('typed after reload')).toEqual({ start: 3, end: 3 });
+  expect(ref.current?.getSelection('typed after reload')).toEqual({ start: 3, end: 3, atomRange: { start: 0, end: 0 } });
   send({ type: 'change', documentId: firstId, document: edited });
   send({ type: 'selection', documentId: firstId, before: { textLength: 0, atomCount: 0 }, through: { textLength: 0, atomCount: 0 } });
   expect(onChangeDocument).toHaveBeenCalledTimes(2);
-  expect(ref.current?.getSelection('typed after reload')).toEqual({ start: 3, end: 3 });
+  expect(ref.current?.getSelection('typed after reload')).toEqual({ start: 3, end: 3, atomRange: { start: 0, end: 0 } });
+});
+
+it('retains structural endpoints when only a zero-width quote is selected', () => {
+  const { ref, page, send } = mount();
+  send({ type: 'ready' });
+  send({ type: 'change', documentId: page.id, document: {
+    version: 1, nodes: [{ type: 'quote', quote: { text: 'selected quote' } }],
+  } });
+  send({ type: 'selection', documentId: page.id, before: { textLength: 0, atomCount: 0 }, through: { textLength: 0, atomCount: 1 } });
+  expect(ref.current?.getSelection('')).toEqual({ start: 0, end: 0, atomRange: { start: 0, end: 1 } });
+  send({ type: 'change', documentId: page.id, document: textComposerDocument('') });
+  expect(ref.current?.getSelection('')).toEqual({ start: 0, end: 0 });
 });
 
 it('keeps pending caret intent on first ready but does not replay it on reload', () => {
