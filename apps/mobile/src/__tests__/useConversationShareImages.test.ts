@@ -269,66 +269,98 @@ describe("share image readiness", () => {
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps text and completed images when another image times out, ignoring its late result", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    let finish!: (value: typeof media) => void;
-    const resolve = vi.fn<ResolveRemoteMediaFn>(async ({ url }) => {
-      if (url === "cindy-media://paste") return media;
-      return new Promise((done) => {
-        finish = done;
+  it.each([false, true])(
+    "keeps later local images across messages when a remote source stalls (reverse=%s)",
+    async (reverse) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      thumbs.entries.set(
+        "cindy-media://remaining",
+        "file:///app/remaining.png",
+      );
+      thumbs.entries.set("cindy-media://next", "file:///app/next.png");
+      let finish!: (value: typeof media) => void;
+      const resolve = vi.fn<ResolveRemoteMediaFn>(async ({ url }) => {
+        if (url === "cindy-media://paste") return media;
+        return new Promise((done) => {
+          finish = done;
+        });
       });
-    });
-    await act(async () =>
-      root.render(
-        createElement(Probe, {
-          messages: [
-            {
-              ...source,
-              body: "keep this text",
-              attachments: [
-                ...source.attachments!,
-                {
-                  kind: "image",
-                  name: "slow image",
-                  uri: "cindy-media://slow",
-                },
-                {
-                  kind: "image",
-                  name: "remaining image",
-                  uri: "cindy-media://remaining",
-                },
-              ],
-            },
-            {
-              clientId: "next",
-              kind: "assistant",
-              body: "keep the next message",
-            },
-          ],
-          resolve,
-        }),
-      ),
-    );
-    await startShare();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
-    });
-    const result = await ready;
-    expect(result.map((message) => message.body)).toEqual([
-      "keep this text",
-      "keep the next message",
-    ]);
-    expect(result[0]?.images?.size).toBe(1);
-    expect(result[0]?.images?.get("cindy-media://paste")?.uri).toBe(media.url);
-    expect(result[0]?.attachments?.[1]?.name).toBe("slow image");
-    expect(resolve).toHaveBeenCalledTimes(2);
-    await act(async () =>
-      finish({ ...media, url: "https://example.com/late.png" }),
-    );
-    expect(current.messages).toBe(result);
-    expect(result[0]?.images?.size).toBe(1);
-    expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
-  });
+      await act(async () =>
+        root.render(
+          createElement(Probe, {
+            messages: [
+              {
+                ...source,
+                body: "keep this text",
+                attachments: (reverse
+                  ? [
+                      {
+                        kind: "image",
+                        name: "slow image",
+                        uri: "cindy-media://slow",
+                      },
+                      {
+                        kind: "image",
+                        name: "remaining image",
+                        uri: "cindy-media://remaining",
+                      },
+                      ...source.attachments!,
+                    ]
+                  : [
+                      ...source.attachments!,
+                      {
+                        kind: "image" as const,
+                        name: "slow image",
+                        uri: "cindy-media://slow",
+                      },
+                      {
+                        kind: "image" as const,
+                        name: "remaining image",
+                        uri: "cindy-media://remaining",
+                      },
+                    ]) as ConversationShareMessage["attachments"],
+              },
+              {
+                clientId: "next",
+                kind: "assistant",
+                body: "keep the next message",
+                attachments: [
+                  { kind: "image", name: "next", uri: "cindy-media://next" },
+                ],
+              },
+            ],
+            resolve,
+          }),
+        ),
+      );
+      await startShare();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      const result = await ready;
+      expect(result.map((message) => message.body)).toEqual([
+        "keep this text",
+        "keep the next message",
+      ]);
+      expect(result[0]?.images?.size).toBe(2);
+      expect(result[1]?.images?.size).toBe(1);
+      expect(result[0]?.images?.get("cindy-media://paste")?.uri).toBe(
+        media.url,
+      );
+      expect(
+        result[0]?.attachments?.find(
+          (attachment) => attachment.uri === "cindy-media://slow",
+        )?.name,
+      ).toBe("slow image");
+      expect(resolve).toHaveBeenCalledTimes(2);
+      await act(async () =>
+        finish({ ...media, url: "https://example.com/late.png" }),
+      );
+      expect(current.messages).toBe(result);
+      expect(result[0]?.images?.size).toBe(2);
+      expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
+    },
+  );
 
   it("survives StrictMode and unrelated rerenders while a remote image loads", async () => {
     let finish!: (value: typeof media) => void;

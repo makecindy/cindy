@@ -17,6 +17,7 @@ export interface ConversationShareImageContext {
 // occurrence before either HTML or SVG can mount it (RGBA: 16 / 32 MB).
 const MAX_IMAGE_PIXELS = 4_000_000;
 const MAX_EXPORT_IMAGE_PIXELS = 8_000_000;
+const IMAGE_PREPARATION_CONCURRENCY = 3;
 
 /** Prepare selected, visible content only; source URLs never enter the export document. */
 export async function prepareConversationShareImages(
@@ -26,8 +27,16 @@ export async function prepareConversationShareImages(
   isActive: () => boolean = () => true,
 ): Promise<ConversationShareMessage[]> {
   const result: ConversationShareMessage[] = [];
-  // Per-export byte reuse. Native renderers mount only the budgeted result.
-  const loaded = new Map<string, ConversationShareImage | null>();
+  // Group references before starting IO so a stalled source cannot prevent
+  // independent sources in later messages from reaching a free worker.
+  const requests = new Map<
+    string,
+    Array<{
+      source: string;
+      occurrences: number;
+      images: Map<string, ConversationShareImage>;
+    }>
+  >();
   let remainingCharacters = 32 * 1024 * 1024;
   let remainingPixels = MAX_EXPORT_IMAGE_PIXELS;
   for (const message of messages) {
@@ -64,19 +73,25 @@ export async function prepareConversationShareImages(
     }
     const images = new Map<string, ConversationShareImage>();
     for (const [source, { url, occurrences }] of sources) {
-      if (!isActive()) return [];
-      let image = loaded.get(url);
-      if (!loaded.has(url)) {
-        const candidate =
-          remainingCharacters > 0 && remainingPixels > 0
-            ? await load(url).catch(() => null)
-            : null;
-        image =
-          candidate && candidate.uri.length <= remainingCharacters
-            ? candidate
-            : null;
-        if (!image) loaded.set(url, null);
+      const references = requests.get(url) ?? [];
+      references.push({ source, occurrences, images });
+      requests.set(url, references);
+    }
+    result.push({ ...message, images });
+  }
+  const pending = requests.entries();
+  const worker = async () => {
+    while (isActive() && remainingCharacters > 0 && remainingPixels > 0) {
+      const next = pending.next();
+      if (next.done) return;
+      const [url, references] = next.value;
+      let image: ConversationShareImage | null;
+      try {
+        image = await load(url);
+      } catch {
+        continue;
       }
+      if (!isActive()) return;
       const pixels = image
         ? Math.ceil(image.width) * Math.ceil(image.height)
         : 0;
@@ -87,19 +102,29 @@ export async function prepareConversationShareImages(
         Number.isFinite(image.height) &&
         image.width > 0 &&
         image.height > 0 &&
-        pixels <= MAX_IMAGE_PIXELS &&
-        pixels * occurrences <= remainingPixels &&
-        image.uri.length * occurrences <= remainingCharacters
+        pixels <= MAX_IMAGE_PIXELS
       ) {
-        // Retain bytes only once they fit an output occurrence budget.
-        loaded.set(url, image);
-        images.set(source, image);
-        // Byte reuse saves reads, but each rendered occurrence embeds a URI.
-        remainingCharacters -= image.uri.length * occurrences;
-        remainingPixels -= pixels * occurrences;
+        // Admission is synchronous: completed sources share one budget owner.
+        // No unbounded completed-image buffer; rejected candidates are released.
+        // Readiness decides admission, while render order stays in the messages.
+        for (const { source, occurrences, images } of references) {
+          if (
+            pixels * occurrences <= remainingPixels &&
+            image.uri.length * occurrences <= remainingCharacters
+          ) {
+            images.set(source, image);
+            remainingCharacters -= image.uri.length * occurrences;
+            remainingPixels -= pixels * occurrences;
+          }
+        }
       }
     }
-    result.push({ ...message, images });
-  }
-  return result;
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(IMAGE_PREPARATION_CONCURRENCY, requests.size) },
+      worker,
+    ),
+  );
+  return isActive() ? result : [];
 }

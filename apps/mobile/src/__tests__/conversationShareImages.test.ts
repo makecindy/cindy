@@ -12,6 +12,90 @@ const image = {
 };
 
 describe("conversation share images", () => {
+  it("lets free workers advance across messages while the first source is stalled", async () => {
+    const finishes = new Map<string, (value: typeof image | null) => void>();
+    let active = 0;
+    let peak = 0;
+    const load = vi.fn((url: string) => {
+      peak = Math.max(peak, ++active);
+      return new Promise<typeof image | null>((resolve) =>
+        finishes.set(url, resolve),
+      ).finally(() => {
+        active--;
+      });
+    });
+    const messages = Array.from({ length: 6 }, (_, i) => ({
+      clientId: String(i),
+      kind: "user" as const,
+      body: "",
+      attachments: [
+        { kind: "image" as const, name: String(i), uri: `cindy-media://${i}` },
+      ],
+    }));
+    const pending = prepareConversationShareImages(messages, load);
+    expect(load).toHaveBeenCalledTimes(3);
+    for (let i = 1; i < 6; i++) {
+      await vi.waitFor(() =>
+        expect(finishes.has(`cindy-media://${i}`)).toBe(true),
+      );
+      finishes.get(`cindy-media://${i}`)!(image);
+    }
+    finishes.get("cindy-media://0")!(null);
+    const result = await pending;
+    expect(peak).toBe(3);
+    expect(load).toHaveBeenCalledTimes(6);
+    expect(result.map((m) => m.clientId)).toEqual(
+      messages.map((m) => m.clientId),
+    );
+    expect(result.map((m) => m.images!.size)).toEqual([0, 1, 1, 1, 1, 1]);
+  });
+
+  it("admits ready sources within both occurrence budgets and discards cancelled late loads", async () => {
+    for (const cancel of [false, true]) {
+      let active = true;
+      const finishes = new Map<string, (value: typeof image) => void>();
+      const load = vi.fn(
+        (url: string) =>
+          new Promise<typeof image>((done) => finishes.set(url, done)),
+      );
+      const urls = ["first", "second", "third", "queued"];
+      const pending = prepareConversationShareImages(
+        [
+          {
+            clientId: "m",
+            kind: "user",
+            body: "",
+            attachments: urls.flatMap((url) =>
+              Array.from({ length: 2 }, () => ({
+                kind: "image" as const,
+                name: url,
+                uri: url,
+              })),
+            ),
+          },
+        ],
+        load,
+        {},
+        () => active,
+      );
+      expect(load).toHaveBeenCalledTimes(3);
+      if (cancel) active = false;
+      const large = {
+        ...image,
+        width: 2000,
+        height: 2000,
+        uri: "data:image/png;base64," + "A".repeat(10 * 1024 * 1024),
+      };
+      finishes.get("second")!(large);
+      finishes.get("third")!(large);
+      finishes.get("first")!(large);
+      const result = await pending;
+      expect(load).toHaveBeenCalledTimes(3);
+      if (cancel) expect(result).toEqual([]);
+      else expect([...result[0]!.images!.keys()]).toEqual(["second"]);
+    }
+  });
+
   it("rejects compressed images above the single-image pixel limit without spending the batch budget", async () => {
     const load = vi.fn(async (url: string) => ({
       ...image,
@@ -40,9 +124,6 @@ describe("conversation share images", () => {
     ]);
     expect(messages[0]!.body).toBe("keep text");
     expect(messages[0]!.attachments).toHaveLength(4);
-    expect(load.mock.calls.map(([url]) => url)).not.toContain(
-      "cindy-media://three",
-    );
   });
 
   it("charges decoded pixels for repeated sources across attachments, structured/secondary text and messages", async () => {
@@ -114,7 +195,7 @@ describe("conversation share images", () => {
     );
     expect(tooMany[0]?.images?.size).toBe(0);
     expect(tooMany[1]?.images?.get(source)).toBe(largeImage);
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it.each([lightColors, darkColors])(
@@ -170,9 +251,9 @@ describe("conversation share images", () => {
   );
 
   it("reuses attachment bytes, skips code and hidden chip contents, and preserves failures", async () => {
-    const load = vi.fn(async (url: string) => {
+    const load = vi.fn((url: string) => {
       if (url.includes("missing")) throw new Error("offline");
-      return image;
+      return Promise.resolve(image);
     });
     const messages = await prepareConversationShareImages(
       [
