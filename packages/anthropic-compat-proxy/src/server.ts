@@ -1448,33 +1448,6 @@ function forward(
     };
     failActiveResponse = (err) => failStreamingResponse('error', err);
 
-    let responseBodyTransform: Transform | null = null;
-    if (transformResponse && status >= 200 && status < 300) {
-      try {
-        responseBodyTransform = transformResponse({
-          reqId,
-          method,
-          url: path,
-          upstreamBase: formatUpstreamBase(actualTarget),
-          status,
-          requestHeaders: headers,
-          outboundHeaders: actualHeaders,
-          responseHeaders: flattenResponseHeaders(upstreamRes.headers),
-          requestBody: body,
-        }) ?? null;
-      } catch (err) {
-        const responseError = err instanceof Error ? err : new Error(String(err));
-        observerError(responseError);
-        upstreamRes.resume();
-        finishClientAfterUpstreamFailure(
-          responseError,
-          `upstream response cannot be adapted safely: ${String(err)}`,
-          'response_transform_unavailable',
-        );
-        return;
-      }
-    }
-
     // kimi 撞车 id 的响应流改名(仅当请求历史带铸造形态 id 且响应是 SSE 才接管;
     // 否则保持字节级 pipe,与扩展前一致)。observer 仍吃上游原始字节(计数/错误体
     // 收集语义不变),CLI 客户端拿到的是改名后的流。
@@ -1535,10 +1508,6 @@ function forward(
       toolUseIdRewrite = new ToolUseIdRewriteTransform(rewriter);
       toolUseIdRewrite.on('error', (err) => failStreamingResponse('error', err));
     }
-    if (responseBodyTransform) {
-      delete respHeaders['content-length'];
-      responseBodyTransform.on('error', (err) => failStreamingResponse('error', err));
-    }
 
     // ── 流式请求的成功响应有效性门(#2242)──────────────────────────────
     // 请求显式声明 stream:true 时,2xx 响应不再「先 writeHead 再 pipe」:上游或
@@ -1561,7 +1530,40 @@ function forward(
     let pendingBytes = 0;
     let pendingText = '';
     const commitStreamResponse = (): void => {
-      if (streamGateCommitted) return;
+      if (streamGateCommitted || upstreamFailureHandled || clientAborted || clientRes.destroyed) return;
+      // Resolve the final MIME before constructing an adapter, and construct it
+      // before committing 200. Invalid or cancelled streams never reach adapters.
+      let responseBodyTransform: Transform | null = null;
+      if (transformResponse && status >= 200 && status < 300) {
+        try {
+          responseBodyTransform = transformResponse({
+            reqId,
+            method,
+            url: path,
+            upstreamBase: formatUpstreamBase(actualTarget),
+            status,
+            requestHeaders: headers,
+            outboundHeaders: actualHeaders,
+            responseHeaders: flattenResponseHeaders(respHeaders),
+            requestBody: body,
+          }) ?? null;
+        } catch (err) {
+          upstreamResponseTerminal = 'error';
+          const responseError = err instanceof Error ? err : new Error(String(err));
+          observerError(responseError);
+          upstreamRes.resume();
+          finishClientAfterUpstreamFailure(
+            responseError,
+            `upstream response cannot be adapted safely: ${String(err)}`,
+            'response_transform_unavailable',
+          );
+          return;
+        }
+      }
+      if (responseBodyTransform) {
+        delete respHeaders['content-length'];
+        responseBodyTransform.on('error', (err) => failStreamingResponse('error', err));
+      }
       streamGateCommitted = true;
       clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
       const responseTransforms = [responseBodyTransform, toolUseIdRewrite]
@@ -1588,7 +1590,10 @@ function forward(
         upstreamRes.pipe(clientRes);
       }
     };
-    if (!gateStreamValidity) commitStreamResponse();
+    if (!gateStreamValidity) {
+      commitStreamResponse();
+      if (upstreamFailureHandled) return;
+    }
 
     /** 未提交状态下把无效流转成结构化 502(观察器按上游真实终态另行收口)。 */
     const rejectInvalidStreamResponse = (code: string, detail: Record<string, unknown>): void => {

@@ -180,6 +180,55 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(JSON.parse(requestBody)).toEqual({ model: 'test-model', routed: true });
   });
 
+  it.each([false, true])('creates the stream adapter with verified MIME (upstream header: %s)', async (withMime) => {
+    const sse = 'data: {"type":"response.created"}\n\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, {
+        ...(withMime ? { 'content-type': 'text/event-stream' } : {}),
+        'content-length': Buffer.byteLength(sse),
+      });
+      res.write(sse.slice(0, 3));
+      setImmediate(() => res.end(sse.slice(3)));
+    });
+    upstreamClose = upstream.close;
+    const transformResponse = vi.fn((ctx) => {
+      if (ctx.responseHeaders['content-type'] !== 'text/event-stream') {
+        throw new Error(`unsupported content type '${ctx.responseHeaders['content-type'] ?? ''}'`);
+      }
+      return new Transform({
+        transform(chunk, _encoding, callback) {
+          callback(null, chunk);
+        },
+        flush(callback) {
+          callback(null, ': adapted\n\n');
+        },
+      });
+    });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformResponse });
+    const response = await fetch(`${proxy.url}/responses`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(response.headers.get('content-length')).toBeNull();
+    expect(await response.text()).toBe(`${sse}: adapted\n\n`);
+    expect(transformResponse).toHaveBeenCalledOnce();
+  });
+
+  it('returns 502 before committing inferred SSE if adapter construction fails', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200).end('data: {"type":"response.created"}\n\n');
+    });
+    upstreamClose = upstream.close;
+    const transformResponse = vi.fn(() => { throw new Error('adapter unavailable'); });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformResponse });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('response_transform_unavailable');
+    expect(transformResponse).toHaveBeenCalledOnce();
+  });
+
   it('can preserve an image request body without changing normal response transforms', async () => {
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -4098,10 +4147,12 @@ describe('streaming response validity gate (#2242)', () => {
       res.end(body);
     });
     upstreamClose = upstream.close;
-    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+    const transformResponse = vi.fn(() => { throw new Error('must not adapt invalid streams'); });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformResponse });
     const result = await post(proxy.url, { model: 'test-model', stream: true });
     expect(result.status).toBe(502);
     expect(JSON.parse(result.text).error.code).toBe('non_sse_stream_response');
+    expect(transformResponse).not.toHaveBeenCalled();
   });
 
   it.each(['\n', '\r\n'])('infers a complete data event across chunk boundaries (%j)', async (newline) => {
