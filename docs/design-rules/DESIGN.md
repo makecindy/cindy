@@ -16,9 +16,9 @@ What makes this system distinctive is the combination of a single geometric sans
 
 - Near-monochrome default theme; chromatic color only via the sanctioned semantic set (§2), always consumed through tokens (§10)
 - Inter as the single sans family, carrying both display headlines and body text
-- Tight border-radius system: 8px (inner controls) / 12px (containers) / 9999px (pill) — three values, nothing else
+- Tight border-radius system: 4px (keyboard keycaps) / 8px (inner controls) / 12px (containers) / 9999px (pill)
 - Zero shadows in the base language — depth comes from background color shifts and 1px borders (narrow token-gated exceptions live in §10)
-- Pill-shaped geometry on all interactive elements (buttons, tabs, single-line inputs, tags) — the only exemption is registered bare text buttons (§5); textareas use the 8px inner-control radius (§5)
+- Pill-shaped geometry on interactive elements (buttons, tabs, single-line inputs, tags); visible keyboard shortcut frames use the registered 4px keycap exception (§5), and textareas use the 8px inner-control radius (§5)
 - No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
 - Extreme content restraint — each surface presents one clear idea
 
@@ -349,7 +349,7 @@ _No 6px / 10px, and no arbitrary radii. **4px is reserved for keyboard keycaps**
 ### Do
 
 - Use Surface (`#f8f8f6` Light / `#1f1f1e` Dark) as the page background — every page starts here
-- Use pill-shaped (9999px) radius on all interactive elements — buttons, tabs, single-line inputs, tags (registered bare text buttons are the only exemption — §5)
+- Use pill-shaped (9999px) radius on interactive elements — buttons, tabs, single-line inputs, tags. Visible keyboard shortcut frames use the registered 4px keycap exception (§5).
 - Use 12px radius on all non-interactive containers — code blocks, cards, panels
 - Use 8px radius for multi-line inputs (textarea, always) and non-button inner controls — dropdown/menu row highlights, in-block cells (see §5)
 - Keep the palette strictly grayscale — chromatic color only via the sanctioned semantic set in §2, always through tokens
@@ -362,7 +362,7 @@ _No 6px / 10px, and no arbitrary radii. **4px is reserved for keyboard keycaps**
 ### Don't
 
 - Don't introduce any chromatic color outside the sanctioned semantic set in §2 — no brand blue, no accent green, no warm tones beyond the registered exceptions
-- Don't invent arbitrary radii — only three values exist: 8px (inner controls), 12px (containers), 9999px (pill). Nothing in between, nothing else.
+- Don't invent arbitrary radii — use the registered values: 4px (keyboard keycaps), 8px (inner controls), 12px (containers), 9999px (pill).
 - Don't add shadows to any element — the flat aesthetic is intentional
 - Don't use font weights above 600 in UI chrome — 700 only inside the exemption domains registered in the §3 registry (that table is the single source of truth; it currently covers markdown content, hljs theme ports, login / Splash brand canvas, third-party viewers under `vendor/`, and imperative third-party APIs). Don't re-enumerate the domains here — read §3. No 800+, no in-between values, anywhere
 - Don't add decorative illustrations — Cindy's working UI carries no mascots or artwork; brand imagery appears only on the explicitly enumerated sanctioned brand surfaces in §15.7 / §16
@@ -412,7 +412,7 @@ Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait
 
 1. Focus on ONE component at a time
 2. Keep all values grayscale — "Stone (#737373)" not "use a light color"
-3. Always specify radius from the three tiers — pill (9999px) / container (12px) / inner control (8px — textareas always, dropdown rows & non-button inner cells). Nothing else.
+3. Always specify radius from the defined tiers — pill (9999px) / container (12px) / inner control (8px — textareas always, dropdown rows & non-button inner cells) / keyboard keycap (4px). Nothing else.
 4. Shadows are always zero — never add them
 5. Weight is 400/500 for everyday chrome, 600 for rationed emphasis — 700 never appears in new UI (registered exemption domains in §3 only)
 6. If something feels too decorated, remove it — less is always more
