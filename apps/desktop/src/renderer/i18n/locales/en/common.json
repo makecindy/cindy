@@ -6962,53 +6962,105 @@
     "homeSuggestions": {
       "shuffle": "Show more",
       "dismiss": "Don't show again",
-      "downloadsDesktop": {
-        "label": "See what's piled up in Downloads and on the Desktop",
-        "prompt": "Look at my Downloads folder and Desktop. List what has piled up: the largest items, obvious duplicates, things untouched for six months or more, and anything safe to archive. For each item, say where it is, how big it is, and why you suggest dealing with it. This round is read-only; wait for me before moving or deleting anything."
-      },
-      "whatCindyCanDo": {
-        "label": "Look at this computer and tell me what you can help with",
-        "prompt": "Look at what is installed on this computer and the kinds of things I seem to work on. Then tell me the specific ways you can help, each in one sentence: when I would use it and what it would save me. Do not recite a feature list; ground it in what actually exists on this machine."
-      },
-      "recentDocs": {
-        "label": "Review my recent documents and make a list",
-        "prompt": "Look at documents I have opened or edited recently. Group them by topic, tell me how many piles of work I have, how far each has gotten, and whether anything looks abandoned. Give me a list with each file's location. Read-only; do not change my files."
-      },
-      "listCodeProjects": {
-        "label": "List the code projects on this computer",
-        "prompt": "Find code projects in the directories I commonly use. For each one, one sentence on what it is, what it is written in, and when it last changed. Then say which look like the main line of work and which look abandoned. If you find none, say so. This round is read-only; do not change any files."
-      },
       "storageUsage": {
-        "label": "Show what's using up disk space",
-        "prompt": "Survey disk use on this computer. List directories and files from largest to smallest, and say which are caches, duplicates, or old things I probably forgot. Give a ranking plus one conclusion: which categories would free the most space. Count only; do not delete anything."
-      },
-      "unusedApps": {
-        "label": "List apps I installed but barely use",
-        "prompt": "Look at apps installed on this computer. Rank them by disk use and last-opened time, and point out which have not been opened in a long time but still take a lot of space. Give me a list; do not uninstall anything yet."
-      },
-      "uncommittedChanges": {
-        "label": "Find my latest project and check uncommitted work",
-        "prompt": "Find the code project I touched most recently. Review uncommitted changes, say what they are doing, and flag anything that looks wrong or missing. Read-only; do not change files or commit."
-      },
-      "devEnvironment": {
-        "label": "Check my development environment",
-        "prompt": "Check this machine's development environment: language runtimes and package managers, their versions, obvious conflicts or stale versions, and git config problems. Give a snapshot plus one conclusion: what to fix first. Inspect only; do not install or change config."
+        "label": "Clean up my computer",
+        "prompt": "Help me find things worth cleaning up on my computer and how much space I could free. Let me confirm before cleaning anything up."
       },
       "whySlow": {
-        "label": "Find out why this computer is slow",
-        "prompt": "Find out why this computer feels slow: load, memory, disk, uptime, and the processes using the most CPU or memory. Give a short conclusion with evidence. Read-only; do not change anything, kill processes, or ask what I have open."
+        "label": "Find out why my computer is slow",
+        "prompt": "Help me find out why my computer is slow and suggest ways to improve it."
+      },
+      "downloadsDesktop": {
+        "label": "Organize my Downloads and Desktop",
+        "prompt": "Help me organize my Downloads folder and desktop so things are easy to find. Show me the plan first."
       },
       "diagnoseNetwork": {
         "label": "Diagnose my network speed",
-        "prompt": "Diagnose this computer's network: ping, DNS, and whether it is wired or Wi-Fi. Give a one- or two-sentence conclusion. Do not run a long speed test or ask about my ISP."
+        "prompt": "Help me find out why my internet is slow and suggest how to fix it."
       },
-      "subscriptionSpend": {
-        "label": "Tally my subscription spending",
-        "prompt": "Scan Downloads, receipts, and local invoices for subscription charges. List service names and amounts. If you find nothing, say so. Do not change subscriptions, ask for a bank card, or sign in to email."
+      "unusedApps": {
+        "label": "Find apps I rarely use that still take up space",
+        "prompt": "Help me find apps that may have gone unused for a long time and take up space. Let me confirm before uninstalling anything."
+      },
+      "stockDigest": {
+        "label": "Send me a daily stock briefing",
+        "prompt": "Set up a daily stock briefing for me. We can start with 2400.HK (XD Inc.); ask which other stocks interest me and when I'd like to receive it."
+      },
+      "morningBrief": {
+        "label": "Create my daily morning briefing",
+        "prompt": "Set up a daily morning briefing for me. Work with me to choose the topics and delivery time."
+      },
+      "watchWebpage": {
+        "label": "Keep an eye on a webpage for me",
+        "prompt": "Watch a webpage for me and let me know when something I care about changes. Work with me to choose the URL, what to watch for, and how often to check."
       },
       "expenseTracker": {
         "label": "Make a simple expense tracker",
-        "prompt": "In this conversation's workspace, make a local expense tracker I can open: date, amount, category, notes. No backend, and do not ask which extra features I want."
+        "prompt": "Help me build a personal expense tracker. We can talk through the features and how I'll use it, then let me try it out."
+      },
+      "kidsGame": {
+        "label": "I want to make a game",
+        "prompt": "I want to make a game. Help me develop my idea or suggest some fun concepts, then let's choose a direction and build it together."
+      },
+      "habitTracker": {
+        "label": "Make a habit tracker",
+        "prompt": "Build a habit-tracking page that fits what I want to keep doing, and let me try it out."
+      },
+      "recentDocs": {
+        "label": "Summarize these materials in one page",
+        "prompt": "Turn the materials I provide into a one-page summary so I can quickly grasp the key points."
+      },
+      "subscriptionSpend": {
+        "label": "Tally my subscription spending",
+        "prompt": "Help me review my subscription spending and find subscriptions worth canceling or changing. Give me suggestions first."
+      },
+      "organizeFolder": {
+        "label": "Sort and organize this folder",
+        "prompt": "Help me organize a folder so files are easier to find. Let's agree on the folder and plan first. Don't delete any files."
+      },
+      "photoTimeline": {
+        "label": "Organize my photos into a timeline",
+        "prompt": "Help me organize my photos into a clear timeline, keeping the originals."
+      },
+      "photoAlbumPage": {
+        "label": "Turn these photos into an album webpage",
+        "prompt": "Build a beautiful, easy-to-browse album website with my photos. Open it for me when it's ready, and keep the original photos."
+      },
+      "uncommittedChanges": {
+        "label": "Review my uncommitted changes",
+        "prompt": "Review the uncommitted changes in my project for problems and omissions. Give me suggestions without modifying files."
+      },
+      "exploreRepo": {
+        "label": "Show me around this project",
+        "prompt": "Show me around this project: what it does, how to run it, and which parts are worth exploring further."
+      },
+      "initAgentDoc": {
+        "label": "Generate an AGENTS.md",
+        "prompt": "Help me create a suitable AGENTS.md for my project. If guidance files already exist, suggest additions without overwriting them."
+      },
+      "listCodeProjects": {
+        "label": "List my code projects and explain what each does",
+        "prompt": "Help me take stock of the code projects on my computer and explain what each one does."
+      },
+      "devEnvironment": {
+        "label": "Check my development environment for problems",
+        "prompt": "Check my development environment for things worth fixing or improving. Give me suggestions first."
+      },
+      "makePlugin": {
+        "label": "Make a plugin for Cindy",
+        "prompt": "I want to make a Cindy plugin. Help me develop my requirements or suggest useful, fun ideas, then build it once we've chosen a direction."
+      },
+      "sendFeedback": {
+        "label": "Send feedback to Cindy's developers",
+        "prompt": "Help me turn my thoughts about Cindy into clear feedback. Let me review it before submitting."
+      },
+      "readOwnSource": {
+        "label": "Explore Cindy's own source code",
+        "prompt": "Show me Cindy's source code (github.com/makecindy/cindy), explain how you're built, and explore some interesting parts with me."
+      },
+      "whatCindyCanDo": {
+        "label": "Find a few things you can help me with",
+        "prompt": "Based on my recent tasks and your current capabilities, suggest concrete things you could do to save me effort. Let me choose one to start."
       }
     },
     "noProvider": {
@@ -7612,6 +7664,27 @@
       "offlineHint": "Offline — available once connected",
       "attachmentsDropped": "Removed {{count}} attachment(s) — they live on the previous device",
       "attachmentsRemoteUnsupported": "File attachments aren't supported on a remote device — skipped {{count}} (images are fine)"
+    },
+    "pluginSuggestions": {
+      "changed": "This suggestion has changed. Shuffle the suggestions and choose again.",
+      "unavailable": "This plugin is currently unavailable. Check it on the Plugins page.",
+      "pending": "After you install or enable the plugin, “{{task}}” will continue.",
+      "cancel": "Cancel continuation",
+      "usePlugin": "Use the {{name}} plugin ({{id}}) to complete this task. First query ghost_info for its current tools, then call ghost_call as needed. If an account connection is required, use the plugin’s existing connection flow.",
+      "mail": {
+        "today": {
+          "label": "Organize today’s emails that need my attention",
+          "prompt": "Help me find today's emails that need my attention and turn them into a to-do list. Leave the emails unchanged for now."
+        },
+        "unanswered": {
+          "label": "Find important emails I haven’t answered",
+          "prompt": "Help me find unanswered emails worth my attention and see which ones need a follow-up."
+        },
+        "reply": {
+          "label": "Draft a reply to this email",
+          "prompt": "Draft a reply to this email, taking the conversation and my thoughts into account. Don't send it yet."
+        }
+      }
     }
   },
   "onboarding": {
@@ -7646,19 +7719,6 @@
       },
       "detectedLabel": "Detected",
       "oauthSub": "Opens a verification page in your browser — connects automatically"
-    },
-    "inheritedSubscription": {
-      "title": "Using the {{products}} sign-in already on this computer",
-      "desc": "Cindy picked up the account you're already signed in to locally — no separate authorization was needed. Switch or disconnect it under model providers.",
-      "openProviders": "Open Model Providers",
-      "acknowledge": "Got it",
-      "separator": ", "
-    },
-    "promotionalGrant": {
-      "title": "Cindy AI is ready",
-      "desc": "A promotional balance of {{amount}} has been added and is valid until {{date}}. You can add funds any time after it runs out or expires.",
-      "openBilling": "View usage",
-      "acknowledge": "Got it"
     }
   },
   "voiceInputOverlay": {
@@ -7969,9 +8029,7 @@
       "dismissTitle": "Dismiss this interruption notice"
     },
     "unreadFailedScheduleBanner": {
-      "text": "This scheduled run did not finish.",
-      "markAsRead": "Mark as read",
-      "markAsReadTitle": "Clear this failed unread state"
+      "text": "Some scheduled runs did not finish. Check the run history."
     },
     "worktreeRestoreBanner": {
       "text": "This session's worktree has been cleaned up (directory missing).",

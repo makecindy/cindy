@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('cindy', {
     return () => listeners.delete(cb);
   },
   send: (payload: unknown): Promise<unknown> => ipcRenderer.invoke('ghost-pipe:send', payload),
+  recommendations: (items: unknown[]): Promise<unknown> =>
+    ipcRenderer.invoke('ghost-pipe:send', { type: 'recommendations-update', items }),
   request: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>

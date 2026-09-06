@@ -12,6 +12,19 @@
 
 ## 2026-09
 
+- **09-06** **首页撤掉订阅与赠送余额告知大卡（拍板人 = 用户）**——用户重申：
+  「我要求撤掉的……重新发个 pr，按我要求调整。」
+  [首页改版最初提交](https://github.com/makecindy/cindy/commit/c1b88f8824a342d9976c042aaea446c77d3194a5)
+  已撤掉两张卡，但[后续评审](https://github.com/makecindy/cindy/pull/3835#pullrequestreview-5103638527)
+  根据旧注释把移除判成 P1，随后恢复生产挂载并反向修改测试。
+  本次明确取代旧的「有模型仍须告知一次」要求：删除「已沿用本机订阅」与
+  「已为你开通 Cindy AI / 赠送余额到账」两张首页卡及其专用实现，
+  不迁成另一处自动告知。余额、有效期与订阅详情继续在既有设置入口查看，
+  不改变实际订阅继承、赠送发放或计费行为。
+  逐项核对原 PR 后续提交：失败建议 prompt 清理、日语错字、任务/工作目录措辞、
+  规范圆角和字号修正保留；建议数量、轮换、整块关闭与零模型登录流程未被另改方向。
+  现行落点：`DESIGN.md §1.1`、`NewMakerDraftRoute.tsx`。
+
 - **09-03** **DS-4 Button / Input 规格缺口六项裁决（拍板人 = 用户/设计师）**——
   背景：`DESIGN.md §4` 按钮 `height ⚠ not yet specified`，hover / pressed / 字号字重 /
   secondary token 归属 / SettingsTextInput ivory 底均未写死。本张把既有

@@ -89,6 +89,13 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(restoreHelper).toBeGreaterThan(-1);
     expect(saveDraft).toBeGreaterThan(failedCard);
     expect(restoreText).toBeGreaterThan(restoreHelper);
+    const draftSnapshot = source.indexOf('const preNavDraft = getComposerDraft(');
+    expect(draftSnapshot).toBeGreaterThan(-1);
+    expect(draftSnapshot).toBeLessThan(restoreHelper);
+    expect(source.slice(draftSnapshot, restoreHelper)).toContain(
+      'const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;',
+    );
+    expect(source.slice(restoreHelper, restoreText)).toContain('text: preNavDraftDoc ??');
     expect(source.slice(restoreHelper, restoreHelper + 500)).toContain(
       'browserComments: rehomedComments',
     );
