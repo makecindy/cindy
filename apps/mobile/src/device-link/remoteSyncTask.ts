@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { withTransientRemoteRetry } from './remoteRetry';
 
 export interface RemoteSyncRunner {
   run(): Promise<void>;
@@ -103,6 +104,32 @@ export interface RemoteSyncRun {
   replaceMessages: boolean;
   /** 请求发起后 sync identity / 权威替换发生变化时,旧结果不得再提交。 */
   isStale(): boolean;
+  signal: AbortSignal;
+  /** A successful snapshot may cover a notification queued while it was starting. */
+  satisfy(reason: string): void;
+}
+
+/** Cancels the local wait; late transport replies remain fenced by isStale/authority. */
+export function waitForRemoteSync<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error('Remote sync superseded'));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new Error('Remote sync superseded'));
+    signal.addEventListener('abort', abort, { once: true });
+    try {
+      operation().then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    } catch (error) {
+      signal.removeEventListener('abort', abort);
+      reject(error);
+    }
+  });
+}
+
+/** Invalidation interrupts both an in-flight read and retry backoff, without reopening a stale peer. */
+export function retryRemoteSyncRead<T>(run: Pick<RemoteSyncRun, 'signal' | 'isStale'>, read: () => Promise<T>): Promise<T> {
+  return waitForRemoteSync(run.signal, () => withTransientRemoteRetry(() => {
+    if (run.isStale()) throw new Error('Remote sync superseded');
+    return waitForRemoteSync(run.signal, read);
+  }));
 }
 
 export interface RemoteSyncCoordinator {
@@ -127,7 +154,7 @@ function mergeRemoteSyncRequest(
 }
 
 /**
- * Session sync coordinator:同一时刻最多一轮网络读取,被动触发合并成至多一轮 follow-up。
+ * Session sync coordinator:同一时刻最多一轮有效读取,被动触发合并成至多一轮 follow-up。
  * context 变化会使旧轮次失效;权威整窗替换还会立即废弃同 context 的旧普通读取,
  * 防止 rewind 后迟到的 reopen 结果把已删除消息重新写回。
  */
@@ -138,21 +165,40 @@ export function createRemoteSyncCoordinator(
   let generation = 0;
   let inFlight: Promise<void> | null = null;
   let pending: PendingRemoteSync | null = null;
+  let controller: AbortController | null = null;
 
   const drain = async (): Promise<void> => {
     let firstError: unknown = null;
     while (pending) {
       const next = pending;
       pending = null;
-      const capturedGeneration = generation;
+      // A sibling of a failed Promise.all may still be settling when the next
+      // run starts, even without a connection change. It cannot commit over it.
+      const capturedGeneration = ++generation;
+      const runController = new AbortController();
+      controller = runController;
       try {
-        await task({
+        const run: RemoteSyncRun = {
           reasons: [...next.reasons],
           replaceMessages: next.replaceMessages,
-          isStale: () => generation !== capturedGeneration,
-        });
+          isStale: () => generation !== capturedGeneration || runController.signal.aborted,
+          signal: runController.signal,
+          satisfy(reason) {
+            if (generation !== capturedGeneration || !pending) return;
+            pending.reasons.delete(reason);
+            if (pending.reasons.size === 0 && !pending.replaceMessages) pending = null;
+          },
+        };
+        // Start synchronously so callers can enqueue a follow-up in this same turn.
+        const result = task(run);
+        void result.catch(() => undefined);
+        await waitForRemoteSync(runController.signal, () => result);
       } catch (error) {
-        firstError ??= error;
+        const cancelled = runController.signal.aborted;
+        runController.abort();
+        if (!cancelled && generation === capturedGeneration) firstError ??= error;
+      } finally {
+        if (controller === runController) controller = null;
       }
     }
     if (firstError !== null) throw firstError;
@@ -163,6 +209,7 @@ export function createRemoteSyncCoordinator(
       if (contextKey === nextContextKey) return;
       contextKey = nextContextKey;
       generation += 1;
+      controller?.abort();
       // 旧 identity 尚未执行的 follow-up 没有提交资格;新 identity 的调用方会立即 request。
       pending = null;
     },
@@ -170,6 +217,7 @@ export function createRemoteSyncCoordinator(
       if (request.replaceMessages === true) {
         // 权威替换必须让已经发出的普通窗口读取失效,并独占下一轮 pending options。
         generation += 1;
+        controller?.abort();
         pending = null;
       }
       pending = mergeRemoteSyncRequest(pending, request);
@@ -177,6 +225,9 @@ export function createRemoteSyncCoordinator(
       inFlight = drain().finally(() => {
         inFlight = null;
       });
+      // Passive refresh callers intentionally do not await. Observe the rejection
+      // without changing the promise returned to rewind/navigation callers.
+      void inFlight.catch(() => undefined);
       return inFlight;
     },
     isRunning(): boolean {
@@ -196,6 +247,7 @@ export function useRemoteSyncCoordinator(
     taskRef.current = task;
     coordinatorRef.current?.setContext(contextKey);
   }, [contextKey, task]);
+  useEffect(() => () => coordinatorRef.current?.setContext('unmounted'), []);
 
   return useCallback(
     (request: RemoteSyncRequest) => coordinatorRef.current?.request(request) ?? Promise.resolve(),

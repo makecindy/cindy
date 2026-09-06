@@ -56,8 +56,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain(
       'const activityEpochAtFetchStart = remoteSessionStore.captureActiveSessionSnapshotEpoch();',
     );
-    expect((source.match(/fetchActiveSessionSnapshot\(\),/g) ?? []).length).toBe(2);
-    expect((source.match(/activeSessionSnapshot\.activityEpochAtFetchStart/g) ?? []).length).toBe(2);
+    // First open and reopen share one progressive, independently retried reader.
+    expect(source).toContain('commitRead(fetchActiveSessionSnapshot,');
+    expect((source.match(/activeSessionSnapshot\.activityEpochAtFetchStart/g) ?? []).length).toBe(1);
     expect((source.match(/maker\.listActiveSessions\(\)/g) ?? []).length).toBe(1);
   });
 
