@@ -109,6 +109,33 @@ export function buildConversationShareSvgLayout({
     const bubbleX = user ? canvasWidth - PADDING - bubbleWidth : PADDING;
     const horizontalPadding = user ? 12 : 0;
     const textWidth = bubbleWidth - horizontalPadding * 2;
+    // Attribution belongs to the whole message, above attachments and outside
+    // the content bubble, including when failed images fall back to text.
+    if (message.automationOriginLabel) {
+      const lines = wrapSvgText(
+        redactSensitiveText(message.automationOriginLabel).trim(),
+        bubbleWidth,
+        META_FONT_SIZE,
+      );
+      const height = lines.length * META_LINE_HEIGHT;
+      bubbles.push({
+        height,
+        width: bubbleWidth,
+        x: bubbleX,
+        y: cursorY,
+        textBlocks: [
+          {
+            color: colors.textTertiary,
+            fontSize: META_FONT_SIZE,
+            lineHeight: META_LINE_HEIGHT,
+            lines,
+            x: bubbleX,
+            y: cursorY + META_FONT_SIZE,
+          },
+        ],
+      });
+      cursorY += height + 4;
+    }
     const appendImage = (image: ConversationShareImage) => {
       const scale = Math.min(1, bubbleWidth / image.width, 320 / image.height);
       const imageWidth = image.width * scale;
@@ -141,14 +168,6 @@ export function buildConversationShareSvgLayout({
         }
     > = [];
 
-    if (message.automationOriginLabel) {
-      blocks.push({
-        color: colors.textTertiary,
-        fontSize: META_FONT_SIZE,
-        lineHeight: META_LINE_HEIGHT,
-        text: redactSensitiveText(message.automationOriginLabel).trim(),
-      });
-    }
     for (const attachment of message.attachments ?? []) {
       if (
         attachment.kind === "image" &&
