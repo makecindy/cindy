@@ -1631,7 +1631,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   });
 
   it.each(['allow', 'block', 'ask'] as const)('reviews adopted approvals with current evidence: %s', async (verdict) => {
-    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' },
+    const input = { path: 'a.txt', content: 'PRIVATE_ADOPTED_FILE_BODY' };
+    const run = pendingSubagentRun({ toolName: 'write', input,
       resolvedWritePath: path.join(cwd, 'a.txt'), resolvedWritableRoots: [cwd],
     }, { runtimeOwnerId: ownerId('earlier-handle-instance'), parentSessionId: `auto-adopt-${verdict}` });
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
@@ -1647,11 +1648,13 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const request = review.mock.calls[0]?.[0];
     expect(request?.userIntent).toBe(''); // Child text must never masquerade as human authorization.
     expect(JSON.parse((request?.action as { description: string }).description)).toMatchObject({
-      toolName: 'write', input: { path: 'a.txt' },
+      toolName: 'write',
       context: expect.stringContaining('Original user authorization and child cwd are unavailable'),
       executionEvidence: { action: { path: 'a.txt', resolvedPath: path.join(cwd, 'a.txt'), resolvedWritableRoots: [cwd] } },
     });
+    expect(JSON.stringify(request)).not.toContain('PRIVATE_ADOPTED_FILE_BODY');
     expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    if (verdict === 'ask') expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ input }));
     await handle.close();
   });
 

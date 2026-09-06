@@ -7698,6 +7698,17 @@ export class CodexAgent extends BaseAgent {
       const activeChange = activeToolContexts.get(params.itemId);
       const changes = params.changes ?? (activeChange?.type === 'fileChange' && activeChange.turnId === params.turnId
         ? activeChange.changes : undefined);
+      // Keep the full patch on the existing user-confirmation surface, but send
+      // only destinations and change kinds to the independent utility reviewer.
+      const changeEvidence = Array.isArray(changes) ? changes.map((change) => {
+        const record = recordFromUnknown(change);
+        const kind = recordFromUnknown(record?.kind);
+        if (typeof record?.path !== 'string' || !record.path.trim()
+          || !['add', 'delete', 'update'].includes(String(kind?.type))) return null;
+        return { path: record.path, kind: { type: kind?.type,
+          ...(typeof kind?.move_path === 'string' ? { move_path: kind.move_path } : {}),
+        } };
+      }) : undefined;
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'fileChange', {
         kind: 'permission',
         requestId,
@@ -7712,7 +7723,9 @@ export class CodexAgent extends BaseAgent {
         // Missing target evidence is sent to review as a protocol limitation, never
         // converted directly into a human prompt or treated as a workspace grant.
         autoReviewAction: Array.isArray(changes) && changes.length > 0
-          ? toolAutoReviewAction('file_change', { grantRoot: params.grantRoot ?? null, changes })
+          ? changeEvidence?.every(Boolean)
+            ? toolAutoReviewAction('file_change', { grantRoot: params.grantRoot ?? null, changes: changeEvidence })
+            : { kind: 'other' }
           : { kind: 'file-write', path: params.grantRoot ?? undefined },
         itemId: params.itemId,
       });

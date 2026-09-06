@@ -14275,6 +14275,42 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it.each((['explicit', 'active'] as const).flatMap((source) => [false, true].flatMap((forcePolicy) =>
+    (['allow', 'ask'] as const).map((verdict) => ({ source, forcePolicy, verdict })),
+  )))('reviews only file destinations and kinds: $source / policy=$forcePolicy / $verdict', async ({ source, forcePolicy, verdict }) => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent, (rpc) => rpc === Method.TurnStart ? { turn: { id: 'file-evidence-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'file-evidence', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    const resolver = vi.fn(async (_request: InteractionRequest): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    handle.setInteractionResolver(resolver);
+    await handle.send({ type: 'user', content: 'Update the approved files.' }, forcePolicy ? {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'desktop', forceConfirmToolCall: () => true },
+    } : undefined);
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.fileChangeApproval || !handlers.itemStarted) throw new Error('missing handlers');
+    const changes = [
+      { path: '/repo/new.txt', kind: { type: 'add' }, diff: 'PRIVATE_PATCH_BODY'.repeat(400) },
+      { path: '/outside/old.txt', kind: { type: 'delete' }, diff: '-PRIVATE_PATCH_BODY' },
+      { path: '/repo/from.txt', kind: { type: 'update', move_path: '/outside/to.txt' }, diff: '+PRIVATE_PATCH_BODY', unknownField: 'PRIVATE_PATCH_BODY' },
+    ];
+    if (source === 'active') handlers.itemStarted({ threadId: 'start-thread-id', turnId: 'file-evidence-turn', item: { id: 'patch', type: 'fileChange', changes } });
+    await expect(handlers.fileChangeApproval({
+      threadId: 'start-thread-id', turnId: 'file-evidence-turn', itemId: 'patch', grantRoot: '/repo',
+      ...(source === 'explicit' ? { changes } : {}),
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewer).toHaveBeenCalledOnce();
+    const request = reviewer.mock.calls[0]?.[0];
+    expect(JSON.stringify(request)).not.toContain('PRIVATE_PATCH_BODY');
+    expect(JSON.parse((request?.action as { description: string }).description)).toEqual({
+      toolName: 'file_change', input: { grantRoot: '/repo', changes: changes.map(({ path, kind }) => ({ path, kind })) },
+    });
+    expect(request?.workspaceRoots).toContain('/repo');
+    expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    if (verdict === 'ask') expect(resolver.mock.calls[0]?.[0]).toMatchObject({ input: { changes } });
+    await handle.close();
+  });
+
   it('accepts a reviewed concrete patch when switching to Full access', async () => {
     const review = deferred<{ verdict: 'allow' }>();
     const reviewer = vi.fn(() => review.promise);

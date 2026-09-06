@@ -3403,18 +3403,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await systemHandle.close();
   });
 
-  it('reviews uncertainty when a readonly bridge request omits canonical-path evidence', async () => {
-    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+  it.each(['read', 'bash', 'powershell'].flatMap((toolName) =>
+    (['allow', 'block', 'ask'] as const).map((verdict) => ({ toolName, verdict })),
+  ))('reviews exact $toolName evidence when canonical paths are absent: $verdict', async ({ toolName, verdict }) => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict }));
     const handle = await start('auto', review);
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionRequest('readonly-without-evidence', 'read', { path: path.join(cwd, 'innocent.txt') });
+    const input = toolName === 'read' ? { path: path.join(cwd, 'innocent.txt') }
+      : { command: 'cat innocent.txt; rm -rf /outside/report' };
+    firePermissionRequest('readonly-without-evidence', toolName, input);
     expect(await waitForResponse('readonly-without-evidence')).toEqual({
-      type: 'extension_ui_response', id: 'readonly-without-evidence', confirmed: true,
+      type: 'extension_ui_response', id: 'readonly-without-evidence', confirmed: verdict === 'allow',
     });
     expect(review).toHaveBeenCalledOnce();
-    expect(resolver).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    expect(JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description)).toEqual({
+      toolName, input, resolvedCredentialPaths: null, credentialEvidenceStatus: 'unverifiable',
+    });
   });
 
   it('auto mode lets the current-model reviewer allow a gray write without prompting', async () => {
@@ -3613,7 +3620,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   it('reviews turn policy operations and passes exact tool evidence', async () => {
-    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'allow' as const }));
     const handle = await start('auto', review);
     const forceConfirmToolCall = vi.fn(() => true);
     await handle.send(
@@ -3629,7 +3636,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
     handle.setInteractionResolver?.(resolver as never);
 
-    const input = { path: '/tmp/policy.txt' };
+    const input = { path: '/tmp/policy.txt', content: 'PRIVATE_FILE_BODY' };
     firePermissionRequest('policy-allow', 'write', input);
     expect(await waitForResponse('policy-allow')).toEqual({
       type: 'extension_ui_response',
@@ -3639,6 +3646,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(forceConfirmToolCall).toHaveBeenCalledWith('write', input);
     expect(resolver).not.toHaveBeenCalled();
     expect(review).toHaveBeenCalledOnce();
+    expect(JSON.stringify(review.mock.calls[0]?.[0])).not.toContain('PRIVATE_FILE_BODY');
+    expect(JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description).executionEvidence)
+      .toMatchObject({ kind: 'file-write', path: input.path, resolvedPath: input.path, resolvedWritableRoots: [cwd] });
   });
 
   it('reviews MCP operations when turn policy cannot classify them', async () => {

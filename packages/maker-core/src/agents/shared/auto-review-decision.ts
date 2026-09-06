@@ -254,6 +254,15 @@ export function toolAutoReviewAction(
   context?: string,
   executionEvidence?: unknown,
 ): ReviewableAction {
+  // Structured file writes are reviewed by destination/canonical scope. Do not
+  // reintroduce file bodies when a channel policy or resumed child wraps them.
+  const evidence = executionEvidence && typeof executionEvidence === 'object'
+    ? executionEvidence as Record<string, unknown> : undefined;
+  const action = evidence?.action && typeof evidence.action === 'object'
+    ? evidence.action as Record<string, unknown> : evidence;
+  if (action?.kind === 'file-write') {
+    input = undefined;
+  }
   return { kind: 'other', description: JSON.stringify({ toolName, input, context, executionEvidence }) };
 }
 

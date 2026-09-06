@@ -25,6 +25,7 @@ import {
   extractAutoReviewUserIntent,
   appendAutoReviewUserIntent,
   resolveAutoReviewDecision,
+  toolAutoReviewAction,
   type AutoReviewRequest,
 } from './auto-review-decision.js';
 
@@ -47,6 +48,26 @@ function request(action: AutoReviewRequest['action']): AutoReviewRequest {
     platform: 'linux',
   };
 }
+
+describe('toolAutoReviewAction', () => {
+  it.each([false, true])('omits structured file bodies from policy evidence (child=%s)', (child) => {
+    const action = { kind: 'file-write', path: '/link/out.txt', resolvedPath: '/outside/out.txt', resolvedWritableRoots: ['/repo'] };
+    const executionEvidence = child ? { action, childTask: 'Update the report', childId: 'child-1' } : action;
+    const input = { path: '/link/out.txt', content: 'PRIVATE_BODY', edits: [{ old_string: 'OLD_SECRET', new_string: 'NEW_SECRET' }] };
+    const result = toolAutoReviewAction('write', input, 'channel policy', executionEvidence);
+    expect(result.kind).toBe('other');
+    expect(JSON.parse((result as { description: string }).description)).toEqual({
+      toolName: 'write', context: 'channel policy', executionEvidence,
+    });
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_BODY|OLD_SECRET|NEW_SECRET/);
+  });
+
+  it('keeps exact message bodies for MCP actions', () => {
+    const input = { action: 'send', to: 'recipient', body: 'The approved message', content: 'attachment description' };
+    const result = toolAutoReviewAction('mcp__mail', input, undefined, { kind: 'other' });
+    expect(JSON.parse((result as { description: string }).description).input).toEqual(input);
+  });
+});
 
 describe('resolveAutoReviewDecision', () => {
   it('names the legacy prompt result as an internal needs-review tier, not a UI prompt', () => {

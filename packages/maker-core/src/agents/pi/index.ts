@@ -7272,12 +7272,12 @@ export class PiAgent extends BaseAgent {
         /* keep defaults */
       }
       if (
-        (toolName === 'read' || toolName === 'grep' || toolName === 'find' || toolName === 'ls' || toolName === 'bash')
+        (toolName === 'read' || toolName === 'grep' || toolName === 'find' || toolName === 'ls' || toolName === 'bash' || toolName === 'powershell')
         && resolvedCredentialPaths === undefined
       ) {
-        // Readonly calls and bash input redirects only reach Host with bridge-supplied
+        // Readonly calls and shell input redirects only reach Host with bridge-supplied
         // canonical-path evidence. Missing evidence means an old or malformed bridge,
-        // not a safe read; require explicit consent instead of trusting a link name.
+        // not a safe read; include this uncertainty in the AI review evidence.
         resolvedCredentialPaths = null;
       }
       if ((toolName === 'write' || toolName === 'edit') && resolvedWritePath === undefined) {
