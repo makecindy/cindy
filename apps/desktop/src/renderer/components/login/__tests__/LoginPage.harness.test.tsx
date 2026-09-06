@@ -140,6 +140,45 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe('error screen recovery', () => {
+  const errorState: AuthFlowState = {
+    step: 'error',
+    code: 'REGION_MISMATCH',
+    recoverTo: 'identifier',
+  };
+
+  it('offers a back action that restarts ordinary sign-in', () => {
+    mount(errorState);
+
+    fireEvent.click(screen.getByRole('button', { name: 'login.back' }));
+
+    expect(loginHook.value.clearError).toHaveBeenCalledOnce();
+    expect(loginHook.value.dispatch).toHaveBeenCalledExactlyOnceWith({ type: 'reset' });
+    expect(screen.getByTestId('login-error-retry')).toBeTruthy();
+    expect(screen.getByTestId('login-local-mode')).toBeTruthy();
+  });
+
+  it('restarts add-account sign-in without closing the login entry', () => {
+    const onClose = vi.fn();
+    mount(errorState, undefined, 'add-account', onClose);
+
+    fireEvent.click(screen.getByRole('button', { name: 'login.back' }));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(loginHook.value.clearError).toHaveBeenCalledOnce();
+    expect(loginHook.value.dispatch).toHaveBeenCalledExactlyOnceWith({ type: 'reset' });
+  });
+
+  it('does not dispatch a second reset while sign-in is loading', () => {
+    mount(errorState, { isLoading: true });
+
+    const back = screen.getByRole('button', { name: 'login.back' }) as HTMLButtonElement;
+    expect(back.disabled).toBe(true);
+    fireEvent.click(back);
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
+});
+
 /* ── wave4 视觉五维(brand-background / panel-border / wordmark / slogan) ── */
 describe('wave4 stage 视觉', () => {
   it('brand-background 纯平白底(消费 login-bg-base,无渐变;2026-07-22 对齐 PR #104,viewport 锚定)', async () => {

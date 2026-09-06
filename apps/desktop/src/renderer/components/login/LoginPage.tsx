@@ -1251,6 +1251,11 @@ export function LoginPage({
         ssoOrgGroupY: false,
         node: (
           <LoginPanel testId="login-panel-error">
+            <LoginBackButton
+              disabled={isLoading || localModePending}
+              label={t('login.back')}
+              onClick={reset}
+            />
             <LoginTitleBlock title={t('login.unavailable')} subtitle={t('login.errors.fallback')} />
             <LoginPrimaryButton
               disabled={isLoading}
