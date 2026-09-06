@@ -121,12 +121,9 @@ if (
 app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 
 // agentManager 已在 vendor 大扫除时退役。app 退出 / 崩溃路径走 maker.shutdown()
-// 一刀切 — 它内部按 (Layer 1) 关所有 session → (Layer 2) dispose 所有 agent (Codex
-// shared app-server 子进程 SIGTERM, Claude no-op) 的固定顺序跑, 调用方不需要分两步。
-//
-// **必须 await**: m.shutdown() 内部的 kill 是异步串行的 — Layer 1 先 await 所有
-// session.close(), Layer 2 才在串行 dispose 里调 AppServerClient.close() 发 SIGTERM。
-// 如果在 sync 阶段 fire-and-forget, app.exit(0) 会在 kill 之前就把 Node 主进程掐掉,
+// 一刀切 — session detach 与 agent dispose 并发，避免某个 session 卡住其它进程收尾。
+// **必须 await**: Codex 会先通过 stdin EOF 保存并退出，超时才发信号。
+// 如果在 sync 阶段 fire-and-forget, app.exit(0) 会在收尾前把 Node 主进程掐掉,
 // Windows 上 codex app-server 子进程不会随父死 → 残留孤儿, 持有 binary 文件锁,
 // 用户下次启动时撞 EBUSY / 端口占用 (anthropic-compat-proxy 等)。
 async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
@@ -138,11 +135,6 @@ async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
   // 任何回收,worktree 原样留在磁盘,下次启动 recoverPool 对账(clean ephemeral 重新
   // 入池,dirty / 交互式的保留,session 重开可无缝续用)。
   rehydrateCloseSuppression.suppressAllForShutdown();
-  try {
-    await shutdownLspServerPool();
-  } catch (err) {
-    console.error('[main] lspPool.shutdown failed:', err);
-  }
   let piSessionFailures = 0;
   try {
     // splash 失败时 maker 未 init / getMakerCore() 抛错 —— 静默兜底, 没东西要清。
@@ -8954,14 +8946,11 @@ onQuit(
   'sync',
 );
 // Async 阶段: 并发跑, 6s 超时兜底。
-//   - shutdown-maker:       Layer 1 关 sessions → Layer 2 dispose agents (Codex
-//                           shared app-server 子进程 SIGTERM)。**必须 await** —
-//                           kill 是 Layer 2 才发出, fire-and-forget 会让 app.exit
-//                           在 kill 之前就掐掉 Node, Windows 上子进程会变孤儿。
+//   - shutdown-maker:       并发 detach sessions 与 dispose agents，等待进程退出。
+//                           fire-and-forget 会让 app.exit 抢先结束 Node。
 //   - im.dispose:           wsClient.stop() 内部先发 announce offline (quit path waits 4.5s)
 //                           再 close WS。**整个改造的核心目标——必须 await。**
-//   - codex env shutdown:   关 MCP HTTP bridge。语义上要在 maker.shutdown() 杀完
-//                           codex 子进程之后, 这里并发跑最坏是 log noise。
+//   - Codex 环境、proxy 和 DB 在 post-async 收尾，正常退出时保留到 Maker 完成。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
 /**
@@ -9106,9 +9095,10 @@ onQuit(
   'async',
 );
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
+// LSP 不占用 Agent 正常保存和退出的时间窗口。
+onQuit('lsp-pool', shutdownLspServerPool, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
-onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
 // 轮 27 MEDIUM-3:pi-env 挪到 post-async —— 若与 shutdown-maker 同 async 并发,
 // bridge 可能在 session close 的 disposeSessionRegistrations(unregisterSessionCtx/
 // Token)之前关闭, 产生「pi dispose session registration failed (non-fatal)」
@@ -9243,6 +9233,9 @@ onQuit(
   'post-async',
 );
 onQuit('pi-env', () => shutdownPiEnvironment(), 'post-async');
+// 正常退出时保留到 Agent 和 Session 收尾完成；async 超时后仍按退出预算尽力清理。
+onQuit('codex-env', () => shutdownCodexEnvironment(), 'post-async');
+onQuit('codex-proxy', () => disposeCodexProxy(), 'post-async');
 // embedding-host: abort 语义 —— 立刻让出 SQLite 写连接, 不等当前 tick (那批 job 保持
 // pending 下次续跑, 写事务同步原子无中断)。
 onQuit('embedding-host', () => stopEmbeddingHost(), 'async');
@@ -9255,7 +9248,6 @@ onQuit('anthropic-compat-proxy', () => disposeAnthropicCompatProxy(), 'async');
 // browser + locked user-data-dir would otherwise survive quit and force a stale
 // SingletonLock recovery next launch). `stop` is idempotent / no-op if never started.
 onQuit('browser-runtime', () => disposeBrowserRuntime(), 'async');
-onQuit('codex-proxy', () => disposeCodexProxy(), 'async');
 // Remote file-service clients: 先于 pool 关闭, 挂断远端 daemon 的 exec channel。
 onQuit('remote-file-browser', () => disposeRemoteFileBrowser(), 'async');
 // Remote SSH pool: 主动断开所有活动连接, 防止 ssh2 子句柄阻塞 Node 进程退出。
@@ -9272,11 +9264,11 @@ onQuit('ios-simulator-exit-abort', abortIOSSimulatorOperationsForExit, 'sync');
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
-onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
 onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');
 onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
+onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 
 installQuitHandler(6000);

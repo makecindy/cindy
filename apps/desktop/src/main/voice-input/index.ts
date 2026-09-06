@@ -26,7 +26,9 @@ import {
   isProviderModelRouteDisabled,
   isUtilityRouteDisabled,
   isUtilityRoutePaymentRequired,
+  requestUtilityText,
 } from '../utility-model/oneShotCandidates.js';
+import { getMaker } from '../maker-host/index.js';
 import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
@@ -47,6 +49,7 @@ import {
   prewarmCodexResponsesEndpoint,
 } from './CodexResponsesTextModelClient.js';
 import { ElevenLabsScribeProvider } from './ElevenLabsScribeProvider.js';
+import { DictionaryLearningTextModelClient } from './DictionaryLearningTextModelClient.js';
 import { FallbackAsrProvider } from './FallbackAsrProvider.js';
 import {
   FallbackTextModelClient,
@@ -376,41 +379,15 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
     };
   }
 
-  // Same fallback chain as dictation refinement: the advisor is a background
-  // task, but a primary refiner outage should degrade to a backup model
-  // instead of silently dropping dictionary learning.
-  const {
-    refinerReadinessList: advisorReadinessList,
-    readyRefinerProfiles: readyAdvisorProfiles,
-  } = await resolveVoiceInputRefinerChainForRuntime();
-  const advisorHeadProfile = readyAdvisorProfiles[0];
-  if (!advisorHeadProfile) {
-    return {
-      ok: false,
-      error: advisorReadinessList[0]?.error ?? 'Dictionary learning advisor requires a configured refiner.',
-    };
-  }
-
   try {
-    const senderId = options.senderId ?? 'device-link';
-    const advisorAttempts: FallbackTextModelAttempt[] = readyAdvisorProfiles.map((profile) => ({
-      profileId: profile.id as VoiceInputRefinerProviderKind,
-      model: profile.model,
-      client: guardRefinerClientAgainstUnavailableRoute(
-        profile,
-        createVoiceInputTextModelClient(profile, {
-          beforeDispatch: () => {
-            assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
-            assertRefinerRouteAvailable(profile);
-          },
-        }),
-      ),
-      promptCacheScope: `dictionaryLearning:${profile.id}:${senderId}`,
-    }));
+    const advisorClient = new DictionaryLearningTextModelClient(
+      (prompt, requestOptions) => requestUtilityText(getMaker(), prompt, requestOptions),
+      () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
+    );
     const advisor = new DictationDictionaryAdvisor({
-      client: new FallbackTextModelClient(advisorAttempts),
-      model: advisorHeadProfile.model,
-      promptCacheScope: `dictionaryLearning:${advisorHeadProfile.id}:${senderId}`,
+      client: advisorClient,
+      // The adapter resolves the shared auxiliary chain; this is not a route pin.
+      model: 'auxiliary',
       debug: DICTIONARY_LEARNING_TEXT_DEBUG,
     });
     const settings = voiceInputDataStore.getSettings();
@@ -447,9 +424,8 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
         confidence: action.confidence,
         reason: action.reason,
       })),
-      refinerProvider: advisorHeadProfile.id,
-      refinerModel: advisorHeadProfile.model,
-      refinerChain: readyAdvisorProfiles.map((profile) => profile.id),
+      auxiliaryProvider: advisorClient.servedRoute?.providerId,
+      auxiliaryModel: advisorClient.servedRoute?.model,
       ignoreReason: result.ignoreReason,
       elapsedMs: Math.round(result.elapsedMs),
       debugText: DICTIONARY_LEARNING_TEXT_DEBUG

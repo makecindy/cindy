@@ -54,6 +54,7 @@ describe('mobile maker transport', () => {
       'maker:get-new-maker-worktree-branch-pref',
       'maker:apply-new-maker-worktree-branch-pref',
       'maker:usage:model-pricing',
+      'local-db:messages:estimatedSessionValue',
       'maker:usage:codex-rate-limits',
       'maker:usage:codex-rate-limit-reset',
       'maker:api-key:present',

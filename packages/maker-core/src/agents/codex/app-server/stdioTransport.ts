@@ -1,10 +1,6 @@
 /**
  * StdioTransport — 本地 spawn `codex app-server`, 接 stdin/stdout NDJSON 流。
  *
- * 历史行为搬迁: 这文件里的 spawn/readline/stderr/exit/kill 逻辑跟原本
- * AppServerClient.spawnProcess + close 一字不差, 只是从 client 内部搬到了
- * transport 层。purpose: 让 client 只关心 NDJSON 流, transport 切换无感。
- *
  * Lifecycle:
  *   - 构造时同步 spawn 子进程 (跟原版 spawnProcess 一致)
  *   - readline on('line') → fan-out 给 onLine handlers
@@ -32,16 +28,18 @@ export interface StdioTransportOptions {
   extraArgs?: string[];
   /** 本地进程生命周期观察器；仅用于宿主诊断，不得影响 transport 启动。 */
   onProcessSpawned?: (pid: number) => void | (() => void);
+  /** stdin EOF 后等待正常保存和退出的时间；仅测试注入。 */
+  gracefulCloseMs?: number;
   /** SIGTERM 后强杀宽限毫秒数;仅测试注入,生产走默认值。 */
   forceKillGraceMs?: number;
+  /** SIGKILL 后确认退出的时间；仅测试注入。 */
+  killConfirmationMs?: number;
 }
 
-/**
- * close() 发出 SIGTERM 后等待进程自行退出的宽限期。健康的 app-server 在毫秒级
- * 退出;卡死的(见 close() 内注释)永远不退,5s 已足够区分两者且不拖慢关闭方
- * (close() 本身不等待,timer 在后台收尸)。
- */
-const FORCE_KILL_GRACE_MS = 5_000;
+// 合计 3s，给 Desktop 6s 退出预算中的其它收尾留出时间。
+const GRACEFUL_CLOSE_MS = 1_500;
+const FORCE_KILL_GRACE_MS = 1_000;
+const KILL_CONFIRMATION_MS = 500;
 
 export function createStdioTransport(opts: StdioTransportOptions): Transport {
   if (!opts.binaryPath) {
@@ -60,6 +58,10 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   const lineBuffer: string[] = [];
   let lineHandlerArmed = false;
   let closed = false;
+  let closePromise: Promise<void> | null = null;
+  let exited = false;
+  let resolveExit!: () => void;
+  const exitPromise = new Promise<void>((resolve) => { resolveExit = resolve; });
 
   const args = ['app-server', ...(opts.extraArgs ?? [])];
   const child: ChildProcessWithoutNullStreams = spawn(opts.binaryPath, args, {
@@ -72,7 +74,7 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     shell: false,
     // Windows 上 app-server 及其控制台句柄不应打断桌面端 UI。
     windowsHide: true,
-    // Linux/macOS: 跟父进程同 process group, 父进程退出时一并被收割。
+    // 不创建独立进程组；close() 仍必须显式等待并确认子进程退出。
     detached: false,
   });
   let disposeProcessRegistration: (() => void) | undefined;
@@ -92,6 +94,8 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     crlfDelay: Infinity,
   });
   rl.on('line', (line) => {
+    // 关闭协议后继续排空 stdout，避免退出收尾写满 pipe。
+    if (closed) return;
     if (!lineHandlerArmed) {
       lineBuffer.push(line);
       return;
@@ -118,21 +122,47 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   const fireClose = (reason: string): void => {
     if (closed) return;
     closed = true;
-    try { rl.close(); } catch { /* already closed */ }
-    try { disposeProcessRegistration?.(); } catch { /* best-effort diagnostic cleanup */ }
-    disposeProcessRegistration = undefined;
+    lineBuffer.length = 0;
     for (const cb of closeHandlers) {
       try { cb({ reason }); } catch { /* handler should not throw */ }
     }
   };
 
+  const finishProcess = (reason: string): void => {
+    if (exited) return;
+    exited = true;
+    try { rl.close(); } catch { /* already closed */ }
+    try { disposeProcessRegistration?.(); } catch { /* best-effort diagnostic cleanup */ }
+    disposeProcessRegistration = undefined;
+    resolveExit();
+    fireClose(reason);
+  };
+
   child.on('error', (err) => {
-    fireClose(`child error: ${err.message}`);
+    const reason = `child error: ${err.message}`;
+    // spawn 失败没有进程；运行中的 error（例如 kill 失败）不是退出证据。
+    if (child.pid == null) finishProcess(reason);
+    else fireClose(reason);
   });
+  child.stdin.on('error', (err) => fireClose(`child stdin error: ${err.message}`));
   child.on('exit', (code, signal) => {
     const reason = signal ? `signal=${signal}` : `exit code=${code ?? 'null'}`;
-    fireClose(`child exited (${reason})`);
+    finishProcess(`child exited (${reason})`);
   });
+
+  const waitForExit = async (timeoutMs: number): Promise<boolean> => {
+    if (exited) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        exitPromise,
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+      ]);
+      return exited;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
 
   return {
     writeLine(line: string): Promise<void> {
@@ -177,29 +207,26 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
       return () => { closeHandlers.delete(handler); };
     },
 
-    async close(reason = 'StdioTransport.close()'): Promise<void> {
-      if (closed) return;
-      // 优雅关: 先 stdin EOF (Rust app-server 看到会自己退), 再 SIGTERM 兜底。
-      try { child.stdin.end(); } catch { /* swallow */ }
-      if (child.exitCode === null && child.signalCode === null) {
-        try { child.kill('SIGTERM'); } catch { /* swallow */ }
-        // #3699: SIGTERM 只对健康的 app-server 有效。当它的主循环卡死(实测
-        // 场景:内部模型刷新子进程 wedged,manager 反复报 "timeout waiting for
-        // child process to exit")时,进程可能既不响应 stdin EOF 也不处理
-        // SIGTERM —— 而调用方(retireHostKey / 切换凭证 / 关闭会话)在 close()
-        // 后即视其为已弃用,不再持有引用。此前没有任何强杀兜底,弃用的
-        // app-server 会以活体泄漏:继续周期性模型刷新、打错误日志、占用
-        // 网络与文件句柄。宽限期后仍未退出则 SIGKILL 收尸;timer unref,
-        // 不阻塞父进程退出(父进程退出时同进程组的子进程本就会被收割)。
-        const killTimer = setTimeout(() => {
-          if (child.exitCode === null && child.signalCode === null) {
-            try { child.kill('SIGKILL'); } catch { /* swallow */ }
-          }
-        }, opts.forceKillGraceMs ?? FORCE_KILL_GRACE_MS);
-        killTimer.unref?.();
-        child.once('exit', () => clearTimeout(killTimer));
+    close(reason = 'StdioTransport.close()'): Promise<void> {
+      // 首次严格关闭可以超时；迟到的真实 exit 使后续幂等检查成功。
+      if (exited) return exitPromise;
+      if (!closePromise) {
+        // 先发布 Promise，再调用可能同步重入 close() 的监听器。
+        closePromise = Promise.resolve().then(async () => {
+          if (exited) return;
+          // EOF 让 app-server 中止在飞 turn 并保存历史；不能紧跟 SIGTERM。
+          try { child.stdin.end(); } catch { /* signal fallback below */ }
+          if (await waitForExit(opts.gracefulCloseMs ?? GRACEFUL_CLOSE_MS)) return;
+          try { child.kill('SIGTERM'); } catch { /* still confirm exit */ }
+          if (await waitForExit(opts.forceKillGraceMs ?? FORCE_KILL_GRACE_MS)) return;
+          // #3699: 卡死进程仍需强杀，且不能在确认退出前释放 Host。
+          try { child.kill('SIGKILL'); } catch { /* still confirm exit */ }
+          if (await waitForExit(opts.killConfirmationMs ?? KILL_CONFIRMATION_MS)) return;
+          throw new Error('Codex app-server did not exit after SIGKILL');
+        });
+        fireClose(reason);
       }
-      fireClose(reason);
+      return closePromise;
     },
   };
 }

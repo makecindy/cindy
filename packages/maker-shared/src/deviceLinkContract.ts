@@ -307,6 +307,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:apply-new-maker-worktree-branch-pref',
   // 模型选择列表元信息:被控端视角的模型单价表(只读;拉不到 → 隐藏价格)。
   'maker:usage:model-pricing',
+  'local-db:messages:estimatedSessionValue',
   // Codex app-server 官方控制面:只读额度/reset 次数 + 人工确认后的单次 reset。
   // reset 使用 desktop 预签发、账号绑定的幂等 offer,手机不能自行指定 creditId。
   'maker:usage:codex-rate-limits',
