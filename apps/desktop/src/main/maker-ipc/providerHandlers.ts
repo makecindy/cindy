@@ -463,7 +463,7 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   const httpUrlOk = (v: string): boolean => {
     try {
       const u = new URL(v);
-      return u.protocol === 'http:' || u.protocol === 'https:';
+      return (u.protocol === 'http:' || u.protocol === 'https:') && !u.username && !u.password;
     } catch {
       return false;
     }

@@ -1,4 +1,31 @@
 {
+  "management": {
+    "title": "デバイス管理",
+    "openDevice": "{{name}} のデバイス詳細を表示",
+    "details": "デバイスの詳細",
+    "retry": "再試行",
+    "unknown": "情報なし",
+    "notFound": "このデバイスはアカウントに登録されていません。",
+    "deleteDevice": "デバイスを削除",
+    "deleteTitle": "「{{name}}」を削除しますか？",
+    "deleteMessage": "デバイスを一覧から削除します。コンピューター上のファイルは削除されません。",
+    "deleteFailed": "デバイスを削除できませんでした。",
+    "deleteOnline": "デバイスがオンラインです。オフラインにしてから削除してください。",
+    "currentlyOnline": "現在オンライン",
+    "nameTooLong": "デバイス名は {{limit}} 文字以内で入力してください。",
+    "fields": {
+      "name": "名前",
+      "status": "状態",
+      "platform": "プラットフォーム",
+      "model": "モデル",
+      "systemVersion": "システムバージョン",
+      "appVersion": "Cindy バージョン",
+      "cpu": "プロセッサー",
+      "memory": "メモリ",
+      "lastSeen": "最終オンライン",
+      "deviceId": "デバイス ID"
+    }
+  },
   "common": {
     "cancel": "キャンセル",
     "save": "保存",

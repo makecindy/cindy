@@ -261,6 +261,52 @@ describe('sanitizePresets', () => {
     }
   });
 
+  it.each(['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'])(
+    'strips credential-bearing modelsUrl without dropping the preset: %s',
+    (userinfo) => {
+      const preset = {
+        ...VALID_PRESET,
+        runtimes: {
+          codex: {
+            baseUrl: 'https://x.example/v1',
+            models: [{ id: 'm', name: 'M' }],
+            modelsUrl: `https://${userinfo}x.example/v1/models`,
+          },
+        },
+      };
+      const out = sanitizePresets([preset]);
+      expect(out).toHaveLength(1);
+      expect(out[0]?.runtimes.codex).toEqual({
+        baseUrl: 'https://x.example/v1',
+        models: [{ id: 'm', name: 'M' }],
+      });
+    },
+  );
+
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+    ),
+  )('removes only discovery sources with credentials in $field: $userinfo', ({ field, userinfo }) => {
+    const source = {
+      baseUrl: 'https://x.example/v1',
+      modelsUrl: 'https://x.example/v1/models',
+      wireProtocol: 'openai-responses',
+    };
+    const out = sanitizePresets([{
+      ...VALID_PRESET,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://x.example/v1',
+          models: [{ id: 'm', name: 'M' }],
+          modelDiscovery: [source, { ...source, [field]: `https://${userinfo}x.example/v1/models` }],
+        },
+      },
+    }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.runtimes.codex?.modelDiscovery).toEqual([source]);
+  });
+
   it('modelDiscovery 只保留同源且协议合法的附加目录', () => {
     const source = {
       baseUrl: 'https://x.example/api/v1',

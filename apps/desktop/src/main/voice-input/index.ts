@@ -6,6 +6,9 @@ import {
   DictationRefiner,
   VoiceInputController,
   VoiceTimelineLogger,
+  takeRefinementContextHead,
+  takeRefinementContextTail,
+  truncateRefinementReply,
   getDictationDictionaryAdviceSkipReason,
   type DictationDictionaryAdviceInput,
   type DictationDictionaryAdviceResult,
@@ -596,9 +599,9 @@ function normalizeRefinementContext(
     dictionaryAliasHints: normalizeDictionaryAliasHints(context?.dictionaryAliasHints),
     voiceInputHistory: normalizeMultilineText(context?.voiceInputHistory ?? ''),
     selectionBefore: takeTail(context?.selectionBefore ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-    selectedText: truncateText(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+    selectedText: takeHead(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     selectionAfter: takeHead(context?.selectionAfter ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-    replyToMessage: truncateText(
+    replyToMessage: truncateRefinementReply(
       context?.replyToMessage ?? '',
       MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS,
     ),
@@ -641,7 +644,7 @@ function beginOverlayContextInjection(
       // synchronous fields, so prompt sizing stays predictable regardless
       // of whether overlay capture won the race.
       targetContext.selectionBefore = takeTail(overlayContext.selectionBefore, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
-      targetContext.selectedText = truncateText(overlayContext.selectedText, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
+      targetContext.selectedText = takeHead(overlayContext.selectedText, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
       targetContext.selectionAfter = takeHead(overlayContext.selectionAfter, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
     })
     .catch((error: unknown) => {
@@ -733,13 +736,11 @@ function normalizeMultilineText(text: string): string {
 }
 
 function takeHead(text: string, maxChars: number): string {
-  return truncateText(text, maxChars);
+  return takeRefinementContextHead(text, maxChars);
 }
 
 function takeTail(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(-maxChars).trim();
+  return takeRefinementContextTail(text, maxChars);
 }
 
 function readActiveVoiceInputModelSelection(reason: string): ReturnType<typeof getVoiceInputModelSelection> {
