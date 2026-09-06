@@ -1798,7 +1798,7 @@
           "defaultEffort": "默认推理强度",
           "defaultEffortHint": "新任务选中该模型时的初始档位，任务内仍可临时调整。",
           "contextLimit": "上下文上限",
-          "contextLimitHint": "以整数 K 编辑，显示时向下取整；未编辑时保留精确配置。保存后用于新建或重新打开的任务。",
+          "contextLimitHint": "用于此模型的所有可用引擎。以整数 K 编辑（1 K = 1,000 tokens）；未编辑时保留精确值。保存后用于后续运行，正在生成的内容不受影响。实际可用长度仍受模型服务限制。",
           "contextLimitAria": "上下文上限（千 tokens）",
           "contextLimitRoute": "当前 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "已超过上游声明的长度，可能导致请求失败。",
@@ -1846,14 +1846,14 @@
             "matching": "原生支持",
             "unknown": "协议待确认"
           },
-          "codexContextDefault": "Codex 默认 272K 上下文",
-          "codexContextHint": "Codex 默认使用 272K 上下文，并提前自动压缩。这里的调整仅用于其他引擎；更大窗口需单独调整 Codex 配置，不建议日常使用。",
-          "codexContextAdvanced": "更大窗口需单独调整 Codex 配置，不建议日常使用。",
           "lifecycle": {
             "alpha": "试用版",
             "deprecated": "不再推荐",
             "retired": "已下架"
-          }
+          },
+          "codexContextUnknown": "未读取到 CLI 配置",
+          "codexContextValues": "总窗口 {{total}} · 可用 {{usable}} · 自动压缩 {{compact}} tokens",
+          "contextLimitGptHint": "GPT 默认最多使用 272K；可在此自定义到 1M。Codex 会同步应用窗口与自动压缩阈值，保留 5% 余量；实际容量受模型服务限制。"
         },
         "kindFilter": {
           "all": "全部",
@@ -2844,7 +2844,7 @@
     },
     "compaction": {
       "title": "上下文压缩",
-      "description": "控制 Claude Code 和 Pi 何时自动压缩上下文。Codex 单独管理上下文压缩。",
+      "description": "Claude Code 和 Pi 的压缩比例在此调整。Codex 随模型设置的上下文上限自动调整压缩阈值；远端压缩失败时自动改用摘要压缩，并在当前任务中保持。",
       "card": {
         "label": "压缩触发阈值",
         "badge": "Claude Code",
@@ -9111,7 +9111,8 @@
       "projectContextLoaded": "项目知识库已加载",
       "contextRing": {
         "compactHint": "点击压缩上下文",
-        "codexAutoHint": "Codex 由服务端自动压缩，不支持手动触发",
+        "codexPendingHint": "配置将在下次发送时应用，当前用量尚未读取。",
+        "codexAutoHint": "Codex CLI 管理上下文与自动压缩，此处只读。",
         "confirmTitle": "压缩上下文？",
         "confirmDescription": "当前已使用 {{used}} / {{total}}({{pct}}%)。将静默压缩上下文，由 Agent 总结历史对话并释放上下文空间。",
         "confirmAction": "压缩",

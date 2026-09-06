@@ -409,6 +409,8 @@ export interface CodexExtraSpawnConfig {
   codexRemoteCompactionProviderId?: string;
   /** Cindy Provider codex/* 的内部 OpenAI transport identity；固定走 HTTP。 */
   codexCindyRemoteCompactionProviderId?: string;
+  /** Native summary identity persisted per thread after remote auto-compaction fails. */
+  codexLocalCompactionProviderId?: string;
   /** Generic custom Provider identities and capabilities frozen into this app-server spawn. */
   codexCustomProviderRoutes?: Array<{
     providerId: string;
@@ -825,38 +827,35 @@ export interface AgentDeps {
     ensureCodexBrowserUseReady: () => Promise<boolean>;
   }) => CapabilityRoutingPolicy | undefined | Promise<CapabilityRoutingPolicy | undefined>;
 
-  /**
-   * 解析某条**具体路由**上该模型已核实的上下文窗口上限（host 注入）；没有则返回 null。
-   *
-   * 用于把上游上报的窗口收敛到真实上限：app-server 对网关路由的模型常报**基础模型**的窗口
-   * （例：目录 372K 的 GPT-5.6-Sol 被报成 1M），虚高值会让上下文占比被低估、memory flush
-   * 阈值跟着推迟。
-   *
-   * 为什么不让 agent 自己查 `capabilities.availableModels`：那是跨 provider 去重后的扁平表，
-   * 同一 model id 由多个 provider 提供时归属已丢，按 id 回查可能命中另一条路由的元数据 ——
-   * 用错路由的上限收敛比不收敛更糟。host 同时持有完整目录与 provider 维度，由它按
-   * (providerId, modelId) 定夺；目录里那些**派生兜底**的窗口（上游不给元数据时补的常量）
-   * 一律不作为上限。
-   *
-   * 返回 null / 缺省不注入 = 不收敛，直接采信上报值（改动前行为）。
-   */
   /** Explicit user context budget for this route. Missing means native/catalog defaults. */
   resolveModelContextLimit?: (
     providerId: string | null | undefined,
     modelId: string,
   ) => number | null;
 
+  /** Resolve native metadata using the exact app-server config and usage report. */
+  resolveCodexContextWindowInfo?: (
+    modelId: string,
+    config: Record<string, unknown>,
+    reportedUsableWindow: number | null,
+  ) => Promise<CodexContextWindowInfo | null>;
+
+  /**
+   * Resolve verified catalog capacity for a concrete (provider, model) route.
+   * Return null for unknown, ambiguous, or derived fallback metadata. Do not use
+   * the provider-deduplicated capabilities.availableModels table for this lookup.
+   * Codex uses this only until native reports its effective usable window;
+   * catalog metadata must not overwrite an observed native capacity.
+   */
   resolveVerifiedContextWindow?: (
     providerId: string | null | undefined,
     modelId: string,
   ) => number | null;
 
   /**
-   * 自定义 Codex 供应商上用户显式填写的 contextWindow。会话启动时据此选择隔离
-   * app-server，并写入 thread/start|resume 的 `config.model_context_window` 与
-   * `config.model_auto_compact_token_limit`,让 app-server 按该窗口 auto-compact。
-   * 可异步核对 Codex 静态目录；返回 null / 缺省 = 不覆盖(官方订阅继续用 live
-   * catalog，目录外自定义 slug 继续走 Codex fallback metadata)。
+   * Per-model requested context window (user override first, explicit provider default second).
+   * A one-session native catalog permits this window without changing sibling routes.
+   * null preserves native defaults. A changed value requires a handle rebuild, preserving rollout.
    */
   resolveCodexThreadContextWindow?: (
     providerId: string | null | undefined,
@@ -893,9 +892,9 @@ export interface AgentDeps {
       requestedCredentialMode?: AgentCredentialMode;
       /** Marks app-server work that must not share the normal local task host. */
       hostPurpose?: 'control-plane' | 'review' | 'custom-context';
-      /** Exact real model slug whose static catalog entry must allow the custom window. */
+      /** Wire model id whose native catalog entry must allow the requested window. */
       customContextModel?: string;
-      /** Explicit custom-provider context window for a one-session custom-context host. */
+      /** Requested context window for a one-session custom-context host. */
       customContextWindow?: number;
       /** Unique app-server Host-generation identity used to scope custom-context resources. */
       customContextHostKey?: string;
@@ -1927,11 +1926,24 @@ export interface AgentSessionTeardownOptions {
   readonly reason: AgentSessionTeardownReason;
 }
 
+/** Read-only native Codex capacity, separate from provider catalog specifications. */
+export interface CodexContextWindowInfo {
+  contextWindow: number;
+  usableContextWindow: number;
+  autoCompactTokenLimit: number;
+  modelMaxContextWindow: number | null;
+  source: 'runtime' | 'config';
+  fallbackModel: boolean;
+  /** No live CLI handle: these settings will be applied on the next send. */
+  pendingApply?: boolean;
+}
+
 /**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
 export interface AgentSessionHandle {
+  getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
   /** SDK 内部 sessionId，session.started 后会回填 */
   readonly id: string;
   readonly agentKind: AgentKind;

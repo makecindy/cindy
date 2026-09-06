@@ -3652,6 +3652,24 @@ describe('model context limit IPC', () => {
   const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 
+  it('returns native facts separately from model preferences without writing or launching a task', async () => {
+    const harness = new IpcHarness();
+    const native = { contextWindow: 272_000, usableContextWindow: 258_400, autoCompactTokenLimit: 244_800,
+      modelMaxContextWindow: 872_000, source: 'runtime' as const, fallbackModel: false };
+    const readCodexContextWindowInfo = vi.fn(async () => native);
+    const writeModelContextLimit = vi.fn();
+    registerProviderHandlers(harness, makeDeps({
+      readModelContextLimit: () => ({ limit: 1_000_000, isCustomized: true }),
+      writeModelContextLimit, readCodexContextWindowInfo,
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, { ...primary, sessionId: 'live-codex' }))
+      .resolves.toMatchObject({ limit: 1_000_000, codexContext: native });
+    expect(readCodexContextWindowInfo).toHaveBeenCalledWith(primary, 'live-codex');
+    expect(writeModelContextLimit).not.toHaveBeenCalled();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, { ...primary, sessionId: 123 }))
+      .rejects.toThrow();
+  });
+
   it('validates every alias then writes one atomic edit with the current owner', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps({
@@ -3668,6 +3686,32 @@ describe('model context limit IPC', () => {
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [primary] }, 400_000, stamp)).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [{ ...related, providerId: 'other' }] }, 400_000, stamp)).rejects.toThrow();
     expect(deps.writeModelContextLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not save a window when native catalog preparation fails', async () => {
+    const harness = new IpcHarness();
+    const writeModelContextLimit = vi.fn();
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'] })],
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      validateModelContextLimit: async () => { throw new Error('native catalog unavailable'); },
+      writeModelContextLimit,
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, primary, 1_000_000, stamp)).rejects.toThrow('native catalog unavailable');
+    expect(writeModelContextLimit).not.toHaveBeenCalled();
+  });
+
+  it('waits for runtime reconfiguration and reports failures for both save and reset', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'] })],
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      writeModelContextLimit: async () => { throw new Error('runtime refresh failed'); },
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, primary, 1_000_000, stamp)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET, primary, stamp)).rejects.toThrow();
   });
 
   it('rejects an owner change during asynchronous catalog validation without writing', async () => {

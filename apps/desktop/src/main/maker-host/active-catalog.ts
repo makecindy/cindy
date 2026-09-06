@@ -58,6 +58,7 @@ import {
 } from './pi-gateway-model-catalog.js';
 import {
   applyLocalConsumerOverrides,
+  hasLocalContextWindowOverride,
   applyLocalOverridesToRoot,
   hasLocalAddition,
   EMPTY_MODEL_CATALOG_OVERRIDES,
@@ -1342,8 +1343,22 @@ function computeMerged(): Catalog {
             ? model.efforts.length === 0 ? null
               : clampEffortToSupported(intent, model.efforts) as Effort | null
             : model.defaultEffort;
+          // Product working defaults are distinct from the provider's advertised capacity.
+          // Apply to each built-in GPT route, including subscription and discount aliases.
+          // Never enlarge smaller models or overwrite BYOM / explicit preference overrides.
+          const conservativeGptDefault = provider.source !== 'user' &&
+            ['openai', 'xd'].includes(provider.id) &&
+            /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(model.id) &&
+            model.contextWindow > 272_000 &&
+            !((agent === 'codex' || agent === 'claude-code') &&
+              hasLocalContextWindowOverride(localOverrides, provider.id,
+                provider.id === 'openai' ? model.id.replace(/^chatgpt\//, '') : model.id, agent));
           return {
             ...model,
+            ...(conservativeGptDefault ? {
+              contextWindow: 272_000,
+              contextWindowMax: model.contextWindowMax ?? model.contextWindow,
+            } : {}),
             defaultEffort,
             ...(nativeApi !== undefined ? { nativeApi } : {}),
           };

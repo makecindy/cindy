@@ -1798,7 +1798,7 @@
           "defaultEffort": "기본 추론 강도",
           "defaultEffortHint": "새 작업의 초기 추론 강도입니다. 작업 안에서도 변경할 수 있습니다.",
           "contextLimit": "컨텍스트 상한",
-          "contextLimitHint": "정수 K로 편집하며 표시는 내림합니다. 편집 전까지 정확한 설정을 유지합니다. 저장하면 새 작업이나 다시 연 작업에 적용됩니다.",
+          "contextLimitHint": "이 모델의 모든 사용 가능한 엔진에 적용됩니다. 정수 K 단위로 편집합니다(1 K = 1,000 tokens). 수정하지 않은 값은 정밀도를 유지합니다. 저장한 변경 사항은 이후 실행에 적용되며 생성 중인 응답을 중단하지 않습니다. 실제로 사용할 수 있는 길이는 모델 서비스의 제한을 따릅니다.",
           "contextLimitAria": "컨텍스트 상한(천 tokens)",
           "contextLimitRoute": "현재 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "공급업체가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
@@ -1846,14 +1846,14 @@
             "matching": "기본 지원",
             "unknown": "프로토콜 미확인"
           },
-          "codexContextDefault": "Codex 기본 컨텍스트 272K",
-          "codexContextHint": "Codex는 기본적으로 272K 컨텍스트를 사용하며 한도에 도달하기 전에 자동 압축합니다. 여기서 변경한 값은 다른 엔진에만 적용됩니다. 더 큰 창은 Codex를 별도로 설정해야 하며 일상적인 사용에는 권장하지 않습니다.",
-          "codexContextAdvanced": "더 큰 창은 Codex를 별도로 설정해야 하며 일상적인 사용에는 권장하지 않습니다.",
           "lifecycle": {
             "alpha": "체험판",
             "deprecated": "더 이상 권장하지 않음",
             "retired": "제공 종료"
-          }
+          },
+          "codexContextUnknown": "CLI 설정을 읽을 수 없음",
+          "codexContextValues": "전체 {{total}} · 사용 가능 {{usable}} · 자동 압축 {{compact}} tokens",
+          "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다."
         },
         "kindFilter": {
           "all": "전체",
@@ -2844,7 +2844,7 @@
     },
     "compaction": {
       "title": "컨텍스트 압축",
-      "description": "Claude Code와 Pi가 컨텍스트를 자동 압축할 시점을 제어합니다. Codex는 별도로 컨텍스트 압축을 관리합니다.",
+      "description": "여기서 Claude Code와 Pi의 압축 비율을 조정합니다. Codex는 모델 컨텍스트 설정에 따라 임계값을 정합니다. 원격 압축이 실패하면 요약 압축으로 자동 전환하고 현재 작업에서 계속 사용합니다.",
       "card": {
         "label": "압축 트리거 임계값",
         "badge": "Claude Code",
@@ -9111,7 +9111,8 @@
       "projectContextLoaded": "프로젝트 지식베이스 로드됨",
       "contextRing": {
         "compactHint": "클릭하여 컨텍스트 압축",
-        "codexAutoHint": "Codex는 서버 측에서 자동으로 압축되며 수동 압축은 지원되지 않습니다",
+        "codexPendingHint": "다음 전송 시 설정이 적용됩니다. 현재 사용량은 아직 확인되지 않았습니다.",
+        "codexAutoHint": "Codex CLI가 컨텍스트와 자동 압축을 관리합니다. 여기서는 읽기만 가능합니다.",
         "confirmTitle": "컨텍스트를 압축할까요?",
         "confirmDescription": "현재 사용량: {{used}} / {{total}}({{pct}}%). 컨텍스트를 조용히 압축하여 Agent가 대화 기록을 요약하고 컨텍스트 공간을 확보합니다.",
         "confirmAction": "압축",

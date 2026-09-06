@@ -55,6 +55,22 @@ describe('per-model protocol comparison', () => {
     expect(pickRecommendedAgent(provider, model.id, ['claude-code', 'codex'])).toBe('claude-code');
   });
 
+  it.each(['openai-chat', 'openai-responses'] as const)(
+    'marks Chat Completions via %s as compatibility without misreporting the native CLI transport',
+    (wireProtocol) => {
+      const { provider, byAgent } = fixture('openai-completions');
+      provider.routing.codex!.wireProtocol = wireProtocol;
+      expect(modelProtocolComparison(provider, byAgent).forAgent('codex')).toMatchObject({
+        harness: 'openai-responses',
+        outbound: wireProtocol === 'openai-chat' ? 'openai-completions' : 'openai-responses',
+        localConversion: wireProtocol === 'openai-chat',
+        mode: 'compatibility',
+      });
+      expect(resolveAgentCapability([{ ...provider, connected: true }], 'xd', model.id, 'codex')?.protocolMode)
+        .toBe('compatibility');
+    },
+  );
+
   it('does not infer a native Google route or recommendation from a Gemini name', () => {
     const { provider, byAgent } = fixture('openai-responses');
     for (const entry of Object.values(byAgent)) entry.id = 'google/gemini-future';

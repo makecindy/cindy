@@ -1,3 +1,4 @@
+import { useCodexContextWindow } from '@/hooks/useCodexContextWindow';
 import { localizedModelName } from '@/lib/modelDisplayNames';
 import { Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -79,10 +80,10 @@ export function ModelConfigFlyout({
   const displayName = localizedModelName(entry.displayName, t);
   const showSlider = config.efforts.length > 1;
   const contextWindow = config.capability?.contextWindow ?? 0;
-  const codexDefaultContext =
-    config.engine === 'codex' &&
-    ['xd', 'openai', 'anthropic', 'xai'].includes(entry.providerId) &&
-    contextWindow > 272_000;
+  const codexDefaultContext = config.engine === 'codex';
+  const codexContext = useCodexContextWindow({
+    enabled: codexDefaultContext, providerId: entry.providerId, modelId: config.wireModelId ?? entry.modelId,
+  });
   const starred = state === 'favorite' || justFavorited;
 
   const discount = price?.kind === 'priced' ? price.discount : undefined;
@@ -151,18 +152,18 @@ export function ModelConfigFlyout({
         {contextWindow > 0 && (
           <>
             {' · '}
-            {codexDefaultContext
-              ? t('settings.providers.models.advanced.codexContextDefault')
-              : t('newChat.modelSelector.meta.context', {
-                  value: formatContextWindow(contextWindow),
-                })}
+            {t('newChat.modelSelector.meta.context', {
+              value: codexDefaultContext
+                ? codexContext ? formatContextWindow(codexContext.contextWindow) : t('settings.providers.models.advanced.codexContextUnknown')
+                : formatContextWindow(contextWindow),
+            })}
           </>
         )}
       </div>
 
       {codexDefaultContext && (
         <p className="pt-1.5 text-11 leading-relaxed text-[var(--text-tertiary)]">
-          {t('settings.providers.models.advanced.codexContextAdvanced')}
+          {t('ccAgent.layout.contextRing.codexAutoHint')}
         </p>
       )}
 

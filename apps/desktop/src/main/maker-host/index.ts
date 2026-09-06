@@ -8,6 +8,7 @@
  * 这样可以确保 localDb.ensureReady(userId) 已经完成才能用 SessionStorage。
  */
 
+import { readCodexContextWindowInfo } from './codex-context-window.js';
 import { app, BrowserWindow } from 'electron';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -102,7 +103,7 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { inferProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -137,11 +138,10 @@ import {
   resolvePiRuntimeModelDescriptor,
   resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
-  resolveExplicitCustomContextWindow,
+  resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
 import {
-  bundledCodexCatalogHasModel,
   prepareCodexCustomContextCatalog,
 } from './codex-custom-context-catalog.js';
 import { buildPiAgent, type BuildPiAgentOpts } from './pi-host.js';
@@ -275,6 +275,7 @@ import {
 import {
   buildCodexProxySpawnArgs,
   CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
 import {
@@ -1384,33 +1385,22 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),
       },
-      // 把 app-server 上报的上下文窗口收敛到该**路由**真实上限。每次调用读 live 目录:
-      // 模型发现 / 切账号 / 自定义 provider 增删改都要即时反映。按 providerId 定夺而不是
-      // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
-      resolveModelContextLimit: (providerId, modelId) =>
-        providerId ? readModelContextLimit('codex', providerId, modelId) : null,
+      // Resolve settings by the actual provider route. Model specifications never
+      // overwrite a native usage report; explicit settings configure the CLI itself.
+      resolveModelContextLimit: (providerId, modelId) => {
+        const source = providerId ?? inferProviderIdForModel(modelId, 'codex');
+        return source ? readModelContextLimit('codex', source, modelId) : null;
+      },
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
-      resolveCodexThreadContextWindow: async (providerId, modelId) => {
-        const contextWindow = resolveExplicitCustomContextWindow(
-          getDesktopSelectableCatalog(),
-          'codex',
-          providerId,
-          modelId,
+      resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow) =>
+        readCodexContextWindowInfo({ codexHome: getCodexHome(), binaryPath: codexPath, modelId, config, reportedUsableWindow }),
+      resolveCodexThreadContextWindow: (providerId, modelId) => {
+        const source = providerId ?? inferProviderIdForModel(modelId, 'codex');
+        const override = source ? readModelContextLimit('codex', source, modelId) : null;
+        return override ?? resolveModelDefaultContextWindow(
+          getDesktopSelectableCatalog(), 'codex', source, modelId,
         );
-        if (contextWindow === null) return null;
-        try {
-          if (await bundledCodexCatalogHasModel(codexPath, modelId)) return contextWindow;
-          desktopMakerLogger.debug(
-            'Codex custom context override skipped: bundled catalog has no matching model',
-          );
-        } catch (error) {
-          desktopMakerLogger.warn(
-            'Codex custom context catalog preflight failed; using fallback model metadata',
-            { error: error instanceof Error ? error.message : String(error) },
-          );
-        }
-        return null;
       },
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
@@ -1695,7 +1685,8 @@ export function getMaker(): Maker {
               }
             : {}),
           ...(ready
-            ? { codexCindyRemoteCompactionProviderId: CODEX_CINDY_COMPACT_PROVIDER_ID }
+            ? { codexCindyRemoteCompactionProviderId: CODEX_CINDY_COMPACT_PROVIDER_ID,
+                codexLocalCompactionProviderId: CODEX_SUMMARY_COMPACT_PROVIDER_ID }
             : {}),
           // oauth spawn 额外定义订阅直连 identity；Cindy codex/* 使用上面的 HTTP identity。
           ...(useOAuthBearer && ready

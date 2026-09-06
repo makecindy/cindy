@@ -272,18 +272,12 @@ export function resolvePiGatewayDescriptorProviderId(
 export { resolveVerifiedContextWindow } from '../../shared/sessionContextWindow';
 
 /**
- * 自定义供应商上用户显式填写的 contextWindow。
- *
- * 注入 thread/start|resume 的 `model_context_window` 与
- * `model_auto_compact_token_limit`(窗口的 95%)。Codex 还会按模型目录里的
- * `max_context_window` 夹紧该值；Desktop 为这类会话启动隔离 app-server，并给它
- * 注入从当前 Codex 二进制提取、只抬高对应模型上限的完整目录。
- * 只认 `source === 'user'` 且 `contextWindowExplicit` 的条目:
- *   - 官方 ChatGPT 订阅走 live catalog 的 1M,不要被这条覆盖;
- *   - 网关核实上限(如 372K)只用于 Cindy 进度条收敛,写进 Codex 会改变官方会话压缩时机。
- * 缺省 200K 展示兜底不算显式,不注入。
+ * The model editor's default window for this exact provider/harness route.
+ * Codex must apply this value even when no user override has been saved.
+ * The caller prepares an isolated native catalog and sets the CLI window and
+ * compaction budget; this value never replaces native runtime usage reports.
  */
-export function resolveExplicitCustomContextWindow(
+export function resolveModelDefaultContextWindow(
   catalog: Catalog,
   agent: AgentKind,
   providerId: string | null | undefined,
@@ -292,11 +286,11 @@ export function resolveExplicitCustomContextWindow(
   const source = providerId?.trim();
   if (!source) return null;
   const provider = catalog.providers.find((entry) => entry.id === source);
-  if (!provider || provider.source !== 'user') return null;
+  if (!provider) return null;
   if (provider.routing[agent]?.disabled === true) return null;
   const model = (provider.models[agent] ?? []).find((entry) => entry.id === modelId);
-  if (!model || model.contextWindowExplicit !== true) return null;
-  return model.contextWindow > 0 ? model.contextWindow : null;
+  return model && Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
+    ? model.contextWindow : null;
 }
 
 /**

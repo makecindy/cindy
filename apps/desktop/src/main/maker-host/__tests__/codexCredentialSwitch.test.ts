@@ -50,6 +50,13 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
     })).toBe(false);
   });
 
+  it('keeps a task on its sticky native summary fallback', () => {
+    expect(isCodexThreadModelProviderIdentityMismatch({ agentKind: 'codex',
+      currentProviderId: 'xd', nextProviderId: 'xd', currentModel: 'codex/gpt-6-astra', nextModel: 'codex/gpt-6-astra',
+      currentCodexProxyActive: true, currentCodexThreadModelProviderId: 'cindy_summary',
+    })).toBe(false);
+  });
+
   it('keeps a matching Cindy Codex remote-compaction thread for Cindy codex model changes', () => {
     const input = {
       agentKind: 'codex',

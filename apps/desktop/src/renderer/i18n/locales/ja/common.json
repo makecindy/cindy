@@ -1798,7 +1798,7 @@
           "defaultEffort": "既定の推論強度",
           "defaultEffortHint": "新しいタスクの初期推論強度です。タスク内でも変更できます。",
           "contextLimit": "コンテキスト上限",
-          "contextLimitHint": "整数 K で編集し、表示時は切り捨てます。編集するまで正確な設定を保持します。保存後は新規または再度開いたタスクに適用されます。",
+          "contextLimitHint": "このモデルのすべての利用可能なエンジンに適用されます。整数 K（1 K = 1,000 tokens）で編集します。未編集の値は精度を保持します。保存した変更は以降の実行に適用され、生成中の応答を中断しません。実際に利用できる長さはモデルサービスの制限に従います。",
           "contextLimitAria": "コンテキスト上限（千 tokens）",
           "contextLimitRoute": "現在 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "プロバイダーが宣言した上限を超えています。リクエストが失敗する可能性があります。",
@@ -1846,14 +1846,14 @@
             "matching": "ネイティブ対応",
             "unknown": "プロトコル未確認"
           },
-          "codexContextDefault": "Codex の既定コンテキストは 272K",
-          "codexContextHint": "Codex の既定コンテキストは 272K で、上限に達する前に自動圧縮します。ここでの変更は他のエンジンにのみ適用されます。拡張には Codex の個別設定が必要で、通常の利用には推奨しません。",
-          "codexContextAdvanced": "拡張には Codex の個別設定が必要で、通常の利用には推奨しません。",
           "lifecycle": {
             "alpha": "試用版",
             "deprecated": "非推奨",
             "retired": "提供終了"
-          }
+          },
+          "codexContextUnknown": "CLI 設定を取得できません",
+          "codexContextValues": "総容量 {{total}} · 使用可能 {{usable}} · 自動圧縮 {{compact}} tokens",
+          "contextLimitGptHint": "GPT は既定で最大 272K を使用します。ここで 1M に変更できます。Codex はウィンドウと自動圧縮のしきい値を同時に適用し、5% の余裕を確保します。実際の容量はモデルサービスに依存します。"
         },
         "kindFilter": {
           "all": "すべて",
@@ -2844,7 +2844,7 @@
     },
     "compaction": {
       "title": "コンテキスト圧縮",
-      "description": "Claude Code と Pi がコンテキストを自動圧縮するタイミングを制御します。Codex は独自にコンテキスト圧縮を管理します。",
+      "description": "Claude Code と Pi の圧縮率をここで調整します。Codex はモデルのコンテキスト設定からしきい値を決定します。リモート圧縮に失敗すると要約による圧縮に自動で切り替え、現在のタスクで継続します。",
       "card": {
         "label": "圧縮トリガーしきい値",
         "badge": "Claude Code",
@@ -9111,7 +9111,8 @@
       "projectContextLoaded": "プロジェクトナレッジベースを読み込みました",
       "contextRing": {
         "compactHint": "クリックでコンテキストを圧縮",
-        "codexAutoHint": "Codex はサーバー側で自動圧縮されるため、手動での圧縮はできません",
+        "codexPendingHint": "次回の送信時に設定が適用されます。現在の使用量はまだ取得されていません。",
+        "codexAutoHint": "コンテキストと自動圧縮は Codex CLI が管理します。ここは読み取り専用です。",
         "confirmTitle": "コンテキストを圧縮しますか?",
         "confirmDescription": "現在の使用量: {{used}} / {{total}}({{pct}}%)。コンテキストを静かに圧縮し、Agent が会話履歴を要約してコンテキスト領域を解放します。",
         "confirmAction": "圧縮",

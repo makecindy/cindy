@@ -32,12 +32,26 @@ export function useModelContextLimit(target: ModelContextLimitTarget | null) {
       const current = () => request === generation.current && isDataOwnerGenerationCurrent(owner);
       setState((prev) => ({ ...prev, loading: true, error: false }));
       try {
-        const view = write
+        let view = write
           ? await window.electronAPI.maker.setModelContextLimit(stableTarget, write.limit, stamp)
           : await window.electronAPI.maker.getModelContextLimit(stableTarget);
+        if (write && stableTarget.agent === 'codex' && current()) {
+          view = await window.electronAPI.maker.getModelContextLimit(stableTarget);
+        }
         if (current()) setState({ ...view, loading: false, error: false });
       } catch (error) {
         log.warn('model context limit request failed', error);
+        // A failed runtime refresh is rolled back by main. Read the committed
+        // value even if rollback/readback also failed; never retain a stale edit.
+        if (write && current()) {
+          try {
+            const view = await window.electronAPI.maker.getModelContextLimit(stableTarget);
+            if (current()) setState({ ...view, loading: false, error: true });
+            return;
+          } catch (readError) {
+            log.warn('model context limit recovery read failed', readError);
+          }
+        }
         if (current()) setState((prev) => ({ ...prev, loading: false, error: true }));
       }
     },

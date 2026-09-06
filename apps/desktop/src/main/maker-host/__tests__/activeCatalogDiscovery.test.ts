@@ -132,7 +132,8 @@ describe('active-catalog discovered augment', () => {
     expect(projected).toMatchObject({
       id: 'chatgpt/gpt-5.7',
       piApi: 'openai-responses',
-      contextWindow: 400_000,
+      contextWindow: 272_000,
+      contextWindowMax: 400_000,
     });
   });
 
@@ -379,7 +380,7 @@ describe('active-catalog discovered augment', () => {
     // 动态快照决定存在性，且明确返回的运行时能力高于 registry 基线。
     const openai = getActiveCatalog().providers.find((p) => p.id === 'openai');
     expect((openai?.models.codex ?? []).find((m) => m.id === 'gpt-5.5')?.contextWindow).toBe(
-      400000,
+      272000,
     );
   });
 
@@ -391,7 +392,7 @@ describe('active-catalog discovered augment', () => {
     const openai = getActiveCatalog().providers.find((p) => p.id === 'openai');
     const m55 = (openai?.models.codex ?? []).find((m) => m.id === 'gpt-5.5');
     // 动态快照决定存在性和明确能力；legacy 静态条目不复活。
-    expect(m55?.contextWindow).toBe(400000);
+    expect(m55).toMatchObject({ contextWindow: 272000, contextWindowMax: 400000 });
   });
 
   it('paired projection 使用同一纯名称和 sortOrder,且按 sortOrder 稳定排序', () => {

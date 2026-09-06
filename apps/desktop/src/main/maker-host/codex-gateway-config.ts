@@ -43,6 +43,9 @@ export const CODEX_OPENAI_COMPACT_PROVIDER_ID = 'cindy_openai';
  */
 export const CODEX_CINDY_COMPACT_PROVIDER_ID = 'cindy_codex';
 
+/** Sticky per-thread native summary fallback; model and credential routing are unchanged. */
+export const CODEX_SUMMARY_COMPACT_PROVIDER_ID = 'cindy_summary';
+
 /**
  * 注入 codex 子进程的环境变量名 —— codex 通过 config 的 `env_key` 来这里读 API key。
  * 用专名避免撞用户机器上已有的同名变量。
@@ -103,6 +106,16 @@ export function buildCodexProxySpawnArgs(
     // 只有不依赖请求体改写的订阅直连 provider(下面的 cindy_openai)才放开 WS。
     '-c', `model_providers.${p}.supports_websockets=false`,
   ];
+  // Same HTTP endpoint and authentication as the normal proxy identity. Its
+  // distinct id is persisted by native Codex so a reopened task stays on summaries.
+  const summary = CODEX_SUMMARY_COMPACT_PROVIDER_ID;
+  args.push(
+    '-c', `model_providers.${summary}.name="Cindy Summary"`,
+    '-c', `model_providers.${summary}.base_url="${baseUrl}"`,
+    '-c', `model_providers.${summary}.wire_api="responses"`,
+    '-c', authArg.replace(`model_providers.${p}.`, `model_providers.${summary}.`),
+    '-c', `model_providers.${summary}.supports_websockets=false`,
+  );
   const c = CODEX_CINDY_COMPACT_PROVIDER_ID;
   const cindyCompactAuthArg = authMode === 'oauth-bearer'
     ? `model_providers.${c}.requires_openai_auth=true`

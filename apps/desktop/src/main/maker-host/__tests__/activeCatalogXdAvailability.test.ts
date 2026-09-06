@@ -37,6 +37,30 @@ afterEach(() => {
 });
 
 describe('XD 网关权威模型清单重建', () => {
+  it('defaults every maintained GPT route to 272K while retaining capacity and smaller/non-GPT windows', () => {
+    const ids = [
+      'codex/gpt-6-astra', 'openai/gpt-6-astra',
+      'codex/gpt-5.6-sol', 'codex/gpt-5.6-terra', 'codex/gpt-5.6-luna',
+      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+      'codex/gpt-5.5', 'codex/gpt-5.5:auto', 'gpt-5.5',
+      'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'codex/gpt-5.4-mini',
+    ];
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      ...ids.map(id => ({ id, name: id, agents: ['claude-code', 'codex', 'pi'] as const,
+        contextWindow: 1_050_000 })),
+      { id: 'gpt-4-small', agents: ['codex'] as const, contextWindow: 128_000 },
+      { id: 'z-ai/glm-5.3-flash', agents: ['codex'] as const, contextWindow: 1_000_000 },
+    ].map(m => ({ ...m, agents: [...m.agents] })));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      for (const id of ids) expect(xdModels(agent).find(m => m.id === id)).toMatchObject({
+        contextWindow: 272_000, contextWindowMax: 1_050_000,
+      });
+    }
+    expect(xdModels('codex').find(m => m.id === 'gpt-4-small')?.contextWindow).toBe(128_000);
+    expect(xdModels('codex').find(m => m.id === 'z-ai/glm-5.3-flash')?.contextWindow).toBe(1_000_000);
+  });
+
   it('未拉到实时清单时不暴露任何 XD 模型', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     expect(xdModels('claude-code')).toEqual([]);
@@ -514,7 +538,8 @@ describe('XD 网关权威模型清单重建', () => {
       expect(list[0]).toMatchObject({
         name: 'GPT-5.6-Sol',
         group: 'gpt-budget',
-        contextWindow: 372_000,
+        contextWindow: 272_000,
+        contextWindowMax: 372_000,
         efforts: ['low', 'medium', 'high', 'xhigh'],
         defaultEffort: 'medium',
       });
@@ -567,7 +592,7 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex').map((model) => model.id)).toEqual(['chat-model']);
   });
 
-  it('perAgent 覆盖块按 tab 应用(cc 无 Fast + 1M 窗口;codex 保持基线)', () => {
+  it('perAgent Fast 差异保留，GPT 工作窗口采用保守默认', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
@@ -583,7 +608,7 @@ describe('XD 网关权威模型清单重建', () => {
     ]);
     const cc = xdModels('claude-code')[0];
     const codex = xdModels('codex')[0];
-    expect(cc).toMatchObject({ contextWindow: 1_000_000, supportsFastMode: false });
+    expect(cc).toMatchObject({ contextWindow: 272_000, supportsFastMode: false });
     expect(codex).toMatchObject({ contextWindow: 272_000, supportsFastMode: true });
     // 覆盖块没动的字段沿用基线。
     expect(cc.efforts).toEqual(['low', 'medium', 'high', 'xhigh']);

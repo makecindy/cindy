@@ -22,7 +22,7 @@ function provider(id: string, row: CatalogModel = model): Provider {
   };
 }
 const session = {
-  agentKind: 'codex',
+  agentKind: 'cc',
   model: model.id,
   providerId: 'openai',
   contextTokens: 140_500,
@@ -31,7 +31,7 @@ const session = {
 const catalog: Pick<Catalog, 'providers'> = { providers: [provider('openai')] };
 
 describe('session context read projection', () => {
-  it.each(['cc', 'codex'])(
+  it.each(['cc', 'claude-code'])(
     'corrects %s history without mutating its stored snapshot',
     (agentKind) => {
       const saved = { ...session, agentKind };
@@ -54,9 +54,11 @@ describe('session context read projection', () => {
     expect(resolveSessionContextWindow(routes, { ...session, providerId: 'missing' })).toBeNull();
   });
 
-  it('preserves Pi runtime snapshots and unknown or unverified routes', () => {
+  it('preserves Codex and Pi runtime snapshots and unknown or unverified routes', () => {
     for (const saved of [
       { ...session, agentKind: 'pi' },
+      { ...session, agentKind: 'codex', contextWindow: 258_400 },
+      { ...session, agentKind: 'codex', contextWindow: 828_400 },
       { ...session, model: '' },
     ]) {
       expect(

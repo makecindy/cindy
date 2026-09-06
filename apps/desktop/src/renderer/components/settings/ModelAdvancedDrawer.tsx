@@ -230,13 +230,7 @@ export function ModelAdvancedDrawer({
     null;
   const primaryModel = row && primaryAgent ? (row.byAgent[primaryAgent] ?? null) : null;
 
-  // Built-in Codex uses its own process/model ceiling. A shared row edit must not
-  // promise to expand it or silently write a Codex override along with Pi/Claude.
-  const separateCodexContext = provider.source !== 'user' && Boolean(row?.byAgent.codex);
-  const contextAgent =
-    separateCodexContext && primaryAgent === 'codex'
-      ? (row?.avail.find((agent) => agent !== 'codex') ?? null)
-      : primaryAgent;
+  const contextAgent = primaryAgent;
   const contextModel = contextAgent ? row?.byAgent[contextAgent] : null;
 
   const contextTarget = useMemo(
@@ -247,20 +241,21 @@ export function ModelAdvancedDrawer({
             agent: contextAgent,
             modelId: contextModel.id,
             relatedTargets: (row?.avail ?? [])
-              .filter((a) => a !== contextAgent && !(separateCodexContext && a === 'codex'))
+              .filter((a) => a !== contextAgent)
               .flatMap((agent) => {
                 const model = row?.byAgent[agent];
                 return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
               }),
           }
         : null,
-    [contextAgent, contextModel, provider.id, row, separateCodexContext],
+    [contextAgent, contextModel, provider.id, row],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
 
   const [ctxDraft, setCtxDraft] = useState('');
   const ctxDirtyRef = useRef(false);
-  const defaultWindow = contextModel?.contextWindow ?? 0;
+  const defaultWindow = contextAgent === 'codex' && ctx.codexContext
+    ? ctx.codexContext.contextWindow : contextModel?.contextWindow ?? 0;
   const routeWindow = primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
@@ -635,30 +630,12 @@ export function ModelAdvancedDrawer({
                   {conversational && (
                     <Section
                       title={t('settings.providers.models.advanced.contextLimit')}
-                      hint={t('settings.providers.models.advanced.contextLimitHint')}
+                      hint={t(/^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(primaryModel.id) && provider.source !== 'user' && ['openai', 'xd'].includes(provider.id)
+                        ? 'settings.providers.models.advanced.contextLimitGptHint'
+                        : 'settings.providers.models.advanced.contextLimitHint')}
                     >
-                      {separateCodexContext && (
-                        <p
-                          data-codex-context-note
-                          className="mb-2 text-12 leading-relaxed text-[var(--text-secondary)]"
-                        >
-                          {t('settings.providers.models.advanced.codexContextHint')}
-                        </p>
-                      )}
                       {contextTarget && (
                         <>
-                          {separateCodexContext && (
-                            <p className="mb-1 text-11 text-[var(--text-tertiary)]">
-                              {[
-                                contextTarget.agent,
-                                ...(contextTarget.relatedTargets ?? []).map(
-                                  (target) => target.agent,
-                                ),
-                              ]
-                                .map((agent) => AGENT_LABEL[agent])
-                                .join(' / ')}
-                            </p>
-                          )}
                           <div className="mt-1 flex flex-wrap items-center gap-2.5">
                             <span
                               className={cn(

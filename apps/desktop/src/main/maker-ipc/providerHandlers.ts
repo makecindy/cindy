@@ -14,6 +14,7 @@
  * handler body 可脱 Electron 用 IpcHarness + 内存 db 直接 invoke 单测（规则 14）。
  */
 
+import type { CodexContextWindowInfo } from '@cindy/maker-core';
 import {
   isLoopbackProviderUrl,
   isProviderRequestPath,
@@ -397,8 +398,10 @@ export interface ProviderHandlerDeps {
    * 能区分「跟随默认」与「设了一个刚好等于默认的值」。write 传 null = 恢复默认(删 override)。
    * 可选 —— 未注入(单测最小桩)时对应 handler 报 INTERNAL 而不是静默成功。
    */
+  readCodexContextWindowInfo?(target: ModelPriceOverrideTarget, sessionId?: string): Promise<CodexContextWindowInfo | null>;
   readModelContextLimit?(target: ModelPriceOverrideTarget): ModelContextLimitView;
-  writeModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number | null): void;
+  validateModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number): Promise<void>;
+  writeModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number | null): void | Promise<void>;
 }
 
 /** 上下文上限的读回视图(与写入返回同形，UI 一次拿齐当前值与是否自定义)。 */
@@ -1502,7 +1505,15 @@ export function registerProviderHandlers(
     assertTrustedProviderMutationSender(event);
     const targets = parseContextTargets(input);
     // 读不做目录成员校验:目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
-    return readContextTargets(targets);
+    const view = readContextTargets(targets);
+    if (targets.length === 1 && targets[0]!.agent === 'codex') {
+      const sessionId = (input as { sessionId?: unknown }).sessionId;
+      if (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 200)) {
+        throwIpcError('INVALID_PARAMS', 'invalid context session id');
+      }
+      return { ...view, codexContext: await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null };
+    }
+    return view;
   });
 
   registry.handle(
@@ -1528,12 +1539,13 @@ export function registerProviderHandlers(
           // 写入才校验目标在目录里:挡「合法长度但不存在的 id」被批量预埋进这份
           // 无界 key-value 文件(与停用轴同一条防线)。
           if (limit !== null) for (const t of targets) await requirePriceTargetModel(t);
+          if (limit !== null) await deps.validateModelContextLimit?.(targets, limit);
           assertProviderMutationOwner(
             ownerAtIngress,
             'active account changed before persisting context limit override',
           );
           try {
-            write(targets, limit);
+            await write(targets, limit);
           } catch (err) {
             log.warn('model context limit persist failed', {
               providerId: target.providerId,
@@ -1563,7 +1575,7 @@ export function registerProviderHandlers(
           'active account changed before resetting context limit override',
         );
         try {
-          write(targets, null);
+          await write(targets, null);
         } catch (err) {
           log.warn('model context limit reset failed', {
             providerId: target.providerId,

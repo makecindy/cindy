@@ -1798,7 +1798,7 @@
           "defaultEffort": "預設推理強度",
           "defaultEffortHint": "新任務選中該模型時的初始檔位，任務內仍可臨時調整。",
           "contextLimit": "上下文上限",
-          "contextLimitHint": "以整數 K 編輯，顯示時向下取整；未編輯時保留精確設定。儲存後用於新建或重新開啟的任務。",
+          "contextLimitHint": "套用至此模型所有可用引擎。以整數 K 編輯（1 K = 1,000 tokens）；未編輯時保留精確值。儲存後用於後續執行，不影響正在產生的內容。實際可用長度仍受模型服務限制。",
           "contextLimitAria": "上下文上限（千 tokens）",
           "contextLimitRoute": "目前 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "已超過上游宣告的長度，可能導致請求失敗。",
@@ -1846,14 +1846,14 @@
             "matching": "原生支援",
             "unknown": "協定待確認"
           },
-          "codexContextDefault": "Codex 預設 272K 上下文",
-          "codexContextHint": "Codex 預設使用 272K 上下文，並提前自動壓縮。這裡的調整僅用於其他引擎；更大視窗需另行調整 Codex 設定，不建議日常使用。",
-          "codexContextAdvanced": "更大視窗需另行調整 Codex 設定，不建議日常使用。",
           "lifecycle": {
             "alpha": "試用版",
             "deprecated": "不再推薦",
             "retired": "已下架"
-          }
+          },
+          "codexContextUnknown": "未讀取到 CLI 設定",
+          "codexContextValues": "總視窗 {{total}} · 可用 {{usable}} · 自動壓縮 {{compact}} tokens",
+          "contextLimitGptHint": "GPT 預設最多使用 272K；可在此自訂為 1M。Codex 會同步套用視窗與自動壓縮門檻，保留 5% 餘量；實際容量受模型服務限制。"
         },
         "kindFilter": {
           "all": "全部",
@@ -2844,7 +2844,7 @@
     },
     "compaction": {
       "title": "上下文壓縮",
-      "description": "控制 Claude Code 和 Pi 何時自動壓縮上下文。Codex 會單獨管理上下文壓縮。",
+      "description": "Claude Code 和 Pi 的壓縮比例在此調整。Codex 隨模型設定的上下文上限自動調整壓縮門檻；遠端壓縮失敗時自動改用摘要壓縮，並在目前任務中保持。",
       "card": {
         "label": "壓縮觸發閾值",
         "badge": "Claude Code",
@@ -9111,7 +9111,8 @@
       "projectContextLoaded": "專案知識庫已載入",
       "contextRing": {
         "compactHint": "點選壓縮上下文",
-        "codexAutoHint": "Codex 由服務端自動壓縮，不支援手動觸發",
+        "codexPendingHint": "設定將在下次傳送時套用，目前用量尚未讀取。",
+        "codexAutoHint": "Codex CLI 管理上下文與自動壓縮，此處唯讀。",
         "confirmTitle": "壓縮上下文？",
         "confirmDescription": "當前已使用 {{used}} / {{total}}({{pct}}%)。將靜默壓縮上下文，由 Agent 總結歷史對話並釋放上下文空間。",
         "confirmAction": "壓縮",

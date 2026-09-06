@@ -1386,6 +1386,10 @@ export class Session {
     }
   }
 
+  async getCodexContextWindowInfo() {
+    return this.handle.getCodexContextWindowInfo?.() ?? null;
+  }
+
   getUsageSnapshot(): UsageSnapshot {
     return this.handle.getUsageSnapshot();
   }

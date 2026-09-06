@@ -9,8 +9,9 @@ export interface ContextWindowSession {
 }
 
 /**
- * Shared with runtime usage normalization: only an unambiguous, verified route
- * may replace a reported window. Never borrow a same-id model from another provider.
+ * Resolve catalog metadata for an unambiguous, verified route. Callers decide
+ * whether it is a fallback or a projection; it cannot replace native Codex usage.
+ * Never borrow a same-id model from another provider.
  */
 export function resolveVerifiedContextWindow(
   catalog: Pick<Catalog, 'providers'>,
@@ -32,12 +33,12 @@ export function resolveVerifiedContextWindow(
   return Number.isFinite(only.contextWindow) && only.contextWindow > 0 ? only.contextWindow : null;
 }
 
-/** Pi's runtime window can differ from its catalog; preserve its saved snapshot. */
+/** Codex and Pi report their effective runtime windows; catalogs cannot replace them. */
 export function resolveSessionContextWindow(
   catalog: Pick<Catalog, 'providers'>,
   session: ContextWindowSession,
 ): number | null {
-  if (!session.model || session.agentKind === 'pi') return null;
+  if (!session.model || session.agentKind === 'pi' || session.agentKind === 'codex') return null;
   return resolveVerifiedContextWindow(
     catalog,
     dbToMakerAgentKind(session.agentKind),

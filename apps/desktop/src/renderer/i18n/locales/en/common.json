@@ -1799,7 +1799,7 @@
           "defaultEffort": "Default reasoning effort",
           "defaultEffortHint": "The initial effort for new tasks. You can still adjust it within a task.",
           "contextLimit": "Context limit",
-          "contextLimitHint": "Edit in whole K, rounded down for display. Exact configuration is preserved until edited. Saved changes apply to new or reopened tasks.",
+          "contextLimitHint": "Applies to all available engines for this model. Edit in whole K (1 K = 1,000 tokens); untouched values retain their precision. Saved changes apply to subsequent runs without interrupting a response. Actual capacity remains subject to the model service’s limits.",
           "contextLimitAria": "Context limit (thousands of tokens)",
           "contextLimitRoute": "Current {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
@@ -1847,14 +1847,14 @@
             "matching": "Native support",
             "unknown": "Protocol unconfirmed"
           },
-          "codexContextDefault": "Codex defaults to 272K context",
-          "codexContextHint": "Codex defaults to 272K context and compacts before reaching that limit. Changes here apply only to other engines. Larger windows require separate Codex configuration and are not recommended for everyday use.",
-          "codexContextAdvanced": "Larger windows require separate Codex configuration and are not recommended for everyday use.",
           "lifecycle": {
             "alpha": "Early access",
             "deprecated": "No longer recommended",
             "retired": "Retired"
-          }
+          },
+          "codexContextUnknown": "CLI configuration unavailable",
+          "codexContextValues": "Total {{total}} · Usable {{usable}} · Auto-compact {{compact}} tokens",
+          "contextLimitGptHint": "GPT defaults to at most 272K; you can set it to 1M here. Codex applies the window and automatic compaction threshold together, retaining 5% headroom. Actual capacity depends on the model service."
         },
         "kindFilter": {
           "all": "All",
@@ -2845,7 +2845,7 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code and Pi automatically compact context. Codex manages context compaction separately.",
+      "description": "Adjust Claude Code and Pi compaction ratios here. Codex derives its threshold from the model context setting. If remote compaction fails, it automatically switches to summary compaction and keeps using it for the current task.",
       "card": {
         "label": "Compaction trigger threshold",
         "badge": "Claude Code",
@@ -9126,7 +9126,8 @@
       "projectContextLoaded": "Project Knowledge Base loaded",
       "contextRing": {
         "compactHint": "Click to compact context",
-        "codexAutoHint": "Codex compacts automatically on the server side; manual compaction is not supported",
+        "codexPendingHint": "Settings apply on the next send. Current usage is not yet available.",
+        "codexAutoHint": "Codex CLI manages context and automatic compaction. This control is read-only.",
         "confirmTitle": "Compact context?",
         "confirmDescription": "Current usage: {{used}} / {{total}} ({{pct}}%). This silently compacts context — the agent summarizes chat history to free up context space.",
         "confirmAction": "Compact",

@@ -59,8 +59,36 @@ describe('context editor request ownership', () => {
     expect(hook.result.current.limit).toBeNull();
     hook.unmount();
   });
+  it('rereads the actual committed value when a save rejects', async () => {
+    get.mockResolvedValueOnce(view(272_000)).mockResolvedValue(view(500_000));
+    set.mockRejectedValueOnce(new Error('runtime refresh/rollback failed'));
+    const hook = renderHook(() => useModelContextLimit(target));
+    await act(async () => {});
+    await act(async () => { await hook.result.current.setLimit(1_000_000); });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.limit).toBe(500_000);
+    expect(hook.result.current.error).toBe(true);
+    hook.unmount();
+  });
+
+  it('ignores a failure recovery read after switching models', async () => {
+    const delayed = deferred<ReturnType<typeof view>>();
+    get.mockResolvedValueOnce(view(272_000)).mockReturnValueOnce(delayed.promise)
+      .mockResolvedValueOnce(view(128_000));
+    set.mockRejectedValueOnce(new Error('refresh failed'));
+    const hook = renderHook(({ modelId }) => useModelContextLimit({ ...target, modelId }),
+      { initialProps: { modelId: 'old' } });
+    await act(async () => {});
+    await act(async () => { void hook.result.current.setLimit(1_000_000); });
+    await act(async () => { hook.rerender({ modelId: 'new' }); });
+    await act(async () => { delayed.resolve(view(500_000)); });
+    expect(hook.result.current.limit).toBe(128_000);
+    expect(hook.result.current.error).toBe(false);
+    hook.unmount();
+  });
+
   it('restores defaults by deletion and exposes failed saves', async () => {
-    get.mockResolvedValue(view(500_000));
+    get.mockResolvedValueOnce(view(500_000)).mockResolvedValue(view(null));
     set.mockResolvedValueOnce(view(null)).mockRejectedValueOnce(new Error('disk full'));
     const hook = renderHook(() => useModelContextLimit(target));
     await act(async () => {});

@@ -486,3 +486,17 @@ export function hasLocalAddition(
   if (!entry) return false;
   return entryRootAgents(entry, providerId).includes(agent);
 }
+
+/** A working default must not replace a context value explicitly supplied locally. */
+export function hasLocalContextWindowOverride(
+  overrides: ModelCatalogOverrides,
+  providerId: string,
+  modelId: string,
+  agent: RootAgentKind,
+): boolean {
+  return (['additions', 'patches'] as const).some(section => {
+    const entry = overrides[section][`${providerId}:${modelId}`];
+    return entry && entryMembershipAgents(entry, providerId).includes(agent) &&
+      effectiveFields(entry, agent).contextWindow !== undefined;
+  });
+}

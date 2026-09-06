@@ -10,6 +10,7 @@ import {
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
 import {
   CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
@@ -169,6 +170,9 @@ export function isCodexThreadModelProviderIdentityMismatch(
   ) {
     return true;
   }
+
+  // This native identity records a sticky summary fallback, not a broken route.
+  if (input.currentCodexThreadModelProviderId === CODEX_SUMMARY_COMPACT_PROVIDER_ID) return false;
 
   const nextProviderId = normalizeProviderId(input.nextProviderId);
   const nextMode = resolveAgentCredentialMode({

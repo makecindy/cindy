@@ -15216,6 +15216,8 @@ function setContextWindow(sessionId: string, contextWindow: number | undefined):
     return;
   const nextContextWindow = Math.floor(contextWindow);
   setState(sessionId, (s) => {
+    // Model-selection metadata must not overwrite Codex's native usage snapshot.
+    if (s.agentKind === 'codex') return s;
     if (s.agentStatus.contextWindow === nextContextWindow) return s;
     return {
       ...s,

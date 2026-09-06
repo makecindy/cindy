@@ -113,6 +113,7 @@ import {
 } from '../shared/overload-error.js';
 import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { buildCodexEnv } from './env-builder.js';
+import type { CodexErrorInfo } from './app-server/protocol.js';
 import {
   buildCodexBotSkillConfigOverrides,
   buildCodexBotMcpConfigOverrides,
@@ -2718,6 +2719,7 @@ export class CodexAgent extends BaseAgent {
     let codexBrowserUseStartupTimeoutMs: number | undefined;
     let remoteCompactionProviderId: string | undefined;
     let cindyRemoteCompactionProviderId: string | undefined;
+    let localCompactionProviderId: string | undefined;
     let codexCustomProviderRoutes: CodexExtraSpawnConfig['codexCustomProviderRoutes'];
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     let subagentModelFallback: string | undefined;
@@ -2751,6 +2753,7 @@ export class CodexAgent extends BaseAgent {
       codexBrowserUseStartupTimeoutMs = undefined;
       remoteCompactionProviderId = undefined;
       cindyRemoteCompactionProviderId = undefined;
+      localCompactionProviderId = undefined;
       codexCustomProviderRoutes = undefined;
       buildSessionMcpConfig = undefined;
       subagentModelFallback = undefined;
@@ -2820,6 +2823,7 @@ export class CodexAgent extends BaseAgent {
           }
           if (codexProxyActive && cfg.codexCindyRemoteCompactionProviderId) {
             cindyRemoteCompactionProviderId = cfg.codexCindyRemoteCompactionProviderId;
+            localCompactionProviderId = cfg.codexLocalCompactionProviderId;
           }
           if (codexProxyActive && cfg.codexCustomProviderRoutes?.length) {
             codexCustomProviderRoutes = cfg.codexCustomProviderRoutes;
@@ -2922,6 +2926,7 @@ export class CodexAgent extends BaseAgent {
       codexBrowserUseStartupTimeoutMs,
       remoteCompactionProviderId,
       cindyRemoteCompactionProviderId,
+      localCompactionProviderId,
       codexCustomProviderRoutes,
       buildSessionMcpConfig,
       subagentModelFallback,
@@ -3256,45 +3261,28 @@ export class CodexAgent extends BaseAgent {
      * (provider, model) 解析, 只更新 model 会让下一 turn 拿新模型去问**旧路由**。
      */
     let activeTurnProviderId: string | null | undefined = opts.providerId;
+    let lastNativeContextWindow: number | null = null;
+    let lastNativeContextWindowTurnId: string | null = null;
+    let hasActivatedRootTurn = false;
     /**
-     * 把 app-server 上报的 modelContextWindow 收敛到模型目录的真实上限。
-     *
-     * app-server 对网关路由的模型常报**基础模型**的窗口, 忽略该路由的实际限制 ——
-     * 例如目录 372K 的 GPT-5.6-Sol 会被报成 1M。虚高值会让上下文占比被低估,
-     * memory flush 阈值也跟着推迟。
-     *
-     * **已核实窗口存在时一律用它, 不与上报值取小** (2026-08-04 修正)。原先取
-     * `min(verified, reported)` 隐含「上报值可信, 只是可能虚高」; 实测证伪了这个
-     * 前提 —— 会话中途切模型后 codex 不刷新 modelContextWindow, 整个会话继续上报
-     * **切换前**那个模型的窗口, 于是 min() 把我们已经算对的新模型窗口又拉回旧值,
-     * 上下文占比与 memory flush 阈值全程按错的窗口走。取小本是为了防虚高, 而
-     * verified 本身就是这条路由的核实上限, 直接用它不会虚高。
-     *
-     * 代价说清楚: 上游「路由真被降窗」而报出更小值的情形不再被采纳。这个场景与
-     * 「上报值陈旧」在协议上无法区分 (两者都只是一个更小的数字), 二选一时优先信
-     * 我们自己按 (provider, model) 核实过的那份 —— 它至少不会指向一个用户已经切走
-     * 的模型。
-     *
-     * 两个约束都不是可省的细节:
-     * - **按 turn 归属模型**, 不读 mutableModel: 见 activeTurnModel 注释。
-     * - **取值交给 host 的 resolveVerifiedContextWindow**, 不自己查 availableModels:
-     *   那张表是跨 provider 去重后的扁平结构, 同一 model id 由多个 provider 提供时
-     *   归属已丢(订阅直连发现的 `gpt-5.6-sol` 与网关下发的同 id), 按 id 回查可能命中
-     *   另一条路由的元数据 —— 用错路由的上限收敛比不收敛更糟。host 同时持有完整目录、
-     *   provider 维度与「这个窗口是显式声明还是派生兜底」的信息, 也天然读的是 live 目录
-     *   (模型发现 / 切账号 / 自定义 provider 增删改都即时反映), 见该 dep 的注释。
-     *
-     * 拿不到已核实窗口时(host 未注入、目录未覆盖、'gpt-5' 这类 server 默认哨兵、只有
-     * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为。
+     * Native usage reports the effective usable window, including model limits and
+     * reserved headroom. Catalog windows and requested limits cannot replace it,
+     * even after a model switch. Only use turn-scoped configuration/catalog data
+     * as a fallback until native has reported a valid window. Missing fields in
+     * later events must not erase an already observed native capacity.
      */
-    const capContextWindow = (reported: number | null): number | null => {
+    const resolveUsageContextWindow = (reported: number | null): number | null => {
+      if (reported !== null && Number.isFinite(reported) && reported > 0) {
+        lastNativeContextWindow = reported;
+        return reported;
+      }
+      if (lastNativeContextWindow !== null) return lastNativeContextWindow;
       const configured = activeTurnContextLimit;
       if (configured && Number.isFinite(configured) && configured > 0) return configured;
       const verified = activeTurnModel
         ? (this.deps.resolveVerifiedContextWindow?.(activeTurnProviderId, activeTurnModel) ?? null)
         : null;
-      if (!verified || verified <= 0) return reported;
-      return verified;
+      return verified !== null && Number.isFinite(verified) && verified > 0 ? verified : null;
     };
 
     let sdkSessionId: string | undefined;
@@ -3853,13 +3841,22 @@ export class CodexAgent extends BaseAgent {
      * 按 id 记账后跨轮污染在结构上就不成立, 也不再需要"换 turn 才清零"这类时序守卫。
      */
     const producedOutputTurnIds = new Set<string>();
+    // Capture whether normal model work preceded this compaction. The compaction
+    // item itself also counts as model work in the generic overload guard.
+    const compactingTurnIds = new Set<string>();
+    const completedSummaryRecoveryTurnIds = new Set<string>();
+    const normalModelWorkTurnIds = new Set<string>();
+    const noteRecoveryModelWork = (turnId: string, item?: unknown): void => {
+      if ((item as { type?: unknown } | undefined)?.type !== 'contextCompaction') normalModelWorkTurnIds.add(turnId);
+    };
+    const SUMMARY_RECOVERY = 'remote-compaction-summary';
     /**
      * 服务过载退避重投状态。`retry` 由 send() 每轮登记，闭包持有该 turn 的
      * turnParams 与响应处理逻辑，因此重投投递的是同一条用户消息、同一套策略，
      * 不会因为期间 mutable 配置变化而偷偷换参数。
      */
     let overloadRetry: {
-      retry: () => Promise<void>;
+      retry: (continueHistory?: boolean) => Promise<void>;
       /**
        * 同一 logical send 已消耗的外层重放次数，所有 provider failure policy 共享。
        * policy 切换不重置：否则 capacity 4 次 + terminal-rate-limit 2 次会把同一条
@@ -3867,13 +3864,13 @@ export class CodexAgent extends BaseAgent {
        * maxAttempts 是它愿意接受的**总重放上限**，不是独立配额。
        */
       attempt: number;
-      /** 同一逻辑 send 最多接管一次 WS→HTTP body recovery，避免坏响应形成重投环。 */
-      httpRecoveryRetryAttempted: boolean;
+      /** One automatic recovery per logical send; a failed fallback cannot loop. */
+      automaticRecoveryAttempted: boolean;
       /**
        * `error` notification 只登记恢复意图；权威的 turn/completed 到达后才真正重投。
        * 单一事实源放在 logical send 状态上，不再分散到各个 turn/start 请求条目。
        */
-      pendingHttpRecovery: { deadTurnId: string; reason: string } | null;
+      pendingAutomaticRecovery: { deadTurnId: string; reason: string } | null;
       timer: ReturnType<typeof setTimeout> | null;
       /**
        * 重投的 turn/start RPC 是否在途。计时器到点后 `timer` 已清空、新 turn 又
@@ -5513,8 +5510,10 @@ export class CodexAgent extends BaseAgent {
     const unsubscribeDetachedThread = async (
       detachedThreadId: string,
       reason: string,
+      retireHostOnFailure = true,
     ): Promise<boolean> => runThreadCleanupOrRetire({
       cleanupThreadId: detachedThreadId,
+      retireHostOnFailure,
       reason,
       cleanup: () => host.unsubscribeThread(detachedThreadId),
     });
@@ -5560,16 +5559,15 @@ export class CodexAgent extends BaseAgent {
       const limit = this.deps.resolveModelContextLimit?.(mutableProviderId, mutableCatalogModel ?? mutableModel);
       return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
     };
-    // The stored setting is a cap on the provider's explicit window. Keep the raw
-    // setting for refresh detection (including reset), but use one effective
-    // window for both native thread configuration and turn-owned usage reporting.
+    // The user override takes precedence over the provider default. Keep the raw
+    // setting for refresh detection (including reset). This requested window is
+    // only a usage fallback until native reports its actual usable capacity.
     const effectiveThreadContextWindow = (contextLimit: number | null): number | null => {
       const customWindow = typeof initialCustomContextWindow === 'number'
         && Number.isFinite(initialCustomContextWindow) && initialCustomContextWindow >= 1
         ? Math.floor(initialCustomContextWindow)
         : null;
-      return contextLimit === null ? customWindow
-        : customWindow === null ? contextLimit : Math.min(contextLimit, customWindow);
+      return contextLimit ?? customWindow;
     };
     let appliedContextLimit = currentContextLimit();
     activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
@@ -5604,15 +5602,14 @@ export class CodexAgent extends BaseAgent {
         ...(!makerMemoryEnabled && !opts.botRuntimeProfile
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
-        // Write the resolved window once: a custom-provider default must not
-        // overwrite the user's cap. Preserve 95% for an explicit provider window
-        // without an override, and 90% for a user-configured cap.
+        // Configure the native window and its 90% compaction budget together.
+        // Native effective_context_window_percent independently reserves input headroom.
         ...(typeof threadContextWindow === 'number' && threadContextWindow > 0
           ? {
               model_context_window: Math.floor(threadContextWindow),
               model_auto_compact_token_limit: Math.max(
                 1,
-                Math.floor(threadContextWindow * (contextLimit === null ? 0.95 : 0.9)),
+                Math.floor(threadContextWindow * 0.9),
               ),
             }
           : {}),
@@ -5808,7 +5805,7 @@ export class CodexAgent extends BaseAgent {
             : {}),
       };
     }
-    const threadModelProvider = opts.remoteHostId
+    let threadModelProvider = opts.remoteHostId
       ? undefined
       : customProviderModelProvider
         ? customProviderModelProvider
@@ -5817,6 +5814,25 @@ export class CodexAgent extends BaseAgent {
           : threadCredentialFamily === 'oauth-bearer'
             ? host.getRemoteCompactionProviderId?.() ?? undefined
             : undefined;
+
+    const isLikelyValidThreadId = (id: string | undefined): id is string =>
+      typeof id === 'string' && id.length > 0 && !id.startsWith('<') && /^[0-9a-fA-F-]+$/.test(id);
+    const localSummaryProvider = opts.remoteHostId ? null : host.getLocalCompactionProviderId?.();
+    if (localSummaryProvider && opts.resumeSessionId && isLikelyValidThreadId(opts.resumeSessionId)) {
+      // Native modelProvider is durable thread metadata. Read it before overriding
+      // resume defaults so recovery survives closing/reopening this same task.
+      try {
+        const saved = await host.request<{ thread: { modelProvider?: string } }>(
+          'thread/read', { threadId: opts.resumeSessionId, includeTurns: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        if (saved.thread.modelProvider === localSummaryProvider) threadModelProvider = localSummaryProvider;
+      } catch (error) {
+        // Let the existing resume path recover an unused thread without a rollout.
+        // Other read failures must not silently reset a saved summary identity.
+        if (!isExactNoRolloutThreadResumeError(error, opts.resumeSessionId)) throw error;
+      }
+    }
 
     /**
      * 本 thread 的 Responses 请求是否走 WebSocket。
@@ -5828,7 +5844,8 @@ export class CodexAgent extends BaseAgent {
      * 单独起名是为了把「选没选 provider」和「实际走不走 WS」分开，避免 prompt 注入
      * 通道错误地只看 provider 身份。
      */
-    const threadUsesWebSocket = !customProviderThreadPolicy.dynamicIdentity
+    let threadUsesWebSocket = threadModelProvider !== localSummaryProvider
+      && !customProviderThreadPolicy.dynamicIdentity
       && !cindyProviderRemoteCompaction
       && !!threadModelProvider
       && (host.getOpenAiWebSocketsEnabled?.() ?? true);
@@ -5886,8 +5903,6 @@ export class CodexAgent extends BaseAgent {
     // 防御: resumeSessionId 偶尔会是上次失败 session 残留的占位 ('<failed>' / '<pending>')
     // 或非 UUID 格式 — server 直接 -32600 invalid thread id, 整个 session 起不来。
     // 看到不像 UUID 就走新 thread/start, 不让 ghost id 阻塞用户。
-    const isLikelyValidThreadId = (id: string | undefined): id is string =>
-      typeof id === 'string' && id.length > 0 && !id.startsWith('<') && /^[0-9a-fA-F-]+$/.test(id);
     if (opts.resumeSessionId && !isLikelyValidThreadId(opts.resumeSessionId)) {
       log.warn('resumeSessionId looks invalid, falling back to thread/start', {
         resumeSessionId: opts.resumeSessionId,
@@ -6232,12 +6247,13 @@ export class CodexAgent extends BaseAgent {
       });
 
     /**
-     * A thread that has not accepted a turn has no rollout and cannot be
-     * resumed. Recreate that unused thread with the current profile instead,
-     * then move the live subscription and thread-scoped registrations.
+     * Apply configuration in a fresh native runtime, then move the existing Cindy
+     * task's subscription and registrations. Unused threads have no rollout;
+     * automatic summary recovery instead forks the intact persisted history.
      */
-    const replaceUnusedThreadWithCurrentProfile = async (
+    const replaceThreadWithCurrentProfile = async (
       signal?: AbortSignal,
+      retainHistory = false,
     ): Promise<void> => {
       const previousThreadId = threadId;
       const replacementProfileFingerprint = currentWorkspacePermissionProfileFingerprint();
@@ -6249,9 +6265,11 @@ export class CodexAgent extends BaseAgent {
         const resp = await requestProfileLifecycle<ThreadStartResponse>({
           action: 'replacement',
           signal,
-          request: () => host.request<ThreadStartResponse>(Method.ThreadStart, {
+          request: () => host.request<ThreadStartResponse>(retainHistory ? Method.ThreadFork : Method.ThreadStart, {
+            ...(retainHistory ? { threadId: previousThreadId, excludeTurns: true } : {}),
             cwd: opts.workingDir,
-            ...currentThreadWorkspaceConfig(),
+            // Recovery belongs to the running send, whose catalog/window is already frozen.
+            ...currentThreadWorkspaceConfig(retainHistory ? appliedContextLimit : undefined),
             ...(sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
             ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
             ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
@@ -6263,7 +6281,7 @@ export class CodexAgent extends BaseAgent {
             if (lateThreadId === previousThreadId) return;
             const cleaned = await unsubscribeDetachedThread(
               lateThreadId,
-              'late unused profile replacement cleanup',
+              'late profile replacement cleanup', !retainHistory,
             );
             if (!cleaned) return;
             log.debug('discarded late unused profile replacement', {
@@ -6277,7 +6295,7 @@ export class CodexAgent extends BaseAgent {
         if (closed) {
           await unsubscribeDetachedThread(
             nextThreadId,
-            'unused profile replacement cleanup after close',
+            'profile replacement cleanup after close', !retainHistory,
           );
           throw new Error('Codex session closed during workspace permission profile replacement');
         }
@@ -6287,10 +6305,14 @@ export class CodexAgent extends BaseAgent {
         ) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
         }
+        if (retainHistory && resp.modelProvider !== localSummaryProvider) {
+          await unsubscribeDetachedThread(nextThreadId, 'summary fallback identity mismatch', false);
+          throw new Error('Codex did not apply the summary compaction provider');
+        }
         codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
         if (nextThreadId !== previousThreadId) {
           const released = await releaseCurrentThreadSubscription(
-            'unused profile replacement release',
+            retainHistory ? 'summary fallback release' : 'unused profile replacement release', { retireHostOnFailure: !retainHistory },
           );
           if (!released) {
             throw staleHostError('workspace permission profile replacement cleanup');
@@ -6299,12 +6321,20 @@ export class CodexAgent extends BaseAgent {
           if (closed) {
             await unsubscribeDetachedThread(
               nextThreadId,
-              'unused profile replacement cleanup after concurrent close',
+              'profile replacement cleanup after concurrent close', !retainHistory,
             );
             throw new Error('Codex session closed during workspace permission profile replacement');
           }
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
+          if (retainHistory) {
+            // A native fork replays the inherited cumulative usage snapshot.
+            // Carry its accepted cursor before subscribing to buffered frames.
+            const cursor = acceptedUsageTotalByThread.get(previousThreadId);
+            if (cursor) acceptedUsageTotalByThread.set(nextThreadId, {
+              generation: cursor.generation, total: { ...cursor.total },
+            });
+          }
           subscription = host.subscribeThread(threadId, handlers);
           registerRootCodexMcpContext();
           refreshCodexAutoReviewerRoute(threadId);
@@ -6330,8 +6360,8 @@ export class CodexAgent extends BaseAgent {
         workspacePermissionProfileFingerprint = workspacePermissionProfileActive
           ? replacementProfileFingerprint
           : null;
-        threadMayHaveRollout = false;
-        log.debug('unused thread replaced with workspace permission profile', {
+        threadMayHaveRollout = retainHistory;
+        log.debug('thread replaced with workspace permission profile', {
           previousThreadId,
           threadId,
           referenceRoots: mutableExtraDirs.length,
@@ -6364,7 +6394,7 @@ export class CodexAgent extends BaseAgent {
             workspacePermissionProfileFingerprint === targetFingerprint
           ) return;
           if (!threadMayHaveRollout) {
-            await replaceUnusedThreadWithCurrentProfile(signal);
+            await replaceThreadWithCurrentProfile(signal);
             continue;
           }
           const resumeThreadWorkspaceConfig = currentThreadWorkspaceConfig();
@@ -6390,7 +6420,7 @@ export class CodexAgent extends BaseAgent {
             if (!isExactNoRolloutThreadResumeError(e, threadId)) throw e;
             if (signal?.aborted) throw new Error('Codex send cancelled before acceptance');
             threadMayHaveRollout = false;
-            await replaceUnusedThreadWithCurrentProfile(signal);
+            await replaceThreadWithCurrentProfile(signal);
             continue;
           }
           assertCurrentHost('workspace permission profile refresh');
@@ -6424,7 +6454,7 @@ export class CodexAgent extends BaseAgent {
       return (async () => {
         if (signal?.aborted || closed) throw new Error('Codex context settings update cancelled');
         if (!threadMayHaveRollout) {
-          await replaceUnusedThreadWithCurrentProfile(signal);
+          await replaceThreadWithCurrentProfile(signal);
         } else {
           const released = await releaseCurrentThreadSubscription('context settings refresh', { retireHostOnFailure: false });
           if (!released) throw new Error('Codex context settings update could not release the thread');
@@ -6465,6 +6495,9 @@ export class CodexAgent extends BaseAgent {
           }
         }
         appliedContextLimit = desired;
+        hasActivatedRootTurn = false;
+        lastNativeContextWindow = null;
+        usageTracker.setContextWindow(0);
       })();
     };
 
@@ -7206,6 +7239,16 @@ export class CodexAgent extends BaseAgent {
       isTurnInFlight = true;
       bindYieldContinuationTurn(turnId);
       if (!isNewTurn) return;
+      if (!hasActivatedRootTurn) {
+        // Resume replays the previous run's usage window before this run starts.
+        // Its history usage is useful, but its old capacity cannot override the
+        // configuration accepted by the fresh native runtime.
+        hasActivatedRootTurn = true;
+        if (lastNativeContextWindowTurnId !== turnId) {
+          lastNativeContextWindow = null;
+          usageTracker.setContextWindow(0);
+        }
+      }
 
       resetCodexGenerationTiming(translatorRt);
       turnDiffSnapshots.clear();
@@ -7476,6 +7519,7 @@ export class CodexAgent extends BaseAgent {
       }
       if (
         event.type === 'thinking' ||
+        event.type === 'compact_boundary' ||
         event.type === 'tool_use' ||
         event.type === 'tool_result' ||
         event.type === 'tool_result_full' ||
@@ -9265,7 +9309,7 @@ export class CodexAgent extends BaseAgent {
     };
 
     const armHttpRecoveryForError = (
-      error: { message?: string; additionalDetails?: unknown } | null | undefined,
+      error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined,
     ): string | null => {
       if (opts.remoteHostId || !this.deps.armCodexHttpRecovery) return null;
       const message = typeof error?.message === 'string' ? error.message : '';
@@ -9293,16 +9337,18 @@ export class CodexAgent extends BaseAgent {
     };
 
     /**
-     * 已确认是 HTTP proxy 可恢复的 WS 请求校验错误时，立即重投同一份冻结 turnParams。
-     * host 已把 thread 标成 HTTP-only；重投新建 transport 时会收到 426 并走既有
-     * recoveryRules。只接管本 logical send、零产出、无其它 start 在飞的明确 turn。
+     * Continue one logical send after its authoritative failed terminal. HTTP body
+     * recovery may replay only zero-output turns. Summary recovery preserves the
+     * native history and uses empty input after model/tool output, avoiding replay.
      */
-    const retryTurnViaHttpRecovery = (deadTurnId: string, reason: string): boolean => {
+    const retryTurnAfterAutomaticRecovery = (deadTurnId: string, reason: string): boolean => {
       const state = overloadRetry;
-      if (!state || closed || state.httpRecoveryRetryAttempted || state.isCancelled()) return false;
+      if (!state || closed || state.automaticRecoveryAttempted || state.isCancelled()) return false;
       const origin = turnOriginByTurnId.get(deadTurnId);
       if (origin?.sendGen !== state.sendGen) return false;
-      if (producedOutputTurnIds.has(deadTurnId)) {
+      const summaryRecovery = reason === SUMMARY_RECOVERY;
+      const continueHistory = summaryRecovery && normalModelWorkTurnIds.has(deadTurnId);
+      if (!summaryRecovery && producedOutputTurnIds.has(deadTurnId)) {
         log.info('codex WS body recovery error after partial output — not auto-retrying', {
           threadId,
           deadTurnId,
@@ -9325,7 +9371,7 @@ export class CodexAgent extends BaseAgent {
         return false;
       }
 
-      state.httpRecoveryRetryAttempted = true;
+      state.automaticRecoveryAttempted = true;
       terminalErroredTurnIds.add(deadTurnId);
       dismissPendingUserInputForTurn(deadTurnId, 'turn_failed');
       clearActiveToolContextsForTurn(deadTurnId);
@@ -9338,13 +9384,39 @@ export class CodexAgent extends BaseAgent {
       ) {
         pendingTightenInterrupt = true;
       }
-      log.info('codex WS body recovery error — retrying turn through HTTP fallback', {
+      log.info('codex automatic recovery — continuing the current task', {
         threadId,
         deadTurnId,
         reason,
       });
 
-      void state.retry().catch((retryError) => {
+      state.inFlight = true;
+      void (async () => {
+        if (summaryRecovery) {
+          const previousProvider = threadModelProvider;
+          const previousWebSocket = threadUsesWebSocket;
+          const previousThread = threadId;
+          threadModelProvider = localSummaryProvider!;
+          threadUsesWebSocket = false;
+          // unsubscribe retains a loaded Codex 0.153 thread for 30 minutes;
+          // resume would ignore provider overrides. Native fork preserves its
+          // full history in a fresh runtime while Cindy keeps this business task.
+          try {
+            await replaceThreadWithCurrentProfile(undefined, true);
+          } catch (error) {
+            if (threadId === previousThread) {
+              threadModelProvider = previousProvider;
+              threadUsesWebSocket = previousWebSocket;
+            }
+            throw error;
+          }
+          if (closed || overloadRetry !== state || state.isCancelled()) {
+            if (overloadRetry === state) settleCancelledOverloadRetry(state, 'cancelled during summary recovery');
+            return;
+          }
+        }
+        await state.retry(continueHistory);
+      })().catch((retryError) => {
         if (closed || overloadRetry !== state || state.isCancelled()) {
           log.info('codex HTTP recovery retry rejected after cancellation — not surfacing', {
             threadId,
@@ -9353,7 +9425,7 @@ export class CodexAgent extends BaseAgent {
           });
           return;
         }
-        log.error('codex HTTP recovery turn/start retry failed', {
+        log.error('codex automatic recovery failed', {
           threadId,
           reason,
           error: retryError instanceof Error ? retryError.message : String(retryError),
@@ -9365,7 +9437,7 @@ export class CodexAgent extends BaseAgent {
         eventQueue.push({
           type: 'error',
           data: {
-            message: `turn/start HTTP recovery retry failed: ${String(retryError)}`,
+            message: `Codex automatic recovery failed: ${String(retryError)}`,
             isTerminal: true,
           },
           source: 'codex',
@@ -9386,25 +9458,61 @@ export class CodexAgent extends BaseAgent {
      * turn/completed 驱动。这样无论 error / completed / turn-start response
      * 如何乱序，都只有一个执行入口。
      */
-    const recordHttpRecoveryIntent = (
+    const canRecoverRemoteCompaction = (deadTurnId: string, error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined): boolean => {
+      if (!localSummaryProvider || !threadModelProvider || !hostUsesCodexProxy || threadModelProvider === localSummaryProvider) return false;
+      if (threadModelProvider !== host.getCindyRemoteCompactionProviderId?.()
+        && threadModelProvider !== host.getRemoteCompactionProviderId?.()) return false;
+      if (!compactingTurnIds.has(deadTurnId)) return false;
+      // In-memory exec continuations cannot be moved to another native thread.
+      if (activeYieldContinuationClaim() || cellsForCompletedTurn(deadTurnId).length > 0) return false;
+      const text = `${error?.message ?? ''}\n${typeof error?.additionalDetails === 'string' ? error.additionalDetails : ''}`;
+      const signals = extractNonSecretErrorSignals(text);
+      // A compact endpoint can exhaust its own retries while ordinary generation works.
+      // Try the same model/account summary once; explicit exhausted quota stays terminal.
+      const compactRateLimit = isTerminalRateLimitRetryExhaustion(text, signals.errorStatus, error?.codexErrorInfo);
+      const tag = codexErrorInfoTag(error?.codexErrorInfo);
+      if (tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded' || tag === 'unauthorized') return false;
+      // A terminal turn alone does not prove an upstream compact request failed:
+      // transport loss/timeouts can leave its result unknown. Accept explicit
+      // endpoint rejection/failure responses (including the observed 502/503),
+      // plus the existing exhausted-429 case; never infer success from exclusions.
+      const info = error?.codexErrorInfo;
+      // The shared redaction helper deliberately extracts only auth/rate-limit
+      // statuses. Parse Codex's explicit HTTP failure wording locally as well.
+      const statusMatch = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i.exec(text);
+      const textStatus = statusMatch ? Number(statusMatch[1]) : signals.errorStatus;
+      const httpStatus = info && typeof info === 'object' && 'httpConnectionFailed' in info
+        ? info.httpConnectionFailed.httpStatusCode ?? textStatus
+        : textStatus;
+      const rejectedRequest = [400, 404, 405, 422, 500, 501, 502, 503].includes(httpStatus ?? 0);
+      const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
+        || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
+      return !uncertainTransport
+        && !isAuthRelatedErrorMessage(text)
+        && ((rejectedRequest && !signals.usageLimit) || compactRateLimit)
+        && !isRemoteCompactEncryptedContentError(text);
+    };
+
+    const recordAutomaticRecoveryIntent = (
       deadTurnId: string,
-      error: { message?: string; additionalDetails?: unknown } | null | undefined,
+      error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined,
     ): boolean => {
       const state = overloadRetry;
+      const summaryRecovery = canRecoverRemoteCompaction(deadTurnId, error);
       if (
         !deadTurnId
         || !state
         || closed
-        || state.httpRecoveryRetryAttempted
+        || state.automaticRecoveryAttempted
         || state.isCancelled()
         || state.timer !== null
         || state.deferredCapacityFailure !== null
-        || producedOutputTurnIds.has(deadTurnId)
+        || (!summaryRecovery && producedOutputTurnIds.has(deadTurnId))
       ) {
         return false;
       }
-      if (state.pendingHttpRecovery) {
-        return state.pendingHttpRecovery.deadTurnId === deadTurnId;
+      if (state.pendingAutomaticRecovery) {
+        return state.pendingAutomaticRecovery.deadTurnId === deadTurnId;
       }
 
       const origin = turnOriginByTurnId.get(deadTurnId);
@@ -9424,9 +9532,9 @@ export class CodexAgent extends BaseAgent {
         return false;
       }
 
-      const reason = armHttpRecoveryForError(error);
+      const reason = summaryRecovery ? SUMMARY_RECOVERY : armHttpRecoveryForError(error);
       if (!reason) return false;
-      state.pendingHttpRecovery = {
+      state.pendingAutomaticRecovery = {
         deadTurnId,
         reason,
       };
@@ -9525,18 +9633,18 @@ export class CodexAgent extends BaseAgent {
       if (reconnectStallTurnId === turn.id) clearReconnectStall();
       let recoveryState = overloadRetry;
       let pendingRecovery =
-        recoveryState?.pendingHttpRecovery?.deadTurnId === turn.id
-          ? recoveryState.pendingHttpRecovery
+        recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
+          ? recoveryState.pendingAutomaticRecovery
           : null;
       if (
         turn.status === 'failed'
         && (!terminalErroredTurnIds.has(turn.id) || pendingRecovery)
       ) {
-        if (!pendingRecovery && turn.error && recordHttpRecoveryIntent(turn.id, turn.error)) {
+        if (!pendingRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error)) {
           recoveryState = overloadRetry;
           pendingRecovery =
-            recoveryState?.pendingHttpRecovery?.deadTurnId === turn.id
-              ? recoveryState.pendingHttpRecovery
+            recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
+              ? recoveryState.pendingAutomaticRecovery
               : null;
         }
         if (recoveryState && pendingRecovery) {
@@ -9561,8 +9669,12 @@ export class CodexAgent extends BaseAgent {
             }
           }
 
-          recoveryState.pendingHttpRecovery = null;
-          if (retryTurnViaHttpRecovery(turn.id, pendingRecovery.reason)) return;
+          recoveryState.pendingAutomaticRecovery = null;
+          if (retryTurnAfterAutomaticRecovery(turn.id, pendingRecovery.reason)) {
+            // Settle old-turn accounting behind its tombstone without ending the logical send.
+            handleTurnCompleted(params);
+            return;
+          }
           // 已登记但归属后来未能坐实时，恢复原终态处理；不能吞掉失败让 UI 悬空。
           terminalErroredTurnIds.delete(turn.id);
           log.warn('codex HTTP recovery intent could not be executed; surfacing turn failure', {
@@ -9572,10 +9684,10 @@ export class CodexAgent extends BaseAgent {
           });
         }
       }
-      if (pendingRecovery && recoveryState?.pendingHttpRecovery?.deadTurnId === turn.id) {
+      if (pendingRecovery && recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id) {
         // 极端协议形状：先报可恢复 terminal error，最终 turn 却不是 failed。
         // 以权威 completed 为准，取消本次恢复意图并正常收口。
-        recoveryState.pendingHttpRecovery = null;
+        recoveryState.pendingAutomaticRecovery = null;
         terminalErroredTurnIds.delete(turn.id);
       }
       // turn/start RPC 响应未回时就收到终态 → 记墓碑, 阻止稍后到达的
@@ -9590,6 +9702,9 @@ export class CodexAgent extends BaseAgent {
       // 同一个墓碑也负责拦截该 turn 随后迟到的 item / reasoning / started 事件。
       if (completedTurnIds.has(turn.id)) return;
       completedTurnIds.add(turn.id);
+      compactingTurnIds.delete(turn.id);
+      normalModelWorkTurnIds.delete(turn.id);
+      completedSummaryRecoveryTurnIds.delete(turn.id);
       // A controlled MCP request may already be waiting for a steer ACK. The
       // completed tombstone is authoritative, so release it immediately to
       // decline instead of waiting for the local ACK timeout.
@@ -10077,6 +10192,7 @@ export class CodexAgent extends BaseAgent {
       // 有产出, 对用户报硬失败 —— 而那一轮其实什么副作用都没发生(review #844 codex P1)。
       if (bufferedModelWorkTurnIds.has(turnId)) {
         producedOutputTurnIds.add(turnId);
+        noteRecoveryModelWork(turnId);
         log.info('codex adopted turn had buffered events — treating as produced output', {
           turnId,
           threadId,
@@ -10132,7 +10248,7 @@ export class CodexAgent extends BaseAgent {
      *   - `inFlight`：计时器已到点、重投 RPC 在途、新 turn 尚未激活；
      *   - `deferredCapacityFailure !== null`：失败已记账、等在途 turn/start settle 后
      *     补排（那一刻既没有计时器也没有 inFlight）。
-     *   - `pendingHttpRecovery !== null`：WS body 错误已登记、等权威 turn/completed。
+     *   - `pendingAutomaticRecovery !== null`：WS body 错误已登记、等权威 turn/completed。
      *
      * 抽成单一判据是因为它同时决定三件事: 会话忙不忙(isTurnRunning)、取消要不要收口
      * (signal abort)、权限收紧要不要作用到重投。前几轮每处各写一份, 第三种状态加进来
@@ -10146,7 +10262,7 @@ export class CodexAgent extends BaseAgent {
         state.timer != null
         || state.inFlight
         || state.deferredCapacityFailure !== null
-        || state.pendingHttpRecovery !== null
+        || state.pendingAutomaticRecovery !== null
       );
 
     /**
@@ -10361,7 +10477,13 @@ export class CodexAgent extends BaseAgent {
       // null, 即这个 turn 的 turnStarted 还没到, 它的 item / reasoning 不可能被记到自己
       // 名下(全被 stale 闸或缓冲挡住)。缓冲事件那种"看不见的产出"由
       // adoptUnidentifiedDeadTurn 在响应回来、id 已知时补记, 补排再查一次就拦住了。
-      if (deadTurnId && producedOutputTurnIds.has(deadTurnId)) {
+      // A successful fallback summary is internal progress, not completed user work.
+      // If its following generation hits a transient 429 before producing anything,
+      // reuse the bounded retry policy and continue the compacted native history.
+      const continueSummaryHistory = policy.kind === 'terminal-rate-limit'
+        && deadTurnId !== null && completedSummaryRecoveryTurnIds.has(deadTurnId)
+        && !normalModelWorkTurnIds.has(deadTurnId);
+      if (deadTurnId && producedOutputTurnIds.has(deadTurnId) && !continueSummaryHistory) {
         log.info('codex replayable error after partial output — not auto-retrying', {
           kind: policy.kind,
           threadId,
@@ -10477,7 +10599,7 @@ export class CodexAgent extends BaseAgent {
       state.timer = setTimeout(() => {
         state.timer = null;
         if (closed || overloadRetry !== state) return;
-        void state.retry().catch((error) => {
+        void state.retry(continueSummaryHistory).catch((error) => {
           // 取消之后 RPC 才 reject：Stop / close / 新 send 都已经各自收口过这一轮
           // （abort 与新 send 会把 overloadRetry 置 null，close 会置 closed）。
           // 此时再报一次 terminal error + Done 会让 UI 二次收口，并把用户主动停止
@@ -10913,7 +11035,11 @@ export class CodexAgent extends BaseAgent {
       tokenUsageUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.tokenUsageUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        lastModelContextWindow = capContextWindow(params.tokenUsage?.modelContextWindow ?? null);
+        const reportedWindow = params.tokenUsage?.modelContextWindow;
+        if (typeof reportedWindow === 'number' && Number.isFinite(reportedWindow) && reportedWindow > 0) {
+          lastNativeContextWindowTurnId = params.turnId || null;
+        }
+        lastModelContextWindow = resolveUsageContextWindow(reportedWindow ?? null);
         usageTracker.setContextWindow(lastModelContextWindow ?? 0);
         const last = params.tokenUsage?.last;
         if (!last) return;
@@ -11068,6 +11194,9 @@ export class CodexAgent extends BaseAgent {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
         }
+        if (params.item.type === 'contextCompaction' && !compactingTurnIds.has(params.turnId)) {
+          compactingTurnIds.add(params.turnId);
+        }
         if (interceptProposedPlanItem(params.turnId, params.item)) {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
@@ -11151,7 +11280,10 @@ export class CodexAgent extends BaseAgent {
         }
         // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。SDK echo 类 item
         // (userMessage 等)不算产出, 见 itemRepresentsModelWork。
-        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
+        if (itemRepresentsModelWork(params.item)) {
+          producedOutputTurnIds.add(params.turnId);
+          noteRecoveryModelWork(params.turnId, params.item);
+        }
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
         // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
@@ -11193,6 +11325,7 @@ export class CodexAgent extends BaseAgent {
           noteObservedModelItem(params.turnId, params.item);
           clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
           producedOutputTurnIds.add(params.turnId);
+          noteRecoveryModelWork(params.turnId, params.item);
         }
         noteActiveToolContext(params.item, params.turnId);
         rememberYieldedExecCells(params.turnId, params.item, 'updated');
@@ -11253,10 +11386,17 @@ export class CodexAgent extends BaseAgent {
           return;
         }
         if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
+        if (params.item.type === 'contextCompaction') {
+          compactingTurnIds.delete(params.turnId);
+          if (threadModelProvider === localSummaryProvider && overloadRetry?.automaticRecoveryAttempted) {
+            completedSummaryRecoveryTurnIds.add(params.turnId);
+          }
+        }
         if (itemRepresentsModelWork(params.item)) {
           noteObservedModelItem(params.turnId, params.item);
           clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
           producedOutputTurnIds.add(params.turnId);
+          noteRecoveryModelWork(params.turnId, params.item);
         }
         noteAssistantReplyCandidate(params.turnId, params.item);
         completeActiveToolContext(params.item, params.turnId);
@@ -11330,6 +11470,7 @@ export class CodexAgent extends BaseAgent {
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
+        noteRecoveryModelWork(params.turnId);
         translateAgentMessageDelta(params, eventQueue, { rt: translatorRt, log });
       },
       turnPlanUpdated: (params) => {
@@ -11345,6 +11486,7 @@ export class CodexAgent extends BaseAgent {
         // thinking 流也算产出：模型已经在这一轮里工作了，整体重放不再等价。
         clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
+        noteRecoveryModelWork(params.turnId);
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningSummaryPartAdded: (params) => {
@@ -11353,6 +11495,7 @@ export class CodexAgent extends BaseAgent {
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
+        noteRecoveryModelWork(params.turnId);
         translateReasoningSummaryPartAdded(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningTextDelta: (params) => {
@@ -11361,6 +11504,7 @@ export class CodexAgent extends BaseAgent {
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
+        noteRecoveryModelWork(params.turnId);
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       accountRateLimitsUpdated: (params) =>
@@ -11625,7 +11769,7 @@ export class CodexAgent extends BaseAgent {
           const recoveryTurnId = effectiveParams.turnId || currentTurnId || '';
           // error notification 只登记恢复意图并保持 logical turn 运行；
           // 权威 turn/completed 才负责收口旧 turn 与发起一次 HTTP 重投。
-          if (recordHttpRecoveryIntent(recoveryTurnId, effectiveParams.error)) return;
+          if (recordAutomaticRecoveryIntent(recoveryTurnId, effectiveParams.error)) return;
         }
         // 服务过载(模型容量不足)时接管重投：translator 命中 capacity 才回调，
         // 拿到进度就把错误透成非终止状态，本函数随后跳过 Done 收口。
@@ -12013,10 +12157,10 @@ export class CodexAgent extends BaseAgent {
         const handleTurnStartResp = (resp: TurnStartResponse, ownerSeq: number): void => {
           if (resp.turn?.id) {
             const startEntry = inFlightStarts.get(ownerSeq);
-            const pendingHttpRecovery = overloadRetry?.pendingHttpRecovery;
+            const pendingAutomaticRecovery = overloadRetry?.pendingAutomaticRecovery;
             if (
               startEntry
-              && pendingHttpRecovery?.deadTurnId === resp.turn.id
+              && pendingAutomaticRecovery?.deadTurnId === resp.turn.id
               && startEntry.sendGen === overloadRetry?.sendGen
             ) {
               // completed 已经把该 turn 记为终态，下面不会重新激活；这里仅补权威
@@ -12187,10 +12331,11 @@ export class CodexAgent extends BaseAgent {
         // turn-start status 抽样、planMode 武装态消耗都是"用户发了一条消息"的
         // 一次性副作用，重投是同一条消息的再次投递，重跑那些会让用量统计与
         // 计划模式状态错乱。
+        let continueNativeHistory = false;
         overloadRetry = {
           attempt: 0,
-          httpRecoveryRetryAttempted: false,
-          pendingHttpRecovery: null,
+          automaticRecoveryAttempted: false,
+          pendingAutomaticRecovery: null,
           timer: null,
           inFlight: false,
           isCancelled: () => sendOpts?.signal?.aborted === true,
@@ -12199,7 +12344,8 @@ export class CodexAgent extends BaseAgent {
           sendGen: mySendGen,
           deferredCapacityFailure: null,
           disposeSignalWatch: null,
-          retry: async () => {
+          retry: async (continueHistory = false) => {
+            continueNativeHistory ||= continueHistory;
             const state = overloadRetry;
             // 发出前复检：本轮 send 的取消信号在退避等待期间才 abort（coordinator
             // 撤单、上层超时）时不走 handle.abort()，计时器到点仍会把一条已被取消
@@ -12229,7 +12375,8 @@ export class CodexAgent extends BaseAgent {
               // 必须带超时：AppServerHost.request 默认不超时，daemon / 远端传输
               // 卡住时这个 RPC 会永久在飞，而 inFlight 被算作忙 → 会话永久卡死
               // 且无人可解（review #844 codex P1）。与正常 turn/start 同款边界。
-              const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
+              const resp = await host.request<TurnStartResponse>(Method.TurnStart,
+                { ...turnParams, threadId, ...(continueNativeHistory ? { input: [] } : {}) }, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
               });
               // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
@@ -12272,7 +12419,7 @@ export class CodexAgent extends BaseAgent {
             } finally {
               state.inFlight = false;
               if (!rpcSettledOk && overloadRetry === state) {
-                state.pendingHttpRecovery = null;
+                state.pendingAutomaticRecovery = null;
               }
               // 注销本次请求(isTurnStartPending 由登记表重算, 不会误清别的请求的状态)。
               endTurnStart(retryStartSeq);
@@ -12307,7 +12454,7 @@ export class CodexAgent extends BaseAgent {
             // 判据用 attempt > 0 限定在"本轮确实被重投接管过"上: 没发生过重投的
             // 普通 send 里 signal 仍只是**受理前**的取消边界, 语义不变。
             const retryOwnsActiveTurn =
-              (armedRetryState.attempt > 0 || armedRetryState.httpRecoveryRetryAttempted)
+              (armedRetryState.attempt > 0 || armedRetryState.automaticRecoveryAttempted)
               && (currentTurnId !== null || isTurnInFlight);
             if (!overloadRetryPending(armedRetryState) && !retryOwnsActiveTurn) return;
             cancelOverloadRetry('send signal aborted');
@@ -12462,7 +12609,7 @@ export class CodexAgent extends BaseAgent {
             !initialStartSettledOk
             && overloadRetry?.sendGen === mySendGen
           ) {
-            overloadRetry.pendingHttpRecovery = null;
+            overloadRetry.pendingAutomaticRecovery = null;
           }
           // 先注销本次请求(isTurnStartPending 由登记表重算) —— 无条件置 false 会在两个
           // start 并存时清掉属于**另一个**请求的状态(review #844 codex P1)。注销必须早于
@@ -12865,6 +13012,30 @@ export class CodexAgent extends BaseAgent {
           }
         };
         return consumedEventStream();
+      },
+
+      getCodexContextWindowInfo: async () => {
+        if (opts.remoteHostId || !this.deps.resolveCodexContextWindowInfo) return null;
+        const model = activeTurnModel ?? mutableModel;
+        const reportedWindow = lastNativeContextWindow;
+        const contextLimit = activeTurnContextLimit;
+        const compactRatio = 0.9;
+        try {
+          const response = await host.request<{ config?: Record<string, unknown> }>(
+            Method.ConfigRead, { includeLayers: false, cwd: opts.workingDir }, { timeoutMs: 5_000 },
+          );
+          if (!response.config) return null;
+          const config = { ...response.config };
+          if (contextLimit !== null) {
+            config.model_context_window = contextLimit;
+            config.model_auto_compact_token_limit = Math.floor(
+              contextLimit * compactRatio,
+            );
+          }
+          return await this.deps.resolveCodexContextWindowInfo(
+            model, config, reportedWindow,
+          );
+        } catch { return null; }
       },
 
       getUsageSnapshot(): UsageSnapshot {

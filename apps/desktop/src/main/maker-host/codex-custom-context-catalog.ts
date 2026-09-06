@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+import { parse as parseToml } from 'smol-toml';
+// Unmodified Apache-2.0 OpenAI Codex rust-v0.153.0 models-manager/prompt.md.
+// This is the native unknown-model prompt, never a GPT-specific template.
+import nativeFallbackPrompt from './codex-native-fallback-prompt.md?raw';
 
 import { writeFileAtomicIfUnchanged } from './codex-global-plugins.js';
 
@@ -16,9 +20,67 @@ const DEFAULT_SCAN_CHUNK_BYTES = 1024 * 1024;
 const MAX_CATALOG_BYTES = 16 * 1024 * 1024;
 const bundledCatalogByBinary = new Map<string, Promise<CodexModelCatalog>>();
 
-interface CodexModelCatalog {
+export interface CodexModelCatalog {
   models: Array<Record<string, unknown> & { slug: string }>;
   [key: string]: unknown;
+}
+
+/** Same longest-prefix / single provider namespace lookup as Codex ModelsManager. */
+export function findCodexCatalogModel(catalog: CodexModelCatalog, modelId: string) {
+  const find = (id: string) => catalog.models.filter((m) => id.startsWith(m.slug))
+    .sort((a, b) => b.slug.length - a.slug.length)[0];
+  return find(modelId) ?? (/^[a-zA-Z0-9_-]+\/[^/]+$/.test(modelId)
+    ? find(modelId.slice(modelId.indexOf('/') + 1)) : undefined);
+}
+
+// Codex 0.153 removes retired update_plan guidance from its own instructions.
+// A model_catalog_json is caller-owned, so preserve that native normalization here.
+function nativeInstructions(text: string): string {
+  return text.replace(/^## (Planning|`update_plan`|Plan tool|Plan Mode vs update_plan tool)\r?\n[\s\S]*?(?=^#{1,2} |$(?![\s\S]))/gm,
+    (section, title: string) => title !== 'Planning' || /^(You have access to an `update_plan` tool|When `update_plan` is available, follow this section)/m.test(section) ? '' : section)
+    .replace(/^Progress visibility:\r?\nIf update_plan is available[^\n]*\n(?:\s*\n)?/gm, '')
+    .replace(/^- (?:Use the plan tool |If you create a checklist or task list,)[^\n]*\n(?:[ \t]+[^\n]*\n)*/gm, '');
+}
+
+function normalizeNativeCatalog(catalog: CodexModelCatalog): CodexModelCatalog {
+  return { ...catalog, models: catalog.models.map((model) => {
+    const messages = isRecord(model.model_messages) ? model.model_messages : null;
+    return { ...model,
+      ...(typeof model.base_instructions === 'string' ? { base_instructions: nativeInstructions(model.base_instructions) } : {}),
+      ...(messages && typeof messages.instructions_template === 'string'
+        ? { model_messages: { ...messages, instructions_template: nativeInstructions(messages.instructions_template) } } : {}),
+    };
+  }) };
+}
+
+/** Mirrors the CLI's model_info_from_slug defaults, preserving prompt/tool behavior. */
+export function nativeCodexFallbackModel(slug: string, instructions = nativeFallbackPrompt) {
+  return {
+    slug, display_name: slug, description: null, supported_reasoning_levels: [],
+    shell_type: 'unified_exec', visibility: 'none', supported_in_api: true, priority: 99,
+    base_instructions: nativeInstructions(instructions),
+    include_skills_usage_instructions: false, include_plugin_usage_instructions: false,
+    include_apps_usage_instructions: false, supports_reasoning_summary_parameter: true,
+    default_reasoning_summary: 'auto', support_verbosity: false,
+    truncation_policy: { mode: 'bytes', limit: 10_000 },
+    context_window: 272_000, max_context_window: 272_000,
+    effective_context_window_percent: 95, experimental_supported_tools: [],
+  };
+}
+
+/** Respect a configured native catalog, then current native discovery, then the binary. */
+export async function readNativeCodexCatalog(binaryPath: string, codexHome: string, scanChunkBytes?: number): Promise<CodexModelCatalog> {
+  let config: Record<string, unknown> = {};
+  try { config = parseToml(await fs.readFile(path.join(codexHome, 'config.toml'), 'utf8')); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  if (typeof config.profile === 'string') {
+    config = { ...config, ...parseToml(await fs.readFile(path.join(codexHome, `${config.profile}.config.toml`), 'utf8')) };
+  }
+  if (typeof config.model_catalog_json === 'string') {
+    return parseCodexModelCatalog(await fs.readFile(path.resolve(codexHome, config.model_catalog_json), 'utf8'));
+  }
+  try { return normalizeNativeCatalog(parseCodexModelCatalog(await fs.readFile(path.join(codexHome, 'models_cache.json'), 'utf8'))); }
+  catch { return normalizeNativeCatalog(await readBundledCatalog(binaryPath, scanChunkBytes)); }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -162,22 +224,15 @@ export function patchCodexModelMaxContextWindow(
   if (!modelId || !Number.isFinite(window) || window <= 0) {
     throw new Error('custom Codex context catalog requires a model and positive context window');
   }
-  const matches = catalog.models.filter((model) => model.slug === modelId);
-  if (matches.length !== 1) {
-    throw new Error(
-      `current Codex binary catalog must contain exactly one model named ${JSON.stringify(modelId)}`,
-    );
-  }
+  const selected = findCodexCatalogModel(catalog, modelId) ?? nativeCodexFallbackModel(modelId);
+  // Add an exact alias so changing one route cannot change its subscription sibling.
+  const model = { ...selected, slug: modelId,
+    max_context_window: Math.max(Number(selected.max_context_window) || 0, window) };
   return {
     ...catalog,
-    models: catalog.models.map((model) => {
-      if (model.slug !== modelId) return model;
-      const currentMax = model.max_context_window;
-      const maxContextWindow = typeof currentMax === 'number' && Number.isFinite(currentMax)
-        ? Math.max(Math.floor(currentMax), window)
-        : window;
-      return { ...model, max_context_window: maxContextWindow };
-    }),
+    models: catalog.models.some((entry) => entry.slug === modelId)
+      ? catalog.models.map((entry) => entry.slug === modelId ? model : entry)
+      : [...catalog.models, model],
   };
 }
 
@@ -192,7 +247,8 @@ async function readBundledCatalog(
   binaryPath: string,
   scanChunkBytes?: number,
 ): Promise<CodexModelCatalog> {
-  const cacheKey = path.resolve(binaryPath);
+  const stat = await fs.stat(binaryPath);
+  const cacheKey = `${path.resolve(binaryPath)}:${stat.size}:${stat.mtimeMs}`;
   let bundledPromise = bundledCatalogByBinary.get(cacheKey);
   if (!bundledPromise || scanChunkBytes !== undefined) {
     bundledPromise = extractBundledCodexModelCatalog(binaryPath, { scanChunkBytes });
@@ -206,20 +262,6 @@ async function readBundledCatalog(
     }
     throw error;
   }
-}
-
-/**
- * 只有静态目录里已有的真实 slug 才能安全抬高上限。未知 slug 会由 Codex 构造带专用
- * base instructions 的 fallback metadata；克隆任意内置条目会静默改变模型行为。
- */
-export async function bundledCodexCatalogHasModel(
-  binaryPath: string,
-  modelId: string,
-  options: { scanChunkBytes?: number } = {},
-): Promise<boolean> {
-  if (!modelId) return false;
-  const bundled = await readBundledCatalog(binaryPath, options.scanChunkBytes);
-  return bundled.models.some((model) => model.slug === modelId);
 }
 
 async function persistCatalog(codexHome: string, content: string): Promise<string> {
@@ -278,18 +320,27 @@ export async function prepareCodexCustomContextCatalog(params: {
   /** In-memory smart Subagent catalog to preserve in the one-session custom-context Host. */
   baseCatalog?: unknown;
 }): Promise<{ catalogPath: string; extraArgs: string[] }> {
-  const bundled = await readBundledCatalog(params.binaryPath, params.scanChunkBytes);
+  const bundled = await readNativeCodexCatalog(params.binaryPath, params.codexHome, params.scanChunkBytes);
   let base = params.baseCatalog === undefined
     ? bundled
-    : parseCodexModelCatalog(JSON.stringify(params.baseCatalog));
+    : normalizeNativeCatalog(parseCodexModelCatalog(JSON.stringify(params.baseCatalog)));
   if (!base.models.some((model) => model.slug === params.modelId)) {
-    const bundledMatches = bundled.models.filter((model) => model.slug === params.modelId);
-    if (bundledMatches.length !== 1) {
-      throw new Error(
-        `current Codex binary catalog must contain exactly one model named ${JSON.stringify(params.modelId)}`,
-      );
+    const native = findCodexCatalogModel(bundled, params.modelId);
+    if (native) base = { ...base, models: [...base.models, { ...native, slug: params.modelId }] };
+    else {
+      // A runtime upgrade must not silently replace an unknown model's native prompt.
+      const binary = await fs.readFile(params.binaryPath);
+      // Git checkout and native CLI builds can use different line endings.
+      // Verify both byte-exact variants regardless of this checkout's format.
+      const unixPrompt = nativeFallbackPrompt.replace(/\r\n/g, '\n');
+      const windowsPrompt = unixPrompt.replace(/\n/g, '\r\n');
+      const instructions = binary.includes(Buffer.from(unixPrompt)) ? unixPrompt
+        : binary.includes(Buffer.from(windowsPrompt)) ? windowsPrompt : null;
+      if (instructions === null) {
+        throw new Error('Codex native fallback metadata changed; update the bundled compatibility descriptor');
+      }
+      base = { ...base, models: [...base.models, nativeCodexFallbackModel(params.modelId, instructions)] };
     }
-    base = { ...base, models: [...base.models, bundledMatches[0]!] };
   }
   const patched = patchCodexModelMaxContextWindow(
     base,

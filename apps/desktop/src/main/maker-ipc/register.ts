@@ -10,6 +10,11 @@
  * 老的 cc-agent:* / codex:* IPC handler 完全不动，新链路与老链路并行。
  */
 
+import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
+import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
+import { inferProviderIdForModel } from '../maker-host/provider-route.js';
+import { getCodexHome } from '../maker-host/auth-adapters.js';
+import { getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
@@ -782,11 +787,11 @@ import {
 } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
 import { readCompactionPct } from '../maker-host/compaction-settings-store.js';
-import { resolveVerifiedContextWindow } from '../maker-host/catalog-to-descriptors.js';
+import { resolveVerifiedContextWindow, resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
 import {
   isModelContextLimitCustomized,
   readModelContextLimit,
-  writeModelContextLimits,
+  writeModelContextLimitsWithRefresh,
 } from '../maker-host/model-context-limit-store.js';
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
@@ -5313,8 +5318,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     clearModelPriceOverride,
     stageClearProviderModelPriceOverrides: stageProviderModelPriceOverridesClear,
     broadcastPricingChanged: broadcastReferenceModelPricing,
-    // 上下文上限:不广播 —— 它不改任何已展示的目录字段,只影响**下一次**窗口评估
-    // (resolveVerifiedContextWindow 每次调用现读 store)。写完 renderer 用返回值就地更新。
+    // Keep the catalog specification unchanged. Persist the override and refresh only
+    // matching Codex tasks at a turn boundary; the editor reads back the effective value.
+    readCodexContextWindowInfo: async (target, sessionId) => {
+      if (sessionId) {
+        const session = maker.getSession(sessionId);
+        if (session) return session.agentKind === 'codex' ? session.getCodexContextWindowInfo() : null;
+      }
+      const configured = await readCodexContextWindowInfo({
+        codexHome: getCodexHome(),
+        binaryPath: getCachedBinaryStatus('codex').binaryPath,
+        modelId: target.modelId,
+        contextWindowOverride: readModelContextLimit('codex', target.providerId, target.modelId)
+          ?? resolveModelDefaultContextWindow(getDesktopSelectableCatalog(), 'codex', target.providerId, target.modelId),
+      });
+      // Configuration refresh releases idle handles; the next send recreates one.
+      // Expose the actual next-start configuration, explicitly marked as pending.
+      return configured && sessionId ? { ...configured, pendingApply: true } : configured;
+    },
     readModelContextLimit: (target) => ({
       limit: readModelContextLimit(target.agent, target.providerId, target.modelId),
       isCustomized: isModelContextLimitCustomized(
@@ -5323,8 +5344,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         target.modelId,
       ),
     }),
-    writeModelContextLimit: (targets, limit) => {
-      writeModelContextLimits(targets, limit);
+    validateModelContextLimit: async (targets, limit) => {
+      for (const target of targets.filter((t) => t.agent === 'codex')) {
+        const binaryPath = getCachedBinaryStatus('codex').binaryPath;
+        if (!binaryPath) throw new Error('Codex runtime is unavailable');
+        await prepareCodexCustomContextCatalog({
+          binaryPath, codexHome: getCodexHome(), modelId: target.modelId, contextWindow: limit,
+        });
+      }
+    },
+    writeModelContextLimit: async (targets, limit) => {
+      const owner = getActiveAppSession();
+      await writeModelContextLimitsWithRefresh(targets, limit, async () => {
+        for (const active of maker.listActiveSessions()) {
+          if (getActiveAppSession().generation !== owner.generation) throw new Error('Account changed during context configuration');
+          const session = maker.getSession(active.id);
+          if (!session || session.agentKind !== 'codex' || session.remoteHostId) continue;
+          const source = getSessionProvider(active.id) ?? inferProviderIdForModel(session.model, 'codex');
+          if (!targets.some((t) => t.agent === 'codex' && t.providerId === source && t.modelId === session.model)) continue;
+          // An already pending model/provider switch will rebuild with the latest settings.
+          // Never replace that user intention with a same-model settings refresh.
+          if (getPendingCredentialSwitchTarget(active.id)) continue;
+          await applyRuntimeSetModelChange({
+            maker, sessionId: active.id, model: session.model,
+            providerId: getSessionProvider(active.id), forceSessionRebuild: true,
+            isSessionInTurn,
+            registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
+            clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
+            wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
+            getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+            codexAuthInjection: getCodexProxyAuthInjectionState(), logger: log,
+          });
+        }
+        if (getActiveAppSession().generation !== owner.generation) throw new Error('Account changed during context configuration');
+      });
     },
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。

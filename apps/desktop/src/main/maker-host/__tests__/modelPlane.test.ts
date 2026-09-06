@@ -157,7 +157,8 @@ describe('registry presence 实体化', () => {
     const codex = models('openai', 'codex').find((m) => m.id === 'gpt-6');
     expect(codex).toMatchObject({
       name: 'GPT-6',
-      contextWindow: 400_000,
+      contextWindow: 272_000,
+      contextWindowMax: 400_000,
       contextWindowVerified: true,
       maxOutput: 128_000,
       efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -205,7 +206,8 @@ describe('registry presence 实体化', () => {
       defaultEffort: 'high',
     });
     expect(models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6')).toMatchObject({
-      contextWindow: 1_000_000,
+      contextWindow: 272_000,
+      contextWindowMax: 1_000_000,
       efforts: ['low', 'medium'],
       defaultEffort: 'medium',
     });
@@ -263,7 +265,8 @@ describe('registry presence 实体化', () => {
         defaultEffort: expectedDefault,
       });
       expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')).toMatchObject({
-        contextWindow: 400_000,
+        contextWindow: 272_000,
+        contextWindowMax: 400_000,
         supportsFastMode: true,
         defaultEffort: 'medium',
       });
@@ -329,7 +332,7 @@ describe('registry presence 实体化', () => {
       {
         id: 'chatgpt/gpt-6[1m]',
         name: 'GPT-6 (1M · 高消耗)',
-        contextWindow: 1_000_000,
+        contextWindow: 272_000,
       },
     ]);
     expect(
@@ -341,6 +344,7 @@ describe('registry presence 实体化', () => {
       }),
     );
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6[1m]')).toBeUndefined();
+    expect(models('openai', 'claude-code').find(m => m.id === 'chatgpt/gpt-6[1m]')?.contextWindow).toBe(900_000);
     expect(getModelPlaneWarnings()).toEqual([]);
   });
 

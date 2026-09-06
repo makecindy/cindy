@@ -142,7 +142,7 @@ describe('model advanced editor', () => {
     expect(setModelVisibility).not.toHaveBeenCalled();
   });
 
-  it('shows the exact maximum but excludes built-in Codex from shared context edits', () => {
+  it('shows the exact maximum and includes Codex in shared context edits', () => {
     draw();
     expect(screen.getByText('1,050,000')).toBeTruthy();
     const input = screen.getByRole('textbox', {
@@ -158,13 +158,13 @@ describe('model advanced editor', () => {
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(mocks.target).toHaveBeenLastCalledWith({
       providerId: 'openai',
-      agent: 'claude-code',
-      modelId: 'chatgpt/gpt-6',
-      relatedTargets: [],
+      agent: 'codex',
+      modelId: 'gpt-6',
+      relatedTargets: [{ providerId: 'openai', agent: 'claude-code', modelId: 'chatgpt/gpt-6' }],
     });
   });
 
-  it('keeps a Codex-only built-in route read-only without removing the model specification', () => {
+  it('edits a Codex-only route without removing the model specification', () => {
     render(
       <ModelAdvancedDrawer
         provider={provider}
@@ -177,14 +177,15 @@ describe('model advanced editor', () => {
         paymentRequired={false}
       />,
     );
-    expect(screen.queryByRole('textbox')).toBeNull();
-    expect(mocks.target).toHaveBeenLastCalledWith(null);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
     expect(screen.getByText('1,050,000')).toBeTruthy();
-    expect(screen.getByText('settings.providers.models.advanced.codexContextHint')).toBeTruthy();
-    expect(mocks.setLimit).not.toHaveBeenCalled();
+    expect(screen.queryByText('settings.providers.models.advanced.codexContextHint')).toBeNull();
   });
 
-  it('preserves the explicit context editor for a custom Codex provider', () => {
+  it('uses the same context editor for custom Codex providers', () => {
     render(
       <ModelAdvancedDrawer
         provider={{ ...provider, id: 'custom', source: 'user' }}
@@ -197,13 +198,11 @@ describe('model advanced editor', () => {
         paymentRequired={false}
       />,
     );
-    expect(screen.getByRole('textbox')).toBeTruthy();
-    expect(mocks.target).toHaveBeenLastCalledWith({
-      providerId: 'custom',
-      agent: 'codex',
-      modelId: model.id,
-      relatedTargets: [],
-    });
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
+    expect(screen.getAllByText('272K').length).toBeGreaterThan(0);
     expect(screen.queryByText('settings.providers.models.advanced.codexContextHint')).toBeNull();
   });
 

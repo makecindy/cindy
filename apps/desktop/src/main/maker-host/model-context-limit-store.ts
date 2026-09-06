@@ -108,8 +108,8 @@ function normalize(raw: unknown): ModelContextLimitPrefs {
   return { limits: sanitizeLimits((raw as { limits?: unknown }).limits) };
 }
 
-const store = createOverrideSettingsFile<ModelContextLimitPrefs>({
-  filePath: () => ownerScopedUserDataPath('model-context-limit-prefs.json'),
+const createStore = (filePath: () => string) => createOverrideSettingsFile<ModelContextLimitPrefs>({
+  filePath,
   defaults: DEFAULTS,
   normalize,
   log,
@@ -117,6 +117,8 @@ const store = createOverrideSettingsFile<ModelContextLimitPrefs>({
   maxBytes: 1_048_576,
   preserveUnreadableFile: true,
 });
+
+let store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
 
 function readPrefs(): ModelContextLimitPrefs {
   // 隐藏配置层级的文件也是正式契约:mtime 守卫让「直接手改文件」在下一次读取生效。
@@ -180,6 +182,38 @@ export function writeModelContextLimits(
   if (Object.keys(limits).length > MAX_ENTRIES) throw new Error('context limit capacity exceeded');
   store.writePatch({ limits });
   return next;
+}
+
+/** Roll back only this edit if its dependent runtime refresh fails. */
+export async function writeModelContextLimitsWithRefresh(
+  targets: readonly { agent: AgentKind; providerId: string; modelId: string }[],
+  limit: number | null,
+  refresh: () => Promise<void>,
+): Promise<void> {
+  // Capture the original owner's file; an account switch must never restore into
+  // the new owner's preferences. Preserve mixed aliases and absent overrides.
+  const filePath = ownerScopedUserDataPath('model-context-limit-prefs.json');
+  const previous = { ...readModelContextLimits() };
+  const written = writeModelContextLimits(targets, limit);
+  try {
+    await refresh();
+  } catch (error) {
+    const originalStore = createStore(() => filePath);
+    const limits = { ...originalStore.read().limits };
+    for (const target of targets) {
+      const key = modelContextLimitKey(target.agent, target.providerId, target.modelId);
+      // Do not undo a newer edit made outside the serialized IPC writer.
+      if ((limits[key] ?? null) !== written) continue;
+      if (previous[key] === undefined) delete limits[key];
+      else limits[key] = previous[key];
+    }
+    try {
+      originalStore.writePatch({ limits });
+    } finally {
+      store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
+    }
+    throw error;
+  }
 }
 
 /** 清空全部上限 override(供应商级 / 整体「恢复默认」用)。 */

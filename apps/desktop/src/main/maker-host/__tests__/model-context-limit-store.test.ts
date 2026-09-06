@@ -31,6 +31,7 @@ import {
   resetModelContextLimits,
   writeModelContextLimit,
   writeModelContextLimits,
+  writeModelContextLimitsWithRefresh,
 } from '../model-context-limit-store';
 
 const PREFS = path.join(tempRoot, 'test-owner', 'model-context-limit-prefs.json');
@@ -46,6 +47,49 @@ describe('model context limit store', () => {
     fs.mkdirSync(path.dirname(PREFS), { recursive: true });
     if (fs.existsSync(PREFS)) fs.unlinkSync(PREFS);
     __testing.invalidate();
+  });
+
+  it.each([1_000_000, null])('rolls back failed refresh for limit %s, including mixed/absent aliases', async (limit) => {
+    const targets = [
+      { agent: 'codex' as const, providerId: 'xd', modelId: 'gpt' },
+      { agent: 'pi' as const, providerId: 'xd', modelId: 'gpt' },
+      { agent: 'claude-code' as const, providerId: 'xd', modelId: 'gpt' },
+    ];
+    writeModelContextLimit('codex', 'xd', 'gpt', 272_000);
+    writeModelContextLimit('pi', 'xd', 'gpt', 500_000);
+    await expect(writeModelContextLimitsWithRefresh(targets, limit, async () => {
+      expect(readModelContextLimit('codex', 'xd', 'gpt')).toBe(limit);
+      writeModelContextLimit('codex', 'xd', 'unrelated', 128_000);
+      throw new Error('runtime close failed');
+    })).rejects.toThrow('runtime close failed');
+    expect(readModelContextLimit('codex', 'xd', 'gpt')).toBe(272_000);
+    expect(readModelContextLimit('pi', 'xd', 'gpt')).toBe(500_000);
+    expect(readModelContextLimit('claude-code', 'xd', 'gpt')).toBeNull();
+    expect(readModelContextLimit('codex', 'xd', 'unrelated')).toBe(128_000);
+  });
+
+  it('rolls back the original owner after an account switch without changing the new owner', async () => {
+    const target = { agent: 'codex' as const, providerId: 'xd', modelId: 'gpt' };
+    writeModelContextLimit('codex', 'xd', 'gpt', 272_000);
+    await expect(writeModelContextLimitsWithRefresh([target], 1_000_000, async () => {
+      ownerId = 'other-owner';
+      writeModelContextLimit('codex', 'xd', 'gpt', 500_000);
+      throw new Error('account changed');
+    })).rejects.toThrow('account changed');
+    expect(readModelContextLimit('codex', 'xd', 'gpt')).toBe(500_000);
+    ownerId = 'test-owner';
+    expect(readModelContextLimit('codex', 'xd', 'gpt')).toBe(272_000);
+  });
+
+  it('keeps successful changes and never overwrites a newer external edit on rollback', async () => {
+    const target = { agent: 'codex' as const, providerId: 'xd', modelId: 'gpt' };
+    await writeModelContextLimitsWithRefresh([target], 1_000_000, async () => {});
+    expect(readModelContextLimit('codex', 'xd', 'gpt')).toBe(1_000_000);
+    await expect(writeModelContextLimitsWithRefresh([target], 272_000, async () => {
+      writeModelContextLimit('codex', 'xd', 'gpt', 500_000);
+      throw new Error('refresh failed');
+    })).rejects.toThrow('refresh failed');
+    expect(readModelContextLimit('codex', 'xd', 'gpt')).toBe(500_000);
   });
 
   it('未设置时不落盘、不视为自定义', () => {
