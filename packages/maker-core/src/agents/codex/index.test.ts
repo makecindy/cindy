@@ -14387,6 +14387,73 @@ describe('CodexAgent MCP thread context hooks', () => {
     await fullHandle.close();
   });
 
+  it.each(['command', 'file', 'mcp', 'permissions', 'dynamic'] as const)('revalidates cancelled Auto waits across %s approval callbacks', async (kind) => {
+    for (const lifecycle of ['abort', 'graceful-stop', 'close', 'completed', 'failed', 'superseded', 'child-completed', 'child-root-stopped', 'child-root-completed', 'same-turn-started'] as const) {
+      for (const verdict of ['allow', 'ask'] as const) {
+        const review = deferred<{ verdict: 'allow' | 'ask' }>();
+        const reviewer = vi.fn(() => review.promise);
+        const callTool = vi.fn(async () => ({ contentItems: [], success: true }));
+        const agent = new CodexAgent(createDeps({}, {
+          reviewAutoPermissionAction: reviewer,
+          ...(kind === 'dynamic' ? { codexHostDynamicToolProvider: {
+            listTools: () => [{ type: 'function' as const, name: 'cindy_contacts__call_tool', description: 'Contacts tool', inputSchema: { type: 'object' }, deferLoading: false }],
+            callTool,
+          } } : {}),
+        }));
+        const host = installFakeHost(agent, (method) => method === Method.TurnInterrupt ? {} : undefined);
+        const handle = await agent.startSession({
+          sessionId: `approval-lifecycle-${kind}-${lifecycle}-${verdict}`, model: 'gpt-5.5',
+          providerId: 'openai', workingDir: '/repo', permissionMode: 'auto',
+        });
+        const h = host.getThreadHandlers();
+        if (!h?.commandExecutionApproval || !h.fileChangeApproval || !h.mcpServerElicitation || !h.permissionsApproval || !h.dynamicToolCall) throw new Error('missing approval handlers');
+        if (lifecycle !== 'same-turn-started') h.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'root-review-turn' } });
+        const child = lifecycle.startsWith('child-');
+        const threadId = child ? 'child-review-thread' : 'start-thread-id';
+        const turnId = child ? 'child-review-turn' : 'root-review-turn';
+        const resolver = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+        handle.setInteractionResolver(resolver);
+        const pending = kind === 'command'
+          ? h.commandExecutionApproval({ threadId, turnId, itemId: 'review-item', command: 'rm -rf build', cwd: '/repo' })
+          : kind === 'file'
+            ? h.fileChangeApproval({ threadId, turnId, itemId: 'review-item', grantRoot: null, changes: [{ path: '/repo/a.txt', kind: { type: 'add' }, diff: '+hello' }] })
+            : kind === 'mcp'
+              ? h.mcpServerElicitation({ threadId, turnId, serverName: 'cindy_contacts', mode: 'form', message: 'Allow tool call', requestedSchema: {},
+                _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'call_tool', tool_params: { name: 'contacts_delete', args: { id: 'contact-1' } } } })
+              : kind === 'dynamic'
+                ? h.dynamicToolCall({ threadId, turnId, callId: 'review-item', namespace: null, tool: 'cindy_contacts__call_tool', arguments: { name: 'contacts_delete', args: { id: 'contact-1' } } }, { requestId: 'review-dynamic' })
+                : h.permissionsApproval({ threadId, turnId, itemId: 'review-item', permissions: { network: true } });
+        await waitForExpectation(() => expect(reviewer).toHaveBeenCalledOnce());
+        if (lifecycle === 'abort' || lifecycle === 'child-root-stopped') await handle.abort();
+        if (lifecycle === 'graceful-stop') await handle.requestGracefulStop?.();
+        if (lifecycle === 'close') await handle.close();
+        if (lifecycle === 'child-completed') {
+          h.descendantNotification?.(threadId, 'turn/completed', { threadId, turn: { id: turnId, status: 'completed' } });
+        } else if (['completed', 'failed', 'superseded', 'child-root-stopped', 'child-root-completed'].includes(lifecycle)) {
+          h.turnCompleted?.({ threadId: 'start-thread-id', turn: {
+            id: 'root-review-turn', status: lifecycle === 'failed' ? 'failed' : lifecycle === 'child-root-stopped' ? 'interrupted' : 'completed',
+          } });
+        }
+        if (lifecycle === 'superseded') await handle.send({ type: 'user', content: 'Continue with the next task.' });
+        if (lifecycle === 'same-turn-started') h.turnStarted?.({ threadId, turn: { id: turnId } });
+        // Widening the mode cannot revive an approval cancelled by Stop.
+        if (lifecycle === 'abort' || lifecycle === 'child-root-stopped' || lifecycle === 'superseded') await handle.setPermissionMode?.('bypassPermissions');
+        review.resolve({ verdict });
+        const accepted = lifecycle === 'child-root-completed' || lifecycle === 'same-turn-started';
+        expect(await pending, `${kind}/${lifecycle}/${verdict}`).toEqual(kind === 'dynamic'
+          ? { success: accepted, contentItems: accepted ? [] : [{ type: 'inputText', text: 'The user declined this tool call.' }] }
+          : kind === 'mcp'
+          ? { action: accepted ? 'accept' : 'decline', content: null, _meta: null }
+          : kind === 'permissions'
+            ? { permissions: accepted ? { network: true } : {}, scope: 'turn' }
+            : { decision: accepted ? 'accept' : 'decline' });
+        expect(resolver).toHaveBeenCalledTimes(accepted && verdict === 'ask' ? 1 : 0);
+        expect(callTool).toHaveBeenCalledTimes(kind === 'dynamic' && accepted ? 1 : 0);
+        await handle.close();
+      }
+    }
+  });
+
   it('discards an in-flight allow when external directory permissions change', async () => {
     const pendingReview = deferred<{ verdict: 'allow' }>();
     const reviewer = vi.fn(() => pendingReview.promise);
