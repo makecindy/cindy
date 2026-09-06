@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkError,
+  DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   SESSION_SYNC_CHANNEL,
@@ -104,6 +105,22 @@ function batchesIn(sent: SentPush[]): MakerEventBatchPayload[] {
     .filter((s) => s.channel === MAKER_EVENT_BATCH_CHANNEL)
     .map((s) => s.payload as MakerEventBatchPayload);
 }
+
+it('projects large tool results before batch admission, preserving ordering with terminal pushes', () => {
+  const { client, sent } = mkClient();
+  __testing.setActiveClient(client as never);
+  subscriptions.subscribe('mobile', ['session:s1'], 'mobile', [
+    CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  ]);
+  const fullText = 'log'.repeat(100_000);
+  __testing.forwardPush('maker:event', { sessionId: 's1', persistId: 'p', resolvedContent: fullText,
+    event: { type: 'tool_result_full', data: { toolUseId: 'use', fullText } } });
+  expect(sent).toHaveLength(0);
+  __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'idle' });
+  expect(sent.map((push) => push.channel)).toEqual([MAKER_EVENT_BATCH_CHANNEL, 'maker:status-changed']);
+  expect(JSON.stringify(sent[0].payload).length).toBeLessThan(10_000);
+  expect(JSON.stringify(sent[0].payload)).not.toContain('resolvedContent');
+});
 
 beforeEach(() => {
   vi.useFakeTimers();

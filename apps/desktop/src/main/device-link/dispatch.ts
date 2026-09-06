@@ -42,6 +42,7 @@ import {
   MAKER_EVENT_BATCH_CHANNEL,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   byteLength,
   DeviceLinkError,
   parseFsWatchTopic,
@@ -67,6 +68,7 @@ import {
 import { app } from 'electron';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { createLogger } from '../logger';
+import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
 import { dispatchLocalInvoke } from './invoke-registry';
@@ -1510,8 +1512,18 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   const batchEligibleSessionId = batchTargets
     ? readPushSessionId(remotePayload)
     : null;
-  const batchEligible = batchEligibleSessionId !== null
-    && estimateMakerEventBytes(remotePayload) < MAKER_EVENT_BATCH_MAX_BYTES;
+  // Project lazily once, before batching/offline queueing. Another Desktop or old Mobile
+  // on the same relay must still receive its unchanged payload.
+  let mobilePayload: unknown;
+  let mobilePayloadReady = false;
+  const payloadFor = (dst: string): unknown => {
+    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return remotePayload;
+    if (!mobilePayloadReady) {
+      mobilePayload = projectMobileToolPush(channel, remotePayload);
+      mobilePayloadReady = true;
+    }
+    return mobilePayload;
+  };
   const offlineTargets = subscriptions
     .getKnownControllersForTopic(topic)
     .filter((dst) => !liveTargets.includes(dst));
@@ -1519,14 +1531,16 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel)) {
       offlinePushQueue.enqueue(dst, {
         channel,
-        payload: remotePayload,
+        payload: payloadFor(dst),
         topic,
         ...(ownerStamp ? { ownerStamp } : {}),
       });
     }
   }
   for (const dst of liveTargets) {
-    const willBatch = batchEligible && batchTargets!.has(dst);
+    const targetPayload = payloadFor(dst);
+    const willBatch = batchEligibleSessionId !== null && batchTargets!.has(dst)
+      && estimateMakerEventBytes(targetPayload) < MAKER_EVENT_BATCH_MAX_BYTES;
     // 跨 channel 保序(review 两轮):**不入批**的帧必须排在该会话已暂存的事件
     // 之后——否则 interaction-request / status-changed / activity 终态会插到攒批
     // 的文本 delta 前面,控制端先收「已完成/确认卡」(结束流式消息)、120ms 后
@@ -1536,15 +1550,15 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     //  - 必须只对 !willBatch 的帧做,否则每条 maker:event 都会先收口上一批,
     //    批被拆回逐帧、优化完全失效。
     if (!willBatch && makerEventBatchStages.size > 0) {
-      flushMakerEventBatchesForSessionPush(dst, channel, remotePayload);
+      flushMakerEventBatchesForSessionPush(dst, channel, targetPayload);
     }
     if (willBatch) {
-      stageMakerEventPush(dst, batchEligibleSessionId!, remotePayload, ownerStamp);
+      stageMakerEventPush(dst, batchEligibleSessionId!, targetPayload, ownerStamp);
       continue;
     }
     // 会话活动是高频状态镜像:走 latest-wins 暂存整流,不直接冲可靠传输窗口。
     if (channel === SESSION_ACTIVITY_CHANNEL) {
-      stageSessionActivityPush(dst, remotePayload, ownerStamp);
+      stageSessionActivityPush(dst, targetPayload, ownerStamp);
       continue;
     }
     // agent 事件流是本条链路的帧数大头:对声明了微批能力的控制端合并成
@@ -1554,7 +1568,7 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
-    sendPushBestEffort(dst, channel, remotePayload, ownerStamp);
+    sendPushBestEffort(dst, channel, targetPayload, ownerStamp);
   }
 }
 
@@ -2442,7 +2456,12 @@ function sendInvokeResultSafe(
 ): boolean {
   const key = `${src}\u0000${requestId}`;
   const normalized = sanitizeMessageInvokeResult(normalizeInvokeResultForWire(result), channel);
-  const attempt = trySendInvokeResult(client, src, requestId, normalized, channel, args);
+  const proactive =
+    subscriptions.controllerSupports(src, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1) &&
+    channel === 'local-db:messages:list' && normalized.ok && Array.isArray(normalized.result)
+      ? { ...normalized, result: projectMobileMessagePage(normalized.result, args?.[1]) }
+      : normalized;
+  const attempt = trySendInvokeResult(client, src, requestId, proactive, channel, args);
   // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
   if (fingerprint !== undefined) {
