@@ -41,7 +41,9 @@ vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing } from '../dispatch';
+import { __testing, runInvoke, wireInboundDispatch } from '../dispatch';
+import { __testing as registry } from '../invoke-registry';
+import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 import * as subscriptions from '../subscriptions';
 
 /** 最小 mock client:只实现被测路径用到的两个发送方法。 */
@@ -600,5 +602,98 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
       'local-db:messages:created',
       { sessionId: 's1', id: 'm1' },
     );
+  });
+});
+
+
+describe('remote companion Session visibility at the device-link boundary', () => {
+  it.each([
+    ['local-db:sessions:get', ['s1']],
+    ['local-db:messages:list', ['s1', {}]],
+    ['local-db:messages:around', ['s1', 'm1']],
+    ['local-db:messages:around-client-id', ['s1', 'm1']],
+    ['maker:send', ['s1', { text: 'hello' }]],
+    ['maker:steer', ['s1', 'hello']],
+  ])('rejects %s before its local handler receives a hidden task', async (channel, args) => {
+    const handler = vi.fn();
+    registry.register(channel as string, handler);
+    setRemoteBotSessionLookup(async (id) => id === 's1' ? 'hidden' : 'ordinary');
+    expect(await runInvoke('ctrl-1', { channel, args } as never)).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('rechecks visibility after an in-flight read and filters active task discovery', async () => {
+    let hidden = false;
+    setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');
+    registry.register('local-db:sessions:get', () => { hidden = true; return { id: 's1' }; });
+    expect(await runInvoke('ctrl-1', { channel: 'local-db:sessions:get', args: ['s1'] })).toMatchObject({ ok: false });
+    registry.register('maker:list-active', () => [{ sessionId: 's1' }]);
+    expect(await runInvoke('ctrl-1', { channel: 'maker:list-active', args: [] })).toEqual({ ok: true, result: [] });
+  });
+
+  it('checks buffered pushes at delivery and preserves peer order and failure isolation', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    let hidden = false;
+    setRemoteBotSessionLookup(async (id) => { await pending; return id === 's1' && hidden ? 'hidden' : 'visible'; });
+    const client = mkClient({ sendPush: vi.fn((dst) => { if (dst === 'ctrl-1') throw new Error('peer gone'); }) });
+    __testing.setActiveClient(client as never);
+    for (const peer of ['ctrl-1', 'ctrl-2']) subscriptions.subscribe(peer, ['session:s1', 'session:s2']);
+    __testing.forwardPush('maker:event', { sessionId: 's1', seq: 0 });
+    __testing.forwardPush('maker:event', { sessionId: 's2', seq: 1 });
+    __testing.forwardPush('maker:event', { sessionId: 's2', seq: 2 });
+    hidden = true;
+    finish();
+    await vi.waitFor(() => expect(client.sendPush.mock.calls.filter(([dst]) => dst === 'ctrl-2')).toHaveLength(2));
+    expect(client.sendPush.mock.calls.filter(([dst]) => dst === 'ctrl-2').map((call) => call[2])).toEqual([
+      { sessionId: 's2', seq: 1 }, { sessionId: 's2', seq: 2 },
+    ]);
+    expect(client.sendPush.mock.calls.every((call) => call[2].sessionId !== 's1')).toBe(true);
+  });
+
+  it('revalidates cached replies without repeating the local handler', async () => {
+    let hidden = false;
+    setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');
+    const handler = vi.fn(() => ({ id: 's1', source: 'bot', workingDir: '/workspace' }));
+    registry.register('local-db:sessions:get', handler);
+    const client = mkClient();
+    wireInboundDispatch(client as never);
+    const frame = client.onFrame.mock.calls[0][0];
+    const request = { v: PROTOCOL_VERSION, kind: 'invoke', src: 'ctrl-1', id: 'cached-read', payload: { channel: 'local-db:sessions:get', args: ['s1'] } };
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(1));
+    expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: true, result: { workingDir: '/workspace' } });
+    hidden = true;
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(2));
+    expect(client.sendInvokeResult.mock.calls[1][2]).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidates a queued reply after the companion becomes hidden', async () => {
+    const client = mkClient({ sendInvokeResult: vi.fn().mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); }) });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'queued-read', { ok: true, result: [{ content: 'private reply' }] }, 'local-db:messages:list', ['s1']);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+    setRemoteBotSessionLookup(async () => 'hidden');
+    __testing.flushRemoteInvokeResultOutbox();
+    await vi.waitFor(() => expect(__testing.remoteInvokeResultOutboxSize()).toBe(0));
+    expect(client.sendInvokeResult.mock.calls[1][2]).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+  });
+
+  it('drops pending authorization after the transport is replaced', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    const oldClient = mkClient();
+    __testing.setActiveClient(oldClient as never);
+    subscriptions.subscribe('ctrl-1', ['session:s1']);
+    __testing.forwardPush('maker:event', { sessionId: 's1' });
+    const newClient = mkClient();
+    __testing.setActiveClient(newClient as never);
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(oldClient.sendPush).not.toHaveBeenCalled();
+    expect(newClient.sendPush).not.toHaveBeenCalled();
   });
 });

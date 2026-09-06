@@ -487,7 +487,7 @@ export function KeyboardShortcutsSection() {
               {/* 组合键展示位: 录制中显示提示, 无绑定显示"未设置" */}
               <span
                 className={cn(
-                  'inline-flex min-w-[72px] items-center justify-center rounded-md px-2 py-1',
+                  'inline-flex min-w-[72px] items-center justify-center rounded-[4px] px-2 py-1',
                   // 不用 font-mono: 项目的 mono 映射到 --app-font-code (代码字体),
                   // 普遍缺 ⌘⇧⌥⌃ 字形, 会 fallback 渲染得又小又不协调。系统 UI
                   // 字体自带这些符号的正确字形 (与 VoiceInputSection 显示一致)。

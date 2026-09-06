@@ -22,6 +22,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, string>) => {
       const table: Record<string, string> = {
+        'modelDescriptions.coding': '用于编写代码、排查错误与改进程序。',
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.openai.title': 'OpenAI',
         'settings.providers.xd.title': 'Cindy AI',
@@ -512,6 +513,32 @@ describe('统一模型选择器面板', () => {
       fireEvent.click(rowFor('GPT-5.5'));
     });
     expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'high', true);
+  });
+
+  it('official 策略忽略全局引擎偏好与收藏，只按目录推荐选择模型', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'cc',
+      effort: 'medium',
+    });
+
+    renderPanel({
+      unifiedSelectionPolicy: 'official',
+      configurationEnabled: false,
+    });
+
+    const list = screen.getByRole('listbox');
+    expect(within(list).queryByText('收藏')).toBeNull();
+    expect(within(rowFor('GPT-5.5')).queryByRole('button', { name: '存为收藏' })).toBeNull();
+
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    expect(screen.queryByTestId('unified-model-config-flyout')).toBeNull();
+    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'high', false);
   });
 
   it('← 键打开该行的配置浮层(键盘入口)', async () => {
@@ -3322,10 +3349,12 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('长描述单行截断并挂 title,长模型名同理', () => {
+  it('本地简介单行截断并挂 title，不透出上游英文描述，模型名同理', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
-    const desc = row.querySelector('[title^="A very long English"]') as HTMLElement;
+    expect(row.textContent).not.toContain('A very long English');
+    const desc = within(row).getByText('用于编写代码、排查错误与改进程序。');
+    expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');

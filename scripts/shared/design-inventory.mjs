@@ -33,6 +33,7 @@ const LAYOUT_ROUTE_COMPONENTS = new Set([
   'LocalDbGate',
   'MainLayout',
   'CCAgentFeatureLayout',
+  'BotsFeatureLayout',
   'SkillhubFeatureLayout',
 ]);
 
@@ -535,6 +536,47 @@ export function catalogSurfaces() {
       styleRoots: ['apps/desktop/src/renderer/features/cc-agent/workdir-browse'],
       routerPaths: ['/cc-agent/files/:sessionId'],
       routeEntryComponents: { '/cc-agent/files/:sessionId': 'WorkdirBrowseRoute' },
+    },
+    {
+      id: 'desktop.bots',
+      platform: 'desktop',
+      title: '伙伴（列表 / 对话 / 设置 / 历史 / 伙伴私聊）',
+      productionEntry:
+        'hash `/bots`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务、伙伴私聊路由（BotsFeatureLayout）',
+      reachableComponents: [
+        'BotsHomeView',
+        'BotRosterView',
+        'BotSessionView',
+        'RemoteBotSessionView',
+        'BotHistorySessionView',
+        'BotDirectMessageView',
+        'BotSettingsDrawer',
+        'BotBasicProfileFields',
+        'BotModelChainEditor',
+        'BotLifecycleSettings',
+        'BotCollaborationCard',
+      ],
+      styleRoots: ['apps/desktop/src/renderer/features/bots'],
+      // 伙伴任务复用简化后的主聊天视图与消息组件；本 surface 只补它自己的覆盖层。
+      extraStyleRoots: ['desktop.chat.session'],
+      routerPaths: [
+        '/bots',
+        '/bots/:botId',
+        '/bots/:botId/direct/:threadId',
+        '/bots/:botId/history/:sessionId',
+        '/bots/:botId/session/:sessionId',
+        '/bots/roster',
+        '/bots/remote/:deviceId/:botId',
+      ],
+      routeEntryComponents: {
+        '/bots': 'BotsHomeView',
+        '/bots/:botId': 'BotsHomeView',
+        '/bots/:botId/direct/:threadId': 'BotDirectMessageView',
+        '/bots/:botId/history/:sessionId': 'BotHistorySessionView',
+        '/bots/:botId/session/:sessionId': 'BotSessionView',
+        '/bots/roster': 'BotRosterView',
+        '/bots/remote/:deviceId/:botId': 'RemoteBotSessionView',
+      },
     },
     {
       id: 'desktop.issues.guide',

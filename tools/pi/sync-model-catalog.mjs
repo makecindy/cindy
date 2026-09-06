@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { applyKnownXaiCorrections, preferredDefaultEffort } from './xai-catalog-corrections.mjs';
 import { applyAstraCatalogAdditions } from './openai-catalog-corrections.mjs';
+import { piSupportedEfforts as supportedEfforts } from '../../packages/model-providers/src/piThinkingLevels.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CATALOG_PATH = path.join(ROOT, 'packages/model-providers/catalog/providers.json');
@@ -58,14 +59,6 @@ function catalogEntries(providerId, value) {
       throw new Error(`Pi catalog '${providerId}' model '${entry.id}' has provider '${entry.provider}'`);
     }
     return entry;
-  });
-}
-
-function supportedEfforts(model) {
-  if (model.reasoning !== true || !model.thinkingLevelMap) return [];
-  return PI_LEVELS.filter((level) => {
-    const mapped = model.thinkingLevelMap?.[level];
-    return mapped !== undefined && mapped !== null;
   });
 }
 

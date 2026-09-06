@@ -96,6 +96,24 @@ function xdProviderWithFullRouting() {
 }
 
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  it('preserves live availability and native model metadata without exposing execution credentials', () => {
+    const provider = {
+      ...xdProviderWithFullRouting(),
+      connected: false,
+      availableMediaModelIds: [],
+      models: { pi: [{
+        id: 'google/gemini-new', name: 'Gemini New', contextWindow: 1_048_576,
+        nativeApi: 'google-generative-ai', piApi: 'google-generative-ai',
+        efforts: ['medium'], defaultEffort: 'medium', defaultEnabled: true,
+      }] },
+    };
+    const result = project({ providers: [provider] }).providers[0];
+    expect(result).toMatchObject({ connected: false, availableMediaModelIds: [], models: provider.models });
+    expect(JSON.stringify(result)).not.toContain('leak-me');
+    expect(JSON.stringify(result)).not.toContain(XD_GATEWAY_BASE_URL);
+    expect(connectedProvidersForAgent([result] as unknown as ProviderView[], 'claude-code')).toEqual([]);
+  });
+
   it('剥掉全部执行细节字段（安全边界 D3:upstream / 密钥 / endpoint 不出被控端）', () => {
     const { providers } = project({ providers: [xdProviderWithFullRouting()] });
     const cc = (providers[0].routing as Record<string, Record<string, unknown>>)['claude-code'];
@@ -309,4 +327,31 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     const weird = { notProviders: 1 };
     expect(__testing.projectInvokeResultForTunnel('maker:provider:list', weird)).toBe(weird);
   });
+});
+
+
+describe('active runtime summary projection', () => {
+  const rows = [true, false].map((isTurnRunning, i) => ({
+    sessionId: `session-${i}`, isTurnRunning, agentKind: 'codex', workDir: '/work',
+    capabilities: { availableModels: [{ id: 'model', description: 'x'.repeat(120_000) }] },
+  }));
+
+  it('omits repeated model catalogs only for an explicit summary request', () => {
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:list-active', rows, false, [{ summary: true }],
+    );
+    expect(projected).toEqual([
+      { sessionId: 'session-0', isTurnRunning: true },
+      { sessionId: 'session-1', isTurnRunning: false },
+    ]);
+    expect(JSON.stringify(projected).length).toBeLessThan(150);
+    expect(rows[0].capabilities.availableModels[0].description).toHaveLength(120_000);
+  });
+
+  it.each([[], [null], [{ summary: false }], [{ summary: 'true' }]])(
+    'preserves the complete response for legacy or non-opt-in callers (%j)', (...args) => {
+      expect(__testing.projectInvokeResultForTunnel('maker:list-active', rows, false, args))
+        .toBe(rows);
+    },
+  );
 });

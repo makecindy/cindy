@@ -7,6 +7,7 @@ import {
   type SelectableMarkdownHtmlOptions,
 } from "@/session/selectableMarkdownHtml";
 import { buildMessageContentLayout } from "@/session/messageContentLayout";
+import { collectMobileMarkdownImages } from "@/session/messageMarkdown";
 import { lineHeight, typeScale } from "@/theme/tokens";
 
 export interface ConversationShareMessage {
@@ -17,11 +18,20 @@ export interface ConversationShareMessage {
   body: string;
   bodyParts?: readonly ConversationShareBodyPart[];
   secondaryBody?: string;
+  /** Export-only decoded images, keyed by attachment/Markdown source. */
+  images?: ReadonlyMap<string, ConversationShareImage>;
+}
+
+export interface ConversationShareImage {
+  uri: string;
+  width: number;
+  height: number;
 }
 
 export interface ConversationShareAttachment {
   kind: "image" | "file";
   name: string;
+  uri?: string;
 }
 
 export type ConversationShareBodyPart =
@@ -124,6 +134,20 @@ function buildMessageHtml(
   message: ConversationShareMessage,
   markdownOptions: SelectableMarkdownHtmlOptions,
 ): string {
+  markdownOptions = { ...markdownOptions, imageSources: message.images ?? new Map() };
+  const texts = message.bodyParts
+    ? message.bodyParts.flatMap((part) => part.kind === "text" ? [part.text] : [])
+    : [message.body];
+  if (message.secondaryBody) texts.push(message.secondaryBody);
+  // Redaction can consume image delimiters as well as URLs. Let the existing
+  // SVG path own all image-bearing text that needs redaction, even when image
+  // preparation failed; never parse damaged Markdown or expose its source URL.
+  if (
+    texts.some((text) => redactSensitiveText(text) !== text) &&
+    texts.some((text) => collectMobileMarkdownImages(text).length > 0)
+  ) {
+    throw new Error('conversation-share-image-requires-svg');
+  }
   const body = redactSensitiveText(message.body).trim();
   const secondaryBody = message.secondaryBody
     ? redactSensitiveText(message.secondaryBody).trim()
@@ -136,7 +160,7 @@ function buildMessageHtml(
   const secondaryHtml = secondaryBody
     ? buildSelectableMarkdownFragmentHtml(secondaryBody, markdownOptions)
     : "";
-  const attachmentsHtml = buildAttachmentsHtml(message.attachments ?? []);
+  const attachmentsHtml = buildAttachmentsHtml(message.attachments ?? [], message.images);
   const bubbleHtml = bodyHtml || secondaryHtml
     ? [
         `<div class="share-bubble share-bubble-${message.kind}">`,
@@ -182,10 +206,16 @@ function buildBodyPartsHtml(
 
 function buildAttachmentsHtml(
   attachments: readonly ConversationShareAttachment[],
+  images?: ConversationShareMessage['images'],
 ): string {
   if (attachments.length === 0) return "";
   const items = attachments.map((attachment) => {
     const name = redactSensitiveText(attachment.name).trim();
+    const image = attachment.kind === "image" && attachment.uri
+      ? images?.get(attachment.uri) : undefined;
+    if (image?.uri.startsWith('data:image/')) {
+      return `<img class="share-attachment-image" src="${escapeAttribute(image.uri)}" alt="${escapeAttribute(name)}">`;
+    }
     return `<div class="share-attachment-chip share-attachment-chip-${attachment.kind}"><span class="share-attachment-icon" aria-hidden="true"></span><span class="share-attachment-label">${escapeHtml(name)}</span></div>`;
   });
   return `<div class="share-attachments">${items.join("")}</div>`;
@@ -275,6 +305,13 @@ function buildConversationShareCss({
     }
     .share-message-user .share-attachments { align-items: flex-end; }
     .share-message-assistant .share-attachments { align-items: flex-start; }
+    .share-attachment-image {
+      display: block;
+      max-width: 100%;
+      max-height: 320px;
+      object-fit: contain;
+      border-radius: 12px;
+    }
     .share-attachment-chip {
       box-sizing: border-box;
       display: flex;

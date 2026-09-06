@@ -2,7 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Effort } from '@/lib/userPreferences.types';
 
@@ -34,6 +34,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
       },
     ) => {
       const translations: Record<string, string> = {
+        'modelDescriptions.complexWork': '适合复杂分析、编程与细致写作。',
+        'modelDescriptions.quickAnswers': '适合简短问答、摘要与短文写作。',
         'effortLevels.xhigh': '超高',
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.xd.title': 'Cindy AI',
@@ -450,6 +452,8 @@ const ModelSelectorContent = (props: React.ComponentProps<typeof SharedModelSele
 import { makerChatStore } from '@/lib/makerChatStore';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
+
+afterEach(() => { vi.useRealTimers(); });
 
 beforeEach(() => {
   modelSelectorI18nRef.language = 'zh-CN';
@@ -1772,7 +1776,7 @@ describe('ModelSelector trigger variants', () => {
 
     fireEvent.pointerEnter(screen.getByRole('option', { name: /Opus 4\.8/ }));
     const information = screen.getByRole('group', { name: /Opus 4\.8/ });
-    expect(within(information).getByText('Most capable for ambitious work')).toBeTruthy();
+    expect(within(information).getByText('适合复杂分析、编程与细致写作。')).toBeTruthy();
     expect(within(information).queryByRole('option')).toBeNull();
   });
 
@@ -1942,7 +1946,7 @@ describe('ModelSelector trigger variants', () => {
     expect(screen.getByTestId('model-options-popover').getAttribute('data-align')).toBe('center');
     expect(screen.getByTestId('model-options-popover').getAttribute('data-side-offset')).toBe('8');
     expect(options).toBeTruthy();
-    expect(within(options).getByText('Most capable for ambitious work')).toBeTruthy();
+    expect(within(options).getByText('适合复杂分析、编程与细致写作。')).toBeTruthy();
     expect(within(options).getByText('Source: Anthropic')).toBeTruthy();
     expect(within(options).getByText('200K context')).toBeTruthy();
     const priceTitle = within(options).getByText('newChat.modelSelector.pricing.title');
@@ -1957,7 +1961,7 @@ describe('ModelSelector trigger variants', () => {
       within(options).getByText('newChat.modelSelector.pricing.subscriptionEstimate'),
     ).toBeTruthy();
     const firstChoice = within(options).getByRole('option', { name: 'low' });
-    const description = within(options).getByText('Most capable for ambitious work');
+    const description = within(options).getByText('适合复杂分析、编程与细致写作。');
     expect(
       description.compareDocumentPosition(firstChoice) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
@@ -2424,7 +2428,7 @@ describe('ModelSelector trigger variants', () => {
 
     fireEvent.pointerEnter(screen.getByRole('option', { name: /Haiku 4\.5/ }));
     const information = screen.getByRole('group', { name: /Haiku 4\.5/ });
-    expect(within(information).getByText('Fastest for quick answers')).toBeTruthy();
+    expect(within(information).getByText('适合简短问答、摘要与短文写作。')).toBeTruthy();
     expect(within(information).getByText('200K context')).toBeTruthy();
     expect(within(information).queryByRole('option')).toBeNull();
   });

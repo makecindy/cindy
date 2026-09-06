@@ -100,12 +100,13 @@ describe('scrollWindowModel', () => {
   it.each(['\n', '\r\n'])('restores the load-earlier affordance after unchanged reopen with %j line endings', (lineEnding) => {
     const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8').replace(/\r?\n/g, lineEnding);
     // 重开"无新内容"分支(metaChanged=false)也补设 hasOlderMessages,用服务端总数 vs in-store 推断。
-    expect(source).toContain('hasOlderMessagesAfterReopen(sessionMeta._count?.messages, remoteSessionStore.getMessages(sessionId))');
+    expect(source).toMatch(/hasOlderMessagesAfterReopen\(\s*sessionMeta\._count\?\.messages, remoteSessionStore\.getMessages\(sessionId\),?\s*\)/);
     // 仍保留有新内容时的精确(page-based)判定。这个值现在同时喂给 store 的窗口连续性判据
     // (moreBeyondWindow,见 #1222):两者本就该同源 —— 「本页上沿之外还有历史」既决定是否点亮
     // 「加载更早」,也决定能不能信任早于本页的缓存段。
     expect(source).toContain('const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);');
-    expect(source).toMatch(/setHasOlderMessages\(history !== null\s+\? shouldKeepOlderMessagesAffordance\(history\)/);
+    expect(source).toContain('setHasOlderMessages(moreBeyondWindow);');
+    expect(source).toMatch(/if \(history === null\) \{\s*messageWindowReconciledRef\.current = true;\s*setHasOlderMessages\(hasOlderMessagesAfterReopen\(/);
     expect(source).toMatch(
       /setLatestMessageWindow\(sessionId, historyPage, \{\s*authority: messageAuthority,\s*moreBeyondWindow,\s*\}\)/,
     );
@@ -137,6 +138,7 @@ describe('evaluateMobileAnchorVerify (贴底锚定校验判定)', () => {
     metrics: anchoredMetrics,
     preserveVisibleContentPosition: false,
     stickToLatest: true,
+    userControllingScroll: false,
     waitRounds: 0,
   };
 
@@ -146,11 +148,16 @@ describe('evaluateMobileAnchorVerify (贴底锚定校验判定)', () => {
       ...base,
       metrics: { ...anchoredMetrics, offsetY: 1200 - MOBILE_ANCHOR_VERIFY_TOLERANCE },
     })).toBe('settled');
-    // iOS bounce 超滚(offset 超过 end)同样视为贴底。
+    // iOS bounce belongs to the gesture; only correct a stale overshoot after it ends.
+    expect(evaluateMobileAnchorVerify({
+      ...base,
+      userControllingScroll: true,
+      metrics: { ...anchoredMetrics, offsetY: 1210 },
+    })).toBe('wait');
     expect(evaluateMobileAnchorVerify({
       ...base,
       metrics: { ...anchoredMetrics, offsetY: 1210 },
-    })).toBe('settled');
+    })).toBe('retry');
   });
 
   it('retries when the drop-to-bottom silently fell short of the content end', () => {
@@ -187,7 +194,7 @@ describe('evaluateMobileAnchorVerify (贴底锚定校验判定)', () => {
     })).toBe('wait');
   });
 
-  it('treats sub-viewport content as anchored regardless of offset', () => {
+  it('treats sub-viewport content as anchored at zero offset', () => {
     expect(evaluateMobileAnchorVerify({
       ...base,
       metrics: { contentHeight: 400, offsetY: 0, viewportHeight: 800 },

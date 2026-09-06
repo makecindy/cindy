@@ -876,7 +876,7 @@ describe('Ghost plugin detail sections', () => {
     expect(listbox.querySelector('[data-row-customize]')).not.toBeNull();
     expect(listbox.querySelector('[data-agent-kind]')).toBeNull();
     const plainRow = within(listbox).getByText('GPT 5.5', { exact: true }).closest<HTMLElement>('[role="option"]')!;
-    expect(within(plainRow).getByText('settings.providers.models.subscription')).toBeTruthy();
+    expect(within(plainRow).queryByText('settings.providers.models.subscription')).toBeNull();
     fireEvent.click(plainRow);
     await waitFor(() => expect(setCindyPref).toHaveBeenCalledWith(
       'xdt-knowledge', 'text.oneshot', 'cat:openai:codex:gpt-5.5',

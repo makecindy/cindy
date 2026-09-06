@@ -23,6 +23,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
+import { readModelContextLimit } from './model-context-limit-store.js';
+
 import {
   PiAgent,
   PiNativeProviderProxyNotReadyError,
@@ -952,6 +954,7 @@ export interface BuildPiAgentOpts {
   getRemotePiTransport?: AgentDeps['getRemotePiTransport'];
   /** SSH remote pi 会话的 agentHome 文件操作原语(host 装配;缺省 = 远端 fs 走本地,错误语义)。 */
   getRemotePiFileOps?: AgentDeps['getRemotePiFileOps'];
+  getRemoteAgentFileOps?: AgentDeps['getRemoteAgentFileOps'];
   /** 远端 pi 二进制解析(host probe;缺省 = 回落本地路径)。 */
   resolveRemotePiBinaryPath?: AgentDeps['resolveRemotePiBinaryPath'];
   /** 远端会话是否跳过 in-process MCP bridge(Phase 1 不桥 orca/memory/ghost)。 */
@@ -1803,6 +1806,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   }
   log.info('pi agent enabled', { binaryPath });
   return new PiAgent({
+    resolveModelContextLimit: (providerId, modelId) => providerId
+      ? readModelContextLimit('pi', providerId, modelId) : null,
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     binaryPath,
@@ -1940,6 +1945,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiVisionBridgeEnv: opts.resolvePiVisionBridgeEnv,
     getRemotePiTransport: opts.getRemotePiTransport,
     getRemotePiFileOps: opts.getRemotePiFileOps,
+    getRemoteAgentFileOps: opts.getRemoteAgentFileOps,
     resolveRemotePiBinaryPath: opts.resolveRemotePiBinaryPath,
     remotePiSkipMcpBridge: opts.remotePiSkipMcpBridge,
     getRemotePiAgentProxyEnv: opts.getRemotePiAgentProxyEnv,

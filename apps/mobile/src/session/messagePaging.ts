@@ -1,12 +1,15 @@
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 
 export const MESSAGE_PAGE_SIZE = 80;
-export const MESSAGE_PAGE_RETRY_LIMITS = [80, 40, 20, 10, 5, 1] as const;
+// Keep the cache window independent of the wire page. On a slow mobile link an
+// 80-row page can occupy the reliable stream past the request deadline.
+export const MESSAGE_FETCH_PAGE_SIZE = 20;
+export const MESSAGE_PAGE_RETRY_LIMITS = [MESSAGE_FETCH_PAGE_SIZE, 10, 5, 1] as const;
 
 export function latestMessageCursor(messages: readonly RemoteMessage[]): string | null {
   let latest: RemoteMessage | null = null;
   for (const message of messages) {
-    if (!message.id || message.id.startsWith('mobile-system-')) continue;
+    if (!isHostMessageRow(message)) continue;
     if (!latest || compareMessageOrder(message, latest) > 0) latest = message;
   }
   return latest?.id ?? null;
@@ -15,10 +18,9 @@ export function latestMessageCursor(messages: readonly RemoteMessage[]): string 
 export function oldestMessageCursor(messages: readonly RemoteMessage[]): string | null {
   let oldest: RemoteMessage | null = null;
   for (const message of messages) {
-    // Skip locally-appended system cards (synthetic `mobile-system-…` id, see
-    // remoteSessionStore.appendLocalSystemCard): they aren't real host rows, so handing one to
-    // the host as a `before` cursor matches nothing and re-fetches the latest page (no progress).
-    if (!message.id || message.id.startsWith('mobile-system-')) continue;
+    // Local system cards and in-flight stream rows have no persisted host ID.
+    // Sending either as `before` can fetch the latest page again without progress.
+    if (!isHostMessageRow(message)) continue;
     if (!oldest || compareMessageOrder(message, oldest) < 0) {
       oldest = message;
     }
@@ -237,7 +239,7 @@ export function shouldRefreshLatestMessageWindowOnReopen(input: {
  * `hasOlderMessages` state 重置为 false,不补设就会丢失「加载更早」入口 —— 这是回归)。
  * 优先用服务端总数 `_count.messages` 与 in-store 已加载真实消息数比较(总数 > 已加载 → 还有更早);
  * 服务端没给总数时退化为窗口启发式(已加载到整页边界 → 推断还有更早)。
- * 计数排除本地合成的 system 卡(`mobile-system-` 前缀,非真实 host 行)。
+ * 计数排除本地 system 卡与尚未落盘的流式行,与服务端持久消息总数保持同一口径。
  */
 export function hasOlderMessagesAfterReopen(
   totalCount: number | undefined,
@@ -268,7 +270,7 @@ export function hasOlderMessagesByServerCount(
 function countRealMessages(messages: readonly RemoteMessage[]): number {
   let count = 0;
   for (const message of messages) {
-    if (!message.id || message.id.startsWith('mobile-system-')) continue;
+    if (!isHostMessageRow(message)) continue;
     count += 1;
   }
   return count;

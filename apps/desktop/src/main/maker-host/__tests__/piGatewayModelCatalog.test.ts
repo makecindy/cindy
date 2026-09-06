@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Catalog } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 
 import {
   resolveBundledPiGatewayModelProfile,
@@ -130,9 +130,7 @@ describe('Cindy Server Pi Gateway catalog authority', () => {
         { id: 'openrouter', protocol: 'openai-chat', modelId: 'moonshot/kimi-k3' },
       ],
     });
-    expect(resolveCatalogPiGatewayModelApi(catalog, 'moonshot/kimi-k3')).toBe(
-      'anthropic-messages',
-    );
+    expect(resolveCatalogPiGatewayModelApi(catalog, 'moonshot/kimi-k3')).toBe('anthropic-messages');
   });
 
   it('does not borrow an exact namespaced id without a registry provider route', () => {
@@ -167,9 +165,7 @@ describe('Cindy Server Pi Gateway catalog authority', () => {
     const catalog = serverCatalog({
       gatewayModelId: 'moonshot/kimi-k3',
       routes: [{ providerId: 'moonshot-kimi-global', modelId: 'kimi-k3' }],
-      presets: [
-        { id: 'moonshot-kimi-global', protocol: 'anthropic-messages', modelId: 'kimi-k3' },
-      ],
+      presets: [{ id: 'moonshot-kimi-global', protocol: 'anthropic-messages', modelId: 'kimi-k3' }],
     });
     catalog.modelRegistry!.models[0]!.status = 'retired';
     expect(resolveCatalogPiGatewayModelApi(catalog, 'moonshot/kimi-k3')).toBeNull();
@@ -186,6 +182,17 @@ describe('Cindy Server Pi Gateway catalog authority', () => {
 });
 
 describe('Pi Gateway version-matched local supplement catalog', () => {
+  it.each(['google/gemini-3.8-flash', 'gemini-3.8-flash', 'google/gemini-99-pro-preview[1m]'])(
+    'keeps new XD Gemini route %s on Google without a per-model registration',
+    (id) =>
+      expect(resolveBundledPiGatewayModelProfile(id)).toEqual({ api: 'google-generative-ai' }),
+  );
+
+  it.each(['other/gemini-99-pro', 'google/not-gemini-99', 'google/gemini-99/other'])(
+    'does not extend the XD Google policy to unrelated identity %s',
+    (id) => expect(resolveBundledPiGatewayModelProfile(id)).toBeUndefined(),
+  );
+
   it('returns the exact Kimi native API and complete tool replay compatibility', () => {
     expect(resolveBundledPiGatewayModelProfile('moonshotai/kimi-k3')).toMatchObject({
       api: 'openai-completions',
@@ -201,6 +208,23 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
         max: 'max',
       },
     });
+  });
+
+  it('does not reuse serializer metadata after an authoritative API correction', () => {
+    const entry = BUNDLED_CATALOG.modelRegistry!.models.find((model) =>
+      model.routes.some(
+        (route) => route.providerId === 'xd' && route.modelId === 'moonshot/kimi-k3',
+      ),
+    )!;
+    const original = entry.nativeApi;
+    try {
+      entry.nativeApi = 'anthropic-messages';
+      expect(resolveBundledPiGatewayModelProfile('moonshot/kimi-k3')).toEqual({
+        api: 'anthropic-messages',
+      });
+    } finally {
+      entry.nativeApi = original;
+    }
   });
 
   it.each([

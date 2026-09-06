@@ -1,5 +1,7 @@
 import {
   isModelSelectableForNewRoute,
+  defaultEffortForCapabilities,
+  clampEffortToSupported,
   type AgentKind,
   type Effort,
   type ProviderView,
@@ -26,11 +28,20 @@ interface ProviderDefaultPolicy {
 /**
  * 新用户的产品默认顺序。
  *
- * 订阅永远先于 Gateway；多订阅又没有“最近连接时间”可用时，固定按
+ * Gateway 的可用推荐组合优先于订阅；Gateway 未就绪或推荐组合不可用时回退订阅。
+ * 多订阅又没有“最近连接时间”可用时，固定按
  * OpenAI → Anthropic → xAI，避免依赖目录下发顺序造成升级后随机换默认。
  * 每个来源的首个 agent 是推荐 Harness，其余只在本机没有安装首选 Harness 时降级。
  */
 const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
+  {
+    providerId: 'xd',
+    accessKind: 'managed',
+    agents: ['pi'],
+    modelIds: ['z-ai/glm-5.3-flash', 'glm-5.3-flash'],
+    requireNewSessionDefault: true,
+    requireImageInput: true,
+  },
   {
     providerId: 'openai',
     accessKind: 'subscription',
@@ -48,14 +59,6 @@ const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
     accessKind: 'subscription',
     agents: ['pi', 'codex', 'claude-code'],
     modelIds: ['grok-4.6', 'xai/grok-4.6'],
-  },
-  {
-    providerId: 'xd',
-    accessKind: 'managed',
-    agents: ['pi'],
-    modelIds: ['z-ai/glm-5.3-flash', 'glm-5.3-flash'],
-    requireNewSessionDefault: true,
-    requireImageInput: true,
   },
 ];
 
@@ -80,10 +83,10 @@ export function isKnownProductDefaultTupleIdentity(args: {
   );
 }
 
-function supportsImageInput(model: NonNullable<ProviderView['models'][AgentKind]>[number]): boolean {
-  return (
-    model.supportsImageInput === true || model.modalities?.input.includes('image') === true
-  );
+function supportsImageInput(
+  model: NonNullable<ProviderView['models'][AgentKind]>[number],
+): boolean {
+  return model.supportsImageInput === true || model.modalities?.input.includes('image') === true;
 }
 
 function matchingModel(
@@ -100,7 +103,6 @@ function matchingModel(
       (model) =>
         model !== undefined &&
         model.defaultEnabled !== false &&
-        model.efforts.includes('high') &&
         (!requireNewSessionDefault || model.newSessionDefault?.includes(agent) === true) &&
         (!requireImageInput || supportsImageInput(model)) &&
         isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
@@ -148,7 +150,11 @@ export function resolveNewMakerDefaultTuple(args: {
         vendor,
         providerId: provider.id,
         model: model.id,
-        effort: 'high',
+        // Missing or stale optional metadata does not disqualify a usable route.
+        effort: model.efforts.length === 0 ? null
+          : model.defaultEffort === null ? null
+            : (clampEffortToSupported(model.defaultEffort, model.efforts)
+              ?? defaultEffortForCapabilities(model.efforts)) as Effort | null,
       };
     }
   }

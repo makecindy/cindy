@@ -104,6 +104,7 @@ import {
   formatRemoteError,
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
+import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import {
@@ -684,55 +685,45 @@ function HomeScreenContent() {
     }
     updateDeviceConnectionState(device.deviceId, 'syncing');
     try {
-      const [
-        list,
-        activeSessions,
-        activeSessionSnapshotEpoch,
-        sessionListMutationEpoch,
-      ] = await withTransientRemoteRetry(async () => {
+      const assertCurrentScope = () => {
         if (
           homeAccountGenerationRef.current !== expectedAccountGeneration
           || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
-        ) {
-          throw new HomeSyncScopeSupersededError();
-        }
+        ) throw new HomeSyncScopeSupersededError();
+      };
+      await withTransientRemoteRetry(async () => {
+        assertCurrentScope();
         homeListOwnedDeviceIdsRef.current.add(device.deviceId);
         await subscribe(HOME_LIST_SUBSCRIPTION_OWNER, device.deviceId, ['sessions']);
-        if (
-          homeAccountGenerationRef.current !== expectedAccountGeneration
-          || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
-        ) {
-          throw new HomeSyncScopeSupersededError();
-        }
-        // Capture inside the retry callback so every maker:list-active attempt gets its own
-        // fence. A newer retry push received while this request is in flight must survive
-        // the older snapshot, while progress predating this attempt can be cleared.
-        const activeSessionSnapshotEpoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
-        const sessionListMutationEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(
-          device.deviceId,
-        );
-        const [list, activeSessions] = await Promise.all([
-          invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
-            LIST_LIMIT,
-            remoteListStatusFilter(statusFilter),
-            // hydrate / 重连是权威重拉，绕开被控端写前的同参数 in-flight list。
-            { includePinned: true, fresh: true },
-          ]),
-          // `sessions` topic replay covers list-level Agent Island activity, but the authoritative
-          // "turn currently running" snapshot is maker:list-active. Pull it with the list so Home
-          // does not need a session-detail round trip before showing running rows.
-          invoke<unknown[]>(device.deviceId, 'maker:list-active', []).catch((err) => {
-            if (isOptionalActiveSessionSnapshotError(err)) return null;
-            throw err;
-          }),
-        ]);
-        return [
-          list,
-          activeSessions,
-          activeSessionSnapshotEpoch,
-          sessionListMutationEpoch,
-        ] as const;
+        assertCurrentScope();
       });
+      // A slow activity snapshot must not replay an already successful whole list.
+      // Each read captures its own authority fence again on every retry.
+      const [[list, sessionListMutationEpoch], [activeSessions, activeSessionSnapshotEpoch]] =
+        await runIndependentSnapshotReads([
+          async () => {
+            assertCurrentScope();
+            const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId);
+            const list = await invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
+              LIST_LIMIT,
+              remoteListStatusFilter(statusFilter),
+              { includePinned: true, fresh: true },
+            ]);
+            return [list, epoch] as const;
+          },
+          async () => {
+            assertCurrentScope();
+            const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+            // Old hosts ignore this optional projection and still return the full snapshot.
+            const active = await invoke<unknown[]>(device.deviceId, 'maker:list-active', [
+              { summary: true },
+            ]).catch((err) => {
+              if (isOptionalActiveSessionSnapshotError(err)) return null;
+              throw err;
+            });
+            return [active, epoch] as const;
+          },
+        ] as const, withTransientRemoteRetry);
       if (
         homeAccountGenerationRef.current !== expectedAccountGeneration
         || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)

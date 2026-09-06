@@ -1,3 +1,4 @@
+import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
   AgentEvent,
   InteractionDecision,
@@ -52,6 +53,7 @@ interface DismissedInteraction {
 }
 
 export interface PrepareSessionEventDeps {
+  readonly botCompactRuntimeRefreshCoordinator: Pick<BotCompactRuntimeRefreshCoordinator, 'noteBoundary'>;
   readonly isFencedStaleSessionTerminal: (sessionId: string, event: AgentEvent) => boolean;
   readonly log: Pick<ReturnType<typeof createLogger>, 'debug' | 'warn'>;
   readonly interruptedTurnAutoResumeGuard: Pick<
@@ -102,7 +104,7 @@ export interface PrepareSessionEventDeps {
   readonly silentStopTurnLeaseGate: Pick<SilentStopTurnLeaseGate, 'turnLeaseIdForEvent'>;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
-    'onTurnEvent' | 'noteSuppressedTerminalError'
+    'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId'
   > | null;
   readonly handleSilentStopTurnEnd: (
     session: Session,
@@ -126,6 +128,7 @@ export function prepareSessionEvent(
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
   if (event.type === 'turn_diff') return;
+  if (event.type === 'compact_boundary') deps.botCompactRuntimeRefreshCoordinator.noteBoundary(session);
   if (
     event.turnScope === 'background' &&
     Object.prototype.hasOwnProperty.call(event, 'backgroundTurnStartedAt') &&
@@ -148,7 +151,13 @@ export function prepareSessionEvent(
   if (typeof event.turnAttemptToken === 'number') {
     deps.interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
   }
-  let attributedEvent = event;
+  const activeInputId = event.turnScope === 'background' ? null
+    : deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
+  // The host's accepted input owns provenance across all three SDKs. Explicit
+  // false restores normal replies when the user steers a private message turn.
+  let attributedEvent = activeInputId
+    ? { ...event, agentMeta: { ...event.agentMeta, botPrivateReply: activeInputId.startsWith('bot-dm:') } }
+    : event;
   if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
     const reason =
       !session.remoteHostId && session.agentKind === 'claude-code'
@@ -159,7 +168,7 @@ export function prepareSessionEvent(
         event.data && typeof event.data === 'object' && !Array.isArray(event.data)
           ? (event.data as Record<string, unknown>)
           : {};
-      attributedEvent = { ...event, data: { ...eventData, reason } };
+      attributedEvent = { ...attributedEvent, data: { ...eventData, reason } };
       deps.log.warn('Claude Opus plan error normalized for renderer', {
         sessionId: session.id,
         model: session.model,
@@ -478,7 +487,7 @@ export function prepareSessionEvent(
   // 把 persistId 盖进广播 payload 让 renderer 在途气泡用同一 id;真正落库走模块内
   // 异步队列、不在此同步执行(规则19 热路径)。终止型 error 同样在广播前预留 persistId
   // (O(1) createId,不 flush、不写库),让 live 横幅与事后 error 行绑定同一 id。
-  const eventAgentMeta = (event as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
+  const eventAgentMeta = (attributedEvent as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
   // 跟踪会话最近一次非空 agentMeta(镜像 renderer state.lastAgentMeta),给 interaction
   // 边界 flush 当兜底锚点,保 agent_meta 不丢(rewind/fork)。
   if (eventAgentMeta && event.turnScope !== 'background') noteAgentMeta(session.id, eventAgentMeta);

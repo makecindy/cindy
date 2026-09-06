@@ -10,6 +10,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { TFunction } from 'i18next';
 import {
+  formatClaudeSubscriptionPlanLabel,
+  formatCodexPlanLabel,
+} from '../lib/subscriptionPlanLabel';
+import {
   buildClaudeUsageCard,
   buildCodexUsageCard,
   buildXaiUsageCard,
@@ -222,6 +226,30 @@ const t = ((key: string, values?: Record<string, unknown>) =>
   `${key}${values ? ':' + JSON.stringify(values) : ''}`) as TFunction;
 const now = Date.UTC(2026, 8, 5);
 describe('shared usage-card provider projections', () => {
+  it.each([
+    [' ProLite ', 'ProLite', 'Pro Lite'],
+    ['custom_plan', 'Custom_plan', 'Custom Plan'],
+    ['', null, null],
+  ])('keeps settings and usage cards consistent for plan %s', (plan, claudeLabel, codexLabel) => {
+    const claude = buildClaudeUsageCard({ subscriptionType: plan, updatedAt: now }, t);
+    const codex = buildCodexUsageCard({ planType: plan }, null, t, now);
+    expect(claude.planLabel).toBe(claudeLabel);
+    expect(codex.planLabel).toBe(codexLabel);
+    expect(claude.planLabel).toBe(formatClaudeSubscriptionPlanLabel(plan));
+    expect(codex.planLabel).toBe(formatCodexPlanLabel(plan));
+  });
+
+  it('treats malformed plan metadata as absent without dropping quota windows', () => {
+    const card = buildCodexUsageCard(
+      { planType: 123 as unknown as string, primary: { usedPercent: 25 } },
+      null,
+      t,
+      now,
+    );
+    expect(card.planLabel).toBeNull();
+    expect(card.windows[0].window.utilization).toBe(25);
+  });
+
   it.each(['free', 'plus', 'business', 'enterprise', 'custom_plan'])(
     'preserves ChatGPT plan %s without requiring quota windows',
     (planType) => {

@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 520,
+  "count": 535,
   "colors": [
     {
       "id": "surface",
@@ -974,6 +974,61 @@
     },
     {
       "id": "file-badge-fg",
+      "light": "#FFFFFF",
+      "dark": "#FFFFFF"
+    },
+    {
+      "id": "bot-avatar-red-bg",
+      "light": "#f7ded9",
+      "dark": "#4a2e2a"
+    },
+    {
+      "id": "bot-avatar-orange-bg",
+      "light": "#f9e3d2",
+      "dark": "#4a3527"
+    },
+    {
+      "id": "bot-avatar-amber-bg",
+      "light": "#f6ebcd",
+      "dark": "#473a22"
+    },
+    {
+      "id": "bot-avatar-green-bg",
+      "light": "#dceedd",
+      "dark": "#26402a"
+    },
+    {
+      "id": "bot-avatar-teal-bg",
+      "light": "#d6ebea",
+      "dark": "#21403e"
+    },
+    {
+      "id": "bot-avatar-blue-bg",
+      "light": "#dce6f5",
+      "dark": "#263449"
+    },
+    {
+      "id": "bot-avatar-violet-bg",
+      "light": "#e3ddf3",
+      "dark": "#322b48"
+    },
+    {
+      "id": "bot-avatar-pink-bg",
+      "light": "#f6deea",
+      "dark": "#452b39"
+    },
+    {
+      "id": "bot-avatar-graphite-bg",
+      "light": "#e5e5e5",
+      "dark": "#3c3c3a"
+    },
+    {
+      "id": "bot-unread-bg",
+      "light": "#417CDD",
+      "dark": "#417CDD"
+    },
+    {
+      "id": "bot-unread-fg",
       "light": "#FFFFFF",
       "dark": "#FFFFFF"
     },
@@ -2366,6 +2421,26 @@
       "id": "warning-fg",
       "light": "#F3A115",
       "dark": "#F3A115"
+    },
+    {
+      "id": "text-danger",
+      "light": "var(--error-fg)",
+      "dark": "var(--error-fg)"
+    },
+    {
+      "id": "danger-bg-soft",
+      "light": "var(--error-bg)",
+      "dark": "var(--error-bg)"
+    },
+    {
+      "id": "status-info",
+      "light": "var(--info-700)",
+      "dark": "var(--info-700)"
+    },
+    {
+      "id": "status-success",
+      "light": "#177C3C",
+      "dark": "#2AAE5B"
     },
     {
       "id": "upgrade-banner-bg",

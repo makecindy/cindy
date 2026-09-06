@@ -76,6 +76,31 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('keeps the task title when a progress frame reports only the role name', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({
+      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'subagent',
+      args: { agent: 'scout', task: 'find the auth entry point' },
+    }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'tool_execution_update', toolCallId: 'sa-title',
+      partialResult: { details: {
+        __cindySubagent: 1, taskId: 'sa-title', status: 'completed', agentName: 'scout',
+      } },
+    }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'tool_execution_end', toolCallId: 'sa-title', result: 'done', isError: false,
+    }), queue, ctx);
+    const updates = events.filter((event) => event.type === 'agent_task_update');
+    expect(updates).toHaveLength(3);
+    expect(updates.map((event) => event.data)).toEqual([
+      expect.objectContaining({ title: 'find the auth entry point' }),
+      expect.objectContaining({ title: 'find the auth entry point' }),
+      expect.objectContaining({ title: 'find the auth entry point', status: 'completed' }),
+    ]);
+  });
+
   it('does not project management commands as Subagent runs', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -644,6 +669,8 @@ describe('pi translator', () => {
 
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    expect((events.find((event) => event.type === 'done')?.data as { silentStop?: boolean }))
+      .not.toHaveProperty('silentStop');
   });
 
   it('keeps a Host stop when it arrives before the pending turn agent_start', () => {
@@ -671,6 +698,8 @@ describe('pi translator', () => {
 
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    expect((events.find((event) => event.type === 'done')?.data as { silentStop?: boolean }))
+      .not.toHaveProperty('silentStop');
   });
 
   it('does not carry a stopped rejected prompt into the next Pi turn', () => {
@@ -842,6 +871,8 @@ describe('pi translator', () => {
       message: 'The operation timed out.',
       reason: 'pi-gateway-drop',
     });
+    expect(events.find((event) => event.type === 'done')?.data)
+      .not.toHaveProperty('silentStop');
   });
 
   it('does not duplicate a terminal error after Pi auto-retry is exhausted', () => {
@@ -876,6 +907,8 @@ describe('pi translator', () => {
     );
     expect(terminalErrors).toHaveLength(1);
     expect(terminalErrors[0]?.data).toMatchObject({ message: 'final provider error' });
+    expect(events.find((event) => event.type === 'done')?.data)
+      .not.toHaveProperty('silentStop');
   });
 
   it('tags a terminal xAI prompt-length error as context-overflow', () => {
@@ -1483,6 +1516,7 @@ describe('pi translator', () => {
     translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
     const done = events.find((e) => e.type === 'done');
     expect(done!.data).toMatchObject({ result: 'final answer', status: 'completed' });
+    expect(done!.data).not.toHaveProperty('silentStop');
 
     // 新 turn:result 归零,不带上一 turn 的回复。
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
@@ -1491,6 +1525,7 @@ describe('pi translator', () => {
     translatePiEvent(ev({ type: 'agent_settled' }), events2.queue, ctx);
     const done2 = events2.events.find((e) => e.type === 'done');
     expect((done2!.data as { result?: unknown }).result).toBe('');
+    expect(done2!.data).toMatchObject({ silentStop: true });
   });
 
   it('resets turn usage counters on the next agent_start', () => {

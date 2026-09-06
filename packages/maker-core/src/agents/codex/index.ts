@@ -93,11 +93,13 @@ import {
   createAutoReviewConfirmUndeliveredNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
+  appendAutoReviewUserIntent,
   isSystemPermissionDenialReason,
   resolveAutoReviewDecision,
+  toolAutoReviewAction,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
-import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
+import type { ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
@@ -112,9 +114,12 @@ import {
 import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { buildCodexEnv } from './env-builder.js';
 import {
+  buildCodexBotSkillConfigOverrides,
+  buildCodexBotMcpConfigOverrides,
   buildCodexCapabilityConfigOverrides,
   buildCodexCapabilitySkillConfigOverrides,
   buildCodexSessionCapabilityRoutingPolicy,
+  mergeCodexSkillConfigOverrides,
   requiresCodexCapabilitySkillDiscovery,
 } from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
@@ -395,15 +400,21 @@ function buildCodexDeveloperInstructions(parts: {
   ghostRosterPrompt?: string;
   runtimeSystemPrompt?: string;
   makerMemoryIndex?: string;
+  botProfilePrompt?: string;
+  botProfileContextPrompt?: string;
+  botUserProfilePrompt?: string;
   userPrompt?: string;
 }): string {
   return [
+    parts.botProfilePrompt,
     MAKER_CODEX_SYSTEM_PROMPT_APPEND,
     parts.makerMemoryRules,
     parts.contactsRules,
     parts.ghostRosterPrompt,
+    parts.botProfileContextPrompt,
     parts.runtimeSystemPrompt,
     parts.makerMemoryIndex,
+    parts.botUserProfilePrompt,
     parts.userPrompt,
   ]
     .filter((s): s is string => !!s && s.trim().length > 0)
@@ -746,7 +757,9 @@ const ASK_USER_DYNAMIC_TOOL: DynamicToolSpec = {
 };
 
 interface ActiveToolContext {
-  type: 'mcpToolCall' | 'dynamicToolCall';
+  type: 'mcpToolCall' | 'dynamicToolCall' | 'fileChange';
+  arguments?: unknown;
+  changes?: unknown;
   turnId?: string | null;
   server?: string | null;
   /**
@@ -1902,7 +1915,11 @@ export class CodexAgent extends BaseAgent {
     // 查询上下文，既能发现全局 skills，又不会误带任意项目的 repo skills。
     const workingDir = opts.workingDir || os.homedir();
     try {
-      const { skills, errors } = await this.listSkillsForCwd(workingDir, opts.forceReload ?? false);
+      const { skills, errors } = await this.listSkillsForCwd(
+        workingDir,
+        opts.forceReload ?? false,
+        opts.remoteHostId,
+      );
       const out: ListAgentSkillsResult = {
         skills: skills
           .filter(isPaletteVisibleCodexSkill)
@@ -1941,8 +1958,11 @@ export class CodexAgent extends BaseAgent {
   private async listSkillsForCwd(
     workingDir: string,
     forceReload: boolean,
+    remoteHostId?: string,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
-    const { host } = await this.getUtilityHost();
+    const host = remoteHostId
+      ? await this.getHost(remoteHostId)
+      : (await this.getUtilityHost()).host;
     return await this.listSkillsForHost(host, workingDir, forceReload);
   }
 
@@ -3182,13 +3202,16 @@ export class CodexAgent extends BaseAgent {
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
     // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
     // 键规则与理由见 buildMemoryScopeKey (memory/storage.ts)。
-    const memoryScopeKey = buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+    const memoryScopeKey =
+      opts.makerMemoryScopeKey ?? buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
     // This per-session injection flag must not mutate the shared manager.
     if (makerMemoryEnabled && makerMemory) {
       try {
         const store = await makerMemory.getStore(memoryScopeKey);
-        makerMemoryRules = MAKER_MEMORY_RULES;
-        makerMemoryIndex = await store.getIndex();
+        makerMemoryRules = opts.makerMemoryScopeKey?.startsWith('bot:')
+          ? ''
+          : MAKER_MEMORY_RULES;
+        makerMemoryIndex = opts.makerMemoryIndexSnapshot ?? await store.getIndex();
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),
           workdir: memoryScopeKey,
@@ -3224,6 +3247,7 @@ export class CodexAgent extends BaseAgent {
      * 归属的仍是它那一 turn 的模型。
      */
     let activeTurnModel: string | undefined = opts.model;
+    let activeTurnContextLimit = this.deps.resolveModelContextLimit?.(opts.providerId, opts.model) ?? null;
     /**
      * 本 turn 实际路由的 provider,与 activeTurnModel 同时快照。
      *
@@ -3264,6 +3288,8 @@ export class CodexAgent extends BaseAgent {
      * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为。
      */
     const capContextWindow = (reported: number | null): number | null => {
+      const configured = activeTurnContextLimit;
+      if (configured && Number.isFinite(configured) && configured > 0) return configured;
       const verified = activeTurnModel
         ? (this.deps.resolveVerifiedContextWindow?.(activeTurnProviderId, activeTurnModel) ?? null)
         : null;
@@ -4263,9 +4289,17 @@ export class CodexAgent extends BaseAgent {
      */
     let mutableProviderId: string | null | undefined = opts.providerId;
     let currentAutoReviewIntent = '';
+    const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
+      ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
+        ? { requesterAuthority: 'unknown' as const, source: 'direct' as const }
+        : undefined);
+    // Authorization belongs to the accepted input, not the foreground policy's lifetime.
+    let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext>;
+    const priorAutoReviewIntent = () => JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const setAutoReviewIntent = (content: UserMessage['content']): void => {
+    const setAutoReviewIntent = (content: UserMessage['content'], source = { authority: currentAutoReviewAuthority }): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
+      currentAutoReviewAuthority = source.authority && { ...source.authority };
       autoReviewDecisionCache.clear();
     // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
     // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
@@ -4298,7 +4332,8 @@ export class CodexAgent extends BaseAgent {
      */
     let mutableCatalogModel: string | undefined = opts.model;
     let mutableEffort: Effort = opts.effort ?? 'high';
-    let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
+    let mutablePermissionMode: PermissionMode =
+      reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
     let autoReviewDirectoryGeneration = 0;
@@ -4311,9 +4346,10 @@ export class CodexAgent extends BaseAgent {
     );
     // Named profiles defined through thread/start.config are thread-local. Codex
     // 0.145.0 cannot resolve that thread-local definition when the selector is
-    // repeated on turn/start, so remember whether the thread is already using it.
-    let readonlyReferencesProfileActive = false;
-    let readonlyReferencesProfileFingerprint: string | null = null;
+    // repeated on turn/start, so remember whether the thread is already using
+    // the currently selected Cindy workspace profile (Review or read-only references).
+    let workspacePermissionProfileActive = false;
+    let workspacePermissionProfileFingerprint: string | null = null;
     // A fresh thread/start has no rollout yet, so thread/resume fails until a
     // turn/start may have crossed the server acceptance boundary. Once a turn
     // was attempted, prefer resume before replacing the thread; "no rollout"
@@ -4758,6 +4794,42 @@ export class CodexAgent extends BaseAgent {
         );
       }
     }
+    let botMcpConfig: Record<string, unknown> = {};
+    if (!reviewMode && opts.botRuntimeProfile?.mcpPolicy) {
+      try {
+        const response = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead, { includeLayers: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        assertCurrentHost('Bot MCP configuration');
+        const transports = new Set(Object.entries(asRecord(asRecord(response.config).mcp_servers))
+          .filter(([, value]) => hasCodexMcpTransport(value)).map(([name]) => name));
+        for (const [key, value] of Object.entries(host.getSessionMcpConfig(opts.sessionInstanceId))) {
+          const match = /^mcp_servers\.([A-Za-z0-9_-]+)\.(?:url|command)$/.exec(key);
+          if (match && typeof value === 'string' && value.trim()) transports.add(match[1]);
+        }
+        botMcpConfig = buildCodexBotMcpConfigOverrides(opts.botRuntimeProfile.mcpPolicy, transports);
+        if (!makerMemoryEnabled && transports.has('cindy_memory')) {
+          botMcpConfig['mcp_servers.cindy_memory.enabled'] = false;
+        }
+      } catch (error) {
+        releaseHostBindingLeaseIfNeeded();
+        throw new Error(`Cannot prepare Codex Bot MCP configuration: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    capabilityRoutingConfig = mergeCodexSkillConfigOverrides(
+      capabilityRoutingConfig,
+      buildCodexBotSkillConfigOverrides(
+        reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+      ),
+    );
+    capabilityRoutingConfig = {
+      ...capabilityRoutingConfig,
+      ...botMcpConfig,
+      // Bot sessions must not absorb project AGENTS.md from the cwd chain —
+      // their context is the Bot profile, not the workspace.
+      ...(!reviewMode && opts.botRuntimeProfile ? { project_doc_max_bytes: 0 } : {}),
+    };
     if (
       Object.keys(capabilityRoutingConfig).length > 0 &&
       !capabilityRoutingProtocolSupported
@@ -4838,6 +4910,7 @@ export class CodexAgent extends BaseAgent {
         // model so the exact current provider route remains resolvable.
         model: mutableCatalogModel ?? mutableModel,
         userIntent: currentAutoReviewIntent,
+        ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots: runtimeWorkspaceRoots().filter(
           (dir): dir is string => typeof dir === 'string' && dir.length > 0,
@@ -4855,11 +4928,13 @@ export class CodexAgent extends BaseAgent {
         );
       if (!cached) autoReviewDecisionCache.set(key, pending);
       return pending.then((decision) => (
-        directoryGeneration === autoReviewDirectoryGeneration
+        autoReviewDecisionCache.get(key) !== pending
+          ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
+          : directoryGeneration === autoReviewDirectoryGeneration
           ? decision
           : {
-              verdict: 'ask',
-              reason: 'Directory permissions changed while this action was under review.',
+              verdict: 'block',
+              reason: 'Directory permissions changed; retry with the current scope.',
             }
       ));
     };
@@ -4962,6 +5037,7 @@ export class CodexAgent extends BaseAgent {
           mcpCallerAttested: true,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
+          ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
           ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
           vendorOptions: vo,
@@ -5461,23 +5537,44 @@ export class CodexAgent extends BaseAgent {
       return config;
     }
 
-    function shouldUseReadonlyReferencesProfile(): boolean {
-      return (
-        reviewMode ||
-        (readonlyReferenceDirsSupported &&
-          (mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0) &&
-          mutablePermissionMode !== 'bypassPermissions')
-      );
+    function currentWorkspacePermissionProfile(): string | undefined {
+      if (reviewMode) return REVIEW_PERMISSION_PROFILE;
+      if (
+        readonlyReferenceDirsSupported
+        && (mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0)
+        && mutablePermissionMode !== 'bypassPermissions'
+      ) {
+        return READONLY_REFERENCES_PERMISSION_PROFILE;
+      }
+      return undefined;
     }
 
-    function currentReadonlyReferencesProfileFingerprint(): string | null {
-      if (!shouldUseReadonlyReferencesProfile()) return null;
-      return JSON.stringify(mutableWritableDirs);
+    function currentWorkspacePermissionProfileFingerprint(): string | null {
+      const profile = currentWorkspacePermissionProfile();
+      if (!profile) return null;
+      return JSON.stringify({ profile, writableDirs: mutableWritableDirs });
     }
 
     let customProviderThreadConfig: Record<string, unknown> = {};
+    const currentContextLimit = (): number | null => {
+      const limit = this.deps.resolveModelContextLimit?.(mutableProviderId, mutableCatalogModel ?? mutableModel);
+      return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
+    };
+    // The stored setting is a cap on the provider's explicit window. Keep the raw
+    // setting for refresh detection (including reset), but use one effective
+    // window for both native thread configuration and turn-owned usage reporting.
+    const effectiveThreadContextWindow = (contextLimit: number | null): number | null => {
+      const customWindow = typeof initialCustomContextWindow === 'number'
+        && Number.isFinite(initialCustomContextWindow) && initialCustomContextWindow >= 1
+        ? Math.floor(initialCustomContextWindow)
+        : null;
+      return contextLimit === null ? customWindow
+        : customWindow === null ? contextLimit : Math.min(contextLimit, customWindow);
+    };
+    let appliedContextLimit = currentContextLimit();
+    activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
 
-    function currentThreadWorkspaceConfig(): Pick<
+    function currentThreadWorkspaceConfig(contextLimit = currentContextLimit()): Pick<
       ThreadStartParams,
       | 'approvalPolicy'
       | 'approvalsReviewer'
@@ -5487,7 +5584,7 @@ export class CodexAgent extends BaseAgent {
       | 'config'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
-      const threadContextWindow = initialCustomContextWindow;
+      const threadContextWindow = effectiveThreadContextWindow(contextLimit);
       const config = {
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
@@ -5504,15 +5601,18 @@ export class CodexAgent extends BaseAgent {
             }
           : {}),
         ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),
-        // 自定义供应商显式窗口。隔离 app-server 的静态模型目录先放开
-        // `max_context_window`,这里再按 thread 设置实际窗口和 95% 自动压缩阈值。
-        // 官方会话继续走共享 app-server + live catalog,不受该静态目录影响。
+        ...(!makerMemoryEnabled && !opts.botRuntimeProfile
+          ? { 'mcp_servers.cindy_memory.enabled': false }
+          : {}),
+        // Write the resolved window once: a custom-provider default must not
+        // overwrite the user's cap. Preserve 95% for an explicit provider window
+        // without an override, and 90% for a user-configured cap.
         ...(typeof threadContextWindow === 'number' && threadContextWindow > 0
           ? {
               model_context_window: Math.floor(threadContextWindow),
               model_auto_compact_token_limit: Math.max(
                 1,
-                Math.floor(threadContextWindow * 0.95),
+                Math.floor(threadContextWindow * (contextLimit === null ? 0.95 : 0.9)),
               ),
             }
           : {}),
@@ -5527,12 +5627,11 @@ export class CodexAgent extends BaseAgent {
           : {}),
         ...(Object.keys(config).length > 0 ? { config } : {}),
       };
-      if (shouldUseReadonlyReferencesProfile()) {
+      const permissionProfile = currentWorkspacePermissionProfile();
+      if (permissionProfile) {
         return {
           ...shared,
-          permissions: reviewMode
-            ? REVIEW_PERMISSION_PROFILE
-            : READONLY_REFERENCES_PERMISSION_PROFILE,
+          permissions: permissionProfile,
         };
       }
       return { ...shared, sandbox };
@@ -5565,16 +5664,16 @@ export class CodexAgent extends BaseAgent {
           : {}),
       };
       if (
-        shouldUseReadonlyReferencesProfile() &&
+        currentWorkspacePermissionProfile() !== undefined &&
         !activeTurnPermissionPolicy
       ) {
         // The profile was selected on thread/start or thread/resume. Repeating
         // the selector here makes Codex 0.145.0 reload its base config (which
         // does not contain our per-thread definition) and reject turn/start
         // with "default_permissions requires a `[permissions]` table".
-        if (!readonlyReferencesProfileActive) {
+        if (!workspacePermissionProfileActive) {
           throw new Error(
-            'Codex read-only reference profile is not active for this thread; restore it with thread/resume before turn/start',
+            'Codex workspace permission profile is not active for this thread; restore it with thread/resume before turn/start',
           );
         }
         return shared;
@@ -5799,7 +5898,7 @@ export class CodexAgent extends BaseAgent {
     // host 的有效状态计算已含: 全局开关 ∧ 工作区/用户覆盖 ∧ 实际应用到 running
     // app-server 的 spawn 快照(失效失败留下 stale 配置时返回 unavailable, 本段
     // 静默, 不指挥模型调 stale 桥里没有的工具)。
-    const contactsState = opts.remoteHostId || reviewMode
+    const contactsState = opts.remoteHostId || reviewMode || opts.botRuntimeProfile
       ? undefined
       : this.deps.getContactsPromptState?.({ workingDir: opts.workingDir });
     const contactsRules =
@@ -5811,16 +5910,21 @@ export class CodexAgent extends BaseAgent {
     // 远端 Codex 的 workingDir 属于 SSH 主机，本地插件目录停用偏好无法可靠匹配；
     // 远端 SSH remote-forward 只下发白名单 MCP，固定 cindy ghost server 不在其中，
     // 因此与 Claude 远端路径一致地 fail-closed，不把召回清单注入到不可达会话。
-    const ghostRosterPrompt = opts.remoteHostId || reviewMode
+    const ghostRosterPrompt = opts.remoteHostId || reviewMode || opts.botRuntimeProfile
       ? ''
       : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
     const developerInstructions = buildCodexDeveloperInstructions({
       makerMemoryRules,
       contactsRules,
       ghostRosterPrompt,
-      runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
+      runtimeSystemPrompt: opts.botRuntimeProfile
+        ? undefined
+        : this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
-      userPrompt: reviewMode ? undefined : opts.userPrompt,
+      botProfilePrompt: reviewMode ? undefined : opts.botProfilePrompt,
+      botProfileContextPrompt: reviewMode ? undefined : opts.botProfileContextPrompt,
+      botUserProfilePrompt: reviewMode ? undefined : opts.botUserProfilePrompt,
+      userPrompt: reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt,
     });
     const useProxyChannel = isCodexProxyChannelReady();
     let threadId!: string;
@@ -5868,8 +5972,8 @@ export class CodexAgent extends BaseAgent {
         codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
       }
       sdkSessionId = threadId;
-      readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
-      readonlyReferencesProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
+      workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
+      workspacePermissionProfileFingerprint = currentWorkspacePermissionProfileFingerprint();
       threadMayHaveRollout = false;
       log.info('thread/start ok', {
         threadId,
@@ -5984,8 +6088,8 @@ export class CodexAgent extends BaseAgent {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         sdkSessionId = threadId;
-        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
-        readonlyReferencesProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
+        workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
+        workspacePermissionProfileFingerprint = currentWorkspacePermissionProfileFingerprint();
         threadMayHaveRollout = true;
         // Resumed app-server threads may have sticky collaborationMode='plan' from
         // a previous handle whose plan cycle ended without a follow-up turn. Since
@@ -6081,7 +6185,7 @@ export class CodexAgent extends BaseAgent {
           if (settled) {
             if (onLateResolve) {
               void Promise.resolve(onLateResolve(value)).catch((error) => {
-                log.warn(`late read-only reference profile ${action} cleanup threw`, {
+                log.warn(`late workspace permission profile ${action} cleanup threw`, {
                   error: String(error),
                   threadId,
                 });
@@ -6110,7 +6214,7 @@ export class CodexAgent extends BaseAgent {
         timer = setTimeout(() => {
           rejectOnce(
             new Error(
-              `Codex read-only reference profile ${action} did not acknowledge within ${PROFILE_LIFECYCLE_ACK_TIMEOUT_MS}ms`,
+              `Codex workspace permission profile ${action} did not acknowledge within ${PROFILE_LIFECYCLE_ACK_TIMEOUT_MS}ms`,
             ),
           );
         }, PROFILE_LIFECYCLE_ACK_TIMEOUT_MS);
@@ -6136,12 +6240,12 @@ export class CodexAgent extends BaseAgent {
       signal?: AbortSignal,
     ): Promise<void> => {
       const previousThreadId = threadId;
-      const replacementProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
+      const replacementProfileFingerprint = currentWorkspacePermissionProfileFingerprint();
       const replacementServiceTierGeneration = serviceTierMutationGeneration;
       const inheritedHostBindingLease = releaseHostBindingLease !== null;
       acquireHostBindingLeaseIfNeeded();
       try {
-        assertCurrentHost('read-only reference profile replacement');
+        assertCurrentHost('workspace permission profile replacement');
         const resp = await requestProfileLifecycle<ThreadStartResponse>({
           action: 'replacement',
           signal,
@@ -6168,14 +6272,14 @@ export class CodexAgent extends BaseAgent {
             });
           },
         });
-        assertCurrentHost('read-only reference profile replacement');
+        assertCurrentHost('workspace permission profile replacement');
         const nextThreadId = resp.thread.id;
         if (closed) {
           await unsubscribeDetachedThread(
             nextThreadId,
             'unused profile replacement cleanup after close',
           );
-          throw new Error('Codex session closed during read-only reference profile replacement');
+          throw new Error('Codex session closed during workspace permission profile replacement');
         }
         if (
           Object.hasOwn(resp, 'serviceTier') &&
@@ -6189,7 +6293,7 @@ export class CodexAgent extends BaseAgent {
             'unused profile replacement release',
           );
           if (!released) {
-            throw staleHostError('read-only reference profile replacement cleanup');
+            throw staleHostError('workspace permission profile replacement cleanup');
           }
           unregisterCodexMcpContext(previousThreadId);
           if (closed) {
@@ -6197,7 +6301,7 @@ export class CodexAgent extends BaseAgent {
               nextThreadId,
               'unused profile replacement cleanup after concurrent close',
             );
-            throw new Error('Codex session closed during read-only reference profile replacement');
+            throw new Error('Codex session closed during workspace permission profile replacement');
           }
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
@@ -6222,12 +6326,12 @@ export class CodexAgent extends BaseAgent {
             ? { threadId, historyHasProductPrompt: true }
             : undefined;
         }
-        readonlyReferencesProfileActive = replacementProfileFingerprint !== null;
-        readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
+        workspacePermissionProfileActive = replacementProfileFingerprint !== null;
+        workspacePermissionProfileFingerprint = workspacePermissionProfileActive
           ? replacementProfileFingerprint
           : null;
         threadMayHaveRollout = false;
-        log.debug('unused thread replaced with read-only reference profile', {
+        log.debug('unused thread replaced with workspace permission profile', {
           previousThreadId,
           threadId,
           referenceRoots: mutableExtraDirs.length,
@@ -6244,20 +6348,20 @@ export class CodexAgent extends BaseAgent {
      * a sandboxPolicy (for example Full access), or when references are added
      * to a thread that started without them.
      */
-    const ensureReadonlyReferencesProfileForNextTurn = (
+    const ensureWorkspacePermissionProfileForNextTurn = (
       signal?: AbortSignal,
     ): Promise<void> | null => {
-      const desiredFingerprint = currentReadonlyReferencesProfileFingerprint();
+      const desiredFingerprint = currentWorkspacePermissionProfileFingerprint();
       if (
-        readonlyReferencesProfileActive === (desiredFingerprint !== null) &&
-        readonlyReferencesProfileFingerprint === desiredFingerprint
+        workspacePermissionProfileActive === (desiredFingerprint !== null) &&
+        workspacePermissionProfileFingerprint === desiredFingerprint
       ) return null;
       return (async () => {
         while (true) {
-          const targetFingerprint = currentReadonlyReferencesProfileFingerprint();
+          const targetFingerprint = currentWorkspacePermissionProfileFingerprint();
           if (
-            readonlyReferencesProfileActive === (targetFingerprint !== null) &&
-            readonlyReferencesProfileFingerprint === targetFingerprint
+            workspacePermissionProfileActive === (targetFingerprint !== null) &&
+            workspacePermissionProfileFingerprint === targetFingerprint
           ) return;
           if (!threadMayHaveRollout) {
             await replaceUnusedThreadWithCurrentProfile(signal);
@@ -6266,7 +6370,7 @@ export class CodexAgent extends BaseAgent {
           const resumeThreadWorkspaceConfig = currentThreadWorkspaceConfig();
           const resumeProfileFingerprint = targetFingerprint;
           const resumeServiceTierGeneration = serviceTierMutationGeneration;
-          assertCurrentHost('read-only reference profile refresh');
+          assertCurrentHost('workspace permission profile refresh');
           let resp: ThreadResumeResponse;
           try {
             resp = await requestProfileLifecycle<ThreadResumeResponse>({
@@ -6289,7 +6393,7 @@ export class CodexAgent extends BaseAgent {
             await replaceUnusedThreadWithCurrentProfile(signal);
             continue;
           }
-          assertCurrentHost('read-only reference profile refresh');
+          assertCurrentHost('workspace permission profile refresh');
           if (
             Object.hasOwn(resp, 'serviceTier') &&
             resumeServiceTierGeneration === serviceTierMutationGeneration
@@ -6299,16 +6403,68 @@ export class CodexAgent extends BaseAgent {
             void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
           }
           codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
-          readonlyReferencesProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
-          readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
+          workspacePermissionProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
+          workspacePermissionProfileFingerprint = workspacePermissionProfileActive
             ? resumeProfileFingerprint
             : null;
           threadMayHaveRollout = true;
-          log.debug('read-only reference profile restored before turn/start', {
+          log.debug('workspace permission profile restored before turn/start', {
             threadId,
             referenceRoots: mutableExtraDirs.length,
           });
         }
+      })();
+    };
+
+    // Loaded-thread resume ignores arbitrary config. Release only this thread,
+    // then cold-resume its intact rollout before accepting another turn.
+    const ensureContextLimitForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
+      const desired = currentContextLimit();
+      if (desired === appliedContextLimit) return null;
+      return (async () => {
+        if (signal?.aborted || closed) throw new Error('Codex context settings update cancelled');
+        if (!threadMayHaveRollout) {
+          await replaceUnusedThreadWithCurrentProfile(signal);
+        } else {
+          const released = await releaseCurrentThreadSubscription('context settings refresh', { retireHostOnFailure: false });
+          if (!released) throw new Error('Codex context settings update could not release the thread');
+          try {
+            assertCurrentHost('context settings refresh');
+            if (closed || signal?.aborted) throw new Error('Codex context settings update cancelled');
+            const workspaceConfig = currentThreadWorkspaceConfig(desired);
+            const resp = await requestProfileLifecycle<ThreadResumeResponse>({
+              action: 'refresh', signal,
+              request: () => host.request<ThreadResumeResponse>(Method.ThreadResume, {
+                threadId, cwd: opts.workingDir,
+                ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
+                ...workspaceConfig,
+                ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+                ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
+                ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+              }),
+              onLateResolve: async () => {
+                await runThreadCleanupOrRetire({
+                  cleanupThreadId: threadId, reason: 'late context settings refresh',
+                  cleanup: () => host.unsubscribeThread(threadId), retireHostOnFailure: false,
+                });
+              },
+            });
+            assertCurrentHost('context settings refresh');
+            if (closed || signal?.aborted || resp.thread.id !== threadId) {
+              throw new Error('Codex context settings resume was not confirmed');
+            }
+            subscription = host.subscribeThread(threadId, handlers);
+            registerRootCodexMcpContext();
+            resetAcceptedUsageCursors('context settings refresh');
+          } catch (error) {
+            // A timed-out resume can still complete later. Close this handle so a
+            // retry cannot use that loaded thread with an unconfirmed budget. The
+            // saved task can reopen; the shared daemon and other tasks stay alive.
+            terminateHandleAfterThreadCleanupFailure('context settings refresh failed');
+            throw error;
+          }
+        }
+        appliedContextLimit = desired;
       })();
     };
 
@@ -6323,6 +6479,8 @@ export class CodexAgent extends BaseAgent {
       resolve: (decision: ApprovalDecision) => void;
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation';
       settled: boolean;
+      /** AI wait is cancellable, but mode changes are handled after review. */
+      reviewing?: boolean;
       turnId: string | null;
       itemId?: string;
       /** prompt-each-time 高风险审批: 宽松模式也必须弹 UI, dismissAllPending('allow') 不得放行 */
@@ -6569,8 +6727,6 @@ export class CodexAgent extends BaseAgent {
       req: InteractionRequest,
       opts?: {
         forcePrompt?: boolean;
-        /** Auto 下跳过轻量 reviewer 转人工；仍保留 Full access 自动放行与热切换语义。 */
-        promptInAuto?: boolean;
         autoReviewAction?: ReviewableAction;
         itemId?: string;
       },
@@ -6583,60 +6739,58 @@ export class CodexAgent extends BaseAgent {
             forceTurnConfirmation(req.toolName, req.input));
         let unavailableHandoff = false;
         let approvalRequest = req;
-        const promptInAuto = opts?.promptInAuto === true;
         // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
         // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
         // 再由 Cindy reviewer 静默裁决。
         // forcePrompt 高风险 MCP inner tool
-        // (如 contacts delete/merge/系统回写)在任何模式下都必须拿到用户的逐次确认。
+        // retains its independent confirmation outside Auto.
         if (
           !forcePrompt &&
           mutablePermissionMode === 'bypassPermissions'
         ) {
           return Promise.resolve('accept');
         }
-        // Policy turns (unattended: feishu bot / 定时任务) 以 untrusted + read-only 发射,把命令/文件
-        // 升级请求发回 host 后自动接受非强制回调 —— 保留该无人值守语义,但**仍对危险桶 fail-closed**:
-        // 无人值守时没有人能批准一个 destructive / 凭证 / 远程执行动作,应拒绝,而不是让它逃出 read-only
-        // 沙箱静默执行(与交互式 Auto 共用同一张 Cindy core 安全网)。安全 / 仅需升级的动作照常自动
-        // 接受,不影响正常无人值守自动化(真需要跑危险命令的自动化应走 bypassPermissions,不受此影响)。
+        // Every Auto approval callback uses the shared reviewer, including
+        // policy turns and MCP actions. Static green decisions stay local;
+        // AI allow/block are silent and ask uses the existing interaction path.
         if (
-          !forcePrompt &&
-          activeTurnPermissionPolicy &&
-          mutablePermissionMode === 'auto'
-        ) {
-          if (opts?.autoReviewAction) {
-            const verdict = reviewAction(
-              opts.autoReviewAction,
-              runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
-              {
-                platform: sessionReviewPlatform,
-                writableRoots: runtimeWritableRoots(),
-              },
-            );
-            // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
-            // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
-            return verdict === 'auto-approve' ? Promise.resolve('accept') : Promise.resolve('decline');
-          }
-          // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
-          // 同样 fail-closed 拒绝。mcpServerElicitation(交互输入)有自己的 forceConfirmToolCall 门,保留 auto-accept。
-          if (kind === 'commandExecution' || kind === 'fileChange') {
-            return Promise.resolve('decline');
-          }
-          return Promise.resolve('accept');
-        }
-        // Auto-review 兜底路径:非 OAuth 路由下 approvalsReviewer='user',app-server 把越界/网络
-        // 等审批请求发回 host(OAuth 原生 auto_review 则由 server 内部裁决、根本不到这里 —— 天然
-        // "原生优先、Cindy 兜底")。明显安全由本地规则放行；灰区调用当前会话模型做轻量
-        // allow/block/ask 裁决。allow/block 不依赖 interactionResolver；只有真正红线 ask 才走 UI，
-        // UI 不可用时 dispatchInteraction 自然 fail-closed decline。
-        if (
-          !forcePrompt &&
-          !promptInAuto &&
           mutablePermissionMode === 'auto' &&
-          opts?.autoReviewAction
+          req.kind === 'permission'
         ) {
-          const decision = await reviewAutoAction(opts.autoReviewAction);
+          const reviewThreadId = threadId;
+          const reviewTurnGeneration = turnStartGeneration;
+          const descendant = Boolean(requestThreadId && requestThreadId !== threadId);
+          const reviewEntry: PendingEntry = {
+            kind, turnId, settled: false, reviewing: true,
+            resolve: () => { reviewEntry.settled = true; },
+            ...(opts?.itemId ? { itemId: opts.itemId } : {}),
+          };
+          pendingApprovals.set(requestId, reviewEntry);
+          let decision: AutoReviewDecision;
+          try {
+            decision = await reviewAutoAction(
+              // Explicit `other` evidence already requires AI review (or a
+              // missing-evidence denial); a channel policy must not replace it
+              // with display text that conceals the absent execution arguments.
+              !opts?.autoReviewAction || (forcePrompt && opts.autoReviewAction.kind !== 'other')
+                ? toolAutoReviewAction(req.toolName, req.input, req.description)
+                : opts.autoReviewAction,
+            );
+          } finally {
+            if (pendingApprovals.get(requestId) === reviewEntry) pendingApprovals.delete(requestId);
+          }
+          // Cancellation wins over every verdict and mode switch. Root and
+          // descendant turns have separate terminal owners; a normal root
+          // completion must not cancel a still-running background child.
+          if (
+            reviewEntry.settled || closed || !isCurrentHost() || threadId !== reviewThreadId
+            || (descendant
+              ? Boolean(turnId && terminalDescendantTurnIds.has(turnId))
+              : (turnStartGeneration !== reviewTurnGeneration && (!turnId || currentTurnId !== turnId)) || Boolean(turnId && (
+                completedTurnIds.has(turnId) || terminalErroredTurnIds.has(turnId)
+                || turnInterruptOrigins.get(turnId)?.source === 'user-stop'
+              )))
+          ) return 'decline';
           // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)或
           // 放宽(→Full)。按**最新**档位决策,否则旧 auto 档 allow 会绕过用户刚要求的确认
           // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
@@ -6652,7 +6806,7 @@ export class CodexAgent extends BaseAgent {
             // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这里。)
             return 'decline';
           } else {
-            // Only red-line decisions reach the user and they cannot be remembered.
+            // AI ask decisions reach the user and cannot be remembered.
             // 审阅器故障降级来的 ask 提示一次,让用户知道为何突然开始被问。
             // 用户点「允许」只批准当前这一次,不再重新跑审阅器。
             if (decision.unavailable) {
@@ -6720,11 +6874,11 @@ export class CodexAgent extends BaseAgent {
      *   - resolveAs='allow' (mode 切到 bypass; forcePrompt 仍 fail-closed): decision='accept'
      *   - resolveAs='deny'  (mode 切到 ask/auto 或 close): decision='decline'
      */
-    function dismissAllPending(reason: string, resolveAs: 'allow' | 'deny'): void {
+    function dismissAllPending(reason: string, resolveAs: 'allow' | 'deny', preserveReviewing = false): void {
       if (pendingApprovals.size === 0) return;
       const entries = Array.from(pendingApprovals.entries());
       for (const [requestId, entry] of entries) {
-        if (entry.settled) continue;
+        if (entry.settled || (preserveReviewing && entry.reviewing)) continue;
         entry.settled = true;
         pendingApprovals.delete(requestId);
         // forcePrompt(prompt-each-time 高风险审批)不接受"切到宽松模式"的批量放行——
@@ -7678,26 +7832,38 @@ export class CodexAgent extends BaseAgent {
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       const requestId = params.itemId;
+      const activeChange = activeToolContexts.get(params.itemId);
+      const changes = params.changes ?? (activeChange?.type === 'fileChange' && activeChange.turnId === params.turnId
+        ? activeChange.changes : undefined);
+      // Keep the full patch on the existing user-confirmation surface, but send
+      // only destinations and change kinds to the independent utility reviewer.
+      const changeEvidence = Array.isArray(changes) ? changes.map((change) => {
+        const record = recordFromUnknown(change);
+        const kind = recordFromUnknown(record?.kind);
+        if (typeof record?.path !== 'string' || !record.path.trim()
+          || !['add', 'delete', 'update'].includes(String(kind?.type))) return null;
+        return { path: record.path, kind: { type: kind?.type,
+          ...(typeof kind?.move_path === 'string' ? { move_path: kind.move_path } : {}),
+        } };
+      }) : undefined;
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'fileChange', {
         kind: 'permission',
         requestId,
         toolUseId: params.itemId,
         toolName: 'file_change',
-        input: { grantRoot: params.grantRoot ?? null },
+        input: { grantRoot: params.grantRoot ?? null, ...(changes ? { changes } : {}) },
         title: 'Allow Codex to change files?',
         description: params.reason ?? undefined,
         suggestions: codexSessionApprovalSuggestions(),
         metadata: params.reason ? { reason: params.reason } : undefined,
       }, {
-        // Codex may omit grantRoot for ordinary apply_patch requests. Without a
-        // concrete target the lightweight reviewer cannot classify the write,
-        // but silently declining is surfaced by app-server as "rejected by user"
-        // even though no user interaction happened. In interactive Auto, route
-        // that protocol gap to the ordinary approval UI; unlike forcePrompt this
-        // still lets a pending request follow a switch to Full access. Unattended
-        // policy turns retain their earlier fail-closed branch above.
-        promptInAuto: !params.grantRoot?.trim(),
-        autoReviewAction: { kind: 'file-write', path: params.grantRoot ?? undefined },
+        // Missing target evidence is sent to review as a protocol limitation, never
+        // converted directly into a human prompt or treated as a workspace grant.
+        autoReviewAction: Array.isArray(changes) && changes.length > 0
+          ? changeEvidence?.every(Boolean)
+            ? toolAutoReviewAction('file_change', { grantRoot: params.grantRoot ?? null, changes: changeEvidence })
+            : { kind: 'other' }
+          : { kind: 'file-write', path: params.grantRoot ?? undefined },
         itemId: params.itemId,
       });
       return { decision };
@@ -7750,6 +7916,13 @@ export class CodexAgent extends BaseAgent {
       if (toolDescription) input.toolDescription = toolDescription;
       if (meta?.tool_params_display != null) input.toolParamsDisplay = meta.tool_params_display;
       if (meta?.tool_params != null) input.toolParams = meta.tool_params;
+      else {
+        const matches = matchingActiveMcpTools(params);
+        if (matches.length === 1) {
+          input.toolName ??= matches[0].context.tool;
+          if (matches[0].context.arguments !== undefined) input.toolParams = matches[0].context.arguments;
+        }
+      }
       return input;
     }
 
@@ -7982,6 +8155,12 @@ export class CodexAgent extends BaseAgent {
         {
           forcePrompt:
             turnPolicyForcePrompt || approvalPolicy === 'prompt-each-time',
+          // Display text is not execution evidence. An absent argument payload
+          // must hit the shared missing-evidence denial, never reach AI as a
+          // seemingly complete action made only of server/title/message fields.
+          ...(policyPermissionInput.toolParams === undefined
+            ? { autoReviewAction: { kind: 'other' as const, description: undefined } }
+            : {}),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );
@@ -8010,8 +8189,8 @@ export class CodexAgent extends BaseAgent {
       if (turnGate === false) return { permissions: {}, scope: 'turn' };
       if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
       const requestId = params.itemId ?? params.turnId;
-      // kind 借用 'commandExecution' 仅为复用其 fail-closed 语义(见 awaitApprovalDecision:无 action /
-      // 无人值守时 decline)——权限升级请求本就该 fail-closed。此处不是命令执行,只是共用同一条兜底路径。
+      // Capability changes share the same decision lifecycle as command approvals.
+      // Auto reviews their complete permission payload rather than inventing a command.
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
@@ -8040,11 +8219,15 @@ export class CodexAgent extends BaseAgent {
       const rec = item as Record<string, unknown>;
       const id = typeof rec.id === 'string' ? rec.id : '';
       if (!id) return null;
+      if (rec.type === 'fileChange') {
+        return { id, ctx: { type: 'fileChange', turnId, changes: rec.changes } };
+      }
       if (rec.type === 'mcpToolCall') {
         return {
           id,
           ctx: {
             type: 'mcpToolCall',
+            arguments: rec.arguments,
             turnId,
             server: typeof rec.server === 'string' ? rec.server : null,
             pluginId:
@@ -8154,7 +8337,7 @@ export class CodexAgent extends BaseAgent {
 
     function classifyToolContext(ctx: ActiveToolContext | undefined): 'ask_user_question' | 'permission' {
       if (!ctx) return 'ask_user_question';
-      if (ctx.type === 'mcpToolCall') return 'permission';
+      if (ctx.type === 'mcpToolCall' || ctx.type === 'fileChange') return 'permission';
       if (ctx.type === 'dynamicToolCall') {
         return isAskUserDynamicTool({ namespace: ctx.namespace ?? '', tool: ctx.tool ?? '' })
           ? 'ask_user_question'
@@ -11589,6 +11772,11 @@ export class CodexAgent extends BaseAgent {
     }
     // ── AgentSessionHandle ──────────────────────────────────────────────────
     const handle: AgentSessionHandle = {
+      reviewAutoPermissionAction: async (action) => {
+        const decision = await reviewAutoAction(action);
+        if (decision.unavailable) autoReviewUnavailableNotice.notify();
+        return decision;
+      },
       get id() { return sdkSessionId ?? '<pending>'; },
       agentKind: 'codex',
       get model() { return mutableModel; },
@@ -11682,28 +11870,30 @@ export class CodexAgent extends BaseAgent {
         // Phase 3: 把 mutable 配置每 turn 透传 — server 接受 per-turn 覆盖。
         // **关键**: 无引用目录时用 sandboxPolicy: SandboxPolicy；有引用目录时继承
         // thread/start / thread/resume 已激活的 named permissions profile。profile
-        // selector 不能在 turn/start 重复发送，见 ensureReadonlyReferencesProfileForNextTurn。
+        // selector 不能在 turn/start 重复发送，见 ensureWorkspacePermissionProfileForNextTurn。
         // effort 同理: 协议层只能在 turn/start 透传 (v2.rs:5800), thread/start 不接;
         // 用户在 session 创建时选的 effort 也是靠 first turn/start 这里传过去才生效。
         let turnWorkspaceConfig: ReturnType<typeof currentTurnWorkspaceConfig>;
         let turnThreadWorkspaceConfig: ReturnType<typeof currentThreadWorkspaceConfig>;
         let turnThreadProfileFingerprint: string | null;
         try {
-          const profileRefresh = ensureReadonlyReferencesProfileForNextTurn(sendOpts?.signal);
+          const contextRefresh = ensureContextLimitForNextTurn(sendOpts?.signal);
+          if (contextRefresh) await contextRefresh;
+          const profileRefresh = ensureWorkspacePermissionProfileForNextTurn(sendOpts?.signal);
           if (profileRefresh) await profileRefresh;
           turnWorkspaceConfig = currentTurnWorkspaceConfig();
           // A stale-daemon retry must hydrate the exact thread-level profile
           // that matches this turn, not mutable settings changed while the
           // original turn/start RPC was pending.
           turnThreadWorkspaceConfig = currentThreadWorkspaceConfig();
-          turnThreadProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
+          turnThreadProfileFingerprint = currentWorkspacePermissionProfileFingerprint();
         } catch (e) {
           isTurnStartPending = false;
-          endPlanCycleAfterPreStartFailure('read-only reference profile refresh failed');
+          endPlanCycleAfterPreStartFailure('workspace permission profile refresh failed');
           flushDeferredTerminalTurnCompletionsIfIdle();
           rejectIfCancelled(sendOpts, 'send');
-          const message = `Failed to restore Codex read-only reference permissions: ${String(e)}`;
-          log.error('read-only reference profile refresh failed', { error: String(e), threadId });
+          const message = `Failed to restore Codex workspace permissions: ${String(e)}`;
+          log.error('workspace permission profile refresh failed', { error: String(e), threadId });
           // Yield continuation owns its product terminal. Emitting here would
           // duplicate the later yield-continuation-start-failed events.
           if (yieldAttempt == null) {
@@ -11749,7 +11939,7 @@ export class CodexAgent extends BaseAgent {
         const autoReviewIntent = (sendOpts as CodexInternalSendOptions | undefined)?.[
           CODEX_AUTO_REVIEW_INTENT
         ];
-        setAutoReviewIntent(autoReviewIntent ?? message.content);
+        setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
         assertCurrentHost('turn/start');
         // 本条消息的计划意图:sendOpts.planMode 是点击发送瞬间的快照(排队行透传),
         // 权威于 agent 当前武装态;undefined 走旧语义(消耗武装态)。一次性语义:
@@ -11785,6 +11975,7 @@ export class CodexAgent extends BaseAgent {
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
         // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
         activeTurnModel = mutableCatalogModel;
+        activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
         activeTurnProviderId = mutableProviderId;
         const markTurnConfigAccepted = (): void => {
           threadMayHaveRollout = true;
@@ -11804,8 +11995,8 @@ export class CodexAgent extends BaseAgent {
         // the request crosses the acceptance boundary: the peer can accept the
         // turn even if the local transport loses the response.
         if ('sandboxPolicy' in turnWorkspaceConfig) {
-          readonlyReferencesProfileActive = false;
-          readonlyReferencesProfileFingerprint = null;
+          workspacePermissionProfileActive = false;
+          workspacePermissionProfileFingerprint = null;
         }
         // After turn/start is attempted, resume before ever replacing this
         // thread. Only an explicit "no rollout found" proves it stayed unused.
@@ -12212,6 +12403,7 @@ export class CodexAgent extends BaseAgent {
               // 恢复路径可能把 'gpt-5' 哨兵解析成具体路由模型 —— 重投的 turn 用的是新值,
               // 窗口归属必须跟着改写走, 否则查不到目录条目、沿用 app-server 的基础模型窗口。
               activeTurnModel = mutableCatalogModel;
+              activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
               activeTurnProviderId = mutableProviderId;
               if (mutableServiceTier !== undefined) {
                 turnParams.serviceTier = mutableServiceTier ?? null;
@@ -12223,8 +12415,8 @@ export class CodexAgent extends BaseAgent {
                 turnParams.collaborationMode.settings.reasoning_effort =
                   clampEffortForCodex(mutableModel, mutableEffort);
               }
-              readonlyReferencesProfileActive = 'permissions' in turnThreadWorkspaceConfig;
-              readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
+              workspacePermissionProfileActive = 'permissions' in turnThreadWorkspaceConfig;
+              workspacePermissionProfileFingerprint = workspacePermissionProfileActive
                 ? turnThreadProfileFingerprint
                 : null;
               threadMayHaveRollout = true;
@@ -12508,7 +12700,7 @@ export class CodexAgent extends BaseAgent {
             turnId: steeredTurnId,
           });
         }
-        setAutoReviewIntent(message.content);
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
       },
 
       async requestGracefulStop(stopOpts) {
@@ -12640,6 +12832,7 @@ export class CodexAgent extends BaseAgent {
           // notifications cannot re-arm it before turn/completed arrives.
           turnInterruptOrigins.set(currentTurnId, { source: 'user-stop' });
         }
+        dismissAllPending('turn_interrupted', 'deny');
         if (!currentTurnId) return;
         if (skipIfStaleHost('turn/interrupt')) return;
         // 中断已在进行:收 idle 表,别让 watchdog 在收口窗口里再开一次火。
@@ -12770,8 +12963,9 @@ export class CodexAgent extends BaseAgent {
 
       async setPermissionMode(newMode: PermissionMode) {
         if (reviewMode) {
-          log.debug('setPermissionMode ignored for hard read-only Review session', {
+          log.debug('setPermissionMode ignored for host-owned hard read-only session', {
             requested: newMode,
+            reviewMode,
           });
           return;
         }
@@ -12790,7 +12984,7 @@ export class CodexAgent extends BaseAgent {
         // reviewer / 人工降级审批，先 fail-closed 关闭；后续重试按当前路由能力
         // 选择 auto_review 或 user reviewer。
         const allowPending = newMode === 'bypassPermissions';
-        dismissAllPending(`permission_mode_changed_to_${newMode}`, allowPending ? 'allow' : 'deny');
+        dismissAllPending(`permission_mode_changed_to_${newMode}`, allowPending ? 'allow' : 'deny', true);
         const wasAuto = mutablePermissionMode === 'auto';
         const wasBypass = mutablePermissionMode === 'bypassPermissions';
         const wasOpen = wasAuto || wasBypass;
@@ -12862,9 +13056,12 @@ export class CodexAgent extends BaseAgent {
         // turn/start. Compare against that activated snapshot, not the mutable
         // list: a root added only for the next turn cannot require revocation.
         let revokesActiveProfileRoot = false;
-        if (readonlyReferencesProfileActive && readonlyReferencesProfileFingerprint !== null) {
+        if (workspacePermissionProfileActive && workspacePermissionProfileFingerprint !== null) {
           try {
-            const activeRoots = JSON.parse(readonlyReferencesProfileFingerprint) as unknown;
+            const parsedFingerprint = JSON.parse(workspacePermissionProfileFingerprint) as {
+              writableDirs?: unknown;
+            };
+            const activeRoots = parsedFingerprint.writableDirs;
             const nextRoots = new Set(newDirs);
             revokesActiveProfileRoot = !Array.isArray(activeRoots)
               || activeRoots.some((dir) => typeof dir !== 'string' || !nextRoots.has(dir));
@@ -12988,8 +13185,8 @@ export class CodexAgent extends BaseAgent {
           }
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
-          readonlyReferencesProfileActive = false;
-          readonlyReferencesProfileFingerprint = null;
+          workspacePermissionProfileActive = false;
+          workspacePermissionProfileFingerprint = null;
           threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
           registerRootCodexMcpContext();

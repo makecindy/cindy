@@ -304,8 +304,10 @@ describe('native e2e environment', () => {
     );
     expect(sessionScreen).toContain('const latestDocument = latestDraft.trim()');
     expect(sessionScreen).toContain('readCurrentDraft: () => draftRef.current');
-    expect(sessionScreen).toContain('onDraftChanged: writeVoiceDraft');
-    expect(sessionScreen).toContain('useComposerVoiceDraftWriter(sessionId, setComposerDraft)');
+    expect(sessionScreen).toContain('if (selection) input?.rememberSelection(text, selection);');
+    expect(sessionScreen).toContain('writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });');
+    expect(sessionScreen).toContain('reconcileComposerVoiceDraft(composerDocumentRef.current, update)');
+    expect(sessionScreen).toContain('reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)');
     expect(sessionScreen).toContain('createMobileVoiceControllerSession({');
     expect(sessionScreen).not.toContain('await sendLatest({ draftOverride: latestDraft });');
   });

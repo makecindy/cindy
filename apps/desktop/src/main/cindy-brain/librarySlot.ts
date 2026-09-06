@@ -23,8 +23,10 @@ import * as path from 'node:path';
 import { crc32 } from 'node:zlib';
 
 import {
+  GHOST_LIBRARY_CAPABILITIES_V1,
   GHOST_LIBRARY_OPS,
   GHOST_PICK_MIN_INTERVAL_MS,
+  type GhostLibraryErrorReason,
   type GhostPipeLibraryResult,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -186,7 +188,17 @@ export interface GhostLibrarySlotDeps {
   ): Promise<boolean | 'granted' | 'not-granted' | 'superseded' | void>;
 }
 
-const fail = (errorCode: string, message: string): GhostPipeLibraryResult => ({ ok: false, errorCode, message });
+const fail = (
+  errorCode: string,
+  message: string,
+  reason?: GhostLibraryErrorReason,
+): GhostPipeLibraryResult => (reason ? { ok: false, errorCode, message, reason } : { ok: false, errorCode, message });
+
+const vaultFail = (r: { errorCode: string; message: string }): GhostPipeLibraryResult => (
+  r.errorCode === 'LIBRARY_UNAVAILABLE'
+    ? fail(r.errorCode, r.message, 'LIBRARY_UNAVAILABLE')
+    : { ok: false, errorCode: r.errorCode, message: r.message }
+);
 
 export class GhostLibrarySlot {
   private readonly sessions = new Map<string, GhostLibrarySession>();
@@ -231,12 +243,24 @@ export class GhostLibrarySlot {
 
   private async dispatch(ghostId: string, payload: unknown): Promise<GhostPipeLibraryResult> {
     if (!this.checkEligibility(ghostId)) {
-      return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力');
+      return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力', 'PERMISSION_DENIED');
     }
     const req = (payload ?? {}) as Record<string, unknown>;
     const op = req.op as string;
     if (!GHOST_LIBRARY_OPS.includes(op as never)) {
-      return fail('PATH_INVALID', `op 必须是 ${GHOST_LIBRARY_OPS.join(' / ')}`);
+      return fail('PATH_INVALID', `op 必须是 ${GHOST_LIBRARY_OPS.join(' / ')}`, 'INVALID_REQUEST');
+    }
+    // 只读能力查询:资格审与 op 合法性之后、会话创建之前返回。
+    // 不捕获 owner、不解析库根、不 open vault、不弹窗、不碰剪贴板。
+    if (op === 'capabilities') {
+      return {
+        ok: true,
+        op: 'capabilities',
+        capabilities: {
+          version: GHOST_LIBRARY_CAPABILITIES_V1.version,
+          operations: [...GHOST_LIBRARY_CAPABILITIES_V1.operations],
+        },
+      };
     }
     // 迁移期只读:写类操作在 copying 全程拒绝(读与状态查询照常)。
     if (this.relocating.has(ghostId)) {
@@ -448,14 +472,14 @@ export class GhostLibrarySlot {
     cancelledMessage: string,
   ): GhostPipeLibraryResult | null {
     if (!this.checkEligibility(ghostId)) {
-      return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力');
+      return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力', 'PERMISSION_DENIED');
     }
     if (this.deps.captureOwnerScope() !== session.ownerScopeKey) {
-      return fail('LIBRARY_UNAVAILABLE', cancelledMessage);
+      return fail('LIBRARY_UNAVAILABLE', cancelledMessage, 'CANCELLED');
     }
     const live = this.sessions.get(ghostId);
     if (!live || live !== session) {
-      return fail('LIBRARY_UNAVAILABLE', cancelledMessage);
+      return fail('LIBRARY_UNAVAILABLE', cancelledMessage, 'CANCELLED');
     }
     return null;
   }
@@ -463,9 +487,9 @@ export class GhostLibrarySlot {
   /** dbPath 相对键 → 库内绝对路径;经 vault 收敛校验(库内 symlink 指根外拒)。 */
   private async resolveDbPath(session: GhostLibrarySession, dbPath: unknown): Promise<{ abs: string } | GhostPipeLibraryResult> {
     const reason = validateLibraryRelPath(dbPath);
-    if (reason) return fail('PATH_INVALID', `dbPath 非法:${reason}`);
+    if (reason) return fail('PATH_INVALID', `dbPath 非法:${reason}`, 'INVALID_REQUEST');
     const abs = await session.vault.resolveDbTarget(dbPath as string);
-    if (abs === null) return fail('PATH_INVALID', 'dbPath 越界或目标不可用作数据库');
+    if (abs === null) return fail('PATH_INVALID', 'dbPath 越界或目标不可用作数据库', 'INVALID_REQUEST');
     return { abs };
   }
 
@@ -504,7 +528,11 @@ export class GhostLibrarySlot {
     // 漂移占位会话:open/status 如实报 unavailable+reason,其余操作全拒
     // (绝不当空库、绝不落默认根冒充)。
     if (session.drift !== null && op !== 'open' && op !== 'status') {
-      return fail('LIBRARY_UNAVAILABLE', `Library 不可用(${session.drift});请在 Cindy 设置中重新确认存储位置`);
+      return fail(
+        'LIBRARY_UNAVAILABLE',
+        `Library 不可用(${session.drift});请在 Cindy 设置中重新确认存储位置`,
+        'LIBRARY_UNAVAILABLE',
+      );
     }
     if (session.drift !== null) {
       const drifted = {
@@ -517,7 +545,7 @@ export class GhostLibrarySlot {
     switch (op) {
       case 'open': {
         const r = await vault.open();
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         this.extraDirOpenerGhostId = ghostId;
         await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
         const body = {
@@ -528,7 +556,7 @@ export class GhostLibrarySlot {
       }
       case 'status': {
         const r = await vault.status();
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         if (this.extraDirOpenerGhostId === ghostId) {
           await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
         }
@@ -542,66 +570,68 @@ export class GhostLibrarySlot {
       }
       case 'read': {
         const r = await vault.read({ path: req.path, encoding: req.encoding, offset: req.offset, length: req.length });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'read', path: r.path, content: r.content, encoding: r.encoding, bytes: r.bytes, sha256: r.sha256 };
       }
       case 'write': {
         const r = await vault.write({ path: req.path, content: req.content, encoding: req.encoding, ifNotExists: req.ifNotExists });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'write', path: r.path, bytes: r.bytes, sha256: r.sha256 };
       }
       case 'writeBegin': {
         const r = await vault.writeBegin({ path: req.path, totalBytes: req.totalBytes, sha256: req.sha256 });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'writeBegin', streamId: r.streamId };
       }
       case 'writeChunk': {
         const r = await vault.writeChunk({ streamId: req.streamId, seq: req.seq, content: req.content, encoding: req.encoding });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'writeChunk', accepted: r.accepted };
       }
       case 'writeCommit': {
         const r = await vault.writeCommit({ streamId: req.streamId });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'writeCommit', path: r.path, bytes: r.bytes, sha256: r.sha256 };
       }
       case 'writeAbort': {
         const r = await vault.writeAbort({ streamId: req.streamId });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'writeAbort', aborted: r.aborted };
       }
       case 'list': {
         const r = await vault.list({ path: req.path, recursive: req.recursive, cursor: req.cursor, limit: req.limit });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'list', entries: r.entries, hasMore: r.hasMore, nextCursor: r.nextCursor };
       }
       case 'stat': {
         const r = await vault.stat({ path: req.path });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'stat', path: r.path, kind: r.kind, bytes: r.bytes, mtime: r.mtime };
       }
       case 'mkdir': {
         const r = await vault.mkdir({ path: req.path });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'mkdir', path: r.path, existed: r.existed };
       }
       case 'delete': {
         const r = await vault.delete({ path: req.path, recursive: req.recursiveDelete });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'delete', path: r.path, existed: r.existed };
       }
       case 'rename': {
         const r = await vault.rename({ from: req.from, to: req.to, overwrite: req.overwrite });
-        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'rename', from: r.from, to: r.to };
       }
       case 'reveal': {
         if (typeof req.path !== 'string' || !req.path) {
-          return fail('PATH_INVALID', 'reveal 需要库内相对路径');
+          return fail('PATH_INVALID', 'reveal 需要库内相对路径', 'INVALID_REQUEST');
         }
         const abs = await vault.resolveExistingFile(req.path);
         if (!abs) return fail('NOT_FOUND', `库内没有这个文件:${req.path}`);
-        if (!this.deps.showItemInFolder) return fail('UNSUPPORTED', '当前宿主不能在文件夹中显示');
+        if (!this.deps.showItemInFolder) {
+          return fail('UNSUPPORTED', '当前宿主不能在文件夹中显示', 'IMPLEMENTATION_UNSUPPORTED');
+        }
 
         // 骚扰钳制:限速按尝试记账(spam 顺延窗口),PATH_INVALID/NOT_FOUND/UNSUPPORTED 不记账。
         const now = this.deps.now?.() ?? Date.now();
@@ -621,14 +651,18 @@ export class GhostLibrarySlot {
       }
       case 'saveAs': {
         if (typeof req.path !== 'string' || !req.path) {
-          return fail('PATH_INVALID', 'saveAs 需要库内相对路径');
+          return fail('PATH_INVALID', 'saveAs 需要库内相对路径', 'INVALID_REQUEST');
         }
         const relPath = req.path;
         const abs = await vault.resolveExistingFile(relPath);
         if (!abs) return fail('NOT_FOUND', `库内没有这个文件:${relPath}`);
-        if (!this.deps.showSaveDialog) return fail('UNSUPPORTED', '当前宿主不能弹出另存为');
+        if (!this.deps.showSaveDialog) {
+          return fail('UNSUPPORTED', '当前宿主不能弹出另存为', 'IMPLEMENTATION_UNSUPPORTED');
+        }
         const ghost = this.deps.getGhost(ghostId);
-        if (!ghost) return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力');
+        if (!ghost) {
+          return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力', 'PERMISSION_DENIED');
+        }
 
         // 骚扰钳制:限速按尝试记账(spam 顺延窗口),再看全局在场标记。
         const now = this.deps.now?.() ?? Date.now();
@@ -651,10 +685,14 @@ export class GhostLibrarySlot {
             ghostName: ghost.manifest.name,
           });
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
           this.deps.log?.warn('ghost library saveAs dialog failed', {
             ghostId,
-            err: error instanceof Error ? error.message : String(error),
+            err: message,
           });
+          if (message === CLIPBOARD_NO_HOST_WINDOW) {
+            return fail('INTERNAL', '另存为窗口无法打开', 'NO_VISIBLE_WINDOW');
+          }
           return fail('INTERNAL', '另存为窗口无法打开');
         } finally {
           this.saveAsDialogInFlight = false;
@@ -672,7 +710,7 @@ export class GhostLibrarySlot {
         );
         if (afterDialog) return afterDialog;
         const live = this.sessions.get(ghostId);
-        if (!live) return fail('LIBRARY_UNAVAILABLE', '账号已切换,另存为已取消');
+        if (!live) return fail('LIBRARY_UNAVAILABLE', '账号已切换,另存为已取消', 'CANCELLED');
         const freshAbs = await live.vault.resolveExistingFile(relPath);
         if (!freshAbs) return fail('NOT_FOUND', `库内没有这个文件:${relPath}`);
         const dest = picked.filePath;
@@ -708,29 +746,29 @@ export class GhostLibrarySlot {
       }
       case 'clipboardWrite': {
         if (req.encoding !== 'base64') {
-          return fail('PATH_INVALID', 'clipboardWrite 只接受 encoding:"base64" 的 PNG 字节');
+          return fail('PATH_INVALID', 'clipboardWrite 只接受 encoding:"base64" 的 PNG 字节', 'INVALID_REQUEST');
         }
         if (typeof req.content !== 'string') {
-          return fail('PATH_INVALID', 'clipboardWrite 需要 content(base64 PNG)');
+          return fail('PATH_INVALID', 'clipboardWrite 需要 content(base64 PNG)', 'INVALID_REQUEST');
         }
         if (req.content.length > (LIBRARY_CLIPBOARD_WRITE_MAX_BYTES * 4) / 3 + 8) {
           return fail('TOO_LARGE', `clipboardWrite 内容超限(上限 ${LIBRARY_CLIPBOARD_WRITE_MAX_BYTES} 字节)`);
         }
         const pngBytes = decodeStrictBase64(req.content);
         if (pngBytes === null) {
-          return fail('PATH_INVALID', 'clipboardWrite content 不是合法 base64');
+          return fail('PATH_INVALID', 'clipboardWrite content 不是合法 base64', 'INVALID_REQUEST');
         }
         if (pngBytes.byteLength === 0) {
-          return fail('PATH_INVALID', 'clipboardWrite 不能写入空字节');
+          return fail('PATH_INVALID', 'clipboardWrite 不能写入空字节', 'INVALID_REQUEST');
         }
         if (pngBytes.byteLength > LIBRARY_CLIPBOARD_WRITE_MAX_BYTES) {
           return fail('TOO_LARGE', `clipboardWrite 内容超限(上限 ${LIBRARY_CLIPBOARD_WRITE_MAX_BYTES} 字节)`);
         }
         if (!isPngBuffer(pngBytes)) {
-          return fail('PATH_INVALID', 'clipboardWrite 只接受 PNG 字节');
+          return fail('PATH_INVALID', 'clipboardWrite 只接受 PNG 字节', 'INVALID_REQUEST');
         }
         if (!this.deps.writeClipboardPng) {
-          return fail('UNSUPPORTED', '当前宿主不能写入系统剪贴板');
+          return fail('UNSUPPORTED', '当前宿主不能写入系统剪贴板', 'IMPLEMENTATION_UNSUPPORTED');
         }
 
         const now = this.deps.now?.() ?? Date.now();
@@ -751,7 +789,11 @@ export class GhostLibrarySlot {
           const message = error instanceof Error ? error.message : String(error);
           this.deps.log?.warn('ghost library clipboardWrite failed', { ghostId, err: message });
           if (message === CLIPBOARD_NO_HOST_WINDOW) {
-            return fail('UNSUPPORTED', '当前没有可挂靠的宿主窗口,无法写入系统剪贴板');
+            return fail(
+              'UNSUPPORTED',
+              '当前没有可挂靠的宿主窗口,无法写入系统剪贴板',
+              'NO_VISIBLE_WINDOW',
+            );
           }
           return fail('INTERNAL', '写入系统剪贴板失败');
         }
@@ -830,7 +872,7 @@ export class GhostLibrarySlot {
         return this.dbResultToPipe(op, r);
       }
       default:
-        return fail('PATH_INVALID', `未知 op:${op}`);
+        return fail('PATH_INVALID', `未知 op:${op}`, 'INVALID_REQUEST');
     }
   }
 }

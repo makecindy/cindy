@@ -23,6 +23,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
 
 const captured = vi.hoisted(() => ({
   args: [] as string[],
@@ -44,6 +45,7 @@ const captured = vi.hoisted(() => ({
     scope: 'session' | 'subagent-route';
   }>,
   mcpVendorOptions: undefined as Record<string, unknown> | undefined,
+  mcpMemoryEnabled: undefined as boolean | undefined,
   failSetModel: false,
   rejectSetModel: false,
   failPrompt: false,
@@ -165,6 +167,7 @@ vi.mock('../rpc-client.js', () => ({
 }));
 
 import {
+  AUTO_REVIEW_SOURCE_CONTENT,
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
   PiManagedPackageMutationFailedError,
@@ -220,6 +223,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.runnerLaunches = [];
     captured.proxyRegistrations = [];
     captured.mcpVendorOptions = undefined;
+    captured.mcpMemoryEnabled = undefined;
     captured.failSetModel = false;
     captured.rejectSetModel = false;
     captured.failPrompt = false;
@@ -292,6 +296,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
             captured.mcpVendorOptions = context?.vendorOptions;
+            captured.mcpMemoryEnabled = context?.memoryEnabled;
             return {
               mcpBridge: {
                 token: 'bridge-token',
@@ -373,6 +378,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
       spawnPiSubagentRunner: (request) => {
         captured.runnerLaunches.push(request);
@@ -2572,6 +2579,70 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('keeps Bot tools and memory independent of global memory while honoring task permissions', async () => {
+    const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
+    deps.getGhostRosterPrompt = vi.fn(() => 'BOT ROSTER');
+    deps.runtimeConfig.memoryEnabled = false;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'bot-read-only-session',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'bypassPermissions',
+      botProfilePrompt: 'BOT SOUL: research without changing the project.',
+      makerMemoryScopeKey: 'bot:bot-read-only',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: '## Bot Memory\n- frozen memory',
+      botUserProfilePrompt: '## User Profile\nCall the user Chris.',
+      userPrompt: 'GLOBAL USER PROMPT',
+      botRuntimeProfile: {
+        botId: 'bot-read-only',
+        profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      },
+    });
+    try {
+      expect(captured.args).not.toContain('--tools');
+      expect(captured.mcpVendorOptions).toBeDefined();
+      expect(captured.mcpMemoryEnabled).toBe(true);
+      const extensionPaths = captured.args.flatMap((arg, index) =>
+        arg === '--extension' ? [captured.args[index + 1]] : []);
+      expect(extensionPaths).toEqual(expect.arrayContaining([
+        path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-bridge.ts'),
+      ]));
+      // Bot 会话是产品人格,不是 coding harness:pi 原生 subagent 面必须不可见,
+      // 项目/全局 AGENTS.md 也不得从 cwd 链被吸进上下文。
+      expect(extensionPaths).not.toEqual(expect.arrayContaining([
+        path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-subagent.ts'),
+      ]));
+      expect(captured.args).toContain('--no-context-files');
+      const promptIndex = captured.args.indexOf('--append-system-prompt');
+      expect(captured.args[promptIndex + 1]).toContain('BOT SOUL');
+      expect(captured.args[promptIndex + 1]).not.toContain('BOT ROSTER');
+      expect(captured.args[promptIndex + 1]).not.toContain('You are Cindy.');
+      expect(captured.args[promptIndex + 1]).not.toContain('GLOBAL USER PROMPT');
+      expect(captured.args[promptIndex + 1]).toContain('frozen memory');
+      expect(captured.args[promptIndex + 1]).toContain('Call the user Chris');
+      expect(captured.args[promptIndex + 1].indexOf('frozen memory')).toBeLessThan(
+        captured.args[promptIndex + 1].indexOf('Call the user Chris'),
+      );
+
+      const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
+      expect(permissionFile).toBeTruthy();
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'bypassPermissions',
+      });
+
+      await handle.setPermissionMode?.('ask');
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'ask',
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('把 session 花名册快照追加到 Pi system prompt', async () => {
     const deps = buildDeps();
     deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
@@ -3055,7 +3126,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(replacementWritableDir, { recursive: true, force: true });
   });
 
-  it('forces confirmation for remote Pi destructive paths instead of using controller realpath', async () => {
+  it('reviews evidence for remote Pi destructive paths instead of using controller realpath', async () => {
     const localSafeTarget = path.join(cwd, 'controller-safe-target');
     const remoteLink = path.join(cwd, 'remote-link');
     mkdirSync(localSafeTarget);
@@ -3081,16 +3152,16 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       { resolvedCredentialPaths: [] },
     );
 
-    expect(await waitForResponse('remote-destructive-link')).toMatchObject({ confirmed: false });
-    expect(review).not.toHaveBeenCalled();
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(await waitForResponse('remote-destructive-link')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ action: expect.objectContaining({ kind: 'exec', destructivePathResolution: 'unavailable' }) }));
+    expect(resolver).not.toHaveBeenCalled();
     await handle.close();
   });
 
-  it('never silently approves a writable-root path whose real target escapes through a link', async () => {
+  it('reviews canonical evidence for a writable-root path whose real target escapes through a link', async () => {
     const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
     const outsideDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-outside-'));
-    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const, reason: 'model block' }));
     const handle = await start('auto', review, false, undefined, { writableDirs: [writableDir] });
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
@@ -3111,15 +3182,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       resolvedWritableRoots: [''],
     });
     expect(await waitForResponse('malformed-root-evidence')).toMatchObject({ confirmed: false });
-    expect(review).not.toHaveBeenCalled();
-    expect(resolver).toHaveBeenCalledTimes(cases.length + 1);
+    expect(review).toHaveBeenCalledTimes(cases.length + 1);
+    for (const [index, [, resolvedPath]] of cases.entries()) {
+      expect(review.mock.calls[index]?.[0]).toMatchObject({ action: { kind: 'file-write', path: linkedPath, resolvedPath } });
+    }
+    expect(resolver).not.toHaveBeenCalled();
 
     firePermissionRequest('authorized-real-target', 'write', { path: linkedPath }, {
       resolvedWritePath: path.join(writableDir, 'real', 'result.txt'),
       resolvedWritableRoots: [cwd, writableDir],
     });
     expect(await waitForResponse('authorized-real-target')).toMatchObject({ confirmed: true });
-    expect(resolver).toHaveBeenCalledTimes(cases.length + 1);
+    expect(resolver).not.toHaveBeenCalled();
 
     await handle.close();
     rmSync(writableDir, { recursive: true, force: true });
@@ -3183,14 +3257,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(await waitForResponse('late-directory-revoke')).toEqual({
       type: 'extension_ui_response',
       id: 'late-directory-revoke',
-      confirmed: true,
+      confirmed: false,
     });
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
     await handle.close();
     rmSync(writableDir, { recursive: true, force: true });
   });
 
-  it('asks instead of auto-reviewing while writable directories are still being persisted', async () => {
+  it('rejects stale evidence while writable directories are still being persisted', async () => {
     const fsp = await import('node:fs');
     const currentWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
     const nextWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
@@ -3223,7 +3297,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     );
     expect(await waitForResponse('pending-writable-persist')).toMatchObject({ confirmed: false });
     expect(review).not.toHaveBeenCalled();
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
 
     releaseWrite();
     await update;
@@ -3239,7 +3313,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     );
     expect(await waitForResponse('persisted-writable')).toMatchObject({ confirmed: true });
     expect(review).not.toHaveBeenCalled();
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
 
     await handle.close();
     rmSync(currentWritableDir, { recursive: true, force: true });
@@ -3399,18 +3473,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await systemHandle.close();
   });
 
-  it('fails closed when a readonly bridge request omits canonical-path evidence', async () => {
-    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+  it.each(['read', 'bash', 'powershell'].flatMap((toolName) =>
+    (['allow', 'block', 'ask'] as const).map((verdict) => ({ toolName, verdict })),
+  ))('reviews exact $toolName evidence when canonical paths are absent: $verdict', async ({ toolName, verdict }) => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict }));
     const handle = await start('auto', review);
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionRequest('readonly-without-evidence', 'read', { path: path.join(cwd, 'innocent.txt') });
+    const input = toolName === 'read' ? { path: path.join(cwd, 'innocent.txt') }
+      : { command: 'cat innocent.txt; rm -rf /outside/report' };
+    firePermissionRequest('readonly-without-evidence', toolName, input);
     expect(await waitForResponse('readonly-without-evidence')).toEqual({
-      type: 'extension_ui_response', id: 'readonly-without-evidence', confirmed: false,
+      type: 'extension_ui_response', id: 'readonly-without-evidence', confirmed: verdict === 'allow',
     });
-    expect(review).not.toHaveBeenCalled();
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledOnce();
+    expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    expect(JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description)).toEqual({
+      toolName, input, resolvedCredentialPaths: null, credentialEvidenceStatus: 'unverifiable',
+    });
   });
 
   it('auto mode lets the current-model reviewer allow a gray write without prompting', async () => {
@@ -3448,6 +3529,154 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   });
 
+  it.each(['allow', 'block', 'ask'] as const)('real extension install obeys AI %s', async (verdict) => {
+    const deps = buildDeps();
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict }));
+    const mutate = vi.fn(async () => ({ changed: true }));
+    deps.reviewAutoPermissionAction = review;
+    deps.mutatePiManagedPackage = mutate;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'auto-package', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    handle.setInteractionResolver?.(resolver);
+    await handle.send({ type: 'user', content: 'Install npm:context-mode now.' });
+    fireManagedPackageRequest('auto-package', 'install', 'npm:context-mode');
+    const response = await waitForResponse('auto-package');
+    expect(review).toHaveBeenCalledOnce();
+    expect(review.mock.calls[0][0].userIntent).toContain('Install npm:context-mode now.');
+    expect(JSON.parse((review.mock.calls[0][0].action as { description: string }).description)).toMatchObject({
+      toolName: 'cindy_pi_extension', input: { action: 'install', source: 'npm:context-mode' },
+    });
+    expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    expect(mutate).toHaveBeenCalledTimes(verdict === 'allow' ? 1 : 0);
+    if (verdict !== 'allow') expect(response.cancelled).toBe(true);
+    await handle.close();
+  });
+
+  it.each(['close', 'abort'] as const)('discards late extension approval after %s', async (operation) => {
+    let release!: (value: { verdict: 'allow' }) => void;
+    const review = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
+    const deps = buildDeps();
+    deps.reviewAutoPermissionAction = review;
+    const mutate = vi.fn(async () => ({ changed: true }));
+    deps.mutatePiManagedPackage = mutate;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'late-package', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    fireManagedPackageRequest('late-package', 'install', 'npm:context-mode');
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    if (operation === 'close') await handle.close({ reason: 'navigation' });
+    else await handle.abort?.();
+    release({ verdict: 'allow' });
+    await flush();
+    expect(mutate).not.toHaveBeenCalled();
+    if (operation !== 'close') await handle.close();
+  });
+
+
+  it.each(['allow', 'ask'] as const)('invalidates old %s when identical text refers to a new attachment', async (verdict) => {
+    let release!: (decision: { verdict: 'allow' | 'ask' }) => void;
+    const reviewer = vi.fn().mockImplementationOnce(() => new Promise<{ verdict: 'allow' | 'ask' }>((resolve) => { release = resolve; }))
+      .mockResolvedValue({ verdict: 'allow' });
+    const handle = await start('auto', reviewer);
+    const source = (file: string) => ({ [AUTO_REVIEW_SOURCE_CONTENT]: [
+      { type: 'text' as const, text: 'Send this.' }, { type: 'file' as const, path: file },
+    ] });
+    await handle.send({ type: 'user', content: 'Send this.' }, source('/tmp/attachment-a.txt'));
+    const action = { kind: 'other' as const, description: 'send the selected attachment' };
+    const old = handle.reviewAutoPermissionAction!(action);
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.steer!({ type: 'user', content: 'Send this.' }, source('/tmp/attachment-b.txt'));
+    // The same serialized request now has a different pending decision in the existing cache.
+    expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({ verdict: 'allow' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(reviewer.mock.calls[0][0].userIntent).toBe(reviewer.mock.calls[1][0].userIntent);
+    release({ verdict });
+    expect(await old).toMatchObject({ verdict: 'block', reason: expect.stringContaining('User instructions changed') });
+    await handle.close();
+  });
+
+  it('rejects mismatched intent authority after a channel prompt is not accepted', async () => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    captured.failPrompt = true;
+    await expect(handle.send({ type: 'user', content: 'Guest: send the private report.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel',
+        autoReviewContext: { requesterAuthority: 'guest', source: 'group' }, forceConfirmToolCall: () => true },
+    })).rejects.toThrow();
+    expect(await handle.reviewAutoPermissionAction?.({ kind: 'other', description: 'send the private report' })).toMatchObject({ verdict: 'block' });
+    expect(review).not.toHaveBeenCalled();
+    captured.failPrompt = false;
+    await handle.send({ type: 'user', content: 'Inspect only.' });
+    await handle.reviewAutoPermissionAction?.({ kind: 'other', description: 'inspect status' });
+    expect(review.mock.calls[0][0].userIntent).toBe('Inspect only.');
+    expect(review.mock.calls[0][0].authorizationContext).toBeUndefined();
+    await handle.close();
+  });
+
+  it.each(['send', 'steer'] as const)('%s excludes decorated channel history from authorization', async (method) => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    if (method === 'steer') await handle.send({ type: 'user', content: 'Inspect only.' });
+    await handle[method]!({ type: 'user', content: 'Guest history: SEND THE REPORT.\nOwner: Do not send.' }, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: 'Do not send.' },
+    });
+    firePermissionRequest('raw-channel', 'unknown_sender', { action: 'send' });
+    await waitForResponse('raw-channel');
+    expect(review.mock.calls[0]?.[0].userIntent).toContain('Do not send.');
+    expect(review.mock.calls[0]?.[0].userIntent).not.toContain('SEND THE REPORT');
+    await handle.close();
+  });
+
+  it('marks legacy channel policies as unknown rather than ordinary task authorization', async () => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    await handle.send({ type: 'user', content: 'Send the report.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' },
+        confirmationSurface: 'channel', forceConfirmToolCall: () => true },
+    });
+    firePermissionRequest('legacy-authority', 'unknown_sender', { action: 'send' });
+    await waitForResponse('legacy-authority');
+    expect(review.mock.calls[0]?.[0].authorizationContext).toEqual({ requesterAuthority: 'unknown', source: 'direct' });
+    await handle.close();
+  });
+
+  it.each(['owner', 'desktop'] as const)('does not carry guest authorization into a later %s turn', async (source) => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    const policy = (requesterAuthority: 'owner' | 'guest') => ({
+      origin: { kind: 'im' as const, channel: 'telegram' as const }, confirmationSurface: 'channel' as const,
+      autoReviewContext: { requesterAuthority, source: 'group' as const }, forceConfirmToolCall: () => true,
+    });
+    await handle.send({ type: 'user', content: 'Guest: send a private report.' }, { turnPermissionPolicy: policy('guest') });
+    firePermissionRequest('guest-send', 'unknown_sender', { action: 'send' });
+    await waitForResponse('guest-send');
+    expect(review.mock.calls[0]?.[0].authorizationContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
+    captured.onEvent?.({ type: 'agent_settled' });
+    await handle.send({ type: 'user', content: 'Owner: inspect the status.' }, source === 'owner' ? { turnPermissionPolicy: policy('owner') } : undefined);
+    firePermissionRequest('owner-inspect', 'unknown_status', { action: 'inspect' });
+    await waitForResponse('owner-inspect');
+    expect(review.mock.calls[1]?.[0].authorizationContext).toEqual(source === 'owner' ? { requesterAuthority: 'owner', source: 'group' } : undefined);
+    expect(review.mock.calls[1]?.[0].userIntent).toBe('Owner: inspect the status.');
+    await handle.close();
+  });
+
+  it.each(['prompt', 'prompt-each-time'] as const)('MCP %s honors all AI verdicts', async (policy) => {
+    for (const verdict of ['allow', 'block', 'ask'] as const) {
+      const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict }));
+      const handle = await start('auto', review, false, { serverNames: ['cindy'], policy: () => policy });
+      const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+      handle.setInteractionResolver?.(resolver);
+      await handle.send({ type: 'user', content: '整理邮箱，先给清单，不发送邮件。' });
+      const input = { ghost_id: 'google-gmail', tool: 'gmail', args: { action: 'search', query: 'in:inbox is:unread' } };
+      const id = `gmail-${policy}-${verdict}`;
+      firePermissionRequest(id, 'mcp__cindy__ghost_call', input);
+      expect((await waitForResponse(id)).confirmed).toBe(verdict === 'allow');
+      expect(review).toHaveBeenCalledOnce();
+      expect(review.mock.calls[0][0].userIntent).toContain('不发送邮件');
+      expect(JSON.parse((review.mock.calls[0][0].action as { description: string }).description)).toMatchObject({ toolName: 'mcp__cindy__ghost_call', input });
+      expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+      await handle.close();
+    }
+  });
+
   it('requires an explicit user decision for extension mutations in Full Access', async () => {
     const handle = await start('bypassPermissions');
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
@@ -3466,8 +3695,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(resolver).toHaveBeenCalledOnce();
   });
 
-  it('does not let Auto-Review approve extension mutations without the user', async () => {
-    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+  it('lets Auto review extension mutations', async () => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'allow' as const }));
     const handle = await start('auto', review);
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
     handle.setInteractionResolver?.(resolver as never);
@@ -3480,14 +3709,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(await waitForResponse('extension-auto')).toEqual({
       type: 'extension_ui_response',
       id: 'extension-auto',
-      confirmed: false,
+      confirmed: true,
     });
-    expect(resolver).toHaveBeenCalledOnce();
-    expect(review).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledOnce();
+    expect(JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description)).toMatchObject({ toolName: 'cindy_pi_extension', input: { action: 'update', source: 'npm:context-mode' } });
   });
 
-  it('lets a turn policy override Auto-Review allow and passes exact tool evidence', async () => {
-    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+  it('reviews turn policy operations and passes exact tool evidence', async () => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'allow' as const }));
     const handle = await start('auto', review);
     const forceConfirmToolCall = vi.fn(() => true);
     await handle.send(
@@ -3503,7 +3733,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
     handle.setInteractionResolver?.(resolver as never);
 
-    const input = { path: '/tmp/policy.txt' };
+    const input = { path: '/tmp/policy.txt', content: 'PRIVATE_FILE_BODY' };
     firePermissionRequest('policy-allow', 'write', input);
     expect(await waitForResponse('policy-allow')).toEqual({
       type: 'extension_ui_response',
@@ -3511,11 +3741,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
     expect(forceConfirmToolCall).toHaveBeenCalledWith('write', input);
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
     expect(review).toHaveBeenCalledOnce();
+    expect(JSON.stringify(review.mock.calls[0]?.[0])).not.toContain('PRIVATE_FILE_BODY');
+    expect(JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description).executionEvidence)
+      .toMatchObject({ kind: 'file-write', path: input.path, resolvedPath: input.path, resolvedWritableRoots: [cwd] });
   });
 
-  it('lets a turn policy override MCP auto-approve and fail-closes policy exceptions', async () => {
+  it('reviews MCP operations when turn policy cannot classify them', async () => {
     const handle = await start('auto', async () => ({ verdict: 'allow' as const }), false, {
       serverNames: ['cindy_contacts'],
       policy: () => 'auto-approve',
@@ -3542,12 +3775,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(await waitForResponse('policy-mcp')).toEqual({
       type: 'extension_ui_response',
       id: 'policy-mcp',
-      confirmed: false,
+      confirmed: true,
     });
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
   });
 
-  it('denies Auto-Review ask without an extra channel prompt on policy turns', async () => {
+  it('delivers Auto-Review ask to the channel on policy turns', async () => {
     const handle = await start('auto', async () => ({
       verdict: 'ask' as const,
     }));
@@ -3570,9 +3803,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(await waitForResponse('policy-gray')).toEqual({
       type: 'extension_ui_response',
       id: 'policy-gray',
-      confirmed: false,
+      confirmed: true,
     });
-    expect(resolver).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
   });
 
   it('keeps a policy across internal continuation tools and clears it at agent_settled', async () => {
@@ -3615,7 +3848,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     expect((await waitForResponse('desktop-after-policy')).confirmed).toBe(true);
     expect(forceConfirmToolCall).toHaveBeenCalledTimes(2);
-    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(resolver).not.toHaveBeenCalled();
   });
 
   it('rolls back a policy when Pi rejects the prompt before provider acceptance', async () => {
@@ -3719,7 +3952,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   });
 
-  it('still asks the user for MCP servers the host policy does not trust', async () => {
+  it('reviews actual operations for MCP servers the host policy does not trust', async () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
     const handle = await start('auto', review, false, {
       serverNames: ['cindy_ssh'],
@@ -3735,9 +3968,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       command: 'uptime',
     });
     await flush();
-    // 不可信 server 仍逐次确认,且同样不该消耗模型审阅(它不是安全分类器该管的事)。
-    expect(review).not.toHaveBeenCalled();
-    expect(resolverCalls).toBe(1);
+    expect(review).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ userIntent: 'check the remote host', action: { kind: 'other', description: JSON.stringify({ toolName: 'mcp__cindy_ssh__ssh_exec', input: { command: 'uptime' } }) } }));
+    expect(resolverCalls).toBe(0);
     expect(captured.sent).toContainEqual({
       type: 'extension_ui_response',
       id: 'r21',
@@ -3750,7 +3983,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       title: 'Allow Xcode to build this project?',
       description: 'Build scripts may access files outside the project, and output is returned to the Agent.',
     };
-    const handle = await start('auto', undefined, false, {
+    const handle = await start('auto', async () => ({ verdict: 'ask' as const }), false, {
       serverNames: ['cindy_ios_simulator'],
       policy: () => 'prompt-each-time',
       presentation: () => disclosure,
@@ -3782,7 +4015,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
    * `cindy_orca` 并继承静默放行 —— 一条实打实的提权路径。归属判定取最长匹配。
    */
   it('does not let a look-alike server name inherit first-party trust', async () => {
-    const handle = await start('auto', async () => ({ verdict: 'allow' as const }), false, {
+    const review = vi.fn(async () => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review, false, {
       serverNames: ['cindy_orca', 'cindy_orca__evil'],
       policy: ({ serverName }) => (serverName === 'cindy_orca' ? 'auto-approve' : 'prompt-each-time'),
     });
@@ -3794,7 +4028,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.send({ type: 'user', content: 'go' });
     firePermissionRequest('r22', 'mcp__cindy_orca__evil__start_team', {});
     await flush();
-    expect(seen).toEqual(['mcp__cindy_orca__evil__start_team']);
+    expect(seen).toEqual([]);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ action: { kind: 'other', description: JSON.stringify({ toolName: 'mcp__cindy_orca__evil__start_team', input: {} }) } }));
     expect(captured.sent).toContainEqual({
       type: 'extension_ui_response',
       id: 'r22',

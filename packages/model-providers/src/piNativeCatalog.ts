@@ -1,7 +1,8 @@
 import piModelCatalogJson from '../catalog/pi-model-catalog.json' with { type: 'json' };
 
-import { PI_REASONING_EFFORTS } from './types.js';
-import type { CatalogModel, Effort, ModelCost, PiModelApi } from './types.js';
+import { defaultEffortForCapabilities } from './effortResolution.js';
+import { piSupportedEfforts } from './piThinkingLevels.mjs';
+import type { CatalogModel, ModelCost, PiModelApi } from './types.js';
 
 interface PiCatalogRow {
   id: string;
@@ -21,21 +22,11 @@ const PI_CATALOG = piModelCatalogJson as unknown as {
   providers: Record<string, PiCatalogRow[]>;
 };
 
-function catalogEfforts(row: PiCatalogRow): Effort[] {
-  if (!row.reasoning || !row.thinkingLevelMap) return [];
-  return PI_REASONING_EFFORTS.filter((effort) => row.thinkingLevelMap?.[effort] != null);
-}
-
-function defaultEffort(efforts: readonly Effort[]): Effort | null {
-  if (efforts.length === 0) return null;
-  for (const effort of ['medium', 'high', 'low', 'xhigh', 'max', 'minimal'] as const) {
-    if (efforts.includes(effort)) return effort;
-  }
-  return efforts[0] ?? null;
-}
-
 function portablePiApi(api: string | undefined): PiModelApi | undefined {
   switch (api) {
+    // Same Responses wire family; pi-host retains the specialized subscription adapter.
+    case 'openai-codex-responses':
+      return 'openai-responses';
     case 'anthropic-messages':
     case 'openai-responses':
     case 'openai-completions':
@@ -68,7 +59,7 @@ export function piNativeCatalogModels(
     ) {
       throw new Error(`[model-providers] invalid Pi catalog row '${piProviderId}/${row.id}'`);
     }
-    const efforts = catalogEfforts(row);
+    const efforts = piSupportedEfforts(row);
     const piApi = portablePiApi(row.api);
     return {
       id: `${options.idPrefix ?? ''}${row.id}`,
@@ -79,7 +70,7 @@ export function piNativeCatalogModels(
       contextWindowVerified: true,
       ...(Number.isFinite(row.maxTokens) && row.maxTokens! > 0 ? { maxOutput: row.maxTokens } : {}),
       efforts,
-      defaultEffort: defaultEffort(efforts),
+      defaultEffort: defaultEffortForCapabilities(efforts),
       status: 'active',
       ...(row.input?.includes('image') ? { supportsImageInput: true } : {}),
       ...(row.cost ? { cost: row.cost } : {}),

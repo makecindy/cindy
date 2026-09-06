@@ -38,8 +38,10 @@ import {
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
+  SESSION_SYNC_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   byteLength,
   DeviceLinkError,
   parseFsWatchTopic,
@@ -68,6 +70,10 @@ import { createLogger } from '../logger';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
 import { dispatchLocalInvoke } from './invoke-registry';
+import {
+  assertRemoteBotInvocationAllowed, projectRemoteSessionResult, projectRemoteBotPush,
+  hasRemoteBotSessionLookup, setRemoteBotSessionLookup,
+} from './remoteBotSessionBoundary.js';
 import { getControllerPlatform } from './controllerPlatform';
 import { runDeviceLinkInvokeContext } from './invoke-context';
 import { fetchLocalMediaToOss } from './mediaFetch';
@@ -137,6 +143,36 @@ const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Se
 ]);
 const textEncoder = new TextEncoder();
 const offlinePushQueue = createOfflinePushQueue();
+
+// Serialize the async DB check at the final wire boundary, retaining per-peer
+// order even when replies arrive out of order. Bounds match best-effort push:
+// dropped frames recover through the existing Session snapshot mechanism.
+const botPushChecks = new Map<string, { tail: Promise<void>; bytes: number; count: number }>();
+function sendBotCheckedPush(
+  dst: string, channel: string, payload: unknown, send: (payload: unknown) => void,
+  failed: (error: unknown) => void,
+): void {
+  if (!hasRemoteBotSessionLookup()) { send(payload); return; }
+  let size: number;
+  try { size = byteLength(JSON.stringify(payload)); } catch (error) { failed(error); return; }
+  const queue = botPushChecks.get(dst) ?? { tail: Promise.resolve(), bytes: 0, count: 0 };
+  if (queue.count >= 64 || queue.bytes + size > 8 * 1024 * 1024) {
+    failed(new DeviceLinkError('BACKPRESSURE', 'remote push authorization queue full'));
+    return;
+  }
+  const client = activeClient;
+  const linkEpoch = remoteInvokeLinkEpoch.get(dst) ?? 0;
+  const owner = broadcastTap.captureDataOwnerBroadcastScope();
+  queue.count += 1; queue.bytes += size;
+  queue.tail = queue.tail.then(async () => {
+    const projected = await projectRemoteBotPush(payload, channel);
+    if (projected !== null && activeClient === client && (remoteInvokeLinkEpoch.get(dst) ?? 0) === linkEpoch && !isControllerRevoked(dst) && broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)) send(projected);
+  }).catch(failed).finally(() => {
+    queue.count -= 1; queue.bytes -= size;
+    if (queue.count === 0 && botPushChecks.get(dst) === queue) botPushChecks.delete(dst);
+  });
+  botPushChecks.set(dst, queue);
+}
 
 /** 只排队可由 session snapshot 对账、且不携带权限终态的会话域事件。 */
 const OFFLINE_QUEUEABLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
@@ -411,7 +447,20 @@ function projectInvokeResultForTunnel(
   channel: string,
   result: unknown,
   supportsFullLogoKinds = false,
+  args: readonly unknown[] = [],
 ): unknown {
+  // Opt-in only: legacy/desktop controllers still receive complete runtime capabilities.
+  // Home only needs run state; repeating the model catalog per runtime blocks slow links.
+  const options = args[0];
+  if (channel === 'maker:list-active' && options && typeof options === 'object'
+    && !Array.isArray(options) && 'summary' in options && options.summary === true
+    && Array.isArray(result)) {
+    return result.map((item: unknown) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+      const row = item as Record<string, unknown>;
+      return { sessionId: row.sessionId, isTurnRunning: row.isTurnRunning };
+    });
+  }
   if (channel !== 'maker:provider:list') return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown };
   if (!Array.isArray(r.providers)) return result;
@@ -617,6 +666,11 @@ const reportedControllerNameByDevice = new Map<string, string>();
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
 let onSessionsSubscribed: SessionsSubscribedListener | null = null;
+let readSessionTextSnapshot: ((sessionId: string) => unknown | null) | null = null;
+
+export function setSessionTextSnapshotReader(reader: typeof readSessionTextSnapshot): void {
+  readSessionTextSnapshot = reader;
+}
 
 export function setControllersChangedListener(cb: ControllersChangedListener | null): void {
   onControllersChanged = cb;
@@ -865,6 +919,89 @@ interface MakerEventBatchStage {
 
 const makerEventBatchStages = new Map<string, MakerEventBatchStage>();
 
+// Bound live traffic before it enters the shared socket FIFO. Only opt-in
+// controllers can repair skipped deltas from the authoritative in-flight block.
+const MAKER_EVENT_WINDOW_SOFT_CAP = 16;
+function isNonFinalTextPush(payload: unknown): boolean {
+  const event = (payload as { event?: { type?: unknown; data?: { isFinal?: unknown } } } | null)?.event;
+  return event?.type === 'text' && event.data?.isFinal === false;
+}
+
+const sessionSyncStages = new Map<string, {
+  sessions: Map<string, boolean>;
+  timer: ReturnType<typeof setTimeout> | null;
+  ownerStamp?: PushOwnerStamp;
+}>();
+
+function clearSessionSyncStage(dst: string): void {
+  const stage = sessionSyncStages.get(dst);
+  if (stage?.timer) clearTimeout(stage.timer);
+  sessionSyncStages.delete(dst);
+}
+
+function stageSessionSync(dst: string, sessionId: string, historyRequired = true): void {
+  if (!subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)) return;
+  let stage = sessionSyncStages.get(dst);
+  if (!stage) {
+    stage = { sessions: new Map(), timer: null, ownerStamp: broadcastTap.getSafeDataOwnerPushStamp?.() };
+    sessionSyncStages.set(dst, stage);
+  }
+  stage.sessions.set(sessionId, historyRequired || stage.sessions.get(sessionId) === true);
+  if (stage.sessions.size > SESSION_ACTIVITY_STAGE_MAX_KEYS) {
+    stage.sessions.delete(stage.sessions.keys().next().value!);
+  }
+  if (stage.timer) return;
+  stage.timer = setTimeout(() => {
+    stage.timer = null;
+    if (!activeClient || activeClient.getStatus() !== 'online'
+      || !makerEventBatchOwnerStampEquals(stage.ownerStamp, broadcastTap.getSafeDataOwnerPushStamp?.())) {
+      clearSessionSyncStage(dst);
+      return;
+    }
+    for (const sid of stage.sessions.keys()) {
+      if (!subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
+        stage.sessions.delete(sid);
+        continue;
+      }
+      if ((activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP) break;
+      // Enqueue older staged deltas before the captured snapshot, then later deltas.
+      // All three use the same per-peer DB authorization queue before wire delivery.
+      flushMakerEventBatchesForSession(dst, sid);
+      try {
+        const snapshot = readSessionTextSnapshot?.(sid);
+        const payload = {
+          ...(snapshot && typeof snapshot === 'object' ? snapshot : {}),
+          sessionId: sid,
+          // Text-only loss is repaired by this snapshot. Re-reading the same
+          // large DB page on every dropped delta would recreate the congestion.
+          // Once the block is sealed, history becomes the recovery authority.
+          resyncRequired: stage.sessions.get(sid) === true || !snapshot,
+        };
+        const ownerStamp = broadcastTap.getSafeDataOwnerPushStamp?.();
+        let admissionFailed = false;
+        sendBotCheckedPush(dst, SESSION_SYNC_CHANNEL, payload,
+          (projected) => {
+            if (subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
+              activeClient?.sendPush(dst, SESSION_SYNC_CHANNEL, projected, ownerStamp);
+            }
+          },
+          () => {
+            admissionFailed = true;
+            stageSessionSync(dst, sid, payload.resyncRequired);
+          });
+        if (admissionFailed) break;
+        stage.sessions.delete(sid);
+      } catch {
+        break;
+      }
+    }
+    const next = stage.sessions.entries().next().value;
+    if (next) stageSessionSync(dst, next[0], next[1]);
+    else clearSessionSyncStage(dst);
+  }, 2_000);
+  (stage.timer as unknown as { unref?: () => void }).unref?.();
+}
+
 function makerEventBatchOwnerStampEquals(
   a: PushOwnerStamp | undefined,
   b: PushOwnerStamp | undefined,
@@ -872,6 +1009,33 @@ function makerEventBatchOwnerStampEquals(
   if (a === b) return true;
   if (!a || !b) return false;
   return a.dataOwnerId === b.dataOwnerId && a.ownerGeneration === b.ownerGeneration;
+}
+
+/** Merge only adjacent deltas whose complete non-text payload is identical. */
+function coalesceMakerTextDelta(previous: unknown, incoming: unknown): unknown | null {
+  const read = (value: unknown) => {
+    if (!value || typeof value !== 'object') return null;
+    const p = value as Record<string, unknown>;
+    if (typeof p.persistId !== 'string' || !p.persistId) return null;
+    const event = p.event as Record<string, unknown> | undefined;
+    const data = event?.data as Record<string, unknown> | undefined;
+    if (event?.type !== 'text' || data?.isFinal !== false || data.isFullText === true
+      || typeof data.text !== 'string') return null;
+    return { p, event, data, text: data.text };
+  };
+  const a = read(previous);
+  const b = read(incoming);
+  if (!a || !b) return null;
+  const signature = (item: typeof a) => JSON.stringify({
+    ...item.p, event: { ...item.event, data: { ...item.data, text: '' } },
+  });
+  try {
+    if (signature(a) !== signature(b)) return null;
+  } catch {
+    // Serialization failures remain isolated by the existing send boundary.
+    return null;
+  }
+  return { ...b.p, event: { ...b.event, data: { ...b.data, text: a.text + b.text } } };
 }
 
 /**
@@ -915,8 +1079,15 @@ function stageMakerEventPush(
     tail = { events: [], bytes: 0, ...(ownerStamp ? { ownerStamp } : {}) };
     segments.push(tail);
   }
-  tail.events.push(payload);
-  tail.bytes += payloadBytes;
+  const previous = tail.events.at(-1);
+  const coalesced = coalesceMakerTextDelta(previous, payload);
+  if (coalesced) {
+    tail.events[tail.events.length - 1] = coalesced;
+    tail.bytes += estimateMakerEventBytes(coalesced) - estimateMakerEventBytes(previous);
+  } else {
+    tail.events.push(payload);
+    tail.bytes += payloadBytes;
+  }
   if (
     tail.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
     || tail.bytes >= MAKER_EVENT_BATCH_MAX_BYTES
@@ -1107,16 +1278,30 @@ function flushMakerEventBatchSession(
         continue;
       }
       const payload: MakerEventBatchPayload = { sessionId, events: slice };
+      const historyRequired = !slice.every(isNonFinalTextPush);
       try {
         if (!activeClient || activeClient.getStatus() !== 'online') {
           throw new DeviceLinkError('NOT_CONNECTED', 'relay offline');
         }
-        if (segment.ownerStamp === undefined) {
-          activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload);
-        } else {
-          activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, segment.ownerStamp);
+        if (
+          subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)
+          && (sessionSyncStages.get(dst)?.sessions.has(sessionId)
+            || (activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP)
+        ) {
+          // Once any part is skipped, subsequent deltas no longer have a valid
+          // prefix at the receiver. Resume only after the full snapshot is queued.
+          stageSessionSync(dst, sessionId, historyRequired);
+          continue;
         }
+        sendBotCheckedPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, (projected) => {
+          if (segment.ownerStamp === undefined) activeClient?.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, projected);
+          else activeClient?.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, projected, segment.ownerStamp);
+        }, () => {
+          outcome.droppedEvents += slice.length;
+          stageSessionSync(dst, sessionId, historyRequired);
+        });
       } catch (err) {
+        stageSessionSync(dst, sessionId, historyRequired);
         // 发不出去就丢这一片(不降级、不重试、不滞留):理由与四轮 review 的推导见
         // MakerEventBatchFlushOutcome 注释。relay 离线时后续切片连尝试都省掉。
         if (err instanceof DeviceLinkError && err.code === 'NOT_CONNECTED') {
@@ -1258,11 +1443,19 @@ function drainSessionActivityStage(dst: string, stage: SessionActivityStage): vo
     if (!next) return;
     const [key, item] = next;
     try {
-      if (item.ownerStamp === undefined) {
-        activeClient.sendPush(dst, SESSION_ACTIVITY_CHANNEL, item.payload);
-      } else {
-        activeClient.sendPush(dst, SESSION_ACTIVITY_CHANNEL, item.payload, item.ownerStamp);
-      }
+      let backpressured = false;
+      sendBotCheckedPush(dst, SESSION_ACTIVITY_CHANNEL, item.payload, (projected) => {
+        if (item.ownerStamp === undefined) activeClient?.sendPush(dst, SESSION_ACTIVITY_CHANNEL, projected);
+        else activeClient?.sendPush(dst, SESSION_ACTIVITY_CHANNEL, projected, item.ownerStamp);
+      }, (error) => {
+        if (error instanceof DeviceLinkError && error.code === 'BACKPRESSURE' && sessionActivityStages.get(dst) === stage) {
+          backpressured = true;
+          if (!stage.queue.has(key)) stage.queue.set(key, item);
+          scheduleSessionActivityRetry(dst, stage);
+        }
+      });
+      // Synchronous queue admission failure must retain the staged update too.
+      if (backpressured) return;
       stage.queue.delete(key);
     } catch (err) {
       if (err instanceof DeviceLinkError && err.code === 'BACKPRESSURE') {
@@ -1442,19 +1635,48 @@ function sendPushBestEffort(
   payload: unknown,
   ownerStamp?: PushOwnerStamp,
 ): void {
+  sendBotCheckedPush(dst, channel, payload,
+    (projected) => sendPushBestEffortAuthorized(dst, channel, projected, ownerStamp),
+    () => log.warn('remote Bot push authorization failed'));
+}
+
+function sendPushBestEffortAuthorized(
+  dst: string,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
   if (!activeClient) return;
+  const sessionId = readPushSessionId(payload);
+  const markForRecovery = () => {
+    if (sessionId && channel !== SESSION_SYNC_CHANNEL
+      && topicForPush(channel, payload) === `session:${sessionId}`) {
+      stageSessionSync(dst, sessionId, channel !== 'maker:event' || !isNonFinalTextPush(payload));
+    }
+  };
+  // Oversized maker events and offline replay can bypass the batching path.
+  // They must obey the same missing-prefix boundary as ordinary deltas.
+  if (channel === 'maker:event' && sessionId
+    && subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)
+    && (sessionSyncStages.get(dst)?.sessions.has(sessionId)
+      || (activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP)) {
+    markForRecovery();
+    return;
+  }
   try {
     if (ownerStamp === undefined) activeClient.sendPush(dst, channel, payload);
     else activeClient.sendPush(dst, channel, payload, ownerStamp);
     return;
   } catch (err) {
     if (!isPayloadTooLargeError(err)) {
+      markForRecovery();
       log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
       return;
     }
 
     const compactPayload = compactOversizedPushPayload(channel, payload);
     if (!compactPayload) {
+      markForRecovery();
       log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
       return;
     }
@@ -1464,6 +1686,7 @@ function sendPushBestEffort(
       else activeClient.sendPush(dst, channel, compactPayload, ownerStamp);
       log.warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
     } catch (retryErr) {
+      markForRecovery();
       log.warn(
         `forwardPush to ${shortId(dst)} failed after compact retry (${channel}): ${String(retryErr)}`,
       );
@@ -1632,6 +1855,7 @@ function deactivateControllerState(
   changed = subscriptions.getControllerIds().includes(deviceId) || changed;
   clearReportedControllerName(deviceId);
   clearSessionActivityStage(deviceId);
+  clearSessionSyncStage(deviceId);
   clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId);
   return subscriptions.clearController(deviceId) || changed;
@@ -1910,7 +2134,7 @@ async function handleInvoke(
   const fingerprint = JSON.stringify(payload) ?? '';
   const admissionFailure = currentRemoteInvokeAdmissionFailure(src);
   if (admissionFailure) {
-    if (!sendInvokeResultSafe(
+    if (!await sendAuthorizedInvokeResultSafe(
       client,
       src,
       requestId,
@@ -1929,7 +2153,7 @@ async function handleInvoke(
       sendRequestIdReuseError(client, src, requestId, payload);
       return;
     }
-    if (!sendInvokeResultSafe(
+    if (!await sendAuthorizedInvokeResultSafe(
       client,
       src,
       requestId,
@@ -1948,7 +2172,7 @@ async function handleInvoke(
       sendRequestIdReuseError(client, src, requestId, payload);
       return;
     }
-    if (!sendInvokeResultSafe(
+    if (!await sendAuthorizedInvokeResultSafe(
       client,
       src,
       requestId,
@@ -1970,7 +2194,7 @@ async function handleInvoke(
     if (inFlight.linkEpoch !== invokeLinkEpoch) return;
     const result = await inFlight.promise;
     if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
-    if (!sendInvokeResultSafe(
+    if (!await sendAuthorizedInvokeResultSafe(
       client,
       src,
       requestId,
@@ -1985,7 +2209,7 @@ async function handleInvoke(
   }
   if (payload && (payload.channel === DL_SUBSCRIBE_CHANNEL || payload.channel === DL_UNSUBSCRIBE_CHANNEL)) {
     const result = handleSubscriptionFrame(src, payload);
-    if (!sendInvokeResultSafe(
+    if (!await sendAuthorizedInvokeResultSafe(
       client,
       src,
       requestId,
@@ -2018,7 +2242,7 @@ async function handleInvoke(
         message: 'remote invoke execution queue is full',
       },
     };
-    if (!sendInvokeResultSafe(
+    if (!await sendAuthorizedInvokeResultSafe(
       client,
       src,
       requestId,
@@ -2071,6 +2295,8 @@ async function handleInvoke(
       inFlightRemoteInvokeBytes -= invokeBytes;
     }
   }
+  // Fresh execution already includes the DB checks in runInvoke, within its
+  // orphan deadline and busy lease. Only replayed replies need a new async check.
   if (!sendInvokeResultSafe(
     client,
     src,
@@ -2264,6 +2490,33 @@ function sanitizeMessageInvokeResult(
     return out;
   });
   return changed ? { ok: true, result: sanitized } : result;
+}
+
+async function authorizeRemoteBotResult(
+  channel: string | undefined, args: unknown[] | undefined, result: InvokeResultPayload,
+): Promise<InvokeResultPayload> {
+  if (!result.ok) return result;
+  try {
+    await assertRemoteBotInvocationAllowed(args ?? [], channel);
+    return { ok: true, result: await projectRemoteSessionResult(channel ?? '', result.result) };
+  } catch {
+    return { ok: false, error: { code: 'IPC_ERROR', message: '[NOT_FOUND] Session does not exist' } };
+  }
+}
+
+/** Revalidate cached/replayed replies without executing a mutation twice. */
+async function sendAuthorizedInvokeResultSafe(
+  ...args: Parameters<typeof sendInvokeResultSafe>
+): Promise<boolean> {
+  if (!hasRemoteBotSessionLookup()) return sendInvokeResultSafe(...args);
+  const [client, src] = args;
+  const epoch = remoteInvokeLinkEpoch.get(src) ?? 0;
+  const owner = broadcastTap.captureDataOwnerBroadcastScope();
+  args[3] = await authorizeRemoteBotResult(args[4], args[5], args[3]);
+  if (activeClient !== client || (remoteInvokeLinkEpoch.get(src) ?? 0) !== epoch || !broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)) return true;
+  const admission = currentRemoteInvokeAdmissionFailure(src);
+  if (admission) args[3] = admission;
+  return sendInvokeResultSafe(...args);
 }
 
 /**
@@ -2461,6 +2714,23 @@ export function flushMakerEventBatchesOnReconnect(): void {
   }
 }
 
+const botInvokeOutboxChecks = new Set<string>();
+function flushAuthorizedBotOutboxEntry(key: string, queued: QueuedRemoteInvokeResult, client: DeviceLinkClient): void {
+  if (botInvokeOutboxChecks.has(key)) return;
+  botInvokeOutboxChecks.add(key);
+  const owner = broadcastTap.captureDataOwnerBroadcastScope();
+  const epoch = remoteInvokeLinkEpoch.get(queued.src) ?? 0;
+  void authorizeRemoteBotResult(queued.channel, queued.args, queued.result).then((result) => {
+    if (remoteInvokeResultOutbox.get(key) !== queued || activeClient !== client ||
+        (remoteInvokeLinkEpoch.get(queued.src) ?? 0) !== epoch || !broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)) return;
+    sendInvokeResultSafe(client, queued.src, queued.requestId,
+      currentRemoteInvokeAdmissionFailure(queued.src) ?? result, queued.channel, queued.args, queued.fingerprint);
+  }).catch(() => log.warn('remote Bot reply authorization failed')).finally(() => {
+    botInvokeOutboxChecks.delete(key);
+    if (remoteInvokeResultOutbox.size > 0) scheduleRemoteInvokeResultOutboxFlush();
+  });
+}
+
 function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
   const client = activeClient;
   if (!client) {
@@ -2490,6 +2760,10 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
     // presence 短暂滞后/误报不得把这条恢复事件一并拦死(review P2)。
     if (!onlySrc && isKnownUnroutable(queued.src)) {
       blockedPeers.add(queued.src);
+      continue;
+    }
+    if (hasRemoteBotSessionLookup() && queued.result.ok) {
+      flushAuthorizedBotOutboxEntry(key, queued, client);
       continue;
     }
     const attempt = trySendInvokeResult(
@@ -2833,6 +3107,7 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     for (const topic of topics) {
       const sessionId = topic.startsWith('session:') ? topic.slice('session:'.length) : null;
       if (sessionId) dropMakerEventBatch(src, sessionId);
+      if (sessionId) sessionSyncStages.get(src)?.sessions.delete(sessionId);
     }
   }
   syncForwarding();
@@ -2845,6 +3120,32 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
     flushMakerEventBatchesFor(src);
     drainOfflinePushQueueTo(src, topics);
+    if (subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)) {
+      // Capture and enqueue synchronously: old batches/backlog precede this
+      // snapshot and subsequent live deltas follow it through the same DB gate.
+      // Synchronous admission errors fail subscribe; async errors stage recovery.
+      for (const topic of topics) {
+        if (!topic.startsWith('session:')) continue;
+        const snapshot = readSessionTextSnapshot?.(topic.slice('session:'.length));
+        if (snapshot) {
+          try {
+            const ownerStamp = broadcastTap.getSafeDataOwnerPushStamp?.();
+            sendBotCheckedPush(src, SESSION_SYNC_CHANNEL, snapshot,
+              (projected) => {
+                if (subscriptions.controllerHasTopic(src, topic)) {
+                  activeClient?.sendPush(src, SESSION_SYNC_CHANNEL, projected, ownerStamp);
+                }
+              },
+              () => stageSessionSync(src, topic.slice('session:'.length)));
+          } catch (error) {
+            return { ok: false, error: {
+              code: error instanceof DeviceLinkError ? error.code : 'INTERNAL',
+              message: 'session text snapshot could not be queued',
+            } };
+          }
+        }
+      }
+    }
   }
   return { ok: true, result: { ok: true } };
 }
@@ -3013,6 +3314,8 @@ export async function runInvoke(
 
   try {
     const args = payload.args ?? [];
+    const invocationOwner = broadcastTap.captureDataOwnerBroadcastScope();
+    if (hasRemoteBotSessionLookup()) await assertRemoteBotInvocationAllowed(args, payload.channel);
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
       : [];
@@ -3030,6 +3333,8 @@ export async function runInvoke(
         payload.channel === 'maker:provider:list' ? [] : args,
       ),
     );
+    if (hasRemoteBotSessionLookup()) await assertRemoteBotInvocationAllowed(args, payload.channel);
+    if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端
     // 镜像收敛到被控端真相(取代控制端乐观覆盖)。本机会话不走这条(走 renderer update)。
     await persistRemoteSetting(payload.channel, payload.args ?? [], result);
@@ -3037,12 +3342,13 @@ export async function runInvoke(
       ok: true,
       result: projectInvokeResultForTunnel(
         payload.channel,
-        result,
+        await projectRemoteSessionResult(payload.channel, result),
         subscriptions.controllerSupports(
           src,
           CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
         )
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
+        args,
       ),
     };
   } catch (err) {
@@ -3118,6 +3424,9 @@ function shortId(deviceId: string): string {
 export const __testing = {
   reset(): void {
     subscriptions.__testing.reset();
+    setRemoteBotSessionLookup(null);
+    botPushChecks.clear();
+    botInvokeOutboxChecks.clear();
     onControllersChanged = null;
     onRemoteInvokeBusyChanged = null;
     inFlightRemoteInvokeCount = 0;
@@ -3136,9 +3445,11 @@ export const __testing = {
     controllerDisplayNameByDevice.clear();
     reportedControllerNameByDevice.clear();
     onSessionsSubscribed = null;
+    readSessionTextSnapshot = null;
     activeClient = null;
     offlinePushQueue.clear();
     clearAllSessionActivityStages();
+    for (const dst of sessionSyncStages.keys()) clearSessionSyncStage(dst);
     clearAllMakerEventBatchStages();
     cancelAllLinkAcceptRetries();
     revokedLinkOpenRejectAt.clear();

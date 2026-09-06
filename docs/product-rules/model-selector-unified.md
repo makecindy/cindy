@@ -102,6 +102,10 @@
 - 推荐引擎 = 模型**生效来源** provider 的主 root(`MODEL_PLANE_POLICIES`:openai→codex、anthropic→claude-code;xd 按 gateway `perAgent`/membership;user provider 按其 runtime)。同名多来源时先 `effectiveSourceIdForModel` 解析生效来源再推导——**禁止读拍平去重后的列表**(registry.ts 明示)。
 - Pi 的候选成员来自客户端随包的 Pi 原生目录与明确的 Pi 覆盖，不能从
   Claude Code/Codex 的发现清单或 Registry 投影；wire enum 仍不增加 pi。
+- **Google 原生协议优先（2026-09-05）**：Cindy 模型目录明确声明
+  `nativeApi: google-generative-ai`，且 Pi 的实际协议匹配、在候选中时推荐 Pi。Claude Code / Codex 的
+  兼容接入不能因历史回落顺序排在它之前。此规则不靠 Google 分组或 Gemini 名字猜测，
+  也不创建缺失的 Pi 路由；手动选择的引擎保持优先。
 - **原生底座(排序用,与推荐引擎分离)只标确有主场的,可空**(Chris 2026-08-13 裁决):
   anthropic→cc、openai→codex、折扣条目→codex;**多 root 全能模型(xai 系)与判不出家族的
   BYOM 一律 null = 无主场**——任何引擎视图都不降级,只有「主场明确在别处」的行才降到
@@ -157,8 +161,8 @@
 
 | 情形 | 行为 |
 |---|---|
-| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-5.6-Sol / Codex / high；Anthropic 订阅→Claude Opus 5 / Claude Code / high；xAI 订阅→Grok 4.6 / Pi / high；CN / Global Cindy Gateway→原生多模态 GLM-5.3-Flash / Pi / high。Gateway 默认必须同时明确声明图片输入与 Pi 实时能力；Pi 不可用时不把该默认强塞进 Codex 或 Claude Code |
-| 多来源 | 可用订阅优先于 Gateway；客户端没有“最近连接时间”时，多订阅稳定按 OpenAI→Anthropic→xAI。来源仍在加载、账号目录没有目标模型、或零来源时不编造组合，保留连接引导 |
+| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-5.6-Sol / Codex / 模型目录默认深度；Anthropic 订阅→Claude Opus 5 / Claude Code / 模型目录默认深度；xAI 订阅→Grok 4.6 / Pi / 模型目录默认深度；CN / Global Cindy Gateway→原生多模态 GLM-5.3-Flash / Pi / 模型目录默认深度。Gateway 默认必须同时明确声明图片输入与 Pi 实时能力；Pi 不可用时不把该默认强塞进 Codex 或 Claude Code |
+| 多来源 | Gateway 的可用推荐组合优先于订阅（CN / Global 一致）；Gateway 未就绪或推荐组合不可用时回退订阅，多订阅稳定按 OpenAI→Anthropic→xAI。本机自动发现 ChatGPT 登录不改变此优先级。来源仍在加载、账号目录没有目标模型、或零来源时不编造组合，保留连接引导 |
 | 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。仅由旧版 cc 不可用触发并持久化的非 cc Harness 仍属于系统回退，不算用户自定义 |
 | 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
 | 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
@@ -230,6 +234,17 @@
 - 服务端下发推荐引擎/排序字段(`ModelAgentOverride` 加字段的最小路径已勘明:protocol L222 + registry/catalog base + 两处手抄镜像类型 + modelRegistryMetaFields 塌平表)。
 - 移动端对齐(mobile 平行实现 + draftModelMemory 多 deviceId 维)。
 
+### 2026-09-05：共享 Harness 选项的原生与兼容说明
+
+- 模型配置浮层由 ModelHarnessPicker 常驻显示所有可选 Harness，每行只显示小图标、名称和选中勾；仅 Codex 确实处于兼容模式时在名称后标“兼容模式”并附小感叹号。不单挂推荐引擎，不逐行写原生/兼容说明，不用下拉隐藏候选。原生协议、实际协议与推荐关系放在各项详情，与设置页共用真实判定；简化显示不改变 Pi 或 Claude Code 的协议与默认配置。
+- 当前选择仅由实际 config.engine 决定。只有当前项画勾。推荐项排序靠前，推荐本身不画第二个选中态、不触发任何配置写入；未选中名称仍正常显示，避免被误认为不可用。
+- 判定复用原生协议比较，先按实际 provider/model/agent 查目录和 wire ID；不按推荐引擎或厂商品牌猜测。旧被控端无协议数据时显示待确认，不借控制端的目录补假信息。
+- 候选仍服从执行端的可用性、固定 Harness 与模型设置。此控件不恢复已关闭的兼容路径、不写模型可见性；只有用户点击可选项才调用既有切换回调。
+- 保留统一选择器的 engineLocked 接口：同引擎视图仅呈现当前引擎的不可切换选项，仍如实说明它是原生还是兼容；收藏、实际运行配置与保存中禁用语义不变。
+- 原生支持只说明当前请求协议直接匹配，不等于所有扩展能力均已做端到端认证；因此不使用“完美适配”。
+- 此轮不改思考深度组件、档位语义或交互；原有来源、上下文与报价保留。协议信息来自同一份执行端能力投影，不引入第二套模型事实。
+
+- 兼容模式的感叹号与设置页共用 ModelCompatibilityNotice，五语统一提示运行可能不稳定、建议有经验的用户使用。图标可悬停、聚焦或点击查看，点击仅查看说明，不切引擎、不改开关。选择器与设置页共用 MODEL_HARNESS_COLOR：Claude Code 橙、Codex 蓝、Pi 紫；不改思考深度的配色或交互。
 
 ## 7. 切换失败的编排恢复（2026-09-05）
 

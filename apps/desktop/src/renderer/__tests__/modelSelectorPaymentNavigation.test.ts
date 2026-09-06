@@ -32,7 +32,7 @@ describe('ModelSelector paid model navigation', () => {
     const modelRowBlock = modelSelectorSource.slice(start, end);
     expect(modelRowBlock).toContain('aria-disabled={disabled ? true : undefined}');
     expect(modelRowBlock).toContain(
-      "`${model.displayName} · ${t('newChat.modelSelector.paymentRequired.unlock')}`",
+      "`${localizedModelName(model.displayName, t)} · ${t('newChat.modelSelector.paymentRequired.unlock')}`",
     );
     expect(modelRowBlock).not.toContain('aria-disabled={disabled || paymentRequired}');
   });

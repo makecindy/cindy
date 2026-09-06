@@ -17,7 +17,7 @@ import type { PanGesture } from 'react-native-gesture-handler';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
@@ -131,6 +131,7 @@ export interface MobileComposerInputRowProps {
   multilineShape?: boolean;
   onBlur?: TextInputProps['onBlur'];
   onChangeText: (value: string) => void;
+  onSelectionChange?: TextInputProps['onSelectionChange'];
   onContentSizeChange?: TextInputProps['onContentSizeChange'];
   onFocus?: TextInputProps['onFocus'];
   /**
@@ -205,6 +206,7 @@ export function MobileComposerInputRow({
   multilineShape,
   onBlur,
   onChangeText,
+  onSelectionChange,
   onContentSizeChange,
   onFocus,
   onPasteImages,
@@ -262,6 +264,7 @@ export function MobileComposerInputRow({
       multiline={multiline}
       onBlur={onBlur}
       onChangeText={onChangeText}
+      onSelectionChange={onSelectionChange}
       onContentSizeChange={onContentSizeChange}
       onFocus={onFocus}
       onPressIn={onPressIn}
@@ -448,7 +451,7 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible,
   );
 }
 
-export function VoiceMicWaveCaret({ color, testID }: { color: string; testID?: string }) {
+export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; testID?: string; viewRef?: Ref<View> }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const bar1 = useRef(new Animated.Value(0)).current;
   const bar2 = useRef(new Animated.Value(0)).current;
@@ -496,6 +499,8 @@ export function VoiceMicWaveCaret({ color, testID }: { color: string; testID?: s
     <View
       pointerEvents="none"
       style={styles.voiceMicCaret}
+      ref={viewRef}
+      collapsable={false}
       testID={testID}
     >
       <Mic color={color} size={iconSize.lg} strokeWidth={iconStroke.regular} />

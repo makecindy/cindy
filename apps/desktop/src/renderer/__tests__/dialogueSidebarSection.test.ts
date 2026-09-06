@@ -82,8 +82,13 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
 
   it('offers the dialogue group as an opt-in toggle, not a fixed section', () => {
     expect(mainListModelSource).toContain('groupDialogue');
-    expect(projectsSectionSource).toContain('DialogueGroupNode');
-    expect(projectsSectionSource).toContain("t('ccAgent.sidebar.dialogues')");
+    /*
+      组件 2026-08-23 改名为 SessionGroupNode:对话组与**伙伴组**是同一种东西 ——
+      一个带标题的会话组,只差图标和标题,所以参数化而不是复制一份出来。
+      对话组仍是它的默认形态(不传 groupIcon / groupTitle 时逐字如旧)。
+    */
+    expect(projectsSectionSource).toContain('SessionGroupNode');
+    expect(projectsSectionSource).toContain("groupTitle ?? t('ccAgent.sidebar.dialogues')");
   });
 
   it('loads archived sessions on demand for the selected connected remote devices', () => {

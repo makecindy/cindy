@@ -31,7 +31,7 @@ export function createComposerDraftSource(document: ComposerDocument) {
 export type ComposerDraftSource = ReturnType<typeof createComposerDraftSource>;
 
 /** A running voice controller follows source replacement within its task only. */
-export function useComposerVoiceDraftWriter(sessionId: string, writeDraft: (draft: string) => void) {
+export function useComposerVoiceDraftWriter<T>(sessionId: string, writeDraft: (draft: T) => void) {
   const owner = useMemo(() => ({ sessionId }), [sessionId]);
   const latest = useRef<{ owner: typeof owner; writeDraft: typeof writeDraft } | null>(null);
   latest.current = { owner, writeDraft };
@@ -41,7 +41,7 @@ export function useComposerVoiceDraftWriter(sessionId: string, writeDraft: (draf
       if (latest.current?.owner === owner) latest.current = null;
     };
   }, [owner]);
-  return useCallback((draft: string) => {
+  return useCallback((draft: T) => {
     const current = latest.current;
     if (current?.owner === owner) current.writeDraft(draft);
   }, [owner]);

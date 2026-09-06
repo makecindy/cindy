@@ -687,7 +687,7 @@ export function createMobileMakerTransport({
       call('local-db:messages:around-client-id', [sessionId, clientId, opts]),
     send: (sessionId, message, createOpts, sendOpts) =>
       call('maker:send', [sessionId, message, createOpts, sendOpts]),
-    listActiveSessions: () => call('maker:list-active'),
+    listActiveSessions: () => call('maker:list-active', [{ summary: true }]),
     setModel: async (sessionId, model, providerId, selection) => {
       const wireArgs = selection
         ? [sessionId, model, providerId ?? null, null, selection]

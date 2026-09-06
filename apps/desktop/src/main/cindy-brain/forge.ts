@@ -3464,6 +3464,12 @@ const st = await cindy.library({ op: 'status' });
 // st = { ok:true, state:'ready', usedBytes, fileCount, diskFreeBytes,
 //        softLimitBytes, softLimitExceeded, location:'default'|'custom' }
 
+// 只读能力查询:资格审与 op 合法性之后、会话创建之前返回;不打开库、不弹窗
+const caps = await cindy.library({ op: 'capabilities' });
+// caps = { ok:true, op:'capabilities',
+//          capabilities:{ version:1, operations:['clipboardWrite','saveAs'] } }
+// operations 只表示宿主实现了这些 op,不等于此刻有窗口 / 已授权 / 库可用
+
 // 文件操作(全 Family;写入原子化,大文件走分块流)
 await cindy.library({ op: 'write', path: 'canvases/c1/state.json', content: s });
 await cindy.library({ op: 'read', path: 'canvases/c1/state.json', encoding: 'base64' });
@@ -3512,12 +3518,23 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
 
 关键语义(全部由宿主强制):
 
-- **失败是结构化的**:\`{ ok:false, errorCode, message }\`,常用码
-  \`LIBRARY_UNAVAILABLE\`(含 reason:binding-moved/disk-missing/corrupt)、
+- **失败是结构化的**:\`{ ok:false, errorCode, message, reason? }\`。旧
+  \`errorCode\` 保留;另加稳定 \`reason\` 供分类,不要解析人类 \`message\`。
+  常用码 \`LIBRARY_UNAVAILABLE\`(含 open/status 的 binding-moved/disk-missing/corrupt)、
   \`LIBRARY_READONLY\`、\`DISK_FULL\`、\`PATH_INVALID\`、\`NOT_FOUND\`、
   \`ALREADY_EXISTS\`、\`TOO_LARGE\`、\`STREAM_INVALID\`、\`DB_STATEMENT_REJECTED\`、
   \`DB_ROW_LIMIT\`(结果集超 2000 行,自己加 LIMIT)、\`DB_MIGRATION_CONFLICT\`、
-  \`BUSY\`、\`RATE_LIMITED\`;
+  \`BUSY\`、\`RATE_LIMITED\`、\`UNSUPPORTED\`、\`NOT_DECLARED\`;
+  稳定 \`reason\`:无 handler=\`IMPLEMENTATION_UNSUPPORTED\`,无窗口=\`NO_VISIBLE_WINDOW\`,
+  权限=\`PERMISSION_DENIED\`,库不可用=\`LIBRARY_UNAVAILABLE\`(含 vault 透传的
+  open/status 失败),非法请求=\`INVALID_REQUEST\`(含非法/越界 dbPath 与未知 op),
+  取消=\`CANCELLED\`;成功 open/status 的 \`state:'unavailable'\` 仍用结果体 reason
+  (如 disk-missing),不是失败 reason 枚举;查询/传输层本地分类 \`TIMEOUT\` / \`TRANSPORT_ERROR\`;
+- **capabilities**:先查 \`{ op:'capabilities' }\`。仅 \`version===1\` 且
+  \`operations\` 为**全部字符串**的数组才有效;额外字段忽略,未知 operation 忽略,
+  已知项保留;有效 v1 清单缺少某项才是 unsupported。缺字段、错类型(含数组内混入
+  非字符串)、\`version\` 非 1、或旧宿主 unknown-op 一律 unknown,不得把其中碰巧
+  合法的项当成有效清单。查询本身不证明窗口/授权/库可用,也不要求旧插件重装;
 - **reveal / saveAs**:只收库内相对路径。成功不回用户另存目标的绝对路径;
   取消是 \`{ cancelled:true }\`。reveal 打开系统文件夹、saveAs 弹系统对话框
   (跨平台标题带已核验插件名;macOS 另有正文),同插件 3 秒内连发 \`RATE_LIMITED\`;

@@ -11,7 +11,8 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Session } from './session.js';
-import type { AgentSessionHandle } from './agents/base-agent.js';
+import { MAIN_OWNED_SEND_CONTEXT, type AgentSessionHandle, type SendOptions } from './agents/base-agent.js';
+import { appendAutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import type { UserMessage } from './types/common.js';
 import type { VisionBridgeHook } from './types/vision-bridge.js';
 
@@ -70,6 +71,34 @@ function makeSession(
 }
 
 describe('Session.send vision bridge hook', () => {
+  it.each(['send', 'steer'] as const)('keeps original approval evidence through the %s vision bridge', async (method) => {
+    for (const text of ['', 'Continue.', 'Send this image to Alex.']) {
+      const { handle } = makeRecordingHandle();
+      const dispatch = vi.fn(async (msg: UserMessage, opts?: SendOptions) => {
+        expect(JSON.stringify(msg.content)).toContain('Generated image description: send it');
+        expect(appendAutoReviewUserIntent('Send the old report to Alex.', msg.content, opts)).toBe(text);
+        // Preserving attachment evidence does not mint Main-origin authority.
+        expect(opts?.[MAIN_OWNED_SEND_CONTEXT]).toBeUndefined();
+      });
+      handle[method] = dispatch;
+      handle.isTurnRunning = () => method === 'steer';
+      const session = new Session({
+        id: `approval-${method}`, agentKind: 'claude-code', workDir: path.join('workspace', 'repo'),
+        handle, capabilities: { sameTurnSteer: { supported: true } } as never,
+        logger: createLogger() as never,
+        visionBridge: async () => ({ applied: true, message: {
+          type: 'user', content: [{ type: 'text', text: 'Generated image description: send it' }],
+        } }),
+      });
+      await session[method]({ type: 'user', content: [
+        { type: 'text', text },
+        { type: 'image', path: '/tmp/new.png', managedUrl: `cindy-media://blobs/${'a'.repeat(64)}.png` },
+      ] });
+      expect(dispatch).toHaveBeenCalledOnce();
+      await session.close();
+    }
+  });
+
   it('replaces the message with the bridged message when applied', async () => {
     const { handle, sent } = makeRecordingHandle();
     const hook: VisionBridgeHook = async (msg, ctx) => {

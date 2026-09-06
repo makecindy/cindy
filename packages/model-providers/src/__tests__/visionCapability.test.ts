@@ -47,6 +47,33 @@ describe('classifyVisionCapability', () => {
     expect(classifyVisionCapability('glm-5.2[1m]')).toBe('no-vision');
   });
 
+  /**
+   * 回归（2026-09-04）：家族级 no-vision 前缀曾把同家族的**视觉变体**一并判成不能看图 ——
+   * `deepseek-` / `glm-5.2` 是家族前缀，而 `deepseek-vl2`、`deepseek-v4-flash-vision-exp`、
+   * `glm-5.2-vision` 都以它们开头。当时四个型号全部误判，后果不只是设置页标错：
+   * isKnownNoVisionModel 是视觉桥「未自定义时默认勾选」的依据，误判会让本可直接吃图的
+   * 模型被迫走桥，图片降级成文字描述。
+   */
+  it('lets an explicit vision marker override the family-level no-vision verdict', () => {
+    expect(classifyVisionCapability('deepseek/deepseek-vl2')).toBe('vision');
+    expect(classifyVisionCapability('deepseek/deepseek-v4-flash-vision-exp')).toBe('vision');
+    expect(classifyVisionCapability('deepseek-v4-flash-vision-exp')).toBe('vision');
+    expect(classifyVisionCapability('z-ai/glm-5.2-vision')).toBe('vision');
+    // 同家族的非视觉型号不受影响 —— 标记必须真的出现在 id 里。
+    expect(classifyVisionCapability('deepseek/deepseek-v4-flash')).toBe('no-vision');
+    expect(classifyVisionCapability('z-ai/glm-5.2')).toBe('no-vision');
+    // [1m] 后缀先被 normalize 剥掉,不影响标记匹配。
+    expect(classifyVisionCapability('deepseek/deepseek-vl2[1m]')).toBe('vision');
+  });
+
+  it('does not treat vision / vl inside a longer word as a marker', () => {
+    // 段边界约束:标记必须自成一段(前后是 ^ / - / / 或 . / 结尾),
+    // 否则「名字里恰好含这两个字母」的纯文本模型会被误判成多模态。
+    expect(classifyVisionCapability('deepseek/deepseek-vllm-runtime')).toBe('no-vision');
+    expect(classifyVisionCapability('foo/invision-model')).toBe('unknown');
+    expect(classifyVisionCapability('foo/bar-vlad')).toBe('unknown');
+  });
+
   it('classifies unknown models as unknown', () => {
     expect(classifyVisionCapability('foo/bar-model')).toBe('unknown');
     expect(classifyVisionCapability('qwen/qwen3.7-max')).toBe('unknown');

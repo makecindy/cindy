@@ -7,7 +7,7 @@
  * 路径」(见 cindy-bridge-source.ts READONLY_BUILTINS + touchesCredentialPath),
  * `bypassPermissions` 全放行 —— 能到这里的是 bash / powershell / edit / write / 桥接 MCP 工具 /
  * 凭证路径的只读调用 / 未来新增内置工具。只读分支扫全部字符串入参判凭证,与 bridge
- * 同判定:bridge 升级上来的凭证读在 auto 档必须落弹窗,不能被 path 字段缺失反向放行。
+ * 同判定:bridge 升级上来的凭证读在 auto 档必须送审,不能被 path 字段缺失静态放行。
  *
  * 第一方 durable `subagent` spawn 没有直接副作用,显式归为 session-state；子层具体工具调用
  * 仍经 runner 回到父审批面。MCP 工具(`mcp__*`)一律走 `other`,由当前会话模型结合完整工具名 /
@@ -32,7 +32,7 @@ export interface PiAutoReviewContext {
   input: Record<string, unknown>;
   /**
    * Bridge-followed real paths that matched the credential policy. `null` means
-   * the bridge evidence was present but malformed and must fail closed.
+   * canonical evidence is unavailable or malformed; the reviewer must see that uncertainty.
    */
   resolvedCredentialPaths?: readonly string[] | null;
   /** 会话工作区根:cwd,绝对路径(pi 无 extraDirs)。 */
@@ -99,24 +99,20 @@ function findCredentialLeaf(input: unknown, depth = 0): string | undefined {
 }
 
 function canonicalCredentialEvidenceAction(
-  resolvedCredentialPaths: readonly string[] | null | undefined,
+  ctx: PiAutoReviewContext,
 ): ReviewableAction | undefined {
-  if (resolvedCredentialPaths === null) {
-    return {
-      kind: 'other',
-      description: 'Pi credential-read evidence was malformed.',
-      requireConsent: true,
-    };
-  }
-  const resolvedCredentialHit = findCredentialLeaf(resolvedCredentialPaths);
-  if ((resolvedCredentialPaths?.length ?? 0) > 0 && !resolvedCredentialHit) {
-    return {
-      kind: 'other',
-      description: 'Pi credential-read evidence did not match the Host policy.',
-      requireConsent: true,
-    };
-  }
-  return resolvedCredentialHit ? { kind: 'read', path: resolvedCredentialHit } : undefined;
+  const { toolName, input, resolvedCredentialPaths } = ctx;
+  if (resolvedCredentialPaths !== null && !resolvedCredentialPaths?.length) return undefined;
+  // Canonical paths supplement the operation; they must not replace a shell
+  // command (which may do more than read) or hide an unverifiable request.
+  return {
+    kind: 'other',
+    description: JSON.stringify({ toolName, input, resolvedCredentialPaths,
+      credentialEvidenceStatus: resolvedCredentialPaths === null ? 'unverifiable'
+        : findCredentialLeaf(resolvedCredentialPaths) ? 'credential-paths' : 'host-policy-mismatch',
+    }),
+    requireConsent: true,
+  };
 }
 
 /**
@@ -136,7 +132,7 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
     // Bridge follows symlinks in its process, so Host must include those canonical
     // targets in the same credential decision. A malformed or policy-inconsistent
     // evidence payload cannot fall back to the innocent-looking link path.
-    const evidenceAction = canonicalCredentialEvidenceAction(ctx.resolvedCredentialPaths);
+    const evidenceAction = canonicalCredentialEvidenceAction(ctx);
     if (evidenceAction) return evidenceAction;
     // 凭证特征可能落在任意字符串入参(grep 的 pattern、find 的表达式等),与 bridge
     // 的 touchesCredentialPath 同口径递归扫全字段。
@@ -147,7 +143,7 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
     return { kind: 'file-write', path: stringField(input, 'path') };
   }
   if (SHELL_TOOLS.has(toolName)) {
-    const evidenceAction = canonicalCredentialEvidenceAction(ctx.resolvedCredentialPaths);
+    const evidenceAction = canonicalCredentialEvidenceAction(ctx);
     if (evidenceAction) return evidenceAction;
     return { kind: 'exec', command: stringField(input, 'command') ?? '' };
   }

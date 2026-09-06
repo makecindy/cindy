@@ -49,6 +49,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { BillingSettingsSection } from '@/features/billing/BillingPage';
+import { BotsGlobalSettingsSection } from '@/features/bots/BotsGlobalSettingsSection';
 import { canAccessBillingSettings } from './billingVisibility';
 import { canAccessUsageSettings } from './usageVisibility';
 import { UsageHistorySection } from './usage/UsageHistorySection';
@@ -120,7 +121,6 @@ export function SettingsView() {
     activeTab === 'im-bot'
       ? (activeImBotGroup ?? (searchParams.get('tab') === 'feishu-bot' ? 'personal' : null))
       : null;
-
   // 切分区后外层滚动容器回顶:滚动偏移是容器的、不随内层 key 重挂归零,
   // 长页滚到底再切短页会停在中段(review 反馈)。瞬时回顶,不做平滑。
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
@@ -260,7 +260,10 @@ export function SettingsView() {
           ref={contentScrollRef}
           className={cn(
             'flex h-full min-h-0 min-w-0 flex-1 flex-col pl-4 pr-6 [scrollbar-gutter:stable]',
-            activeTab === 'import' || activeTab === 'ghosts'
+            // providers 与 import / ghosts 同属「内部自己滚」:模型列表要贴着窗口底,
+            // 外层再滚一层会让卡片高度只能靠猜(原先卡片写 calc(100vh-14rem),
+            // 扣除量与真实 chrome 不符时下方就空出一条 —— 正是 pb-32 那 128px)。
+            activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
               ? 'overflow-hidden'
               : 'overflow-y-auto',
           )}
@@ -271,7 +274,9 @@ export function SettingsView() {
             key={`${activeTab}:${piExtensionsPanelOpen ? 'pi-extensions' : 'root'}`}
             className={cn(
               'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
-              activeTab === 'import' || activeTab === 'ghosts' ? 'h-full min-h-0' : 'pb-32',
+              activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
+                ? 'h-full min-h-0'
+                : 'pb-32',
               activeTab === 'ghosts' && 'max-w-none px-0',
             )}
           >
@@ -342,6 +347,17 @@ export function SettingsView() {
                     >
                       <NotificationSection />
                     </section>
+
+                    {/* Section — 伙伴（功能级设置：怎么提醒你 + 带走/接回一个伙伴）。
+                        单个伙伴的性格、记忆、能力与日程仍在 TA 自己的设置页里。 */}
+                    <section
+                      id="settings-bots"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.bots')}
+                    >
+                      <BotsGlobalSettingsSection />
+                    </section>
+
 
                     {/* Section — App Behavior(「应用行为」)
                         「保持电脑唤醒」跨平台生效,故 section 常驻;其中
@@ -509,8 +525,12 @@ export function SettingsView() {
                 role="tabpanel"
                 id="settings-panel-providers"
                 aria-labelledby="settings-tab-providers"
+                className="h-full min-h-0"
               >
-                <section className="pb-[18px]" aria-label={t('settings.sections.providers')}>
+                <section
+                  className="flex h-full min-h-0 flex-col pb-[18px]"
+                  aria-label={t('settings.sections.providers')}
+                >
                   <ProvidersSection />
                 </section>
               </div>

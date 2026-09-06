@@ -8,7 +8,7 @@
  *     Claude Code / Codex CLI 时置一条建议行,点击直达该渠道的授权步。
  *   - 右栏:选中供应商的详情 = 鉴权头部(复用既有各 Row 的连接/断开/授权逻辑,
  *     **不发明新的连接 IPC**)+ 统一模型可见性列表(UnifiedModelList:并集 +
- *     单开关同写双 agent,「分别调整」兜底,见该组件头注释)。
+ *     单开关选推荐引擎，高级设置逐引擎调整,见该组件头注释)。
  *
  * 鉴权通道(与重构前一致):
  *   - Anthropic: maker.claudeOAuth*;OpenAI: useCodexAuth();xAI: maker.xaiOAuth*。
@@ -41,7 +41,8 @@ import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/cod
 import { useApiKey } from '@/hooks/useApiKey';
 import { extractIpcError } from '@/utils/ipcError';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
-import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
+import { useModelAccessCreditUsageResult } from '@/hooks/useModelAccessCreditUsage';
+import { useClaudeAccountUsageResult } from '@/hooks/useClaudeAccountUsage';
 import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { Button } from '@/components/ui/button';
@@ -78,6 +79,13 @@ import {
   requestXaiSubscriptionRefresh,
   useXaiSubscriptionUsage,
 } from '@/hooks/useXaiSubscriptionUsage';
+// 订阅余量:三家各有一个既有 hook,呈现收敛到本文件的 SubscriptionUsageModule。
+import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
+import {
+  formatClaudeSubscriptionPlanLabel,
+  formatCodexPlanLabel,
+} from '@/lib/subscriptionPlanLabel';
 import {
   formatXaiProductLabel,
   isXaiWeeklyUsageCurrent,
@@ -526,6 +534,7 @@ function AnthropicHeader({
       })}
       trailing={trailing}
       provider={provider}
+      assetModule={<ClaudeAssetModule connected={connected} />}
     />
   );
 }
@@ -668,6 +677,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
           </div>
         ) : undefined
       }
+      assetModule={<CodexAssetModule connected={connected} />}
     />
   );
 }
@@ -776,10 +786,11 @@ function ImageApiKeyRow({
 }
 
 // ---------------------------------------------------------------------------
-// xAI —— OAuth(SuperGrok 订阅),复用 maker.xaiOAuth*。
+// 订阅用量模块(xAI / Anthropic / OpenAI 共用形制)
 // ---------------------------------------------------------------------------
 
-function formatXaiResetLabel(resetsAt: number | null | undefined, locale: string): string | null {
+/** epoch 秒 → 本地「月/日 时:分」。三家的 reset 时间都是 epoch 秒,共用一份。 */
+function formatResetLabel(resetsAt: number | null | undefined, locale: string): string | null {
   if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
   try {
     return new Date(resetsAt * 1000).toLocaleString(locale, {
@@ -792,6 +803,191 @@ function formatXaiResetLabel(resetsAt: number | null | undefined, locale: string
     return null;
   }
 }
+
+/**
+ * 订阅余量的统一呈现:套餐名 → 一个大数字 → 一到两行补充 → 右侧文字链接。
+ *
+ * 刻意做成**一块留白而不是卡片**:这里已经在 DetailHeader 的 assetModule 槽位里,
+ * 外面有一条 1px 发丝线分隔,再套边框就是框中框(DESIGN §2 layer rule)。
+ * 也刻意**不画进度条** —— 它会把「42% 已使用」这一个事实重复说两遍,而百分比本身
+ * 已经是最紧凑的表达;进度条只在需要比较多个池子时才有额外信息量。
+ *
+ * 三家的数据语义完全不同(xAI 信用点周窗口 / Anthropic 5h + 7d 双窗口 /
+ * ChatGPT primary + secondary 限额),但**用户要看的东西是同一个**:还剩多少、什么时候
+ * 恢复。所以收敛成同一个形状,各家只负责把自己的快照映射成这三样。
+ */
+function SubscriptionUsageModule({
+  planLabel,
+  primary,
+  notes,
+  link,
+}: {
+  planLabel: string;
+  /** 最该看的那个值,如「42% 已使用」。拿不到就整块不渲染,不画占位。 */
+  primary: string;
+  /** 一到两行小灰补充:重置时刻、次级窗口、分模型占比等。 */
+  notes: string[];
+  link?: { label: string; onClick: () => void };
+}) {
+  return (
+    <div
+      data-testid="provider-usage-module"
+      className="flex flex-wrap justify-between gap-x-6 gap-y-4 border-t px-5 py-5"
+      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+    >
+      <div className="min-w-0">
+        <p className="text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
+          {planLabel}
+        </p>
+        <p
+          className="mt-1.5 text-20 font-medium leading-[1.3] tracking-[-0.02em] tabular-nums"
+          style={{ color: 'var(--text-primary)' }}
+        >
+          {primary}
+        </p>
+        {notes.map((note) => (
+          <p
+            key={note}
+            className="mt-1 text-12 leading-tight tabular-nums"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            {note}
+          </p>
+        ))}
+      </div>
+      {link && (
+        <div className="flex shrink-0 items-center pt-3.5">
+          <button
+            type="button"
+            onClick={link.onClick}
+            className="text-13 transition-colors hover:text-[var(--text-primary)]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            {link.label}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Anthropic 订阅余量。数据来自既有 `useClaudeSubscriptionUsage`(5h 滚动窗口 + 总周限 +
+ * 分模型周窗口),此前只有状态栏 chip 消费它 —— 供应商详情页一直是空的。
+ *
+ * 主指标取 5h 窗口:它是最容易被撞到、也最容易恢复的那个,用户来这一页多半是想知道
+ * 「现在还能不能用」。周限与分模型占比作为补充行。
+ */
+function ClaudeAssetModule({ connected }: { connected: boolean }) {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const usage = useClaudeSubscriptionUsage(connected);
+  if (!connected || !usage) return null;
+
+  const fiveHour = usage.fiveHour;
+  const fiveHourPct =
+    fiveHour && Number.isFinite(fiveHour.utilization) ? Math.round(fiveHour.utilization) : null;
+  const sevenDayPct =
+    usage.sevenDay && Number.isFinite(usage.sevenDay.utilization)
+      ? Math.round(usage.sevenDay.utilization)
+      : null;
+  // 两个窗口都没有数据就整块不渲染 —— 只有套餐名的一块留白没有信息量。
+  if (fiveHourPct === null && sevenDayPct === null) return null;
+
+  const notes: string[] = [];
+  const resetLabel = formatResetLabel(fiveHour?.resetsAt, locale);
+  const resetPart = resetLabel ? t('settings.providers.usage.resetsAt', { at: resetLabel }) : null;
+  const weeklyPart =
+    sevenDayPct !== null
+      ? t('settings.providers.usage.claudeWeekly', { percent: sevenDayPct })
+      : null;
+  const firstLine = [resetPart, weeklyPart].filter(Boolean).join(' · ');
+  if (firstLine) notes.push(firstLine);
+  const scoped = (usage.scoped ?? [])
+    .filter((window) => Number.isFinite(window.utilization))
+    .map((window) =>
+      t('settings.providers.usage.scopedModel', {
+        model: window.modelDisplayName,
+        percent: Math.round(window.utilization),
+      }),
+    );
+  if (scoped.length > 0) notes.push(scoped.join(' · '));
+
+  return (
+    <SubscriptionUsageModule
+      planLabel={
+        formatClaudeSubscriptionPlanLabel(usage.subscriptionType)
+          ? `Claude ${formatClaudeSubscriptionPlanLabel(usage.subscriptionType)}`
+          : t('settings.providers.usage.claudePlanFallback')
+      }
+      primary={t('settings.providers.usage.percentUsed', {
+        percent: fiveHourPct ?? sevenDayPct ?? 0,
+      })}
+      notes={notes}
+      link={{
+        label: t('settings.providers.usage.openClaudeUsage'),
+        onClick: () => void window.electronAPI.openExternal('https://claude.ai/settings/usage'),
+      }}
+    />
+  );
+}
+
+/**
+ * ChatGPT / Codex 订阅余量。数据来自既有 `useCodexRateLimits`(app-server 上报的
+ * primary / secondary 限额窗口 + 限额重置券),此前只有状态栏 chip 与移动端消费。
+ *
+ * 主指标取 primary 窗口(通常是短窗口),secondary 与重置券数量作为补充行。
+ */
+function CodexAssetModule({ connected }: { connected: boolean }) {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const { snapshot } = useCodexRateLimits(connected);
+  if (!connected || !snapshot) return null;
+
+  const primaryWindow = snapshot.rateLimits.primary;
+  const primaryPct =
+    primaryWindow && Number.isFinite(primaryWindow.usedPercent)
+      ? Math.round(primaryWindow.usedPercent)
+      : null;
+  if (primaryPct === null) return null;
+
+  const notes: string[] = [];
+  const resetLabel = formatResetLabel(primaryWindow?.resetsAt, locale);
+  const secondary = snapshot.rateLimits.secondary;
+  const secondaryPct =
+    secondary && Number.isFinite(secondary.usedPercent) ? Math.round(secondary.usedPercent) : null;
+  const firstLine = [
+    resetLabel ? t('settings.providers.usage.resetsAt', { at: resetLabel }) : null,
+    secondaryPct !== null
+      ? t('settings.providers.usage.codexSecondary', { percent: secondaryPct })
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  if (firstLine) notes.push(firstLine);
+  const credits = snapshot.rateLimitResetCredits?.availableCount ?? 0;
+  if (credits > 0) {
+    notes.push(t('settings.providers.usage.codexResetCredits', { count: credits }));
+  }
+
+  return (
+    <SubscriptionUsageModule
+      planLabel={
+        formatCodexPlanLabel(snapshot.account.planType ?? snapshot.rateLimits.planType)
+          ? `ChatGPT ${formatCodexPlanLabel(
+              snapshot.account.planType ?? snapshot.rateLimits.planType,
+            )}`
+          : t('settings.providers.usage.codexPlanFallback')
+      }
+      primary={t('settings.providers.usage.percentUsed', { percent: primaryPct })}
+      notes={notes}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// xAI —— OAuth(SuperGrok 订阅),复用 maker.xaiOAuth*。
+// ---------------------------------------------------------------------------
 
 function XaiAssetModule({ connected }: { connected: boolean }) {
   const { t, i18n } = useTranslation();
@@ -809,57 +1005,31 @@ function XaiAssetModule({ connected }: { connected: boolean }) {
   }, [connected, usage, nowMs]);
   if (!connected || !usage) return null;
   const hasWeekly = isXaiWeeklyUsageCurrent(usage, nowMs);
-  if (!usage.planLabel && !hasWeekly) return null;
-  const resetLabel = formatXaiResetLabel(usage.resetsAt, i18n.resolvedLanguage ?? i18n.language);
+  // 没有周窗口数据时整块不渲染:只有一个套餐名的留白没有信息量(改用共用组件前
+  // 这里会渲染成一个孤零零的套餐名)。
+  if (!hasWeekly) return null;
+  const resetLabel = formatResetLabel(usage.resetsAt, i18n.resolvedLanguage ?? i18n.language);
+  const notes = [
+    ...(resetLabel ? [t('settings.providers.xai.asset.resetsAt', { at: resetLabel })] : []),
+    ...(usage.productUsage ?? []).map((product) =>
+      t('settings.providers.xai.asset.productLine', {
+        product: formatXaiProductLabel(product.product),
+        percent: Math.round(product.usagePercent),
+      }),
+    ),
+  ];
   return (
-    <div
-      className="flex flex-wrap justify-between gap-x-6 gap-y-4 border-t px-5 py-5"
-      style={{ borderColor: 'var(--settings-theme-card-border)' }}
-    >
-      <div className="min-w-0">
-        <p className="text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
-          {usage.planLabel ?? t('settings.providers.xai.asset.weeklyTitle')}
-        </p>
-        {hasWeekly && (
-          <p
-            className="mt-1.5 text-20 font-medium leading-[1.3] tracking-[-0.02em] tabular-nums"
-            style={{ color: 'var(--text-primary)' }}
-          >
-            {t('settings.providers.xai.asset.weeklyUsed', {
-              percent: Math.round(usage.creditUsagePercent ?? 0),
-            })}
-          </p>
-        )}
-        {hasWeekly && resetLabel && (
-          <p className="mt-1 text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
-            {t('settings.providers.xai.asset.resetsAt', { at: resetLabel })}
-          </p>
-        )}
-        {hasWeekly &&
-          (usage.productUsage ?? []).map((product) => (
-            <p
-              key={product.product}
-              className="mt-1 text-12 leading-tight tabular-nums"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              {t('settings.providers.xai.asset.productLine', {
-                product: formatXaiProductLabel(product.product),
-                percent: Math.round(product.usagePercent),
-              })}
-            </p>
-          ))}
-      </div>
-      <div className="flex shrink-0 items-center pt-3.5">
-        <button
-          type="button"
-          onClick={() => void window.electronAPI.openExternal('https://grok.com')}
-          className="text-13 transition-colors hover:text-[var(--text-primary)]"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          {t('settings.providers.xai.asset.openUsage')}
-        </button>
-      </div>
-    </div>
+    <SubscriptionUsageModule
+      planLabel={usage.planLabel ?? t('settings.providers.xai.asset.weeklyTitle')}
+      primary={t('settings.providers.xai.asset.weeklyUsed', {
+        percent: Math.round(usage.creditUsagePercent ?? 0),
+      })}
+      notes={notes}
+      link={{
+        label: t('settings.providers.xai.asset.openUsage'),
+        onClick: () => void window.electronAPI.openExternal('https://grok.com'),
+      }}
+    />
   );
 }
 
@@ -1228,13 +1398,21 @@ function XdGatewayHeader({
   // 余额取三池账本的 available —— 与计费页余额卡、状态栏用量 chip 同一口径同一币种
   // (见 TodaySpendChip 的「同一笔钱、必须同口径」注释)。该 hook 的防闪烁缓存按
   // accountId 绑定,切号当帧失效,不会把上一个账号的余额显示给新账号。
-  const creditUsage = useModelAccessCreditUsage(billingAccessible);
+  const credit = useModelAccessCreditUsageResult(billingAccessible);
+  const quotaAccessible =
+    (connected || hasSavedKey) &&
+    (mode === 'local' || (mode === 'cloud' && user?.membershipKind === 'org'));
+  const quota = useClaudeAccountUsageResult(quotaAccessible);
   const assetState = resolveXdAssetModuleState({
     billingAccessible,
     syncState: syncStatus.state,
-    available: creditUsage?.available ?? null,
+    available: credit.usage?.available ?? null,
+    quotaAccessible,
+    quota: quota.usage,
+    loading: billingAccessible ? credit.loading : quota.loading,
   });
   const primaryAction = useXdAssetPrimaryAction(assetState.kind === 'balance');
+  const refreshAccount = billingAccessible ? credit.refresh : quota.refresh;
 
   // 凭据一律由服务端自动下发(个人 / 已接入企业),**无手填入口**(2026-07-17 定案)。
   const serverManaged = syncStatus.state === 'ok' && syncStatus.source === 'server';
@@ -1385,7 +1563,10 @@ function XdGatewayHeader({
     assetState.kind === 'hidden' ? undefined : (
       <div
         data-testid="cindy-ai-asset-module"
-        className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 border-t px-5 py-4"
+        className={cn(
+          'flex flex-wrap items-center justify-between gap-x-6 gap-y-4 border-t px-5 py-4',
+          billingAccessible ? 'min-h-[88px]' : 'min-h-[112px]',
+        )}
         style={{ borderColor: 'var(--settings-theme-card-border)' }}
       >
         {assetState.kind === 'fault' ? (
@@ -1398,6 +1579,63 @@ function XdGatewayHeader({
               {t('settings.providers.xd.asset.syncFailed')}
             </p>
             <PillButton label={t('settings.providers.xd.sync.retry')} onClick={handleRetry} />
+          </>
+        ) : assetState.kind === 'loading' || assetState.kind === 'unavailable' ? (
+          <>
+            <div>
+              <p className="text-12 text-[var(--text-secondary)]">
+                {t(
+                  assetState.scope === 'quota'
+                    ? 'settings.providers.xd.asset.quotaTitle'
+                    : 'billing.balance.title',
+                )}
+              </p>
+              <p className="mt-1 text-13 text-[var(--text-tertiary)]" role="status">
+                {t(
+                  assetState.kind === 'loading'
+                    ? 'settings.providers.xd.asset.loading'
+                    : 'settings.providers.xd.asset.unavailable',
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={assetState.kind === 'loading'}
+              onClick={refreshAccount}
+              className="rounded-full px-3 py-1.5 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+            >
+              {t('settings.providers.xd.asset.refresh')}
+            </button>
+          </>
+        ) : assetState.kind === 'quota' ? (
+          <>
+            <div>
+              <p className="text-12 text-[var(--text-secondary)]">
+                {t('settings.providers.xd.asset.quotaTitle')}
+              </p>
+              <p className="mt-1.5 text-20 font-medium tabular-nums text-[var(--text-primary)]">
+                {formatBillingAmount(
+                  String(Math.max(0, assetState.quota.maxBudget - assetState.quota.spend)),
+                  assetState.quota.currency,
+                  i18n.resolvedLanguage ?? i18n.language,
+                )}
+              </p>
+              <p className="mt-1 text-11 text-[var(--text-tertiary)]">
+                {t('settings.providers.xd.asset.quotaUsed', {
+                  used: formatBillingAmount(
+                    String(assetState.quota.spend),
+                    assetState.quota.currency,
+                    i18n.resolvedLanguage ?? i18n.language,
+                  ),
+                  total: formatBillingAmount(
+                    String(assetState.quota.maxBudget),
+                    assetState.quota.currency,
+                    i18n.resolvedLanguage ?? i18n.language,
+                  ),
+                })}
+              </p>
+            </div>
+            <PillButton label={t('settings.providers.xd.asset.refresh')} onClick={refreshAccount} />
           </>
         ) : (
           <>
@@ -1419,6 +1657,10 @@ function XdGatewayHeader({
             </div>
             {/* 一屏一颗 Black Pill。查看用量始终是次动作；右侧按套餐状态切换。 */}
             <div className="flex shrink-0 items-center gap-3">
+              <PillButton
+                label={t('settings.providers.xd.asset.refresh')}
+                onClick={refreshAccount}
+              />
               <PillButton
                 label={t('settings.providers.xd.asset.viewUsage')}
                 onClick={() => goToBilling()}
@@ -1459,10 +1701,7 @@ function XdGatewayHeader({
           </span>
         ) : undefined
       }
-      subtitle={providerSubtitleForDisplay(provider, t('settings.providers.xd.modelLabel'), {
-        suffix: t('settings.providers.xd.billingLabel'),
-        fallback: t('settings.providers.xd.subtitle'),
-      })}
+      subtitle={t('settings.providers.xd.simpleSubtitle')}
       trailing={trailing}
       provider={provider}
       menuItems={menuItems}
@@ -2194,11 +2433,15 @@ export function ProvidersSection() {
 
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
   const effectiveSelected = useMemo(() => {
-    if (selectedId && listProviders.some((p) => p.id === selectedId)) {
-      return listProviders.find((p) => p.id === selectedId) ?? null;
-    }
-    return listProviders[0] ?? null;
-  }, [selectedId, listProviders]);
+    const selected = listProviders.find((p) => p.id === selectedId) ?? listProviders[0] ?? null;
+    // Match the connection header immediately, including auth invalidation before catalog refresh.
+    return selected?.id === 'openai'
+      ? {
+          ...selected,
+          connected: isChatGptConnectionConnected(codexAuth.state, selected.connected),
+        }
+      : selected;
+  }, [selectedId, listProviders, codexAuth.state]);
 
   const handleDelete = useCallback(
     async (p: ProviderView) => {
@@ -2371,8 +2614,8 @@ export function ProvidersSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
+    <div className="flex h-full min-h-0 flex-col gap-[14px]">
+      <div className="flex shrink-0 flex-col gap-1">
         <h2
           className="text-16 font-medium leading-[1.2]"
           style={{ color: 'var(--settings-section-title)' }}
@@ -2385,12 +2628,14 @@ export function ProvidersSection() {
       </div>
 
       {/* 先取数据再渲染卡片(规则 7:首帧即终态高度,不出现连接态翻转的跳变帧)。
-          高度跟随视口(减去标题栏 + 设置页 chrome + section 标题的约 14rem),窗口越大
-          卡片越高、能显示越多模型;min-h 保底小窗口不塌陷。左右栏各自内部滚动。
-          原来写死 560px 会在大窗口下截断模型列表(不随框体撑高)。 */}
+          高度**吃掉父容器的剩余空间**,不按视口算:写死 560px 会在大窗口下截断列表,
+          而 calc(100vh-14rem) 是在猜「标题栏 + 设置页 chrome + section 标题」有多高 ——
+          猜多了下方空一条(叠上外层 pb-32 就是那 128px),猜少了则溢出。设置页右栏本身
+          已是 h-full min-h-0 的 flex 列(providers 与 import / ghosts 同属内部滚动一档),
+          所以这里 flex-1 就是真实可用高度。min-h-0 允许小窗口收缩,左右栏各自内部滚动。 */}
       {!loading && (
         <div
-          className="flex h-[calc(100vh-14rem)] min-h-[460px] overflow-hidden rounded-xl border"
+          className="flex min-h-0 flex-1 overflow-hidden rounded-xl border"
           style={{
             backgroundColor: 'var(--settings-theme-card-bg)',
             borderColor: 'var(--settings-theme-card-border)',

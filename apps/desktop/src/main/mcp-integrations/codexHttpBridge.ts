@@ -28,7 +28,7 @@ import {
   createCodexMcpThreadContextStore,
   isSameCodexMcpSessionContext,
 } from './codexMcpThreadContextStore.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
+import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
 
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
@@ -787,8 +787,7 @@ function findBlockedToolCall(
     toolCallContexts.push(context);
   }
   for (const context of toolCallContexts) {
-    const raw = context?.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
-    if (Array.isArray(raw) && raw.some((id) => id === pluginId)) {
+    if (!isFrozenBuiltinPluginAllowed(context?.vendorOptions, pluginId)) {
       return { reason: 'disabled', context };
     }
   }

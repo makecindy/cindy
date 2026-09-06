@@ -228,7 +228,7 @@ describe('parseModelsListResponse contextWindow 提取(#386)', () => {
 });
 
 describe('provider-service 连接态', () => {
-  it('oauth 形态 user 供应商连接态 = genericOAuthConnected；apiKey 形态恒 true', async () => {
+  it('OAuth 与 API key 供应商分别使用真实凭证状态', async () => {
     const catalog = {
       version: 't',
       providers: [
@@ -240,6 +240,7 @@ describe('provider-service 连接态', () => {
       getCatalog: () => catalog,
       connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
       genericOAuthConnected: (id) => id === 'acme-sub',
+      customApiKeyConnected: (provider) => provider.id === 'plain',
     });
     const views = await svc.listProviders();
     expect(views.find((v) => v.id === 'acme-sub')?.connected).toBe(true);
@@ -252,5 +253,6 @@ describe('provider-service 连接态', () => {
     });
     const views2 = await svcLoggedOut.listProviders();
     expect(views2.find((v) => v.id === 'acme-sub')?.connected).toBe(false);
+    expect(views2.find((v) => v.id === 'plain')?.connected).toBe(false);
   });
 });

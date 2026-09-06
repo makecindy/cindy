@@ -2354,6 +2354,8 @@ describe("Pi provider-aware model routing", () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
       getRemotePiTransport: async () => ({
         writeLine: async () => {},
@@ -3378,6 +3380,24 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("keeps medium executable when the native model only declares sparse extended mappings", async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: "native-a", name: "Native A", baseUrl: "http://a.test", api: "openai-responses",
+        models: [{ id: "local-model", reasoning: true,
+          thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+        }],
+      }], env: {},
+    })));
+    const handle = await agent.startSession({
+      sessionId: "sparse-native-effort", workingDir: cwd,
+      model: "local-model", providerId: "native-a", effort: "medium",
+    });
+    await handle.setEffort!("medium");
+    expect(captured.requests).toContainEqual({ type: "set_thinking_level", level: "medium" });
+    await handle.close();
+  });
+
   it("freezes active BYOM effort selection to the startup models.json snapshot", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({
@@ -3760,6 +3780,8 @@ describe("Pi provider-aware model routing", () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
     });
 
@@ -4920,6 +4942,8 @@ describe("Pi provider-aware model routing", () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
     };
     const agent = new PiAgent(deps);
@@ -5013,6 +5037,8 @@ describe("Pi provider-aware model routing", () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
     });
     const handle = await agent.startSession({
@@ -5134,6 +5160,8 @@ describe("Pi provider-aware model routing", () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
       getRemotePiTransport: async (_hostId, opts) => {
         transportOptions = opts;
@@ -5357,6 +5385,8 @@ describe("Pi provider-aware model routing", () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
       getRemotePiTransport: async (_hostId, opts) => {
         transportOptions = opts;
@@ -5417,6 +5447,8 @@ describe("Pi provider-aware model routing", () => {
       stat: async () => ({ isFile: true }),
       rm: async () => {},
       listDir: async () => [],
+      readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+      sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
     };
     const startRemote = async (permissionMode: "ask" | "bypassPermissions") => {
       const base = byomDeps(async () => ({ providers: [], env: {} }));
@@ -5498,6 +5530,8 @@ describe("Pi provider-aware model routing", () => {
           stat: async () => ({ isFile: true }),
           rm: async () => {},
           listDir: async () => [],
+          readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+          sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
         }),
       });
       const handle = await agent.startSession({
@@ -5556,6 +5590,8 @@ describe("Pi provider-aware model routing", () => {
           stat: async () => ({ isFile: true }),
           rm: async () => {},
           listDir: async () => [],
+          readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+          sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
         }),
       });
       const handle = await agent.startSession({
@@ -5618,6 +5654,8 @@ describe("Pi provider-aware model routing", () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
     });
     const handle = await agent.startSession({
@@ -5681,6 +5719,8 @@ describe("Pi provider-aware model routing", () => {
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
       }),
     });
     const handle = await agent.startSession({

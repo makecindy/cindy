@@ -763,6 +763,10 @@ const fanOutIOSSimulatorRouteStatus = createIpcFanOut(IOS_SIMULATOR_ROUTE_STATUS
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
 );
+const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
+const fanOutBotDirectMessageChanged = createIpcFanOut('maker:bot-direct-message:changed');
+const fanOutBotProfileChanged = createIpcFanOut('maker:bot-profile:changed');
+const fanOutBotLifecycleChanged = createIpcFanOut('maker:bot-lifecycle:changed');
 const fanOutMakerPiPackagesChanged = createIpcFanOut('maker:pi-packages:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
 const fanOutMakerUsageTodayTokens = createIpcFanOut('usage:today-tokens-changed'); // Codex token
@@ -1803,10 +1807,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener(XBOX_GAMEPAD_STATE_CHANGED_CHANNEL, listener);
     },
     onPreviewInput: (callback: (input: XboxGamepadPreviewInput) => void): (() => void) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        input: XboxGamepadPreviewInput,
-      ): void => callback(input);
+      const listener = (_event: Electron.IpcRendererEvent, input: XboxGamepadPreviewInput): void =>
+        callback(input);
       ipcRenderer.on(XBOX_GAMEPAD_PREVIEW_INPUT_CHANNEL, listener);
       return () => ipcRenderer.removeListener(XBOX_GAMEPAD_PREVIEW_INPUT_CHANNEL, listener);
     },
@@ -3176,11 +3178,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       visibleSlugs?: string[];
     }): Promise<{
       success: boolean;
-      result?: { slug: string; visibility: 'private' | 'shared' | 'public'; requestedVisibility?: 'public'; reviewStatus?: 'pending' };
+      result?: {
+        slug: string;
+        visibility: 'private' | 'shared' | 'public';
+        requestedVisibility?: 'public';
+        reviewStatus?: 'pending';
+      };
       error?: string;
       errorCode?: string;
-    }> =>
-      ipcRenderer.invoke('skillhub:set-published-visibility', params),
+    }> => ipcRenderer.invoke('skillhub:set-published-visibility', params),
 
     // 读取已发布 skill 的可见对象(共享团队 + 可见部门),编辑可见范围弹窗回显用
     getPublishedVisibility: (
@@ -3897,8 +3903,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       entries: { name: string; kind: 'dir' | 'symlink'; path: string }[];
       parent: string | null;
     }> => ipcRenderer.invoke('fs:list-dir', { path }),
-    statPath: (path: string): Promise<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }> =>
-      ipcRenderer.invoke('fs:stat-path', { path }),
+    statPath: (
+      path: string,
+    ): Promise<{
+      kind: 'dir' | 'file' | 'missing';
+      resolvedPath: string;
+      mtimeMs?: number;
+      birthtimeMs?: number;
+      sizeBytes?: number;
+    }> => ipcRenderer.invoke('fs:stat-path', { path }),
     mkdirP: (path: string): Promise<{ resolvedPath: string }> =>
       ipcRenderer.invoke('fs:mkdir-p', { path }),
   },
@@ -4374,8 +4387,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       hosts: unknown[];
       warningCount?: number;
       diagnostic?: { kind: 'io' | 'syntax' | 'limit' } | null;
-    }> =>
-      ipcRenderer.invoke('maker:remote-ssh:reload-config'),
+    }> => ipcRenderer.invoke('maker:remote-ssh:reload-config'),
     add: (host: {
       id: string;
       displayName?: string;
@@ -5043,9 +5055,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         input: import('../shared/localDbMaintenance').DbSlimmingScheduleInput,
       ): Promise<import('../shared/localDbMaintenance').DbSlimmingScheduleResult> =>
         ipcRenderer.invoke('local-db:maintenance:schedule', input),
-      getLastResult: (): Promise<
-        import('../shared/localDbMaintenance').DbSlimmingResult | null
-      > => ipcRenderer.invoke('local-db:maintenance:last-result'),
+      getLastResult: (): Promise<import('../shared/localDbMaintenance').DbSlimmingResult | null> =>
+        ipcRenderer.invoke('local-db:maintenance:last-result'),
       openLastBackupDirectory: (): Promise<{ opened: boolean }> =>
         ipcRenderer.invoke('local-db:maintenance:open-last-backup-directory'),
       getStartupProgress: (): Promise<
@@ -5098,6 +5109,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ackInterrupted: (id: string): Promise<void> =>
         ipcRenderer.invoke('local-db:sessions:ack-interrupted', id),
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
+    },
+    bots: {
+      getModelChainSettings: (): Promise<{
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+        isCustomized: boolean;
+      }> => ipcRenderer.invoke('local-db:bots:model-chain-settings-get'),
+      setModelChainSettings: (body: {
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+      }): Promise<{
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+        isCustomized: boolean;
+      }> => ipcRenderer.invoke('local-db:bots:model-chain-settings-set', body),
+      list: (body?: { lastReadAtByBotId?: Record<string, number> }): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:list', body),
+      get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
+      chooseAvatar: (body: { botId: string }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:choose-avatar', body),
+      searchHistory: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:search-history', body),
+      create: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:create', body),
+      update: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:update', body),
+      createCanonicalSession: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:create-canonical-session', body),
+      history: (botId: string): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:history', botId),
     },
     conversations: {
       search: (request: unknown): Promise<unknown> =>
@@ -5435,6 +5471,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onAgentsChanged: fanOutMakerAgentsChanged,
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-capabilities', agentKind),
+    listBotDelegations: (
+      parentSessionId: string,
+    ): Promise<import('../shared/botDelegation').BotDelegationListResult> =>
+      ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId),
+    cancelBotDelegation: (
+      parentSessionId: string,
+      delegationId: string,
+    ): Promise<import('../shared/botDelegation').BotDelegationCancelResult> =>
+      ipcRenderer.invoke('maker:bot-delegation:cancel', parentSessionId, delegationId),
+    onBotDelegationChanged: fanOutBotDelegationChanged,
+    getBotDirectMessageThread: (
+      threadId: string,
+      viewerBotId: string,
+    ): Promise<import('../shared/botDirectMessage').BotDirectMessageThreadResult> =>
+      ipcRenderer.invoke('maker:bot-direct-message-thread:get', threadId, viewerBotId),
+    onBotDirectMessageChanged: fanOutBotDirectMessageChanged,
+    onBotProfileChanged: fanOutBotProfileChanged,
+    runBotLifecycleAction: (
+      request: import('../shared/botLifecycle').BotLifecycleActionRequest,
+    ): Promise<import('../shared/botLifecycle').BotLifecycleActionResult> =>
+      ipcRenderer.invoke('maker:bot-lifecycle:action', request),
+    onBotLifecycleChanged: fanOutBotLifecycleChanged,
     listTurnChangeSets: (
       sessionId: string,
     ): Promise<import('../shared/turnChangeSet').TurnChangeSetSummary[]> =>
@@ -5747,6 +5805,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
       target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
     ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
       ipcRenderer.invoke('maker:model-price-override:reset', target),
+    /**
+     * 单模型上下文上限 override(设置 → 模型 → 高级设置)。窗口是自动压缩比例的分母,
+     * 调小它让压缩按用户设的长度提前触发。target 与价格 override 同形。
+     * set 传 null = 恢复默认(删 override);返回落盘后的有效值与是否自定义。
+     */
+    getModelContextLimit: (
+      target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+    ): Promise<import('../shared/modelContextLimit').ModelContextLimitView> =>
+      ipcRenderer.invoke('maker:model-context-limit:get', target),
+    setModelContextLimit: (
+      target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+      limit: number | null,
+      owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
+    ): Promise<import('../shared/modelContextLimit').ModelContextLimitView> =>
+      ipcRenderer.invoke('maker:model-context-limit:set', target, limit, owner),
+    resetModelContextLimit: (
+      target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+      owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
+    ): Promise<import('../shared/modelContextLimit').ModelContextLimitView> =>
+      ipcRenderer.invoke('maker:model-context-limit:reset', target, owner),
 
     // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session。
     openSessionInNewWindow: (sessionId: string, deviceId?: string | null): Promise<void> =>
@@ -5816,7 +5894,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
+      params: {
+        workingDir?: string;
+        remoteHostId?: string;
+        forceReload?: boolean;
+        sessionId?: string;
+      },
     ): Promise<{
       success: boolean;
       error?: string;
@@ -6479,9 +6562,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       owner: { dataOwnerId: string | null; ownerGeneration: number },
     ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:compaction:set-pct', pct, owner),
-    compactionResetPct: (
-      owner: { dataOwnerId: string | null; ownerGeneration: number },
-    ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+    compactionResetPct: (owner: {
+      dataOwnerId: string | null;
+      ownerGeneration: number;
+    }): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:compaction:reset-pct', owner),
 
     // Pi 原生自动上下文压缩阈值。下次启动或恢复 Pi 任务时生效。
@@ -6493,9 +6577,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       owner: { dataOwnerId: string | null; ownerGeneration: number },
     ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:pi-compaction:set-pct', pct, owner),
-    piCompactionResetPct: (
-      owner: { dataOwnerId: string | null; ownerGeneration: number },
-    ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+    piCompactionResetPct: (owner: {
+      dataOwnerId: string | null;
+      ownerGeneration: number;
+    }): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:pi-compaction:reset-pct', owner),
 
     // LSP Beta 开关 —— 控制 mcp providers 是否注入 lsp_* 工具 (Phase 1 Beta)。
@@ -6939,8 +7024,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         days?: number | 'all';
         modelDays?: number | 'all';
         forceRefresh?: boolean;
-      }): Promise<unknown> =>
-        ipcRenderer.invoke('maker:usage:history', opts),
+      }): Promise<unknown> => ipcRenderer.invoke('maker:usage:history', opts),
       /** Claude USD 推送 (per-turn, agentKind=claude-code 时订阅它)。 */
       onTodaySpendChanged: fanOutMakerUsageTodaySpend,
       /** Codex token 推送 (per-turn, agentKind=codex 时订阅它)。 */

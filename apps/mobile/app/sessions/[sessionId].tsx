@@ -59,7 +59,6 @@ import {
   type PressableProps,
   type StyleProp,
   type TextInputContentSizeChangeEvent,
-  type TextLayoutEvent,
   type ViewStyle,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
@@ -99,11 +98,13 @@ import {
 } from '@/device-link/remoteSyncTask';
 import {
   runConnectionScopedSessionMetadataRead,
-  readProgressiveMessageWindow,
+  waitForIndependentSnapshotReads,
   runSessionMessagesSnapshotSingleFlight,
   runSessionPendingInteractionsSnapshotSingleFlight,
   runSessionProjectionSnapshotSingleFlight,
 } from '@/device-link/sessionSnapshotSingleFlight';
+import { syncSessionMessageWindow } from '@/session/sessionMessageWindowSync';
+import { shouldClearOperationErrorAfterSync, type SessionOperationError } from '@/session/sessionSyncErrorRecovery';
 import { createTransientTopicSubscriptionCoordinator } from '@/device-link/transientTopicSubscription';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
@@ -134,6 +135,7 @@ import {
   collectConversationShareBlockIds,
   collectConversationShareMessages,
 } from '@/session/conversationShareMessages';
+import { useConversationShareImages } from '@/session/useConversationShareImages';
 import {
   isFoldableBlockExpanded,
   useFoldableExpandedBlocksSnapshot,
@@ -275,12 +277,14 @@ import {
   migrateLegacyComposerDraft,
   normalizeComposerDocument,
   reconcileComposerProjectedText,
+  reconcileComposerVoiceDraft,
   replaceComposerTextRange,
   serializeComposerDocument,
   sessionLinkComposerNode,
   slashCommandTextNode,
   textComposerDocument,
   type ComposerDocument,
+  type ComposerVoiceDraftUpdate,
 } from '@/session/composerDocument';
 import { boundAgentReferenceText } from '@cindy/maker-shared/agent-input-projection';
 import {
@@ -464,7 +468,6 @@ import {
   oldestMessageCursor,
   projectLoadedMessageWindowIncrementally,
   type LoadedMessageWindowProjection,
-  shouldRefreshLatestMessageWindowOnReopen,
   shouldKeepOlderMessagesAffordance,
 } from '@/session/messagePaging';
 import {
@@ -644,7 +647,6 @@ const COMPOSER_STACK_GAP_HEIGHT = 4;
 const COMPOSER_INPUT_ROW_CHROME_HEIGHT = 22;
 // 聚焦卡片形态的 row chrome:paddingTop 26 + paddingBottom 8 + 层间 gap 8 + 工具排 ~36。
 const COMPOSER_CARD_ROW_CHROME_HEIGHT = 78;
-const COMPOSER_VOICE_CARET_GAP = 2;
 // 重开且检测到有新内容时,只拉最新小窗对账(比首开整窗 80 便宜很多);payload 过大再逐档退。
 const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 // session-tail-banner「重试」短窗口隐藏的超时兜底(接管信号全部丢失时恢复错误入口);
@@ -1641,7 +1643,32 @@ export default function SessionScreen() {
   const [extraDirBrowseEntries, setExtraDirBrowseEntries] = useState<RemoteDirectoryEntry[]>([]);
   const [extraDirBrowseLoading, setExtraDirBrowseLoading] = useState(false);
   const [extraDirBrowseError, setExtraDirBrowseError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<SessionOperationError | null>(null);
+  const operationErrorRef = useRef<SessionOperationError | null>(null);
+  const setError = useCallback((message: string | null) => {
+    const next = message === null ? null : { message };
+    operationErrorRef.current = next;
+    setOperationError(next);
+  }, []);
+  const error = operationError?.message ?? null;
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const historyRequestSeqRef = useRef(0);
+  const historyRequestInFlightRef = useRef<number | null>(null);
+  const messageWindowReconciledRef = useRef(false);
+  const errorScopeKey = JSON.stringify([deviceId, sessionId]);
+  const [errorScope, setErrorScope] = useState(errorScopeKey);
+  if (errorScope !== errorScopeKey) {
+    setErrorScope(errorScopeKey);
+    setError(null);
+    setSyncError(null);
+    setHistoryError(null);
+    setLoadingEarlier(false);
+    historyRequestSeqRef.current += 1;
+    historyRequestInFlightRef.current = null;
+    messageWindowReconciledRef.current = false;
+  }
+  useEffect(() => () => { historyRequestSeqRef.current += 1; }, []);
   // UI 错误可被任意操作清掉；transport hold 独立锁存所有连接恢复来源，直到当前
   // 设备完成一次权威同步。error 可空：纯 relay / presence 断线未必产生请求错误。
   const [outboxTransportHold, setOutboxTransportHold] = useState<{
@@ -1918,7 +1945,7 @@ export default function SessionScreen() {
   // 用它——否则恢复后横幅消失了,composer 却仍被 stale 快照锁在不可用态,
   // 直到手动同步才解开。
   const connectionError = resolveEffectiveConnectionError(
-    isDeviceAccessRevoked ? '[ACCESS_REVOKED] access revoked by target device' : error,
+    isDeviceAccessRevoked ? '[ACCESS_REVOKED] access revoked by target device' : syncError ?? error,
     isDeviceUnresponsive,
   );
   // dispatch / Stop 与恢复 edge 共用 Context 内随 connection epoch 重置的三态 verdict，
@@ -1999,6 +2026,8 @@ export default function SessionScreen() {
   );
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
   const connectionRecoveryError = activeOutboxTransportError ?? connectionError;
+  const bannerError = connectionRecoveryError ?? historyError;
+  const bannerRetriesHistory = connectionRecoveryError === null && historyError !== null;
   const contentRecoveryState = contentRecoveryKey !== null
     && contentSyncedKey === contentRecoveryKey
     && readAckSyncedKey === `${sessionId}:${connectionEpoch}`
@@ -2011,7 +2040,7 @@ export default function SessionScreen() {
   }, [contentRecoveryState]);
   const showConnectionBanner = useShowConnectionBanner(
     status,
-    connectionRecoveryError,
+    bannerError,
     connectionIssue,
     isDeviceUnresponsive,
     contentRecoveryState,
@@ -2703,7 +2732,9 @@ export default function SessionScreen() {
     applyComposerDraft(value, queueEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDraft]);
 
-  const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, setComposerDraft);
+  const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) => {
+    applyRichComposerChange(reconcileComposerVoiceDraft(composerDocumentRef.current, update));
+  });
 
   useEffect(() => {
     const tracker = createMobileVoiceDictionaryLearningTracker({
@@ -3247,8 +3278,8 @@ export default function SessionScreen() {
       () => maker.getPendingInteractions(sessionId),
     );
     if (syncRun.isStale()) return;
+    const operationErrorAtSyncStart = operationErrorRef.current;
     setLoading(true);
-    setError(null);
     try {
       await prepareLinkAndSubscription();
       if (syncRun.isStale() || !messageAuthorityCurrent()) return;
@@ -3261,15 +3292,13 @@ export default function SessionScreen() {
       const isCurrent = () => !syncRun.isStale() && messageAuthorityCurrent();
       const pushRefresh = notificationResponse !== null
         && syncedNotificationResponseRef.current !== notificationResponse;
-      const messageRead = readProgressiveMessageWindow({
+      const messageRead = syncSessionMessageWindow({
         readMetadata: () => retryRead(fetchSessionMetadata),
+        isReopen,
+        storedSession: storedSessionAtStart,
         eager: !isReopen || pushRefresh,
-        shouldReadMessages: (sessionMeta) => shouldRefreshLatestMessageWindowOnReopen({
-          freshSession: sessionMeta,
-          messageWindowSynced: remoteSessionStore.isSessionMessageWindowSynced(sessionId, sessionMeta),
-          storedSession: storedSessionAtStart,
-        }),
-        readMessages: () => retryRead(() => listMessagesWithPayloadRetry(
+        isWindowSynced: (sessionMeta) => remoteSessionStore.isSessionMessageWindowSynced(sessionId, sessionMeta),
+        readLatest: () => retryRead(() => listMessagesWithPayloadRetry(
           (limit) => runSessionMessagesSnapshotSingleFlight(
             snapshotScope,
             limit,
@@ -3290,6 +3319,21 @@ export default function SessionScreen() {
               moreBeyondWindow,
             });
           }
+          // Even failed metadata must not hide pagination for a successful page.
+          messageWindowReconciledRef.current = true;
+          setHasOlderMessages(moreBeyondWindow);
+        },
+        commit: (sessionMeta, history) => {
+          if (history !== null) {
+            remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
+            if (pushRefresh) syncedNotificationResponseRef.current = notificationResponse;
+          }
+          if (history === null) {
+            messageWindowReconciledRef.current = true;
+            setHasOlderMessages(hasOlderMessagesAfterReopen(
+              sessionMeta._count?.messages, remoteSessionStore.getMessages(sessionId),
+            ));
+          }
         },
       });
       const commitRead = <T,>(read: () => Promise<T>, commit: (value: T) => void) =>
@@ -3297,7 +3341,7 @@ export default function SessionScreen() {
       // Only the control/read-receipt barrier waits for all resources. Each response
       // is applied independently, and a changed metadata response starts history
       // immediately rather than waiting for pending/projection/active.
-      const [{ metadata: sessionMeta, history }] = await Promise.all([
+      await waitForIndependentSnapshotReads([
         messageRead,
         commitRead(fetchPendingInteractions, (pendingInteractions) => {
           remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
@@ -3316,17 +3360,11 @@ export default function SessionScreen() {
         }),
       ]);
       if (!isCurrent()) return;
-      if (history !== null) {
-        remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
-        if (pushRefresh) syncedNotificationResponseRef.current = notificationResponse;
-      }
-      setHasOlderMessages(history !== null
-        ? shouldKeepOlderMessagesAffordance(history)
-        : hasOlderMessagesAfterReopen(sessionMeta._count?.messages, remoteSessionStore.getMessages(sessionId)));
-      // 不变量:上面 setHasOlderMessages 的校正与这里的 setLastSyncedAt 之间必须保持
-      // 同步尾、无 await —— 否则乐观点亮 effect(依赖 lastSyncedAt===null)会在 await 间隙把刚校正成 false
-      // 的「加载更早」入口重新点亮。将来切勿在两者之间插入 await。
       if (syncRun.isStale() || !messageAuthorityCurrent()) return;
+      setSyncError(null);
+      if (shouldClearOperationErrorAfterSync(operationErrorRef.current, operationErrorAtSyncStart)) {
+        setError(null);
+      }
       // 当前设备的权威 session + projection 同步已完整落定，才解除独立 transport hold。
       // 不在 connectionEpoch 刚推进时提前清，避免同一 commit 的 outbox effect 抢在 resync 前派发。
       setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);
@@ -3345,18 +3383,17 @@ export default function SessionScreen() {
     } catch (err) {
       if (!syncRun.isStale() && messageAuthorityCurrent()) {
         const formatted = formatRemoteError(err);
-        setError(formatted);
+        setSyncError(formatted);
         // 两类失败都写入 hold 且不能清门：瞬态错误继续自动重试，确定性错误保留
         // 手动同步入口；共享 UI error 被其它操作清掉时也不会变成不可见的永久自锁。
         latchOutboxTransportHold(formatted);
-        // The coordinator owns sibling cancellation and preserves this failure
-        // for rewind/navigation callers. Supersession remains a separate outcome.
+        // Useful siblings have settled; preserve full-sync failure for callers.
         throw err;
       }
     } finally {
       if (!syncRun.isStale() && messageAuthorityCurrent()) setLoading(false);
     }
-  }, [deviceId, deviceName, getSubscriptionIdentity, latchOutboxTransportHold, maker, notificationResponse, openLink, reopenLink, sessionId, subscribe]);
+  }, [deviceId, deviceName, getSubscriptionIdentity, latchOutboxTransportHold, maker, notificationResponse, openLink, reopenLink, sessionId, setError, subscribe]);
   // 任一连接恢复身份变化都会让旧读取失去提交资格。否则断线前启动的同步可能在
   // 新 hold 锁存后迟到，并从成功尾误清恢复屏障。
   const remoteSyncContextKey = JSON.stringify([
@@ -3707,13 +3744,13 @@ export default function SessionScreen() {
 
   // 乐观点亮「加载更早」入口:缓存消息 hydrate 后(messages 已有内容),不等首开那次慢 listMessages(A1,
   // device-link 往返可能数秒)回来,就用已存 session 的 _count.messages 与 in-store 已加载真实条数比较,
-  // 立即让入口可见,避免"先拉没反应、慢拉取回来才出现入口、再拉才加载"。仅在本次打开尚未同步过
-  // (lastSyncedAt 为空)、入口当前不可见、且 _count 已知且 > 已加载时乐观置 true;A1 / reopen 回来后仍按
+  // 立即让入口可见,避免"先拉没反应、慢拉取回来才出现入口、再拉才加载"。仅在历史尚未校正且未完整同步、
+  // 入口当前不可见、且 _count 已知且 > 已加载时乐观置 true;A1 / reopen 回来后仍按
   // shouldKeepOlderMessagesAffordance / hasOlderMessagesAfterReopen 校正(:806/:846)。_count 未知不凭空点亮。
   useEffect(() => {
     if (isScheduleDetail) return;
     const currentMessages = latestMessagesRef.current;
-    if (lastSyncedAt !== null || hasOlderMessages || currentMessages.length === 0) return;
+    if (messageWindowReconciledRef.current || lastSyncedAt !== null || hasOlderMessages || currentMessages.length === 0) return;
     if (hasOlderMessagesByServerCount(currentSession?._count?.messages, currentMessages)) {
       setHasOlderMessages(true);
     }
@@ -4377,7 +4414,7 @@ export default function SessionScreen() {
 
   const loadEarlierMessages = useCallback(async () => {
     if (isScheduleDetail) return;
-    if (!deviceId || !sessionId || loadingEarlier || !hasOlderMessages) return;
+    if (!deviceId || !sessionId || loadingEarlier || historyRequestInFlightRef.current !== null || !hasOlderMessages) return;
     const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
     if (!remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) return;
     const before = oldestLoadedMessageCursor;
@@ -4389,25 +4426,35 @@ export default function SessionScreen() {
     // 发请求**之前**同步做掉,不能只靠依赖 loadingEarlier 的 effect —— 那是被动的,自动补齐可能
     // 在它执行前就返回并继续下一页(#1210 review)。
     abandonInFlightBackfill();
+    const requestSeq = ++historyRequestSeqRef.current;
+    historyRequestInFlightRef.current = requestSeq;
+    const isCurrentHistoryRequest = () => historyRequestSeqRef.current === requestSeq
+      && remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority);
     setLoadingEarlier(true);
-    setError(null);
     try {
       const page = await withTransientRemoteRetry(() =>
         listMessagesWithPayloadRetry((limit) => maker.listMessages(sessionId, { limit, before })),
       );
-      if (!remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) return;
+      if (!isCurrentHistoryRequest()) return;
       const pageList = Array.isArray(page.messages) ? page.messages : [];
       // 用 mergeEarlierMessages 而不是 mergeMessages:这一页是沿 before 从窗口最旧端**连续**取的,
       // 登记进「已验证连续」区间后,后续满页的最新窗口同步才不会把用户一路翻出来的历史当成来源
       // 不明的缓存丢掉(#1210 review)。
-      remoteSessionStore.mergeEarlierMessages(sessionId, pageList, { authority: messageAuthority });
+      if (!remoteSessionStore.mergeEarlierMessages(sessionId, pageList, {
+        authority: messageAuthority,
+        before,
+      })) return;
+      setHistoryError(null);
       setHasOlderMessages(shouldKeepOlderMessagesAffordance(page));
     } catch (err) {
-      if (remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) {
-        setError(formatRemoteError(err));
+      if (isCurrentHistoryRequest()) {
+        setHistoryError(formatRemoteError(err));
       }
     } finally {
-      setLoadingEarlier(false);
+      if (historyRequestSeqRef.current === requestSeq) {
+        historyRequestInFlightRef.current = null;
+        setLoadingEarlier(false);
+      }
     }
   }, [abandonInFlightBackfill, deviceId, hasOlderMessages, isScheduleDetail, loadingEarlier, maker, oldestLoadedMessageCursor, sessionId]);
 
@@ -4758,6 +4805,11 @@ export default function SessionScreen() {
         return;
       }
       const startController = async () => {
+        const initialDraft = draftRef.current;
+        const initialDocument = composerDocumentRef.current;
+        const input = composerInputRef.current;
+        const initialSelection = input?.getSelection(initialDraft)
+          ?? { start: initialDraft.length, end: initialDraft.length };
         const controller = createMobileVoiceControllerSession({
           credential,
           ...(prewarmedVoice ? { asr: prewarmedVoice.asr } : {}),
@@ -4766,11 +4818,15 @@ export default function SessionScreen() {
             voiceContext.createRefinerTarget(providerId, options),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string }) =>
             voiceContext.warmRefiner(input),
-          initialDraft: draftRef.current,
-          refinementContext: buildMobileVoiceSessionRefinementContext(draftRef.current, renderItems),
+          initialDraft,
+          initialSelection,
+          refinementContext: buildMobileVoiceSessionRefinementContext(initialDraft, renderItems, initialSelection),
           localVoiceInputHistory,
           readCurrentDraft: () => draftRef.current,
-          onDraftChanged: writeVoiceDraft,
+          onDraftChanged: (text, selection, replacement) => {
+            if (selection) input?.rememberSelection(text, selection);
+            writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
+          },
           onStateChanged: setVoiceState,
           onError: (message) => {
             setVoiceState('error');
@@ -4970,20 +5026,22 @@ export default function SessionScreen() {
       // stop() can deliver an empty final transcript through onDraftChanged before
       // resolving. Capture the rich document first so quote/reference atoms survive.
       const documentBeforeStop = composerDocumentRef.current;
+      const inputBeforeStop = composerInputRef.current;
       const latestDraft = await controller.stop();
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
       setVoiceState('done');
-      // 听写结束落焦(既有行为,显式 focus 承担弹键盘语义):focus 的 web 侧
-      // 实现即 placeCaretAtEnd,caret 落在转写文字末尾。听写**进行中**禁止任何
-      // 程序化 focus(见 voiceIsListening 滚动效应的注释)。
-      requestAnimationFrame(() => {
-        composerInputRef.current?.focus();
-      });
       // chat-text-quote:纯引用(无转写文字、无附件)也要发出去——发送按钮在
       // quote-only 时可见,漏了引用会变成「点发送只停了录音、消息没发」。
       const latestDocument = latestDraft.trim()
-        ? reconcileComposerProjectedText(documentBeforeStop, latestDraft)
+        ? reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)
         : documentBeforeStop;
+      // Focus only after dictation ends, with the caret after the inserted text.
+      const insertionEnd = composerInputRef.current?.getSelection(latestDraft).end ?? latestDraft.length;
+      requestAnimationFrame(() => {
+        if (inputBeforeStop && composerInputRef.current === inputBeforeStop && draftRef.current === latestDraft) {
+          inputBeforeStop.applyDocumentAndFocusSelection(composerDocumentRef.current, insertionEnd);
+        }
+      });
       if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0)) {
         const sendLatest = sendLatestRef.current;
         if (!sendLatest) throw new Error(t('session.screen.voiceSenderNotReady'));
@@ -5579,30 +5637,11 @@ export default function SessionScreen() {
     textTertiary: colors.textTertiary,
     dark: mode === 'dark',
   }), [colors, mode]);
-  const conversationShareHtml = useMemo(() => {
-    if (
-      !nativeConversationShareAvailable
-      || !shareSelectionActive
-      || selectedShareMessages.length === 0
-    ) return '';
-    return buildConversationShareHtml({
-      allShareableIds,
-      characterSrc: shareCharacterSrc ?? undefined,
-      colors: conversationShareColors,
-      contentWidth: windowDimensions.width,
-      logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
-      selectedMessages: selectedShareMessages,
-    });
-  }, [
-    allShareableIds,
-    conversationShareColors,
-    mode,
-    selectedShareMessages,
-    shareCharacterSrc,
-    shareLogoSrc,
-    shareSelectionActive,
-    windowDimensions.width,
-  ]);
+  const shareImages = useConversationShareImages(selectedShareMessages, resolveRemoteMedia, {
+    workdir: currentSession?.workingDir ?? undefined,
+    remoteHostId: currentSession?.remoteHostId ?? undefined,
+    sessionId,
+  });
   const enterShareSelection = useCallback((clientId: string) => {
     Keyboard.dismiss();
     setShareSelectionTriggeredByScreenshot(false);
@@ -5610,21 +5649,31 @@ export default function SessionScreen() {
   }, [sessionId]);
   const cancelShareSelection = useCallback(() => {
     shareOperationSeqRef.current += 1;
+    shareImages.cancel();
     setConversationShareBusy(false);
     setShareSelectionTriggeredByScreenshot(false);
     shareSelectionStore.exit();
-  }, []);
+  }, [shareImages.cancel]);
   const exportConversationSharePng = useCallback(async () => {
+    const messages = await shareImages.prepare();
+    if (messages.length === 0) throw new Error('conversation share selection changed');
     const nativeShareAssetsReady = Boolean(
       nativeConversationShareAvailable
       && shareCharacterSrc
       && shareLogoSrc
       && shareLogoModeRef.current === mode,
     );
-    if (conversationShareHtml && nativeShareAssetsReady) {
+    if (nativeShareAssetsReady) {
       try {
         const nativeBase64 = await renderConversationShareHtmlToPng({
-          html: conversationShareHtml,
+          html: buildConversationShareHtml({
+            allShareableIds,
+            characterSrc: shareCharacterSrc ?? undefined,
+            colors: conversationShareColors,
+            contentWidth: windowDimensions.width,
+            logoSrc: shareLogoSrc ?? undefined,
+            selectedMessages: messages,
+          }),
           width: windowDimensions.width,
         });
         if (nativeBase64) {
@@ -5638,7 +5687,7 @@ export default function SessionScreen() {
     const svg = conversationShareSvgRef.current;
     if (!svg) throw new Error('conversation share svg renderer is unavailable');
     return svg.exportPng();
-  }, [conversationShareHtml, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
+  }, [shareImages.prepare, allShareableIds, conversationShareColors, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
   const shareSelectedConversation = useCallback(async () => {
     if (
       conversationShareBusy
@@ -8677,11 +8726,14 @@ export default function SessionScreen() {
               <ConnectionBanner
                 density="compact"
                 deviceUnresponsive={isDeviceUnresponsive}
-                error={connectionRecoveryError}
+                error={bannerError}
+                requestErrorAutoRecovering={bannerRetriesHistory ? false : undefined}
                 issue={connectionIssue}
                 lastSyncedAt={lastSyncedAt}
-                loading={loading}
-                onSync={() => void requestSync({ reason: 'manual', replaceMessages: false })}
+                loading={loading || loadingEarlier}
+                onSync={() => bannerRetriesHistory
+                  ? void loadEarlierMessages()
+                  : void requestSync({ reason: 'manual', replaceMessages: false })}
                 status={status}
                 recovery={contentRecoveryState}
                 variant="inline"
@@ -8923,6 +8975,7 @@ export default function SessionScreen() {
             disabled={controlBusy || !canUseRemoteSessionControls}
             emptyHint={modelSheetCapabilitiesError ?? undefined}
             flatOptions={modelSheetRuntimeOptions.modelOptions}
+            providersReady={composerDeviceProviders.ready}
             modelVisibilityOverrides={composerDeviceProviders.modelVisibilityOverrides}
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
             loading={composerDeviceProviders.loading || modelSheetCapabilitiesLoading}
@@ -9006,6 +9059,8 @@ export default function SessionScreen() {
                 onCancel={() => setRewindState({ kind: 'idle' })}
                 onConfirm={() => void confirmRewind()}
                 state={rewindState}
+                bottomOverlayHeight={bottomOverlayHeight}
+                topOverlayHeight={topOverlayHeight}
               />
 
               {sessionOperationLayout.messageHistoryMode === 'collapsed' ? (
@@ -9366,9 +9421,10 @@ export default function SessionScreen() {
       </ComposerKeyboardAvoidingView>
       {shareSelectionActive && selectedShareMessages.length > 0 ? (
         <ConversationShareSvg
+          key={`${shareImages.revision}-${mode}`}
           allShareableIds={allShareableIds}
           colors={conversationShareColors}
-          messages={selectedShareMessages}
+          messages={shareImages.messages}
           ref={conversationShareSvgRef}
           width={windowDimensions.width}
         />
@@ -10038,6 +10094,8 @@ function SessionComposerInput({
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
+  const voiceDraftCaretRef = useRef<View>(null);
+  const voiceDraftMeasuredBlockRef = useRef<View>(null);
   const composerScrollViewRef = useRef<ScrollView>(null);
   const composerScrollEnabledRef = useRef(false);
   const voiceDraftScrollRef = useRef<ScrollView>(null);
@@ -10230,19 +10288,15 @@ function SessionComposerInput({
       Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
     ));
   }, []);
-  const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {
-    const lines = event.nativeEvent.lines;
-    const lastLine = lines[lines.length - 1];
-    if (!lastLine) return;
-    const nextFrame = {
-      left: Math.max(0, Math.round(lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP)),
-      top: Math.max(0, Math.round(lastLine.y + ((lastLine.height - COMPOSER_INPUT_LINE_HEIGHT) / 2))),
-    };
-    setVoiceDraftCaretFrame((currentFrame) => (
-      currentFrame.left === nextFrame.left && currentFrame.top === nextFrame.top
-        ? currentFrame
-        : nextFrame
-    ));
+  const handleVoiceDraftTextLayout = useCallback(() => {
+    const block = voiceDraftMeasuredBlockRef.current;
+    const caret = voiceDraftCaretRef.current;
+    if (!block || !caret) return;
+    caret.measureLayout(block, (x, y) => {
+      if (caret !== voiceDraftCaretRef.current || block !== voiceDraftMeasuredBlockRef.current) return;
+      const nextFrame = { left: Math.max(0, Math.round(x)), top: Math.max(0, Math.round(y)) };
+      setVoiceDraftCaretFrame((current) => current.left === nextFrame.left && current.top === nextFrame.top ? current : nextFrame);
+    }, () => undefined);
   }, []);
 
   const renderComposerResizeHandle = () => (
@@ -10255,6 +10309,7 @@ function SessionComposerInput({
     />
   );
 
+  const voiceDraftInsertionEnd = composerInputRef.current?.getSelection(draft).end ?? draft.length;
   const renderComposerInputOverlay = () => voiceIsListening ? (
     // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
     // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
@@ -10279,12 +10334,12 @@ function SessionComposerInput({
         ]}
         onContentSizeChange={() => {
           requestAnimationFrame(() => {
-            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+            voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
           });
         }}
         onLayout={() => {
           requestAnimationFrame(() => {
-            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+            voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
           });
         }}
         pointerEvents="none"
@@ -10298,25 +10353,12 @@ function SessionComposerInput({
             <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
           </View>
         ) : (
-          <View style={styles.voiceDraftMeasuredBlock}>
-            <Text
-              onTextLayout={handleVoiceDraftTextLayout}
-              style={styles.voiceDraftText}
-            >
-              {draft}
+          <View ref={voiceDraftMeasuredBlockRef} collapsable={false} style={styles.voiceDraftMeasuredBlock}>
+            <Text onTextLayout={handleVoiceDraftTextLayout} style={styles.voiceDraftText}>
+              {draft.slice(0, voiceDraftInsertionEnd)}
+              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" viewRef={voiceDraftCaretRef} />
+              {draft.slice(voiceDraftInsertionEnd)}
             </Text>
-            <View
-              pointerEvents="none"
-              style={[
-                styles.voiceDraftCaretOverlay,
-                {
-                  left: voiceDraftCaretFrame.left,
-                  top: voiceDraftCaretFrame.top,
-                },
-              ]}
-            >
-              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
-            </View>
           </View>
         )}
       </ScrollView>
@@ -10332,10 +10374,10 @@ function SessionComposerInput({
   useEffect(() => {
     if (!voiceIsListening) return undefined;
     const frame = requestAnimationFrame(() => {
-      voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+      voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceIsListening]);
+  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceDraftCaretFrame.top, voiceIsListening]);
 
   useEffect(() => {
     if (voiceIsListening && draft.length > 0) return;
@@ -10702,11 +10744,15 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 function buildMobileVoiceSessionRefinementContext(
   draftText: string,
   items: readonly MobileMessageRenderItem[],
+  selection: { start: number; end: number },
 ) {
-  const selectionBefore = takeRefinementContextTail(draftText);
+  const selectionBefore = takeRefinementContextTail(draftText.slice(0, selection.start));
+  const selectionAfter = draftText.slice(selection.end, selection.end + 1200);
   const replyToMessage = findLastAssistantMessageText(items);
   return {
     selectionBefore: selectionBefore || undefined,
+    selectedText: draftText.slice(selection.start, selection.end).slice(0, 1200) || undefined,
+    selectionAfter: selectionAfter || undefined,
     replyToMessage: replyToMessage || undefined,
   };
 }
@@ -11531,9 +11577,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceDraftMeasuredBlock: {
     minHeight: COMPOSER_INPUT_LINE_HEIGHT,
     position: 'relative',
-  },
-  voiceDraftCaretOverlay: {
-    position: 'absolute',
   },
   // 草稿层的文本档必须与真实 TextInput 完全一致,否则换行位置错开、超出的行被裁在
   // 框外(见 MOBILE_COMPOSER_DRAFT_TEXT_STYLE)。

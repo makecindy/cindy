@@ -378,6 +378,77 @@ function makeRelayClient(
 }
 
 describe('DeviceLinkClient', () => {
+  it('gives hello/ack a full window after a slow but successful socket upgrade', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { handshakeTimeoutMs: 15, pingIntervalMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current();
+      await vi.advanceTimersByTimeAsync(12);
+      socket.emit('open');
+      await vi.advanceTimersByTimeAsync(12);
+      expect(socket.terminated).toBe(false);
+      socket.push({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+        serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'dev-self', userId: 'u1',
+      } });
+      await vi.advanceTimersByTimeAsync(20);
+      expect(h.client.getStatus()).toBe('online');
+      expect(h.sockets).toHaveLength(1);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off large response copies for a slow controller without blocking a healthy controller', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current();
+      socket.ack();
+      for (const peer of ['ctrl-slow', 'ctrl-healthy']) {
+        const opening = establishInboundReliableLink(h, `${peer}-stream`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opening;
+      }
+      const acknowledge = (peer: string, id: string) => {
+        const frame = socket.sent.find(e => e.kind === 'invoke-result' && e.id === id)!;
+        const meta = parseTransportPayload(frame.payload)!.meta;
+        socket.push({ v: PROTOCOL_VERSION, kind: 'push', src: peer, payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        } });
+      };
+      h.client.sendInvokeResult('ctrl-slow', 'large', { ok: true, result: 'x'.repeat(240_000) });
+      const copies = () => socket.sent.filter(e => e.kind === 'invoke-result' && e.id === 'large');
+      const firstBytes = copies().reduce((sum, e) => sum + JSON.stringify(e).length, 0);
+      expect(copies()).toHaveLength(2);
+      // The local socket is drained, but the downstream controller needs ten seconds.
+      expect(socket.bufferedAmount).toBe(0);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(copies()).toHaveLength(2); // The first two segments are still in transit.
+      h.client.sendInvokeResult('ctrl-healthy', 'healthy', { ok: true, result: 'ok' });
+      acknowledge('ctrl-healthy', 'healthy');
+      expect(h.client.getReliableSendQueueDepth('ctrl-healthy')).toBe(0);
+      expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      acknowledge('ctrl-slow', 'large');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(copies()).toHaveLength(2);
+      expect(copies().reduce((sum, e) => sum + JSON.stringify(e).length, 0)).toBe(firstBytes);
+      expect(h.client.getReliableSendQueueDepth('ctrl-slow')).toBe(0);
+      expect(h.client.isLinkReady('ctrl-slow')).toBe(true);
+      expect(h.sockets).toHaveLength(1);
+      expect(socket.terminated).toBe(false);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('start → open 后第一帧是 hello,hello-ack 后 online', async () => {
     const h = makeHarness();
     const statuses: string[] = [];
@@ -1002,7 +1073,7 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('≥2 控制端共享同一被控端:一个停止 ACK 只复位该 peer,邻居 link 与在途请求零感知', async () => {
+  it.each([16, 300 * 1024])('≥2 控制端共享同一被控端:停止 ACK 的 %i 字节响应只复位该 peer,邻居零感知', async (bytes) => {
     // 故障半径要求的拓扑是「多个控制端共用一台被控桌面」,不是「一个控制端连两台桌面」。
     // 本用例站在被控 Desktop:ctrl-silent 永不 ACK,ctrl-healthy 的在途 invoke 必须仍能完成,
     // 且共享 WSS 不得被拆掉。
@@ -1029,7 +1100,7 @@ describe('DeviceLinkClient', () => {
     const socket = h.current();
     const socketCount = h.sockets.length;
 
-    h.client.sendInvokeResult('ctrl-silent', 'silent-req', { ok: true, result: ['silent'] });
+    h.client.sendInvokeResult('ctrl-silent', 'silent-req', { ok: true, result: 's'.repeat(bytes) });
     h.client.sendInvokeResult('ctrl-healthy', 'healthy-inflight', { ok: true, result: ['healthy'] });
     const healthyFrame = socket.sent
       .filter((env) => env.kind === 'invoke-result' && env.dst === 'ctrl-healthy')
@@ -4365,6 +4436,28 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it.each([1, 9, 11, 19])('last valid frame at %sms receives the full heartbeat idle budget', async (offset) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 10, pongMissLimit: 1 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      await vi.advanceTimersByTimeAsync(offset);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(19);
+      expect(ws.terminated).toBe(false);
+      expect(h.client.getStatus()).toBe('online');
+      // Still bounded: the first heartbeat tick after two full idle periods closes it.
+      await vi.advanceTimersByTimeAsync(11);
+      expect(ws.terminated).toBe(true);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('pong 持续回应则不判僵死', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
     h.client.start();
@@ -6621,7 +6714,148 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     }
   }
 
-  it('对端停止 ACK 时,一趟定时重发只发预算内的最旧几条(而不是整个窗口)', async () => {
+  it('a large response delivered after 18s is not duplicated while waiting for its first ACK', async () => {
+    await withFakeTimers(async (h, advance) => {
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      const ws = h.current();
+      const first = ws.sent.find((env) => env.kind === 'invoke-result')!;
+      const meta = parseTransportPayload(first.payload)!.meta;
+      await advance(18_000);
+      expect([...sendsBySeq(ws).values()]).toEqual([1]);
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        },
+      });
+      await advance(40_000);
+      expect([...sendsBySeq(ws).values()]).toEqual([1]);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+      expect(ws.closed).toBeNull();
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it('retries an eligible small request while a large head frame is cooling down', async () => {
+    await withFakeTimers(async (h, advance) => {
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      expect(seqs).toHaveLength(2);
+
+      // The large head waits for its byte-based interval (~26s), but the
+      // small tail is eligible on the first retry tick and must not be starved.
+      await advance(2_000);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[1]]);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  }, 10_000);
+
+  it('a small tail cannot reset a slow large head after 35s without ACK or disturb another peer', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const resets = vi.fn();
+      h.client.onPeerTransportReset(resets);
+      const healthyLink = establishInboundReliableLink(h, 'healthy-stream', 1, 'dev-healthy');
+      await advance(1);
+      await healthyLink;
+      const ws = h.current();
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const healthyRequest = h.client.invoke('dev-healthy', { channel: 'maker:healthy', args: [] }, 60_000);
+      void healthyRequest.catch(() => {});
+      const healthyFrame = ws.sent.find((env) => env.kind === 'invoke' && env.dst === 'dev-healthy')!;
+      const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+      ws.push({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-healthy',
+        payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: {
+          streamId: healthyMeta.streamId, ackSeq: healthyMeta.seq,
+        } },
+      });
+
+      await advance(25_999);
+      expect(sendsBySeq(ws).get(seqs[0])).toBe(1);
+      await advance(9_001);
+      // The existing 26s size budget permits one head retry, not an early
+      // reset/replay. The tail's cumulative ACK is still blocked by that head.
+      expect(resets).not.toHaveBeenCalled();
+      expect(h.client.isLinkReady('dev-b')).toBe(true);
+      expect(h.client.isLinkReady('dev-healthy')).toBe(true);
+      expect(ws.sent.filter((env) => env.kind === 'link-close')).toHaveLength(0);
+      expect(sendsBySeq(ws).get(seqs[0])).toBe(2);
+      expect(sendsBySeq(ws).get(seqs[1])).toBe(2);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-healthy',
+        id: healthyFrame.id, payload: { ok: true, result: 'healthy' } });
+      await expect(healthyRequest).resolves.toEqual({ ok: true, result: 'healthy' });
+
+      // A genuinely silent head must still exhaust its own bounded budget.
+      await advance(100_000);
+      expect(resets).toHaveBeenCalledTimes(1);
+      expect(resets.mock.calls[0][0]).toMatchObject({ deviceId: 'dev-b', seq: seqs[0] });
+      expect(h.client.isLinkReady('dev-healthy')).toBe(true);
+      expect(ws.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it.each([true, false])('a small tail resumes bounded retries after its large head is acknowledged (tail ACK=%s)', async (ackTail) => {
+    await withFakeTimers(async (h, advance) => {
+      const resets = vi.fn();
+      h.client.onPeerTransportReset(resets);
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const ws = h.current();
+      const first = ws.sent.find((env) => env.kind === 'invoke-result')!;
+      const meta = parseTransportPayload(first.payload)!.meta;
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      await advance(35_000);
+      expect(resets).not.toHaveBeenCalled();
+      ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: {
+          streamId: meta.streamId, ackSeq: seqs[0],
+        } } });
+      await advance(2_000);
+      expect(sendsBySeq(ws).get(seqs[1])).toBe(3);
+      if (ackTail) {
+        ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+          payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: {
+            streamId: meta.streamId, ackSeq: seqs[1],
+          } } });
+      }
+      await advance(35_000);
+      if (ackTail) {
+        expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+        expect(resets).not.toHaveBeenCalled();
+      } else {
+        expect(resets).toHaveBeenCalledTimes(1);
+        expect(resets.mock.calls[0][0]).toMatchObject({ deviceId: 'dev-b', seq: seqs[1] });
+      }
+      expect(ws.closed).toBeNull();
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it.each([1, 2])('a small tail respects a retry limit of %s behind a large head', async (transportMaxRetryAttempts) => {
+    await withFakeTimers(async (h, advance) => {
+      const resets = vi.fn();
+      h.client.onPeerTransportReset(resets);
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      await advance(25_999);
+      expect(resets).not.toHaveBeenCalled();
+      expect(sendsBySeq(ws).get(seqs[0])).toBe(1);
+      expect(sendsBySeq(ws).get(seqs[1])).toBe(transportMaxRetryAttempts);
+      await advance(30_001);
+      expect(resets).toHaveBeenCalledTimes(1);
+      expect(resets.mock.calls[0][0]).toMatchObject({ deviceId: 'dev-b', seq: seqs[0] });
+      expect(ws.closed).toBeNull();
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000, transportMaxRetryAttempts });
+  });
+
+  it('队头冷却时仍允许后续小请求重传', async () => {
     // 2026-08-08 线上:一趟重发遍历整个 pending 窗口(上限 64 条)、同步全部写进 ws,
     // 对端 relay 路由已失效时逐帧弹回 DEVICE_OFFLINE —— 单簇 213 条就是这个形状。
     // 既有两道刹车都拦不住本趟:per-peer 制动要等 relay-error 回来(异步),ws 容量
@@ -6639,9 +6873,12 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       await advance(200);
       expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
 
-      // 再一趟:对端仍未 ACK,预算继续压在同样的队头 3 条上(不铺满窗口)
+      // 后续小帧不再被队头冷却冻结；本趟预算继续限制单趟发送量。
       await advance(200);
-      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 6));
+      expect(seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq))).toEqual([2, 2, 2]);
+      // 队头继续按退避间隔重发，后续序号则可独立获得重试机会。
+      await advance(200);
       const headCounts = seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq));
       expect(headCounts).toEqual([3, 3, 3]); // 首发 + 两趟重发
     }, {
@@ -6708,7 +6945,8 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       // 预算 4 帧、每条 3 片:队头那条发完(3 帧)后,第二条会超预算 → 发送前就被拦下,
       // 留到下一趟。所以本趟只重发队头 1 条、只写出 3 帧。
       const framesBefore = framesSent(ws);
-      await advance(200);
+      // Large messages first receive a bounded transmission budget (15 ticks).
+      await advance(3_000);
       const retried = retriedSeqs(sendsBySeq(ws));
       expect(retried).toEqual([seqs[0]]);
       // 本趟真实写出的帧数不超过 max(预算, 队头分片数) —— 这才是「上限」的准确表述
@@ -6733,14 +6971,9 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       }
       const ws = h.current();
       const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
-      const framesBefore = framesSent(ws);
-
-      await advance(200);
-      // 只有队头那条大消息被重发,5 条小消息一条都没被带出去
-      expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[0]]);
-      // 溢出被限制在「队头这一条的分片数」内,而不是预算 + 队头
-      const passFrames = framesSent(ws) - framesBefore;
-      expect(passFrames).toBeLessThanOrEqual(6);
+      await advance(3_000);
+      // 队头仍受分片预算约束；小消息不会因队头冷却而饥饿。
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs);
     }, {
       pingIntervalMs: 600_000,
       transportRetryIntervalMs: 200,

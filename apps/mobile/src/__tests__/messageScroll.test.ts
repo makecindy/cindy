@@ -17,7 +17,6 @@ import {
   isNearMobileMessageListBottom,
   isNearMessageListTop,
   isMobileMvcpSettling,
-  mobileFollowVerifyStartDelayMs,
   mobileMessageListKeysSignature,
   mobileMvcpSettleDeadline,
   MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS,
@@ -680,6 +679,7 @@ describe('evaluateMobileAnchorVerify (落底校验/补滚有界重试环——�
     listVisible: true,
     preserveVisibleContentPosition: false,
     stickToLatest: true,
+    userControllingScroll: false,
     waitRounds: 0,
   };
 
@@ -711,6 +711,40 @@ describe('evaluateMobileAnchorVerify (落底校验/补滚有界重试环——�
     expect(evaluateMobileAnchorVerify({
       ...baseInput, metrics: metricsAt(0),
     })).toBe('retry');
+  });
+
+  it('rejects overshoot beyond the end while allowing two-sided rounding tolerance', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: metricsAt(1200 + MOBILE_ANCHOR_VERIFY_TOLERANCE),
+    })).toBe('settled');
+    for (const offsetY of [1200 + MOBILE_ANCHOR_VERIFY_TOLERANCE + 1, 1800]) {
+      expect(evaluateMobileAnchorVerify({ ...baseInput, metrics: metricsAt(offsetY) })).toBe('retry');
+      expect(evaluateMobileAnchorVerify({
+        ...baseInput, attempts: MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS, metrics: metricsAt(offsetY),
+      })).toBe('give-up');
+    }
+  });
+
+  it('corrects a stale offset after content shrinks below the viewport', () => {
+    const metrics = { contentHeight: 400, viewportHeight: 800, offsetY: 600 };
+    expect(evaluateMobileAnchorVerify({ ...baseInput, metrics })).toBe('retry');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: { ...metrics, offsetY: 0 },
+    })).toBe('settled');
+  });
+
+  it('waits through native bounce and resumes correction only after gesture ownership ends', () => {
+    const metrics = metricsAt(1800);
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, userControllingScroll: true, metrics,
+    })).toBe('wait');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, userControllingScroll: true, waitRounds: MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS, metrics,
+    })).toBe('give-up');
+    expect(evaluateMobileAnchorVerify({ ...baseInput, metrics })).toBe('retry');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, stickToLatest: false, metrics,
+    })).toBe('settled');
   });
 
   it('重试次数达到上限后仍未落底 → give-up(不无限重试)', () => {
@@ -777,33 +811,5 @@ describe('mobile mVCP settle quiet window', () => {
     expect(mobileMessageListKeysSignature(['u1', 'a1'])).not.toBe(
       mobileMessageListKeysSignature(['u1', 'a1', 'a2']),
     );
-  });
-});
-
-describe('mobileFollowVerifyStartDelayMs (动画贴底完成后再启动 verifier)', () => {
-  it('动画仍在 settle 窗口内时返回剩余等待时间', () => {
-    expect(mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: true,
-      now: 600,
-      settleAt: 1400,
-    })).toBe(800);
-  });
-
-  it('非动画、已结束或时钟已越过 settle 时立即校验', () => {
-    expect(mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: false,
-      now: 600,
-      settleAt: 1400,
-    })).toBe(0);
-    expect(mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: true,
-      now: 1400,
-      settleAt: 1400,
-    })).toBe(0);
-    expect(mobileFollowVerifyStartDelayMs({
-      animatedScrollInFlight: true,
-      now: 1500,
-      settleAt: 1400,
-    })).toBe(0);
   });
 });

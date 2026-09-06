@@ -340,33 +340,31 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
 
     expect(registryEntryForRoute('xd', 'bytedance-seed/seed-2.1-pro')).toMatchObject({
       efforts: ['minimal', 'low', 'medium', 'high'],
-      defaultEffort: 'minimal',
+      defaultEffort: 'medium',
       supportsFastMode: false,
       perAgent: {
         'claude-code': {
           efforts: ['low', 'medium', 'high'],
-          defaultEffort: 'low',
         },
       },
     });
     expect(registryEntryForRoute('xd', 'moonshot/kimi-k3')).toMatchObject({
-      efforts: ['low', 'high', 'max'],
-      defaultEffort: 'max',
+      efforts: ['low', 'medium', 'high', 'max'],
+      defaultEffort: 'medium',
       supportsFastMode: false,
     });
     expect(registryEntryForRoute('xd', 'qwen/qwen3.8-max-preview')).toMatchObject({
       efforts: ['low', 'high', 'xhigh'],
-      defaultEffort: 'xhigh',
+      defaultEffort: 'high',
       supportsFastMode: false,
     });
     expect(registryEntryForRoute('xd', 'z-ai/glm-5.2')).toMatchObject({
       efforts: ['minimal', 'high', 'max'],
-      defaultEffort: 'max',
+      defaultEffort: 'high',
       supportsFastMode: false,
       perAgent: {
         'claude-code': {
           efforts: ['high', 'max'],
-          defaultEffort: 'max',
         },
       },
     });

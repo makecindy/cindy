@@ -29,7 +29,11 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
+  clampEffortToSupported,
+  modelDefaultEffort,
+  defaultEffortForCapabilities,
   findModelRegistryRoute,
+  resolveModelNativeApi,
   projectXaiApiImageModels,
   type AgentKind,
   type Catalog,
@@ -41,6 +45,8 @@ import {
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
+
+import { selectDefaultModels } from './model-default-selection.js';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
@@ -240,7 +246,15 @@ let localOverrides: ModelCatalogOverrides = EMPTY_MODEL_CATALOG_OVERRIDES;
 let lastPlanWarnings: ModelPlaneWarning[] = [];
 
 type Effort = CatalogModel['efforts'][number];
-const EFFORT_RANK: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+const EFFORT_RANK: readonly Effort[] = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+];
 
 /**
  * 档位集合 → **规范升序**数组(低 → 高)。x.ai discovery 的 payload 是降序,而下游
@@ -285,7 +299,7 @@ function pickXaiDefaultEffort(
     : (efforts[0] ?? null);
 }
 
-/** SuperGrok 账号档位：官方梯子/默认 high 只作用于 Grok 4.6；其余以 discovery 为准。 */
+/** SuperGrok discovery supplies capabilities; Cindy's model default wins when declared. */
 function resolveXaiAccountCapabilities(
   entry: XaiDiscoveredModel,
   baselineEfforts: readonly Effort[] | undefined,
@@ -301,15 +315,16 @@ function resolveXaiAccountCapabilities(
     : entry.efforts !== undefined
       ? canonicalEffortOrder(entry.efforts)
       : canonicalEffortOrder(baselineEfforts);
+  const adaptedRegistryDefault = clampEffortToSupported(registryDefault, efforts) as Effort | null | undefined;
   const defaultEffort = isGrok46
     ? pickXaiDefaultEffort(
         efforts,
-        [registryDefault, catalogDefault, entry.defaultEffort],
+        [adaptedRegistryDefault, catalogDefault, entry.defaultEffort],
         'official-high',
       )
     : pickXaiDefaultEffort(
         efforts,
-        [entry.defaultEffort, registryDefault, catalogDefault],
+        [adaptedRegistryDefault, entry.defaultEffort, catalogDefault],
         'first',
       );
   return { efforts, defaultEffort };
@@ -343,10 +358,38 @@ function isPiModelApi(value: unknown): value is PiModelApi {
   );
 }
 
-function resolveXdPiGatewayServerModelApi(model: XdGatewayModelInfo): PiModelApi | null | undefined {
-  return piGatewayAuthorityCatalog
+function resolveXdPiGatewayServerModelApi(
+  model: XdGatewayModelInfo,
+): PiModelApi | null | undefined {
+  if (
+    piGatewayAuthorityCatalog &&
+    isCatalogPiGatewayModelRetired(piGatewayAuthorityCatalog, model.id)
+  )
+    return null;
+  const nativeApi = nativeApiForRoute('xd', model.id);
+  if (nativeApi) return nativeApi;
+  const declared = piGatewayAuthorityCatalog
     ? resolveCatalogPiGatewayModelApi(piGatewayAuthorityCatalog, model.id)
     : undefined;
+  if (declared !== undefined) return declared;
+  // Explicit unknowns can keep an independently declared execution route, but that route
+  // must never be presented as canonical. Missing metadata was already filled locally above.
+  if ((base?.modelRegistry?.schemaVersion ?? 0) >= 3 || nativeApi === null) {
+    return resolveXdPiGatewayHintModelApi(model);
+  }
+  return undefined;
+}
+
+/** Cindy owns the canonical API independently of Gateway's execution hints.
+ * Server omissions (including V3) use the local declarations; explicit corrections,
+ * unknowns and retirements still win. No prices, windows or availability are backfilled.
+ */
+function nativeApiForRoute(providerId: string, modelId: string): PiModelApi | null | undefined {
+  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  const declared = resolveModelNativeApi(registry, providerId, modelId);
+  return declared !== undefined
+    ? declared
+    : resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, modelId);
 }
 
 function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi | null {
@@ -375,7 +418,9 @@ function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
   return (model.agents ?? []).filter((agent) => agent !== 'pi' || !serverRetired);
 }
 
-/** Resolve only Cindy Server's highest-priority protocol declaration. */
+/** Resolve Cindy's canonical policy for Pi, including local metadata for Server omissions.
+ * An explicit unknown keeps only an independently declared execution route.
+ */
 export function resolveXdPiGatewayServerApi(modelId: string): PiModelApi | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
   const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
@@ -618,7 +663,9 @@ function modelRegistryMetaFields(
   const { entry } = matched;
   const perAgent = registryAgent ? entry.perAgent?.[registryAgent] : undefined;
   const efforts = perAgent?.efforts ?? entry.efforts;
-  const defaultEffort = perAgent?.defaultEffort ?? entry.defaultEffort;
+  const defaultEffort = efforts?.length === 0
+    ? null
+    : clampEffortToSupported(modelDefaultEffort(entry), efforts);
   return {
     name: entry.name,
     ...(entry.group !== undefined ? { group: entry.group } : {}),
@@ -900,11 +947,7 @@ function projectXdGatewayMediaModels(
   delete identity.imageDefaults;
   delete identity.videoModels;
   delete identity.videoDefaults;
-  if (
-    options.authoritative ||
-    hasEmbeddingEntries ||
-    xdGatewayEmbeddingFallbackSuppressed
-  ) {
+  if (options.authoritative || hasEmbeddingEntries || xdGatewayEmbeddingFallbackSuppressed) {
     delete identity.embeddingModels;
     delete identity.embeddingDefaults;
   }
@@ -915,9 +958,7 @@ function projectXdGatewayMediaModels(
     ...(embeddingModels.length > 0 ? { embeddingModels } : {}),
     ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
     ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),
-    ...(embeddingModels[0]
-      ? { embeddingDefaults: { standard: embeddingModels[0].id } }
-      : {}),
+    ...(embeddingModels[0] ? { embeddingDefaults: { standard: embeddingModels[0].id } } : {}),
   };
 }
 
@@ -1157,12 +1198,12 @@ function computeMerged(): Catalog {
   });
 
   // XD 网关权威模型清单重建。即使实时清单为空也必须重建为空:不能证明某个模型
-  // 当前在网关可用就不显示。元数据**只信服务端下发**(2026-07-19 起
-  // 不再回落产品目录静态模型条目——服务端 modelRegistry 已是唯一策展元数据权威):
+  // 当前在网关可用就不显示。成员与通道能力只信实时下发；模型默认深度优先读取
+  // Cindy 已接受的 Registry（内置／远程版本统一选取），不重建静态成员:
   //   - perAgent 覆盖块按 tab 应用在基线字段之上;
   //   - efforts 缺失或 [] = 没有可调档位，不合成任何档位;
-  //   - defaultEffort 只使用服务端明确下发值，不猜 high / 最大档;
-  //   - supportsFastMode / defaultEnabled 缺失就保持缺失，不物化客户端默认值;
+  //   - defaultEffort 优先 Cindy 已接受的 Registry 模型默认，缺失时按实际能力优先选中档;
+  //   - supportsFastMode 缺失保持缺失；defaultEnabled 叠加本地精简陈列策略，用户显式选择另行优先;
   //   - v3 name / contextWindow 已在 HTTP 协议边界强制要求，这里绝不补 id / 200K。
   // 放在所有 augment 之后:只影响 xd 供应商自己的模型列表,同 id 模型经其它供应商
   // (如 anthropic 订阅直连)仍照常可用。
@@ -1181,19 +1222,40 @@ function computeMerged(): Catalog {
         const ov = gm.perAgent?.[agent] ?? {};
         // v3 validator 已检查 effort 枚举与 defaultEffort 从属关系；此处只做层级覆盖。
         const efforts = (ov.efforts ?? gm.efforts ?? []) as Effort[];
-        const rawDefault = ov.defaultEffort !== undefined ? ov.defaultEffort : gm.defaultEffort;
-        const defaultEffort = (rawDefault ?? null) as Effort | null;
-        const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
+        // Cindy's accepted Registry owns model defaults; Gateway owns the live route
+        // and its supported efforts. Missing Registry defaults use Cindy’s medium-first policy.
+        // Resolve without an agent: each harness adapts the same model-level intent.
+        const registryEntry = findModelRegistryRoute(b.modelRegistry, 'xd', gm.id)?.entry;
+        const registryDefault = registryEntry ? modelDefaultEffort(registryEntry) : undefined;
+        const intent = registryDefault !== undefined ? registryDefault : defaultEffortForCapabilities(efforts);
+        const defaultEffort = efforts.length === 0 ? null
+          : (clampEffortToSupported(intent, efforts) ?? null) as Effort | null;
+        // Canonical Registry API determines native versus compatibility defaults. Explicit
+        // per-harness policy remains an override; user visibility preferences are applied later.
+        const nativeApi = nativeApiForRoute('xd', gm.id);
+        const piApi = agent === 'pi' ? resolveXdPiGatewayModelApi(gm) : undefined;
+        const harnessApi =
+          agent === 'claude-code'
+            ? 'anthropic-messages'
+            : agent === 'codex'
+              ? 'openai-responses'
+              : piApi;
+        const outboundApi = agent === 'pi' ? piApi : (ov.wireProtocol ?? harnessApi);
+        const compatible = Boolean(
+          nativeApi && (harnessApi !== nativeApi || outboundApi !== nativeApi),
+        );
+        const defaultEnabled = ov.defaultEnabled ?? (compatible ? false : gm.defaultEnabled);
         const cost = effectiveGatewayModelCost(gm);
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
-        const piApi = agent === 'pi' ? resolveXdPiGatewayModelApi(gm) : undefined;
         const merged: CatalogModel = {
           id: gm.id,
+          ...(nativeApi !== undefined ? { nativeApi } : {}),
           ...(gm.availability ? { availability: gm.availability } : {}),
           // name / contextWindow are required by Model Access v3 and therefore never synthesized.
           name: gm.name as string,
           ...(gm.group !== undefined ? { group: gm.group } : {}),
           contextWindow: contextWindow as number,
+          contextWindowMax: gm.contextWindow,
           ...(gm.maxOutputTokens !== undefined ? { maxOutput: gm.maxOutputTokens } : {}),
           contextWindowVerified: true,
           efforts,
@@ -1218,6 +1280,26 @@ function computeMerged(): Catalog {
         models[agent]!.push(merged);
       }
     }
+    // Choose only among routes which have a usable, default-enabled harness after the
+    // native/compatibility projection. A cheaper but unsupported route must not hide its sibling.
+    const eligibleIds = new Set(
+      Object.values(models).flatMap((entries) =>
+        (entries ?? []).filter((model) => model.defaultEnabled !== false).map((model) => model.id),
+      ),
+    );
+    const defaultGatewayModels = selectDefaultModels(
+      gwModels
+        .filter((model) => eligibleIds.has(model.id))
+        .map((model) => ({ ...model, defaultEnabled: true })),
+      'xd',
+    );
+    for (const agent of agentKeys) {
+      models[agent] = models[agent]!.map((model) =>
+        (!model.mode || model.mode === 'chat' || model.mode === 'responses') && !defaultGatewayModels.has(model.id)
+          ? { ...model, defaultEnabled: false }
+          : model,
+      );
+    }
     // 每个 tab 内按 sortOrder 稳定排序(无 sortOrder 的合成条目排最后,按进入序)。
     for (const agent of agentKeys) {
       models[agent] = models[agent]!.map((model, index) => ({ model, index }))
@@ -1236,6 +1318,55 @@ function computeMerged(): Catalog {
     };
   });
 
+  providers = providers.map((provider) => ({
+    ...provider,
+    models: Object.fromEntries(
+      Object.entries(provider.models).map(([agent, models]) => [
+        agent,
+        models?.map((model) => {
+          const nativeApi = nativeApiForRoute(provider.id, model.id);
+          // Pi's independent catalog supplies capabilities, not a separate default.
+          // Membership remains native; a Registry match only contributes model intent.
+          const entry = agent === 'pi' && provider.source !== 'user' && provider.id !== 'xd'
+            ? findModelRegistryRoute(b.modelRegistry, provider.id,
+                provider.id === 'xai' && !model.id.startsWith('xai/') ? `xai/${model.id}` : model.id)?.entry
+            : undefined;
+          const intent = entry ? modelDefaultEffort(entry) : undefined;
+          const defaultEffort = intent !== undefined
+            ? model.efforts.length === 0 ? null
+              : clampEffortToSupported(intent, model.efforts) as Effort | null
+            : model.defaultEffort;
+          return {
+            ...model,
+            defaultEffort,
+            ...(nativeApi !== undefined ? { nativeApi } : {}),
+          };
+        }),
+      ]),
+    ),
+  }));
+  // Subscription providers use the same small default selection, scoped per harness so
+  // chatgpt/ aliases never hide their sibling Codex route. Explicit user visibility stays external.
+  providers = providers.map((provider) => {
+    if (provider.source === 'user' || !['openai', 'anthropic', 'xai'].includes(provider.id))
+      return provider;
+    return {
+      ...provider,
+      models: Object.fromEntries(
+        Object.entries(provider.models).map(([agent, models]) => {
+          const selected = selectDefaultModels(models ?? []);
+          return [
+            agent,
+            models?.map((model) =>
+              (!model.mode || model.mode === 'chat' || model.mode === 'responses') && !selected.has(model.id)
+                ? { ...model, defaultEnabled: false }
+                : model,
+            ),
+          ];
+        }),
+      ),
+    };
+  });
   // The xAI API-key preset is chat-first in CustomProviderConfig, but its official
   // endpoint can execute the same Imagine catalog. Keep the executable media facts
   // in one projection so Settings and Art do not disagree. 未命中投影时保持原数组
@@ -1552,9 +1683,7 @@ export function getXdGatewayModelAccessSnapshot(): {
     authoritative: xdGatewayModelsAuthoritative,
     models: xdGatewayModels,
     paymentRequiredModelIds: [...xdGatewayPaymentRequiredRoutes].flatMap((route) =>
-      route.startsWith(claudeCodeRoutePrefix)
-        ? [route.slice(claudeCodeRoutePrefix.length)]
-        : [],
+      route.startsWith(claudeCodeRoutePrefix) ? [route.slice(claudeCodeRoutePrefix.length)] : [],
     ),
   };
 }

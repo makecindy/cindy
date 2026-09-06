@@ -21,6 +21,9 @@
  */
 
 import {
+  clampEffortToSupported,
+  defaultEffortForCapabilities,
+  modelDefaultEffort,
   findModelRegistryRoute,
   type AgentKind,
   type CatalogModel,
@@ -193,6 +196,7 @@ interface EffectiveRouteFields {
   description?: string;
   sortOrder?: number;
   contextWindow?: number;
+  contextWindowMax?: number;
   maxOutput?: number;
   efforts?: Effort[];
   defaultEffort?: Effort | null;
@@ -209,24 +213,22 @@ function effectiveRouteFields(
 ): EffectiveRouteFields {
   const override = agent ? entry.perAgent?.[agent] : undefined;
   const efforts = override?.efforts ?? entry.efforts;
-  const candidateDefaultEffort = override?.defaultEffort ?? entry.defaultEffort;
+  // The model owns the default intent. Legacy perAgent defaults must not change it.
+  const candidateDefaultEffort = modelDefaultEffort(entry);
   const hasInvalidEffort =
     efforts !== undefined &&
     (!Array.isArray(efforts) || efforts.some((effort) => !VALID_EFFORTS.has(effort)));
   const validatedEfforts =
     efforts !== undefined && !hasInvalidEffort ? ([...efforts] as Effort[]) : undefined;
   const defaultEffort: Effort | null | undefined =
-    validatedEfforts === undefined
-      ? candidateDefaultEffort !== undefined && VALID_EFFORTS.has(candidateDefaultEffort)
-        ? (candidateDefaultEffort as Effort)
-        : undefined
-      : validatedEfforts.length === 0
-        ? null
-        : candidateDefaultEffort !== undefined &&
-            VALID_EFFORTS.has(candidateDefaultEffort) &&
-            validatedEfforts.includes(candidateDefaultEffort as Effort)
+    candidateDefaultEffort === null || validatedEfforts?.length === 0
+      ? null
+      : validatedEfforts === undefined
+        ? candidateDefaultEffort !== undefined && VALID_EFFORTS.has(candidateDefaultEffort)
           ? (candidateDefaultEffort as Effort)
-          : undefined;
+          : undefined
+        : (clampEffortToSupported(candidateDefaultEffort, validatedEfforts)
+          ?? defaultEffortForCapabilities(validatedEfforts)) as Effort | null;
   return {
     name: entry.name,
     ...(entry.group !== undefined ? { group: entry.group } : {}),
@@ -235,6 +237,7 @@ function effectiveRouteFields(
     ...(override?.contextWindow !== undefined || entry.contextWindow !== undefined
       ? { contextWindow: override?.contextWindow ?? entry.contextWindow }
       : {}),
+    ...(entry.contextWindow !== undefined ? { contextWindowMax: entry.contextWindow } : {}),
     ...(entry.maxOutputTokens !== undefined ? { maxOutput: entry.maxOutputTokens } : {}),
     ...(validatedEfforts !== undefined ? { efforts: validatedEfforts } : {}),
     ...(defaultEffort !== undefined ? { defaultEffort } : {}),
@@ -255,7 +258,7 @@ function effectiveRouteFields(
  *  - providerId ∈ allowlist,agent ∈ roots ∩ route.agents;
  *  - status 显式 ∈ {active, preview, deprecated}(缺失 = metadata-only,永不长实体);
  *  - 能力自洽完整:contextWindow>0、efforts 显式在场;efforts=[] ⇒ defaultEffort:=null
- *    (确定性推导);非空 efforts ⇒ effective default 必须显式在场且 ∈ efforts,不准猜。
+ *    (确定性推导);非空 efforts 的默认值缺失时按共同策略从已声明档位选取，不合成新能力。
  *  - 不满足 ⇒ 该 route 单独跳过 + warning,不拖垮其余(隔离)。
  *
  * overlay(registry 显式字段 > discovery 显式值)对**已存在**条目始终适用(含
@@ -393,6 +396,9 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
       for (const bridgeAgent of policy.membershipGatedBridges) {
         if (!routeAgents.includes(bridgeAgent)) continue;
         const fields = effectiveRouteFields(entry, bridgeAgent);
+        // A root's default is not consent to a cross-harness bridge. The online
+        // per-agent policy may opt in; local consumer overrides are applied later.
+        fields.defaultEnabled = entry.perAgent?.[bridgeAgent]?.defaultEnabled ?? false;
         if (fields.validationError) {
           plan.warnings.push({
             source: 'registry',
@@ -444,8 +450,12 @@ export function applyRegistryConsumerOverlay(
   plan: ModelPlaneRegistryPlan,
 ): CatalogModel {
   const overlay = plan.consumers.get(consumerPlanKey(providerId, consumer))?.get(rootModelId);
-  if (!overlay) return model;
-  return applyExistingRegistryOverlay(model, overlay);
+  const bridge =
+    MODEL_PLANE_POLICIES.get(providerId)?.membershipGatedBridges.includes(
+      consumer as RootAgentKind,
+    ) === true;
+  const withDefaults = bridge ? { ...model, defaultEnabled: false } : model;
+  return overlay ? applyExistingRegistryOverlay(withDefaults, overlay) : withDefaults;
 }
 
 /** 已存在实体的字段覆盖：保留有效默认档，能力变化时复用既有确定性回退。 */
@@ -458,10 +468,10 @@ function applyExistingRegistryOverlay(
   if (overlay.efforts !== undefined) {
     const { efforts, defaultEffort } = overlaid;
     if (efforts.length === 0) return { ...overlaid, defaultEffort: null };
-    if (defaultEffort === null || !efforts.includes(defaultEffort)) {
+    if (defaultEffort !== null && !efforts.includes(defaultEffort)) {
       return {
         ...overlaid,
-        defaultEffort: efforts.includes('high') ? 'high' : efforts[efforts.length - 1]!,
+        defaultEffort: defaultEffortForCapabilities(efforts),
       };
     }
   }
@@ -481,6 +491,7 @@ function toOverlay(
     ...(fields.contextWindow !== undefined && fields.contextWindow > 0
       ? { contextWindow: fields.contextWindow, contextWindowVerified: true }
       : {}),
+    ...(fields.contextWindowMax !== undefined ? { contextWindowMax: fields.contextWindowMax } : {}),
     ...(fields.maxOutput !== undefined ? { maxOutput: fields.maxOutput } : {}),
     ...(fields.efforts !== undefined ? { efforts: fields.efforts } : {}),
     ...(fields.defaultEffort !== undefined ? { defaultEffort: fields.defaultEffort } : {}),
@@ -508,14 +519,10 @@ function toMaterializedModel(
   if (fields.efforts === undefined) {
     return 'materializable route has no explicit efforts';
   }
-  let defaultEffort: Effort | null;
-  if (fields.efforts.length === 0) {
-    defaultEffort = null;
-  } else if (fields.defaultEffort != null && fields.efforts.includes(fields.defaultEffort)) {
-    defaultEffort = fields.defaultEffort;
-  } else {
-    return 'materializable route has efforts but no self-consistent defaultEffort';
-  }
+  const defaultEffort: Effort | null = fields.defaultEffort === null || fields.efforts.length === 0
+    ? null
+    : (clampEffortToSupported(fields.defaultEffort, fields.efforts)
+      ?? defaultEffortForCapabilities(fields.efforts)) as Effort | null;
   return {
     id: modelId,
     name: fields.name,
@@ -524,6 +531,7 @@ function toMaterializedModel(
     ...(fields.sortOrder !== undefined ? { sortOrder: fields.sortOrder } : {}),
     contextWindow: fields.contextWindow,
     contextWindowVerified: true,
+    ...(fields.contextWindowMax !== undefined ? { contextWindowMax: fields.contextWindowMax } : {}),
     ...(fields.maxOutput !== undefined ? { maxOutput: fields.maxOutput } : {}),
     efforts: fields.efforts,
     defaultEffort,

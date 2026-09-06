@@ -1489,6 +1489,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   it.each([
     { model: 'byom-reasoner', effort: 'xhigh' as const },
     { model: 'gpt-6-astra', effort: 'max' as const },
+    { model: 'gpt-5.6-terra', effort: 'medium' as const },
   ])(
     'BYOM Responses: $model sends $effort with compatible cache parameters',
     { timeout: 60_000 },
@@ -1557,7 +1558,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
                   input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5,
                   tiers: [{ inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 }],
                 },
-                thinkingLevelMap: {
+                thinkingLevelMap: model === 'gpt-5.6-terra' ? {
+                  minimal: 'low', xhigh: 'xhigh', max: 'max',
+                } : {
                   minimal: null,
                   low: 'low',
                   medium: null,
@@ -2952,7 +2955,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(cardUpdates.every((u) => u.provider === 'pi')).toBe(true);
         expect(cardUpdates.at(0)?.status).toBe('running');
         expect(cardUpdates.at(-1)?.status).toBe('completed');
-        expect(cardUpdates.at(-1)?.title).toBe('scout');
+        expect(cardUpdates.at(-1)?.title).toBe('find the auth entry point');
         const finalUsage = cardUpdates.at(-1)?.usage as Record<string, number> | undefined;
         // 真实用量来自子进程的 message_end.usage(fake gateway 上报 42 input tokens)。
         expect(finalUsage?.totalTokens).toBeGreaterThan(0);

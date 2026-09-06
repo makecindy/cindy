@@ -98,10 +98,9 @@ export function registerMakerUsageHandlers(
     const kind = requireString(agentKind, 'agentKind');
     if (kind === 'codex') return await deps.readCodexAccountUsageSnapshot();
     if (kind === 'claude-code') {
-      // warm-start: 没有 snapshot 时触发一次强制刷新；本次仍按当前 snapshot 返回。
-      if (deps.readClaudeAccountUsageSnapshot() === null) {
-        void deps.triggerClaudeAccountUsageRefresh(true);
-      }
+      // Both first load and explicit refresh must reach the existing owner-scoped fetcher.
+      // Cached reads retain its throttle; an empty cache gets the existing warm-start path.
+      await deps.triggerClaudeAccountUsageRefresh(deps.readClaudeAccountUsageSnapshot() === null);
       return deps.readClaudeAccountUsageSnapshot();
     }
     return null;

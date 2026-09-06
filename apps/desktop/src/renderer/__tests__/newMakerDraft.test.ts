@@ -98,6 +98,73 @@ describe('newMakerDraft store', () => {
     expect(reloaded.getDraft().defaultTupleCustomized).toBe(false);
   });
 
+  it.each([false, true])('Gateway 后到时仅更新未自定义草稿（手动选择=%s）', async (customized) => {
+    const { resolveNewMakerDefaultTuple } = await import('@/lib/newMakerDefaultTuple');
+    const { applySuggestedDefaultTuple, getDraft, markDefaultTupleCustomized } = await loadModule();
+    const sources: import('@cindy/model-providers').ProviderView[] = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        connected: true,
+        agents: ['codex'],
+        auth: { method: 'oauth' },
+        access: { kind: 'subscription', product: 'ChatGPT' },
+        routing: {},
+        models: {
+          codex: [
+            {
+              id: 'gpt-5.6-sol',
+              name: 'Sol',
+              contextWindow: 272000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ];
+    const resolve = () =>
+      resolveNewMakerDefaultTuple({
+        providers: sources,
+        providersLoading: false,
+        availableAgents: new Set(['cc', 'codex', 'pi']),
+        availableAgentsLoaded: true,
+      })!;
+    expect(applySuggestedDefaultTuple(resolve())).toBe(true);
+    expect(getDraft().vendor).toBe('codex');
+    if (customized) markDefaultTupleCustomized();
+    sources.push({
+      id: 'xd',
+      name: 'Cindy AI',
+      source: 'builtin',
+      connected: true,
+      agents: ['pi'],
+      auth: { method: 'managed' },
+      access: { kind: 'managed' },
+      routing: {},
+      models: {
+        pi: [
+          {
+            id: 'z-ai/glm-5.3-flash',
+            name: 'GLM',
+            contextWindow: 200000,
+            efforts: ['high'],
+            defaultEffort: 'high',
+            newSessionDefault: ['pi'],
+            modalities: { input: ['text', 'image'], output: ['text'] },
+          },
+        ],
+      },
+    });
+    expect(applySuggestedDefaultTuple(resolve())).toBe(!customized);
+    const draft = getDraft();
+    expect(draft.vendor).toBe(customized ? 'codex' : 'pi');
+    expect(draft.lastByVendor[draft.vendor].providerId).toBe(customized ? 'openai' : 'xd');
+    expect(draft.defaultTupleCustomized).toBe(customized);
+    expect(applySuggestedDefaultTuple(resolve())).toBe(false);
+  });
+
   it('用户明确改过组合后，登录态变化不再覆盖', async () => {
     const { applySuggestedDefaultTuple, getDraft, markDefaultTupleCustomized } = await loadModule();
     markDefaultTupleCustomized();
