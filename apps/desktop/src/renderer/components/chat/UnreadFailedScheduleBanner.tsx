@@ -96,7 +96,7 @@ function FailedScheduleNotice({
           type="button"
           onClick={dismiss}
           aria-label={t('chat.unreadFailedScheduleBanner.dismissTitle')}
-          className="shrink-0 rounded-full p-0.5 text-[var(--error-fg)] hover:bg-[var(--error-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+          className="shrink-0 rounded-full p-0.5 text-[var(--error-fg)] hover:bg-[var(--button-primary-hover)] active:bg-[var(--button-primary-pressed)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
         >
           <X size={14} aria-hidden="true" />
         </button>
