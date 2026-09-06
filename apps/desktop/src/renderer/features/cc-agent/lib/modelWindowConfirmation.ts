@@ -1,6 +1,7 @@
 export interface ModelWindowConfirmationResult {
   deferred: boolean;
   superseded?: boolean;
+  pendingUntilSend?: boolean;
   contextWindowConfirmationRequired?: number;
   contextTokensForConfirmation?: number;
 }
@@ -28,11 +29,15 @@ function confirmationFromResult(result: ModelWindowConfirmationResult | undefine
   return { contextWindow, contextTokens };
 }
 
-/** First call only discovers pressure; an exact-window retry may perform the rebuild. */
+/** A staged selection is consumed by the recovery send; immediate routes retain window confirmation. */
 export async function setModelWithWindowConfirmation(
   options: ConfirmedModelSwitchOptions,
-): Promise<'applied' | 'confirmed' | false> {
-  const confirmation = confirmationFromResult(await options.invoke());
+): Promise<'applied' | 'confirmed' | 'pending' | false> {
+  const result = await options.invoke();
+  if (result?.deferred === true && result.superseded === false && result.pendingUntilSend === true) {
+    return 'pending';
+  }
+  const confirmation = confirmationFromResult(result);
   if (!confirmation) return 'applied';
   if (!(await options.confirm(confirmation))) return false;
   return confirmationFromResult(await options.invoke(confirmation.contextWindow)) === null
