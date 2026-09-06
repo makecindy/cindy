@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
 
 import { useState } from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { CindyAuthClient, reduceAuthFlow, type AuthFlowState } from '@cindy/auth-client';
 import { createScenarioFetch } from '@cindy/auth-client/fixtures';
-import type { DesktopLoginActionResult } from '../../../../shared/authIpc';
+import type { DesktopLoginAction, DesktopLoginActionResult } from '../../../../shared/authIpc';
 
 const auth = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
   loadLoginState: vi.fn<() => Promise<DesktopLoginActionResult>>(),
   beginAddAccount: vi.fn<() => Promise<DesktopLoginActionResult>>(),
   cancelAddAccount: vi.fn(async () => undefined),
+  dispatchLoginAction: vi.fn<(action: DesktopLoginAction) => Promise<DesktopLoginActionResult>>(),
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth.value }));
@@ -40,6 +41,7 @@ function Harness({ addAccount = false }: { addAccount?: boolean }) {
     loadLoginState: auth.loadLoginState,
     beginAddAccount: auth.beginAddAccount,
     cancelAddAccount: auth.cancelAddAccount,
+    dispatchLoginAction: auth.dispatchLoginAction,
   };
   return (
     <AppShellCoverProvider>
@@ -86,6 +88,45 @@ afterEach(() => {
 });
 
 describe('login initialization ownership', () => {
+  it.each([false, true])(
+    'returns from an initialization error to the login entry (addAccount=%s)',
+    async (addAccount) => {
+      const initialize = addAccount ? auth.beginAddAccount : auth.loadLoginState;
+      initialize.mockImplementation(async () => {
+        const state: AuthFlowState = {
+          step: 'error',
+          code: 'REGION_MISMATCH',
+          recoverTo: 'identifier',
+        };
+        publishState(state);
+        return { success: false, code: state.code, state };
+      });
+      // Publish the successful reset result through the same auth-state boundary
+      // consumed by the real useLogin hook and LoginPage.
+      auth.dispatchLoginAction.mockImplementation(async (action) => {
+        if (action.type !== 'reset') throw new Error('expected reset');
+        publishState(identifierState);
+        return { success: true, state: identifierState };
+      });
+      render(<Harness addAccount={addAccount} />);
+
+      await screen.findByTestId('login-panel-error');
+      const back = screen.getByRole('button', { name: 'login.back' }) as HTMLButtonElement;
+      await waitFor(() => expect(back.disabled).toBe(false));
+      expect(screen.getByTestId('login-error-retry')).toBeTruthy();
+
+      fireEvent.click(back);
+
+      await screen.findByTestId('login-panel-identifier');
+      expect(screen.getByTestId('login-input')).toBeTruthy();
+      expect(screen.queryByTestId('login-panel-error')).toBeNull();
+      expect(screen.queryByTestId('login-error-text')).toBeNull();
+      expect(screen.queryByTestId('login-error-retry')).toBeNull();
+      expect(auth.dispatchLoginAction).toHaveBeenCalledExactlyOnceWith({ type: 'reset' });
+      expect(auth.cancelAddAccount).not.toHaveBeenCalled();
+    },
+  );
+
   it('opens add-account login without an invalidated load or a false failure', async () => {
     render(<Harness addAccount />);
 

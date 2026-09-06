@@ -147,28 +147,6 @@ describe('error screen recovery', () => {
     recoverTo: 'identifier',
   };
 
-  it('offers a back action that restarts ordinary sign-in', () => {
-    mount(errorState);
-
-    fireEvent.click(screen.getByRole('button', { name: 'login.back' }));
-
-    expect(loginHook.value.clearError).toHaveBeenCalledOnce();
-    expect(loginHook.value.dispatch).toHaveBeenCalledExactlyOnceWith({ type: 'reset' });
-    expect(screen.getByTestId('login-error-retry')).toBeTruthy();
-    expect(screen.getByTestId('login-local-mode')).toBeTruthy();
-  });
-
-  it('restarts add-account sign-in without closing the login entry', () => {
-    const onClose = vi.fn();
-    mount(errorState, undefined, 'add-account', onClose);
-
-    fireEvent.click(screen.getByRole('button', { name: 'login.back' }));
-
-    expect(onClose).not.toHaveBeenCalled();
-    expect(loginHook.value.clearError).toHaveBeenCalledOnce();
-    expect(loginHook.value.dispatch).toHaveBeenCalledExactlyOnceWith({ type: 'reset' });
-  });
-
   it('does not dispatch a second reset while sign-in is loading', () => {
     mount(errorState, { isLoading: true });
 
