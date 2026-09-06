@@ -30,6 +30,75 @@ const colors = {
 };
 
 describe("ConversationShareSvg", () => {
+  it.each(["user", "assistant"] as const)(
+    "preserves mixed attachment order through every image fallback combination for %s",
+    (kind) => {
+      for (let ready = 0; ready < 8; ready++) {
+        const urls = ["first", "second", "third"];
+        const images = new Map(
+          urls.flatMap((url, index) =>
+            ready & (1 << index)
+              ? [
+                  [
+                    url,
+                    {
+                      uri: `data:image/png;base64,${url}`,
+                      width: 40,
+                      height: 20,
+                    },
+                  ] as const,
+                ]
+              : [],
+          ),
+        );
+        const layout = buildConversationShareSvgLayout({
+          allShareableIds: ["m"],
+          colors,
+          width: 390,
+          messages: [
+            {
+              clientId: "m",
+              kind,
+              automationOriginLabel: "automation",
+              body: "body",
+              attachments: [
+                { kind: "image", name: "first", uri: "first" },
+                { kind: "file", name: "document" },
+                { kind: "image", name: "second", uri: "second" },
+                { kind: "image", name: "third", uri: "third" },
+              ],
+              images,
+            },
+          ],
+        });
+        const visible = [
+          ...layout.images.map((image) => ({
+            y: image.y,
+            text: image.uri.split(",")[1],
+          })),
+          ...layout.bubbles.map((bubble) => ({
+            y: bubble.y,
+            text: bubble.textBlocks
+              .flatMap((block) => block.lines)
+              .join(" ")
+              .replace(/^[▧▤] /, ""),
+          })),
+        ].sort((a, b) => a.y - b.y);
+        expect(visible.map((item) => item.text)).toEqual([
+          "automation",
+          "first",
+          "document",
+          "second",
+          "third",
+          "body",
+        ]);
+        for (let i = 1; i < visible.length; i++) {
+          expect(visible[i]!.y).toBeGreaterThan(visible[i - 1]!.y);
+        }
+      }
+    },
+  );
+
   it.each([0, 1, 2])(
     "keeps attribution above all content with %i decoded attachments",
     (decodedCount) => {
@@ -80,7 +149,7 @@ describe("ConversationShareSvg", () => {
           expect(item.y).toBeGreaterThan(attributionBottom);
         }
         const content = layout.bubbles.slice(2, -1);
-        expect(content).toHaveLength(decodedCount < 2 || body ? 1 : 0);
+        expect(content).toHaveLength(2 - decodedCount + (body ? 1 : 0));
         expect(
           content
             .flatMap((bubble) => bubble.textBlocks)

@@ -109,11 +109,9 @@ export function buildConversationShareSvgLayout({
     const bubbleX = user ? canvasWidth - PADDING - bubbleWidth : PADDING;
     const horizontalPadding = user ? 12 : 0;
     const textWidth = bubbleWidth - horizontalPadding * 2;
-    // Attribution belongs to the whole message, above attachments and outside
-    // the content bubble, including when failed images fall back to text.
-    if (message.automationOriginLabel) {
+    const appendMetadata = (text: string, color: string, gap: number) => {
       const lines = wrapSvgText(
-        redactSensitiveText(message.automationOriginLabel).trim(),
+        redactSensitiveText(text).trim(),
         bubbleWidth,
         META_FONT_SIZE,
       );
@@ -125,7 +123,7 @@ export function buildConversationShareSvgLayout({
         y: cursorY,
         textBlocks: [
           {
-            color: colors.textTertiary,
+            color,
             fontSize: META_FONT_SIZE,
             lineHeight: META_LINE_HEIGHT,
             lines,
@@ -134,7 +132,12 @@ export function buildConversationShareSvgLayout({
           },
         ],
       });
-      cursorY += height + 4;
+      cursorY += height + gap;
+    };
+    // One ordered traversal owns attribution, attachments, then body. Failed
+    // images replace their own occurrence rather than moving into the bubble.
+    if (message.automationOriginLabel) {
+      appendMetadata(message.automationOriginLabel, colors.textTertiary, 4);
     }
     const appendImage = (image: ConversationShareImage) => {
       const scale = Math.min(1, bubbleWidth / image.width, 320 / image.height);
@@ -156,6 +159,12 @@ export function buildConversationShareSvgLayout({
           : undefined;
       if (image && attachment.uri) {
         appendImage(image);
+      } else {
+        appendMetadata(
+          `${attachment.kind === "image" ? "▧" : "▤"} ${attachment.name}`,
+          colors.textSecondary,
+          MESSAGE_GAP,
+        );
       }
     }
     const blocks: Array<
@@ -168,20 +177,6 @@ export function buildConversationShareSvgLayout({
         }
     > = [];
 
-    for (const attachment of message.attachments ?? []) {
-      if (
-        attachment.kind === "image" &&
-        attachment.uri &&
-        message.images?.has(attachment.uri)
-      )
-        continue;
-      blocks.push({
-        color: colors.textSecondary,
-        fontSize: META_FONT_SIZE,
-        lineHeight: META_LINE_HEIGHT,
-        text: `${attachment.kind === "image" ? "▧" : "▤"} ${redactSensitiveText(attachment.name).trim()}`,
-      });
-    }
     for (const part of conversationShareBodyParts(message)) {
       if ("image" in part) blocks.push(part);
       else
