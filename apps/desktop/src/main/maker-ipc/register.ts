@@ -13854,7 +13854,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
       let persistedProviderId: string | null = null;
       let persistedProviderKnown = true;
-      if (requestedProviderId === undefined && !hasSessionProvider(sessionId)) {
+      // 「目标 provider」(requestedProviderId,用户要切去的来源)与「源会话 provider」
+      // (会话当前路由,窗口评估要用)是两个独立事实。冷会话内存未 hydrate 时,即使
+      // 本次请求显式携带了目标 provider,也必须先从 DB 恢复源 provider —— 否则
+      // currentProviderId 为 null,源模型窗口按全局 modelId 反查,同名模型跨
+      // provider 时解析不确定(fail-closed),冷会话带历史切换渠道会误报
+      // MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN(#3996)。目标 provider 只参与目标
+      // 模型解析与最终提交,不覆盖源窗口解析所需身份。
+      if (!hasSessionProvider(sessionId)) {
         try {
           const db = getDbClient().drizzle;
           const [row] = await db
@@ -13885,9 +13892,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (routeExplicit) {
         const dbAgentKind = getSessionDbAgentKind(sessionId);
         if (dbAgentKind) {
-          const reroute = persistedProviderKnown
-            ? await assertModelRouteUsable(dbToMakerAgentKind(dbAgentKind), model, guardProviderId)
-            : undefined;
+          // 停用轴准入只依赖目标路由(guard = 显式目标 ?? 恢复出的源),与源 provider
+          // 的 DB 查询成败无关 —— 查询失败只能放弃独占 pin 重裁决,不能跳过准入。
+          const reroute = await assertModelRouteUsable(
+            dbToMakerAgentKind(dbAgentKind),
+            model,
+            guardProviderId,
+          );
           effectiveProviderId = resolveExclusiveSetModelReroute(
             requestedProviderId,
             currentProviderId,
