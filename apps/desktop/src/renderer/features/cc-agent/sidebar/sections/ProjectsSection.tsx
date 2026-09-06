@@ -838,10 +838,20 @@ export function ProjectsSection({
     dialogueGroupKey: string,
     dialogueDeviceTarget?: DialogueDeviceTarget | null,
   ): ReactNode => {
-    if (entry.kind === 'session' || entry.kind === 'automation-group') {
+    if (
+      entry.kind === 'session' ||
+      entry.kind === 'automation-group' ||
+      entry.kind === 'session-family'
+    ) {
       return (
         <SessionEntryRows
-          key={entry.kind === 'session' ? entry.session.id : `automation-group:${entry.group.id}`}
+          key={
+            entry.kind === 'session'
+              ? entry.session.id
+              : entry.kind === 'automation-group'
+                ? `automation-group:${entry.group.id}`
+                : entry.family.id
+          }
           entries={[entry]}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}

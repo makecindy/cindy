@@ -241,7 +241,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it('远程会话 patchMeta(删/归档/改名/置顶)经隧道 local-db:sessions:patch-meta', async () => {
+  it('远程会话 patchMeta(删/归档/改名/置顶/脱离 family)经隧道 local-db:sessions:patch-meta', async () => {
     const { invoke } = stubElectron();
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
     const sessionService = await import('@/lib/sessionService');
@@ -258,6 +258,11 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:patch-meta', [
       'rs',
       { title: 'New' },
+    ]);
+    await sessionService.patchMeta('rs', { parentSessionId: null });
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:patch-meta', [
+      'rs',
+      { parentSessionId: null },
     ]);
 
     // Relay reconnect may temporarily clear the live mirror. The sticky
