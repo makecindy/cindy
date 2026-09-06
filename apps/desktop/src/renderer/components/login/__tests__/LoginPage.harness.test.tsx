@@ -140,6 +140,23 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe('error screen recovery', () => {
+  const errorState: AuthFlowState = {
+    step: 'error',
+    code: 'REGION_MISMATCH',
+    recoverTo: 'identifier',
+  };
+
+  it('does not dispatch a second reset while sign-in is loading', () => {
+    mount(errorState, { isLoading: true });
+
+    const back = screen.getByRole('button', { name: 'login.back' }) as HTMLButtonElement;
+    expect(back.disabled).toBe(true);
+    fireEvent.click(back);
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
+});
+
 /* ── wave4 视觉五维(brand-background / panel-border / wordmark / slogan) ── */
 describe('wave4 stage 视觉', () => {
   it('brand-background 纯平白底(消费 login-bg-base,无渐变;2026-07-22 对齐 PR #104,viewport 锚定)', async () => {

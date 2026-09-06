@@ -2,6 +2,7 @@ import type { Editor } from '@tiptap/core';
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { EditorState } from '@tiptap/pm/state';
 import {
+  buildBotReferenceHref,
   parseBrowserTabReferenceHref,
   parseDesktopWindowReferenceHref,
   parsePluginResourceReferenceHref,
@@ -120,6 +121,7 @@ function serializeComposerDocument(
       attrs.kind === 'project' ||
       attrs.kind === 'browser-tab' ||
       attrs.kind === 'desktop-window' ||
+      attrs.kind === 'bot' ||
       attrs.kind === 'plugin-resource' ||
       attrs.kind === 'plugin-capability'
     )
@@ -363,6 +365,25 @@ function serializeComposerDocument(
               ...(attrs.sourceDescription ? { description: attrs.sourceDescription } : {}),
             });
           }
+          return;
+        }
+        if (attrs.kind === 'bot') {
+          const label = attrs.label
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/([[\]\\])/g, '\\$1');
+          const href = buildBotReferenceHref(attrs.path);
+          const wire = `[${label || 'Bot'}](${href})`;
+          const start = buffer.length;
+          buffer += wire;
+          bufferAgentReferences.push({
+            kind: 'bot',
+            start,
+            end: buffer.length,
+            href,
+            botId: attrs.path,
+            name: attrs.label || attrs.path,
+          });
           return;
         }
         if (attrs.kind === 'dir') {

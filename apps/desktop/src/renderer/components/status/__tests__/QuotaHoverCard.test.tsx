@@ -14,6 +14,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.modelWeeklyLabel') return `${options.model} 周限`;
       if (key === 'quotaCard.windowsRegionLabel') return '配额窗口列表';
       if (key === 'quotaCard.usedPercent') return `已用 ${options.percent}%`;
+      if (key === 'quotaCard.remainingPercent') return `剩余 ${options.percent}%`;
       if (key === 'quotaCard.usageCritical') return '用量较高';
       if (key === 'quotaCard.usageWarning') return '用量偏高';
       if (key === 'quotaCard.limitRejected') return '已触发套餐限额，请求可能被拒绝';
@@ -139,9 +140,9 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('Fable 周限')).toBeTruthy();
     expect(screen.getByText('Opus 周限')).toBeTruthy();
     expect(screen.getByText('已用 1%')).toBeTruthy();
-    expect(screen.getByText('已用 4%')).toBeTruthy();
-    expect(screen.getByText('已用 0%')).toBeTruthy();
-    expect(screen.getByText('已用 76%')).toBeTruthy();
+    expect(screen.getByText('剩余 96%')).toBeTruthy();
+    expect(screen.getByText('剩余 100%')).toBeTruthy();
+    expect(screen.getByText('剩余 24%')).toBeTruthy();
     expect(screen.getByText('17:05 重置')).toBeTruthy();
     expect(screen.getByText('8月7日 00:00 重置')).toBeTruthy();
     expect(screen.getByText('8月6日 23:59 重置')).toBeTruthy();
@@ -229,7 +230,7 @@ describe('QuotaHoverCard', () => {
       />,
     );
 
-    expect(screen.getByText('已用 30%')).toBeTruthy();
+    expect(screen.getByText('剩余 70%')).toBeTruthy();
     expect(screen.queryByText(/重置$/)).toBeNull();
   });
 
@@ -243,6 +244,27 @@ describe('QuotaHoverCard', () => {
     expect((bar.firstElementChild as HTMLElement | null)?.style.width).toBe('100%');
     expect(screen.getByText('已用 100%')).toBeTruthy();
   });
+
+  it.each([
+    { utilization: 94, remaining: 6, severity: 'crit' },
+    { utilization: 100, remaining: 0, severity: 'crit' },
+    { utilization: 250, remaining: 0, severity: 'crit' },
+    { utilization: 0, remaining: 100, severity: 'normal' },
+    { utilization: -5, remaining: 100, severity: 'normal' },
+  ])(
+    'shows $remaining% remaining for weekly usage $utilization without reversing warnings',
+    ({ utilization, remaining, severity }) => {
+      render(
+        <QuotaHoverCard nowMs={NOW_MS} snapshot={makeSnapshot({ sevenDay: { utilization } })} />,
+      );
+      const bar = screen.getByRole('progressbar');
+      expect(screen.getByText(`剩余 ${remaining}%`)).toBeTruthy();
+      expect(bar.getAttribute('aria-valuenow')).toBe(String(remaining));
+      expect(bar.getAttribute('aria-valuetext')).toBe(`剩余 ${remaining}%`);
+      expect((bar.firstElementChild as HTMLElement).style.width).toBe(`${remaining}%`);
+      expect(bar.getAttribute('data-severity')).toBe(severity);
+    },
+  );
 
   it('omits a null subscription badge and maps max to Max', () => {
     const { rerender } = render(

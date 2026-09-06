@@ -64,8 +64,10 @@ interface SessionRuntimeControlState {
 const states = new Map<string, SessionRuntimeControlState>();
 let ownerEpoch = 0;
 
-function routeKey(profile: Pick<SessionRuntimeProfile, 'providerId' | 'model'>): string {
-  return `${profile.providerId ?? ''}\u0000${profile.model}`;
+function routeKey(
+  profile: Pick<SessionRuntimeProfile, 'agentKind' | 'providerId' | 'model'>,
+): string {
+  return `${profile.agentKind}\u0000${profile.providerId ?? ''}\u0000${profile.model}`;
 }
 
 function stateFor(sessionId: string): SessionRuntimeControlState {
@@ -465,7 +467,11 @@ export function pickSessionRuntimeFallback(params: {
   }
 
   for (const candidate of candidates) {
-    const key = routeKey({ providerId: candidate.providerId, model: candidate.model.id });
+    const key = routeKey({
+      agentKind: params.current.agentKind,
+      providerId: candidate.providerId,
+      model: candidate.model.id,
+    });
     if (visited.has(key)) continue;
     const axes = resolveSessionRuntimeAxes({
       model: candidate.model,

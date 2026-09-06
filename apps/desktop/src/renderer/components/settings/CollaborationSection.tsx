@@ -4,10 +4,10 @@
 
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { SettingsTextInput } from './SettingsTextInput';
 
 /** 带分割线的多行卡片:卡片自身不留内边距,由每行 `px-4 py-4` 承担(房规见 SubagentModelSection 卡 2)。 */
 const CARD_CLASS = cn(
@@ -23,7 +23,7 @@ const ROW_HINT_CLASS =
 /** 行间分割线:左右缩进与行内边距对齐。 */
 const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
 
-/** 数字输入走标准 Input md 档（32/36/40 中的 36px），原生步进器不自绘。 */
+/** 数字输入复用标准 Input md 档，设置封装保留旧局部主题覆盖，原生步进器不自绘。 */
 
 interface CollaborationSettings {
   workerSoftLimit: number;
@@ -104,7 +104,7 @@ export function CollaborationSection() {
               {t('settings.collaboration.workerSoftLimitHint')}
             </span>
           </span>
-          <Input
+          <SettingsTextInput
             type="number"
             min={1}
             max={settings.workerHardLimit}
@@ -130,7 +130,7 @@ export function CollaborationSection() {
               {t('settings.collaboration.workerHardLimitHint')}
             </span>
           </span>
-          <Input
+          <SettingsTextInput
             type="number"
             min={settings.workerSoftLimit}
             max={20}
@@ -159,7 +159,7 @@ export function CollaborationSection() {
               {t('settings.collaboration.idleReleaseHint')}
             </span>
           </span>
-          <Input
+          <SettingsTextInput
             type="number"
             min={0}
             max={120}

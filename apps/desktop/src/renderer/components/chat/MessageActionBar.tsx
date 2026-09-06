@@ -1,7 +1,7 @@
 /**
  * MessageActionBar
  * ---------------------------------------------------------------------------
- * Hover-revealed action bar for chat messages (V1.2 spec).
+ * Action bar for chat messages (V1.2 spec).
  *
  * Layout:
  *   - Bar gap 2px, align-items: center
@@ -14,7 +14,8 @@
  *     hover color #262626 (Light) / #ffffff (Dark)
  *   - Time text 12px Inter normal, color INVERTED from icon (#a3a3a3 / #737373)
  *
- * Visibility (controlled by parent hover container):
+ * Visibility (controlled by parent hover container unless the Bot-only
+ * simplified mode keeps the bar visible):
  *   - visible=true  → opacity 1 (mounted, no fade-in per spec)
  *   - visible=false → opacity 0 + pointer-events-none, parent owns 200ms
  *     debounce + 150ms fade-out lifecycle
@@ -33,6 +34,7 @@ import {
   Ellipsis,
   Link2,
   MessageSquarePlus,
+  MessageSquareReply,
   Pencil,
   Share,
   Split,
@@ -73,6 +75,8 @@ interface MessageActionBarProps {
   /** Whether the parent message is currently hovered. Drives the entire
    *  fade lifecycle internally so quick re-enters don't replay from 0. */
   hovered: boolean;
+  /** 伙伴对话专属精简态：操作栏常显，隐藏费用和 Fork，并把引用入口外显为“回复”。 */
+  simplifiedBotConversation?: boolean;
   /** When provided, render a Fork button (user messages fork *before* the
    *  question; assistant messages fork *through* the reply's turn — the
    *  parent decides whether to wire it). Returning a promise keeps the
@@ -122,6 +126,7 @@ export function MessageActionBar({
   copyLinkText,
   align,
   hovered,
+  simplifiedBotConversation = false,
   onFork,
   onAddToChat,
   onShareAsImage,
@@ -317,7 +322,7 @@ export function MessageActionBar({
     </Tooltip.Root>
   );
 
-  const forkBtn = onFork && (
+  const forkBtn = !simplifiedBotConversation && onFork && (
     <Tooltip.Root key="fork">
       <Tooltip.Trigger asChild>
         <button
@@ -351,6 +356,39 @@ export function MessageActionBar({
         </button>
       </Tooltip.Trigger>
       <Tooltip.Content>{t('chat.messageActionBar.fork')}</Tooltip.Content>
+    </Tooltip.Root>
+  );
+
+  const replyBtn = simplifiedBotConversation && onAddToChat && (
+    <Tooltip.Root key="reply">
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onAddToChat();
+          }}
+          disabled={inFlight}
+          className={cn(
+            'group flex h-[24px] w-[24px] items-center justify-center',
+            'rounded-full border-none bg-transparent outline-none cursor-pointer',
+            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
+            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          )}
+          aria-label={t('chat.messageActionBar.reply')}
+        >
+          <MessageSquareReply
+            size={14}
+            strokeWidth={2}
+            className={cn(
+              'text-[var(--cmd-palette-item-meta)]',
+              'group-hover:text-[var(--msg-assistant-text)]',
+              'transition-colors duration-150',
+            )}
+          />
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{t('chat.messageActionBar.reply')}</Tooltip.Content>
     </Tooltip.Root>
   );
 
@@ -505,10 +543,12 @@ export function MessageActionBar({
     </Tooltip.Root>
   );
 
-  // Rewind、链接复制与单条删除收进 More 菜单；Fork 与复制同级外显。
+  // Rewind、链接复制与单条删除收进 More 菜单；普通任务仍在菜单里提供
+  // “添加到对话”，伙伴对话则将同一动作外显成“回复”。
   // 面板/行几何遵守 12px container + 8px inner-control 两档圆角。
   const canRewind = Boolean(onRewind && align === 'right');
-  const moreMenu = (onAddToChat || copyLinkText || canRewind || onDelete) && (
+  const addToChatInMenu = simplifiedBotConversation ? undefined : onAddToChat;
+  const moreMenu = (addToChatInMenu || copyLinkText || canRewind || onDelete) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <button
@@ -565,11 +605,11 @@ export function MessageActionBar({
           'bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-none',
         )}
       >
-        {onAddToChat && (
+        {addToChatInMenu && (
           <DropdownMenuItem
             onSelect={(event) => {
               event.stopPropagation();
-              onAddToChat();
+              addToChatInMenu();
             }}
             className="h-8 cursor-pointer select-none rounded-lg px-2 text-sm focus:bg-[var(--cmd-palette-item-hover)]"
           >
@@ -604,7 +644,7 @@ export function MessageActionBar({
         )}
         {onDelete && (
           <>
-            {(onAddToChat || copyLinkText || canRewind) && (
+            {(addToChatInMenu || copyLinkText || canRewind) && (
               <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
             )}
             <DropdownMenuItem
@@ -627,12 +667,22 @@ export function MessageActionBar({
     </DropdownMenu>
   );
 
+  // 普通任务:
   // align='left'  → [copy][share][fork][more][time][cost]   (assistant)
   // align='right' → [time][copy][share][fork][edit][more]   (user)
+  // 伙伴对话:[copy][share][reply][more][time] / [time][copy][share][reply][edit][more]
   const items =
     align === 'left'
-      ? [copyBtn, shareBtn, forkBtn, moreMenu, timeText, costText || tokensText]
-      : [timeText, copyBtn, shareBtn, forkBtn, editBtn, moreMenu];
+      ? [
+          copyBtn,
+          shareBtn,
+          forkBtn,
+          replyBtn,
+          moreMenu,
+          timeText,
+          simplifiedBotConversation ? null : costText || tokensText,
+        ]
+      : [timeText, copyBtn, shareBtn, forkBtn, replyBtn, editBtn, moreMenu];
 
   return (
     <div
@@ -645,7 +695,9 @@ export function MessageActionBar({
         // Hover re-enters mid-fade interpolate from the current opacity
         // (browser CSS transition behavior — no replay from 0).
         'transition-opacity duration-[250ms] ease-out',
-        visible || menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
+        simplifiedBotConversation || visible || menuOpen
+          ? 'opacity-100'
+          : 'opacity-0 pointer-events-none',
         // Menu-owned actions dim the entire bar and block clicks. Fork only
         // disables its own button so More remains available.
         moreInFlight && 'opacity-60 pointer-events-none',

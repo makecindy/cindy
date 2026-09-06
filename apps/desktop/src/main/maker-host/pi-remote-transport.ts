@@ -197,6 +197,37 @@ fi
       return null;
     },
 
+    async readFile(file: string, maxBytes = 1_048_576): Promise<string> {
+      const boundedBytes = Math.max(1, Math.min(Math.trunc(maxBytes), 4_194_304));
+      const script = `P=${shellQuote(file)}; case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\$HOME}" != "$P" ] && P="\${H}\${P#\\$HOME}";; esac; [ -f "$P" ] || exit 44; head -c ${boundedBytes} "$P"`;
+      const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
+        timeoutMs: 10_000,
+        label: 'agent-remote-read-file',
+      });
+      if (result.exitCode !== 0) {
+        throw new Error(`remote read failed (exit ${result.exitCode})`);
+      }
+      return result.stdout;
+    },
+
+    async sha256File(file: string): Promise<string> {
+      const script = [
+        `P=${shellQuote(file)}`,
+        `case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\$HOME}" != "$P" ] && P="\${H}\${P#\\$HOME}";; esac`,
+        `[ -f "$P" ] || exit 44`,
+        `if command -v sha256sum >/dev/null 2>&1; then sha256sum "$P" | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$P" | awk '{print $1}'; elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$P" | awk '{print $NF}'; else exit 45; fi`,
+      ].join('\n');
+      const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
+        timeoutMs: 30_000,
+        label: 'agent-remote-sha256-file',
+      });
+      const digest = result.stdout.trim().split(/\r?\n/).pop()?.toLowerCase() ?? '';
+      if (result.exitCode !== 0 || !/^[a-f0-9]{64}$/.test(digest)) {
+        throw new Error(`remote sha256 failed (exit ${result.exitCode})`);
+      }
+      return digest;
+    },
+
     async rm(fileOrDir: string, opts?: { recursive?: boolean }): Promise<void> {
       const flag = opts?.recursive === true ? ' -rf' : ' -f';
       // 轮 43 P1(codex-connector):eval 换 H=$(printf) + 参数替换, 无注入风险。

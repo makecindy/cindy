@@ -313,6 +313,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     await waitFor(() => {
       expect(view.result.current.get('session-1')).toMatchObject({
         hasFailedRun: true,
+        latestFailedRun: { runId: 'read-failure', firedAt: 10 },
         hasUnreadFailedRun: false,
         hasUnreadRun: false,
         unreadRunIds: [],
@@ -327,6 +328,22 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
         hasUnreadFailedRun: false,
       });
     });
+  });
+
+  it('selects the latest failure independently of read state and snapshot row order', async () => {
+    stubApiWithRuns([
+      indexRun({ runId: 'read-z', status: 'interrupted', readAt: 30, firedAt: 20 }),
+      indexRun({ runId: 'read-a', status: 'failed', readAt: 30, firedAt: 20 }),
+      indexRun({ runId: 'older-unread', status: 'failed', readAt: undefined, firedAt: 10 }),
+      indexRun({ runId: 'success', status: 'success', readAt: 30, firedAt: 25 }),
+    ]);
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() =>
+      expect(result.current.get('session-1')).toMatchObject({
+        latestFailedRun: { runId: 'read-z', firedAt: 20 },
+        latestUnreadFailedRunId: 'older-unread',
+      }),
+    );
   });
 
   it('clears markers whose run already reached a terminal status', async () => {

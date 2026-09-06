@@ -24,10 +24,14 @@ function View({
   runIds,
   visible = true,
   showBanner = true,
+  sessionId = 'session-1',
+  dataOwnerId = 'owner-1',
 }: {
   runIds: string[];
   visible?: boolean;
   showBanner?: boolean;
+  sessionId?: string;
+  dataOwnerId?: string;
 }) {
   const [, refresh] = useReducer((revision: number) => revision + 1, 0);
   useEffect(() => subscribeScheduleRunReadSync(refresh), []);
@@ -35,13 +39,20 @@ function View({
     runIds.filter((id) => !readIds.has(id)),
     visible,
   );
-  return showBanner ? <UnreadFailedScheduleBanner /> : null;
+  return showBanner ? (
+    <UnreadFailedScheduleBanner
+      dataOwnerId={dataOwnerId}
+      sessionId={sessionId}
+      latestFailedRun={{ runId: runIds.at(-1)!, firedAt: runIds.length }}
+    />
+  ) : null;
 }
 
 beforeEach(() => {
   focused = true;
   visibility = 'visible';
   readIds.clear();
+  localStorage.clear();
   markRunRead.mockReset().mockImplementation(async (id) => {
     readIds.add(id);
   });
@@ -66,9 +77,11 @@ describe('historical failed schedule notice', () => {
     expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
   });
 
-  it('marks the batch read on opening and keeps the notice after reopening, without a button', async () => {
+  it('marks the batch read without clicking close and keeps the notice after reopening', async () => {
     const view = render(<View runIds={['old-1', 'old-2']} />);
-    expect(screen.queryByRole('button')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'chat.unreadFailedScheduleBanner.dismissTitle' }),
+    ).toBeTruthy();
     await waitFor(() => expect(readIds).toEqual(new Set(['old-1', 'old-2'])));
     view.rerender(<View runIds={['old-2', 'old-1']} />);
     expect(markRunRead.mock.calls.map(([id]) => id)).toEqual(['old-1', 'old-2']);
@@ -77,6 +90,89 @@ describe('historical failed schedule notice', () => {
     render(<View runIds={['old-1', 'old-2']} />);
     expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
     expect(markRunRead).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a closed notice hidden after remount, but shows a new failure', async () => {
+    const view = render(<View runIds={['old']} />);
+    await waitFor(() => expect(readIds.has('old')).toBe(true));
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+    view.unmount();
+    const reopened = render(<View runIds={['old']} />);
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+    reopened.rerender(<View runIds={['old', 'new']} />);
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+    await waitFor(() => expect(readIds).toEqual(new Set(['old', 'new'])));
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+  });
+
+  it('does not carry dismissal into another task or owner', () => {
+    const view = render(<View runIds={['old']} />);
+    fireEvent.click(screen.getByRole('button'));
+    view.rerender(<View runIds={['old']} sessionId="session-2" />);
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+    view.rerender(<View runIds={['old']} dataOwnerId="owner-2" />);
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+    view.rerender(<View runIds={['old']} />);
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+  });
+
+  it('syncs dismissal from another window without changing read receipts', () => {
+    focused = false;
+    render(<View runIds={['old']} />);
+    const key = 'scheduleFailureDismissal:["owner-1","session-1"]:[1,"old"]';
+    localStorage.setItem(key, '1');
+    fireEvent(window, new StorageEvent('storage', { key, storageArea: localStorage }));
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+    expect(markRunRead).not.toHaveBeenCalled();
+    localStorage.clear();
+    fireEvent(window, new StorageEvent('storage', { key: null, storageArea: localStorage }));
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+  });
+
+  it('does not overwrite a newer dismissal when a stale window closes an older notice', () => {
+    const older = render(<View runIds={['old']} />);
+    const newer = render(<View runIds={['old', 'new']} />);
+    fireEvent.click(newer.container.querySelector('button')!);
+    fireEvent.click(older.container.querySelector('button')!);
+    expect(localStorage.length).toBe(1);
+    // 回收旧 key 后，收到清理事件的旧窗口仍保持关闭。
+    fireEvent(
+      window,
+      new StorageEvent('storage', {
+        key: 'scheduleFailureDismissal:["owner-1","session-1"]:[1,"old"]',
+        storageArea: localStorage,
+      }),
+    );
+    expect(older.container.querySelector('button')).toBeNull();
+    older.unmount();
+    newer.unmount();
+    render(<View runIds={['old', 'new']} />);
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+  });
+
+  it('can close when preference storage fails, without clearing failed read receipts', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    markRunRead.mockRejectedValue(new Error('IPC unavailable'));
+    const view = render(<View runIds={['old']} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+    expect(readIds.size).toBe(0);
+    fireEvent(
+      window,
+      new StorageEvent('storage', {
+        key: 'scheduleFailureDismissal:["owner-1","session-1"]:[0,"older"]',
+        storageArea: localStorage,
+      }),
+    );
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
+    view.rerender(<View runIds={['old', 'new']} />);
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+    await act(async () => {});
+    expect(readIds.size).toBe(0);
   });
 
   it('does not read a mounted background window until it gains focus', async () => {

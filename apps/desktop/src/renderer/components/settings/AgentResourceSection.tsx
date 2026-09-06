@@ -10,11 +10,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { SettingsTextInput } from './SettingsTextInput';
 
 type Wire = AgentResourceSettingsWire;
 type SettingKey = 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads';
@@ -41,7 +41,7 @@ const ROW_HINT_CLASS =
 /** 行间分割线:左右缩进与行内边距对齐。 */
 const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
 
-/** 数字输入走标准 Input md 档（32/36/40 中的 36px），原生步进器不自绘。 */
+/** 数字输入复用标准 Input md 档，设置封装保留旧局部主题覆盖，原生步进器不自绘。 */
 
 /**
  * 均衡档并发值:本机核数的一半,至少 2(与 main 侧 toolchain-thread-cap 的口径一致),
@@ -298,7 +298,7 @@ export function AgentResourceSection() {
               {t('settings.agentResource.maxConcurrentHint')}
             </span>
           </span>
-          <Input
+          <SettingsTextInput
             type="number"
             min={0}
             max={MAX_CONCURRENT_CAP}

@@ -462,6 +462,7 @@ export function TabStrip({
         {dropdownOpen && (
           <AddTabDropdown
             anchorRef={addButtonWrapperRef}
+            sessionId={sessionId}
             onClose={() => setDropdownOpen(false)}
             onSelect={(kind) => {
               onAdd(kind);

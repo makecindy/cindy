@@ -19,6 +19,7 @@ import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionStreamResult } from './sessionEventStream.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
 export interface DeliverSessionEventDeps {
+  readonly attemptBotCompactRuntimeRefresh: (session: Session, reason: string) => void;
   readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'captureWorkerTerminalTurn'> | null;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
@@ -160,6 +161,13 @@ export function deliverSessionEvent(
   }
   if (event.type === 'done' && !isContinuationBoundary) {
     void deps.gitSnapshotCoordinator?.onTurnEnd(session.id);
+  }
+  if (
+    (event.type === 'done' && !isContinuationBoundary) ||
+    (event.type === 'status' && shouldMarkTurnStatusIdleAfterBroadcast) ||
+    event.type === 'agent_task_update'
+  ) {
+    deps.attemptBotCompactRuntimeRefresh(session, `event:${event.type}`);
   }
   if (isTerminalTurnErrorEvent(event)) {
     deps.gitSnapshotCoordinator?.onTurnAbort(session.id);

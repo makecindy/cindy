@@ -27,6 +27,10 @@ export const DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE = 'transport-timeout
  */
 export const DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM = 'reliable-link-confirm-v1';
 
+/** Mobile understands tool-input detail references and bounded plain result previews in
+ * list/created/maker:event. Around reads retain full detail; old peers stay unchanged. */
+export const DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1 = 'compact-message-history-v1';
+
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
 export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';
 

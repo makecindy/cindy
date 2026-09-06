@@ -16,6 +16,9 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { BotAvatar } from '@/features/bots/BotAvatar';
+import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
+
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import type { PendingPermission } from '@/lib/makerChatStore';
@@ -27,6 +30,7 @@ import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope'
 
 interface PermissionPromptProps {
   permission: PendingPermission;
+  companion?: BotChatIdentity | null;
   onRespond: (result: CCAgentPermissionResult) => void;
 }
 
@@ -76,7 +80,7 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 // Component
 // ---------------------------------------------------------------------------
 
-export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
+export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
   const { t } = useTranslation();
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable } = permission;
   const promptDescription = autoReviewUnavailable
@@ -162,10 +166,18 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
-      {/* Title */}
-      <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
-        {displayTitle}
-      </p>
+      {/* Keep the request in the conversation, with the exact operation below. */}
+      <div className="flex items-center gap-2.5">
+        {companion ? <BotAvatar bot={companion} size="sm" /> : null}
+        <div className="min-w-0">
+          <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
+            {companion ? t('bots.permissionRequest', { name: companion.name }) : displayTitle}
+          </p>
+          {companion ? (
+            <p className="mt-1 text-12 text-[var(--status-bar-meta)]">{displayTitle}</p>
+          ) : null}
+        </div>
+      </div>
 
       {/* Description */}
       {promptDescription && (

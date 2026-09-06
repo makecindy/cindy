@@ -169,6 +169,18 @@ describe('pi remote file ops command hygiene', () => {
     const ops = createRemotePiFileOps(host);
     expect(await ops.stat('/nope')).toBeNull();
   });
+
+  it('hashes the complete remote file in place without transferring its contents', async () => {
+    const digest = 'a'.repeat(64);
+    const { calls, host } = makeHostExec(`${digest}\n`);
+    const ops = createRemotePiFileOps(host);
+
+    await expect(ops.sha256File('/srv/bot/SKILL.md')).resolves.toBe(digest);
+    expect(calls[0].cmd).toContain('sha256sum');
+    expect(calls[0].cmd).toContain('shasum -a 256');
+    expect(calls[0].cmd).toContain('openssl dgst -sha256');
+    expect(calls[0].cmd).not.toContain('head -c');
+  });
 });
 
 describe('killRemotePiManagerSession — pi-manager exclusive path (post python retirement)', () => {

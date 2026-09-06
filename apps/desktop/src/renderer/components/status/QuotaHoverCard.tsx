@@ -106,6 +106,7 @@ function formatPaceLine(pace: QuotaPace, t: TFunction): string {
 function WindowBlock({
   title,
   window,
+  showRemaining = false,
   paceWindowMinutes,
   detail,
   breakdown,
@@ -116,6 +117,7 @@ function WindowBlock({
 }: {
   title: string;
   window: UsageCardWindow['window'];
+  showRemaining?: boolean;
   paceWindowMinutes?: number;
   detail?: string;
   breakdown?: UsageCardWindow['breakdown'];
@@ -126,6 +128,9 @@ function WindowBlock({
 }) {
   const titleId = React.useId();
   const usedPercent = clampPercent(window.utilization);
+  const percentText = t(showRemaining ? 'quotaCard.remainingPercent' : 'quotaCard.usedPercent', {
+    percent: Math.round(showRemaining ? 100 - usedPercent : usedPercent),
+  });
   const severity = effectiveQuotaSeverity(window);
   const severityAnnouncement =
     severity === 'crit'
@@ -166,11 +171,15 @@ function WindowBlock({
           <span className="sr-only">，{severityAnnouncement}</span>
         ) : null}
       </div>
-      <QuotaBar usedPercent={window.utilization} severity={severity} aria-labelledby={titleId} />
+      <QuotaBar
+        usedPercent={window.utilization}
+        showRemaining={showRemaining}
+        severity={severity}
+        aria-labelledby={titleId}
+        aria-valuetext={percentText}
+      />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
-        <span className="font-medium text-[var(--text-primary)]">
-          {t('quotaCard.usedPercent', { percent: Math.round(usedPercent) })}
-        </span>
+        <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
         {resetAt !== null ? (
           <span className="text-12 text-[var(--text-secondary)]">
             {t('quotaCard.resetAt', { at: resetAt })}

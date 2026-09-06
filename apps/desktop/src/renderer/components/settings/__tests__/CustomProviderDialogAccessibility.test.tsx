@@ -125,6 +125,8 @@ async function renderImageGenerationHelp() {
   const user = userEvent.setup();
   render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
+  // Let the dialog's initial focus settle before testing the help popover's focus behavior.
+  await waitForInitialDialogFocus();
   const advanced = screen.getByRole('button', {
     name: 'settings.providers.custom.fields.runtimeAdvanced',
   });

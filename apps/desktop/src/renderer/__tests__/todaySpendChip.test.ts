@@ -361,8 +361,14 @@ describe('shared usage-card provider projections', () => {
     );
     expect(card.windows.map((window) => window.window.utilization)).toEqual([9]);
     expect(card.windows[0].breakdown).toEqual([
-      { label: 'quotaCard.includedLabel:{"name":"Grok Build"}', value: '2%' },
-      { label: 'quotaCard.includedLabel:{"name":"Other Product"}', value: '7%' },
+      {
+        label: 'quotaCard.includedLabel:{"name":"Grok Build"}',
+        value: 'quotaCard.usedPercent:{"percent":2}',
+      },
+      {
+        label: 'quotaCard.includedLabel:{"name":"Other Product"}',
+        value: 'quotaCard.usedPercent:{"percent":7}',
+      },
     ]);
     expect(card.windows[0].detail).toBe('todaySpend.xai.accountWeeklyHint');
     expect(card.details).toEqual(

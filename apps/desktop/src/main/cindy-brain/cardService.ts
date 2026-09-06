@@ -153,6 +153,7 @@ interface CallEntry {
   ghostId: string;
   toolUseId: string | null;
   sessionId: string | null;
+  sessionInstanceId?: string;
   /**
    * SSH remote 会话的 host id；本地会话必须显式登记 null。省略表示调用方
    * 没有提供 locality 事实，能力消费方必须 fail closed，不能当成本地。
@@ -238,6 +239,7 @@ export class GhostCardService {
       ghostId: string;
       toolUseId: string | null;
       sessionId: string | null;
+      sessionInstanceId?: string;
       /** SSH remote host；本地会话显式传 null，未知时省略并 fail closed。 */
       remoteHostId?: string | null;
       /** 脚本通道调用方传入 schedule.workingDir;普通会话调用省略。 */
@@ -253,6 +255,7 @@ export class GhostCardService {
       ghostId: info.ghostId,
       toolUseId: info.toolUseId,
       sessionId: info.sessionId,
+      sessionInstanceId: info.sessionInstanceId,
       remoteHostId: info.remoteHostId,
       channel: info.channel ?? 'session',
       scriptWorkdir: info.scriptWorkdir ?? null,
@@ -307,10 +310,10 @@ export class GhostCardService {
    * 结束后继续充当"目录授权上下文"——否则插件记住一个旧 callId 就能跨
    * 调用复用当时会话的 workdir 自动放行。
    */
-  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; remoteHostId: string | null | undefined; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; sessionInstanceId?: string; remoteHostId: string | null | undefined; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
     const e = this.calls.get(callId);
     if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
-    return { ghostId: e.ghostId, sessionId: e.sessionId, remoteHostId: e.remoteHostId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
+    return { ghostId: e.ghostId, sessionId: e.sessionId, ...(e.sessionInstanceId ? { sessionInstanceId: e.sessionInstanceId } : {}), remoteHostId: e.remoteHostId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
   }
 
   /**

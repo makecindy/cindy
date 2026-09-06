@@ -7,6 +7,7 @@ const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
 const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
+const sessionOrdinalBadgeSource = readFileSync(resolve(sidebarDir, 'sessionOrdinalBadges.tsx'), 'utf8');
 const railNavSource = readFileSync(resolve(sidebarDir, 'RailNav.tsx'), 'utf8');
 const sessionRenameInputSource = readFileSync(
   resolve(sidebarDir, '..', 'SessionRenameInput.tsx'),
@@ -196,6 +197,7 @@ describe('SessionCard review regressions', () => {
     );
     expect(sessionItemSource).toContain('invisible col-start-1 row-start-1 inline-flex');
     expect(sessionItemSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
+    expect(sessionOrdinalBadgeSource).toContain('rounded-[4px]');
     expect(sessionCardSource).toContain('invisible col-start-1 row-start-1 inline-flex');
     expect(sessionCardSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
     expect(sessionItemSource).not.toContain(

@@ -695,6 +695,8 @@ interface ModelSelectorProps {
   sessionEngineFilter?: UnifiedModelPanelProps['sessionEngineFilter'];
   /** 语义同 ModelSelectorContentProps.unifiedAgents（参与联合列表的引擎集合）。 */
   unifiedAgents?: readonly AgentKind[];
+  /** 统一面板是否只采用目录官方推荐配置，不读取个人引擎偏好与收藏配置。 */
+  unifiedSelectionPolicy?: UnifiedModelPanelProps['selectionPolicy'];
   /**
    * composer pill 尾部的**引擎小标**(model-selector-unified §1.1)。
    *
@@ -852,6 +854,7 @@ interface ModelSelectorContentProps {
    * 不隐藏任何引擎);当前引擎必须始终在列。
    */
   unifiedAgents?: readonly AgentKind[];
+  unifiedSelectionPolicy?: UnifiedModelPanelProps['selectionPolicy'];
   /**
    * 统一面板里被选中的**收藏锚点** uid(规格 §1.5:选中的是那一条收藏副本,不是模型本体)。
    * 由调用方持有(草稿层),因为它与 (来源, 模型) 一样属于「当前选了什么」这份状态。
@@ -1041,6 +1044,7 @@ function ModelSelectorContentView({
   unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
   unifiedAgents: requestedUnifiedAgents,
+  unifiedSelectionPolicy = 'personalized',
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
   onUnifiedSelect,
@@ -1311,7 +1315,7 @@ function ModelSelectorContentView({
   // seedDefaultFavorite 内部保证,这里重复跑只是 no-op。device-link 远程视图不投:
   // 标记来自被控端目录,控制端的本机收藏不该被它污染。
   useEffect(() => {
-    if (!unifiedPanel || deviceId || providersOverride) return;
+    if (!unifiedPanel || deviceId || providersOverride || unifiedSelectionPolicy === 'official') return;
     const entries = unifiedModelEntries({
       providers,
       ...(unifiedAgents ? { agents: unifiedAgents } : {}),
@@ -1354,6 +1358,7 @@ function ModelSelectorContentView({
     unifiedExcludeModel,
     unifiedScope,
     unifiedAgentsKey,
+    unifiedSelectionPolicy,
   ]);
 
   // 模型清单来源:本机会话从 live providers 派生(builtin + 自定义合集);device-link 远程会话
@@ -2845,9 +2850,9 @@ function ModelSelectorContentView({
             panelWidthFluid={fluidWidth}
             selected={{ providerId: activeSourceId, modelId }}
             selectedFavoriteUid={selectedFavoriteUid}
-            liveAgentKind={currentAgentKind}
-            fastMode={fastMode}
-            selectedEffort={effort}
+            liveAgentKind={unifiedSelectionPolicy === 'official' ? null : currentAgentKind}
+            fastMode={unifiedSelectionPolicy === 'official' ? false : fastMode}
+            selectedEffort={unifiedSelectionPolicy === 'official' ? undefined : effort}
             {...(modelMemory ? { modelMemory } : {})}
             agentFastModeCapable={unifiedAgentFastCapable}
             priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
@@ -2862,6 +2867,7 @@ function ModelSelectorContentView({
             paymentRequiredUnlockLabel={t('newChat.modelSelector.paymentRequired.unlock')}
             onPaymentRequired={showPaymentRequired}
             configurationEnabled={configurationEnabled}
+            selectionPolicy={unifiedSelectionPolicy}
             isRouteDisabled={(providerId, id) => providersOverride ? false : modelDisabledOf(providers.find((provider) => provider.id === providerId) ?? null, id)}
             {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
             {...(followSession ? { followSession: {
@@ -3200,6 +3206,7 @@ export function ModelSelector({
   unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
   unifiedAgents,
+  unifiedSelectionPolicy = 'personalized',
   engineMarkVendor = null,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
@@ -3958,6 +3965,7 @@ export function ModelSelector({
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}
+      unifiedSelectionPolicy={unifiedSelectionPolicy}
       selectedFavoriteUid={selectedFavoriteUid}
       onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
       onUnifiedSelect={onUnifiedSelect}
@@ -4024,7 +4032,7 @@ export function ModelSelector({
           // 与隔壁权限字段同规则),且压掉共享 PopoverContent 的 shadow-md(§4 面板无
           // 阴影);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
           isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)] shadow-none' : 'w-auto',
-          'overflow-hidden rounded-[12px] p-0',
+          'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',
         )}

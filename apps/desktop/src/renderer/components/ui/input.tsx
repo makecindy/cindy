@@ -74,12 +74,12 @@ const EYE_STYLES: Record<InputSize, { iconSize: number; offset: string }> = {
 };
 
 /**
- * 边框 / 文字 / placeholder 一律绑 Tier-1 slot，不继承 `--settings-input-*` 域 alias
+ * 边框 / 文字 / placeholder 默认绑 Tier-1 slot，不继承 `--settings-input-*` 域 alias
  * （与 G5 对 button/secondary 的同一条判据：primitive 不继承域 alias，防设置页私有
  * 决定泄漏成全局默认）。这几个 alias 的默认值本就 forward-resolve 到同一批 slot，
  * 11 个内置主题与外部主题导入 allowlist 均未 override 它们，故默认外观逐值不变；
- * 变的是 override 面 —— 手写过 `settings-input-*` 的用户本地主题不再作用于本组件。
- * `--settings-input-border-focus` 亦同（其默认值 = `--text-tertiary-stone`）。
+ * 既有设置输入的局部主题合同由 SettingsTextInput 经 inputClassName 保留，
+ * 不把 settings 域 override 提升为所有 Input 或全局 semantic 的默认值。
  */
 const FIELD_CHROME =
   'text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] border border-[var(--border-default)] focus:border-[var(--text-tertiary-stone)] focus:ring-2 focus:ring-[var(--focus-ring)]';
@@ -107,6 +107,8 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   error?: boolean;
   /** 附加到**外层容器**（内层 input 恒为 w-full），供 flex 行传 `flex-1 min-w-0`。 */
   className?: string;
+  /** 内层控件的样式扩展；供既有域封装保留局部主题合同，错误态仍优先。 */
+  inputClassName?: string;
 }
 
 export function Input({
@@ -122,6 +124,7 @@ export function Input({
   trailing,
   error = false,
   className,
+  inputClassName,
   disabled,
   autoComplete,
   spellCheck,
@@ -178,6 +181,7 @@ export function Input({
           mono && 'font-mono',
           FIELD_CHROME,
           SURFACE_STYLES[surface],
+          inputClassName,
           error && ERROR_CHROME,
           disabled && 'cursor-not-allowed opacity-60',
         )}

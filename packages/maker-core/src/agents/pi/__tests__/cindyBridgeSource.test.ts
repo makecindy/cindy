@@ -341,7 +341,45 @@ function loadBashTimeoutHelpers(): {
   return factory();
 }
 
+function loadQuestionTool(): { execute: (...args: any[]) => Promise<any> } {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function registerCindyQuestionTool');
+  const end = source.indexOf('export default async function cindyBridge');
+  const compiled = ts.transpileModule(source.slice(start, end), {
+    compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  let tool: any;
+  runInNewContext(compiled + '\nregisterCindyQuestionTool(pi);', {
+    pi: { registerTool(value: any) { tool = value; } },
+  });
+  return tool;
+}
+
 describe('cindy-bridge extension source', () => {
+  it('keeps the question tool pending until the UI returns a real answer', async () => {
+    const tool = loadQuestionTool();
+    let answer!: (value: string) => void;
+    let finished = false;
+    const run = tool.execute('q', { questions: [{ question: 'Continue?', options: ['Yes', 'No'] }] }, undefined, undefined, {
+      ui: { select: () => new Promise<string>((resolve) => { answer = resolve; }) },
+    }).then((result) => { finished = true; return result; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    answer('No');
+    expect((await run).details).toEqual({ answers: { 'Continue?': 'No' }, cancelled: false });
+  });
+
+  it('reports cancellation without fabricating a choice and validates all questions before showing UI', async () => {
+    const tool = loadQuestionTool();
+    const ctx = { ui: { input: async () => undefined } };
+    expect((await tool.execute('q', { questions: [{ question: 'Name?' }] }, undefined, undefined, ctx)).details)
+      .toEqual({ answers: {}, cancelled: true });
+    await expect(tool.execute('q', { questions: [{ question: 'Name?' }, { question: 'Name?' }] }, undefined, undefined, ctx))
+      .rejects.toThrow('distinct questions');
+    await expect(tool.execute('q', { questions: [{ question: 'Name?' }] }, undefined, undefined, { hasUI: false }))
+      .rejects.toThrow('unavailable');
+  });
+
   it('adapts Astra API payloads without changing other models or subscription requests', () => {
     const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function astraResponsesPayload(');
     const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge');
@@ -1348,16 +1386,52 @@ describe('cindy-bridge extension source', () => {
     expect(handler).toContain('TURN_CHANGE_CAPTURE_TITLE');
   });
 
-  it('exposes a constant two-tool MCP gateway while preserving the real MCP identity for approval', () => {
+  it('keeps generic MCP behind two tools and gives frequent Bot actions typed fast paths', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi)');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "name: CINDY_CREATE_TEAMMATE_TOOL",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("collaborate_with_bot");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain(
+      "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      'mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true })',
+    );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.isSchemaDisclosed(resolvedGatewayCall)');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Inspect this tool before execution');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionToolName = gatewayCall?.qualifiedName');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionInput = gatewayCall?.args');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "qualifiedName: 'mcp__cindy_helper__' + name",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "qualifiedName: 'mcp__cindy_memory__call_tool'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "this.botMemoryFacadeEnabled && serverName === 'cindy_memory'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("name = 'memory_review'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("name = 'memory_consolidate'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("name: qualifiedName,\n        label: server.name + ': ' + tool.name");
   });
 
@@ -1577,6 +1651,8 @@ describe('cindy-bridge extension source', () => {
     expect(source.slice(readOnlyGate, credentialGate)).not.toContain('permission.writableRoots');
     expect(source).not.toContain('Cindy blocks reading credential or key paths, even with Full access.');
     expect(source).not.toContain('Cindy blocks reading process environment (/proc/*/environ), even with Full access.');
+    expect(source).toContain('const writeInsideAnyGrantedRoot = (roots: readonly string[])');
+    expect(source).toContain('&& !writeInsideWritableRoot');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
     expect(source).toContain(
       'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',
@@ -2001,4 +2077,49 @@ describe('cindy-bridge extension source', () => {
       ).toContain(sourcePath);
     },
   );
+});
+
+it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const calls: unknown[] = [];
+  const client = { request: async (method: string, params: unknown) => {
+    calls.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_helper', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object' } },
+  ]);
+  const ordinary: any[] = [];
+  gateway.register({ registerTool: (tool: unknown) => ordinary.push(tool) });
+  expect(ordinary.map((tool) => tool.name)).toEqual(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
+  expect(gateway.resolveDirectHelperTool('start_session_task', {})).toBeNull();
+
+  const bot: any[] = [];
+  gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
+  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'create_teammate']) {
+    const tool = bot.find((item) => item.name === name);
+    expect(tool).toBeDefined();
+    const args = name === 'start_session_task' ? { instruction: 'Prepare a report' }
+      : name === 'send_to_agent' ? { target_id: 'bot-b', message: 'Please review' }
+      : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
+      : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
+      : { task_id: 'task-1' };
+    const resolved = gateway.resolveDirectHelperTool(name, args);
+    expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);
+    expect(resolved.args).toEqual(args); // Permission review retains the actual operation and arguments.
+    await tool.execute('call-1', args);
+    expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } } });
+  }
 });

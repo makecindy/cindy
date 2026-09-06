@@ -125,6 +125,59 @@ describe('MessageActionBar', () => {
     await waitFor(() => expect(onDelete).toHaveBeenCalledTimes(1));
   });
 
+  it('keeps teammate actions visible, exposes Reply, and hides fork and usage', async () => {
+    const onFork = vi.fn(async () => undefined);
+    const onAddToChat = vi.fn();
+    const onDelete = vi.fn(async () => undefined);
+    const deepLink = 'cindy://session/session-a?message=message-a';
+
+    const { container } = render(
+      <MessageActionBar
+        copyText="message body"
+        copyLinkText={deepLink}
+        align="left"
+        hovered={false}
+        simplifiedBotConversation
+        onFork={onFork}
+        onAddToChat={onAddToChat}
+        onDelete={onDelete}
+        turnMoney={{ amount: 1.5, currency: 'CNY', approximate: false, kind: 'actual-cost' }}
+        turnUsageDetails={{
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          totalTokens: 15,
+          cacheHitRate: 0,
+        }}
+      />,
+    );
+
+    const actionBar = container.firstElementChild;
+    expect(actionBar?.classList.contains('opacity-100')).toBe(true);
+    expect(actionBar?.classList.contains('pointer-events-none')).toBe(false);
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.fork' })).toBeNull();
+    expect(screen.queryByText('¥1.50')).toBeNull();
+    expect(screen.queryByText('chat.messageActionBar.turnTokens')).toBeNull();
+
+    const reply = screen.getByRole('button', { name: 'chat.messageActionBar.reply' });
+    expect(reply.querySelector('.lucide-message-square-reply')).toBeTruthy();
+    fireEvent.click(reply);
+    expect(onAddToChat).toHaveBeenCalledTimes(1);
+
+    const trigger = screen.getByRole('button', {
+      name: 'chat.messageActionBar.moreActions',
+    });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(screen.queryByRole('menuitem', { name: 'chat.quote.addToChat' })).toBeNull();
+    expect(screen.getByRole('menuitem', {
+      name: 'chat.messageActionBar.copyLink',
+    })).toBeTruthy();
+    expect(screen.getByRole('menuitem', {
+      name: 'chat.messageActionBar.delete',
+    })).toBeTruthy();
+  });
+
   it('does not restore pointer focus to the ellipsis trigger after close', async () => {
     render(
       <MessageActionBar

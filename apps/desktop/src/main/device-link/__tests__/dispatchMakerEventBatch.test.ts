@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkError,
+  DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   SESSION_SYNC_CHANNEL,
@@ -66,6 +67,7 @@ import {
   setSessionTextSnapshotReader,
 } from '../dispatch';
 import * as subscriptions from '../subscriptions';
+import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 
 /** 微批窗口与退避间隔(dispatch 内部常量);推进定时器用。 */
 const WINDOW_MS = 120;
@@ -104,6 +106,22 @@ function batchesIn(sent: SentPush[]): MakerEventBatchPayload[] {
     .filter((s) => s.channel === MAKER_EVENT_BATCH_CHANNEL)
     .map((s) => s.payload as MakerEventBatchPayload);
 }
+
+it('projects large tool results before batch admission, preserving ordering with terminal pushes', () => {
+  const { client, sent } = mkClient();
+  __testing.setActiveClient(client as never);
+  subscriptions.subscribe('mobile', ['session:s1'], 'mobile', [
+    CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  ]);
+  const fullText = 'log'.repeat(100_000);
+  __testing.forwardPush('maker:event', { sessionId: 's1', persistId: 'p', resolvedContent: fullText,
+    event: { type: 'tool_result_full', data: { toolUseId: 'use', fullText } } });
+  expect(sent).toHaveLength(0);
+  __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'idle' });
+  expect(sent.map((push) => push.channel)).toEqual([MAKER_EVENT_BATCH_CHANNEL, 'maker:status-changed']);
+  expect(JSON.stringify(sent[0].payload).length).toBeLessThan(10_000);
+  expect(JSON.stringify(sent[0].payload)).not.toContain('resolvedContent');
+});
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -664,6 +682,76 @@ describe('running session recovery on slow links', () => {
     expect(phone.map(p => p.channel)).toEqual([MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
     expect(phone[1].payload).toEqual(snapshot);
     expect(h.sent.filter(p => p.dst === 'old').every(p => p.channel === MAKER_EVENT_BATCH_CHANNEL)).toBe(true);
+  });
+
+  it('retries the final activity update when the async authorization queue is full', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    subscriptions.subscribe('phone', ['sessions']);
+    for (let index = 0; index < 65; index++) {
+      __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: `s${index}`, phase: 'completed' });
+    }
+    expect(h.sent).toHaveLength(0);
+    finish();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.sent).toHaveLength(65);
+    expect(h.sent.at(-1)?.payload).toEqual({ sessionId: 's64', phase: 'completed' });
+  });
+
+  it('keeps old deltas, snapshot and new deltas ordered through the async DB gate', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setRemoteBotSessionLookup(async () => 'visible');
+    setSessionTextSnapshotReader(() => snapshot);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    __testing.forwardPush('maker:event', delta('old suffix'));
+    __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    __testing.forwardPush('maker:event', delta('new suffix'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL,
+    ]);
+    expect(h.sent[1].payload).toEqual(snapshot);
+  });
+
+  it.each(['subscribe', 'congestion'] as const)('blocks hidden companion snapshots during %s', async (path) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader(() => snapshot);
+    setRemoteBotSessionLookup(async () => 'hidden');
+    if (path === 'subscribe') {
+      __testing.handleSubscriptionFrame('phone', {
+        channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+      });
+    } else {
+      subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+      h.client.getReliableSendQueueDepth.mockReturnValue(16);
+      __testing.forwardPush('maker:event', delta('hidden body'));
+      await vi.advanceTimersByTimeAsync(WINDOW_MS);
+      h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    }
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('repairs snapshot admission failure after async authorization', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setRemoteBotSessionLookup(async () => 'visible');
+    setSessionTextSnapshotReader(() => snapshot);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(h.sent).toEqual([
+      { dst: 'phone', channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, resyncRequired: true }, ownerStamp: undefined },
+    ]);
   });
 
   it('fails subscription when the snapshot cannot enter the reliable window', () => {
