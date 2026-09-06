@@ -6,6 +6,7 @@ import { useConversationShareImages } from "@/session/useConversationShareImages
 import type { ConversationShareMessage } from "@/session/conversationShareWebViewHtml";
 import type { ResolveRemoteMediaFn } from "@/session/remoteMedia";
 import { downloadRemoteMediaAsDataUri } from "@/session/remoteMediaDiskCacheExpo";
+import { createRemoteMediaResolveQueue } from "@/session/remoteMediaResolveQueue";
 
 vi.mock("react-native", () => ({
   Image: { getSize: vi.fn(async () => ({ width: 40, height: 20 })) },
@@ -42,12 +43,14 @@ async function startShare() {
 function Probe({
   messages,
   resolve,
+  sessionId = "session",
 }: {
   messages: ConversationShareMessage[];
   resolve: ResolveRemoteMediaFn;
+  sessionId?: string;
 }) {
   current = useConversationShareImages(messages, resolve, {
-    sessionId: "session",
+    sessionId,
   });
   return null;
 }
@@ -75,6 +78,91 @@ afterEach(async () => {
 });
 
 describe("share image readiness", () => {
+  it.each(["timeout", "cancel", "selection", "session", "unmount"])(
+    "removes queued media work on %s before a free slot can start it",
+    async (event) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let finish!: (value: typeof media) => void;
+      const fetch = vi.fn(
+        () =>
+          new Promise<typeof media>((done) => {
+            finish = done;
+          }),
+      );
+      const queue = createRemoteMediaResolveQueue(
+        { resolve: fetch },
+        { maxConcurrent: 1 },
+      );
+      const busy = queue.request({ kind: "image", url: "cindy-media://busy" });
+      const resolve: ResolveRemoteMediaFn = (request, opts) =>
+        queue.request(request, opts);
+      await act(async () =>
+        root.render(createElement(Probe, { messages: [source], resolve })),
+      );
+      await startShare();
+      expect(queue.stats()).toEqual({ inFlight: 1, queued: 1 });
+      await act(async () => {
+        if (event === "timeout") await vi.advanceTimersByTimeAsync(20_000);
+        if (event === "cancel") current.cancel();
+        if (event === "selection")
+          root.render(createElement(Probe, { messages: [], resolve }));
+        if (event === "session")
+          root.render(
+            createElement(Probe, {
+              messages: [source],
+              resolve,
+              sessionId: "next",
+            }),
+          );
+        if (event === "unmount") root.render(null);
+      });
+      expect(queue.stats().queued).toBe(0);
+      expect((await ready).length).toBe(event === "timeout" ? 1 : 0);
+      await act(async () => {
+        finish(media);
+        await busy;
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(queue.stats()).toEqual({ inFlight: 0, queued: 0 });
+    },
+  );
+
+  it("cancels only the share waiter while a shared queued consumer still completes", async () => {
+    let finish!: (value: typeof media) => void;
+    const fetch = vi.fn(async ({ url }: { url: string }) =>
+      url.endsWith("busy")
+        ? new Promise<typeof media>((done) => {
+            finish = done;
+          })
+        : media,
+    );
+    const queue = createRemoteMediaResolveQueue(
+      { resolve: fetch },
+      { maxConcurrent: 1 },
+    );
+    const busy = queue.request({ kind: "image", url: "cindy-media://busy" });
+    const resolve: ResolveRemoteMediaFn = (request, opts) =>
+      queue.request(request, opts);
+    await act(async () =>
+      root.render(createElement(Probe, { messages: [source], resolve })),
+    );
+    await startShare();
+    const other = queue.request({
+      kind: "image",
+      url: "cindy-media://paste",
+      thumbnail: true,
+    });
+    await act(async () => current.cancel());
+    expect(await ready).toEqual([]);
+    expect(queue.stats().queued).toBe(1);
+    await act(async () => {
+      finish(media);
+      await busy;
+      await other;
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps direct HTTP images as placeholders without starting a download", async () => {
     const resolve = vi.fn<ResolveRemoteMediaFn>();
     const url = "https://example.com/unbounded.png";
@@ -294,7 +382,9 @@ describe("share image readiness", () => {
       ),
     );
     expect(await oldReady).toEqual([]);
-    await act(async () => finish({ ...media, url: "https://example.com/cancelled.png" }));
+    await act(async () =>
+      finish({ ...media, url: "https://example.com/cancelled.png" }),
+    );
     expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
     await startShare();
     expect((await ready).map((message) => message.clientId)).toEqual(["next"]);

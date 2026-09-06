@@ -12,6 +12,71 @@ const image = {
 };
 
 describe("conversation share images", () => {
+  it("rejects compressed images above the single-image pixel limit without spending the batch budget", async () => {
+    const load = vi.fn(async (url: string) => ({
+      ...image,
+      width: url.endsWith("huge") ? 100_000 : 2_000,
+      height: url.endsWith("huge") ? 100_000 : 2_000,
+    }));
+    const messages = await prepareConversationShareImages(
+      [
+        {
+          clientId: "m",
+          kind: "user",
+          body: "keep text",
+          attachments: [
+            { kind: "image", name: "huge", uri: "cindy-media://huge" },
+            { kind: "image", name: "one", uri: "cindy-media://one" },
+            { kind: "image", name: "two", uri: "cindy-media://two" },
+            { kind: "image", name: "over batch", uri: "cindy-media://three" },
+          ],
+        },
+      ],
+      load,
+    );
+    expect([...messages[0]!.images!.keys()]).toEqual([
+      "cindy-media://one",
+      "cindy-media://two",
+    ]);
+    expect(messages[0]!.body).toBe("keep text");
+    expect(messages[0]!.attachments).toHaveLength(4);
+    expect(load.mock.calls.map(([url]) => url)).not.toContain(
+      "cindy-media://three",
+    );
+  });
+
+  it("charges decoded pixels for repeated sources across attachments, structured/secondary text and messages", async () => {
+    const url = "cindy-media://same";
+    const load = vi.fn(async () => ({ ...image, width: 2_000, height: 1_000 }));
+    const message = {
+      clientId: "first",
+      kind: "user" as const,
+      body: "ignored",
+      attachments: [{ kind: "image" as const, name: "paste", uri: url }],
+      bodyParts: [{ kind: "text" as const, text: `![body](${url})` }],
+      secondaryBody: `![secondary](${url})`,
+    };
+    const result = await prepareConversationShareImages(
+      [
+        message,
+        { ...message, clientId: "over" },
+        { clientId: "last", kind: "assistant", body: `![last](${url})` },
+      ],
+      load,
+    );
+    expect(result.map((m) => m.images!.size)).toEqual([1, 0, 1]);
+    expect(load).toHaveBeenCalledTimes(1);
+    // A rejected oversized occurrence group must not poison a later smaller group.
+    const retry = await prepareConversationShareImages(
+      [
+        { ...message, secondaryBody: `![a](${url})![b](${url})![c](${url})` },
+        { ...message, clientId: "later" },
+      ],
+      load,
+    );
+    expect(retry.map((m) => m.images!.size)).toEqual([0, 1]);
+  });
+
   it("charges every attachment and Markdown occurrence even when bytes are reused across messages", async () => {
     const largeImage = {
       ...image,

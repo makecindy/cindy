@@ -36,6 +36,7 @@ async function loadShareImage(
   url: string,
   resolve: ResolveRemoteMediaFn,
   canRead: () => boolean,
+  signal: AbortSignal,
 ): Promise<ConversationShareImage | null> {
   // The existing store owns both OSS and desktop-media upload thumbnails.
   await ensureSentAttachmentThumbsHydrated();
@@ -50,12 +51,15 @@ async function loadShareImage(
   if (!canRead()) return null;
   let mimeType = imageMimeFromUrl(uri) ?? "image/jpeg";
   if (uri === url && isDesktopLocalMediaUrl(url)) {
-    const media = await resolve({
-      kind: "image",
-      url,
-      previewable: true,
-      thumbnail: true,
-    });
+    const media = await resolve(
+      {
+        kind: "image",
+        url,
+        previewable: true,
+        thumbnail: true,
+      },
+      { signal },
+    );
     if (
       !canRead() ||
       !media.mimeType.startsWith("image/") ||
@@ -127,6 +131,9 @@ export function useConversationShareImages(
   useEffect(() => {
     if (!job) return;
     const { sourceMessages, resolve, context } = job;
+    // The existing media queue removes this export's still-queued waiter.
+    // Effect-local ownership also gives StrictMode replays a fresh signal.
+    const controller = new AbortController();
     let active = true;
     activeJob.current = job;
     let timedOut = false;
@@ -136,6 +143,7 @@ export function useConversationShareImages(
     });
     const timer = setTimeout(() => {
       timedOut = true;
+      controller.abort();
       finishImageWait(null);
     }, 20_000);
     void prepareConversationShareImages(
@@ -146,7 +154,12 @@ export function useConversationShareImages(
         timedOut
           ? Promise.resolve(null)
           : Promise.race([
-              loadShareImage(url, resolve, () => active && !timedOut),
+              loadShareImage(
+                url,
+                resolve,
+                () => active && !timedOut,
+                controller.signal,
+              ),
               imageDeadline,
             ]),
       context,
@@ -168,6 +181,7 @@ export function useConversationShareImages(
       });
     return () => {
       active = false;
+      controller.abort();
       clearTimeout(timer);
       finishImageWait(null);
       activeJob.current = null;
