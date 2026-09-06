@@ -6738,7 +6738,22 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
   });
 
-  it('对端停止 ACK 时,一趟定时重发只发预算内的最旧几条(而不是整个窗口)', async () => {
+  it('retries an eligible small request while a large head frame is cooling down', async () => {
+    await withFakeTimers(async (h, advance) => {
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      expect(seqs).toHaveLength(2);
+
+      // The large head waits for its byte-based interval (~2.6s), but the
+      // small tail is eligible on the first retry tick and must not be starved.
+      await advance(2_000);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[1]]);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  }, 10_000);
+
+  it('队头冷却时仍允许后续小请求重传', async () => {
     // 2026-08-08 线上:一趟重发遍历整个 pending 窗口(上限 64 条)、同步全部写进 ws,
     // 对端 relay 路由已失效时逐帧弹回 DEVICE_OFFLINE —— 单簇 213 条就是这个形状。
     // 既有两道刹车都拦不住本趟:per-peer 制动要等 relay-error 回来(异步),ws 容量
@@ -6756,11 +6771,11 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       await advance(200);
       expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
 
-      // 再一趟:对端仍未 ACK,预算继续压在同样的队头 3 条上(不铺满窗口)
+      // 后续小帧不再被队头冷却冻结；本趟预算继续限制单趟发送量。
       await advance(200);
-      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 6));
       expect(seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq))).toEqual([2, 2, 2]);
-      // The head cooldown also holds the tail. Only retry again after the doubled interval.
+      // 队头继续按退避间隔重发，后续序号则可独立获得重试机会。
       await advance(200);
       const headCounts = seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq));
       expect(headCounts).toEqual([3, 3, 3]); // 首发 + 两趟重发
@@ -6854,14 +6869,9 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       }
       const ws = h.current();
       const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
-      const framesBefore = framesSent(ws);
-
       await advance(3_000);
-      // 只有队头那条大消息被重发,5 条小消息一条都没被带出去
-      expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[0]]);
-      // 溢出被限制在「队头这一条的分片数」内,而不是预算 + 队头
-      const passFrames = framesSent(ws) - framesBefore;
-      expect(passFrames).toBeLessThanOrEqual(6);
+      // 队头仍受分片预算约束；小消息不会因队头冷却而饥饿。
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs);
     }, {
       pingIntervalMs: 600_000,
       transportRetryIntervalMs: 200,

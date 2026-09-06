@@ -3648,9 +3648,11 @@ export class DeviceLinkClient {
         Math.min(4, 2 ** Math.max(0, pending.attempts - 1)),
       );
       if (!opts.ignoreInterval && now - pending.lastSentAt < retryDelayMs) {
-        // Do not spend the cooldown retransmitting later seqs: cumulative ACK
-        // cannot advance past this head, and those copies only deepen the backlog.
-        break;
+        // A large head frame may still be inside its byte-based cooldown while
+        // a later small request is already eligible. Cumulative ACK cannot
+        // advance past the head, but sending the later frame lets the receiver
+        // buffer it and avoids starving independent request deadlines.
+        continue;
       }
       if (pending.attempts >= this.timing.transportMaxRetryAttempts) {
         this.handleReliableRetryExhausted(dst, pending.seq);
