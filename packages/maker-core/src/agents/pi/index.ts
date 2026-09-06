@@ -6120,6 +6120,7 @@ export class PiAgent extends BaseAgent {
       async requestGracefulStop(): Promise<void> {
         if (proc.isClosed) throw new Error('No active Pi turn to stop');
         const hostAbortToken = markPiHostAbortRequested(ctx);
+        autoReviewDecisionCache.clear();
         dismissAllPendingPrompts('turn_aborted', 'deny');
         let resp: Awaited<ReturnType<typeof proc.request>>;
         try {
@@ -6138,6 +6139,7 @@ export class PiAgent extends BaseAgent {
       async abort(): Promise<void> {
         if (proc.isClosed) return;
         const hostAbortToken = markPiHostAbortRequested(ctx);
+        autoReviewDecisionCache.clear();
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
         // 停止的那次工具继续等一张已失效的卡。policy 仅在 Pi 确认接受 abort 后清空，
         // RPC 失败时继续保留，防止仍在运行的 turn 失去渠道安全边界。

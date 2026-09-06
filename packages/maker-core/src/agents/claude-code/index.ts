@@ -5990,6 +5990,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const generation = turnState.generation;
         turnState.interruptRequested = true;
         turnState.interruptGeneration = generation;
+        autoReviewDecisionCache.clear();
         cancelIdleHostAutoCompact('host_auto_compact_graceful_stop');
         dismissAllPending('graceful_stop', 'deny');
         // A parent result can leave the foreground idle while wake tasks still
