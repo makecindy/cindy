@@ -1086,6 +1086,68 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(control).not.toHaveBeenCalled();
   });
 
+  it.each((['navigation', 'process-exit'] as const).flatMap((boundary) =>
+    (['allow', 'block', 'ask'] as const).flatMap((verdict) =>
+      (['confirm', 'input'] as const).map((method) => ({ boundary, verdict, method }))),
+  ))('parks a late Auto $verdict after $boundary ($method) until a current surface reviews it', async ({ boundary, verdict, method }) => {
+    let releaseReview!: (value: { verdict: typeof verdict }) => void;
+    const reviewGate = new Promise<{ verdict: typeof verdict }>((resolve) => { releaseReview = resolve; });
+    const run = pendingSubagentRun({ toolName: 'bash', input: { command: 'printf hi > /outside/report.txt' } }, {}, method);
+    const list = vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(() => reviewGate);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review }))
+      .startSession({ ...opts(), permissionMode: 'auto' });
+    handle.setInteractionResolver(resolver);
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    if (boundary === 'navigation') await handle.close({ reason: 'navigation' });
+    else knobs.onExit?.({ code: 1, signal: null });
+    releaseReview({ verdict });
+    // Several supervisor polls must not consume or repeatedly re-review the parked request.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(control).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledOnce();
+
+    if (boundary === 'process-exit') await handle.close({ reason: 'navigation' });
+    let reopened: Awaited<ReturnType<PiAgent['startSession']>> | undefined;
+    if (method === 'confirm') {
+      const freshReview = vi.fn(async () => ({ verdict: 'block' as const }));
+      reopened = await new PiAgent(buildDeps({ reviewAutoPermissionAction: freshReview }))
+        .startSession({ ...opts(), sessionInstanceId: 'reopened-auto', permissionMode: 'auto' });
+      await vi.waitFor(() => expect(control).toHaveBeenCalledOnce(), { timeout: 3_000 });
+      expect(freshReview).toHaveBeenCalledOnce();
+    } else {
+      // Rewiring the existing detached handle must not reuse its cached pre-close allow.
+      review.mockResolvedValue({ verdict: 'block' });
+      handle.setInteractionResolver(resolver);
+      await vi.waitFor(() => expect(control).toHaveBeenCalledOnce(), { timeout: 3_000 });
+      expect(review).toHaveBeenCalledTimes(2);
+    }
+    expect(control).toHaveBeenCalledWith(expect.any(String), run.taskId, 'approval', expect.objectContaining(
+      method === 'input' ? { value: 'auto-review-deny' } : { confirmed: false },
+    ));
+    list.mockResolvedValue([]);
+    await reopened?.close({ reason: 'navigation' });
+  });
+
+  it('keeps Auto approvals that start after detaching under that lifecycle', async () => {
+    const list = vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review }))
+      .startSession({ ...opts(), permissionMode: 'auto' });
+    await handle.close({ reason: 'navigation' });
+    const run = pendingSubagentRun({ toolName: 'bash', input: { command: 'printf hi > /outside/report.txt' } });
+    list.mockResolvedValue([run]);
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(expect.any(String), run.taskId, 'approval', expect.objectContaining({ confirmed: true })), { timeout: 3_000 });
+    expect(review).toHaveBeenCalledOnce();
+    list.mockResolvedValue([]);
+  });
+
   it('stays idempotent over a repeated account-boundary close', async () => {
     let approvalGeneration = 0;
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockImplementation(async () => {

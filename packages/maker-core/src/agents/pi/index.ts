@@ -3223,6 +3223,7 @@ export class PiAgent extends BaseAgent {
       opts?: { dismissPending?: boolean; surfaceLost?: boolean },
     ): void => {
       activeTurnPermissionPolicy = null;
+      if (opts?.surfaceLost) autoReviewDecisionCache.clear();
       if (opts?.dismissPending) {
         dismissAllPendingPrompts(reason, 'deny', { surfaceLost: opts.surfaceLost === true });
       }
@@ -3553,6 +3554,14 @@ export class PiAgent extends BaseAgent {
       // otherwise the entry is filed under the new generation and the retry gate
       // below never opens again.
       const offeredUnderGeneration = interactionResolverGeneration;
+      const offeredInAuto = permissionMode === 'auto';
+      const offeredWhileClosed = closed;
+      const offeredAfterProcessExit = piProcessExited;
+      // Detached runs outlive the root, but an Auto verdict must not straddle
+      // its teardown. Reuse the durable unanswered path without stopping later
+      // offers that begin under the already-detached lifecycle.
+      const autoReviewOfferExpired = (): boolean => offeredInAuto
+        && (closed !== offeredWhileClosed || piProcessExited !== offeredAfterProcessExit);
       piSubagentApprovalRequests.add(key);
       if (turnChangeCapture) {
         let toolName = '';
@@ -3828,6 +3837,7 @@ export class PiAgent extends BaseAgent {
               adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
               { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
             : action);
+          if (autoReviewOfferExpired()) return null;
           if (permissionMode !== 'auto') {
             return requestUserDecision({ forcePrompt: true });
           }
@@ -3853,13 +3863,16 @@ export class PiAgent extends BaseAgent {
           && (approval.method === 'confirm' || approval.method === 'input')
         ) {
           const resolved = await resolveConfirmation();
-          if (resolved === null) {
+          const expired = autoReviewOfferExpired();
+          if (resolved === null || expired) {
             // Parked, not answered: no decision cached, no delivery recorded,
             // so the request stays in the durable mailbox for a later surface.
             // Remember the generation we offered under so the 250ms supervisor
             // poll does not re-ask a resolver with nobody behind it; a new
             // `setInteractionResolver` clears this and re-offers immediately.
-            piSubagentApprovalDeferred.set(key, offeredUnderGeneration);
+            // Teardown expires the whole offer, including a resolver attached
+            // during review. Do not immediately retry under that old surface.
+            piSubagentApprovalDeferred.set(key, expired ? interactionResolverGeneration : offeredUnderGeneration);
             piSubagentApprovalRequests.delete(key);
             return;
           }
