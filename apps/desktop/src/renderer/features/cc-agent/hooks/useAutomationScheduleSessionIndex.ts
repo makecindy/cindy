@@ -35,6 +35,7 @@ import {
 } from '../../scheduler/lib/runUnread';
 import { loadScheduleSidebarIndexSnapshot } from '../../scheduler/lib/scheduleSidebarIndexRuns';
 import { subscribeScheduleRunReadSync } from '../../scheduler/lib/scheduleRunReadSync';
+import { compareFailedScheduleRuns } from '../../scheduler/lib/failedScheduleDismissal';
 
 const log = createLogger('AutomationScheduleSessionIndex');
 
@@ -95,7 +96,6 @@ function applyOptimisticUnreads(next: Map<string, AutomationScheduleSessionInfo>
     }
     if (overlay.kind === 'failed' && !existing.unreadFailedRunIds.includes(overlay.runId)) {
       existing.hasFailedRun = true;
-      existing.latestFailedRunId = overlay.runId;
       existing.unreadFailedRunIds.push(overlay.runId);
       existing.latestUnreadFailedRunId = overlay.runId;
     }
@@ -210,7 +210,6 @@ export function useAutomationScheduleSessionIndex(
       }
 
       const next = new Map<string, AutomationScheduleSessionInfo>();
-      const latestFailedFiredAt = new Map<string, number>();
       const latestUnreadFailedFiredAt = new Map<string, number>();
       for (const run of runs) {
         if (!run.sessionId) continue;
@@ -223,18 +222,11 @@ export function useAutomationScheduleSessionIndex(
         // 未读 run 拉高本 session 的 urgency 让侧栏涂红而不是涂绿。
         const isRunUnread = isUnreadScheduleRun(run);
         if (isRunUnread) unreadRunIds.push(run.runId);
-        let latestFailedRunId = existing?.latestFailedRunId;
+        let latestFailedRun = existing?.latestFailedRun;
         if (isFailedScheduleRun(run)) {
-          const firedAt = run.firedAt ?? 0;
-          const previousFiredAt =
-            latestFailedFiredAt.get(run.sessionId) ?? Number.NEGATIVE_INFINITY;
-          if (
-            firedAt > previousFiredAt ||
-            (firedAt === previousFiredAt && run.runId > (latestFailedRunId ?? ''))
-          ) {
-            latestFailedFiredAt.set(run.sessionId, firedAt);
-            latestFailedRunId = run.runId;
-          }
+          const candidate = { runId: run.runId, firedAt: run.firedAt ?? 0 };
+          if (!latestFailedRun || compareFailedScheduleRuns(candidate, latestFailedRun) > 0)
+            latestFailedRun = candidate;
         }
         let latestUnreadFailedRunId = existing?.latestUnreadFailedRunId;
         if (isUnreadFailedScheduleRun(run)) {
@@ -258,7 +250,7 @@ export function useAutomationScheduleSessionIndex(
           unreadRunIds,
           unreadFailedRunIds,
           latestUnreadFailedRunId,
-          latestFailedRunId,
+          latestFailedRun,
           hasFailedRun: Boolean(existing?.hasFailedRun || isFailedScheduleRun(run)),
           hasUnreadRun: unreadRunIds.length > 0,
           hasUnreadFailedRun: unreadFailedRunIds.length > 0,

@@ -3,19 +3,18 @@ import { AlertCircle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-
-function readDismissedRun(key: string | null): string | null {
-  try {
-    return key ? localStorage.getItem(key) : null;
-  } catch {
-    return null;
-  }
-}
+import {
+  compareFailedScheduleRuns,
+  dismissScheduleFailure,
+  failedScheduleDismissalPrefix,
+  readLatestDismissedScheduleFailure,
+  type FailedScheduleRunSnapshot,
+} from '@/features/scheduler/lib/failedScheduleDismissal';
 
 interface BannerProps {
   dataOwnerId: string | null;
   sessionId: string;
-  latestFailedRunId: string;
+  latestFailedRun: FailedScheduleRunSnapshot;
   className?: string;
   style?: CSSProperties;
 }
@@ -24,7 +23,7 @@ interface BannerProps {
 export function UnreadFailedScheduleBanner(props: BannerProps) {
   return (
     <FailedScheduleNotice
-      key={JSON.stringify([props.dataOwnerId, props.sessionId, props.latestFailedRunId])}
+      key={JSON.stringify([props.dataOwnerId, props.sessionId, props.latestFailedRun])}
       {...props}
     />
   );
@@ -33,37 +32,48 @@ export function UnreadFailedScheduleBanner(props: BannerProps) {
 function FailedScheduleNotice({
   dataOwnerId,
   sessionId,
-  latestFailedRunId,
+  latestFailedRun,
   className,
   style,
 }: BannerProps) {
   const { t } = useTranslation();
-  // 关闭是本机 UI 偏好，不修改运行记录或已读回执。按运行身份记录，
-  // 避免另一个窗口关闭旧提示时覆盖新提示的关闭状态。
-  const key = dataOwnerId
-    ? `scheduleFailureDismissal:${JSON.stringify([dataOwnerId, sessionId, latestFailedRunId])}`
-    : null;
-  const [dismissedRunId, setDismissedRunId] = useState(() => readDismissedRun(key));
+  // 关闭是本机 UI 偏好，不修改运行记录或已读回执。
+  const prefix = dataOwnerId ? failedScheduleDismissalPrefix(dataOwnerId, sessionId) : null;
+  const [dismissedRun, setDismissedRun] = useState(() =>
+    readLatestDismissedScheduleFailure(prefix),
+  );
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
-      if (key && (event.key === key || event.key === null) && event.storageArea === localStorage) {
-        setDismissedRunId(readDismissedRun(key));
+      if (
+        prefix &&
+        (event.key?.startsWith(prefix) || event.key === null) &&
+        event.storageArea === localStorage
+      ) {
+        const stored = readLatestDismissedScheduleFailure(prefix);
+        // 回收旧 key 的事件不能撤销本窗口在写失败时的临时关闭；显式 clear 仍重置。
+        setDismissedRun((previous) =>
+          event.key !== null &&
+          previous &&
+          (!stored || compareFailedScheduleRuns(previous, stored) > 0)
+            ? previous
+            : stored,
+        );
       }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, [key]);
+  }, [prefix]);
 
-  if (dismissedRunId === latestFailedRunId) return null;
+  if (dismissedRun && compareFailedScheduleRuns(dismissedRun, latestFailedRun) >= 0) return null;
 
   const dismiss = () => {
     try {
-      if (key) localStorage.setItem(key, latestFailedRunId);
+      if (prefix) dismissScheduleFailure(prefix, latestFailedRun);
     } catch {
       // 偏好保存失败仍允许关闭当前提示；失败历史和未读记录保持不变。
     }
-    setDismissedRunId(latestFailedRunId);
+    setDismissedRun(latestFailedRun);
   };
 
   return (

@@ -4883,7 +4883,7 @@ export function CCAgentSessionView({
               !errorTailMsg &&
               !interruptedFromSession &&
               scheduleSessionInfo?.hasFailedRun &&
-              scheduleSessionInfo.latestFailedRunId &&
+              scheduleSessionInfo.latestFailedRun &&
               !syntheticContinuationPending &&
               !error &&
               !credentialSwitchWait &&
@@ -4894,7 +4894,7 @@ export function CCAgentSessionView({
                   key={sessionId}
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
-                  latestFailedRunId={scheduleSessionInfo.latestFailedRunId}
+                  latestFailedRun={scheduleSessionInfo.latestFailedRun}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />

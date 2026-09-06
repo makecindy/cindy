@@ -1,5 +1,6 @@
 import type { Session } from '@/lib/ccAgent.types';
 import type { Schedule } from '@cindy/maker-scheduler';
+import type { FailedScheduleRunSnapshot } from '../../scheduler/lib/failedScheduleDismissal';
 
 import {
   getAutomationSessionDisplayTitle,
@@ -30,7 +31,7 @@ export interface AutomationScheduleSessionInfo {
   /** 存在失败/中断历史；不随已读变化，用于保留失败提示。 */
   hasFailedRun?: boolean;
   /** 最近一次失败/中断的身份，不随已读变化；关闭提示只针对这次历史快照。 */
-  latestFailedRunId?: string;
+  latestFailedRun?: FailedScheduleRunSnapshot;
   /** 该 session 上最近一次未读失败/中断 run，供单次重试或继续操作使用。 */
   latestUnreadFailedRunId?: string;
   /**

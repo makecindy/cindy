@@ -43,7 +43,7 @@ function View({
     <UnreadFailedScheduleBanner
       dataOwnerId={dataOwnerId}
       sessionId={sessionId}
-      latestFailedRunId={runIds.at(-1)!}
+      latestFailedRun={{ runId: runIds.at(-1)!, firedAt: runIds.length }}
     />
   ) : null;
 }
@@ -120,8 +120,8 @@ describe('historical failed schedule notice', () => {
   it('syncs dismissal from another window without changing read receipts', () => {
     focused = false;
     render(<View runIds={['old']} />);
-    const key = 'scheduleFailureDismissal:["owner-1","session-1","old"]';
-    localStorage.setItem(key, 'old');
+    const key = 'scheduleFailureDismissal:["owner-1","session-1"]:[1,"old"]';
+    localStorage.setItem(key, '1');
     fireEvent(window, new StorageEvent('storage', { key, storageArea: localStorage }));
     expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
     expect(markRunRead).not.toHaveBeenCalled();
@@ -135,6 +135,16 @@ describe('historical failed schedule notice', () => {
     const newer = render(<View runIds={['old', 'new']} />);
     fireEvent.click(newer.container.querySelector('button')!);
     fireEvent.click(older.container.querySelector('button')!);
+    expect(localStorage.length).toBe(1);
+    // 回收旧 key 后，收到清理事件的旧窗口仍保持关闭。
+    fireEvent(
+      window,
+      new StorageEvent('storage', {
+        key: 'scheduleFailureDismissal:["owner-1","session-1"]:[1,"old"]',
+        storageArea: localStorage,
+      }),
+    );
+    expect(older.container.querySelector('button')).toBeNull();
     older.unmount();
     newer.unmount();
     render(<View runIds={['old', 'new']} />);
@@ -151,6 +161,14 @@ describe('historical failed schedule notice', () => {
     fireEvent.click(screen.getByRole('button'));
     expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
     expect(readIds.size).toBe(0);
+    fireEvent(
+      window,
+      new StorageEvent('storage', {
+        key: 'scheduleFailureDismissal:["owner-1","session-1"]:[0,"older"]',
+        storageArea: localStorage,
+      }),
+    );
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).toBeNull();
     view.rerender(<View runIds={['old', 'new']} />);
     expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
     await act(async () => {});

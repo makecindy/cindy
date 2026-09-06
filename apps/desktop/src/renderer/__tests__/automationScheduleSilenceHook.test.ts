@@ -313,7 +313,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     await waitFor(() => {
       expect(view.result.current.get('session-1')).toMatchObject({
         hasFailedRun: true,
-        latestFailedRunId: 'read-failure',
+        latestFailedRun: { runId: 'read-failure', firedAt: 10 },
         hasUnreadFailedRun: false,
         hasUnreadRun: false,
         unreadRunIds: [],
@@ -340,7 +340,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     const { result } = renderHook(() => useAutomationScheduleSessionIndex());
     await waitFor(() =>
       expect(result.current.get('session-1')).toMatchObject({
-        latestFailedRunId: 'read-z',
+        latestFailedRun: { runId: 'read-z', firedAt: 20 },
         latestUnreadFailedRunId: 'older-unread',
       }),
     );
