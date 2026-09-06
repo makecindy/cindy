@@ -8370,7 +8370,8 @@
       "dismissTitle": "Dismiss this interruption notice"
     },
     "unreadFailedScheduleBanner": {
-      "text": "Some scheduled runs did not finish. Check the run history."
+      "text": "Some scheduled runs did not finish. Check the run history.",
+      "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
       "text": "This session's worktree has been cleaned up (directory missing).",

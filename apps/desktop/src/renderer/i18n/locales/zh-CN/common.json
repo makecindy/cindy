@@ -8364,7 +8364,8 @@
       "dismissTitle": "关闭此中断提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "此前有定时任务未完成，可查看运行记录。"
+      "text": "此前有定时任务未完成，可查看运行记录。",
+      "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {
       "text": "该任务的 worktree 已被回收（目录不存在）。",

@@ -536,7 +536,7 @@ describe('automation-generated sessions', () => {
     );
     expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
     expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有定时任务未完成，可查看运行记录。');
-    expect(bannerSource).not.toContain('<button');
+    expect(sessionViewSource).toContain('latestFailedRunId={scheduleSessionInfo.latestFailedRunId}');
   });
 
   it('maps a focused schedule to the status bucket that can reveal it', () => {

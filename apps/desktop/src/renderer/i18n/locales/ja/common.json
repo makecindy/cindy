@@ -8364,7 +8364,8 @@
       "dismissTitle": "この中断通知を閉じる"
     },
     "unreadFailedScheduleBanner": {
-      "text": "完了しなかったスケジュール実行があります。実行履歴を確認してください。"
+      "text": "完了しなかったスケジュール実行があります。実行履歴を確認してください。",
+      "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {
       "text": "このセッションのワークツリーは回収されました（ディレクトリが存在しません）。",

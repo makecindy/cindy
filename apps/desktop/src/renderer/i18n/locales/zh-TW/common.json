@@ -8363,7 +8363,8 @@
       "dismissTitle": "關閉此中斷提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "先前有定時任務未完成，可查看執行記錄。"
+      "text": "先前有定時任務未完成，可查看執行記錄。",
+      "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {
       "text": "該任務的 worktree 已被回收（目錄不存在）。",
