@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { MakerVendor } from '@/lib/ccAgent.types';
+import type { SelectableVendor } from '@/lib/agentVendors';
 import { cn } from '@/lib/utils';
 import {
   BOT_MODEL_CHAIN_MAX,
@@ -17,7 +18,9 @@ function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
   return harness === 'claude' ? 'cc' : harness;
 }
 
-function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
+function harnessFor(vendor: SelectableVendor): BotHarness | null {
+  // Bot model chains only host claude/codex/pi; Grok Build is a chat harness, not a bot route.
+  if (vendor === 'grok-build') return null;
   return vendor === 'cc' ? 'claude' : vendor;
 }
 
@@ -26,7 +29,9 @@ function agentKindFor(vendor: 'cc' | 'codex' | 'pi'): AgentKind {
 }
 
 function defaultRoute(vendor: 'cc' | 'codex' | 'pi'): BotModelRoute {
-  return { harness: harnessFor(vendor), ...getEffectiveBotModelSettings(vendor, null) };
+  const harness = harnessFor(vendor);
+  if (!harness) throw new Error(`unsupported bot harness vendor: ${vendor}`);
+  return { harness, ...getEffectiveBotModelSettings(vendor, null) };
 }
 
 export function BotModelChainEditor({
@@ -92,15 +97,17 @@ export function BotModelChainEditor({
         unifiedPanel
         unifiedAgents={unifiedAgents}
         unifiedSelectionPolicy="official"
-        onUnifiedSelect={(selection) =>
+        onUnifiedSelect={(selection) => {
+          const harness = harnessFor(selection.engine);
+          if (!harness) return;
           replace(index, {
-            harness: harnessFor(selection.engine),
+            harness,
             providerId: selection.providerId,
             model: selection.modelId,
             effort: selection.effort ?? '',
             fastMode: selection.fast,
-          })
-        }
+          });
+        }}
         unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
       />
     </div>
