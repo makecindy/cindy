@@ -274,8 +274,8 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(retry).toContain('|| isDeviceUnresponsive');
     expect(syncCatch).toContain('latchOutboxTransportHold(formatted);');
     expect(syncCatch).not.toContain('? null : current');
-    expect(source).toContain('error={bannerError}');
-    expect(source).toContain('const bannerError = connectionRecoveryError ?? historyError;');
+    expect(source).toContain('error={connectionRecoveryError}');
+    expect(source).not.toContain('const bannerError = connectionRecoveryError ?? historyError;');
   });
 
   it('separates the interrupted metadata fence from the full read-ack sync gate', () => {
