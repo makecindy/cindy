@@ -7708,6 +7708,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
   const agentSwitchPending = createPendingAgentSwitchRegistry();
+  // User send intent owns the next route boundary, including automatic requests
+  // that read the runtime generation after the picker accepted that intent.
+  const canApplyAutomaticRuntimeSelection = (sessionId: string, expectedGeneration?: number): boolean =>
+    !agentSwitchPending.get(sessionId) &&
+    sessionRuntimeGenerationMatches(sessionId, expectedGeneration);
   cancelPendingAgentSwitchHolder = (sessionId) => {
     agentSwitchPending.clear(sessionId);
     broadcastSessionPatched(sessionId, {
@@ -10749,7 +10754,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!profiles) return null;
       // A previously accepted Agent/fallback mutation owns the next boundary.
       // Do not let a later infrastructure retry replace that pending intent.
-      if (profiles.control.pending) return null;
+      if (profiles.control.pending ||
+          !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return null;
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
       // guesser. Ordinary Sessions keep their existing second-attempt behavior.
@@ -10847,15 +10853,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         if (selected.agentKind !== currentForFallback.agentKind) {
           try {
-            const result = await performSessionAgentSwitch(agentSwitchDeps, {
-              sessionId,
-              targetAgentKind: selected.agentKind,
-              model: selected.model,
-              providerId: selected.providerId,
-              effort: selected.effort,
-              fastMode: selected.fastMode,
-              applyNow: true,
+            const result = await withSendToSessionLock(sessionId, async () => {
+              if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch) ||
+                  !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return null;
+              const switched = await performSessionAgentSwitch(agentSwitchDeps, {
+                sessionId,
+                targetAgentKind: selected.agentKind,
+                model: selected.model,
+                providerId: selected.providerId,
+                effort: selected.effort,
+                fastMode: selected.fastMode,
+                applyNow: true,
+              });
+              if (switched.switched) {
+                acceptSessionRuntimeMutation({
+                  sessionId,
+                  source: 'fallback',
+                  profile: selected,
+                  previousProfile: currentForFallback,
+                  deferred: false,
+                });
+              }
+              return switched;
             });
+            if (!result) return runtimeSession;
             if (!result.switched) {
               if (await advanceConfiguredBotRoute(selected)) continue;
               return runtimeSession;
@@ -10864,13 +10885,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             if (await advanceConfiguredBotRoute(selected)) continue;
             throw error;
           }
-          acceptSessionRuntimeMutation({
-            sessionId,
-            source: 'fallback',
-            profile: selected,
-            previousProfile: currentForFallback,
-            deferred: false,
-          });
           log.info('automatic Bot runtime fallback switched harness', {
             sessionId,
             episodeAttempt,
@@ -14889,7 +14903,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (
         internalOptions.source !== 'user' &&
-        !sessionRuntimeGenerationMatches(sessionId, internalOptions.expectedGeneration)
+        !canApplyAutomaticRuntimeSelection(sessionId, internalOptions.expectedGeneration)
       ) {
         return { deferred: false, superseded: true };
       }
