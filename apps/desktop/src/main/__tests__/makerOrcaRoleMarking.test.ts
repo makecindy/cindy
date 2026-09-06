@@ -20,17 +20,38 @@ describe('maker Orca role marking IPC boundary', () => {
 
   it('suppresses Agent Island notifications for known Orca workers', () => {
     expect(registerSource).toContain("from '../agent-island/notificationPolicy.js'");
-    expect(registerSource).toContain('function shouldNotifyAgentIslandForSession(sessionId: string): boolean');
+    expect(registerSource).toContain(
+      'function shouldNotifyAgentIslandForSession(sessionId: string): boolean',
+    );
     expect(registerSource).toContain('isKnownOrcaWorkerSession(sessionId)');
     expect(registerSource).toContain('if (!shouldNotifyAgentIslandForSession(session.id)) return;');
     expect(registerSource).toContain('if (!shouldNotifyAgentIslandForSession(sessionId)) return;');
   });
 
+  it('routes only Worker permission interactions into Agent Island and cleans them by request id', () => {
+    expect(registerSource).toContain('shouldNotifyAgentIslandForInteraction');
+    expect(registerSource).toContain('projectAgentIslandInteractionForOrcaWorker');
+    expect(registerSource).toContain('req.kind');
+    expect(registerSource).toContain(
+      'handleAgentIslandInteractionDismissedByRequestId(requestId, sessionId)',
+    );
+    expect(registerSource).toContain(
+      'getAgentIslandService()?.hasPendingPermissionRequestForSession(sessionId) === false',
+    );
+    expect(registerSource).toContain('clearSuppressedOrcaWorkerAgentIslandSession(sessionId);');
+  });
+
   it('clears any existing Agent Island entry when a session is marked as an Orca worker', () => {
-    const roleMarkingSource = registerSource.slice(registerSource.indexOf('async function markOrcaRoleIfNeeded'));
+    const roleMarkingSource = registerSource.slice(
+      registerSource.indexOf('async function markOrcaRoleIfNeeded'),
+    );
 
     expect(roleMarkingSource).toContain("if (orcaRole === 'worker') {");
-    expectOrder(roleMarkingSource, 'markKnownOrcaWorkerSession(sessionId);', 'clearSuppressedOrcaWorkerAgentIslandSession(sessionId);');
+    expectOrder(
+      roleMarkingSource,
+      'markKnownOrcaWorkerSession(sessionId);',
+      'clearSuppressedOrcaWorkerAgentIslandSession(sessionId);',
+    );
   });
 
   it('rejects Review sessions before either Orca entry point can mutate state', () => {

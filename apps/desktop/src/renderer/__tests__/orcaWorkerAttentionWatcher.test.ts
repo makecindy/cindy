@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeWorkerAttentionUpdates,
   type WorkerAttentionRecord,
+  type WorkerAttentionObservedState,
 } from '@/features/cc-agent/hooks/useOrcaWorkerAttentionWatcher';
 import type { OrcaWorkerStatus } from '../../shared/orca-worker-status';
 
@@ -20,18 +21,25 @@ function worker(
     leadSessionId: LEAD_ID,
     status,
     focused,
+    pendingPermissionRequestIds: [],
   };
 }
+
+function observed(status: OrcaWorkerStatus): WorkerAttentionObservedState {
+  return { status, pendingPermissionRequestIds: [] };
+}
+
+const doneMutation = (workerId: string) => ({ workerId, reason: { kind: 'done' as const } });
 
 describe('computeWorkerAttentionUpdates', () => {
   it('marks attention on running to done transition', () => {
     const result = computeWorkerAttentionUpdates(
-      new Map([[WORKER_ID, 'running']]),
+      new Map([[WORKER_ID, observed('running')]]),
       [worker(WORKER_ID, 'done')],
       LEAD_ID,
     );
 
-    expect(result.toMark).toEqual([WORKER_ID]);
+    expect(result.toMark).toEqual([doneMutation(WORKER_ID)]);
   });
 
   it('marks attention for first observed done status so remount can restore unread state', () => {
@@ -41,7 +49,7 @@ describe('computeWorkerAttentionUpdates', () => {
       LEAD_ID,
     );
 
-    expect(result.toMark).toEqual([WORKER_ID]);
+    expect(result.toMark).toEqual([doneMutation(WORKER_ID)]);
   });
 
   it('marks multiple first-observed done workers independently', () => {
@@ -55,27 +63,27 @@ describe('computeWorkerAttentionUpdates', () => {
       LEAD_ID,
     );
 
-    expect(result.toMark).toEqual([WORKER_ID, OTHER_WORKER_ID]);
+    expect(result.toMark).toEqual([doneMutation(WORKER_ID), doneMutation(OTHER_WORKER_ID)]);
   });
 
   it('marks again when a read worker runs new work and finishes again', () => {
     const running = computeWorkerAttentionUpdates(
-      new Map([[WORKER_ID, 'done']]),
+      new Map([[WORKER_ID, observed('done')]]),
       [worker(WORKER_ID, 'running')],
       LEAD_ID,
     );
     const doneAgain = computeWorkerAttentionUpdates(
-      running.nextStatusByWorkerId,
+      running.nextStateByWorkerId,
       [worker(WORKER_ID, 'done')],
       LEAD_ID,
     );
 
-    expect(doneAgain.toMark).toEqual([WORKER_ID]);
+    expect(doneAgain.toMark).toEqual([doneMutation(WORKER_ID)]);
   });
 
   it('keeps unread completion attention when the worker starts new work', () => {
     const result = computeWorkerAttentionUpdates(
-      new Map([[WORKER_ID, 'done']]),
+      new Map([[WORKER_ID, observed('done')]]),
       [worker(WORKER_ID, 'idle')],
       undefined,
     );
@@ -94,11 +102,11 @@ describe('computeWorkerAttentionUpdates', () => {
   });
 
   it('does not re-mark when switching away and back without a status change', () => {
-    const prev = new Map<string, OrcaWorkerStatus>([[WORKER_ID, 'done']]);
+    const prev = new Map<string, WorkerAttentionObservedState>([[WORKER_ID, observed('done')]]);
 
     const away = computeWorkerAttentionUpdates(prev, [worker(WORKER_ID, 'done')], undefined);
     const back = computeWorkerAttentionUpdates(
-      away.nextStatusByWorkerId,
+      away.nextStateByWorkerId,
       [worker(WORKER_ID, 'done', true)],
       LEAD_ID,
     );
@@ -110,14 +118,14 @@ describe('computeWorkerAttentionUpdates', () => {
   it('prunes workers that no longer exist', () => {
     const result = computeWorkerAttentionUpdates(
       new Map([
-        [WORKER_ID, 'done'],
-        [OTHER_WORKER_ID, 'idle'],
+        [WORKER_ID, observed('done')],
+        [OTHER_WORKER_ID, observed('idle')],
       ]),
       [worker(OTHER_WORKER_ID, 'idle')],
       LEAD_ID,
     );
 
     expect(result.toPrune).toEqual([WORKER_ID]);
-    expect(result.nextStatusByWorkerId.has(WORKER_ID)).toBe(false);
+    expect(result.nextStateByWorkerId.has(WORKER_ID)).toBe(false);
   });
 });

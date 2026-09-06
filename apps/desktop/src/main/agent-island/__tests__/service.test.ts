@@ -37,22 +37,26 @@ function handleInteractionRequestForTest(
   service: AgentIslandService,
   meta: Parameters<AgentIslandService['handleInteractionRequest']>[0],
   request: InteractionRequest,
+  options?: Parameters<AgentIslandService['handleInteractionRequest']>[3],
 ): void {
   service.handleInteractionRequest(
     meta,
     request,
     service.captureInteractionEpoch(meta.sessionId),
+    options,
   );
 }
 
 const mocks = vi.hoisted(() => ({
-  getSessionRowSnapshot: vi.fn<() => Promise<{
-    status: string;
-    title: string | null;
-    userSendAt: number | null;
-    workingDir: string | null;
-    workspaceKind: string | null;
-  } | null>>(() => Promise.resolve(null)),
+  getSessionRowSnapshot: vi.fn<
+    () => Promise<{
+      status: string;
+      title: string | null;
+      userSendAt: number | null;
+      workingDir: string | null;
+      workspaceKind: string | null;
+    } | null>
+  >(() => Promise.resolve(null)),
   primaryDisplay: {
     id: 1,
     label: 'Built-in Retina Display',
@@ -1320,6 +1324,119 @@ describe('AgentIslandService native publishing', () => {
       permissionAction: null,
     });
     expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(0);
+  });
+
+  it('keeps Worker permissions focus-only and provider-authored fields out of Agent Island', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const { projectAgentIslandInteractionForOrcaWorker } = await import('../notificationPolicy.js');
+    const publish = vi.fn(
+      (
+        state: AgentIslandDisplayState,
+        frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[],
+      ) => {
+        void state;
+        void frameOrFrames;
+        return true;
+      },
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    const secretCommand = 'echo WORKER_PERMISSION_SECRET';
+    const resolver = vi.fn(() => true);
+
+    syncEnabledForTest(service, publish);
+    service.setPermissionResolver(resolver);
+    const request = projectAgentIslandInteractionForOrcaWorker(
+      {
+        kind: 'permission',
+        requestId: 'worker-permission-1',
+        toolName: 'Bash',
+        title: `Allow ${secretCommand}?`,
+        displayName: `Run ${secretCommand}`,
+        description: secretCommand,
+        metadata: { raw: secretCommand },
+        input: { command: secretCommand },
+        suggestions: [{ destination: 'session', command: secretCommand }],
+      },
+      true,
+    );
+    handleInteractionRequestForTest(
+      service,
+      { sessionId: 'worker-session', agentKind: 'codex' },
+      request,
+      { allowPermissionActions: false },
+    );
+
+    const session = publish.mock.calls.at(-1)?.[0].sessions[0];
+    const published = JSON.stringify(publish.mock.calls.at(-1));
+    expect(session).toMatchObject({
+      sessionId: 'worker-session',
+      interactionKind: 'permission',
+      permissionAction: null,
+    });
+    expect(published).not.toContain(secretCommand);
+
+    service.handlePermissionAction({ requestId: 'worker-permission-1', action: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('keeps concurrent focus-only Worker permissions owner-scoped through dismissal', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(
+      (
+        state: AgentIslandDisplayState,
+        frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[],
+      ) => {
+        void state;
+        void frameOrFrames;
+        return true;
+      },
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+
+    syncEnabledForTest(service, publish);
+    for (const [requestId, toolName] of [
+      ['worker-permission-1', 'Bash'],
+      ['worker-permission-2', 'Read'],
+    ] as const) {
+      handleInteractionRequestForTest(
+        service,
+        { sessionId: 'worker-session', agentKind: 'codex' },
+        { kind: 'permission', requestId, toolName, input: {} },
+        { allowPermissionActions: false },
+      );
+    }
+
+    // The pill counts waiting sessions, not requests; both requests share one Worker.
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(1);
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.permissionAction).toBeNull();
+    expect(service.hasPendingPermissionRequestForSession('worker-session')).toBe(true);
+    expect(
+      service.handleInteractionDismissedByRequestId('worker-permission-1', 'other-session'),
+    ).toBe(false);
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(1);
+
+    expect(
+      service.handleInteractionDismissedByRequestId('worker-permission-1', 'worker-session'),
+    ).toBe(true);
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(1);
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      phase: 'needs-interaction',
+      interactionKind: 'permission',
+      permissionAction: null,
+    });
+    expect(service.hasPendingPermissionRequestForSession('worker-session')).toBe(true);
+
+    expect(
+      service.handleInteractionDismissedByRequestId('worker-permission-2', 'worker-session'),
+    ).toBe(true);
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(0);
+    expect(service.hasPendingPermissionRequestForSession('worker-session')).toBe(false);
   });
 
   it('keeps permission routing through recoverable errors and clears it on terminal errors', async () => {

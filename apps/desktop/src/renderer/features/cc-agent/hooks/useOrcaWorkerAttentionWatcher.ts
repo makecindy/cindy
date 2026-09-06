@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 
 import type { Session } from '@/lib/ccAgent.types';
+import { makerChatStore } from '@/lib/makerChatStore';
 import { isOrcaLeadSession } from '@/lib/orcaSessionIdentity';
 import type { OrcaWorkerStatus } from '../../../../shared/orca-worker-status';
 import {
@@ -9,8 +10,10 @@ import {
   useWorkerProjectionVersion,
 } from './workerProjectionStore';
 import {
+  clearWorkerAttention,
   clearWorkerAttentionMany,
   markWorkerAttention,
+  type WorkerAttentionReason,
 } from '../lib/workerAttentionStore';
 
 export interface WorkerAttentionRecord {
@@ -18,43 +21,81 @@ export interface WorkerAttentionRecord {
   leadSessionId: string;
   status: OrcaWorkerStatus;
   focused: boolean;
+  pendingPermissionRequestIds: readonly string[];
+}
+
+export interface WorkerAttentionObservedState {
+  status: OrcaWorkerStatus;
+  pendingPermissionRequestIds: readonly string[];
+}
+
+export interface WorkerAttentionMutation {
+  workerId: string;
+  reason: WorkerAttentionReason;
 }
 
 export interface WorkerAttentionUpdates {
-  toMark: string[];
+  toMark: WorkerAttentionMutation[];
+  toClear: WorkerAttentionMutation[];
   toPrune: string[];
-  nextStatusByWorkerId: Map<string, OrcaWorkerStatus>;
+  nextStateByWorkerId: Map<string, WorkerAttentionObservedState>;
 }
 
 export function computeWorkerAttentionUpdates(
-  prevStatusByWorkerId: ReadonlyMap<string, OrcaWorkerStatus>,
+  prevStateByWorkerId: ReadonlyMap<string, WorkerAttentionObservedState>,
   currentWorkers: readonly WorkerAttentionRecord[],
   activeSessionId: string | undefined,
 ): WorkerAttentionUpdates {
   const currentWorkerIds = new Set<string>();
-  const nextStatusByWorkerId = new Map<string, OrcaWorkerStatus>();
-  const toMark: string[] = [];
+  const nextStateByWorkerId = new Map<string, WorkerAttentionObservedState>();
+  const toMark: WorkerAttentionMutation[] = [];
+  const toClear: WorkerAttentionMutation[] = [];
   const toPrune: string[] = [];
 
   for (const worker of currentWorkers) {
     currentWorkerIds.add(worker.workerId);
-    nextStatusByWorkerId.set(worker.workerId, worker.status);
+    nextStateByWorkerId.set(worker.workerId, {
+      status: worker.status,
+      pendingPermissionRequestIds: worker.pendingPermissionRequestIds,
+    });
 
-    const prevStatus = prevStatusByWorkerId.get(worker.workerId);
+    const prevState = prevStateByWorkerId.get(worker.workerId);
     // `done` persists until the result is viewed and acknowledged, so an initial
     // snapshot can safely restore unread attention after a late mount or reload.
-    const enteredDone = prevStatus !== 'done' && worker.status === 'done';
+    const enteredDone = prevState?.status !== 'done' && worker.status === 'done';
     const isViewed = worker.focused && worker.leadSessionId === activeSessionId;
     if (enteredDone && !isViewed) {
-      toMark.push(worker.workerId);
+      toMark.push({ workerId: worker.workerId, reason: { kind: 'done' } });
+    }
+
+    const previousRequestIds = new Set(prevState?.pendingPermissionRequestIds ?? []);
+    const currentRequestIds = new Set(worker.pendingPermissionRequestIds);
+    for (const previousRequestId of previousRequestIds) {
+      if (!currentRequestIds.has(previousRequestId)) {
+        toClear.push({
+          workerId: worker.workerId,
+          reason: { kind: 'permission', requestId: previousRequestId },
+        });
+      }
+    }
+    for (const currentRequestId of currentRequestIds) {
+      if (!previousRequestIds.has(currentRequestId)) {
+        // Permission is live blocking state rather than unread state. Keep it
+        // projected even while focused; the selected Worker hides its own dot,
+        // and navigating away restores the signal until this request resolves.
+        toMark.push({
+          workerId: worker.workerId,
+          reason: { kind: 'permission', requestId: currentRequestId },
+        });
+      }
     }
   }
 
-  for (const workerId of prevStatusByWorkerId.keys()) {
+  for (const workerId of prevStateByWorkerId.keys()) {
     if (!currentWorkerIds.has(workerId)) toPrune.push(workerId);
   }
 
-  return { toMark, toPrune, nextStatusByWorkerId };
+  return { toMark, toClear, toPrune, nextStateByWorkerId };
 }
 
 export function useOrcaWorkerAttentionByLeadIds(
@@ -68,12 +109,17 @@ export function useOrcaWorkerAttentionByLeadIds(
   );
   useWorkerProjectionOwners(leadSessionIds);
   const projectionVersion = useWorkerProjectionVersion();
-  const prevStatusByWorkerIdRef = useRef<Map<string, OrcaWorkerStatus>>(new Map());
+  const sessionStatusSnapshot = useSyncExternalStore(
+    makerChatStore.subscribeAll,
+    makerChatStore.getRunningSnapshot,
+    makerChatStore.getRunningSnapshot,
+  );
+  const prevStateByWorkerIdRef = useRef<Map<string, WorkerAttentionObservedState>>(new Map());
 
   useEffect(() => {
     if (leadSessionIds.length === 0) {
-      clearWorkerAttentionMany(prevStatusByWorkerIdRef.current.keys());
-      prevStatusByWorkerIdRef.current = new Map();
+      clearWorkerAttentionMany(prevStateByWorkerIdRef.current.keys());
+      prevStateByWorkerIdRef.current = new Map();
       return;
     }
 
@@ -84,17 +130,24 @@ export function useOrcaWorkerAttentionByLeadIds(
           leadSessionId,
           status: worker.status,
           focused: worker.focused,
+          pendingPermissionRequestIds:
+            sessionStatusSnapshot.get(worker.sessionId)?.pendingPermissionRequestIds ?? [],
         })),
       );
     const updates = computeWorkerAttentionUpdates(
-      prevStatusByWorkerIdRef.current,
+      prevStateByWorkerIdRef.current,
       currentWorkers,
       activeSessionId,
     );
-    for (const workerId of updates.toMark) markWorkerAttention(workerId);
+    for (const update of updates.toClear) {
+      clearWorkerAttention(update.workerId, update.reason);
+    }
+    for (const update of updates.toMark) {
+      markWorkerAttention(update.workerId, update.reason);
+    }
     clearWorkerAttentionMany(updates.toPrune);
-    prevStatusByWorkerIdRef.current = updates.nextStatusByWorkerId;
-  }, [activeSessionId, leadSessionKey, projectionVersion]);
+    prevStateByWorkerIdRef.current = updates.nextStateByWorkerId;
+  }, [activeSessionId, leadSessionKey, projectionVersion, sessionStatusSnapshot]);
 }
 
 export function useOrcaWorkerAttentionWatcher(

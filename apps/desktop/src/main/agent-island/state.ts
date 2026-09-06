@@ -43,6 +43,14 @@ export type AgentIslandInteractionRequest =
       detail: string;
     };
 
+export interface ApplyAgentIslandInteractionOptions {
+  /**
+   * A focus-only permission reminder must not expose native approval actions:
+   * its exact input remains available only in the trusted in-app prompt.
+   */
+  allowPermissionActions?: boolean;
+}
+
 export const AGENT_ISLAND_COMPLETION_DWELL_MS = 5_000;
 export const AGENT_ISLAND_ERROR_DWELL_MS = 12_000;
 export const AGENT_ISLAND_REVEAL_DWELL_MS = 5_000;
@@ -126,8 +134,10 @@ interface AgentIslandSessionState {
   pendingInteractionKinds: Map<string, AgentIslandInteractionKind>;
   pendingInteractionDetails: Map<string, string>;
   pendingPermissionCanAllowForSession: Map<string, boolean>;
+  pendingPermissionActionsEnabled: Map<string, boolean>;
   permissionRequestId: string | null;
   permissionCanAllowForSession: boolean;
+  permissionActionsEnabled: boolean;
   running: boolean;
   completedUntil: number | null;
   errorUntil: number | null;
@@ -733,6 +743,7 @@ export function applyAgentIslandEvent(
     clearPendingInteractionMetadata(session);
     session.permissionRequestId = null;
     session.permissionCanAllowForSession = false;
+    session.permissionActionsEnabled = false;
     session.interactionRevealDismissed = false;
     session.currentToolUseId = null;
     session.toolDetailUntil = null;
@@ -767,6 +778,7 @@ export function applyAgentIslandInteractionRequest(
   meta: AgentIslandSessionMeta,
   request: AgentIslandInteractionRequest,
   now: number,
+  options: ApplyAgentIslandInteractionOptions = {},
 ): void {
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
@@ -779,15 +791,20 @@ export function applyAgentIslandInteractionRequest(
   const activateRequest = request.kind !== 'permission' || session.permissionRequestId === null;
   if (request.kind === 'permission') {
     const canAllowForSession = hasSessionScopedPermissionSuggestion(request.suggestions);
+    const permissionActionsEnabled = options.allowPermissionActions !== false;
     session.pendingPermissionCanAllowForSession.set(request.requestId, canAllowForSession);
+    session.pendingPermissionActionsEnabled.set(request.requestId, permissionActionsEnabled);
     if (activateRequest) {
       session.permissionRequestId = request.requestId;
       session.permissionCanAllowForSession = canAllowForSession;
+      session.permissionActionsEnabled = permissionActionsEnabled;
     }
   } else {
     session.permissionRequestId = null;
     session.permissionCanAllowForSession = false;
+    session.permissionActionsEnabled = false;
     session.pendingPermissionCanAllowForSession.delete(request.requestId);
+    session.pendingPermissionActionsEnabled.delete(request.requestId);
   }
   if (!activateRequest) {
     session.lastActivityAt = now;
@@ -836,6 +853,7 @@ function dismissPendingInteraction(
   session.pendingInteractionKinds.delete(requestId);
   session.pendingInteractionDetails.delete(requestId);
   session.pendingPermissionCanAllowForSession.delete(requestId);
+  session.pendingPermissionActionsEnabled.delete(requestId);
   if (session.permissionRequestId === requestId) {
     restorePendingPermissionAction(session);
   }
@@ -957,6 +975,7 @@ export function completeAgentIslandSessionWithoutAttention(
   clearPendingInteractionMetadata(session);
   session.permissionRequestId = null;
   session.permissionCanAllowForSession = false;
+  session.permissionActionsEnabled = false;
   session.currentToolUseId = null;
   session.toolDetailUntil = null;
   session.detailSource = null;
@@ -2161,8 +2180,10 @@ function getOrCreateSession(
     pendingInteractionKinds: new Map(),
     pendingInteractionDetails: new Map(),
     pendingPermissionCanAllowForSession: new Map(),
+    pendingPermissionActionsEnabled: new Map(),
     permissionRequestId: null,
     permissionCanAllowForSession: false,
+    permissionActionsEnabled: false,
     running: false,
     completedUntil: null,
     errorUntil: null,
@@ -2195,6 +2216,7 @@ function cloneSession(session: AgentIslandSessionState): AgentIslandSessionState
     pendingInteractionKinds: new Map(session.pendingInteractionKinds),
     pendingInteractionDetails: new Map(session.pendingInteractionDetails),
     pendingPermissionCanAllowForSession: new Map(session.pendingPermissionCanAllowForSession),
+    pendingPermissionActionsEnabled: new Map(session.pendingPermissionActionsEnabled),
     activityLines: session.activityLines.map((line) => ({ ...line })),
     assistantStream: cloneActivityTextStreamState(session.assistantStream),
     messagePreview: session.messagePreview
@@ -2211,6 +2233,7 @@ function clearPendingInteractionMetadata(session: AgentIslandSessionState): void
   session.pendingInteractionKinds.clear();
   session.pendingInteractionDetails.clear();
   session.pendingPermissionCanAllowForSession.clear();
+  session.pendingPermissionActionsEnabled.clear();
 }
 
 function restorePendingPermissionAction(session: AgentIslandSessionState): void {
@@ -2224,6 +2247,9 @@ function restorePendingPermissionAction(session: AgentIslandSessionState): void 
   session.permissionRequestId = requestId;
   session.permissionCanAllowForSession = requestId
     ? session.pendingPermissionCanAllowForSession.get(requestId) === true
+    : false;
+  session.permissionActionsEnabled = requestId
+    ? session.pendingPermissionActionsEnabled.get(requestId) !== false
     : false;
   if (requestId) {
     session.detail = session.pendingInteractionDetails.get(requestId) ?? session.detail;
@@ -2264,12 +2290,13 @@ function toSnapshot(session: AgentIslandSessionState): AgentIslandSessionSnapsho
     phase: session.phase,
     agentKind: session.agentKind,
     interactionKind: session.interactionKind,
-    permissionAction: session.permissionRequestId
-      ? {
-          requestId: session.permissionRequestId,
-          canAllowForSession: session.permissionCanAllowForSession,
-        }
-      : null,
+    permissionAction:
+      session.permissionRequestId && session.permissionActionsEnabled
+        ? {
+            requestId: session.permissionRequestId,
+            canAllowForSession: session.permissionCanAllowForSession,
+          }
+        : null,
     attention: isAttentionSession(session),
     activityLines: session.activityLines,
     startedAt: session.startedAt,
@@ -2391,7 +2418,11 @@ function isVisibleInteractionSuppressed(
 }
 
 function isPermissionApprovalSession(session: AgentIslandSessionState): boolean {
-  return session.interactionKind === 'permission' && session.permissionRequestId !== null;
+  return (
+    session.interactionKind === 'permission' &&
+    session.permissionRequestId !== null &&
+    session.permissionActionsEnabled
+  );
 }
 
 function compareSessionsForDisplay(

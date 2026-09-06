@@ -50,4 +50,43 @@ describe('workerAttentionStore', () => {
 
     expect(listener).toHaveBeenCalledTimes(2);
   });
+
+  it('keeps done and permission attention as independent reasons', () => {
+    markWorkerAttention(WORKER_ID, { kind: 'done' });
+    markWorkerAttention(WORKER_ID, { kind: 'permission', requestId: 'permission-1' });
+    markWorkerAttention(WORKER_ID, { kind: 'permission', requestId: 'permission-2' });
+
+    expect(__getWorkerAttentionSnapshotForTest().get(WORKER_ID)).toEqual([
+      { kind: 'done' },
+      { kind: 'permission', requestId: 'permission-1' },
+      { kind: 'permission', requestId: 'permission-2' },
+    ]);
+
+    // Viewing a Worker acknowledges only its unread completion. A live
+    // permission remains actionable until that exact request is dismissed.
+    expect(clearWorkerAttention(WORKER_ID)).toBe(true);
+    expect(__getWorkerAttentionSnapshotForTest().get(WORKER_ID)).toEqual([
+      { kind: 'permission', requestId: 'permission-1' },
+      { kind: 'permission', requestId: 'permission-2' },
+    ]);
+
+    expect(
+      clearWorkerAttention(WORKER_ID, {
+        kind: 'permission',
+        requestId: 'permission-1',
+      }),
+    ).toBe(true);
+    expect(__getWorkerAttentionSnapshotForTest().get(WORKER_ID)).toEqual([
+      { kind: 'permission', requestId: 'permission-2' },
+    ]);
+  });
+
+  it('clears all reasons only when the Worker leaves the team', () => {
+    markWorkerAttention(WORKER_ID, { kind: 'done' });
+    markWorkerAttention(WORKER_ID, { kind: 'permission', requestId: 'permission-1' });
+
+    expect(clearWorkerAttentionMany([WORKER_ID])).toBe(1);
+    expect(hasWorkerAttention(WORKER_ID)).toBe(false);
+    expect(__getWorkerAttentionSnapshotForTest().has(WORKER_ID)).toBe(false);
+  });
 });
