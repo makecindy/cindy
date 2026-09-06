@@ -3633,7 +3633,20 @@ export class DeviceLinkClient {
     // 引发事故的量级。真出现这种负载时日志会给出真实形状,届时按证据设计,不先建机制。
     const budget = this.recoveryPassBudget();
     let framesSpent = 0;
+    const head = peer.pending.values().next().value;
     for (const pending of peer.pending.values()) {
+      // Cumulative ACK cannot confirm a tail while a byte-paced head is still
+      // missing. Allow one early tail retry to fill the receiver's buffer, but
+      // do not burn its whole retry budget (and reset this healthy slow link)
+      // before the head has finished. ACK removal naturally releases this hold;
+      // genuine link recovery still replays immediately via ignoreInterval.
+      if (
+        !opts.ignoreInterval
+        && head
+        && pending !== head
+        && head.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL
+        && pending.attempts >= Math.min(2, this.timing.transportMaxRetryAttempts)
+      ) continue;
       // A local ws write is not a delivery receipt: relay -> mobile can still be
       // transmitting a large response even with bufferedAmount=0. A 200KB page
       // took ~18s on Android's 256Kbit/s high-latency link; 2/4/8s backoff still
@@ -3650,8 +3663,8 @@ export class DeviceLinkClient {
       if (!opts.ignoreInterval && now - pending.lastSentAt < retryDelayMs) {
         // A large head frame may still be inside its byte-based cooldown while
         // a later small request is already eligible. Cumulative ACK cannot
-        // advance past the head, but sending the later frame lets the receiver
-        // buffer it and avoids starving independent request deadlines.
+        // advance past the head, but one early retry lets the receiver buffer
+        // the later frame without exhausting its budget behind that head.
         continue;
       }
       if (pending.attempts >= this.timing.transportMaxRetryAttempts) {
