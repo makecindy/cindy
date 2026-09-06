@@ -6940,7 +6940,7 @@ export function ChatInput({
           expectedAgentSwitchRevision === undefined) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId);
         return performAgentSwitch(intent?.target ?? runtimeAgentKind, newModelId,
-          intent?.providerId ?? effectiveSourceId ?? null);
+          intent ? intent.providerId : effectiveSourceId ?? null);
       }
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
