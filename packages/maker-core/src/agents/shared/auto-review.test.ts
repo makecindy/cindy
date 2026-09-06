@@ -302,6 +302,14 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
 });
 
 describe('classifyShellCommand — 只读放行', () => {
+  it('bounds direct parser inputs before scanning and preserves trailing-root semantics', () => {
+    expect(classifyShellCommand('echo ' + ' '.repeat(50_000) + '!', roots)).toBe('prompt');
+    for (const root of ['/repo', '/repo/', '/repo////']) {
+      expect(reviewAction({ kind: 'file-write', path: 'file.txt' }, [root])).toBe('auto-approve');
+      expect(classifyShellCommand('find . -name build -exec rm -rf {} +', [root]))
+        .toBe(classifyShellCommand('find . -name build -exec rm -rf {} +', ['/repo']));
+    }
+  });
   it('常见只读命令 / git 只读 / curl GET', () => {
     for (const c of ['ls -la', 'cat f', 'grep -rn x . --include="[b]ook.ts"', 'rg TODO', 'git status', 'git log', 'curl -sS https://x.com', 'env FOO=1 ls', 'timeout 5 grep x f']) {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');

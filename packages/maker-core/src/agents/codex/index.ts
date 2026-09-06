@@ -6619,7 +6619,10 @@ export class CodexAgent extends BaseAgent {
           req.kind === 'permission'
         ) {
           const decision = await reviewAutoAction(
-            forcePrompt || !opts?.autoReviewAction
+            // Explicit `other` evidence already requires AI review (or a
+            // missing-evidence denial); a channel policy must not replace it
+            // with display text that conceals the absent execution arguments.
+            !opts?.autoReviewAction || (forcePrompt && opts.autoReviewAction.kind !== 'other')
               ? toolAutoReviewAction(req.toolName, req.input, req.description)
               : opts.autoReviewAction,
           );
@@ -7974,6 +7977,12 @@ export class CodexAgent extends BaseAgent {
         {
           forcePrompt:
             turnPolicyForcePrompt || approvalPolicy === 'prompt-each-time',
+          // Display text is not execution evidence. An absent argument payload
+          // must hit the shared missing-evidence denial, never reach AI as a
+          // seemingly complete action made only of server/title/message fields.
+          ...(policyPermissionInput.toolParams === undefined
+            ? { autoReviewAction: { kind: 'other' as const, description: undefined } }
+            : {}),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );
@@ -11750,7 +11759,7 @@ export class CodexAgent extends BaseAgent {
         const autoReviewIntent = (sendOpts as CodexInternalSendOptions | undefined)?.[
           CODEX_AUTO_REVIEW_INTENT
         ];
-        setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content));
+        setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
         assertCurrentHost('turn/start');
         // 本条消息的计划意图:sendOpts.planMode 是点击发送瞬间的快照(排队行透传),
         // 权威于 agent 当前武装态;undefined 走旧语义(消耗武装态)。一次性语义:
@@ -12509,7 +12518,7 @@ export class CodexAgent extends BaseAgent {
             turnId: steeredTurnId,
           });
         }
-        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content));
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
       },
 
       async requestGracefulStop(stopOpts) {

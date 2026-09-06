@@ -1,4 +1,5 @@
 import {
+  extractAutoReviewUserIntent,
   getAutoReviewActionTextLength,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
@@ -37,7 +38,6 @@ export interface AutoPermissionReviewerDeps {
 
 const MAX_REASON_CHARS = 240;
 const MAX_REVIEW_OUTPUT_CHARS = 1_024;
-const MAX_USER_INTENT_CHARS = 2_000;
 // ChatInput permits ten external directory grants shared across read-only and writable
 // roots. Keep those ten plus the primary workspace visible to the reviewer.
 const MAX_WORKSPACE_ROOTS = 11;
@@ -121,7 +121,7 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
   const writableSet = new Set(writableRoots);
   const referenceRoots = request.workspaceRoots.filter((root) => !writableSet.has(root));
   const payload = {
-    userIntent: compactText(request.userIntent, MAX_USER_INTENT_CHARS),
+    userIntent: extractAutoReviewUserIntent(request.userIntent),
     action: request.action,
     ...(request.authorizationContext ? { authorizationContext: request.authorizationContext } : {}),
     workspaceRoot: compactText(workspaceRoot ?? '', MAX_WORKSPACE_ROOT_CHARS),

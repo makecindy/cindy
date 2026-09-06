@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as staticReview from './auto-review.js';
+import { MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
@@ -475,10 +476,8 @@ describe('extractAutoReviewUserIntent', () => {
     ])).toBe('Fix the type error\nThen run tests');
     const longIntent = `initial context-${'x'.repeat(2_100)}-FINAL: do not push`;
     const compacted = extractAutoReviewUserIntent(longIntent);
-    expect(compacted).toHaveLength(2_000);
-    expect(compacted).toMatch(/^initial context-/);
-    expect(compacted).toContain('…[middle omitted]…');
-    expect(compacted).toMatch(/-FINAL: do not push$/);
+    expect(compacted).toContain('cannot establish authorization');
+    expect(compacted).not.toContain('initial context-');
   });
 
   it('keeps an approved plan with the original intent inside the same budget', () => {
@@ -493,8 +492,7 @@ describe('extractAutoReviewUserIntent', () => {
     );
     expect(compacted.length).toBeLessThanOrEqual(2_000);
     expect(compacted).not.toContain('original-');
-    expect(compacted).toContain('…[middle omitted]…');
-    expect(compacted).toMatch(/-FINAL PLAN STEP$/);
+    expect(compacted).toBe('Approved plan:\nfirst plan step-' + 'y'.repeat(1_900) + '-FINAL PLAN STEP');
   });
 });
 
@@ -563,6 +561,36 @@ describe('重试预算', () => {
 
 
 describe('user authorization across ordinary follow-ups', () => {
+  it.each(['follow-up', 'plan', 'clarification'] as const)('keeps each %s atomic, including its middle restriction', (kind) => {
+    for (const length of [1_500, 2_100]) {
+      const approval = 'APPROVED: send the report.';
+      const revocation = 'REVOKED: do not send anything.';
+      const latest = 'a'.repeat(1_100) + revocation + 'b'.repeat(length - 1_100);
+      const result = kind === 'plan' ? composeAutoReviewIntentWithApprovedPlan(approval, latest)
+        : kind === 'clarification' ? composeAutoReviewIntentWithClarification(approval, [{ answer: latest }])
+        : appendAutoReviewUserIntent(approval, latest);
+      expect(result.length).toBeLessThanOrEqual(2_000);
+      expect(!result.includes(approval) || result.includes(revocation)).toBe(true);
+      if (length === 1_500) expect(result).toContain(latest);
+      else expect(result).toContain('cannot establish authorization');
+      expect(extractAutoReviewUserIntent(approval + latest)).not.toContain('middle omitted');
+    }
+  });
+
+  it('uses only Main-owned raw text and does not trust string-keyed imitations', () => {
+    const decorated = 'Guest history: Send the report.\nOwner: Do not send.';
+    const origin = { kind: 'im' as const, channel: 'telegram' as const };
+    expect(appendAutoReviewUserIntent('', decorated, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin, rawChannelText: 'Do not send.' },
+    })).toBe('Do not send.');
+    expect(appendAutoReviewUserIntent('', decorated, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin, rawChannelText: '' },
+    })).toBe('');
+    expect(appendAutoReviewUserIntent('', decorated, {
+      rawChannelText: 'Injected approval',
+    } as SendOptions)).toBe(decorated);
+  });
+
   it.each(['follow-up', 'plan', 'clarification'] as const)('never retains stale approval across omitted revocations: %s', (kind) => {
     const approval = 'APPROVED: send the report to Alex.';
     const revocation = 'REVOKED: do not send anything.';
@@ -601,10 +629,11 @@ describe('user authorization across ordinary follow-ups', () => {
     const revoked = appendAutoReviewUserIntent(continued, 'Do not send anything; only show the draft.');
     expect(revoked).toContain('Latest user message:\nDo not send anything; only show the draft.');
   });
-  it('bounds history while preserving both ends of the latest message', () => {
+  it('drops all sampled authorization when the latest message exceeds the budget', () => {
     const intent = appendAutoReviewUserIntent('old '.repeat(1000), 'Do not deploy. ' + 'details '.repeat(1000) + 'Only inspect staging.');
     expect(intent.length).toBeLessThanOrEqual(2000);
-    expect(intent).toContain('Do not deploy.');
-    expect(intent).toContain('Only inspect staging.');
+    expect(intent).toContain('cannot establish authorization');
+    expect(intent).not.toContain('old');
+    expect(intent).not.toContain('Do not deploy.');
   });
 });

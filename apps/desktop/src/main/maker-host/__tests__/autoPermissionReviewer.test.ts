@@ -115,8 +115,9 @@ describe('buildAutoPermissionReviewPrompt', () => {
       ),
     }));
 
-    expect(prompt).toContain('intent-head-');
-    expect(prompt).toContain('-intent-tail');
+    expect(prompt).not.toContain('intent-head-');
+    expect(prompt).not.toContain('-intent-tail');
+    expect(prompt).toContain('cannot establish authorization');
     expect(prompt).toContain('…[truncated]…');
     expect(prompt).toContain('/root-10-');
     expect(prompt).not.toContain('/root-11-');

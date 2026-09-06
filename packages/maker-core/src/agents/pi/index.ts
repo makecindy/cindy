@@ -5768,7 +5768,7 @@ export class PiAgent extends BaseAgent {
           let { text, images } = await buildPiPrompt(message, { remote });
           rejectIfCancelled(sendOpts, 'send');
           assertImageInputSupported(images);
-          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content));
+          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
           const managedPackageRoute = await routeManagedPackageCommand(
             text,
             images.length,
@@ -5985,7 +5985,7 @@ export class PiAgent extends BaseAgent {
         let { text, images } = await buildPiPrompt(message, { remote });
         rejectIfCancelled(sendOpts, 'steer');
         assertImageInputSupported(images);
-        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content));
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
         const managedPackageRoute = await routeManagedPackageCommand(
           text,
           images.length,

@@ -51,6 +51,7 @@ import { parseShellInputRedirections } from './shell-input-redirections.js';
 export { isSensitiveCredentialPath } from './sensitive-credential-paths.js';
 
 export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
+export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
 
 /**
  * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
@@ -3799,7 +3800,7 @@ function matchedPathSentinel(
   if (/[$`{}*?[\]]/.test(root) || root.startsWith('~')) return null;
   const base = opts.cwd ?? workspaceRoots[0];
   if (!isAbsolutePath(toForwardSlashes(root)) && (!base || opts.cwdUnknown)) return null;
-  const resolved = normalizeTarget(root, base ? [base] : []).replace(/\/+$/, '');
+  const resolved = trimTrailingSlashes(normalizeTarget(root, base ? [base] : []));
   return `${resolved}/${MATCHED_PATH_SENTINEL}`;
 }
 
@@ -6022,7 +6023,11 @@ export function classifyShellCommand(
   workspaceRoots: string[],
   opts: ShellReviewOptions = {},
 ): ReviewVerdict {
-  if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
+  if (typeof command !== 'string') return 'prompt';
+  // Keep the primitive length barrier next to the parsers, including for direct
+  // classifier callers. Auto's outer evidence guard already blocks this action.
+  if (command.length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return 'prompt';
+  if (command.trim().length === 0) return 'prompt';
   // The shared path matcher deliberately accepts only complete path values. Shell
   // commands need argument-aware scanning so a trailing pipe/comment cannot hide a
   // dotenv operand, while jq/grep expressions such as jq .env data.json stay data.
@@ -6149,12 +6154,18 @@ function isAbsolutePath(p: string): boolean {
   return p.startsWith('/') || /^[A-Za-z]:/.test(p);
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') end--;
+  return value.slice(0, end);
+}
+
 /** 归一化路径:去包裹引号、统一分隔符,相对路径挂到第一个 workspace root(cwd)。 */
 function normalizeTarget(target: string, workspaceRoots: string[]): string {
   let p = toForwardSlashes(target.replace(/^['"]|['"]$/g, ''));
   if (!isAbsolutePath(p)) {
     const cwd = workspaceRoots[0];
-    if (cwd) p = `${toForwardSlashes(cwd).replace(/\/+$/, '')}/${p.replace(/^\/+/, '')}`;
+    if (cwd) p = `${trimTrailingSlashes(toForwardSlashes(cwd))}/${p.replace(/^\/+/, '')}`;
   }
   return normalizeSlashes(p);
 }

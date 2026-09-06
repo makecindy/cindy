@@ -1,6 +1,8 @@
 import type { AgentKind, UserMessage } from '../../types/common.js';
+import { MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
+  MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   reviewAction,
   type ReviewableAction,
   type ReviewVerdict,
@@ -255,7 +257,7 @@ export function toolAutoReviewAction(
   return { kind: 'other', description: JSON.stringify({ toolName, input, context, executionEvidence }) };
 }
 
-export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+export { MAX_AUTO_REVIEW_ACTION_TEXT_CHARS } from './auto-review.js';
 const MAX_AUTO_REVIEW_REASON_CHARS = 240;
 /**
  * Auto-review is deliberately bounded: a reviewer outage must still resolve the
@@ -484,44 +486,45 @@ export async function resolveAutoReviewDecision(
 }
 
 const MAX_USER_INTENT_CHARS = 2_000;
-const USER_INTENT_TRUNCATION_MARKER = '\n…[middle omitted]…\n';
+const OMITTED_USER_INTENT = 'User message omitted because it exceeds the review budget; it cannot establish authorization.';
 
 function compactCurrentUserIntent(text: string, maxChars = MAX_USER_INTENT_CHARS): string {
   const normalized = text.trim();
   if (normalized.length <= maxChars) return normalized;
-  const remaining = maxChars - USER_INTENT_TRUNCATION_MARKER.length;
-  const headChars = Math.ceil(remaining * 0.75);
-  const tailChars = remaining - headChars;
-  return `${normalized.slice(0, headChars)}${USER_INTENT_TRUNCATION_MARKER}${normalized.slice(-tailChars)}`;
+  return OMITTED_USER_INTENT;
 }
 
-/** 只取当前用户消息文本并设硬上限，保留末尾的最终要求或更正。 */
-export function extractAutoReviewUserIntent(content: UserMessage['content']): string {
-  const text = typeof content === 'string'
+function userIntentText(content: UserMessage['content']): string {
+  return (typeof content === 'string'
     ? content
     : content
       .filter((block): block is Extract<typeof block, { type: 'text' }> => block.type === 'text')
       .map((block) => block.text)
-      .join('\n');
-  return compactCurrentUserIntent(text);
+      .join('\n')).trim();
+}
+
+/** Authorization text is atomic: never sample away a restriction within a message. */
+export function extractAutoReviewUserIntent(content: UserMessage['content']): string {
+  return compactCurrentUserIntent(userIntentText(content));
 }
 
 /** Preserve bounded user authorization across follow-ups; later restrictions take precedence. */
-export function appendAutoReviewUserIntent(previous: string, content: UserMessage['content']): string {
-  const latest = extractAutoReviewUserIntent(content);
-  if (!previous.trim()) return latest;
+export function appendAutoReviewUserIntent(previous: string, content: UserMessage['content'], sendOpts?: SendOptions): string {
+  // Only Main's Symbol carries authenticated channel text. Decorated replies and
+  // group history remain model context, never evidence of the requester's consent.
+  const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? content);
+  if (!previous.trim()) return compactCurrentUserIntent(latest);
   if (!latest) return compactCurrentUserIntent(previous);
   const prefix = 'Earlier user messages (still apply unless explicitly changed below):\n';
   const separator = '\n\nLatest user message:\n';
-  const latestText = compactCurrentUserIntent(latest, 1_400);
-  const priorBudget = MAX_USER_INTENT_CHARS - prefix.length - separator.length - latestText.length;
+  const priorBudget = MAX_USER_INTENT_CHARS - prefix.length - separator.length - latest.length;
   // History is atomic: keeping an early approval while sampling away an
   // intervening revocation would manufacture authorization. On overflow, drop
   // the entire prior context, including its approvals, rather than sampling it.
   if (previous.trim().length > priorBudget) {
-    return 'Earlier user context omitted; it cannot establish authorization.' + separator + latestText;
+    return compactCurrentUserIntent(latest);
   }
-  return prefix + previous.trim() + separator + latestText;
+  return prefix + previous.trim() + separator + latest;
 }
 
 /**

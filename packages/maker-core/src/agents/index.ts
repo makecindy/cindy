@@ -94,6 +94,7 @@ export {
   AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS,
   autoReviewRetryBudgetMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
+  extractAutoReviewUserIntent,
   getAutoReviewActionTextLength,
   getAutoReviewDelegateHardCeilingMs,
   isAutoReviewConfirmUndeliveredNotice,
