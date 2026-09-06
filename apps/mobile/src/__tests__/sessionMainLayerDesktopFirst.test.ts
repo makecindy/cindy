@@ -46,7 +46,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     // 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
     expect(routeSource).toContain('{showConnectionBanner ? (');
     expect(source.replace(/\r\n/g, '\n'))
-      .toContain('useShowConnectionBanner(\n    status,\n    connectionRecoveryError,');
+      .toContain('useShowConnectionBanner(\n    status,\n    bannerError,');
     expect(routeSource).not.toContain('connectionError || (loading && !currentSession)');
     expect(syncSource).toContain("t('session.screen.awaitingSync')");
     expect(syncSource).toContain("t('session.screen.resync')");

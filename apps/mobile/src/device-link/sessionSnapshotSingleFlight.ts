@@ -220,8 +220,18 @@ export async function readProgressiveMessageWindow<Metadata, History>(options: {
   const history = options.eager
     ? messages()
     : metadata.then((value) => options.isCurrent() && options.shouldReadMessages(value) ? messages() : null);
-  const [metadataValue, historyValue] = await Promise.all([metadata, history]);
+  const [metadataValue, historyValue] = await waitForIndependentSnapshotReads([metadata, history] as const);
   return { metadata: metadataValue, history: historyValue };
+}
+
+/** Do not let one rejected read cancel still-useful siblings at the coordinator boundary. */
+export async function waitForIndependentSnapshotReads<T extends readonly unknown[]>(
+  reads: { [K in keyof T]: Promise<T[K]> },
+): Promise<T> {
+  const results = await Promise.allSettled(reads);
+  const failure = results.find((result) => result.status === 'rejected');
+  if (failure?.status === 'rejected') throw failure.reason;
+  return results.map((result) => (result as PromiseFulfilledResult<unknown>).value) as unknown as T;
 }
 
 /** Apply each successful response immediately while retaining allSettled failure classification. */

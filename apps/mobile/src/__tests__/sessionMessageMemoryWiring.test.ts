@@ -77,7 +77,7 @@ describe('任务消息内存治理页面接线', () => {
     expect(screen).toMatch(/remoteSessionStore\.mergeEarlierMessages\(sessionId, pageList, \{\s*authority: messageAuthority,\s*before,\s*\}\)/);
     expect(screen).toContain('remoteSessionStore.mergeMessages(sessionIdAtStart, rows, { authority: messageAuthority });');
     // First open and reopen now share the same authority-fenced history read.
-    expect(screen).toContain('readProgressiveMessageWindow({');
+    expect(screen).toContain('syncSessionMessageWindow({');
     expect(screen.match(/maker\.listMessages\(/g)).toHaveLength(3);
   });
 

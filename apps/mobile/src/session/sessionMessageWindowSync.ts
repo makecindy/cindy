@@ -3,14 +3,17 @@ import {
   type MessagePageRetryResult,
 } from '@/session/messagePaging';
 import type { RemoteSession } from '@/session/types';
+import { readProgressiveMessageWindow } from '@/device-link/sessionSnapshotSingleFlight';
 
 interface SessionMessageWindowSync {
   isReopen: boolean;
+  eager?: boolean;
   storedSession: RemoteSession | null;
   readMetadata(): Promise<RemoteSession>;
   readLatest(): Promise<MessagePageRetryResult>;
   isCurrent(): boolean;
   isWindowSynced(session: RemoteSession): boolean;
+  commitMessages?(page: MessagePageRetryResult): void;
   commit(session: RemoteSession, page: MessagePageRetryResult | null): void;
 }
 
@@ -21,21 +24,17 @@ interface SessionMessageWindowSync {
  * still decided by the caller after all resources succeed.
  */
 export async function syncSessionMessageWindow(input: SessionMessageWindowSync): Promise<void> {
-  let session: RemoteSession;
-  let page: MessagePageRetryResult | null = null;
-  if (!input.isReopen) {
-    // Keep cold-open metadata and history parallel; neither depends on projection.
-    [session, page] = await Promise.all([input.readMetadata(), input.readLatest()]);
-  } else {
-    session = await input.readMetadata();
-    if (!input.isCurrent()) return;
-    if (shouldRefreshLatestMessageWindowOnReopen({
-      freshSession: session,
+  const { metadata: session, history: page } = await readProgressiveMessageWindow({
+    readMetadata: input.readMetadata,
+    readMessages: input.readLatest,
+    eager: input.eager ?? !input.isReopen,
+    isCurrent: input.isCurrent,
+    shouldReadMessages: (metadata) => shouldRefreshLatestMessageWindowOnReopen({
+      freshSession: metadata,
       storedSession: input.storedSession,
-      messageWindowSynced: input.isWindowSynced(session),
-    })) {
-      page = await input.readLatest();
-    }
-  }
+      messageWindowSynced: input.isWindowSynced(metadata),
+    }),
+    commitMessages: (history) => input.commitMessages?.(history),
+  });
   if (input.isCurrent()) input.commit(session, page);
 }
