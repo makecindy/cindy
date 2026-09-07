@@ -34,6 +34,8 @@ describe('iOS Simulator IPC handlers', () => {
   });
 
   it.each([
+    MAKER_INVOKE.IOS_SIMULATOR_GET_PREFERENCES,
+    MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL,
     MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS,
     MAKER_INVOKE.IOS_SIMULATOR_STATUS,
     MAKER_INVOKE.IOS_SIMULATOR_CALL,
@@ -58,6 +60,76 @@ describe('iOS Simulator IPC handlers', () => {
     });
     expect(assertTrustedSender).toHaveBeenCalledOnce();
     expect(getStatus).not.toHaveBeenCalled();
+  });
+
+  it('reads and updates the owner-scoped presentation preference without a task grant', async () => {
+    const harness = new IpcHarness();
+    const getPluginAccess = vi.fn(() => ({ allowed: true as const }));
+    const getPreferences = vi.fn(() => ({ autoOpenEmbeddedPanel: true }));
+    const setAutoOpenEmbeddedPanel = vi.fn(async (enabled: boolean) => ({
+      autoOpenEmbeddedPanel: enabled,
+    }));
+    registerTrusted(harness, {
+      getPluginAccess,
+      getSessionAccess: () => null,
+      getViewerAccess: () => null,
+      hasViewerAccess: () => false,
+      getPreferences,
+      setAutoOpenEmbeddedPanel,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_GET_PREFERENCES),
+    ).resolves.toEqual({ autoOpenEmbeddedPanel: true });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL, {
+        enabled: false,
+      }),
+    ).resolves.toEqual({ autoOpenEmbeddedPanel: false });
+
+    expect(getPreferences).toHaveBeenCalledOnce();
+    expect(setAutoOpenEmbeddedPanel).toHaveBeenCalledWith(false);
+    expect(getPluginAccess).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed preference writes before reaching persistence', async () => {
+    const harness = new IpcHarness();
+    const setAutoOpenEmbeddedPanel = vi.fn();
+    registerTrusted(harness, { setAutoOpenEmbeddedPanel });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL, {
+        enabled: 'false',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(setAutoOpenEmbeddedPanel).not.toHaveBeenCalled();
+  });
+
+  it('drops a preference write when the owner changes while persistence is pending', async () => {
+    const harness = new IpcHarness();
+    let ownerScopeKey = 'local:owner-a:1';
+    let releaseWrite: (() => void) | undefined;
+    const setAutoOpenEmbeddedPanel = vi.fn(
+      () =>
+        new Promise<{ autoOpenEmbeddedPanel: boolean }>((resolve) => {
+          releaseWrite = () => resolve({ autoOpenEmbeddedPanel: false });
+        }),
+    );
+    registerTrusted(harness, {
+      getOwnerScopeKey: () => ownerScopeKey,
+      setAutoOpenEmbeddedPanel,
+    });
+
+    const pending = harness.invokeFrom(
+      17,
+      MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL,
+      { enabled: false },
+    );
+    await vi.waitFor(() => expect(releaseWrite).toBeDefined());
+    ownerScopeKey = 'cloud:owner-b:2';
+    releaseWrite?.();
+
+    await expect(pending).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
   });
 
   it('rejects every Renderer entry before reaching the Host when the plugin is unavailable', async () => {
