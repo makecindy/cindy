@@ -253,9 +253,9 @@ describe('shouldAutoLoadEarlier', () => {
     actionVisible: true,
     atEnd: false,
     atStart: true,
-    firstItemKey: 'message-a',
+    progressKey: 'message-a',
     initialAutoFillAllowed: false,
-    lastAttemptedFirstItemKey: null,
+    lastAttemptedProgressKey: null,
     nearStart: true,
     userScrolledForOlder: true,
   };
@@ -328,11 +328,11 @@ describe('shouldAutoLoadEarlier', () => {
 
   it('requires progress between attempts to avoid hammering a host that returns no new rows', () => {
     // 上次尝试后首项没变(加载失败 / host cursor 未命中拉回重复页)→ 不自动重试;
-    expect(shouldAutoLoadEarlier({ ...eligible, lastAttemptedFirstItemKey: 'message-a' })).toBe(false);
+    expect(shouldAutoLoadEarlier({ ...eligible, lastAttemptedProgressKey: 'message-a' })).toBe(false);
     // prepend 真落地(首项变化)→ 允许级联拉下一页(小页填满预取区);
-    expect(shouldAutoLoadEarlier({ ...eligible, lastAttemptedFirstItemKey: 'message-z' })).toBe(true);
+    expect(shouldAutoLoadEarlier({ ...eligible, lastAttemptedProgressKey: 'message-z' })).toBe(true);
     // 空列表无进展信号,不触发。
-    expect(shouldAutoLoadEarlier({ ...eligible, firstItemKey: null })).toBe(false);
+    expect(shouldAutoLoadEarlier({ ...eligible, progressKey: null })).toBe(false);
   });
 });
 
