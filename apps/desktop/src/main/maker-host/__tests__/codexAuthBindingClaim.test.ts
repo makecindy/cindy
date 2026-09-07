@@ -257,11 +257,19 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     h.dataOwnerId = 'owner-a';
     writeStableProjectionOwner('owner-a');
 
-    const link = fs.promises.link.bind(fs.promises);
-    vi.spyOn(fs.promises, 'link').mockImplementationOnce(async (existingPath, newPath) => {
-      await link(existingPath, newPath);
-      h.dataOwnerId = 'owner-b';
-    });
+    if (process.platform === 'win32') {
+      const link = fs.promises.link.bind(fs.promises);
+      vi.spyOn(fs.promises, 'link').mockImplementationOnce(async (existingPath, newPath) => {
+        await link(existingPath, newPath);
+        h.dataOwnerId = 'owner-b';
+      });
+    } else {
+      const symlink = fs.promises.symlink.bind(fs.promises);
+      vi.spyOn(fs.promises, 'symlink').mockImplementationOnce(async (target, path, type) => {
+        await symlink(target, path, type);
+        h.dataOwnerId = 'owner-b';
+      });
+    }
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
