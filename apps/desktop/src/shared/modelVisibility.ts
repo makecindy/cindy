@@ -27,6 +27,8 @@ export function isModelVisibilityLegacyOwnerClaim(
 /** Optional append-only IPC policy; omitted by older renderers. */
 export interface ModelVisibilityPolicy {
   fallback: false;
+  /** Renderer still needs the catalog/legacy claim; this is not an effective snapshot. */
+  pending?: true;
   /** Only an explicit Restore defaults action may follow future catalog defaults. */
   followCatalogKeys: string[];
 }

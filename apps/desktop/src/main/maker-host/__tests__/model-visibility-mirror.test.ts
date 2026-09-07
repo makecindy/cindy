@@ -9,6 +9,7 @@ import { isModelVisible, type ProviderView } from '@cindy/model-providers';
 import {
   __resetModelVisibilityMirrorForTest,
   clearModelVisibilityMirror,
+  waitForModelVisibilityMirror,
   getModelVisibilityOverride,
   getModelVisibilityMirrorSnapshot,
   setModelVisibilityMirror,
@@ -18,11 +19,12 @@ import {
 
 afterEach(() => {
   __resetModelVisibilityMirrorForTest();
+  vi.useRealTimers();
 });
 
 describe('model-visibility-mirror', () => {
   it('尚未收到账号配置时不自动显示默认模型', () => {
-    expect(getModelVisibilityOverride('claude-code', 'xd', 'gpt-5.5')).toBe(false);
+    expect(() => getModelVisibilityOverride('claude-code', 'xd', 'gpt-5.5')).toThrow('MODEL_VISIBILITY_NOT_READY');
   });
 
   it('按 `${agent}:${providerId}:${modelId}` 命中对应 override', () => {
@@ -47,7 +49,7 @@ describe('model-visibility-mirror', () => {
   it('账号边界同步清空旧 owner 的进程内镜像', () => {
     setModelVisibilityMirror({ 'codex:openai:gpt-5.6': false });
     clearModelVisibilityMirror();
-    expect(getModelVisibilityOverride('codex', 'openai', 'gpt-5.6')).toBe(false);
+    expect(() => getModelVisibilityOverride('codex', 'openai', 'gpt-5.6')).toThrow('MODEL_VISIBILITY_NOT_READY');
   });
 
   it('仅在净化后的整表实际变化时返回 true，供调用方广播目录失效事件', () => {
@@ -113,7 +115,7 @@ describe('model-visibility-mirror', () => {
       true,
       invalidate,
     )).toBe(false);
-    expect(getModelVisibilityOverride('codex', 'openai', 'gpt-5.6')).toBe(false);
+    expect(() => getModelVisibilityOverride('codex', 'openai', 'gpt-5.6')).toThrow('MODEL_VISIBILITY_NOT_READY');
 
     expect(syncModelVisibilityMirrorForOwner(
       { 'codex:openai:gpt-5.6': false },
@@ -166,6 +168,42 @@ describe('initialized model visibility policy', () => {
       { dataOwnerId: 'new', ownerGeneration: 2 }, false, notify, undefined)).toBe(false);
     expect(getModelVisibilityOverride('pi', 'xd', 'new')).toBe(false);
     clearModelVisibilityMirror();
+    expect(() => getModelVisibilityOverride('pi', 'xd', 'new')).toThrow('MODEL_VISIBILITY_NOT_READY');
+  });
+});
+
+
+describe('model visibility synchronization readiness', () => {
+  it('waits for a complete snapshot, retaining explicit on/off instead of inventing an empty list', async () => {
+    const done = vi.fn();
+    const waiting = waitForModelVisibilityMirror().then(done);
+    setModelVisibilityMirror({}, { fallback: false, pending: true });
+    await Promise.resolve();
+    expect(done).not.toHaveBeenCalled();
+    expect(getModelVisibilityMirrorSnapshot([], true)).toEqual({}); // local catalog can bootstrap
+    expect(() => getModelVisibilityMirrorSnapshot()).toThrow('MODEL_VISIBILITY_NOT_READY');
+    setModelVisibilityMirror({ 'pi:xd:kept': true, 'pi:xd:off': false }, { fallback: false });
+    await waiting;
+    expect(getModelVisibilityOverride('pi', 'xd', 'kept')).toBe(true);
+    expect(getModelVisibilityOverride('pi', 'xd', 'off')).toBe(false);
     expect(getModelVisibilityOverride('pi', 'xd', 'new')).toBe(false);
+  });
+
+  it('accepts a deliberately empty complete snapshot as all off', async () => {
+    setModelVisibilityMirror({}, { fallback: false });
+    await expect(waitForModelVisibilityMirror()).resolves.toBeUndefined();
+    expect(getModelVisibilityOverride('pi', 'xd', 'new')).toBe(false);
+  });
+
+  it('rejects unavailable and changed-account waits; a later snapshot recovers', async () => {
+    vi.useFakeTimers();
+    const timeout = expect(waitForModelVisibilityMirror(100)).rejects.toThrow('MODEL_VISIBILITY_NOT_READY');
+    await vi.advanceTimersByTimeAsync(100);
+    await timeout;
+    const boundary = expect(waitForModelVisibilityMirror()).rejects.toThrow('MODEL_VISIBILITY_NOT_READY');
+    clearModelVisibilityMirror();
+    await boundary;
+    setModelVisibilityMirror({ 'pi:xd:b': true }, { fallback: false });
+    await expect(waitForModelVisibilityMirror()).resolves.toBeUndefined();
   });
 });

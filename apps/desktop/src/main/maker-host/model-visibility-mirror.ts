@@ -25,6 +25,26 @@ type VisibilityMap = Record<string, boolean>;
 
 let mirror: VisibilityMap = {};
 let strict = true;
+let ready = false;
+const readinessWaiters = new Set<(error?: Error) => void>();
+
+function notReady(): Error {
+  return new Error('MODEL_VISIBILITY_NOT_READY: current account model preferences have not synchronized');
+}
+
+/** Wait only for current-account preferences; never manufacture factory defaults. */
+export function waitForModelVisibilityMirror(timeoutMs = 5000): Promise<void> {
+  if (ready) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const finish = (error?: Error): void => {
+      clearTimeout(timer);
+      readinessWaiters.delete(finish);
+      if (error) reject(error); else resolve();
+    };
+    const timer = setTimeout(() => finish(notReady()), timeoutMs);
+    readinessWaiters.add(finish);
+  });
+}
 let followCatalogKeys = new Set<string>();
 
 /** 与 renderer modelVisibilityPrefs.keyOf 保持一致(改一处要同步另一处)。 */
@@ -38,7 +58,9 @@ function keyOf(agent: AgentKind, providerId: string, modelId: string): string {
  * 返回净化后的镜像是否实际变化，调用方据此避免重复广播目录失效事件。
  */
 export function setModelVisibilityMirror(raw: unknown, policy?: unknown): boolean {
-  const candidate = policy as { fallback?: unknown; followCatalogKeys?: unknown } | undefined;
+  const candidate = policy as { fallback?: unknown; followCatalogKeys?: unknown; pending?: unknown } | undefined;
+  if (candidate?.pending === true) return false;
+  const wasReady = ready;
   const nextStrict = candidate?.fallback === false;
   const nextFollow = new Set<string>(nextStrict && Array.isArray(candidate?.followCatalogKeys)
     ? candidate.followCatalogKeys.filter((key): key is string => typeof key === 'string') : []);
@@ -54,13 +76,15 @@ export function setModelVisibilityMirror(raw: unknown, policy?: unknown): boolea
   const currentKeys = Object.keys(mirror);
   const nextKeys = Object.keys(next);
   if (
-    !policyChanged && currentKeys.length === nextKeys.length
+    wasReady && !policyChanged && currentKeys.length === nextKeys.length
     && currentKeys.every((key) => mirror[key] === next[key])
   ) {
     return false;
   }
 
   mirror = next;
+  ready = true;
+  for (const finish of readinessWaiters) finish();
   strict = nextStrict;
   followCatalogKeys = nextFollow;
   return true;
@@ -112,6 +136,7 @@ export function getModelVisibilityOverride(
   providerId: string,
   modelId: string,
 ): boolean | undefined {
+  if (!ready) throw notReady();
   const key = keyOf(agent, providerId, modelId);
   return mirror[key] ?? (strict && !followCatalogKeys.has(key) ? false : undefined);
 }
@@ -120,7 +145,9 @@ export function getModelVisibilityOverride(
  * 整表快照(浅拷贝)。PROVIDER_LIST 用它把被控端的可见性 override 一并回给 device-link
  * 控制端(手机),让手机模型列表按**被控端**用户的显示开关过滤(与本机 / IM /model 同口径)。
  */
-export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderView[] = []): Record<string, boolean> {
+export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderView[] = [], allowPending = false): Record<string, boolean> {
+  if (!ready && allowPending) return {};
+  if (!ready) throw notReady();
   const snapshot = { ...mirror };
   // Expand the fallback into ordinary per-model booleans for legacy remote clients. The
   // provider list and visibility map come from the same catalog; no wire-schema change.
@@ -138,6 +165,8 @@ export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderVie
 /** Clear the process-global mirror at an account boundary before the next owner is committed. */
 export function clearModelVisibilityMirror(): void {
   mirror = {};
+  ready = false;
+  for (const finish of readinessWaiters) finish(notReady());
   strict = true;
   followCatalogKeys = new Set();
 }

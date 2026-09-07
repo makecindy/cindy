@@ -842,6 +842,7 @@ import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtim
 import {
   getModelVisibilityMirrorSnapshot,
   syncModelVisibilityMirrorForOwner,
+  waitForModelVisibilityMirror,
 } from '../maker-host/model-visibility-mirror.js';
 import {
   clearProviderDisableOverrides,
@@ -5241,7 +5242,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
-    getModelVisibilityOverrides: (providers) => getModelVisibilityMirrorSnapshot(providers),
+    getModelVisibilityOverrides: async (providers, trusted) => {
+      if (!trusted) await waitForModelVisibilityMirror();
+      return getModelVisibilityMirrorSnapshot(providers, trusted);
+    },
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     codexCustomProviderConfigSignature,
     hasAppliedCodexCustomProviderImageGeneration: (providerId) =>

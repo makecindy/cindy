@@ -237,7 +237,7 @@ export interface ProviderHandlerDeps {
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
    * key = `${agent}:${providerId}:${modelId}`,与 renderer modelVisibilityPrefs.keyOf 一致。
    */
-  getModelVisibilityOverrides(providers: readonly ProviderView[]): Record<string, boolean>;
+  getModelVisibilityOverrides(providers: readonly ProviderView[], trusted: boolean): Record<string, boolean> | Promise<Record<string, boolean>>;
   /** CRUD 成功后重算 active-catalog（生产 = refreshCustomProvidersIntoCatalog）。 */
   refreshCatalog(): Promise<void>;
   /**
@@ -998,7 +998,7 @@ export function registerProviderHandlers(
     }
   };
 
-  // 只读聚合：loadCatalog 永不抛（最差回退内置目录），故无需 throwIpcError 包裹。
+  // 只读聚合：远端还需等待当前账号的模型开关就绪；失败不可伪装为全部关闭。
   registry.handle(
     MAKER_INVOKE.PROVIDER_LIST,
     async (
@@ -1019,6 +1019,8 @@ export function registerProviderHandlers(
         allowSideEffects: trusted,
       });
       assertProviderMutationOwner(ownerAtIngress);
+      const modelVisibilityOverrides = await deps.getModelVisibilityOverrides(providers, trusted);
+      assertProviderMutationOwner(ownerAtIngress);
       const providerOrder = deps.getProviderOrder();
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
       // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
@@ -1029,7 +1031,7 @@ export function registerProviderHandlers(
         ownerGeneration: ownerAtIngress?.generation ?? 0,
         providers: providers.map(withoutProviderHeaderCredentials),
         providerOrder,
-        modelVisibilityOverrides: deps.getModelVisibilityOverrides(providers),
+        modelVisibilityOverrides,
       };
     },
   );

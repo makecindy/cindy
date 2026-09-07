@@ -239,7 +239,7 @@ describe('modelVisibilityPrefs store', () => {
 
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(true);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-b')).toBeNull();
-    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-b', 2, {});
+    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-b', 2, {}, expect.objectContaining({ pending: true }));
 
     setOwnerClaim('owner-a', 3, true, true);
     module.setModelVisibilityOwner('owner-a', 3, 'cloud');
@@ -353,13 +353,23 @@ describe('modelVisibilityPrefs store', () => {
     expect(syncModelVisibility).toHaveBeenLastCalledWith(null, 2, {});
   });
 
-  it('main 镜像同步异步失败时静默降级', async () => {
-    syncModelVisibility.mockRejectedValueOnce(new Error('handler not registered'));
-
-    await loadModuleForOwner();
-    await Promise.resolve();
-
-    expect(syncModelVisibility).toHaveBeenCalledWith('owner-a', 1, {});
+  it('retries a failed mirror sync and cancels old snapshots after a newer switch', async () => {
+    vi.useFakeTimers();
+    try {
+      syncModelVisibility.mockRejectedValueOnce(new Error('handler not registered'));
+      const prefs = await loadModuleForOwner();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(syncModelVisibility).toHaveBeenCalledTimes(2);
+      syncModelVisibility.mockRejectedValueOnce(new Error('temporary failure'));
+      prefs.setModelVisibility('pi', 'xd', 'a', true);
+      await Promise.resolve();
+      prefs.setModelVisibility('pi', 'xd', 'a', false);
+      const count = syncModelVisibility.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(syncModelVisibility).toHaveBeenCalledTimes(count);
+      expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1,
+        { 'pi:xd:a': false }, expect.anything());
+    } finally { vi.useRealTimers(); }
   });
 
   it('本地 profile 认领历史全局 key 并迁移到自己的 namespace', async () => {
@@ -566,6 +576,18 @@ describe('compact model defaults upgrade', () => {
     prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     prefs.migrateModelVisibilityDefaults('owner-b', 1, [provider]);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.initialization.owner.owner-b')).toBe(before);
+  });
+
+  it.each([false, true])('retains fresh initialization through pending writes, unless legacy data exists (%s)', async (hasLegacy) => {
+    if (hasLegacy) memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({ 'pi:xd:fable-5': false }));
+    setOwnerClaim('owner-a', 1, true, false);
+    const prefs = await upgrade();
+    prefs.setModelVisibility('pi', 'xd', 'fable-5-1', false);
+    expect(memStorage.getItem(markerKey)).toBeNull();
+    setOwnerClaim('owner-a', 1);
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(!hasLegacy);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'fable-5-1', defaultEnabled: true })).toBe(false);
   });
 
   it('retries a baseline write failure without overwriting a newer explicit off switch', async () => {

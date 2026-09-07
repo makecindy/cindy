@@ -241,19 +241,33 @@ function load(): VisibilityMap {
  * 列表时复用同一套可见性过滤,保证 IM 与应用内列表逐模型一致。失败静默(非 electron / preload
  * 未就绪 / 测试环境),不影响本地读写。
  */
+let mirrorRevision = 0;
+let mirrorRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
 function mirrorToMain(map: VisibilityMap): void {
-  try {
-    const syncPromise = window.electronAPI?.maker?.syncModelVisibility?.(
-      activeOwnerId,
-      activeOwnerGeneration,
-      effectiveMap(map),
-      ...(activeOwnerId && (initialization || !mayInitializeDefaults || activeOwnerMigrationPending)
-        ? [{ fallback: false as const, followCatalogKeys: initialization?.followCatalogKeys ?? [] }] : []),
-    );
-    if (syncPromise) void syncPromise.catch(() => undefined);
-  } catch {
-    // ignore — 镜像失败不影响本地可见性逻辑
-  }
+  const revision = ++mirrorRevision;
+  clearTimeout(mirrorRetryTimer);
+  const ownerId = activeOwnerId;
+  const generation = activeOwnerGeneration;
+  const pending = !!ownerId && (activeOwnerMigrationPending || (mayInitializeDefaults && !initialization));
+  const policy = ownerId ? { fallback: false as const,
+    followCatalogKeys: initialization?.followCatalogKeys ?? [], ...(pending ? { pending: true as const } : {}) } : undefined;
+  const snapshot = effectiveMap(map);
+  const send = (attempt: number): void => {
+    if (revision !== mirrorRevision || ownerId !== activeOwnerId || generation !== activeOwnerGeneration) return;
+    const retry = (): void => {
+      if (revision === mirrorRevision && attempt < 3) {
+        mirrorRetryTimer = setTimeout(() => send(attempt + 1), 250 * (2 ** attempt));
+      }
+    };
+    try {
+      const result = window.electronAPI?.maker?.syncModelVisibility?.(
+        ownerId, generation, snapshot, ...(policy ? [policy] : []),
+      );
+      if (result) void result.catch(retry);
+    } catch { retry(); }
+  };
+  send(0);
 }
 
 // ── 订阅 / 版本(供 useSyncExternalStore)──────────────────────────────────
@@ -293,7 +307,7 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   }
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
   cache = map;
-  if (context.providerId !== '*') mayInitializeDefaults = false;
+  if (context.providerId !== '*' && initialization?.scopes.length) mayInitializeDefaults = false;
   version += 1;
   // 每次开关变更后把最新快照重推 main,保持 IM /model 与应用内可见性一致。
   mirrorToMain(map);
@@ -564,6 +578,8 @@ export function useModelVisibilityVersion(): number {
 
 /** 测试用 —— 重置缓存 + 清 localStorage(其它代码不应调用)。 */
 export function __resetForTest(): void {
+  mirrorRevision += 1;
+  clearTimeout(mirrorRetryTimer);
   const currentScopedKey = activeOwnerId ? ownerStorageKey(activeOwnerId) : null;
   const currentMigrationKey = activeOwnerId ? ownerMigrationCompleteKey(activeOwnerId) : null;
   if (activeOwnerId) window.localStorage.removeItem(initializationKey(activeOwnerId));

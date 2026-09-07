@@ -192,11 +192,25 @@ describe('provider:list IPC handler', () => {
       providerOrder,
       modelVisibilityOverrides: overrides,
     });
-    expect(getVisibility).toHaveBeenCalledWith(views);
+    expect(getVisibility).toHaveBeenCalledWith(views, false);
     expect(listProviders).toHaveBeenCalledOnce();
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
     });
+  });
+
+  it('waits for effective visibility and rejects an account change during that wait', async () => {
+    const harness = new IpcHarness();
+    let owner = { dataOwnerId: 'owner-a', generation: 1 };
+    let release!: (map: Record<string, boolean>) => void;
+    const getVisibility = vi.fn(() => new Promise<Record<string, boolean>>((resolve) => { release = resolve; }));
+    registerProviderHandlers(harness, makeDeps({ listProviders: async () => [fakeView('xd', true)],
+      currentOwnerSession: () => owner, getModelVisibilityOverrides: getVisibility }));
+    const pending = harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    await vi.waitFor(() => expect(getVisibility).toHaveBeenCalledOnce());
+    owner = { dataOwnerId: 'owner-b', generation: 2 };
+    release({ 'pi:xd:old-account': true });
+    await expect(pending).rejects.toThrow('active account changed');
   });
 
   it('rejects a catalog snapshot after an A→B→A owner round trip during the async read', async () => {
