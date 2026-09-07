@@ -5913,6 +5913,45 @@ describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
 });
 
 describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
+  it('excludes idle and inbound-closed peers while admitting a new active target', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50);
+      h.current().ack();
+      for (let i = 0; i < 12; i++) {
+        const peer = `peer-${i}`;
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+        if (i < 6) h.client.closeLink(peer, 'user', 'inbound');
+      }
+      const socket = h.current();
+      socket.sent.length = 0;
+      for (let i = 0; i < 8; i++) h.client.sendPush('peer-11', 'maker:event', { part: i });
+      expect(socket.sent).toHaveLength(8);
+      const last = parseTransportPayload(socket.sent.at(-1)!.payload)!.meta;
+      socket.push({ v: 1, kind: 'push', src: 'peer-11', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: last.streamId, ackSeq: last.seq },
+      } });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(h.client.getReliableSendQueueDepth('peer-11')).toBe(0);
+      // A previously idle target must be included before initial admission, even
+      // for an oversized response, without waiting for historical peers' turns.
+      const before = socket.sent.length;
+      h.client.sendInvokeResult('peer-10', 'large-active', { ok: true, result: 'x'.repeat(12 * 128 * 1024) });
+      expect(socket.sent.length - before).toBeGreaterThan(8);
+      expect(socket.sent.slice(before).every((env) => env.dst === 'peer-10')).toBe(true);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('queues paced sends despite a full socket and refunds failed retry capacity checks', async () => {
     vi.useFakeTimers();
     const debug = vi.fn();
@@ -5932,6 +5971,8 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
         await opened;
       }
       const socket = h.current();
+      // Keep b genuinely active so a receives half of the shared window.
+      h.client.sendPush('b', 'maker:event', { pending: true });
       socket.sent.length = 0;
       for (let i = 0; i < 4; i++) h.client.sendPush('a', 'maker:event', { part: i });
       expect(socket.sent).toHaveLength(4);
@@ -5940,9 +5981,9 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
       expect(() => h.client.sendPush('a', 'maker:event', { part: 'queued' })).not.toThrow();
       expect(() => h.client.sendInvokeResult('a', 'queued-result', { ok: true, result: 'ok' })).not.toThrow();
       expect(h.client.getReliableSendQueueDepth('a')).toBe(6);
-      // An unpaced peer still checks socket capacity before queue admission.
+      // A peer with remaining credit still checks capacity and preserves its old queue.
       expect(() => h.client.sendInvokeResult('b', 'full', { ok: true, result: 'ok' })).toThrow();
-      expect(h.client.getReliableSendQueueDepth('b')).toBe(0);
+      expect(h.client.getReliableSendQueueDepth('b')).toBe(1);
       debug.mockClear();
       socket.push({ v: 1, kind: 'push', src: 'a', payload: {
         channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: last.streamId, ackSeq: last.seq },
@@ -6027,6 +6068,8 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
       h.client.sendInvokeResult('b', 'healthy-result', { ok: true, result: 'ok' });
       const reliable = () => socket.sent.filter((env) => parseTransportPayload(env.payload));
       expect(reliable().length).toBeLessThanOrEqual(8);
+      // b became active after a used the idle window; it progresses next window.
+      await vi.advanceTimersByTimeAsync(250);
       expect(reliable().some((env) => env.dst === 'b' && env.kind === 'invoke-result')).toBe(true);
       socket.push(encodeReliableFrames({ v: 1, kind: 'push', src: 'a', payload: { channel: 'maker:event', payload: {} } }, 'stream-a', 1)[0]);
       await vi.advanceTimersByTimeAsync(0);

@@ -2712,7 +2712,7 @@ export class DeviceLinkClient {
     const willSendNow = this.isPeerSendReady(peer)
       && !this.shouldHoldRecoverySend(peer, additionalFrames)
       && (this.congestionCloseStreak === 0 || this.congestionSendBudget.canTake(
-        env.dst, additionalFrames, this.getReadyReliablePeers(), this.monotonicNow(),
+        env.dst, additionalFrames, this.getReadyReliablePeers(env.dst), this.monotonicNow(),
       ));
     if (willSendNow) {
       this.assertWebSocketCapacity(this.measureReliableFrames(frames));
@@ -2794,7 +2794,7 @@ export class DeviceLinkClient {
     const congestionBudget = this.congestionCloseStreak > 0 ? this.congestionSendBudget : null;
     if (congestionBudget) {
       if (!congestionBudget.take(
-        pending.envelope.dst!, frames.length, this.getReadyReliablePeers(), this.monotonicNow(),
+        pending.envelope.dst!, frames.length, this.getReadyReliablePeers(pending.envelope.dst!), this.monotonicNow(),
       )) return 0;
     }
     let sent = 0;
@@ -2824,9 +2824,11 @@ export class DeviceLinkClient {
     return sent;
   }
 
-  private getReadyReliablePeers(): string[] {
+  private getReadyReliablePeers(target: string): string[] {
     return [...this.peerTransport.entries()]
-      .filter(([, peer]) => peer.reliable && this.isPeerSendReady(peer))
+      // Include the initial target before enqueue; unacknowledged data still needs retries.
+      .filter(([id, peer]) => peer.reliable && this.isPeerSendReady(peer)
+        && (id === target || peer.pending.size > 0))
       .map(([id]) => id);
   }
 
