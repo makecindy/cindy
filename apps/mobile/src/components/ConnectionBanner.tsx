@@ -20,7 +20,7 @@ import {
   resolveEffectiveConnectionError,
 } from '@/components/connectionBannerVisibility';
 import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 /** 普通断线(无分类 issue)转为可见提示前的静默窗口:健康重连通常 <1s 完成,不闪 banner。 */
 const OFFLINE_BANNER_DELAY_MS = 1_200;
@@ -109,7 +109,7 @@ export function ConnectionBanner({
   const friendlyError = activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
   const autoRecoveringRequest = requestErrorAutoRecovering ?? isAutoRecoveringRemoteError(effectiveError);
   const showRecoveryProgress = (!activeIssue || activeIssue.kind === 'unstable' || activeIssue.kind === 'replaced')
-    && (status === 'connecting' || showUnresponsive || recovery === 'syncing'
+    && (status === 'connecting' || deviceUnresponsive || recovery === 'syncing'
       || (friendlyError !== null && autoRecoveringRequest));
   const showSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
@@ -189,7 +189,7 @@ export function ConnectionBanner({
         <LoaderCircle
           accessibilityLabel={`${title} · ${copy}`}
           color={colors.textSecondary}
-          size={20}
+          size={iconSize.action}
           testID="connection.recoveryProgressStatic"
         />
       ) : null}
