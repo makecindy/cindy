@@ -209,6 +209,7 @@ import {
   isDbClientNotReadyError,
 } from '../localDb/client/current.js';
 import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
+import { createWorkingDirectoryRecovery } from './workingDirectoryRecovery.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
@@ -220,10 +221,7 @@ import {
   ensureDialogueWorkspaceDir,
   dialogueWorkspaceRootDir,
 } from '../localDb/dialogueWorkspace.js';
-import {
-  healMissingDialogueWorkdir,
-  matchDialogueWorkspacePath,
-} from '../localDb/dialogueWorkdirSelfHeal.js';
+import { matchDialogueWorkspacePath } from '../localDb/dialogueWorkdirSelfHeal.js';
 import {
   broadcastMessageRow,
   broadcastMessageAgentMetaUpdate,
@@ -1053,6 +1051,7 @@ import { handleSessionEvent, type SessionEventDependencies } from './sessionEven
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
+const workingDirectoryRecovery = createWorkingDirectoryRecovery();
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
@@ -11498,6 +11497,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await ensureRemoteReadyForSessionStart(params);
     },
     checkWorkDirExists,
+    peekWorkingDirectoryRecoveryNote: (sessionId) => workingDirectoryRecovery.peek(sessionId),
+    consumeWorkingDirectoryRecoveryNote: (sessionId, note) =>
+      workingDirectoryRecovery.consume(sessionId, note),
     isOrcaMcpHydrated,
     buildCreateOptsWithStderr,
     synthesizeOrcaVendorOptionsFromDb,
@@ -17282,21 +17284,24 @@ async function checkWorkDirExists(
       }
     }
     return true;
-  } catch {
-    // app 托管的 dialogue 工作目录(<userData>/dialogues/<日期>/<id>)本来就是
-    // 空的一次性目录:丢了直接 mkdir 重建放行,不打扰用户(自愈详见
-    // dialogueWorkdirSelfHeal.ts;legacy userData 前缀由启动 sweep 先行改写)。
-    const healed = await healMissingDialogueWorkdir(workingDir, dialogueWorkspaceRootDir());
-    if (healed) {
-      log.info('send: recreated missing dialogue workdir', { sessionId, workingDir });
-      return true;
-    }
+  } catch (error) {
     // Cindy 托管 worktree 被外部 PR cleanup / 手动 git 命令移除时，先按 DB 中
-    // 的精确 worktree_path 从本地或 origin tracking 分支重建。普通用户目录绝不
-    // 猜测 fallback；快照冲突也保持阻断，交给恢复横幅显式处理。
+    // 的精确 worktree_path 从本地或 origin tracking 分支重建，保留原代码与快照。
     const restored = await restoreMissingManagedWorktreeForSession(sessionId, workingDir);
     if (restored) {
       log.info('send: restored missing managed worktree', { sessionId, workingDir });
+      return true;
+    }
+    // A missing ordinary/dialogue cwd must not stop the conversation. Prefer a repaired
+    // DB path when the caller has one; never turn a managed Git recovery into
+    // an empty project, or treat permission/non-directory failures as ENOENT.
+    if (
+      !suppress &&
+      (error as NodeJS.ErrnoException).code === 'ENOENT' &&
+      getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) === null &&
+      await workingDirectoryRecovery.recover(sessionId, workingDir)
+    ) {
+      log.info('send: recreated missing working directory for conversation', { sessionId, workingDir });
       return true;
     }
     if (suppress) {

@@ -412,6 +412,8 @@ export interface MakerSendTransactionDeps {
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
+  peekWorkingDirectoryRecoveryNote?(sessionId: string): string | null;
+  consumeWorkingDirectoryRecoveryNote?(sessionId: string, note: string): void;
   /**
    * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
    * sealedTurnId 只用于已完成计划的一次性保护,跨过 accepted 后才消费。
@@ -569,7 +571,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   async function loadExtraDirsIfNeeded(
     sessionId: string,
     opts: CreateOpts,
-    source: 'lazy-create' | 'active-orca-rehydrate',
+    source: 'lazy-create' | 'active-session-rehydrate',
   ): Promise<void> {
     if (opts.extraDirs === undefined) {
       try {
@@ -642,10 +644,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     return true;
   }
 
-  async function rehydrateActiveOrcaSession(
+  async function rehydrateActiveSession(
     sessionId: string,
     createOpts: CreateOpts,
     fromDeviceLinkClient: boolean,
+    reason: 'orca' | 'workdir' = 'orca',
   ): Promise<ResolveSessionResult> {
     const okRehydrate = await ensureWorkDirWithDbFallback(sessionId, createOpts);
     if (!okRehydrate) {
@@ -659,8 +662,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ),
       };
     }
-    await loadExtraDirsIfNeeded(sessionId, createOpts, 'active-orca-rehydrate');
+    await loadExtraDirsIfNeeded(sessionId, createOpts, 'active-session-rehydrate');
     try {
+      if (reason === 'workdir') {
+        await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
+      }
       // 关旧 runtime 前先按 DB 权威口径对账执行字段(与 lazy-create 同源):caller /
       // 队列的 createOpts 快照常不带 resumeSessionId(或带旧引擎的陈旧值),直接
       // close+bootstrap 会启动一个没有旧 transcript 的全新原生会话(#2882:Pi 会话
@@ -687,15 +693,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       const session = await deps.withRehydrateCloseSuppressed(sessionId, async () => {
         await deps.closeSession(sessionId);
-        // close 后重新 bootstrap，避免旧 SDK handle 缺 Orca MCP vendorOptions。
+        // Rebuild the SDK handle with the repaired cwd and current MCP options.
         const {
           session: newSess,
           didInjectOrcaInstructions,
           didInjectProjectContext,
         } = await deps.bootstrapSession(createOpts);
         await deps.markOrcaRoleIfNeeded(newSess.id, createOpts.orcaRole);
-        deps.log.info('send: rehydrate active Orca session with MCP vendorOptions', {
+        deps.log.info('send: rehydrate active session', {
           sessionId,
+          reason,
           agentKind: createOpts.agentKind,
           usedOrcaInstructions: didInjectOrcaInstructions,
           usedProjectContext: didInjectProjectContext,
@@ -853,13 +860,37 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       await deps.ensureRemoteReadyForSessionStart({ session: sess, createOpts });
 
       if (sess) {
+        // Startup migration or a directory relocation may repair SQLite while a
+        // live SDK still owns the old cwd. Only use that persisted replacement;
+        // recreating an arbitrary project as an empty folder would lose its context.
+        const dbDir = createOpts && deps.reconcileCreateOptsWithDb && !sess.remoteHostId
+          ? await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null)
+          : null;
+        const fallbackDir = dbDir && dbDir !== sess.workDir ? dbDir : null;
         const ok = await deps.checkWorkDirExists(
           sessionId,
           sess.workDir,
           sess.agentKind,
           sess.remoteHostId,
+          ...(fallbackDir ? [{ suppressMissingBroadcast: true }] : []),
         );
-        if (!ok) {
+        if (!ok && fallbackDir) {
+          const co = deps.buildCreateOptsWithStderr({
+            ...(createOpts as CreateOpts),
+            id: sessionId,
+            workingDir: fallbackDir,
+            agentKind: sess.agentKind,
+            remoteHostId: sess.remoteHostId ?? undefined,
+          });
+          const recovered = await rehydrateActiveSession(
+            sessionId,
+            co,
+            requestedSendOpts.fromDeviceLinkClient === true,
+            'workdir',
+          );
+          if (recovered.kind === 'failure') return recovered.result;
+          sess = recovered.session;
+        } else if (!ok) {
           return toCompatibleMakerSendResult(
             createHostSendFailure(
               'WORKDIR_MISSING',
@@ -880,7 +911,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 sessionId,
               });
             } else {
-              const rehydrated = await rehydrateActiveOrcaSession(
+              const rehydrated = await rehydrateActiveSession(
                 sessionId,
                 co,
                 requestedSendOpts.fromDeviceLinkClient === true,
@@ -988,6 +1019,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
+      const workdirRecoveryNote = deps.peekWorkingDirectoryRecoveryNote?.(sessionId) ?? null;
+      if (workdirRecoveryNote) {
+        normalized = prependNoteToWireUserMessage(normalized as HandoffWireMessage, workdirRecoveryNote);
+      }
       const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
       const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
@@ -1344,6 +1379,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (pendingHandoff && sendResult.accepted) {
           // 只有跨过不可逆 dispatch 边界才消费;未派发保留 pending 下次重试。
           deps.consumePendingHandoff?.(sessionId);
+        }
+        if (workdirRecoveryNote && sendResult.accepted) {
+          deps.consumeWorkingDirectoryRecoveryNote?.(sessionId, workdirRecoveryNote);
         }
         if (planReconcile?.sealedTurnId && sendResult.accepted) {
           try {

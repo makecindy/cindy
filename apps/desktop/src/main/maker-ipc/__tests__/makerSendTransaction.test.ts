@@ -1107,6 +1107,82 @@ describe('maker SEND transaction', () => {
     expect(session.send).not.toHaveBeenCalled();
   });
 
+  it('recovers a live session from the repaired DB directory and resumes its native history', async () => {
+    const recoveredSession = createSession({ workDir: '/repaired/project' });
+    const { deps, session } = createDeps({
+      readSessionWorkingDirFromDb: vi.fn(async () => '/repaired/project'),
+      checkWorkDirExists: vi.fn(async (_id, dir) => dir === '/repaired/project'),
+      reconcileCreateOptsWithDb: vi.fn(async (_id, opts) => {
+        expect(deps.closeSession).not.toHaveBeenCalled();
+        opts.resumeSessionId = 'native-history';
+        opts.model = 'persisted-model';
+      }),
+      bootstrapSession: vi.fn(async () => ({
+        session: recoveredSession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/stale/caller', model: 'stale-model',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.checkWorkDirExists).toHaveBeenNthCalledWith(
+      1, 'session-1', session.workDir, 'codex', null, { suppressMissingBroadcast: true },
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'session-1', workingDir: '/repaired/project', remoteHostId: undefined,
+      resumeSessionId: 'native-history', model: 'persisted-model',
+    }));
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(session.send).not.toHaveBeenCalled();
+    expect(recoveredSession.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the live runtime when both its directory and the DB replacement are missing', async () => {
+    const { deps, session } = createDeps({
+      readSessionWorkingDirFromDb: vi.fn(async () => '/also/missing'),
+      checkWorkDirExists: vi.fn(async () => false),
+      reconcileCreateOptsWithDb: vi.fn(async () => {}),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/stale/caller',
+    })).resolves.toMatchObject({ accepted: false, reason: 'WORKDIR_MISSING' });
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('does not close the live runtime if native history reconciliation fails during directory recovery', async () => {
+    const { deps, session } = createDeps({
+      readSessionWorkingDirFromDb: vi.fn(async () => '/repaired/project'),
+      checkWorkDirExists: vi.fn(async (_id, dir) => dir === '/repaired/project'),
+      reconcileCreateOptsWithDb: vi.fn(async () => { throw new Error('DB unavailable'); }),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/stale/caller',
+    })).resolves.toMatchObject({ accepted: false, reason: 'REHYDRATE_FAILED' });
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('does not use local DB directory recovery for a live SSH session', async () => {
+    const session = createSession({ remoteHostId: 'ssh-host' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      readSessionWorkingDirFromDb: vi.fn(async () => '/local/project'),
+      reconcileCreateOptsWithDb: vi.fn(async () => {}),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/remote/project', remoteHostId: 'ssh-host',
+    })).resolves.toMatchObject({ accepted: true });
+    expect(deps.readSessionWorkingDirFromDb).not.toHaveBeenCalled();
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
   it('rebuilds an error session through lazy bootstrap before dispatch', async () => {
     const failedSession = createSession({
       getStatus: vi.fn(() => 'error' as const),
@@ -1921,6 +1997,38 @@ describe('mobile client prompt note', () => {
 });
 
 describe('session-agent-switch handoff injection', () => {
+  it('tells the agent about recreated cwd without changing the displayed user message', async () => {
+    const consumeWorkingDirectoryRecoveryNote = vi.fn();
+    const { deps, session } = createDeps({
+      peekWorkingDirectoryRecoveryNote: () => 'The directory was recreated; files are missing.',
+      consumeWorkingDirectoryRecoveryNote,
+    });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', undefined, {
+      persistUserMessage: { clientId: 'input', content: 'hello' },
+    });
+    expect(session.send).toHaveBeenCalledWith(
+      expect.stringContaining('The directory was recreated; files are missing.'), expect.anything(),
+    );
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[1].content).toBe('hello');
+    expect(consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledWith(
+      'session-1', 'The directory was recreated; files are missing.',
+    );
+  });
+
+  it('keeps the recovery notice when the provider has not accepted the message', async () => {
+    const consumeWorkingDirectoryRecoveryNote = vi.fn();
+    const session = createSession({
+      send: vi.fn(async () => ({ accepted: false, reason: 'cancelled-before-dispatch' } satisfies SessionSendResult)),
+    });
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+      consumeWorkingDirectoryRecoveryNote,
+    });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
+    expect(consumeWorkingDirectoryRecoveryNote).not.toHaveBeenCalled();
+  });
+
   it('pending 命中时 wire payload 前置交接段,落库内容保持用户原文,accepted 后 consume', async () => {
     const consumePendingHandoff = vi.fn();
     const { deps, session } = createDeps({
