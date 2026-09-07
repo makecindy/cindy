@@ -34,10 +34,5 @@ export function isFrozenBuiltinPluginAllowed(
 ): boolean {
   const allowed = readAllowedBuiltinPluginIds(vendorOptions);
   if (allowed) return allowed.includes(pluginId);
-  const disabled = readDisabledBuiltinPluginIds(vendorOptions);
-  // A controlled builtin must have an explicit, frozen policy. Missing or
-  // malformed vendor options are an unknown capability snapshot, so fail
-  // closed instead of treating them as "everything enabled".
-  if (!disabled) return false;
-  return !disabled.includes(pluginId);
+  return !readDisabledBuiltinPluginIds(vendorOptions)?.includes(pluginId);
 }
