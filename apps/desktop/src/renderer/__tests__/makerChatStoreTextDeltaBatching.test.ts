@@ -1625,6 +1625,99 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  it('does not append a second bubble when a DB snapshot arrives before the first batched delta', () => {
+    emitTextDelta('draft');
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: {
+        clientId: 'assistant-1', role: 'assistant', content: 'complete answer',
+        createdAt: '2026-06-15T00:00:05.000Z',
+      },
+    });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'complete answer', isStreaming: false }),
+    ]);
+  });
+
+  it('calibrates an earlier finalized item in place without sealing a newer stream', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'pi', data: { text: 'draft', isFinal: true, isFullText: true } },
+      persistId: 'assistant-1',
+    });
+    emitTextDelta('new answer', SESSION_ID, 'assistant-2');
+    vi.advanceTimersByTime(32);
+    const previousMeta = makerChatStore.getSnapshot(SESSION_ID).lastAgentMeta;
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'pi',
+        data: { text: 'corrected', isFinal: true, isFullText: true },
+        agentMeta: { model: 'earlier-model' },
+      },
+      persistId: 'assistant-1',
+    });
+    emitTextDelta(' tail', SESSION_ID, 'assistant-2');
+    vi.advanceTimersByTime(32);
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.streamingClientId).toBe('assistant-2');
+    expect(snapshot.lastAgentMeta).toBe(previousMeta);
+    expect(snapshot.messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'corrected', isStreaming: false, model: 'earlier-model' }),
+      expect.objectContaining({ clientId: 'assistant-2', content: 'new answer tail', isStreaming: true }),
+    ]);
+  });
+
+  it('ignores late deltas and partial final blocks for an already finalized item', () => {
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: { clientId: 'assistant-1', role: 'assistant', content: 'full answer', createdAt: new Date().toISOString() },
+    });
+    emitTextDelta('stale', SESSION_ID, 'assistant-1');
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'claude-code', data: { text: 'answer', isFinal: true } },
+      persistId: 'assistant-1',
+    });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'full answer', isStreaming: false }),
+    ]);
+  });
+
+  it('does not reset or duplicate thinking on a repeated start, including after its DB echo', () => {
+    const start = {
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'start', blockId: 'thinking-replayed', startedAt: Date.now() } },
+    };
+    onEvent?.(start);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'delta', blockId: 'thinking-replayed', text: 'reasoning' } },
+    });
+    onEvent?.(start);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'thinking-replayed', content: 'reasoning', isStreaming: true }),
+    ]);
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: {
+        clientId: 'thinking-replayed', role: 'thinking',
+        content: { kind: 'thinking', text: 'finished reasoning', durationMs: 5000, isRedacted: false },
+        createdAt: new Date().toISOString(),
+      },
+    });
+    onEvent?.(start);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'delta', blockId: 'thinking-replayed', text: 'late delta' } },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'thinking-replayed', content: 'finished reasoning', isStreaming: false }),
+    ]);
+  });
+
   it('calibrates an in-flight bubble to a shorter authoritative final text', () => {
     emitTextDelta('Hello worxderful');
 
@@ -6944,6 +7037,21 @@ describe('makerChatStore text delta batching', () => {
       'existing-row-3',
       'newer-row-5',
     ]);
+  });
+
+  it('deduplicates history batches and previously duplicated runtime rows by message identity', () => {
+    const old: ChatMessage = {
+      clientId: 'assistant-1', role: 'assistant', content: 'old', isStreaming: false,
+      createdAt: '2026-06-15T00:00:03.000Z',
+    };
+    const latest = { ...old, content: 'latest' };
+    const persisted = { ...latest, id: 'db-1', rowid: 1 };
+    const other = { ...old, clientId: 'assistant-2', content: 'other' };
+    expect(makerChatStore.__mergeMessagesForTest([old, persisted, other], [])).toEqual([persisted, other]);
+    expect(makerChatStore.__mergeMessagesForTest([persisted, persisted, other], [old, latest])).toEqual([persisted, other]);
+    expect(makerChatStore.__mergeMessagesForTest([old], [latest, latest], { addOnly: true })).toEqual([latest]);
+    const stable = [persisted, other];
+    expect(makerChatStore.__mergeMessagesForTest([persisted], stable)).toBe(stable);
   });
 
   it('does not stop remote reconciliation on row-trimmed overlaps', () => {

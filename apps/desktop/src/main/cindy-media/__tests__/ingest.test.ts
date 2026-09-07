@@ -15,6 +15,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { LedgerDb } from '../ledger';
 import type { MediaRefCompensationScope } from '../refCompensationJournal';
+import { fileSymlinkFixture } from './fileSymlinkFixture';
 
 let tmpUserData = '';
 const OWNER_ID = 'owner-a';
@@ -244,10 +245,11 @@ describe('ingestMedia(全局去重)', () => {
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-ingest-outside-'));
     const outside = path.join(outsideDir, 'leave-me-alone.bin');
     fs.writeFileSync(outside, Buffer.from('leave-me-alone'));
+    let link: ReturnType<typeof fileSymlinkFixture> | undefined;
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.rmSync(dest, { recursive: true, force: true });
-      fs.symlinkSync(outside, dest);
+      link = fileSymlinkFixture(outside, dest);
       await expect(
         ingest.ingestMedia(
           {
@@ -258,11 +260,12 @@ describe('ingestMedia(全局去重)', () => {
           db,
         ),
       ).rejects.toThrow(/symlink/);
-      expect(fs.lstatSync(dest).isSymbolicLink()).toBe(true);
+      link.expectIntact();
       expect(fs.readFileSync(outside).toString()).toBe('leave-me-alone');
       expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(0);
       expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
     } finally {
+      link?.restore();
       fs.rmSync(dest, { force: true });
       fs.rmSync(outsideDir, { recursive: true, force: true });
     }
