@@ -17320,6 +17320,9 @@ async function checkWorkDirExists(
       log.info('send: restored missing managed worktree', { sessionId, workingDir });
       return true;
     }
+    // Preserve the existing sibling-path diagnostic before mkdir makes the probe pass.
+    // A fuzzy match is a lead for the agent, not authority to switch project identity.
+    const similar = suppress ? null : await findSimilarDirOnDisk(workingDir);
     // A missing ordinary/dialogue cwd must not stop the conversation. Prefer a repaired
     // DB path when the caller has one; never turn a managed Git recovery into
     // an empty project, or treat permission/non-directory failures as ENOENT.
@@ -17327,7 +17330,7 @@ async function checkWorkDirExists(
       !suppress &&
       (error as NodeJS.ErrnoException).code === 'ENOENT' &&
       getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) === null &&
-      await workingDirectoryRecovery.recover(sessionId, workingDir)
+      await workingDirectoryRecovery.recover(sessionId, workingDir, similar)
     ) {
       log.info('send: recreated missing working directory for conversation', { sessionId, workingDir });
       return true;
@@ -17339,7 +17342,6 @@ async function checkWorkDirExists(
       });
       return false;
     }
-    const similar = await findSimilarDirOnDisk(workingDir);
     emitWorkDirMissingError(sessionId, workingDir, source, 'not-exist', similar);
     return false;
   }

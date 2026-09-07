@@ -7,7 +7,7 @@ export function createWorkingDirectoryRecovery(io: {
 } = fsp) {
   const pending = new Map<string, { note: string | null }>();
   return {
-    async recover(sessionId: string, workingDir: string): Promise<boolean> {
+    async recover(sessionId: string, workingDir: string, similarPath?: string | null): Promise<boolean> {
       const entry = pending.get(sessionId) ?? { note: null };
       pending.set(sessionId, entry);
       try {
@@ -26,6 +26,9 @@ export function createWorkingDirectoryRecovery(io: {
           '[Working directory recovery]',
           `The working directory was missing. Cindy recreated the directory at ${JSON.stringify(workingDir)} so this conversation can continue.`,
           'Only the directory was recreated; its previous files have not been recovered. Do not assume the original project contents are available.',
+          ...(similarPath ? [
+            `A similarly named filesystem entry exists at ${JSON.stringify(similarPath)} (possibly differing only in whitespace or case). Inspect this candidate before reading or creating project files in the recreated directory. It may contain the original project; verify its identity or ask the user before treating it as their workspace.`,
+          ] : []),
           'Continue responding to the user. If their task needs the missing files, investigate the location or recovery options, or ask the user through the conversation. Do not require a folder-selection interface just to continue chatting.',
         ].join('\n');
         return true;

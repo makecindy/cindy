@@ -10,6 +10,19 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  it('passes the similar-path diagnostic to the agent while keeping the conversation available', async () => {
+    const mkdir = vi.fn(async () => {});
+    const recovery = createWorkingDirectoryRecovery({
+      stat: vi.fn(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }),
+      mkdir,
+    });
+    expect(await recovery.recover('task', '/project', '/project ')).toBe(true);
+    expect(mkdir).toHaveBeenCalledWith('/project', { recursive: true });
+    expect(recovery.peek('task')).toContain(JSON.stringify('/project '));
+    expect(recovery.peek('task')).toContain('Inspect this candidate before reading or creating project files');
+    expect(recovery.peek('task')).toContain('previous files have not been recovered');
+  });
+
   it('keeps the recovery note when another probe sees the directory before mkdir settles', async () => {
     let finish!: () => void;
     const mkdir = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
