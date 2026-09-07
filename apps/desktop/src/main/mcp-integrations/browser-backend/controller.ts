@@ -49,14 +49,18 @@ export class BrowserBackendController implements BrowserBackend {
     return this.router.probeActiveControl(options);
   }
 
-  setKind(kind: BackendKind): Promise<boolean> {
+  setKind(
+    kind: BackendKind,
+    persistKind: ((kind: BackendKind) => void | Promise<void>) | undefined = this.opts.persistKind,
+  ): Promise<boolean> {
     return this.enqueue(async () => {
       const changed = this.router.getCurrentBackendKind() !== kind;
-      if (changed) await this.router.setBackend(this.createBackend(kind));
-      // Persist even on same-kind retry: a prior save can fail after the target
-      // is already active. Keeping the save in this queue also prevents a later
-      // selection from being overwritten by an earlier transition's write.
-      this.opts.persistKind?.(kind);
+      const next = changed ? this.createBackend(kind) : undefined;
+      // Save before activation: a disk failure must leave the old backend live.
+      // Factories are lazy; router swaps cannot fail on outgoing disposal.
+      // Reset supplies its clear-override operation in this same queue.
+      await persistKind?.(kind);
+      if (next) await this.router.setBackend(next);
       return changed;
     });
   }

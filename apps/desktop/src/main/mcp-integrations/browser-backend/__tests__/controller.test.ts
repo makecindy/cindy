@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser-control-runtime';
 
 import { BrowserBackendController } from '../controller.js';
+import { createBrowserProfileLifecycleQueue } from '../../browser-real-profile/runtime-stop.js';
 import type { BackendKind, BrowserBackend } from '../types.js';
 
 function fakeLogger() {
@@ -31,7 +32,61 @@ function fakeBackend(kind: BackendKind): BrowserBackend & {
 }
 
 describe('BrowserBackendController', () => {
-  it('retries a failed save without recreating or disposing the active backend', async () => {
+  it('serializes reset cleanup after outgoing profile disposal without deadlocking', async () => {
+    const queue = createBrowserProfileLifecycleQueue();
+    const external = fakeBackend('external');
+    const events: string[] = [];
+    let release!: () => void;
+    const busy = queue.run(() => new Promise<void>((resolve) => { release = resolve; }));
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    external.dispose.mockImplementation(() => queue.run(async () => { events.push('dispose'); }));
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: external,
+      createRsbBackend: () => fakeBackend('rsb-webview'), logger: fakeLogger(),
+    });
+    const change = controller.setKind('rsb-webview');
+    await vi.waitFor(() => expect(external.dispose).toHaveBeenCalledOnce());
+    const reset = controller.setKind('external', () => queue.run(async () => { events.push('reset'); }));
+    release();
+    await Promise.all([busy, change, reset]);
+    expect(events).toEqual(['dispose', 'reset']);
+    expect(controller.kind).toBe('external');
+    await expect(controller.setKind('rsb-webview', async () => { throw new Error('cleanup failed'); }))
+      .rejects.toThrow('cleanup failed');
+    expect(controller.kind).toBe('external');
+  });
+
+  it('does not save a selection when its backend factory fails', async () => {
+    const persistKind = vi.fn();
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: fakeBackend('external'),
+      createRsbBackend: () => { throw new Error('factory failed'); }, persistKind, logger: fakeLogger(),
+    });
+    await expect(controller.setKind('rsb-webview')).rejects.toThrow('factory failed');
+    expect(persistKind).not.toHaveBeenCalled();
+    expect(controller.kind).toBe('external');
+  });
+
+  it('clears an override on reset without losing a later same-kind explicit choice', async () => {
+    let override: BackendKind | undefined = 'external';
+    const persistKind = vi.fn((kind: BackendKind) => { override = kind; });
+    const clearOverride = vi.fn(() => { override = undefined; });
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: fakeBackend('external'),
+      createRsbBackend: () => fakeBackend('rsb-webview'), persistKind, logger: fakeLogger(),
+    });
+    await controller.setKind('external', clearOverride);
+    expect(override).toBeUndefined();
+    expect(persistKind).not.toHaveBeenCalled();
+    await Promise.all([
+      controller.setKind('external', clearOverride),
+      controller.setKind('external'),
+    ]);
+    expect(override).toBe('external');
+    expect(persistKind).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the active backend usable when saving fails, then retries the selection', async () => {
     const external = fakeBackend('external');
     const embedded = fakeBackend('rsb-webview');
     const createRsbBackend = vi.fn(() => embedded);
@@ -40,10 +95,12 @@ describe('BrowserBackendController', () => {
       initialKind: 'external', externalBackend: external, createRsbBackend, persistKind, logger: fakeLogger(),
     });
     await expect(controller.setKind('rsb-webview')).rejects.toThrow('disk full');
-    expect(controller.kind).toBe('rsb-webview');
-    await expect(controller.setKind('rsb-webview')).resolves.toBe(false);
+    expect(controller.kind).toBe('external');
+    expect(await controller.call({ action: 'status' })).toMatchObject({ data: { kind: 'external' } });
+    expect(external.dispose).not.toHaveBeenCalled();
+    await expect(controller.setKind('rsb-webview')).resolves.toBe(true);
     expect(persistKind.mock.calls).toEqual([['rsb-webview'], ['rsb-webview']]);
-    expect(createRsbBackend).toHaveBeenCalledOnce();
+    expect(createRsbBackend).toHaveBeenCalledTimes(2);
     expect(external.dispose).toHaveBeenCalledOnce();
     expect(embedded.dispose).not.toHaveBeenCalled();
   });
@@ -60,7 +117,7 @@ describe('BrowserBackendController', () => {
     const first = controller.setKind('rsb-webview');
     await vi.waitFor(() => expect(external.dispose).toHaveBeenCalledOnce());
     const second = controller.setKind('external');
-    expect(persistKind).not.toHaveBeenCalled();
+    expect(persistKind.mock.calls).toEqual([['rsb-webview']]);
     release();
     await Promise.all([first, second]);
     expect(persistKind.mock.calls).toEqual([['rsb-webview'], ['external']]);

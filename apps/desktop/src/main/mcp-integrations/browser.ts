@@ -434,13 +434,16 @@ export function registerBrowserBackendIpc(): void {
       return setBrowserUseRealProfile(enabled);
     },
     reset: async () => {
-      const next = await browserProfileLifecycleQueue.run(async () => {
-        if (readBrowserBackendSettings().useRealProfile) {
-          await applyBrowserUseRealProfile(false);
-        }
-        return resetBrowserBackendSettings();
-      });
-      await setActiveBrowserBackendKind(next.kind);
+      // Keep controller -> profile queue ordering, matching external disposal.
+      await backendController.setKind(
+        readBrowserBackendSettingsState().defaults.kind,
+        () => browserProfileLifecycleQueue.run(async () => {
+          if (readBrowserBackendSettings().useRealProfile) {
+            await applyBrowserUseRealProfile(false);
+          }
+          resetBrowserBackendSettings();
+        }),
+      );
       return backendController.getCurrentBackendKind();
     },
     getHealth: getBrowserBackendHealth,

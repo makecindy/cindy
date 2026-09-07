@@ -38,7 +38,7 @@
  *     ignored: no override exists to honor. Two mechanisms collapse
  *     "deliberately chose the then-default" into "never customized":
  *       (a) `override-settings-file.writePatch` DELETES a key whose new value
- *           equals the current default (`writeBrowserBackendKind` passes no
+ *           equals the current default (the old writer did not pass
  *           `preserveDefaults`), and an empty override map unlinks the file —
  *           so toggling external→rsb-webview under the old default erased the
  *           file it had just written;
@@ -49,10 +49,9 @@
  * Consequence worth stating plainly: a user who chose the sidebar browser *for
  * its tighter isolation* (no loopback CDP port, uploads confined to the session
  * dir) is silently moved onto the backend that has neither. Protecting that
- * user would need a customization flag independent of value-equality; §3
- * forbids reconstructing intent from the old stored value, so we do NOT try to
- * infer it retroactively. If that user class matters, the fix is a real flag
- * plus a one-time notice — not a heuristic here.
+ * user requires customization independent of value-equality. Explicit choices
+ * now preserve the kind override even at the default; reset clears it. §3
+ * forbids reconstructing erased intent, so we do not infer it retroactively.
  * No migration step is needed either way: `createOverrideSettingsFile` persists
  * only the override, so "has an override" is directly observable. Note the two
  * backends do NOT share login state — a user moved to `'external'` by this
@@ -126,7 +125,7 @@ export function readBrowserBackendSettingsState(): OverrideSettingsState<Browser
 }
 
 export function writeBrowserBackendKind(kind: BackendKind): void {
-  store.writePatch({ kind });
+  store.writePatch({ kind }, { preserveDefaults: true });
   log.info('browser-backend kind written', { kind });
 }
 
