@@ -277,6 +277,7 @@ function extractIpcUserMessageText(message: IpcUserMessage): string {
 }
 
 export interface MakerSendTransactionSession {
+  hostUserPrompt?: string;
   id: string;
   agentKind: AgentKind;
   workDir: string;
@@ -882,7 +883,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir);
         if ((!ok && fallbackDir) || needsCwdRefresh) {
           const co = deps.buildCreateOptsWithStderr({
-            ...((createOpts as CreateOpts | undefined) ?? await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId)),
+            ...((createOpts as CreateOpts | undefined) ?? {
+              ...await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId),
+              userPrompt: sess.hostUserPrompt,
+            }),
             id: sessionId,
             workingDir: needsCwdRefresh ? sess.workDir : fallbackDir!,
             agentKind: sess.agentKind,

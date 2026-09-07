@@ -130,6 +130,8 @@ export interface MakerDeps {
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
+  /** Host prompt before generated context; retained only by the live Session. */
+  hostUserPrompt?: string;
   agentKind: AgentKind;
   /** 可选：UI 显示用 */
   title?: string;
@@ -914,6 +916,7 @@ export class Maker {
       agentKind: meta.agentKind,
       workDir: meta.workDir,
       handle,
+      hostUserPrompt: opts.hostUserPrompt,
       capabilities: capabilitiesForSession(meta.agentKind, agent.capabilities, meta.remoteHostId),
       logger: this.logger,
       permissionMode: startOpts.permissionMode,

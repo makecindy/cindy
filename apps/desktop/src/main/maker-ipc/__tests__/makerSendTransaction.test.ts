@@ -1159,7 +1159,7 @@ describe('maker SEND transaction', () => {
   });
 
   it.each(['claude-code', 'pi'] as const)('refreshes a live %s process after same-path recovery and preserves its note', async (agentKind) => {
-    const oldSession = createSession({ agentKind });
+    const oldSession = createSession({ agentKind, hostUserPrompt: 'Keep the caller preference' });
     const recovered = createSession({ agentKind });
     const { deps } = createDeps({
       getSession: () => oldSession,
@@ -1179,7 +1179,7 @@ describe('maker SEND transaction', () => {
     expect(deps.closeSession).toHaveBeenCalledOnce();
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
       workingDir: oldSession.workDir, resumeSessionId: 'native-history',
-      permissionMode: 'ask', planMode: true,
+      permissionMode: 'ask', planMode: true, userPrompt: 'Keep the caller preference',
     }));
     expect(oldSession.send).not.toHaveBeenCalled();
     expect(recovered.send).toHaveBeenCalledWith(expect.stringContaining('original files remain missing'), expect.anything());
@@ -2011,8 +2011,8 @@ describe('mobile client prompt note', () => {
     expect(session.send).toHaveBeenCalledWith('/compact focus on decisions', expect.anything());
   });
 
-  it('keeps the mobile note for /compact text sent to a non-Claude agent', async () => {
-    const session = createSession({ agentKind: 'pi' });
+  it('keeps the mobile note for /compact text sent to Codex', async () => {
+    const session = createSession({ agentKind: 'codex' });
     const { deps } = createDeps({
       getSession: vi.fn(() => session),
       isMobileClientInvoke: vi.fn(() => true),
@@ -2048,6 +2048,27 @@ describe('mobile client prompt note', () => {
 });
 
 describe('session-agent-switch handoff injection', () => {
+  it.each([
+    '/skill:git',
+    ' /extension-command argument',
+    { type: 'user' as const, content: [{ type: 'text' as const, text: '/skill:git' }, { type: 'image' as const, url: 'https://example.invalid/image.png' }] },
+  ])('keeps Pi command intact and retains recovery note: %j', async (command) => {
+    const session = createSession({ agentKind: 'pi' });
+    const consumeWorkingDirectoryRecoveryNote = vi.fn();
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+      consumeWorkingDirectoryRecoveryNote,
+      bootstrapSession: vi.fn(async () => ({ session, didInjectOrcaInstructions: false, didInjectProjectContext: false })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', command);
+    expect(session.send).toHaveBeenLastCalledWith(command, expect.anything());
+    expect(consumeWorkingDirectoryRecoveryNote).not.toHaveBeenCalled();
+    await transaction.sendToAgentAccepted('session-1', 'continue');
+    expect(session.send).toHaveBeenLastCalledWith(expect.stringContaining('Directory recreated'), expect.anything());
+    expect(consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledOnce();
+  });
   it.each([
     '/compact',
     { type: 'user' as const, content: '/compact focus on the bug' },

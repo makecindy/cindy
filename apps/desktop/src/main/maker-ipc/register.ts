@@ -6242,6 +6242,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
   }> {
+    o.hostUserPrompt = o.userPrompt;
     await options.waitForAccountProviderModelsReady();
     const runtimeOverride =
       typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
@@ -17332,8 +17333,8 @@ async function checkWorkDirExists(
       getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) === null &&
       await workingDirectoryRecovery.recover(sessionId, workingDir, similar,
         getMaker().listActiveSessions()
-          .filter((session) => !session.remoteHostId && path.resolve(session.workDir) === path.resolve(workingDir))
-          .map((session) => session.id))
+          .filter((session) => !session.remoteHostId)
+          .map((session) => ({ id: session.id, workingDir: session.workDir })))
     ) {
       log.info('send: recreated missing working directory for conversation', { sessionId, workingDir });
       return true;

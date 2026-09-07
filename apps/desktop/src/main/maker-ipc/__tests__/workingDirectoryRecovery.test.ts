@@ -10,12 +10,52 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  it('notifies physical aliases while preserving unrelated pending recovery', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-cwd-alias-'));
+    roots.push(root);
+    const parent = path.join(root, 'parent');
+    const alias = path.join(root, 'alias');
+    await fsp.mkdir(parent);
+    await fsp.symlink(parent, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const dir = path.join(parent, 'project');
+    const aliasDir = path.join(alias, 'project');
+    const other = path.join(root, 'other');
+    const recovery = createWorkingDirectoryRecovery();
+    await recovery.recover('other', other);
+    const otherNote = recovery.peek('other', other);
+    await recovery.recover('first', dir, null, [
+      { id: 'alias', workingDir: aliasDir }, { id: 'other', workingDir: other },
+    ]);
+    expect(recovery.peek('alias', aliasDir)).toContain('previous files have not been recovered');
+    expect(recovery.peek('other', other)).toBe(otherNote);
+    recovery.consume('first', recovery.peek('first', dir)!);
+    expect(recovery.peek('alias', aliasDir)).not.toBeNull();
+  });
+
+  it('does not revive an alias cleared while physical identity is being resolved', async () => {
+    let finish!: (dir: string) => void;
+    const realpath = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const recovery = createWorkingDirectoryRecovery({
+      stat: vi.fn(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }),
+      mkdir: vi.fn(async () => {}),
+      realpath,
+    });
+    const recovering = recovery.recover('first', '/project', null, [{ id: 'alias', workingDir: '/alias' }]);
+    await vi.waitFor(() => expect(realpath).toHaveBeenCalledOnce());
+    recovery.discard('alias');
+    realpath.mockResolvedValue('/physical');
+    finish('/physical');
+    expect(await recovering).toBe(true);
+    expect(recovery.peek('alias', '/alias')).toBeNull();
+    expect(recovery.peek('first', '/project')).not.toBeNull();
+  });
+
   it('keeps shared-directory notices independent and drops a notice after moving away', async () => {
     const recovery = createWorkingDirectoryRecovery({
       stat: vi.fn(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }),
       mkdir: vi.fn(async () => {}),
     });
-    await recovery.recover('first', '/project', null, ['second', 'third']);
+    await recovery.recover('first', '/project', null, ['second', 'third'].map((id) => ({ id, workingDir: '/project' })));
     const note = recovery.peek('first', '/project')!;
     recovery.consume('first', note);
     expect(recovery.peek('first', '/project')).toBeNull();
@@ -33,7 +73,7 @@ describe('working directory conversation recovery', () => {
       stat: vi.fn(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }),
       mkdir,
     });
-    const recovering = recovery.recover('first', '/project', null, ['cleared', 'moved', 'remaining']);
+    const recovering = recovery.recover('first', '/project', null, ['cleared', 'moved', 'remaining'].map((id) => ({ id, workingDir: '/project' })));
     await vi.waitFor(() => expect(mkdir).toHaveBeenCalled());
     recovery.discard('cleared');
     expect(recovery.peek('moved', '/elsewhere')).toBeNull();

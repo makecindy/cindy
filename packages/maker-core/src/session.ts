@@ -144,6 +144,7 @@ function parseTurnStallMs(raw: string | undefined): number {
 }
 
 export interface SessionOptions {
+  hostUserPrompt?: string;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
   sessionInstanceId?: string;
@@ -389,6 +390,8 @@ function createSendReservation(generation: number): SendReservation {
 }
 
 export class Session {
+  /** Host caller prompt before generated project/Orca context; memory-only recovery input. */
+  readonly hostUserPrompt?: string;
   readonly id: string;
   /** business id 可复用；instanceId 精确标识本次内存 Session incarnation。 */
   readonly instanceId: string;
@@ -516,6 +519,7 @@ export class Session {
   private turnControlState: TurnControlState | null = null;
 
   constructor(opts: SessionOptions) {
+    this.hostUserPrompt = opts.hostUserPrompt;
     this.id = opts.id;
     this.instanceId = opts.sessionInstanceId ?? generateSessionId();
     this.agentKind = opts.agentKind;

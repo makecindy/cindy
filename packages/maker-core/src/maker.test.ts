@@ -524,13 +524,16 @@ describe('Maker session creation singleflight', () => {
       resumeSessionId: 'thread-1',
     };
 
-    const first = maker.createSession(options);
-    const second = maker.createSession({ ...options });
+    const first = maker.createSession({ ...options, hostUserPrompt: 'Original caller prompt' });
+    const second = maker.createSession({ ...options, hostUserPrompt: 'Unused caller prompt' });
 
     expect(startSession).toHaveBeenCalledTimes(1);
     resolveStart(createHandle({ id: 'thread-1' }));
     const [firstSession, secondSession] = await Promise.all([first, second]);
 
+    expect(firstSession.hostUserPrompt).toBe('Original caller prompt');
+    const existingSession = await maker.createSession({ ...options, hostUserPrompt: undefined });
+    expect(existingSession.hostUserPrompt).toBe('Original caller prompt');
     expect(secondSession).toBe(firstSession);
     expect(maker.listActiveSessions()).toEqual([firstSession]);
     expect(created).toHaveBeenCalledTimes(1);

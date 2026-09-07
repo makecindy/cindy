@@ -5,16 +5,19 @@ import path from 'node:path';
 export function createWorkingDirectoryRecovery(io: {
   stat(dir: string): Promise<{ isDirectory(): boolean }>;
   mkdir(dir: string, opts: { recursive: true }): Promise<unknown>;
+  realpath?(dir: string): Promise<string>;
 } = fsp) {
   const pending = new Map<string, { workingDir: string; note: string | null }>();
   return {
-    async recover(sessionId: string, workingDir: string, similarPath?: string | null, affectedSessionIds: string[] = []): Promise<boolean> {
-      const normalizedDir = path.resolve(workingDir);
-      const entries = [...new Set([sessionId, ...affectedSessionIds])].map((id) => {
+    async recover(sessionId: string, workingDir: string, similarPath?: string | null, candidates: { id: string; workingDir: string }[] = []): Promise<boolean> {
+      const sessions = new Map(candidates.map((session) => [session.id, session.workingDir]));
+      sessions.set(sessionId, workingDir);
+      const entries = [...sessions].map(([id, dir]) => {
         const previous = pending.get(id);
-        const entry = previous?.workingDir === normalizedDir ? previous : { workingDir: normalizedDir, note: null };
+        // Preserve unrelated recovery notes until physical identity is known.
+        const entry = previous ?? { workingDir: path.resolve(dir), note: null };
         pending.set(id, entry);
-        return { id, entry };
+        return { id, dir, entry };
       });
       try {
         // A stale probe must not mistake a file, permission error, or a directory
@@ -26,6 +29,7 @@ export function createWorkingDirectoryRecovery(io: {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
         }
         await io.mkdir(workingDir, { recursive: true });
+        const canonical = await io.realpath?.(workingDir).catch(() => null);
         // Cleanup may have removed this entry while filesystem IO was pending.
         // Do not repopulate it after a clear, archive, delete, or owner change.
         const note = [
@@ -37,9 +41,13 @@ export function createWorkingDirectoryRecovery(io: {
           ] : []),
           'Continue responding to the user. If their task needs the missing files, investigate the location or recovery options, or ask the user through the conversation. Do not require a folder-selection interface just to continue chatting.',
         ].join('\n');
-        for (const { id, entry } of entries) {
-          if (pending.get(id) === entry) entry.note = note;
-        }
+        await Promise.all(entries.map(async ({ id, dir, entry }) => {
+          const matches = path.resolve(dir) === path.resolve(workingDir) ||
+            (canonical != null && await io.realpath?.(dir).catch(() => null) === canonical);
+          if (matches && pending.get(id) === entry) {
+            pending.set(id, { workingDir: path.resolve(dir), note });
+          }
+        }));
         return true;
       } catch {
         return false;
