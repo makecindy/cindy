@@ -1,4 +1,5 @@
 import { matchPath } from 'react-router-dom';
+import type { BotProfile } from '@/features/bots/botStore';
 
 const NON_SESSION_CC_AGENT_SEGMENTS = new Set([
   'boot',
@@ -18,6 +19,13 @@ export function resolveAgentIslandVisibleSessionIdFromPath(
   const sessionId = sessionMatch?.params.sessionId;
   if (!sessionId || NON_SESSION_CC_AGENT_SEGMENTS.has(sessionId)) return null;
   return sessionId;
+}
+
+export function resolveAgentIslandVisibleBotSessionIdFromPath(pathname: string, botProfiles: readonly BotProfile[]): string | null {
+  const m = matchPath('/bots/:botId/session/:sessionId', pathname);
+  if (m?.params.sessionId) return m.params.sessionId;
+  const b = matchPath('/bots/:botId', pathname);
+  return botProfiles.find(p => p.id === b?.params.botId)?.sessions.find(x => x.role === 'canonical')?.id ?? null;
 }
 
 /**
