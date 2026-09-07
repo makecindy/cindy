@@ -47,6 +47,7 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
   const deps: MakerSendTransactionDeps = {
     getSession: vi.fn((sessionId: string) => (sessionId === session.id ? session : undefined)),
     closeSession: vi.fn(async () => {}),
+    preflightBotRuntimeResources: vi.fn(async () => {}),
     getSessionMeta: vi.fn(async () => ({ title: '现有会话' })),
     ensureRemoteReadyForSessionStart: vi.fn(async () => {}),
     checkWorkDirExists: vi.fn(async () => true),
@@ -1159,7 +1160,9 @@ describe('maker SEND transaction', () => {
   });
 
   it.each(['claude-code', 'pi'] as const)('refreshes a live %s process after same-path recovery and preserves its note', async (agentKind) => {
-    const oldSession = createSession({ agentKind, hostUserPrompt: 'Keep the caller preference' });
+    const oldSession = createSession({ agentKind, hostStartupPreferences: {
+      userPrompt: 'Keep the caller preference', makerMemoryEnabled: true,
+    } });
     const recovered = createSession({ agentKind });
     const { deps } = createDeps({
       getSession: () => oldSession,
@@ -1180,10 +1183,45 @@ describe('maker SEND transaction', () => {
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
       workingDir: oldSession.workDir, resumeSessionId: 'native-history',
       permissionMode: 'ask', planMode: true, userPrompt: 'Keep the caller preference',
+      makerMemoryEnabled: true,
     }));
     expect(oldSession.send).not.toHaveBeenCalled();
     expect(recovered.send).toHaveBeenCalledWith(expect.stringContaining('original files remain missing'), expect.anything());
     expect(deps.consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, false, true])('preserves omitted startup preferences and respects an explicit memory setting of %s', async (makerMemoryEnabled) => {
+    const session = createSession({ agentKind: 'pi', hostStartupPreferences: {
+      userPrompt: 'Original preference', makerMemoryEnabled: true, displayReasoning: 'off',
+    } });
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'pi', makerMemoryEnabled,
+    })).resolves.toMatchObject({ accepted: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      userPrompt: 'Original preference', displayReasoning: 'off',
+      makerMemoryEnabled: makerMemoryEnabled ?? true,
+    }));
+  });
+
+  it('keeps the old runtime when Bot resource preflight fails, then resumes normally after repair', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+      preflightBotRuntimeResources: vi.fn().mockRejectedValueOnce(new Error('Bot resource unavailable')).mockResolvedValue(undefined),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).resolves.toMatchObject({ accepted: false });
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    await transaction.sendToAgentAccepted('session-1', 'hello');
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(vi.mocked(deps.preflightBotRuntimeResources).mock.invocationCallOrder[1])
+      .toBeLessThan(vi.mocked(deps.closeSession).mock.invocationCallOrder[0]!);
   });
 
   it('uses persisted settings to recover a live session when send has no createOpts', async () => {

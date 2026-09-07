@@ -53,6 +53,7 @@ import type {
   AgentSessionTeardownOptions,
   BackgroundTaskSnapshot,
   SendOptions,
+  StartSessionOptions,
   TurnContinuationState,
 } from './agents/base-agent.js';
 import {
@@ -143,8 +144,12 @@ function parseTurnStallMs(raw: string | undefined): number {
   return Math.floor(n);
 }
 
+/** Launch-only caller preferences. Live controls and grants have separate authorities. */
+export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
+  'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
+
 export interface SessionOptions {
-  hostUserPrompt?: string;
+  hostStartupPreferences?: SessionStartupPreferences;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
   sessionInstanceId?: string;
@@ -390,8 +395,8 @@ function createSendReservation(generation: number): SendReservation {
 }
 
 export class Session {
-  /** Host caller prompt before generated project/Orca context; memory-only recovery input. */
-  readonly hostUserPrompt?: string;
+  /** Caller preferences before generated context; memory-only recovery input. */
+  readonly hostStartupPreferences?: SessionStartupPreferences;
   readonly id: string;
   /** business id 可复用；instanceId 精确标识本次内存 Session incarnation。 */
   readonly instanceId: string;
@@ -519,7 +524,8 @@ export class Session {
   private turnControlState: TurnControlState | null = null;
 
   constructor(opts: SessionOptions) {
-    this.hostUserPrompt = opts.hostUserPrompt;
+    this.hostStartupPreferences = opts.hostStartupPreferences
+      ? Object.freeze({ ...opts.hostStartupPreferences }) : undefined;
     this.id = opts.id;
     this.instanceId = opts.sessionInstanceId ?? generateSessionId();
     this.agentKind = opts.agentKind;

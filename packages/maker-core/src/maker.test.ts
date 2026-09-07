@@ -524,16 +524,18 @@ describe('Maker session creation singleflight', () => {
       resumeSessionId: 'thread-1',
     };
 
-    const first = maker.createSession({ ...options, hostUserPrompt: 'Original caller prompt' });
-    const second = maker.createSession({ ...options, hostUserPrompt: 'Unused caller prompt' });
+    const preferences = { userPrompt: 'Original caller prompt', makerMemoryEnabled: true };
+    const first = maker.createSession({ ...options, hostStartupPreferences: preferences });
+    const second = maker.createSession({ ...options, hostStartupPreferences: { makerMemoryEnabled: false } });
 
     expect(startSession).toHaveBeenCalledTimes(1);
     resolveStart(createHandle({ id: 'thread-1' }));
     const [firstSession, secondSession] = await Promise.all([first, second]);
 
-    expect(firstSession.hostUserPrompt).toBe('Original caller prompt');
-    const existingSession = await maker.createSession({ ...options, hostUserPrompt: undefined });
-    expect(existingSession.hostUserPrompt).toBe('Original caller prompt');
+    expect(firstSession.hostStartupPreferences).toEqual(preferences);
+    preferences.makerMemoryEnabled = false;
+    const existingSession = await maker.createSession(options);
+    expect(existingSession.hostStartupPreferences).toMatchObject({ userPrompt: 'Original caller prompt', makerMemoryEnabled: true });
     expect(secondSession).toBe(firstSession);
     expect(maker.listActiveSessions()).toEqual([firstSession]);
     expect(created).toHaveBeenCalledTimes(1);

@@ -37,7 +37,7 @@ import type {
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
 import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
-import { Session, generateSessionId } from './session.js';
+import { Session, generateSessionId, type SessionStartupPreferences } from './session.js';
 import type {
   AgentSessionHandle,
   AgentSessionTeardownOptions,
@@ -130,8 +130,8 @@ export interface MakerDeps {
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
-  /** Host prompt before generated context; retained only by the live Session. */
-  hostUserPrompt?: string;
+  /** Host caller preferences before generated context; retained only by the live Session. */
+  hostStartupPreferences?: SessionStartupPreferences;
   agentKind: AgentKind;
   /** 可选：UI 显示用 */
   title?: string;
@@ -916,7 +916,7 @@ export class Maker {
       agentKind: meta.agentKind,
       workDir: meta.workDir,
       handle,
-      hostUserPrompt: opts.hostUserPrompt,
+      hostStartupPreferences: opts.hostStartupPreferences,
       capabilities: capabilitiesForSession(meta.agentKind, agent.capabilities, meta.remoteHostId),
       logger: this.logger,
       permissionMode: startOpts.permissionMode,

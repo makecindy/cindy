@@ -277,7 +277,7 @@ function extractIpcUserMessageText(message: IpcUserMessage): string {
 }
 
 export interface MakerSendTransactionSession {
-  hostUserPrompt?: string;
+  hostStartupPreferences?: CreateOpts['hostStartupPreferences'];
   id: string;
   agentKind: AgentKind;
   workDir: string;
@@ -298,6 +298,7 @@ export interface MakerSendTransactionLog {
 export interface MakerSendTransactionDeps {
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
+  preflightBotRuntimeResources(opts: CreateOpts): Promise<void>;
   getSessionMeta(sessionId: string): Promise<{ title?: string } | null>;
   ensureRemoteReadyForSessionStart(params: {
     session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
@@ -675,6 +676,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 中途 start_team 后丢失全部对话历史)。DB 读失败时 reconcile 抛错 → 落入下方
       // REHYDRATE_FAILED,此时尚未 closeSession,旧 runtime 不受损。
       await deps.reconcileCreateOptsWithDb?.(sessionId, createOpts);
+      if (reason === 'workdir') await deps.preflightBotRuntimeResources(createOpts);
       // A newly created device-link Codex Lead has a real sdk_session_id as soon as
       // thread/start returns, but that id is not resumable until a provider turn
       // is accepted. The live Session is the only trustworthy local evidence at
@@ -882,11 +884,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           (sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
           !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir);
         if ((!ok && fallbackDir) || needsCwdRefresh) {
+          const supplied = (createOpts as CreateOpts | undefined) ??
+            await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
+          const startupPreferences = sess.hostStartupPreferences ?? {};
+          const preferences = Object.fromEntries(Object.entries(startupPreferences)
+            .filter(([key]) => supplied[key as keyof typeof startupPreferences] === undefined));
           const co = deps.buildCreateOptsWithStderr({
-            ...((createOpts as CreateOpts | undefined) ?? {
-              ...await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId),
-              userPrompt: sess.hostUserPrompt,
-            }),
+            ...supplied,
+            ...preferences,
             id: sessionId,
             workingDir: needsCwdRefresh ? sess.workDir : fallbackDir!,
             agentKind: sess.agentKind,
