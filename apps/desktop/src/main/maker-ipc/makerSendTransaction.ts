@@ -412,7 +412,7 @@ export interface MakerSendTransactionDeps {
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
-  peekWorkingDirectoryRecoveryNote?(sessionId: string): string | null;
+  peekWorkingDirectoryRecoveryNote?(sessionId: string, workingDir: string): string | null;
   readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
   consumeWorkingDirectoryRecoveryNote?(sessionId: string, note: string): void;
   /**
@@ -879,7 +879,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // The pending note also covers recovery performed by an earlier preflight.
         const needsCwdRefresh = ok && !sess.remoteHostId &&
           (sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
-          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId);
+          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir);
         if ((!ok && fallbackDir) || needsCwdRefresh) {
           const co = deps.buildCreateOptsWithStderr({
             ...((createOpts as CreateOpts | undefined) ?? await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId)),
@@ -1026,7 +1026,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const workdirRecoveryNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? deps.peekWorkingDirectoryRecoveryNote?.(sessionId) ?? null
+        ? deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir) ?? null
         : null;
       if (workdirRecoveryNote) {
         normalized = prependNoteToWireUserMessage(normalized as HandoffWireMessage, workdirRecoveryNote);

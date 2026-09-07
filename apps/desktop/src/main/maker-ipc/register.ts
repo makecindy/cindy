@@ -11524,7 +11524,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
       };
     },
-    peekWorkingDirectoryRecoveryNote: (sessionId) => workingDirectoryRecovery.peek(sessionId),
+    peekWorkingDirectoryRecoveryNote: (sessionId, workingDir) => workingDirectoryRecovery.peek(sessionId, workingDir),
     consumeWorkingDirectoryRecoveryNote: (sessionId, note) =>
       workingDirectoryRecovery.consume(sessionId, note),
     isOrcaMcpHydrated,
@@ -17330,7 +17330,10 @@ async function checkWorkDirExists(
       !suppress &&
       (error as NodeJS.ErrnoException).code === 'ENOENT' &&
       getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) === null &&
-      await workingDirectoryRecovery.recover(sessionId, workingDir, similar)
+      await workingDirectoryRecovery.recover(sessionId, workingDir, similar,
+        getMaker().listActiveSessions()
+          .filter((session) => !session.remoteHostId && path.resolve(session.workDir) === path.resolve(workingDir))
+          .map((session) => session.id))
     ) {
       log.info('send: recreated missing working directory for conversation', { sessionId, workingDir });
       return true;

@@ -10,6 +10,41 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  it('keeps shared-directory notices independent and drops a notice after moving away', async () => {
+    const recovery = createWorkingDirectoryRecovery({
+      stat: vi.fn(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }),
+      mkdir: vi.fn(async () => {}),
+    });
+    await recovery.recover('first', '/project', null, ['second', 'third']);
+    const note = recovery.peek('first', '/project')!;
+    recovery.consume('first', note);
+    expect(recovery.peek('first', '/project')).toBeNull();
+    expect(recovery.peek('second', '/project')).toBe(note);
+    expect(recovery.peek('third', '/elsewhere')).toBeNull();
+    expect(recovery.peek('third', '/project')).toBeNull();
+    recovery.consume('second', note);
+    expect(recovery.peek('second', '/project')).toBeNull();
+  });
+
+  it('does not revive sibling notices cleared or moved during shared-directory IO', async () => {
+    let finish!: () => void;
+    const mkdir = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const recovery = createWorkingDirectoryRecovery({
+      stat: vi.fn(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }),
+      mkdir,
+    });
+    const recovering = recovery.recover('first', '/project', null, ['cleared', 'moved', 'remaining']);
+    await vi.waitFor(() => expect(mkdir).toHaveBeenCalled());
+    recovery.discard('cleared');
+    expect(recovery.peek('moved', '/elsewhere')).toBeNull();
+    finish();
+    expect(await recovering).toBe(true);
+    expect(recovery.peek('cleared', '/project')).toBeNull();
+    expect(recovery.peek('moved', '/project')).toBeNull();
+    expect(recovery.peek('remaining', '/project')).toBe(recovery.peek('first', '/project'));
+    expect(recovery.peek('remaining', '/project')).toContain('previous files have not been recovered');
+  });
+
   it('passes the similar-path diagnostic to the agent while keeping the conversation available', async () => {
     const mkdir = vi.fn(async () => {});
     const recovery = createWorkingDirectoryRecovery({
