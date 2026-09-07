@@ -29,6 +29,7 @@ vi.mock('expo-updates', () => ({
   ...nativeUpdates,
 }));
 vi.mock('@/config/env', () => ({ OTA_SERVER_BASE_URL: 'https://updates.example.test' }));
+vi.mock('./nativeOtaBridge', () => ({ getNativeOtaBridge: () => null }));
 
 import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 import {
