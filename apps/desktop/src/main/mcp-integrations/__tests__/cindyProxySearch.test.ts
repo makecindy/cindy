@@ -168,7 +168,22 @@ describe('cindyProxySearch', () => {
       { status: 401, body: { error: 'insufficient scope' }, code: 'AUTH_REJECTED' },
       { status: 403, body: { error: 'insufficient permissions' }, code: 'AUTH_REJECTED' },
       { status: 402, body: { error: 'insufficient balance' }, code: 'QUOTA_EXHAUSTED' },
+      // 网关预算闸的真实形态:HTTP 429 + ExceededBudget(#4024)—— 是余额耗尽,不是限流。
+      {
+        status: 429,
+        body: { error: 'ExceededBudget', principal: 'aigw:user-1', spend: 12.34, budget: 10 },
+        code: 'QUOTA_EXHAUSTED',
+      },
+      { status: 429, body: { error: 'budget_exceeded' }, code: 'QUOTA_EXHAUSTED' },
+      // 瞬时限流照旧,即便正文带 credit 之类宽松措辞也不得升级成「去充值」。
       { status: 429, body: { error: 'rate limit' }, code: 'RATE_LIMITED' },
+      { status: 429, body: { error: 'Too Many Requests' }, code: 'RATE_LIMITED' },
+      {
+        status: 429,
+        body: { error: 'rate limit exceeded, credits refill in 60s' },
+        code: 'RATE_LIMITED',
+      },
+      { status: 404, body: { error: 'not found' }, code: 'NOT_CONFIGURED' },
       { status: 503, body: { error: 'unavailable' }, code: 'UPSTREAM_UNAVAILABLE' },
     ] as const;
 
@@ -271,15 +286,16 @@ describe('cindyProxySearch', () => {
     const service = createCindyProxySearchService({
       getBaseUrl: () => 'https://gateway.example.test',
       getApiKey: () => 'test-key',
-      fetchImpl: vi.fn(async () =>
-        ({
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'x-request-id': 'request-body-failed' }),
-          text: vi.fn(async () => {
-            throw new Error('stream interrupted');
-          }),
-        }) as unknown as Response,
+      fetchImpl: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'x-request-id': 'request-body-failed' }),
+            text: vi.fn(async () => {
+              throw new Error('stream interrupted');
+            }),
+          }) as unknown as Response,
       ) as unknown as typeof fetch,
       log: { info: vi.fn(), warn },
     });
@@ -331,5 +347,91 @@ describe('cindyProxySearch', () => {
     const logged = JSON.stringify([info.mock.calls, warn.mock.calls]);
     expect(logged).not.toContain('sensitive user query');
     expect(logged).not.toContain('super-secret-test-key');
+  });
+
+  it('余额耗尽(429 + ExceededBudget)给出充值引导,日志只留允许名单内的结构化摘要', async () => {
+    const warn = vi.fn();
+    const service = createCindyProxySearchService({
+      getBaseUrl: () => 'https://gateway.example.test',
+      getApiKey: () => 'super-secret-test-key',
+      fetchImpl: vi.fn(async () =>
+        response(
+          {
+            error: 'ExceededBudget',
+            principal: 'aigw:internal-user-42',
+            spend: 12.34,
+            budget: 10,
+            token: 'placeholder-credential-must-not-be-logged',
+            echo: 'sensitive user query',
+            padding: 'x'.repeat(600),
+          },
+          { status: 429, headers: { 'x-request-id': 'req-quota-1' } },
+        ),
+      ) as unknown as typeof fetch,
+      log: { info: vi.fn(), warn },
+    });
+
+    const outcome = await service.search({ query: 'sensitive user query', limit: 5 });
+    expect(outcome).toMatchObject({
+      ok: false,
+      errorCode: 'QUOTA_EXHAUSTED',
+      status: 429,
+      requestId: 'req-quota-1',
+    });
+    expect(outcome.ok === false && outcome.message).toContain('余额不足');
+    expect(outcome.ok === false && outcome.message).toContain('充值');
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [, meta] = warn.mock.calls[0] as [string, Record<string, unknown>];
+    expect(meta.errorCode).toBe('QUOTA_EXHAUSTED');
+    // 摘要是允许名单式的结构化字段,不是任意正文:principal / 凭证 / 回显字段一律不进日志。
+    expect(meta.bodyDigest).toEqual({
+      json: true,
+      length: expect.any(Number),
+      error: 'ExceededBudget',
+      spend: 12.34,
+      budget: 10,
+    });
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain('internal-user-42');
+    expect(logged).not.toContain('aigw:');
+    expect(logged).not.toContain('placeholder-credential-must-not-be-logged');
+    expect(logged).not.toContain('sensitive user query');
+    expect(logged).not.toContain('super-secret-test-key');
+    expect(logged).not.toContain('xxxx');
+  });
+
+  it('非标识形态的 error 文本与非 JSON 正文只记长度,不落盘内容', async () => {
+    const cases: Array<{ body: BodyInit; expected: Record<string, unknown> }> = [
+      {
+        body: JSON.stringify({
+          error: {
+            type: 'rate_limit_error',
+            message: 'slow down, user asked: sensitive user query',
+          },
+        }),
+        expected: { json: true, error: 'rate_limit_error', type: 'rate_limit_error' },
+      },
+      {
+        body: JSON.stringify({ error: 'insufficient balance for sensitive user query' }),
+        expected: { json: true },
+      },
+      { body: '<html>Bad Gateway sensitive user query</html>', expected: { json: false } },
+    ];
+    for (const testCase of cases) {
+      const warn = vi.fn();
+      const service = createCindyProxySearchService({
+        getBaseUrl: () => 'https://gateway.example.test',
+        getApiKey: () => 'test-key',
+        fetchImpl: vi.fn(
+          async () => new Response(testCase.body, { status: 502 }),
+        ) as unknown as typeof fetch,
+        log: { info: vi.fn(), warn },
+      });
+      await service.search({ query: 'sensitive user query', limit: 5 });
+      const [, meta] = warn.mock.calls[0] as [string, Record<string, unknown>];
+      expect(meta.bodyDigest).toMatchObject(testCase.expected);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('sensitive user query');
+    }
   });
 });
