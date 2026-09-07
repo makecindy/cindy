@@ -243,6 +243,9 @@ describe('pending_send 渲染接线', () => {
     expect(badge).toContain('testID={`pendingSend.badge.${item.phase}`}');
     expect(badge).toContain('actions.onSelect(selected ? null : item.clientId)');
     expect(badge).not.toContain('renderText(');
+    expect(badge).toContain('badgePosition');
+    expect(bubbleSource).toContain('event.nativeEvent.layout.x - 28 - spacing.sm');
+    expect(bubbleSource).toContain('onLayout={hasAttachments ? undefined : measureBadgeAnchor}');
     expect(bubbleSource.indexOf('testID={`pendingSend.bubble.${item.clientId}`}')).toBeGreaterThan(badgeEnd);
     expect(bubbleSource).toContain('const collapseLatched = collapseLatchBody === displayBody;');
     expect(bubbleSource).toContain('if (collapseResolved && !collapseLatched) setCollapseLatchBody(displayBody);');

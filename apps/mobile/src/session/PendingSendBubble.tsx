@@ -12,7 +12,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Text } from '@/components/AppText';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { summarizeMessageBubblePresentation } from '@/session/messagePresentation';
@@ -224,6 +224,15 @@ export function PendingSendBubble({
   const expanded = expandedBody === displayBody;
   const collapsedLines = shouldCollapse && !expanded ? LONG_USER_MESSAGE_COLLAPSED_LINES : undefined;
   const hasBody = !!displayBody;
+  const hasAttachments = item.thumbs.length > 0 || !!item.fileNames?.length;
+  const [badgeAnchor, setBadgeAnchor] = useState<{ clientId: string; left: number } | null>(null);
+  const measureBadgeAnchor = (event: LayoutChangeEvent) => {
+    const left = Math.max(0, event.nativeEvent.layout.x - 28 - spacing.sm);
+    setBadgeAnchor((current) => current?.clientId === item.clientId && current.left === left
+      ? current : { clientId: item.clientId, left });
+  };
+  const badgePosition = badgeAnchor?.clientId === item.clientId
+    ? { left: badgeAnchor.left } : { right: 0 };
 
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
@@ -242,7 +251,7 @@ export function PendingSendBubble({
           disabled={!interactive}
           hitSlop={spacing.sm}
           onPress={() => actions.onSelect(selected ? null : item.clientId)}
-          style={({ pressed }) => [styles.badge, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.badge, badgePosition, pressed && styles.pressed]}
           testID={`pendingSend.badge.${item.phase}`}
         >
           {failed ? (
@@ -265,8 +274,8 @@ export function PendingSendBubble({
           ]}
           testID={`pendingSend.bubble.${item.clientId}`}
         >
-          {item.thumbs.length > 0 || item.fileNames?.length ? (
-            <View style={[styles.attachmentStrip, { gap: layout.attachmentGap }]}>
+          {hasAttachments ? (
+            <View key={`attachments:${item.clientId}`} onLayout={measureBadgeAnchor} style={[styles.attachmentStrip, { gap: layout.attachmentGap }]}>
               <AttachmentThumbStrip
                 gap={layout.attachmentGap}
                 renderImage={renderImage}
@@ -281,7 +290,7 @@ export function PendingSendBubble({
             </View>
           ) : null}
           {hasBody ? (
-            <View style={[styles.bubble, density === 'compact' && styles.bubbleCompact, density === 'rich' && styles.bubbleRich]}>
+            <View key={`body:${item.clientId}`} onLayout={hasAttachments ? undefined : measureBadgeAnchor} style={[styles.bubble, density === 'compact' && styles.bubbleCompact, density === 'rich' && styles.bubbleRich]}>
               {rendersSentInlineBody ? (
                 <SentInlineAtomBody
                   interactiveAtoms={false}
@@ -453,7 +462,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'flex-end',
     width: '100%',
   },
-  badge: { alignItems: 'center', justifyContent: 'center', width: 28, minHeight: 44, position: 'absolute', left: 0, top: 0, zIndex: 1 },
+  badge: { alignItems: 'center', justifyContent: 'center', width: 28, minHeight: 44, position: 'absolute', top: 0, zIndex: 1 },
   // 与已发送用户气泡同款,但整体半透明:「这就是你的消息,只是还没生效」。
   textChunk: { flexBasis: '100%', flexShrink: 1, maxWidth: '100%' },
   content: { alignItems: 'flex-end', gap: 2, width: '100%', opacity: 0.62 },
