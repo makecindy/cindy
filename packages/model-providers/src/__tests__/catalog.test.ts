@@ -370,7 +370,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     });
     for (const id of ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash']) {
       expect(registryEntryForRoute('xd', id), id).toMatchObject({
-        efforts: id.endsWith('-flash') ? ['low', 'high', 'max'] : ['high', 'max'],
+        efforts: ['low', 'high', 'max'],
         defaultEffort: 'high',
         supportsFastMode: false,
       });
