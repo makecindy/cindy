@@ -49,12 +49,26 @@ Cindy 保底压缩是**一套**流程，不是剥图 / 换窗两套功能。装�
 不另开一档：官方 compact 会先清旧工具结果；官方失败后交接不带 tool_result 正文。
 可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
 由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援路径不得依赖额外模型调用。
-切模型预检的数学仍在 `assessModelSwitchContext`。同引擎切到更小窗口时，main 必须在
-set-model 与 send 共用的 session 锁内按目标窗口评估；Claude Code／Codex／Pi 的强制换窗线
+切模型预检的数学仍在 `assessModelSwitchContext`。本机普通任务的用户选模只登记待应用意图，
+不改当前 route 或原生线程；用户反复改选时覆盖意图，以实际发送时的最终选择为准。
+沿用跨引擎的 pending registry 与发送入口，不能在 turn 结束或定时巡检时自动消费选模意图。
+设备互联控制本机任务同样适用；SSH 与 Orca 保留各自的运行时边界。
+同引擎切到更小窗口时，main 在实际 send 持有的 session 锁内按目标窗口评估；
+用户发送即同意为最终选择执行必要的上下文整理，不再弹出二次确认。
+仅选择或反复切换模型不构成整理授权；同窗或扩窗不因此触发摘要重建。
+Claude Code／Codex／Pi 的强制换窗线
 统一固定为目标窗口 90%，与各 harness 的日常 auto-compaction 百分比解耦；Claude Code
 与 Pi 的日常默认值也设为 90%，对齐 Codex 口径，但用户已有显式 override 继续生效。命中
 `danger`／`overflow` 的本机会话先走同一套 `context_rebuild` bounded handoff，再落目标
 route，不能 resume 旧原生窗口。
+Codex 跨凭证时先按目标来源 resume 同一个原生线程，不因 `ordinal` / `history_base` 或来源
+变化而 fork、改写历史或交接。普通加密推理失败继续使用现有 HTTP 透明重试；只有上游明确
+拒绝且请求里仅剩不可剥除的压缩块密文时，proxy 才标记
+`CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE`，交给既有 compact 失败恢复流程。
+裸 `invalid_encrypted_content`、网络错误和切换来源本身都不足以触发该恢复；保留同一用户消息
+最多一次重放及已有产出／工具副作用禁止重放的边界。
+HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
+确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
 正在运行的 turn、SSH 远端缺少本地交接能力、或已有恢复动作在途时必须 fail closed，不能
 先热切再发送。三个 harness 的同模型自动压缩所有权保持不变。token 破了只认：终态超限、
 占用 ≥ 100%、官方 compact 确定性失败；普通 timeout 不算。

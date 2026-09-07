@@ -5,6 +5,7 @@ import { promises as fs } from 'node:fs';
 import { applyPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 
 import { CodexAgent, isExactNoRolloutThreadResumeError } from './index.js';
+import { CodexForkError } from './fork-error.js';
 import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
@@ -22339,6 +22340,66 @@ describe('CodexAgent native fork anchor events', () => {
 });
 
 describe('CodexAgent.forkSdkSession', () => {
+  it('keeps a startup cause and records a concurrent host retirement failure', async () => {
+    const cause = new Error('ECONNRESET');
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.ensureStarted.mockRejectedValueOnce(cause);
+    vi.spyOn(agent as any, 'retireHostKey').mockRejectedValue(new Error('shutdown failed'));
+    await expect(agent.forkSdkSession({ sourceSdkSessionId: 'source', upToMessageId: undefined }))
+      .rejects.toMatchObject({ stage: 'host-start', cause, cleanupFailed: true });
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new CodexResumePreparationBlockedError('live rollout writer'),
+    Object.assign(new Error('request timeout'), { name: 'AbortError' }),
+  ])('preserves the control signal $name', async (cause) => {
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession: async () => { throw cause; } }));
+    const host = installFakeHost(agent);
+    await expect(agent.forkSdkSession({ sourceSdkSessionId: 'source', upToMessageId: undefined, stripEncryptedReasoning: true }))
+      .rejects.toBe(cause);
+    expect(host.getHost).not.toHaveBeenCalled();
+  });
+
+  it('reports a startup failure only after retiring its isolated host', async () => {
+    const cause = Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNRESET' } });
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.ensureStarted.mockRejectedValueOnce(cause);
+    const retire = vi.spyOn(agent as any, 'retireHostKey').mockResolvedValue(undefined);
+    const error = await agent.forkSdkSession({ sourceSdkSessionId: 'source', upToMessageId: undefined }).catch(e => e);
+    expect(error).toBeInstanceOf(CodexForkError);
+    expect(error).toMatchObject({ stage: 'host-start', cause });
+    expect(host.request).not.toHaveBeenCalled();
+    expect(retire).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the phase and cause of a lost fork response', async () => {
+    const cause = new Error('request timeout ETIMEDOUT');
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => {
+      if (method === Method.ThreadFork) throw cause;
+    });
+    await expect(agent.forkSdkSession({ sourceSdkSessionId: 'source', upToMessageId: undefined }))
+      .rejects.toMatchObject({ stage: 'thread-fork', cause });
+    expect(host.request).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the rollback failure when child cleanup also fails', async () => {
+    const cause = new Error('rollback rejected');
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => {
+      if (method === Method.ThreadRollback) throw cause;
+    });
+    host.unsubscribeThread.mockRejectedValue(new Error('cleanup EPIPE'));
+    const retire = vi.spyOn(agent as any, 'retireHostKey').mockResolvedValue(undefined);
+    await expect(agent.forkSdkSession({ sourceSdkSessionId: 'source', upToMessageId: undefined, tailTurnsToDrop: 1 }))
+      .rejects.toMatchObject({ stage: 'thread-rollback', cause, cleanupFailed: true });
+    expect(host.unsubscribeThread).toHaveBeenCalledOnce();
+    expect(retire).toHaveBeenCalledOnce();
+  });
+
   it('reuses the shared host and forks directly at a native turn', async () => {
     const prepareCodexResumeSession = vi.fn(async () => {});
     const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));

@@ -178,7 +178,8 @@ import {
   assertCodexRolloutRewriteSupported,
   sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
-import { CodexHistoryRecoveryRequiredError } from './history-recovery.js';
+import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
+import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -13592,6 +13593,9 @@ export class CodexAgent extends BaseAgent {
     const forkHostKey = localForkHostKey();
     let forkHost: AppServerHost | undefined;
     let forkHostRetired = false;
+    let stage: CodexForkStage = 'source-prepare';
+    let operationFailed = false;
+    let forkFailure: CodexForkError | undefined;
     const createdThreadIds = new Set<string>();
     const cleanupCreatedThreads = async (): Promise<void> => {
       if (!forkHost || createdThreadIds.size === 0) return;
@@ -13646,6 +13650,7 @@ export class CodexAgent extends BaseAgent {
         await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
         historyChecked = true;
       }
+      stage = 'host-create';
       const host = await this.getHost(undefined, forkCredentialMode, {
         keyOverride: forkHostKey,
         hostPurpose: 'control-plane',
@@ -13658,6 +13663,7 @@ export class CodexAgent extends BaseAgent {
         throw error;
       });
       forkHost = host;
+      stage = 'host-start';
       const initResp = await host.ensureStarted();
       // Child rollout discovery scans this.codexHome. The fork host may be
       // the first host started by this process, so hydrate it here.
@@ -13667,6 +13673,7 @@ export class CodexAgent extends BaseAgent {
       // fork must cross the same preparation boundary before thread/fork or the
       // fork app-server cannot resolve a freshly imported thread.
       // A first host may have just created the managed state DB needed for imports.
+      stage = 'source-prepare';
       preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
       if (opts.stripEncryptedReasoning && !historyChecked) {
         // Check before allocating a child: indexed native history must go through
@@ -13682,6 +13689,8 @@ export class CodexAgent extends BaseAgent {
         ...(supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
         ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
       };
+      // Once dispatched, a lost response may still mean a child was allocated.
+      stage = 'thread-fork';
       const resp = await host.request<ThreadForkResponse>(Method.ThreadFork, params);
       let newSdkSessionId = resp.thread.id;
       createdThreadIds.add(newSdkSessionId);
@@ -13692,6 +13701,7 @@ export class CodexAgent extends BaseAgent {
         };
         // thread/rollback 没有 excludeTurns 对应物,响应仍可能携带完整历史;
         // 超限时熔断的只是这台一次性 host,活跃 session 不受影响。
+        stage = 'thread-rollback';
         const rollbackResp = await host.request<ThreadRollbackResponse>(
           Method.ThreadRollback,
           rollbackParams,
@@ -13704,8 +13714,11 @@ export class CodexAgent extends BaseAgent {
         // Legacy unindexed history can be sanitized after the one-shot writer closes.
         // Indexed history was rejected before fork; a second guard inside the sanitizer
         // also protects against a newer child format returned by the native daemon.
+        stage = 'child-cleanup';
         await cleanupCreatedThreads();
+        stage = 'host-retire';
         await retireForkHost(true);
+        stage = 'child-sanitize';
         const childRolloutPath = await this.findRolloutPath(newSdkSessionId);
         const sanitizeStats = await sanitizeCodexForkRolloutFileInPlace(childRolloutPath);
         log.info('fork child rollout sanitized', {
@@ -13717,14 +13730,30 @@ export class CodexAgent extends BaseAgent {
       }
       log.info('forkSdkSession ◀', { newSdkSessionId, tailTurnsToDrop });
       return { newSdkSessionId, uuidMap: new Map() };
+    } catch (error) {
+      operationFailed = true;
+      // Recovery and authentication are control signals consumed by callers.
+      if (
+        isCodexHistoryRecoveryRequired(error) ||
+        error instanceof AgentNotAuthenticatedError ||
+        error instanceof CodexResumePreparationBlockedError ||
+        (error instanceof Error && error.name === 'AbortError')
+      ) throw error;
+      forkFailure = new CodexForkError(stage, error);
+      throw forkFailure;
     } finally {
       try {
         await cleanupCreatedThreads();
+      } catch (error) {
+        // A cleanup failure must never replace the primary failure.
+        if (!operationFailed) throw new CodexForkError('child-cleanup', error);
+        if (forkFailure) forkFailure.cleanupFailed = true;
       } finally {
         // 一次性 host 用完即收,无论成败。key 唯一、无 session 绑定,
         // retire 不会波及任何共享 host 或活跃会话。
         if (forkHost && !forkHostRetired) {
-          await retireForkHost(false).catch((err) => {
+          await retireForkHost(forkFailure !== undefined).catch((err) => {
+            if (forkFailure) forkFailure.cleanupFailed = true;
             log.warn('fork host retire failed', {
               forkHostKey,
               err: err instanceof Error ? err.message : String(err),

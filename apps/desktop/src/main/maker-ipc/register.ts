@@ -28,7 +28,7 @@ import {
   listPiSubagentRuns,
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
-import { MAIN_OWNED_SEND_CONTEXT, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
+import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import type {
   AgentEvent,
   AgentKind,
@@ -309,7 +309,6 @@ import {
   recycleSessionWorktreeForStatusChange,
   setSessionRuntimeCleanup,
 } from '../localDb/ipc/sessions.js';
-import { persistableSessionEffort } from '../localDb/mapper.js';
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
 
 import {
@@ -725,6 +724,7 @@ import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
   performSessionAgentSwitch,
+  projectPendingAgentSwitchIntent,
   registerMakerSessionAgentSwitchHandler,
   type MakerSessionAgentSwitchHandlerDeps,
 } from './sessionAgentSwitchHandler.js';
@@ -895,11 +895,6 @@ import {
   codexCustomProviderConfigSignature,
   hasCodexAppliedCustomProviderCapability,
 } from '../maker-host/codex-custom-provider-route.js';
-import {
-  decideCodexProviderThreadRelink,
-  relinkCodexProviderThread,
-  type CodexProviderThreadRoute,
-} from './codexProviderThreadRelink.js';
 import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
@@ -7716,6 +7711,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
   const agentSwitchPending = createPendingAgentSwitchRegistry();
+  // User send intent owns the next route boundary, including automatic requests
+  // that read the runtime generation after the picker accepted that intent.
+  const canApplyAutomaticRuntimeSelection = (sessionId: string, expectedGeneration?: number): boolean =>
+    !agentSwitchPending.get(sessionId) &&
+    sessionRuntimeGenerationMatches(sessionId, expectedGeneration);
   cancelPendingAgentSwitchHolder = (sessionId) => {
     agentSwitchPending.clear(sessionId);
     broadcastSessionPatched(sessionId, {
@@ -7941,6 +7941,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches: agentSwitchPending,
+    selectSameAgentModel: async (sessionId, intent, applyNow) => {
+      const result = await applySessionRuntimeSelection(sessionId, intent.model, intent.providerId, {
+        effort: (intent.effort ?? null) as SessionRuntimeProfile['effort'],
+        fastMode: intent.fastMode ?? false,
+      }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow });
+      return result;
+    },
     onPendingSwitchChanged: (sessionId, intent) => {
       if (intent) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
@@ -10375,6 +10382,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   type InternalRuntimeSelectionOptions = {
     source: 'user' | SessionRuntimeMutationSource;
+    /** Internal calls from the send / switch transaction already own the route lock. */
+    sessionLockHeld?: boolean;
+    applyingUserSelectionOnSend?: boolean;
     expectedGeneration?: number;
     deferWhileRunning?: boolean;
     applyingPendingGeneration?: number;
@@ -10747,7 +10757,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!profiles) return null;
       // A previously accepted Agent/fallback mutation owns the next boundary.
       // Do not let a later infrastructure retry replace that pending intent.
-      if (profiles.control.pending) return null;
+      if (profiles.control.pending ||
+          !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return null;
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
       // guesser. Ordinary Sessions keep their existing second-attempt behavior.
@@ -10845,15 +10856,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         if (selected.agentKind !== currentForFallback.agentKind) {
           try {
-            const result = await performSessionAgentSwitch(agentSwitchDeps, {
-              sessionId,
-              targetAgentKind: selected.agentKind,
-              model: selected.model,
-              providerId: selected.providerId,
-              effort: selected.effort,
-              fastMode: selected.fastMode,
-              applyNow: true,
+            const result = await withSendToSessionLock(sessionId, async () => {
+              if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch) ||
+                  !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return null;
+              const switched = await performSessionAgentSwitch(agentSwitchDeps, {
+                sessionId,
+                targetAgentKind: selected.agentKind,
+                model: selected.model,
+                providerId: selected.providerId,
+                effort: selected.effort,
+                fastMode: selected.fastMode,
+                applyNow: true,
+              });
+              if (switched.switched) {
+                acceptSessionRuntimeMutation({
+                  sessionId,
+                  source: 'fallback',
+                  profile: selected,
+                  previousProfile: currentForFallback,
+                  deferred: false,
+                });
+              }
+              return switched;
             });
+            if (!result) return runtimeSession;
             if (!result.switched) {
               if (await advanceConfiguredBotRoute(selected)) continue;
               return runtimeSession;
@@ -10862,13 +10888,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             if (await advanceConfiguredBotRoute(selected)) continue;
             throw error;
           }
-          acceptSessionRuntimeMutation({
-            sessionId,
-            source: 'fallback',
-            profile: selected,
-            previousProfile: currentForFallback,
-            deferred: false,
-          });
           log.info('automatic Bot runtime fallback switched harness', {
             sessionId,
             episodeAttempt,
@@ -14747,7 +14766,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     selection: unknown,
     internalOptions: InternalRuntimeSelectionOptions,
   ) => {
-    if (internalOptions.source === 'user' && !isDeviceLinkInvoke()) {
+    if (internalOptions.source === 'user' && !internalOptions.sessionLockHeld && !isDeviceLinkInvoke()) {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     }
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
@@ -14868,7 +14887,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (
         internalOptions.source !== 'user' &&
-        !sessionRuntimeGenerationMatches(sessionId, internalOptions.expectedGeneration)
+        !canApplyAutomaticRuntimeSelection(sessionId, internalOptions.expectedGeneration)
       ) {
         return { deferred: false, superseded: true };
       }
@@ -14890,7 +14909,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 落地(与 bootstrapSession 同语义)。agentKind 读不到(会话行缺失等)时不拦。
       // DB 存的是 'cc' | 'codex'(messages.agent_kind 口径),目录侧是 AgentKind。
       const requestedProviderId = normalizeSessionProviderId(
-        typeof providerId === 'string' || providerId === null ? providerId : undefined,
+        typeof providerId === 'string' || providerId === null
+          ? providerId
+          : internalOptions.source === 'user' && agentSwitchPending.get(sessionId)?.sameAgentSelection
+            ? agentSwitchPending.get(sessionId)?.providerId
+            : undefined,
       );
       let persistedProviderId: string | null = null;
       let persistedProviderKnown = true;
@@ -15009,6 +15032,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: axes.fastMode,
         };
       }
+      // A picker click records intent only. Keep the persisted route and native binding
+      // authoritative until a real send holds this same lock and consumes the final choice.
+      if (internalOptions.source === 'user' && !internalOptions.applyingUserSelectionOnSend &&
+          !runtimeStatus.remoteHostId && !runtimeStatus.orcaRole) {
+        assertRuntimeOwnerCurrent();
+        clearPendingCredentialSwitchForSession(sessionId, { wake: false });
+        const intent = {
+          sameAgentSelection: true,
+          targetAgentKind: dbToMakerAgentKind(runtimeStatus.agentKind),
+          model,
+          providerId: effectiveProviderId === undefined ? currentProviderId : effectiveProviderId,
+          effort: atomicSelection ? atomicSelection.effort ?? undefined : runtimeStatus.effort ?? undefined,
+          fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
+        };
+        agentSwitchPending.set(sessionId, intent);
+        agentSwitchDeps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(intent));
+        wakeSessionInputAfterCredentialSwitch(sessionId);
+        const response = { deferred: true, superseded: false, pendingUntilSend: true };
+        // Dispatch must not persist a selection over the source route outside this lock.
+        if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);
+        return response;
+      }
       const axisPatch: SessionRuntimeAxisPatch = {
         ...(internalOptions.effortExplicit === true && atomicSelection
           ? { effort: atomicSelection.effort }
@@ -15089,176 +15134,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         effectiveProviderId === undefined
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
           : (normalizeSessionProviderId(effectiveProviderId) ?? null);
-      const hasPersistedLocalCodexThread =
-        routeExplicit &&
-        runtimeStatus.agentKind === 'codex' &&
-        !runtimeStatus.remoteHostId &&
-        !!runtimeStatus.sdkSessionId;
-      const relinkDecision = hasPersistedLocalCodexThread
-        ? decideCodexProviderThreadRelink(
-            { model: runtimeStatus.model, providerId: runtimeStatus.providerId },
-            { model, providerId: targetProviderId },
-          )
-        : 'not-applicable';
-      if (relinkDecision === 'unresolved') {
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'Codex provider credential identity could not be resolved; retry with an explicit provider',
-        );
-      }
-      const requiresCodexThreadRelink = relinkDecision === 'relink';
-      if (requiresCodexThreadRelink && isSessionInTurn(sessionId)) {
-        return deferLockedSelection();
-      }
-      const targetCodexRoute: CodexProviderThreadRoute | undefined = requiresCodexThreadRelink
-        ? {
-            model,
-            providerId: targetProviderId,
-            effort: atomicSelection ? atomicSelection.effort : runtimeStatus.effort,
-            fastMode: atomicSelection ? atomicSelection.fastMode : runtimeStatus.fastMode,
-          }
-        : undefined;
-      const relinkCodexThread = targetCodexRoute
-        ? async (): Promise<void> => {
-            const ownerScope = captureDataOwnerBroadcastScope();
-            const dbSnapshot = getCurrentDbClientSnapshot();
-            if (!dbSnapshot) {
-              throwIpcError(
-                'PRECONDITION_FAILED',
-                'Codex provider thread relink requires an active Profile database',
-              );
-            }
-            const relinked = await relinkCodexProviderThread(
-              {
-                readSource: async (targetSessionId) => {
-                  const [row] = await dbSnapshot.client.drizzle
-                    .select({
-                      sdkSessionId: sessions.sdkSessionId,
-                      workingDir: sessions.workingDir,
-                      model: sessions.model,
-                      providerId: sessions.providerId,
-                      effort: sessions.effort,
-                      fastMode: sessions.fastMode,
-                    })
-                    .from(sessions)
-                    .where(eq(sessions.id, targetSessionId))
-                    .limit(1);
-                  return row ?? null;
-                },
-                fork: async ({ sourceSdkSessionId, sourceModel, sourceProviderId, workingDir }) => {
-                  const forked = await maker.forkSdkSession('codex', {
-                    sourceSdkSessionId,
-                    model: sourceModel,
-                    providerId: sourceProviderId,
-                    upToMessageId: undefined,
-                    ...(workingDir ? { workingDir } : {}),
-                    stripEncryptedReasoning: true,
-                    remoteHostId: null,
-                  });
-                  if (forked.newSdkSessionId === sourceSdkSessionId) {
-                    throwIpcError('INTERNAL', 'Codex fork returned an invalid replacement thread');
-                  }
-                  const cleanup = reserveCodexForkCleanup(
-                    forked.newSdkSessionId,
-                    sourceSdkSessionId,
-                  );
-                  return {
-                    newSdkSessionId: forked.newSdkSessionId,
-                    ...(cleanup ? { cleanup } : {}),
-                  };
-                },
-                commit: async ({ sessionId: targetSessionId, source, newSdkSessionId, target }) => {
-                  if (
-                    !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
-                    getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
-                  ) {
-                    return false;
-                  }
-                  const now = Date.now();
-                  const persistableEffort = persistableSessionEffort(target.effort);
-                  const sourceRouteConditions = [
-                    eq(sessions.id, targetSessionId),
-                    eq(sessions.sdkSessionId, source.sdkSessionId),
-                    eq(sessions.model, source.model),
-                    source.providerId === null
-                      ? isNull(sessions.providerId)
-                      : eq(sessions.providerId, source.providerId),
-                    source.effort === null
-                      ? isNull(sessions.effort)
-                      : eq(
-                          sessions.effort,
-                          source.effort as (typeof sessions.$inferSelect)['effort'],
-                        ),
-                    eq(sessions.fastMode, source.fastMode),
-                  ];
-                  const write = await dbSnapshot.client.drizzle
-                    .update(sessions)
-                    .set({
-                      sdkSessionId: newSdkSessionId,
-                      model: target.model,
-                      providerId: target.providerId,
-                      ...(persistableEffort !== undefined ? { effort: persistableEffort } : {}),
-                      fastMode: target.fastMode,
-                      updatedAt: now,
-                    })
-                    .where(and(...sourceRouteConditions))
-                    .run();
-                  if (write.changes === 0) return false;
-                  broadcastSessionPatched(
-                    targetSessionId,
-                    {
-                      sdkSessionId: newSdkSessionId,
-                      model: target.model,
-                      providerId: target.providerId,
-                      ...(persistableEffort !== undefined ? { effort: persistableEffort } : {}),
-                      fastMode: target.fastMode,
-                      updatedAt: new Date(now).toISOString(),
-                    },
-                    ownerScope,
-                  );
-                  return true;
-                },
-              },
-              { sessionId, target: targetCodexRoute },
-            ).catch(async (error) => {
-              if (isCodexHistoryRecoveryRequired(error) && contextOverflowRolloverHolder) {
-                try {
-                  await contextOverflowRolloverHolder.prepareNativeSessionRecovery(
-                    sessionId, targetCodexRoute, assertRuntimeOwnerCurrent,
-                  );
-                  modelWindowRebuilt = true;
-                  return { previousSdkSessionId: runtimeStatus.sdkSessionId!, newSdkSessionId: null };
-                } catch (recoveryError) {
-                  error = recoveryError;
-                }
-              }
-              if (isIpcError(error)) throw error;
-              if (
-                error instanceof Error &&
-                error.message.startsWith('Codex provider thread relink was superseded')
-              ) {
-                throwIpcError(
-                  'PRECONDITION_FAILED',
-                  'Codex provider thread changed during model switch; retry the selection',
-                );
-              }
-              throwIpcError('INTERNAL', 'Failed to rebuild Codex provider thread');
-            });
-            if (!relinked) {
-              throwIpcError(
-                'PRECONDITION_FAILED',
-                'Codex provider thread changed during model switch; retry the selection',
-              );
-            }
-            log.info('Codex provider thread and route committed atomically', {
-              sessionId,
-              fromThreadId: relinked.previousSdkSessionId,
-              toThreadId: relinked.newSdkSessionId,
-              providerId: targetCodexRoute.providerId,
-              model: targetCodexRoute.model,
-            });
-          }
-        : undefined;
+      // Codex can resume the same native thread with a new provider. Reconnect the
+      // runtime when credentials change; do not fork or rewrite indexed history.
+      // Rejected opaque compaction is recovered only after an actual upstream failure.
       const rebuildLiveOrcaWorker =
         routeExplicit &&
         runtimeStatus.orcaRole === 'worker' &&
@@ -15448,7 +15326,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           currentFastMode: getSessionFastMode(sessionId),
           gate: {
             inTurn: isSessionInTurn(sessionId),
-            isRemote: !!runtimeStatus.remoteHostId || isDeviceLinkInvoke(),
+            isRemote: !!runtimeStatus.remoteHostId ||
+              (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke()),
             agentKind: runtimeAgentKind,
             runtimeRouteChanged,
             verifiedTargetWindow,
@@ -15488,7 +15367,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               contextWindow: targetContextWindow!,
               recheckTargetPressure: true,
               confirmedTargetPressure:
-                !isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow,
+                internalOptions.applyingUserSelectionOnSend === true ||
+                (!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow),
               onConfirmationRequired: (contextTokens) => {
                 confirmationContextTokens = contextTokens;
               },
@@ -15650,11 +15530,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             deferred: false,
           });
         }
-        agentSwitchPending.clear(sessionId);
-        broadcastSessionPatched(sessionId, {
-          agentSwitchIntent: null,
-          agentSwitchIntentCanceled: true,
-        });
+        if (!internalOptions.applyingUserSelectionOnSend) {
+          agentSwitchPending.clear(sessionId);
+          broadcastSessionPatched(sessionId, {
+            agentSwitchIntent: null,
+            agentSwitchIntentCanceled: true,
+          });
+        }
         wakeSessionInputAfterCredentialSwitch(sessionId);
         await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
           log.debug('recovered runtime projection broadcast failed', {
@@ -15663,9 +15545,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         });
       };
-      // context.rebuild clears sdk_session_id, so the preflight Codex thread can no longer
-      // be forked. Persist the accepted target route and let the next send create a new thread.
-      const shouldRelinkCodexThread = requiresCodexThreadRelink && !modelWindowRebuilt;
       try {
         const result = routeExplicit
           ? await applyRuntimeSetModelChange({
@@ -15707,8 +15586,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
               // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
               codexAuthInjection: getCodexProxyAuthInjectionState(),
-              requiresCodexThreadRelink: shouldRelinkCodexThread,
-              ...(shouldRelinkCodexThread && relinkCodexThread ? { relinkCodexThread } : {}),
               logger: log,
             })
           : { status: 'applied' as const };
@@ -15765,7 +15642,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                   contextWindow: finalPiWindow,
                   recheckTargetPressure: true,
                   confirmedTargetPressure:
-                    !isDeviceLinkInvoke() && confirmedContextWindow === finalPiWindow,
+                    internalOptions.applyingUserSelectionOnSend === true ||
+                    (!isDeviceLinkInvoke() && confirmedContextWindow === finalPiWindow),
                   onConfirmationRequired: (contextTokens) => {
                     finalPressureContextTokens = contextTokens;
                   },
@@ -15935,11 +15813,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             markRemoteSettingPersistedInsideHandler(response);
           }
         }
-        agentSwitchPending.clear(sessionId);
-        broadcastSessionPatched(sessionId, {
-          agentSwitchIntent: null,
-          agentSwitchIntentCanceled: true,
-        });
+        if (!internalOptions.applyingUserSelectionOnSend) {
+          agentSwitchPending.clear(sessionId);
+          broadcastSessionPatched(sessionId, {
+            agentSwitchIntent: null,
+            agentSwitchIntentCanceled: true,
+          });
+        }
         if (supersededByOwnerBoundary()) {
           return { deferred: false, superseded: true };
         }
@@ -16075,9 +15955,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         if (err instanceof CredentialModeSwitchBusyError) {
-          if (requiresCodexThreadRelink && isSessionInTurn(sessionId)) {
-            return deferLockedSelection();
-          }
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
           // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
           throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
@@ -16085,7 +15962,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throw err;
       }
     };
-    return withSendToSessionLock(sessionId, applyLocked);
+    return internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked);
   };
   applySessionRuntimeSelection = (sessionId, model, providerId, selection, options) =>
     handleSetModel(undefined, sessionId, model, providerId, undefined, selection, options);
@@ -16174,6 +16051,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           'PRECONDITION_FAILED',
           'archived or deleted task cannot change runtime effort',
         );
+      }
+      const userIntent = agentSwitchPending.get(sessionId);
+      if (userIntent?.sameAgentSelection) {
+        assertOwnerCurrent();
+        const result = await agentSwitchDeps.selectSameAgentModel!(sessionId,
+          { ...userIntent, effort: effort }, false);
+        if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
+        return remoteResponse ?? result;
       }
       const livePatch: SessionRuntimeAxisPatch = {
         effort: effort as SessionRuntimeProfile['effort'],
@@ -16602,6 +16487,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'PRECONDITION_FAILED',
             'archived or deleted task cannot change runtime Fast mode',
           );
+        }
+        const userIntent = agentSwitchPending.get(sessionId);
+        if (userIntent?.sameAgentSelection) {
+          assertOwnerCurrent();
+          const result = await agentSwitchDeps.selectSameAgentModel!(sessionId,
+            { ...userIntent, fastMode: enabled }, false);
+          if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
+          return remoteResponse ?? result;
         }
         const livePatch: SessionRuntimeAxisPatch = { fastMode: enabled };
         const pendingPatch = await resolvePendingRuntimeAxisPatch(sessionId, livePatch);

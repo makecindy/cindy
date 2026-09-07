@@ -6950,6 +6950,12 @@ export function ChatInput({
   const performModelChange = useCallback(
     async (newModelId: string, expectedAgentSwitchRevision?: number) => {
       if (settingsLocked) return false;
+      if (sessionId && sessionAgentSwitchSupported && !remoteHostId && runtimeAgentKind &&
+          expectedAgentSwitchRevision === undefined) {
+        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+        return performAgentSwitch(intent?.target ?? runtimeAgentKind, newModelId,
+          intent ? intent.providerId : effectiveSourceId ?? null);
+      }
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sourceSessionId))
@@ -7225,6 +7231,9 @@ export function ChatInput({
       remoteAtomicModelSelectionSupported,
       showModelSwitchFailure,
       settingsLocked,
+      sessionAgentSwitchSupported,
+      remoteHostId,
+      runtimeAgentKind,
     ],
   );
 
@@ -7501,6 +7510,15 @@ export function ChatInput({
       reconciledFast?: boolean,
     ) => {
       if (settingsLocked) return false;
+      if (sessionId && sessionAgentSwitchSupported && !remoteHostId && runtimeAgentKind &&
+          expectedAgentSwitchRevision === undefined) {
+        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+        return performAgentSwitch(intent?.target ?? runtimeAgentKind,
+          reconciledModelId ?? intent?.model ?? activeModel, newProviderId, {
+            effort: reconciledEffort,
+            fastMode: reconciledFast,
+          });
+      }
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sourceSessionId))
@@ -7842,6 +7860,9 @@ export function ChatInput({
       remoteAtomicModelSelectionSupported,
       showModelSwitchFailure,
       settingsLocked,
+      sessionAgentSwitchSupported,
+      remoteHostId,
+      runtimeAgentKind,
     ],
   );
 
@@ -7881,8 +7902,8 @@ export function ChatInput({
   // performAgentSwitch 的"选回当前引擎"分支经 ref 调用(两 handler 声明在其后,TDZ)。
   sameEngineReselectRef.current = {
     byProvider: (providerId, modelId, expectedRevision, effort, fastMode) =>
-      handleProviderChange(providerId, modelId, effort, expectedRevision, fastMode),
-    byModel: (modelId, expectedRevision) => handleModelChange(modelId, expectedRevision),
+      performProviderChange(providerId, modelId, effort, expectedRevision, fastMode),
+    byModel: (modelId, expectedRevision) => performModelChange(modelId, expectedRevision),
   };
 
   const handleNavigateToProviders = useCallback(() => {

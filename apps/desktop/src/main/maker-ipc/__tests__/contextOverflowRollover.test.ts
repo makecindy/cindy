@@ -811,7 +811,10 @@ describe('createContextOverflowRollover', () => {
     expect(remoteDeps.closeSession).not.toHaveBeenCalled();
   });
 
-  it('rebuilds Codex remote compact encrypted-content failures without a context-overflow reason key', async () => {
+  it.each([
+    'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
+    'CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE',
+  ])('rebuilds proven Codex compaction failures without a context-overflow reason key: %s', async (message) => {
     const deps = makeDeps([
       msg('user', '先做 A', 'u1', 1),
       msg('assistant', '做完 A', 'a1', 2),
@@ -832,8 +835,7 @@ describe('createContextOverflowRollover', () => {
     rollover.claim('s1');
     await expect(
       rollover.tryRecover('s1', {
-        message:
-          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
+        message,
       }),
     ).resolves.toBe(true);
     expect(deps.commitRebuild).toHaveBeenCalledWith(

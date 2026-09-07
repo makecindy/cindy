@@ -238,6 +238,8 @@ export interface RecoveryRule {
   matches: (decodedErrorBodyText: string) => boolean;
   /** 改写请求 body;返回 null = 没有可改的东西(本规则不适用,继续找下一条)。 */
   strip: (body: Buffer) => Buffer | null;
+  /** Classify a matched terminal rejection from the actual sent body, after safe retries. */
+  unrecoverableCode?: (body: Buffer) => string | null;
   /** 命中并成功 strip 后触发(用于 Layer-2 markActive)。 */
   onRetry?: (threadId: string, model: string) => void;
   /** 取 threadId 的 header 候选名;省略用默认 DEFAULT_THREAD_ID_HEADERS。 */
