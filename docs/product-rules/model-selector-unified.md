@@ -182,7 +182,9 @@
 | M7 | i18n(zh/en+术语表)/token 登记/超长适配 | locales / globals.css / tailwind |
 | M8 | 测试:新逻辑单测 + 更新受影响测试锁(逐条列明有意变更) | `__tests__/` |
 
-设置类入口(scheduler/IM/Hook/Subagent/GhostErrand/CreateWorker)**不改交互结构**;其内嵌 ModelSelector 面板通过组件演进自然更新,回归验证纳入 M8。
+设置类入口统一复用 ModelSelector 面板。自动化、IM 默认、Hook 工作目录、插件快问快答和 Worker 支持保存 Harness 的入口，必须通过 `onUnifiedSelect` 一次提交 Harness、来源、模型及该入口支持的配置，删除重复的 Harness 控件。只存模型或有意固定 Harness 的专用入口保留其契约限制；IM 默认和 Hook 工作目录不存 Fast，不展示 Fast 开关。
+
+绑定已有任务的自动化在保存时只更新自动化配置，下次触发时才通过现有任务切换流程应用完整选择；目标正忙时顺延，不能抢占当前轮次。新增的 `modelAgentKind` 标识显式 Harness 选择；旧记录不补默认值，继续跟随绑定任务的 Harness。选择“跟随”会清除整套显式覆盖，切换新建／绑定模式往返时保留用户已选配置。
 
 ---
 

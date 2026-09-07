@@ -178,10 +178,10 @@ vi.mock('@/state/newMakerDraft', () => ({
 vi.mock('@/features/scheduler/components/ScheduleChips', async () => {
   const React = await import('react');
   return {
-    AgentTabs: ({ value }: { value: string }) =>
-      React.createElement('div', { 'data-testid': 'agent-kind' }, value),
-    ModelEffortChip: ({ modelValue }: { modelValue: string }) =>
-      React.createElement('div', { 'data-testid': 'model-value' }, modelValue),
+    ModelEffortChip: ({ modelValue, agentKind }: { modelValue: string; agentKind: string }) =>
+      React.createElement(React.Fragment, null,
+        React.createElement('div', { 'data-testid': 'agent-kind' }, agentKind),
+        React.createElement('div', { 'data-testid': 'model-value' }, modelValue)),
     ProjectChip: () => React.createElement('div'),
     ScheduleChip: ({ cronExpr }: { cronExpr: string }) =>
       React.createElement('div', { 'data-testid': 'cron-expr' }, cronExpr),

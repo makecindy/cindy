@@ -56,9 +56,14 @@ function normalizeScriptConfig(
 }
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle'>,
+  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'model'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
+  if (schedule.modelAgentKind != null) {
+    if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
+      throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
+    }
+  }
   if ((schedule.executionMode ?? 'agent') !== 'script') {
     // 堵 update 逃逸:script 任务(prompt 合法为空)经 patch 只切 executionMode='agent'
     // 时,若不校验会落库空提示词的 agent 任务,触发即烧一轮空输入。checkAgentPrompt

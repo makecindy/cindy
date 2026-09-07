@@ -686,6 +686,8 @@ interface ModelSelectorProps {
   maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口与行内状态摘要；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
+  /** Restrict Fast to the Harnesses this entry can persist and dispatch; false disables it. */
+  fastModeConfigurable?: boolean | readonly AgentKind[];
   /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，默认开启）。 */
   unifiedPanel?: boolean;
   /** 语义同 ModelSelectorContentProps.sessionEngineFilter（统一面板的会话内形态）。 */
@@ -822,6 +824,8 @@ interface ModelSelectorContentProps {
   followSession?: { active: boolean; label: string; onFollow: () => void | boolean | Promise<void | boolean> };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
   configurationEnabled?: boolean;
+  /** Restrict Fast to the Harnesses this entry can persist and dispatch; false disables it. */
+  fastModeConfigurable?: boolean | readonly AgentKind[];
   /** A is the default for every entry. False is reserved for capabilities-only remote compatibility. */
   unifiedPanel?: boolean;
   /**
@@ -1037,6 +1041,7 @@ function ModelSelectorContentView({
   onNavigateToProviders,
   followSession,
   configurationEnabled = true,
+  fastModeConfigurable = true,
   unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
   unifiedAgents: requestedUnifiedAgents,
@@ -2698,12 +2703,12 @@ function ModelSelectorContentView({
   );
   const unifiedAgentFastCapable = useCallback(
     (agent: AgentKind): boolean =>
-      !!(onFastModeChange || onUnifiedSelect) && (agent === 'claude-code'
+      (typeof fastModeConfigurable === 'boolean' ? fastModeConfigurable : fastModeConfigurable.includes(agent)) && !!(onFastModeChange || onUnifiedSelect) && (agent === 'claude-code'
         ? !!cc.capabilities?.hasFastMode
         : agent === 'codex'
           ? !!codex.capabilities?.hasFastMode
           : !!pi.capabilities?.hasFastMode),
-    [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect],
+    [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect, fastModeConfigurable],
   );
 
   if (emptyState) return emptyState;
@@ -3191,6 +3196,7 @@ export function ModelSelector({
   popoverSide = 'top',
   maxVisibleModelRows,
   configurationEnabled = true,
+  fastModeConfigurable = true,
   unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
   unifiedAgents,
@@ -3943,6 +3949,7 @@ export function ModelSelector({
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
+      fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}

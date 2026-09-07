@@ -120,6 +120,7 @@ export interface ScheduleFormState {
   /** 手动模式:true → 创建后永不自动 fire,只能 Run now。UI 上需要 recurring=false 才能勾。 */
   manual: boolean;
   agentKind: 'claude-code' | 'codex' | 'pi';
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   model: string;
   /**
    * 显式选定的来源(供应商)id。'' = 跟随该 agent 原生默认来源（no-break，与未升级
@@ -275,6 +276,7 @@ export interface RememberedBinding {
   effort: EffortValue | '';
   fastMode: boolean;
   agentKind: ScheduleFormState['agentKind'];
+  modelAgentKind?: ScheduleFormState['modelAgentKind'];
 }
 
 /** 从 form 提取绑定快照;无真实绑定返回 null。 */
@@ -287,6 +289,7 @@ export function captureBinding(form: ScheduleFormState): RememberedBinding | nul
     effort: form.effort,
     fastMode: form.fastMode,
     agentKind: form.agentKind,
+    modelAgentKind: form.modelAgentKind,
   };
 }
 
@@ -320,6 +323,7 @@ export function applyRunMode(
           effort: remembered.effort,
           fastMode: remembered.fastMode,
           agentKind: remembered.agentKind,
+          modelAgentKind: remembered.modelAgentKind,
         }
       : f;
 
@@ -515,6 +519,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     // 相对间隔任务则原样保留权威值，不能从可能陈旧的 cronExpr 重新推导。
     intervalMs: form.intervalMs,
     agentKind: form.agentKind,
+    modelAgentKind: !isScript && form.model.trim() ? form.modelAgentKind : undefined,
     workspaceKind: form.workspaceKind,
     useWorktree: !isScript && form.workspaceKind === 'project' && form.useWorktree,
     persistentSession: !isScript && form.persistentSession,
@@ -540,6 +545,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
 
   if (isHeartbeat) {
     base.useWorktree = false;
+    if (form.modelAgentKind) base.fastMode = form.fastMode;
     base.model = form.model.trim() || undefined;
     base.providerId = form.providerId.trim() || undefined;
     base.effort = form.effort && isEffortValue(form.effort) ? form.effort : undefined;

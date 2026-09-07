@@ -214,6 +214,16 @@ describe('Scheduler', () => {
     h = makeHarness();
   });
 
+
+  it('persists an explicit Harness with its model and clears it when following the target', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: 'grok-4.6' });
+    expect(saved.modelAgentKind).toBe('pi');
+    await expect(h.scheduler.update(saved.id, { model: undefined })).rejects.toThrow(/Harness/);
+    const followed = await h.scheduler.update(saved.id, { modelAgentKind: undefined, model: undefined });
+    expect(followed?.modelAgentKind).toBeUndefined();
+    await expect(h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: '' })).rejects.toThrow(/Harness/);
+  });
+
   it('create() computes nextFireAt and adds to active map', async () => {
     const sch = await h.scheduler.create({ ...baseInput });
     // From 00:00:30, next minute boundary = 00:01:00

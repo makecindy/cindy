@@ -1,0 +1,1 @@
+ALTER TABLE `schedules` ADD `model_agent_kind` text;

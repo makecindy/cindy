@@ -1,3 +1,4 @@
+import { ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
 /**
  * Phase 3: MakerScheduleRunner
  *
@@ -240,7 +241,7 @@ export interface MakerScheduleRunnerDeps {
    * 锁住 heartbeat session、落实 deferred switch 并 bootstrap 新 live session。
    * runner 在 Session.send 返回后 release。
    */
-  acquirePendingAgentSwitch?: (sessionId: string, signal?: AbortSignal) => Promise<() => void>;
+  acquirePendingAgentSwitch?: (sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection) => Promise<() => void>;
   /** 新建可见会话落库后通知本机窗口与 device-link 列表订阅者。 */
   onSessionCreated?: (sessionId: string) => void;
   /** 可选:撞忙排队桥。未注入时心跳撞忙回退为顺延(deferFire)旧行为。 */
@@ -652,8 +653,28 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 直发路径不经过 makerSendTransaction。先落实 pending switch,再读取 meta/row,
       // 才能让本轮 createSession 与 send 都指向切换后的 live engine。
       throwIfFireAborted(ctx.signal, 'credential switch setup');
-      holder.releaseAgentSwitchLock =
-        (await this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal)) ?? undefined;
+      const selection: ScheduledModelSelection | undefined = schedule.modelAgentKind && schedule.model?.trim()
+        ? { agentKind: schedule.modelAgentKind, model: schedule.model,
+            providerId: schedule.providerId?.trim() || null,
+            effort: (schedule.effort as Effort | undefined) ?? null, fastMode: schedule.fastMode === true }
+        : undefined;
+      if (selection && this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
+        return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+      }
+      if (selection && !this.deps.acquirePendingAgentSwitch) {
+        throw new Error('Scheduled model selection is not available');
+      }
+      try {
+        holder.releaseAgentSwitchLock =
+          (await (selection
+            ? this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal, selection)
+            : this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal))) ?? undefined;
+      } catch (error) {
+        if (error instanceof ScheduledModelSelectionBusyError) {
+          return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+        }
+        throw error;
+      }
       throwIfFireAborted(ctx.signal, 'credential switch setup');
       const [meta, row] = await Promise.all([
         this.deps.maker.getSessionMeta(sessionId).catch(() => null),
@@ -714,6 +735,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 升级为可见排队)。B1 活跃礼让仍优先:用户正在对话时连队都不排,顺延到
         // 用户空闲再说。桥未注入(测试/启动早期)时走原直发路径,行为不变。
         if (this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
+          if (selection) {
+            holder.releaseAgentSwitchLock?.();
+            holder.releaseAgentSwitchLock = undefined;
+            return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+          }
           const liveSession = this.deps.maker.getSession(sessionId);
           if (
             liveSession &&
@@ -871,7 +897,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 确保「不影响 Claude」。heartbeat 沿用 session meta 里的 fast 态，非 heartbeat 取 schedule。
     let fastMode =
       effectiveAgentKind === 'codex' || effectiveAgentKind === 'pi'
-        ? isHeartbeat
+        ? isHeartbeat && !schedule.modelAgentKind
           ? heartbeatFastMode
           : schedule.fastMode
         : undefined;

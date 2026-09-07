@@ -3943,6 +3943,16 @@ describe('统一面板 · 清收藏锚点也等待回执', () => {
 
 
 describe('global default A contract', () => {
+  it.each([false, ['pi'] as const])('hides Fast when this entry cannot dispatch it (%s)', async (fastModeConfigurable) => {
+    const select = vi.fn();
+    renderPanel({ vendorKey: 'codex', modelId: 'gpt-5.5', currentProviderId: 'xd',
+      onUnifiedSelect: select, onFastModeChange: undefined, fastModeConfigurable });
+    const flyout = await openRowFlyout('GPT-5.5');
+    expect(flyout.querySelector('[data-fast-toggle]')).toBeNull();
+    await act(async () => { fireEvent.click(rowFor('GPT-5.5')); });
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ engine: 'codex', fast: false }));
+  });
+
   it('defaults to A and limits a model-only settings field to its writable Harness', async () => {
     const change = vi.fn();
     const { container } = renderPanel({ vendorKey: 'cc', onProviderChange: change,

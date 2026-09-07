@@ -38,3 +38,24 @@ describe('useScheduleForm validate — script 模式跳过隐藏的前置检查�
     expect(result.current.validate()).toBeNull();
   });
 });
+
+
+describe('saved automation model selection', () => {
+  it('saves every selected axis for the next fire and clears all overrides when following the task', () => {
+    const { result } = renderHook(() => useScheduleForm(null));
+    act(() => result.current.setField('targetSessionId', 'existing-task'));
+    act(() => result.current.selectModelConfiguration({
+      agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: 'medium', fastMode: true,
+    }));
+    expect(result.current.toInput()).toMatchObject({
+      targetSessionId: 'existing-task', agentKind: 'pi', modelAgentKind: 'pi',
+      model: 'test-model', providerId: 'custom', effort: 'medium', fastMode: true,
+    });
+    act(() => result.current.setRunMode('fresh'));
+    act(() => result.current.setRunMode('bound'));
+    expect(result.current.toInput()).toMatchObject({ modelAgentKind: 'pi', model: 'test-model', fastMode: true });
+    act(() => result.current.selectModelConfiguration(null));
+    expect(result.current.toInput()).toMatchObject({ modelAgentKind: undefined, model: undefined, effort: undefined, providerId: undefined });
+    expect(result.current.form.fastMode).toBe(false);
+  });
+});

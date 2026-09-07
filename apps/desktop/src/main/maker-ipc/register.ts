@@ -1,3 +1,4 @@
+import { applyScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from './scheduledModelSelection';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
@@ -3146,7 +3147,7 @@ function settlePendingCredentialSwitch(sessionId: string, source: string): void 
 let refreshRemoteCodexMcpOnTurnSettledHolder: ((sessionId: string) => void) | null = null;
 let deferredCodexRestartHolder: DeferredCodexRestartService | null = null;
 let pendingAgentSwitchApplyHolder:
-  ((sessionId: string, signal?: AbortSignal) => Promise<() => void>) | null = null;
+  ((sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection) => Promise<() => void>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
@@ -3325,8 +3326,10 @@ export function clearDeferredCodexRestartForOwnerBoundary(): void {
 export async function acquirePendingAgentSwitchForDirectSend(
   sessionId: string,
   signal?: AbortSignal,
+  selection?: ScheduledModelSelection,
 ): Promise<() => void> {
-  return pendingAgentSwitchApplyHolder?.(sessionId, signal) ?? (() => {});
+  if (selection && !pendingAgentSwitchApplyHolder) throw new Error('Scheduled model selection is not initialized');
+  return pendingAgentSwitchApplyHolder?.(sessionId, signal, selection) ?? (() => {});
 }
 
 /** 直发路径在 createSession / 重读 live session 之前关掉不健康原生会话。 */
@@ -7996,13 +7999,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log,
   });
-  pendingAgentSwitchApplyHolder = async (sessionId, signal) => {
+  pendingAgentSwitchApplyHolder = async (sessionId, signal, selection) => {
     const release = await acquireSendToSessionLock(sessionId);
     try {
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
         bootstrapAfterSwitch: true,
         signal,
       });
+      if (selection) {
+        await applyScheduledModelSelection(selection, {
+          getTarget: async () => {
+            const row = await agentSwitchDeps.getSessionRow(sessionId);
+            return row ? { agentKind: dbToMakerAgentKind(row.agentKind), status: row.status } : null;
+          },
+          isBusy: () => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning(),
+          switchHarness: (route) => performSessionAgentSwitch(agentSwitchDeps, {
+            sessionId, targetAgentKind: route.agentKind, model: route.model,
+            providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
+            applyNow: true, signal,
+          }),
+          applyModel: async (route) => {
+            if (signal?.aborted) throw new Error('Scheduled model selection aborted');
+            const result = await applySessionRuntimeSelection(sessionId, route.model, route.providerId,
+              { effort: route.effort, fastMode: route.fastMode },
+              { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: true });
+            if (result.deferred) throw new ScheduledModelSelectionBusyError('Scheduled model selection deferred');
+            if (result.superseded || runtimeSelectionRequiresModelWindowConfirmation(result)) {
+              throw new Error('Scheduled model selection could not be applied');
+            }
+          },
+        });
+      }
       await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
       return release;
     } catch (err) {

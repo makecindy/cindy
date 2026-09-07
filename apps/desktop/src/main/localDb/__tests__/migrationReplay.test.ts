@@ -307,8 +307,19 @@ describeMigrationReplay('migration replay', () => {
         );
         CREATE TABLE sessions (
           id TEXT PRIMARY KEY NOT NULL,
-          permission_mode TEXT
+          permission_mode TEXT,
+          source TEXT,
+          title TEXT,
+          created_at INTEGER
         );
+        CREATE TABLE schedules (
+          id TEXT PRIMARY KEY NOT NULL,
+          agent_kind TEXT NOT NULL,
+          model TEXT,
+          name TEXT,
+          created_at INTEGER
+        );
+        INSERT INTO schedules (id, agent_kind, model) VALUES ('legacy-schedule', 'codex', 'legacy-model');
         CREATE TABLE schedule_runs (
           id TEXT PRIMARY KEY NOT NULL
         );
@@ -331,6 +342,8 @@ describeMigrationReplay('migration replay', () => {
         currentVersion: 73,
       });
 
+      expect(db.prepare('SELECT agent_kind, model, model_agent_kind FROM schedules WHERE id = ?')
+        .get('legacy-schedule')).toEqual({ agent_kind: 'codex', model: 'legacy-model', model_agent_kind: null });
       expect(result.applied.map((migration) => migration.seq)).toEqual(
         listMigrations(drizzleDir()).filter((migration) => migration.seq > 73).map((migration) => migration.seq),
       );
@@ -351,9 +364,7 @@ describeMigrationReplay('migration replay', () => {
           'cost_attribution',
         ]),
       );
-      // fixture 故意不建 schedules(最小库 + 各迁移自带守卫的设计):0084 的
-      // 裸 ALTER 靠 runner 的冻结缺陷守卫跳过,迁移链必须能走完而不是中途炸掉。
-      expect(tableExists(db, 'schedules')).toBe(false);
+      expect(tableExists(db, 'schedules')).toBe(true);
       expect(tableExists(db, 'project_aliases')).toBe(true);
       expect(tableExists(db, 'device_link_ownership')).toBe(true);
       expect(

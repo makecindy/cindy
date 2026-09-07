@@ -146,6 +146,16 @@ describe('scheduleToCamel', () => {
 });
 
 describe('scheduleCreateToRow', () => {
+  it('round-trips an explicit model Harness and clears it without changing the legacy agent', () => {
+    const original = baseSchedule({ agentKind: 'codex', modelAgentKind: 'pi', model: 'test-model', providerId: 'custom', fastMode: true });
+    const row = scheduleCreateToRow(original);
+    expect(row.modelAgentKind).toBe('pi');
+    expect(scheduleToCamel(row as ScheduleRowLike)).toEqual(original);
+    expect(scheduleCreateToRow(baseSchedule()).modelAgentKind).toBeNull();
+    expect(schedulePatchToRow({ modelAgentKind: undefined })).toEqual({ modelAgentKind: null });
+    expect(schedulePatchToRow({ name: 'renamed' })).not.toHaveProperty('modelAgentKind');
+  });
+
   it('拆 notify 为两列', () => {
     const row = scheduleCreateToRow(baseSchedule({ notify: { desktop: false, feishu: true } }));
     expect(row.notifyDesktop).toBe(false);

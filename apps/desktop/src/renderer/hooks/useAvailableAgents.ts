@@ -298,3 +298,12 @@ export function __resetAvailableAgentsCacheForTest(): void {
   inFlight.clear();
   agentsCacheInvalidationScheduled.clear();
 }
+
+/** Model pickers keep the current Harness visible while excluding unregistered runtimes. */
+export function useModelPickerAgents(current: RuntimeAgentKind, deviceId?: string | null): readonly RuntimeAgentKind[] | undefined {
+  const { availableVendors, loaded } = useAvailableAgents(deviceId);
+  if (!loaded) return undefined;
+  return (['claude-code', 'codex', 'pi'] as const).filter(
+    (agent) => agent === current || availableVendors.has(toVendor(agent)),
+  );
+}
