@@ -4,15 +4,20 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { shouldAutoLoadEarlier } from '@/session/messageScroll';
 
-// Execute the production callback so its early dedupe guard and its helper input are both tested.
+// Execute the production progress-key calculation and callback, including the early dedupe guard.
 const source = ts.createSourceFile('renderer.tsx', readFileSync(
   resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8',
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let callbackSource = '';
+let progressKeySource = '';
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'attemptAutoLoadEarlier'
     && node.initializer && ts.isCallExpression(node.initializer)) {
     callbackSource = node.initializer.arguments[0].getText(source);
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'historyProgressKey'
+    && node.initializer) {
+    progressKeySource = node.initializer.getText(source);
   }
   ts.forEachChild(node, visit);
 }
@@ -29,7 +34,7 @@ function fixture() {
     initialHistoryAutofillRemainingRef: { current: 3 },
     regroupedHistoryContinuationRef: { current: false },
     firstItemKey: 'local-notice',
-    historyProgressKey: 'host-80',
+    loadEarlierProgressKey: 'host-80' as string | null,
     lastAutoLoadEarlierKeyRef: { current: null as string | null },
     listRef: { current: { getState: () => ({ isAtEnd: true, isAtStart: true, isNearStart: true }) } },
     loadEarlierAction: { visible: true, disabled: false },
@@ -37,8 +42,9 @@ function fixture() {
     requestLoadEarlier,
   };
   const attempt = () => {
-    if (!callbackSource) throw new Error('Missing production callback');
-    const compiled = ts.transpileModule(`const callback = ${callbackSource};`, {
+    if (!callbackSource || !progressKeySource) throw new Error('Missing production paging code');
+    const compiled = ts.transpileModule(`const historyProgressKey = ${progressKeySource};
+const callback = ${callbackSource};`, {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText;
     new Function(...Object.keys(bindings), `${compiled}\nreturn callback;`)(...Object.values(bindings))();
@@ -51,13 +57,13 @@ describe('history autofill production callback', () => {
     const { bindings, attempt, requestLoadEarlier } = fixture();
     attempt();
     expect(requestLoadEarlier).toHaveBeenCalledTimes(1);
-    bindings.historyProgressKey = 'host-60';
+    bindings.loadEarlierProgressKey = 'host-60';
     attempt();
     expect(requestLoadEarlier).toHaveBeenCalledTimes(2);
-    bindings.historyProgressKey = 'host-40';
+    bindings.loadEarlierProgressKey = 'host-40';
     attempt();
     expect(requestLoadEarlier).toHaveBeenCalledTimes(3);
-    bindings.historyProgressKey = 'host-20';
+    bindings.loadEarlierProgressKey = 'host-20';
     attempt();
     expect(requestLoadEarlier).toHaveBeenCalledTimes(3);
   });
@@ -70,11 +76,22 @@ describe('history autofill production callback', () => {
     expect(requestLoadEarlier).toHaveBeenCalledTimes(1);
   });
 
+  it('falls back to the first rendered row only when no host cursor is available', () => {
+    const { bindings, attempt, requestLoadEarlier } = fixture();
+    bindings.loadEarlierProgressKey = null;
+    attempt();
+    attempt();
+    expect(requestLoadEarlier).toHaveBeenCalledTimes(1);
+    bindings.firstItemKey = 'earlier-render-item';
+    attempt();
+    expect(requestLoadEarlier).toHaveBeenCalledTimes(2);
+  });
+
   it('uses the same cursor progress for user-driven regroup continuation', () => {
     const { bindings, attempt, requestLoadEarlier } = fixture();
     bindings.userScrollForOlderRef.current = true;
     attempt();
-    bindings.historyProgressKey = 'host-60';
+    bindings.loadEarlierProgressKey = 'host-60';
     bindings.regroupedHistoryContinuationRef.current = true;
     attempt();
     expect(requestLoadEarlier).toHaveBeenCalledTimes(2);
