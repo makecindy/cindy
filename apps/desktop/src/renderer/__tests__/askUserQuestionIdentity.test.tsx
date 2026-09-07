@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/i18n';
-import type { PendingAskUser } from '@/lib/makerChatStore';
+import type { AskUserQuestionItem, PendingAskUser } from '@/lib/makerChatStore';
 import { AskUserQuestionPrompt } from '../components/new-chat/AskUserQuestionPrompt';
 
 beforeEach(async () => {
@@ -74,6 +74,49 @@ describe('AskUserQuestionPrompt identity', () => {
       'First question': 'First draft answer',
       'Second question': JSON.stringify(['A', 'Unsubmitted detail']),
     });
+  });
+
+  it.each([
+    { label: 'question text', update: { question: 'Updated second question' } },
+    { label: 'options', update: { options: [{ label: 'C' }] } },
+    { label: 'selection mode', update: { multiSelect: false } },
+    { label: 'header', update: { header: 'Updated header' } },
+    { label: 'option description', update: { options: [{ label: 'A', description: 'Updated meaning' }, { label: 'B' }] } },
+    { label: 'question count', update: null },
+  ])('resets answers when $label changes within the same request', async ({ update }) => {
+    const props = makeProps();
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    const oldInput = await fillBothQuestions(view);
+    props.onDraftChange.mockClear();
+    const questions: AskUserQuestionItem[] = update
+      ? [props.pending.questions[0], { ...props.pending.questions[1], ...update }]
+      : [props.pending.questions[0]];
+
+    // The store clears the draft for changed content, even with the same requestId.
+    view.rerender(createElement(AskUserQuestionPrompt, {
+      ...props,
+      pending: { ...props.pending, questions },
+    }));
+
+    expect(oldInput.isConnected).toBe(false);
+    expect(view.queryByText('First question')).not.toBeNull();
+    expect(view.queryByPlaceholderText('Type your answer…')).toBeNull();
+    expect(props.onDraftChange).toHaveBeenLastCalledWith({
+      requestId: 'request-1', currentIndex: 0, answers: {},
+    });
+
+    fireEvent.click(view.getByText('First option'));
+    const expectedAnswers: Record<string, string> = { 'First question': 'First option' };
+    if (questions.length > 1) {
+      const second = questions[1];
+      await waitFor(() => expect(view.queryByText(second.question)).not.toBeNull());
+      await waitFor(() => expect(view.queryByRole('button', { name: /Back/ })).not.toBeNull());
+      const label = second.options![0].label;
+      fireEvent.click(view.getByText(label));
+      if (second.multiSelect) fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+      expectedAnswers[second.question] = second.multiSelect ? JSON.stringify([label]) : label;
+    }
+    expect(props.onAnswer).toHaveBeenCalledWith('request-1', expectedAnswers);
   });
 
   it.each([

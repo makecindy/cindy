@@ -104,9 +104,19 @@ export function AskUserQuestionPrompt({
   sessionId,
   ...props
 }: AskUserQuestionPromptProps & { sessionId: string | undefined }) {
-  // Repeated snapshots keep this form mounted; another session or request
-  // starts from its own draft instead of inheriting the previous form's state.
-  return <AskUserQuestionForm key={`${sessionId}:${props.pending.requestId}`} {...props} />;
+  // Match the store's content comparison, including option order and metadata.
+  // Fixed field order avoids treating JSON property order as a new question;
+  // absent and empty options are equivalent, as in the reducer.
+  const questionsIdentity = props.pending.questions.map((question) => [
+    question.question,
+    question.header,
+    question.multiSelect,
+    (question.options ?? []).map((option) => [option.label, option.description]),
+  ]);
+  const formKey = JSON.stringify([sessionId, props.pending.requestId, questionsIdentity]);
+  // Repeated snapshots keep this form mounted. A changed session, request or
+  // question starts from its own draft (cleared by the store on content changes).
+  return <AskUserQuestionForm key={formKey} {...props} />;
 }
 
 function AskUserQuestionForm({
@@ -130,8 +140,8 @@ function AskUserQuestionForm({
   // Note: `requestId` is captured in the lazy initializer closure on first
   // render; subsequent prop updates do NOT re-run the initializer (that is
   // useState's documented behavior). The public wrapper remounts this form
-  // when the session or request changes. For a brand-new question batch the
-  // store has cleared `askUserDraft`, so the new form starts from defaults.
+  // when the session, request or question content changes. For a new or changed
+  // question batch the store clears `askUserDraft`, so the form starts fresh.
   const [currentIndex, setCurrentIndex] = useState<number>(() =>
     draft && draft.requestId === requestId ? draft.currentIndex : 0,
   );
