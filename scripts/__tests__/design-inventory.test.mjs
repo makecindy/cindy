@@ -1094,7 +1094,7 @@ test('defaultHumanSeed: 全量 legacy + unassigned,protected 与迁移状态正�
   assert.equal(seed.includes('unassigned'), true);
   assert.equal(seed.includes('| legacy |'), true);
   assert.equal(seed.includes('| pilot |'), false);
-  assert.equal(seed.includes('待 DS-9 增量'), true);
+  assert.equal(seed.includes('待 DS-7 增量发现'), true);
   assert.equal(seed.includes('cindy-updater/ui'), true);
   assert.equal(seed.includes('DESIGN.md §16 登录链路'), true);
   assert.equal(seed.includes('DESIGN.md §15 CINDY 皮肤族'), true);

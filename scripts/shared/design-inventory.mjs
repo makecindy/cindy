@@ -891,7 +891,7 @@ export function catalogSurfaces() {
       id: 'desktop.overlay.permission-prompt',
       platform: 'desktop',
       title: '权限询问',
-      productionEntry: 'PermissionPrompt（会话内权限卡；DS-6 迁移前置）',
+      productionEntry: 'PermissionPrompt（会话内权限卡；DS-11 迁移前置）',
       reachableComponents: ['PermissionPrompt', 'PermissionSelector', 'AskUserQuestionPrompt'],
       styleRoots: [
         'apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx',
@@ -1205,7 +1205,7 @@ export function defaultHumanSeed(surfaces) {
     '',
     '生成器不得改本表。首轮（DS-2a）：全部 `legacy`；暂无归属写 `unassigned`。`protected` 与迁移状态正交。',
     '',
-    'Mobile 本轮不展开顶层 screen，**待 DS-9 增量**。',
+    'Mobile 尚未展开顶层 screen，**待 DS-7 增量发现**；数值接管在 DS-10。',
     '',
     '另册 / 排除（不进必做迁移清单）：',
     '',
@@ -1247,7 +1247,7 @@ const PROTECTED_TAGS = {
   'desktop.chat.new-draft': ['DESIGN.md §15.15 创建页内容位'],
   'desktop.overlay.permission-prompt': [
     'DESIGN.md §5 裸文字按钮豁免（相关）',
-    'DS-6 Permission 迁移前置',
+    'DS-11 Permission 迁移前置',
   ],
   'desktop.settings': [
     'DESIGN.md §10 语义豁免色族消费者',
@@ -1261,7 +1261,7 @@ export function defaultHumanAnnotation(id) {
     owner: 'unassigned',
     status: 'legacy',
     protected: (PROTECTED_TAGS[id] ?? []).join('；') || '—',
-    target: '待 DS-4 标准组件落地后按 Pattern 迁',
+    target: '查现有标准组件与治理 §12 当前路线；按人工下一动作接管',
     next: '保持现状；发现问题记下一动作，本张不修视觉',
   };
 }

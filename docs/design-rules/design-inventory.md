@@ -32,7 +32,7 @@
 | `desktop.overlay.confirm` | desktop | 确认弹窗 | ConfirmDialogProvider 及插件确认宿主 | ConfirmDialogProvider, ForgeOidcInstallConfirmHost, GhostConfirmDialogHost, PluginPublisherConfirmHost | apps/desktop/src/renderer/cindy-brain/ForgeOidcInstallConfirmHost.tsx, apps/desktop/src/renderer/cindy-brain/GhostConfirmDialogHost.tsx, apps/desktop/src/renderer/components/ui/confirm-dialog-provider.tsx, apps/desktop/src/renderer/components/ui/confirm-dialog.tsx, apps/desktop/src/renderer/features/plugin/PluginPublisherConfirmHost.tsx | 21 | 0 | 6 |
 | `desktop.overlay.find-in-page` | desktop | 页内查找条 | App → FindInPageBar | FindInPageBar | apps/desktop/src/renderer/components/find-in-page/FindInPageBar.tsx, apps/desktop/src/renderer/components/find-in-page/findInPageOwnership.ts | 2 | 0 | 4 |
 | `desktop.overlay.interaction-portal` | desktop | 交互提问卡片 | components/interaction-portal（AskUser / 权限类卡片出口） | InteractionPromptCardShell, InteractionPromptHost | apps/desktop/src/renderer/components/interaction-portal/InteractionPromptCardShell.tsx, apps/desktop/src/renderer/components/interaction-portal/InteractionPromptHost.tsx, apps/desktop/src/renderer/components/interaction-portal/InteractionPromptSlot.tsx, apps/desktop/src/renderer/components/interaction-portal/index.ts, apps/desktop/src/renderer/components/interaction-portal/store.ts | 10 | 0 | 4 |
-| `desktop.overlay.permission-prompt` | desktop | 权限询问 | PermissionPrompt（会话内权限卡；DS-6 迁移前置） | AskUserQuestionPrompt, PermissionPrompt, PermissionSelector | apps/desktop/src/renderer/components/new-chat/AskUserQuestionPrompt.tsx, apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx, apps/desktop/src/renderer/components/new-chat/PermissionSelector.tsx | 51 | 4 | 27 |
+| `desktop.overlay.permission-prompt` | desktop | 权限询问 | PermissionPrompt（会话内权限卡；DS-11 迁移前置） | AskUserQuestionPrompt, PermissionPrompt, PermissionSelector | apps/desktop/src/renderer/components/new-chat/AskUserQuestionPrompt.tsx, apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx, apps/desktop/src/renderer/components/new-chat/PermissionSelector.tsx | 51 | 4 | 27 |
 | `desktop.overlay.route-error` | desktop | 路由错误页 | router errorElement → RouteErrorFallback / TopLevelErrorBoundary | AppCrashScreen, RouteErrorFallback, TopLevelErrorBoundary | apps/desktop/src/renderer/components/error/AppCrashScreen.tsx, apps/desktop/src/renderer/components/error/LocalDbFatalScreen.tsx, apps/desktop/src/renderer/components/error/RouteErrorFallback.tsx, apps/desktop/src/renderer/components/error/TopLevelErrorBoundary.tsx, apps/desktop/src/renderer/components/error/localDbFatalView.ts | 11 | 0 | 6 |
 | `desktop.overlay.splash` | desktop | 启动遮罩 | App → SplashScreen；同源 gating 下并挂 LoginBrandStage（z-9980 品牌画布，启动期即可见、Splash(z-9999) 之下） | LoginBrandStage, SplashScreen | apps/desktop/src/renderer/components/login/LoginBrandStage.tsx, apps/desktop/src/renderer/components/splash/SplashScreen.tsx | 3 | 0 | 5 |
 | `desktop.overlay.toast` | desktop | Toast | App 常驻 ToastContainer（用户可见出口，不展开业务逻辑） | Toast, ToastContainer | apps/desktop/src/renderer/components/ui/toast/Toast.tsx, apps/desktop/src/renderer/components/ui/toast/ToastContainer.tsx, apps/desktop/src/renderer/components/ui/toast/index.ts | 7 | 4 | 3 |
@@ -104,7 +104,7 @@
 
 生成器不得改本表。首轮（DS-2a）：全部 `legacy`；暂无归属写 `unassigned`。`protected` 与迁移状态正交。
 
-Mobile 本轮不展开顶层 screen，**待 DS-9 增量**。
+Mobile 尚未展开顶层 screen，**待 DS-7 增量发现**；数值接管在 DS-10。
 
 另册 / 排除（不进必做迁移清单）：
 
@@ -115,38 +115,38 @@ Mobile 本轮不展开顶层 screen，**待 DS-9 增量**。
 
 | ID | owner | 迁移状态 | protected | 目标道路 | 下一动作 |
 | --- | --- | --- | --- | --- | --- |
-| `desktop.auth.add-account` | unassigned | legacy | DESIGN.md §16 登录链路 | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.auth.legacy-migration` | unassigned | legacy | DESIGN.md §16 登录链路（消费 --login-callback-* 品牌豁免族 component token） | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.auth.login` | unassigned | legacy | DESIGN.md §16 登录链路 | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.bots` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.chat.files` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.chat.new-draft` | unassigned | legacy | DESIGN.md §15.15 创建页内容位 | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.chat.orca-workflow` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.chat.scheduled` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.chat.session` | unassigned | legacy | DESIGN.md §10 语义豁免色族消费者（status / diff / 消息卡）；DESIGN.md §5 2px status micro-cells | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.dev.maker-experimental` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.issues.guide` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.native.app-menu` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.native.system-notification` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.native.tray` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.overlay.confirm` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.overlay.find-in-page` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.overlay.interaction-portal` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.overlay.permission-prompt` | unassigned | legacy | DESIGN.md §5 裸文字按钮豁免（相关）；DS-6 Permission 迁移前置 | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.overlay.route-error` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.overlay.splash` | unassigned | legacy | DESIGN.md §16 登录链路 | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.overlay.toast` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.plugins.app-main` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.plugins.installed` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.settings` | unassigned | pilot | DESIGN.md §10 语义豁免色族消费者；外部主题导入保护 token（资源用量类别色在独立窗） | DS-4 Button / Input 已在 ProvidersSection 与设置输入落地；既有 SettingsTextInput 和四个数字框经同一标准组件的局部兼容封装消费，通用 Input 保持 Tier-1 | DS-4 兼容收口：旧 SettingsTextInput 与四个数字框经设置封装保留原局部主题覆盖，通用 Input 保持 Tier-1 默认；既有 alias 与 slot 并存时按作用域生效，不能仅为统一而删除用户局部配色。DS-5 的跨 surface alias 收敛仍需先明确兼容策略（历史范围见 decision-log 09-04，不沿用旧计数作当前清单）；ivory/elevated 与 focus 环维持待裁决；confirm-dialog 按钮族另批迁移 |
-| `desktop.shell.main-layout` | unassigned | legacy | DESIGN.md §15 CINDY 皮肤族（侧栏 vibrancy / 选中 pill）；外部主题导入保护 token | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.skillhub.local` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.skillhub.market` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.computer-permission-guide` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.ghost-panel` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.resource-usage` | unassigned | legacy | 外部主题导入保护 token（进程类别色） | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.review-artifact-confirm` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.session-drag-preview` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.sidebar` | unassigned | legacy | DESIGN.md §15 CINDY 皮肤族 | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.voice-dictionary-toast` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.voice-overlay` | unassigned | legacy | — | 待 DS-4 标准组件落地后按 Pattern 迁 | 保持现状；发现问题记下一动作，本张不修视觉 |
+| `desktop.auth.add-account` | unassigned | legacy | DESIGN.md §16 登录链路 | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.auth.legacy-migration` | unassigned | legacy | DESIGN.md §16 登录链路（消费 --login-callback-* 品牌豁免族 component token） | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.auth.login` | unassigned | legacy | DESIGN.md §16 登录链路 | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.bots` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.chat.files` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.chat.new-draft` | unassigned | legacy | DESIGN.md §15.15 创建页内容位 | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.chat.orca-workflow` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.chat.scheduled` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.chat.session` | unassigned | legacy | DESIGN.md §10 语义豁免色族消费者（status / diff / 消息卡）；DESIGN.md §5 2px status micro-cells | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 完整工具/推理/消息/代码/附件迁移，验证流式、长文与旧 msg 局部覆盖；保留现有保护族 |
+| `desktop.dev.maker-experimental` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.issues.guide` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.native.app-menu` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对原生出口与平台限制；保留项登记理由、实际负责人及复查日期，不凭共享依赖记迁移完成 |
+| `desktop.native.system-notification` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对原生出口与平台限制；保留项登记理由、实际负责人及复查日期，不凭共享依赖记迁移完成 |
+| `desktop.native.tray` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对原生出口与平台限制；保留项登记理由、实际负责人及复查日期，不凭共享依赖记迁移完成 |
+| `desktop.overlay.confirm` | unassigned | legacy | — | DS-6 普通确认与标准按钮复用 | 先核治理 §10 的普通/危险主次及 confirm-* / confirm-btn-* 局部覆盖合同，再随真实消费者实施与验证 |
+| `desktop.overlay.find-in-page` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.overlay.interaction-portal` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.overlay.permission-prompt` | unassigned | legacy | DESIGN.md §5 裸文字按钮豁免（相关）；DS-11 Permission 迁移前置 | DS-11 授权确认呈现（治理 §10 三项设计前置） | 余项关闭前相关文件不得进入迁移 diff；继承已裁决圆角与键帽规则，按 DS-11 补实施，权限行为不变 |
+| `desktop.overlay.route-error` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.overlay.splash` | unassigned | legacy | DESIGN.md §16 登录链路 | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.overlay.toast` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.plugins.app-main` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.plugins.installed` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.settings` | unassigned | pilot | DESIGN.md §10 语义豁免色族消费者；外部主题导入保护 token（资源用量类别色在独立窗） | DS-4 / DS-4b 的 Button / Input 与 SettingsTextInput 局部兼容壳已落地；DS-6 完整表单和第二消费者，DS-8 数值同源 | DS-6 补全状态、说明与公开附件；focus、ivory/elevated 见治理 §10。旧 alias 与 slot 按作用域生效，禁止仅因同值删除局部配色；DS-6/8/9/11 按实际消费者分批核对跨 surface alias，confirm-dialog 归 DS-6 |
+| `desktop.shell.main-layout` | unassigned | legacy | DESIGN.md §15 CINDY 皮肤族（侧栏 vibrancy / 选中 pill）；外部主题导入保护 token | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.skillhub.local` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.skillhub.market` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.window.computer-permission-guide` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.window.ghost-panel` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.window.resource-usage` | unassigned | legacy | 外部主题导入保护 token（进程类别色） | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.window.review-artifact-confirm` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.window.session-drag-preview` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.window.sidebar` | unassigned | legacy | DESIGN.md §15 CINDY 皮肤族 | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.window.voice-dictionary-toast` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+| `desktop.window.voice-overlay` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
